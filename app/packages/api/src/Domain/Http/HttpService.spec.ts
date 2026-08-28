@@ -466,6 +466,78 @@ describe('HttpService', () => {
 
       expect(lastRequest().authentication).toBe('new-access')
     })
+
+    it('should join an in-flight refresh instead of starting a second one when its own response expires', async () => {
+      // Two requests leave the client before any refresh exists, so neither is
+      // gated by the pre-flight wait. The slower one comes back 498 only after
+      // the faster one has already put a refresh in flight; it must wait for
+      // that refresh rather than firing a competing one, which would burn the
+      // single-use refresh token and log the user out.
+      service.setSession(sessionWith('old-access', 'old-refresh'))
+      service.setCallbacks(jest.fn(), jest.fn())
+
+      let releaseRefresh: () => void = () => undefined
+      let releaseSlowOriginal: () => void = () => undefined
+      let refreshCallCount = 0
+      let slowCallCount = 0
+      let fastCallCount = 0
+
+      handleRequest.mockImplementation(async (request: HttpRequest) => {
+        if (request.url.endsWith('/v1/sessions/refresh')) {
+          refreshCallCount++
+
+          return new Promise((resolve) => {
+            releaseRefresh = () =>
+              resolve({ status: HttpStatusCode.Success, data: refreshBody('new-access', 'new-refresh') })
+          })
+        }
+
+        if (request.url.endsWith('/v1/slow')) {
+          if (slowCallCount++ === 0) {
+            return new Promise((resolve) => {
+              releaseSlowOriginal = () => resolve({ status: HttpStatusCode.ExpiredAccessToken, data: {} })
+            })
+          }
+
+          return { status: HttpStatusCode.Success, data: { retried: true } }
+        }
+
+        if (fastCallCount++ === 0) {
+          return { status: HttpStatusCode.ExpiredAccessToken, data: {} }
+        }
+
+        return { status: HttpStatusCode.Success, data: { fast: true } }
+      })
+
+      const slow = service.get('/v1/slow')
+      await Promise.resolve()
+
+      // The fast request expires and opens the refresh.
+      const fast = service.get('/v1/fast')
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(refreshCallCount).toBe(1)
+
+      // Only now does the slow request come back 498.
+      releaseSlowOriginal()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      releaseRefresh()
+
+      const slowResponse = await slow
+      const fastResponse = await fast
+
+      // One refresh served both requests.
+      expect(refreshCallCount).toBe(1)
+      expect(fastResponse.data).toEqual({ fast: true })
+      expect(slowResponse.data).toEqual({ retried: true })
+      const slowRequests = handleRequest.mock.calls
+        .map(([request]: [HttpRequest]) => request)
+        .filter((request: HttpRequest) => request.url.endsWith('/v1/slow'))
+      expect(slowRequests).toHaveLength(2)
+      expect(slowRequests[1].authentication).toBe('new-access')
+    })
   })
 
   describe('developer simulators', () => {

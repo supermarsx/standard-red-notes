@@ -108,6 +108,22 @@ describe('FetchRequestHandler', () => {
     expect(response.data).toBeInstanceOf(ArrayBuffer)
   })
 
+  it('decodes a successful body as a string when the caller requests a text response', async () => {
+    // Same content type as the ArrayBuffer case above; only `responseType`
+    // differs, so this pins the branch rather than the content negotiation.
+    const fetchResponse = new Response('a plain text payload', {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+    })
+
+    const response = await requestHandler['handleFetchResponse'](fetchResponse, 'text')
+
+    expect(response.status).toBe(200)
+    expect(response.data).toBe('a plain text payload')
+  })
+
   it('decodes a text error response even when binary data was requested', async () => {
     const fetchResponse = new Response('File metadata was not found.', {
       status: 400,
@@ -358,6 +374,132 @@ describe('FetchRequestHandler', () => {
       await expect(responsePromise).rejects.toMatchObject({ name: 'AbortError' })
       expect(errorLog).not.toHaveBeenCalled()
     })
+
+    /**
+     * A faithful stand-in for the runtime's `fetch`: it rejects immediately when
+     * handed an already-aborted signal, and otherwise only settles when the
+     * signal fires. Anything else never settles, which is the half-open socket
+     * the wedge fix exists for.
+     */
+    const fetchThatOnlySettlesOnAbort = () =>
+      jest.fn((_request: Request, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          const signal = init?.signal
+          if (signal?.aborted) {
+            reject(signal.reason)
+
+            return
+          }
+
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      }) as unknown as typeof global.fetch
+
+    it('rejects with the caller reason when the signal is already aborted before the request starts', async () => {
+      // An abort that lands before the handler runs (e.g. the download was
+      // cancelled while an earlier chunk was still in flight) must still cancel
+      // this request: an already-aborted signal never re-fires 'abort', so
+      // subscribing alone would leave the request hanging until the deadline.
+      const controller = new AbortController()
+      const reason = new Error('caller cancelled before dispatch')
+      controller.abort(reason)
+
+      global.fetch = fetchThatOnlySettlesOnAbort()
+
+      const responsePromise = requestHandler.handleRequest({
+        url: 'http://localhost:3000/files',
+        verb: HttpVerb.Get,
+        abortSignal: controller.signal,
+        // Short deadline so a regression surfaces as a timed-out response
+        // rather than as a 30s hang.
+        timeoutMs: 50,
+      })
+
+      await expect(responsePromise).rejects.toBe(reason)
+    })
+
+    it('keeps a timed-out request a network failure even when the caller aborts immediately after', async () => {
+      jest.useFakeTimers()
+      global.fetch = fetchThatOnlySettlesOnAbort()
+
+      const controller = new AbortController()
+      const responsePromise = requestHandler.handleRequest({
+        url: 'http://localhost:3000/sync',
+        verb: HttpVerb.Get,
+        abortSignal: controller.signal,
+        timeoutMs: 100,
+      })
+      await Promise.resolve()
+
+      // The deadline wins the race, then the caller gives up too. The late
+      // cancellation must not reclassify an already-aborted request as caller
+      // control flow, or sync loses the timedOut hint that drives its backoff.
+      jest.advanceTimersByTime(101)
+      controller.abort(new Error('caller cancelled after the deadline'))
+
+      const response = await responsePromise
+
+      expect(response.status).toBe(HttpStatusCode.InternalServerError)
+      expect(response.data).toMatchObject({
+        networkFailure: true,
+        timedOut: true,
+        error: { message: 'Request timed out' },
+      })
+    })
+
+    it('keeps a caller cancellation a rejection when the deadline elapses right after it', async () => {
+      jest.useFakeTimers()
+      global.fetch = fetchThatOnlySettlesOnAbort()
+
+      const controller = new AbortController()
+      const reason = new Error('caller cancelled first')
+      const responsePromise = requestHandler.handleRequest({
+        url: 'http://localhost:3000/sync',
+        verb: HttpVerb.Get,
+        abortSignal: controller.signal,
+        timeoutMs: 100,
+      })
+      await Promise.resolve()
+
+      controller.abort(reason)
+      jest.advanceTimersByTime(101)
+
+      await expect(responsePromise).rejects.toBe(reason)
+    })
+
+    it('rethrows the underlying error when the caller signal carries no abort reason', async () => {
+      // `AbortSignal.reason` postdates the original spec, so a polyfilled or
+      // shimmed signal can abort with no reason at all. Throwing `undefined`
+      // there would leave callers with an unloggable, uncatchable failure.
+      const abortListeners: Array<() => void> = []
+      const reasonlessSignal = {
+        aborted: false,
+        reason: undefined,
+        addEventListener: (_type: string, listener: () => void) => {
+          abortListeners.push(listener)
+        },
+        removeEventListener: () => undefined,
+      } as unknown as AbortSignal
+
+      const fetchError = new Error('request cancelled by the runtime')
+      global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(fetchError), { once: true })
+        })
+      }) as unknown as typeof global.fetch
+
+      const responsePromise = requestHandler.handleRequest({
+        url: 'http://localhost:3000/files',
+        verb: HttpVerb.Get,
+        abortSignal: reasonlessSignal,
+      })
+      await Promise.resolve()
+
+      expect(abortListeners).toHaveLength(1)
+      abortListeners.forEach((listener) => listener())
+
+      await expect(responsePromise).rejects.toBe(fetchError)
+    })
   })
 
   describe('should return ErrorResponse when status is not >=200 and <500', () => {
@@ -374,6 +516,74 @@ describe('FetchRequestHandler', () => {
       expect(response.status).toBe(599)
       expect(response.headers).toEqual(new Map<string, string | null>([['content-type', 'text/plain']]))
       expect((response.data as HttpErrorResponseBody).error).toEqual({ message: 'Request failed with HTTP 599.' })
+    })
+  })
+
+  describe('bounded error-body decoding', () => {
+    // These bodies are all decoded deliberately, so nothing may reach the
+    // generic "could not parse" catch in handleFetchResponse. A logger that
+    // fires here means the fallback was an accident, not a decision.
+    let errorLog: jest.Mock
+    let handler: FetchRequestHandler
+
+    beforeEach(() => {
+      errorLog = jest.fn()
+      handler = new FetchRequestHandler(snjsVersion, appVersion, environment, {
+        error: errorLog,
+      } as unknown as LoggerInterface)
+    })
+
+    it('falls back to a generic message when a JSON error body is truncated', async () => {
+      // A proxy that cuts the response short still advertises application/json.
+      const fetchResponse = new Response('{"error":{"message":"upstream ti', {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      const response = await handler['handleFetchResponse'](fetchResponse)
+
+      expect((response.data as HttpErrorResponseBody).error).toEqual({ message: 'Request failed with HTTP 500.' })
+      expect(errorLog).not.toHaveBeenCalled()
+    })
+
+    it('reports a bodyless error response without reading a stream that does not exist', async () => {
+      const fetchResponse = new Response(null, {
+        status: 400,
+        headers: { 'Content-Type': 'text/plain' },
+      })
+      expect(fetchResponse.body).toBeNull()
+
+      const response = await handler['handleFetchResponse'](fetchResponse, 'arraybuffer')
+
+      expect((response.data as HttpErrorResponseBody).error).toEqual({ message: 'Request failed with HTTP 400.' })
+      expect(errorLog).not.toHaveBeenCalled()
+    })
+
+    it('does not reflect an HTML error page that a proxy mislabelled as text/plain', async () => {
+      // The content type says text/plain, so only the body sniff can catch this.
+      const fetchResponse = new Response('  <!doctype html><html><body>upstream 10.0.0.4 refused</body></html>', {
+        status: 400,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+
+      const response = await handler['handleFetchResponse'](fetchResponse, 'arraybuffer')
+
+      const message = (response.data as HttpErrorResponseBody).error?.message
+      expect(message).toBe('Request failed with HTTP 400.')
+      expect(message).not.toContain('10.0.0.4')
+      expect(errorLog).not.toHaveBeenCalled()
+    })
+
+    it('falls back to a generic message when a plain-text error body is only whitespace', async () => {
+      const fetchResponse = new Response('  \n\t  ', {
+        status: 400,
+        headers: { 'Content-Type': 'text/plain' },
+      })
+
+      const response = await handler['handleFetchResponse'](fetchResponse, 'arraybuffer')
+
+      expect((response.data as HttpErrorResponseBody).error).toEqual({ message: 'Request failed with HTTP 400.' })
+      expect(errorLog).not.toHaveBeenCalled()
     })
   })
 })
