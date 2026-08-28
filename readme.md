@@ -9,6 +9,12 @@
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-be1f2d?style=flat-square&logo=githubpages)](https://supermarsx.github.io/standard-red-notes/)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](license.md)
 
+> **Experimental software.** Standard Red Notes is under active development and
+> is not production-ready. Sync, storage, and deployment behavior can change in
+> breaking ways, and bugs affecting data integrity have been found and fixed
+> during recent development. Use it at your own risk and keep independent
+> backups of anything you cannot afford to lose.
+
 Standard Red Notes is an open, AGPL-3.0-licensed, self-hosted fork of
 [Standard Notes](https://standardnotes.com). The fork is
 **fully featured by default**, without subscription provisioning. Optional
