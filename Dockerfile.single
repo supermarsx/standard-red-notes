@@ -19,6 +19,12 @@ ARG SRN_DEPLOY_VERSION
 # CI do this, or pass `--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)`.
 # When a revision IS supplied but no version is, the version is derived from the
 # revision, so the two images of one build always agree (mirrors setup.sh).
+#
+# Alpine's /bin/sh is busybox ash, whose default pipeline status is the LAST
+# command's — so a failing `printf` feeding `cut` below would be swallowed and
+# the marker would be stamped from truncated input. pipefail makes the whole
+# pipeline fail-closed, matching the rest of this stage (hadolint DL4006).
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 RUN set -eu; \
   revision="${SRN_DEPLOY_REVISION}"; \
   version="${SRN_DEPLOY_VERSION}"; \

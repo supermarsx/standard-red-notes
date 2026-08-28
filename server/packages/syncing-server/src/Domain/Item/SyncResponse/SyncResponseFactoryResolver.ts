@@ -1,4 +1,4 @@
-import { usesModernSyncResponse } from '../../Api/ApiVersion'
+import { ApiVersion } from '../../Api/ApiVersion'
 import { SyncResponseFactory20161215 } from './SyncResponseFactory20161215'
 import { SyncResponseFactory20200115 } from './SyncResponseFactory20200115'
 import { SyncResponseFactoryInterface } from './SyncResponseFactoryInterface'
@@ -11,6 +11,13 @@ export class SyncResponseFactoryResolver implements SyncResponseFactoryResolverI
   ) {}
 
   resolveSyncResponseFactoryVersion(apiVersion?: string): SyncResponseFactoryInterface {
-    return usesModernSyncResponse(apiVersion) ? this.syncResponseFactory20200115 : this.syncResponseFactory20161215
+    switch (apiVersion) {
+      case ApiVersion.v20190520:
+      case ApiVersion.v20200115:
+      case ApiVersion.v20240226:
+        return this.syncResponseFactory20200115
+      default:
+        return this.syncResponseFactory20161215
+    }
   }
 }

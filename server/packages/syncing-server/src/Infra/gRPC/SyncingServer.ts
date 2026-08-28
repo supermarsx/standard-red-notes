@@ -6,7 +6,8 @@ import { safeErrorLogMetadata, MapperInterface } from '@standardnotes/domain-cor
 
 import { ItemHash } from '../../Domain/Item/ItemHash'
 import { SyncItems } from '../../Domain/UseCase/Syncing/SyncItems/SyncItems'
-import { ApiVersion, usesModernSyncResponse } from '../../Domain/Api/ApiVersion'
+import { ApiVersion } from '../../Domain/Api/ApiVersion'
+import { usesModernSyncResponse } from '../../Domain/Api/ModernSyncResponse'
 import { SyncResponseFactoryResolverInterface } from '../../Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
 import { SyncResponse20200115 } from '../../Domain/Item/SyncResponse/SyncResponse20200115'
 import { CheckForTrafficAbuse } from '../../Domain/UseCase/Syncing/CheckForTrafficAbuse/CheckForTrafficAbuse'
