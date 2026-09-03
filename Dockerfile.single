@@ -3,7 +3,7 @@
 ARG SRN_DEPLOY_REVISION=""
 ARG SRN_DEPLOY_VERSION=""
 
-FROM alpine:3.23 AS deployment-identity
+FROM alpine:3.24 AS deployment-identity
 
 ARG SRN_DEPLOY_REVISION
 ARG SRN_DEPLOY_VERSION
@@ -69,7 +69,7 @@ RUN set -eu; \
 # STAGE 1 — build the server workspace (produces the compiled home-server under
 # /opt/server, incl. the PnP .yarn cache + native addons). Mirrors server/Dockerfile.
 # -----------------------------------------------------------------------------
-FROM node:26.5.0-alpine3.23 AS server-build
+FROM node:26.8.1-alpine3.23 AS server-build
 
 ENV NODE_ENV=production
 
@@ -85,7 +85,7 @@ RUN CI=true yarn build
 # -----------------------------------------------------------------------------
 # STAGE 2 — build the web SPA bundle (packages/web/dist). Mirrors app/Dockerfile.
 # -----------------------------------------------------------------------------
-FROM node:26.5.0-bookworm-slim AS app-build
+FROM node:26.8.1-bookworm-slim AS app-build
 
 WORKDIR /opt/app
 
@@ -109,7 +109,7 @@ RUN --mount=type=cache,target=/opt/app/node_modules/.cache \
 # -----------------------------------------------------------------------------
 # RUNTIME — node + nginx + supervisord, no compiler toolchain. Runs as `srn`.
 # -----------------------------------------------------------------------------
-FROM node:26.5.0-alpine3.23 AS runtime
+FROM node:26.8.1-alpine3.23 AS runtime
 
 ARG SRN_DEPLOY_REVISION
 ARG SRN_DEPLOY_VERSION
