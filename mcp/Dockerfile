@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.25.0
 
-FROM node:26.5.0-alpine3.23 AS build
+FROM node:26.8.1-alpine3.23 AS build
 
 WORKDIR /opt/standard-red-notes
 
@@ -20,7 +20,7 @@ COPY mcp/src ./mcp/src
 # globals shimmed via the esbuild banner / libsodium sumo alias).
 RUN yarn workspace @standard-red-notes/mcp build
 
-FROM node:26.5.0-alpine3.23
+FROM node:26.8.1-alpine3.23
 
 WORKDIR /opt/standard-red-notes
 
