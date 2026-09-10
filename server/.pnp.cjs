@@ -6130,7 +6130,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
-          ["nodemailer", "npm:9.0.3"],\
+          ["nodemailer", "npm:9.1.1"],\
           ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.47.0"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
@@ -6195,7 +6195,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.23.0"],\
-          ["nodemailer", "npm:9.0.3"],\
+          ["nodemailer", "npm:9.1.1"],\
           ["otplib", "npm:13.4.1"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
@@ -13623,10 +13623,10 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["nodemailer", [\
-      ["npm:9.0.3", {\
-        "packageLocation": "./.yarn/cache/nodemailer-npm-9.0.3-898bcbd706-0118b6fc1e.zip/node_modules/nodemailer/",\
+      ["npm:9.1.1", {\
+        "packageLocation": "./.yarn/cache/nodemailer-npm-9.1.1-0fb48edfee-d84fd16456.zip/node_modules/nodemailer/",\
         "packageDependencies": [\
-          ["nodemailer", "npm:9.0.3"]\
+          ["nodemailer", "npm:9.1.1"]\
         ],\
         "linkType": "HARD"\
       }]\
