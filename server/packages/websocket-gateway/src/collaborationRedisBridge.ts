@@ -101,8 +101,38 @@ function asLifecycleError(error: unknown): Error {
   return wrapped
 }
 
-function causeOf(error: unknown): string {
-  return JSON.stringify({ cause: collaborationErrorCode(error) ?? 'redis-unavailable' })
+type DenialOperation =
+  | 'current-room-epoch'
+  | 'responder-lookup'
+  | 'lease-renewal'
+  | 'lease-reservation'
+  | 'lease-activation'
+  | 'yjs-response-claim'
+  | 'lease-refresh'
+  | 'frame-publish'
+  | 'lease-cleanup'
+
+/**
+ * The operator lines, as constants: the operation selects one, and the only
+ * other value beside it is the closed-enum cause code (R45), repeated in the
+ * metadata for hosts that keep structured fields. Nothing derived from the raw
+ * error ever reaches the message position; `safeErrorLogMetadata` carries its
+ * redacted classification.
+ */
+const WARN_LINES: Readonly<Record<DenialOperation, string>> = Object.freeze({
+  'current-room-epoch': '[collab-redis] current room epoch unavailable',
+  'responder-lookup': '[collab-redis] responder lookup unavailable',
+  'lease-renewal': '[collab-redis] lease renewal unavailable; denying collaboration',
+  'lease-reservation': '[collab-redis] lease reservation unavailable; denying collaboration',
+  'lease-activation': '[collab-redis] lease activation unavailable; denying collaboration',
+  'yjs-response-claim': '[collab-redis] Yjs response claim unavailable; denying collaboration',
+  'lease-refresh': '[collab-redis] lease refresh failed',
+  'frame-publish': '[collab-redis] encrypted frame publish failed',
+  'lease-cleanup': '[collab-redis] lease cleanup failed',
+})
+
+function causeCodeOf(error: unknown): CollaborationLifecycleErrorCode {
+  return collaborationErrorCode(error) ?? 'redis-unavailable'
 }
 
 type RelayPayloadFrame =
@@ -549,7 +579,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     try {
       state = await bounded(this.commands.get(this.roomStateKey(room)))
     } catch (error) {
-      this.logger.warn(`[collab-redis] current room epoch unavailable ${causeOf(error)}`, safeErrorLogMetadata(error))
+      this.warnDenial('current-room-epoch', error)
       return undefined
     }
     if (typeof state !== 'string') {
@@ -579,7 +609,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       )
       return !Number.isSafeInteger(count) || count > 0
     } catch (error) {
-      this.logger.warn(`[collab-redis] responder lookup unavailable ${causeOf(error)}`, safeErrorLogMetadata(error))
+      this.warnDenial('responder-lookup', error)
       return true
     }
   }
@@ -647,10 +677,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         }
       } catch (rawError) {
         const error = asLifecycleError(rawError)
-        this.logger.warn(
-          `[collab-redis] lease renewal unavailable; denying collaboration ${causeOf(error)}`,
-          safeErrorLogMetadata(error),
-        )
+        this.warnDenial('lease-renewal', error)
         if (isLeasePolicyError(error)) {
           await this.denyAndReleaseRoom(room, roomDeniedReasonFor(error))
         } else {
@@ -731,10 +758,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       return { shouldBootstrap, ...(bootstrapChallenge ? { bootstrapChallenge } : {}) }
     } catch (rawError) {
       const error = asLifecycleError(rawError)
-      this.logger.warn(
-        `[collab-redis] lease reservation unavailable; denying collaboration ${causeOf(error)}`,
-        safeErrorLogMetadata(error),
-      )
+      this.warnDenial('lease-reservation', error)
       if (error instanceof CollaborationRoomSecurityRevokedError) {
         await this.discardRevokedRoom(room)
       } else if (!isLeasePolicyError(error) && !(error instanceof CollaborationRoomEpochMismatchError)) {
@@ -787,10 +811,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       await this.refresh(lease, this.leaseTtl(expiresAt))
     } catch (rawError) {
       const error = asLifecycleError(rawError)
-      this.logger.warn(
-        `[collab-redis] lease activation unavailable; denying collaboration ${causeOf(error)}`,
-        safeErrorLogMetadata(error),
-      )
+      this.warnDenial('lease-activation', error)
       if (isLeasePolicyError(error)) {
         await this.denyAndReleaseRoom(room, roomDeniedReasonFor(error))
       } else {
@@ -932,10 +953,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       return result === 1 ? claimExpiresAt : undefined
     } catch (rawError) {
       const error = asLifecycleError(rawError)
-      this.logger.warn(
-        `[collab-redis] Yjs response claim unavailable; denying collaboration ${causeOf(error)}`,
-        safeErrorLogMetadata(error),
-      )
+      this.warnDenial('yjs-response-claim', error)
       this.handleCommandUnavailable()
       throw error
     }
@@ -971,7 +989,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
           } else {
             refreshFailed = true
           }
-          this.logger.warn(`[collab-redis] lease refresh failed ${causeOf(error)}`, safeErrorLogMetadata(error))
+          this.warnDenial('lease-refresh', error)
         }
       }),
     )
@@ -995,7 +1013,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       }
     } catch (rawError) {
       const error = asLifecycleError(rawError)
-      this.logger.warn(`[collab-redis] encrypted frame publish failed ${causeOf(error)}`, safeErrorLogMetadata(error))
+      this.warnDenial('frame-publish', error)
       if (missingSubscribers) {
         this.handleSubscriberUnavailable()
         if (this.subscriber.status === 'ready') {
@@ -1035,6 +1053,16 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     this.leases.clear()
     await Promise.allSettled([...pendingReleases.values()].map((lease) => this.release(lease)))
     await Promise.all([this.closeClient(this.commands), this.closeClient(this.subscriber)])
+  }
+
+  /**
+   * One constant line per operation plus the closed-enum cause code, in the
+   * message (for hosts that flatten metadata) and in the metadata (for hosts
+   * that keep it); the error itself contributes only its redacted classification.
+   */
+  private warnDenial(operation: DenialOperation, error: unknown): void {
+    const cause = causeCodeOf(error)
+    this.logger.warn(`${WARN_LINES[operation]} ${JSON.stringify({ cause })}`, { ...safeErrorLogMetadata(error), cause })
   }
 
   private localLeaseId(conn: Conn<S>, room: string, requestId: string | undefined): string {
@@ -1219,7 +1247,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       return true
     } catch (error) {
       // The lease key has a short TTL, so a failed cleanup cannot strand a room.
-      this.logger.warn(`[collab-redis] lease cleanup failed ${causeOf(error)}`, safeErrorLogMetadata(error))
+      this.warnDenial('lease-cleanup', error)
       return false
     }
   }

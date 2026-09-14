@@ -2727,6 +2727,18 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
             String(message).endsWith('{"cause":"redis-unavailable"}'),
         ),
     ).toBe(true)
+    // The same code travels in the structured metadata next to the redacted
+    // classification, for hosts that keep metadata rather than flatten it.
+    expect(
+      vi
+        .mocked(logger.warn)
+        .mock.calls.some(
+          ([message, metadata]) =>
+            String(message).endsWith('{"cause":"redis-unavailable"}') &&
+            (metadata as { cause?: string; errorType?: string }).cause === 'redis-unavailable' &&
+            (metadata as { cause?: string; errorType?: string }).errorType === 'Error',
+        ),
+    ).toBe(true)
     redis.failEval = false
     redis.emitCommandReady()
 
