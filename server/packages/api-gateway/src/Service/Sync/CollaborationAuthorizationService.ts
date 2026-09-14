@@ -96,9 +96,13 @@ export class CollaborationAuthorizationService {
     }
 
     // The default is deterministic for one encryption/membership generation so
-    // separately-authorized clients converge on the same initial room. Redis
-    // may rotate an empty room to a fresh epoch; clients then re-authorize with
-    // that exact server-reported epoch through expectedRoomEpoch.
+    // separately-authorized clients converge on the same initial room. This
+    // service never reads room state: the websocket gateway may rotate an
+    // empty room to a fresh epoch, and on the sync lane it substitutes the
+    // room's CURRENT epoch for this initial value in the discovery answer
+    // (`collaborationRoomEpochResolver`, contract C4) while keeping the
+    // one-use challenge binding. That resolver is the only source of rotation;
+    // the grant leg below signs whatever expectedRoomEpoch the client learned.
     const initialRoomEpoch = createHmac('sha256', this.capabilitySecret)
       .update(`${input.noteUuid}\u0000${access.collaborationSecurityEpoch}`, 'utf8')
       .digest('base64url')

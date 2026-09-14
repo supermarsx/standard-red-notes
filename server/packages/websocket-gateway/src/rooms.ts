@@ -99,6 +99,75 @@ export const MAX_YJS_CLIENT_ID = 0xffff_ffff
 export type RoomLeaseRole = 'editor' | 'comment'
 export type YjsResponseFrameDisposition = 'uncorrelated' | 'partial' | 'complete' | 'denied'
 
+/**
+ * Why a `room-denied` frame was sent (contract C1). The server always sets it;
+ * `roomEpoch` accompanies the frame iff `reason === 'epoch-mismatch'` and then
+ * carries the room's CURRENT epoch so the client can re-run discovery.
+ */
+export type RoomDeniedReason =
+  | 'epoch-mismatch'
+  | 'security-revoked'
+  | 'rate-limited'
+  | 'relay-unhealthy'
+  | 'capability-invalid'
+  | 'room-full'
+  | 'reservation-expired'
+  | 'room-limit'
+  | 'policy'
+
+/**
+ * Stable cause codes carried on the `code` property of every error a
+ * RoomRelayLifecycle implementation throws (R45). They survive log redaction
+ * and are the only input to the denial reason a client sees.
+ */
+export type CollaborationLifecycleErrorCode =
+  | 'epoch-mismatch'
+  | 'security-revoked'
+  | 'room-limit'
+  | 'incompatible-protocol'
+  | 'reservation-expired'
+  | 'relay-unhealthy'
+  | 'redis-unavailable'
+
+const LIFECYCLE_ERROR_CODES = new Set<string>([
+  'epoch-mismatch',
+  'security-revoked',
+  'room-limit',
+  'incompatible-protocol',
+  'reservation-expired',
+  'relay-unhealthy',
+  'redis-unavailable',
+])
+
+export function collaborationErrorCode(error: unknown): CollaborationLifecycleErrorCode | undefined {
+  if (!(error instanceof Error)) {
+    return undefined
+  }
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' && LIFECYCLE_ERROR_CODES.has(code)
+    ? (code as CollaborationLifecycleErrorCode)
+    : undefined
+}
+
+/** Map a lifecycle failure onto the bounded reason a client may learn (C1). */
+export function roomDeniedReasonFor(error: unknown): RoomDeniedReason {
+  switch (collaborationErrorCode(error)) {
+    case 'epoch-mismatch':
+      return 'epoch-mismatch'
+    case 'security-revoked':
+      return 'security-revoked'
+    case 'room-limit':
+      return 'room-limit'
+    case 'reservation-expired':
+      return 'reservation-expired'
+    case 'relay-unhealthy':
+    case 'redis-unavailable':
+      return 'relay-unhealthy'
+    default:
+      return 'policy'
+  }
+}
+
 // Reservations exist before normal room membership, so the membership cap below
 // cannot bound them. Keep this ledger deliberately smaller than the normal room
 // cap: an editor reservation should be activated almost immediately.
@@ -115,18 +184,26 @@ export const MAX_COLLABORATION_SOCKET_BUFFERED_BYTES = 1024 * 1024
 // capability verification and distributed lease coordination, while retry asks
 // every peer to regenerate a full Yjs state. Unique request ids must not bypass
 // these fixed-window budgets.
+//
+// Reserve and join room budgets are keyed by (room, user) so one user's
+// reconnect storm after a gateway restart cannot blind-deny the other editors of
+// the same room (R14); the ceilings exceed 2x the 64-lease editor cap so a full
+// room reconnecting at once with the client's 5-retry budget fits in one window.
 export const CONTROL_FRAME_WINDOW_MS = 10_000
 export const MAX_ROOM_RESERVE_FRAMES_PER_CONNECTION = 12
-export const MAX_ROOM_RESERVE_FRAMES_PER_ROOM = 48
+export const MAX_ROOM_RESERVE_FRAMES_PER_ROOM = 128
 export const MAX_ROOM_JOIN_FRAMES_PER_CONNECTION = 16
-export const MAX_ROOM_JOIN_FRAMES_PER_ROOM = 64
+export const MAX_ROOM_JOIN_FRAMES_PER_ROOM = 160
 export const MAX_YJS_RETRY_FRAMES_PER_CONNECTION = 3
 export const MAX_YJS_RETRY_FRAMES_PER_ROOM = 12
 export const MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION = 8
 export const MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM = 128
 export const MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_CONNECTION = 16
 export const MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_ROOM = 128
-const MAX_TRACKED_CONTROL_ROOMS = 2_048
+// Room windows (retry/claim) and (room, user) windows (reserve/join) share one
+// bounded ledger; when it is full the stalest entry is recycled instead of
+// denying every new room outright.
+export const MAX_TRACKED_CONTROL_WINDOWS = 8_192
 
 const CONTROL_FRAME_LIMITS = Object.freeze({
   'room-reserve': {
@@ -419,11 +496,11 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   private readonly pendingReservationsByRoom = new Map<string, Map<Conn<S>, Map<string, PendingEditorReservation>>>()
   private readonly pendingReservationsByConn = new WeakMap<Conn<S>, Map<string, Set<string>>>()
   private readonly controlWindowsByConn = new WeakMap<Conn<S>, ControlWindows>()
-  private readonly controlWindowsByRoom = new Map<string, ControlWindows>()
+  private readonly controlWindowsByScope = new Map<string, ControlWindows>()
   private readonly yjsResponseGrantsByRoom = new Map<string, Map<Conn<S>, Map<string, YjsResponseGrant>>>()
   private readonly yjsResponseGrantRoomsByConn = new WeakMap<Conn<S>, Set<string>>()
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(readonly now: () => number = Date.now) {}
 
   /**
    * Claim a bounded slot before awaiting capability authorization. The short
@@ -556,33 +633,42 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     return this.takeExpiredPendingEditorReservationsInRoom(room)
   }
 
-  /** Atomically consume both the connection and aggregate room control budget. */
+  /**
+   * Atomically consume both the connection and the aggregate control budget.
+   * Reserve/join aggregate per (room, user); retry/claim aggregate per room.
+   */
   allowControlFrame(kind: ControlFrameKind, room: string, conn: Conn<S>): boolean {
     const now = this.now()
-    this.pruneControlRooms(now)
+    this.pruneControlScopes(now)
     const connectionWindows = this.controlWindowsByConn.get(conn) ?? this.newControlWindows(now)
     const connectionWindow = this.currentControlWindow(connectionWindows[kind], now)
     const limits = CONTROL_FRAME_LIMITS[kind]
     if (connectionWindow.count >= limits.connection) {
       return false
     }
-    let roomWindows = this.controlWindowsByRoom.get(room)
-    if (!roomWindows) {
-      if (this.controlWindowsByRoom.size >= MAX_TRACKED_CONTROL_ROOMS) {
-        return false
+    const scope = kind === 'room-reserve' || kind === 'room-join' ? `${room}\u0000${conn.userUuid}` : room
+    let scopeWindows = this.controlWindowsByScope.get(scope)
+    if (!scopeWindows) {
+      if (this.controlWindowsByScope.size >= MAX_TRACKED_CONTROL_WINDOWS) {
+        this.recycleStalestControlScope()
       }
-      roomWindows = this.newControlWindows(now)
-      this.controlWindowsByRoom.set(room, roomWindows)
+      scopeWindows = this.newControlWindows(now)
+      this.controlWindowsByScope.set(scope, scopeWindows)
     }
 
-    const roomWindow = this.currentControlWindow(roomWindows[kind], now)
-    if (roomWindow.count >= limits.room) {
+    const scopeWindow = this.currentControlWindow(scopeWindows[kind], now)
+    if (scopeWindow.count >= limits.room) {
       return false
     }
     connectionWindow.count += 1
-    roomWindow.count += 1
+    scopeWindow.count += 1
     this.controlWindowsByConn.set(conn, connectionWindows)
     return true
+  }
+
+  /** Number of aggregate control windows currently tracked (leak guard). */
+  trackedControlWindowCount(): number {
+    return this.controlWindowsByScope.size
   }
 
   requestLease(
@@ -924,16 +1010,16 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   /** Fail closed when the distributed relay can no longer guarantee convergence. */
-  denyRoom(room: string): void {
+  denyRoom(room: string, reason: RoomDeniedReason = 'policy'): void {
     this.removeAllYjsResponseGrantsForRoom(room)
     const members = this.byRoom.get(room)
     if (members) {
       for (const [conn, membership] of members) {
         for (const requestId of membership.requestIds.keys()) {
-          this.sendDenied(conn, room, requestId)
+          this.sendDenied(conn, room, requestId, reason)
         }
         if (membership.legacyLease) {
-          this.sendDenied(conn, room)
+          this.sendDenied(conn, room, undefined, reason)
         }
         this.byConn.get(conn)?.delete(room)
       }
@@ -943,21 +1029,21 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     if (pending) {
       for (const [conn, reservations] of [...pending]) {
         for (const requestId of reservations.keys()) {
-          this.sendDenied(conn, room, requestId)
+          this.sendDenied(conn, room, requestId, reason)
         }
         this.releasePendingEditorReservation(room, conn)
       }
     }
   }
 
-  denyAllRooms(): void {
+  denyAllRooms(reason: RoomDeniedReason = 'relay-unhealthy'): void {
     const rooms = new Set([
       ...this.byRoom.keys(),
       ...this.pendingReservationsByRoom.keys(),
       ...this.yjsResponseGrantsByRoom.keys(),
     ])
     for (const room of rooms) {
-      this.denyRoom(room)
+      this.denyRoom(room, reason)
     }
   }
 
@@ -986,6 +1072,32 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       return false
     }
     return this.pruneExpiredLeases(room, conn, membership)
+  }
+
+  /**
+   * True when a connection OTHER than `conn` holds a live editor lease in
+   * `room`, i.e. a local peer exists that can answer a full-state retry. With
+   * a lifecycle attached, registry editor leases are activated by construction.
+   */
+  hasOtherEditor(room: string, conn: Conn<S>): boolean {
+    const members = this.byRoom.get(room)
+    if (!members) {
+      return false
+    }
+    for (const [member, membership] of [...members]) {
+      if (member === conn || !this.pruneExpiredLeases(room, member, membership)) {
+        continue
+      }
+      if (membership.legacyLease?.role === 'editor') {
+        return true
+      }
+      for (const lease of membership.requestIds.values()) {
+        if (lease.role === 'editor') {
+          return true
+        }
+      }
+    }
+    return false
   }
 
   /** True only while this connection owns at least one live lease for `role`. */
@@ -1024,12 +1136,12 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       if (lease.expiresAt <= now) {
         this.removeYjsResponseGrants(room, conn, requestId)
         membership.requestIds.delete(requestId)
-        this.sendDenied(conn, room, requestId)
+        this.sendDenied(conn, room, requestId, 'capability-invalid')
       }
     }
     if (membership.legacyLease !== undefined && membership.legacyLease.expiresAt <= now) {
       membership.legacyLease = undefined
-      this.sendDenied(conn, room)
+      this.sendDenied(conn, room, undefined, 'capability-invalid')
     }
     if (membership.requestIds.size > 0 || membership.legacyLease !== undefined) {
       return true
@@ -1167,26 +1279,46 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     return window
   }
 
-  private pruneControlRooms(now: number): void {
-    for (const [room, windows] of this.controlWindowsByRoom) {
-      if (
-        now - windows['room-reserve'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
-        now - windows['room-join'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
-        now - windows['yjs-retry'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
-        now - windows['yjs-response-claim'].startedAt >= CONTROL_FRAME_WINDOW_MS
-      ) {
-        this.controlWindowsByRoom.delete(room)
+  private latestControlWindowStart(windows: ControlWindows): number {
+    return Math.max(
+      windows['room-reserve'].startedAt,
+      windows['room-join'].startedAt,
+      windows['yjs-retry'].startedAt,
+      windows['yjs-response-claim'].startedAt,
+    )
+  }
+
+  private pruneControlScopes(now: number): void {
+    for (const [scope, windows] of this.controlWindowsByScope) {
+      if (now - this.latestControlWindowStart(windows) >= CONTROL_FRAME_WINDOW_MS) {
+        this.controlWindowsByScope.delete(scope)
       }
     }
   }
 
-  private sendDenied(conn: Conn<S>, room: string, requestId?: string): void {
+  private recycleStalestControlScope(): void {
+    let stalest: string | undefined
+    let stalestStart = Number.POSITIVE_INFINITY
+    for (const [scope, windows] of this.controlWindowsByScope) {
+      const start = this.latestControlWindowStart(windows)
+      if (start < stalestStart) {
+        stalestStart = start
+        stalest = scope
+      }
+    }
+    if (stalest !== undefined) {
+      this.controlWindowsByScope.delete(stalest)
+    }
+  }
+
+  private sendDenied(conn: Conn<S>, room: string, requestId: string | undefined, reason: RoomDeniedReason): void {
     try {
       conn.socket.send(
         JSON.stringify({
           t: 'room-denied',
           room,
           ...(requestId ? { requestId } : {}),
+          reason,
         }),
       )
     } catch {
@@ -1287,6 +1419,12 @@ export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
     reason?: RoomPresenceLeaveReason,
   ): Promise<void>
   heartbeatPresence?(conn: Conn<S>, room: string, requestId: string, roomEpoch: string, clientId: number): Promise<void>
+  /**
+   * Distributed view for C2: true when any editor lease other than `conn`'s own
+   * may still answer a full-state retry in `room`. Implementations must answer
+   * true when unsure (a remote pending lease, a failed read).
+   */
+  hasOtherActivatedEditorLease?(conn: Conn<S>, room: string): Promise<boolean>
   /** Absolute local expiry when granted; undefined means this claimant lost. */
   claimYjsResponse(
     conn: Conn<S>,
@@ -1339,6 +1477,8 @@ export type RoomPresenceLeaveReason = 'clean-leave' | 'disconnect' | 'heartbeat-
 
 /** A policy rejection that may safely disclose only the opaque current epoch. */
 export class CollaborationRoomEpochMismatchError extends Error {
+  readonly code: CollaborationLifecycleErrorCode = 'epoch-mismatch'
+
   constructor(readonly currentRoomEpoch: string) {
     super('Collaboration room epoch mismatch')
     this.name = 'CollaborationRoomEpochMismatchError'
@@ -1371,14 +1511,20 @@ export async function handleRelayFrame<S extends SendableSocket>(
   if (isConnectionActive && !isConnectionActive()) {
     return 0
   }
-  const deny = (room: string, requestId?: string, roomEpoch?: string): number => {
+  const deny = (
+    room: string,
+    requestId: string | undefined,
+    reason: RoomDeniedReason,
+    currentRoomEpoch?: string,
+  ): number => {
     try {
       conn.socket.send(
         JSON.stringify({
           t: 'room-denied',
           room,
           ...(requestId ? { requestId } : {}),
-          ...(roomEpoch ? { roomEpoch } : {}),
+          ...(reason === 'epoch-mismatch' && currentRoomEpoch ? { roomEpoch: currentRoomEpoch } : {}),
+          reason,
         }),
       )
     } catch {
@@ -1386,6 +1532,13 @@ export async function handleRelayFrame<S extends SendableSocket>(
     }
     return 0
   }
+  const denyForError = (room: string, requestId: string | undefined, error: unknown): number =>
+    deny(
+      room,
+      requestId,
+      roomDeniedReasonFor(error),
+      error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
+    )
   const authorizeCapability = async (room: string, capability?: string): Promise<RoomJoinAuthorization> => {
     if (!authorize) {
       return {
@@ -1404,13 +1557,28 @@ export async function handleRelayFrame<S extends SendableSocket>(
       return { authorized: false }
     }
   }
+  // Without a lifecycle the local registry is the whole world; a lifecycle that
+  // cannot report the distributed view is assumed to have a responder (safe).
+  const hasRemoteResponder = async (room: string): Promise<boolean> => {
+    if (!lifecycle) {
+      return false
+    }
+    if (!lifecycle.hasOtherActivatedEditorLease) {
+      return true
+    }
+    try {
+      return await lifecycle.hasOtherActivatedEditorLease(conn, room)
+    } catch {
+      return true
+    }
+  }
   switch (frame.t) {
     case 'room-reserve': {
       if (!lifecycle) {
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, 'policy')
       }
       if (!rooms.allowControlFrame('room-reserve', frame.room, conn)) {
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, 'rate-limited')
       }
       const expiredReservations = [
         ...rooms.takeExpiredPendingEditorReservationsForConn(conn),
@@ -1423,7 +1591,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
       )
       const slot = rooms.reservePendingEditorSlot(frame.room, conn, frame.requestId)
       if (!slot.accepted) {
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, 'room-limit')
       }
       const authorization = await authorizeCapability(frame.room, frame.cap)
       if (
@@ -1437,7 +1605,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
         if (slot.created) {
           rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
         }
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, authorization.authorized ? 'policy' : 'capability-invalid')
       }
       if (isConnectionActive && !isConnectionActive()) {
         rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
@@ -1450,7 +1618,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
         authorization.expiresAt,
       )
       if (activationDeadline === undefined) {
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, 'reservation-expired')
       }
       try {
         const reservation = await lifecycle.reserveEditorLease(
@@ -1482,16 +1650,15 @@ export async function handleRelayFrame<S extends SendableSocket>(
             protocolVersion: COLLABORATION_PROTOCOL_VERSION,
             maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
             roomEpoch: authorization.roomEpoch,
+            // Relative activation budget (C3): the client bounds its remaining
+            // pre-join work to this minus a safety margin instead of guessing.
+            activationTtlMs: Math.max(0, activationDeadline - rooms.now()),
           }),
         )
       } catch (error) {
         rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
         await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
-        return deny(
-          frame.room,
-          frame.requestId,
-          error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
-        )
+        return denyForError(frame.room, frame.requestId, error)
       }
       return 0
     }
@@ -1558,26 +1725,26 @@ export async function handleRelayFrame<S extends SendableSocket>(
           }
         }
       }
-      const denyJoin = async (): Promise<number> => {
+      const denyJoin = async (reason: RoomDeniedReason): Promise<number> => {
         await releaseJoinAttempt()
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, reason)
       }
       if (
         lifecycle &&
         requestedRole === 'editor' &&
         (!frame.requestId || !rooms.hasPendingEditorReservation(frame.room, conn, frame.requestId))
       ) {
-        return denyJoin()
+        return denyJoin('reservation-expired')
       }
       if (!rooms.canAcceptJoin(frame.room, conn, frame.requestId)) {
-        return denyJoin()
+        return denyJoin('room-full')
       }
       if (!rooms.allowControlFrame('room-join', frame.room, conn)) {
-        return denyJoin()
+        return denyJoin('rate-limited')
       }
       const authorization = await authorizeCapability(frame.room, frame.cap)
       if (!authorization.authorized) {
-        return denyJoin()
+        return denyJoin('capability-invalid')
       }
       // Authorization can be asynchronous. A socket that closed while it was
       // in flight must never be resurrected into a room or receive an ack.
@@ -1596,7 +1763,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
           !isValidCollaborationEpoch(authorization.collaborationSecurityEpoch) ||
           authorization.leaseRequestId !== frame.requestId)
       ) {
-        return denyJoin()
+        return denyJoin('policy')
       }
       if (requestedRole === 'editor' && lifecycle) {
         if (
@@ -1604,7 +1771,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
           authorization.leaseRequestId !== frame.requestId ||
           frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION
         ) {
-          return denyJoin()
+          return denyJoin('policy')
         }
         try {
           shouldBootstrapOverride = (
@@ -1629,11 +1796,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
           }
         } catch (error) {
           await releaseJoinAttempt()
-          return deny(
-            frame.room,
-            frame.requestId,
-            error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
-          )
+          return denyForError(frame.room, frame.requestId, error)
         }
       }
       const joinResult = rooms.join(
@@ -1651,18 +1814,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
         if (lifecycle && reservedEditorLease) {
           await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
         }
-        try {
-          conn.socket.send(
-            JSON.stringify({
-              t: 'room-denied',
-              room: frame.room,
-              ...(frame.requestId ? { requestId: frame.requestId } : {}),
-            }),
-          )
-        } catch {
-          /* socket unwritable; nothing else to do */
-        }
-        return 0
+        return deny(frame.room, frame.requestId, 'room-full')
       }
       if (reservedEditorLease && frame.requestId) {
         rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
@@ -1697,15 +1849,15 @@ export async function handleRelayFrame<S extends SendableSocket>(
         return 0
       }
       const syncFrame = { t: 'room-sync' as const, room: frame.room }
+      const syncReached = rooms.broadcast(frame.room, JSON.stringify(syncFrame), conn)
       if (lifecycle) {
         try {
           await lifecycle.publish(syncFrame)
         } catch {
-          rooms.denyRoom(frame.room)
-          return 0
+          rooms.denyRoom(frame.room, 'relay-unhealthy')
         }
       }
-      return rooms.broadcast(frame.room, JSON.stringify(syncFrame), conn)
+      return syncReached
     }
     case 'room-leave':
       rooms.leave(frame.room, conn, frame.requestId)
@@ -1724,16 +1876,12 @@ export async function handleRelayFrame<S extends SendableSocket>(
         lease.roomEpoch !== frame.expectedRoomEpoch ||
         frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION
       ) {
-        return deny(frame.room, frame.requestId)
+        return deny(frame.room, frame.requestId, 'policy')
       }
       try {
         await lifecycle.heartbeatPresence(conn, frame.room, frame.requestId, frame.expectedRoomEpoch, frame.clientId)
       } catch (error) {
-        return deny(
-          frame.room,
-          frame.requestId,
-          error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
-        )
+        return denyForError(frame.room, frame.requestId, error)
       }
       return 0
     }
@@ -1790,8 +1938,21 @@ export async function handleRelayFrame<S extends SendableSocket>(
       ) {
         return 0
       }
-      if (frame.t === 'yjs-retry' && !rooms.allowControlFrame('yjs-retry', frame.room, conn)) {
-        return 0
+      if (frame.t === 'yjs-retry') {
+        if (!rooms.allowControlFrame('yjs-retry', frame.room, conn)) {
+          return 0
+        }
+        // C2: a full-state retry that no other activated editor can answer is
+        // told so at once, instead of the client timing out 8 x 10 s and only
+        // then failing over to its own bootstrap.
+        if (!rooms.hasOtherEditor(frame.room, conn) && !(await hasRemoteResponder(frame.room))) {
+          try {
+            conn.socket.send(JSON.stringify({ t: 'yjs-no-responder', room: frame.room, requestId: frame.requestId }))
+          } catch {
+            /* socket unwritable */
+          }
+          return 0
+        }
       }
       const yjsResponseDisposition =
         frame.t === 'yjs' || frame.t === 'yjs-chunk'
@@ -1800,15 +1961,18 @@ export async function handleRelayFrame<S extends SendableSocket>(
       if (yjsResponseDisposition === 'denied') {
         return 0
       }
+      // R15: local peers receive the frame immediately; the cross-replica
+      // publish follows and its failure still denies the room (fail closed for
+      // convergence) without holding local delivery behind a Redis round trip.
+      const reached = rooms.broadcast(frame.room, JSON.stringify(frame), conn)
       if (lifecycle) {
         try {
           await lifecycle.publish(frame)
         } catch {
-          rooms.denyRoom(frame.room)
-          return 0
+          rooms.denyRoom(frame.room, 'relay-unhealthy')
+          return reached
         }
       }
-      const reached = rooms.broadcast(frame.room, JSON.stringify(frame), conn)
       const acceptedTransferId =
         frame.t === 'yjs'
           ? frame.transferId

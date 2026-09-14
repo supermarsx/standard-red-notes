@@ -4,9 +4,13 @@ import { Redis } from 'ioredis'
 import type { Conn, SendableSocket } from './registry.js'
 import {
   CollaborationRoomEpochMismatchError,
+  collaborationErrorCode,
   parseRelayFrame,
   PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+  roomDeniedReasonFor,
+  type CollaborationLifecycleErrorCode,
   type RelayFrame,
+  type RoomDeniedReason,
   type RoomRegistry,
   type RoomRelayLifecycle,
 } from './rooms.js'
@@ -14,6 +18,22 @@ import type { Logger } from './redisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
 
 export const COLLABORATION_RELAY_CHANNEL = 'srn-collaboration-relay-v1'
+const COLLABORATION_KEY_ROOT = 'srn:collaboration:'
+
+/**
+ * Per-deployment Redis namespace (C10): a non-empty namespace prefixes every
+ * collaboration key and the relay channel as `<ns>:<original>`; empty keeps
+ * today's byte-identical names so a rolling upgrade keeps replicas talking.
+ */
+export function collaborationKeyPrefix(namespace: string | undefined): string {
+  const trimmed = (namespace ?? '').replace(/:+$/, '')
+  return trimmed.length > 0 ? `${trimmed}:` : ''
+}
+
+export function collaborationRelayChannel(namespace: string | undefined): string {
+  return `${collaborationKeyPrefix(namespace)}${COLLABORATION_RELAY_CHANNEL}`
+}
+
 const LEASE_TTL_MS = 75_000
 const ROOM_EPOCH_TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1_000
 const REDIS_OPERATION_TIMEOUT_MS = 1_500
@@ -26,17 +46,63 @@ export const COLLABORATION_PRESENCE_TTL_MS = 45_000
 // a new stateRequestId, so liveness does not require re-granting the same id
 // while a 4 MiB winner may still be encrypting and chunking its response.
 export const YJS_RESPONSE_CLAIM_TTL_MS = 15_000
-const INCOMPATIBLE_PROTOCOL_ERROR = 'Incompatible collaboration protocol is active in this room'
-const ROOM_LEASE_LIMIT_ERROR = 'Collaboration room editor lease limit exceeded'
-const LEASE_OWNERSHIP_LOST_ERROR = 'Collaboration lease ownership was lost'
+/**
+ * Every failure the bridge raises carries a stable `code` (R45) so operators can
+ * tell an epoch lockout from a Redis outage even after log redaction, and so the
+ * gateway can name the denial to the client (C1). `policy` marks lease-policy
+ * rejections that deny one room without declaring the whole relay unhealthy.
+ */
+export class CollaborationLifecycleError extends Error {
+  constructor(
+    readonly code: CollaborationLifecycleErrorCode,
+    message: string,
+    readonly policy = false,
+  ) {
+    super(message)
+    this.name = 'CollaborationLifecycleError'
+  }
+}
 
-function isLeasePolicyError(error: unknown): error is Error {
-  return (
-    error instanceof Error &&
-    (error.message === INCOMPATIBLE_PROTOCOL_ERROR ||
-      error.message === ROOM_LEASE_LIMIT_ERROR ||
-      error.message === LEASE_OWNERSHIP_LOST_ERROR)
-  )
+function lifecycleError(code: CollaborationLifecycleErrorCode, message: string): CollaborationLifecycleError {
+  return new CollaborationLifecycleError(code, message)
+}
+
+function leasePolicyError(code: CollaborationLifecycleErrorCode, message: string): CollaborationLifecycleError {
+  return new CollaborationLifecycleError(code, message, true)
+}
+
+function incompatibleProtocolError(): CollaborationLifecycleError {
+  return leasePolicyError('incompatible-protocol', 'Incompatible collaboration protocol is active in this room')
+}
+
+function roomLeaseLimitError(): CollaborationLifecycleError {
+  return leasePolicyError('room-limit', 'Collaboration room editor lease limit exceeded')
+}
+
+function leaseOwnershipLostError(): CollaborationLifecycleError {
+  return leasePolicyError('reservation-expired', 'Collaboration lease ownership was lost')
+}
+
+function relayUnhealthyError(): CollaborationLifecycleError {
+  return lifecycleError('relay-unhealthy', 'Redis collaboration relay is not healthy')
+}
+
+function isLeasePolicyError(error: unknown): error is CollaborationLifecycleError {
+  return error instanceof CollaborationLifecycleError && error.policy
+}
+
+/** Wrap a raw transport rejection so every thrown error carries a cause code. */
+function asLifecycleError(error: unknown): Error {
+  if (collaborationErrorCode(error) !== undefined) {
+    return error as Error
+  }
+  const wrapped = lifecycleError('redis-unavailable', 'Redis collaboration operation failed')
+  wrapped.cause = error
+  return wrapped
+}
+
+function causeOf(error: unknown): string {
+  return JSON.stringify({ cause: collaborationErrorCode(error) ?? 'redis-unavailable' })
 }
 
 type RelayPayloadFrame =
@@ -81,6 +147,7 @@ type LocalPresence<S extends SendableSocket> = {
 interface RedisCommandClient {
   readonly status: string
   eval(script: string, numberOfKeys: number, ...args: Array<string | number>): Promise<unknown>
+  get(key: string): Promise<string | null>
   publish(channel: string, message: string): Promise<number>
   on(event: 'error', callback: (error: Error) => void): unknown
   on(event: 'ready', callback: () => void): unknown
@@ -123,6 +190,10 @@ type LocalLease<S extends SendableSocket> = {
   activated: boolean
 }
 
+// A denied reserve (epoch or security mismatch) returns WITHOUT touching the
+// room-state TTL: only a successful reserve/refresh/release re-arms the 24 h
+// tombstone. Otherwise every retry against a rotated room would push the
+// lock-out out another day (t90 v2-M1), and a note in daily use never recovers.
 const RESERVE_LEASE_SCRIPT = `
 -- SRN_RESERVE_LEASE_V3
 local members = redis.call('SMEMBERS', KEYS[1])
@@ -159,7 +230,6 @@ else
   local requestedIssuedAt = tonumber(ARGV[9]) or 0
   if currentSecurityEpoch ~= ARGV[6] then
     if requestedIssuedAt <= currentIssuedAt then
-      redis.call('PEXPIRE', KEYS[3], ARGV[8])
       return 'epoch:' .. currentEpoch
     end
     for _, leaseKey in ipairs(members) do redis.call('DEL', leaseKey) end
@@ -169,7 +239,6 @@ else
     return 'revoked:' .. ARGV[7]
   end
   if currentEpoch ~= ARGV[5] then
-    redis.call('PEXPIRE', KEYS[3], ARGV[8])
     return 'epoch:' .. currentEpoch
   end
 end
@@ -227,6 +296,21 @@ redis.call('PEXPIRE', KEYS[3], ARGV[6])
 return 1
 `
 
+// Counts room leases that are neither this process's own nor expired. Remote
+// pending leases count as potential responders on purpose (they activate or
+// expire within the 15 s reservation window), so the answer errs towards
+// "someone may still answer" and the client keeps its bounded wait.
+const COUNT_OTHER_LEASES_SCRIPT = `
+-- SRN_COUNT_OTHER_LEASES_V1
+local own = {}
+for _, leaseKey in ipairs(ARGV) do own[leaseKey] = true end
+local count = 0
+for _, leaseKey in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  if not own[leaseKey] and redis.call('EXISTS', leaseKey) == 1 then count = count + 1 end
+end
+return count
+`
+
 const CLAIM_YJS_RESPONSE_SCRIPT = `
 -- SRN_CLAIM_YJS_RESPONSE_V1
 local current = redis.call('GET', KEYS[1])
@@ -243,12 +327,17 @@ function isValidEpoch(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
 }
 
-class CollaborationRoomSecurityRevokedError extends CollaborationRoomEpochMismatchError {}
+export class CollaborationRoomSecurityRevokedError extends CollaborationRoomEpochMismatchError {
+  override readonly code: CollaborationLifecycleErrorCode = 'security-revoked'
+}
 
 async function bounded<T>(operation: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('Redis collaboration operation timed out')), REDIS_OPERATION_TIMEOUT_MS)
+    timer = setTimeout(
+      () => reject(lifecycleError('redis-unavailable', 'Redis collaboration operation timed out')),
+      REDIS_OPERATION_TIMEOUT_MS,
+    )
   })
   try {
     return await Promise.race([operation, timeout])
@@ -355,6 +444,8 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
   private leaseCleanupRetryTimer: ReturnType<typeof setTimeout> | undefined
   private leaseCleanupFailureCount = 0
   private stopping = false
+  private readonly keyPrefix: string
+  private readonly relayChannel: string
 
   constructor(
     private readonly rooms: RoomRegistry<S>,
@@ -362,7 +453,10 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     private readonly subscriber: RedisSubscriberClient,
     private readonly logger: Logger,
     private readonly instanceId = randomUUID(),
+    options: { keyPrefix?: string } = {},
   ) {
+    this.keyPrefix = collaborationKeyPrefix(options.keyPrefix)
+    this.relayChannel = collaborationRelayChannel(options.keyPrefix)
     commands.on('error', (error) => {
       logger.error('[collab-redis] command connection error', safeErrorLogMetadata(error))
       this.handleCommandUnavailable()
@@ -417,7 +511,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       this.subscribeForCurrentConnection()
     })
     subscriber.on('message', (channel, raw) => {
-      if (!this.relayHealthy || channel !== COLLABORATION_RELAY_CHANNEL) {
+      if (!this.relayHealthy || channel !== this.relayChannel) {
         return
       }
       const frame = parseRemoteFrame(raw, this.instanceId)
@@ -434,6 +528,62 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     }
   }
 
+  /** Both Redis paths (commands + relay subscription) are usable right now (C9). */
+  isRelayHealthy(): boolean {
+    return this.relayHealthy
+  }
+
+  /**
+   * The room's CURRENT epoch for one security generation (C4). Discovery on the
+   * sync lane substitutes it for the deterministic initial epoch, so a room that
+   * rotated when its last editor left can be re-entered with the one-use
+   * challenge binding intact. Undefined when the room carries no state, when
+   * the state belongs to another security epoch, or when Redis cannot answer
+   * (callers then keep the initial epoch).
+   */
+  async currentRoomEpoch(room: string, collaborationSecurityEpoch: string): Promise<string | undefined> {
+    if (typeof room !== 'string' || room.length === 0 || !isValidEpoch(collaborationSecurityEpoch)) {
+      return undefined
+    }
+    let state: string | null
+    try {
+      state = await bounded(this.commands.get(this.roomStateKey(room)))
+    } catch (error) {
+      this.logger.warn(`[collab-redis] current room epoch unavailable ${causeOf(error)}`, safeErrorLogMetadata(error))
+      return undefined
+    }
+    if (typeof state !== 'string') {
+      return undefined
+    }
+    const [epoch, securityEpoch] = state.split(':')
+    return isValidEpoch(epoch) && securityEpoch === collaborationSecurityEpoch ? epoch : undefined
+  }
+
+  async hasOtherActivatedEditorLease(conn: Conn<S>, room: string): Promise<boolean> {
+    const ownLeaseKeys: string[] = []
+    for (const lease of this.leases.values()) {
+      if (lease.room !== room) {
+        continue
+      }
+      if (lease.conn !== conn && lease.activated) {
+        return true
+      }
+      ownLeaseKeys.push(lease.leaseKey)
+    }
+    if (!this.relayHealthy) {
+      return true
+    }
+    try {
+      const count = Number(
+        await bounded(this.commands.eval(COUNT_OTHER_LEASES_SCRIPT, 1, this.roomSetKey(room), ...ownLeaseKeys)),
+      )
+      return !Number.isSafeInteger(count) || count > 0
+    } catch (error) {
+      this.logger.warn(`[collab-redis] responder lookup unavailable ${causeOf(error)}`, safeErrorLogMetadata(error))
+      return true
+    }
+  }
+
   async reserveEditorLease(
     conn: Conn<S>,
     room: string,
@@ -446,7 +596,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     collaborationAuthorizationIssuedAt = Date.now(),
   ): Promise<{ shouldBootstrap: boolean; bootstrapChallenge?: string }> {
     if (!this.relayHealthy) {
-      throw new Error('Redis collaboration relay is not healthy')
+      throw relayUnhealthyError()
     }
     const now = Date.now()
     if (
@@ -459,10 +609,10 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       !isValidEpoch(roomEpoch) ||
       !isValidEpoch(collaborationSecurityEpoch)
     ) {
-      throw new Error('Collaboration reservation inputs are invalid or expired')
+      throw lifecycleError('reservation-expired', 'Collaboration reservation inputs are invalid or expired')
     }
     if ([...this.pendingLeaseReleases.values()].some((lease) => lease.room === room)) {
-      throw new Error('Redis collaboration lease cleanup is pending for this room')
+      throw lifecycleError('relay-unhealthy', 'Redis collaboration lease cleanup is pending for this room')
     }
     const localId = this.localLeaseId(conn, room, requestId)
     const existing = this.leases.get(localId)
@@ -495,10 +645,14 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
           shouldBootstrap: existing.shouldBootstrap,
           ...(existing.bootstrapChallenge ? { bootstrapChallenge: existing.bootstrapChallenge } : {}),
         }
-      } catch (error) {
-        this.logger.warn('[collab-redis] lease renewal unavailable; denying collaboration', safeErrorLogMetadata(error))
+      } catch (rawError) {
+        const error = asLifecycleError(rawError)
+        this.logger.warn(
+          `[collab-redis] lease renewal unavailable; denying collaboration ${causeOf(error)}`,
+          safeErrorLogMetadata(error),
+        )
         if (isLeasePolicyError(error)) {
-          await this.denyAndReleaseRoom(room)
+          await this.denyAndReleaseRoom(room, roomDeniedReasonFor(error))
         } else {
           this.handleCommandUnavailable()
         }
@@ -506,9 +660,9 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       }
     }
 
-    const roomSetKey = `srn:collaboration:room:${digest(room)}`
-    const roomStateKey = `srn:collaboration:room-state:${digest(room)}`
-    const leaseKey = `srn:collaboration:lease:${digest(`${this.instanceId}\u0000${localId}`)}`
+    const roomSetKey = this.roomSetKey(room)
+    const roomStateKey = this.roomStateKey(room)
+    const leaseKey = `${this.keyPrefix}${COLLABORATION_KEY_ROOT}lease:${digest(`${this.instanceId}\u0000${localId}`)}`
     const redisValue = `v${protocolVersion}:${digest(`${roomEpoch}\u0000${collaborationSecurityEpoch}`)}:${randomUUID()}`
     const roomStatePrefix = `${roomEpoch}:${collaborationSecurityEpoch}`
     const rotatedRoomStateValue = `${randomUUID()}:${collaborationSecurityEpoch}:${collaborationAuthorizationIssuedAt}`
@@ -544,13 +698,13 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       }
       const electionResult = Number(elected)
       if (electionResult === -1) {
-        throw new Error(INCOMPATIBLE_PROTOCOL_ERROR)
+        throw incompatibleProtocolError()
       }
       if (electionResult === -2) {
-        throw new Error(ROOM_LEASE_LIMIT_ERROR)
+        throw roomLeaseLimitError()
       }
       if (electionResult !== 0 && electionResult !== 1) {
-        throw new Error('Redis returned an invalid collaboration lease result')
+        throw lifecycleError('redis-unavailable', 'Redis returned an invalid collaboration lease result')
       }
       const shouldBootstrap = electionResult === 1
       const bootstrapChallenge = shouldBootstrap ? randomUUID() : undefined
@@ -575,9 +729,10 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         activated: false,
       })
       return { shouldBootstrap, ...(bootstrapChallenge ? { bootstrapChallenge } : {}) }
-    } catch (error) {
+    } catch (rawError) {
+      const error = asLifecycleError(rawError)
       this.logger.warn(
-        '[collab-redis] lease reservation unavailable; denying collaboration',
+        `[collab-redis] lease reservation unavailable; denying collaboration ${causeOf(error)}`,
         safeErrorLogMetadata(error),
       )
       if (error instanceof CollaborationRoomSecurityRevokedError) {
@@ -602,7 +757,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     collaborationAuthorizationIssuedAt = Date.now(),
   ): Promise<{ shouldBootstrap: boolean }> {
     if (!this.relayHealthy) {
-      throw new Error('Redis collaboration relay is not healthy')
+      throw relayUnhealthyError()
     }
     const now = Date.now()
     const lease = this.leases.get(this.localLeaseId(conn, room, requestId))
@@ -620,19 +775,24 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       !Number.isSafeInteger(collaborationAuthorizationIssuedAt) ||
       collaborationAuthorizationIssuedAt < lease.collaborationAuthorizationIssuedAt
     ) {
-      throw new Error('Collaboration reservation is missing or expired')
+      throw lifecycleError('reservation-expired', 'Collaboration reservation is missing or expired')
     }
     if (bootstrapChallenge !== lease.bootstrapChallenge) {
-      throw new Error('Collaboration bootstrap challenge mismatch')
+      throw lifecycleError('incompatible-protocol', 'Collaboration bootstrap challenge mismatch')
     }
     lease.expiresAt = expiresAt
     lease.collaborationAuthorizationIssuedAt = collaborationAuthorizationIssuedAt
     lease.reservedRevision = serverUpdatedAtTimestamp
     try {
       await this.refresh(lease, this.leaseTtl(expiresAt))
-    } catch (error) {
+    } catch (rawError) {
+      const error = asLifecycleError(rawError)
+      this.logger.warn(
+        `[collab-redis] lease activation unavailable; denying collaboration ${causeOf(error)}`,
+        safeErrorLogMetadata(error),
+      )
       if (isLeasePolicyError(error)) {
-        await this.denyAndReleaseRoom(room)
+        await this.denyAndReleaseRoom(room, roomDeniedReasonFor(error))
       } else {
         this.handleCommandUnavailable()
       }
@@ -650,7 +810,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     clientId: number,
   ): Promise<void> {
     if (!this.relayHealthy) {
-      throw new Error('Redis collaboration relay is not healthy')
+      throw relayUnhealthyError()
     }
     const localId = this.localLeaseId(conn, room, requestId)
     const lease = this.leases.get(localId)
@@ -669,7 +829,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     const existing = this.presences.get(localId)
     if (existing) {
       if (existing.clientId !== clientId || existing.lease !== lease) {
-        throw new Error('Collaboration presence identity changed during an active lease')
+        throw lifecycleError('incompatible-protocol', 'Collaboration presence identity changed during an active lease')
       }
       existing.expiresAt = now + COLLABORATION_PRESENCE_TTL_MS
       this.schedulePresenceExpiry()
@@ -679,7 +839,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       [...this.presences.values()].filter((presence) => presence.lease.room === room).length >=
       MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM
     ) {
-      throw new Error('Collaboration room presence limit exceeded')
+      throw lifecycleError('room-limit', 'Collaboration room presence limit exceeded')
     }
 
     const presence: LocalPresence<S> = {
@@ -731,7 +891,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     leaseRequestId: string,
   ): Promise<number | undefined> {
     if (!this.relayHealthy) {
-      throw new Error('Redis collaboration relay is not healthy')
+      throw relayUnhealthyError()
     }
     const localId = this.localLeaseId(conn, room, leaseRequestId)
     const lease = this.leases.get(localId)
@@ -743,7 +903,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       await this.releaseOrQueue(lease)
       return undefined
     }
-    const claimKey = `srn:collaboration:yjs-response-claim:${digest(room)}:${digest(stateRequestId)}`
+    const claimKey = `${this.keyPrefix}${COLLABORATION_KEY_ROOT}yjs-response-claim:${digest(room)}:${digest(stateRequestId)}`
     // Capture before Redis EVAL so the gateway-local permission is never valid
     // beyond the distributed NX claim created during that operation.
     const claimExpiresAt = Date.now() + YJS_RESPONSE_CLAIM_TTL_MS
@@ -763,16 +923,17 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         ),
       )
       if (result === -1) {
-        await this.denyAndReleaseRoom(room)
+        await this.denyAndReleaseRoom(room, 'reservation-expired')
         return undefined
       }
       if (result !== 0 && result !== 1) {
-        throw new Error('Redis returned an invalid Yjs response claim result')
+        throw lifecycleError('redis-unavailable', 'Redis returned an invalid Yjs response claim result')
       }
       return result === 1 ? claimExpiresAt : undefined
-    } catch (error) {
+    } catch (rawError) {
+      const error = asLifecycleError(rawError)
       this.logger.warn(
-        '[collab-redis] Yjs response claim unavailable; denying collaboration',
+        `[collab-redis] Yjs response claim unavailable; denying collaboration ${causeOf(error)}`,
         safeErrorLogMetadata(error),
       )
       this.handleCommandUnavailable()
@@ -792,7 +953,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
   async refreshLeases(): Promise<void> {
     const now = Date.now()
     let refreshFailed = false
-    const policyFailureRooms = new Set<string>()
+    const policyFailureRooms = new Map<string, RoomDeniedReason>()
     await Promise.all(
       [...this.leases.entries()].map(async ([localId, lease]) => {
         if (Number.isFinite(lease.expiresAt) && lease.expiresAt <= now) {
@@ -803,17 +964,18 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         }
         try {
           await this.refresh(lease, this.leaseTtl(lease.expiresAt))
-        } catch (error) {
+        } catch (rawError) {
+          const error = asLifecycleError(rawError)
           if (isLeasePolicyError(error)) {
-            policyFailureRooms.add(lease.room)
+            policyFailureRooms.set(lease.room, roomDeniedReasonFor(error))
           } else {
             refreshFailed = true
           }
-          this.logger.warn('[collab-redis] lease refresh failed', safeErrorLogMetadata(error))
+          this.logger.warn(`[collab-redis] lease refresh failed ${causeOf(error)}`, safeErrorLogMetadata(error))
         }
       }),
     )
-    await Promise.all([...policyFailureRooms].map((room) => this.denyAndReleaseRoom(room)))
+    await Promise.all([...policyFailureRooms].map(([room, reason]) => this.denyAndReleaseRoom(room, reason)))
     if (refreshFailed) {
       this.handleCommandUnavailable()
     }
@@ -821,18 +983,19 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
 
   async publish(frame: RelayPayloadFrame): Promise<void> {
     if (!this.relayHealthy) {
-      throw new Error('Redis collaboration relay is not healthy')
+      throw relayUnhealthyError()
     }
     const message = JSON.stringify({ v: 1, origin: this.instanceId, frame })
     let missingSubscribers = false
     try {
-      const subscriberCount = await bounded(this.commands.publish(COLLABORATION_RELAY_CHANNEL, message))
+      const subscriberCount = await bounded(this.commands.publish(this.relayChannel, message))
       if (!Number.isFinite(subscriberCount) || subscriberCount < 1) {
         missingSubscribers = true
-        throw new Error('Redis collaboration relay has no subscribers')
+        throw lifecycleError('relay-unhealthy', 'Redis collaboration relay has no subscribers')
       }
-    } catch (error) {
-      this.logger.warn('[collab-redis] encrypted frame publish failed', safeErrorLogMetadata(error))
+    } catch (rawError) {
+      const error = asLifecycleError(rawError)
+      this.logger.warn(`[collab-redis] encrypted frame publish failed ${causeOf(error)}`, safeErrorLogMetadata(error))
       if (missingSubscribers) {
         this.handleSubscriberUnavailable()
         if (this.subscriber.status === 'ready') {
@@ -859,7 +1022,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     this.subscriptionEstablished = false
     this.commandReady = false
     this.relayHealthy = false
-    this.rooms.denyAllRooms()
+    this.rooms.denyAllRooms('relay-unhealthy')
     this.cancelLeaseCleanupRetry()
     if (this.leaseCleanupInFlight) {
       await this.leaseCleanupInFlight
@@ -878,9 +1041,17 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     return `${conn.userUuid}\u0000${conn.connectionId}\u0000${room}\u0000${requestId ?? 'legacy'}`
   }
 
+  private roomSetKey(room: string): string {
+    return `${this.keyPrefix}${COLLABORATION_KEY_ROOT}room:${digest(room)}`
+  }
+
+  private roomStateKey(room: string): string {
+    return `${this.keyPrefix}${COLLABORATION_KEY_ROOT}room-state:${digest(room)}`
+  }
+
   private markRelayUnhealthy(): void {
     this.relayHealthy = false
-    this.rooms.denyAllRooms()
+    this.rooms.denyAllRooms('relay-unhealthy')
     this.presences.clear()
     if (this.presenceExpiryTimer) {
       clearTimeout(this.presenceExpiryTimer)
@@ -939,7 +1110,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     }
 
     try {
-      const result = this.subscriber.subscribe(COLLABORATION_RELAY_CHANNEL, finish)
+      const result = this.subscriber.subscribe(this.relayChannel, finish)
       if (result && typeof result === 'object' && 'then' in result && typeof result.then === 'function') {
         void Promise.resolve(result).then(
           (count) => finish(undefined, count),
@@ -1048,7 +1219,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       return true
     } catch (error) {
       // The lease key has a short TTL, so a failed cleanup cannot strand a room.
-      this.logger.warn('[collab-redis] lease cleanup failed', safeErrorLogMetadata(error))
+      this.logger.warn(`[collab-redis] lease cleanup failed ${causeOf(error)}`, safeErrorLogMetadata(error))
       return false
     }
   }
@@ -1061,8 +1232,8 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     this.schedulePendingLeaseCleanupRetry()
   }
 
-  private async denyAndReleaseRoom(room: string): Promise<void> {
-    this.rooms.denyRoom(room)
+  private async denyAndReleaseRoom(room: string, reason: RoomDeniedReason = 'policy'): Promise<void> {
+    this.rooms.denyRoom(room, reason)
     const owned = [...this.leases.entries()].filter(([, lease]) => lease.room === room)
     await Promise.all(
       owned.map(async ([localId, lease]) => {
@@ -1074,7 +1245,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
   }
 
   private async discardRevokedRoom(room: string): Promise<void> {
-    this.rooms.denyRoom(room)
+    this.rooms.denyRoom(room, 'security-revoked')
     const releases: Promise<void>[] = []
     for (const [localId, lease] of this.leases) {
       if (lease.room === room) {
@@ -1169,16 +1340,16 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       ),
     )
     if (result === -1) {
-      throw new Error(INCOMPATIBLE_PROTOCOL_ERROR)
+      throw incompatibleProtocolError()
     }
     if (result === -2) {
-      throw new Error(ROOM_LEASE_LIMIT_ERROR)
+      throw roomLeaseLimitError()
     }
     if (result === -3) {
-      throw new Error(LEASE_OWNERSHIP_LOST_ERROR)
+      throw leaseOwnershipLostError()
     }
     if (result !== 1) {
-      throw new Error('Redis returned an invalid collaboration lease refresh result')
+      throw lifecycleError('redis-unavailable', 'Redis returned an invalid collaboration lease refresh result')
     }
   }
 
@@ -1193,7 +1364,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
 
 export function startCollaborationRedisBridge<S extends SendableSocket>(
   rooms: RoomRegistry<S>,
-  opts: { host: string; port: number; logger: Logger },
+  opts: { host: string; port: number; logger: Logger; keyPrefix?: string },
 ): CollaborationRedisBridge<S> {
   const baseRedisOptions = {
     host: opts.host,
@@ -1211,5 +1382,7 @@ export function startCollaborationRedisBridge<S extends SendableSocket>(
     enableOfflineQueue: false,
     autoResubscribe: false,
   })
-  return new CollaborationRedisBridge(rooms, commands, subscriber, opts.logger)
+  return new CollaborationRedisBridge(rooms, commands, subscriber, opts.logger, randomUUID(), {
+    ...(opts.keyPrefix ? { keyPrefix: opts.keyPrefix } : {}),
+  })
 }

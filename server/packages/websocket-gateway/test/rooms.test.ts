@@ -25,10 +25,16 @@ import {
   PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
   YJS_CHUNK_PLAINTEXT_BYTES,
   COLLABORATION_PROTOCOL_VERSION as COLLABORATION_PROTOCOL_VERSION_SOURCE,
+  type RoomDeniedReason,
   type RoomJoinAuthorization,
   type RoomRelayLifecycle,
 } from '../src/rooms.js'
 import type { Conn } from '../src/registry.js'
+
+/** The exact `room-denied` frame the gateway emits (C1): every denial names its funnel. */
+function denied(room: string, requestId: string | undefined, reason: RoomDeniedReason): string {
+  return JSON.stringify({ t: 'room-denied', room, ...(requestId ? { requestId } : {}), reason })
+}
 
 // `export const COLLABORATION_PROTOCOL_VERSION = 3` carries a *widening* literal
 // type, so `{ protocolVersion: COLLABORATION_PROTOCOL_VERSION }` in a fixture
@@ -526,7 +532,7 @@ describe('RoomRegistry + handleRelayFrame', () => {
       role: 'editor',
     })
 
-    expect(conn.sent).not.toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'stable-lease' }))
+    expect(conn.sent.some((m) => m.includes('"t":"room-denied"') && m.includes('stable-lease'))).toBe(false)
     expect(rooms.hasRole('n1', conn, 'comment')).toBe(true)
     expect(rooms.hasRole('n1', conn, 'editor')).toBe(false)
   })
@@ -541,7 +547,7 @@ describe('RoomRegistry + handleRelayFrame', () => {
     rooms.evictExpired()
 
     expect(rooms.isMember('n1', conn)).toBe(false)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1' }))
+    expect(conn.sent).toContain(denied('n1', undefined, 'capability-invalid'))
   })
 
   it.each([
@@ -564,7 +570,7 @@ describe('RoomRegistry + handleRelayFrame', () => {
     expect(rooms.isMember('n1', conn)).toBe(true)
     now = 2_001
     expect(rooms.isMember('n1', conn)).toBe(false)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'short-lease' }))
+    expect(conn.sent).toContain(denied('n1', 'short-lease', 'capability-invalid'))
   })
 
   it('leaveAll removes a connection from every room', async () => {
@@ -856,9 +862,13 @@ describe('reservation and expensive control-frame limits', () => {
       collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
       leaseRequestId: capability,
     }))
-    const aggregateConnections = Array.from({ length: MAX_ROOM_JOIN_FRAMES_PER_ROOM + 1 }, (_, index) =>
-      fakeConn(`aggregate-join-${index}`),
-    )
+    // R14: the aggregate join budget is keyed by (room, user); one user's many
+    // connections share it, other users' connections do not (see below).
+    const aggregateConnections = Array.from({ length: MAX_ROOM_JOIN_FRAMES_PER_ROOM + 1 }, (_, index) => {
+      const conn = fakeConn(`aggregate-join-${index}`)
+      conn.userUuid = 'aggregate-join-user'
+      return conn
+    })
     for (let index = 0; index < aggregateConnections.length; index += 1) {
       await handleRelayFrame(
         aggregateRooms,
@@ -874,9 +884,19 @@ describe('reservation and expensive control-frame limits', () => {
         },
         aggregateAuthorize,
       )
+      // The join ceiling exceeds the 128-connection room cap, so every joiner
+      // but the first leaves again: the window counts joins, not members.
+      if (index > 0) {
+        await handleRelayFrame(
+          aggregateRooms,
+          aggregateConnections[index],
+          { t: 'room-leave', room: 'aggregate-join-room', requestId: `aggregate-join-${index}` },
+          aggregateAuthorize,
+        )
+      }
     }
     expect(aggregateAuthorize).toHaveBeenCalledTimes(MAX_ROOM_JOIN_FRAMES_PER_ROOM)
-    expect(aggregateRooms.members('aggregate-join-room')).toHaveLength(MAX_ROOM_JOIN_FRAMES_PER_ROOM)
+    expect(aggregateRooms.members('aggregate-join-room')).toHaveLength(1)
 
     aggregateConnections[0].sent.length = 0
     await handleRelayFrame(
@@ -1046,9 +1066,7 @@ describe('reservation and expensive control-frame limits', () => {
 
     expect(authorize).not.toHaveBeenCalled()
     expect(lifecycle.reserveEditorLease).not.toHaveBeenCalled()
-    expect(conn.sent).toContain(
-      JSON.stringify({ t: 'room-denied', room: 'overflow-room', requestId: 'overflow-request' }),
-    )
+    expect(conn.sent).toContain(denied('overflow-room', 'overflow-request', 'room-limit'))
   })
 
   it('releases expired distributed reservations before admitting replacement work', async () => {
@@ -1160,6 +1178,7 @@ describe('reservation and expensive control-frame limits', () => {
 
     for (let index = 0; index <= MAX_ROOM_RESERVE_FRAMES_PER_ROOM; index += 1) {
       const conn = fakeConn(`aggregate-reserve-${index}`)
+      conn.userUuid = 'aggregate-reserve-user'
       const requestId = `aggregate-request-${index}`
       await handleRelayFrame(
         rooms,
@@ -1569,9 +1588,7 @@ describe('distributed Yjs response claims', () => {
       await handleRelayFrame(rooms, winner, failingFrame, undefined, undefined, lifecycle)
 
       expect(rooms.isMember('publish-failure-room', winner)).toBe(false)
-      expect(winner.sent).toContain(
-        JSON.stringify({ t: 'room-denied', room: 'publish-failure-room', requestId: 'winner-lease' }),
-      )
+      expect(winner.sent).toContain(denied('publish-failure-room', 'winner-lease', 'relay-unhealthy'))
       rooms.join('publish-failure-room', winner, 2_000, 'winner-lease', 'editor')
       vi.mocked(lifecycle.publish).mockClear()
       vi.mocked(lifecycle.publish).mockResolvedValue(undefined)
@@ -1814,7 +1831,7 @@ describe('handleRelayFrame room-join authorization', () => {
 
     expect(reached).toBe(0)
     expect(rooms.members('n1')).toHaveLength(1) // intruder NOT added
-    expect(intruder.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-intruder' }))
+    expect(intruder.sent).toContain(denied('n1', 'lease-intruder', 'capability-invalid'))
 
     // The intruder cannot inject frames into a room it never joined, and a's
     // frame is not delivered to the intruder.
@@ -1833,7 +1850,7 @@ describe('handleRelayFrame room-join authorization', () => {
     const reached = await handleRelayFrame(rooms, a, { t: 'room-join', room: 'n1' }, authorize)
     expect(reached).toBe(0)
     expect(rooms.members('n1')).toHaveLength(0)
-    expect(a.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1' }))
+    expect(a.sent).toContain(denied('n1', undefined, 'capability-invalid'))
   })
 
   it('allows an authorized member to join and collaborate', async () => {
@@ -1980,7 +1997,7 @@ describe('handleRelayFrame room-join authorization', () => {
 
     expect(reached).toBe(0)
     expect(rooms.roomCount()).toBe(0)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-downgraded' }))
+    expect(conn.sent).toContain(denied('n1', 'lease-downgraded', 'policy'))
     expect(conn.sent.some((message) => message.includes('room-joined'))).toBe(false)
   })
 })
@@ -2061,7 +2078,7 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
       payload: 'after-expiry',
     })
     expect(receiveReach).toBe(0)
-    expect(expiring.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'expiring-request' }))
+    expect(expiring.sent).toContain(denied('n1', 'expiring-request', 'capability-invalid'))
     expect(rooms.isMember('n1', expiring)).toBe(false)
 
     const sendReach = await handleRelayFrame(rooms, expiring, {

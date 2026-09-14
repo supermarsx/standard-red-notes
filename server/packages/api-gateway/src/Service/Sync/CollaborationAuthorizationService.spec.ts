@@ -198,6 +198,30 @@ describe('CollaborationAuthorizationService', () => {
       expect(await epochFor()).toBe(await epochFor())
     })
 
+    // The gateway rotates an emptied room to a random epoch in Redis. This
+    // service has no room-state dependency, so discovery keeps answering the
+    // INITIAL epoch no matter how often it is asked; the gateway's
+    // current-epoch resolver (contract C4) is the only place a rotated epoch
+    // can enter a discovery answer. Pinning that here keeps the two halves
+    // from both trying to be the source of truth.
+    it("returns the initial HMAC epoch on every discovery; rotation is the gateway resolver's job (C4)", async () => {
+      const { service, callSyncingServer } = harness()
+      const expected = createHmac('sha256', SECRET).update(`${NOTE}\u0000${SECURITY_EPOCH}`, 'utf8').digest('base64url')
+
+      const epochs: string[] = []
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const grant = await service.authorize(request, locals(), discoveryRequest)
+        epochs.push((grant as { roomEpoch: string }).roomEpoch)
+      }
+
+      expect(epochs).toEqual([expected, expected, expected])
+      expect(callSyncingServer).toHaveBeenCalledTimes(3)
+      // Nothing but the syncing-server access check is consulted per discovery.
+      expect(
+        callSyncingServer.mock.calls.every(([, , endpoint]) => endpoint === 'items/collaboration-authorization'),
+      ).toBe(true)
+    })
+
     it('is bound to the NOTE: another note derives a different epoch', async () => {
       expect(await epochFor({ note: 'note-uuid-2' })).not.toBe(await epochFor())
     })

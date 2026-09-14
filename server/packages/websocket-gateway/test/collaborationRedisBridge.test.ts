@@ -1401,7 +1401,12 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
 
     expect(rooms.isMember('policy-affected-room', affected)).toBe(false)
     expect(affected.send).toHaveBeenCalledWith(
-      JSON.stringify({ t: 'room-denied', room: 'policy-affected-room', requestId: 'affected-request' }),
+      JSON.stringify({
+        t: 'room-denied',
+        room: 'policy-affected-room',
+        requestId: 'affected-request',
+        reason: policyResult === -2 ? 'room-limit' : 'policy',
+      }),
     )
     expect(rooms.isMember('policy-unrelated-room', unrelated)).toBe(true)
     expect(unrelated.send).not.toHaveBeenCalledWith(expect.stringContaining('"t":"room-denied"'))
@@ -1588,7 +1593,12 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     ).rejects.toThrow('Collaboration lease ownership was lost')
     expect(roomsA.isMember('activation-race-room', a)).toBe(false)
     expect(a.send).toHaveBeenCalledWith(
-      JSON.stringify({ t: 'room-denied', room: 'activation-race-room', requestId: 'lease-a' }),
+      JSON.stringify({
+        t: 'room-denied',
+        room: 'activation-race-room',
+        requestId: 'lease-a',
+        reason: 'reservation-expired',
+      }),
     )
     expect(redis.leases.size).toBe(1)
     await expect(
@@ -1777,7 +1787,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     await expect(bridge.publish({ t: 'yjs', room: 'health-room', payload: 'opaque' })).rejects.toThrow()
     expect(rooms.roomCount()).toBe(0)
     expect(member.send).toHaveBeenCalledWith(
-      JSON.stringify({ t: 'room-denied', room: 'health-room', requestId: 'health-lease' }),
+      JSON.stringify({ t: 'room-denied', room: 'health-room', requestId: 'health-lease', reason: 'relay-unhealthy' }),
     )
 
     const refreshRooms = new RoomRegistry<SendableSocket>()
@@ -1993,7 +2003,12 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
 
     expect(rooms.roomCount()).toBe(0)
     expect(member.send).toHaveBeenCalledWith(
-      JSON.stringify({ t: 'room-denied', room: 'lifecycle-room', requestId: 'lifecycle-request' }),
+      JSON.stringify({
+        t: 'room-denied',
+        room: 'lifecycle-room',
+        requestId: 'lifecycle-request',
+        reason: 'relay-unhealthy',
+      }),
     )
     await expect(
       bridge.reserveEditorLease(
@@ -2288,6 +2303,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         t: 'room-denied',
         room: 'command-lifecycle-room',
         requestId: 'command-lifecycle-request',
+        reason: 'relay-unhealthy',
       }),
     )
     await expect(

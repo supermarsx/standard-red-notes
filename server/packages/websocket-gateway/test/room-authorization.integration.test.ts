@@ -2,7 +2,13 @@ import { describe, it, expect, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { defaultRoomJoinAuthorizer } from '../src/gateway.js'
-import { COLLABORATION_PROTOCOL_VERSION, handleRelayFrame, MAX_YJS_TRANSFER_BYTES, RoomRegistry } from '../src/rooms.js'
+import {
+  COLLABORATION_PROTOCOL_VERSION,
+  handleRelayFrame,
+  MAX_YJS_TRANSFER_BYTES,
+  RoomRegistry,
+  type RoomDeniedReason,
+} from '../src/rooms.js'
 import { CollaborationRedisBridge } from '../src/collaborationRedisBridge.js'
 import { RecordingCollaborationRedis } from './fixtures/recordingCollaborationRedis.js'
 import type { Conn, SendableSocket } from '../src/registry.js'
@@ -14,6 +20,11 @@ import type { Conn, SendableSocket } from '../src/registry.js'
 const SECRET = 'integration-connection-secret'
 const ROOM_EPOCH = 'room_epoch_0000000000000001'
 const SECURITY_EPOCH = 'security_epoch_0000000000000001'
+
+/** The exact `room-denied` frame the gateway emits (C1): every denial names its funnel. */
+function denied(room: string, requestId: string | undefined, reason: RoomDeniedReason): string {
+  return JSON.stringify({ t: 'room-denied', room, ...(requestId ? { requestId } : {}), reason })
+}
 
 function fakeConn(userUuid: string): Conn & { sent: string[] } {
   const sent: string[] = []
@@ -70,7 +81,7 @@ describe('default (production) room authorization is fail-closed', () => {
 
     expect(reached).toBe(0)
     expect(rooms.members('note-1')).toHaveLength(0)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1' }))
+    expect(conn.sent).toContain(denied('note-1', undefined, 'capability-invalid'))
   })
 
   it('DENIES a join whose capability was signed with the wrong secret', async () => {
@@ -81,7 +92,7 @@ describe('default (production) room authorization is fail-closed', () => {
     await handleRelayFrame(rooms, conn, { t: 'room-join', room: 'note-1', cap }, authorize)
 
     expect(rooms.members('note-1')).toHaveLength(0)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1' }))
+    expect(conn.sent).toContain(denied('note-1', undefined, 'capability-invalid'))
   })
 
   it('DENIES a join whose capability is for a different room/user', async () => {
@@ -191,7 +202,7 @@ describe('default (production) room authorization is fail-closed', () => {
 
     expect(reached).toBe(0)
     expect(rooms.isMember('note-1', conn)).toBe(false)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId: 'join-request' }))
+    expect(conn.sent).toContain(denied('note-1', 'join-request', 'capability-invalid'))
   })
 
   it('DENIES an otherwise-valid capability when the frame expects another room epoch', async () => {
@@ -215,7 +226,7 @@ describe('default (production) room authorization is fail-closed', () => {
     )
 
     expect(rooms.isMember('note-1', conn)).toBe(false)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'policy'))
   })
 })
 
@@ -350,7 +361,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
     )
 
     expect(reached).toBe(0)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'capability-invalid'))
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
 
@@ -377,7 +388,8 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       )
     }
 
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'reservation-expired'))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'capability-invalid'))
     expect(conn.sent.filter((message) => message.includes('room-joined'))).toHaveLength(0)
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
@@ -423,7 +435,8 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       h.bridge,
     )
 
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'policy'))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'reservation-expired'))
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
 
@@ -451,7 +464,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       h.bridge,
     )
 
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'reservation-expired'))
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
 
@@ -502,7 +515,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
     )
 
     expect(conn.sent.filter((message) => message.includes('room-joined'))).toHaveLength(0)
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'policy'))
     expect(h.rooms.isMember('note-1', conn)).toBe(false)
     // The activation EVAL never ran, so the reservation was never promoted.
     expect(h.redis.refreshEvalCalls).toBe(refreshesAfterReserve)
@@ -532,7 +545,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       h.bridge,
     )
 
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'capability-invalid'))
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
 
@@ -562,7 +575,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       h.bridge,
     )
 
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'policy'))
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
 
@@ -627,36 +640,36 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       'a different room',
       (requestId: string) => capabilityFor('user-a', 'note-OTHER', { leaseRequestId: requestId }),
       ROOM_EPOCH,
-      undefined,
+      'capability-invalid',
     ],
     [
       'a different user',
       (requestId: string) => capabilityFor('attacker', 'note-1', { leaseRequestId: requestId }),
       ROOM_EPOCH,
-      undefined,
+      'capability-invalid',
     ],
     [
       'a different lease request',
       () => capabilityFor('user-a', 'note-1', { leaseRequestId: 'someone-elses-lease' }),
       ROOM_EPOCH,
-      undefined,
+      'policy',
     ],
     [
       'a different room epoch',
       (requestId: string) =>
         capabilityFor('user-a', 'note-1', { leaseRequestId: requestId, roomEpoch: 'room_epoch_0000000000000009' }),
       ROOM_EPOCH,
-      undefined,
+      'policy',
     ],
     [
       'a foreign signing secret',
       (requestId: string) => capabilityFor('user-a', 'note-1', { leaseRequestId: requestId, secret: 'attacker' }),
       ROOM_EPOCH,
-      undefined,
+      'capability-invalid',
     ],
   ])(
     'MISMATCHED challenge bound to %s never reaches the grant backend',
-    async (_description, mintCapability, expectedRoomEpoch) => {
+    async (_description, mintCapability, expectedRoomEpoch, reason) => {
       const h = harness()
       const conn = fakeConn('user-a')
       const requestId = 'mismatched-lease'
@@ -678,7 +691,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
         h.bridge,
       )
 
-      expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+      expect(conn.sent).toContain(denied('note-1', requestId, reason as RoomDeniedReason))
       expectGrantBackendUntouched(h, 'note-1', conn, requestId)
     },
   )
@@ -712,7 +725,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
       h.bridge,
     )
 
-    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(conn.sent).toContain(denied('note-1', requestId, 'policy'))
     expectGrantBackendUntouched(h, 'note-1', conn, requestId)
   })
 
@@ -765,7 +778,7 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
     )
 
     expect(attacker.sent.filter((message) => message.includes('room-joined'))).toHaveLength(0)
-    expect(attacker.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId }))
+    expect(attacker.sent).toContain(denied('note-1', requestId, 'reservation-expired'))
     expect(h.rooms.isMember('note-1', attacker)).toBe(false)
     expect(h.redis.refreshEvalCalls).toBe(refreshesAfterReserve)
     expect(h.redis.reserveEvalCalls).toBe(reservesAfterReserve)
