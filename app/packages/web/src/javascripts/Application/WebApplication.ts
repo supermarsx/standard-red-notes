@@ -109,6 +109,7 @@ import {
   AuthenticatedRpcError,
   deriveOpaqueSyncSessionScope,
   SyncCapability,
+  SyncControlPlaneRefusal,
   SyncTicketResponse,
   WebSocketSyncTransport,
 } from '@/Services/SyncTransport/WebSocketSyncTransport'
@@ -467,20 +468,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       getConfiguredWebSocketUrl: () => this.sockets.getConfiguredWebSocketUrl(),
       getAuthenticatedSessionScope: () => this.getOpaqueAuthenticatedSyncSessionScope(),
       controlPlane: {
-        getCapabilities: async () => {
-          const response = await this.serverGetJsonRequest<{ capabilities?: SyncCapability[] }>(
-            '/v1/sockets/sync/capabilities',
-          )
-          return response.ok && Array.isArray(response.data.capabilities)
-            ? { capabilities: response.data.capabilities }
-            : undefined
-        },
-        createTicket: async (requestedDeviceId) => {
-          const response = await this.serverJsonRequest<SyncTicketResponse>('/v1/sockets/sync/ticket', {
-            deviceId: requestedDeviceId,
-          })
-          return response.ok ? response.data : undefined
-        },
+        getCapabilities: () => this.syncControlPlaneCapabilities(),
+        createTicket: (requestedDeviceId) => this.syncControlPlaneTicket(requestedDeviceId),
       },
     })
     this._webSocketSyncTransport = transport
@@ -577,6 +566,47 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       )
     }
     this.disposers.push(() => lifecycle.stop())
+  }
+
+  /**
+   * Sync control plane: capability probe. The server's answer is passed on
+   * whole — the list it sent, or a refusal carrying the status and error body
+   * for any non-success answer — so the transport can tell a permanent 404/501
+   * ("no such endpoint here") from a retryable 503 ("stores still starting")
+   * instead of treating every non-ok answer alike. A thrown fetch propagates:
+   * a network failure proves nothing about the capability and must stay
+   * retryable. `undefined` is reserved for a success answer that could not be
+   * read.
+   */
+  private async syncControlPlaneCapabilities(): Promise<
+    { capabilities: SyncCapability[] } | SyncControlPlaneRefusal | undefined
+  > {
+    const response = await this.serverGetJsonRequest<{ capabilities?: SyncCapability[] }>(
+      '/v1/sockets/sync/capabilities',
+    )
+    if (!response.ok) {
+      return this.syncControlPlaneRefusal(response)
+    }
+    return Array.isArray(response.data?.capabilities) ? { capabilities: response.data.capabilities } : undefined
+  }
+
+  /** Sync control plane: one-use ticket. Same contract as the capability probe. */
+  private async syncControlPlaneTicket(
+    deviceId: string,
+  ): Promise<SyncTicketResponse | SyncControlPlaneRefusal | undefined> {
+    const response = await this.serverJsonRequest<SyncTicketResponse>('/v1/sockets/sync/ticket', { deviceId })
+    return response.ok ? response.data : this.syncControlPlaneRefusal(response)
+  }
+
+  /** Shape a non-success control-plane answer; `code`/`transient` come from the JSON error body when present. */
+  private syncControlPlaneRefusal(response: { status: number; data: unknown }): SyncControlPlaneRefusal {
+    const error = (response.data as { error?: { code?: unknown; transient?: unknown } } | null | undefined)?.error
+    return {
+      refused: true,
+      status: response.status,
+      ...(typeof error?.code === 'string' ? { code: error.code } : {}),
+      transient: error?.transient === true,
+    }
   }
 
   /**
