@@ -1,10 +1,32 @@
 import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Env } from '../src/Bootstrap/Env'
-import { HomeServer } from '../src/Server/HomeServer'
+import { boundedBootFailureText, describeFatal, HomeServer } from '../src/Server/HomeServer'
+
+/**
+ * Standard Red Notes: fail-fast global crash handlers, matching the
+ * api-gateway's. A genuinely unhandled rejection or uncaught exception leaves
+ * the process in an unknown state, so log one clear FATAL line (redacted
+ * classification only: type, code, status — never the message) and exit
+ * non-zero so the supervisor restarts us. Node's default already crashes on an
+ * unhandled rejection; what this adds is a line that names the event, so a
+ * crash-loop is VISIBLE and attributable instead of a bare stack on stderr.
+ */
+function installFatalHandlers(target: NodeJS.Process): void {
+  target.on('unhandledRejection', (reason: unknown) => {
+    console.error(...describeFatal('unhandledRejection', reason))
+    target.exit(1)
+  })
+  target.on('uncaughtException', (error: Error) => {
+    console.error(...describeFatal('uncaughtException', error))
+    target.exit(1)
+  })
+}
 
 if (process.argv.length === 3 && process.argv[2] === '--srn-release-self-test') {
   process.stdout.write(`srn-native-self-test-v1 ${process.platform} ${process.arch}\n`)
 } else {
+  installFatalHandlers(process)
+
   const homeServer = new HomeServer()
 
   const env: Env = new Env()
@@ -20,10 +42,22 @@ if (process.argv.length === 3 && process.argv[2] === '--srn-release-self-test') 
         },
         environment: env.getAll(),
       }),
-    ).catch((error) => {
-      console.error('Could not start server.', safeErrorLogMetadata(error))
-    })
+    )
+      .then((result) => {
+        if (result.isFailed()) {
+          // start() already logged the redacted classification; this is the
+          // bounded text of the Result (a constant-string boot error such as a
+          // named precondition), withheld when it could carry a path or value.
+          console.error(`Could not start server: ${boundedBootFailureText(result.getError())}`)
+          process.exitCode = 1
+        }
+      })
+      .catch((error) => {
+        console.error('Could not start server.', safeErrorLogMetadata(error))
+        process.exitCode = 1
+      })
   } catch (error) {
     console.error('Could not initialize the home server.', safeErrorLogMetadata(error))
+    process.exitCode = 1
   }
 }

@@ -4,6 +4,7 @@ import {
   ControllerContainer,
   Result,
   RuntimeLogLevelApplier,
+  safeErrorLogMetadata,
   ServerSettingsLogLevelResolver,
   ServiceContainer,
 } from '@standardnotes/domain-core'
@@ -39,6 +40,8 @@ import {
   SyncWebSocketCommandAdapter,
   SyncWebSocketRuntime,
   TYPES as ApiGatewayTypes,
+  type SyncPrecondition,
+  type SyncPreconditionState,
 } from '@standardnotes/api-gateway'
 import {
   createLoggerSyncCommandMetrics,
@@ -46,6 +49,8 @@ import {
   createSharedInviteEventComposition,
   createRedisSyncState,
   createSyncFilesTokenDecoder,
+  parseConnectionTokenTtl,
+  parseMaxConnectionsPerUser,
   RedisInviteEventAvailabilityBus,
   RedisInviteEventStore,
   type RedisInviteEventClient,
@@ -71,6 +76,7 @@ import { resolve as resolvePath } from 'path'
 import * as winston from 'winston'
 import Redis from 'ioredis'
 import { PassThrough } from 'stream'
+import { inspect } from 'util'
 import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
@@ -149,6 +155,164 @@ export function listenHomeServer(app: HomeServerListener, port: number, bindAddr
   return bindAddress ? app.listen(port, bindAddress) : app.listen(port)
 }
 
+/**
+ * The websocket gateway logs through a variadic `(...args: unknown[])` logger
+ * and hands it metadata OBJECTS (`{ socketCount }`, `safeErrorLogMetadata(e)`,
+ * `{ code }`). Joining the args with `String()` printed every one of those as
+ * `[object Object]`, so the only per-push operator line and every error code
+ * were lost. Strings and primitives become the message; plain objects become
+ * winston metadata (rendered as JSON fields by the json format); an Error is
+ * reduced to its redacted classification, never its message; anything else
+ * (arrays, class instances) is JSON-serialised into the message.
+ */
+export function formatGatewayLogArguments(args: readonly unknown[]): {
+  message: string
+  metadata: Record<string, unknown> | undefined
+} {
+  const parts: string[] = []
+  let metadata: Record<string, unknown> | undefined
+  for (const arg of args) {
+    if (typeof arg === 'string') {
+      parts.push(arg)
+    } else if (arg === null || arg === undefined || typeof arg !== 'object') {
+      parts.push(String(arg))
+    } else if (arg instanceof Error) {
+      metadata = { ...metadata, ...safeErrorLogMetadata(arg) }
+    } else if (Object.getPrototypeOf(arg) === Object.prototype || Object.getPrototypeOf(arg) === null) {
+      metadata = { ...metadata, ...(arg as Record<string, unknown>) }
+    } else {
+      try {
+        parts.push(JSON.stringify(arg))
+      } catch {
+        parts.push(inspect(arg, { depth: 2, breakLength: Infinity }))
+      }
+    }
+  }
+  return { message: parts.join(' '), metadata }
+}
+
+export interface HomeServerRealtimeGateInput {
+  connectionTokenSecret: string | undefined
+  redisHost: string | undefined
+  webSocketSyncEnabled: boolean
+}
+
+export interface HomeServerRealtimeGate {
+  /**
+   * WEB_SOCKET_CONNECTION_TOKEN_SECRET is at least 32 bytes -- the minimum the
+   * sync lane's invite-cursor codec accepts (it throws on anything shorter).
+   */
+  connectionTokenSecretUsable: boolean
+  /** Presence-only booleans the gate log and the admin diagnostics both read. */
+  observation: SyncPreconditionState
+  unmetSyncPreconditions: SyncPrecondition[]
+  /**
+   * The gateway (legacy `/sockets?authToken=` lane + token minting) attaches on
+   * ANY non-empty secret with Redis configured, exactly as the api-gateway does;
+   * a short secret only costs the sync lane.
+   */
+  attachGateway: boolean
+  /** The sync lane (tickets, invite store, SYNC_ITEMS…) needs the USABLE secret. */
+  buildSyncLane: boolean
+}
+
+/**
+ * The once-per-boot realtime gate, as a pure function so its two outputs --
+ * "attach the gateway at all" and "build the sync lane" -- can be tested
+ * without booting the five bundled services.
+ *
+ * `connectionTokenSecretPresent` is the USABLE length, not mere presence. With
+ * presence alone, a hand-typed short secret passed the gate, was logged as
+ * "preconditions are satisfied", and then took the whole boot down inside
+ * RedisInviteEventStore with an error whose message the redacting logger
+ * strips. Now it is a named unmet precondition carrying its remedy, and the
+ * process boots with the legacy lane. Length only; the value is never read
+ * into a log or a diagnostic.
+ */
+export function resolveHomeServerRealtimeGate(input: HomeServerRealtimeGateInput): HomeServerRealtimeGate {
+  const secret = input.connectionTokenSecret ?? ''
+  const redisConfigured = Boolean(input.redisHost)
+  const connectionTokenSecretUsable = Buffer.byteLength(secret, 'utf8') >= 32
+  const observation: SyncPreconditionState = {
+    connectionTokenSecretPresent: connectionTokenSecretUsable,
+    webSocketSyncEnabled: input.webSocketSyncEnabled,
+    redisBound: redisConfigured,
+    // The durable command backend is in-process here, satisfied by construction.
+    syncingServerGrpcBound: true,
+  }
+
+  return {
+    connectionTokenSecretUsable,
+    observation,
+    unmetSyncPreconditions: resolveUnmetSyncPreconditions(observation),
+    attachGateway: secret.length > 0 && redisConfigured,
+    buildSyncLane: connectionTokenSecretUsable && redisConfigured && input.webSocketSyncEnabled,
+  }
+}
+
+export interface RedisReadinessClient {
+  status: string
+  once(event: 'ready' | 'end', listener: () => void): unknown
+  removeListener(event: 'ready' | 'end', listener: () => void): unknown
+}
+
+/** How long boot waits for the sync shared-state Redis before listening anyway. */
+export const REDIS_READY_TIMEOUT_MS = 10_000
+
+/**
+ * Resolves true once the ioredis client reports `ready`, false when it gives up
+ * (`end`) or the bound elapses. Never rejects: readiness is gated on this, but a
+ * Redis that is slow to come up must delay the listener, not fail the boot --
+ * once listening, the sync ticket route answers a transient 503 until the
+ * store connects.
+ */
+export function waitForRedisReady(client: RedisReadinessClient, timeoutMs: number): Promise<boolean> {
+  if (client.status === 'ready') {
+    return Promise.resolve(true)
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const finish = (ready: boolean): void => {
+      clearTimeout(timer)
+      client.removeListener('ready', onReady)
+      client.removeListener('end', onEnd)
+      resolve(ready)
+    }
+    const onReady = (): void => finish(true)
+    const onEnd = (): void => finish(false)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    timer.unref()
+    client.once('ready', onReady)
+    client.once('end', onEnd)
+  })
+}
+
+/**
+ * FATAL line for the process-level crash handlers: the event name plus the
+ * redacted error classification (type, code, status) -- never the message.
+ */
+export function describeFatal(label: string, error: unknown): [string, Record<string, unknown>] {
+  return [`FATAL ${label}.`, { ...safeErrorLogMetadata(error) }]
+}
+
+const SAFE_BOOT_FAILURE_TEXT = /^[\w .,;:'()<>+-]{1,200}$/
+
+/**
+ * A boot failure's `Result` text is an exception message. Constant-string
+ * throws ("Invite cursor secret must contain at least 32 bytes.", the shared
+ * parsers' "<n>s, <n>m or <n>h") are exactly what an operator needs and were
+ * previously stripped by the redacting logger; anything that could carry a
+ * path, URL, query or value (slashes, `@`, `=`, quotes, length over 200) is
+ * withheld.
+ */
+export function boundedBootFailureText(message: string): string {
+  const trimmed = message.trim()
+  if (SAFE_BOOT_FAILURE_TEXT.test(trimmed)) {
+    return trimmed
+  }
+  return '(details withheld: the message may carry a path, URL or configured value; see the redacted log line above)'
+}
+
 export class HomeServer implements HomeServerInterface {
   private readonly runtime = new HomeServerRuntime()
   private authService: AuthServiceInterface | undefined
@@ -220,10 +384,15 @@ export class HomeServer implements HomeServerInterface {
 
       // Bridge in-process WEB_SOCKET_MESSAGE_REQUESTED events onto Redis pub/sub
       // so the self-hosted WebSocket gateway can push them to live clients.
+      // WEBSOCKET_REDIS_NAMESPACE (empty by default) prefixes the channel so two
+      // stacks sharing one Redis do not cross-talk; the in-process gateway
+      // subscribes under the same variable, so the two sides always agree.
+      const webSocketRedisNamespace = env.get('WEBSOCKET_REDIS_NAMESPACE', true) || undefined
       const webSocketRedisBridge = new WebSocketRedisBridge(
         winston.loggers.get('home-server'),
         env.get('REDIS_HOST', true) || undefined,
         env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+        { namespace: webSocketRedisNamespace },
       )
       directCallDomainEventPublisher.register(webSocketRedisBridge)
 
@@ -591,10 +760,23 @@ export class HomeServer implements HomeServerInterface {
 
       serverInstance.keepAliveTimeout = keepAliveTimeout
 
+      // Adapt the winston logger to the gateway's variadic Logger interface.
+      // See formatGatewayLogArguments: metadata objects become winston fields
+      // instead of the former `[object Object]`.
+      const bridgeGatewayLog =
+        (level: 'info' | 'warn' | 'error') =>
+        (...args: unknown[]): void => {
+          const { message, metadata } = formatGatewayLogArguments(args)
+          if (metadata) {
+            logger[level](message, metadata)
+          } else {
+            logger[level](message)
+          }
+        }
       const gatewayLogger = {
-        info: (...args: unknown[]) => logger.info(args.map(String).join(' ')),
-        warn: (...args: unknown[]) => logger.warn(args.map(String).join(' ')),
-        error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
+        info: bridgeGatewayLog('info'),
+        warn: bridgeGatewayLog('warn'),
+        error: bridgeGatewayLog('error'),
       }
       const webSocketRuntime = new SyncWebSocketRuntime()
       let syncStateRedis: Redis | undefined
@@ -605,26 +787,38 @@ export class HomeServer implements HomeServerInterface {
       let realtime: { stop(): Promise<void> } | undefined
       const redisHost = env.get('REDIS_HOST', true) || undefined
       const connectionTokenSecret = env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true) || undefined
+      // Standard Red Notes: the two gateway knobs are parsed by the SAME shared
+      // parsers the api-gateway and the standalone entry use (C8), at boot and
+      // before the gate, so a bad value fails closed with a named error instead
+      // of minting 0-second tokens ("60" was milliseconds to jsonwebtoken) or
+      // 500-ing every mint while readiness stayed green.
+      const connectionTokenTtl = parseConnectionTokenTtl(env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || undefined)
+      const maxConnectionsPerUser = parseMaxConnectionsPerUser(
+        env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true) || undefined,
+      )
       // Standard Red Notes: same DEFINITIVE, once-per-boot verdict the distributed
       // api-gateway emits, from the same shared module, so an operator reads the
       // identical precondition names whichever deployment they run. The durable
       // backend is in-process here, so that condition is satisfied by construction.
-      // Presence only — booleans in, constant remedies out, never a value.
-      const syncGateObservation = {
-        connectionTokenSecretPresent: Boolean(connectionTokenSecret),
-        webSocketSyncEnabled,
-        redisBound: Boolean(redisHost),
-        syncingServerGrpcBound: true,
-      }
-      const unmetSyncPreconditions = resolveUnmetSyncPreconditions(syncGateObservation)
+      // Presence only — booleans in, constant remedies out, never a value. The
+      // secret condition is its USABLE length (≥ 32 bytes), see
+      // resolveHomeServerRealtimeGate: a shorter one no longer crashes the boot
+      // inside the invite store after this line has said "satisfied".
+      const realtimeGate = resolveHomeServerRealtimeGate({ connectionTokenSecret, redisHost, webSocketSyncEnabled })
+      const syncGateObservation = realtimeGate.observation
+      const unmetSyncPreconditions = realtimeGate.unmetSyncPreconditions
       // Standard Red Notes: the admin Diagnostics panel reads the SAME verdict over
       // GET /v1/admin/sync-diagnostics. Recording it here as well as in the
       // distributed gateway's bin/server.ts is what makes that panel work on a
       // single-container deployment — HomeServer is a separate boot path, so a
       // recorder wired only in bin/server.ts would leave this topology reporting
       // "the gate has not been recorded" forever, which is precisely the useless
-      // non-answer the panel exists to replace.
-      syncGateDiagnostics.record({ ...syncGateObservation, filesAdvertised: false })
+      // non-answer the panel exists to replace. `gatewayAttached` is recorded from
+      // the ATTACH OUTCOME (re-recorded below once the gateway is up), not
+      // inferred from the secret: a single container without Redis attaches no
+      // gateway at all, and one with a short secret attaches the legacy lane.
+      let recordedGate = { ...syncGateObservation, filesAdvertised: false, gatewayAttached: false }
+      syncGateDiagnostics.record(recordedGate)
       if (unmetSyncPreconditions.length === 0) {
         logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')
       } else {
@@ -633,10 +827,12 @@ export class HomeServer implements HomeServerInterface {
           { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
         )
       }
-      if (connectionTokenSecret && redisHost) {
+      // `attachGateway` already implies both values are set; the conjunction is
+      // for the type narrowing only.
+      if (realtimeGate.attachGateway && connectionTokenSecret && redisHost) {
         try {
           let sync: SyncGatewayOptions | undefined
-          if (webSocketSyncEnabled) {
+          if (realtimeGate.buildSyncLane) {
             syncStateRedis = new Redis({
               host: redisHost,
               port: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
@@ -667,11 +863,12 @@ export class HomeServer implements HomeServerInterface {
             // Home server owns canonical file storage in-process, so the FILES_V1
             // waiver here is never about a missing URL or valet secret — the
             // adapter either constructed or it did not.
-            syncGateDiagnostics.record({
-              ...syncGateObservation,
+            recordedGate = {
+              ...recordedGate,
               filesAdvertised: Boolean(filesAdapter),
               ...(filesAdapter ? {} : { filesUnmetCondition: 'TRANSPORT_CONSTRUCTION' as const }),
-            })
+            }
+            syncGateDiagnostics.record(recordedGate)
             const syncAdapter = new SyncWebSocketCommandAdapter(
               container.get(ApiGatewayTypes.ApiGateway_ServiceProxy),
               new DirectCallSyncCommandPort(serviceContainer),
@@ -686,7 +883,12 @@ export class HomeServer implements HomeServerInterface {
             sync = {
               isEnabled: () => webSocketSyncEnabled,
               allowedOrigins: syncAllowedOrigins,
-              allowSameOrigin: syncAllowedOrigins.length === 0,
+              // Same-origin browser upgrades are always accepted (a page served
+              // by this host on any hostname/port the operator did not list);
+              // WEBSOCKET_SYNC_ALLOWED_ORIGINS / PUBLIC_URL stay ADDITIVE for
+              // cross-origin clients. Pinning to the exact PUBLIC_URL origin
+              // silently dropped every LAN-IP / second-hostname tab to HTTP.
+              allowSameOrigin: true,
               authorization: syncAdapter,
               backend: syncAdapter,
               collaborationAuthorization: syncAdapter,
@@ -710,16 +912,17 @@ export class HomeServer implements HomeServerInterface {
             logger: gatewayLogger,
             config: {
               connectionTokenSecret,
-              connectionTokenTtl: env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || '60s',
+              connectionTokenTtl,
               internalSecret: env.get('WEBSOCKET_GATEWAY_INTERNAL_SECRET', true) || '',
               authJwtSecret: env.get('AUTH_JWT_SECRET', true) || '',
               redisHost,
               redisPort: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
-              maxConnectionsPerUser: parseOptionalPositiveInteger(
-                'WEBSOCKET_MAX_CONNECTIONS_PER_USER',
-                env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true) || undefined,
-                1_024,
-              ),
+              maxConnectionsPerUser,
+              // Same namespace as the push bridge above (C10): the gateway
+              // subscribes to `<ns>:websocket-messages`, the bridge publishes
+              // there; the relay channel, collab keys, SQS dedup and invite
+              // store keys take the same prefix inside the gateway.
+              redisNamespace: webSocketRedisNamespace,
             },
             sync,
           })
@@ -753,7 +956,12 @@ export class HomeServer implements HomeServerInterface {
               }
             },
           }
-          logger.info('Realtime WebSocket gateway attached to the HomeServer HTTP server')
+          recordedGate = { ...recordedGate, gatewayAttached: true }
+          syncGateDiagnostics.record(recordedGate)
+          logger.info('Realtime WebSocket gateway attached to the HomeServer HTTP server', {
+            syncLane: sync ? 'built' : 'not-built',
+            legacyLane: 'attached',
+          })
         } catch (error) {
           await webSocketRuntime.stop().catch(() => undefined)
           await inviteDomainEventBridge?.close().catch(() => undefined)
@@ -773,6 +981,28 @@ export class HomeServer implements HomeServerInterface {
           { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
         )
       }
+
+      // Standard Red Notes: readiness is reported after the sync shared-state
+      // Redis is `ready` (bounded). ioredis connects asynchronously, so a page
+      // load racing a restart used to negotiate HTTP-only from an empty
+      // /capabilities list while readiness was already green. Listening only
+      // once the store is up (or the bound elapses, logged) keeps the container
+      // healthcheck honest without failing the boot on a slow Redis.
+      if (syncStateRedis) {
+        const syncStateRedisReady = await waitForRedisReady(syncStateRedis, REDIS_READY_TIMEOUT_MS)
+        if (!syncStateRedisReady) {
+          logger.warn(
+            `WebSocket sync shared-state Redis is not ready after ${REDIS_READY_TIMEOUT_MS} ms; listening anyway. Sync tickets answer a transient 503 until it connects.`,
+            { redisStatus: syncStateRedis.status },
+          )
+        }
+      }
+      // Open the push bridge's Redis connection before the first request can
+      // produce an event: its offline queue is disabled (a publish must never
+      // stall a save), so a connection that is still opening would drop the
+      // very first push. Placed here because every failure path from now on
+      // (listen error, runtime start error) closes the bridge.
+      webSocketRedisBridge.connect()
 
       try {
         listenHomeServer(serverInstance, port, bindAddress)
@@ -821,7 +1051,9 @@ export class HomeServer implements HomeServerInterface {
       } else {
         this.authService = undefined
       }
-      console.error('Home server startup failed.')
+      // Redacted classification only; bin/server.ts prints the bounded text of
+      // the Result (constant-string boot errors) next to it.
+      console.error('Home server startup failed.', safeErrorLogMetadata(startupError))
 
       return Result.fail(
         cleanupError ? `${startupError.message}; startup cleanup failed: ${cleanupError}` : startupError.message,
