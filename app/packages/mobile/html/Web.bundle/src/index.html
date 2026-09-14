@@ -22,6 +22,8 @@
         window.defaultSyncServer = __defaultSyncServer.indexOf("__DEFAULT") === 0 ? "" : __defaultSyncServer;
         window.defaultFilesHost = __defaultFilesHost.indexOf("__DEFAULT") === 0 ? "" : __defaultFilesHost;
         window.enabledUnfinishedFeatures = "" === 'true';
+        // Empty on purpose: snjs derives ws(s)://<sync-host>/sockets from the
+        // configured sync server at runtime, so no gateway URL is baked in here.
         window.websocketUrl = "";
         window.purchaseUrl = "";
         window.plansUrl = "";

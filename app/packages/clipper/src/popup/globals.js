@@ -6,6 +6,8 @@
 window.defaultSyncServer = ''
 window.defaultFilesHost = ''
 window.enabledUnfinishedFeatures = false
+// Empty on purpose: snjs derives ws(s)://<sync-host>/sockets from the sync
+// server at runtime, so no gateway URL is baked in here.
 window.websocketUrl = ''
 // No paid tier — these go nowhere.
 window.purchaseUrl = 'about:blank'

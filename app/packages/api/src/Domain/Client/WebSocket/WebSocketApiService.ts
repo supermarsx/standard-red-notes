@@ -23,13 +23,14 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
     this.operationsInProgress.set(WebSocketApiOperations.CreatingConnectionToken, true)
 
     try {
-      const response = await this.webSocketServer.createConnectionToken({})
-
-      this.operationsInProgress.set(WebSocketApiOperations.CreatingConnectionToken, false)
-
-      return response
+      return await this.webSocketServer.createConnectionToken({})
     } catch {
       throw new ApiCallError(ErrorMessage.GenericFail)
+    } finally {
+      // Released on the thrown path too (R19): a request that threw (host not
+      // set yet, an aborted fetch) used to leave the flag set, and every later
+      // mint failed with GenericInProgress until the app restarted.
+      this.operationsInProgress.set(WebSocketApiOperations.CreatingConnectionToken, false)
     }
   }
 

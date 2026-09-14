@@ -337,7 +337,11 @@ export class SessionManager
       this.webSocketsService.closeWebSocketConnection()
     }
     if (syncTransportRevocationError) {
-      throw syncTransportRevocationError
+      // The server session is gone and the local user is forgotten by now; a
+      // sync worker that could not quarantine its outbox (an unreadable outbox
+      // store, a worker that never answered) is not a reason to report the
+      // sign-out as failed to the user (N43). Log it and move on.
+      console.error('Sync transport quarantine failed during sign-out:', syncTransportRevocationError)
     }
   }
 

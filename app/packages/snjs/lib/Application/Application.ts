@@ -438,13 +438,17 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
       }
     }
 
-    await this.handleStage(ApplicationStage.StorageDecrypted_09)
-
+    // The host and the gateway URL must be known BEFORE stage 09: the session
+    // manager restores the stored session in its stage-09 handler and dials the
+    // websocket right there, which needs the HTTP host for the token mint and
+    // the (stored or host-derived) gateway URL to be eligible at all (N10).
     const host = this.legacyApi.loadHost()
 
     this.http.setHost(host)
 
-    this.sockets.loadWebSocketUrl()
+    this.sockets.loadWebSocketUrl(host)
+
+    await this.handleStage(ApplicationStage.StorageDecrypted_09)
 
     this.settings.initializeFromDisk()
 
@@ -589,7 +593,9 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
   public async setCustomHost(host: string, websocketUrl?: string): Promise<void> {
     await this.setHost.execute(host)
 
-    this.sockets.setWebSocketUrl(websocketUrl)
+    // Without an explicit gateway URL the socket is derived from the host, so a
+    // custom server keeps realtime instead of silently losing it (R20).
+    this.sockets.setWebSocketUrl(websocketUrl, host)
   }
 
   public getUserPasswordCreationDate(): Date | undefined {

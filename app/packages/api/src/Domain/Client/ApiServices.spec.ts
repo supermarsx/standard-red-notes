@@ -220,6 +220,21 @@ describe('WebSocketApiService', () => {
     ).rejects.toThrow(ErrorMessage.GenericFail)
   })
 
+  // R19 / e5 probe H. FALSE-GREEN: move the flag reset back inside the `try`
+  // → the second call rejects with GenericInProgress and the server is called
+  // once → RED.
+  it('createConnectionToken should release its lock after a transport failure so the next call goes through', async () => {
+    const server = {
+      createConnectionToken: jest.fn().mockRejectedValueOnce(new Error('network down')).mockResolvedValue(response),
+    }
+    const service = new WebSocketApiService(server as never)
+
+    await expect(service.createConnectionToken()).rejects.toThrow(ErrorMessage.GenericFail)
+    await expect(service.createConnectionToken()).resolves.toBe(response)
+
+    expect(server.createConnectionToken).toHaveBeenCalledTimes(2)
+  })
+
   it('authorizeCollaboration should pass the note uuid through', async () => {
     const server = { authorizeCollaboration: ok() }
 

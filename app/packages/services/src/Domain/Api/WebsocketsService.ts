@@ -217,7 +217,19 @@ export class WebSocketsService extends AbstractService<
   DomainEventInterface | SyncItemsPushedData | undefined
 > {
   private CLOSE_CONNECTION_CODE = 3123
-  private HEARTBEAT_DELAY = 360_000
+  /** RFC 6455 policy violation: the gateway refused this token, session, path or socket budget. */
+  private POLICY_VIOLATION_CLOSE_CODE = 1008
+  /** Application code used when this client gives up on a socket that stopped answering pings. */
+  private HALF_OPEN_CLOSE_CODE = 4000
+  /**
+   * Text `ping` cadence while OPEN. The gateway answers a text `ping` with a
+   * text `pong`; any inbound frame within PONG_DEADLINE_MS of a ping proves the
+   * path is alive. A laptop that slept or a NAT that dropped the mapping leaves
+   * the socket OPEN in the browser's eyes while nothing can cross it, and only a
+   * write with a deadline can tell (the socket is otherwise "open" forever).
+   */
+  private HEARTBEAT_DELAY = 60_000
+  private PONG_DEADLINE_MS = 120_000
 
   /**
    * Reconnect backoff (Standard Red Notes hardening).
@@ -231,16 +243,42 @@ export class WebSocketsService extends AbstractService<
    * resets to the base delay only once a connection has stayed open long enough
    * to be considered stable (see RECONNECT_STABLE_MS), so a server that accepts
    * the socket and then drops it immediately cannot reset the backoff and keep
-   * us in a fast loop.
+   * us in a fast loop. After RECONNECT_LONG_AFTER_ATTEMPTS consecutive failures
+   * the cap grows to RECONNECT_LONG_MAX_MS: an outage that has already lasted
+   * a minute is not worth a token mint every 30 s per tab.
    */
   private RECONNECT_BASE_MS = 1_000
   private RECONNECT_MAX_MS = 30_000
+  private RECONNECT_LONG_AFTER_ATTEMPTS = 6
+  private RECONNECT_LONG_MAX_MS = 300_000
   /** A connection must stay open this long before its backoff is reset. */
   private RECONNECT_STABLE_MS = 10_000
 
   private reconnectAttempts = 0
   private reconnectTimeout?: ReturnType<typeof setTimeout>
   private stableConnectionTimeout?: ReturnType<typeof setTimeout>
+  private pongDeadlineTimeout?: ReturnType<typeof setTimeout>
+  /**
+   * Bumped by every dial and by closeWebSocketConnection(). A dial whose token
+   * mint resolves after the generation moved on was superseded (the app closed
+   * the connection, or a newer dial took over) and must not build a socket with
+   * a token minted under a session that may be gone.
+   */
+  private dialGeneration = 0
+  /**
+   * True from the first explicit start until closeWebSocketConnection(). Only a
+   * requested connection is re-dialled by reconnectIfClosed(): an offline
+   * workspace or a signed-out app must not mint tokens on every focus.
+   */
+  private connectionRequested = false
+  /**
+   * Set by closeWebSocketConnection() before the socket is closed so a close
+   * event that echoes an unexpected code (a CONNECTING socket closes with 1006,
+   * not the requested 3123) is never mistaken for a server-side drop.
+   */
+  private closedByApplication = false
+  /** One console.error per outage; reset when a socket opens or the app closes the connection. */
+  private reportedDialFailure = false
   /**
    * Guards against concurrent dials (sign-in + close + online all racing). Held
    * true from the start of a dial until the socket actually OPENS or CLOSES — not
@@ -274,9 +312,36 @@ export class WebSocketsService extends AbstractService<
     super(internalEventBus)
   }
 
-  public setWebSocketUrl(url: string | undefined): void {
-    this.webSocketUrl = url
-    this.storageService.setValue(StorageKey.WebSocketUrl, url)
+  /**
+   * The gateway URL implied by an API host: `http(s)://host[:port]` (an optional
+   * trailing slash is fine) becomes `ws(s)://host[:port]/sockets`, the same
+   * same-origin rule the web build applies in its index.html. Anything else —
+   * another scheme, a sub-path, a query, credentials — yields undefined so a
+   * deployment we cannot reason about keeps dialling nothing rather than the
+   * wrong thing. A regex rather than `URL` so it behaves identically in every
+   * runtime that loads this package (browser, WebView, headless node).
+   */
+  public static deriveWebSocketUrl(apiHost: string | undefined): string | undefined {
+    if (typeof apiHost !== 'string') {
+      return undefined
+    }
+    const match = /^(https?):\/\/([a-z0-9.-]+|\[[0-9a-f:.]+\])(:\d{1,5})?\/?$/i.exec(apiHost.trim())
+    if (!match) {
+      return undefined
+    }
+    const [, scheme, host, port = ''] = match
+    return `${scheme.toLowerCase() === 'https' ? 'wss' : 'ws'}://${host}${port}/sockets`
+  }
+
+  /**
+   * Store an explicit gateway URL, or — when the caller has none — the one
+   * derived from `apiHost`. A custom server picked in the UI therefore keeps a
+   * socket instead of silently dropping it for the session (R20).
+   */
+  public setWebSocketUrl(url: string | undefined, apiHost?: string): void {
+    const nextUrl = url || WebSocketsService.deriveWebSocketUrl(apiHost)
+    this.webSocketUrl = nextUrl
+    this.storageService.setValue(StorageKey.WebSocketUrl, nextUrl)
   }
 
   /** Current operator-configured gateway URL; never substitutes a first-party host. */
@@ -316,14 +381,40 @@ export class WebSocketsService extends AbstractService<
     }
   }
 
-  public loadWebSocketUrl(): void {
+  /**
+   * Resolve the gateway URL for this launch: a URL stored by the picker wins,
+   * then the one the host page injected at start-up, then the legacy
+   * `globalThis._websocket_url` hook, and finally the URL derived from the API
+   * host. Desktop, mobile and the clipper inject nothing, so the derivation is
+   * what gives them a socket at all (B4).
+   */
+  public loadWebSocketUrl(apiHost?: string): void {
     const storedValue = this.storageService.getValue<string | undefined>(StorageKey.WebSocketUrl)
     // Read the injected fallback off `globalThis` rather than a bare `window`: `window`
     // is undeclared in non-DOM runtimes (react-native, headless node/mcp) where it errors
     // at type-check and throws ReferenceError at runtime. `globalThis` is always defined
     // (in a browser/WebView `globalThis === window`), so no typeof guard is needed.
     const windowFallbackUrl = (globalThis as { _websocket_url?: string })._websocket_url
-    this.webSocketUrl = storedValue || this.webSocketUrl || windowFallbackUrl
+    this.webSocketUrl =
+      storedValue || this.webSocketUrl || windowFallbackUrl || WebSocketsService.deriveWebSocketUrl(apiHost)
+  }
+
+  /**
+   * Contract C11: dial again after the app came back online or to the
+   * foreground. No-op without a URL, while a dial is in flight, while the
+   * socket is OPEN, and — so an offline workspace or a signed-out app never
+   * mints tokens on focus — until the app has asked for a connection since
+   * the last closeWebSocketConnection(). Otherwise any pending backoff is
+   * cancelled, the attempt counter reset and a dial started now: a socket
+   * that gave up (1008, a 503 mint) gets one fresh try per foreground event.
+   */
+  public reconnectIfClosed(): void {
+    if (!this.webSocketUrl || !this.connectionRequested || this.connecting || this.isWebSocketConnectionOpen()) {
+      return
+    }
+    this.clearReconnectTimeout()
+    this.reconnectAttempts = 0
+    void this.startWebSocketConnection()
   }
 
   async startWebSocketConnection(): Promise<Result<void>> {
@@ -343,22 +434,38 @@ export class WebSocketsService extends AbstractService<
 
     // A manual/explicit start supersedes any scheduled backoff retry.
     this.clearReconnectTimeout()
+    this.connectionRequested = true
+    this.closedByApplication = false
     this.connecting = true
+    const generation = ++this.dialGeneration
 
     try {
-      const webSocketConectionToken = await this.createWebSocketConnectionToken()
-      if (webSocketConectionToken === undefined) {
-        // Treat a failed token fetch like a failed connection: back off instead
-        // of letting the caller hammer us with immediate retries. This is a
-        // TERMINAL path that never wires up a socket, so nothing downstream would
-        // ever clear `connecting` — clear it here or the service dead-locks in a
-        // permanent "connecting" state and can never dial again.
+      const mint = await this.createWebSocketConnectionToken()
+      if (generation !== this.dialGeneration) {
+        // closeWebSocketConnection() (or a newer dial) superseded this one while
+        // the token was minting; that path owns `connecting` now and a socket
+        // must not be built with a token from a session that may be gone.
+        return Result.fail('WebSocket dial superseded')
+      }
+      if ('failure' in mint) {
+        // This is a TERMINAL path that never wires up a socket, so nothing
+        // downstream would ever clear `connecting` — clear it here or the
+        // service dead-locks in a permanent "connecting" state.
         this.connecting = false
-        this.scheduleReconnect()
+        if (mint.failure === 'retryable') {
+          // Treat a failed token fetch like a failed connection: back off instead
+          // of letting the caller hammer us with immediate retries.
+          this.scheduleReconnect()
+        } else {
+          // The server said no in a way that will not change on its own (no
+          // gateway attached, this session may not hold a socket). Stop until
+          // the next sign-in or foreground event instead of minting forever.
+          this.stopUntilNextSignInOrForeground()
+        }
         return Result.fail('Failed to create WebSocket connection token')
       }
 
-      const webSocket = new WebSocket(`${this.webSocketUrl}?authToken=${webSocketConectionToken}`)
+      const webSocket = new WebSocket(`${this.webSocketUrl}?authToken=${mint.token}`)
       this.webSocket = webSocket
       // Adapt at the assignment seam: react-native's WebSocket event types declare `.data`
       // and `.code` as optional, which isn't assignable to our strict handler params. Coerce
@@ -390,6 +497,9 @@ export class WebSocketsService extends AbstractService<
       // instead of building a duplicate socket.
       return Result.ok()
     } catch (error) {
+      if (generation !== this.dialGeneration) {
+        return Result.fail('WebSocket dial superseded')
+      }
       // TERMINAL path: no socket handlers were wired, so nothing will ever clear
       // `connecting` later — clear it here or the service dead-locks.
       this.connecting = false
@@ -403,6 +513,7 @@ export class WebSocketsService extends AbstractService<
     // later dial can proceed. From here isWebSocketConnectionOpen() coalesces
     // duplicate triggers instead.
     this.connecting = false
+    this.reportedDialFailure = false
 
     // Don't reset the backoff yet: a server that accepts then instantly drops
     // the socket must not be able to reset us into a fast loop. Only reset once
@@ -445,7 +556,9 @@ export class WebSocketsService extends AbstractService<
       return
     }
 
-    const exponential = Math.min(this.RECONNECT_MAX_MS, this.RECONNECT_BASE_MS * 2 ** this.reconnectAttempts)
+    const cap =
+      this.reconnectAttempts >= this.RECONNECT_LONG_AFTER_ATTEMPTS ? this.RECONNECT_LONG_MAX_MS : this.RECONNECT_MAX_MS
+    const exponential = Math.min(cap, this.RECONNECT_BASE_MS * 2 ** this.reconnectAttempts)
     const delay = Math.random() * exponential
     this.reconnectAttempts += 1
 
@@ -453,6 +566,17 @@ export class WebSocketsService extends AbstractService<
       this.reconnectTimeout = undefined
       void this.startWebSocketConnection()
     }, delay)
+  }
+
+  /**
+   * The gateway refused us for a reason that will not change until the user
+   * signs in again or the app returns to the foreground (a 1008 policy close,
+   * a 503 "no gateway" or 403 mint). Drop the backoff loop entirely; the next
+   * setSession() or reconnectIfClosed() dials again from attempt 0 (R17).
+   */
+  private stopUntilNextSignInOrForeground(): void {
+    this.clearReconnectTimeout()
+    this.reconnectAttempts = 0
   }
 
   isWebSocketConnectionOpen(): boolean {
@@ -467,12 +591,39 @@ export class WebSocketsService extends AbstractService<
 
   public closeWebSocketConnection(): void {
     // An explicit close must cancel any pending reconnect so we don't re-dial a
-    // socket the app just asked us to tear down (e.g. on sign-out).
+    // socket the app just asked us to tear down (e.g. on sign-out), and must
+    // abandon a dial that is still minting its token.
+    this.dialGeneration += 1
+    this.connecting = false
+    this.connectionRequested = false
+    this.closedByApplication = true
+    this.reportedDialFailure = false
     this.clearReconnectTimeout()
     this.clearStableConnectionTimeout()
     this.clearWebSocketHeartbeat()
     this.reconnectAttempts = 0
-    this.webSocket?.close(this.CLOSE_CONNECTION_CODE, 'Closing application')
+
+    // Detach BEFORE closing (R18): a CONNECTING socket's close() fails the
+    // handshake and reports 1006, not the 3123 we asked for, and an OPEN socket
+    // on a dead path never gets its close echoed at all. With `this.webSocket`
+    // cleared first, the identity guard on the handlers drops that late close
+    // instead of treating it as a server drop and re-arming the backoff loop.
+    const webSocket = this.webSocket
+    this.webSocket = undefined
+    if (!webSocket) {
+      return
+    }
+    const wasLive = typeof WebSocket !== 'undefined' && webSocket.readyState !== WebSocket.CLOSED
+    try {
+      webSocket.close(this.CLOSE_CONNECTION_CODE, 'Closing application')
+    } catch {
+      /* already closing; nothing more to do */
+    }
+    if (wasLive) {
+      // The detached handler would have published this; keep the contract for
+      // the consumers that fail closed on it (encrypted rooms).
+      void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidClose)
+    }
   }
 
   private beginWebSocketHeartbeat(): void {
@@ -485,12 +636,53 @@ export class WebSocketsService extends AbstractService<
       clearInterval(this.webSocketHeartbeatInterval)
       this.webSocketHeartbeatInterval = undefined
     }
+    this.clearPongDeadline()
+  }
+
+  private clearPongDeadline(): void {
+    if (this.pongDeadlineTimeout) {
+      clearTimeout(this.pongDeadlineTimeout)
+      this.pongDeadlineTimeout = undefined
+    }
   }
 
   private websocketHeartbeat(): void {
-    if (this.webSocket?.readyState === WebSocket.OPEN) {
-      this.webSocket.send('ping')
+    if (this.webSocket?.readyState !== WebSocket.OPEN) {
+      return
     }
+    this.webSocket.send('ping')
+    // One deadline per silence, not per ping: it is cleared by the first
+    // inbound frame of any kind and re-armed by the next ping after that.
+    if (!this.pongDeadlineTimeout) {
+      this.pongDeadlineTimeout = setTimeout(() => {
+        this.pongDeadlineTimeout = undefined
+        this.handleUnresponsiveSocket()
+      }, this.PONG_DEADLINE_MS)
+    }
+  }
+
+  /**
+   * Half-open detection (D3): nothing came back within PONG_DEADLINE_MS of a
+   * ping. The browser still reports the socket OPEN, so isWebSocketConnectionOpen()
+   * would keep suppressing the sync poll and no reconnect would ever run. Give
+   * the socket up ourselves: detach it (its eventual 1006 may take minutes and
+   * is dropped by the identity guard), tell consumers, and re-dial.
+   */
+  private handleUnresponsiveSocket(): void {
+    const webSocket = this.webSocket
+    if (!webSocket) {
+      return
+    }
+    this.webSocket = undefined
+    this.clearWebSocketHeartbeat()
+    this.clearStableConnectionTimeout()
+    try {
+      webSocket.close(this.HALF_OPEN_CLOSE_CODE, 'No pong within the deadline')
+    } catch {
+      /* the path is dead; the close frame goes nowhere either way */
+    }
+    void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidClose)
+    this.scheduleReconnect()
   }
 
   /**
@@ -634,10 +826,18 @@ export class WebSocketsService extends AbstractService<
     // text `pong`/keepalive would otherwise throw an uncaught exception here on
     // every beat. Mirror the "malformed push must not throw" discipline below
     // (and authorizeCollaborationRoom's try/catch): drop the frame and return.
+    // Any inbound frame — including the text `pong` the parse below rejects —
+    // proves the path is alive, so the half-open deadline is cleared first.
+    this.clearPongDeadline()
     let eventData
     try {
       eventData = JSON.parse(messageEvent.data)
     } catch {
+      return
+    }
+    // A JSON `null`, number, string or boolean parses fine but has no fields;
+    // reading `.t` off null would throw outside the try above (N11).
+    if (eventData === null || typeof eventData !== 'object') {
       return
     }
     if (typeof eventData.t === 'string' && COLLABORATION_FRAME_TYPES.has(eventData.t)) {
@@ -701,47 +901,78 @@ export class WebSocketsService extends AbstractService<
     // The socket didn't survive: cancel the pending "stable" reset so a flapping
     // server can't reset our backoff.
     this.clearStableConnectionTimeout()
+    this.webSocket = undefined
     void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidClose)
 
-    const closedByApplication = event.code === this.CLOSE_CONNECTION_CODE
-    if (closedByApplication) {
-      this.webSocket = undefined
-
+    // closeWebSocketConnection() detaches the socket before closing it, so this
+    // handler normally never sees an application close; the flag and the echoed
+    // code are kept as belt and braces for a runtime that fires synchronously.
+    if (this.closedByApplication || event.code === this.CLOSE_CONNECTION_CODE) {
       return
     }
 
-    if (this.webSocket?.readyState === WebSocket.CLOSED) {
-      // Back off instead of re-dialling immediately. This is the fix for the
-      // reconnect storm: repeated failures now grow the delay (capped + jittered)
-      // rather than busy-looping.
-      this.scheduleReconnect()
+    if (event.code === this.POLICY_VIOLATION_CLOSE_CODE) {
+      // The gateway refused this socket outright (bad token, revoked session,
+      // wrong path, per-user budget). Dialling again every 30 s changes nothing
+      // and costs a token mint per attempt per tab (R17).
+      this.stopUntilNextSignInOrForeground()
+      return
     }
+
+    // Back off instead of re-dialling immediately. This is the fix for the
+    // reconnect storm: repeated failures now grow the delay (capped + jittered)
+    // rather than busy-looping.
+    this.scheduleReconnect()
   }
 
-  private async createWebSocketConnectionToken(): Promise<string | undefined> {
+  /**
+   * Mint the short-lived token the gateway requires on the upgrade. A 503 (no
+   * gateway attached to this deployment) or 403 (this session may not hold a
+   * socket) is `terminal`: nothing this client does will change it, so the
+   * caller stops instead of backing off. Everything else — a 5xx, a network
+   * error, a thrown request — is `retryable`.
+   */
+  private async createWebSocketConnectionToken(): Promise<{ token: string } | { failure: 'terminal' | 'retryable' }> {
     try {
       const response = await this.webSocketApiService.createConnectionToken()
       if (isErrorResponse(response)) {
-        console.error(response.data.error)
-
-        return undefined
+        this.reportDialFailure(response.data.error)
+        const terminal = response.status === 503 || response.status === 403
+        return { failure: terminal ? 'terminal' : 'retryable' }
+      }
+      const token = response.data.token
+      if (typeof token !== 'string' || token.length === 0) {
+        this.reportDialFailure('The connection token response carried no token.')
+        return { failure: 'retryable' }
       }
 
-      return response.data.token
+      return { token }
     } catch (error) {
-      console.error('Caught error:', (error as Error).message)
+      this.reportDialFailure((error as Error).message)
 
-      return undefined
+      return { failure: 'retryable' }
     }
   }
 
+  /** Log the first failure of an outage only; the backoff already tells the rest. */
+  private reportDialFailure(detail: unknown): void {
+    if (this.reportedDialFailure) {
+      return
+    }
+    this.reportedDialFailure = true
+    console.error('Could not open the realtime websocket; retrying in the background.', detail)
+  }
+
   override deinit(): void {
+    // Close BEFORE the dependencies are nulled (R18): the close used to run
+    // last, so a socket still CONNECTING (or one whose peer never echoed the
+    // close) reported 1006 later, the reconnect timer re-armed, and every tick
+    // minted through an undefined api service — a zombie loop logging
+    // "Caught error:" for the life of the page.
+    this.closeWebSocketConnection()
     super.deinit()
-    this.clearReconnectTimeout()
-    this.clearStableConnectionTimeout()
     ;(this.storageService as unknown) = undefined
     ;(this.webSocketApiService as unknown) = undefined
-    this.closeWebSocketConnection()
     this.syncSessionRevocationHandlers.clear()
     this.collaborationAuthorizationCache.clear()
     this.collaborationAuthorizationRequests.clear()

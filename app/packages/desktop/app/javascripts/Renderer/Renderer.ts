@@ -45,7 +45,13 @@ const loadAndStartApplication = async () => {
 
   window.device = await createDesktopDevice(remoteBridge)
 
-  return window.startApplication(DEFAULT_SYNC_SERVER, window.device, window.enableUnfinishedFeatures, WEBSOCKET_URL)
+  // WEBSOCKET_URL is a build-time define that no workflow sets, so it is the
+  // literal `undefined` in every shipped build. Fall back to a URL the host
+  // page may have injected, else pass "" and let snjs derive
+  // ws(s)://<sync-host>/sockets from the sync server at runtime (B4).
+  const webSocketUrl = WEBSOCKET_URL || (window as { websocketUrl?: string }).websocketUrl || ''
+
+  return window.startApplication(DEFAULT_SYNC_SERVER, window.device, window.enableUnfinishedFeatures, webSocketUrl)
 }
 
 window.onload = () => {

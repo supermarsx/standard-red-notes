@@ -31,8 +31,12 @@ const ServerPicker = ({ className }: Props) => {
     }
   }, [application.homeServer, server])
 
+  // `websocketUrl` is only ever known for the default server (the URL the host
+  // page injected at start-up). For a custom or home server it is passed as
+  // undefined on purpose: snjs then derives ws(s)://<server>/sockets from the
+  // server itself, so picking a server never silently drops the socket.
   const handleSyncServerChange = useCallback(
-    (server: string, websocketUrl?: string) => {
+    (server: string, websocketUrl: string | undefined) => {
       setServer(server)
       void determineServerType()
       application.setCustomHost(server, websocketUrl).catch(console.error)
@@ -51,7 +55,7 @@ const ServerPicker = ({ className }: Props) => {
       // (window.defaultSyncServer / window.websocketUrl) — same-origin by
       // default, overridable via the SYNC_SERVER env var. NOT the hosted
       // api.standardnotes.com.
-      handleSyncServerChange(window.defaultSyncServer, window.websocketUrl)
+      handleSyncServerChange(window.defaultSyncServer, window.websocketUrl || undefined)
     } else if (type === 'home server') {
       if (!application.homeServer) {
         application.alerts.alert(t('homeServerNotRunning')).catch(console.error)
@@ -66,7 +70,7 @@ const ServerPicker = ({ className }: Props) => {
         return
       }
 
-      handleSyncServerChange(homeServerUrl)
+      handleSyncServerChange(homeServerUrl, undefined)
     }
   }
 
@@ -95,7 +99,7 @@ const ServerPicker = ({ className }: Props) => {
           left={[<Icon type="server" className="text-neutral" />]}
           placeholder={window.defaultSyncServer}
           value={server}
-          onChange={handleSyncServerChange}
+          onChange={(customServer) => handleSyncServerChange(customServer, undefined)}
         />
       )}
     </div>

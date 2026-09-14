@@ -414,6 +414,18 @@ describe('webSocketsService', () => {
       expect(events).toHaveLength(0)
     })
 
+    // N11: these parse as valid JSON, so the parse guard lets them through; a
+    // `null` then threw a TypeError on `.t` outside the try. FALSE-GREEN: drop
+    // the `eventData === null || typeof eventData !== 'object'` guard → 'null'
+    // throws → RED.
+    it.each(['null', '42', '"pong"', 'true'])('drops the scalar JSON frame %s without throwing', (raw) => {
+      const service = createService()
+      const { events, run } = pumpRaw(service, raw)
+
+      expect(run).not.toThrow()
+      expect(events).toHaveLength(0)
+    })
+
     it('still processes a well-formed frame after the guard (no behaviour change for valid JSON)', () => {
       const service = createService()
       const { events, run } = pumpRaw(service, JSON.stringify({ type: 'ITEMS_CHANGED_ON_SERVER' }))
@@ -500,14 +512,17 @@ describe('webSocketsService', () => {
       // A well-formed token response (createWebSocketConnectionToken reads
       // response.data.token) so the dial reaches `new WebSocket(...)`.
       webSocketApiService.createConnectionToken = jest.fn().mockResolvedValue({ data: { token: 'tok' } })
-      // Keep reconnect backoff timers inert so a scheduled retry can't race the
-      // assertions or spawn a second real dial.
-      jest.spyOn(global, 'setTimeout').mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>)
+      // Fake timers: a scheduled backoff retry only runs when a test advances
+      // the clock, so it cannot race the assertions or spawn a second dial.
+      jest.useFakeTimers()
     })
 
     afterEach(() => {
+      services.forEach((service) => service.deinit())
+      services = []
       ;(globalThis as { WebSocket?: unknown }).WebSocket = originalWebSocket
       jest.restoreAllMocks()
+      jest.useRealTimers()
     })
 
     it('coalesces a concurrent dial while the first socket is still CONNECTING (exactly one socket + one heartbeat arm)', async () => {
@@ -604,6 +619,510 @@ describe('webSocketsService', () => {
       expect(setIntervalSpy).toHaveBeenCalledTimes(2)
       expect(clearIntervalSpy).not.toHaveBeenCalled()
       expect(service.isWebSocketConnectionOpen()).toBe(true)
+    })
+  })
+
+  describe('gateway URL derivation (B4 / R20)', () => {
+    it.each([
+      ['https://notes.example.com', 'wss://notes.example.com/sockets'],
+      ['http://localhost:3001', 'ws://localhost:3001/sockets'],
+      ['https://notes.example.com/', 'wss://notes.example.com/sockets'],
+      ['HTTPS://Notes.Example.com:8443', 'wss://Notes.Example.com:8443/sockets'],
+      ['http://127.0.0.1:3000', 'ws://127.0.0.1:3000/sockets'],
+      ['http://[::1]:3000', 'ws://[::1]:3000/sockets'],
+    ])('derives %s → %s', (apiHost, expected) => {
+      expect(WebSocketsService.deriveWebSocketUrl(apiHost)).toBe(expected)
+    })
+
+    it.each([
+      ['a sub-path', 'https://example.com/notes'],
+      ['a query string', 'https://example.com/?x=1'],
+      ['credentials', 'https://user:pw@example.com'],
+      ['a websocket URL', 'wss://example.com'],
+      ['a file origin', 'file:///index.html'],
+      ['an empty host', ''],
+      ['garbage', 'not a url'],
+    ])('refuses %s', (_case, apiHost) => {
+      expect(WebSocketsService.deriveWebSocketUrl(apiHost)).toBeUndefined()
+    })
+
+    it('refuses an undefined host', () => {
+      expect(WebSocketsService.deriveWebSocketUrl(undefined)).toBeUndefined()
+    })
+
+    // FALSE-GREEN: drop the `|| WebSocketsService.deriveWebSocketUrl(apiHost)`
+    // tail in loadWebSocketUrl → the URL stays '' → RED.
+    it('loadWebSocketUrl(host) falls back to the derived URL when nothing is stored, configured or injected', () => {
+      storageService.getValue = jest.fn().mockReturnValue(undefined)
+      const service = createService()
+
+      service.loadWebSocketUrl('http://localhost:3001')
+
+      expect(service.getConfiguredWebSocketUrl()).toBe('ws://localhost:3001/sockets')
+      expect(service.hasConfiguredWebSocketUrl()).toBe(true)
+    })
+
+    it('loadWebSocketUrl(host) leaves the URL unset when the host is not derivable', () => {
+      storageService.getValue = jest.fn().mockReturnValue(undefined)
+      const service = createService()
+
+      service.loadWebSocketUrl('https://example.com/notes')
+
+      expect(service.hasConfiguredWebSocketUrl()).toBe(false)
+    })
+
+    it('a stored URL wins over the derived one', () => {
+      storageService.getValue = jest.fn().mockReturnValue('wss://stored.example.test/sockets')
+      const service = createService()
+
+      service.loadWebSocketUrl('http://localhost:3001')
+
+      expect(service.getConfiguredWebSocketUrl()).toBe('wss://stored.example.test/sockets')
+    })
+
+    // FALSE-GREEN: revert setWebSocketUrl to store `url` as given → stores
+    // undefined and hasConfiguredWebSocketUrl() is false → RED.
+    it('setWebSocketUrl(undefined, host) derives and persists the derived URL', () => {
+      const service = createService()
+
+      service.setWebSocketUrl(undefined, 'https://custom.example.com')
+
+      expect(service.getConfiguredWebSocketUrl()).toBe('wss://custom.example.com/sockets')
+      expect(storageService.setValue).toHaveBeenCalledWith(StorageKey.WebSocketUrl, 'wss://custom.example.com/sockets')
+    })
+
+    it('setWebSocketUrl(url, host) keeps an explicit URL over the derived one', () => {
+      const service = createService()
+
+      service.setWebSocketUrl('wss://gateway.example.com/sockets', 'https://custom.example.com')
+
+      expect(service.getConfiguredWebSocketUrl()).toBe('wss://gateway.example.com/sockets')
+    })
+  })
+
+  describe('reconnect lifecycle (fake timers, browser-faithful socket)', () => {
+    // Mirrors the WHATWG contract the plain FakeWebSocket above glosses over:
+    // close() on a CONNECTING socket *fails* the handshake and the close event
+    // carries 1006, not the code the caller asked for; close() on an OPEN
+    // socket echoes the requested code (what `ws` does server-side). With
+    // `echoClose = false` the peer never answers the close frame at all (a
+    // half-open TCP path): the socket sits in CLOSING until the test fires the
+    // eventual 1006 itself.
+    class BrowserLikeWebSocket {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSING = 2
+      static readonly CLOSED = 3
+      static instances: BrowserLikeWebSocket[] = []
+
+      readyState: number = BrowserLikeWebSocket.CONNECTING
+      onopen: (() => void) | null = null
+      onclose: ((event: { code?: number }) => void) | null = null
+      onmessage: ((event: { data: unknown }) => void) | null = null
+      sent: string[] = []
+      closeCalls: Array<number | undefined> = []
+      echoClose = true
+
+      constructor(public url: string) {
+        BrowserLikeWebSocket.instances.push(this)
+      }
+
+      send(data: string): void {
+        this.sent.push(data)
+      }
+
+      close(code?: number): void {
+        this.closeCalls.push(code)
+        if (this.readyState === BrowserLikeWebSocket.CLOSED) {
+          return
+        }
+        const wasConnecting = this.readyState === BrowserLikeWebSocket.CONNECTING
+        if (!this.echoClose) {
+          this.readyState = BrowserLikeWebSocket.CLOSING
+          return
+        }
+        this.readyState = BrowserLikeWebSocket.CLOSED
+        this.onclose?.({ code: wasConnecting ? 1006 : code })
+      }
+
+      fireOpen(): void {
+        this.readyState = BrowserLikeWebSocket.OPEN
+        this.onopen?.()
+      }
+      fireClose(code: number): void {
+        this.readyState = BrowserLikeWebSocket.CLOSED
+        this.onclose?.({ code })
+      }
+      fireMessage(data: unknown): void {
+        this.onmessage?.({ data })
+      }
+    }
+
+    const DIAL_URL = 'wss://gateway.test/sockets'
+    const okToken = () => ({ status: 200, data: { token: 'tok' } })
+    const errorToken = (status: number) => ({ status, data: { error: { message: `mint failed ${status}` } } })
+
+    let originalWebSocket: unknown
+    let createConnectionToken: jest.Mock
+    let consoleError: jest.SpyInstance
+    let timeoutSpy: jest.SpyInstance
+
+    const sockets = () => BrowserLikeWebSocket.instances
+    const lastDelay = () => timeoutSpy.mock.calls[timeoutSpy.mock.calls.length - 1][1] as number
+    /** Let a dial's awaited token mint settle without moving the clock. */
+    const flush = () => jest.advanceTimersByTimeAsync(0)
+    const observeEvents = (service: WebSocketsService): WebSocketsServiceEvent[] => {
+      const events: WebSocketsServiceEvent[] = []
+      service.addEventObserver((event) => {
+        events.push(event)
+        return Promise.resolve()
+      })
+      return events
+    }
+
+    const createDialService = (url: string = DIAL_URL) => {
+      const service = new WebSocketsService(storageService, url, webSocketApiService, internalEventBus)
+      services.push(service)
+      return service
+    }
+
+    beforeEach(() => {
+      jest.useFakeTimers()
+      BrowserLikeWebSocket.instances = []
+      originalWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket
+      ;(globalThis as { WebSocket?: unknown }).WebSocket = BrowserLikeWebSocket
+      createConnectionToken = jest.fn().mockImplementation(async () => okToken())
+      webSocketApiService.createConnectionToken = createConnectionToken
+      consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      timeoutSpy = jest.spyOn(globalThis, 'setTimeout')
+      // Full jitter at its maximum → deterministic delays equal to the cap curve.
+      jest.spyOn(Math, 'random').mockReturnValue(1)
+    })
+
+    afterEach(() => {
+      services.forEach((service) => service.deinit())
+      services = []
+      ;(globalThis as { WebSocket?: unknown }).WebSocket = originalWebSocket
+      jest.restoreAllMocks()
+      jest.useRealTimers()
+    })
+
+    it('backs off 1→2→4→8→16→30 s, then 64→128→256→300 s after six failures, minting a fresh token per dial', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      expect(sockets()).toHaveLength(1)
+
+      const delays: number[] = []
+      for (let i = 0; i < 11; i++) {
+        const before = timeoutSpy.mock.calls.length
+        sockets()[i].fireClose(1006)
+        expect(timeoutSpy.mock.calls.length).toBe(before + 1)
+        delays.push(timeoutSpy.mock.calls[before][1] as number)
+        await jest.advanceTimersByTimeAsync(delays[i])
+        expect(sockets()).toHaveLength(i + 2)
+      }
+
+      // FALSE-GREEN: revert the RECONNECT_LONG_* cap → 30 000 from the 6th
+      // failure on → RED on the tail of this list.
+      expect(delays).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 64_000, 128_000, 256_000, 300_000, 300_000])
+      expect(createConnectionToken).toHaveBeenCalledTimes(12)
+      expect(new Set(sockets().map((ws) => ws.url))).toEqual(new Set([`${DIAL_URL}?authToken=tok`]))
+    })
+
+    it('resets the backoff only after the socket has stayed OPEN for 10 s', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      sockets()[0].fireClose(1006)
+      await jest.advanceTimersByTimeAsync(1_000)
+      sockets()[1].fireClose(1006)
+      await jest.advanceTimersByTimeAsync(2_000)
+
+      // Accept-then-drop before 10 s must not reset: next delay is still 4 s.
+      sockets()[2].fireOpen()
+      await jest.advanceTimersByTimeAsync(9_999)
+      let before = timeoutSpy.mock.calls.length
+      sockets()[2].fireClose(1006)
+      expect(timeoutSpy.mock.calls[before][1]).toBe(4_000)
+      await jest.advanceTimersByTimeAsync(4_000)
+
+      // Stable for 10 s → the next drop starts again at 1 s.
+      sockets()[3].fireOpen()
+      await jest.advanceTimersByTimeAsync(10_000)
+      before = timeoutSpy.mock.calls.length
+      sockets()[3].fireClose(1006)
+      expect(timeoutSpy.mock.calls[before][1]).toBe(1_000)
+    })
+
+    // R18 / e5 probe E. FALSE-GREEN: in closeWebSocketConnection() keep the
+    // socket reference and leave `closedByApplication` false (the fix is those
+    // two redundant layers) → the 1006 the browser reports for a CONNECTING
+    // close reaches onWebSocketClose → a backoff timer re-arms → a second
+    // socket is dialled and a second token minted → RED.
+    it('closeWebSocketConnection() during CONNECTING dials no second socket and mints no second token', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      expect(sockets()[0].readyState).toBe(BrowserLikeWebSocket.CONNECTING)
+
+      service.closeWebSocketConnection()
+
+      expect(sockets()[0].closeCalls).toEqual([3123])
+      expect(jest.getTimerCount()).toBe(0)
+      await jest.advanceTimersByTimeAsync(600_000)
+      expect(sockets()).toHaveLength(1)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+      expect(service.isWebSocketConnectionOpen()).toBe(false)
+    })
+
+    it('closeWebSocketConnection() while the token is still minting builds no socket and does not dead-lock a later start', async () => {
+      const service = createDialService()
+      let resolveMint: (value: unknown) => void = () => undefined
+      createConnectionToken.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveMint = resolve
+          }),
+      )
+
+      const dial = service.startWebSocketConnection()
+      service.closeWebSocketConnection()
+      resolveMint(okToken())
+      const result = await dial
+
+      expect(result.isFailed()).toBe(true)
+      expect(sockets()).toHaveLength(0)
+      expect(jest.getTimerCount()).toBe(0)
+
+      await service.startWebSocketConnection()
+      expect(sockets()).toHaveLength(1)
+    })
+
+    it('closeWebSocketConnection() of an OPEN socket publishes WebSocketDidClose exactly once', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      sockets()[0].fireOpen()
+      const events = observeEvents(service)
+
+      service.closeWebSocketConnection()
+
+      expect(events.filter((event) => event === WebSocketsServiceEvent.WebSocketDidClose)).toHaveLength(1)
+      expect(jest.getTimerCount()).toBe(0)
+    })
+
+    // R18 / e5 probe F. FALSE-GREEN: the same two-line revert as above (keep
+    // the reference, flag off) → the 1006 re-arms a timer → RED. Closing after
+    // the dependencies were nulled is what made every tick of that loop mint
+    // through an undefined api service and log "Caught error:"; deinit now
+    // closes first, and the detach keeps the loop from starting at all.
+    it('deinit() during CONNECTING leaves no timer, dials nothing and logs nothing', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+
+      service.deinit()
+      services = services.filter((candidate) => candidate !== service)
+
+      expect(jest.getTimerCount()).toBe(0)
+      await jest.advanceTimersByTimeAsync(600_000)
+      expect(sockets()).toHaveLength(1)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+      expect(consoleError).not.toHaveBeenCalled()
+    })
+
+    // R18 / e5 probe F2: a peer that never echoes the close frame.
+    it('deinit() while OPEN followed by a late 1006 from the abandoned socket re-arms nothing', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      const ws = sockets()[0]
+      ws.fireOpen()
+      ws.echoClose = false
+
+      service.deinit()
+      services = services.filter((candidate) => candidate !== service)
+      expect(ws.readyState).toBe(BrowserLikeWebSocket.CLOSING)
+
+      ws.fireClose(1006)
+
+      expect(jest.getTimerCount()).toBe(0)
+      await jest.advanceTimersByTimeAsync(600_000)
+      expect(sockets()).toHaveLength(1)
+      expect(consoleError).not.toHaveBeenCalled()
+    })
+
+    // R17. FALSE-GREEN: drop the 1008 branch in onWebSocketClose → a backoff
+    // timer is armed and a second socket dialled → RED.
+    it('a 1008 policy close stops re-dialling; reconnectIfClosed() then tries exactly once more', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      sockets()[0].fireOpen()
+
+      sockets()[0].fireClose(1008)
+
+      expect(jest.getTimerCount()).toBe(0)
+      await jest.advanceTimersByTimeAsync(600_000)
+      expect(sockets()).toHaveLength(1)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(2)
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+    })
+
+    // R17 / R7. FALSE-GREEN: classify every mint error as retryable → a
+    // backoff timer is armed and the mint repeats → RED.
+    it.each([503, 403])(
+      'a %i token mint stops dialling and logs once; reconnectIfClosed() mints once more',
+      async (status) => {
+        createConnectionToken.mockImplementation(async () => errorToken(status))
+        const service = createDialService()
+
+        const result = await service.startWebSocketConnection()
+
+        expect(result.isFailed()).toBe(true)
+        expect(sockets()).toHaveLength(0)
+        expect(jest.getTimerCount()).toBe(0)
+        await jest.advanceTimersByTimeAsync(600_000)
+        expect(createConnectionToken).toHaveBeenCalledTimes(1)
+        expect(consoleError).toHaveBeenCalledTimes(1)
+
+        service.reconnectIfClosed()
+        await flush()
+        expect(createConnectionToken).toHaveBeenCalledTimes(2)
+        expect(jest.getTimerCount()).toBe(0)
+      },
+    )
+
+    // R17 (log demotion). FALSE-GREEN: log on every failure → 5 errors → RED.
+    it('a retryable mint failure backs off and logs only the first failure of each outage', async () => {
+      createConnectionToken.mockImplementation(async () => errorToken(500))
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      for (let i = 0; i < 4; i++) {
+        await jest.advanceTimersByTimeAsync(lastDelay())
+      }
+      expect(createConnectionToken).toHaveBeenCalledTimes(5)
+      expect(consoleError).toHaveBeenCalledTimes(1)
+
+      // The outage ends when a socket opens; the next outage logs again.
+      createConnectionToken.mockImplementation(async () => okToken())
+      await jest.advanceTimersByTimeAsync(lastDelay())
+      sockets()[0].fireOpen()
+      createConnectionToken.mockImplementation(async () => errorToken(500))
+      sockets()[0].fireClose(1006)
+      await jest.advanceTimersByTimeAsync(lastDelay())
+
+      expect(consoleError).toHaveBeenCalledTimes(2)
+    })
+
+    it('a thrown mint (host not set yet, aborted fetch) is retryable and logged once', async () => {
+      createConnectionToken.mockImplementation(async () => {
+        throw new Error('host not set')
+      })
+      const service = createDialService()
+
+      await service.startWebSocketConnection()
+      await jest.advanceTimersByTimeAsync(lastDelay())
+
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+      expect(consoleError).toHaveBeenCalledTimes(1)
+      expect(jest.getTimerCount()).toBe(1)
+    })
+
+    // D3 half-open detection. FALSE-GREEN: never arm the pong deadline in
+    // websocketHeartbeat → the silent socket stays OPEN and no second socket
+    // is ever dialled → RED.
+    it('pings every 60 s and gives up a socket that answers nothing for 120 s, re-dialling from attempt 0', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      const ws = sockets()[0]
+      ws.fireOpen()
+      ws.echoClose = false
+      const events = observeEvents(service)
+
+      await jest.advanceTimersByTimeAsync(60_000)
+      expect(ws.sent).toEqual(['ping'])
+      ws.fireMessage('pong')
+
+      // Answered: the deadline from the 60 s ping is cleared; the 120 s ping
+      // re-arms it (expires at 240 s) and the 180 s ping leaves it alone.
+      await jest.advanceTimersByTimeAsync(120_000)
+      expect(ws.sent).toEqual(['ping', 'ping', 'ping'])
+      expect(sockets()).toHaveLength(1)
+      expect(service.isWebSocketConnectionOpen()).toBe(true)
+
+      await jest.advanceTimersByTimeAsync(60_000)
+      expect(ws.closeCalls).toEqual([4000])
+      expect(service.isWebSocketConnectionOpen()).toBe(false)
+      expect(events).toContain(WebSocketsServiceEvent.WebSocketDidClose)
+
+      await jest.advanceTimersByTimeAsync(1_000)
+      expect(sockets()).toHaveLength(2)
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+
+      // The abandoned socket's eventual 1006 is ignored.
+      ws.fireClose(1006)
+      expect(jest.getTimerCount()).toBe(0)
+      expect(sockets()).toHaveLength(2)
+    })
+
+    it('any inbound frame — not just a pong — satisfies the deadline', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      const ws = sockets()[0]
+      ws.fireOpen()
+
+      await jest.advanceTimersByTimeAsync(60_000)
+      ws.fireMessage(JSON.stringify({ type: 'ITEMS_CHANGED_ON_SERVER' }))
+      await jest.advanceTimersByTimeAsync(119_000)
+
+      expect(ws.closeCalls).toEqual([])
+      expect(service.isWebSocketConnectionOpen()).toBe(true)
+    })
+
+    // Contract C11.
+    it('reconnectIfClosed() is a no-op without a URL, before a connection was requested, while CONNECTING and while OPEN', async () => {
+      const noUrl = createDialService('')
+      noUrl.reconnectIfClosed()
+      const neverRequested = createDialService()
+      neverRequested.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(0)
+      expect(createConnectionToken).not.toHaveBeenCalled()
+
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(1)
+
+      sockets()[0].fireOpen()
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(1)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+    })
+
+    // FALSE-GREEN: make reconnectIfClosed() return without dialling when a
+    // backoff timer is pending → still 1 socket after flush → RED.
+    it('reconnectIfClosed() cancels a pending backoff and dials immediately from attempt 0, but never after the app closed the socket', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      sockets()[0].fireOpen()
+      sockets()[0].fireClose(1006)
+      expect(jest.getTimerCount()).toBe(1)
+
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(2)
+      expect(jest.getTimerCount()).toBe(0)
+
+      // Attempt counter was reset: the next drop backs off from 1 s again.
+      sockets()[1].fireClose(1006)
+      expect(lastDelay()).toBe(1_000)
+
+      service.closeWebSocketConnection()
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(2)
     })
   })
 })
