@@ -12,6 +12,12 @@ const KnownErrorTypes = new Set([
   'EvalError',
   'RangeError',
   'ReferenceError',
+  // domain-events-infra SNSDomainEventPublisher's bounded publish (2 s on the
+  // syncing-server request path). A stable class name, never a value; without
+  // it a sync-command outbox row that dies after twenty publish timeouts logs
+  // the same `errorType: 'Error'` as a rejected payload, and those two need
+  // opposite remedies (a slow broker vs. an oversized message).
+  'SNSPublishTimeoutError',
   'SyntaxError',
   'TimeoutError',
   'TypeError',

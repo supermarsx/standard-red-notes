@@ -66,6 +66,26 @@ describe('safeErrorLogMetadata', () => {
     }
   })
 
+  it('passes the SNS publish timeout type through, without its message or cause', () => {
+    // Same shape as domain-events-infra's SNSPublishTimeoutError (the class
+    // itself lives above this package). A sync-command outbox row that dies
+    // after twenty of these must be distinguishable from one rejected outright.
+    const timedOut = Object.assign(new Error('SNS publish timed out after 2000 ms.'), {
+      name: 'SNSPublishTimeoutError',
+      cause: Object.assign(new Error('The operation was aborted https://sns.internal:4566/topic'), {
+        name: 'AbortError',
+      }),
+    })
+    const rejected = Object.assign(new Error('Message too long: 300000 bytes'), { name: 'Error' })
+
+    const result = safeErrorLogMetadata(timedOut)
+
+    expect(result).toEqual({ errorType: 'SNSPublishTimeoutError', errorCode: undefined, status: undefined })
+    expect(JSON.stringify(result)).not.toContain('2000 ms')
+    expect(JSON.stringify(result)).not.toContain('sns.internal')
+    expect(safeErrorLogMetadata(rejected).errorType).toBe('Error')
+  })
+
   it('survives hostile proxies and bounds numeric codes', () => {
     const hostile = new Proxy(
       {},
