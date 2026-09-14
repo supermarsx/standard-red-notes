@@ -29,7 +29,6 @@ import {
   RequiredCrossServiceTokenMiddleware,
   createAdminEmailDeliveryRouter,
   CollaborationAuthorizationService,
-  describeUnmetSyncPreconditions,
   LoopbackSyncApiRpcAdapter,
   DirectCallSyncCommandPort,
   parseOptionalPositiveInteger,
@@ -191,10 +190,59 @@ export function formatGatewayLogArguments(args: readonly unknown[]): {
   return { message: parts.join(' '), metadata }
 }
 
+/**
+ * WEBSOCKET_REDIS_NAMESPACE (C10), parsed ONCE for every consumer on this host
+ * -- the push bridge, the gateway config, the invite store and the invite
+ * availability bus -- so all of them see the same trimmed value and the same
+ * verdict. The rule is the gateway's own (`parseRedisNamespace` trims and
+ * matches `^[a-z0-9:_-]{1,64}$`; its Redis bridge additionally refuses a
+ * leading or trailing colon, which would silently produce `prod::…` on one
+ * side only). Empty means "no namespace", byte-identical to a deployment that
+ * never set it.
+ */
+export function parseHomeServerRedisNamespace(raw: string | undefined): {
+  namespace: string | undefined
+  valid: boolean
+} {
+  const trimmed = (raw ?? '').trim()
+  if (trimmed === '') {
+    return { namespace: undefined, valid: true }
+  }
+  const valid = /^[a-z0-9:_-]{1,64}$/u.test(trimmed) && !trimmed.startsWith(':') && !trimmed.endsWith(':')
+  return { namespace: valid ? trimmed : undefined, valid }
+}
+
+export const REDIS_NAMESPACE_INVALID_CODE = 'WEBSOCKET_REDIS_NAMESPACE_INVALID' as const
+
+export const REDIS_NAMESPACE_INVALID_REMEDY =
+  'WEBSOCKET_REDIS_NAMESPACE is set but does not match ^[a-z0-9:_-]{1,64}$ (no leading or trailing colon); fix or unset it. Until then the realtime gateway is not attached and the push bridge stays closed, so nothing is published on the un-namespaced channels of a sibling stack sharing this Redis'
+
+/**
+ * The shared four-condition gate plus the one condition only this host adds.
+ * `SyncPreconditionCode` is a closed set owned by api-gateway, so the
+ * namespace verdict is a sibling entry with the same `{ code, remedy }` shape
+ * rather than a new member of that set.
+ */
+export type HomeServerRealtimePrecondition =
+  | SyncPrecondition
+  | { code: typeof REDIS_NAMESPACE_INVALID_CODE; remedy: typeof REDIS_NAMESPACE_INVALID_REMEDY }
+
+/** Same rendering as `describeUnmetSyncPreconditions`, over the widened list. */
+export function describeHomeServerRealtimePreconditions(
+  preconditions: readonly HomeServerRealtimePrecondition[],
+): string {
+  if (preconditions.length === 0) {
+    return 'none'
+  }
+  return preconditions.map((precondition) => `${precondition.code} (${precondition.remedy})`).join('; ')
+}
+
 export interface HomeServerRealtimeGateInput {
   connectionTokenSecret: string | undefined
   redisHost: string | undefined
   webSocketSyncEnabled: boolean
+  /** Verdict of `parseHomeServerRedisNamespace`; an invalid namespace attaches nothing. */
+  redisNamespaceValid: boolean
 }
 
 export interface HomeServerRealtimeGate {
@@ -205,7 +253,7 @@ export interface HomeServerRealtimeGate {
   connectionTokenSecretUsable: boolean
   /** Presence-only booleans the gate log and the admin diagnostics both read. */
   observation: SyncPreconditionState
-  unmetSyncPreconditions: SyncPrecondition[]
+  unmetSyncPreconditions: HomeServerRealtimePrecondition[]
   /**
    * The gateway (legacy `/sockets?authToken=` lane + token minting) attaches on
    * ANY non-empty secret with Redis configured, exactly as the api-gateway does;
@@ -241,12 +289,24 @@ export function resolveHomeServerRealtimeGate(input: HomeServerRealtimeGateInput
     syncingServerGrpcBound: true,
   }
 
+  const unmetSyncPreconditions: HomeServerRealtimePrecondition[] = resolveUnmetSyncPreconditions(observation)
+  if (!input.redisNamespaceValid) {
+    // A malformed namespace cannot be applied consistently (the gateway's own
+    // attach refuses it), and attaching WITHOUT it would put this stack's
+    // pushes, relay frames and invite keys on the bare names of whichever
+    // sibling shares the Redis. So it is a named unmet precondition -- the
+    // process boots, HTTP serves, the log and the diagnostics name the fix --
+    // never a message-less crash and never a silent fallback to no namespace.
+    unmetSyncPreconditions.push({ code: REDIS_NAMESPACE_INVALID_CODE, remedy: REDIS_NAMESPACE_INVALID_REMEDY })
+  }
+
   return {
     connectionTokenSecretUsable,
     observation,
-    unmetSyncPreconditions: resolveUnmetSyncPreconditions(observation),
-    attachGateway: secret.length > 0 && redisConfigured,
-    buildSyncLane: connectionTokenSecretUsable && redisConfigured && input.webSocketSyncEnabled,
+    unmetSyncPreconditions,
+    attachGateway: secret.length > 0 && redisConfigured && input.redisNamespaceValid,
+    buildSyncLane:
+      connectionTokenSecretUsable && redisConfigured && input.webSocketSyncEnabled && input.redisNamespaceValid,
   }
 }
 
@@ -387,12 +447,21 @@ export class HomeServer implements HomeServerInterface {
       // WEBSOCKET_REDIS_NAMESPACE (empty by default) prefixes the channel so two
       // stacks sharing one Redis do not cross-talk; the in-process gateway
       // subscribes under the same variable, so the two sides always agree.
-      const webSocketRedisNamespace = env.get('WEBSOCKET_REDIS_NAMESPACE', true) || undefined
+      // An INVALID value keeps the bridge closed for this boot (see the gate
+      // below, which names it): publishing without the namespace would land on
+      // a sibling stack's bare channel.
+      const redisNamespaceParse = parseHomeServerRedisNamespace(env.get('WEBSOCKET_REDIS_NAMESPACE', true))
+      const webSocketRedisNamespace = redisNamespaceParse.namespace
       const webSocketRedisBridge = new WebSocketRedisBridge(
         winston.loggers.get('home-server'),
         env.get('REDIS_HOST', true) || undefined,
         env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
-        { namespace: webSocketRedisNamespace },
+        {
+          namespace: webSocketRedisNamespace,
+          ...(redisNamespaceParse.valid
+            ? {}
+            : { disabledReason: `${REDIS_NAMESPACE_INVALID_CODE} (${REDIS_NAMESPACE_INVALID_REMEDY})` }),
+        },
       )
       directCallDomainEventPublisher.register(webSocketRedisBridge)
 
@@ -804,7 +873,12 @@ export class HomeServer implements HomeServerInterface {
       // secret condition is its USABLE length (≥ 32 bytes), see
       // resolveHomeServerRealtimeGate: a shorter one no longer crashes the boot
       // inside the invite store after this line has said "satisfied".
-      const realtimeGate = resolveHomeServerRealtimeGate({ connectionTokenSecret, redisHost, webSocketSyncEnabled })
+      const realtimeGate = resolveHomeServerRealtimeGate({
+        connectionTokenSecret,
+        redisHost,
+        webSocketSyncEnabled,
+        redisNamespaceValid: redisNamespaceParse.valid,
+      })
       const syncGateObservation = realtimeGate.observation
       const unmetSyncPreconditions = realtimeGate.unmetSyncPreconditions
       // Standard Red Notes: the admin Diagnostics panel reads the SAME verdict over
@@ -823,7 +897,7 @@ export class HomeServer implements HomeServerInterface {
         logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')
       } else {
         logger.warn(
-          `WebSocket sync is UNAVAILABLE. Unmet preconditions: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
+          `WebSocket sync is UNAVAILABLE. Unmet preconditions: ${describeHomeServerRealtimePreconditions(unmetSyncPreconditions)}`,
           { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
         )
       }
@@ -844,13 +918,21 @@ export class HomeServer implements HomeServerInterface {
             inviteAvailabilityRedis.on('error', () =>
               logger.warn('WebSocket invite availability Redis connection error.'),
             )
+            // C10: the invite availability channels and the invite stream keys
+            // take the same per-deployment namespace as the push channel. The
+            // gate already validated it, so neither constructor can throw
+            // INVITE_REDIS_NAMESPACE_INVALID here; a usable secret is likewise
+            // guaranteed by `buildSyncLane`, so INVITE_CURSOR_SECRET_TOO_SHORT
+            // cannot be reached from this boot path.
             inviteEventAvailability = new RedisInviteEventAvailabilityBus(
               syncStateRedis as unknown as RedisInviteEventPublisher,
               inviteAvailabilityRedis as unknown as RedisInviteEventSubscriber,
+              { namespace: webSocketRedisNamespace },
             )
             const inviteEventComposition = createSharedInviteEventComposition({
               store: new RedisInviteEventStore(syncStateRedis as unknown as RedisInviteEventClient, {
                 cursorSecret: connectionTokenSecret,
+                namespace: webSocketRedisNamespace,
               }),
               availability: inviteEventAvailability,
             })
@@ -977,7 +1059,7 @@ export class HomeServer implements HomeServerInterface {
         // Was "connection-token secret and shared Redis state are required",
         // which never said which of the two was absent.
         logger.warn(
-          `WebSocket sync capability was not built: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
+          `WebSocket sync capability was not built: ${describeHomeServerRealtimePreconditions(unmetSyncPreconditions)}`,
           { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
         )
       }

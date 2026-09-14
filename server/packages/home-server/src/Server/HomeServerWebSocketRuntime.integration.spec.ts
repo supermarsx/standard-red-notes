@@ -15,7 +15,11 @@ import { HomeServerRuntime } from './HomeServerRuntime'
 import {
   boundedBootFailureText,
   describeFatal,
+  describeHomeServerRealtimePreconditions,
   formatGatewayLogArguments,
+  parseHomeServerRedisNamespace,
+  REDIS_NAMESPACE_INVALID_CODE,
+  REDIS_NAMESPACE_INVALID_REMEDY,
   REDIS_READY_TIMEOUT_MS,
   resolveHomeServerRealtimeGate,
   waitForRedisReady,
@@ -241,6 +245,7 @@ describe('HomeServer WebSocket sync lifecycle integration', () => {
       connectionTokenSecret: shortSecret,
       redisHost: '127.0.0.1',
       webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
     })
     expect(gate.attachGateway).toBe(true)
     expect(gate.buildSyncLane).toBe(false)
@@ -316,6 +321,7 @@ describe('resolveHomeServerRealtimeGate', () => {
       connectionTokenSecret: USABLE_SECRET,
       redisHost: '127.0.0.1',
       webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
     })
 
     expect(gate.connectionTokenSecretUsable).toBe(true)
@@ -330,11 +336,74 @@ describe('resolveHomeServerRealtimeGate', () => {
     })
   })
 
+  it('names an invalid WEBSOCKET_REDIS_NAMESPACE and attaches nothing, keeping the shared observation truthful', () => {
+    const gate = resolveHomeServerRealtimeGate({
+      connectionTokenSecret: USABLE_SECRET,
+      redisHost: '127.0.0.1',
+      webSocketSyncEnabled: true,
+      redisNamespaceValid: false,
+    })
+
+    expect(gate.attachGateway).toBe(false)
+    expect(gate.buildSyncLane).toBe(false)
+    expect(gate.unmetSyncPreconditions).toEqual([
+      { code: REDIS_NAMESPACE_INVALID_CODE, remedy: REDIS_NAMESPACE_INVALID_REMEDY },
+    ])
+    // The four shared conditions are all met and say so; only the host-local
+    // condition is unmet. Nothing here lies about Redis being bound.
+    expect(gate.observation).toEqual({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: true,
+      syncingServerGrpcBound: true,
+    })
+    expect(describeHomeServerRealtimePreconditions(gate.unmetSyncPreconditions)).toBe(
+      `${REDIS_NAMESPACE_INVALID_CODE} (${REDIS_NAMESPACE_INVALID_REMEDY})`,
+    )
+  })
+
+  it('lists the namespace condition after the shared ones when several are unmet', () => {
+    const gate = resolveHomeServerRealtimeGate({
+      connectionTokenSecret: SHORT_SECRET,
+      redisHost: '127.0.0.1',
+      webSocketSyncEnabled: true,
+      redisNamespaceValid: false,
+    })
+
+    expect(gate.unmetSyncPreconditions.map(({ code }) => code)).toEqual([
+      'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
+      REDIS_NAMESPACE_INVALID_CODE,
+    ])
+    expect(describeHomeServerRealtimePreconditions([])).toBe('none')
+  })
+})
+
+describe('parseHomeServerRedisNamespace', () => {
+  it('treats unset, empty and blank as "no namespace" (byte-identical wire)', () => {
+    for (const raw of [undefined, '', '   ']) {
+      expect(parseHomeServerRedisNamespace(raw)).toEqual({ namespace: undefined, valid: true })
+    }
+  })
+
+  it('accepts the gateway rule and trims like the gateway parser does', () => {
+    expect(parseHomeServerRedisNamespace('prod')).toEqual({ namespace: 'prod', valid: true })
+    expect(parseHomeServerRedisNamespace('  prod:eu_1-a  ')).toEqual({ namespace: 'prod:eu_1-a', valid: true })
+    expect(parseHomeServerRedisNamespace('a'.repeat(64))).toEqual({ namespace: 'a'.repeat(64), valid: true })
+  })
+
+  it.each(['Prod', 'a b', 'a/b', 'a'.repeat(65), ':ns', 'ns:', 'ns::'])(
+    'rejects %j without exposing the value',
+    (raw) => {
+      expect(parseHomeServerRedisNamespace(raw)).toEqual({ namespace: undefined, valid: false })
+    },
+  )
+
   it('treats a secret under 32 bytes as the named unmet precondition, attaching only the legacy lane', () => {
     const gate = resolveHomeServerRealtimeGate({
       connectionTokenSecret: SHORT_SECRET,
       redisHost: '127.0.0.1',
       webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
     })
 
     expect(gate.connectionTokenSecretUsable).toBe(false)
@@ -353,6 +422,7 @@ describe('resolveHomeServerRealtimeGate', () => {
       connectionTokenSecret: sixteenTwoByteGlyphs,
       redisHost: '127.0.0.1',
       webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
     })
 
     expect(gate.connectionTokenSecretUsable).toBe(true)
@@ -364,6 +434,7 @@ describe('resolveHomeServerRealtimeGate', () => {
       connectionTokenSecret: USABLE_SECRET,
       redisHost: undefined,
       webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
     })
 
     expect(gate.attachGateway).toBe(false)
@@ -376,6 +447,7 @@ describe('resolveHomeServerRealtimeGate', () => {
       connectionTokenSecret: undefined,
       redisHost: '127.0.0.1',
       webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
     })
 
     expect(gate.attachGateway).toBe(false)
@@ -388,6 +460,7 @@ describe('resolveHomeServerRealtimeGate', () => {
       connectionTokenSecret: USABLE_SECRET,
       redisHost: '127.0.0.1',
       webSocketSyncEnabled: false,
+      redisNamespaceValid: true,
     })
 
     expect(gate.attachGateway).toBe(true)

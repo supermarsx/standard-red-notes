@@ -77,6 +77,31 @@ describe('WebSocketRedisBridge lifecycle', () => {
     })
   })
 
+  it('stays closed and names the reason once when the host disabled it (invalid namespace)', async () => {
+    const bridge = new WebSocketRedisBridge(logger, 'redis', 6379, {
+      createPublisher,
+      disabledReason: 'WEBSOCKET_REDIS_NAMESPACE_INVALID (fix or unset it)',
+    })
+
+    bridge.connect()
+    await bridge.handleMessage(event)
+    await bridge.handleMessage(event)
+
+    expect(createPublisher).not.toHaveBeenCalled()
+    expect(logger.info).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn).toHaveBeenCalledWith(
+      'WebSocketRedisBridge disabled: WEBSOCKET_REDIS_NAMESPACE_INVALID (fix or unset it)',
+    )
+    expect(bridge.health()).toEqual({
+      channel: 'websocket-messages',
+      publisherStatus: 'none',
+      droppedPublishes: 0,
+      connectionErrors: 0,
+    })
+    await bridge.close()
+  })
+
   it('publishes the event payload on the expected Redis channel without an offline queue', async () => {
     const bridge = new WebSocketRedisBridge(logger, 'redis', 6380, { createPublisher })
 

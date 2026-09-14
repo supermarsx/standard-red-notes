@@ -23,10 +23,29 @@ const mockCreateInviteRealtimeDomainEventBridge = jest.fn(() => ({
   close: mockInviteBridgeClose,
 }))
 const mockAvailabilityClose = jest.fn<Promise<void>, []>().mockResolvedValue(undefined)
-const mockAvailabilityInstances: Array<{ close: jest.Mock }> = []
+const mockAvailabilityInstances: Array<{ close: jest.Mock; options: unknown }> = []
+const mockInviteStoreInstances: Array<{ options: unknown }> = []
+
+/**
+ * The boot log's precondition diagnosis. Stubbed like every other collaborator
+ * in this partial mock, but faithfully enough to pin the R28 seam: the gate
+ * hands it `connectionTokenSecretPresent` computed from the USABLE length, and
+ * this reflects that one bit back as the named code the log and the panel
+ * carry. The resolution itself is covered where it lives, in api-gateway's
+ * SyncWebSocketPreconditions spec.
+ */
+const mockResolveUnmetSyncPreconditions = jest.fn((state: { connectionTokenSecretPresent: boolean }) => {
+  if (state.connectionTokenSecretPresent) {
+    return []
+  }
+  return [{ code: 'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING', remedy: 'set it to at least 32 bytes' }]
+})
 
 const mockRedisInstances: RedisDouble[] = []
 class RedisDouble {
+  // ioredis reports 'ready' once connected; HomeServer waits (bounded) for it
+  // before listening (C15), so the double is born ready.
+  status = 'ready'
   readonly on = jest.fn()
   readonly quit = jest.fn<Promise<string>, []>().mockResolvedValue('OK')
   readonly disconnect = jest.fn()
@@ -117,11 +136,19 @@ class HomeServerRuntimeDouble {
   })
 }
 
-const mockWebSocketRedisBridgeInstances: Array<{ close: jest.Mock<Promise<void>, []> }> = []
+const mockWebSocketRedisBridgeInstances: Array<{
+  close: jest.Mock<Promise<void>, []>
+  connect: jest.Mock
+  options: unknown
+}> = []
 class WebSocketRedisBridgeDouble {
   readonly close = jest.fn<Promise<void>, []>().mockResolvedValue(undefined)
+  // Opened eagerly by HomeServer before listen (R10: no offline queue).
+  readonly connect = jest.fn()
+  readonly options: unknown
 
-  constructor() {
+  constructor(_logger: unknown, _host: unknown, _port: unknown, options: unknown) {
+    this.options = options
     mockWebSocketRedisBridgeInstances.push(this)
   }
 }
@@ -216,7 +243,8 @@ jest.mock('@standardnotes/api-gateway', () => ({
   // in this partial mock; the resolution itself is covered where it lives, in
   // api-gateway's SyncWebSocketPreconditions spec.
   describeUnmetSyncPreconditions: jest.fn(() => 'none'),
-  resolveUnmetSyncPreconditions: jest.fn(() => []),
+  resolveUnmetSyncPreconditions: (state: { connectionTokenSecretPresent: boolean }) =>
+    mockResolveUnmetSyncPreconditions(state),
   syncGateDiagnostics: mockSyncGateDiagnostics,
   HOME_SERVER_WELCOME_HTML: '<p>home</p>',
   parseClientIpHeaderName: jest.fn(),
@@ -235,17 +263,29 @@ jest.mock('@standardnotes/api-gateway', () => ({
 jest.mock('@standard-red-notes/websocket-gateway', () => ({
   RedisInviteEventAvailabilityBus: class {
     readonly close = mockAvailabilityClose
+    readonly options: unknown
 
-    constructor(..._args: unknown[]) {
+    constructor(_publisher: unknown, _subscriber: unknown, options: unknown) {
+      this.options = options
       mockAvailabilityInstances.push(this)
     }
   },
-  RedisInviteEventStore: class {},
+  RedisInviteEventStore: class {
+    readonly options: unknown
+
+    constructor(_redis: unknown, options: unknown) {
+      this.options = options
+      mockInviteStoreInstances.push(this)
+    }
+  },
   createInviteRealtimeDomainEventBridge: (...args: unknown[]) => mockCreateInviteRealtimeDomainEventBridge(...args),
   createLoggerSyncCommandMetrics: jest.fn(() => ({})),
   createRedisSyncState: jest.fn(() => ({})),
   createSharedInviteEventComposition: (...args: unknown[]) => mockCreateSharedInviteEventComposition(...args),
   createSyncFilesTokenDecoder: (secret: string) => mockCreateSyncFilesTokenDecoder(secret),
+  // C8 parsers, stubbed as pass-throughs; their rules are covered in the gateway.
+  parseConnectionTokenTtl: jest.fn((value: string | undefined) => value ?? '60s'),
+  parseMaxConnectionsPerUser: jest.fn((value: string | undefined) => (value === undefined ? undefined : Number(value))),
 }))
 
 jest.mock('@standardnotes/domain-core', () => ({
@@ -305,9 +345,12 @@ const configuration = {
     REDIS_PORT: '6379',
     WEBSOCKET_GATEWAY_INTERNAL_SECRET: 'internal-secret',
     WEBSOCKET_SYNC_ENABLED: 'true',
-    WEB_SOCKET_CONNECTION_TOKEN_SECRET: 'connection-secret',
+    // >= 32 bytes: the USABLE length the sync lane's invite-cursor codec
+    // requires (R28). The short-secret case has its own test below.
+    WEB_SOCKET_CONNECTION_TOKEN_SECRET: 'connection-secret-with-at-least-32-bytes',
   },
 }
+const SHORT_CONNECTION_TOKEN_SECRET = 'sixteen-byte-key'
 
 function latest<T>(values: T[]): T {
   const value = values.at(-1)
@@ -330,6 +373,7 @@ describe('HomeServer invite realtime composition', () => {
     mockDirectCallPublisherInstances.length = 0
     mockHomeRuntimeInstances.length = 0
     mockHttpServers.length = 0
+    mockInviteStoreInstances.length = 0
     mockRedisInstances.length = 0
     mockServiceContainerInstances.length = 0
     mockWebSocketRedisBridgeInstances.length = 0
@@ -362,6 +406,28 @@ describe('HomeServer invite realtime composition', () => {
     const attachOptions = latest(mockWebSocketRuntimeInstances).attach.mock.calls[0][0]
     expect(attachOptions.sync.inviteEventDispatcher).toBe(mockInviteDispatcher)
     expect(attachOptions.sync.inviteEvents).toBe(mockInviteGatewayAdapter)
+    // C7: same-origin browser upgrades are always admitted; the explicit
+    // origin list (empty here) stays additive.
+    expect(attachOptions.sync.allowSameOrigin).toBe(true)
+    // N22: the panel's `gatewayAttached` comes from the ATTACH OUTCOME. The
+    // gate records `false` first (nothing attached yet) and re-records `true`
+    // only after attach() returned.
+    const recordCalls = mockSyncGateDiagnostics.record.mock.calls.map(([observation]) => observation)
+    expect(recordCalls[0]).toMatchObject({ gatewayAttached: false })
+    expect(recordCalls.at(-1)).toMatchObject({ gatewayAttached: true, connectionTokenSecretPresent: true })
+    // R10: the push bridge is opened before the listener, not on the first push.
+    const bridge = latest(mockWebSocketRedisBridgeInstances)
+    expect(bridge.connect).toHaveBeenCalledTimes(1)
+    const listenOrder = latest(mockHttpServers).listen.mock.invocationCallOrder[0]
+    expect(bridge.connect.mock.invocationCallOrder[0]).toBeLessThan(listenOrder)
+    // C10 without a namespace: byte-identical names everywhere.
+    expect(bridge.options).toEqual({ namespace: undefined })
+    expect(attachOptions.config.redisNamespace).toBeUndefined()
+    expect(latest(mockInviteStoreInstances).options).toEqual({
+      cursorSecret: configuration.environment.WEB_SOCKET_CONNECTION_TOKEN_SECRET,
+      namespace: undefined,
+    })
+    expect(latest(mockAvailabilityInstances).options).toEqual({ namespace: undefined })
 
     const stopResult = await server.stop()
     expect(stopResult.isFailed()).toBe(false)
@@ -396,6 +462,99 @@ describe('HomeServer invite realtime composition', () => {
     expect(mockRedisInstances[1].quit).toHaveBeenCalledTimes(1)
     expect(mockRedisInstances[1].disconnect).not.toHaveBeenCalled()
     expect(latest(mockHomeRuntimeInstances).start).not.toHaveBeenCalled()
+  })
+
+  /**
+   * R28, pinned on the boot path. A secret under 32 bytes used to pass the
+   * presence-only gate, log "preconditions are satisfied", and then take the
+   * whole process down inside RedisInviteEventStore with a message the
+   * redacting logger strips. Now: the boot succeeds, the legacy lane attaches
+   * (token minting, `/sockets?authToken=`), the sync lane is not built, no
+   * invite store is constructed, and the log + the gate record NAME the cause.
+   */
+  it('boots on a short secret with the legacy lane only and names WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING', async () => {
+    const server = createServer()
+
+    const result = await server.start({
+      ...configuration,
+      environment: { ...configuration.environment, WEB_SOCKET_CONNECTION_TOKEN_SECRET: SHORT_CONNECTION_TOKEN_SECRET },
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(mockResolveUnmetSyncPreconditions).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionTokenSecretPresent: false, redisBound: true, webSocketSyncEnabled: true }),
+    )
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('WebSocket sync is UNAVAILABLE'), {
+      unmetPreconditions: ['WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING'],
+    })
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      'WebSocket sync preconditions are satisfied; the realtime transport will be advertised.',
+    )
+    // Legacy lane attached with the secret it was given; no sync lane.
+    const attachOptions = latest(mockWebSocketRuntimeInstances).attach.mock.calls[0][0]
+    expect(attachOptions.sync).toBeUndefined()
+    expect(attachOptions.config.connectionTokenSecret).toBe(SHORT_CONNECTION_TOKEN_SECRET)
+    expect(mockInviteStoreInstances).toHaveLength(0)
+    expect(mockAvailabilityInstances).toHaveLength(0)
+    expect(mockCreateInviteRealtimeDomainEventBridge).not.toHaveBeenCalled()
+    // Only the gateway's own Redis client is created by the (doubled) runtime;
+    // HomeServer itself opens no sync-state client for a lane it did not build.
+    expect(mockRedisInstances).toHaveLength(0)
+    const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0]
+    expect(recorded).toMatchObject({ connectionTokenSecretPresent: false, gatewayAttached: true })
+    expect(latest(mockHomeRuntimeInstances).start).toHaveBeenCalledTimes(1)
+
+    await server.stop()
+  })
+
+  it('threads WEBSOCKET_REDIS_NAMESPACE to the push bridge, the gateway, the invite store and the availability bus', async () => {
+    const server = createServer()
+
+    const result = await server.start({
+      ...configuration,
+      environment: { ...configuration.environment, WEBSOCKET_REDIS_NAMESPACE: '  tenant-a  ' },
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(latest(mockWebSocketRedisBridgeInstances).options).toEqual({ namespace: 'tenant-a' })
+    const attachOptions = latest(mockWebSocketRuntimeInstances).attach.mock.calls[0][0]
+    expect(attachOptions.config.redisNamespace).toBe('tenant-a')
+    expect(latest(mockInviteStoreInstances).options).toEqual({
+      cursorSecret: configuration.environment.WEB_SOCKET_CONNECTION_TOKEN_SECRET,
+      namespace: 'tenant-a',
+    })
+    expect(latest(mockAvailabilityInstances).options).toEqual({ namespace: 'tenant-a' })
+
+    await server.stop()
+  })
+
+  it('boots without realtime on an invalid WEBSOCKET_REDIS_NAMESPACE and names it, touching no shared Redis name', async () => {
+    const server = createServer()
+
+    const result = await server.start({
+      ...configuration,
+      environment: { ...configuration.environment, WEBSOCKET_REDIS_NAMESPACE: 'Tenant A' },
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(latest(mockHomeRuntimeInstances).start).toHaveBeenCalledTimes(1)
+    // Nothing attached, nothing built: the invalid value must not fall back to
+    // the un-namespaced channels of a sibling stack.
+    expect(latest(mockWebSocketRuntimeInstances).attach).not.toHaveBeenCalled()
+    expect(mockInviteStoreInstances).toHaveLength(0)
+    expect(mockAvailabilityInstances).toHaveLength(0)
+    expect(mockRedisInstances).toHaveLength(0)
+    const bridgeOptions = latest(mockWebSocketRedisBridgeInstances).options as { namespace?: string; disabledReason?: string }
+    expect(bridgeOptions.namespace).toBeUndefined()
+    expect(bridgeOptions.disabledReason).toContain('WEBSOCKET_REDIS_NAMESPACE_INVALID')
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('WEBSOCKET_REDIS_NAMESPACE_INVALID'), {
+      unmetPreconditions: ['WEBSOCKET_REDIS_NAMESPACE_INVALID'],
+    })
+    expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('Tenant A')
+    const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0]
+    expect(recorded).toMatchObject({ gatewayAttached: false, redisBound: true, connectionTokenSecretPresent: true })
+
+    await server.stop()
   })
 })
 
@@ -470,10 +629,13 @@ describe('HomeServer FILES_V1 composition', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    mockAvailabilityInstances.length = 0
     mockHomeRuntimeInstances.length = 0
     mockHttpServers.length = 0
+    mockInviteStoreInstances.length = 0
     mockRedisInstances.length = 0
     mockServiceContainerInstances.length = 0
+    mockWebSocketRedisBridgeInstances.length = 0
     mockWebSocketRuntimeInstances.length = 0
     mockInviteBridgeClose.mockResolvedValue(undefined)
     mockAvailabilityClose.mockResolvedValue(undefined)
@@ -620,8 +782,13 @@ describe('HomeServer FILES_V1 composition', () => {
     expect(mockSyncGateDiagnostics.record).toHaveBeenCalled()
     const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0] as Record<string, unknown>
     // The durable backend is in-process here, so that condition is satisfied by
-    // construction rather than by configuration.
-    expect(recorded).toMatchObject({ syncingServerGrpcBound: true, connectionTokenSecretPresent: true })
+    // construction rather than by configuration. `gatewayAttached` is the
+    // attach OUTCOME (N22), re-recorded after attach() returned.
+    expect(recorded).toMatchObject({
+      syncingServerGrpcBound: true,
+      connectionTokenSecretPresent: true,
+      gatewayAttached: true,
+    })
     // Presence only: every recorded field is a boolean or a literal key, never a
     // configured value. This is the structural guarantee the endpoint relies on.
     for (const [key, value] of Object.entries(recorded)) {

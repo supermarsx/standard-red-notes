@@ -34,6 +34,11 @@ const KnownErrorCodes = new Set([
   'ERR_BAD_RESPONSE',
   'ERR_CANCELED',
   'ERR_NETWORK',
+  // Realtime composition mistakes (websocket-gateway InviteEventConfigurationError).
+  // Stable constants that name a misconfiguration, never a value; without them a
+  // host that logs only this metadata reports a boot refusal as `errorCode: undefined`.
+  'INVITE_CURSOR_SECRET_TOO_SHORT',
+  'INVITE_REDIS_NAMESPACE_INVALID',
   'SQLITE_BUSY',
   'TimeoutError',
 ])

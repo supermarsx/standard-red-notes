@@ -21,6 +21,13 @@ export interface WebSocketRedisBridgeOptions {
    * the channel the in-process gateway subscribes to under the same variable.
    */
   namespace?: string
+  /**
+   * When set, the bridge never opens Redis and logs this reason once (at warn)
+   * instead of the "REDIS_HOST not set" line: the host decided at its gate that
+   * the shared Redis must not be touched (e.g. an invalid namespace would
+   * publish on the un-namespaced channel of a sibling stack).
+   */
+  disabledReason?: string
   createPublisher?: (options: RedisOptions) => WebSocketRedisPublisher
   /** Bounds the warn lines to one per cause per interval (default 60 s). */
   throttle?: LogThrottle
@@ -81,6 +88,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
   }
 
   readonly channel: string
+  private readonly disabledReason: string | undefined
   private readonly createPublisher: (options: RedisOptions) => WebSocketRedisPublisher
   private readonly throttle: LogThrottle
   private publisher: WebSocketRedisPublisher | undefined
@@ -95,6 +103,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
     options: WebSocketRedisBridgeOptions = {},
   ) {
     this.channel = WebSocketRedisBridge.channelFor(options.namespace)
+    this.disabledReason = options.disabledReason
     this.createPublisher = options.createPublisher ?? ((redisOptions) => new Redis(redisOptions))
     this.throttle = options.throttle ?? createLogThrottle({ intervalMs: WebSocketRedisBridge.WARN_INTERVAL_MS })
   }
@@ -120,6 +129,13 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
   }
 
   private getPublisher(): WebSocketRedisPublisher | undefined {
+    if (this.disabledReason !== undefined) {
+      if (!this.warned) {
+        this.logger.warn(`WebSocketRedisBridge disabled: ${this.disabledReason}`)
+        this.warned = true
+      }
+      return undefined
+    }
     if (!this.redisHost) {
       if (!this.warned) {
         this.logger.info('WebSocketRedisBridge: REDIS_HOST not set; realtime push bridge disabled.')
