@@ -1,8 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
 import * as zlib from 'node:zlib'
-import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient, type SQSClientConfig } from '@aws-sdk/client-sqs'
+import {
+  DeleteMessageCommand,
+  ReceiveMessageCommand,
+  SQSClient,
+  type Message,
+  type SQSClientConfig,
+} from '@aws-sdk/client-sqs'
 import { ConnectionRegistry, dispatch, type DispatchMessage, type SendableSocket } from './registry.js'
-import type { Logger } from './redisBridge.js'
+import { applyRedisNamespace, type Logger, type PushDispatchedHook } from './redisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
 import type { InviteRealtimeDomainEventEnvelope } from './inviteEventDomainEventHandler.js'
 import { INVITE_REALTIME_DOMAIN_EVENT_TYPE } from './inviteEventDomainEventBridge.js'
@@ -10,6 +16,18 @@ import { INVITE_REALTIME_DOMAIN_EVENT_TYPE } from './inviteEventDomainEventBridg
 const DEFAULT_DEDUP_RETENTION_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_DEDUP_LEASE_MS = 30_000
 const COMPLETED_VALUE = 'completed'
+
+/** Redis key prefix of the durable-event dedup store when no namespace is configured. */
+export const DEFAULT_SQS_DEDUP_KEY_PREFIX = 'ws:sqs:event:v1:'
+
+/**
+ * Dedup key prefix for a deployment namespace (C10): `ws:sqs:event:v1:` when
+ * the namespace is empty, `<ns>:ws:sqs:event:v1:` otherwise. Hosts pass the
+ * result as `keyPrefix` to `createRedisSqsEventDedupStore`.
+ */
+export function namespacedDedupPrefix(namespace?: string): string {
+  return applyRedisNamespace(namespace, DEFAULT_SQS_DEDUP_KEY_PREFIX)
+}
 
 const COMPLETE_SCRIPT = `
 -- SRN_WS_SQS_EVENT_DEDUP_COMPLETE_V1
@@ -54,7 +72,7 @@ export function createRedisSqsEventDedupStore(
   redis: RedisSqsEventDedupClient,
   options: RedisSqsEventDedupOptions = {},
 ): SqsEventDedupStore {
-  const keyPrefix = options.keyPrefix ?? 'ws:sqs:event:v1:'
+  const keyPrefix = options.keyPrefix ?? DEFAULT_SQS_DEDUP_KEY_PREFIX
   const retentionMilliseconds = positiveInteger(
     options.retentionMilliseconds ?? DEFAULT_DEDUP_RETENTION_MS,
     'retentionMilliseconds',
@@ -187,7 +205,16 @@ export function decodeSqsBodyToDomainEvent(body: string): Record<string, unknown
  * Pure + side-effect free so it can be unit-tested without SQS.
  */
 export function decodeSqsBodyToDispatch(body: string): SqsDispatchMessage | null {
-  const event = decodeSqsBodyToDomainEvent(body) as {
+  return domainEventToDispatch(decodeSqsBodyToDomainEvent(body))
+}
+
+/**
+ * Project an already-decoded domain event onto the dispatch shape, or null when
+ * it is not a well-formed WEB_SOCKET_MESSAGE_REQUESTED event. The consumer loop
+ * inflates each SQS body exactly once and branches on the decoded type (N7).
+ */
+export function domainEventToDispatch(domainEvent: Record<string, unknown> | null): SqsDispatchMessage | null {
+  const event = domainEvent as {
     eventId?: unknown
     type?: unknown
     payload?: { userUuid?: unknown; message?: unknown; originatingSessionUuid?: unknown }
@@ -226,18 +253,27 @@ export interface SqsConsumerOptions {
   dedupStore?: SqsEventDedupStore
   /** Recognized invite events are acknowledged only after this strict handler succeeds. */
   inviteRealtimeHandler?: { handle(event: InviteRealtimeDomainEventEnvelope): Promise<void> }
+  /** Feeds `AttachedGateway.health().pushesDispatched` (C9); not called for suppressed duplicates. */
+  onDispatched?: PushDispatchedHook
 }
+
+/**
+ * Handle returned by `startSqsConsumer`. Calling it stops the consumer (the
+ * original shape); `stop()` is the same operation and `running()` reports the
+ * loop flag for `AttachedGateway.health().sqsConsumerRunning` (C9).
+ */
+export type SqsConsumerHandle = (() => void) & { stop(): void; running(): boolean }
 
 /**
  * Polls an SQS queue (subscribed to the syncing-server SNS topic) for
  * WEB_SOCKET_MESSAGE_REQUESTED events and pushes them to live sockets. This is
  * the path used in the multi-process / SNS+SQS deployment (the Redis bridge is
- * used in single-process home-server mode). Returns a stop() function.
+ * used in single-process home-server mode). Returns a callable stop handle.
  */
 export function startSqsConsumer<S extends SendableSocket>(
   registry: ConnectionRegistry<S>,
   opts: SqsConsumerOptions,
-): () => void {
+): SqsConsumerHandle {
   const config: SQSClientConfig = {
     region: opts.region ?? 'us-east-1',
     credentials: {
@@ -253,81 +289,106 @@ export function startSqsConsumer<S extends SendableSocket>(
   let running = true
   opts.logger.info(`[sqs] consuming ${opts.queueUrl}`)
 
-  const loop = async (): Promise<void> => {
-    while (true) {
-      if (!running) {
-        break
-      }
+  /**
+   * Process one message and report whether it may be acknowledged. Every
+   * failure mode is caught here so the batch loop only ever sees a boolean;
+   * a poison body is acknowledged (it would otherwise redeliver forever), a
+   * failed dispatch is not (SQS redelivers it after the visibility timeout).
+   */
+  const processMessage = async (msg: Message): Promise<boolean> => {
+    if (!msg.Body) {
+      return true
+    }
+    // N7: inflate the body once; the queue is shared with every other event type.
+    const domainEvent = decodeSqsBodyToDomainEvent(msg.Body)
+    if (domainEvent?.type === INVITE_REALTIME_DOMAIN_EVENT_TYPE) {
       try {
-        const result = await client.send(
+        if (!opts.inviteRealtimeHandler) {
+          throw new Error('Invite realtime SQS handler is unavailable.')
+        }
+        await opts.inviteRealtimeHandler.handle(domainEvent as InviteRealtimeDomainEventEnvelope)
+        opts.logger.info('[invite:sqs] dispatched durable invite invalidation')
+        return true
+      } catch (error) {
+        opts.logger.error('[sqs] invite realtime processing failed', safeErrorLogMetadata(error))
+        return false
+      }
+    }
+
+    const parsed = domainEventToDispatch(domainEvent)
+    if (!parsed) {
+      return true
+    }
+    try {
+      let sent = 0
+      let decision: SqsEventDedupDecision = 'executed'
+      const dispatchMessage = (): void => {
+        sent = dispatch(registry, parsed)
+        opts.onDispatched?.(sent)
+      }
+      if (parsed.eventId) {
+        if (!opts.dedupStore) {
+          throw new Error('Shared SQS event deduplication is required for durable websocket events.')
+        }
+        decision = await opts.dedupStore.executeOnce(`WEB_SOCKET_MESSAGE_REQUESTED:${parsed.eventId}`, dispatchMessage)
+      } else {
+        dispatchMessage()
+      }
+
+      if (decision === 'duplicate') {
+        opts.logger.info('[push:sqs] skipped completed websocket duplicate', {
+          userId: parsed.userUuid,
+        })
+      } else {
+        opts.logger.info('[push:sqs] dispatched websocket message', {
+          userId: parsed.userUuid,
+          socketCount: sent,
+          originExcluded: parsed.originatingSessionUuid !== undefined,
+        })
+      }
+      return true
+    } catch (error) {
+      opts.logger.error('[sqs] websocket message processing failed', safeErrorLogMetadata(error))
+      return false
+    }
+  }
+
+  const loop = async (): Promise<void> => {
+    while (running) {
+      let received: { Messages?: Message[] }
+      try {
+        received = await client.send(
           new ReceiveMessageCommand({
             QueueUrl: opts.queueUrl,
             MaxNumberOfMessages: 10,
             WaitTimeSeconds: 20,
           }),
         )
-        for (const msg of result.Messages ?? []) {
-          let acknowledge = true
-          if (msg.Body) {
-            const domainEvent = decodeSqsBodyToDomainEvent(msg.Body)
-            if (domainEvent?.type === INVITE_REALTIME_DOMAIN_EVENT_TYPE) {
-              try {
-                if (!opts.inviteRealtimeHandler) {
-                  throw new Error('Invite realtime SQS handler is unavailable.')
-                }
-                await opts.inviteRealtimeHandler.handle(domainEvent as InviteRealtimeDomainEventEnvelope)
-                opts.logger.info('[invite:sqs] dispatched durable invite invalidation')
-              } catch (error) {
-                acknowledge = false
-                opts.logger.error('[sqs] invite realtime processing failed', safeErrorLogMetadata(error))
-              }
-            } else {
-              const parsed = decodeSqsBodyToDispatch(msg.Body)
-              if (parsed) {
-                try {
-                  let sent = 0
-                  let decision: SqsEventDedupDecision = 'executed'
-                  const dispatchMessage = (): void => {
-                    sent = dispatch(registry, parsed)
-                  }
-                  if (parsed.eventId) {
-                    if (!opts.dedupStore) {
-                      throw new Error('Shared SQS event deduplication is required for durable websocket events.')
-                    }
-                    decision = await opts.dedupStore.executeOnce(
-                      `WEB_SOCKET_MESSAGE_REQUESTED:${parsed.eventId}`,
-                      dispatchMessage,
-                    )
-                  } else {
-                    dispatchMessage()
-                  }
-
-                  if (decision === 'duplicate') {
-                    opts.logger.info('[push:sqs] skipped completed websocket duplicate', {
-                      userId: parsed.userUuid,
-                    })
-                  } else {
-                    opts.logger.info('[push:sqs] dispatched websocket message', {
-                      userId: parsed.userUuid,
-                      socketCount: sent,
-                      originExcluded: parsed.originatingSessionUuid !== undefined,
-                    })
-                  }
-                } catch (error) {
-                  acknowledge = false
-                  opts.logger.error('[sqs] websocket message processing failed', safeErrorLogMetadata(error))
-                }
-              }
-            }
-          }
-          if (acknowledge && msg.ReceiptHandle) {
-            await client.send(new DeleteMessageCommand({ QueueUrl: opts.queueUrl, ReceiptHandle: msg.ReceiptHandle }))
-          }
-        }
       } catch (err) {
         if (running) {
           opts.logger.error('[sqs] poll error', safeErrorLogMetadata(err))
           await new Promise((r) => setTimeout(r, 2000))
+        }
+        continue
+      }
+
+      for (const msg of received.Messages ?? []) {
+        if (!running) {
+          break
+        }
+        // R35: each message owns its dispatch + acknowledgement. A rejected
+        // DeleteMessage used to abort the whole batch, leaving the rest
+        // undispatched until SQS redelivered them and the failed one
+        // dispatched twice; now it is logged and the batch carries on.
+        try {
+          const acknowledge = await processMessage(msg)
+          if (acknowledge && msg.ReceiptHandle) {
+            await client.send(new DeleteMessageCommand({ QueueUrl: opts.queueUrl, ReceiptHandle: msg.ReceiptHandle }))
+          }
+        } catch (error) {
+          if (running) {
+            opts.logger.error('[sqs] message acknowledgement failed', safeErrorLogMetadata(error))
+          }
         }
       }
     }
@@ -335,8 +396,10 @@ export function startSqsConsumer<S extends SendableSocket>(
 
   void loop()
 
-  return () => {
+  const stop = (): void => {
     running = false
     client.destroy()
   }
+
+  return Object.assign(stop, { stop, running: () => running })
 }
