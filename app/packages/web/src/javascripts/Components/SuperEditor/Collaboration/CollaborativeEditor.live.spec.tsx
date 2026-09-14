@@ -9,8 +9,13 @@
  *   editor A -> @lexical/yjs binding -> Y.Doc -> EncryptedYjsProvider (AES) ->
  *   ws -> gateway relay -> ws -> EncryptedYjsProvider (AES) -> Y.Doc -> editor B.
  *
- * STACK-GATED: skips when the gateway is not reachable, so it never breaks
- * offline CI. Run with the docker stack up.
+ * OPT-IN: the whole suite is skipped unless SRN_LIVE_GATEWAY=1. It used to
+ * gate itself on reachability and return early, which reported a PASS whenever
+ * the stack was down — a green that proved nothing. Now an explicit opt-in run
+ * FAILS if the gateway is unreachable, and an ordinary run skips out loud.
+ *
+ * Run it with the docker stack up:
+ *   SRN_LIVE_GATEWAY=1 yarn workspace @standardnotes/web jest --config jest.config.js CollaborativeEditor.live
  */
 import { act, createElement, useEffect } from 'react'
 import { createRoot, Root } from 'react-dom/client'
@@ -22,7 +27,7 @@ import { CollaborationPlugin } from '@lexical/react/LexicalCollaborationPlugin'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { LexicalCollaboration } from '@lexical/react/LexicalCollaborationContext'
 import { $getRoot, $createParagraphNode, $createTextNode, LexicalEditor } from 'lexical'
-import { webcrypto } from 'node:crypto'
+import { webcrypto, randomBytes } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 
@@ -54,9 +59,25 @@ if (typeof (globalThis as { TextEncoder?: unknown }).TextEncoder === 'undefined'
 }
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://localhost:3106'
-const GATEWAY_WS = process.env.GATEWAY_WS ?? 'ws://localhost:3106'
+const LIVE = process.env.SRN_LIVE_GATEWAY === '1'
+// The public front door (the app nginx), which is the only origin a browser
+// uses, and where the socket must be reachable.
+const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://localhost:3001'
+const GATEWAY_WS = process.env.GATEWAY_WS ?? 'ws://localhost:3001/sockets'
+const GATEWAY_HEALTH_PATH = process.env.GATEWAY_HEALTH_PATH ?? '/healthcheck/readiness'
+// The internal mint is a different origin on purpose: nginx blanks
+// `X-Internal-Secret` on `/sockets`, and the gateway refuses an internal mint
+// whenever `x-forwarded-for` is present or the peer is not loopback. So the
+// token has to be minted against the gateway's own port, from this machine.
+const GATEWAY_INTERNAL_HTTP = process.env.GATEWAY_INTERNAL_HTTP ?? 'http://localhost:3106'
 const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? 'dev-ws-internal-secret-change-me'
+// Collaboration protocol v3 binds every room membership to a room epoch and a
+// security epoch; the capability must pin the identical pair the join carries.
+// Hex, not base64url: epochs are echoed through identifier validation and a
+// leading `-`/`_` would fail a fraction of runs.
+const COLLABORATION_PROTOCOL_VERSION = 3
+const ROOM_EPOCH = randomBytes(16).toString('hex')
+const COLLABORATION_SECURITY_EPOCH = randomBytes(16).toString('hex')
 // Same secret the gateway verifies connection tokens AND room capabilities with.
 const CONNECTION_TOKEN_SECRET =
   process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? 'dev-ws-connection-token-secret-change-me'
@@ -85,7 +106,7 @@ function nodeHttp(
 
 async function gatewayReachable(): Promise<boolean> {
   try {
-    return (await nodeHttp('GET', `${GATEWAY_HTTP}/health`, {})).status === 200
+    return (await nodeHttp('GET', `${GATEWAY_HTTP}${GATEWAY_HEALTH_PATH}`, {})).status === 200
   } catch {
     return false
   }
@@ -95,7 +116,7 @@ async function mint(userUuid: string, sessionUuid: string): Promise<string> {
   const body = JSON.stringify({ userUuid, sessionUuid })
   const res = await nodeHttp(
     'POST',
-    `${GATEWAY_HTTP}/sockets/tokens`,
+    `${GATEWAY_INTERNAL_HTTP}/sockets/tokens`,
     {
       'content-type': 'application/json',
       'x-internal-secret': INTERNAL_SECRET,
@@ -106,9 +127,37 @@ async function mint(userUuid: string, sessionUuid: string): Promise<string> {
   return JSON.parse(res.text).token
 }
 
+/** A protocol-v3 room capability, pinned to the epoch pair the join carries. */
+function roomCapability(
+  userUuid: string,
+  room: string,
+  leaseRequestId: string | undefined,
+  roomEpoch: string,
+  bootstrapChallenge?: string,
+): string {
+  return nodeRequire('jsonwebtoken').sign(
+    {
+      purpose: 'collab-room',
+      userUuid,
+      room,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      collaborationAuthorizationIssuedAt: 1,
+      serverUpdatedAtTimestamp: 1,
+      roomEpoch,
+      collaborationSecurityEpoch: COLLABORATION_SECURITY_EPOCH,
+      ...(leaseRequestId ? { leaseRequestId } : {}),
+      ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+    },
+    CONNECTION_TOKEN_SECRET,
+    { algorithm: 'HS256', expiresIn: 300 },
+  ) as string
+}
+
 function liveChannel(token: string, userUuid: string): Promise<CollabChannel & { close: () => void }> {
   return new Promise((resolve, reject) => {
-    const ws = new NodeWebSocket(`${GATEWAY_WS}/?authToken=${token}`)
+    // GATEWAY_WS already ends in the pinned `/sockets` pathname (contract C13);
+    // the legacy lane closes 1008 `unknown path` on anything else.
+    const ws = new NodeWebSocket(`${GATEWAY_WS}?authToken=${token}`)
     const handlers = new Set<(f: CollabFrame) => void>()
     ws.on('message', (data) => {
       const raw = data.toString()
@@ -134,13 +183,19 @@ function liveChannel(token: string, userUuid: string): Promise<CollabChannel & {
         // The api-gateway is not in this live harness; mint the room capability
         // directly with the gateway's connection-token secret (the same secret it
         // verifies with), mirroring what the api-gateway does after an access check.
-        authorize: (room: string) =>
-          Promise.resolve(
-            nodeRequire('jsonwebtoken').sign({ purpose: 'collab-room', userUuid, room }, CONNECTION_TOKEN_SECRET, {
-              algorithm: 'HS256',
-              expiresIn: 300,
-            }) as string,
-          ),
+        authorize: (room: string, leaseRequestId?: string, bootstrapChallenge?: string) =>
+          Promise.resolve(roomCapability(userUuid, room, leaseRequestId, ROOM_EPOCH, bootstrapChallenge)),
+        authorizeEpochBound: (
+          room: string,
+          expectedRoomEpoch: string,
+          leaseRequestId?: string,
+          bootstrapChallenge?: string,
+        ) =>
+          Promise.resolve({
+            capability: roomCapability(userUuid, room, leaseRequestId, expectedRoomEpoch, bootstrapChallenge),
+            roomEpoch: expectedRoomEpoch,
+            collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION as 3,
+          }),
         close: () => ws.close(),
       }),
     )
@@ -214,21 +269,19 @@ function textOf(editor: LexicalEditor): string {
   return text
 }
 
-describe('Collaborative editor over the LIVE gateway (definitive e2e)', () => {
+// Opt-in only. Without SRN_LIVE_GATEWAY=1 the suite is skipped rather than
+// passed, so an offline run can never be mistaken for a proven one.
+;(LIVE ? describe : describe.skip)('Collaborative editor over the LIVE gateway (definitive e2e)', () => {
   jest.setTimeout(40000)
-  let up = false
   beforeAll(async () => {
-    up = await gatewayReachable()
-    if (!up) {
-      console.warn('SKIP: gateway not reachable on', GATEWAY_HTTP)
+    // An explicit live run that cannot reach the gateway is a failure. The old
+    // early-return turned exactly this case into a green test.
+    if (!(await gatewayReachable())) {
+      throw new Error(`SRN_LIVE_GATEWAY=1 but the gateway is unreachable on ${GATEWAY_HTTP}${GATEWAY_HEALTH_PATH}`)
     }
   })
 
   it('typing in editor A appears in editor B through the real encrypted gateway', async () => {
-    if (!up) {
-      return
-    }
-
     const room = 'note-live-' + Date.now()
     const roomKey = (await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
       'encrypt',

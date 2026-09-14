@@ -750,6 +750,95 @@ test("the required stack cannot skip encrypted two-editor convergence", () => {
   );
 });
 
+test("the required stack cannot skip the cross-device realtime push round trip", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replaceAll("e2e/push-roundtrip.e2e.mjs", "e2e/disabled.e2e.mjs"),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /container-smoke cross-device realtime push round trip/,
+  );
+});
+
+test("the realtime push round trip must run under both the default and the gRPC service proxies", () => {
+  // Dropping only the second run leaves the fragment present, so a
+  // presence-only rule would pass. The count rule is what catches it.
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      `      - name: Verify the realtime push round trip under gRPC proxies
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/push-roundtrip.e2e.mjs
+`,
+      "",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /realtime push round trip under both the default and the gRPC service proxies exactly 2 times, found 1/,
+  );
+});
+
+test("the required stack cannot skip the oversized SYNC_ITEMS result drill", () => {
+  for (const [current, replacement, expected] of [
+    [
+      "e2e/sync-items-oversized.e2e.mjs",
+      "e2e/disabled.e2e.mjs",
+      /container-smoke oversized committed SYNC_ITEMS result drill/,
+    ],
+    [
+      'REQUIRE_SYNC_ITEMS: "1"',
+      'REQUIRE_SYNC_ITEMS: "0"',
+      /container-smoke required worker-lane SYNC_ITEMS negotiation/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+      content.replace(current, replacement),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("the oversized SYNC_ITEMS drill cannot run without the gRPC service proxy phase", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      "echo 'SERVICE_PROXY_TYPE=grpc' >> \"$GITHUB_ENV\"",
+      "echo 'SERVICE_PROXY_TYPE=' >> \"$GITHUB_ENV\"",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /container-smoke gRPC service proxy phase switch/,
+  );
+});
+
+test("the gRPC phase must follow hardening and precede publication", () => {
+  // Hoisting the switch above the hardening step would harden a stack that is
+  // no longer the one the default drills ran against.
+  const grpcPhase = `      - name: Switch the stack to gRPC service proxies
+        run: echo 'SERVICE_PROXY_TYPE=grpc' >> "$GITHUB_ENV"
+`;
+  const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+    assert.ok(content.includes(grpcPhase));
+    return content
+      .replace(grpcPhase, "")
+      .replace(
+        "      - name: Verify image and live-container hardening\n",
+        `${grpcPhase}      - name: Verify image and live-container hardening\n`,
+      );
+  });
+  const errors = validateCiContract(files).join("\n");
+  assert.match(
+    errors,
+    /must finish live-container hardening under the default service proxies before the gRPC phase/,
+  );
+});
+
 test("the required stack cannot skip durable email queue and delivery integration", () => {
   for (const [command, replacement, expected] of [
     [

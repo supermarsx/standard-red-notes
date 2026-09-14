@@ -7,6 +7,7 @@ import {
   finish,
   freshAccount,
   GATEWAY_WS,
+  isPushFrame,
   SERVER,
   serverUp,
 } from "./helpers.js";
@@ -81,7 +82,8 @@ async function main(): Promise<void> {
   });
 
   const pushed = await new Promise<string | null>((resolve) => {
-    const ws = new WebSocket(`${GATEWAY_WS}/?authToken=${token}`);
+    // GATEWAY_WS already ends in the pinned `/sockets` pathname (C13).
+    const ws = new WebSocket(`${GATEWAY_WS}?authToken=${token}`);
     ws.onopen = async () => {
       await new Promise((r) => setTimeout(r, 1000));
       await writer.createNote({
@@ -96,7 +98,7 @@ async function main(): Promise<void> {
   });
   check(
     "browser socket (api-gateway token) receives a push for another device's edit",
-    !!pushed && pushed.includes("ITEMS_CHANGED_ON_SERVER"),
+    isPushFrame(pushed),
   );
 
   await cleanup(app2, dir2);

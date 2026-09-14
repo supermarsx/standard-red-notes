@@ -4,13 +4,44 @@ import os from "node:os";
 import path from "node:path";
 import { bootstrapHeadlessApp, type HeadlessApp } from "../snjs/bootstrap.js";
 
+/** The public front door — the only origin a real client ever uses. */
 export const SERVER =
   process.env.STANDARD_RED_NOTES_SERVER_URL ?? "http://localhost:3001";
+/**
+ * The gateway's OWN port, bypassing the front door. Only the liveness probe
+ * uses this: it is the one check that wants to know whether the gateway
+ * process itself is up, separately from whether nginx is routing to it.
+ * Everything else must go through SERVER, because the front door is where
+ * origin checks, header stripping and rate limits actually apply.
+ */
 export const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? "http://localhost:3106";
-export const GATEWAY_WS = process.env.GATEWAY_WS ?? "ws://localhost:3106";
+/**
+ * The legacy WebSocket lane through the front door. Contract C13 pins it to
+ * the exact pathname `/sockets`; any other path is closed 1008 `unknown path`,
+ * so this value already includes it and callers append `?authToken=…`.
+ */
+export const GATEWAY_WS =
+  process.env.GATEWAY_WS ?? "ws://localhost:3001/sockets";
 export const INTERNAL_SECRET =
   process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ??
   "dev-ws-internal-secret-change-me";
+/**
+ * A push is either a bare notification or an inlined payload depending on
+ * `WEBSOCKET_SYNC_PUSH_ENABLED`, which defaults to OFF. Tests that only care
+ * that a push arrived must accept either.
+ */
+export const PUSH_FRAME_TYPES = [
+  "ITEMS_CHANGED_ON_SERVER",
+  "SYNC_ITEMS_PUSHED",
+] as const;
+
+/** True when `frame` is any realtime push notification. */
+export function isPushFrame(frame: string | null | undefined): boolean {
+  return (
+    typeof frame === "string" &&
+    PUSH_FRAME_TYPES.some((type) => frame.includes(type))
+  );
+}
 
 let failures = 0;
 export function check(name: string, cond: boolean): void {

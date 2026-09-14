@@ -337,6 +337,19 @@ jobs:
             -e GATEWAY_WS=ws://127.0.0.1:3000/sockets \
             -e GATEWAY_HEALTH_PATH=/healthcheck/readiness \
             server yarn node packages/websocket-gateway/e2e/collab-yjs.e2e.mjs
+      # The whole cross-device push chain (save -> syncing-server -> SNS/SQS ->
+      # gateway worker -> the other device's socket) from the PUBLIC front door,
+      # which is the only origin a browser uses. A broken queue, a filtered
+      # subscription or a dead worker fails here and nowhere else in CI.
+      - name: Verify the cross-device realtime push round trip
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/push-roundtrip.e2e.mjs
       - name: Run bounded browser and Redis smoke
         working-directory: e2e
         env:
@@ -360,6 +373,37 @@ jobs:
           --container "db=${COMPOSE_PROJECT_NAME}-db-1"
           --container "cache=${COMPOSE_PROJECT_NAME}-cache-1"
           --container "floci=${COMPOSE_PROJECT_NAME}-floci-1"
+      # gRPC phase. The worker sync lane only carries SYNC_ITEMS when the
+      # api-gateway speaks gRPC to the syncing-server, so the oversized-result
+      # contract (a payload-less STATUS COMMITTED + an idempotent HTTP replay)
+      # is unprovable under the default HTTP proxies. Compose passes
+      # SERVICE_PROXY_TYPE straight through, so switching it and recreating the
+      # server is the whole setup. This runs LAST against the live stack: every
+      # step after it inspects images, not containers, so nothing needs the
+      # default proxy configuration restored.
+      - name: Switch the stack to gRPC service proxies
+        run: echo 'SERVICE_PROXY_TYPE=grpc' >> "$GITHUB_ENV"
+      - name: Recreate the stack with gRPC service proxies
+        run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Verify the oversized SYNC_ITEMS result over the worker lane
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          REQUIRE_SYNC_ITEMS: "1"
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/sync-items-oversized.e2e.mjs
+      - name: Verify the realtime push round trip under gRPC proxies
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/push-roundtrip.e2e.mjs
       - name: Resolve retry-stable publication handoff identity
         id: publication_identity
         if: >-

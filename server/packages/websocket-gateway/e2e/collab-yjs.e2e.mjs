@@ -245,13 +245,19 @@ class EncryptedPeer {
     // released (RELEASE_LEASE_SCRIPT rewrites the room-state key once SCARD
     // hits 0), so the epoch this peer used before an offline round is stale by
     // the time it reconnects. That is deliberate: a stale reservation is denied
-    // with `room-denied` carrying the room's current epoch, exactly so the
-    // client can adopt it and re-reserve. Production does the same thing by
-    // re-running epoch discovery for every activation, which yields whatever
-    // epoch the room currently has. Mirror that here rather than pinning one
-    // epoch for the process lifetime.
+    // with `room-denied { reason: 'epoch-mismatch', roomEpoch: <current> }`
+    // (contract C1), exactly so the client can adopt it and re-reserve.
+    //
+    // Production now recovers the same way on BOTH legs. Epoch discovery runs
+    // for every activation and returns the room's CURRENT epoch, because the
+    // COLLABORATION_AUTHORIZATION handler resolves it through
+    // `collaborationRoomEpochResolver` (contract C4) instead of answering with
+    // the HMAC-derived opening epoch; and the web client adopts
+    // `room-denied.roomEpoch` before re-reserving on the HTTP fallback. Mirror
+    // that here rather than pinning one epoch for the process lifetime.
     for (let attempt = 0; attempt < 3 && !this.reservation; attempt++) {
       this.denied = false
+      this.deniedReason = undefined
       this.deniedRoomEpoch = undefined
       this.requestId = `e2e-${sessionUuid}-${crypto.randomUUID()}`
       socket.send(
@@ -267,6 +273,10 @@ class EncryptedPeer {
       )
       await waitFor(() => this.reservation || this.denied, `${this.userUuid} room reservation`)
       if (this.denied && this.deniedRoomEpoch && this.deniedRoomEpoch !== this.roomEpoch) {
+        // C1: a denial that hands back an epoch to adopt is an epoch mismatch
+        // and nothing else. Any other reason carrying `roomEpoch` would mean
+        // the server leaked the room's epoch on a denial it must not.
+        check(`${this.userUuid} epoch adoption is a room-denied epoch-mismatch`, this.deniedReason === 'epoch-mismatch')
         this.roomEpoch = this.deniedRoomEpoch
       }
     }
@@ -466,7 +476,9 @@ class EncryptedPeer {
       this.reservation = frame
     } else if (frame.t === 'room-denied' && frame.requestId === this.requestId) {
       this.denied = true
-      // Carries the room's current epoch when the denial was an epoch mismatch.
+      // Contract C1: `reason` is always set, and `roomEpoch` is present iff the
+      // reason is `epoch-mismatch` (the room's current epoch).
+      this.deniedReason = typeof frame.reason === 'string' ? frame.reason : 'policy'
       if (typeof frame.roomEpoch === 'string' && frame.roomEpoch.length > 0) {
         this.deniedRoomEpoch = frame.roomEpoch
       }

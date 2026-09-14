@@ -889,6 +889,19 @@ export function validateCiContract(files) {
       "packages/websocket-gateway/e2e/collab-yjs.e2e.mjs",
       "encrypted two-editor convergence drill",
     ],
+    [
+      "e2e/push-roundtrip.e2e.mjs",
+      "cross-device realtime push round trip",
+    ],
+    [
+      "e2e/sync-items-oversized.e2e.mjs",
+      "oversized committed SYNC_ITEMS result drill",
+    ],
+    ['REQUIRE_SYNC_ITEMS: "1"', "required worker-lane SYNC_ITEMS negotiation"],
+    [
+      "echo 'SERVICE_PROXY_TYPE=grpc' >> \"$GITHUB_ENV\"",
+      "gRPC service proxy phase switch",
+    ],
     ['OPS_LOAD_NOTES: "25"', "bounded note count"],
     ['OPS_LOAD_CLIENTS: "2"', "bounded client count"],
     ['OPS_REDIS_WORKERS: "2"', "bounded Redis workers"],
@@ -1020,6 +1033,16 @@ export function validateCiContract(files) {
     }
   }
   for (const [fragment, expectedCount, description] of [
+    [
+      "e2e/push-roundtrip.e2e.mjs",
+      2,
+      "realtime push round trip under both the default and the gRPC service proxies",
+    ],
+    [
+      "docker compose up -d --no-build --wait --wait-timeout 900",
+      2,
+      "bounded stack startup for the default phase and the gRPC phase",
+    ],
     ["github.event_name == 'push'", 3, "main-push archive event guard"],
     ["github.ref == 'refs/heads/main'", 3, "main branch archive guard"],
     [
@@ -1055,6 +1078,37 @@ export function validateCiContract(files) {
   ) {
     errors.push(
       `${file}: container-smoke must harden, bind producer identity, export, and upload the tested images in that order`,
+    );
+  }
+  // The gRPC phase rewrites SERVICE_PROXY_TYPE for every later step, so it has
+  // to come after the drills that must run under the default HTTP proxies and
+  // before the publication steps, which only inspect images.
+  const defaultPushRoundTripIndex = containerSmokeBlock.indexOf(
+    "Verify the cross-device realtime push round trip",
+  );
+  const grpcSwitchIndex = containerSmokeBlock.indexOf(
+    "Switch the stack to gRPC service proxies",
+  );
+  const grpcRecreateIndex = containerSmokeBlock.indexOf(
+    "Recreate the stack with gRPC service proxies",
+  );
+  const oversizedIndex = containerSmokeBlock.indexOf(
+    "Verify the oversized SYNC_ITEMS result over the worker lane",
+  );
+  if (
+    defaultPushRoundTripIndex < 0 ||
+    grpcSwitchIndex <= defaultPushRoundTripIndex ||
+    grpcRecreateIndex <= grpcSwitchIndex ||
+    oversizedIndex <= grpcRecreateIndex ||
+    identityIndex <= oversizedIndex
+  ) {
+    errors.push(
+      `${file}: container-smoke must prove the push round trip under the default proxies, then switch to gRPC, recreate the stack, and prove the oversized SYNC_ITEMS result before publication`,
+    );
+  }
+  if (grpcSwitchIndex >= 0 && grpcSwitchIndex <= hardeningIndex) {
+    errors.push(
+      `${file}: container-smoke must finish live-container hardening under the default service proxies before the gRPC phase`,
     );
   }
 
