@@ -15,23 +15,31 @@ import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
+  MULTI_REALTIME_SWITCH_ENV,
+  SINGLE_REALTIME_SWITCH_ENV,
   collectSQLiteMigrationSources,
+  lxcNginxSiteTemplate,
   runDockerHardeningValidation,
   validateAuthStepUpComposeContract,
   validateAuthStepUpComposeSource,
   validateComposeHardening,
   validateContainerHardening,
+  validateContentSecurityPolicyNginxContract,
   validateDatabaseCredentialGateContract,
   validateDatabaseVolumeMigrationGateContract,
   validateDeploymentIdentityContract,
   validateFilesStorageDeploymentContract,
   validateImageHardening,
+  validateLxcNginxContract,
   validatePairingCallbackNginxContract,
   validatePairingComposeContract,
   validatePairingComposeSource,
   validatePairingDockerfileContract,
   validateReadinessAcceptanceContract,
   validateReadinessBootContract,
+  validateRealtimeQueueBootstrapContract,
+  validateRealtimeQueueIsolationContract,
+  validateRealtimeSwitchComposeContract,
   validateRuntimeLogLevelBootContract,
   validateRuntimeLogLevelDeploymentContract,
   validateServerDockerfileContract,
@@ -40,6 +48,7 @@ import {
   validateSingleEntrypointAuthStepUpPropagation,
   validateSyncGrpcAuthComposeContract,
   validateSingleContainerSQLiteMigrationContract,
+  validateSupervisorStopGroupContract,
   validateWebSocketProxyNginxContract,
   validateWebSocketSyncComposeContract,
 } from "./validate-docker-hardening.mjs";
@@ -1260,7 +1269,8 @@ test("requires /sockets to preserve WebSocket upgrades and long-lived proxy time
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Internal-Secret "";
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
       }
@@ -1272,6 +1282,23 @@ test("requires /sockets to preserve WebSocket upgrades and long-lived proxy time
       proxyPass: "http://127.0.0.1:3000",
     }),
     [],
+  );
+  assert.match(
+    validateWebSocketProxyNginxContract(
+      block.replace(
+        "proxy_set_header Host $http_host;",
+        "proxy_set_header Host $host;",
+      ),
+      { label: "single nginx", proxyPass: "http://127.0.0.1:3000" },
+    ).join("\n"),
+    /must forward Host with its port/,
+  );
+  assert.match(
+    validateWebSocketProxyNginxContract(
+      block.replace('proxy_set_header X-Internal-Secret "";', ""),
+      { label: "single nginx", proxyPass: "http://127.0.0.1:3000" },
+    ).join("\n"),
+    /must blank the X-Internal-Secret header/,
   );
   assert.match(
     validateWebSocketProxyNginxContract(
@@ -1721,4 +1748,395 @@ test("CLI requires service=target for --image and --container", () => {
       );
     }
   }
+});
+
+function serverEnvironmentFromCompose(composeSource) {
+  const block = composeSource.match(
+    /^x-server-env:[^\n]*\n((?:[ \t#][^\n]*\n|\n)*)/m,
+  )[1];
+  return Object.fromEntries(
+    [...block.matchAll(/^[ \t]+([A-Z][A-Z0-9_]*):/gm)].map(([, key]) => [
+      key,
+      "",
+    ]),
+  );
+}
+
+test("isolates the gateway's SQS queue from the supervisord workers", () => {
+  const multiComposeSource = readFileSync(
+    resolve("docker-compose.yml"),
+    "utf8",
+  );
+  const multiEntrypointSource = readFileSync(
+    resolve("server/docker/docker-entrypoint.sh"),
+    "utf8",
+  );
+  const configFor = (source) => ({
+    services: { server: { environment: serverEnvironmentFromCompose(source) } },
+  });
+  const valid = {
+    multiConfig: configFor(multiComposeSource),
+    multiComposeSource,
+    multiEntrypointSource,
+  };
+  assert.deepEqual(validateRealtimeQueueIsolationContract(valid), []);
+
+  const bareSource = multiComposeSource.replace(
+    "API_GATEWAY_SQS_QUEUE_URL: ${SQS_QUEUE_URL:-",
+    "SQS_QUEUE_URL: ${SQS_QUEUE_URL:-",
+  );
+  assert.notEqual(bareSource, multiComposeSource);
+  const bareErrors = validateRealtimeQueueIsolationContract({
+    ...valid,
+    multiConfig: configFor(bareSource),
+    multiComposeSource: bareSource,
+  }).join("\n");
+  assert.match(bareErrors, /must not carry the bare SQS_QUEUE_URL/);
+  assert.match(bareErrors, /must propagate API_GATEWAY_SQS_QUEUE_URL/);
+  assert.match(
+    bareErrors,
+    /x-server-env must not declare the bare SQS_QUEUE_URL/,
+  );
+  assert.match(
+    bareErrors,
+    /API_GATEWAY_SQS_QUEUE_URL must stay operator-overridable through the bare \$\{SQS_QUEUE_URL\} interpolation/,
+  );
+
+  const inheritedSns = configFor(multiComposeSource);
+  inheritedSns.services.server.environment.SNS_TOPIC_ARN = "";
+  assert.match(
+    validateRealtimeQueueIsolationContract({
+      ...valid,
+      multiConfig: inheritedSns,
+    }).join("\n"),
+    /must not carry the bare SNS_TOPIC_ARN/,
+  );
+
+  const loop = multiEntrypointSource.match(
+    /for realtime_queue_variable[\s\S]*?\ndone\n/,
+  )[0];
+  assert.match(
+    validateRealtimeQueueIsolationContract({
+      ...valid,
+      multiEntrypointSource: multiEntrypointSource.replace(loop, ""),
+    }).join("\n"),
+    /must unset every bare SQS_\*\/SNS_\* variable before starting supervisord/,
+  );
+  const late = multiEntrypointSource
+    .replace(loop, "")
+    .replace(
+      /^supervisord -c \/etc\/supervisord\.conf\n/m,
+      (line) => line + loop,
+    );
+  assert.notEqual(late, multiEntrypointSource.replace(loop, ""));
+  assert.match(
+    validateRealtimeQueueIsolationContract({
+      ...valid,
+      multiEntrypointSource: late,
+    }).join("\n"),
+    /unset loop must run before supervisord starts/,
+  );
+});
+
+test("opens the realtime switches in both Compose topologies without forcing gRPC", () => {
+  const entrypoint = readFileSync(
+    resolve("server/docker/docker-entrypoint.sh"),
+    "utf8",
+  );
+  for (const [serviceName, label, switches, file] of [
+    [
+      "server",
+      "multi compose",
+      MULTI_REALTIME_SWITCH_ENV,
+      "docker-compose.yml",
+    ],
+    [
+      "app",
+      "single compose",
+      SINGLE_REALTIME_SWITCH_ENV,
+      "docker-compose.single.yml",
+    ],
+  ]) {
+    const source = readFileSync(resolve(file), "utf8");
+    const config = {
+      services: {
+        [serviceName]: {
+          environment: Object.fromEntries(
+            Object.keys(switches).map((key) => [key, ""]),
+          ),
+        },
+      },
+    };
+    const entrypointSource = serviceName === "server" ? entrypoint : undefined;
+    const options = { serviceName, label, switches, entrypointSource };
+    assert.deepEqual(
+      validateRealtimeSwitchComposeContract(config, source, options),
+      [],
+    );
+
+    const missing = structuredClone(config);
+    delete missing.services[serviceName].environment.WEBSOCKET_REDIS_NAMESPACE;
+    assert.match(
+      validateRealtimeSwitchComposeContract(missing, source, options).join(
+        "\n",
+      ),
+      /must propagate WEBSOCKET_REDIS_NAMESPACE/,
+    );
+    const pinned = source.replace(
+      "WEBSOCKET_REDIS_NAMESPACE: ${WEBSOCKET_REDIS_NAMESPACE:-}",
+      "WEBSOCKET_REDIS_NAMESPACE: srn",
+    );
+    assert.notEqual(pinned, source);
+    assert.match(
+      validateRealtimeSwitchComposeContract(config, pinned, options).join("\n"),
+      /WEBSOCKET_REDIS_NAMESPACE must remain operator-overridable as \$\{WEBSOCKET_REDIS_NAMESPACE:-\}/,
+    );
+  }
+
+  const multiSource = readFileSync(resolve("docker-compose.yml"), "utf8");
+  const multiConfig = {
+    services: {
+      server: {
+        environment: Object.fromEntries(
+          Object.keys(MULTI_REALTIME_SWITCH_ENV).map((key) => [key, ""]),
+        ),
+      },
+    },
+  };
+  const multiOptions = (entrypointSource) => ({
+    serviceName: "server",
+    label: "multi compose",
+    switches: MULTI_REALTIME_SWITCH_ENV,
+    entrypointSource,
+  });
+  const fallback =
+    "export API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http://localhost:$FILES_SERVER_PORT";
+  assert.ok(entrypoint.includes(fallback));
+  assert.match(
+    validateRealtimeSwitchComposeContract(
+      multiConfig,
+      multiSource,
+      multiOptions(entrypoint.replace(fallback, "")),
+    ).join("\n"),
+    /must default API_GATEWAY_WEBSOCKET_SYNC_FILES_URL to the internal files service/,
+  );
+  assert.match(
+    validateRealtimeSwitchComposeContract(
+      multiConfig,
+      multiSource,
+      multiOptions(
+        entrypoint
+          .replace(fallback, "")
+          .replace(
+            /^printenv \| grep API_GATEWAY_ .*\n/m,
+            (line) => `${line}${fallback}\n`,
+          ),
+      ),
+    ).join("\n"),
+    /default must precede the api-gateway \.env projection/,
+  );
+  assert.match(
+    validateRealtimeSwitchComposeContract(
+      multiConfig,
+      multiSource,
+      multiOptions(
+        `${entrypoint}\nexport API_GATEWAY_SERVICE_PROXY_TYPE=grpc\n`,
+      ),
+    ).join("\n"),
+    /must not force SERVICE_PROXY_TYPE/,
+  );
+});
+
+test("filters and dead-letters the websocket queue in the emulator bootstrap", () => {
+  const bootstrap = readFileSync(
+    resolve("server/docker/localstack_bootstrap.sh"),
+    "utf8",
+  );
+  const options = { label: "emulator bootstrap" };
+  assert.deepEqual(
+    validateRealtimeQueueBootstrapContract(bootstrap, options),
+    [],
+  );
+
+  const unfiltered = bootstrap.replace(
+    'link_queue_and_topic_filtered $AUTH_TOPIC_ARN $WEBSOCKET_QUEUE_ARN "$WEBSOCKET_QUEUE_FILTER_POLICY"',
+    "link_queue_and_topic $AUTH_TOPIC_ARN $WEBSOCKET_QUEUE_ARN",
+  );
+  assert.notEqual(unfiltered, bootstrap);
+  const unfilteredErrors = validateRealtimeQueueBootstrapContract(
+    unfiltered,
+    options,
+  ).join("\n");
+  assert.match(
+    unfilteredErrors,
+    /must subscribe websocket-local-queue to AUTH_TOPIC_ARN through the FilterPolicy/,
+  );
+  assert.match(unfilteredErrors, /must not carry an unfiltered subscription/);
+
+  const widened = bootstrap.replace(
+    '"INVITE_REALTIME_INVALIDATION_REQUESTED"]}',
+    '"INVITE_REALTIME_INVALIDATION_REQUESTED","ITEM_DUMPED"]}',
+  );
+  assert.notEqual(widened, bootstrap);
+  assert.match(
+    validateRealtimeQueueBootstrapContract(widened, options).join("\n"),
+    /must define WEBSOCKET_QUEUE_FILTER_POLICY as exactly the two gateway event types/,
+  );
+
+  const noRedrive = bootstrap.replace(
+    /^REDRIVE_RESULT=\$\(set_queue_redrive_policy .*\n/m,
+    "",
+  );
+  assert.notEqual(noRedrive, bootstrap);
+  assert.match(
+    validateRealtimeQueueBootstrapContract(noRedrive, options).join("\n"),
+    /must park unacknowledged websocket messages in websocket-local-dlq after 5 receives/,
+  );
+  assert.match(
+    validateRealtimeQueueBootstrapContract(
+      bootstrap.replace(
+        'QUEUE_NAME="websocket-local-dlq"',
+        'QUEUE_NAME="websocket-dlq"',
+      ),
+      options,
+    ).join("\n"),
+    /must create websocket-local-dlq/,
+  );
+  assert.match(
+    validateRealtimeQueueBootstrapContract(
+      bootstrap.replace('--attributes "${FILTER_POLICY_ATTRIBUTES}"', ""),
+      options,
+    ).join("\n"),
+    /must pass the FilterPolicy as a subscription attribute/,
+  );
+});
+
+test("stops every multi supervisord program as a process group", () => {
+  const supervisord = readFileSync(
+    resolve("server/docker/supervisord.conf"),
+    "utf8",
+  );
+  const options = { label: "multi supervisord" };
+  assert.deepEqual(
+    validateSupervisorStopGroupContract(supervisord, options),
+    [],
+  );
+
+  const orphaning = supervisord.replace(
+    /(\[program:auth-worker\][\s\S]*?)stopasgroup=true\n/,
+    "$1",
+  );
+  assert.notEqual(orphaning, supervisord);
+  assert.match(
+    validateSupervisorStopGroupContract(orphaning, options).join("\n"),
+    /\[program:auth-worker\] must set stopasgroup=true/,
+  );
+  assert.match(
+    validateSupervisorStopGroupContract(
+      supervisord.replace(
+        /(\[program:files\][\s\S]*?)killasgroup=true\n/,
+        "$1",
+      ),
+      options,
+    ).join("\n"),
+    /\[program:files\] must set killasgroup=true/,
+  );
+  assert.match(
+    validateSupervisorStopGroupContract(
+      supervisord.replace(
+        /(\[program:revisions-worker\][\s\S]*?)stopwaitsecs=\d+\n/,
+        "$1",
+      ),
+      options,
+    ).join("\n"),
+    /\[program:revisions-worker\] must set stopwaitsecs/,
+  );
+  assert.match(
+    validateSupervisorStopGroupContract(
+      "[supervisord]\nnodaemon=true\n",
+      options,
+    ).join("\n"),
+    /must define at least one \[program:\*\]/,
+  );
+});
+
+test("rejects a cleartext ws: source in the SPA connect-src", () => {
+  const conf = [
+    "server {",
+    "  add_header Content-Security-Policy \"default-src 'self'; connect-src 'self' https: http://localhost:* ws://$http_host wss:; frame-src 'self'\" always;",
+    "  add_header Content-Security-Policy \"default-src 'none'; connect-src 'none'\" always;",
+    "}",
+  ].join("\n");
+  const options = { label: "multi nginx" };
+  assert.deepEqual(
+    validateContentSecurityPolicyNginxContract(conf, options),
+    [],
+  );
+  const check = (mutated) =>
+    validateContentSecurityPolicyNginxContract(mutated, options).join("\n");
+  assert.match(
+    check(conf.replace("ws://$http_host wss:", "ws: wss:")),
+    /connect-src must not admit cleartext ws: to any host/,
+  );
+  assert.match(
+    check(conf.replace("ws://$http_host wss:", "ws://$http_host")),
+    /connect-src must keep wss: for TLS realtime/,
+  );
+  assert.match(
+    check(conf.replace(" ws://$http_host", "")),
+    /connect-src must admit the page's own host over ws:\/\/\$http_host/,
+  );
+  assert.match(
+    check(conf.replace("connect-src 'self' https:", "connect-src https:")),
+    /connect-src must keep 'self'/,
+  );
+  assert.match(
+    check("server {}"),
+    /must set a Content-Security-Policy with a connect-src for the SPA document/,
+  );
+});
+
+test("validates the shipped front doors and the LXC nginx template alike", () => {
+  for (const [file, label, proxyPass] of [
+    ["app/docker/nginx.conf", "multi nginx", "http://$srn_ws"],
+    ["app/docker/single/nginx.conf", "single nginx", "http://127.0.0.1:3000"],
+  ]) {
+    const source = readFileSync(resolve(file), "utf8");
+    assert.deepEqual(
+      validateWebSocketProxyNginxContract(source, { label, proxyPass }),
+      [],
+    );
+    assert.deepEqual(
+      validateContentSecurityPolicyNginxContract(source, { label }),
+      [],
+    );
+  }
+
+  const install = readFileSync(resolve("deploy/lxc/install.sh"), "utf8");
+  assert.deepEqual(validateLxcNginxContract(install), []);
+  assert.equal(lxcNginxSiteTemplate(install).includes("\\$"), false);
+  assert.match(
+    lxcNginxSiteTemplate(install),
+    /proxy_set_header Host \$http_host;/,
+  );
+
+  const portless = install.replace(
+    "proxy_set_header Host \\$http_host;",
+    "proxy_set_header Host \\$host;",
+  );
+  assert.notEqual(portless, install);
+  assert.match(
+    validateLxcNginxContract(portless).join("\n"),
+    /lxc nginx: \/sockets location must forward Host with its port/,
+  );
+  const cleartext = install.replace("ws://\\$http_host wss:", "ws: wss:");
+  assert.notEqual(cleartext, install);
+  assert.match(
+    validateLxcNginxContract(cleartext).join("\n"),
+    /lxc nginx: connect-src must not admit cleartext ws: to any host/,
+  );
+  assert.match(
+    validateLxcNginxContract("echo no nginx here\n").join("\n"),
+    /install_nginx_site heredoc/,
+  );
 });

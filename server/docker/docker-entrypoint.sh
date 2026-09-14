@@ -566,9 +566,30 @@ if [ -z "$PUBLIC_FILES_SERVER_URL" ]; then
   export PUBLIC_FILES_SERVER_URL=http://localhost:3125
 fi
 export API_GATEWAY_FILES_SERVER_URL=$PUBLIC_FILES_SERVER_URL
+# Container-INTERNAL files service URL for the FILES_V1 socket transport. The
+# gateway never advertises the lane without it (files then fall back to HTTP).
+# docker-compose.yml sets it too; this fallback covers a bare image run.
+if [ -z "${API_GATEWAY_WEBSOCKET_SYNC_FILES_URL:-}" ]; then
+  export API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http://localhost:$FILES_SERVER_PORT
+fi
+# SERVICE_PROXY_TYPE is deliberately NOT defaulted here: docker-compose.yml
+# passes API_GATEWAY_SERVICE_PROXY_TYPE through from the operator's .env and
+# empty keeps the HTTP proxies. Do not auto-enable gRPC from the secret.
 
 printenv | grep API_GATEWAY_ | sed 's/API_GATEWAY_//g' > /opt/server/packages/api-gateway/.env
 chmod 600 /opt/server/packages/api-gateway/.env
+
+# Every supervisord program inherits THIS shell's environment, and dotenv never
+# overrides a variable that is already set. A bare SQS_*/SNS_* left here would
+# therefore win over every per-service .env written above: all four workers
+# would poll the gateway's websocket queue instead of their own, swallowing
+# most realtime pushes and starving their own event streams. Each service
+# reads its queue from the <SERVICE>_SQS_* projection in its own .env (the
+# api-gateway from API_GATEWAY_SQS_*), so nothing needs a bare value: drop
+# every one of them before supervisord starts.
+for realtime_queue_variable in $(printenv | grep -oE '^(SQS|SNS)_[A-Za-z0-9_]*' | sort -u); do
+  unset "$realtime_queue_variable"
+done
 
 # Run supervisor
 

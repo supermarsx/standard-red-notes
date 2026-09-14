@@ -756,7 +756,11 @@ server {
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$connection_upgrade;
-    proxy_set_header Host \$host;
+    # \$http_host keeps the port (unlike \$host); the sync lane's same-origin
+    # check compares "<proto>://<Host>" with the browser's Origin.
+    proxy_set_header Host \$http_host;
+    # Never let a public client present the server-internal token-mint secret.
+    proxy_set_header X-Internal-Secret "";
     # This nginx is the LXC public trust boundary. Discard any client-supplied
     # forwarding chain instead of letting it influence Express request.ip.
     proxy_set_header X-Forwarded-For \$remote_addr;
@@ -799,7 +803,7 @@ server {
   }
 
   location / {
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'self' 'unsafe-hashes' 'sha256-nIvOnptGOkcUoTPVOYWoDnWbMyGMgUTK8pMzXf87azw='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws: wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'self' 'unsafe-hashes' 'sha256-nIvOnptGOkcUoTPVOYWoDnWbMyGMgUTK8pMzXf87azw='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://\$http_host wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
     try_files \$uri \$uri/ /index.html;
   }
 

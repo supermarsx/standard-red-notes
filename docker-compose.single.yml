@@ -74,8 +74,20 @@ services:
       # before enabling workflows or subscription pairing. The setup scripts
       # generate a correct local or production value.
       PUBLIC_URL: ${PUBLIC_URL:-}
-      # The HomeServer socket command plane is default-on but fails closed unless
-      # an exact public origin and external shared Redis state are configured.
+      # Realtime WebSocket gateway (in-process on the home-server's :3000). The
+      # legacy push/relay lane needs only the two secrets below (auto-generated
+      # and persisted when empty, like the others) and a same-origin browser;
+      # the worker sync lane (/sockets/sync) additionally needs the shared
+      # Redis state configured with REDIS_HOST until the in-process shared-state
+      # adapter lands. Empty values keep the home-server defaults.
+      WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-}
+      WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-}
+      WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-}
+      WEBSOCKET_MAX_CONNECTIONS_PER_USER: ${WEBSOCKET_MAX_CONNECTIONS_PER_USER:-}
+      COLLABORATION_CAPABILITY_TTL_SECONDS: ${COLLABORATION_CAPABILITY_TTL_SECONDS:-}
+      # Optional per-deployment prefix for the realtime Redis channels/keys so two
+      # stacks sharing one Redis do not cross-talk (see docker-compose.yml).
+      WEBSOCKET_REDIS_NAMESPACE: ${WEBSOCKET_REDIS_NAMESPACE:-}
       WEBSOCKET_SYNC_ENABLED: ${WEBSOCKET_SYNC_ENABLED:-true}
       WEBSOCKET_SYNC_ALLOWED_ORIGINS: ${WEBSOCKET_SYNC_ALLOWED_ORIGINS:-}
       WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER: ${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER:-4}

@@ -61,6 +61,46 @@ const WEBSOCKET_SYNC_ENV_DEFAULTS = Object.freeze({
 });
 const FILE_DOWNLOAD_DEADLINE_ENV_KEY = "FILE_DOWNLOAD_DEADLINE_MS";
 const FILE_DOWNLOAD_DEADLINE_DEFAULT = "30000";
+// The in-process websocket gateway reads its queue from the API_GATEWAY_SQS_*
+// projection the multi entrypoint writes into api-gateway/.env. A BARE SQS_*/
+// SNS_* key in x-server-env is inherited by every supervisord program and, since
+// dotenv never overrides an inherited value, every worker would poll the
+// gateway's queue instead of its own (t90 B1/B2).
+const API_GATEWAY_SQS_ENV_KEYS = Object.freeze([
+  "API_GATEWAY_SQS_QUEUE_URL",
+  "API_GATEWAY_SQS_ENDPOINT",
+  "API_GATEWAY_SQS_AWS_REGION",
+  "API_GATEWAY_SQS_ACCESS_KEY_ID",
+  "API_GATEWAY_SQS_SECRET_ACCESS_KEY",
+]);
+const BARE_REALTIME_QUEUE_ENV_PATTERN = /^(?:SQS|SNS)_/;
+const REALTIME_QUEUE_UNSET_LOOP_PATTERN =
+  /for\s+(\w+)\s+in\s+\$\(\s*printenv\s*\|\s*grep\s+-oE\s+'\^\(SQS\|SNS\)_\[A-Za-z0-9_\]\*'[^)]*\)\s*;\s*do\s+unset\s+"\$\1"\s*;?\s*done/;
+// Realtime switches every topology must pass through from the operator's .env.
+// Multi: the gRPC proxy switch (empty = HTTP proxies; never forced by the
+// entrypoint), the container-internal files URL behind FILES_V1, and the
+// per-deployment Redis namespace. Single: the legacy-lane tunables and both
+// websocket secrets that were previously unreachable from .env.single.
+export const MULTI_REALTIME_SWITCH_ENV = Object.freeze({
+  API_GATEWAY_SERVICE_PROXY_TYPE: "${SERVICE_PROXY_TYPE:-}",
+  API_GATEWAY_WEBSOCKET_SYNC_FILES_URL:
+    "${WEBSOCKET_SYNC_FILES_URL:-http://localhost:3104}",
+  WEBSOCKET_REDIS_NAMESPACE: "${WEBSOCKET_REDIS_NAMESPACE:-}",
+});
+export const SINGLE_REALTIME_SWITCH_ENV = Object.freeze({
+  WEBSOCKET_GATEWAY_INTERNAL_SECRET: "${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-}",
+  WEB_SOCKET_CONNECTION_TOKEN_SECRET: "${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-}",
+  WEB_SOCKET_CONNECTION_TOKEN_TTL: "${WEB_SOCKET_CONNECTION_TOKEN_TTL:-}",
+  WEBSOCKET_MAX_CONNECTIONS_PER_USER: "${WEBSOCKET_MAX_CONNECTIONS_PER_USER:-}",
+  COLLABORATION_CAPABILITY_TTL_SECONDS:
+    "${COLLABORATION_CAPABILITY_TTL_SECONDS:-}",
+  WEBSOCKET_REDIS_NAMESPACE: "${WEBSOCKET_REDIS_NAMESPACE:-}",
+});
+// The gateway handles exactly these two SNS event types; the emulator bootstrap
+// subscribes websocket-local-queue with this FilterPolicy so the other ~36
+// types on the syncing-server/auth topics stop occupying its batches.
+const WEBSOCKET_QUEUE_FILTER_POLICY =
+  '{"event":["WEB_SOCKET_MESSAGE_REQUESTED","INVITE_REALTIME_INVALIDATION_REQUESTED"]}';
 const RUNTIME_LOG_PACKAGE_PREFIXES = Object.freeze([
   "API_GATEWAY",
   "AUTH_SERVER",
@@ -1098,6 +1138,200 @@ export function validateReadinessBootContract({
   return errors;
 }
 
+function serverEnvAnchorBlock(composeSource) {
+  const match = String(composeSource).match(
+    /^x-server-env:[^\n]*\n((?:[ \t#][^\n]*\n|\n)*)/m,
+  );
+  return match ? match[1] : undefined;
+}
+
+export function validateRealtimeQueueIsolationContract({
+  multiConfig,
+  multiComposeSource,
+  multiEntrypointSource,
+}) {
+  const errors = [];
+  const service = multiConfig?.services?.server;
+  if (!service) {
+    errors.push("multi compose: missing server service");
+  } else {
+    const environment = environmentMap(service.environment);
+    for (const key of Object.keys(environment).sort()) {
+      if (BARE_REALTIME_QUEUE_ENV_PATTERN.test(key)) {
+        errors.push(
+          `multi compose server: must not carry the bare ${key} (every supervisord worker would inherit the gateway's queue)`,
+        );
+      }
+    }
+    for (const key of API_GATEWAY_SQS_ENV_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(environment, key)) {
+        errors.push(`multi compose server: must propagate ${key}`);
+      }
+    }
+  }
+
+  const block = serverEnvAnchorBlock(multiComposeSource);
+  if (block === undefined) {
+    errors.push("multi compose: must define the x-server-env anchor");
+  } else {
+    for (const match of block.matchAll(
+      /^[ \t]+((?:SQS|SNS)_[A-Za-z0-9_]*)\s*:/gm,
+    )) {
+      errors.push(
+        `multi compose: x-server-env must not declare the bare ${match[1]}`,
+      );
+    }
+    for (const key of API_GATEWAY_SQS_ENV_KEYS) {
+      const bare = key.slice("API_GATEWAY_".length);
+      if (!block.includes(`${key}: \${${bare}:-`)) {
+        errors.push(
+          `multi compose: ${key} must stay operator-overridable through the bare \${${bare}} interpolation`,
+        );
+      }
+    }
+  }
+
+  const entrypoint = String(multiEntrypointSource);
+  const loop = entrypoint.match(REALTIME_QUEUE_UNSET_LOOP_PATTERN);
+  const supervisord = entrypoint.search(/^[ \t]*supervisord\s+-c\s+/m);
+  if (!loop) {
+    errors.push(
+      "multi entrypoint: must unset every bare SQS_*/SNS_* variable before starting supervisord",
+    );
+  } else if (supervisord >= 0 && loop.index > supervisord) {
+    errors.push(
+      "multi entrypoint: the bare SQS_*/SNS_* unset loop must run before supervisord starts",
+    );
+  }
+  return errors;
+}
+
+export function validateRealtimeSwitchComposeContract(
+  config,
+  composeSource,
+  { serviceName, label, switches, entrypointSource },
+) {
+  const service = config?.services?.[serviceName];
+  if (!service) {
+    return [`${label}: missing ${serviceName} service`];
+  }
+
+  const errors = [];
+  const environment = environmentMap(service.environment);
+  const source = String(composeSource);
+  for (const [key, interpolation] of Object.entries(switches)) {
+    if (!Object.prototype.hasOwnProperty.call(environment, key)) {
+      errors.push(`${label} ${serviceName}: must propagate ${key}`);
+    }
+    if (!source.includes(`${key}: ${interpolation}`)) {
+      errors.push(
+        `${label}: ${key} must remain operator-overridable as ${interpolation}`,
+      );
+    }
+  }
+
+  if (entrypointSource !== undefined) {
+    const entrypoint = String(entrypointSource);
+    const fallback = entrypoint.search(
+      /^[ \t]*export\s+API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http:\/\/localhost:\$FILES_SERVER_PORT\s*$/m,
+    );
+    const projection = entrypoint.search(
+      /printenv \| grep API_GATEWAY_ \| sed 's\/API_GATEWAY_\/\/g' > \/opt\/server\/packages\/api-gateway\/\.env/,
+    );
+    if (fallback < 0) {
+      errors.push(
+        `${label} entrypoint: must default API_GATEWAY_WEBSOCKET_SYNC_FILES_URL to the internal files service`,
+      );
+    } else if (projection >= 0 && fallback > projection) {
+      errors.push(
+        `${label} entrypoint: the API_GATEWAY_WEBSOCKET_SYNC_FILES_URL default must precede the api-gateway .env projection`,
+      );
+    }
+    if (/^[ \t]*export\s+API_GATEWAY_SERVICE_PROXY_TYPE=/m.test(entrypoint)) {
+      errors.push(
+        `${label} entrypoint: must not force SERVICE_PROXY_TYPE (the Compose passthrough owns it)`,
+      );
+    }
+  }
+  return errors;
+}
+
+export function validateRealtimeQueueBootstrapContract(
+  bootstrapSource,
+  { label },
+) {
+  const source = String(bootstrapSource);
+  const errors = [];
+  if (
+    !source.includes(
+      `WEBSOCKET_QUEUE_FILTER_POLICY='${WEBSOCKET_QUEUE_FILTER_POLICY}'`,
+    )
+  ) {
+    errors.push(
+      `${label}: must define WEBSOCKET_QUEUE_FILTER_POLICY as exactly the two gateway event types`,
+    );
+  }
+  if (!/--attributes "\$\{FILTER_POLICY_ATTRIBUTES\}"/.test(source)) {
+    errors.push(
+      `${label}: link_queue_and_topic_filtered must pass the FilterPolicy as a subscription attribute`,
+    );
+  }
+  for (const topic of ["SYNCING_SERVER_TOPIC_ARN", "AUTH_TOPIC_ARN"]) {
+    if (
+      !source.includes(
+        `link_queue_and_topic_filtered $${topic} $WEBSOCKET_QUEUE_ARN "$WEBSOCKET_QUEUE_FILTER_POLICY"`,
+      )
+    ) {
+      errors.push(
+        `${label}: must subscribe websocket-local-queue to ${topic} through the FilterPolicy`,
+      );
+    }
+  }
+  if (/link_queue_and_topic \$\w+ \$WEBSOCKET_QUEUE_ARN\b/.test(source)) {
+    errors.push(
+      `${label}: websocket-local-queue must not carry an unfiltered subscription`,
+    );
+  }
+  if (!/QUEUE_NAME="websocket-local-dlq"/.test(source)) {
+    errors.push(`${label}: must create websocket-local-dlq`);
+  }
+  if (
+    !/set_queue_redrive_policy \$WEBSOCKET_QUEUE_URL \$WEBSOCKET_DLQ_ARN 5\b/.test(
+      source,
+    )
+  ) {
+    errors.push(
+      `${label}: must park unacknowledged websocket messages in websocket-local-dlq after 5 receives`,
+    );
+  }
+  return errors;
+}
+
+export function validateSupervisorStopGroupContract(source, { label }) {
+  const programs = [
+    ...String(source).matchAll(
+      /^\[program:([^\]]+)\]\n([\s\S]*?)(?=^\[|$(?![\s\S]))/gm,
+    ),
+  ];
+  if (programs.length === 0) {
+    return [`${label}: must define at least one [program:*]`];
+  }
+  const errors = [];
+  for (const [, name, body] of programs) {
+    for (const key of ["stopasgroup", "killasgroup"]) {
+      if (!new RegExp(`^${key}=true[ \\t]*$`, "m").test(body)) {
+        errors.push(
+          `${label}: [program:${name}] must set ${key}=true so a stop reaches the yarn-spawned node grandchild`,
+        );
+      }
+    }
+    if (!/^stopwaitsecs=\d+[ \t]*$/m.test(body)) {
+      errors.push(`${label}: [program:${name}] must set stopwaitsecs`);
+    }
+  }
+  return errors;
+}
+
 function exactLocationBody(nginxConfig, route) {
   const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [
@@ -1156,7 +1390,16 @@ export function validateWebSocketProxyNginxContract(
       /\bproxy_set_header\s+Connection\s+\$connection_upgrade\s*;/,
       body,
     ],
-    ["forward Host", /\bproxy_set_header\s+Host\s+\$host\s*;/, body],
+    [
+      "forward Host with its port",
+      /\bproxy_set_header\s+Host\s+\$http_host\s*;/,
+      body,
+    ],
+    [
+      "blank the X-Internal-Secret header",
+      /\bproxy_set_header\s+X-Internal-Secret\s+""\s*;/,
+      body,
+    ],
     ["retain long-lived reads", /\bproxy_read_timeout\s+86400s\s*;/, body],
     ["retain long-lived writes", /\bproxy_send_timeout\s+86400s\s*;/, body],
   ];
@@ -1166,6 +1409,80 @@ export function validateWebSocketProxyNginxContract(
     }
   }
   return errors;
+}
+
+function contentSecurityPolicyDirective(policy, name) {
+  return policy
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.split(/\s+/))
+    .find(([directive]) => directive === name);
+}
+
+export function validateContentSecurityPolicyNginxContract(
+  nginxConfig,
+  { label },
+) {
+  const policies = [
+    ...String(nginxConfig).matchAll(
+      /add_header\s+Content-Security-Policy\s+"([^"]*)"/g,
+    ),
+  ].map((match) => match[1]);
+  const connectSources = policies
+    .map((policy) => contentSecurityPolicyDirective(policy, "connect-src"))
+    .filter((directive) => directive && !directive.slice(1).includes("'none'"))
+    .map((directive) => directive.slice(1));
+  if (connectSources.length === 0) {
+    return [
+      `${label}: must set a Content-Security-Policy with a connect-src for the SPA document`,
+    ];
+  }
+  const errors = [];
+  for (const sources of connectSources) {
+    if (!sources.includes("'self'")) {
+      errors.push(`${label}: connect-src must keep 'self'`);
+    }
+    if (!sources.includes("wss:")) {
+      errors.push(`${label}: connect-src must keep wss: for TLS realtime`);
+    }
+    if (!sources.includes("ws://$http_host")) {
+      errors.push(
+        `${label}: connect-src must admit the page's own host over ws://$http_host (plain-http self-hosts; not every browser lets 'self' match ws:)`,
+      );
+    }
+    if (sources.includes("ws:")) {
+      errors.push(
+        `${label}: connect-src must not admit cleartext ws: to any host`,
+      );
+    }
+  }
+  return errors;
+}
+
+export function lxcNginxSiteTemplate(installScriptSource) {
+  const match = String(installScriptSource).match(
+    /install_nginx_site\(\)\s*\{[\s\S]*?cat > "\$\{conf\}" <<EOF\n([\s\S]*?)\nEOF\n/,
+  );
+  return match ? match[1].replace(/\\\$/g, "$") : undefined;
+}
+
+export function validateLxcNginxContract(installScriptSource) {
+  const template = lxcNginxSiteTemplate(installScriptSource);
+  if (template === undefined) {
+    return [
+      "lxc nginx: install.sh must render the nginx site from its install_nginx_site heredoc",
+    ];
+  }
+  return [
+    ...validateWebSocketProxyNginxContract(template, {
+      label: "lxc nginx",
+      proxyPass: "http://127.0.0.1:3000",
+    }),
+    ...validateContentSecurityPolicyNginxContract(template, {
+      label: "lxc nginx",
+    }),
+  ];
 }
 
 export function validatePairingCallbackNginxContract(
@@ -1823,6 +2140,14 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     ),
     "utf8",
   );
+  const lxcInstallScript = readFileSync(
+    path.join(repositoryRoot, "deploy", "lxc", "install.sh"),
+    "utf8",
+  );
+  const emulatorBootstrap = readFileSync(
+    path.join(repositoryRoot, "server", "docker", "localstack_bootstrap.sh"),
+    "utf8",
+  );
   const multiSupervisorSource = readFileSync(
     path.join(repositoryRoot, "server", "docker", "supervisord.conf"),
     "utf8",
@@ -1981,6 +2306,39 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       label: "single nginx",
       proxyPass: "http://127.0.0.1:3000",
     }),
+    ...validateRealtimeQueueIsolationContract({
+      multiConfig,
+      multiComposeSource,
+      multiEntrypointSource: multiEntrypoint,
+    }),
+    ...validateRealtimeSwitchComposeContract(multiConfig, multiComposeSource, {
+      serviceName: "server",
+      label: "multi compose",
+      switches: MULTI_REALTIME_SWITCH_ENV,
+      entrypointSource: multiEntrypoint,
+    }),
+    ...validateRealtimeSwitchComposeContract(
+      singleConfig,
+      singleComposeSource,
+      {
+        serviceName: "app",
+        label: "single compose",
+        switches: SINGLE_REALTIME_SWITCH_ENV,
+      },
+    ),
+    ...validateRealtimeQueueBootstrapContract(emulatorBootstrap, {
+      label: "emulator bootstrap",
+    }),
+    ...validateSupervisorStopGroupContract(multiSupervisorSource, {
+      label: "multi supervisord",
+    }),
+    ...validateContentSecurityPolicyNginxContract(multiNginx, {
+      label: "multi nginx",
+    }),
+    ...validateContentSecurityPolicyNginxContract(singleNginx, {
+      label: "single nginx",
+    }),
+    ...validateLxcNginxContract(lxcInstallScript),
   );
 
   for (const [service, image] of args.images) {

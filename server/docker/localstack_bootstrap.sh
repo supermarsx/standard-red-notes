@@ -38,6 +38,31 @@ link_queue_and_topic() {
   awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sns subscribe --topic-arn ${TOPIC_ARN_TO_LINK} --protocol sqs --notification-endpoint ${QUEUE_ARN_TO_LINK}
 }
 
+# Subscribe with an SNS FilterPolicy so the queue receives ONLY the listed
+# event types (matched against the `event` message attribute every
+# SNSDomainEventPublisher stamps). Attribute values are JSON strings, hence the
+# nested encoding.
+link_queue_and_topic_filtered() {
+  local TOPIC_ARN_TO_LINK=$1
+  local QUEUE_ARN_TO_LINK=$2
+  local FILTER_POLICY=$3
+  local FILTER_POLICY_ATTRIBUTES
+  FILTER_POLICY_ATTRIBUTES=$(printf '{"FilterPolicy":"%s"}' "${FILTER_POLICY//\"/\\\"}")
+  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sns subscribe --topic-arn ${TOPIC_ARN_TO_LINK} --protocol sqs --notification-endpoint ${QUEUE_ARN_TO_LINK} --attributes "${FILTER_POLICY_ATTRIBUTES}"
+}
+
+# Point a queue's redrive policy at a dead-letter queue: a message the consumer
+# refuses to acknowledge MAX_RECEIVE_COUNT times is parked there instead of
+# being redelivered forever every visibility timeout.
+set_queue_redrive_policy() {
+  local QUEUE_URL_TO_CONFIGURE=$1
+  local DEAD_LETTER_QUEUE_ARN=$2
+  local MAX_RECEIVE_COUNT=$3
+  local REDRIVE_ATTRIBUTES
+  REDRIVE_ATTRIBUTES=$(printf '{"RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"%s\\",\\"maxReceiveCount\\":\\"%s\\"}"}' "${DEAD_LETTER_QUEUE_ARN}" "${MAX_RECEIVE_COUNT}")
+  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sqs set-queue-attributes --queue-url ${QUEUE_URL_TO_CONFIGURE} --attributes "${REDRIVE_ATTRIBUTES}"
+}
+
 get_queue_arn_from_name() {
   local QUEUE_NAME=$1
   echo "arn:aws:sqs:${AWS_REGION}:${LOCALSTACK_DUMMY_ID}:$QUEUE_NAME"
@@ -215,23 +240,44 @@ QUEUE_URL=$(create_queue ${QUEUE_NAME})
 echo "created queue: $QUEUE_URL"
 SCHEDULER_QUEUE_ARN=$(get_queue_arn_from_name $QUEUE_NAME)
 
-# Queue consumed by the self-hosted websocket-gateway. Subscribed to the
-# syncing-server topic so it receives WEB_SOCKET_MESSAGE_REQUESTED (item
-# changes) and to the auth topic for shared-vault invite/messages.
+# Queue consumed by the in-process websocket gateway (api-gateway). Subscribed
+# to the syncing-server topic for WEB_SOCKET_MESSAGE_REQUESTED (item changes)
+# and to the auth topic for shared-vault invites/messages, MFA and roles pushes
+# and INVITE_REALTIME_INVALIDATION_REQUESTED. Both subscriptions carry a
+# FilterPolicy: the gateway handles exactly these two event types, so the
+# other ~36 types published on those topics no longer occupy its batches.
+# Messages the gateway refuses to acknowledge (an invite event that fails the
+# gateway-side validator) are parked in websocket-local-dlq after 5 receives
+# instead of being redelivered forever.
+WEBSOCKET_QUEUE_FILTER_POLICY='{"event":["WEB_SOCKET_MESSAGE_REQUESTED","INVITE_REALTIME_INVALIDATION_REQUESTED"]}'
+
+QUEUE_NAME="websocket-local-dlq"
+
+echo "creating queue $QUEUE_NAME"
+QUEUE_URL=$(create_queue ${QUEUE_NAME})
+echo "created queue: $QUEUE_URL"
+WEBSOCKET_DLQ_ARN=$(get_queue_arn_from_name $QUEUE_NAME)
+
 QUEUE_NAME="websocket-local-queue"
 
 echo "creating queue $QUEUE_NAME"
 QUEUE_URL=$(create_queue ${QUEUE_NAME})
 echo "created queue: $QUEUE_URL"
 WEBSOCKET_QUEUE_ARN=$(get_queue_arn_from_name $QUEUE_NAME)
+WEBSOCKET_QUEUE_URL="http://${LOCALSTACK_HOST}:4566/${LOCALSTACK_DUMMY_ID}/${QUEUE_NAME}"
 
-echo "linking topic $SYNCING_SERVER_TOPIC_ARN to queue $WEBSOCKET_QUEUE_ARN"
-LINKING_RESULT=$(link_queue_and_topic $SYNCING_SERVER_TOPIC_ARN $WEBSOCKET_QUEUE_ARN)
+echo "setting redrive policy of queue $WEBSOCKET_QUEUE_ARN to $WEBSOCKET_DLQ_ARN (maxReceiveCount 5)"
+REDRIVE_RESULT=$(set_queue_redrive_policy $WEBSOCKET_QUEUE_URL $WEBSOCKET_DLQ_ARN 5)
+echo "redrive done:"
+echo "$REDRIVE_RESULT"
+
+echo "linking topic $SYNCING_SERVER_TOPIC_ARN to queue $WEBSOCKET_QUEUE_ARN (filtered: $WEBSOCKET_QUEUE_FILTER_POLICY)"
+LINKING_RESULT=$(link_queue_and_topic_filtered $SYNCING_SERVER_TOPIC_ARN $WEBSOCKET_QUEUE_ARN "$WEBSOCKET_QUEUE_FILTER_POLICY")
 echo "linking done:"
 echo "$LINKING_RESULT"
 
-echo "linking topic $AUTH_TOPIC_ARN to queue $WEBSOCKET_QUEUE_ARN"
-LINKING_RESULT=$(link_queue_and_topic $AUTH_TOPIC_ARN $WEBSOCKET_QUEUE_ARN)
+echo "linking topic $AUTH_TOPIC_ARN to queue $WEBSOCKET_QUEUE_ARN (filtered: $WEBSOCKET_QUEUE_FILTER_POLICY)"
+LINKING_RESULT=$(link_queue_and_topic_filtered $AUTH_TOPIC_ARN $WEBSOCKET_QUEUE_ARN "$WEBSOCKET_QUEUE_FILTER_POLICY")
 echo "linking done:"
 echo "$LINKING_RESULT"
 
