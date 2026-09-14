@@ -2,9 +2,13 @@ import { type IncomingMessage, type Server as HttpServer, type ServerResponse } 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import {
+  classifyConnectionTokenError,
   decodeCrossServiceToken,
   InMemorySyncAuthTicketStore,
+  MAX_CONNECTIONS_PER_USER_CEILING,
   mintConnectionToken,
+  parseConnectionTokenTtl,
+  parseRedisNamespace,
   verifyConnectionToken,
   verifyRoomCapabilityWithExpiry,
   type SyncAuthTicketStore,
@@ -38,7 +42,7 @@ import type { SyncFilesAdapter } from './filesSession.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
 import { InviteRealtimeDomainEventHandler } from './inviteEventDomainEventHandler.js'
 import type { InviteEventOutboxDispatcher } from './inviteEventOutbox.js'
-import { MAX_SYNC_FRAME_BYTES, SYNC_PROTOCOL_VERSION, isSyncDeviceId } from './syncProtocol.js'
+import { MAX_SYNC_FRAME_BYTES, SYNC_PROTOCOL_VERSION } from './syncProtocol.js'
 
 // ---------------------------------------------------------------------------
 // Shared gateway logic.
@@ -102,6 +106,12 @@ export const DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLim
 })
 
 export const SYNC_SOCKET_PATH = '/sockets/sync'
+/**
+ * The only path the legacy `?authToken=` lane upgrades on. It used to accept
+ * any path that was not `/sockets/sync` (a probe observed `/?authToken=`),
+ * which made the front door's path-based routing meaningless for it.
+ */
+export const LEGACY_SOCKET_PATH = '/sockets'
 export const SYNC_CAPABILITY_ID = 'ws-sync' as const
 
 export interface SyncCapability {
@@ -123,7 +133,13 @@ export interface SyncTicketResponse {
 }
 
 export interface SyncGatewayOptions {
-  /** Dynamic kill switch, checked during negotiation and before every frame. */
+  /**
+   * Kill switch, consulted during negotiation and before every frame. Both
+   * hosts evaluate WEBSOCKET_SYNC_ENABLED once at boot and pass a constant
+   * closure, so in production this is NOT a runtime switch: flipping the
+   * setting takes effect on the next process start. It stays a function so a
+   * composition root that does hold a live setting can supply one.
+   */
   isEnabled: () => boolean
   /** Exact browser origins allowed to establish `/sockets/sync`. */
   allowedOrigins: readonly string[]
@@ -138,6 +154,17 @@ export interface SyncGatewayOptions {
   backend: SyncCommandBackendAdapter
   /** Optional authenticated control-plane operation negotiated on socket AUTH. */
   collaborationAuthorization?: SyncCollaborationAuthorizationAdapter
+  /**
+   * Resolves the room's CURRENT epoch during collaboration epoch discovery.
+   * The authorization adapter answers discovery with the deterministic initial
+   * epoch; once a room has been used and released, the fleet-shared room state
+   * holds a rotated epoch, and a grant bound to the initial one is refused
+   * forever. When this returns a value it replaces `roomEpoch` in both the
+   * discovery record and the frame sent to the client, so the one-use
+   * challenge binding is preserved. Undefined, a rejection or a slow answer
+   * (bounded by the handler) keeps the initial epoch.
+   */
+  collaborationRoomEpochResolver?: (room: string, collaborationSecurityEpoch: string) => Promise<string | undefined>
   /** Optional same-origin authenticated API RPC adapter. */
   apiRpc?: SyncApiRpcAdapter
   /** Fleet-shared durable invitation/membership/application-state stream. */
@@ -211,6 +238,13 @@ export type SyncUnavailabilityReason =
    * STREAM_ASSISTANT and FILES_V1 down with it, none of which depend on it.
    */
   | 'durable-backend-unavailable'
+  /**
+   * Retained as a diagnostic code but NO LONGER produced by the lane gate.
+   * The invite availability bus is a dependency of `INVITE_EVENTS` alone,
+   * which the command handler already withholds per socket while the bus is
+   * not ready. Gating the whole lane on it meant a client that connected
+   * during a 1-2 s Redis reconnect window was HTTP-only for the session.
+   */
   | 'invite-event-store-unavailable'
 
 export interface SyncGatewayAccess {
@@ -222,6 +256,34 @@ export interface SyncGatewayAccess {
    * precondition, not just the first, so one log line resolves the whole gate.
    */
   unavailabilityReasons?(): readonly SyncUnavailabilityReason[]
+}
+
+/**
+ * The preconditions that describe a fleet-shared store which has not (yet)
+ * reported ready: a boot or a Redis reconnect window rather than a
+ * configuration decision. A refusal made only of these is transient, and the
+ * ticket endpoint says so (503 + Retry-After) instead of letting the client
+ * cache "sync disabled" for a minute.
+ */
+export const SYNC_STORE_READINESS_REASONS: ReadonlySet<SyncUnavailabilityReason> = new Set<SyncUnavailabilityReason>([
+  'ticket-store-unavailable',
+  'command-lease-store-unavailable',
+  'socket-budget-store-unavailable',
+  'invite-event-store-unavailable',
+])
+
+/** Thrown by `SyncGatewayAccess.issueTicket` so the HTTP layer can name the cause. */
+export class SyncUnavailableError extends Error {
+  readonly reasons: readonly SyncUnavailabilityReason[]
+  /** True when EVERY unmet reason is a store-readiness one (see above). */
+  readonly transient: boolean
+
+  constructor(reasons: readonly SyncUnavailabilityReason[], message = 'WebSocket sync is unavailable.') {
+    super(message)
+    this.name = 'SyncUnavailableError'
+    this.reasons = [...reasons]
+    this.transient = reasons.length > 0 && reasons.every((reason) => SYNC_STORE_READINESS_REASONS.has(reason))
+  }
 }
 
 export interface WebSocketRelayBacklogLimits {
@@ -374,6 +436,13 @@ export interface GatewayConfig {
   authJwtSecret: string
   redisHost: string
   redisPort: number
+  /**
+   * WEBSOCKET_REDIS_NAMESPACE. When set (`^[a-z0-9:_-]{1,64}$`) it prefixes the
+   * push channel, the collaboration relay channel and keys, the SQS dedup keys
+   * and the invite stream keys as `<namespace>:<original>`. Empty means the
+   * names a deployment has always used, so a rolling upgrade keeps talking.
+   */
+  redisNamespace?: string
   /** Optional operator override; attach-level override wins (primarily tests). */
   maxConnectionsPerUser?: number
   /** SQS source; when queueUrl is unset the consumer is not started. */
@@ -395,7 +464,6 @@ export interface GatewayConfig {
  */
 export interface RouteRegistrar {
   post(path: string, handler: (...args: any[]) => void): unknown
-  get?(path: string, handler: (...args: any[]) => void): unknown
 }
 
 export interface AttachOptions {
@@ -441,14 +509,35 @@ export interface AttachOptions {
   sync?: SyncGatewayOptions
 }
 
+/**
+ * What the realtime path can say about itself, for `/healthcheck/readiness`
+ * (informational, never gating: a Redis blip must not restart the container)
+ * and the admin sync diagnostics. Nothing in here is secret or per-user.
+ */
+export interface GatewayHealth {
+  attached: true
+  /** Which push transport this deployment attached: Redis pub/sub, an in-process bridge, or none. */
+  pushBridge: 'redis' | 'in-process' | 'none'
+  /** The push subscriber's client currently reports `ready`. */
+  pushBridgeReady: boolean
+  /** The SQS consumer loop was started and has not been stopped. */
+  sqsConsumerRunning: boolean
+  /** The collaboration relay subscription is established (fleet-wide relay works). */
+  collaborationRelayHealthy: boolean
+  /** Whether `/sockets/sync` would admit a client right now. */
+  syncLane: 'up' | 'down'
+  /** Push messages handed to the local connection registry since attach. */
+  pushesDispatched: number
+}
+
 export interface AttachedGateway {
   registry: ConnectionRegistry<WebSocket>
   rooms: RoomRegistry<WebSocket>
   /** POST /sockets/tokens handler, exposed for callers that own their own http server. */
   handleMintToken(req: IncomingMessage, res: ServerResponse): void
-  handleSyncTicket(req: IncomingMessage, res: ServerResponse): void
-  handleSyncCapabilities(_req: IncomingMessage, res: ServerResponse): void
   sync: SyncGatewayAccess
+  /** A point-in-time, side-effect-free snapshot; cheap enough to call per readiness probe. */
+  health(): GatewayHealth
   /** Tear down the ws server, heartbeat, redis bridge and SQS consumer. */
   stop(): Promise<void>
 }
@@ -483,7 +572,9 @@ function buildMintTokenHandler(
         return
       }
       const token = mintConnectionToken(identity, config.connectionTokenSecret, config.connectionTokenTtl)
-      logger.info(`[token] minted (x-auth) user=${identity.userUuid}`)
+      // No user identifier on the success line: every legacy reconnect on
+      // every device would otherwise write it three times at info.
+      logger.info('[token] minted (x-auth)')
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ token }))
       return
@@ -497,6 +588,22 @@ function buildMintTokenHandler(
       )
       res.writeHead(503, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'internal token minting is disabled (no internal secret configured)' }))
+      return
+    }
+    // The internal path mints a connection token for ANY user the body names.
+    // It is meant for a process on this host, yet every front door proxies
+    // `/sockets` straight through, so a holder of the secret could open a
+    // legacy socket as anyone from the internet. A proxied request always
+    // carries X-Forwarded-For (both shipped nginx configs set it), and a
+    // direct one arrives from a non-loopback peer; both are refused before
+    // the secret is even compared. Fails closed when the peer is unknown.
+    if (!isDirectLoopbackRequest(req)) {
+      logRefusal(
+        '[token] mint refused: the internal-secret path is only accepted from a direct loopback caller (request was proxied or remote)',
+        'mint:internal-secret-proxied',
+      )
+      res.writeHead(403, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'forbidden' }))
       return
     }
     const provided = req.headers['x-internal-secret']
@@ -559,14 +666,26 @@ function mintFromBody(
     return
   }
   const token = mintConnectionToken({ userUuid, sessionUuid }, config.connectionTokenSecret, config.connectionTokenTtl)
-  logger.info(`[token] minted user=${userUuid}`)
+  logger.info('[token] minted (internal)')
   res.writeHead(200, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ token }))
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' })
-  res.end(JSON.stringify(body))
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+
+/**
+ * True only for a request that reached this process directly from the local
+ * machine: no X-Forwarded-For (set by every reverse proxy in front of the
+ * gateway) and a loopback peer address. An unknown peer counts as remote.
+ */
+function isDirectLoopbackRequest(req: IncomingMessage): boolean {
+  if (req.headers['x-forwarded-for'] !== undefined) {
+    return false
+  }
+  const remoteAddress = (req.socket as { remoteAddress?: string } | undefined)?.remoteAddress
+  return (
+    typeof remoteAddress === 'string' && (LOOPBACK_ADDRESSES.has(remoteAddress) || remoteAddress.startsWith('127.'))
+  )
 }
 
 export type RefusalLogger = (message: string, throttleKey: string, metadata?: Record<string, unknown>) => void
@@ -590,55 +709,6 @@ export function createRefusalLogger(logger: Logger, throttle: LogThrottle = crea
     }
     logger.warn(message, JSON.stringify({ ...(metadata ?? {}), suppressedSinceLastLog: decision.suppressed }))
   }
-}
-
-function readBoundedJsonBody(
-  req: IncomingMessage,
-  maximumBytes = 16_384,
-): Promise<Record<string, unknown> | undefined> {
-  const parsedBody = (req as { body?: unknown }).body
-  if (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)) {
-    return Promise.resolve(parsedBody as Record<string, unknown>)
-  }
-  return new Promise((resolve) => {
-    let bytes = 0
-    let body = ''
-    let settled = false
-    req.on('data', (chunk: Buffer | string) => {
-      if (settled) {
-        return
-      }
-      bytes += Buffer.byteLength(chunk)
-      if (bytes > maximumBytes) {
-        settled = true
-        resolve(undefined)
-        return
-      }
-      body += chunk.toString()
-    })
-    req.on('end', () => {
-      if (settled) {
-        return
-      }
-      settled = true
-      try {
-        const parsed = body ? (JSON.parse(body) as unknown) : {}
-        resolve(
-          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? (parsed as Record<string, unknown>)
-            : undefined,
-        )
-      } catch {
-        resolve(undefined)
-      }
-    })
-    req.on('error', () => {
-      if (!settled) {
-        settled = true
-        resolve(undefined)
-      }
-    })
-  })
 }
 
 function normalizeAllowedOrigins(origins: readonly string[]): ReadonlySet<string> {
@@ -762,10 +832,18 @@ export function defaultRoomJoinAuthorizer(connectionTokenSecret: string): RoomJo
 }
 
 export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
-  const { httpServer, config, logger, app, authorizeRoomJoin } = opts
+  const { httpServer, logger, app, authorizeRoomJoin } = opts
 
-  if (!config.connectionTokenSecret) {
+  if (!opts.config.connectionTokenSecret) {
     throw new Error('WEB_SOCKET_CONNECTION_TOKEN_SECRET is required (refusing to attach with an empty signing secret).')
+  }
+  // Belt and braces: the hosts parse these too, but a config that reached
+  // here unparsed would mint 0 s tokens ("60") or 500 on every mint ("abc")
+  // while readiness stayed green. Normalise once and mint from the result.
+  const config: GatewayConfig = {
+    ...opts.config,
+    connectionTokenTtl: parseConnectionTokenTtl(opts.config.connectionTokenTtl),
+    redisNamespace: parseRedisNamespace(opts.config.redisNamespace),
   }
 
   // SECURITY: default to a capability-verifying authorizer (fail closed). A caller
@@ -785,8 +863,14 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   assertValidRelayBacklogLimits(relayBacklogLimits)
   const maxConnectionsPerUser =
     opts.maxConnectionsPerUser ?? config.maxConnectionsPerUser ?? DEFAULT_MAX_CONNECTIONS_PER_USER
-  if (!Number.isSafeInteger(maxConnectionsPerUser) || maxConnectionsPerUser < 1) {
-    throw new Error('Invalid WebSocket per-user connection limit: expected a positive safe integer.')
+  if (
+    !Number.isSafeInteger(maxConnectionsPerUser) ||
+    maxConnectionsPerUser < 1 ||
+    maxConnectionsPerUser > MAX_CONNECTIONS_PER_USER_CEILING
+  ) {
+    throw new Error(
+      `Invalid WebSocket per-user connection limit: expected a positive safe integer no greater than ${MAX_CONNECTIONS_PER_USER_CEILING}.`,
+    )
   }
 
   const syncOptions = opts.sync
@@ -848,9 +932,10 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     if (!sessionAuthorizationReady(syncOptions.authorization)) {
       reasons.push('authorization-adapter-unavailable')
     }
-    if (syncOptions.requireSharedState && !syncOptions.inviteEvents?.ready()) {
-      reasons.push('invite-event-store-unavailable')
-    }
+    // Deliberately NOT here: `inviteEvents.ready()`. That bus gates the
+    // INVITE_EVENTS operation per socket inside the command handler; it was
+    // once a lane precondition, which turned every Redis reconnect window into
+    // an HTTP-only session for whoever negotiated during it.
     return reasons
   }
   const syncAvailable = (): boolean => syncUnavailabilityReasons().length === 0
@@ -901,14 +986,14 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       const reasons = syncUnavailabilityReasons()
       if (reasons.length > 0) {
         logSyncRefusal('ticket refused', reasons)
-        throw new Error('WebSocket sync is unavailable.')
+        throw new SyncUnavailableError(reasons)
       }
       const operation = syncTickets.issue(identity)
       ticketOperations.add(operation)
       try {
         const issued = await operation
         if (stopping) {
-          throw new Error('WebSocket sync is stopping.')
+          throw new SyncUnavailableError(['gateway-stopping'], 'WebSocket sync is stopping.')
         }
         return {
           ticket: issued.ticket,
@@ -923,66 +1008,28 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     },
   }
 
-  const registry = new ConnectionRegistry<WebSocket>()
+  // Every push -- Redis bridge or SQS consumer -- fans out through
+  // `pushToUser`, so counting here observes both transports without either
+  // having to report back. Read by `health()`.
+  let pushesDispatched = 0
+  const registry = new (class extends ConnectionRegistry<WebSocket> {
+    override pushToUser(userUuid: string, message: string, excludeSessionUuid?: string): number {
+      pushesDispatched += 1
+      return super.pushToUser(userUuid, message, excludeSessionUuid)
+    }
+  })()
   const rooms = new RoomRegistry<WebSocket>()
   const alive = new WeakMap<WebSocket, boolean>()
   const syncHandlers = new Set<SyncCommandHandler>()
 
   const handleMintToken = buildMintTokenHandler(config, logger)
-  const handleSyncCapabilities = (_req: IncomingMessage, res: ServerResponse): void => {
-    writeJson(res, 200, sync.capabilities())
-  }
-  const handleSyncTicket = (req: IncomingMessage, res: ServerResponse): void => {
-    void (async () => {
-      const unavailability = syncUnavailabilityReasons()
-      if (unavailability.length > 0) {
-        logSyncRefusal('ticket refused', unavailability)
-        writeJson(res, 503, { error: { code: 'SYNC_DISABLED' } })
-        return
-      }
-      const body = await readBoundedJsonBody(req)
-      if (!body || !isSyncDeviceId(body.deviceId)) {
-        logRefusal('[ws-sync] ticket refused: unreadable body or invalid deviceId', 'ticket:invalid-device')
-        writeJson(res, 400, { error: { code: 'INVALID_DEVICE' } })
-        return
-      }
-
-      let identity: Omit<SyncTicketIdentity, 'deviceId'> | undefined
-      const xAuthToken = req.headers['x-auth-token']
-      if (typeof xAuthToken === 'string' && xAuthToken.length > 0 && config.authJwtSecret) {
-        identity = decodeCrossServiceToken(xAuthToken, config.authJwtSecret)
-      } else if (config.internalSecret && secretsMatch(req.headers['x-internal-secret'], config.internalSecret)) {
-        if (
-          typeof body.userUuid === 'string' &&
-          body.userUuid.length > 0 &&
-          typeof body.sessionUuid === 'string' &&
-          body.sessionUuid.length > 0
-        ) {
-          identity = { userUuid: body.userUuid, sessionUuid: body.sessionUuid }
-        }
-      }
-      if (!identity) {
-        logRefusal(
-          '[ws-sync] ticket refused: neither a decodable x-auth-token nor a matching internal secret with a body identity',
-          'ticket:auth-rejected',
-        )
-        writeJson(res, 401, { error: { code: 'AUTH_REJECTED' } })
-        return
-      }
-      try {
-        writeJson(res, 200, await sync.issueTicket({ ...identity, deviceId: body.deviceId }))
-      } catch (error) {
-        // issueTicket already logged the precondition list when it refused; this
-        // covers a ticket store that threw while otherwise reporting ready.
-        logRefusal('[ws-sync] ticket issuance failed', 'ticket:issue-failed', safeErrorLogMetadata(error))
-        writeJson(res, 503, { error: { code: 'SYNC_DISABLED' } })
-      }
-    })()
-  }
   if (app) {
+    // Only the mint route. The gateway-native `/sockets/sync/tickets` and
+    // `/sockets/sync/capabilities` handlers were deleted: neither host ever
+    // passed `app`, both front doors 404'd them, and the ticket one would have
+    // minted credential-less tickets from a bare body had it been reachable.
+    // The hosts own those routes behind their session middleware.
     app.post('/sockets/tokens', handleMintToken)
-    app.post('/sockets/sync/tickets', handleSyncTicket)
-    app.get?.('/sockets/sync/capabilities', handleSyncCapabilities)
   }
 
   // This is intentionally enforced by `ws`, before the application-level
@@ -992,11 +1039,25 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES,
     perMessageDeflate: false,
   })
-  const collaborationRedis = startCollaborationRedisBridge(rooms, {
+  const collaborationBridgeOptions = {
     host: config.redisHost,
     port: config.redisPort,
     logger,
-  })
+    ...(config.redisNamespace ? { keyPrefix: `${config.redisNamespace}:` } : {}),
+  }
+  const collaborationRedis = startCollaborationRedisBridge(rooms, collaborationBridgeOptions)
+  // The fleet-shared room state is the only place a rotated epoch lives, so
+  // the bridge is the default resolver. Guarded structurally: the method is
+  // added to the bridge in this same wave, and until then (or on a test
+  // double without it) discovery keeps answering the initial epoch.
+  const bridgeEpochs = collaborationRedis as unknown as {
+    currentRoomEpoch?: (room: string, collaborationSecurityEpoch: string) => Promise<string | undefined>
+  }
+  const collaborationRoomEpochResolver: SyncGatewayOptions['collaborationRoomEpochResolver'] =
+    syncOptions?.collaborationRoomEpochResolver ??
+    (typeof bridgeEpochs.currentRoomEpoch === 'function'
+      ? (room, collaborationSecurityEpoch) => bridgeEpochs.currentRoomEpoch!(room, collaborationSecurityEpoch)
+      : undefined)
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -1019,13 +1080,23 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           `connection:${rejection}:${unavailability.join()}`,
           unavailability.length > 0 ? { rejection, reasons: unavailability } : { rejection },
         )
-        socket.close(unavailability.length === 0 ? 1008 : 1013, 'sync unavailable')
+        // The close reason names the cause too. One opaque 'sync unavailable'
+        // for three different fixes left support unable to tell, from the
+        // client side, an origin problem from a query string from a Redis
+        // outage. Reason codes are stable identifiers, never input echoes.
+        // A close reason is capped at 123 bytes by the protocol; every code
+        // is ASCII, so a character slice is a byte slice.
+        if (rejection === 'unavailable') {
+          socket.close(1013, `sync-unavailable:${unavailability.join(',')}`.slice(0, 120))
+        } else {
+          socket.close(1008, rejection)
+        }
         return
       }
 
       alive.set(socket, true)
       const ingressLimiter = new WebSocketIngressLimiter(syncIngressLimits)
-      const handler = new SyncCommandHandler({
+      const handlerOptions = {
         socket,
         ownerId: randomUUID(),
         tickets: syncTickets,
@@ -1034,6 +1105,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         authorization: syncOptions!.authorization,
         backend: syncOptions!.backend,
         collaborationAuthorization: syncOptions!.collaborationAuthorization,
+        collaborationRoomEpochResolver,
         apiRpc: syncOptions!.apiRpc,
         inviteEvents: syncOptions!.inviteEvents,
         files: syncOptions!.files,
@@ -1044,7 +1116,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         backendTimeoutMs: syncOptions!.backendTimeoutMs,
         leaseRenewIntervalMs: syncOptions!.leaseRenewIntervalMs,
         socketBudgetRenewIntervalMs: syncOptions!.socketBudgetRenewIntervalMs,
-      })
+      }
+      const handler = new SyncCommandHandler(handlerOptions)
       syncHandlers.add(handler)
 
       const stopHandler = (): void => {
@@ -1085,11 +1158,19 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       return
     }
 
-    // Legacy client connects to: ws://host:PORT/?authToken=<jwt>
+    // Legacy client connects to: ws://host:PORT/sockets?authToken=<jwt>
+    if (url.pathname !== LEGACY_SOCKET_PATH) {
+      // The path is caller-controlled input and is not logged.
+      logRefusal('[ws] connection rejected: unknown path', 'legacy:unknown-path')
+      socket.close(1008, 'unknown path')
+      return
+    }
     const token = url.searchParams.get('authToken')
 
+    // Every legacy refusal is throttled like the sync lane's: an
+    // unauthenticated caller retrying in a loop must not drive log volume.
     if (!token) {
-      logger.warn('[ws] connection rejected: missing authToken')
+      logRefusal('[ws] connection rejected: missing authToken', 'legacy:missing-auth-token')
       socket.close(1008, 'missing authToken')
       return
     }
@@ -1098,13 +1179,20 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     try {
       identity = verifyConnectionToken(token, config.connectionTokenSecret)
     } catch (err) {
-      logger.warn('[ws] connection rejected: bad token', safeErrorLogMetadata(err))
+      // `jwtError` is the stable cause: expired vs forged vs garbage were one
+      // identical line before, because the redacted metadata collapses them.
+      logRefusal('[ws] connection rejected: bad token', 'legacy:bad-token', {
+        ...safeErrorLogMetadata(err),
+        jwtError: classifyConnectionTokenError(err),
+      })
       socket.close(1008, 'invalid authToken')
       return
     }
 
     if (registry.get(identity.userUuid).length >= maxConnectionsPerUser) {
-      logger.warn(`[ws] connection rejected: per-user limit user=${identity.userUuid}`)
+      logRefusal('[ws] connection rejected: per-user limit', 'legacy:per-user-limit', {
+        limit: maxConnectionsPerUser,
+      })
       socket.close(1008, 'per-user connection limit exceeded')
       return
     }
@@ -1119,7 +1207,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     alive.set(socket, true)
     const ingressLimiter = new WebSocketIngressLimiter(ingressLimits)
     const relayBacklog = new WebSocketRelayBacklog(relayBacklogLimits)
-    logger.info(`[ws] connect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
+    logger.info(`[ws] connect conn=${conn.connectionId} total=${registry.size()}`)
 
     let connectionClosed = false
     // Preserve frame order while async room authorization is in flight. Without
@@ -1149,7 +1237,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           await collaborationRedis.releaseAll(conn)
         },
       )
-      logger.info(`[ws] disconnect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
+      logger.info(`[ws] disconnect conn=${conn.connectionId} total=${registry.size()}`)
     }
 
     socket.on('close', cleanup)
@@ -1168,7 +1256,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       }
       const rawBytes = rawDataByteLength(data)
       if (!ingressLimiter.tryConsume(rawBytes)) {
-        logger.warn(`[ws] ingress rate exceeded user=${identity.userUuid} conn=${conn.connectionId}`)
+        logRefusal('[ws] ingress rate exceeded', 'legacy:ingress-rate', { conn: conn.connectionId })
         cleanup()
         socket.close(1008, 'message rate limit exceeded')
         return
@@ -1182,7 +1270,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       const frame = parseRelayFrame(raw)
       if (frame) {
         if (!relayBacklog.tryEnqueue(rawBytes)) {
-          logger.warn(`[ws] relay backlog exceeded user=${identity.userUuid} conn=${conn.connectionId}`)
+          logRefusal('[ws] relay backlog exceeded', 'legacy:relay-backlog', { conn: conn.connectionId })
           cleanup()
           try {
             socket.close(1008, 'relay backlog exceeded')
@@ -1237,15 +1325,34 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   }, HEARTBEAT_MS)
   heartbeat.unref()
 
-  const redis = startRedisBridge(registry, {
+  const pushBridgeOptions = {
     host: config.redisHost,
     port: config.redisPort,
     logger,
-  })
+    ...(config.redisNamespace ? { channelPrefix: `${config.redisNamespace}:` } : {}),
+  }
+  const redis = startRedisBridge(registry, pushBridgeOptions)
 
-  let stopSqs: (() => void) | undefined
+  // The consumer's stop handle is either the bare stop function or, once it
+  // reports its own state, `{ stop, running }`; both shapes are honoured.
+  let sqsHandle: unknown
+  const sqsConsumerRunning = (): boolean => {
+    if (sqsHandle === undefined) {
+      return false
+    }
+    const handle = sqsHandle as { running?: () => boolean }
+    return typeof handle.running === 'function' ? handle.running() : !stopping
+  }
+  const stopSqs = (): void => {
+    const handle = sqsHandle as (() => void) | { stop(): void } | undefined
+    if (typeof handle === 'function') {
+      handle()
+    } else {
+      handle?.stop()
+    }
+  }
   if (config.sqs?.queueUrl) {
-    stopSqs = startSqsConsumer(registry, {
+    sqsHandle = startSqsConsumer(registry, {
       queueUrl: config.sqs.queueUrl,
       endpoint: config.sqs.endpoint,
       region: config.sqs.region,
@@ -1259,6 +1366,19 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     })
   }
 
+  const health = (): GatewayHealth => {
+    const relay = collaborationRedis as unknown as { isRelayHealthy?: () => boolean }
+    return {
+      attached: true,
+      pushBridge: config.redisHost ? 'redis' : 'none',
+      pushBridgeReady: (redis as { status?: string }).status === 'ready',
+      sqsConsumerRunning: sqsConsumerRunning(),
+      collaborationRelayHealthy: typeof relay.isRelayHealthy === 'function' ? relay.isRelayHealthy() : false,
+      syncLane: syncAvailable() ? 'up' : 'down',
+      pushesDispatched,
+    }
+  }
+
   let stopPromise: Promise<void> | undefined
   const stop = (): Promise<void> => {
     if (stopPromise) {
@@ -1267,7 +1387,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     stopPromise = (async () => {
       stopping = true
       clearInterval(heartbeat)
-      stopSqs?.()
+      stopSqs()
 
       const websocketClosed = new Promise<void>((resolve) => {
         let settled = false
@@ -1322,7 +1442,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     return stopPromise
   }
 
-  return { registry, rooms, handleMintToken, handleSyncTicket, handleSyncCapabilities, sync, stop }
+  return { registry, rooms, handleMintToken, sync, health, stop }
 }
 
 export * from './syncProtocol.js'
@@ -1357,6 +1477,15 @@ export type {
   SyncLiveAuthorizationAdapter,
 } from './syncCommandHandler.js'
 export type { SyncTicketIdentity } from './auth.js'
+export {
+  classifyConnectionTokenError,
+  DEFAULT_CONNECTION_TOKEN_TTL,
+  MAX_CONNECTIONS_PER_USER_CEILING,
+  parseConnectionTokenTtl,
+  parseMaxConnectionsPerUser,
+  parseRedisNamespace,
+} from './auth.js'
+export type { ConnectionTokenErrorClass } from './auth.js'
 export {
   RedisSyncAuthTicketStore,
   RedisSyncCommandLeaseRegistry,

@@ -86,6 +86,95 @@ export function mintConnectionToken(
   })
 }
 
+export const DEFAULT_CONNECTION_TOKEN_TTL = '60s'
+/** Upper bound for WEBSOCKET_MAX_CONNECTIONS_PER_USER in every host. */
+export const MAX_CONNECTIONS_PER_USER_CEILING = 1_024
+
+/**
+ * Normalise WEB_SOCKET_CONNECTION_TOKEN_TTL before it reaches jsonwebtoken.
+ *
+ * jsonwebtoken treats a bare numeric STRING as milliseconds: `"60"` minted a
+ * 0-second token that only verified inside the 10 s clock tolerance, while
+ * `""` and `"abc"` made every mint throw a 500 with readiness still green.
+ * Environment values are always strings, so the integer form is defined here
+ * as seconds and rendered as `<n>s`. Accepted: `<n>`, `<n>s`, `<n>m`, `<n>h`
+ * with n >= 1. Undefined or blank means the 60 s default.
+ */
+export function parseConnectionTokenTtl(value: string | undefined): string {
+  const trimmed = value === undefined ? '' : value.trim()
+  if (trimmed === '') {
+    return DEFAULT_CONNECTION_TOKEN_TTL
+  }
+  const match = /^(\d+)([smh])?$/.exec(trimmed)
+  if (!match || !/[1-9]/.test(match[1])) {
+    throw new Error(
+      'WEB_SOCKET_CONNECTION_TOKEN_TTL must be a positive integer number of seconds, or <n>s, <n>m or <n>h.',
+    )
+  }
+  return `${Number.parseInt(match[1], 10)}${match[2] ?? 's'}`
+}
+
+/**
+ * One parser for WEBSOCKET_MAX_CONNECTIONS_PER_USER. The api-gateway used to
+ * crash at boot on a non-numeric value while the home-server silently capped
+ * it; now both hosts and the standalone entry share this. Undefined or blank
+ * means "use the gateway default".
+ */
+export function parseMaxConnectionsPerUser(value: string | undefined): number | undefined {
+  const trimmed = value === undefined ? '' : value.trim()
+  if (trimmed === '') {
+    return undefined
+  }
+  const parsed = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : Number.NaN
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_CONNECTIONS_PER_USER_CEILING) {
+    throw new Error(
+      `WEBSOCKET_MAX_CONNECTIONS_PER_USER must be an integer between 1 and ${MAX_CONNECTIONS_PER_USER_CEILING}.`,
+    )
+  }
+  return parsed
+}
+
+/**
+ * WEBSOCKET_REDIS_NAMESPACE: an optional per-deployment prefix for every Redis
+ * channel and key the realtime path uses, so two stacks sharing one Redis do
+ * not cross-talk. Empty means byte-identical channel and key names to a
+ * deployment that never set it, which is what lets a rolling upgrade keep
+ * old and new replicas talking.
+ */
+export function parseRedisNamespace(value: string | undefined): string | undefined {
+  const trimmed = value === undefined ? '' : value.trim()
+  if (trimmed === '') {
+    return undefined
+  }
+  if (!/^[a-z0-9:_-]{1,64}$/.test(trimmed)) {
+    throw new Error('WEBSOCKET_REDIS_NAMESPACE must match ^[a-z0-9:_-]{1,64}$ when set.')
+  }
+  return trimmed
+}
+
+/**
+ * Stable, non-sensitive classification of a connection-token verification
+ * failure. `safeErrorLogMetadata` deliberately collapses every error to
+ * `{ errorType: 'Error' }`, which made six different token-rejection probes
+ * (garbage, expired, wrong secret, alg=none, ...) produce one identical log
+ * line. The class is derived from jsonwebtoken's error names and messages
+ * only; nothing from the token itself is ever included.
+ */
+export type ConnectionTokenErrorClass = 'expired' | 'invalid-signature' | 'malformed' | 'other'
+
+export function classifyConnectionTokenError(error: unknown): ConnectionTokenErrorClass {
+  if (!(error instanceof Error)) {
+    return 'other'
+  }
+  if (error.name === 'TokenExpiredError') {
+    return 'expired'
+  }
+  if (error.name === 'JsonWebTokenError') {
+    return error.message === 'invalid signature' ? 'invalid-signature' : 'malformed'
+  }
+  return 'other'
+}
+
 /**
  * Standard Red Notes: verify a collaboration-room capability minted by the
  * api-gateway (`POST /v1/collaboration/authorize`) and presented by the client on

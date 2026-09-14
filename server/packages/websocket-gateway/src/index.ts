@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { parseConnectionTokenTtl, parseMaxConnectionsPerUser, parseRedisNamespace } from './auth.js'
 import { attachWebSocketGateway, type GatewayConfig } from './gateway.js'
 import { createConsoleLogger } from './logger.js'
 import { type Logger } from './redisBridge.js'
@@ -26,24 +27,35 @@ const REDIS_PORT = Number(process.env.REDIS_PORT ?? 6379)
 // only `console` usage in this package and redacts every argument.
 const logger: Logger = createConsoleLogger({ level: process.env.LOG_LEVEL })
 
-const config: GatewayConfig = {
-  connectionTokenSecret: process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? '',
-  connectionTokenTtl: process.env.WEB_SOCKET_CONNECTION_TOKEN_TTL ?? '60s',
-  internalSecret: process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? '',
-  authJwtSecret: process.env.AUTH_JWT_SECRET ?? '',
-  redisHost: REDIS_HOST,
-  redisPort: REDIS_PORT,
-  maxConnectionsPerUser:
-    process.env.WEBSOCKET_MAX_CONNECTIONS_PER_USER === undefined
-      ? undefined
-      : Number(process.env.WEBSOCKET_MAX_CONNECTIONS_PER_USER),
-  sqs: {
-    queueUrl: process.env.SQS_QUEUE_URL,
-    endpoint: process.env.SQS_ENDPOINT,
-    region: process.env.SQS_AWS_REGION,
-    accessKeyId: process.env.SQS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.SQS_SECRET_ACCESS_KEY,
-  },
+// The same parsers both hosts use, so a TTL like "60" (which jsonwebtoken
+// would read as 60 ms) or a non-numeric per-user ceiling fails here, at boot,
+// with its variable named -- not on the first mint with readiness green.
+function readConfig(): GatewayConfig {
+  return {
+    connectionTokenSecret: process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? '',
+    connectionTokenTtl: parseConnectionTokenTtl(process.env.WEB_SOCKET_CONNECTION_TOKEN_TTL),
+    internalSecret: process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? '',
+    authJwtSecret: process.env.AUTH_JWT_SECRET ?? '',
+    redisHost: REDIS_HOST,
+    redisPort: REDIS_PORT,
+    redisNamespace: parseRedisNamespace(process.env.WEBSOCKET_REDIS_NAMESPACE),
+    maxConnectionsPerUser: parseMaxConnectionsPerUser(process.env.WEBSOCKET_MAX_CONNECTIONS_PER_USER),
+    sqs: {
+      queueUrl: process.env.SQS_QUEUE_URL,
+      endpoint: process.env.SQS_ENDPOINT,
+      region: process.env.SQS_AWS_REGION,
+      accessKeyId: process.env.SQS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.SQS_SECRET_ACCESS_KEY,
+    },
+  }
+}
+
+let config: GatewayConfig
+try {
+  config = readConfig()
+} catch (error) {
+  logger.error(error instanceof Error ? error.message : 'invalid websocket-gateway configuration')
+  process.exit(1)
 }
 
 // Fail CLOSED before opening a listener: an empty connection-token secret means
@@ -70,15 +82,9 @@ const httpServer = createServer((req, res) => {
     return
   }
 
-  if (req.method === 'GET' && url.pathname === '/sockets/sync/capabilities') {
-    gateway.handleSyncCapabilities(req, res)
-    return
-  }
-
-  if (req.method === 'POST' && url.pathname === '/sockets/sync/tickets') {
-    gateway.handleSyncTicket(req, res)
-    return
-  }
+  // No `/sockets/sync/*` routes here: the sync lane's ticket and capability
+  // endpoints belong to a host with session middleware. Standalone serves the
+  // legacy lane and the mint endpoint only.
 
   res.writeHead(404, { 'content-type': 'text/plain' })
   res.end('not found')
