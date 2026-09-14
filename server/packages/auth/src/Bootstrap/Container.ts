@@ -442,7 +442,6 @@ import { BaseSubscriptionTokensController } from '../Infra/InversifyExpressUtils
 import { BaseUserRequestsController } from '../Infra/InversifyExpressUtils/Base/BaseUserRequestsController'
 import { BaseUsersController } from '../Infra/InversifyExpressUtils/Base/BaseUsersController'
 import { BaseValetTokenController } from '../Infra/InversifyExpressUtils/Base/BaseValetTokenController'
-import { BaseWebSocketsController } from '../Infra/InversifyExpressUtils/Base/BaseWebSocketsController'
 import { BaseSessionsController } from '../Infra/InversifyExpressUtils/Base/BaseSessionsController'
 import { Transform } from 'stream'
 import { ActivatePremiumFeatures } from '../Domain/UseCase/ActivatePremiumFeatures/ActivatePremiumFeatures'
@@ -3718,15 +3717,6 @@ export class ContainerConfigLoader {
         .toConstantValue(
           new BaseUserRequestsController(
             container.get(TYPES.Auth_UserRequestsController),
-            container.get(TYPES.Auth_ControllerContainer),
-          ),
-        )
-      container
-        .bind<BaseWebSocketsController>(TYPES.Auth_BaseWebSocketsController)
-        .toConstantValue(
-          new BaseWebSocketsController(
-            container.get(TYPES.Auth_CreateCrossServiceToken),
-            container.get(TYPES.Auth_WebSocketConnectionTokenDecoder),
             container.get(TYPES.Auth_ControllerContainer),
           ),
         )

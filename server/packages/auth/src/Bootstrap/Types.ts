@@ -446,7 +446,6 @@ const TYPES = {
   Auth_WORKSPACES_PER_EMAIL_ENABLED: Symbol.for('Auth_WORKSPACES_PER_EMAIL_ENABLED'),
   Auth_BaseSubscriptionInvitesController: Symbol.for('Auth_BaseSubscriptionInvitesController'),
   Auth_BaseUserRequestsController: Symbol.for('Auth_BaseUserRequestsController'),
-  Auth_BaseWebSocketsController: Symbol.for('Auth_BaseWebSocketsController'),
   Auth_BaseSessionsController: Symbol.for('Auth_BaseSessionsController'),
   Auth_BaseValetTokenController: Symbol.for('Auth_BaseValetTokenController'),
   Auth_BaseUsersController: Symbol.for('Auth_BaseUsersController'),
