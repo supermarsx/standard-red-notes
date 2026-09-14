@@ -80,7 +80,12 @@ import { ItemBackupMapper } from '../Mapping/Backup/ItemBackupMapper'
 import { SaveNewItem } from '../Domain/UseCase/Syncing/SaveNewItem/SaveNewItem'
 import { UpdateExistingItem } from '../Domain/UseCase/Syncing/UpdateExistingItem/UpdateExistingItem'
 import { GetItems } from '../Domain/UseCase/Syncing/GetItems/GetItems'
-import { SaveItems } from '../Domain/UseCase/Syncing/SaveItems/SaveItems'
+import {
+  SaveItems,
+  parseWebsocketSyncPushEnabled,
+  parseWebsocketSyncPushMaxBytes,
+  parseWebsocketSyncPushMaxItems,
+} from '../Domain/UseCase/Syncing/SaveItems/SaveItems'
 import { ItemHashHttpMapper } from '../Mapping/Http/ItemHashHttpMapper'
 import { ItemHash } from '../Domain/Item/ItemHash'
 import { ItemHashHttpRepresentation } from '../Mapping/Http/ItemHashHttpRepresentation'
@@ -196,6 +201,17 @@ import { GetSyncCommandStatus } from '../Domain/SyncCommand/GetSyncCommandStatus
 import { CleanupSyncCommands } from '../Domain/SyncCommand/CleanupSyncCommands'
 import { InviteMutationTransactionRunner } from '../Domain/Invite/InviteMutationTransactionRunner'
 import { InviteRealtimeDomainEventProducer } from '../Domain/Invite/InviteRealtimeDomainEventProducer'
+
+/**
+ * Upper bound on a single SNS publish from the request path (t90 R11). The
+ * infra publisher aborts the AWS SDK call and throws `SNSPublishTimeoutError`;
+ * the save has already been persisted by then, so the caller logs and drops
+ * the realtime notification and the other devices catch up on their next sync.
+ */
+export const SNS_PUBLISH_TIMEOUT_MILLISECONDS = 2_000
+
+export const createSNSDomainEventPublisher = (snsClient: SNSClient, topicArn: string): SNSDomainEventPublisher =>
+  new SNSDomainEventPublisher(snsClient, topicArn, SNS_PUBLISH_TIMEOUT_MILLISECONDS)
 
 export class ContainerConfigLoader {
   private readonly DEFAULT_FREE_USER_CONTENT_LIMIT_BYTES = 100_000_000
@@ -362,7 +378,11 @@ export class ContainerConfigLoader {
       container
         .bind<DomainEventPublisherInterface>(TYPES.Sync_RawDomainEventPublisher)
         .toDynamicValue((context: ResolutionContext) => {
-          return new SNSDomainEventPublisher(context.get(TYPES.Sync_SNS), context.get(TYPES.Sync_SNS_TOPIC_ARN))
+          // The non-durable realtime notification (every plain HTTP save) awaits
+          // this publish inline on the request path. Bound it so a hung broker
+          // costs at most 2 s per save instead of the 60 s gateway timeout; the
+          // items are already persisted and SaveItems logs-and-drops the push.
+          return createSNSDomainEventPublisher(context.get(TYPES.Sync_SNS), context.get(TYPES.Sync_SNS_TOPIC_ARN))
         })
 
       const sqsConfig: SQSClientConfig = {
@@ -961,10 +981,13 @@ export class ContainerConfigLoader {
         container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
         container.get<CheckForContentLimit>(TYPES.Sync_CheckForContentLimit),
         container.get<MapperInterface<Item, ItemHttpRepresentation>>(TYPES.Sync_ItemHttpMapper),
-        // Standard Red Notes: websocket sync-push optimization. Default ON; the
-        // client always degrades to HTTP cleanly if disabled or inconsistent.
-        env.get('WEBSOCKET_SYNC_PUSH_ENABLED', true) !== 'false',
-        env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true) ? +env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true) : 50,
+        // Standard Red Notes: websocket sync-push payload inlining. Default OFF
+        // (only the exact string 'true' enables it): the fast-apply gate on the
+        // client cannot pass with today's request-clock sync token (t90 D4),
+        // so inlining only doubled the push bytes. See SaveItems.
+        parseWebsocketSyncPushEnabled(env.get('WEBSOCKET_SYNC_PUSH_ENABLED', true)),
+        parseWebsocketSyncPushMaxItems(env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true)),
+        parseWebsocketSyncPushMaxBytes(env.get('WEBSOCKET_SYNC_PUSH_MAX_BYTES', true)),
         container.get<Logger>(TYPES.Sync_Logger),
       ),
     )
@@ -1112,6 +1135,7 @@ export class ContainerConfigLoader {
           container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
           container.get<InviteMutationTransactionRunner>(TYPES.Sync_InviteMutationTransactionRunner),
           container.get<InviteRealtimeDomainEventProducer>(TYPES.Sync_InviteRealtimeDomainEventProducer),
+          container.get<TimerInterface>(TYPES.Sync_Timer),
         ),
       )
     container

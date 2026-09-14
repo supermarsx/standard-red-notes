@@ -108,7 +108,7 @@ export class TypeORMSyncCommandOutboxRepository implements SyncCommandOutboxRepo
           event.createdAt = new Date(event.createdAt)
         }
 
-        return { uuid: claimed.uuid, event, lockToken }
+        return { uuid: claimed.uuid, event, lockToken, attempts: Number(claimed.attempts) }
       }
 
       return null
@@ -147,13 +147,31 @@ export class TypeORMSyncCommandOutboxRepository implements SyncCommandOutboxRepo
     )
   }
 
+  async markDead(uuid: string, lockToken: string, deadAtTimestamp: number): Promise<void> {
+    await this.repository.update(
+      { uuid, status: 'dispatching', lockToken },
+      {
+        status: 'dead',
+        lockToken: null,
+        lockedAtTimestamp: null,
+        updatedAtTimestamp: deadAtTimestamp,
+      },
+    )
+  }
+
   async deletePublishedBefore(timestamp: number): Promise<number> {
     const result = await this.repository
       .createQueryBuilder()
       .delete()
       .from(TypeORMSyncCommandOutbox)
-      .where('status = :status', { status: 'published' })
-      .andWhere('published_at_timestamp < :timestamp', { timestamp })
+      .where(
+        new Brackets((query) => {
+          query
+            .where('status = :published AND published_at_timestamp < :timestamp', { published: 'published', timestamp })
+            // Dead rows are never republished; without this they would accumulate forever.
+            .orWhere('status = :dead AND updated_at_timestamp < :timestamp', { dead: 'dead', timestamp })
+        }),
+      )
       .execute()
 
     return result.affected ?? 0

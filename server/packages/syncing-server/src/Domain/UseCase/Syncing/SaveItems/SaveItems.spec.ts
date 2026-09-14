@@ -1,7 +1,14 @@
 import { TimerInterface } from '@standardnotes/time'
 import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
 import { ItemSaveValidatorInterface } from '../../../Item/SaveValidator/ItemSaveValidatorInterface'
-import { SaveItems } from './SaveItems'
+import {
+  SaveItems,
+  WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT,
+  WEBSOCKET_SYNC_PUSH_MAX_ITEMS_DEFAULT,
+  parseWebsocketSyncPushEnabled,
+  parseWebsocketSyncPushMaxBytes,
+  parseWebsocketSyncPushMaxItems,
+} from './SaveItems'
 import { SaveNewItem } from '../SaveNewItem/SaveNewItem'
 import { UpdateExistingItem } from '../UpdateExistingItem/UpdateExistingItem'
 import { Logger } from 'winston'
@@ -33,6 +40,7 @@ describe('SaveItems', () => {
   let itemHttpMapper: MapperInterface<Item, ItemHttpRepresentation>
   let websocketSyncPushEnabled: boolean
   let websocketSyncPushMaxItems: number
+  let websocketSyncPushMaxBytes: number
 
   const createUseCase = () =>
     new SaveItems(
@@ -48,6 +56,7 @@ describe('SaveItems', () => {
       itemHttpMapper,
       websocketSyncPushEnabled,
       websocketSyncPushMaxItems,
+      websocketSyncPushMaxBytes,
       logger,
     )
 
@@ -72,9 +81,11 @@ describe('SaveItems', () => {
     itemHttpMapper = {} as jest.Mocked<MapperInterface<Item, ItemHttpRepresentation>>
     itemHttpMapper.toProjection = jest.fn().mockReturnValue({ uuid: 'projected', content: 'enc' })
 
-    // Default: push optimization enabled with a generous item ceiling.
+    // Most cases here exercise the inlining branch explicitly, so turn it on
+    // with generous ceilings; the production default (off) has its own test.
     websocketSyncPushEnabled = true
     websocketSyncPushMaxItems = 50
+    websocketSyncPushMaxBytes = WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT
 
     itemSaveValidator = {} as jest.Mocked<ItemSaveValidatorInterface>
     itemSaveValidator.validate = jest.fn().mockResolvedValue({ passed: true })
@@ -777,6 +788,90 @@ describe('SaveItems', () => {
       // shared-vault fan-out (sendEventToClients) always carries the plain notification
       const sharedEvent = (sendEventToClients.execute as jest.Mock).mock.calls[0][0].event
       expect(sharedEvent.type).toEqual('ITEMS_CHANGED_ON_SERVER')
+    })
+
+    it('leaves inlining off under the default configuration: a 1-item save publishes the plain notification', async () => {
+      // WEBSOCKET_SYNC_PUSH_ENABLED unset (the shipped default, t92 decision (i)).
+      websocketSyncPushEnabled = parseWebsocketSyncPushEnabled(undefined)
+      const useCase = createUseCase()
+
+      const result = await useCase.execute({ ...baseDto, itemHashes: [itemHash1] })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(sendEventToClient.execute).toHaveBeenCalledTimes(1)
+      const event = (sendEventToClient.execute as jest.Mock).mock.calls[0][0].event
+      expect(event.type).toEqual('ITEMS_CHANGED_ON_SERVER')
+      expect(event.payload.items).toBeUndefined()
+      expect(itemHttpMapper.toProjection).not.toHaveBeenCalled()
+    })
+
+    it.each<[string | undefined, boolean]>([
+      ['true', true],
+      ['false', false],
+      ['TRUE', false],
+      ['1', false],
+      ['', false],
+      [undefined, false],
+    ])('parses WEBSOCKET_SYNC_PUSH_ENABLED=%p as %p (only the exact string true enables inlining)', (value, expected) => {
+      expect(parseWebsocketSyncPushEnabled(value)).toBe(expected)
+    })
+
+    it.each<[string | undefined, number]>([
+      [undefined, WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],
+      ['', WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],
+      ['0', WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],
+      ['-1', WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],
+      ['abc', WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],
+      ['1.5', WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],
+      ['4096', 4096],
+    ])('parses WEBSOCKET_SYNC_PUSH_MAX_BYTES=%p as %p', (value, expected) => {
+      expect(parseWebsocketSyncPushMaxBytes(value)).toBe(expected)
+    })
+
+    it('defaults the byte cap to 200 KiB and the item cap to 50, parsed with the same rules', () => {
+      expect(WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT).toBe(200 * 1024)
+      expect(WEBSOCKET_SYNC_PUSH_MAX_ITEMS_DEFAULT).toBe(50)
+      expect(parseWebsocketSyncPushMaxItems(undefined)).toBe(50)
+      expect(parseWebsocketSyncPushMaxItems('7')).toBe(7)
+      expect(parseWebsocketSyncPushMaxItems('seven')).toBe(50)
+      expect(parseWebsocketSyncPushMaxItems('0')).toBe(50)
+    })
+
+    it('falls back to the plain notification when the serialised projections exceed the byte cap', async () => {
+      websocketSyncPushEnabled = true
+      websocketSyncPushMaxBytes = 200 * 1024
+      // One item whose projection alone is 200 KiB of content: under the count
+      // cap, over the byte cap.
+      itemHttpMapper.toProjection = jest.fn().mockReturnValue({ uuid: 'projected', content: 'x'.repeat(200 * 1024) })
+      const useCase = createUseCase()
+
+      const result = await useCase.execute({ ...baseDto, itemHashes: [itemHash1] })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(sendEventToClient.execute).toHaveBeenCalledTimes(1)
+      const event = (sendEventToClient.execute as jest.Mock).mock.calls[0][0].event
+      expect(event.type).toEqual('ITEMS_CHANGED_ON_SERVER')
+      expect(event.payload.items).toBeUndefined()
+      expect(logger.debug).toHaveBeenCalledWith(
+        'Websocket sync push exceeds the byte cap; sending the plain notification instead.',
+        expect.objectContaining({ userId: 'user-uuid', itemCount: 1, maxBytes: 200 * 1024 }),
+      )
+      const { serialisedBytes } = (logger.debug as jest.Mock).mock.calls[0][1]
+      expect(serialisedBytes).toBeGreaterThan(200 * 1024)
+    })
+
+    it('still inlines payloads whose serialised size is exactly at the byte cap', async () => {
+      websocketSyncPushEnabled = true
+      const projection = { uuid: 'projected', content: 'enc' }
+      websocketSyncPushMaxBytes = Buffer.byteLength(JSON.stringify([projection]), 'utf8')
+      const useCase = createUseCase()
+
+      await useCase.execute({ ...baseDto, itemHashes: [itemHash1] })
+
+      const event = (sendEventToClient.execute as jest.Mock).mock.calls[0][0].event
+      expect(event.type).toEqual('SYNC_ITEMS_PUSHED')
+      expect(event.payload.items).toEqual([projection])
+      expect(logger.debug).not.toHaveBeenCalled()
     })
   })
 })

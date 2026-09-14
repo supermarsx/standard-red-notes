@@ -19,6 +19,34 @@ import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpReprese
 import { DomainEventInterface } from '@standardnotes/domain-events'
 import { ConcurrentItemUpdateError } from '../../../Item/ConcurrentItemUpdateError'
 
+/**
+ * `WEBSOCKET_SYNC_PUSH_ENABLED` parser. Only the exact string 'true' turns the
+ * SYNC_ITEMS_PUSHED inlining on; unset, empty, or anything else leaves it off
+ * (see the constructor comment on `websocketSyncPushEnabled` for why the
+ * default is off).
+ */
+export const parseWebsocketSyncPushEnabled = (value: string | undefined): boolean => value === 'true'
+
+export const WEBSOCKET_SYNC_PUSH_MAX_ITEMS_DEFAULT = 50
+export const WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT = 200 * 1024
+
+/** `WEBSOCKET_SYNC_PUSH_MAX_ITEMS` parser: a positive integer, else the default. */
+export const parseWebsocketSyncPushMaxItems = (value: string | undefined): number =>
+  parsePositiveInteger(value) ?? WEBSOCKET_SYNC_PUSH_MAX_ITEMS_DEFAULT
+
+/** `WEBSOCKET_SYNC_PUSH_MAX_BYTES` parser: a positive integer, else the default (200 KiB). */
+export const parseWebsocketSyncPushMaxBytes = (value: string | undefined): number =>
+  parsePositiveInteger(value) ?? WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT
+
+const parsePositiveInteger = (value: string | undefined): number | undefined => {
+  if (value === undefined || !/^\d+$/.test(value)) {
+    return undefined
+  }
+  const parsed = Number(value)
+
+  return parsed > 0 && Number.isSafeInteger(parsed) ? parsed : undefined
+}
+
 export class SaveItems implements UseCaseInterface<SaveItemsResult> {
   private readonly SYNC_TOKEN_VERSION = 2
 
@@ -33,19 +61,33 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     private domainEventFactory: DomainEventFactoryInterface,
     private checkForContentLimit: CheckForContentLimit,
     private itemHttpMapper: MapperInterface<Item, ItemHttpRepresentation>,
-    // Standard Red Notes websocket fast path: when enabled, push the changed
-    // encrypted item payloads + the new sync
-    // token over the websocket so other devices can apply them WITHOUT an HTTP
-    // pull. This is purely an OPTIMIZATION layered on top of the existing
-    // notify-then-pull flow: the client always degrades to a normal HTTP sync
-    // if this is disabled, the change set is too large, the base token doesn't
-    // match, or anything goes wrong. HTTP sync remains the source of truth.
+    // Standard Red Notes websocket push (`WEBSOCKET_SYNC_PUSH_ENABLED`). When
+    // enabled, the changed encrypted item payloads + the new and base sync
+    // tokens are inlined into a SYNC_ITEMS_PUSHED message so another device
+    // that is exactly caught up can apply them WITHOUT an HTTP pull.
+    //
+    // DEFAULT OFF (t92 decision (i), t90 finding D4). Today's sync token is the
+    // saver's own request-start microsecond (`lastUpdatedTimestamp` below), and
+    // no receiver ever holds that value as its current token, so the client's
+    // strict `currentToken === baseSyncToken` gate never passes: every inlined
+    // payload was discarded and re-pulled over HTTP. Until the token is a
+    // per-user monotonic change sequence persisted with each batch (the
+    // planned redesign), inlining only doubles the bytes on the wire. With the
+    // flag off the server sends the plain ITEMS_CHANGED_ON_SERVER notification
+    // and the client pulls over HTTP, which is the same latency as before.
+    // HTTP sync remains the source of truth either way.
     private websocketSyncPushEnabled: boolean,
     // Upper bound on the number of items we will inline into a single push. A
     // larger change set sends the plain ITEMS_CHANGED_ON_SERVER notification
     // only (the client then pulls via HTTP as today), so we never blow up a
     // single websocket frame.
     private websocketSyncPushMaxItems: number,
+    // Upper bound on the serialised size of the inlined projections. The count
+    // cap above does not bound bytes (50 large notes can exceed the 256 KiB SNS
+    // message limit and poison the durable outbox), so a change set whose
+    // JSON projections exceed this many bytes also degrades to the plain
+    // notification.
+    private websocketSyncPushMaxBytes: number,
     private logger: Logger,
   ) {}
 
@@ -205,10 +247,13 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
     const syncToken = this.calculateSyncToken(lastUpdatedTimestamp, savedItems)
 
-    // The token representing the server's state immediately BEFORE this batch
-    // was applied. A receiving device only fast-applies the pushed payloads if
-    // its own current sync token equals this base token (i.e. it was exactly
-    // caught up); otherwise it discards the push and reconciles over HTTP.
+    // The token the push advertises as the server's state immediately BEFORE
+    // this batch. A receiving device only fast-applies the pushed payloads if
+    // its own current sync token equals it; otherwise it discards the push and
+    // reconciles over HTTP. NOTE: this is derived from THIS request's start
+    // time, which no other device can hold, so at present the gate never
+    // passes (t90 D4) — fast-apply needs a persisted per-user change sequence
+    // as the token before it can fire. The push is therefore off by default.
     const baseSyncToken = this.calculateSyncToken(lastUpdatedTimestamp, [])
 
     // Standard Red Notes: the items above are already durably persisted. Client
@@ -270,6 +315,19 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       return notification
     }
 
+    const items = savedItems.map((item) => this.itemHttpMapper.toProjection(item))
+    const serialisedBytes = Buffer.byteLength(JSON.stringify(items), 'utf8')
+    if (serialisedBytes > this.websocketSyncPushMaxBytes) {
+      this.logger.debug('Websocket sync push exceeds the byte cap; sending the plain notification instead.', {
+        userId: dto.userUuid,
+        itemCount: items.length,
+        serialisedBytes,
+        maxBytes: this.websocketSyncPushMaxBytes,
+      })
+
+      return notification
+    }
+
     return {
       type: 'SYNC_ITEMS_PUSHED',
       createdAt: notification.createdAt,
@@ -280,7 +338,7 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         timestamp: lastUpdatedTimestamp,
         syncToken,
         baseSyncToken,
-        items: savedItems.map((item) => this.itemHttpMapper.toProjection(item)),
+        items,
       },
     }
   }

@@ -7,6 +7,7 @@ import {
   Uuid,
 } from '@standardnotes/domain-core'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { TimerInterface } from '@standardnotes/time'
 
 import { RemoveUserFromSharedVaultDTO } from './RemoveUserFromSharedVaultDTO'
 import { SharedVaultRepositoryInterface } from '../../../SharedVault/SharedVaultRepositoryInterface'
@@ -32,6 +33,10 @@ export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
     private domainEventPublisher: DomainEventPublisherInterface,
     private inviteMutationTransactionRunner?: InviteMutationTransactionRunner,
     private inviteRealtimeDomainEventProducer?: InviteRealtimeDomainEventProducer,
+    // Source of the membership revision on removal (see `removalRevision`).
+    // Optional only so existing callers keep compiling; production wires the
+    // syncing-server Timer.
+    private timer?: TimerInterface,
   ) {}
 
   async execute(dto: RemoveUserFromSharedVaultDTO): Promise<Result<void>> {
@@ -87,6 +92,10 @@ export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
     const membersBeforeRemoval = this.inviteRealtimeDomainEventProducer
       ? await this.sharedVaultUsersRepository.findBySharedVaultUuid(sharedVaultUuid)
       : [sharedVaultUser]
+
+    // Captured before the row is removed so the revision reflects the moment
+    // of THIS mutation, not the row's last (older) update.
+    const revision = this.removalRevision(sharedVaultUser.props.timestamps.updatedAt)
 
     await this.sharedVaultUsersRepository.remove(sharedVaultUser)
 
@@ -149,10 +158,24 @@ export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
       sharedVaultUuid: sharedVaultUuid.value,
       memberUserUuid: userUuid.value,
       membershipUuid: sharedVaultUser.id.toString(),
-      revision: String(sharedVaultUser.props.timestamps.updatedAt),
+      revision,
       affectedUserUuids: [...membersBeforeRemoval.map((member) => member.props.userUuid.value), userUuid.value],
     })
 
     return Result.ok()
+  }
+
+  /**
+   * Membership revision contract (t92 C12): producers emit the microsecond
+   * timestamp of the mutation as a decimal string, and the client fences per
+   * membership with a strictly-greater comparison. A removal does not bump the
+   * row (it deletes it), so the revision is the removal time from the Timer,
+   * clamped to be strictly greater than the row's `updatedAt` so the event
+   * ordering holds even if the clock is behind the row's last write.
+   */
+  private removalRevision(rowUpdatedAtMicroseconds: number): string {
+    const removalTimestamp = this.timer?.getTimestampInMicroseconds() ?? Date.now() * 1_000
+
+    return String(Math.max(removalTimestamp, rowUpdatedAtMicroseconds + 1))
   }
 }

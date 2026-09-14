@@ -5,8 +5,11 @@ import {
   NotificationPayload,
   SharedVaultUserPermission,
   SharedVaultUser,
+  UniqueEntityId,
 } from '@standardnotes/domain-core'
+import { TimerInterface } from '@standardnotes/time'
 
+import { InviteRealtimeDomainEventProducer } from '../../../Invite/InviteRealtimeDomainEventProducer'
 import { SharedVault } from '../../../SharedVault/SharedVault'
 import { SharedVaultRepositoryInterface } from '../../../SharedVault/SharedVaultRepositoryInterface'
 import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
@@ -267,5 +270,108 @@ describe('RemoveUserFromSharedVault', () => {
     expect(result.getError()).toBe('Oops')
 
     mock.mockRestore()
+  })
+
+  /**
+   * Membership revision contract (t92 C12, t90 D8): the revision is the
+   * microsecond timestamp of the removal as a decimal string, strictly greater
+   * than the row's own `updatedAt`, so the client's per-membership
+   * strictly-greater fence applies the revocation instead of dropping it as a
+   * duplicate. The literal fixture `{ revision: '1789150108395094', membershipUuid }`
+   * is shared with the client fence spec.
+   */
+  describe('membership revision', () => {
+    const MEMBERSHIP_UUID = '30000000-0000-4000-8000-000000000011'
+    const ROW_UPDATED_AT_MICROSECONDS = 1789150108395093
+    const REMOVAL_MICROSECONDS = 1789150108395094
+    const OWNER_UUID = '00000000-0000-0000-0000-000000000000'
+    const MEMBER_UUID = '00000000-0000-0000-0000-000000000001'
+    const revokeByOwner = { originatorUuid: OWNER_UUID, sharedVaultUuid: OWNER_UUID, userUuid: MEMBER_UUID }
+
+    let timer: TimerInterface
+    let producer: InviteRealtimeDomainEventProducer
+
+    const createRealtimeUseCase = (withTimer = true) =>
+      new RemoveUserFromSharedVault(
+        sharedVaultUserRepository,
+        sharedVaultRepository,
+        addNotificationsForUsers,
+        addNotificationForUser,
+        domainEventFactory,
+        domainEventPublisher,
+        undefined,
+        producer,
+        withTimer ? timer : undefined,
+      )
+
+    const recordedInput = () =>
+      (producer.recordSharedVaultMembership as jest.Mock).mock.calls[0][0] as { revision: string; action: string }
+
+    beforeEach(() => {
+      sharedVaultUser = SharedVaultUser.create(
+        {
+          ...sharedVaultUser.props,
+          userUuid: Uuid.create(MEMBER_UUID).getValue(),
+          timestamps: Timestamps.create(ROW_UPDATED_AT_MICROSECONDS, ROW_UPDATED_AT_MICROSECONDS).getValue(),
+        },
+        new UniqueEntityId(MEMBERSHIP_UUID),
+      ).getValue()
+      sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(sharedVaultUser)
+      sharedVaultUserRepository.findBySharedVaultUuid = jest.fn().mockResolvedValue([sharedVaultUser])
+
+      timer = {} as jest.Mocked<TimerInterface>
+      timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(REMOVAL_MICROSECONDS)
+
+      producer = {} as jest.Mocked<InviteRealtimeDomainEventProducer>
+      producer.recordSharedVaultMembership = jest.fn().mockResolvedValue(undefined)
+    })
+
+    it('emits the removal time from the Timer as the revision, in the canonical shape', async () => {
+      const result = await createRealtimeUseCase().execute(revokeByOwner)
+
+      expect(result.isFailed()).toBe(false)
+      expect(producer.recordSharedVaultMembership).toHaveBeenCalledTimes(1)
+      expect(producer.recordSharedVaultMembership).toHaveBeenCalledWith({
+        action: 'revoked',
+        sharedVaultUuid: OWNER_UUID,
+        memberUserUuid: MEMBER_UUID,
+        membershipUuid: MEMBERSHIP_UUID,
+        revision: '1789150108395094',
+        affectedUserUuids: [MEMBER_UUID, MEMBER_UUID],
+      })
+      const { revision } = recordedInput()
+      expect(revision).toMatch(/^[1-9]\d{0,31}$/)
+      expect(BigInt(revision) > BigInt(sharedVaultUser.props.timestamps.updatedAt)).toBe(true)
+    })
+
+    it('captures the revision before the membership row is removed', async () => {
+      await createRealtimeUseCase().execute(revokeByOwner)
+
+      const [timerCall] = (timer.getTimestampInMicroseconds as jest.Mock).mock.invocationCallOrder
+      const [removeCall] = (sharedVaultUserRepository.remove as jest.Mock).mock.invocationCallOrder
+      expect(timerCall).toBeLessThan(removeCall)
+    })
+
+    it('stays strictly greater than the row updatedAt when the clock is behind it', async () => {
+      timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(ROW_UPDATED_AT_MICROSECONDS - 5_000_000)
+
+      await createRealtimeUseCase().execute(revokeByOwner)
+
+      expect(recordedInput().revision).toBe(String(ROW_UPDATED_AT_MICROSECONDS + 1))
+    })
+
+    it('falls back to the wall clock when no Timer is injected and still moves past the row', async () => {
+      await createRealtimeUseCase(false).execute(revokeByOwner)
+
+      const { revision } = recordedInput()
+      expect(revision).toMatch(/^[1-9]\d{0,31}$/)
+      expect(BigInt(revision) > BigInt(ROW_UPDATED_AT_MICROSECONDS)).toBe(true)
+    })
+
+    it('reports a self-removal as left with the same revision rule', async () => {
+      await createRealtimeUseCase().execute({ ...revokeByOwner, originatorUuid: MEMBER_UUID })
+
+      expect(recordedInput()).toEqual(expect.objectContaining({ action: 'left', revision: '1789150108395094' }))
+    })
   })
 })

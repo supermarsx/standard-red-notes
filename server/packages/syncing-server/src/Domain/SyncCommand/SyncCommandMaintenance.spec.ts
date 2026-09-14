@@ -1,9 +1,12 @@
-import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { DomainEventInterface, DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 
 import { CleanupSyncCommands } from './CleanupSyncCommands'
-import { SyncCommandOutboxDispatcher } from './SyncCommandOutboxDispatcher'
-import { SyncCommandOutboxRepositoryInterface } from './SyncCommandOutboxRepositoryInterface'
+import { SYNC_COMMAND_OUTBOX_MAX_ATTEMPTS_DEFAULT, SyncCommandOutboxDispatcher } from './SyncCommandOutboxDispatcher'
+import {
+  ClaimedSyncCommandOutboxEvent,
+  SyncCommandOutboxRepositoryInterface,
+} from './SyncCommandOutboxRepositoryInterface'
 import { SyncCommandRepositoryInterface } from './SyncCommandRepositoryInterface'
 
 const deferred = <T>() => {
@@ -22,7 +25,20 @@ const createOutboxRepository = (): jest.Mocked<SyncCommandOutboxRepositoryInterf
   claimNext: jest.fn(),
   markPublished: jest.fn(),
   releaseForRetry: jest.fn(),
+  markDead: jest.fn(),
   deletePublishedBefore: jest.fn(),
+})
+
+const claimedEvent = (attempts: number, uuid = 'outbox-1'): ClaimedSyncCommandOutboxEvent => ({
+  uuid,
+  lockToken: 'lock-1',
+  attempts,
+  event: {
+    type: 'SYNC_ITEMS_PUSHED',
+    createdAt: new Date(1),
+    payload: {},
+    meta: { correlation: { userIdentifier: 'user-uuid', userIdentifierType: 'uuid' }, origin: 'syncing-server' },
+  } as unknown as DomainEventInterface,
 })
 
 const createCommandRepository = (): jest.Mocked<SyncCommandRepositoryInterface> => ({
@@ -68,6 +84,112 @@ describe('sync command maintenance jobs', () => {
       'Sync command outbox background dispatch failed.',
       expect.objectContaining({ codeTag: 'SyncCommandOutboxDispatcher', error: 'database unavailable' }),
     )
+  })
+
+  /**
+   * Attempt cap (t90 R12). Without it a poison event — one the broker rejects
+   * every time, e.g. an oversized SYNC_ITEMS_PUSHED — is retried on every
+   * maintenance sweep forever, logging an error each time.
+   */
+  describe('outbox attempt cap', () => {
+    it('caps delivery at 20 attempts by default', () => {
+      expect(SYNC_COMMAND_OUTBOX_MAX_ATTEMPTS_DEFAULT).toBe(20)
+    })
+
+    it('releases a failed event for retry while attempts remain, naming the event type', async () => {
+      const repository = createOutboxRepository()
+      repository.claimNext.mockResolvedValueOnce(claimedEvent(19)).mockResolvedValue(null)
+      const publisher: jest.Mocked<DomainEventPublisherInterface> = {
+        publish: jest.fn().mockRejectedValue(new Error('broker down')),
+      }
+      const logger = { error: jest.fn() } as unknown as Logger
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, publisher, logger)
+
+      await expect(dispatcher.dispatchAvailable()).resolves.toBe(0)
+
+      expect(repository.releaseForRetry).toHaveBeenCalledWith('outbox-1', 'lock-1', expect.any(Number))
+      expect(repository.markDead).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledTimes(1)
+      expect(logger.error).toHaveBeenCalledWith(
+        'Sync command outbox dispatch failed; event remains durable for retry.',
+        expect.objectContaining({
+          codeTag: 'SyncCommandOutboxDispatcher',
+          outboxEventId: 'outbox-1',
+          eventType: 'SYNC_ITEMS_PUSHED',
+          attempts: 19,
+          maxAttempts: 20,
+        }),
+      )
+    })
+
+    it('marks the event dead on the 20th failed attempt and stops retrying it', async () => {
+      const repository = createOutboxRepository()
+      repository.claimNext.mockResolvedValueOnce(claimedEvent(20)).mockResolvedValue(null)
+      const publisher: jest.Mocked<DomainEventPublisherInterface> = {
+        publish: jest.fn().mockRejectedValue(new Error('MessageTooLong')),
+      }
+      const logger = { error: jest.fn() } as unknown as Logger
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, publisher, logger)
+
+      await expect(dispatcher.dispatchAvailable()).resolves.toBe(0)
+
+      expect(repository.markDead).toHaveBeenCalledWith('outbox-1', 'lock-1', expect.any(Number))
+      expect(repository.releaseForRetry).not.toHaveBeenCalled()
+      expect(repository.markPublished).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledTimes(1)
+      expect(logger.error).toHaveBeenCalledWith(
+        'Sync command outbox event exhausted its delivery attempts and was marked dead.',
+        expect.objectContaining({
+          codeTag: 'SyncCommandOutboxDispatcher',
+          outboxEventId: 'outbox-1',
+          eventType: 'SYNC_ITEMS_PUSHED',
+          attempts: 20,
+          maxAttempts: 20,
+          error: 'MessageTooLong',
+        }),
+      )
+      // The drain carries on past the dead row rather than aborting the sweep.
+      expect(repository.claimNext).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps publishing healthy events after a dead one in the same sweep', async () => {
+      const repository = createOutboxRepository()
+      repository.claimNext
+        .mockResolvedValueOnce(claimedEvent(20, 'poison'))
+        .mockResolvedValueOnce(claimedEvent(1, 'healthy'))
+        .mockResolvedValue(null)
+      const publisher: jest.Mocked<DomainEventPublisherInterface> = {
+        publish: jest.fn().mockRejectedValueOnce(new Error('MessageTooLong')).mockResolvedValueOnce(undefined),
+      }
+      const logger = { error: jest.fn() } as unknown as Logger
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, publisher, logger)
+
+      await expect(dispatcher.dispatchAvailable()).resolves.toBe(1)
+
+      expect(repository.markDead).toHaveBeenCalledWith('poison', 'lock-1', expect.any(Number))
+      expect(repository.markPublished).toHaveBeenCalledWith('healthy', 'lock-1', expect.any(Number))
+      expect(repository.releaseForRetry).not.toHaveBeenCalled()
+    })
+
+    it('honours a custom cap and stringifies non-Error rejections in the dead log', async () => {
+      const repository = createOutboxRepository()
+      repository.claimNext
+        .mockResolvedValueOnce(claimedEvent(2, 'retry-me'))
+        .mockResolvedValueOnce(claimedEvent(3, 'give-up'))
+        .mockResolvedValue(null)
+      const publisher: jest.Mocked<DomainEventPublisherInterface> = { publish: jest.fn().mockRejectedValue('nope') }
+      const logger = { error: jest.fn() } as unknown as Logger
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, publisher, logger, 1_000, 30_000, 3)
+
+      await expect(dispatcher.dispatchAvailable()).resolves.toBe(0)
+
+      expect(repository.releaseForRetry).toHaveBeenCalledWith('retry-me', 'lock-1', expect.any(Number))
+      expect(repository.markDead).toHaveBeenCalledWith('give-up', 'lock-1', expect.any(Number))
+      expect(logger.error).toHaveBeenLastCalledWith(
+        'Sync command outbox event exhausted its delivery attempts and was marked dead.',
+        expect.objectContaining({ outboxEventId: 'give-up', attempts: 3, maxAttempts: 3, error: 'nope' }),
+      )
+    })
   })
 
   it('keeps cleanup single-flight when multiple scheduled wakeups overlap', async () => {
