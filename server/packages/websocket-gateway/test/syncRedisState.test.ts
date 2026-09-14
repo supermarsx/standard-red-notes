@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import type { SyncTicketIdentity } from '../src/auth.js'
 import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
-import { RedisSyncAuthTicketStore, createRedisSyncState, type SyncRedisClient } from '../src/syncRedisState.js'
+import {
+  RedisSyncAuthTicketStore,
+  createRedisSyncState,
+  isRetryableSyncRedisError,
+  type SyncRedisClient,
+} from '../src/syncRedisState.js'
 
 type StoredString = { value: string; expiresAt: number }
 
@@ -308,8 +313,64 @@ describe('fleet-shared Redis sync state', () => {
     await expect(state.leases.renew(lease())).resolves.toBe(false)
     await expect(state.leases.release(lease())).resolves.toBeUndefined()
     await expect(state.socketBudget.acquire({ userUuid: 'user-1', ownerId: 'owner' })).resolves.toBe(false)
-    await expect(state.socketBudget.renew({ userUuid: 'user-1', ownerId: 'owner' })).resolves.toBe(false)
+    // A renewal against a client that is not ready has an UNKNOWN outcome: it is
+    // retryable, never a definitive "reservation gone".
+    await expect(state.socketBudget.renew({ userUuid: 'user-1', ownerId: 'owner' })).rejects.toMatchObject({
+      name: 'SyncRedisRetryableError',
+      retryable: true,
+    })
     await expect(state.socketBudget.release({ userUuid: 'user-1', ownerId: 'owner' })).resolves.toBeUndefined()
+  })
+
+  // R6. Every socket in the fleet used to close within one renewal interval of
+  // Redis leaving `ready`, because a not-ready client and a timed-out call both
+  // read as "renewal returned false" (reservation lost). Only a definitive
+  // Redis answer may say that; everything with an unknown outcome is retryable.
+  it('classifies socket-budget renewal failures: definitive miss is false, unknown outcome is retryable, abort stays abort', async () => {
+    const backend = new SharedRedisHarness()
+    const client = new FakeRedisClient(backend)
+    const state = createRedisSyncState(client, { operationTimeoutMs: 5, socketLeaseTtlMs: 4_000 })
+    const owner = { userUuid: 'user-1', ownerId: 'socket-1' }
+    await expect(state.socketBudget.acquire(owner)).resolves.toBe(true)
+
+    // Definitive: Redis answered, the member is not there.
+    await expect(state.socketBudget.renew({ userUuid: 'user-1', ownerId: 'never-reserved' })).resolves.toBe(false)
+    await expect(state.socketBudget.renew(owner)).resolves.toBe(true)
+
+    // Unknown: the bounded operation timed out while the client was still ready.
+    backend.hang = true
+    const timedOut = await state.socketBudget.renew(owner).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(isRetryableSyncRedisError(timedOut)).toBe(true)
+    expect(timedOut).toMatchObject({ name: 'SyncRedisRetryableError', retryable: true })
+    expect((timedOut as Error).cause).toMatchObject({ message: expect.stringMatching(/timed out/i) })
+
+    // Unknown: the transport failed mid-flight.
+    backend.hang = false
+    backend.fail = true
+    await expect(state.socketBudget.renew(owner)).rejects.toMatchObject({ name: 'SyncRedisRetryableError' })
+    backend.fail = false
+
+    // Unknown: the client is not ready (ready-flap).
+    client.status = 'reconnecting'
+    await expect(state.socketBudget.renew(owner)).rejects.toMatchObject({ name: 'SyncRedisRetryableError' })
+    await expect(state.leases.acquire(lease())).rejects.toMatchObject({ name: 'SyncRedisRetryableError' })
+    client.status = 'ready'
+
+    // Caller cancellation is neither: it stays an AbortError.
+    const controller = new AbortController()
+    controller.abort()
+    const aborted = await state.socketBudget.renew(owner, controller.signal).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(aborted).toMatchObject({ name: 'AbortError' })
+    expect(isRetryableSyncRedisError(aborted)).toBe(false)
+
+    // And the reservation was never touched by any of the failures above.
+    await expect(state.socketBudget.renew(owner)).resolves.toBe(true)
   })
 })
 

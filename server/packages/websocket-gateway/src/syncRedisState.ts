@@ -152,6 +152,30 @@ function abortError(): Error {
   return error
 }
 
+/**
+ * A Redis operation whose OUTCOME IS UNKNOWN: the client was not `ready`, or
+ * the bounded call timed out, or the transport failed mid-flight. The
+ * reservation may well still be intact on the server, so the caller should
+ * retry once before declaring anything lost. A definitive Redis answer (the
+ * script returned 0) is never wrapped in this: that one means "gone".
+ */
+export class SyncRedisRetryableError extends Error {
+  readonly retryable = true as const
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'SyncRedisRetryableError'
+  }
+}
+
+export function isRetryableSyncRedisError(error: unknown): error is SyncRedisRetryableError {
+  return error instanceof SyncRedisRetryableError
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
 async function boundedRedisOperation<T>(operation: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) {
     throw abortError()
@@ -355,7 +379,7 @@ export class RedisSyncCommandLeaseRegistry implements SyncCommandLeaseRegistry {
 
   async acquire(input: CommandLeaseInput, signal?: AbortSignal): Promise<SyncCommandLeaseResult> {
     if (!this.ready()) {
-      throw new Error('Sync Redis command lease registry is unavailable.')
+      throw new SyncRedisRetryableError('Sync Redis command lease registry is unavailable.')
     }
     const result = await boundedRedisOperation(
       this.client.eval(
@@ -455,21 +479,37 @@ export class RedisSyncSocketBudget implements SyncSocketBudget {
     return Number(result) === 1
   }
 
+  /**
+   * Resolves `false` ONLY on a definitive Redis answer (the reservation is
+   * gone). A client that is not `ready`, a timed-out call or a transport
+   * failure leaves the outcome unknown and throws `SyncRedisRetryableError`, so
+   * one Redis ready-flap or operation timeout no longer reads as a lost
+   * reservation and closes the socket; the handler retries once first.
+   * Caller cancellation still surfaces as an AbortError.
+   */
   async renew(input: { userUuid: string; ownerId: string }, signal?: AbortSignal): Promise<boolean> {
     if (!this.ready()) {
-      return false
+      throw new SyncRedisRetryableError('Sync Redis socket budget is not ready.')
     }
-    const result = await boundedRedisOperation(
-      this.client.eval(
-        SOCKET_BUDGET_RENEW_SCRIPT,
-        1,
-        socketBudgetKey(this.options.keyPrefix, input.userUuid),
-        socketOwner(input.ownerId),
-        this.options.socketLeaseTtlMs,
-      ),
-      this.options.operationTimeoutMs,
-      signal,
-    )
+    let result: unknown
+    try {
+      result = await boundedRedisOperation(
+        this.client.eval(
+          SOCKET_BUDGET_RENEW_SCRIPT,
+          1,
+          socketBudgetKey(this.options.keyPrefix, input.userUuid),
+          socketOwner(input.ownerId),
+          this.options.socketLeaseTtlMs,
+        ),
+        this.options.operationTimeoutMs,
+        signal,
+      )
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error
+      }
+      throw new SyncRedisRetryableError('Sync Redis socket budget renewal outcome is unknown.', { cause: error })
+    }
     return Number(result) === 1
   }
 

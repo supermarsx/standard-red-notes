@@ -12,6 +12,7 @@ import {
   MAX_RPC_CREDIT_BYTES,
   SYNC_AUTH_DEADLINE_MS,
   SYNC_BACKEND_TIMEOUT_MS,
+  SYNC_RESULT_TOO_LARGE_STATUS_CODE,
   SyncProtocolError,
   createSyncServerFrame,
   parseSyncClientFrame,
@@ -42,8 +43,27 @@ export interface SyncSocket {
   close(code?: number, reason?: string): void
 }
 
+/**
+ * Adapter-side authorization verdicts. Most are folded into NOT_AUTHORIZED on
+ * the wire (see `publicAuthorizationCode`); the three that the client can act
+ * on are public:
+ *   - SESSION_STALE: the bearer captured at ticket time no longer validates
+ *     (token rotated/refreshed, identity moved) -- RETRYABLE, the client
+ *     re-tickets once and resends the same command.
+ *   - LIVE_SYNC_DISABLED: the per-user "Live sync" switch is off -- permanent
+ *     for the session, the client stays on HTTP.
+ *   - READ_ONLY / CONTENT_LIMIT: existing public policy codes.
+ * SHADOW_BANNED stays private (it is never revealed on the wire).
+ */
 export type SyncAuthorizationCode =
-  'SESSION_REVOKED' | 'READ_ONLY' | 'CONTENT_LIMIT' | 'SHARED_VAULT_FORBIDDEN' | 'SHADOW_BANNED' | 'NOT_AUTHORIZED'
+  | 'SESSION_REVOKED'
+  | 'SESSION_STALE'
+  | 'READ_ONLY'
+  | 'CONTENT_LIMIT'
+  | 'SHARED_VAULT_FORBIDDEN'
+  | 'SHADOW_BANNED'
+  | 'LIVE_SYNC_DISABLED'
+  | 'NOT_AUTHORIZED'
 
 export interface SyncAuthorizationInput {
   identity: SyncTicketIdentity
@@ -54,7 +74,14 @@ export interface SyncAuthorizationInput {
   payload?: JsonObject
 }
 
-export type SyncAuthorizationDecision = { authorized: true } | { authorized: false; code: SyncAuthorizationCode }
+/**
+ * `session` is adapter-owned evidence of the validation that produced the
+ * verdict. The handler never inspects it; it only carries the SECOND
+ * (pre-execute) authorization's session into `execute`/`status` so an adapter
+ * can skip one more round trip to the auth service when the evidence is fresh.
+ */
+export type SyncAuthorizationDecision =
+  { authorized: true; session?: unknown } | { authorized: false; code: SyncAuthorizationCode }
 
 /** Called for every command/status request; no authorization claim is cached from the ticket. */
 export interface SyncLiveAuthorizationAdapter {
@@ -102,8 +129,18 @@ export type SyncBackendStatus =
  */
 export interface SyncCommandBackendAdapter {
   ready(): boolean
-  execute(input: SyncBackendCommandInput, signal: AbortSignal): Promise<SyncBackendCommit>
-  status(input: Omit<SyncBackendCommandInput, 'payload'>, signal: AbortSignal): Promise<SyncBackendStatus>
+  /**
+   * `session` is the evidence returned by the authorization that immediately
+   * preceded this call (see `SyncAuthorizationDecision.session`). An adapter
+   * may reuse it instead of revalidating, but must treat it as untrusted input:
+   * accept only evidence it produced itself and only while it is fresh.
+   */
+  execute(input: SyncBackendCommandInput, signal: AbortSignal, session?: unknown): Promise<SyncBackendCommit>
+  status(
+    input: Omit<SyncBackendCommandInput, 'payload'>,
+    signal: AbortSignal,
+    session?: unknown,
+  ): Promise<SyncBackendStatus>
 }
 
 export type SyncCollaborationAuthorizationResult =
@@ -196,7 +233,27 @@ export interface SyncInviteEventsAdapter {
 
 export interface SyncCommandMetrics {
   increment(event: string, code?: string): void
+  /** Optional gauge-style sample (e.g. per-RPC backpressure count / max wait). */
+  observe?(event: string, code: string, value: number): void
 }
+
+/**
+ * Throttled refusal log, shaped like the gateway's `RefusalLogger`. Callers pass
+ * only stable, non-sensitive codes and counters -- never a token, header, body
+ * or user identifier.
+ */
+export type SyncRefusalLogger = (message: string, throttleKey: string, metadata?: Record<string, unknown>) => void
+
+/**
+ * Resolves the CURRENT room epoch for a collaboration room (contract C4). The
+ * discovery adapter reports the HMAC initial epoch; a room whose epoch rotated
+ * (last editor left, key/membership change) would otherwise be unjoinable.
+ * `undefined` keeps the initial epoch.
+ */
+export type SyncCollaborationRoomEpochResolver = (
+  room: string,
+  collaborationSecurityEpoch: string,
+) => Promise<string | undefined>
 
 export interface SyncCommandHandlerOptions {
   socket: SyncSocket
@@ -215,6 +272,12 @@ export interface SyncCommandHandlerOptions {
   files?: SyncFilesAdapter
   isEnabled: () => boolean
   metrics?: SyncCommandMetrics
+  /** Throttled refusal log for conditions an operator should see (post-crash BUSY leases). */
+  logRefusal?: SyncRefusalLogger
+  /** Contract C4: replaces the discovery epoch with the room's current epoch when one exists. */
+  collaborationRoomEpochResolver?: SyncCollaborationRoomEpochResolver
+  /** Bound on the resolver above; on timeout or failure the initial epoch is kept. Default 1 500 ms. */
+  collaborationRoomEpochResolverTimeoutMs?: number
   authDeadlineMs?: number
   backendTimeoutMs?: number
   maxQueuedFrames?: number
@@ -222,6 +285,13 @@ export interface SyncCommandHandlerOptions {
   maxBufferedBytes?: number
   leaseRenewIntervalMs?: number
   socketBudgetRenewIntervalMs?: number
+  /**
+   * Delay before the ONE retry a failed socket-budget renewal gets when its
+   * outcome is unknown (store not ready, operation timed out). Defaults to the
+   * renewal interval: the lease TTL is sized as four such quarters, so the
+   * retry lands in the second quarter with two quarters of margin left.
+   */
+  socketBudgetRenewRetryDelayMs?: number
 }
 
 type ActiveLease = {
@@ -245,6 +315,9 @@ type ActiveRpc = {
   waiters: Set<() => void>
   deadlineTimer?: NodeJS.Timeout
   abortCode?: string
+  /** Credit stalls seen by this RPC; reported ONCE when it finishes (count + longest wait). */
+  backpressureWaits: number
+  backpressureMaxWaitMs: number
 }
 
 type ActiveInviteSubscription = {
@@ -273,8 +346,20 @@ type CollaborationEpochDiscovery = {
 
 const MAX_ACTIVE_RPC_REQUESTS = 8
 const COLLABORATION_EPOCH_DISCOVERY_TTL_MS = 10_000
+const COLLABORATION_ROOM_EPOCH_RESOLVER_TIMEOUT_MS = 1_500
 const MAX_RPC_CHUNK_BYTES = 64 * 1024
 const MAX_RPC_IDEMPOTENCY_ENTRIES = 256
+
+/**
+ * Why a grant could not be bound to an outstanding discovery challenge.
+ *   - 'expired': nothing is outstanding (never discovered on this socket, already
+ *     consumed, past its TTL) or a NEWER discovery superseded the one presented.
+ *     Reported as CHALLENGE_EXPIRED (retryable): the client re-runs discovery once.
+ *   - 'invalid': a challenge IS outstanding and matches the request id, but the
+ *     binding (identity, note, epoch) or the challenge digest differs. Reported
+ *     as NOT_AUTHORIZED, indistinguishable from a policy denial on purpose.
+ */
+type CollaborationEpochDiscoveryRejection = 'expired' | 'invalid'
 
 function constantTimeTextMatches(left: string, right: string): boolean {
   const leftDigest = createHash('sha256').update(left, 'utf8').digest()
@@ -284,7 +369,15 @@ function constantTimeTextMatches(left: string, right: string): boolean {
 
 function publicAuthorizationCode(code: SyncAuthorizationCode): string {
   // Never reveal shadow-ban state or detailed authorization topology on the wire.
-  return code === 'CONTENT_LIMIT' ? 'CONTENT_LIMIT' : code === 'READ_ONLY' ? 'READ_ONLY' : 'NOT_AUTHORIZED'
+  switch (code) {
+    case 'CONTENT_LIMIT':
+    case 'READ_ONLY':
+    case 'SESSION_STALE':
+    case 'LIVE_SYNC_DISABLED':
+      return code
+    default:
+      return 'NOT_AUTHORIZED'
+  }
 }
 
 class SyncLeaseLostError extends Error {
@@ -321,6 +414,10 @@ export class SyncCommandHandler {
   private readonly maxBufferedBytes: number
   private readonly leaseRenewIntervalMs: number
   private readonly socketBudgetRenewIntervalMs: number
+  private readonly socketBudgetRenewRetryDelayMs: number
+  private readonly collaborationRoomEpochResolverTimeoutMs: number
+  /** Commands this socket has attempted; the FIRST one refused BUSY is the post-crash signature (R36). */
+  private commandsAttempted = 0
 
   constructor(private readonly options: SyncCommandHandlerOptions) {
     this.authDeadlineMs = options.authDeadlineMs ?? SYNC_AUTH_DEADLINE_MS
@@ -330,6 +427,9 @@ export class SyncCommandHandler {
     this.maxBufferedBytes = options.maxBufferedBytes ?? MAX_SYNC_BUFFERED_BYTES
     this.leaseRenewIntervalMs = options.leaseRenewIntervalMs ?? 10_000
     this.socketBudgetRenewIntervalMs = options.socketBudgetRenewIntervalMs ?? 20_000
+    this.socketBudgetRenewRetryDelayMs = options.socketBudgetRenewRetryDelayMs ?? this.socketBudgetRenewIntervalMs
+    this.collaborationRoomEpochResolverTimeoutMs =
+      options.collaborationRoomEpochResolverTimeoutMs ?? COLLABORATION_ROOM_EPOCH_RESOLVER_TIMEOUT_MS
     if (options.files) {
       this.filesSession = new SyncFilesSession({
         adapter: options.files,
@@ -343,9 +443,17 @@ export class SyncCommandHandler {
       !Number.isSafeInteger(this.leaseRenewIntervalMs) ||
       this.leaseRenewIntervalMs < 1 ||
       !Number.isSafeInteger(this.socketBudgetRenewIntervalMs) ||
-      this.socketBudgetRenewIntervalMs < 1
+      this.socketBudgetRenewIntervalMs < 1 ||
+      !Number.isSafeInteger(this.socketBudgetRenewRetryDelayMs) ||
+      this.socketBudgetRenewRetryDelayMs < 1
     ) {
       throw new Error('Invalid sync lease renewal interval.')
+    }
+    if (
+      !Number.isSafeInteger(this.collaborationRoomEpochResolverTimeoutMs) ||
+      this.collaborationRoomEpochResolverTimeoutMs < 1
+    ) {
+      throw new Error('Invalid collaboration room epoch resolver timeout.')
     }
     this.authTimer = setTimeout(() => {
       if (!this.identity && !this.closed) {
@@ -452,20 +560,29 @@ export class SyncCommandHandler {
     if (this.closed) {
       return
     }
+    if (!this.options.isEnabled()) {
+      this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1012)
+      return
+    }
+    // Admission (the AUTH frame) needs the fleet-shared ticket, lease and
+    // socket-budget stores plus the session plane, so a socket that cannot be
+    // admitted is closed 1012 and the client re-tickets later. Once
+    // AUTHENTICATED, none of those stores gates the socket any more: a Redis
+    // ready-flap or one 1.5 s operation timeout used to close every idle sync
+    // socket in the fleet within a renewal interval and drop the invite,
+    // collaboration, RPC and files lanes with it. Store readiness is a
+    // per-operation dependency of COMMAND/STATUS alone (like the durable
+    // backend), and those are refused individually with a retryable error.
     if (
-      !this.options.isEnabled() ||
-      !this.options.tickets.ready() ||
-      !this.options.leases.ready() ||
-      !this.options.socketBudget.ready() ||
-      !sessionAuthorizationReady(this.options.authorization)
+      !this.identity &&
+      (!this.options.tickets.ready() ||
+        !this.options.leases.ready() ||
+        !this.options.socketBudget.ready() ||
+        !sessionAuthorizationReady(this.options.authorization))
     ) {
       this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1012)
       return
     }
-    // The durable backend is deliberately NOT part of this blanket check. It is
-    // a per-operation dependency of SYNC_ITEMS alone; closing the socket for it
-    // also destroys the invite, collaboration, RPC and files lanes, none of
-    // which touch it. COMMAND/STATUS are refused individually below instead.
 
     let frame
     try {
@@ -628,10 +745,17 @@ export class SyncCommandHandler {
     const grantRequest = discoveryRequest
       ? undefined
       : (frame.payload as Extract<SyncCollaborationAuthorizationPayload, { expectedRoomEpoch: string }>)
-    const consumedDiscovery = grantRequest ? this.consumeCollaborationEpochDiscovery(grantRequest, identity) : undefined
+    const consumed = grantRequest ? this.consumeCollaborationEpochDiscovery(grantRequest, identity) : undefined
+    const consumedDiscovery = consumed && 'discovery' in consumed ? consumed.discovery : undefined
     if (grantRequest && !consumedDiscovery) {
-      this.options.metrics?.increment('collaboration_authorization', 'epoch_challenge_invalid')
-      this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
+      // An expired or superseded challenge is NOT a policy denial: the client
+      // re-runs discovery once. Everything else stays indistinguishable from one.
+      const expired = consumed !== undefined && 'rejection' in consumed && consumed.rejection === 'expired'
+      this.options.metrics?.increment(
+        'collaboration_authorization',
+        expired ? 'epoch_challenge_expired' : 'epoch_challenge_invalid',
+      )
+      this.sendError(frame.requestId, frame.commandId, expired ? 'CHALLENGE_EXPIRED' : 'NOT_AUTHORIZED')
       return
     }
 
@@ -653,6 +777,15 @@ export class SyncCommandHandler {
           this.sendError(frame.requestId, frame.commandId, 'BACKEND_ERROR')
           return
         }
+        // Contract C4: the adapter reports the HMAC INITIAL epoch; a room whose
+        // epoch rotated since (last editor left, key/membership change) would
+        // refuse that epoch forever. Ask the room's current epoch and bind the
+        // one-use challenge to it instead. Bounded, and never fatal: on timeout,
+        // failure or an invalid value the initial epoch stands.
+        const roomEpoch = (await this.resolveCollaborationRoomEpoch(result)) ?? result.roomEpoch
+        if (this.closed) {
+          return
+        }
         // Hex, not base64url: the client must echo this challenge back inside a
         // sync envelope, where every identifier has to satisfy IDENTIFIER_PATTERN
         // (first character alphanumeric). base64url leads with `-` or `_` 2/64 of
@@ -670,7 +803,7 @@ export class SyncCommandHandler {
           userUuid: identity.userUuid,
           sessionUuid: identity.sessionUuid,
           noteUuid: frame.payload.noteUuid,
-          roomEpoch: result.roomEpoch,
+          roomEpoch,
           collaborationSecurityEpoch: result.collaborationSecurityEpoch,
           expiresAt,
         }
@@ -679,7 +812,7 @@ export class SyncCommandHandler {
           room: result.room,
           serverUpdatedAtTimestamp: result.serverUpdatedAtTimestamp,
           collaborationProtocolVersion: 3,
-          roomEpoch: result.roomEpoch,
+          roomEpoch,
           collaborationSecurityEpoch: result.collaborationSecurityEpoch,
           epochDiscoveryChallenge: challenge,
           epochDiscoveryRequestId: frame.requestId,
@@ -719,25 +852,71 @@ export class SyncCommandHandler {
     }
   }
 
+  /**
+   * Bounded, non-fatal lookup of the room's current epoch (contract C4).
+   * Returns `undefined` -- keep the adapter's initial epoch -- when no resolver
+   * is configured, it answers nothing, it fails, it exceeds its budget, or its
+   * answer is not a well-formed epoch.
+   */
+  private async resolveCollaborationRoomEpoch(
+    result: Extract<SyncCollaborationAuthorizationResult, { epochDiscovery: true }>,
+  ): Promise<string | undefined> {
+    const resolver = this.options.collaborationRoomEpochResolver
+    if (!resolver) {
+      return undefined
+    }
+    let timer: NodeJS.Timeout | undefined
+    try {
+      const resolved = await Promise.race([
+        resolver(result.room, result.collaborationSecurityEpoch),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('collaboration room epoch resolver timeout')),
+            this.collaborationRoomEpochResolverTimeoutMs,
+          )
+          timer.unref()
+        }),
+      ])
+      if (resolved === undefined) {
+        return undefined
+      }
+      if (!isValidCollaborationEpoch(resolved)) {
+        this.options.metrics?.increment('collaboration_authorization', 'epoch_resolver_invalid')
+        return undefined
+      }
+      if (resolved !== result.roomEpoch) {
+        this.options.metrics?.increment('collaboration_authorization', 'epoch_resolved')
+      }
+      return resolved
+    } catch {
+      this.options.metrics?.increment('collaboration_authorization', 'epoch_resolver_failed')
+      return undefined
+    } finally {
+      if (timer) {
+        clearTimeout(timer)
+      }
+    }
+  }
+
   private consumeCollaborationEpochDiscovery(
     request: Extract<SyncCollaborationAuthorizationPayload, { expectedRoomEpoch: string }>,
     identity: SyncTicketIdentity,
-  ): CollaborationEpochDiscovery | undefined {
+  ): { discovery: CollaborationEpochDiscovery } | { rejection: CollaborationEpochDiscoveryRejection } {
     const discovery = this.collaborationEpochDiscovery
     this.collaborationEpochDiscovery = undefined
+    if (!discovery || discovery.expiresAt <= Date.now() || discovery.requestId !== request.epochDiscoveryRequestId) {
+      return { rejection: 'expired' }
+    }
     if (
-      !discovery ||
-      discovery.expiresAt <= Date.now() ||
-      discovery.requestId !== request.epochDiscoveryRequestId ||
       discovery.userUuid !== identity.userUuid ||
       discovery.sessionUuid !== identity.sessionUuid ||
       discovery.noteUuid !== request.noteUuid ||
       discovery.roomEpoch !== request.expectedRoomEpoch
     ) {
-      return undefined
+      return { rejection: 'invalid' }
     }
     const supplied = createHash('sha256').update(request.epochDiscoveryChallenge, 'utf8').digest()
-    return timingSafeEqual(discovery.challengeDigest, supplied) ? discovery : undefined
+    return timingSafeEqual(discovery.challengeDigest, supplied) ? { discovery } : { rejection: 'invalid' }
   }
 
   private async handleInviteSubscribe(frame: SyncInviteSubscribeFrame): Promise<void> {
@@ -834,6 +1013,16 @@ export class SyncCommandHandler {
       subscription.pumping ||
       subscription.awaitingAck
     ) {
+      return
+    }
+    if (!adapter.ready()) {
+      // The store (or its availability bus) went away under a live
+      // subscription. Silently skipping the pump left the client subscribed to
+      // nothing: its SUBSCRIBE on the bus may have been rejected, and only a
+      // fresh INVITE_SUBSCRIBE re-issues it. A retryable error makes it do that.
+      this.options.metrics?.increment('invite_events', 'unavailable')
+      this.stopInviteSubscription(subscription)
+      this.sendError(subscription.requestId, subscription.commandId, 'INVITE_STORE_UNAVAILABLE')
       return
     }
 
@@ -1017,6 +1206,8 @@ export class SyncCommandHandler {
       controller,
       creditBytes: Math.min(MAX_RPC_CREDIT_BYTES, frame.payload.initialCreditBytes),
       waiters: new Set(),
+      backpressureWaits: 0,
+      backpressureMaxWaitMs: 0,
     }
     active.deadlineTimer = setTimeout(() => {
       active.abortCode = 'DEADLINE_EXCEEDED'
@@ -1133,8 +1324,12 @@ export class SyncCommandHandler {
 
   private async consumeRpcCredit(active: ActiveRpc, bytes: number): Promise<void> {
     while (active.creditBytes < bytes && !active.controller.signal.aborted && !this.closed) {
-      this.options.metrics?.increment('rpc', 'backpressure_wait')
+      // Aggregated per RPC and emitted once in finishRpc: a stalled 4 MiB
+      // stream used to log one metric line per 64 KiB chunk.
+      const stalledAt = Date.now()
+      active.backpressureWaits += 1
       await new Promise<void>((resolve) => active.waiters.add(resolve))
+      active.backpressureMaxWaitMs = Math.max(active.backpressureMaxWaitMs, Date.now() - stalledAt)
     }
     if (active.controller.signal.aborted || this.closed) {
       throw active.controller.signal.reason ?? new Error('RPC aborted.')
@@ -1157,6 +1352,12 @@ export class SyncCommandHandler {
       clearTimeout(active.deadlineTimer)
     }
     this.wakeRpc(active)
+    if (active.backpressureWaits > 0) {
+      this.options.metrics?.increment('rpc', 'backpressure_wait')
+      this.options.metrics?.observe?.('rpc', 'backpressure_wait_count', active.backpressureWaits)
+      this.options.metrics?.observe?.('rpc', 'backpressure_wait_max_ms', active.backpressureMaxWaitMs)
+      active.backpressureWaits = 0
+    }
   }
 
   private abortActiveRpcs(code: string): void {
@@ -1172,7 +1373,8 @@ export class SyncCommandHandler {
   }
 
   private async handleStatus(frame: SyncStatusRequestFrame): Promise<void> {
-    if (!this.options.backend.ready()) {
+    if (!this.options.backend.ready() || !sessionAuthorizationReady(this.options.authorization)) {
+      this.options.metrics?.increment('status', 'unavailable')
       this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
       return
     }
@@ -1200,7 +1402,12 @@ export class SyncCommandHandler {
         return
       }
       const status = await this.withTimeout(
-        (signal) => this.options.backend.status({ identity, commandId: frame.commandId, digest: frame.digest }, signal),
+        (signal) =>
+          this.options.backend.status(
+            { identity, commandId: frame.commandId, digest: frame.digest },
+            signal,
+            authorization.session,
+          ),
         controller,
       )
       if (status.digest && !constantTimeTextMatches(status.digest, frame.digest)) {
@@ -1231,7 +1438,12 @@ export class SyncCommandHandler {
   private async handleCommand(frame: SyncCommandFrame): Promise<void> {
     // Refused BEFORE a command lease is acquired: a socket that never
     // advertised SYNC_ITEMS must not be able to take durable-command leases.
-    if (!this.options.backend.ready()) {
+    if (
+      !this.options.backend.ready() ||
+      !this.options.leases.ready() ||
+      !sessionAuthorizationReady(this.options.authorization)
+    ) {
+      this.options.metrics?.increment('command', 'unavailable')
       this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
       return
     }
@@ -1243,8 +1455,39 @@ export class SyncCommandHandler {
       digest: frame.digest,
       ownerId: this.options.ownerId,
     }
-    const lease = await this.options.leases.acquire(leaseInput, this.lifecycleAbort.signal)
+    const firstCommandOnSocket = this.commandsAttempted === 0
+    this.commandsAttempted += 1
+    let lease
+    try {
+      lease = await this.options.leases.acquire(leaseInput, this.lifecycleAbort.signal)
+    } catch {
+      // The lease store did not answer (not ready, timed out, transport error).
+      // That is one command's problem, not the socket's: answer BUSY, which the
+      // client retries after backoff. If the acquire did land, the 30 s lease
+      // TTL turns the retry into an honest BUSY until it expires.
+      if (this.closed) {
+        return
+      }
+      this.options.metrics?.increment('lease', 'acquire_error')
+      this.sendError(frame.requestId, frame.commandId, 'BUSY')
+      return
+    }
     if (!lease.acquired) {
+      if (lease.reason === 'BUSY') {
+        this.options.metrics?.increment('lease', 'busy')
+        if (firstCommandOnSocket) {
+          // A device whose FIRST command on a fresh socket finds its own lease
+          // held is the signature of a lease that outlived its socket: a gateway
+          // that was SIGKILLed mid-command never ran `release`, and the 30 s
+          // TTL is the only thing that frees it. Nothing else logged this.
+          this.options.metrics?.increment('lease', 'busy-after-close')
+          this.options.logRefusal?.(
+            '[ws-sync] command refused BUSY on the first command of a fresh socket: a command lease outlived its socket (crash or unclean close); it frees itself when the lease TTL expires',
+            'lease:busy-after-close',
+            { code: 'BUSY' },
+          )
+        }
+      }
       this.sendError(frame.requestId, frame.commandId, lease.reason)
       return
     }
@@ -1275,11 +1518,14 @@ export class SyncCommandHandler {
           return
         }
 
+        // The session validated by the pre-execute authorization is handed to
+        // the backend so it need not validate a third time (R8).
         const committed = await this.withTimeout(
           (signal) =>
             this.options.backend.execute(
               { identity, commandId: frame.commandId, digest: frame.digest, payload: frame.payload },
               signal,
+              executeAuthorization.session,
             ),
           controller,
         )
@@ -1436,6 +1682,21 @@ export class SyncCommandHandler {
     const serialized = JSON.stringify(frame)
     const bytes = Buffer.byteLength(serialized, 'utf8')
     if (bytes > MAX_SYNC_FRAME_BYTES) {
+      if ((type === 'COMMITTED' || type === 'STATUS') && payload.status === 'COMMITTED') {
+        // Contract C5. The command IS committed and journaled; only the result
+        // does not fit the socket. Answering ERROR here made the client treat a
+        // committed command as unrecoverable (RECOVERY_REQUIRED until sign-out)
+        // and re-dial into the same error. A payload-less COMMITTED STATUS with
+        // the same ids/digest tells it to fetch the journaled result over HTTP.
+        this.options.metrics?.increment('egress', 'RESULT_TOO_LARGE_STATUS')
+        return this.send(
+          'STATUS',
+          requestId,
+          commandId,
+          { status: 'COMMITTED', code: SYNC_RESULT_TOO_LARGE_STATUS_CODE },
+          digest,
+        )
+      }
       this.options.metrics?.increment('egress', 'RESULT_TOO_LARGE')
       this.sendError(requestId, commandId, 'RESULT_TOO_LARGE')
       return false
@@ -1522,7 +1783,15 @@ export class SyncCommandHandler {
     }
   }
 
-  private scheduleSocketBudgetRenewal(): void {
+  /**
+   * A renewal that resolves `false` is DEFINITIVE (the store says the
+   * reservation is gone) and closes the socket. A renewal that THROWS has an
+   * unknown outcome -- the store was not ready or the bounded call timed out --
+   * and gets exactly one retry after `socketBudgetRenewRetryDelayMs` before the
+   * reservation is declared lost. One Redis ready-flap or operation timeout
+   * used to close every idle sync socket in the fleet within a renewal interval.
+   */
+  private scheduleSocketBudgetRenewal(delayMs = this.socketBudgetRenewIntervalMs, retrying = false): void {
     if (!this.activeSocketBudget || this.closed) {
       return
     }
@@ -1532,22 +1801,28 @@ export class SyncCommandHandler {
         if (!reservation || this.closed) {
           return
         }
+        let renewed: boolean | undefined
         try {
-          const renewed = await this.options.socketBudget.renew(reservation, this.lifecycleAbort.signal)
-          if (!renewed) {
-            this.options.metrics?.increment('socket_budget', 'lost')
-            this.failAndClose('SOCKET_BUDGET_LOST', 'Sync socket reservation was lost.', 1013)
-            return
-          }
-          this.scheduleSocketBudgetRenewal()
+          renewed = await this.options.socketBudget.renew(reservation, this.lifecycleAbort.signal)
         } catch {
-          if (!this.closed) {
-            this.options.metrics?.increment('socket_budget', 'error')
-            this.failAndClose('SOCKET_BUDGET_LOST', 'Sync socket reservation was lost.', 1013)
-          }
+          renewed = undefined
         }
+        if (this.closed) {
+          return
+        }
+        if (renewed === true) {
+          this.scheduleSocketBudgetRenewal()
+          return
+        }
+        if (renewed === undefined && !retrying) {
+          this.options.metrics?.increment('socket_budget', 'renew_retry')
+          this.scheduleSocketBudgetRenewal(this.socketBudgetRenewRetryDelayMs, true)
+          return
+        }
+        this.options.metrics?.increment('socket_budget', renewed === false ? 'lost' : 'error')
+        this.failAndClose('SOCKET_BUDGET_LOST', 'Sync socket reservation was lost.', 1013)
       })()
-    }, this.socketBudgetRenewIntervalMs)
+    }, delayMs)
     this.socketBudgetRenewTimer.unref()
   }
 
@@ -1746,7 +2021,12 @@ function isRetryableError(code: string): boolean {
     code === 'SOCKET_BUDGET_LOST' ||
     code === 'OPERATION_UNAVAILABLE' ||
     code === 'INVITE_STORE_UNAVAILABLE' ||
-    code === 'DEADLINE_EXCEEDED'
+    code === 'DEADLINE_EXCEEDED' ||
+    // Contract C6: the client re-tickets once (SESSION_STALE) or re-runs epoch
+    // discovery once (CHALLENGE_EXPIRED). LIVE_SYNC_DISABLED is deliberately
+    // absent: it is permanent for the session.
+    code === 'SESSION_STALE' ||
+    code === 'CHALLENGE_EXPIRED'
   )
 }
 
@@ -1791,7 +2071,10 @@ const SHARED_VAULT_MEMBERSHIP_EVENT_FIELDS = new Set([
 ])
 const APPLICATION_STATE_EVENT_FIELDS = new Set([...INVITE_BASE_EVENT_FIELDS, 'resource', 'resourceUuid', 'revision'])
 const INVITE_ACTIONS = new Set(['created', 'updated', 'accepted', 'declined', 'canceled', 'deleted'])
-const MEMBERSHIP_ACTIONS = new Set(['invited', 'accepted', 'joined', 'left', 'revoked', 'role-changed'])
+// `role-changed` was dropped together with the client contract (N16): it has no
+// producer, and a client disconnects on an action it does not know, so the
+// gateway must not relay one even if a store somehow holds it.
+const MEMBERSHIP_ACTIONS = new Set(['invited', 'accepted', 'joined', 'left', 'revoked'])
 const MEMBERSHIP_ROLES = new Set(['read', 'write', 'admin'])
 const APPLICATION_STATE_ACTIONS = new Set(['updated', 'invalidated'])
 const APPLICATION_STATE_RESOURCES = new Set([
@@ -1848,7 +2131,7 @@ function isValidInviteEvent(value: unknown): value is JsonObject & { streamPosit
       }
       const needsMembership = event.action !== 'invited'
       const needsInvite = event.action === 'invited' || event.action === 'accepted'
-      const needsRole = ['invited', 'accepted', 'joined', 'role-changed'].includes(event.action)
+      const needsRole = ['invited', 'accepted', 'joined'].includes(event.action)
       return (
         (needsMembership ? isInviteUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
         (needsInvite ? isInviteUuid(event.inviteUuid) : event.inviteUuid === undefined) &&

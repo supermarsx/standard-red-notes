@@ -81,6 +81,24 @@ export type SyncNegotiatedOperation =
 
 export type JsonObject = Record<string, unknown>
 
+/**
+ * Marks a COMMITTED result the socket cannot carry. When a COMMITTED frame or a
+ * STATUS answer with `status: 'COMMITTED'` would exceed MAX_SYNC_FRAME_BYTES,
+ * the gateway sends a STATUS frame `{ status: 'COMMITTED', code: 'RESULT_TOO_LARGE' }`
+ * with NO `result` (same requestId/commandId/digest) and the client fetches the
+ * journaled result over HTTP by command id/digest. `ERROR RESULT_TOO_LARGE`
+ * remains the answer for oversized INGRESS only.
+ */
+export const SYNC_RESULT_TOO_LARGE_STATUS_CODE = 'RESULT_TOO_LARGE' as const
+
+/** Payload of a COMMITTED frame and of every STATUS answer. */
+export interface SyncCommandResultPayload extends JsonObject {
+  status: 'UNKNOWN' | 'ACCEPTED' | 'COMMITTED' | 'ERROR'
+  result?: JsonObject
+  /** Backend code for `status: 'ERROR'`, or RESULT_TOO_LARGE on a payload-less COMMITTED answer. */
+  code?: string
+}
+
 interface SyncFrameBase<TType extends string, TPayload extends JsonObject> {
   version: typeof SYNC_PROTOCOL_VERSION
   channel: typeof SYNC_CHANNEL

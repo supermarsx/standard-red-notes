@@ -12,6 +12,7 @@ import {
   type SyncApiRpcAdapter,
   type SyncCollaborationAuthorizationAdapter,
   type SyncCommandBackendAdapter,
+  type SyncCommandHandlerOptions,
   type SyncCommandMetrics,
   type SyncLiveAuthorizationAdapter,
   type SyncSocket,
@@ -292,6 +293,10 @@ async function authenticatedHandler(
     ownerId?: string
     leaseRenewIntervalMs?: number
     socketBudgetRenewIntervalMs?: number
+    socketBudgetRenewRetryDelayMs?: number
+    logRefusal?: SyncCommandHandlerOptions['logRefusal']
+    collaborationRoomEpochResolver?: SyncCommandHandlerOptions['collaborationRoomEpochResolver']
+    collaborationRoomEpochResolverTimeoutMs?: number
   } = {},
 ): Promise<{ handler: SyncCommandHandler; socket: FakeSocket; tickets: InMemorySyncAuthTicketStore }> {
   const tickets = options.tickets ?? new InMemorySyncAuthTicketStore()
@@ -321,6 +326,10 @@ async function authenticatedHandler(
     maxBufferedBytes: options.maxBufferedBytes,
     leaseRenewIntervalMs: options.leaseRenewIntervalMs,
     socketBudgetRenewIntervalMs: options.socketBudgetRenewIntervalMs,
+    socketBudgetRenewRetryDelayMs: options.socketBudgetRenewRetryDelayMs,
+    logRefusal: options.logRefusal,
+    collaborationRoomEpochResolver: options.collaborationRoomEpochResolver,
+    collaborationRoomEpochResolverTimeoutMs: options.collaborationRoomEpochResolverTimeoutMs,
   })
   enqueue(handler, authFrame(issued.ticket, deviceId, options.resumeSequence))
   await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('AUTHENTICATED'))
@@ -341,6 +350,10 @@ describe('SyncCommandHandler', () => {
     }
     expect(() => new SyncCommandHandler({ ...base, leaseRenewIntervalMs: 0 })).toThrow(/renewal interval/i)
     expect(() => new SyncCommandHandler({ ...base, socketBudgetRenewIntervalMs: 1.5 })).toThrow(/renewal interval/i)
+    expect(() => new SyncCommandHandler({ ...base, socketBudgetRenewRetryDelayMs: 0 })).toThrow(/renewal interval/i)
+    expect(() => new SyncCommandHandler({ ...base, collaborationRoomEpochResolverTimeoutMs: 0 })).toThrow(
+      /resolver timeout/i,
+    )
   })
 
   it('replays and live-delivers durable invite batches only after the exact prior cursor is acknowledged', async () => {
@@ -468,7 +481,7 @@ describe('SyncCommandHandler', () => {
       { action: 'joined', membershipUuid, role: 'read' },
       { action: 'left', membershipUuid },
       { action: 'revoked', membershipUuid },
-      { action: 'role-changed', membershipUuid, role: 'admin' },
+      // `role-changed` is deliberately absent: dropped with the client contract (N16).
     ]
     const membershipEvents = membershipDetails.map((details, index) => ({
       version: 1,
@@ -483,24 +496,24 @@ describe('SyncCommandHandler', () => {
     }))
     const applicationEvents = ['updated', 'invalidated'].map((action, index) => ({
       version: 1,
-      eventId: `00000000-0000-4000-8000-${String(index + 7).padStart(12, '0')}`,
-      streamPosition: `cursor-${index + 7}`,
+      eventId: `00000000-0000-4000-8000-${String(index + 6).padStart(12, '0')}`,
+      streamPosition: `cursor-${index + 6}`,
       kind: 'application-state',
       action,
       resource: index === 0 ? 'files-metadata' : 'account',
       ...(index === 0 ? { resourceUuid: sharedVaultUuid } : {}),
-      revision: String(index + 7),
-      occurredAt: index + 7,
+      revision: String(index + 6),
+      occurredAt: index + 6,
     }))
     const events = [...membershipEvents, ...applicationEvents]
     const inviteEvents: SyncInviteEventsAdapter = {
       distribution: 'shared',
       ready: () => true,
-      tail: vi.fn(async () => 'cursor-8'),
+      tail: vi.fn(async () => 'cursor-7'),
       readAfter: vi.fn(async (_userUuid, cursor) => ({
         previousCursor: cursor,
         events,
-        nextCursor: 'cursor-8',
+        nextCursor: 'cursor-7',
         hasMore: false,
       })),
       subscribeAvailability: vi.fn(() => () => undefined),
@@ -509,7 +522,60 @@ describe('SyncCommandHandler', () => {
     const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true })
     enqueue(handler, inviteSubscribeFrame(1, 'cursor-0', events.length))
     await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('INVITE_BATCH'))
-    expect(socket.frames.at(-1)?.payload).toMatchObject({ events, nextCursor: 'cursor-8' })
+    expect(socket.frames.at(-1)?.payload).toMatchObject({ events, nextCursor: 'cursor-7' })
+    handler.disconnect()
+  })
+
+  it('fails a live invite subscription with a retryable error when the store goes away, so the client re-subscribes', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    let ready = true
+    const listeners = new Set<() => void>()
+    const unsubscribe = vi.fn(() => undefined)
+    const inviteEvents: SyncInviteEventsAdapter = {
+      distribution: 'shared',
+      ready: () => ready,
+      tail: vi.fn(async () => 'cursor-0'),
+      readAfter: vi.fn(async (_userUuid, cursor) => ({
+        previousCursor: cursor,
+        events: [],
+        nextCursor: cursor,
+        hasMore: false,
+      })),
+      subscribeAvailability: vi.fn((_userUuid, listener) => {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+          unsubscribe()
+        }
+      }),
+    }
+    const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true, metrics })
+    enqueue(handler, inviteSubscribeFrame(1, 'cursor-0'))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('INVITE_READY'))
+    expect(listeners.size).toBe(1)
+    expect(inviteEvents.readAfter).toHaveBeenCalledTimes(1)
+
+    // The store (or its bus) leaves ready under the live subscription; the next
+    // wake-up used to be skipped silently, leaving the client subscribed to
+    // nothing. A retryable error is what makes it send a fresh INVITE_SUBSCRIBE,
+    // which is the only thing that re-issues a rejected SUBSCRIBE on the bus.
+    ready = false
+    for (const listener of [...listeners]) {
+      listener()
+    }
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ code: 'INVITE_STORE_UNAVAILABLE', retryable: true })
+    expect(metrics.increment).toHaveBeenCalledWith('invite_events', 'unavailable')
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(listeners.size).toBe(0)
+    // The unready store was never read.
+    expect(inviteEvents.readAfter).toHaveBeenCalledTimes(1)
+    // The socket itself is untouched: a fresh INVITE_SUBSCRIBE re-arms the stream.
+    expect(socket.closes).toHaveLength(0)
+    ready = true
+    enqueue(handler, inviteSubscribeFrame(2, 'cursor-0'))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('INVITE_READY'))
+    expect(listeners.size).toBe(1)
     handler.disconnect()
   })
 
@@ -594,6 +660,8 @@ describe('SyncCommandHandler', () => {
       inviteUuid: undefined,
       role: undefined,
     }
+    // Dropped with the client contract (N16): otherwise a well-formed membership
+    // event under an action the client no longer knows, which must not be relayed.
     const roleChangedMembership = {
       ...acceptedMembership,
       action: 'role-changed',
@@ -654,8 +722,8 @@ describe('SyncCommandHandler', () => {
       { ...invitedMembership, role: undefined },
       { ...leftMembership, inviteUuid: acceptedMembership.inviteUuid },
       { ...leftMembership, role: 'read' },
-      { ...roleChangedMembership, role: 1 },
-      { ...roleChangedMembership, role: 'owner' },
+      roleChangedMembership,
+      { ...roleChangedMembership, role: undefined },
       { ...applicationState, extra: true },
       { ...applicationState, action: 1 },
       { ...applicationState, action: 'unknown' },
@@ -1087,8 +1155,12 @@ describe('SyncCommandHandler', () => {
     })
     expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
 
+    // The one-use challenge is consumed: presenting it again finds nothing
+    // outstanding, which is CHALLENGE_EXPIRED (re-discover), not a policy denial.
     enqueue(handler, collaborationAuthorizationFrame(3, grantPayload))
-    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false }))
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'CHALLENGE_EXPIRED', retryable: true }),
+    )
     expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
     handler.disconnect()
   })
@@ -1169,7 +1241,7 @@ describe('SyncCommandHandler', () => {
         }),
       )
       await vi.waitFor(() =>
-        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false }),
+        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'CHALLENGE_EXPIRED', retryable: true }),
       )
       expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
     } finally {
@@ -1270,12 +1342,22 @@ describe('SyncCommandHandler', () => {
     }
   }
 
-  /** Wait until exactly `count` ERROR frames exist, the newest being a denial. */
-  async function expectDenials(socket: FakeSocket, count: number): Promise<void> {
+  /**
+   * Wait until exactly `count` ERROR frames exist, the newest being a denial.
+   * NOT_AUTHORIZED (permanent) is a binding/challenge mismatch or a policy
+   * denial; CHALLENGE_EXPIRED (retryable) means no usable discovery is
+   * outstanding (never discovered, consumed, past TTL, superseded) and the
+   * client re-runs discovery. Either way the grant backend is never reached.
+   */
+  async function expectDenials(
+    socket: FakeSocket,
+    count: number,
+    code: 'NOT_AUTHORIZED' | 'CHALLENGE_EXPIRED' = 'NOT_AUTHORIZED',
+  ): Promise<void> {
     await vi.waitFor(() => {
       const errors = socket.frames.filter((frame) => frame.type === 'ERROR')
       expect(errors).toHaveLength(count)
-      expect(errors.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false })
+      expect(errors.at(-1)?.payload).toEqual({ code, retryable: code === 'CHALLENGE_EXPIRED' })
     }, FRAME_WAIT)
   }
 
@@ -1367,9 +1449,12 @@ describe('SyncCommandHandler', () => {
         }),
       )
 
-      await expectDenials(socket, 1)
+      // Nothing is outstanding on this socket, so the answer is the retryable
+      // "re-discover" code rather than a policy denial; the backend stays untouched.
+      await expectDenials(socket, 1, 'CHALLENGE_EXPIRED')
       expect(authorizeCollaboration).not.toHaveBeenCalled()
-      expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', 'epoch_challenge_invalid')
+      expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', 'epoch_challenge_expired')
+      expect(metrics.increment).not.toHaveBeenCalledWith('collaboration_authorization', 'epoch_challenge_invalid')
       expect(socket.frames.some((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toBe(false)
 
       // Control: this exact spy DOES record a call once the handshake is real, so
@@ -1428,6 +1513,7 @@ describe('SyncCommandHandler', () => {
         expectedRoomEpoch: collaborationEpochs.roomEpoch,
         ...challenge,
       }),
+      'NOT_AUTHORIZED' as const,
     ],
     [
       'another room epoch',
@@ -1437,8 +1523,11 @@ describe('SyncCommandHandler', () => {
         expectedRoomEpoch: 'room_epoch_00000002',
         ...challenge,
       }),
+      'NOT_AUTHORIZED' as const,
     ],
     [
+      // A request id the socket never minted: whatever is outstanding was
+      // superseded from the client's point of view, so it may re-discover.
       'another discovery request id',
       (challenge: { epochDiscoveryChallenge: string; epochDiscoveryRequestId: string }) => ({
         noteUuid: 'note-1',
@@ -1447,6 +1536,7 @@ describe('SyncCommandHandler', () => {
         epochDiscoveryChallenge: challenge.epochDiscoveryChallenge,
         epochDiscoveryRequestId: 'some-other-discovery',
       }),
+      'CHALLENGE_EXPIRED' as const,
     ],
     [
       'a challenge value from nowhere',
@@ -1457,11 +1547,12 @@ describe('SyncCommandHandler', () => {
         epochDiscoveryChallenge: 'unrelated_challenge_abcdefghijklmnop',
         epochDiscoveryRequestId: challenge.epochDiscoveryRequestId,
       }),
+      'NOT_AUTHORIZED' as const,
     ],
   ])(
     'MISMATCHED challenge bound to %s never reaches the grant backend',
     { timeout: CHALLENGE_TEST_TIMEOUT },
-    async (_description, buildGrant) => {
+    async (_description, buildGrant, expectedCode) => {
       const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
       const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
       const challenge = await discover(handler, socket, 1)
@@ -1469,7 +1560,7 @@ describe('SyncCommandHandler', () => {
 
       enqueue(handler, collaborationAuthorizationFrame(2, buildGrant(challenge)))
 
-      await expectDenials(socket, 1)
+      await expectDenials(socket, 1, expectedCode)
       expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
       expect(socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toHaveLength(1)
       handler.disconnect()
@@ -1497,7 +1588,9 @@ describe('SyncCommandHandler', () => {
         }),
       )
 
-      await expectDenials(victimHandler.socket, 1)
+      // The victim socket has no discovery outstanding, so it answers the
+      // retryable re-discover code; the grant backend is still never reached.
+      await expectDenials(victimHandler.socket, 1, 'CHALLENGE_EXPIRED')
       // The challenge is bound to the socket that discovered it; the second
       // socket's grant backend is never consulted.
       expect(victim.authorizeCollaboration).not.toHaveBeenCalled()
@@ -1532,7 +1625,8 @@ describe('SyncCommandHandler', () => {
         }),
       )
 
-      await expectDenials(socket, 1)
+      // Superseded by the second discovery: retryable, and the backend is not consulted.
+      await expectDenials(socket, 1, 'CHALLENGE_EXPIRED')
       expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
 
       // Only ONE challenge is ever outstanding, and a failed attempt burns it.
@@ -1547,7 +1641,7 @@ describe('SyncCommandHandler', () => {
           ...second,
         }),
       )
-      await expectDenials(socket, 2)
+      await expectDenials(socket, 2, 'CHALLENGE_EXPIRED')
       expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
 
       // Control: a fresh discovery still grants, so the rejections above are
@@ -1602,7 +1696,8 @@ describe('SyncCommandHandler', () => {
         }),
       )
 
-      await expectDenials(socket, 1)
+      // Consumed on the first grant: nothing outstanding, no second capability.
+      await expectDenials(socket, 1, 'CHALLENGE_EXPIRED')
       expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
       expect(socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toHaveLength(2)
       handler.disconnect()
@@ -1640,7 +1735,8 @@ describe('SyncCommandHandler', () => {
           ...challenge,
         }),
       )
-      await expectDenials(socket, 2)
+      // The burned challenge leaves nothing outstanding: retryable, backend untouched.
+      await expectDenials(socket, 2, 'CHALLENGE_EXPIRED')
       expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
       handler.disconnect()
     },
@@ -2567,22 +2663,111 @@ describe('SyncCommandHandler', () => {
     expect(socket.frames).toHaveLength(frameCount)
   })
 
-  it('never enqueues an oversized result and emits only a small retryable fallback signal', async () => {
+  // -------------------------------------------------------------------------
+  // Contract C5. A committed result larger than one frame used to be answered
+  // with ERROR RESULT_TOO_LARGE, which the client read as an unrecoverable
+  // dispatched command (RECOVERY_REQUIRED until sign-out) and re-dialled into
+  // the same error. The command IS committed and journaled; only the result
+  // does not fit. The answer is a payload-less COMMITTED STATUS carrying the
+  // same ids and digest plus `code: 'RESULT_TOO_LARGE'`, so the client fetches
+  // the journaled result over HTTP. The socket stays open and healthy.
+  // -------------------------------------------------------------------------
+  const oversizedResult = { huge: 'x'.repeat(MAX_SYNC_FRAME_BYTES + 100 * 1024) }
+
+  it('answers an oversized COMMITTED result on the COMMAND leg with a payload-less COMMITTED status', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
     const backend: SyncCommandBackendAdapter = {
       ready: () => true,
-      execute: vi.fn(async (input) => ({ digest: input.digest, payload: { huge: 'x'.repeat(MAX_SYNC_FRAME_BYTES) } })),
+      execute: vi.fn(async (input) => ({ digest: input.digest, payload: oversizedResult })),
       status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
         status: 'UNKNOWN',
         digest: input.digest,
       })),
     }
-    const { handler, socket } = await authenticatedHandler({ backend })
-    enqueue(handler, commandFrame('large-result', 1))
-    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'RESULT_TOO_LARGE', retryable: true }))
-    expect(socket.frames.some((frame) => frame.type === 'COMMITTED')).toBe(false)
+    const { handler, socket } = await authenticatedHandler({ backend, metrics })
+    const frame = commandFrame('large-result', 1)
+    enqueue(handler, frame)
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('STATUS'))
+    expect(socket.frames.at(-1)).toMatchObject({
+      type: 'STATUS',
+      requestId: 'request-large-result',
+      commandId: 'large-result',
+      digest: frame.digest,
+      payload: { status: 'COMMITTED', code: 'RESULT_TOO_LARGE' },
+    })
+    expect(socket.frames.at(-1)?.payload).not.toHaveProperty('result')
+    expect(socket.frames.map((frame) => frame.type)).toEqual(['AUTHENTICATED', 'ACCEPTED', 'STATUS'])
+    expect(socket.frames.some((frame) => frame.type === 'ERROR')).toBe(false)
     expect(
       socket.frames.every((frame) => Buffer.byteLength(JSON.stringify(frame), 'utf8') <= MAX_SYNC_FRAME_BYTES),
     ).toBe(true)
+    expect(metrics.increment).toHaveBeenCalledWith('egress', 'RESULT_TOO_LARGE_STATUS')
+    expect(metrics.increment).not.toHaveBeenCalledWith('egress', 'RESULT_TOO_LARGE')
+    expect(socket.closes).toHaveLength(0)
+
+    // The socket is still healthy: a follow-up command on the same socket commits.
+    ;(backend.execute as ReturnType<typeof vi.fn>).mockImplementationOnce(async (input: { digest: string }) => ({
+      digest: input.digest,
+      payload: { small: true },
+    }))
+    enqueue(handler, commandFrame('small-result', 2))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COMMITTED'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ status: 'COMMITTED', result: { small: true } })
+    await handler.stop()
+  })
+
+  it('answers an oversized COMMITTED result on the STATUS leg with a payload-less COMMITTED status', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const body = { api: '20200115', items: [] }
+    const digest = digestSyncCommandBody(body)
+    const backend: SyncCommandBackendAdapter = {
+      ready: () => true,
+      execute: vi.fn(async (input) => ({ digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'COMMITTED',
+        digest: input.digest,
+        payload: oversizedResult,
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ backend, metrics, resumeSequence: 40 })
+    enqueue(handler, statusFrame('large-status', 1, digest))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('STATUS'))
+    expect(socket.frames.at(-1)).toMatchObject({
+      type: 'STATUS',
+      requestId: 'status-large-status',
+      commandId: 'large-status',
+      sequence: 42,
+      digest,
+      payload: { status: 'COMMITTED', code: 'RESULT_TOO_LARGE' },
+    })
+    expect(socket.frames.at(-1)?.payload).not.toHaveProperty('result')
+    expect(socket.frames.some((frame) => frame.type === 'ERROR')).toBe(false)
+    expect(metrics.increment).toHaveBeenCalledWith('egress', 'RESULT_TOO_LARGE_STATUS')
+    expect(socket.closes).toHaveLength(0)
+    await handler.stop()
+  })
+
+  it('still refuses other oversized egress with the retryable RESULT_TOO_LARGE error', async () => {
+    // Only a COMMITTED result has a journaled HTTP fallback; an oversized
+    // non-committed answer (here: an ACCEPTED status) keeps the old signal.
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const backend: SyncCommandBackendAdapter = {
+      ready: () => true,
+      execute: vi.fn(async (input) => ({ digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'ACCEPTED',
+        digest: input.digest,
+        payload: oversizedResult,
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ backend, metrics })
+    enqueue(handler, statusFrame('large-accepted', 1, 'a'.repeat(64)))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'RESULT_TOO_LARGE', retryable: true }))
+    expect(socket.frames.some((frame) => frame.type === 'STATUS')).toBe(false)
+    expect(
+      socket.frames.every((frame) => Buffer.byteLength(JSON.stringify(frame), 'utf8') <= MAX_SYNC_FRAME_BYTES),
+    ).toBe(true)
+    expect(metrics.increment).toHaveBeenCalledWith('egress', 'RESULT_TOO_LARGE')
     await handler.stop()
   })
 
@@ -2674,5 +2859,481 @@ describe('SyncCommandHandler', () => {
     enqueue(handler, pingFrame(1))
     await vi.waitFor(() => expect(socket.closes.at(-1)?.code).toBe(1008))
     expect(socket.frames).toHaveLength(frameCount)
+  })
+
+  // -------------------------------------------------------------------------
+  // R6. One Redis operation timeout or ready-flap used to close the WHOLE sync
+  // socket: an `acquire` that threw escaped handleCommand into the queue's
+  // catch (SYNC_DISABLED, 1013), and a per-frame readiness check closed an
+  // authenticated socket 1012 the moment any store left `ready` -- taking the
+  // invite, collaboration, RPC and files lanes with it. Store trouble is now one
+  // command's problem, and a socket-budget renewal gets one retry.
+  // -------------------------------------------------------------------------
+  it('answers BUSY and keeps the socket open when the lease store cannot be reached for one command', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const backing = new InMemorySyncCommandLeaseRegistry()
+    const leases: SyncCommandLeaseRegistry = {
+      distribution: 'shared',
+      ready: () => true,
+      acquire: vi
+        .fn<SyncCommandLeaseRegistry['acquire']>()
+        .mockRejectedValueOnce(new Error('Sync Redis operation timed out.'))
+        .mockImplementation((input) => backing.acquire(input)),
+      renew: (input) => backing.renew(input),
+      release: (input) => backing.release(input),
+    }
+    const backend = committingBackend()
+    const { handler, socket } = await authenticatedHandler({ leases, backend, metrics })
+
+    enqueue(handler, commandFrame('lease-store-timeout', 1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BUSY', retryable: true })
+    expect(socket.closes).toHaveLength(0)
+    expect(metrics.increment).toHaveBeenCalledWith('lease', 'acquire_error')
+    expect(metrics.increment).not.toHaveBeenCalledWith('backend', 'transport_unavailable')
+    expect(backend.execute).not.toHaveBeenCalled()
+
+    // The same socket carries the retry once the store answers again.
+    enqueue(handler, commandFrame('lease-store-timeout', 2))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COMMITTED'))
+    expect(socket.closes).toHaveLength(0)
+    await handler.stop()
+  })
+
+  it('refuses COMMAND and STATUS individually while a store or the session plane is unready, and keeps the other lanes', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    let leasesReady = true
+    let sessionReady = true
+    const backing = new InMemorySyncCommandLeaseRegistry()
+    const leases: SyncCommandLeaseRegistry = {
+      distribution: 'shared',
+      ready: () => leasesReady,
+      acquire: (input) => backing.acquire(input),
+      renew: (input) => backing.renew(input),
+      release: (input) => backing.release(input),
+    }
+    const authorization: SyncLiveAuthorizationAdapter = {
+      ready: () => true,
+      sessionAuthorizationReady: () => sessionReady,
+      authorize: vi.fn<SyncLiveAuthorizationAdapter['authorize']>(async () => ({ authorized: true })),
+    }
+    const backend = committingBackend()
+    const { handler, socket } = await authenticatedHandler({ leases, authorization, backend, metrics })
+
+    leasesReady = false
+    enqueue(handler, commandFrame('no-lease-store', 1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true })
+    expect(metrics.increment).toHaveBeenCalledWith('command', 'unavailable')
+    expect(backend.execute).not.toHaveBeenCalled()
+    // Not closed: a PING on the same socket is still answered.
+    enqueue(handler, pingFrame(2))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('PONG'))
+    expect(socket.closes).toHaveLength(0)
+
+    leasesReady = true
+    sessionReady = false
+    enqueue(handler, statusFrame('no-session-plane', 3, 'a'.repeat(64)))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true })
+    expect(metrics.increment).toHaveBeenCalledWith('status', 'unavailable')
+    expect(backend.status).not.toHaveBeenCalled()
+    expect(authorization.authorize).not.toHaveBeenCalled()
+    expect(socket.closes).toHaveLength(0)
+
+    // Both back: the socket that was never closed commits normally.
+    sessionReady = true
+    enqueue(handler, commandFrame('stores-back', 4))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COMMITTED'))
+    expect(socket.closes).toHaveLength(0)
+    await handler.stop()
+  })
+
+  it('retries a socket-budget renewal once when its outcome is unknown, and closes only when the retry fails too', async () => {
+    const survivingMetrics: SyncCommandMetrics = { increment: vi.fn() }
+    const survivingRenew = vi
+      .fn<SyncSocketBudget['renew']>()
+      .mockRejectedValueOnce(new Error('Sync Redis socket budget renewal outcome is unknown.'))
+      .mockResolvedValue(true)
+    const surviving = await authenticatedHandler({
+      socketBudget: {
+        distribution: 'shared',
+        ready: () => true,
+        acquire: vi.fn(async () => true),
+        renew: survivingRenew,
+        release: vi.fn(async () => undefined),
+      },
+      ownerId: 'flapping-socket',
+      socketBudgetRenewIntervalMs: 20,
+      socketBudgetRenewRetryDelayMs: 20,
+      metrics: survivingMetrics,
+    })
+    await vi.waitFor(() => expect(survivingRenew.mock.calls.length).toBeGreaterThanOrEqual(3))
+    expect(surviving.socket.closes).toHaveLength(0)
+    expect(surviving.socket.frames.some((frame) => frame.type === 'ERROR')).toBe(false)
+    expect(survivingMetrics.increment).toHaveBeenCalledWith('socket_budget', 'renew_retry')
+    expect(survivingMetrics.increment).not.toHaveBeenCalledWith('socket_budget', 'error')
+    await surviving.handler.stop()
+
+    const lostMetrics: SyncCommandMetrics = { increment: vi.fn() }
+    const lostRenew = vi.fn<SyncSocketBudget['renew']>(async () => {
+      throw new Error('Sync Redis socket budget is not ready.')
+    })
+    const lost = await authenticatedHandler({
+      socketBudget: {
+        distribution: 'shared',
+        ready: () => true,
+        acquire: vi.fn(async () => true),
+        renew: lostRenew,
+        release: vi.fn(async () => undefined),
+      },
+      ownerId: 'still-flapping-socket',
+      // The first renewal lands after the AUTHENTICATED frame has been observed.
+      socketBudgetRenewIntervalMs: 200,
+      socketBudgetRenewRetryDelayMs: 30,
+      metrics: lostMetrics,
+    })
+    await vi.waitFor(() =>
+      expect(lost.socket.frames.at(-1)?.payload).toEqual({ code: 'SOCKET_BUDGET_LOST', retryable: true }),
+    )
+    expect(lost.socket.closes.at(-1)?.code).toBe(1013)
+    // Exactly the original attempt plus its one retry; not a third.
+    expect(lostRenew).toHaveBeenCalledTimes(2)
+    expect(lostMetrics.increment).toHaveBeenCalledWith('socket_budget', 'renew_retry')
+    expect(lostMetrics.increment).toHaveBeenCalledWith('socket_budget', 'error')
+    await lost.handler.stop()
+  })
+
+  // -------------------------------------------------------------------------
+  // R36. A lease outlives a SIGKILLed gateway by up to its TTL, so the device's
+  // first command on its next socket is refused BUSY. Nothing logged that.
+  // -------------------------------------------------------------------------
+  it('names a BUSY lease on the first command of a fresh socket and logs it through the throttled refusal logger', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const logRefusal = vi.fn()
+    const leases: SyncCommandLeaseRegistry = {
+      distribution: 'shared',
+      ready: () => true,
+      acquire: vi.fn(async () => ({ acquired: false as const, reason: 'BUSY' as const })),
+      renew: vi.fn(async () => false),
+      release: vi.fn(async () => undefined),
+    }
+    const { handler, socket } = await authenticatedHandler({ leases, metrics, logRefusal })
+
+    enqueue(handler, commandFrame('after-crash', 1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BUSY', retryable: true }))
+    expect(metrics.increment).toHaveBeenCalledWith('lease', 'busy')
+    expect(metrics.increment).toHaveBeenCalledWith('lease', 'busy-after-close')
+    expect(logRefusal).toHaveBeenCalledTimes(1)
+    expect(logRefusal).toHaveBeenCalledWith(
+      expect.stringMatching(/lease outlived its socket/i),
+      'lease:busy-after-close',
+      {
+        code: 'BUSY',
+      },
+    )
+
+    // A later BUSY on the same socket is ordinary contention, not the crash signature.
+    enqueue(handler, commandFrame('after-crash', 2))
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(2))
+    expect(
+      (metrics.increment as ReturnType<typeof vi.fn>).mock.calls.filter(([, code]) => code === 'busy'),
+    ).toHaveLength(2)
+    expect(
+      (metrics.increment as ReturnType<typeof vi.fn>).mock.calls.filter(([, code]) => code === 'busy-after-close'),
+    ).toHaveLength(1)
+    expect(logRefusal).toHaveBeenCalledTimes(1)
+    expect(socket.closes).toHaveLength(0)
+    handler.disconnect()
+  })
+
+  // -------------------------------------------------------------------------
+  // R8. The pre-execute authorization already validated the session; the
+  // backend used to validate it a third time. The handler hands the SECOND
+  // authorization's evidence (never the first, which is older) to execute, and
+  // the STATUS authorization's evidence to status.
+  // -------------------------------------------------------------------------
+  it('hands the pre-execute authorization session to execute and the STATUS session to status', async () => {
+    const first = { validated: 'first' }
+    const second = { validated: 'second' }
+    const forStatus = { validated: 'status' }
+    const authorization: SyncLiveAuthorizationAdapter = {
+      ready: () => true,
+      authorize: vi
+        .fn<SyncLiveAuthorizationAdapter['authorize']>()
+        .mockResolvedValueOnce({ authorized: true, session: first })
+        .mockResolvedValueOnce({ authorized: true, session: second })
+        .mockResolvedValueOnce({ authorized: true, session: forStatus }),
+    }
+    const backend = committingBackend()
+    const { handler, socket } = await authenticatedHandler({ authorization, backend })
+
+    const frame = commandFrame('with-session', 1)
+    enqueue(handler, frame)
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COMMITTED'))
+    expect(backend.execute).toHaveBeenCalledTimes(1)
+    expect(backend.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ commandId: 'with-session' }),
+      expect.any(AbortSignal),
+      second,
+    )
+    expect((backend.execute as ReturnType<typeof vi.fn>).mock.calls[0][2]).not.toBe(first)
+
+    enqueue(handler, statusFrame('with-session', 2, frame.digest as string))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('STATUS'))
+    expect(backend.status).toHaveBeenCalledWith(
+      expect.objectContaining({ commandId: 'with-session' }),
+      expect.any(AbortSignal),
+      forStatus,
+    )
+    handler.disconnect()
+  })
+
+  // -------------------------------------------------------------------------
+  // Contract C6. SESSION_STALE (bearer rotated: re-ticket once and retry) and
+  // LIVE_SYNC_DISABLED (per-user switch off: permanent) are PUBLIC codes with
+  // their own retryability; SHADOW_BANNED is still never revealed.
+  // -------------------------------------------------------------------------
+  it.each([
+    ['SESSION_STALE', 'SESSION_STALE', true],
+    ['LIVE_SYNC_DISABLED', 'LIVE_SYNC_DISABLED', false],
+    ['SHADOW_BANNED', 'NOT_AUTHORIZED', false],
+    ['SESSION_REVOKED', 'NOT_AUTHORIZED', false],
+  ] as const)(
+    'reports %s as %s with retryable=%s on COMMAND and STATUS',
+    async (authorizationCode, publicCode, retryable) => {
+      const authorization: SyncLiveAuthorizationAdapter = {
+        ready: () => true,
+        authorize: vi.fn(async () => ({ authorized: false as const, code: authorizationCode })),
+      }
+      const backend = committingBackend()
+      const { handler, socket } = await authenticatedHandler({ authorization, backend })
+      enqueue(handler, commandFrame(`denied-${authorizationCode}`, 1))
+      await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('ERROR'))
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: publicCode, retryable })
+      enqueue(handler, statusFrame(`denied-${authorizationCode}`, 2, 'a'.repeat(64)))
+      await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(2))
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: publicCode, retryable })
+      expect(backend.execute).not.toHaveBeenCalled()
+      expect(backend.status).not.toHaveBeenCalled()
+      expect(socket.closes).toHaveLength(0)
+      handler.disconnect()
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // Contract C4. The discovery adapter reports the HMAC INITIAL epoch; once a
+  // room's epoch has rotated (last editor left, key/membership change) that
+  // epoch is refused forever and the room is unjoinable. The handler asks a
+  // resolver for the room's CURRENT epoch and binds the one-use challenge to
+  // it, so the client echoes an epoch the room will accept.
+  // -------------------------------------------------------------------------
+  const INITIAL_ROOM_EPOCH = 'initial_room_epoch_0001'
+  const ROTATED_ROOM_EPOCH = 'rotated_room_epoch_0002'
+
+  /** Discovery reports the initial epoch; a grant echoes whatever epoch the request expects (as the real service does). */
+  function echoingCollaborationAdapter() {
+    const authorizeCollaboration = vi.fn(
+      async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
+        request.epochDiscovery === true
+          ? {
+              authorized: true as const,
+              epochDiscovery: true as const,
+              room: request.noteUuid,
+              serverUpdatedAtTimestamp: 123,
+              collaborationProtocolVersion: 3 as const,
+              roomEpoch: INITIAL_ROOM_EPOCH,
+              collaborationSecurityEpoch: collaborationEpochs.securityEpoch,
+            }
+          : {
+              authorized: true as const,
+              capability: 'collaboration-capability',
+              room: request.noteUuid,
+              expiresIn: 300,
+              serverUpdatedAtTimestamp: 123,
+              collaborationProtocolVersion: 3 as const,
+              roomEpoch: request.expectedRoomEpoch as string,
+              collaborationSecurityEpoch: collaborationEpochs.securityEpoch,
+              ...(typeof request.leaseRequestId === 'string' ? { leaseRequestId: request.leaseRequestId } : {}),
+              ...(typeof request.bootstrapChallenge === 'string'
+                ? { bootstrapChallenge: request.bootstrapChallenge }
+                : {}),
+            },
+    )
+    const adapter: SyncCollaborationAuthorizationAdapter = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration,
+    }
+    return { adapter, authorizeCollaboration }
+  }
+
+  it(
+    'binds the discovery challenge to the resolved current room epoch and refuses the initial one',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const metrics: SyncCommandMetrics = { increment: vi.fn() }
+      const { adapter, authorizeCollaboration } = echoingCollaborationAdapter()
+      const collaborationRoomEpochResolver = vi.fn(async () => ROTATED_ROOM_EPOCH)
+      const { handler, socket } = await authenticatedHandler({
+        collaborationAuthorization: adapter,
+        collaborationRoomEpochResolver,
+        metrics,
+      })
+
+      enqueue(handler, collaborationAuthorizationFrame(1))
+      await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+      const discovery = payloadOf(socket.frames.at(-1))
+      expect(discovery).toMatchObject({ epochDiscovery: true, roomEpoch: ROTATED_ROOM_EPOCH })
+      expect(collaborationRoomEpochResolver).toHaveBeenCalledWith('note-1', collaborationEpochs.securityEpoch)
+      expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', 'epoch_resolved')
+
+      // The initial (adapter-reported) epoch is no longer what the challenge is bound to.
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(2, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: INITIAL_ROOM_EPOCH,
+          epochDiscoveryChallenge: discovery.epochDiscoveryChallenge,
+          epochDiscoveryRequestId: discovery.epochDiscoveryRequestId,
+        }),
+      )
+      await expectDenials(socket, 1, 'NOT_AUTHORIZED')
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+      // A fresh discovery bound to the resolved epoch grants for exactly that epoch.
+      enqueue(handler, collaborationAuthorizationFrame(3))
+      await vi.waitFor(() =>
+        expect(socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toHaveLength(2),
+      )
+      const second = payloadOf(socket.frames.at(-1))
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(4, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: ROTATED_ROOM_EPOCH,
+          epochDiscoveryChallenge: second.epochDiscoveryChallenge,
+          epochDiscoveryRequestId: second.epochDiscoveryRequestId,
+          leaseRequestId: 'lease-1',
+        }),
+      )
+      await expectGrants(socket, 1)
+      expect(socket.frames.at(-1)?.payload).toMatchObject({ roomEpoch: ROTATED_ROOM_EPOCH, leaseRequestId: 'lease-1' })
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(3)
+      handler.disconnect()
+    },
+  )
+
+  type RoomEpochResolver = NonNullable<SyncCommandHandlerOptions['collaborationRoomEpochResolver']>
+  const resolverCases: Array<{ label: string; resolver: RoomEpochResolver; expectedMetric?: string }> = [
+    { label: 'answers nothing', resolver: async () => undefined },
+    {
+      label: 'throws',
+      resolver: async () => {
+        throw new Error('room state unavailable')
+      },
+      expectedMetric: 'epoch_resolver_failed',
+    },
+    {
+      label: 'exceeds its budget',
+      resolver: () => new Promise<string>(() => undefined),
+      expectedMetric: 'epoch_resolver_failed',
+    },
+    { label: 'answers a malformed epoch', resolver: async () => 'no', expectedMetric: 'epoch_resolver_invalid' },
+    { label: 'answers the initial epoch', resolver: async () => INITIAL_ROOM_EPOCH },
+  ]
+
+  it.each(resolverCases)('keeps the initial epoch when the resolver $label', async ({ resolver, expectedMetric }) => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const { adapter } = echoingCollaborationAdapter()
+    const { handler, socket } = await authenticatedHandler({
+      collaborationAuthorization: adapter,
+      collaborationRoomEpochResolver: resolver,
+      collaborationRoomEpochResolverTimeoutMs: 20,
+      metrics,
+    })
+    enqueue(handler, collaborationAuthorizationFrame(1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+    const discovery = payloadOf(socket.frames.at(-1))
+    expect(discovery).toMatchObject({ epochDiscovery: true, roomEpoch: INITIAL_ROOM_EPOCH })
+    if (expectedMetric) {
+      expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', expectedMetric)
+    }
+    expect(metrics.increment).not.toHaveBeenCalledWith('collaboration_authorization', 'epoch_resolved')
+
+    enqueue(
+      handler,
+      collaborationAuthorizationFrame(2, {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: INITIAL_ROOM_EPOCH,
+        epochDiscoveryChallenge: discovery.epochDiscoveryChallenge,
+        epochDiscoveryRequestId: discovery.epochDiscoveryRequestId,
+      }),
+    )
+    await expectGrants(socket, 1)
+    expect(socket.closes).toHaveLength(0)
+    handler.disconnect()
+  })
+
+  // -------------------------------------------------------------------------
+  // N6. `rpc backpressure_wait` fired once per stalled 64 KiB chunk. It is now
+  // aggregated per RPC and emitted once when the RPC finishes, with the stall
+  // count and the longest single wait as optional samples.
+  // -------------------------------------------------------------------------
+  it('emits one backpressure metric per RPC with the stall count and longest wait', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn(), observe: vi.fn() }
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({
+        status: 200,
+        headers: { 'content-type': 'application/octet-stream' },
+        stream: (async function* () {
+          yield Buffer.from('12345678')
+          yield Buffer.from('abcdefgh')
+        })(),
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc, metrics })
+    enqueue(handler, rpcFrame(1, { requestId: 'rpc-stalls', stream: true, initialCreditBytes: 4 }))
+    await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('RPC_RESPONSE'))
+    expect(metrics.increment).not.toHaveBeenCalledWith('rpc', 'backpressure_wait')
+
+    // Two stalls: the first chunk waits for credit, so does the second.
+    enqueue(handler, rpcCreditFrame(2, 'rpc-stalls', 8))
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'RPC_CHUNK')).toHaveLength(1))
+    enqueue(handler, rpcCreditFrame(3, 'rpc-stalls', 8))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+
+    const backpressure = (metrics.increment as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([event, code]) => event === 'rpc' && code === 'backpressure_wait',
+    )
+    expect(backpressure).toHaveLength(1)
+    expect(metrics.observe).toHaveBeenCalledWith('rpc', 'backpressure_wait_count', 2)
+    expect(metrics.observe).toHaveBeenCalledWith('rpc', 'backpressure_wait_max_ms', expect.any(Number))
+    const [, , maxWaitMs] = (metrics.observe as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([, code]) => code === 'backpressure_wait_max_ms',
+    ) as [string, string, number]
+    expect(maxWaitMs).toBeGreaterThanOrEqual(0)
+    handler.disconnect()
+  })
+
+  it('emits no backpressure metric for an RPC that never stalled', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn(), observe: vi.fn() }
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({ status: 200, body: { ok: true } })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc, metrics })
+    enqueue(handler, rpcFrame(1, { requestId: 'rpc-smooth' }))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+    expect(metrics.increment).not.toHaveBeenCalledWith('rpc', 'backpressure_wait')
+    expect(metrics.observe).not.toHaveBeenCalled()
+    handler.disconnect()
   })
 })

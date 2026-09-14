@@ -44,6 +44,36 @@ export interface DurableSyncCommandPort {
 type ValidatedSession = {
   locals: ResponseLocals
   token: CrossServiceTokenData
+  /** Identity the validation was performed for; a supplied session is reused only for the same one. */
+  identity: Pick<SyncTicketIdentity, 'userUuid' | 'sessionUuid'>
+  /** Adapter clock at validation time; evidence older than SUPPLIED_SESSION_MAX_AGE_MS is not reused. */
+  validatedAt: number
+}
+
+/**
+ * How long the evidence from the pre-execute authorization may stand in for a
+ * fresh `validate()` inside `execute`/`status` (R8). The handler calls
+ * authorize immediately before execute, so this is a bound on scheduling
+ * delay, not a cache lifetime.
+ */
+export const SUPPLIED_SESSION_MAX_AGE_MS = 5_000
+
+/**
+ * Why a session could not be validated. `stale` -- the auth service answered
+ * and the bearer captured at ticket time no longer validates (rotated,
+ * refreshed, or now bound to another identity) -- maps to the PUBLIC,
+ * retryable SESSION_STALE so the client re-tickets once; everything else
+ * (no bearer, plane unready, transport failure, unverifiable token) stays the
+ * private SESSION_REVOKED (NOT_AUTHORIZED on the wire).
+ */
+class SessionValidationError extends Error {
+  constructor(
+    message: string,
+    readonly kind: 'stale' | 'revoked',
+  ) {
+    super(message)
+    this.name = 'SessionValidationError'
+  }
 }
 
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -88,7 +118,15 @@ export class SyncWebSocketCommandAdapter
     private readonly durableSync: DurableSyncCommandPort | undefined,
     private readonly authJwtSecret: string,
     private readonly collaborationAuthorization?: CollaborationAuthorizationService,
+    private readonly now: () => number = Date.now,
   ) {}
+
+  /**
+   * Sessions THIS adapter validated. `execute`/`status` accept supplied session
+   * evidence only when it is one of these (a WeakSet, so nothing is retained):
+   * the handler carries the value opaquely, and anything else is untrusted.
+   */
+  private readonly issuedSessions = new WeakSet<ValidatedSession>()
 
   /**
    * Session revalidation readiness. Deliberately says nothing about the durable
@@ -113,12 +151,15 @@ export class SyncWebSocketCommandAdapter
     let validated: ValidatedSession
     try {
       validated = await this.validate(input.identity, signal)
-    } catch {
-      return { authorized: false, code: 'SESSION_REVOKED' }
+    } catch (error) {
+      return {
+        authorized: false,
+        code: error instanceof SessionValidationError && error.kind === 'stale' ? 'SESSION_STALE' : 'SESSION_REVOKED',
+      }
     }
 
     if (input.operation === 'STATUS') {
-      return { authorized: true }
+      return { authorized: true, session: validated }
     }
     if (validated.locals.readOnlyAccess) {
       return { authorized: false, code: 'READ_ONLY' }
@@ -126,18 +167,25 @@ export class SyncWebSocketCommandAdapter
     if (validated.locals.hasContentLimit) {
       return { authorized: false, code: 'CONTENT_LIMIT' }
     }
-    if (validated.locals.shadowBanned || validated.locals.liveSyncEnabled === false) {
+    // The per-user "Live sync" switch is a public, permanent refusal (the
+    // client stays on HTTP); it is checked before the shadow ban so that a
+    // shadow-banned user with live sync off gets the same answer as anyone
+    // else with live sync off, and the ban itself is still never revealed.
+    if (validated.locals.liveSyncEnabled === false) {
+      return { authorized: false, code: 'LIVE_SYNC_DISABLED' }
+    }
+    if (validated.locals.shadowBanned) {
       return { authorized: false, code: 'SHADOW_BANNED' }
     }
     if (input.payload && !this.hasSharedVaultAccess(input.payload, validated.token)) {
       return { authorized: false, code: 'SHARED_VAULT_FORBIDDEN' }
     }
-    return { authorized: true }
+    return { authorized: true, session: validated }
   }
 
-  async execute(input: SyncBackendCommandInput, signal: AbortSignal): Promise<SyncBackendCommit> {
+  async execute(input: SyncBackendCommandInput, signal: AbortSignal, session?: unknown): Promise<SyncBackendCommit> {
     const durableSync = this.requireDurableSync()
-    const validated = await this.validate(input.identity, signal)
+    const validated = this.reusableSession(session, input.identity) ?? (await this.validate(input.identity, signal))
     const body = this.commandBody(input.payload)
     const { request, response } = this.httpContext(validated.locals, body)
     const result = await abortable(
@@ -156,9 +204,13 @@ export class SyncWebSocketCommandAdapter
     return { digest, payload: result.data }
   }
 
-  async status(input: Omit<SyncBackendCommandInput, 'payload'>, signal: AbortSignal): Promise<SyncBackendStatus> {
+  async status(
+    input: Omit<SyncBackendCommandInput, 'payload'>,
+    signal: AbortSignal,
+    session?: unknown,
+  ): Promise<SyncBackendStatus> {
     const durableSync = this.requireDurableSync()
-    const validated = await this.validate(input.identity, signal)
+    const validated = this.reusableSession(session, input.identity) ?? (await this.validate(input.identity, signal))
     const { request, response } = this.httpContext(validated.locals, {})
     const result = await abortable(
       durableSync.getSyncCommandStatus(request, response, input.commandId, input.digest),
@@ -211,12 +263,35 @@ export class SyncWebSocketCommandAdapter
     return this.durableSync
   }
 
+  /**
+   * Session evidence handed back by the handler from the authorization that
+   * immediately preceded `execute`/`status` (R8: each `SYNC_ITEMS` command used
+   * to cost three uncached validations against auth). Reused only when it is
+   * a session THIS adapter validated, for THIS identity, within
+   * SUPPLIED_SESSION_MAX_AGE_MS; anything else falls back to a fresh
+   * `validate()`.
+   */
+  private reusableSession(session: unknown, identity: SyncTicketIdentity): ValidatedSession | undefined {
+    if (typeof session !== 'object' || session === null || !this.issuedSessions.has(session as ValidatedSession)) {
+      return undefined
+    }
+    const validated = session as ValidatedSession
+    if (
+      validated.identity.userUuid !== identity.userUuid ||
+      validated.identity.sessionUuid !== identity.sessionUuid ||
+      this.now() - validated.validatedAt > SUPPLIED_SESSION_MAX_AGE_MS
+    ) {
+      return undefined
+    }
+    return validated
+  }
+
   private async validate(identity: SyncTicketIdentity, signal: AbortSignal): Promise<ValidatedSession> {
     // Session revalidation needs the auth secret and the HTTP service proxy,
     // never the durable port -- gating it on `ready()` is what made an unbound
     // gRPC proxy look like a dead authorization plane.
     if (!identity.authorization || !this.sessionAuthorizationReady()) {
-      throw new Error('Live sync authorization is unavailable.')
+      throw new SessionValidationError('Live sync authorization is unavailable.', 'revoked')
     }
     const authorization = identity.authorization.replace(/^Bearer\s+/i, '')
     const authResponse = await abortable(
@@ -227,16 +302,19 @@ export class SyncWebSocketCommandAdapter
       signal,
     )
     if (authResponse.status !== 200 || !this.isJsonObject(authResponse.data)) {
-      throw new Error('Sync session is no longer authorized.')
+      // Auth answered and refused the bearer captured at ticket time: the
+      // session token was rotated or refreshed mid-socket. Re-ticketing with
+      // the current token fixes it, so this is the retryable SESSION_STALE.
+      throw new SessionValidationError('Sync session is no longer authorized.', 'stale')
     }
     const authToken = authResponse.data.authToken
     if (typeof authToken !== 'string') {
-      throw new Error('Sync session validation returned no token.')
+      throw new SessionValidationError('Sync session validation returned no token.', 'revoked')
     }
     const token = verify(authToken, this.authJwtSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
     const session = token.session
     if (token.user.uuid !== identity.userUuid || session?.uuid !== identity.sessionUuid) {
-      throw new Error('Sync session identity changed.')
+      throw new SessionValidationError('Sync session identity changed.', 'stale')
     }
     const readOnlyAccess = session.readonly_access || token.mcp_scope?.access === 'read'
     const locals = {
@@ -255,7 +333,14 @@ export class SyncWebSocketCommandAdapter
       authTokenVersion: token.version,
       shadowBanned: token.shadow_banned === true,
     } satisfies ResponseLocals
-    return { locals, token }
+    const validated: ValidatedSession = {
+      locals,
+      token,
+      identity: { userUuid: identity.userUuid, sessionUuid: identity.sessionUuid },
+      validatedAt: this.now(),
+    }
+    this.issuedSessions.add(validated)
+    return validated
   }
 
   private hasSharedVaultAccess(payload: JsonObject, token: CrossServiceTokenData): boolean {

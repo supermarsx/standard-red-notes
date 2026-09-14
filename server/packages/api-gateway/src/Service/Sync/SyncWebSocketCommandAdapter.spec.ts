@@ -32,6 +32,7 @@ function token(overrides: Record<string, unknown> = {}): string {
 function build(
   overrides: Record<string, unknown> = {},
   collaboration?: CollaborationAuthorizationService,
+  now: () => number = Date.now,
 ): {
   adapter: SyncWebSocketCommandAdapter
   serviceProxy: ServiceProxyInterface
@@ -56,7 +57,7 @@ function build(
     })),
   }
   return {
-    adapter: new SyncWebSocketCommandAdapter(serviceProxy, durable, JWT_SECRET, collaboration),
+    adapter: new SyncWebSocketCommandAdapter(serviceProxy, durable, JWT_SECRET, collaboration, now),
     serviceProxy,
     durable,
   }
@@ -117,7 +118,7 @@ describe('SyncWebSocketCommandAdapter', () => {
           { identity, operation: 'COMMAND', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 1 },
           new AbortController().signal,
         ),
-      ).resolves.toEqual({ authorized: true })
+      ).resolves.toEqual({ authorized: true, session: expect.any(Object) })
       await expect(
         adapter.authorizeCollaboration(collaborationInput, new AbortController().signal),
       ).resolves.toMatchObject({ authorized: true })
@@ -139,7 +140,7 @@ describe('SyncWebSocketCommandAdapter', () => {
           { identity, operation: 'STATUS', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
           new AbortController().signal,
         ),
-      ).resolves.toEqual({ authorized: true })
+      ).resolves.toEqual({ authorized: true, session: expect.any(Object) })
     })
 
     it('reports both planes unready without an auth secret, since the session plane rests on it', async () => {
@@ -200,7 +201,8 @@ describe('SyncWebSocketCommandAdapter', () => {
       new AbortController().signal,
     )
 
-    expect(authorization).toEqual({ authorized: true })
+    // Without the session evidence handed back, execute validates on its own.
+    expect(authorization).toEqual({ authorized: true, session: expect.any(Object) })
     expect(serviceProxy.validateSession).toHaveBeenCalledTimes(2)
     expect(serviceProxy.validateSession).toHaveBeenCalledWith(
       expect.objectContaining({ headers: { authorization: 'session-token' } }),
@@ -222,7 +224,16 @@ describe('SyncWebSocketCommandAdapter', () => {
     ['read-only session', { session: { uuid: 'session-1', readonly_access: true } }, 'READ_ONLY'],
     ['content limit', { hasContentLimit: true }, 'CONTENT_LIMIT'],
     ['shadow ban', { shadow_banned: true }, 'SHADOW_BANNED'],
-    ['live-sync revocation', { live_sync_enabled: false }, 'SHADOW_BANNED'],
+    // The per-user "Live sync" switch has its own public, permanent code: it is
+    // not a shadow ban and the client must not treat it as a policy denial.
+    ['live-sync revocation', { live_sync_enabled: false }, 'LIVE_SYNC_DISABLED'],
+    // A shadow-banned user with live sync off gets the same public answer as
+    // anyone else with live sync off; the ban is never the thing revealed.
+    [
+      'live-sync revocation of a shadow-banned user',
+      { live_sync_enabled: false, shadow_banned: true },
+      'LIVE_SYNC_DISABLED',
+    ],
   ])('fails closed for a live %s', async (_label, claims, code) => {
     const { adapter } = build(claims)
     await expect(
@@ -257,8 +268,17 @@ describe('SyncWebSocketCommandAdapter', () => {
     ).resolves.toEqual({ authorized: false, code: 'SHARED_VAULT_FORBIDDEN' })
   })
 
-  it('maps revoked/mismatched sessions to SESSION_REVOKED without calling the durable executor', async () => {
-    const { adapter, durable } = build({ session: { uuid: 'different-session', readonly_access: false } })
+  // R9 / contract C6. A session token rotated or refreshed mid-socket used to
+  // turn every later COMMAND into the permanent NOT_AUTHORIZED, and nothing
+  // told the client to re-ticket. Auth ANSWERING that the captured bearer no
+  // longer validates -- a non-200, or a token now bound to another identity --
+  // is the public, retryable SESSION_STALE. Failures where auth did not answer
+  // (or the token is unverifiable) stay the private SESSION_REVOKED.
+  it.each([
+    ['a session now bound to another session id', { session: { uuid: 'different-session', readonly_access: false } }],
+    ['a session now bound to another user', { user: { uuid: 'user-2', email: 'other@example.test' } }],
+  ])('maps %s to the retryable SESSION_STALE without calling the durable executor', async (_label, claims) => {
+    const { adapter, durable } = build(claims)
     await expect(
       adapter.authorize(
         {
@@ -270,8 +290,219 @@ describe('SyncWebSocketCommandAdapter', () => {
         },
         new AbortController().signal,
       ),
+    ).resolves.toEqual({ authorized: false, code: 'SESSION_STALE' })
+    expect(durable.sync).not.toHaveBeenCalled()
+  })
+
+  it('maps an auth refusal of the captured bearer (non-200) to SESSION_STALE', async () => {
+    const { adapter, serviceProxy, durable } = build()
+    ;(serviceProxy.validateSession as jest.Mock).mockResolvedValue({ status: 401, data: {}, headers: {} })
+    await expect(
+      adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ authorized: false, code: 'SESSION_STALE' })
+    await expect(
+      adapter.authorize(
+        { identity, operation: 'STATUS', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ authorized: false, code: 'SESSION_STALE' })
+    expect(durable.sync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'the socket carries no bearer',
+      (proxy: ServiceProxyInterface) => proxy,
+      { ...identity, authorization: undefined },
+    ],
+    [
+      'auth is unreachable',
+      (proxy: ServiceProxyInterface) => {
+        ;(proxy.validateSession as jest.Mock).mockRejectedValue(new Error('ECONNREFUSED'))
+        return proxy
+      },
+      identity,
+    ],
+    [
+      'auth returns no token',
+      (proxy: ServiceProxyInterface) => {
+        ;(proxy.validateSession as jest.Mock).mockResolvedValue({ status: 200, data: {}, headers: {} })
+        return proxy
+      },
+      identity,
+    ],
+    [
+      'the returned token does not verify',
+      (proxy: ServiceProxyInterface) => {
+        ;(proxy.validateSession as jest.Mock).mockResolvedValue({
+          status: 200,
+          data: { authToken: jwt.sign({ user: { uuid: 'user-1' } }, 'another-secret') },
+          headers: {},
+        })
+        return proxy
+      },
+      identity,
+    ],
+  ])('keeps the private SESSION_REVOKED when %s', async (_label, arrange, ticketIdentity) => {
+    const { adapter, serviceProxy, durable } = build()
+    arrange(serviceProxy)
+    await expect(
+      adapter.authorize(
+        {
+          identity: ticketIdentity,
+          operation: 'COMMAND',
+          commandId: 'command-1',
+          digest: 'a'.repeat(64),
+          payloadLength: 0,
+        },
+        new AbortController().signal,
+      ),
     ).resolves.toEqual({ authorized: false, code: 'SESSION_REVOKED' })
     expect(durable.sync).not.toHaveBeenCalled()
+  })
+
+  // -------------------------------------------------------------------------
+  // R8. Each SYNC_ITEMS command used to cost three uncached validations against
+  // auth (two authorize passes plus one inside execute). The handler now hands
+  // the pre-execute authorization's session back to execute/status; the adapter
+  // reuses it ONLY when it is evidence this adapter produced, for this
+  // identity, and no older than SUPPLIED_SESSION_MAX_AGE_MS.
+  // -------------------------------------------------------------------------
+  describe('session evidence reuse', () => {
+    const digest = 'a'.repeat(64)
+    const payload = { command: 'SYNC_ITEMS', body: { api: '20200115', items: [] } }
+
+    it('skips validate() in execute when handed the session it just authorized', async () => {
+      const { adapter, serviceProxy, durable } = build()
+      const authorization = await adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest, payloadLength: 1, payload },
+        new AbortController().signal,
+      )
+      expect(authorization).toMatchObject({ authorized: true, session: expect.any(Object) })
+      const session = (authorization as { session?: unknown }).session
+
+      const result = await adapter.execute(
+        { identity, commandId: 'command-1', digest, payload },
+        new AbortController().signal,
+        session,
+      )
+
+      expect(serviceProxy.validateSession).toHaveBeenCalledTimes(1)
+      expect(durable.sync).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          locals: expect.objectContaining({ user: { uuid: 'user-1', email: 'user@example.test' } }),
+        }),
+        { api: '20200115', items: [], command: { id: 'command-1', digest } },
+      )
+      expect(result).toEqual({
+        digest,
+        payload: { retrieved_items: [], command: { id: 'command-1', digest, status: 'committed' } },
+      })
+    })
+
+    it('skips validate() in status when handed the STATUS authorization session', async () => {
+      const { adapter, serviceProxy } = build()
+      const authorization = await adapter.authorize(
+        { identity, operation: 'STATUS', commandId: 'command-2', digest, payloadLength: 0 },
+        new AbortController().signal,
+      )
+      expect(authorization).toMatchObject({ authorized: true, session: expect.any(Object) })
+
+      await expect(
+        adapter.status(
+          { identity, commandId: 'command-2', digest },
+          new AbortController().signal,
+          (authorization as { session?: unknown }).session,
+        ),
+      ).resolves.toEqual({ status: 'COMMITTED', digest, payload: { retrieved_items: [] } })
+      expect(serviceProxy.validateSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('revalidates when the supplied evidence is older than the freshness bound', async () => {
+      let now = 1_000_000
+      const { adapter, serviceProxy } = build({}, undefined, () => now)
+      const authorization = await adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest, payloadLength: 1, payload },
+        new AbortController().signal,
+      )
+      now += 5_001
+      await adapter.execute(
+        { identity, commandId: 'command-1', digest, payload },
+        new AbortController().signal,
+        (authorization as { session?: unknown }).session,
+      )
+      expect(serviceProxy.validateSession).toHaveBeenCalledTimes(2)
+    })
+
+    it('reuses evidence that is exactly at the freshness bound', async () => {
+      let now = 1_000_000
+      const { adapter, serviceProxy } = build({}, undefined, () => now)
+      const authorization = await adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest, payloadLength: 1, payload },
+        new AbortController().signal,
+      )
+      now += 5_000
+      await adapter.execute(
+        { identity, commandId: 'command-1', digest, payload },
+        new AbortController().signal,
+        (authorization as { session?: unknown }).session,
+      )
+      expect(serviceProxy.validateSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('revalidates when the supplied evidence was minted for another identity', async () => {
+      const { adapter, serviceProxy } = build()
+      const authorization = await adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest, payloadLength: 1, payload },
+        new AbortController().signal,
+      )
+      const other: SyncTicketIdentity = { ...identity, deviceId: 'device-2', sessionUuid: 'session-2' }
+      // The fresh validation for `other` fails the identity check (the token is
+      // for session-1), which proves the supplied evidence was NOT reused.
+      await expect(
+        adapter.execute(
+          { identity: other, commandId: 'command-1', digest, payload },
+          new AbortController().signal,
+          (authorization as { session?: unknown }).session,
+        ),
+      ).rejects.toThrow(/identity changed/i)
+      expect(serviceProxy.validateSession).toHaveBeenCalledTimes(2)
+    })
+
+    it.each([
+      ['a look-alike object the adapter never produced', { locals: {}, token: {}, identity, validatedAt: Date.now() }],
+      ['a string', 'session'],
+      ['null', null],
+      ['undefined', undefined],
+    ])('revalidates when the supplied evidence is %s', async (_label, session) => {
+      const { adapter, serviceProxy } = build()
+      await adapter.execute(
+        { identity, commandId: 'command-1', digest, payload },
+        new AbortController().signal,
+        session,
+      )
+      expect(serviceProxy.validateSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('never reuses evidence across adapter instances', async () => {
+      const first = build()
+      const second = build()
+      const authorization = await first.adapter.authorize(
+        { identity, operation: 'COMMAND', commandId: 'command-1', digest, payloadLength: 1, payload },
+        new AbortController().signal,
+      )
+      await second.adapter.execute(
+        { identity, commandId: 'command-1', digest, payload },
+        new AbortController().signal,
+        (authorization as { session?: unknown }).session,
+      )
+      expect(first.serviceProxy.validateSession).toHaveBeenCalledTimes(1)
+      expect(second.serviceProxy.validateSession).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('delegates STATUS and returns the exact committed result for reconnect recovery', async () => {

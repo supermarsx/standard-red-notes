@@ -11,6 +11,7 @@ import {
   CURRENT_SYNC_COMMAND_DIGEST_TEST_VECTOR,
   FILES_CONTROL_DEFAULTS,
   SYNC_COMMAND_DIGEST_TEST_VECTOR,
+  SYNC_RESULT_TOO_LARGE_STATUS_CODE,
   SyncProtocolError,
   canonicalSyncJson,
   constantTimeDigestMatches,
@@ -19,6 +20,7 @@ import {
   parseSyncClientFrame,
   syncPayloadLength,
   type JsonObject,
+  type SyncCommandResultPayload,
 } from '../src/syncProtocol.js'
 import {
   MAX_FILE_METADATA_ENTRIES,
@@ -754,5 +756,34 @@ describe('sync protocol v1', () => {
     expect(() => parseSyncClientFrame('{}', -1)).toThrowError(expect.objectContaining({ code: 'FRAME_TOO_LARGE' }))
     expect(() => parseSyncClientFrame('{}', 1.5)).toThrowError(expect.objectContaining({ code: 'FRAME_TOO_LARGE' }))
     expectInvalidFrame(inviteFrame('INVITE_ACK', { cursor: 'x'.repeat(MAX_INVITE_CURSOR_BYTES + 1) }))
+  })
+
+  // Contract C5: a committed result that does not fit one frame is answered by
+  // a STATUS frame carrying `code: 'RESULT_TOO_LARGE'` and NO result. The code
+  // is the same token as the ingress ERROR, so both sides share one constant.
+  it('shapes a payload-less COMMITTED status for an oversized committed result', () => {
+    expect(SYNC_RESULT_TOO_LARGE_STATUS_CODE).toBe('RESULT_TOO_LARGE')
+    const payload: SyncCommandResultPayload = { status: 'COMMITTED', code: SYNC_RESULT_TOO_LARGE_STATUS_CODE }
+    const frame = createSyncServerFrame({
+      type: 'STATUS',
+      requestId: 'request-1',
+      commandId: 'command-1',
+      sequence: 7,
+      payload,
+      digest: 'a'.repeat(64),
+    })
+    expect(frame).toEqual({
+      version: 1,
+      channel: 'sync',
+      type: 'STATUS',
+      requestId: 'request-1',
+      commandId: 'command-1',
+      sequence: 7,
+      payloadLength: syncPayloadLength(payload),
+      payload: { status: 'COMMITTED', code: 'RESULT_TOO_LARGE' },
+      digest: 'a'.repeat(64),
+    })
+    expect(frame.payload).not.toHaveProperty('result')
+    expect(Buffer.byteLength(JSON.stringify(frame), 'utf8')).toBeLessThan(MAX_SYNC_FRAME_BYTES)
   })
 })
