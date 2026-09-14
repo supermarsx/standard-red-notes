@@ -1982,4 +1982,54 @@ describe('useCollaborationRoomAccess security transitions', () => {
       visibility.mockRestore()
     }
   })
+
+  it('adopts the epoch named by an epoch-mismatch denial when REST discovery keeps answering the initial epoch', async () => {
+    const sent: CollabFrame[] = []
+    const rotatedEpoch = 'room_epoch_0000000000000002'
+    const { channel, denials } = createEpochAwareChannel(sent, () => rotatedEpoch)
+    mockedCreateChannel.mockImplementation(() => channel as never)
+    // The HTTP fallback lane: REST discovery has no Redis view of the room and
+    // always answers the initial HMAC epoch, but its grant leg signs whatever
+    // epoch the client pins. Only the pin can re-enter a rotated room here.
+    const pinnedEpochs: (string | undefined)[] = []
+    mockedPrepare.mockImplementation(async (_application, note, context) => {
+      pinnedEpochs.push(context?.expectedRoomEpoch)
+      const epoch = context?.expectedRoomEpoch ?? roomEpoch
+      return {
+        available: true,
+        noteUuid: note.uuid,
+        sourceId: 'root-same-uuid:version-1',
+        roomKey: {} as CryptoKey,
+        capability: `capability:${epoch}`,
+        roomEpoch: epoch,
+        serverUpdatedAtTimestamp: 100,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }
+    })
+    const note = { uuid: 'note-rest-lane', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(40)
+    })
+
+    expect(denials).toEqual([roomEpoch])
+    expect(pinnedEpochs[0]).toBeUndefined()
+    expect(pinnedEpochs).toContain(rotatedEpoch)
+    expect(reservesOf(sent).map((frame) => frame.expectedRoomEpoch)).toEqual([roomEpoch, rotatedEpoch])
+    expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch: rotatedEpoch })
+  })
 })

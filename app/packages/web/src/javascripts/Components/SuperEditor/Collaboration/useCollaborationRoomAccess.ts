@@ -511,9 +511,12 @@ function matchesExpectedEditorIdentity(
 /**
  * One full reserve/activate pass, plus the contract-C1 answer to an `epoch-mismatch` denial:
  * the room rotated (its last editor left, or a failover released the last lease) between
- * discovery and the reserve. Discovery now reports the room's current epoch, so a fresh pass
- * re-enters the rotated room. A reconnecting provider cannot take that path (its cipher is
- * bound to the epoch it mounted with), so it is told to remount instead.
+ * discovery and the reserve. The denial names the room's current epoch, and the fresh pass
+ * pins it: on the sync lane discovery returns that same current epoch (C4) so the pin matches,
+ * and on the HTTP fallback lane, where REST discovery has no Redis view and would repeat the
+ * initial epoch, the pin is what makes the grant sign the current one. A reconnecting provider
+ * cannot take that path (its cipher is bound to the epoch it mounted with), so it is told to
+ * remount instead.
  */
 async function establishEditorAccess(
   application: WebApplication,
@@ -531,7 +534,14 @@ async function establishEditorAccess(
       denial: first.denial,
     }
   }
-  const second = await attemptEditorAccess(application, initialNote, expectedIdentity)
+  const adoptedRoomEpoch = first.denial.roomEpoch
+  const second = await attemptEditorAccess(
+    application,
+    initialNote,
+    expectedIdentity && adoptedRoomEpoch !== undefined
+      ? { ...expectedIdentity, roomEpoch: adoptedRoomEpoch }
+      : expectedIdentity,
+  )
   if ('reason' in second && second.denial?.reason === 'epoch-mismatch') {
     return {
       ...second,
