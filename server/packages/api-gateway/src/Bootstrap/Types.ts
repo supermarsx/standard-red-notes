@@ -64,7 +64,6 @@ export const TYPES = {
   ApiGateway_RequiredCrossServiceTokenMiddleware: Symbol.for('ApiGateway_RequiredCrossServiceTokenMiddleware'),
   ApiGateway_UserRateLimitMiddleware: Symbol.for('ApiGateway_UserRateLimitMiddleware'),
   ApiGateway_OptionalCrossServiceTokenMiddleware: Symbol.for('ApiGateway_OptionalCrossServiceTokenMiddleware'),
-  ApiGateway_WebSocketAuthMiddleware: Symbol.for('ApiGateway_WebSocketAuthMiddleware'),
   ApiGateway_SubscriptionTokenAuthMiddleware: Symbol.for('ApiGateway_SubscriptionTokenAuthMiddleware'),
   // Realtime-sync collaborators of SyncWebSocketController.
   //

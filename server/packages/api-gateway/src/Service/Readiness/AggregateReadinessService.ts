@@ -7,8 +7,36 @@ export type ReadinessFetch = (
   init: { method: string; headers: Record<string, string>; signal: AbortSignal },
 ) => Promise<{ status: number }>
 
+/**
+ * Standard Red Notes (C9): what the in-process realtime gateway says about
+ * itself. Structurally identical to the websocket-gateway package's
+ * `GatewayHealth` (`AttachedGateway.health()`); mirrored here so readiness
+ * compiles against a host that has not rebuilt that package, and so the shape
+ * this endpoint publishes is pinned in THIS module. Nothing in it is secret or
+ * per-user. INFORMATIONAL ONLY — it never gates `status`: a Redis blip on the
+ * push bridge must not restart the container.
+ */
+export type RealtimeGatewayHealth = {
+  attached: true
+  /** Which push transport attached: Redis pub/sub, an in-process bridge, or none. */
+  pushBridge: 'redis' | 'in-process' | 'none'
+  /** The push subscriber's client currently reports `ready`. */
+  pushBridgeReady: boolean
+  /** The SQS consumer loop was started and has not been stopped. */
+  sqsConsumerRunning: boolean
+  /** The collaboration relay subscription is established. */
+  collaborationRelayHealthy: boolean
+  /** Whether `/sockets/sync` would admit a client right now. */
+  syncLane: 'up' | 'down'
+  /** Push messages handed to the local connection registry since attach. */
+  pushesDispatched: number
+}
+
+/** `{ attached: false }` when the provider is wired but no gateway is attached (or it threw). */
+export type RealtimeReadinessReport = RealtimeGatewayHealth | { attached: false }
+
 export type AggregateReadinessChecks = {
-  gateway: { redis: boolean; runtime: boolean }
+  gateway: { redis: boolean; runtime: boolean; realtime?: RealtimeReadinessReport }
   services: Record<string, boolean>
   programs?: Record<string, boolean>
 }
@@ -33,6 +61,13 @@ export interface AggregateReadinessServiceOptions {
   deploymentRevision?: string
   deploymentVersion?: string
   deploymentMarker?: DeploymentIdentity
+  /**
+   * C9: late-bound realtime health provider. The gateway attaches to the owned
+   * http.Server AFTER the container is built, so this is a thunk, not a value.
+   * `undefined` from the thunk means "no gateway attached". Omit the option
+   * entirely and the report carries no `realtime` field at all.
+   */
+  realtime?: () => RealtimeGatewayHealth | undefined
 }
 
 /**
@@ -110,13 +145,30 @@ export class AggregateReadinessService {
   }
 
   private report(checks: AggregateReadinessChecks): AggregateReadinessReport {
+    // Realtime health is deliberately NOT part of this conjunction — see RealtimeGatewayHealth.
     const healthy =
       checks.gateway.redis &&
       checks.gateway.runtime &&
       Object.values(checks.services).every(Boolean) &&
       (checks.programs === undefined || Object.values(checks.programs).every(Boolean))
 
-    return { status: healthy ? 'ready' : 'unavailable', deployment: this.deployment, checks }
+    const realtime = this.sampleRealtime()
+    const reported: AggregateReadinessChecks =
+      realtime === undefined ? checks : { ...checks, gateway: { ...checks.gateway, realtime } }
+
+    return { status: healthy ? 'ready' : 'unavailable', deployment: this.deployment, checks: reported }
+  }
+
+  private sampleRealtime(): RealtimeReadinessReport | undefined {
+    if (!this.options.realtime) {
+      return undefined
+    }
+    try {
+      return this.options.realtime() ?? { attached: false }
+    } catch {
+      // A health snapshot must never take readiness down with it.
+      return { attached: false }
+    }
   }
 
   private async checkRedis(): Promise<boolean> {

@@ -7,6 +7,7 @@ import { createLogThrottle, isSyncDeviceId, type LogThrottle } from '@standard-r
 import { TYPES } from '../../Bootstrap/Types'
 import { ResponseLocals } from '../ResponseLocals'
 import {
+  isGatewaySyncUnavailableError,
   SyncWebSocketUnavailableError,
   syncWebSocketAccessService,
   SyncWebSocketAccessService,
@@ -151,8 +152,19 @@ export class SyncWebSocketController extends BaseHttpController {
       })
       response.status(200).send(ticket)
     } catch (error) {
-      if (error instanceof SyncWebSocketUnavailableError) {
+      if (error instanceof SyncWebSocketUnavailableError || isGatewaySyncUnavailableError(error)) {
         this.logRefusal('ticket', 'SYNC_DISABLED', true)
+        // C15: a refusal caused ONLY by a store that is not ready yet (Redis
+        // still connecting at boot, a blip mid-reconnect) is transient: say so
+        // and name a retry delay, so a page load that races a restart retries
+        // the ticket instead of negotiating HTTP-only for the whole session.
+        // Any configuration cause (origin, kill switch, no secret) stays a plain
+        // 503 — retrying cannot fix those.
+        if (error.transient) {
+          response.setHeader('Retry-After', '5')
+          response.status(503).send({ error: { code: 'SYNC_DISABLED', transient: true } })
+          return
+        }
         response.status(503).send({ error: { code: 'SYNC_DISABLED' } })
         return
       }

@@ -3,7 +3,10 @@ import 'reflect-metadata'
 import { AxiosError, AxiosInstance } from 'axios'
 import { Request, Response } from 'express'
 
+import type { AttachedGateway } from '@standard-red-notes/websocket-gateway'
+
 import { CrossServiceTokenCacheInterface } from '../Cache/CrossServiceTokenCacheInterface'
+import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 import { HttpServiceProxy } from './HttpServiceProxy'
 
 describe('HttpServiceProxy', () => {
@@ -409,11 +412,63 @@ describe('HttpServiceProxy', () => {
       expect(httpClient.request).not.toHaveBeenCalled()
     })
 
-    it('silently skips a websocket call when no websocket server is configured', async () => {
+    // R4: an empty WEB_SOCKET_SERVER_URL used to `return` without writing a
+    // response, so the client waited out its 30 s timeout per mint attempt.
+    it('answers 503 instead of hanging when no websocket server is configured and no gateway is attached', async () => {
       await buildProxy({ ws: '' }).callWebSocketServer(buildRequest(), buildResponse(), 'push')
 
       expect(httpClient.request).not.toHaveBeenCalled()
-      expect(status).not.toHaveBeenCalled()
+      expect(status).toHaveBeenCalledWith(503)
+      expect(send).toHaveBeenCalledWith({ error: { message: 'Websockets server is not available.' } })
+    })
+
+    describe('with the realtime gateway attached in-process', () => {
+      const authenticated = { user: { uuid: 'u-1' }, session: { uuid: 's-1' }, authToken: 'signed-auth', roles: [] }
+      let handleMintToken: jest.Mock
+
+      beforeEach(() => {
+        handleMintToken = jest.fn((request, response) => {
+          expect(request.headers['x-auth-token']).toBe('signed-auth')
+          response.writeHead(200)
+          response.end(JSON.stringify({ token: 'ws-token' }))
+        })
+        webSocketGatewayAccessService.setProvider({ handleMintToken } as unknown as AttachedGateway)
+      })
+
+      afterEach(() => webSocketGatewayAccessService.clearProvider())
+
+      // R4: the mint is a loopback self-call to THIS process in the compose
+      // stack; with the gateway attached it must never leave the process.
+      it('mints in-process, decorated, without dialling WEB_SOCKET_SERVER_URL', async () => {
+        await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets/tokens')
+
+        expect(handleMintToken).toHaveBeenCalledTimes(1)
+        expect(httpClient.request).not.toHaveBeenCalled()
+        expect(status).toHaveBeenCalledWith(200)
+        expect(send).toHaveBeenCalledWith({
+          meta: { auth: { userUuid: 'u-1', roles: [] }, server: { filesServerUrl: 'http://files' } },
+          data: { token: 'ws-token' },
+        })
+      })
+
+      it('propagates the gateway refusal status', async () => {
+        handleMintToken.mockImplementationOnce((_request, response) => {
+          response.writeHead(401)
+          response.end(JSON.stringify({ error: 'invalid auth token' }))
+        })
+
+        await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets/tokens')
+
+        expect(status).toHaveBeenCalledWith(401)
+        expect(send).toHaveBeenCalledWith(expect.objectContaining({ data: { error: 'invalid auth token' } }))
+      })
+
+      it('falls back to the configured websocket host when the locals carry no session', async () => {
+        await buildProxy().callWebSocketServer(buildRequest(), buildResponse({ user: { uuid: 'u-1' } }), 'sockets/tokens')
+
+        expect(handleMintToken).not.toHaveBeenCalled()
+        expect(httpClient.request).toHaveBeenCalledTimes(1)
+      })
     })
 
     it('silently skips a payments call when no payments server is configured', async () => {

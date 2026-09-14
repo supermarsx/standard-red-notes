@@ -38,10 +38,14 @@
  */
 
 /**
- * `MODE`, as read by `ContainerConfigLoader`. `unset` is the ordinary
- * multi-container deployment; `other` means a value we do not recognise, which
- * behaves like `unset` in the container but should not be reported as if it were
- * deliberate.
+ * `MODE`, as read by `ContainerConfigLoader`. The bundled multi-container
+ * `server` image exports `MODE=self-hosted` from its entrypoint
+ * (`server/docker/docker-entrypoint.sh`), so `self-hosted` is what the shipped
+ * compose stack reports. `unset` is the RAW default — a process started outside
+ * that entrypoint with no MODE at all (a bare `yarn start`, the standalone e2e
+ * harness), not an ordinary deployment. `other` means a value we do not
+ * recognise, which behaves like `unset` in the container but should not be
+ * reported as if it were deliberate.
  */
 export type DeploymentMode = 'home-server' | 'self-hosted' | 'unset' | 'other'
 

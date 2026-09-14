@@ -202,9 +202,18 @@ export class EndpointResolver implements EndpointResolverInterface {
         // mis-matched as the next placeholder and clobbered. A global replace with
         // a positional replacer inserts each param at the k-th placeholder and
         // never re-scans inserted text, keeping single-param routes identical.
+        //
+        // Every substituted value is percent-encoded as ONE path segment. The
+        // values come from request params and, historically, from raw request
+        // headers; unencoded, a value such as `../../v1/anything?x=1` rewrote
+        // the loopback URL (`new URL()` resolves the dots) into an arbitrary
+        // path + query on the upstream service. Express decodes params on the
+        // receiving side, so a uuid, an email or a setting name round-trips
+        // unchanged; only characters that would change the URL's shape are
+        // escaped.
         let paramIndex = 0
         return endpoint.replace(/:[a-zA-Z0-9]+/g, (match) => {
-          return paramIndex < params.length ? params[paramIndex++] : match
+          return paramIndex < params.length ? encodeURIComponent(params[paramIndex++]) : match
         })
       }
 

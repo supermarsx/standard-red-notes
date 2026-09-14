@@ -4,6 +4,9 @@ import { AxiosError, AxiosInstance } from 'axios'
 import { Request, Response } from 'express'
 import { IAuthClient } from '@standardnotes/grpc'
 import { Status } from '@grpc/grpc-js/build/src/constants'
+import type { AttachedGateway } from '@standard-red-notes/websocket-gateway'
+
+import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 
 import { CrossServiceTokenCacheInterface } from '../Cache/CrossServiceTokenCacheInterface'
 import { GRPCServiceProxy } from './GRPCServiceProxy'
@@ -531,12 +534,43 @@ describe('GRPCServiceProxy', () => {
       expect(httpClient.request).not.toHaveBeenCalled()
     })
 
-    it('silently skips websocket and payments calls when those servers are unconfigured', async () => {
-      await buildProxy({ ws: '' }).callWebSocketServer(buildRequest(), buildResponse(), 'push')
+    it('silently skips a payments call when that server is unconfigured', async () => {
       await buildProxy({ payments: '' }).callPaymentsServer(buildRequest(), buildResponse(), 'subscriptions')
 
       expect(httpClient.request).not.toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
+    })
+
+    // R4: an empty WEB_SOCKET_SERVER_URL used to `return` without a response.
+    it('answers 503 when no websocket server is configured and no gateway is attached', async () => {
+      await buildProxy({ ws: '' }).callWebSocketServer(buildRequest(), buildResponse(), 'push')
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(status).toHaveBeenCalledWith(503)
+      expect(send).toHaveBeenCalledWith({ error: { message: 'Websockets server is not available.' } })
+    })
+
+    it('mints in-process, decorated, when the realtime gateway is attached', async () => {
+      const handleMintToken = jest.fn((request, response) => {
+        expect(request.headers['x-auth-token']).toBe('signed-auth')
+        response.writeHead(200)
+        response.end(JSON.stringify({ token: 'ws-token' }))
+      })
+      webSocketGatewayAccessService.setProvider({ handleMintToken } as unknown as AttachedGateway)
+      try {
+        await buildProxy({ ws: '' }).callWebSocketServer(
+          buildRequest(),
+          buildResponse({ user: { uuid: 'u-1' }, session: { uuid: 's-1' }, authToken: 'signed-auth' }),
+          'sockets/tokens',
+        )
+      } finally {
+        webSocketGatewayAccessService.clearProvider()
+      }
+
+      expect(handleMintToken).toHaveBeenCalledTimes(1)
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(status).toHaveBeenCalledWith(200)
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ meta: expect.anything(), data: { token: 'ws-token' } }))
     })
 
     it('keeps a gateway-originated websocket call in the minimal legacy format', async () => {

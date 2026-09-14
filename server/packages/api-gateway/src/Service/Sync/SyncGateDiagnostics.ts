@@ -93,7 +93,10 @@ export type SyncGateDiagnosticsReport = {
    * rather than present an empty unmet list as a healthy gate.
    */
   recorded: boolean
-  /** The ws gateway was attached to the http server (token minting is possible). */
+  /**
+   * The ws gateway was attached to the http server (token minting is possible).
+   * Taken from the recorded attach outcome; `false` until the host records one.
+   */
   gatewayAttached: boolean
   /** The sync lane itself was built — this is what makes POST /ticket succeed. */
   syncLaneEnabled: boolean
@@ -120,6 +123,16 @@ export type SyncGateDiagnosticsReport = {
 export type SyncGateObservation = SyncPreconditionState & {
   filesAdvertised: boolean
   filesUnmetCondition?: SyncFilesUnmetCondition
+  /**
+   * Whether the ws gateway actually attached to the http server — recorded
+   * from the ATTACH OUTCOME by the composition root, never re-derived from the
+   * secret's presence. Deriving it used to report `true` on a single container
+   * that attached no gateway (no Redis) and `false` on a compose stack whose
+   * legacy lane was up on a short secret. Optional so a host that has not yet
+   * recorded the outcome (boot in progress, an older host) reads as not
+   * attached rather than as attached on no evidence.
+   */
+  gatewayAttached?: boolean
 }
 
 const NO_FILES: SyncFilesReport = Object.freeze({ advertised: false, unmetCondition: null, remedy: null })
@@ -160,7 +173,7 @@ export class SyncGateDiagnosticsRecorder {
 
     return {
       recorded: true,
-      gatewayAttached: observed.connectionTokenSecretPresent,
+      gatewayAttached: observed.gatewayAttached ?? false,
       syncLaneEnabled: laneEnabled,
       syncItemsAdvertised: laneEnabled && resolveUnmetSyncItemsPreconditions(observed).length === 0,
       unmetPreconditions,

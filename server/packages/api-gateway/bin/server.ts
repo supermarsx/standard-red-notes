@@ -84,6 +84,8 @@ import {
   createLoggerSyncCommandMetrics,
   createSharedInviteEventComposition,
   createRedisSyncState,
+  parseConnectionTokenTtl,
+  parseMaxConnectionsPerUser,
   RedisInviteEventAvailabilityBus,
   RedisInviteEventStore,
   type RedisInviteEventClient,
@@ -112,7 +114,14 @@ import {
   resolveUnmetSyncItemsPreconditions,
   resolveUnmetSyncTransportPreconditions,
 } from '../src/Service/Sync/SyncWebSocketPreconditions'
-import { syncGateDiagnostics, SyncFilesUnmetCondition } from '../src/Service/Sync/SyncGateDiagnostics'
+import {
+  syncGateDiagnostics,
+  SyncFilesUnmetCondition,
+  type SyncGateObservation,
+} from '../src/Service/Sync/SyncGateDiagnostics'
+import { createGatewayLoggerBridge } from '../src/Logging/GatewayLoggerBridge'
+import { type RealtimeRedisNamespace, resolveRealtimeRedisNamespace } from '../src/Service/Sync/RealtimeRedisNamespace'
+import { type RedisReadinessClient, waitForRedisReady } from '../src/Service/Readiness/WaitForRedisReady'
 
 // Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
 // rejection or uncaught exception leaves the process in an unknown state, so we
@@ -517,14 +526,10 @@ void container
     // (optional) SQS consumer. The `POST /sockets/tokens` route is registered on the
     // Express app in setConfig (before build(), so the catch-all does not shadow it);
     // here we just point that route's late-bound handler at gateway.handleMintToken.
-    // Adapt the winston logger to the gateway's minimal Logger interface
-    // (variadic info/warn/error returning void). winston's leveled methods accept
-    // a message + meta, so join the args into one message string.
-    const gatewayLogger = {
-      info: (...args: unknown[]) => logger.info(args.map(String).join(' ')),
-      warn: (...args: unknown[]) => logger.warn(args.map(String).join(' ')),
-      error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
-    }
+    // Adapt the winston logger to the gateway's minimal variadic Logger. Every
+    // non-string argument is serialised (N1) — the former `args.map(String)`
+    // printed `[object Object]` for every metadata object the gateway logs.
+    const gatewayLogger = createGatewayLoggerBridge(logger)
 
     const webSocketRuntime = new SyncWebSocketRuntime()
     let stopWebSocketGateway: (() => Promise<void>) | undefined
@@ -548,13 +553,56 @@ void container
     // a crash. Length only; the value is never read into a log or a diagnostic.
     const connectionTokenSecret = env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)
     const connectionTokenSecretUsable = Buffer.byteLength(connectionTokenSecret || '', 'utf8') >= 32
+    // R3/N3: the token TTL and the per-user connection cap are validated HERE,
+    // at boot, with the parsers the gateway itself applies (C8). Unvalidated,
+    // `WEB_SOCKET_CONNECTION_TOKEN_TTL=60` handed jsonwebtoken a bare string it
+    // reads as MILLISECONDS — 0 s tokens usable only inside the clock tolerance —
+    // and `abc` made every mint throw 500 while readiness stayed green. A bad
+    // value now fails the boot with the variable named, the same fail-closed
+    // behaviour the home-server has. WEBSOCKET_REDIS_NAMESPACE (C10) is
+    // validated here too, once, and handed to every Redis consumer below.
+    // The startup catch below redacts a thrown error to `{ errorType }`, which
+    // would leave the operator with no hint which variable to fix, so the
+    // failing VARIABLE NAMES (never values, never the thrown message) are
+    // collected and logged here before the boot is refused.
+    const invalidRealtimeVariables: string[] = []
+    const parseOrRecord = <T>(variable: string, parse: () => T): T | undefined => {
+      try {
+        return parse()
+      } catch {
+        invalidRealtimeVariables.push(variable)
+        return undefined
+      }
+    }
+    const connectionTokenTtl = parseOrRecord('WEB_SOCKET_CONNECTION_TOKEN_TTL', () =>
+      parseConnectionTokenTtl(env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || undefined),
+    )
+    const maxConnectionsPerUser = parseOrRecord('WEBSOCKET_MAX_CONNECTIONS_PER_USER', () =>
+      parseMaxConnectionsPerUser(env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true) || undefined),
+    )
+    const realtimeRedis: RealtimeRedisNamespace | undefined = parseOrRecord('WEBSOCKET_REDIS_NAMESPACE', () =>
+      resolveRealtimeRedisNamespace(env.get('WEBSOCKET_REDIS_NAMESPACE', true) || undefined),
+    )
+    if (invalidRealtimeVariables.length > 0 || connectionTokenTtl === undefined || realtimeRedis === undefined) {
+      logger.error('Realtime gateway configuration is invalid; refusing to start.', {
+        invalidVariables: invalidRealtimeVariables,
+      })
+      throw new Error(`Invalid realtime gateway configuration: ${invalidRealtimeVariables.join(', ')}`)
+    }
     const gateObservation = {
       connectionTokenSecretPresent: connectionTokenSecretUsable,
       webSocketSyncEnabled,
       redisBound: container.isBound(TYPES.ApiGateway_Redis),
       syncingServerGrpcBound: container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy),
     }
-    syncGateDiagnostics.record({ ...gateObservation, filesAdvertised: false })
+    // N22: `gatewayAttached` is recorded from the ATTACH OUTCOME below, never
+    // derived from the secret's presence. Each later record() patches this one.
+    let gateRecord: SyncGateObservation = { ...gateObservation, filesAdvertised: false, gatewayAttached: false }
+    const recordGate = (patch: Partial<SyncGateObservation>): void => {
+      gateRecord = { ...gateRecord, ...patch }
+      syncGateDiagnostics.record(gateRecord)
+    }
+    recordGate({})
 
     // Standard Red Notes: the DEFINITIVE, once-per-boot verdict on the realtime
     // lane. The gate is evaluated exactly here and never re-evaluated, so this
@@ -628,10 +676,13 @@ void container
             }
           const redisState = createRedisSyncState(redisClient, syncRedisOptions)
           inviteAvailabilityRedis = redisClient.duplicate()
-          inviteEventAvailability = new RedisInviteEventAvailabilityBus(redisClient, inviteAvailabilityRedis)
+          inviteEventAvailability = new RedisInviteEventAvailabilityBus(redisClient, inviteAvailabilityRedis, {
+            namespace: realtimeRedis.namespace,
+          })
           const inviteEventComposition = createSharedInviteEventComposition({
             store: new RedisInviteEventStore(redisClient, {
               cursorSecret: env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true),
+              namespace: realtimeRedis.namespace,
             }),
             availability: inviteEventAvailability,
           })
@@ -681,7 +732,13 @@ void container
           sync = {
             isEnabled: () => webSocketSyncEnabled,
             allowedOrigins: syncAllowedOrigins,
-            allowSameOrigin: syncAllowedOrigins.length === 0,
+            // C7 (D5): same-origin upgrades are ALWAYS admitted. A page script
+            // cannot set `Host`, so the same-origin comparison is exactly as
+            // strong as the explicit list; pinning the lane to the single
+            // PUBLIC_URL origin silently dropped every LAN-by-IP, second-hostname
+            // and non-default-port browser to HTTP. The explicit list stays
+            // additive for cross-origin clients (desktop, extensions).
+            allowSameOrigin: true,
             authorization: syncAdapter,
             backend: syncAdapter,
             collaborationAuthorization: syncAdapter,
@@ -715,8 +772,7 @@ void container
                 : !env.get('VALET_TOKEN_SECRET', true)
                   ? 'VALET_TOKEN_SECRET'
                   : 'TRANSPORT_CONSTRUCTION'
-          syncGateDiagnostics.record({
-            ...gateObservation,
+          recordGate({
             filesAdvertised: filesComposition.advertised,
             ...(filesUnmetCondition ? { filesUnmetCondition } : {}),
           })
@@ -744,14 +800,16 @@ void container
           logger: gatewayLogger,
           config: {
             connectionTokenSecret: env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true),
-            connectionTokenTtl: env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || '60s',
+            connectionTokenTtl,
             internalSecret: env.get('WEBSOCKET_GATEWAY_INTERNAL_SECRET', true) || '',
             authJwtSecret: env.get('AUTH_JWT_SECRET', true) || '',
             redisHost: env.get('REDIS_HOST', true) || '127.0.0.1',
             redisPort: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
-            maxConnectionsPerUser: env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true)
-              ? +env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true)
-              : undefined,
+            // C10 (R34): one per-deployment prefix for the push channel, relay
+            // channel, collaboration keys, SQS dedup and invite-store keys, so two
+            // stacks on one Redis stop cross-talking. Empty = today's names.
+            redisNamespace: realtimeRedis.namespace,
+            maxConnectionsPerUser,
             sqs: {
               queueUrl: env.get('SQS_QUEUE_URL', true) || undefined,
               endpoint: env.get('SQS_ENDPOINT', true) || undefined,
@@ -762,7 +820,10 @@ void container
           },
           sync,
           sqsEventDedupStore: container.isBound(TYPES.ApiGateway_Redis)
-            ? createRedisSqsEventDedupStore(container.get(TYPES.ApiGateway_Redis) as RedisSqsEventDedupClient)
+            ? createRedisSqsEventDedupStore(container.get(TYPES.ApiGateway_Redis) as RedisSqsEventDedupClient, {
+                // N17: dedup claims are namespaced with everything else.
+                keyPrefix: realtimeRedis.sqsDedupKeyPrefix,
+              })
             : undefined,
         })
         stopWebSocketGateway = async (): Promise<void> => {
@@ -784,19 +845,38 @@ void container
           }
         }
         mintConnectionTokenHandler = gateway.handleMintToken
+        recordGate({ gatewayAttached: true })
         logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
       } catch (error) {
         await inviteEventAvailability?.close().catch(() => undefined)
         inviteEventAvailability = undefined
         inviteAvailabilityRedis?.disconnect()
         inviteAvailabilityRedis = undefined
+        recordGate({ gatewayAttached: false })
         logger.error('Failed to attach the realtime WebSocket gateway.', safeErrorLogMetadata(error))
         throw error
       }
     } else {
+      recordGate({ gatewayAttached: false })
       logger.info(
         'WEB_SOCKET_CONNECTION_TOKEN_SECRET not set; realtime WebSocket gateway not attached (token minting disabled)',
       )
+    }
+
+    // C15 (R7): do not advertise readiness before this process's own Redis
+    // client is `ready` — the sync lane evaluates its store preconditions per
+    // call, so a client that raced the restart would otherwise negotiate
+    // HTTP-only for the whole session while readiness already said `ready`.
+    // Bounded: an unreachable Redis is the readiness report's `gateway.redis`
+    // ping's job to say, not a reason to never mark ready.
+    const redisReadiness = await waitForRedisReady(
+      container.isBound(TYPES.ApiGateway_Redis)
+        ? (container.get(TYPES.ApiGateway_Redis) as RedisReadinessClient)
+        : undefined,
+      10_000,
+    )
+    if (redisReadiness === 'timeout' || redisReadiness === 'ended') {
+      logger.warn(`Redis client did not reach ready before the listener opened (${redisReadiness}); marking ready anyway`)
     }
 
     serverInstance.listen(env.get('PORT'), () => {

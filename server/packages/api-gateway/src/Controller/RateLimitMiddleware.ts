@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { NextFunction, Request, Response } from 'express'
 
 import { IpAclDecision } from './IpAccessList'
@@ -59,6 +60,13 @@ export interface RateLimitRule {
   windowSeconds: number
   /** Whether this rule applies to the given request. */
   match: (method: string, normalizedPath: string) => boolean
+  /**
+   * Optional subject override: the string the counter is keyed on for this
+   * request, or `undefined` to key on the client IP as every other rule does.
+   * The realtime-token bucket counts per SESSION when a bearer credential is
+   * presented, so one busy NAT does not starve every user behind it.
+   */
+  subject?: (request: Request) => string | undefined
 }
 
 export interface RateLimitConfig {
@@ -110,6 +118,25 @@ export const normalizeRateLimitPath = (path: string): string => {
  * login allowance; it reuses the more generous login ceiling to avoid disrupting
  * legitimate provider redirects. Extend/retune via the overlay/env limits.
  */
+/** The realtime control-plane endpoints the `realtime-tokens` bucket covers (N41). */
+export const REALTIME_TOKEN_PATHS: readonly string[] = ['/v1/sockets/tokens', '/v1/sockets/sync/ticket', '/sockets/tokens']
+
+/**
+ * Per-session subject for the realtime-token bucket: a digest of the presented
+ * bearer credential (never the credential itself — it is a Redis key). A rotated
+ * bogus bearer only buys 401s from the cross-service token middleware, never a
+ * mint, so keying on it does not open a bypass; a request with no credential
+ * falls back to the IP.
+ */
+export const realtimeTokenSubject = (request: Request): string | undefined => {
+  const authorization = request.headers.authorization
+  if (typeof authorization !== 'string' || authorization.length === 0) {
+    return undefined
+  }
+
+  return `session:${createHash('sha256').update(authorization).digest('hex').slice(0, 32)}`
+}
+
 export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRule[] => {
   const postTo =
     (paths: string[]) =>
@@ -149,6 +176,18 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
       limit: limits.loginMax,
       windowSeconds: limits.windowSeconds,
       match: getTo(['/v1/assistant/subscription/callback']),
+    },
+    {
+      // Standard Red Notes (N41): the realtime control plane. Minting a
+      // connection token and issuing a sync ticket each sign a JWT/HMAC and, on
+      // the sync lane, touch Redis, and neither sat inside any bucket before. A
+      // legitimate client mints once per socket, so the login ceiling is ample;
+      // a reconnect storm is charged to the session that causes it.
+      bucket: 'realtime-tokens',
+      limit: limits.loginMax,
+      windowSeconds: limits.windowSeconds,
+      match: postTo([...REALTIME_TOKEN_PATHS]),
+      subject: realtimeTokenSubject,
     },
   ]
 }
@@ -259,7 +298,7 @@ export const createRateLimitMiddleware = (options: {
         return
       }
 
-      const key = `rl:${rule.bucket}:${ip}`
+      const key = `rl:${rule.bucket}:${rule.subject?.(request) ?? ip}`
       try {
         const count = await redis.incr(key)
         // First hit in this window: attach the TTL so the counter self-resets.

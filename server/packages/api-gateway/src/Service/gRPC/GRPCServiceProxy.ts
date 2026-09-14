@@ -8,6 +8,7 @@ import * as grpc from '@grpc/grpc-js'
 import { CrossServiceTokenCacheInterface } from '../Cache/CrossServiceTokenCacheInterface'
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { GRPCSyncingServerServiceProxy } from './GRPCSyncingServerServiceProxy'
+import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 import { Status } from '@grpc/grpc-js/build/src/constants'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
@@ -272,8 +273,20 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
     endpoint: string,
     payload?: Record<string, unknown> | string,
   ): Promise<void> {
+    // Standard Red Notes (R4): mint against the IN-PROCESS gateway first — see
+    // HttpServiceProxy.callWebSocketServer for why the loopback self-call was
+    // wrong. The loopback path survives only for a genuinely separate websockets
+    // host; with nothing attached and no URL the caller now gets an answer.
+    const minted = webSocketGatewayAccessService.mintConnectionTokenFor(response.locals as ResponseLocals)
+    if (minted) {
+      this.sendDecorated(response, minted.statusCode, minted.json)
+
+      return
+    }
+
     if (!this.webSocketServerUrl) {
-      this.logger.debug('Websockets Server URL not defined. Skipped request to WebSockets API.')
+      this.logger.debug('Websockets Server URL not defined and no in-process gateway attached; refusing request.')
+      response.status(503).send({ error: { message: 'Websockets server is not available.' } })
 
       return
     }
@@ -412,8 +425,6 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
     endpoint: string,
     payload?: Record<string, unknown> | string,
   ): Promise<void> {
-    const locals = response.locals as ResponseLocals
-
     const serviceResponse = await this.getServerResponse(serverUrl, request, response, endpoint, payload)
 
     if (!serviceResponse) {
@@ -428,7 +439,14 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
       return
     }
 
-    response.status(serviceResponse.status).send({
+    this.sendDecorated(response, serviceResponse.status, serviceResponse.data)
+  }
+
+  /** The gateway's standard response envelope: auth + server metadata around the service's payload. */
+  private sendDecorated(response: Response, status: number, data: unknown): void {
+    const locals = response.locals as ResponseLocals
+
+    response.status(status).send({
       meta: {
         auth: {
           userUuid: locals.user?.uuid,
@@ -438,7 +456,7 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
           filesServerUrl: this.filesServerUrl,
         },
       },
-      data: serviceResponse.data,
+      data,
     })
   }
 

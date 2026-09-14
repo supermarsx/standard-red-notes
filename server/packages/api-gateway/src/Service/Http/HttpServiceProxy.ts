@@ -11,6 +11,7 @@ import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
 import { resolveClientIpFromRequest } from '../../Controller/ClientIp'
 import { PublicServiceFailure, publicHttpErrorStatus, safeHttpErrorLogMetadata } from '../Logging/SafeLog'
+import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 
 @injectable()
 export class HttpServiceProxy implements ServiceProxyInterface {
@@ -181,8 +182,24 @@ export class HttpServiceProxy implements ServiceProxyInterface {
     endpoint: string,
     payload?: Record<string, unknown> | string,
   ): Promise<void> {
+    // Standard Red Notes (R4): the realtime gateway runs IN-PROCESS on this same
+    // http server, so mint here instead of dialling WEB_SOCKET_SERVER_URL — in
+    // the shipped compose stack that variable is this very listener, i.e. a
+    // loopback self-call that ran the whole middleware chain twice per token
+    // and, with the variable empty, wrote NO response at all (the client waited
+    // out its 30 s timeout). The loopback path survives only for a deployment
+    // that genuinely runs a separate websockets host; with nothing attached and
+    // no URL configured the caller now gets an answer.
+    const minted = webSocketGatewayAccessService.mintConnectionTokenFor(response.locals as ResponseLocals)
+    if (minted) {
+      this.sendDecorated(response, minted.statusCode, minted.json)
+
+      return
+    }
+
     if (!this.webSocketServerUrl) {
-      this.logger.debug('Websockets Server URL not defined. Skipped request to WebSockets API.')
+      this.logger.debug('Websockets Server URL not defined and no in-process gateway attached; refusing request.')
+      response.status(503).send({ error: { message: 'Websockets server is not available.' } })
 
       return
     }
@@ -298,7 +315,6 @@ export class HttpServiceProxy implements ServiceProxyInterface {
     endpoint: string,
     payload?: Record<string, unknown> | string,
   ): Promise<void> {
-    const locals = response.locals as ResponseLocals
     const serviceResponse = await this.getServerResponse(serverUrl, request, response, endpoint, payload)
 
     if (!serviceResponse) {
@@ -313,7 +329,14 @@ export class HttpServiceProxy implements ServiceProxyInterface {
       return
     }
 
-    response.status(serviceResponse.status).send({
+    this.sendDecorated(response, serviceResponse.status, serviceResponse.data)
+  }
+
+  /** The gateway's standard response envelope: auth + server metadata around the service's payload. */
+  private sendDecorated(response: Response, status: number, data: unknown): void {
+    const locals = response.locals as ResponseLocals
+
+    response.status(status).send({
       meta: {
         auth: {
           userUuid: locals.user?.uuid,
@@ -323,7 +346,7 @@ export class HttpServiceProxy implements ServiceProxyInterface {
           filesServerUrl: this.filesServerUrl,
         },
       },
-      data: serviceResponse.data,
+      data,
     })
   }
 

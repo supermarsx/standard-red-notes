@@ -354,3 +354,61 @@ describe('AggregateReadinessService', () => {
     expect(fetchFn).toHaveBeenCalledTimes(4)
   })
 })
+
+// C9 (R38): readiness reports what the realtime gateway says about itself, but
+// never gates on it — a Redis blip on the push bridge must not restart the
+// container. Before this the report could say `ready` while 80 % of pushes
+// were being lost.
+describe('AggregateReadinessService realtime health (C9)', () => {
+  const health = {
+    attached: true as const,
+    pushBridge: 'redis' as const,
+    pushBridgeReady: false,
+    sqsConsumerRunning: false,
+    collaborationRelayHealthy: false,
+    syncLane: 'down' as const,
+    pushesDispatched: 0,
+  }
+  const homeServer = (realtime?: () => typeof health | undefined) =>
+    new AggregateReadinessService({
+      homeServer: true,
+      state: new ReadinessState(true),
+      inProcessChecks: {
+        auth: async () => undefined,
+        'syncing-server': async () => undefined,
+        files: async () => undefined,
+        revisions: async () => undefined,
+      },
+      cacheTtlMs: 0,
+      realtime,
+    })
+
+  it('reports the gateway health under checks.gateway.realtime without gating status on it', async () => {
+    const report = await homeServer(() => health).check()
+
+    expect(report.status).toBe('ready')
+    expect(report.checks.gateway.realtime).toEqual(health)
+  })
+
+  it('reports { attached: false } when the provider has no gateway to describe', async () => {
+    const report = await homeServer(() => undefined).check()
+
+    expect(report.status).toBe('ready')
+    expect(report.checks.gateway.realtime).toEqual({ attached: false })
+  })
+
+  it('omits the field entirely when no provider is wired', async () => {
+    const report = await homeServer().check()
+
+    expect(report.checks.gateway).toEqual({ redis: true, runtime: true })
+  })
+
+  it('never lets a throwing health snapshot take readiness down', async () => {
+    const report = await homeServer(() => {
+      throw new Error('registry gone')
+    }).check()
+
+    expect(report.status).toBe('ready')
+    expect(report.checks.gateway.realtime).toEqual({ attached: false })
+  })
+})

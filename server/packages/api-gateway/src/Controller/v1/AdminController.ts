@@ -45,6 +45,7 @@ import {
 } from '../../Service/Assistant/tokenMetering'
 import { SYNC_PROTOCOL_VERSION } from '@standard-red-notes/websocket-gateway'
 import { syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAccessService'
+import { webSocketGatewayAccessService } from '../../Service/Sync/SyncWebSocketRuntime'
 import { SYNC_SERVER_OPERATIONS, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
 import { deploymentDiagnostics } from '../../Service/Diagnostics/DeploymentDiagnostics'
 
@@ -931,6 +932,9 @@ export class AdminController extends BaseHttpController {
       live: {
         capabilities,
         unavailabilityReasons,
+        // C9: the attached gateway's own health snapshot (push bridge, SQS
+        // consumer, relay, sync lane); undefined when no gateway is attached.
+        realtime: webSocketGatewayAccessService.health(),
         // What POST /v1/sockets/sync/ticket would do if asked right now: it
         // refuses with 503 SYNC_DISABLED on an empty capability list, so this is
         // the single field that answers "can this client get onto the socket".

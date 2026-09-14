@@ -28,7 +28,42 @@ describe('EndpointResolver', () => {
       // single-pass replace must insert the second param at the REAL second placeholder.
       expect(
         resolver.resolveEndpointOrMethodIdentifier('GET', 'users/:userUuid/settings/:settingName', 'a:b', 'x'),
-      ).toEqual('users/a:b/settings/x')
+      ).toEqual('users/a%3Ab/settings/x')
+    })
+
+    // R2: a caller-supplied value used to be spliced in raw, so `../../v1/x?y=1`
+    // rewrote the upstream URL's path and query once `new URL()` resolved the
+    // dots. Every value is now ONE percent-encoded path segment.
+    it('percent-encodes a param so it can never escape its path segment', () => {
+      const resolver = createResolver(false)
+
+      expect(
+        resolver.resolveEndpointOrMethodIdentifier(
+          'DELETE',
+          'sockets/connections/:connectionId',
+          '../../v1/anything?x=1#frag',
+        ),
+      ).toEqual('sockets/connections/..%2F..%2Fv1%2Fanything%3Fx%3D1%23frag')
+      expect(new URL('http://localhost:3000/sockets/connections/..%2F..%2Fv1%2Fanything%3Fx%3D1%23frag').pathname).toBe(
+        '/sockets/connections/..%2F..%2Fv1%2Fanything%3Fx%3D1%23frag',
+      )
+    })
+
+    it('leaves uuids, emails and setting names readable after encoding', () => {
+      const resolver = createResolver(false)
+
+      expect(
+        resolver.resolveEndpointOrMethodIdentifier('GET', 'admin/users/:email/ban-status', 'a.b+c@example.com'),
+      ).toEqual('admin/users/a.b%2Bc%40example.com/ban-status')
+      expect(decodeURIComponent('a.b%2Bc%40example.com')).toBe('a.b+c@example.com')
+      expect(
+        resolver.resolveEndpointOrMethodIdentifier(
+          'GET',
+          'users/:userUuid/settings/:settingName',
+          '3f2c1e8a-1c0e-4c9a-9d2b-1f9f1b5a6c7d',
+          'MUTE_SIGN_IN_EMAILS',
+        ),
+      ).toEqual('users/3f2c1e8a-1c0e-4c9a-9d2b-1f9f1b5a6c7d/settings/MUTE_SIGN_IN_EMAILS')
     })
 
     it('leaves extra placeholders untouched when fewer params are supplied', () => {

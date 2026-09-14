@@ -406,3 +406,93 @@ describe('SyncWebSocketAccessService lifecycle', () => {
     expect(service.capabilities()).toEqual(newProvider.capabilities())
   })
 })
+
+// C15 (R7): a ticket refused ONLY because a store is not ready yet (Redis
+// connecting at boot, a blip mid-reconnect) is transient — the client should
+// retry after a delay instead of negotiating HTTP-only for the whole session.
+// A configuration cause is not retryable and must not be marked transient.
+describe('SyncWebSocketController transient refusals (C15)', () => {
+  const ticketRequest = (): Request =>
+    ({ body: { deviceId: 'device-1' }, headers: { authorization: 'Bearer session-token' } }) as unknown as Request
+
+  const responseWithHeaders = (): { response: Response; status: jest.Mock; send: jest.Mock; setHeader: jest.Mock } => {
+    const send = jest.fn()
+    const status = jest.fn(() => ({ send }))
+    const setHeader = jest.fn()
+    const locals = { user: { uuid: 'user-1' }, session: { uuid: 'session-1' } }
+    return { response: { locals, status, send, setHeader } as unknown as Response, status, send, setHeader }
+  }
+
+  const providerRefusing = (reasons: string[]): SyncGatewayAccess => ({
+    capabilities: () => ({ capabilities: [] }),
+    issueTicket: jest.fn(),
+    unavailabilityReasons: () => reasons as never,
+  })
+
+  beforeEach(() => syncWebSocketAccessService.clearProvider())
+  afterEach(() => syncWebSocketAccessService.clearProvider())
+
+  it('marks a refusal transient with Retry-After when every unmet reason is a store-readiness one', async () => {
+    syncWebSocketAccessService.setProvider(providerRefusing(['ticket-store-unavailable', 'socket-budget-store-unavailable']))
+    const { response, status, send, setHeader } = responseWithHeaders()
+
+    await new SyncWebSocketController().ticket(ticketRequest(), response)
+
+    expect(status).toHaveBeenCalledWith(503)
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '5')
+    expect(send).toHaveBeenCalledWith({ error: { code: 'SYNC_DISABLED', transient: true } })
+  })
+
+  it('does not mark a refusal transient when a configuration cause is among the reasons', async () => {
+    syncWebSocketAccessService.setProvider(providerRefusing(['ticket-store-unavailable', 'no-allowed-origins']))
+    const { response, status, send, setHeader } = responseWithHeaders()
+
+    await new SyncWebSocketController().ticket(ticketRequest(), response)
+
+    expect(status).toHaveBeenCalledWith(503)
+    expect(setHeader).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith({ error: { code: 'SYNC_DISABLED' } })
+  })
+
+  it('does not mark a refusal transient when no lane was ever built', async () => {
+    const { response, send, setHeader } = responseWithHeaders()
+
+    await new SyncWebSocketController().ticket(ticketRequest(), response)
+
+    expect(setHeader).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith({ error: { code: 'SYNC_DISABLED' } })
+  })
+
+  it("honours the gateway's own transient verdict when issueTicket itself refuses", async () => {
+    const gatewayError = Object.assign(new Error('WebSocket sync is unavailable.'), {
+      name: 'SyncUnavailableError',
+      transient: true,
+    })
+    syncWebSocketAccessService.setProvider({
+      capabilities: () => ({ capabilities: [{ id: 'ws-sync', version: 1, endpoint: '/sockets/sync' }] }),
+      issueTicket: jest.fn(async () => {
+        throw gatewayError
+      }),
+    })
+    const { response, status, send, setHeader } = responseWithHeaders()
+
+    await new SyncWebSocketController().ticket(ticketRequest(), response)
+
+    expect(status).toHaveBeenCalledWith(503)
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '5')
+    expect(send).toHaveBeenCalledWith({ error: { code: 'SYNC_DISABLED', transient: true } })
+  })
+
+  it('still rethrows an unrelated issueTicket failure', async () => {
+    syncWebSocketAccessService.setProvider({
+      capabilities: () => ({ capabilities: [{ id: 'ws-sync', version: 1, endpoint: '/sockets/sync' }] }),
+      issueTicket: jest.fn(async () => {
+        throw new Error('redis exploded')
+      }),
+    })
+
+    await expect(new SyncWebSocketController().ticket(ticketRequest(), responseWithHeaders().response)).rejects.toThrow(
+      'redis exploded',
+    )
+  })
+})

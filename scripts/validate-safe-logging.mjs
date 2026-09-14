@@ -24,7 +24,6 @@ const contractSourceFiles = [
   "server/packages/auth/src/Infra/InversifyExpressUtils/AnnotatedSubscriptionTokensController.ts",
   "server/packages/auth/src/Infra/InversifyExpressUtils/AnnotatedOfflineController.ts",
   "server/packages/api-gateway/src/Controller/AuthMiddleware.ts",
-  "server/packages/api-gateway/src/Controller/WebSocketAuthMiddleware.ts",
   "server/packages/api-gateway/src/Controller/SubscriptionTokenAuthMiddleware.ts",
   "server/packages/api-gateway/src/Controller/RateLimitMiddleware.ts",
   "server/packages/api-gateway/src/Controller/UserRateLimitMiddleware.ts",

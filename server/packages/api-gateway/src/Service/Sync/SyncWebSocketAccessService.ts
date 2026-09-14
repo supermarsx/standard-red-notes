@@ -6,11 +6,46 @@ import type {
   SyncUnavailabilityReason,
 } from '@standard-red-notes/websocket-gateway'
 
+/**
+ * C15: the gateway's unavailability reasons that describe a STORE that is not
+ * ready yet (Redis connecting at boot, a blip mid-reconnect) rather than a
+ * configuration the operator has to change. Only these make a refusal
+ * transient — the client may retry after `Retry-After` instead of falling back
+ * to HTTP for the whole session.
+ */
+export const SYNC_STORE_READINESS_REASONS: ReadonlySet<SyncUnavailabilityReason> = new Set<SyncUnavailabilityReason>([
+  'ticket-store-unavailable',
+  'command-lease-store-unavailable',
+  'socket-budget-store-unavailable',
+  'invite-event-store-unavailable',
+])
+
+export function isTransientSyncUnavailability(reasons: readonly SyncUnavailabilityReason[]): boolean {
+  return reasons.length > 0 && reasons.every((reason) => SYNC_STORE_READINESS_REASONS.has(reason))
+}
+
 export class SyncWebSocketUnavailableError extends Error {
-  constructor() {
+  /** True when EVERY unmet reason is a store-readiness one (see above). */
+  readonly transient: boolean
+
+  constructor(readonly reasons: readonly SyncUnavailabilityReason[] = []) {
     super('WebSocket sync is unavailable.')
     this.name = 'SyncWebSocketUnavailableError'
+    this.transient = isTransientSyncUnavailability(reasons)
   }
+}
+
+/**
+ * The gateway's own `SyncUnavailableError` (thrown by `issueTicket` once a lane
+ * that WAS built declines), recognised structurally so this package never needs
+ * the gateway's runtime build for an `instanceof`.
+ */
+export function isGatewaySyncUnavailableError(error: unknown): error is Error & { transient: boolean } {
+  return (
+    error instanceof Error &&
+    error.name === 'SyncUnavailableError' &&
+    typeof (error as { transient?: unknown }).transient === 'boolean'
+  )
 }
 
 /**
@@ -60,7 +95,7 @@ export class SyncWebSocketAccessService {
 
   async issueTicket(identity: SyncTicketIdentity): Promise<SyncTicketResponse> {
     if (!this.provider || this.capabilities().capabilities.length === 0) {
-      throw new SyncWebSocketUnavailableError()
+      throw new SyncWebSocketUnavailableError(this.unavailabilityReasons())
     }
     return this.provider.issueTicket(identity)
   }

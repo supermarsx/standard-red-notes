@@ -226,3 +226,71 @@ describe('RateLimitMiddleware', () => {
     })
   })
 })
+
+// N41: the realtime control plane (token mint, sync ticket) sat outside every
+// bucket. It is counted per SESSION when a bearer credential is presented, so a
+// reconnect storm is charged to the session that causes it and a busy NAT does
+// not starve everyone behind it; anonymous calls fall back to the IP.
+describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
+  const rules = buildDefaultRateLimitRules(limits)
+  const realtime = rules.find((rule) => rule.bucket === 'realtime-tokens')
+
+  it('matches POST on the three realtime control-plane paths only', () => {
+    expect(realtime).toBeDefined()
+    for (const path of ['/v1/sockets/tokens', '/v1/sockets/sync/ticket', '/sockets/tokens']) {
+      expect(realtime?.match('POST', path)).toBe(true)
+      expect(realtime?.match('GET', path)).toBe(false)
+    }
+    expect(realtime?.match('POST', '/v1/sockets/sync/capabilities')).toBe(false)
+    expect(realtime?.limit).toBe(limits.loginMax)
+    expect(realtime?.windowSeconds).toBe(limits.windowSeconds)
+  })
+
+  it('keys the counter on a digest of the bearer credential, never on the credential itself', async () => {
+    const redis = buildRedis()
+    const next: NextFunction = jest.fn()
+    const middleware = createRateLimitMiddleware({ redis, config: { enabled: true, rules }, logger: { warn: jest.fn() } })
+
+    middleware(
+      buildRequest({ path: '/v1/sockets/tokens', headers: { authorization: 'Bearer session-secret' } as never }),
+      buildResponse().response,
+      next,
+    )
+    await flush()
+
+    const key = (redis.incr as jest.Mock).mock.calls[0][0] as string
+    expect(key).toMatch(/^rl:realtime-tokens:session:[0-9a-f]{32}$/)
+    expect(key).not.toContain('session-secret')
+    expect(next).toHaveBeenCalled()
+  })
+
+  it('throttles one session while another session from the same IP keeps its allowance', async () => {
+    const redis = buildRedis()
+    const middleware = createRateLimitMiddleware({ redis, config: { enabled: true, rules }, logger: { warn: jest.fn() } })
+    const call = async (authorization: string) => {
+      const next: NextFunction = jest.fn()
+      const { response, status } = buildResponse()
+      middleware(buildRequest({ path: '/v1/sockets/sync/ticket', headers: { authorization } as never }), response, next)
+      await flush()
+      return { next, status }
+    }
+
+    await call('Bearer a')
+    await call('Bearer a')
+    const third = await call('Bearer a')
+    const other = await call('Bearer b')
+
+    expect(third.status).toHaveBeenCalledWith(429)
+    expect(other.next).toHaveBeenCalled()
+  })
+
+  it('falls back to the client IP when no bearer credential is presented', async () => {
+    const redis = buildRedis()
+    const middleware = createRateLimitMiddleware({ redis, config: { enabled: true, rules }, logger: { warn: jest.fn() } })
+
+    middleware(buildRequest({ path: '/sockets/tokens', headers: {} }), buildResponse().response, jest.fn())
+    await flush()
+
+    expect((redis.incr as jest.Mock).mock.calls[0][0]).toBe('rl:realtime-tokens:1.2.3.4')
+  })
+})

@@ -15,7 +15,6 @@ import { HttpServiceProxy } from '../Service/Http/HttpServiceProxy'
 import { SubscriptionTokenAuthMiddleware } from '../Controller/SubscriptionTokenAuthMiddleware'
 import { CrossServiceTokenCacheInterface } from '../Service/Cache/CrossServiceTokenCacheInterface'
 import { RedisCrossServiceTokenCache } from '../Infra/Redis/RedisCrossServiceTokenCache'
-import { WebSocketAuthMiddleware } from '../Controller/WebSocketAuthMiddleware'
 import { InMemoryCrossServiceTokenCache } from '../Infra/InMemory/InMemoryCrossServiceTokenCache'
 import { DirectCallServiceProxy } from '../Service/DirectCall/DirectCallServiceProxy'
 import {
@@ -45,7 +44,6 @@ import { GRPCSyncingServerServiceProxy } from '../Service/gRPC/GRPCSyncingServer
 import { SyncResponseHttpRepresentation } from '../Mapping/Sync/Http/SyncResponseHttpRepresentation'
 import { SyncRequestGRPCMapper } from '../Mapping/Sync/GRPC/SyncRequestGRPCMapper'
 import { SyncResponseGRPCMapper } from '../Mapping/Sync/GRPC/SyncResponseGRPCMapper'
-import { GRPCWebSocketAuthMiddleware } from '../Controller/GRPCWebSocketAuthMiddleware'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { SNSDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterface'
@@ -83,6 +81,7 @@ import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/Rate
 import { AggregateReadinessService } from '../Service/Readiness/AggregateReadinessService'
 import { DEFAULT_DEPLOYMENT_MARKER_PATH, readDeploymentMarker } from '../Service/Readiness/DeploymentIdentity'
 import { ReadinessState } from '../Service/Readiness/ReadinessState'
+import { webSocketGatewayAccessService } from '../Service/Sync/SyncWebSocketRuntime'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { buildDefaultOAuthConfig } from '../Service/Assistant/subscription/oauthConfig'
@@ -861,6 +860,10 @@ export class ContainerConfigLoader {
         serviceProbeUrls,
         serviceControlService: container.get(TYPES.ApiGateway_ServiceControlService),
         inProcessChecks,
+        // C9: the realtime gateway attaches to the owned http.Server AFTER this
+        // container is built, so its health is read late-bound through the
+        // module singleton the runtime publishes into. Informational only.
+        realtime: () => webSocketGatewayAccessService.health(),
         deploymentRevision: env.get('SRN_DEPLOY_REVISION', true),
         deploymentVersion: env.get('SRN_DEPLOY_VERSION', true),
         deploymentMarker:
@@ -1151,20 +1154,6 @@ export class ContainerConfigLoader {
         boundServiceProxy = 'http'
         container.bind<ServiceProxyInterface>(TYPES.ApiGateway_ServiceProxy).to(HttpServiceProxy)
       }
-    }
-
-    if (isConfiguredForGRPCProxy) {
-      container
-        .bind<GRPCWebSocketAuthMiddleware>(TYPES.ApiGateway_WebSocketAuthMiddleware)
-        .toConstantValue(
-          new GRPCWebSocketAuthMiddleware(
-            container.get<IAuthClient>(TYPES.ApiGateway_GRPCAuthClient),
-            container.get<string>(TYPES.ApiGateway_AUTH_JWT_SECRET),
-            container.get<winston.Logger>(TYPES.ApiGateway_Logger),
-          ),
-        )
-    } else {
-      container.bind<WebSocketAuthMiddleware>(TYPES.ApiGateway_WebSocketAuthMiddleware).to(WebSocketAuthMiddleware)
     }
 
     // Standard Red Notes: presence and topology for the admin Diagnostics panel.

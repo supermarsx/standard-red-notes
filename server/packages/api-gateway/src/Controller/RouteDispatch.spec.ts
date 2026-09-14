@@ -319,8 +319,6 @@ describe('versioned route controllers', () => {
       'OfflineController.getOfflineFeatures (/features)',
       // OAuth redirect back from the assistant subscription provider.
       'AssistantController.subscriptionCallback (/subscription/callback)',
-      // Websocket connection lifecycle hooks, called by the websocket tier.
-      'WebSocketsController.deleteWebSocketConnection (/connections)',
       // The payments site's own pages and its separate admin login, proxied as-is.
       'PaymentsController.adminLogin (/admin/auth/login)',
       'PaymentsController.adminLogout (/admin/auth/logout)',
