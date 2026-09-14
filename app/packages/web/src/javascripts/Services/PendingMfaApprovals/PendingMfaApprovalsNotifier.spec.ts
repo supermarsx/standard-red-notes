@@ -22,9 +22,10 @@ function createApplication(initial: { socketOpen?: boolean; signedIn?: boolean }
   const state = { socketOpen: initial.socketOpen ?? false, signedIn: initial.signedIn ?? true }
   const observers: SocketObserver[] = []
   const socketDisposer = jest.fn()
-  const listPendingMfaApprovals = jest.fn(
-    async (): Promise<PendingApprovalsResponse> => ({ status: 200, data: { pendingApprovals: [] } }),
-  )
+  const listPendingMfaApprovals = jest.fn(async (): Promise<PendingApprovalsResponse> => ({
+    status: 200,
+    data: { pendingApprovals: [] },
+  }))
   const application = {
     sockets: {
       addEventObserver: (observer: SocketObserver) => {
