@@ -501,8 +501,17 @@ export type SyncServerFrame = {
 export type SyncTicket = {
   endpoint: string
   ticket: string
+  /** The server's absolute expiry, on the server's clock. Never compared to the local clock. */
   expiresAt: number
   deviceId: string
+  /**
+   * Expiry on the LOCAL clock, derived by the main thread from the server's own
+   * `expiresAt - issuedAt` span and the instant the ticket arrived. Absent when the
+   * server did not report `issuedAt`; the worker then dials without a pre-check and
+   * lets the gateway judge expiry, because comparing a server timestamp against a
+   * browser clock that runs ≥ 29 s ahead silently kept every ticket out of the lane.
+   */
+  localExpiresAt?: number
 }
 
 export type MainToSyncWorkerMessage =
@@ -513,7 +522,19 @@ export type MainToSyncWorkerMessage =
       sessionScope: string
       context?: AccountSyncTransportContext
     }
-  | { type: 'RECOVER'; clientRequestId: string; sessionScope: string }
+  | {
+      type: 'RECOVER'
+      clientRequestId: string
+      sessionScope: string
+      /**
+       * Set when the main thread has already ruled the socket out for this session
+       * (http-only switch, no configured URL, non-http page origin). The worker
+       * must then replay the persisted record over HTTP with its command identity
+       * instead of asking for a ticket it can never get — otherwise the kill switch
+       * turned a dispatched record into RECOVERY_REQUIRED on every sync.
+       */
+      replayOverHttp?: SyncFallbackReason
+    }
   | {
       type: 'AUTHORIZE_COLLABORATION'
       clientRequestId: string
@@ -596,6 +617,12 @@ export type SyncFallbackReason =
   | 'multi-tab-not-owner'
   | 'worker-error'
   | 'operation-unavailable'
+  /**
+   * The server answered `LIVE_SYNC_DISABLED`: this account may not sync items over
+   * the socket for the rest of the session. Deliberately NOT permanent — the other
+   * lanes (invites, RPC, collaboration, files) stay up on the same socket.
+   */
+  | 'live-sync-disabled'
 
 /**
  * Reasons that describe a structural absence rather than a transient fault: this deployment
@@ -603,6 +630,12 @@ export type SyncFallbackReason =
  * built never to use it. Retrying on a timer cannot make any of them succeed, so long-lived
  * consumers must stand down and wait for a lifecycle event (relaunch, sign-in) instead of
  * reconnecting forever.
+ *
+ * `capability-unavailable` may only be emitted when the server ANSWERED that the capability
+ * is absent (a capabilities list without `ws-sync`, 404/410/501, or a non-transient
+ * `SYNC_DISABLED`). A network error, timeout or 5xx proves nothing and must map to the
+ * retryable `ticket-unavailable`, or one restart of the api-gateway silences the invite
+ * stream for the life of the tab.
  */
 const PERMANENT_SYNC_FALLBACK_REASONS = new Set<SyncFallbackReason>([
   'http-only',

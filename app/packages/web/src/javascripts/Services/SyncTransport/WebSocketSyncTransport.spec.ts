@@ -625,10 +625,12 @@ describe('WebSocketSyncTransport', () => {
       worker.emit({ type: 'NEED_TICKET', clientRequestId: execute.clientRequestId, reconnect: false })
       await flush()
       await new Promise((resolve) => setTimeout(resolve, 0))
+      // The cache replays the classified reason; it never rewrites a transient
+      // verdict into the permanent one for the request that follows.
       expect(worker.posts).toContainEqual({
         type: 'TICKET_UNAVAILABLE',
         clientRequestId: execute.clientRequestId,
-        reason: suffix === 'first' ? 'ticket-unavailable' : 'capability-unavailable',
+        reason: 'ticket-unavailable',
       })
       worker.emit({
         type: 'HTTP_FALLBACK',
@@ -642,6 +644,218 @@ describe('WebSocketSyncTransport', () => {
     expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
     expect(controlPlane.getCapabilities).toHaveBeenCalledTimes(1)
     expect(fallback).toHaveBeenCalledTimes(2)
+  })
+
+  describe('control-plane failure classification', () => {
+    const requestTicket = async (transport: WebSocketSyncTransport) => {
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+      const execution = transport.execute(request(), fallback)
+      await flush()
+      const execute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: execute.clientRequestId, reconnect: false })
+      await flush()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const verdict = worker.posts.find(
+        (message) => message.type === 'TICKET_UNAVAILABLE' && message.clientRequestId === execute.clientRequestId,
+      ) as Extract<MainToSyncWorkerMessage, { type: 'TICKET_UNAVAILABLE' }> | undefined
+      worker.emit({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: execute.clientRequestId,
+        reason: verdict?.reason ?? 'worker-error',
+        body: request(),
+      })
+      await execution
+      return verdict?.reason
+    }
+
+    it('treats a network error on the ticket request as retryable, not as a missing capability', async () => {
+      controlPlane.createTicket.mockRejectedValue(new TypeError('Failed to fetch'))
+      ;(controlPlane.getCapabilities as jest.Mock).mockRejectedValue(new TypeError('Failed to fetch'))
+
+      await expect(requestTicket(createTransport())).resolves.toBe('ticket-unavailable')
+    })
+
+    it('treats a capabilities answer without ws-sync as the capability being absent', async () => {
+      controlPlane.createTicket.mockRejectedValue(new TypeError('Failed to fetch'))
+      ;(controlPlane.getCapabilities as jest.Mock).mockResolvedValue({ capabilities: [] })
+
+      await expect(requestTicket(createTransport())).resolves.toBe('capability-unavailable')
+    })
+
+    it.each([
+      [{ refused: true, status: 404 }, 'capability-unavailable'],
+      [{ refused: true, status: 501 }, 'capability-unavailable'],
+      [{ refused: true, status: 503, code: 'SYNC_DISABLED' }, 'capability-unavailable'],
+      [{ refused: true, status: 503, code: 'SYNC_DISABLED', transient: true }, 'ticket-unavailable'],
+      [{ refused: true, status: 503 }, 'ticket-unavailable'],
+      [{ refused: true, status: 502 }, 'ticket-unavailable'],
+      [{ refused: true, status: 429 }, 'ticket-unavailable'],
+    ] as const)('classifies a ticket refusal %j as %s', async (refusal, expected) => {
+      controlPlane.createTicket.mockResolvedValue(refusal)
+
+      await expect(requestTicket(createTransport())).resolves.toBe(expected)
+      expect(controlPlane.getCapabilities).not.toHaveBeenCalled()
+    })
+
+    it('lets the invite bootstrap past the negative ticket cache while plain syncs stay cached', async () => {
+      // The control plane keeps failing for the whole window, so every request that
+      // actually reaches it is visible as one more createTicket call.
+      controlPlane.createTicket.mockResolvedValue(undefined)
+      const transport = createTransport()
+      await expect(requestTicket(transport)).resolves.toBe('ticket-unavailable')
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+
+      await transport.subscribeInviteEvents({
+        applyBatch: jest.fn().mockResolvedValue('cursor-1'),
+        reconcile: jest.fn().mockResolvedValue(undefined),
+      })
+      const subscribe = worker.posts.find((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'SUBSCRIBE_INVITE_EVENTS' }
+      >
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: subscribe.clientRequestId, reconnect: false })
+      await flush()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      // The bootstrap asked the server itself instead of inheriting the cached verdict.
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(2)
+      expect(worker.posts).toContainEqual({
+        type: 'TICKET_UNAVAILABLE',
+        clientRequestId: subscribe.clientRequestId,
+        reason: 'ticket-unavailable',
+      })
+
+      // A plain sync in the same window still gets the cached verdict without a request.
+      await expect(requestTicket(transport)).resolves.toBe('ticket-unavailable')
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('ticket expiry on the local clock', () => {
+    const connectFor = async (transport: WebSocketSyncTransport) => {
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+      void transport.execute(request(), fallback)
+      await flush()
+      const execute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: execute.clientRequestId, reconnect: false })
+      await flush()
+      return worker.posts.find((message) => message.type === 'CONNECT') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'CONNECT' }
+      >
+    }
+
+    it('derives the local expiry from the server-reported lifetime, not from the server clock', async () => {
+      const localNow = 1_800_000_000_000
+      const serverNow = localNow - 60_000 // this browser runs a minute ahead of the server
+      jest.spyOn(Date, 'now').mockReturnValue(localNow)
+      controlPlane.createTicket.mockResolvedValue({
+        ticket: 'ticket'.repeat(8),
+        issuedAt: serverNow,
+        expiresAt: serverNow + 30_000,
+        endpoint: '/sockets/sync',
+        capability: 'ws-sync',
+        version: 1,
+      })
+
+      const connect = await connectFor(createTransport())
+
+      expect(connect.authorization.expiresAt).toBe(serverNow + 30_000)
+      expect(connect.authorization.localExpiresAt).toBe(localNow + 30_000)
+    })
+
+    it('performs no local pre-check when the server reports no issue time', async () => {
+      const connect = await connectFor(createTransport())
+
+      expect(connect.authorization).not.toHaveProperty('localExpiresAt')
+    })
+  })
+
+  it('clears the negotiated operations when the worker falls back without a DEGRADED transition', async () => {
+    const transport = createTransport()
+    void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+    await flush()
+    worker.emit({
+      type: 'NEGOTIATED',
+      sessionScope: SESSION_A,
+      protocolVersion: 1,
+      endpoint: 'wss://sync.example.test/sockets/sync',
+      operations: ['SYNC_ITEMS', 'INVITE_EVENTS'],
+    })
+    worker.emit({ type: 'STATE', state: 'READY' })
+    await flush()
+    expect(transport.transportStatus.operations).toEqual(['SYNC_ITEMS', 'INVITE_EVENTS'])
+
+    worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'proxy-failed' })
+    await flush()
+
+    expect(transport.transportStatus).toEqual({ state: 'HTTP_FALLBACK', fallbackReason: 'proxy-failed', operations: [] })
+  })
+
+  describe('a session with no socket lane', () => {
+    it('stays on HTTP from a non-http page origin without creating a worker or requesting a ticket', async () => {
+      // jsdom's `location` is unforgeable, so the page protocol rides the environment seam.
+      const transport = createTransport({
+        environment: { hasWorker: true, hasWebSocket: true, hasIndexedDb: true, pageProtocol: 'file:' },
+      })
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+
+      await expect(transport.execute(request(), fallback)).resolves.toEqual({ response: response('http') })
+
+      expect(worker.posts).toHaveLength(0)
+      expect(controlPlane.createTicket).not.toHaveBeenCalled()
+      expect(transport.transportStatus).toEqual({
+        state: 'HTTP_ONLY',
+        fallbackReason: 'capability-unavailable',
+        operations: [],
+      })
+    })
+
+    it('stays on HTTP when no websocket URL is configured without consulting the worker', async () => {
+      const transport = createTransport({ getConfiguredWebSocketUrl: () => undefined })
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+
+      await expect(transport.execute(request(), fallback)).resolves.toEqual({ response: response('http') })
+
+      expect(worker.posts).toHaveLength(0)
+      expect(controlPlane.createTicket).not.toHaveBeenCalled()
+      expect(transport.transportStatus.fallbackReason).toBe('capability-unavailable')
+    })
+
+    it('replays a pending record over HTTP with its identity under the http-only switch', async () => {
+      const transport = createTransport({ isHttpOnly: () => true })
+      const fallback = jest.fn().mockResolvedValue(response('replayed'))
+      const recovery = transport.recoverPending(fallback)
+      await flush()
+      const recover = worker.posts.find((message) => message.type === 'RECOVER') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'RECOVER' }
+      >
+      expect(recover).toEqual(expect.objectContaining({ sessionScope: SESSION_A, replayOverHttp: 'http-only' }))
+
+      const command = { id: 'command-1', digest: 'a'.repeat(64), sequence: 1 }
+      worker.emit({ type: 'COMMAND_PERSISTED', clientRequestId: recover.clientRequestId, body: request(), command })
+      worker.emit({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: recover.clientRequestId,
+        reason: 'http-only',
+        body: request(),
+        command,
+      })
+
+      const result = await recovery
+      expect(fallback).toHaveBeenCalledWith(request(), command)
+      expect(result).toEqual(
+        expect.objectContaining({ response: response('replayed'), request: request() }),
+      )
+      expect(result?.markCheckpointDurable).toBeDefined()
+    })
   })
 
   it('closes and rejects an active execution when the session is revoked', async () => {

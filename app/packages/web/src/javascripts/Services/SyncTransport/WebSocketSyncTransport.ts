@@ -83,15 +83,50 @@ export type SyncCapability = {
 export type SyncTicketResponse = {
   ticket: string
   expiresAt: number
+  /**
+   * Server clock at issue time, when the server reports it. Together with
+   * `expiresAt` it gives the ticket's lifetime without trusting either clock to
+   * agree with the other; without it the client performs no local expiry check.
+   */
+  issuedAt?: number
   endpoint: string
   capability: 'ws-sync'
   version: 1
 }
 
+/**
+ * A control-plane request the server ANSWERED with a non-success status. Only an
+ * answer can prove the capability absent; a thrown request (network error,
+ * timeout) or a bare `undefined` proves nothing and must stay retryable. `code`
+ * and `transient` come from the JSON error body when the server sent one
+ * (`{ error: { code: 'SYNC_DISABLED', transient: true } }` during a store outage).
+ */
+export type SyncControlPlaneRefusal = {
+  refused: true
+  status: number
+  code?: string
+  transient?: boolean
+}
+
+export function isSyncControlPlaneRefusal(value: unknown): value is SyncControlPlaneRefusal {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { refused?: unknown }).refused === true &&
+    Number.isSafeInteger((value as { status?: unknown }).status)
+  )
+}
+
 export interface SyncTransportControlPlane {
-  /** Compatibility probe used only after ticket issuance says the operation is unavailable. */
-  getCapabilities?(): Promise<{ capabilities: SyncCapability[] } | undefined>
-  createTicket(deviceId: string): Promise<SyncTicketResponse | undefined>
+  /**
+   * Compatibility probe used only after ticket issuance says the operation is
+   * unavailable. Return the list the server answered with, a refusal for a
+   * non-success answer, `undefined` when the answer could not be read, and throw
+   * on a network failure.
+   */
+  getCapabilities?(): Promise<{ capabilities: SyncCapability[] } | SyncControlPlaneRefusal | undefined>
+  /** Same contract: refusal for a non-success answer, `undefined` for an unreadable one, throw on network failure. */
+  createTicket(deviceId: string): Promise<SyncTicketResponse | SyncControlPlaneRefusal | undefined>
 }
 
 export type WebSocketSyncTransportOptions = {
@@ -106,10 +141,13 @@ export type WebSocketSyncTransportOptions = {
     hasWorker: boolean
     hasWebSocket: boolean
     hasIndexedDb: boolean
+    /** Defaults to `location.protocol`; only http(s) pages have an origin the sync lane can use. */
+    pageProtocol?: string
   }
 }
 
 type TransportResponse = HttpResponse<RawSyncResponse>
+type CapabilityProbeVerdict = 'present' | 'absent' | 'unknown'
 type PendingResult =
   AccountSyncTransportResult<TransportResponse> | AccountSyncTransportRecoveryResult<TransportResponse> | undefined
 
@@ -248,6 +286,33 @@ type PendingFileDownload = {
 
 const CAPABILITY_REPROBE_MS = 60_000
 
+/**
+ * The worker lane rides a same-origin websocket, so it only makes sense from a
+ * page served over http(s). Electron `file:`, a React Native webview or an
+ * extension popup have no such origin and run the legacy socket lane only.
+ */
+function pageOriginSupportsSyncLane(pageProtocol: string | undefined): boolean {
+  const protocol = pageProtocol ?? (globalThis as { location?: { protocol?: unknown } }).location?.protocol
+  return protocol === undefined || protocol === 'http:' || protocol === 'https:'
+}
+
+/**
+ * Statuses with which a server states that this endpoint does not exist here.
+ * Anything else — 5xx from a proxy mid-deploy, 429, 401 — says nothing about the
+ * capability and must stay retryable.
+ */
+const CAPABILITY_ABSENT_STATUSES = new Set([404, 410, 501])
+
+function refusalProvesCapabilityAbsent(refusal: SyncControlPlaneRefusal): boolean {
+  if (CAPABILITY_ABSENT_STATUSES.has(refusal.status)) {
+    return true
+  }
+  // 503 SYNC_DISABLED without `transient` is the gateway saying the lane is
+  // switched off by configuration; with `transient: true` its stores are still
+  // coming up and the very same request may succeed seconds later.
+  return refusal.status === 503 && refusal.code === 'SYNC_DISABLED' && refusal.transient !== true
+}
+
 function defaultHttpOnly(): boolean {
   const injected = (globalThis as { _sync_transport?: unknown })._sync_transport
   if (injected === 'http-only') {
@@ -294,8 +359,13 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     endpoint: string
     operations: ReadonlySet<SyncNegotiatedOperation>
   }
-  private capabilityProbe?: Promise<boolean>
-  private capabilityUnavailableUntil = 0
+  private capabilityProbe?: Promise<CapabilityProbeVerdict>
+  /**
+   * Negative ticket cache. It stores the classified reason with its deadline and
+   * replays that exact reason, so a transient `ticket-unavailable` never gets
+   * rewritten into the permanent `capability-unavailable` for the next request.
+   */
+  private ticketFailureCache?: { reason: SyncFallbackReason; until: number }
   private fallbackReason?: SyncFallbackReason
 
   constructor(private readonly options: WebSocketSyncTransportOptions) {}
@@ -337,13 +407,6 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    * discovered epoch and denies before the grant leg is ever sent, so a caller
    * holding state from a since-rotated room is cut off during discovery instead of
    * receiving a capability for the new epoch.
-   *
-   * Note the seam that reaches this method — `CollaborationRoomAuthorizationTransport`
-   * in `@standardnotes/services` — still declares only three parameters, so the
-   * production wiring cannot pass the fourth yet and epoch mismatches are caught one
-   * round trip later by the echo check in `normalizeCollaborationAuthorization`.
-   * Keep this parameter: it is the target of that seam widening, and the epoch-bound
-   * callers already cast to a four-argument signature to reach it.
    */
   authorizeCollaborationRoom(
     noteUuid: string,
@@ -671,6 +734,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     if (!worker) {
       return undefined
     }
+    // The kill switch (and a platform with no socket lane) must cover recovery
+    // too: a record dispatched before the switch flipped can never be asked
+    // STATUS again, so the worker replays it over HTTP with its identity.
+    const replayOverHttp = this.sessionLaneUnavailableReason()
     const clientRequestId = this.nextRequestId('recover')
     return new Promise<AccountSyncTransportRecoveryResult<TransportResponse> | undefined>((resolve, reject) => {
       this.pending.set(clientRequestId, {
@@ -680,8 +747,43 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         resolve: resolve as (result: PendingResult) => void,
         reject,
       })
-      worker.postMessage({ type: 'RECOVER', clientRequestId, sessionScope })
+      worker.postMessage({
+        type: 'RECOVER',
+        clientRequestId,
+        sessionScope,
+        ...(replayOverHttp ? { replayOverHttp } : {}),
+      })
     })
+  }
+
+  /**
+   * Reasons that rule the worker lane out for the whole session before any
+   * ticket is worth requesting: the operator/user http-only switch, no configured
+   * websocket URL, a URL that is not ws(s), or a page origin that is not http(s).
+   * `capability-unavailable` is right for the last three — they are structural,
+   * and nothing a retry can change.
+   */
+  private sessionLaneUnavailableReason(): SyncFallbackReason | undefined {
+    if (this.options.isHttpOnly?.() === true || (!this.options.isHttpOnly && defaultHttpOnly())) {
+      return 'http-only'
+    }
+    const configuredUrl = this.options.getConfiguredWebSocketUrl()
+    if (!configuredUrl) {
+      return 'capability-unavailable'
+    }
+    let configuredEndpoint: URL
+    try {
+      configuredEndpoint = new URL(configuredUrl)
+    } catch {
+      return 'capability-unavailable'
+    }
+    if (configuredEndpoint.protocol !== 'wss:' && configuredEndpoint.protocol !== 'ws:') {
+      return 'capability-unavailable'
+    }
+    if (!pageOriginSupportsSyncLane(this.options.environment?.pageProtocol)) {
+      return 'capability-unavailable'
+    }
+    return undefined
   }
 
   private async executeOrdered(
@@ -702,8 +804,12 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     if (this.revokedSessionScopes.has(sessionScope)) {
       throw new Error('Websocket sync session was revoked.')
     }
-    if (this.options.isHttpOnly?.() === true || (!this.options.isHttpOnly && defaultHttpOnly())) {
+    // Decided here, not in the worker: a platform with no socket lane used to pay
+    // a worker round trip plus an IndexedDB read on every sync only to be told so.
+    const laneUnavailable = this.sessionLaneUnavailableReason()
+    if (laneUnavailable) {
       this.state = 'HTTP_ONLY'
+      this.fallbackReason = laneUnavailable
       return { response: await httpFallback(normalizedRequest) }
     }
     if (!this.environmentSupported()) {
@@ -822,7 +928,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     if (message.type === 'STATE') {
       this.state = message.state
       this.fallbackReason = message.reason
-      if (message.state === 'DEGRADED' || message.state === 'HTTP_ONLY') {
+      // A worker-initiated close never posts DEGRADED (its own onClose is skipped),
+      // so HTTP_FALLBACK must clear the negotiation too or the negative ticket
+      // cache is bypassed on every sync and the reported operations go stale.
+      if (message.state === 'DEGRADED' || message.state === 'HTTP_ONLY' || message.state === 'HTTP_FALLBACK') {
         this.negotiated = undefined
       }
       return
@@ -834,7 +943,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         endpoint: message.endpoint,
         operations: new Set(message.operations),
       }
-      this.capabilityUnavailableUntil = 0
+      this.ticketFailureCache = undefined
       this.fallbackReason = undefined
       return
     }
@@ -1244,34 +1353,41 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     const unavailable = (reason: SyncFallbackReason) => {
       worker.postMessage({ type: 'TICKET_UNAVAILABLE', clientRequestId, reason })
     }
-    if (this.options.isHttpOnly?.() === true || (!this.options.isHttpOnly && defaultHttpOnly())) {
-      unavailable('http-only')
+    const laneUnavailable = this.sessionLaneUnavailableReason()
+    if (laneUnavailable) {
+      unavailable(laneUnavailable)
       return
     }
-    const configuredUrl = this.options.getConfiguredWebSocketUrl()
-    if (!configuredUrl) {
-      unavailable('capability-unavailable')
+    // sessionLaneUnavailableReason() just parsed this successfully.
+    const configuredEndpoint = new URL(this.options.getConfiguredWebSocketUrl() as string)
+
+    // The cache exists so background syncs do not repeat ticket + capability
+    // requests every 30 s. The invite stream and RPC callers are not background
+    // syncs: they arrive once per launch and a stale verdict stands them down
+    // for the life of the tab, so they always get a fresh answer.
+    const bootstrap = this.pendingInviteSubscriptions.has(clientRequestId) || this.pendingRpcs.has(clientRequestId)
+    const cached = this.ticketFailureCache
+    if (!bootstrap && !this.negotiated && cached && Date.now() < cached.until) {
+      unavailable(cached.reason)
       return
     }
-    let configuredEndpoint: URL
+    const cacheAndReport = (reason: SyncFallbackReason) => {
+      this.ticketFailureCache = { reason, until: Date.now() + CAPABILITY_REPROBE_MS }
+      unavailable(reason)
+    }
+
+    let ticket: SyncTicketResponse | SyncControlPlaneRefusal | undefined
+    let receivedAt: number
     try {
-      configuredEndpoint = new URL(configuredUrl)
+      ticket = await this.options.controlPlane.createTicket(this.options.deviceId)
+      receivedAt = Date.now()
     } catch {
-      unavailable('capability-unavailable')
+      // No answer at all (network error, timeout, aborted fetch). The capability
+      // may well exist; only a probe that the server answers can say otherwise.
+      cacheAndReport((await this.probeCapabilityOnce()) === 'absent' ? 'capability-unavailable' : 'ticket-unavailable')
       return
     }
-    if (configuredEndpoint.protocol !== 'wss:' && configuredEndpoint.protocol !== 'ws:') {
-      unavailable('capability-unavailable')
-      return
-    }
-
-    if (!this.negotiated && Date.now() < this.capabilityUnavailableUntil) {
-      unavailable('capability-unavailable')
-      return
-    }
-
     try {
-      const ticket = await this.options.controlPlane.createTicket(this.options.deviceId)
       const currentScope = await this.currentSessionScope()
       if (currentScope !== sessionScope || this.revokedSessionScopes.has(sessionScope)) {
         const pending = this.pending.get(clientRequestId)
@@ -1290,6 +1406,13 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         await this.quarantineWorkerScope(sessionScope)
         return
       }
+      if (isSyncControlPlaneRefusal(ticket)) {
+        // The server answered. Only an answer that says "not here" is permanent;
+        // a 5xx, 429 or a transient SYNC_DISABLED is the same request succeeding
+        // a little later.
+        cacheAndReport(refusalProvesCapabilityAbsent(ticket) ? 'capability-unavailable' : 'ticket-unavailable')
+        return
+      }
       if (
         !ticket ||
         ticket.capability !== 'ws-sync' ||
@@ -1298,17 +1421,21 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         ticket.ticket.length < 32 ||
         !Number.isSafeInteger(ticket.expiresAt)
       ) {
-        const capabilityAvailable = await this.probeCapabilityOnce()
-        // A positive capability response does not make a failing ticket issuer
-        // healthy. Cache both negative capabilities and ticket-plane failures so
-        // each background sync does not repeat ticket + capability requests.
-        this.capabilityUnavailableUntil = Date.now() + CAPABILITY_REPROBE_MS
-        unavailable(capabilityAvailable ? 'ticket-unavailable' : 'capability-unavailable')
+        // Unreadable or malformed answer. A positive capability probe does not
+        // make a failing ticket issuer healthy, so this is still cached — but
+        // as the retryable reason unless the probe proves the capability absent.
+        cacheAndReport(
+          (await this.probeCapabilityOnce()) === 'absent' ? 'capability-unavailable' : 'ticket-unavailable',
+        )
         return
       }
-      this.capabilityUnavailableUntil = 0
+      this.ticketFailureCache = undefined
       const relativeEndpoint = ticket.endpoint
       const endpoint = new URL(relativeEndpoint, configuredEndpoint).toString()
+      // Express expiry on the local clock from the server's own lifetime span.
+      // Comparing the server's absolute `expiresAt` to Date.now() kept every
+      // ticket out of the lane on a browser clock ≥ 29 s ahead of the server.
+      const lifetimeMs = Number.isSafeInteger(ticket.issuedAt) ? ticket.expiresAt - Number(ticket.issuedAt) : undefined
       worker.postMessage({
         type: 'CONNECT',
         clientRequestId,
@@ -1318,29 +1445,40 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
           ticket: ticket.ticket,
           expiresAt: ticket.expiresAt,
           deviceId: this.options.deviceId,
+          ...(lifetimeMs !== undefined && lifetimeMs > 0 ? { localExpiresAt: receivedAt + lifetimeMs } : {}),
         },
       })
     } catch {
-      const capabilityAvailable = await this.probeCapabilityOnce()
-      this.capabilityUnavailableUntil = Date.now() + CAPABILITY_REPROBE_MS
-      unavailable(capabilityAvailable ? 'ticket-unavailable' : 'capability-unavailable')
+      cacheAndReport('ticket-unavailable')
     }
   }
 
-  private probeCapabilityOnce(): Promise<boolean> {
+  /**
+   * `'absent'` only when the server answered that the capability is not offered:
+   * a list without `ws-sync`, or a status that says the endpoint does not exist.
+   * A thrown probe, an unreadable answer or any other refusal is `'unknown'`.
+   */
+  private probeCapabilityOnce(): Promise<CapabilityProbeVerdict> {
     if (!this.options.controlPlane.getCapabilities) {
-      return Promise.resolve(false)
+      return Promise.resolve('unknown')
     }
     if (this.capabilityProbe) {
       return this.capabilityProbe
     }
     const probe = this.options.controlPlane
       .getCapabilities()
-      .then(
-        (response) =>
-          response?.capabilities.some((candidate) => candidate.id === 'ws-sync' && candidate.version === 1) === true,
-      )
-      .catch(() => false)
+      .then((response): CapabilityProbeVerdict => {
+        if (isSyncControlPlaneRefusal(response)) {
+          return refusalProvesCapabilityAbsent(response) ? 'absent' : 'unknown'
+        }
+        if (!response || !Array.isArray(response.capabilities)) {
+          return 'unknown'
+        }
+        return response.capabilities.some((candidate) => candidate.id === 'ws-sync' && candidate.version === 1)
+          ? 'present'
+          : 'absent'
+      })
+      .catch((): CapabilityProbeVerdict => 'unknown')
       .finally(() => {
         if (this.capabilityProbe === probe) {
           this.capabilityProbe = undefined

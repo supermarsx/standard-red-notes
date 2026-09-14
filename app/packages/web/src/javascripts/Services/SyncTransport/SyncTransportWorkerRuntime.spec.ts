@@ -1678,12 +1678,53 @@ describe('SyncTransportWorkerRuntime', () => {
       },
     })
 
+    // A permanent reason can never be resolved by STATUS (no socket will ever
+    // exist for it), so the record is replayed over HTTP WITH its identity —
+    // never id-less, and never left as RECOVERY_REQUIRED on every sync.
     await recovered.runtime.handle({
       type: 'TICKET_UNAVAILABLE',
       clientRequestId: 'client-1',
       reason: 'capability-unavailable',
     })
-    expectDispatchedRecoveryWithoutHttpFallback(recovered, 'client-1', persistedCommand.commandId, operationId)
+    expect(recovered.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(recovered.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
+      {
+        type: 'HTTP_FALLBACK',
+        clientRequestId: 'client-1',
+        reason: 'capability-unavailable',
+        body: body(),
+        command: {
+          id: persistedCommand.commandId,
+          digest: persistedCommand.digest,
+          sequence: persistedCommand.sequence,
+          operationId,
+        },
+      },
+    ])
+  })
+
+  it('retains a dispatched record for STATUS when a transient ticket failure interrupts recovery', async () => {
+    const shared = new FakeOutbox()
+    const first = setup(shared)
+    const firstSocket = await authorize(first)
+    const persistedCommand = JSON.parse(
+      firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string,
+    ) as { commandId: string }
+    await first.runtime.handle({ type: 'SHUTDOWN' })
+
+    const recovered = setup(shared)
+    await recovered.runtime.handle({ type: 'RECOVER', clientRequestId: 'client-1', sessionScope: SESSION_A })
+    await recovered.runtime.handle({
+      type: 'TICKET_UNAVAILABLE',
+      clientRequestId: 'client-1',
+      reason: 'ticket-unavailable',
+    })
+
+    expect(recovered.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(recovered.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toHaveLength(0)
+    expect(recovered.outbox.records.get(persistedCommand.commandId)).toEqual(
+      expect.objectContaining({ dispatchedAt: expect.any(Number) }),
+    )
   })
 
   it('isolates recovery by authenticated session scope and ignores legacy unscoped records', async () => {
@@ -1709,7 +1750,7 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(legacyProbe.messages).toContainEqual({ type: 'RECOVERY_EMPTY', clientRequestId: 'legacy-probe' })
   })
 
-  it('requires durable recovery for a committed result that is too large for WS', async () => {
+  it('requires durable recovery for an ingress-rejected command and closes the socket it would otherwise orphan', async () => {
     const harness = setup()
     const operationId = '11111111-1111-4111-8111-111111111161'
     const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, undefined, {
@@ -1728,6 +1769,318 @@ describe('SyncTransportWorkerRuntime', () => {
     await flush()
 
     expectDispatchedRecoveryWithoutHttpFallback(harness, 'client-1', command.commandId, operationId)
+    // Nothing reuses a DEGRADED socket and the next recovery dials a new one, so a
+    // preserved socket was an authenticated orphan holding a per-user slot.
+    expect(socket.readyState).toBe(3)
+    expect(harness.messages.at(-1)).toEqual({ type: 'STATE', state: 'DEGRADED', reason: 'result-too-large' })
+  })
+
+  describe('a committed result the socket cannot carry', () => {
+    const oversizedVerdict = (
+      frameType: 'STATUS' | 'COMMITTED',
+      commandId: string,
+      digest: string,
+    ): SyncServerFrame =>
+      serverFrame(
+        frameType,
+        commandId,
+        frameType === 'STATUS' ? { status: 'COMMITTED', code: 'RESULT_TOO_LARGE' } : { code: 'RESULT_TOO_LARGE' },
+        digest,
+      )
+
+    it.each(['STATUS', 'COMMITTED'] as const)(
+      'replays a %s verdict over HTTP with the command identity and keeps the socket READY',
+      async (frameType) => {
+        const harness = setup()
+        const operationId = '11111111-1111-4111-8111-111111111162'
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, undefined, {
+          operationId,
+          operationIndex: 0,
+        })
+        const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+          commandId: string
+          digest: string
+          sequence: number
+        }
+
+        socket.receive(oversizedVerdict(frameType, command.commandId, command.digest))
+        await flush()
+
+        expect(harness.messages).not.toContainEqual(expect.objectContaining({ type: 'RESULT' }))
+        expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+        expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
+          {
+            type: 'HTTP_FALLBACK',
+            clientRequestId: 'client-1',
+            reason: 'result-too-large',
+            body: body(),
+            command: { id: command.commandId, digest: command.digest, sequence: command.sequence, operationId },
+          },
+        ])
+        expect(harness.messages.at(-1)).toEqual({ type: 'STATE', state: 'READY' })
+        expect(socket.readyState).toBe(1)
+        // The record survives until the HTTP result is checkpointed.
+        expect(harness.outbox.records.get(command.commandId)).toEqual(
+          expect.objectContaining({ dispatchedAt: expect.any(Number) }),
+        )
+      },
+    )
+
+    it('escapes the recovery loop: STATUS on a new socket gets the same verdict and replays over HTTP', async () => {
+      const shared = new FakeOutbox()
+      const first = setup(shared)
+      const firstSocket = await authorize(first)
+      const command = JSON.parse(
+        firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string,
+      ) as { commandId: string; digest: string; sequence: number }
+      // The tab dies before the main thread could replay the first verdict.
+      firstSocket.receive(oversizedVerdict('STATUS', command.commandId, command.digest))
+      await flush()
+      await first.runtime.handle({ type: 'SHUTDOWN' })
+
+      const recovered = setup(shared)
+      await recovered.runtime.handle({ type: 'RECOVER', clientRequestId: 'recover-1', sessionScope: SESSION_A })
+      await recovered.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'recover-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 'r'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = recovered.sockets.at(-1) as FakeSocket
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      await flush()
+      const status = JSON.parse(socket.sent[1]) as { type: string; commandId: string }
+      expect(status).toEqual(expect.objectContaining({ type: 'STATUS', commandId: command.commandId }))
+
+      socket.receive(oversizedVerdict('STATUS', command.commandId, command.digest))
+      await flush()
+
+      expect(recovered.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'recover-1' })
+      expect(recovered.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
+        expect.objectContaining({
+          clientRequestId: 'recover-1',
+          reason: 'result-too-large',
+          command: expect.objectContaining({ id: command.commandId, digest: command.digest }),
+        }),
+      ])
+      expect(socket.readyState).toBe(1)
+      expect(recovered.sockets).toHaveLength(1)
+    })
+  })
+
+  it('replays the persisted record over HTTP with its identity when recovery is told the lane is ruled out', async () => {
+    const shared = new FakeOutbox()
+    const first = setup(shared)
+    const firstSocket = await authorize(first)
+    const command = JSON.parse(firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+      digest: string
+      sequence: number
+    }
+    await first.runtime.handle({ type: 'SHUTDOWN' })
+
+    const recovered = setup(shared)
+    await recovered.runtime.handle({
+      type: 'RECOVER',
+      clientRequestId: 'recover-1',
+      sessionScope: SESSION_A,
+      replayOverHttp: 'http-only',
+    })
+
+    expect(recovered.messages.map((message) => message.type)).toEqual([
+      'COMMAND_PERSISTED',
+      'STATE',
+      'HTTP_FALLBACK',
+    ])
+    expect(recovered.messages).toContainEqual({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: 'recover-1',
+      reason: 'http-only',
+      body: body(),
+      command: { id: command.commandId, digest: command.digest, sequence: command.sequence },
+    })
+    expect(recovered.messages).not.toContainEqual(expect.objectContaining({ type: 'NEED_TICKET' }))
+    expect(recovered.sockets).toHaveLength(0)
+  })
+
+  it('re-tickets exactly once for a stale session and settles the command through STATUS on the new socket', async () => {
+    const harness = setup()
+    const socket = await authorize(harness)
+    const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+      digest: string
+    }
+
+    socket.receive(serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest))
+    await flush()
+
+    expect(socket.readyState).toBe(3)
+    expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(harness.messages.at(-1)).toEqual({ type: 'NEED_TICKET', clientRequestId: 'client-1', reconnect: true })
+
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'n'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const fresh = harness.sockets.at(-1) as FakeSocket
+    expect(fresh).not.toBe(socket)
+    fresh.open()
+    const auth = JSON.parse(fresh.sent[0]) as { commandId: string; payload: { ticket: string } }
+    expect(auth.payload.ticket).toBe('n'.repeat(40))
+    fresh.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    await flush()
+    expect(JSON.parse(fresh.sent[1])).toEqual(expect.objectContaining({ type: 'STATUS', commandId: command.commandId }))
+
+    // A second stale verdict on the same request is no longer a retry: durable recovery.
+    fresh.receive(serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest))
+    await flush()
+    expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(2)
+  })
+
+  it('runs discovery once more on the same socket when the grant reports the challenge expired', async () => {
+    const harness = setup()
+    const { socket, discovery } = await startCollaborationHandshake(harness)
+    const discoveryAnswer = (requestId: string, commandId: string) => ({
+      ...serverFrame('COLLABORATION_AUTHORIZED', commandId, {
+        epochDiscovery: true,
+        room: 'note-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch: ROOM_EPOCH,
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+        epochDiscoveryChallenge: 'challenge_abcdefghijklmnopqrstuvwxyz0123456789',
+        epochDiscoveryRequestId: requestId,
+        challengeExpiresAt: Date.now() + 10_000,
+      }),
+      requestId,
+    })
+    const authorizationFrames = () =>
+      socket.sent
+        .map((entry) => JSON.parse(entry) as { type: string; requestId: string; commandId: string; payload: Record<string, unknown> })
+        .filter((frame) => frame.type === 'COLLABORATION_AUTHORIZE')
+
+    socket.receive(discoveryAnswer(discovery.requestId, discovery.commandId))
+    await flush()
+    const firstGrant = authorizationFrames()[1]
+    socket.receive(serverFrame('ERROR', firstGrant.commandId, { code: 'CHALLENGE_EXPIRED', retryable: true }))
+    await flush()
+
+    const frames = authorizationFrames()
+    expect(frames).toHaveLength(3)
+    expect(frames[2].payload).toEqual({ noteUuid: 'note-1', collaborationProtocolVersion: 3, epochDiscovery: true })
+    expect(frames[2].commandId).not.toBe(firstGrant.commandId)
+    expect(harness.messages.some((message) => message.type === 'COLLABORATION_DENIED')).toBe(false)
+    expect(harness.messages.some((message) => message.type === 'COLLABORATION_FALLBACK')).toBe(false)
+    expect(socket.readyState).toBe(1)
+
+    // The retry budget is one: a second expiry is reported, not retried forever.
+    socket.receive(discoveryAnswer(frames[2].requestId, frames[2].commandId))
+    await flush()
+    const secondGrant = authorizationFrames()[3]
+    socket.receive(serverFrame('ERROR', secondGrant.commandId, { code: 'CHALLENGE_EXPIRED', retryable: true }))
+    await flush()
+    expect(authorizationFrames()).toHaveLength(4)
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({ type: 'COLLABORATION_FALLBACK', clientRequestId: 'collaboration-client-1' }),
+    )
+  })
+
+  it('keeps item sync on HTTP for the rest of the session once the server answers LIVE_SYNC_DISABLED', async () => {
+    const harness = setup()
+    const socket = await authorize(harness)
+    const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+      digest: string
+      sequence: number
+    }
+
+    socket.receive(
+      serverFrame('ERROR', command.commandId, { code: 'LIVE_SYNC_DISABLED', retryable: false }, command.digest),
+    )
+    await flush()
+
+    expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
+      {
+        type: 'HTTP_FALLBACK',
+        clientRequestId: 'client-1',
+        reason: 'live-sync-disabled',
+        body: body(),
+        command: { id: command.commandId, digest: command.digest, sequence: command.sequence },
+      },
+    ])
+    expect(harness.messages.at(-1)).toEqual({ type: 'STATE', state: 'READY' })
+    expect(socket.readyState).toBe(1)
+    await harness.runtime.handle({
+      type: 'CHECKPOINT_DURABLE',
+      requestId: 'checkpoint-1',
+      sessionScope: SESSION_A,
+      commandId: command.commandId,
+    })
+
+    const framesBefore = socket.sent.length
+    await harness.runtime.handle({ type: 'EXECUTE', clientRequestId: 'client-2', body: body('b'), sessionScope: SESSION_A })
+    await flush()
+
+    expect(socket.sent).toHaveLength(framesBefore)
+    expect(harness.messages).toContainEqual({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: 'client-2',
+      reason: 'live-sync-disabled',
+      body: body('b'),
+    })
+    expect(harness.messages).not.toContainEqual(expect.objectContaining({ type: 'NEED_TICKET', clientRequestId: 'client-2' }))
+  })
+
+  it('dials on a ticket whose server-clock expiry is already behind the local clock when no local expiry is known', async () => {
+    const harness = setup()
+    await harness.runtime.handle({ type: 'EXECUTE', clientRequestId: 'client-1', body: body(), sessionScope: SESSION_A })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 's'.repeat(40),
+        // A browser clock 60 s ahead of the server sees every fresh ticket like this.
+        expiresAt: Date.now() - 60_000,
+        deviceId: 'device-1',
+      },
+    })
+
+    expect(harness.sockets).toHaveLength(1)
+    expect(harness.messages).not.toContainEqual(expect.objectContaining({ reason: 'ticket-expired' }))
   })
 
   it('rejects an oversized inbound result without delivering it and preserves replay identity', async () => {
@@ -1775,6 +2128,7 @@ describe('SyncTransportWorkerRuntime', () => {
         endpoint: 'wss://sync.example.test/sockets/sync',
         ticket: 'e'.repeat(40),
         expiresAt: Date.now(),
+        localExpiresAt: Date.now(),
         deviceId: 'device-1',
       },
     })
@@ -1806,6 +2160,7 @@ describe('SyncTransportWorkerRuntime', () => {
         endpoint: 'wss://sync.example.test/sockets/sync',
         ticket: 'e'.repeat(40),
         expiresAt: Date.now(),
+        localExpiresAt: Date.now(),
         deviceId: 'device-1',
       },
     })

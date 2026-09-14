@@ -144,6 +144,8 @@ type ActiveRequest =
       phase: 'discovery' | 'grant'
       socketGeneration?: number
       discovery?: CollaborationEpochDiscoveryHandshake
+      /** One fresh discovery per request after the gateway reports the challenge expired. */
+      discoveryRetried?: boolean
     }
   | {
       clientRequestId: string
@@ -301,6 +303,14 @@ export class SyncTransportWorkerRuntime {
   private commandSent = false
   private resultDelivered = false
   private reconnectAttempts = 0
+  /** One re-ticket per request after the gateway reports the ticket's bearer stale. */
+  private reticketedForStaleSession = false
+  /**
+   * Set once the server answers `LIVE_SYNC_DISABLED`: item sync is refused for this
+   * account for the rest of the worker's life, so later commands go to HTTP without
+   * spending a socket round trip, while every other lane keeps using the socket.
+   */
+  private liveSyncDisabled = false
   private negotiatedOperations = new Set<SyncNegotiatedOperation>()
   private readonly rpcRequests = new Map<string, ActiveRpcRequest>()
   private readonly fileDownloads = new Map<string, ActiveFileDownload>()
@@ -342,7 +352,7 @@ export class SyncTransportWorkerRuntime {
         await this.execute(message.clientRequestId, message.body, message.sessionScope, message.context)
         break
       case 'RECOVER':
-        await this.recover(message.clientRequestId, message.sessionScope)
+        await this.recover(message.clientRequestId, message.sessionScope, message.replayOverHttp)
         break
       case 'AUTHORIZE_COLLABORATION':
         await this.authorizeCollaboration(message.clientRequestId, message.sessionScope, message.request)
@@ -406,7 +416,11 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
-  private async recover(clientRequestId: string, sessionScope: string): Promise<void> {
+  private async recover(
+    clientRequestId: string,
+    sessionScope: string,
+    replayOverHttp?: SyncFallbackReason,
+  ): Promise<void> {
     if (this.shuttingDown || !validSessionScope(sessionScope)) {
       this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
       return
@@ -432,6 +446,7 @@ export class SyncTransportWorkerRuntime {
       this.accepted = false
       this.commandSent = record.dispatchedAt !== undefined
       this.resultDelivered = false
+      this.reticketedForStaleSession = false
       this.dependencies.postMessage({
         type: 'COMMAND_PERSISTED',
         clientRequestId,
@@ -443,6 +458,13 @@ export class SyncTransportWorkerRuntime {
           ...(record.operationId ? { operationId: record.operationId } : {}),
         },
       })
+      if (replayOverHttp) {
+        // The socket is ruled out for this session, so STATUS can never be asked.
+        // The HTTP path carries the command identity and the server journal
+        // answers it idempotently — the same guarantee the UNKNOWN path relies on.
+        await this.fallback(replayOverHttp, record, false, true)
+        return
+      }
       if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
         await this.prepareActiveRequest()
         return
@@ -492,6 +514,7 @@ export class SyncTransportWorkerRuntime {
     this.accepted = false
     this.commandSent = false
     this.resultDelivered = false
+    this.reticketedForStaleSession = false
 
     if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
       await this.prepareActiveRequest()
@@ -1391,7 +1414,9 @@ export class SyncTransportWorkerRuntime {
     ) {
       return
     }
-    if (authorization.expiresAt <= this.now() + 1_000) {
+    // Only a LOCAL-clock expiry is worth pre-checking; `expiresAt` is on the
+    // server's clock and a browser running ahead of it would fail every ticket.
+    if (authorization.localExpiresAt !== undefined && authorization.localExpiresAt <= this.now() + 1_000) {
       await this.fallback('ticket-expired')
       return
     }
@@ -1640,8 +1665,20 @@ export class SyncTransportWorkerRuntime {
       }
       if (frame.type === 'ERROR') {
         this.clearAckDeadline()
+        const active = this.active
+        if (frame.payload.code === 'CHALLENGE_EXPIRED' && active.phase === 'grant' && !active.discoveryRetried) {
+          // The one-use discovery challenge lapsed before the grant reached the
+          // gateway. That is not a policy denial — run discovery once more on the
+          // same socket rather than telling the caller it was refused.
+          active.discoveryRetried = true
+          active.phase = 'discovery'
+          active.discovery = undefined
+          active.commandId = this.uuid()
+          await this.sendCollaborationAuthorization()
+          return
+        }
         if (frame.payload.code === 'NOT_AUTHORIZED') {
-          const clientRequestId = this.active.clientRequestId
+          const clientRequestId = active.clientRequestId
           this.active = undefined
           this.reconnectAttempts = 0
           this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId })
@@ -1671,11 +1708,19 @@ export class SyncTransportWorkerRuntime {
         break
       case 'COMMITTED':
         this.clearAckDeadline()
+        if (isOversizedCommittedResult(frame.payload)) {
+          await this.replayOversizedResultOverHttp()
+          break
+        }
         this.deliverResult(frame.payload.result)
         break
       case 'STATUS':
         this.clearAckDeadline()
         if (frame.payload.status === 'COMMITTED') {
+          if (isOversizedCommittedResult(frame.payload)) {
+            await this.replayOversizedResultOverHttp()
+            break
+          }
           this.deliverResult(frame.payload.result)
         } else if (frame.payload.status === 'UNKNOWN') {
           // The durable backend explicitly confirmed that the command did not
@@ -1689,6 +1734,23 @@ export class SyncTransportWorkerRuntime {
         }
         break
       case 'ERROR':
+        if (frame.payload.code === 'SESSION_STALE' && !this.reticketedForStaleSession) {
+          // The ticket captured a bearer the auth service has since rotated. The
+          // gateway refused before the backend saw the command, so one fresh
+          // ticket on a fresh socket is the retry; the STATUS query that follows
+          // it settles whether the command must be replayed over HTTP.
+          this.reticketedForStaleSession = true
+          await this.reticket()
+          break
+        }
+        if (frame.payload.code === 'LIVE_SYNC_DISABLED') {
+          this.liveSyncDisabled = true
+          await this.fallback('live-sync-disabled', this.outboxRecord, true, true)
+          break
+        }
+        // ERROR RESULT_TOO_LARGE now means only "your COMMAND frame was too large
+        // to ingest"; a committed result the socket cannot carry arrives as
+        // STATUS COMMITTED + code instead (see replayOversizedResultOverHttp).
         await this.fallback(
           frame.payload.code === 'RESULT_TOO_LARGE' ? 'result-too-large' : 'server-kill',
           this.outboxRecord,
@@ -1698,6 +1760,31 @@ export class SyncTransportWorkerRuntime {
       default:
         break
     }
+  }
+
+  /**
+   * The backend committed the command but the result is larger than one sync
+   * frame. The HTTP path carries `x-sync-command-id`/`x-sync-command-digest`, so
+   * the server journal serves the same committed result idempotently over the
+   * unbounded transport. The socket is healthy and stays READY; the outbox record
+   * is cleared by the checkpoint that follows the HTTP result. Before this, the
+   * client demanded durable recovery, recovery asked STATUS, STATUS hit the same
+   * cap, and the account wedged until sign-out while orphaning a socket per cycle.
+   */
+  private async replayOversizedResultOverHttp(): Promise<void> {
+    await this.fallback('result-too-large', this.outboxRecord, true, true)
+  }
+
+  /** Drop the current socket and its ticket, keep the request, and ask for a fresh ticket. */
+  private async reticket(): Promise<void> {
+    const active = this.active
+    if (!active) {
+      return
+    }
+    this.clearAckDeadline()
+    await this.closeSocketAndReleaseOwner()
+    this.transition('HALF_OPEN')
+    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId: active.clientRequestId, reconnect: true })
   }
 
   private async prepareActiveRequest(): Promise<void> {
@@ -2096,6 +2183,12 @@ export class SyncTransportWorkerRuntime {
       await this.fallback('operation-unavailable', undefined, true, true)
       return
     }
+    // The server already told this session that item sync is off for the account.
+    // A recovered record still carries its identity so the HTTP replay is idempotent.
+    if (this.liveSyncDisabled) {
+      await this.fallback('live-sync-disabled', this.outboxRecord, true, true)
+      return
+    }
     try {
       if (active.mode === 'recover') {
         const record = this.outboxRecord
@@ -2469,8 +2562,13 @@ export class SyncTransportWorkerRuntime {
       return
     }
     const recordBelongsToActive = record?.sessionScope === active.sessionScope
-    if (recordBelongsToActive && this.commandSent && !confirmedNoSideEffect) {
-      await this.requireDurableRecovery(active.clientRequestId, reason, preserveHealthySocket)
+    // A permanent reason answered to a recovery can never be resolved by STATUS
+    // (no socket will ever exist for it), so the only exit is the identity-bearing
+    // HTTP replay, which the server journal makes idempotent.
+    const journalIdempotentReplay =
+      confirmedNoSideEffect || (active.mode === 'recover' && isPermanentSyncFallbackReason(reason))
+    if (recordBelongsToActive && this.commandSent && !journalIdempotentReplay) {
+      await this.requireDurableRecovery(active.clientRequestId, reason)
       return
     }
     this.transition('HTTP_FALLBACK', reason)
@@ -2503,11 +2601,7 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
-  private async requireDurableRecovery(
-    clientRequestId: string,
-    reason: SyncFallbackReason,
-    preserveHealthySocket: boolean,
-  ): Promise<void> {
+  private async requireDurableRecovery(clientRequestId: string, reason: SyncFallbackReason): Promise<void> {
     this.clearAckDeadline()
     this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
     this.active = undefined
@@ -2515,10 +2609,13 @@ export class SyncTransportWorkerRuntime {
     this.accepted = false
     // Retain outboxRecord and commandSent. The next recoverPending call must
     // query STATUS for this exact command id/digest before any replay.
+    //
+    // The socket is always closed here, healthy or not: nothing reuses a socket
+    // in DEGRADED (every entry point demands READY) and the next recovery dials
+    // a new one, so a preserved socket was an authenticated orphan holding one of
+    // the account's per-user socket slots until the tab closed.
+    await this.closeSocketAndReleaseOwner()
     this.transition('DEGRADED', reason)
-    if (!preserveHealthySocket) {
-      await this.closeSocketAndReleaseOwner()
-    }
   }
 
   private async fallbackCollaboration(reason: SyncFallbackReason, preserveHealthySocket: boolean): Promise<void> {
@@ -2604,6 +2701,7 @@ export class SyncTransportWorkerRuntime {
     this.active = undefined
     this.inviteSubscription = undefined
     this.outboxRecord = undefined
+    this.liveSyncDisabled = false
     this.outbox.close()
     this.transition('HTTP_ONLY')
     this.dependencies.postMessage(
@@ -2628,6 +2726,15 @@ export class SyncTransportWorkerRuntime {
     this.outbox.close()
     this.transition('HTTP_ONLY')
   }
+}
+
+/**
+ * A COMMITTED verdict whose result the socket could not carry: the gateway sends
+ * `{ status: 'COMMITTED', code: 'RESULT_TOO_LARGE' }` with no `result` in place of
+ * the oversized frame, both on the command leg and in answer to STATUS.
+ */
+function isOversizedCommittedResult(payload: Record<string, unknown>): boolean {
+  return payload.code === 'RESULT_TOO_LARGE' && payload.result === undefined
 }
 
 function validOperationId(operationId: unknown): operationId is string {
