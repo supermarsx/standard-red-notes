@@ -308,14 +308,18 @@ export class RedisSyncAuthTicketStore implements SyncAuthTicketStore {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const ticket = randomBytes(32).toString('base64url')
       const key = ticketKey(this.options.keyPrefix, ticket)
-      const expiresAt = this.now() + ttlMs
+      // Stamped beside expiresAt exactly as the in-memory issuer does (D7): a
+      // client compares `expiresAt - issuedAt` against its own elapsed time
+      // instead of judging the absolute server expiry against its own clock.
+      const issuedAt = this.now()
+      const expiresAt = issuedAt + ttlMs
       const stored = encryptTicketIdentity(ticket, key, identity, expiresAt)
       const result = await boundedRedisOperation(
         this.client.set(key, stored, 'PX', ttlMs, 'NX'),
         this.options.operationTimeoutMs,
       )
       if (result === 'OK') {
-        return { ticket, expiresAt }
+        return { ticket, expiresAt, issuedAt }
       }
     }
     throw new Error('Unable to reserve a unique sync authentication ticket.')

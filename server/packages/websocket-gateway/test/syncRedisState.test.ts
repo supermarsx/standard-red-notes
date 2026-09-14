@@ -372,6 +372,25 @@ describe('fleet-shared Redis sync state', () => {
     // And the reservation was never touched by any of the failures above.
     await expect(state.socketBudget.renew(owner)).resolves.toBe(true)
   })
+
+  // D7. Ticket expiry used to be judged against the browser clock; the client
+  // now compares `expiresAt - issuedAt` against its own elapsed time, so BOTH
+  // issuers (in-memory and Redis) must stamp issuedAt from the server clock.
+  it('stamps issuedAt beside expiresAt from the server clock so the client can measure the TTL relatively', async () => {
+    const backend = new SharedRedisHarness()
+    backend.now = 1_700_000_000_000
+    const store = new RedisSyncAuthTicketStore(new FakeRedisClient(backend), {}, () => backend.now)
+
+    const issued = await store.issue(identity, 30_000)
+
+    expect(issued.issuedAt).toBe(1_700_000_000_000)
+    expect(issued.expiresAt).toBe(1_700_000_000_000 + 30_000)
+    expect(issued.expiresAt - (issued.issuedAt as number)).toBe(30_000)
+    // The stamp is the issue-time clock, not the consume-time one.
+    backend.now += 5_000
+    await expect(store.consume(issued.ticket)).resolves.toEqual(identity)
+    expect(issued.issuedAt).toBe(1_700_000_000_000)
+  })
 })
 
 describe('explicit process-local sync state', () => {
