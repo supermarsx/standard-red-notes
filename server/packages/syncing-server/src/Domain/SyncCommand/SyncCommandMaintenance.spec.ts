@@ -82,8 +82,10 @@ describe('sync command maintenance jobs', () => {
 
     expect(logger.error).toHaveBeenCalledWith(
       'Sync command outbox background dispatch failed.',
-      expect.objectContaining({ codeTag: 'SyncCommandOutboxDispatcher', error: 'database unavailable' }),
+      expect.objectContaining({ codeTag: 'SyncCommandOutboxDispatcher', errorType: 'Error' }),
     )
+    // Safe logging: the failure's raw message must never reach the log.
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
   })
 
   /**

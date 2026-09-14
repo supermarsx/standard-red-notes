@@ -93,8 +93,8 @@ export class SyncCommandOutboxDispatcher {
   wake(): void {
     void this.dispatchAvailable().catch((error) => {
       this.logger.error('Sync command outbox background dispatch failed.', {
+        ...safeErrorLogMetadata(error),
         codeTag: 'SyncCommandOutboxDispatcher',
-        error: error instanceof Error ? error.message : String(error),
       })
     })
   }
