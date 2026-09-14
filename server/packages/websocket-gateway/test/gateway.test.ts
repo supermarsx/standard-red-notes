@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import jwt from 'jsonwebtoken'
 import {
   classifyConnectionTokenError,
+  GatewayConfigurationError,
   InMemorySyncAuthTicketStore,
   mintConnectionToken,
   parseConnectionTokenTtl,
@@ -277,5 +278,25 @@ describe('auth: InMemorySyncAuthTicketStore', () => {
     const issued = await store.issue({ userUuid: 'u', sessionUuid: 's', deviceId: 'd' })
 
     expect(issued).toEqual({ ticket: expect.any(String), issuedAt: 1_700_000_000_000, expiresAt: 1_700_000_030_000 })
+  })
+})
+
+describe('auth: GatewayConfigurationError', () => {
+  it.each([
+    ['WEB_SOCKET_CONNECTION_TOKEN_TTL', () => parseConnectionTokenTtl('abc')],
+    ['WEBSOCKET_MAX_CONNECTIONS_PER_USER', () => parseMaxConnectionsPerUser('many')],
+    ['WEBSOCKET_REDIS_NAMESPACE', () => parseRedisNamespace('Tenant A')],
+  ])('carries the variable name %s so a boot log never needs the message', (variable, parse) => {
+    let thrown: unknown
+    try {
+      parse()
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(GatewayConfigurationError)
+    expect(thrown).toMatchObject({ name: 'GatewayConfigurationError', variable })
+    // The value under test never reaches the message either.
+    expect((thrown as Error).message).not.toMatch(/abc|many|Tenant A/)
   })
 })

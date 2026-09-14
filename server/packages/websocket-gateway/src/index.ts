@@ -1,5 +1,10 @@
 import { createServer } from 'node:http'
-import { parseConnectionTokenTtl, parseMaxConnectionsPerUser, parseRedisNamespace } from './auth.js'
+import {
+  GatewayConfigurationError,
+  parseConnectionTokenTtl,
+  parseMaxConnectionsPerUser,
+  parseRedisNamespace,
+} from './auth.js'
 import { attachWebSocketGateway, type GatewayConfig } from './gateway.js'
 import { createConsoleLogger } from './logger.js'
 import { type Logger } from './redisBridge.js'
@@ -54,7 +59,15 @@ let config: GatewayConfig
 try {
   config = readConfig()
 } catch (error) {
-  logger.error(error instanceof Error ? error.message : 'invalid websocket-gateway configuration')
+  // The boundary logs the variable NAME (a constant the parser set) and a
+  // fixed sentence -- never the error's message, which is the pattern the
+  // safe-logging validator forbids because a message can carry config text.
+  logger.error(
+    error instanceof GatewayConfigurationError
+      ? `${error.variable} is invalid; see the documented format for this variable and restart`
+      : 'invalid websocket-gateway configuration',
+    safeErrorLogMetadata(error),
+  )
   process.exit(1)
 }
 

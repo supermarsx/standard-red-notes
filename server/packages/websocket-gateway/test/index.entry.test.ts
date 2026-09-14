@@ -237,7 +237,20 @@ describe('standalone entry', () => {
     await importEntry({ ...REQUIRED_ENV, [variable]: value }).catch(() => undefined)
 
     expect(exitSpy).toHaveBeenCalledWith(1)
-    expect(console.error).toHaveBeenCalledWith(expect.any(String), '[error]', expect.stringContaining(variable))
+    expect(console.error).toHaveBeenCalledWith(
+      expect.any(String),
+      '[error]',
+      expect.stringContaining(variable),
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    // The rejected value and the parser's own message text stay out of the log
+    // line (the first argument is the timestamp, so only the message is read).
+    const messages = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => String(call[2]))
+      .join('\n')
+    expect(messages).not.toContain(value)
+    expect(messages).not.toContain('must ')
   })
 
   it('attaches without an express app so the token route is dispatched manually', async () => {

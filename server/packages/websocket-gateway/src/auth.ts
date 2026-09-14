@@ -91,6 +91,22 @@ export const DEFAULT_CONNECTION_TOKEN_TTL = '60s'
 export const MAX_CONNECTIONS_PER_USER_CEILING = 1_024
 
 /**
+ * Thrown by the configuration parsers below. `variable` is the environment
+ * variable's NAME (a constant from this file, never its value), so a boot log
+ * can name what to fix without ever printing an error message that might
+ * carry configuration text.
+ */
+export class GatewayConfigurationError extends Error {
+  readonly variable: string
+
+  constructor(variable: string, requirement: string) {
+    super(`${variable} must ${requirement}`)
+    this.name = 'GatewayConfigurationError'
+    this.variable = variable
+  }
+}
+
+/**
  * Normalise WEB_SOCKET_CONNECTION_TOKEN_TTL before it reaches jsonwebtoken.
  *
  * jsonwebtoken treats a bare numeric STRING as milliseconds: `"60"` minted a
@@ -107,8 +123,9 @@ export function parseConnectionTokenTtl(value: string | undefined): string {
   }
   const match = /^(\d+)([smh])?$/.exec(trimmed)
   if (!match || !/[1-9]/.test(match[1])) {
-    throw new Error(
-      'WEB_SOCKET_CONNECTION_TOKEN_TTL must be a positive integer number of seconds, or <n>s, <n>m or <n>h.',
+    throw new GatewayConfigurationError(
+      'WEB_SOCKET_CONNECTION_TOKEN_TTL',
+      'be a positive integer number of seconds, or <n>s, <n>m or <n>h.',
     )
   }
   return `${Number.parseInt(match[1], 10)}${match[2] ?? 's'}`
@@ -127,8 +144,9 @@ export function parseMaxConnectionsPerUser(value: string | undefined): number | 
   }
   const parsed = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : Number.NaN
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_CONNECTIONS_PER_USER_CEILING) {
-    throw new Error(
-      `WEBSOCKET_MAX_CONNECTIONS_PER_USER must be an integer between 1 and ${MAX_CONNECTIONS_PER_USER_CEILING}.`,
+    throw new GatewayConfigurationError(
+      'WEBSOCKET_MAX_CONNECTIONS_PER_USER',
+      `be an integer between 1 and ${MAX_CONNECTIONS_PER_USER_CEILING}.`,
     )
   }
   return parsed
@@ -147,7 +165,7 @@ export function parseRedisNamespace(value: string | undefined): string | undefin
     return undefined
   }
   if (!/^[a-z0-9:_-]{1,64}$/.test(trimmed)) {
-    throw new Error('WEBSOCKET_REDIS_NAMESPACE must match ^[a-z0-9:_-]{1,64}$ when set.')
+    throw new GatewayConfigurationError('WEBSOCKET_REDIS_NAMESPACE', 'match ^[a-z0-9:_-]{1,64}$ when set.')
   }
   return trimmed
 }

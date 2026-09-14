@@ -1461,6 +1461,7 @@ export type { SyncTicketIdentity } from './auth.js'
 export {
   classifyConnectionTokenError,
   DEFAULT_CONNECTION_TOKEN_TTL,
+  GatewayConfigurationError,
   MAX_CONNECTIONS_PER_USER_CEILING,
   parseConnectionTokenTtl,
   parseMaxConnectionsPerUser,
