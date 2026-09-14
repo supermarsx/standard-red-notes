@@ -9,6 +9,24 @@ import { StorageKey } from '../Storage/StorageKeys'
 import { Result } from '@standardnotes/domain-core'
 
 /**
+ * Why a `room-denied` frame was sent (contract C1, declared in
+ * websocket-gateway/src/rooms.ts and mirrored verbatim here and in
+ * web/Components/SuperEditor/Collaboration/CollabChannel.ts). The gateway
+ * always sets it; a consumer that meets a frame without one (an older gateway)
+ * must treat it as `'policy'`.
+ */
+export type RoomDeniedReason =
+  | 'epoch-mismatch'
+  | 'security-revoked'
+  | 'rate-limited'
+  | 'relay-unhealthy'
+  | 'capability-invalid'
+  | 'room-full'
+  | 'reservation-expired'
+  | 'room-limit'
+  | 'policy'
+
+/**
  * Collaborative-editing relay frames carried over the same authenticated gateway
  * socket (see websocket-gateway/src/rooms.ts). A room id is a note uuid; payloads
  * are end-to-end-encrypted yjs sync/awareness blobs the gateway cannot read.
@@ -74,6 +92,9 @@ export type CollaborationFrame =
       protocolVersion: 3
       maxTransferBytes: number
       roomEpoch: string
+      // Contract C3: relative ms the gateway keeps this reservation before it
+      // expires unactivated. Optional until every gateway sends it.
+      activationTtlMs?: number
     }
   | {
       t: 'room-joined'
@@ -106,9 +127,15 @@ export type CollaborationFrame =
       protocolVersion: 3
     }
   | { t: 'yjs-accepted'; room: string; transferId: string; protocolVersion: 3 }
+  // Gateway -> client (contract C2): a `yjs-retry` found no other activated
+  // editor lease in the room, so no peer will ever answer the state request
+  // `requestId`; the requester fails over to bootstrap immediately.
+  | { t: 'yjs-no-responder'; room: string; requestId: string }
   | { t: 'awareness'; room: string; payload: string }
-  // Gateway -> client: the join was refused (no/invalid capability or no access).
-  | { t: 'room-denied'; room: string; requestId?: string; roomEpoch?: string }
+  // Gateway -> client: the join was refused. `reason` says why (contract C1);
+  // `roomEpoch` is present iff `reason === 'epoch-mismatch'` and carries the
+  // room's current epoch so the client can re-enter after a fresh discovery.
+  | { t: 'room-denied'; room: string; requestId?: string; roomEpoch?: string; reason: RoomDeniedReason }
   // Standard Red Notes: an end-to-end-encrypted note-comment event. `payload` is
   // a base64(iv ‖ ciphertext) blob encrypted with the same per-room key as the
   // yjs frames, so the gateway never sees comment text. Used to push new/edited
@@ -130,6 +157,7 @@ const COLLABORATION_FRAME_TYPES = new Set([
   'yjs-response-claim',
   'yjs-response-granted',
   'yjs-accepted',
+  'yjs-no-responder',
   'awareness',
   'comment',
   'room-denied',
