@@ -38,8 +38,10 @@ import {
   resolveWebSocketSyncAllowedOrigins,
   SyncWebSocketCommandAdapter,
   SyncWebSocketRuntime,
+  SYNC_HOST_REMEDIES,
   TYPES as ApiGatewayTypes,
-  type SyncPrecondition,
+  type SyncGateUnmetPrecondition,
+  type SyncHostUnmetCondition,
   type SyncPreconditionState,
 } from '@standardnotes/api-gateway'
 import {
@@ -220,20 +222,19 @@ export function parseHomeServerRedisNamespace(raw: string | undefined): {
   }
 }
 
-export const REDIS_NAMESPACE_INVALID_CODE = 'WEBSOCKET_REDIS_NAMESPACE_INVALID' as const
+export const REDIS_NAMESPACE_INVALID_CODE = 'WEBSOCKET_REDIS_NAMESPACE_INVALID' satisfies SyncHostUnmetCondition
 
-export const REDIS_NAMESPACE_INVALID_REMEDY =
-  'WEBSOCKET_REDIS_NAMESPACE is set but does not match ^[a-z0-9:_-]{1,64}$ (no leading or trailing colon); fix or unset it. Until then the realtime gateway is not attached and the push bridge stays closed, so nothing is published on the un-namespaced channels of a sibling stack sharing this Redis'
+/** The one constant copy, shared with the admin diagnostics report. */
+export const REDIS_NAMESPACE_INVALID_REMEDY = SYNC_HOST_REMEDIES[REDIS_NAMESPACE_INVALID_CODE]
 
 /**
- * The shared four-condition gate plus the one condition only this host adds.
- * `SyncPreconditionCode` is a closed set owned by api-gateway, so the
- * namespace verdict is a sibling entry with the same `{ code, remedy }` shape
- * rather than a new member of that set.
+ * The shared four-condition gate plus the one condition only this host adds
+ * (`SyncHostUnmetCondition`, recorded through `hostUnmetCondition` so the
+ * admin diagnostics name it too). `SyncPreconditionCode` itself stays a
+ * closed set owned by api-gateway; the widened `{ code, remedy }` shape is the
+ * report's own.
  */
-export type HomeServerRealtimePrecondition =
-  | SyncPrecondition
-  | { code: typeof REDIS_NAMESPACE_INVALID_CODE; remedy: typeof REDIS_NAMESPACE_INVALID_REMEDY }
+export type HomeServerRealtimePrecondition = SyncGateUnmetPrecondition
 
 /** Same rendering as `describeUnmetSyncPreconditions`, over the widened list. */
 export function describeHomeServerRealtimePreconditions(
@@ -262,6 +263,12 @@ export interface HomeServerRealtimeGate {
   /** Presence-only booleans the gate log and the admin diagnostics both read. */
   observation: SyncPreconditionState
   unmetSyncPreconditions: HomeServerRealtimePrecondition[]
+  /**
+   * The host-added condition, recorded into the diagnostics observation so the
+   * admin panel names it next to the shared four instead of showing a lane
+   * down over an empty list. Undefined when the host adds nothing.
+   */
+  hostUnmetCondition?: SyncHostUnmetCondition
   /**
    * The gateway (legacy `/sockets?authToken=` lane + token minting) attaches on
    * ANY non-empty secret with Redis configured, exactly as the api-gateway does;
@@ -312,6 +319,7 @@ export function resolveHomeServerRealtimeGate(input: HomeServerRealtimeGateInput
     connectionTokenSecretUsable,
     observation,
     unmetSyncPreconditions,
+    ...(input.redisNamespaceValid ? {} : { hostUnmetCondition: REDIS_NAMESPACE_INVALID_CODE }),
     attachGateway: secret.length > 0 && redisConfigured && input.redisNamespaceValid,
     buildSyncLane:
       connectionTokenSecretUsable && redisConfigured && input.webSocketSyncEnabled && input.redisNamespaceValid,
@@ -891,7 +899,16 @@ export class HomeServer implements HomeServerInterface {
       // the ATTACH OUTCOME (re-recorded below once the gateway is up), not
       // inferred from the secret: a single container without Redis attaches no
       // gateway at all, and one with a short secret attaches the legacy lane.
-      let recordedGate = { ...syncGateObservation, filesAdvertised: false, gatewayAttached: false }
+      // The host-added condition (invalid namespace) rides along as a literal
+      // key, so the panel's unmet list names it; the key is absent, not
+      // `undefined`, when there is none (every recorded value stays a boolean
+      // or a literal).
+      let recordedGate = {
+        ...syncGateObservation,
+        filesAdvertised: false,
+        gatewayAttached: false,
+        ...(realtimeGate.hostUnmetCondition ? { hostUnmetCondition: realtimeGate.hostUnmetCondition } : {}),
+      }
       syncGateDiagnostics.record(recordedGate)
       if (unmetSyncPreconditions.length === 0) {
         logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')

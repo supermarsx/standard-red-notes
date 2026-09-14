@@ -246,6 +246,9 @@ jest.mock('@standardnotes/api-gateway', () => ({
   resolveUnmetSyncPreconditions: (state: { connectionTokenSecretPresent: boolean }) =>
     mockResolveUnmetSyncPreconditions(state),
   syncGateDiagnostics: mockSyncGateDiagnostics,
+  // The host-condition remedy table the gate copies its remedy from; the
+  // report's own rendering of it is covered in SyncGateDiagnostics.spec.
+  SYNC_HOST_REMEDIES: { WEBSOCKET_REDIS_NAMESPACE_INVALID: 'fix or unset WEBSOCKET_REDIS_NAMESPACE' },
   HOME_SERVER_WELCOME_HTML: '<p>home</p>',
   parseClientIpHeaderName: jest.fn(),
   parseOptionalPositiveInteger: jest.fn((_name: string, value: string | undefined, fallback: number) => {
@@ -563,10 +566,33 @@ describe('HomeServer invite realtime composition', () => {
       unmetPreconditions: ['WEBSOCKET_REDIS_NAMESPACE_INVALID'],
     })
     expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('Tenant A')
-    const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0]
-    expect(recorded).toMatchObject({ gatewayAttached: false, redisBound: true, connectionTokenSecretPresent: true })
+    // The verdict reaches the diagnostics record as a literal key, so the
+    // admin panel names it (the report closes the lane on it and lists it).
+    const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(recorded).toMatchObject({
+      gatewayAttached: false,
+      redisBound: true,
+      connectionTokenSecretPresent: true,
+      hostUnmetCondition: 'WEBSOCKET_REDIS_NAMESPACE_INVALID',
+    })
+    expect(JSON.stringify(recorded)).not.toContain('Tenant A')
 
     await server.stop()
+  })
+
+  it('records no host condition when the namespace is valid or unset', async () => {
+    for (const environment of [configuration.environment, { ...configuration.environment, WEBSOCKET_REDIS_NAMESPACE: 'ok' }]) {
+      mockSyncGateDiagnostics.record.mockClear()
+      const server = createServer()
+
+      const result = await server.start({ ...configuration, environment })
+
+      expect(result.isFailed()).toBe(false)
+      for (const [observation] of mockSyncGateDiagnostics.record.mock.calls) {
+        expect(Object.keys(observation as Record<string, unknown>)).not.toContain('hostUnmetCondition')
+      }
+      await server.stop()
+    }
   })
 })
 

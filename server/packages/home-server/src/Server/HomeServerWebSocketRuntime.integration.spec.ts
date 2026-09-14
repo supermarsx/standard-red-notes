@@ -6,6 +6,7 @@ import * as net from 'net'
 import {
   SyncWebSocketController,
   SyncWebSocketRuntime,
+  SYNC_HOST_REMEDIES,
   syncGateDiagnostics,
   syncWebSocketAccessService,
 } from '@standardnotes/api-gateway'
@@ -348,6 +349,18 @@ describe('resolveHomeServerRealtimeGate', () => {
     expect(gate.unmetSyncPreconditions).toEqual([
       { code: REDIS_NAMESPACE_INVALID_CODE, remedy: REDIS_NAMESPACE_INVALID_REMEDY },
     ])
+    // Recorded into the diagnostics observation by HomeServer.start; the
+    // remedy is the one constant copy the admin report renders.
+    expect(gate.hostUnmetCondition).toBe('WEBSOCKET_REDIS_NAMESPACE_INVALID')
+    expect(REDIS_NAMESPACE_INVALID_REMEDY).toBe(SYNC_HOST_REMEDIES.WEBSOCKET_REDIS_NAMESPACE_INVALID)
+    expect(
+      resolveHomeServerRealtimeGate({
+        connectionTokenSecret: USABLE_SECRET,
+        redisHost: '127.0.0.1',
+        webSocketSyncEnabled: true,
+        redisNamespaceValid: true,
+      }).hostUnmetCondition,
+    ).toBeUndefined()
     // The four shared conditions are all met and say so; only the host-local
     // condition is unmet. Nothing here lies about Redis being bound.
     expect(gate.observation).toEqual({

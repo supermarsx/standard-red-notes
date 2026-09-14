@@ -4,7 +4,6 @@ import {
   resolveUnmetSyncItemsPreconditions,
   resolveUnmetSyncPreconditions,
   resolveUnmetSyncTransportPreconditions,
-  type SyncPrecondition,
   type SyncPreconditionCode,
   type SyncPreconditionState,
 } from './SyncWebSocketPreconditions'
@@ -86,6 +85,37 @@ export type SyncFilesReport = {
   remedy: string | null
 }
 
+/**
+ * A condition a HOST adds on top of the shared four, when its own composition
+ * cannot attach the lane for a reason the shared gate has no word for. The
+ * home server records `WEBSOCKET_REDIS_NAMESPACE_INVALID` when the namespace
+ * every shared Redis name would take is malformed: attaching WITHOUT it would
+ * publish on a sibling stack's bare channels, so it attaches nothing. Like
+ * every other key here it is a literal, never the configured value. Each host
+ * records at most one.
+ */
+export type SyncHostUnmetCondition = 'WEBSOCKET_REDIS_NAMESPACE_INVALID'
+
+export const SYNC_HOST_REMEDIES: Readonly<Record<SyncHostUnmetCondition, string>> = Object.freeze({
+  WEBSOCKET_REDIS_NAMESPACE_INVALID:
+    'WEBSOCKET_REDIS_NAMESPACE is set but does not match ^[a-z0-9:_-]{1,64}$ (no leading or trailing colon); fix or unset it. Until then the realtime gateway is not attached and the push bridge stays closed, so nothing is published on the un-namespaced channels of a sibling stack sharing this Redis',
+})
+
+/** A code the report can carry: one of the shared four, or a host condition. */
+export type SyncGateUnmetCode = SyncPreconditionCode | SyncHostUnmetCondition
+
+export type SyncGateUnmetPrecondition = {
+  code: SyncGateUnmetCode
+  remedy: string
+}
+
+export type SyncHostReport = {
+  /** Null when the host recorded no condition of its own. */
+  unmetCondition: SyncHostUnmetCondition | null
+  /** Constant copy for the unmet condition. Null when there is none. */
+  remedy: string | null
+}
+
 export type SyncGateDiagnosticsReport = {
   /**
    * False before the gate has run at all — a request that lands during boot, or
@@ -109,11 +139,17 @@ export type SyncGateDiagnosticsReport = {
    * healthy lane and leave them no way to see the missing operation.
    */
   syncItemsAdvertised: boolean
-  /** Every unmet boot condition, from SyncWebSocketPreconditions. */
-  unmetPreconditions: SyncPrecondition[]
+  /**
+   * Every unmet boot condition: the shared ones from SyncWebSocketPreconditions,
+   * then the host's own (see `host`), so the panel's single list names ALL of
+   * them and never shows a lane down with an empty list.
+   */
+  unmetPreconditions: SyncGateUnmetPrecondition[]
   /** Just the codes, for callers that only need the set. */
-  unmetCodes: SyncPreconditionCode[]
+  unmetCodes: SyncGateUnmetCode[]
   files: SyncFilesReport
+  /** The host-added condition on its own, for renderers that treat it apart. */
+  host: SyncHostReport
 }
 
 /**
@@ -133,9 +169,16 @@ export type SyncGateObservation = SyncPreconditionState & {
    * attached rather than as attached on no evidence.
    */
   gatewayAttached?: boolean
+  /**
+   * A condition only this host's composition can see (see
+   * `SyncHostUnmetCondition`). Optional and additive: a host with nothing to
+   * add, or an older host, records no key and the report reads as before.
+   */
+  hostUnmetCondition?: SyncHostUnmetCondition
 }
 
 const NO_FILES: SyncFilesReport = Object.freeze({ advertised: false, unmetCondition: null, remedy: null })
+const NO_HOST: SyncHostReport = Object.freeze({ unmetCondition: null, remedy: null })
 
 /**
  * Late-bound like SyncWebSocketAccessService: the controller is registered
@@ -163,13 +206,24 @@ export class SyncGateDiagnosticsRecorder {
         unmetPreconditions: [],
         unmetCodes: [],
         files: { ...NO_FILES },
+        host: { ...NO_HOST },
       }
     }
 
     // The full list is still what the panel renders, so the gRPC condition
     // remains visible and named; only which of them gate WHAT has changed.
-    const unmetPreconditions = resolveUnmetSyncPreconditions(observed)
-    const laneEnabled = resolveUnmetSyncTransportPreconditions(observed).length === 0
+    // A host condition closes the lane like a transport one: the host
+    // attached nothing, and the list must say why rather than show a lane
+    // down over an empty list.
+    const hostUnmetCondition = observed.hostUnmetCondition
+    const unmetPreconditions: SyncGateUnmetPrecondition[] = [
+      ...resolveUnmetSyncPreconditions(observed),
+      ...(hostUnmetCondition
+        ? [{ code: hostUnmetCondition, remedy: SYNC_HOST_REMEDIES[hostUnmetCondition] }]
+        : []),
+    ]
+    const laneEnabled =
+      resolveUnmetSyncTransportPreconditions(observed).length === 0 && hostUnmetCondition === undefined
 
     return {
       recorded: true,
@@ -182,6 +236,10 @@ export class SyncGateDiagnosticsRecorder {
         advertised: observed.filesAdvertised,
         unmetCondition: observed.filesUnmetCondition ?? null,
         remedy: observed.filesUnmetCondition ? FILES_REMEDIES[observed.filesUnmetCondition] : null,
+      },
+      host: {
+        unmetCondition: hostUnmetCondition ?? null,
+        remedy: hostUnmetCondition ? SYNC_HOST_REMEDIES[hostUnmetCondition] : null,
       },
     }
   }
