@@ -169,6 +169,90 @@ describe('InviteRealtimeSubscriptionCoordinator', () => {
     expect(port.subscriptions).toHaveLength(1)
   })
 
+  it('re-opens a stood-down session from its durable cursor on an environment wake signal', async () => {
+    const store = new MemoryCheckpointStore()
+    store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })
+    const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+    const port = new FakeSubscriptionPort()
+    const scheduler = new ManualScheduler()
+    const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+      scheduler,
+      reconcileSnapshot: jest.fn(),
+    })
+
+    await coordinator.startSession(sessionA)
+    expect(coordinator.hasLiveSubscription()).toBe(true)
+    // Live: a wake signal must not tear down a healthy subscription.
+    expect(coordinator.reconnectIfStopped()).toBe(false)
+    expect(port.subscriptions).toHaveLength(1)
+
+    // A transient control-plane failure reported as permanent stands the stream down.
+    port.subscriptions[0].options.onError?.({ code: 'CAPABILITY_UNAVAILABLE', retryable: false })
+    expect(coordinator.hasLiveSubscription()).toBe(false)
+    expect(scheduler.delays).toEqual([])
+
+    // Connectivity returns / the tab becomes visible: re-open from the durable cursor.
+    expect(coordinator.reconnectIfStopped()).toBe(true)
+    expect(coordinator.hasLiveSubscription()).toBe(true)
+    await Promise.resolve()
+    expect(port.subscriptions).toHaveLength(2)
+    expect(port.subscriptions[1].options.cursor).toBe(cursor0)
+    await expect(port.subscriptions[1].options.applyBatch(batch())).resolves.toBe(cursor1)
+  })
+
+  it('lets a wake signal skip a pending backoff and refuses to re-open after stopSession', async () => {
+    const store = new MemoryCheckpointStore()
+    store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })
+    const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+    const port = new FakeSubscriptionPort()
+    const scheduler = new ManualScheduler()
+    const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+      scheduler,
+      reconcileSnapshot: jest.fn(),
+    })
+
+    await coordinator.startSession(sessionA)
+    port.subscriptions[0].options.onError?.(new Error('transport failure'))
+    expect(scheduler.delays).toEqual([250])
+
+    expect(coordinator.reconnectIfStopped()).toBe(true)
+    await Promise.resolve()
+    expect(port.subscriptions).toHaveLength(2)
+    // The backoff timer was cancelled, so nothing is left to fire.
+    expect(() => scheduler.runNext()).toThrow('No invite retry was scheduled.')
+
+    coordinator.stopSession()
+    expect(coordinator.hasLiveSubscription()).toBe(false)
+    expect(coordinator.reconnectIfStopped()).toBe(false)
+    expect(port.subscriptions).toHaveLength(2)
+  })
+
+  it('does not race a session that is still loading its checkpoint', async () => {
+    const store = new MemoryCheckpointStore()
+    let releaseRead!: () => void
+    const blockedRead = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    store.read = async (scope) => {
+      await blockedRead
+      return store.values.get(scope)
+    }
+    const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+    const port = new FakeSubscriptionPort()
+    const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+      reconcileSnapshot: jest.fn(),
+    })
+
+    const starting = coordinator.startSession(sessionA)
+    expect(coordinator.hasLiveSubscription()).toBe(false)
+    expect(coordinator.reconnectIfStopped()).toBe(false)
+    releaseRead()
+    await starting
+
+    expect(port.subscriptions).toHaveLength(1)
+    expect(coordinator.hasLiveSubscription()).toBe(true)
+  })
+
   it('uses a strict snapshot only for server bootstrap and persists its tail before resubscribe', async () => {
     const store = new MemoryCheckpointStore()
     const consumer = new InviteRealtimeEventConsumer(store, jest.fn())

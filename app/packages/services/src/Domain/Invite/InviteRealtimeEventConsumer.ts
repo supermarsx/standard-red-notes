@@ -233,7 +233,12 @@ export class InviteRealtimeEventConsumer {
             duplicates += 1
             continue
           }
-          if (BigInt(revisionIdentity.revision) !== BigInt(priorRevision) + BigInt(1)) {
+          // Only a contiguous counter can prove a missed event. Timestamp revisions
+          // (membership rows) always jump, so a strictly-newer value is simply applied.
+          if (
+            revisionIdentity.ordering === 'counter' &&
+            BigInt(revisionIdentity.revision) !== BigInt(priorRevision) + BigInt(1)
+          ) {
             return { status: 'reconcile', reason: 'revision-gap' }
           }
         }

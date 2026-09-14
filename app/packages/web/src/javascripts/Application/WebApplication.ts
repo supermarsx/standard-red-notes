@@ -554,6 +554,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     }
     this.disposers.push(this.addEventObserver(startInviteRealtime, ApplicationEvent.Launched))
     this.disposers.push(this.addEventObserver(startInviteRealtime, ApplicationEvent.SignedIn))
+    this.disposers.push(this.armInviteRealtimeWakeSignals(startInviteRealtime, coordinator))
     this.disposers.push(
       this.addEventObserver(async () => {
         lifecycle.stop()
@@ -576,6 +577,45 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       )
     }
     this.disposers.push(() => lifecycle.stop())
+  }
+
+  /**
+   * Re-arm the durable invite stream on environment wake signals. A transient
+   * control-plane failure (a 5xx during a restart, a network blip at launch) can
+   * reach the coordinator classified as permanent, and it then stands down until
+   * the next launch or sign-in — so the user never learns that invites and
+   * membership changes stopped being live. Connectivity returning or the tab
+   * becoming visible is the natural moment to try again: `start` covers a
+   * lifecycle that never got going (or whose start failed), `reconnectIfStopped`
+   * covers a coordinator session that stood down or is mid-backoff. Free while
+   * healthy — a live subscription returns before any async work.
+   */
+  private armInviteRealtimeWakeSignals(
+    start: () => Promise<void>,
+    coordinator: Pick<InviteRealtimeSubscriptionCoordinator, 'hasLiveSubscription' | 'reconnectIfStopped'>,
+  ): () => void {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return () => undefined
+    }
+    const rearm = () => {
+      if (!this.sessions.isSignedIn() || coordinator.hasLiveSubscription()) {
+        return
+      }
+      void start().then(() => {
+        coordinator.reconnectIfStopped()
+      })
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        rearm()
+      }
+    }
+    window.addEventListener('online', rearm)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('online', rearm)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }
 
   /** Apply security-sensitive membership/application invalidations before ACKing their stream cursor. */

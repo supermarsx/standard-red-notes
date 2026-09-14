@@ -54,6 +54,8 @@ type ActiveInviteRealtimeSession = {
   readonly sessionScope: string
   readonly generation: number
   readonly abortController: AbortController
+  /** Set once the session's first subscription attempt has begun. */
+  opened: boolean
   connection?: symbol
   disposeSubscription?: () => void
   retryHandle?: unknown
@@ -110,6 +112,7 @@ export class InviteRealtimeSubscriptionCoordinator {
       sessionScope,
       generation: ++this.generation,
       abortController: new AbortController(),
+      opened: false,
       retryAttempt: 0,
     }
     this.active = session
@@ -133,10 +136,36 @@ export class InviteRealtimeSubscriptionCoordinator {
     this.consumer.endSession()
   }
 
+  /** True while the active session holds a subscription that is open or being opened. */
+  hasLiveSubscription(): boolean {
+    const session = this.active
+    return session !== undefined && this.isCurrent(session) && session.connection !== undefined
+  }
+
+  /**
+   * Re-open a stood-down or backing-off session from its durable cursor.
+   * Wired to environment wake signals (connectivity restored, tab visible) so a
+   * transient control-plane failure the transport reported as permanent no
+   * longer silences invites and membership changes for the life of the tab.
+   * No-op while a subscription is live or opening, before the session's first
+   * open has begun, and after `stopSession()`. Returns whether it re-opened.
+   */
+  reconnectIfStopped(): boolean {
+    const session = this.active
+    if (!session || !this.isCurrent(session) || !session.opened || session.connection !== undefined) {
+      return false
+    }
+    this.cancelRetry(session)
+    session.retryAttempt = 0
+    void this.openSubscription(session, this.consumer.getCursor(session.sessionScope))
+    return true
+  }
+
   private async openSubscription(session: ActiveInviteRealtimeSession, cursor?: string): Promise<void> {
     if (!this.isCurrent(session)) {
       return
     }
+    session.opened = true
     this.disposeSubscription(session)
     const connection = Symbol('invite-realtime-connection')
     session.connection = connection

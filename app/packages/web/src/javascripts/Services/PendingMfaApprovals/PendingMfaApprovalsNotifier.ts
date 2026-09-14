@@ -19,20 +19,35 @@ import {
  *  - PRIMARY — websocket. The auth server pushes an MFA_APPROVAL_REQUESTED
  *    frame to every other authenticated session the instant the approval is
  *    created (see auth CreatePendingMfaApproval), and WebSocketsService already
- *    emits it as WebSocketsServiceEvent.MfaApprovalRequested. This is the
- *    existing event mechanism, so no polling is needed while a socket is live.
- *  - FALLBACK — a modest poll of GET /v1/pending-mfa-approvals for deployments
- *    without a websocket server (or while the socket is down). Each tick is
- *    skipped entirely when the socket is open, the tab is hidden, or no user is
- *    signed in, so the steady-state cost is a timer no-op.
+ *    emits it as WebSocketsServiceEvent.MfaApprovalRequested. The push is
+ *    best-effort: the server does not retry a frame the legacy lane lost, and a
+ *    half-open socket still reports OPEN, so an open socket is not proof of
+ *    delivery.
+ *  - SAFETY NET — a poll of GET /v1/pending-mfa-approvals that always runs:
+ *    every 120 s while the socket is OPEN (a lost push is still recovered inside
+ *    the ~2 min approval TTL), every 20 s otherwise (desktop, mobile and
+ *    deployments without a gateway have no push at all, so the poll IS the
+ *    delivery path), and once immediately when the tab becomes visible (5 s
+ *    throttle). A hidden tab skips ticks, so an approval raised while the tab
+ *    was in the background surfaces the moment the user returns. A tick is never
+ *    skipped merely because the socket is OPEN.
  *
  * De-duplication: one toast per challenge id for the lifetime of the approval
  * (ids are remembered until their expiry passes, then pruned), so the websocket
  * frame and a later poll of the same approval cannot double-toast.
  */
 
-/** Fallback poll cadence. Approvals live ~2 minutes, so 45s still catches them. */
-export const PENDING_MFA_APPROVALS_POLL_INTERVAL_MS = 45_000
+/** Safety-net cadence while the legacy socket is OPEN (lost-push recovery only). */
+export const PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS = 120_000
+
+/** Cadence when no socket is open: the poll is the only delivery path. Approvals live ~2 minutes. */
+export const PENDING_MFA_APPROVALS_POLL_INTERVAL_MS = 20_000
+
+/** Minimum spacing between a visibility-triggered poll and whatever poll ran before it. */
+export const PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS = 5_000
+
+/** Timer granularity: every tick re-reads the socket state and polls once its cadence has elapsed. */
+const POLL_TICK_MS = PENDING_MFA_APPROVALS_POLL_INTERVAL_MS
 
 /** Retention for remembered ids when the payload carries no usable expiry. */
 const DEFAULT_REMEMBER_MS = 10 * 60 * 1000
@@ -44,6 +59,8 @@ type PendingApprovalLike = {
   expiresAt?: unknown
 }
 
+type PollTrigger = 'tick' | 'visible'
+
 const debugLog = (...args: unknown[]): void => {
   // eslint-disable-next-line no-console
   console.debug('[PendingMfaApprovals]', ...args)
@@ -52,11 +69,16 @@ const debugLog = (...args: unknown[]): void => {
 export class PendingMfaApprovalsNotifier {
   private socketObserverDisposer?: () => void
   private pollTimer?: ReturnType<typeof setInterval>
+  private visibilityListener?: () => void
   private polling = false
+  /** Epoch-ms of the last poll that actually went out; cadences are measured from here. */
+  private lastPollStartedAt: number
   /** challengeId -> epoch-ms after which the entry may be forgotten. */
   private notifiedChallengeIds = new Map<string, number>()
 
   constructor(private application: WebApplication) {
+    this.lastPollStartedAt = Date.now()
+
     this.socketObserverDisposer = this.application.sockets.addEventObserver(async (event, data) => {
       if (event === WebSocketsServiceEvent.MfaApprovalRequested) {
         this.maybeNotify(data as PendingApprovalLike)
@@ -64,8 +86,17 @@ export class PendingMfaApprovalsNotifier {
     })
 
     this.pollTimer = setInterval(() => {
-      void this.pollIfNeeded()
-    }, PENDING_MFA_APPROVALS_POLL_INTERVAL_MS)
+      void this.pollIfDue('tick')
+    }, POLL_TICK_MS)
+
+    if (typeof document !== 'undefined') {
+      this.visibilityListener = () => {
+        if (document.visibilityState === 'visible') {
+          void this.pollIfDue('visible')
+        }
+      }
+      document.addEventListener('visibilitychange', this.visibilityListener)
+    }
   }
 
   deinit(): void {
@@ -75,15 +106,22 @@ export class PendingMfaApprovalsNotifier {
       clearInterval(this.pollTimer)
       this.pollTimer = undefined
     }
+    if (this.visibilityListener && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityListener)
+    }
+    this.visibilityListener = undefined
     this.notifiedChallengeIds.clear()
     ;(this.application as unknown) = undefined
   }
 
   /**
-   * Fallback path only: skipped when the websocket is delivering frames, the
-   * tab is hidden, or there is no signed-in session to authenticate the call.
+   * Safety-net poll. A tick polls once the cadence for the CURRENT socket state
+   * has elapsed since the last poll — so a socket that closes mid-interval is
+   * picked up at the next 20 s tick rather than after a full 120 s — and a
+   * visibility wake polls immediately unless a poll ran within the last 5 s.
+   * Hidden tabs and signed-out sessions never poll.
    */
-  private async pollIfNeeded(): Promise<void> {
+  private async pollIfDue(trigger: PollTrigger): Promise<void> {
     if (this.polling) {
       return
     }
@@ -91,10 +129,9 @@ export class PendingMfaApprovalsNotifier {
       return
     }
 
+    let socketOpen: boolean
     try {
-      if (this.application.sockets.isWebSocketConnectionOpen()) {
-        return
-      }
+      socketOpen = this.application.sockets.isWebSocketConnectionOpen()
       if (!this.application.sessions.getUser()) {
         return
       }
@@ -104,6 +141,18 @@ export class PendingMfaApprovalsNotifier {
       return
     }
 
+    const now = Date.now()
+    const minimumSpacing =
+      trigger === 'visible'
+        ? PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS
+        : socketOpen
+          ? PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS
+          : PENDING_MFA_APPROVALS_POLL_INTERVAL_MS
+    if (now - this.lastPollStartedAt < minimumSpacing) {
+      return
+    }
+
+    this.lastPollStartedAt = now
     this.polling = true
     try {
       const response = await this.application.legacyApi.listPendingMfaApprovals()

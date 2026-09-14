@@ -283,7 +283,7 @@ describe('InviteRealtimeEventConsumer', () => {
       eventId: id,
       streamPosition: position,
       kind: 'shared-vault-membership',
-      action: 'role-changed',
+      action: 'joined',
       sharedVaultUuid: '10000000-0000-4000-8000-000000000001',
       memberUserUuid: '20000000-0000-4000-8000-000000000001',
       membershipUuid: '30000000-0000-4000-8000-000000000001',
@@ -291,8 +291,8 @@ describe('InviteRealtimeEventConsumer', () => {
       revision,
       occurredAt: Number(revision),
     })
-    const first = membership('1', cursor1, '00000000-0000-4000-8000-000000000011')
-    const second = membership('2', cursor2, '00000000-0000-4000-8000-000000000012')
+    const first = membership('1789150108395094', cursor1, '00000000-0000-4000-8000-000000000011')
+    const second = membership('1789150108500000', cursor2, '00000000-0000-4000-8000-000000000012')
     const handled: InviteRealtimeEvent[] = []
     const consumer = new InviteRealtimeEventConsumer(store, (events) => {
       handled.push(...events)
@@ -307,15 +307,15 @@ describe('InviteRealtimeEventConsumer', () => {
     expect(handled).toEqual([first, second])
     expect(store.values.get(accountA)?.resourceRevisions).toEqual([
       {
-        key: 'membership:10000000-0000-4000-8000-000000000001',
-        revision: '2',
+        key: 'membership:30000000-0000-4000-8000-000000000001',
+        revision: '1789150108500000',
       },
     ])
 
     const restoredHandler = jest.fn()
     const restored = new InviteRealtimeEventConsumer(store, restoredHandler)
     await restored.beginSession(accountA)
-    const stale = membership('2', 'cursor-3', '00000000-0000-4000-8000-000000000013')
+    const stale = membership('1789150108500000', 'cursor-3', '00000000-0000-4000-8000-000000000013')
     await expect(restored.consume(accountA, batch([stale], { previousCursor: cursor2 }))).resolves.toMatchObject({
       status: 'applied',
       applied: 0,
@@ -323,6 +323,111 @@ describe('InviteRealtimeEventConsumer', () => {
       ackCursor: 'cursor-3',
     })
     expect(restoredHandler).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Production membership revisions are `String(<microsecond timestamp of the
+   * mutation>)` stamped per membership row (C12), not a per-vault counter. This
+   * is the t90-e7 scenario: an older member's revocation carries a timestamp
+   * older than a newer member's acceptance, and must still be applied.
+   */
+  it('applies an older member’s revocation and a non-contiguous newer revision under the per-membership fence', async () => {
+    const store = new MemoryStore()
+    store.values.set(accountA, { cursor: cursor0, seenEventIds: [] })
+    const vault = '10000000-0000-4000-8000-000000000001'
+    const memberA = '20000000-0000-4000-8000-00000000000a'
+    const memberB = '20000000-0000-4000-8000-00000000000b'
+    const membershipA = '30000000-0000-4000-8000-00000000000a'
+    const membershipB = '30000000-0000-4000-8000-00000000000b'
+    const handled: InviteRealtimeEvent[] = []
+    const consumer = new InviteRealtimeEventConsumer(store, (events) => {
+      handled.push(...events)
+    })
+    await consumer.beginSession(accountA)
+
+    // 1) Member A accepts at T1: the producer stamps A's membership row `updatedAt`.
+    const accepted: InviteRealtimeEvent = {
+      version: 1,
+      eventId: '00000000-0000-4000-8000-000000000021',
+      streamPosition: cursor1,
+      kind: 'shared-vault-membership',
+      action: 'accepted',
+      sharedVaultUuid: vault,
+      memberUserUuid: memberA,
+      membershipUuid: membershipA,
+      inviteUuid: '40000000-0000-4000-8000-000000000001',
+      role: 'write',
+      revision: '1789150108395094',
+      occurredAt: 1,
+    }
+    await expect(consumer.consume(accountA, batch([accepted]))).resolves.toMatchObject({
+      status: 'applied',
+      applied: 1,
+    })
+
+    // 2) Member B, who joined before A, is revoked. The removal timestamp is newer than
+    //    B's row but older than A's acceptance (T0 < T1) — a different membership row.
+    const revokedOlder: InviteRealtimeEvent = {
+      version: 1,
+      eventId: '00000000-0000-4000-8000-000000000022',
+      streamPosition: cursor2,
+      kind: 'shared-vault-membership',
+      action: 'revoked',
+      sharedVaultUuid: vault,
+      memberUserUuid: memberB,
+      membershipUuid: membershipB,
+      revision: '1789150108000000',
+      occurredAt: 2,
+    }
+    await expect(consumer.consume(accountA, batch([revokedOlder], { previousCursor: cursor1 }))).resolves.toEqual({
+      status: 'applied',
+      ackCursor: cursor2,
+      applied: 1,
+      duplicates: 0,
+      hasMore: false,
+    })
+
+    // 3) Member A is revoked later (T2 > T1, and nowhere near T1 + 1): same row, strictly
+    //    newer — applied as a delta, never a snapshot.
+    const revokedNewer: InviteRealtimeEvent = {
+      version: 1,
+      eventId: '00000000-0000-4000-8000-000000000023',
+      streamPosition: 'cursor-3',
+      kind: 'shared-vault-membership',
+      action: 'revoked',
+      sharedVaultUuid: vault,
+      memberUserUuid: memberA,
+      membershipUuid: membershipA,
+      revision: '1789150108500000',
+      occurredAt: 3,
+    }
+    await expect(consumer.consume(accountA, batch([revokedNewer], { previousCursor: cursor2 }))).resolves.toEqual({
+      status: 'applied',
+      ackCursor: 'cursor-3',
+      applied: 1,
+      duplicates: 0,
+      hasMore: false,
+    })
+
+    // 4) A replay of A's acceptance (older than A's revocation) is fenced out but ACKed past.
+    const replayedAcceptance: InviteRealtimeEvent = {
+      ...accepted,
+      eventId: '00000000-0000-4000-8000-000000000024',
+      streamPosition: 'cursor-4',
+    }
+    await expect(
+      consumer.consume(accountA, batch([replayedAcceptance], { previousCursor: 'cursor-3' })),
+    ).resolves.toEqual({ status: 'applied', ackCursor: 'cursor-4', applied: 0, duplicates: 1, hasMore: false })
+
+    expect(handled.map((event) => event.eventId)).toEqual([
+      '00000000-0000-4000-8000-000000000021',
+      '00000000-0000-4000-8000-000000000022',
+      '00000000-0000-4000-8000-000000000023',
+    ])
+    expect(store.values.get(accountA)?.resourceRevisions).toEqual([
+      { key: `membership:${membershipB}`, revision: '1789150108000000' },
+      { key: `membership:${membershipA}`, revision: '1789150108500000' },
+    ])
   })
 
   it('requires snapshot reconciliation when a resource revision jumps', async () => {

@@ -1,4 +1,5 @@
 import {
+  getInviteRealtimeRevisionIdentity,
   InviteRealtimeEvent,
   isInviteRealtimeBatch,
   isInviteRealtimeEvent,
@@ -31,7 +32,6 @@ function membershipEvent(action: SharedVaultMembershipRealtimeAction): InviteRea
     case 'accepted':
       return { ...common, membershipUuid, inviteUuid, role: 'write' }
     case 'joined':
-    case 'role-changed':
       return { ...common, membershipUuid, role: 'write' }
     case 'left':
     case 'revoked':
@@ -40,12 +40,49 @@ function membershipEvent(action: SharedVaultMembershipRealtimeAction): InviteRea
 }
 
 describe('InviteRealtimeEvent account-state contract', () => {
-  it.each<SharedVaultMembershipRealtimeAction>(['invited', 'accepted', 'joined', 'left', 'revoked', 'role-changed'])(
+  it.each<SharedVaultMembershipRealtimeAction>(['invited', 'accepted', 'joined', 'left', 'revoked'])(
     'accepts the strict metadata-only %s membership shape',
     (action) => {
       expect(isInviteRealtimeEvent(membershipEvent(action))).toBe(true)
     },
   )
+
+  it('no longer admits the producer-less role-changed action in any shape', () => {
+    // With a role (the shape the old contract required) and without one: both rejected.
+    expect(isInviteRealtimeEvent({ ...membershipEvent('joined'), action: 'role-changed' })).toBe(false)
+    expect(isInviteRealtimeEvent({ ...membershipEvent('left'), action: 'role-changed' })).toBe(false)
+  })
+
+  it('fences membership revisions per membership row as strictly-increasing timestamps', () => {
+    expect(getInviteRealtimeRevisionIdentity(membershipEvent('revoked'))).toEqual({
+      key: `membership:${membershipUuid}`,
+      revision: '1',
+      ordering: 'timestamp',
+    })
+    // An invitation has no membership row yet; the vault is the only stable key.
+    expect(getInviteRealtimeRevisionIdentity(membershipEvent('invited'))).toEqual({
+      key: `membership:${sharedVaultUuid}`,
+      revision: '1',
+      ordering: 'timestamp',
+    })
+    expect(
+      getInviteRealtimeRevisionIdentity({
+        ...base,
+        kind: 'application-state',
+        action: 'updated',
+        resource: 'items',
+        revision: '9',
+      }),
+    ).toEqual({ key: 'application:items', revision: '9', ordering: 'counter' })
+    expect(
+      getInviteRealtimeRevisionIdentity({
+        ...base,
+        kind: 'subscription-invite',
+        action: 'created',
+        inviteUuid,
+      }),
+    ).toBeUndefined()
+  })
 
   it('accepts application-state signals and rejects binary bodies or non-canonical revisions', () => {
     const event: InviteRealtimeEvent = {
@@ -64,8 +101,8 @@ describe('InviteRealtimeEvent account-state contract', () => {
   })
 
   it('rejects structurally incomplete membership changes and empty continuation batches', () => {
-    const roleChange = membershipEvent('role-changed')
-    expect(isInviteRealtimeEvent({ ...roleChange, role: undefined })).toBe(false)
+    const joined = membershipEvent('joined')
+    expect(isInviteRealtimeEvent({ ...joined, role: undefined })).toBe(false)
     expect(isInviteRealtimeEvent({ ...membershipEvent('revoked'), role: 'read' })).toBe(false)
     expect(isInviteRealtimeEvent({ ...membershipEvent('joined'), memberEmail: 'secret@example.com' })).toBe(false)
     expect(

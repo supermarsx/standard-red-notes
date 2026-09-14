@@ -4,8 +4,13 @@ export type InviteRealtimeEventKind =
   'shared-vault-invite' | 'subscription-invite' | 'shared-vault-membership' | 'application-state'
 
 export type InviteRealtimeInviteAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
-export type SharedVaultMembershipRealtimeAction =
-  'invited' | 'accepted' | 'joined' | 'left' | 'revoked' | 'role-changed'
+/**
+ * Exactly the actions a server producer emits today (accept → `accepted`,
+ * remove → `left`/`revoked`, invite → `invited`/`joined`). A `role-changed`
+ * action was declared without any producer and has been dropped; a future
+ * permissions producer must be added on both sides of the contract together.
+ */
+export type SharedVaultMembershipRealtimeAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked'
 export type ApplicationStateRealtimeAction = 'updated' | 'invalidated'
 export type InviteRealtimeEventAction =
   InviteRealtimeInviteAction | SharedVaultMembershipRealtimeAction | ApplicationStateRealtimeAction
@@ -97,7 +102,6 @@ const MEMBERSHIP_ACTIONS = new Set<SharedVaultMembershipRealtimeAction>([
   'joined',
   'left',
   'revoked',
-  'role-changed',
 ])
 const APPLICATION_ACTIONS = new Set<ApplicationStateRealtimeAction>(['updated', 'invalidated'])
 const MEMBERSHIP_ROLES = new Set<SharedVaultMembershipRole>(['read', 'write', 'admin'])
@@ -172,7 +176,7 @@ export function isInviteRealtimeEvent(value: unknown): value is InviteRealtimeEv
       }
       const needsMembership = event.action !== 'invited'
       const needsInvite = event.action === 'invited' || event.action === 'accepted'
-      const needsRole = ['invited', 'accepted', 'joined', 'role-changed'].includes(event.action)
+      const needsRole = ['invited', 'accepted', 'joined'].includes(event.action)
       return (
         (needsMembership ? isUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
         (needsInvite ? isUuid(event.inviteUuid) : event.inviteUuid === undefined) &&
@@ -231,19 +235,48 @@ export function isCanonicalRevision(value: unknown): value is string {
   return typeof value === 'string' && /^[1-9]\d{0,31}$/u.test(value)
 }
 
+/**
+ * How a resource's revisions relate to each other, which decides what the
+ * consumer's fence may infer from two consecutive values:
+ *
+ * - `timestamp`: the producer stamps each event with the microsecond time of
+ *   the mutation (a membership row's `updatedAt`, or the removal time for
+ *   `left`/`revoked`). Values are strictly increasing per key but never
+ *   contiguous, so only "not newer than what was already applied" may be
+ *   inferred — a numeric jump is normal, not a gap.
+ * - `counter`: a contiguous per-resource counter; a jump means a missed event
+ *   and requires an authoritative snapshot.
+ */
+export type InviteRealtimeRevisionOrdering = 'timestamp' | 'counter'
+
+export type InviteRealtimeRevisionIdentity = {
+  key: string
+  revision: string
+  ordering: InviteRealtimeRevisionOrdering
+}
+
+/**
+ * Membership revisions are fenced per membership row (`membershipUuid`), the
+ * unit the producer actually stamps: two members of one vault carry unrelated
+ * timestamps, so a vault-wide fence would drop the older member's revocation
+ * as "already seen". `invited` events have no membership row yet and fall back
+ * to the vault.
+ */
 export function getInviteRealtimeRevisionIdentity(
   event: InviteRealtimeEvent,
-): { key: string; revision: string } | undefined {
+): InviteRealtimeRevisionIdentity | undefined {
   switch (event.kind) {
     case 'shared-vault-membership':
       return {
-        key: `membership:${event.sharedVaultUuid}`,
+        key: `membership:${event.membershipUuid ?? event.sharedVaultUuid}`,
         revision: event.revision,
+        ordering: 'timestamp',
       }
     case 'application-state':
       return {
         key: `application:${event.resource}`,
         revision: event.revision,
+        ordering: 'counter',
       }
     default:
       return undefined
