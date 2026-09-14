@@ -286,6 +286,18 @@ jest.mock('@standard-red-notes/websocket-gateway', () => ({
   // C8 parsers, stubbed as pass-throughs; their rules are covered in the gateway.
   parseConnectionTokenTtl: jest.fn((value: string | undefined) => value ?? '60s'),
   parseMaxConnectionsPerUser: jest.fn((value: string | undefined) => (value === undefined ? undefined : Number(value))),
+  // C10 rule double (the real one is exercised by the integration spec's
+  // parser tests): same accept set as the gateway, throws otherwise.
+  WEBSOCKET_MESSAGES_CHANNEL: 'websocket-messages',
+  applyRedisNamespace: jest.fn((namespace: string | undefined, original: string) => {
+    if (namespace === undefined || namespace === '') {
+      return original
+    }
+    if (!/^[a-z0-9:_-]{1,64}$/u.test(namespace) || namespace.startsWith(':') || namespace.endsWith(':')) {
+      throw new Error('WEBSOCKET_REDIS_NAMESPACE must match ^[a-z0-9:_-]{1,64}$ with no leading or trailing colon.')
+    }
+    return `${namespace}:${original}`
+  }),
 }))
 
 jest.mock('@standardnotes/domain-core', () => ({

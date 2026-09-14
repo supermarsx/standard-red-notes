@@ -43,6 +43,7 @@ import {
   type SyncPreconditionState,
 } from '@standardnotes/api-gateway'
 import {
+  applyRedisNamespace,
   createLoggerSyncCommandMetrics,
   createInviteRealtimeDomainEventBridge,
   createSharedInviteEventComposition,
@@ -51,6 +52,7 @@ import {
   parseConnectionTokenTtl,
   parseMaxConnectionsPerUser,
   RedisInviteEventAvailabilityBus,
+  WEBSOCKET_MESSAGES_CHANNEL,
   RedisInviteEventStore,
   type RedisInviteEventClient,
   type RedisInviteEventPublisher,
@@ -208,8 +210,14 @@ export function parseHomeServerRedisNamespace(raw: string | undefined): {
   if (trimmed === '') {
     return { namespace: undefined, valid: true }
   }
-  const valid = /^[a-z0-9:_-]{1,64}$/u.test(trimmed) && !trimmed.startsWith(':') && !trimmed.endsWith(':')
-  return { namespace: valid ? trimmed : undefined, valid }
+  try {
+    // The gateway's rule, applied to the push channel it will subscribe on;
+    // it throws on anything it would refuse at attach time.
+    applyRedisNamespace(trimmed, WEBSOCKET_MESSAGES_CHANNEL)
+    return { namespace: trimmed, valid: true }
+  } catch {
+    return { namespace: undefined, valid: false }
+  }
 }
 
 export const REDIS_NAMESPACE_INVALID_CODE = 'WEBSOCKET_REDIS_NAMESPACE_INVALID' as const
@@ -345,14 +353,6 @@ export function waitForRedisReady(client: RedisReadinessClient, timeoutMs: numbe
     client.once('ready', onReady)
     client.once('end', onEnd)
   })
-}
-
-/**
- * FATAL line for the process-level crash handlers: the event name plus the
- * redacted error classification (type, code, status) -- never the message.
- */
-export function describeFatal(label: string, error: unknown): [string, Record<string, unknown>] {
-  return [`FATAL ${label}.`, { ...safeErrorLogMetadata(error) }]
 }
 
 const SAFE_BOOT_FAILURE_TEXT = /^[\w .,;:'()<>+-]{1,200}$/

@@ -1,6 +1,6 @@
 import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Env } from '../src/Bootstrap/Env'
-import { boundedBootFailureText, describeFatal, HomeServer } from '../src/Server/HomeServer'
+import { boundedBootFailureText, HomeServer } from '../src/Server/HomeServer'
 
 /**
  * Standard Red Notes: fail-fast global crash handlers, matching the
@@ -13,11 +13,11 @@ import { boundedBootFailureText, describeFatal, HomeServer } from '../src/Server
  */
 function installFatalHandlers(target: NodeJS.Process): void {
   target.on('unhandledRejection', (reason: unknown) => {
-    console.error(...describeFatal('unhandledRejection', reason))
+    console.error('FATAL unhandledRejection.', safeErrorLogMetadata(reason))
     target.exit(1)
   })
   target.on('uncaughtException', (error: Error) => {
-    console.error(...describeFatal('uncaughtException', error))
+    console.error('FATAL uncaughtException.', safeErrorLogMetadata(error))
     target.exit(1)
   })
 }
@@ -45,10 +45,13 @@ if (process.argv.length === 3 && process.argv[2] === '--srn-release-self-test') 
     )
       .then((result) => {
         if (result.isFailed()) {
-          // start() already logged the redacted classification; this is the
-          // bounded text of the Result (a constant-string boot error such as a
-          // named precondition), withheld when it could carry a path or value.
-          console.error(`Could not start server: ${boundedBootFailureText(result.getError())}`)
+          // start() already logged the redacted classification. What reaches
+          // the console here is the BOUNDED text of the Result: a constant
+          // string such as a named precondition or a parser's own message,
+          // and a fixed placeholder whenever the text could carry a path,
+          // URL or configured value (see boundedBootFailureText).
+          const bootRefusal = boundedBootFailureText(result.getError())
+          console.error('Could not start server.', { cause: bootRefusal })
           process.exitCode = 1
         }
       })

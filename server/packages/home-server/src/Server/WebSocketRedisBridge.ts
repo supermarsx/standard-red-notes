@@ -1,6 +1,11 @@
 import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventInterface, DomainEventMessageHandlerInterface } from '@standardnotes/domain-events'
-import { createLogThrottle, type LogThrottle } from '@standard-red-notes/websocket-gateway'
+import {
+  createLogThrottle,
+  namespacedPushChannel,
+  WEBSOCKET_MESSAGES_CHANNEL,
+  type LogThrottle,
+} from '@standard-red-notes/websocket-gateway'
 import Redis, { RedisOptions } from 'ioredis'
 import { Logger } from 'winston'
 
@@ -43,15 +48,6 @@ export interface WebSocketRedisBridgeHealth {
 }
 
 /**
- * Mirrors `applyRedisNamespace` in the gateway's redisBridge (C10) rule for
- * rule, so the publisher and the subscriber can never disagree on the channel
- * name: empty keeps the bare name; otherwise the pattern, and no leading or
- * trailing colon (which would silently produce `prod::websocket-messages` on
- * one side only).
- */
-const NAMESPACE_PATTERN = /^[a-z0-9:_-]{1,64}$/u
-
-/**
  * Bridges the in-process `WEB_SOCKET_MESSAGE_REQUESTED` domain event onto a
  * Redis pub/sub channel so the self-hosted WebSocket gateway (a separate
  * process, or the one attached in-process on the same http server) holding the
@@ -73,19 +69,27 @@ const NAMESPACE_PATTERN = /^[a-z0-9:_-]{1,64}$/u
  * unaffected.
  */
 export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface {
-  static readonly CHANNEL = 'websocket-messages'
+  static readonly CHANNEL = WEBSOCKET_MESSAGES_CHANNEL
   static readonly WARN_INTERVAL_MS = 60_000
   static readonly PUBLISH_TIMEOUT_MS = 5_000
 
+  /**
+   * The gateway's own rule (`namespacedPushChannel`, C10): the subscriber in
+   * the in-process gateway derives its channel from the same function, so the
+   * two sides cannot drift. Throws on a malformed namespace.
+   */
   static channelFor(namespace: string | undefined): string {
-    if (namespace === undefined || namespace === '') {
-      return WebSocketRedisBridge.CHANNEL
-    }
-    if (!NAMESPACE_PATTERN.test(namespace) || namespace.startsWith(':') || namespace.endsWith(':')) {
-      throw new Error('WEBSOCKET_REDIS_NAMESPACE must match ^[a-z0-9:_-]{1,64}$ with no leading or trailing colon.')
-    }
-    return `${namespace}:${WebSocketRedisBridge.CHANNEL}`
+    return namespacedPushChannel(namespace)
   }
+
+  /**
+   * The two operator lines, as constants: the cause selects one, nothing
+   * dynamic ever reaches the message position.
+   */
+  private static readonly WARN_LINES: Readonly<Record<'connection' | 'publish', string>> = Object.freeze({
+    connection: 'WebSocketRedisBridge redis connection error; pushes are dropped until it reconnects.',
+    publish: 'WebSocketRedisBridge publish failed; the realtime push was dropped (clients recover on their next sync).',
+  })
 
   readonly channel: string
   private readonly disabledReason: string | undefined
@@ -154,7 +158,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
       })
       this.publisher.on('error', (error) => {
         this.connectionErrors += 1
-        this.warnThrottled('connection', 'WebSocketRedisBridge redis connection error; pushes are dropped until it reconnects.', error)
+        this.warnThrottled('connection', error)
       })
     }
     return this.publisher
@@ -176,11 +180,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
       await publisher.publish(this.channel, JSON.stringify(messageOrEvent.payload))
     } catch (error) {
       this.droppedPublishes += 1
-      this.warnThrottled(
-        'publish',
-        'WebSocketRedisBridge publish failed; the realtime push was dropped (clients recover on their next sync).',
-        error,
-      )
+      this.warnThrottled('publish', error)
     }
   }
 
@@ -209,12 +209,12 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
    * promptly and its size is readable without flooding the log. Error metadata
    * is the redacted classification only (type, code), never the message.
    */
-  private warnThrottled(cause: 'connection' | 'publish', message: string, error: unknown): void {
+  private warnThrottled(cause: 'connection' | 'publish', error: unknown): void {
     const decision = this.throttle.consider(cause)
     if (!decision.emit) {
       return
     }
-    this.logger.warn(message, {
+    this.logger.warn(WebSocketRedisBridge.WARN_LINES[cause], {
       ...safeErrorLogMetadata(error),
       cause,
       suppressedSinceLastLine: decision.suppressed,

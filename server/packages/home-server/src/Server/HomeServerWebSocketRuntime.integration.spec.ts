@@ -14,7 +14,6 @@ import type { SyncCommandBackendAdapter, SyncLiveAuthorizationAdapter } from '@s
 import { HomeServerRuntime } from './HomeServerRuntime'
 import {
   boundedBootFailureText,
-  describeFatal,
   describeHomeServerRealtimePreconditions,
   formatGatewayLogArguments,
   parseHomeServerRedisNamespace,
@@ -582,16 +581,6 @@ describe('formatGatewayLogArguments', () => {
 })
 
 describe('boot failure reporting', () => {
-  it('describes a fatal event with the redacted classification only', () => {
-    const [message, metadata] = describeFatal(
-      'unhandledRejection',
-      Object.assign(new Error('Could not subscribe to invite availability.'), { code: 'ECONNREFUSED' }),
-    )
-
-    expect(message).toBe('FATAL unhandledRejection.')
-    expect(metadata).toEqual({ errorType: 'Error', errorCode: 'ECONNREFUSED', status: undefined })
-  })
-
   it('passes a constant-string boot error through, bounded', () => {
     expect(boundedBootFailureText('Invite cursor secret must contain at least 32 bytes.')).toBe(
       'Invite cursor secret must contain at least 32 bytes.',
