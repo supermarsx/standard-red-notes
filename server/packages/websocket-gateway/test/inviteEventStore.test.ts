@@ -76,7 +76,6 @@ const membershipEvent = (action: SharedVaultMembershipEventAction, index: number
         role: 'write',
       }
     case 'joined':
-    case 'role-changed':
       return { ...common, membershipUuid: '30000000-0000-4000-8000-000000000001', role: 'write' }
     case 'left':
     case 'revoked':
@@ -174,14 +173,7 @@ describe('InMemoryInviteEventStore', () => {
     const store = new InMemoryInviteEventStore({ cursorSecret: secret })
     const cursorA = await store.tail(accountA)
     const cursorB = await store.tail(accountB)
-    const actions: SharedVaultMembershipEventAction[] = [
-      'invited',
-      'accepted',
-      'joined',
-      'role-changed',
-      'left',
-      'revoked',
-    ]
+    const actions: SharedVaultMembershipEventAction[] = ['invited', 'accepted', 'joined', 'left', 'revoked']
 
     for (const [index, action] of actions.entries()) {
       const results = await appendInviteEventForAffectedUsers(
@@ -370,7 +362,7 @@ describe('invite event validation', () => {
     const accepted = membershipEvent('accepted', 3)
     const invited = membershipEvent('invited', 4)
     const left = membershipEvent('left', 5)
-    const roleChanged = membershipEvent('role-changed', 6)
+    const joined = membershipEvent('joined', 6)
     const invalid: unknown[] = [
       { ...accepted, plaintext: 'must-not-pass' },
       { ...accepted, action: 1 },
@@ -387,8 +379,11 @@ describe('invite event validation', () => {
       { ...invited, role: undefined },
       { ...left, inviteUuid: accountA },
       { ...left, role: 'read' },
-      { ...roleChanged, role: 1 },
-      { ...roleChanged, role: 'owner' },
+      // Dropped with the client contract (N16): a shape that is otherwise valid
+      // must not pass under an action the client no longer knows.
+      { ...left, action: 'role-changed' },
+      { ...joined, role: 1 },
+      { ...joined, role: 'owner' },
       { ...applicationEvent, plaintext: 'must-not-pass' },
       { ...applicationEvent, action: 1 },
       { ...applicationEvent, action: 'unknown' },

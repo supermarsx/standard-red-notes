@@ -45,7 +45,6 @@ const membershipEvent = (action: InviteRealtimeMembershipAction, index: number):
     case 'accepted':
       return { ...common, membershipUuid, inviteUuid, role: 'write' }
     case 'joined':
-    case 'role-changed':
       return { ...common, membershipUuid, role: 'write' }
     case 'left':
     case 'revoked':
@@ -97,14 +96,7 @@ describe('isInviteRealtimeInvalidation', () => {
       expect(isInviteRealtimeInvalidation(inviteEvent(1, { action }))).toBe(true)
       expect(isInviteRealtimeInvalidation({ ...subscriptionEvent, action })).toBe(true)
     }
-    const membershipActions: InviteRealtimeMembershipAction[] = [
-      'invited',
-      'accepted',
-      'joined',
-      'left',
-      'revoked',
-      'role-changed',
-    ]
+    const membershipActions: InviteRealtimeMembershipAction[] = ['invited', 'accepted', 'joined', 'left', 'revoked']
     membershipActions.forEach((action, index) => {
       expect(isInviteRealtimeInvalidation(membershipEvent(action, index + 1))).toBe(true)
     })
@@ -151,7 +143,7 @@ describe('isInviteRealtimeInvalidation', () => {
     const accepted = membershipEvent('accepted', 3)
     const invited = membershipEvent('invited', 4)
     const left = membershipEvent('left', 5)
-    const roleChanged = membershipEvent('role-changed', 6)
+    const joined = membershipEvent('joined', 6)
     const invalid: unknown[] = [
       { ...accepted, plaintext: 'must-not-pass' },
       { ...accepted, action: 1 },
@@ -172,8 +164,11 @@ describe('isInviteRealtimeInvalidation', () => {
       { ...invited, role: undefined },
       { ...left, inviteUuid: accountA },
       { ...left, role: 'read' },
-      { ...roleChanged, role: 1 },
-      { ...roleChanged, role: 'owner' },
+      // Dropped with the client contract (N16): a shape that is otherwise valid
+      // must not pass under an action the client no longer knows.
+      { ...left, action: 'role-changed' },
+      { ...joined, role: 1 },
+      { ...joined, role: 'owner' },
       { ...applicationEvent, plaintext: 'must-not-pass' },
       { ...applicationEvent, action: 1 },
       { ...applicationEvent, action: 'unknown' },

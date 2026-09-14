@@ -6,8 +6,14 @@ describe('invite event wire compatibility', () => {
   it('accepts legacy invite actions and every membership/application-state action in one versioned schema', () => {
     const events = inviteRealtimeProtocolEvents()
 
-    expect(events).toHaveLength(20)
+    // 6 invite + 6 subscription + 5 membership (role-changed dropped with the client contract, N16) + 2 application-state
+    expect(events).toHaveLength(19)
     expect(events.every(isStoredInviteEvent)).toBe(true)
+    const membership = events.find(
+      (candidate) => candidate.kind === 'shared-vault-membership' && candidate.action === 'left',
+    )
+    // The client disconnects on an action it does not know; the wire validator must not let one through.
+    expect(isStoredInviteEvent({ ...membership, action: 'role-changed' })).toBe(false)
     expect(
       isInviteEventReplay(
         {

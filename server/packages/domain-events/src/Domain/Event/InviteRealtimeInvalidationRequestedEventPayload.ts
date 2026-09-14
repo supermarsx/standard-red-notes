@@ -6,7 +6,9 @@ export type InviteRealtimeEventKind =
   | 'shared-vault-membership'
   | 'application-state'
 export type InviteRealtimeEventAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
-export type InviteRealtimeMembershipAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked' | 'role-changed'
+// `role-changed` was dropped together with the client contract (N16): no producer
+// emits it and a client disconnects on an action it does not know.
+export type InviteRealtimeMembershipAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked'
 export type InviteRealtimeMembershipRole = 'read' | 'write' | 'admin'
 export type InviteRealtimeApplicationStateAction = 'updated' | 'invalidated'
 export type InviteRealtimeApplicationStateResource =
@@ -92,7 +94,6 @@ const MEMBERSHIP_ACTIONS: ReadonlySet<string> = new Set<InviteRealtimeMembership
   'joined',
   'left',
   'revoked',
-  'role-changed',
 ])
 const MEMBERSHIP_ROLES: ReadonlySet<string> = new Set<InviteRealtimeMembershipRole>(['read', 'write', 'admin'])
 const APPLICATION_ACTIONS: ReadonlySet<string> = new Set<InviteRealtimeApplicationStateAction>([
@@ -112,7 +113,6 @@ const MEMBERSHIP_ACTIONS_WITH_ROLE: ReadonlySet<string> = new Set<InviteRealtime
   'invited',
   'accepted',
   'joined',
-  'role-changed',
 ])
 
 const BASE_FIELDS = ['version', 'eventId', 'kind', 'action', 'occurredAt']

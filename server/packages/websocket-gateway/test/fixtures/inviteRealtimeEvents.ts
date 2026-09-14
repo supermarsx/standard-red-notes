@@ -18,14 +18,7 @@ export function inviteRealtimeProtocolEvents(): StoredInviteEvent[] {
     }
   }
   const inviteActions: InviteEventAction[] = ['created', 'updated', 'accepted', 'declined', 'canceled', 'deleted']
-  const membershipActions: SharedVaultMembershipEventAction[] = [
-    'invited',
-    'accepted',
-    'joined',
-    'role-changed',
-    'left',
-    'revoked',
-  ]
+  const membershipActions: SharedVaultMembershipEventAction[] = ['invited', 'accepted', 'joined', 'left', 'revoked']
 
   return [
     ...inviteActions.map((action): StoredInviteEvent => ({
@@ -56,7 +49,6 @@ export function inviteRealtimeProtocolEvents(): StoredInviteEvent[] {
         case 'accepted':
           return { ...common, inviteUuid, membershipUuid: inviteMembershipUuid, role: 'write' }
         case 'joined':
-        case 'role-changed':
           return { ...common, membershipUuid: inviteMembershipUuid, role: 'admin' }
         case 'left':
         case 'revoked':

@@ -45,7 +45,9 @@ return #expired
 export type InviteEventKind =
   'shared-vault-invite' | 'subscription-invite' | 'shared-vault-membership' | 'application-state'
 export type InviteEventAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
-export type SharedVaultMembershipEventAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked' | 'role-changed'
+// `role-changed` was dropped together with the client contract (N16): it has no
+// producer and a client disconnects on a kind/action it does not know.
+export type SharedVaultMembershipEventAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked'
 export type ApplicationStateEventAction = 'updated' | 'invalidated'
 export type SharedVaultMembershipRole = 'read' | 'write' | 'admin'
 export type ApplicationStateResource =
@@ -512,7 +514,6 @@ const MEMBERSHIP_ACTIONS = new Set<SharedVaultMembershipEventAction>([
   'joined',
   'left',
   'revoked',
-  'role-changed',
 ])
 const APPLICATION_ACTIONS = new Set<ApplicationStateEventAction>(['updated', 'invalidated'])
 const MEMBERSHIP_ROLES = new Set<SharedVaultMembershipRole>(['read', 'write', 'admin'])
@@ -604,7 +605,7 @@ export function isInviteEventInvalidation(value: unknown): value is InviteEventI
       }
       const needsMembership = event.action !== 'invited'
       const needsInvite = event.action === 'invited' || event.action === 'accepted'
-      const needsRole = ['invited', 'accepted', 'joined', 'role-changed'].includes(event.action)
+      const needsRole = ['invited', 'accepted', 'joined'].includes(event.action)
       return (
         (needsMembership ? isUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
         (needsInvite ? isUuid(event.inviteUuid) : event.inviteUuid === undefined) &&
