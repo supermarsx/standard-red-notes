@@ -126,6 +126,15 @@ const TOO_MANY_REQUESTS_RESPONSE_STATUS = 429
 const DEFAULT_AUTO_SYNC_INTERVAL = 30_000
 
 /**
+ * While the legacy websocket reads OPEN the auto-sync tick only syncs when the server has
+ * notified us of a change. A push can be lost for good (a swallowed publish failure on the
+ * server, a half-open TCP path after sleep or a NAT timeout that the browser has not noticed
+ * yet), and the server never replays it. So every AUTO_SYNC_BACKSTOP_TICKS ticks
+ * (10 × 30 s = 5 min) the tick syncs unconditionally, socket or not.
+ */
+const AUTO_SYNC_BACKSTOP_TICKS = 10
+
+/**
  * LIVE-SYNC: when the server pushes an ITEMS_CHANGED_ON_SERVER notification over the
  * websocket (e.g. a collaborator edited a shared vault), we trigger an immediate sync
  * rather than waiting up to 30s for the periodic auto-sync tick. The trigger is debounced
@@ -216,6 +225,8 @@ export class SyncService
 
   private autoSyncInterval?: NodeJS.Timeout
   private wasNotifiedOfItemsChangeOnServer = false
+  /** Auto-sync ticks spent with the socket OPEN and no server notification since the last tick-driven sync. */
+  private autoSyncTicksSinceBackstop = 0
 
   /** Pending debounced live-sync timer, coalescing a burst of server-change notifications. */
   private liveSyncDebounceTimeout?: NodeJS.Timeout
@@ -273,6 +284,7 @@ export class SyncService
 
     const onOnline = () => {
       this.logger.debug('Network came back online, syncing ASAP and resetting backoff')
+      this.reconnectLegacySocketIfClosed()
       this.cancelFailureBackoff()
       this.consecutiveFailureCount = 0
       this.syncDetached(
@@ -285,6 +297,9 @@ export class SyncService
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         return
       }
+
+      /** Not throttled: it is a no-op while the socket is OPEN or CONNECTING (C11). */
+      this.reconnectLegacySocketIfClosed()
 
       const now = Date.now()
       if (now - this.lastFocusSyncAt < FOCUS_SYNC_THROTTLE_MS) {
@@ -313,6 +328,18 @@ export class SyncService
         document.removeEventListener('visibilitychange', onFocusOrVisible)
       }
     }
+  }
+
+  /**
+   * C11 / D3: re-dial the legacy push socket when the environment comes back (online,
+   * focus, visible) and the socket is neither OPEN nor CONNECTING. The HTTP sync that
+   * follows covers the items; this brings the push/invite/MFA/collaboration lane back
+   * without waiting for the backoff timer. The optional call keeps lightweight stubs
+   * (specs pass `{}` as the sockets service) valid.
+   */
+  private reconnectLegacySocketIfClosed(): void {
+    const sockets = this.sockets as WebSocketsService & { reconnectIfClosed?: () => void }
+    sockets.reconnectIfClosed?.()
   }
 
   /** Cancel any pending failure-backoff auto-retry so it doesn't delay a fresher sync. */
@@ -833,6 +860,7 @@ export class SyncService
     }
 
     if (!this.sockets.isWebSocketConnectionOpen()) {
+      this.autoSyncTicksSinceBackstop = 0
       this.logger.debug('WebSocket connection is closed, doing autosync')
 
       this.syncDetached({ sourceDescription: 'Auto Sync' }, 'automatic sync')
@@ -841,6 +869,7 @@ export class SyncService
     }
 
     if (this.wasNotifiedOfItemsChangeOnServer) {
+      this.autoSyncTicksSinceBackstop = 0
       this.logger.debug('Was notified of items changed on server, doing autosync')
 
       this.wasNotifiedOfItemsChangeOnServer = false
@@ -849,6 +878,22 @@ export class SyncService
         { sourceDescription: 'WebSockets Event - Items Changed On Server' },
         'websocket items-changed notification',
       )
+
+      return
+    }
+
+    /**
+     * D3 backstop: an OPEN socket is not proof that pushes are arriving (lost publish,
+     * half-open path). Sync unconditionally every AUTO_SYNC_BACKSTOP_TICKS quiet ticks so a
+     * passive second screen can never stay stale for longer than the backstop window.
+     */
+    this.autoSyncTicksSinceBackstop += 1
+
+    if (this.autoSyncTicksSinceBackstop >= AUTO_SYNC_BACKSTOP_TICKS) {
+      this.autoSyncTicksSinceBackstop = 0
+      this.logger.debug('WebSocket is open but quiet for the backstop window, doing autosync')
+
+      this.syncDetached({ sourceDescription: 'Auto Sync - WebSocket Backstop' }, 'automatic backstop sync')
     }
   }
 
@@ -2949,14 +2994,44 @@ export class SyncService
       case WebSocketsServiceEvent.SyncItemsPushed:
         await this.handleItemsPushedOverWebSocket(event.payload as SyncItemsPushedData)
         break
+      case WebSocketsServiceEvent.WebSocketDidOpen:
+        this.handleWebSocketDidOpen()
+        break
       default:
         break
     }
   }
 
   /**
+   * D3: the server never replays a push that was emitted while the legacy socket was
+   * down or half-open, so every (re)open catches up over HTTP right away. The notified
+   * flag is left set so the next auto-sync tick reconciles as well if this detached sync
+   * is suppressed (manual sync mode) or fails — the same belt-and-braces the push fallback
+   * uses. The first open after launch costs one extra no-op sync.
+   */
+  private handleWebSocketDidOpen(): void {
+    if (this.dealloced) {
+      return
+    }
+
+    this.wasNotifiedOfItemsChangeOnServer = true
+
+    this.syncDetached(
+      { source: SyncSource.External, sourceDescription: 'WebSocket reconnect catch-up' },
+      'websocket reconnect catch-up',
+    )
+  }
+
+  /**
    * Standard Red Notes (Phase 1A): apply encrypted item payloads pushed over the
    * websocket WITHOUT an HTTP pull, but only when it is provably safe.
+   *
+   * t92 decision (i) / D4: by default the server no longer inlines payloads
+   * (`WEBSOCKET_SYNC_PUSH_ENABLED` defaults to false) and emits ITEMS_CHANGED_ON_SERVER
+   * instead, which `handleEvent` turns into the debounced live sync. This branch only
+   * runs when an operator enables the flag, and rule 1 below cannot match until the
+   * sync token becomes a per-user change sequence (the long-term redesign); it stays
+   * as the flag-guarded optimisation it is, with HTTP as the path that actually runs.
    *
    * SAFETY RULES (HTTP sync is always the reliable backstop):
    * 1. Token continuity: we only fast-apply when our current sync token EXACTLY

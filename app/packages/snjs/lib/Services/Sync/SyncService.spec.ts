@@ -626,9 +626,26 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     })
   })
 
-  it('does not perform an unconditional HTTP backfill when the legacy websocket reconnects', async () => {
+  it('performs exactly one HTTP catch-up sync when the legacy websocket (re)opens (D3)', async () => {
     const service = createService('base-token')
     const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+    await service.handleEvent({ type: WebSocketsServiceEvent.WebSocketDidOpen } as never)
+
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ source: SyncSource.External, sourceDescription: 'WebSocket reconnect catch-up' }),
+    )
+    // Belt and braces: the next auto-sync tick reconciles too if the detached sync is suppressed or fails.
+    expect((service as unknown as { wasNotifiedOfItemsChangeOnServer: boolean }).wasNotifiedOfItemsChangeOnServer).toBe(
+      true,
+    )
+  })
+
+  it('ignores a websocket open after deinit', async () => {
+    const service = createService('base-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+    ;(service as unknown as { dealloced: boolean }).dealloced = true
 
     await service.handleEvent({ type: WebSocketsServiceEvent.WebSocketDidOpen } as never)
 
@@ -3224,5 +3241,177 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
 
     expect(localOnlyPersistedItems).toHaveLength(0)
     expect(items.map((i) => i.uuid)).toContain(LOCAL_ONLY_UUID)
+  })
+})
+
+describe('SyncService auto-sync backstop and legacy socket re-dial (D3 / C11)', () => {
+  let logger: jest.Mocked<LoggerInterface>
+  let windowStub: { addEventListener: jest.Mock; removeEventListener: jest.Mock }
+
+  const AUTO_SYNC_TICK_MS = 30_000
+  const BACKSTOP_TICKS = 10
+
+  type SocketsStub = { isWebSocketConnectionOpen: jest.Mock; reconnectIfClosed?: jest.Mock }
+
+  const createService = (sockets: SocketsStub): SyncService => {
+    logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    return new SyncService(
+      {} as never, // itemManager
+      {} as never, // sessionManager
+      {} as never, // encryptionService
+      {} as never, // storageService
+      {} as never, // payloadManager
+      {} as never, // apiService
+      {} as never, // historyService
+      {} as never, // device
+      'test-identifier',
+      {} as never, // options
+      logger,
+      sockets as never,
+      {} as never, // syncFrequencyGuard
+      {} as never, // syncBackoffService
+      { addEventHandler: noop, publish: noop, publishSync: noop } as never,
+    )
+  }
+
+  /** The listeners are registered in the constructor only when a `window` exists (headless guard). */
+  const registeredHandler = (eventName: string): (() => void) => {
+    const call = windowStub.addEventListener.mock.calls.find(([name]) => name === eventName)
+    if (!call) {
+      throw new Error(`no ${eventName} listener registered`)
+    }
+    return call[1] as () => void
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers()
+    windowStub = { addEventListener: jest.fn(), removeEventListener: jest.fn() }
+    ;(globalThis as unknown as { window: unknown }).window = windowStub
+  })
+
+  afterEach(() => {
+    jest.clearAllTimers()
+    jest.useRealTimers()
+    delete (globalThis as unknown as { window?: unknown }).window
+  })
+
+  describe('auto-sync tick while the legacy socket reads OPEN', () => {
+    it('syncs every tick while the socket is NOT open (unchanged behaviour)', () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(false) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * 3)
+
+      expect(syncSpy).toHaveBeenCalledTimes(3)
+      expect(syncSpy).toHaveBeenLastCalledWith(expect.objectContaining({ sourceDescription: 'Auto Sync' }))
+    })
+
+    it('stays quiet for 9 ticks and runs an unconditional backstop sync on the 10th', () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(true) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * (BACKSTOP_TICKS - 1))
+
+      expect(syncSpy).not.toHaveBeenCalled()
+
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS)
+
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+      expect(syncSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceDescription: 'Auto Sync - WebSocket Backstop' }),
+      )
+    })
+
+    it('re-arms the backstop after it fires (one sync per 10 quiet ticks, not one per tick)', () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(true) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * BACKSTOP_TICKS * 2)
+
+      expect(syncSpy).toHaveBeenCalledTimes(2)
+
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * (BACKSTOP_TICKS - 1))
+
+      expect(syncSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('a server notification still syncs on the very next tick and resets the backstop window', async () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(true) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * 5)
+      // Flag only (the debounced live sync needs a session, which this harness does not have).
+      ;(service as unknown as { wasNotifiedOfItemsChangeOnServer: boolean }).wasNotifiedOfItemsChangeOnServer = true
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS)
+
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+      expect(syncSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceDescription: 'WebSockets Event - Items Changed On Server' }),
+      )
+
+      // The window restarts from the notified tick: 9 more quiet ticks stay quiet, the 10th fires.
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * (BACKSTOP_TICKS - 1))
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS)
+      expect(syncSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not count ticks towards the backstop in manual sync mode', () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(true) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+      service.setManualSyncMode(true)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * BACKSTOP_TICKS * 2)
+
+      expect(syncSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('legacy socket re-dial hooks (C11)', () => {
+    it('online: re-dials the legacy socket and syncs over HTTP', () => {
+      const sockets = { isWebSocketConnectionOpen: jest.fn().mockReturnValue(false), reconnectIfClosed: jest.fn() }
+      const service = createService(sockets)
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      registeredHandler('online')()
+
+      expect(sockets.reconnectIfClosed).toHaveBeenCalledTimes(1)
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+      expect(syncSpy).toHaveBeenCalledWith(expect.objectContaining({ sourceDescription: 'Browser online event' }))
+    })
+
+    it('focus: re-dials the legacy socket on every focus, even inside the sync throttle window', () => {
+      const sockets = { isWebSocketConnectionOpen: jest.fn().mockReturnValue(false), reconnectIfClosed: jest.fn() }
+      const service = createService(sockets)
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      const onFocus = registeredHandler('focus')
+      onFocus()
+      jest.advanceTimersByTime(1_000)
+      onFocus()
+
+      expect(sockets.reconnectIfClosed).toHaveBeenCalledTimes(2)
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('tolerates a sockets service without reconnectIfClosed (headless / older wiring)', () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(false) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      expect(() => registeredHandler('online')()).not.toThrow()
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
   })
 })
