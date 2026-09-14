@@ -13,6 +13,15 @@ import { SyncCommandOutboxRepositoryInterface } from '../SyncCommand/SyncCommand
 
 const MAX_AFFECTED_USERS = 1_000
 
+/**
+ * Membership revision contract (t92 C12): a positive decimal integer without
+ * leading zeros, at most 32 digits — the microsecond timestamp of the
+ * mutation. Same pattern as the domain-events validator and the gateway; it
+ * is checked here too because the syncing-server outbox enqueues the event
+ * directly and never runs that validator.
+ */
+export const CANONICAL_REVISION_PATTERN = /^[1-9]\d{0,31}$/u
+
 type SharedVaultInviteInput = {
   action: InviteRealtimeEventAction
   inviteUuid: string
@@ -56,7 +65,7 @@ export class InviteRealtimeDomainEventProducer {
   }
 
   recordSharedVaultMembership(input: SharedVaultMembershipInput): Promise<void> {
-    if (!input.revision || input.revision.length > 128) {
+    if (typeof input.revision !== 'string' || !CANONICAL_REVISION_PATTERN.test(input.revision)) {
       throw new Error('Invite realtime membership revision is invalid.')
     }
     return this.publish(input.affectedUserUuids, {
