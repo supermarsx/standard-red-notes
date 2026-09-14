@@ -145,9 +145,11 @@ describe('sync command maintenance jobs', () => {
           eventType: 'SYNC_ITEMS_PUSHED',
           attempts: 20,
           maxAttempts: 20,
-          error: 'MessageTooLong',
+          errorType: 'Error',
         }),
       )
+      // Safe logging: the broker's raw message must never reach the log.
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('MessageTooLong')
       // The drain carries on past the dead row rather than aborting the sweep.
       expect(repository.claimNext).toHaveBeenCalledTimes(2)
     })
@@ -171,7 +173,7 @@ describe('sync command maintenance jobs', () => {
       expect(repository.releaseForRetry).not.toHaveBeenCalled()
     })
 
-    it('honours a custom cap and stringifies non-Error rejections in the dead log', async () => {
+    it('honours a custom cap and classifies non-Error rejections safely in the dead log', async () => {
       const repository = createOutboxRepository()
       repository.claimNext
         .mockResolvedValueOnce(claimedEvent(2, 'retry-me'))
@@ -187,8 +189,9 @@ describe('sync command maintenance jobs', () => {
       expect(repository.markDead).toHaveBeenCalledWith('give-up', 'lock-1', expect.any(Number))
       expect(logger.error).toHaveBeenLastCalledWith(
         'Sync command outbox event exhausted its delivery attempts and was marked dead.',
-        expect.objectContaining({ outboxEventId: 'give-up', attempts: 3, maxAttempts: 3, error: 'nope' }),
+        expect.objectContaining({ outboxEventId: 'give-up', attempts: 3, maxAttempts: 3, errorType: 'Error' }),
       )
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('nope')
     })
   })
 

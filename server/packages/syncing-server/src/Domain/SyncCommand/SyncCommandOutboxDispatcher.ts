@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 
@@ -60,13 +61,16 @@ export class SyncCommandOutboxDispatcher {
       } catch (error) {
         if (claimed.attempts >= this.maxAttempts) {
           await this.repository.markDead(claimed.uuid, claimed.lockToken, Date.now())
+          // Safe logging: only the error classification reaches the log (a raw
+          // broker/provider message may carry endpoint or payload text). The
+          // event type and the attempt count are the diagnostic value here.
           this.logger.error('Sync command outbox event exhausted its delivery attempts and was marked dead.', {
+            ...safeErrorLogMetadata(error),
             codeTag: 'SyncCommandOutboxDispatcher',
             outboxEventId: claimed.uuid,
             eventType: claimed.event.type,
             attempts: claimed.attempts,
             maxAttempts: this.maxAttempts,
-            error: error instanceof Error ? error.message : String(error),
           })
 
           continue
