@@ -251,3 +251,55 @@ describe('as a status chip', () => {
     expect(className).toContain('rounded-full')
   })
 })
+
+describe('states added by the t92 realtime pass', () => {
+  it('shows a room whose automatic retries stood down even if it was never live, and says how it resumes', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, {
+      kind: 'unavailable',
+      reason: 'The collaboration gateway relay is unavailable right now. Live collaboration will retry.',
+      retriesExhausted: true,
+    })
+    await render()
+    await advance(PREPARING_QUIET_PERIOD_MS * 4)
+
+    const button = chip()
+    expect(button).not.toBeNull()
+    expect(label()).toContain('Encrypted collaboration unavailable')
+    expect(label()).toContain('relay is unavailable')
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const popover = container.querySelector('[data-testid="collaboration-popover"]')
+    expect(popover?.textContent).toContain('Automatic retries have paused')
+    expect(popover?.textContent).toContain('return to this tab or edit the note')
+  })
+
+  it('still hides a never-live unavailable room while its retries are running', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, {
+      kind: 'unavailable',
+      reason: 'The collaboration gateway relay is unavailable right now. Live collaboration will retry.',
+    })
+    await render()
+    await advance(PREPARING_QUIET_PERIOD_MS * 4)
+
+    expect(chip()).toBeNull()
+  })
+
+  it("names the wait for a collaborator's copy and never stands that wait down", async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing', awaitingPeerState: true })
+    await render()
+
+    await advance(PREPARING_QUIET_PERIOD_MS)
+    expect(chip()).not.toBeNull()
+    expect(label()).toBe("Waiting for a collaborator's copy of this note. Editing resumes when it arrives.")
+
+    await advance(PREPARING_STAND_DOWN_MS * 2)
+    expect(chip()).not.toBeNull()
+
+    await act(async () => {
+      CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
+    })
+    expect(label()).toContain('Encrypted collaboration active')
+  })
+})

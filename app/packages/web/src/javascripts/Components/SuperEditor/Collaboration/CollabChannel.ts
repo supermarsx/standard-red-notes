@@ -9,6 +9,40 @@ export const COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS = 15_000
 export const COLLABORATION_PRESENCE_MIN_TTL_MS = 30_000
 export const COLLABORATION_PRESENCE_MAX_TTL_MS = 120_000
 
+/**
+ * Why a `room-denied` frame was sent (contract C1, declared in
+ * websocket-gateway/src/rooms.ts and mirrored verbatim here and in
+ * services/Domain/Api/WebsocketsService.ts). The gateway always sets it; a
+ * frame that arrives without one (an older gateway) is treated as `'policy'`.
+ */
+export type RoomDeniedReason =
+  | 'epoch-mismatch'
+  | 'security-revoked'
+  | 'rate-limited'
+  | 'relay-unhealthy'
+  | 'capability-invalid'
+  | 'room-full'
+  | 'reservation-expired'
+  | 'room-limit'
+  | 'policy'
+
+const ROOM_DENIED_REASONS: ReadonlySet<string> = new Set<RoomDeniedReason>([
+  'epoch-mismatch',
+  'security-revoked',
+  'rate-limited',
+  'relay-unhealthy',
+  'capability-invalid',
+  'room-full',
+  'reservation-expired',
+  'room-limit',
+  'policy',
+])
+
+/** Bounded runtime read of an inbound denial reason: unknown or missing values are `'policy'`. */
+export function resolveRoomDeniedReason(value: unknown): RoomDeniedReason {
+  return typeof value === 'string' && ROOM_DENIED_REASONS.has(value) ? (value as RoomDeniedReason) : 'policy'
+}
+
 export type EpochBoundCollaborationAuthorization = {
   capability: string
   roomEpoch: string
@@ -109,12 +143,19 @@ export type CollabFrame =
       protocolVersion: 3
     }
   | { t: 'yjs-accepted'; room: string; transferId: string; protocolVersion: 3 }
+  // Gateway -> client (contract C2): a `yjs-retry` found no other activated
+  // editor lease in the room, so no peer will ever answer the state request
+  // `requestId`; the requester fails over to bootstrap immediately.
+  | { t: 'yjs-no-responder'; room: string; requestId: string }
   | { t: 'awareness'; room: string; payload: string }
   // Standard Red Notes: an E2E-encrypted note-comment event (see WebsocketsService
   // CollaborationFrame). Carries an encrypted JSON comment payload.
   | { t: 'comment'; room: string; payload: string }
-  // Gateway -> client: the join was refused.
-  | { t: 'room-denied'; room: string; requestId?: string }
+  // Gateway -> client: the join was refused. `reason` says why (contract C1);
+  // `roomEpoch` is present iff `reason === 'epoch-mismatch'` and carries the
+  // room's current epoch. `reason` is optional only on this inbound type so an
+  // older gateway's frame still parses; readers go through resolveRoomDeniedReason.
+  | { t: 'room-denied'; room: string; requestId?: string; roomEpoch?: string; reason?: RoomDeniedReason }
 
 export interface CollabChannel {
   isConnected(): boolean

@@ -734,6 +734,140 @@ describe('EncryptedYjsProvider convergence', () => {
     }
   })
 
+  it('fails over immediately when the gateway reports no responder for its state request', async () => {
+    jest.useFakeTimers()
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const release = jest.fn()
+    const onBootstrapRetry = jest.fn()
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    let provider: EncryptedYjsProvider | undefined
+    try {
+      provider = new EncryptedYjsProvider(
+        new Y.Doc(),
+        'no-responder-room',
+        {
+          isConnected: () => true,
+          authorize: jest.fn(),
+          subscribe: (handler) => {
+            inbound = handler
+            return () => {
+              inbound = undefined
+            }
+          },
+          send: (frame) => sent.push(frame),
+        },
+        createTestTransportCipher(),
+        undefined,
+        'no-responder-lease',
+        {
+          activeLease: {
+            requestId: 'no-responder-lease',
+            shouldBootstrap: false,
+            protocolVersion: 3,
+            maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+            roomEpoch: TEST_ROOM_EPOCH,
+            release,
+          },
+          shouldBootstrap: false,
+          validateAttachment: jest.fn(() => true),
+          reactivate: jest.fn(),
+          onFatal: jest.fn(),
+          onBootstrapRetry,
+        },
+      )
+
+      provider.connect()
+      await flushMicrotasksUntil(() => sent.some((frame) => frame.t === 'yjs-retry'))
+      const stateRequest = sent.find(
+        (frame): frame is Extract<CollabFrame, { t: 'yjs-retry' }> => frame.t === 'yjs-retry',
+      )
+      expect(stateRequest).toBeDefined()
+
+      // A foreign requestId must not be trusted: nothing happens.
+      inbound?.({ t: 'yjs-no-responder', room: 'no-responder-room', requestId: 'someone-elses-request' })
+      expect(onBootstrapRetry).not.toHaveBeenCalled()
+
+      inbound?.({ t: 'yjs-no-responder', room: 'no-responder-room', requestId: stateRequest!.requestId })
+      await provider.flush()
+
+      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(provider.isRoomJoined()).toBe(false)
+      expect(provider.getLastSyncFailure()).toBe('encrypted-yjs-no-responder')
+
+      // No 8 x 10 s wait: the correlated-state timer is gone.
+      await jest.advanceTimersByTimeAsync(90_000)
+      expect(sent.filter((frame) => frame.t === 'yjs-retry')).toHaveLength(1)
+      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+    } finally {
+      provider?.destroy()
+      consoleError.mockRestore()
+      jest.useRealTimers()
+    }
+  })
+
+  it('remounts instead of re-authorizing its stale epoch when the joined lease is denied for an epoch mismatch', async () => {
+    const release = jest.fn()
+    const onBootstrapRetry = jest.fn()
+    const reactivate = jest.fn()
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'rotated-under-lease-room',
+      {
+        isConnected: () => true,
+        authorize: jest.fn(),
+        subscribe: (handler) => {
+          inbound = handler
+          return () => {
+            inbound = undefined
+          }
+        },
+        send: (frame) => sent.push(frame),
+      },
+      createTestTransportCipher(),
+      undefined,
+      'rotated-under-lease',
+      {
+        activeLease: {
+          requestId: 'rotated-under-lease',
+          shouldBootstrap: false,
+          protocolVersion: 3,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          release,
+        },
+        shouldBootstrap: false,
+        validateAttachment: jest.fn(() => true),
+        reactivate,
+        onFatal: jest.fn(),
+        onBootstrapRetry,
+      },
+    )
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+
+      inbound?.({
+        t: 'room-denied',
+        room: 'rotated-under-lease-room',
+        requestId: 'rotated-under-lease',
+        reason: 'epoch-mismatch',
+        roomEpoch: 'room_epoch_0000000000000002',
+      })
+      await provider.flush()
+
+      expect(provider.isRoomJoined()).toBe(false)
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(reactivate).not.toHaveBeenCalled()
+    } finally {
+      provider.destroy()
+    }
+  })
+
   it('bounds bootstrap snapshot acceptance retries before releasing for a fresh election', async () => {
     jest.useFakeTimers()
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)

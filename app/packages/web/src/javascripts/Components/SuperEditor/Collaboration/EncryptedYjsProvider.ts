@@ -13,6 +13,7 @@ import {
   COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS,
   COLLABORATION_PROTOCOL_VERSION,
   createCollaborationRequestId,
+  resolveRoomDeniedReason,
   type CollabChannel,
   type CollabFrame,
 } from './CollabChannel'
@@ -1555,6 +1556,12 @@ export class EncryptedYjsProvider implements Provider {
       case 'room-denied':
         if (frame.requestId === this.joinRequestId) {
           const shouldReauthorize = this.joined
+          // Contract C1: the room rotated under this lease (its epoch moved on) or the
+          // security epoch was revoked. This provider's cipher is bound to the epoch it
+          // mounted with, so re-authorizing the same lease can only be denied again;
+          // remount through the hook instead so a fresh discovery adopts the current epoch.
+          const deniedReason = resolveRoomDeniedReason(frame.reason)
+          const requiresRemount = deniedReason === 'epoch-mismatch' || deniedReason === 'security-revoked'
           this.transportGeneration += 1
           const generation = this.transportGeneration
           this.joined = false
@@ -1579,11 +1586,27 @@ export class EncryptedYjsProvider implements Provider {
               const expiredLease = this.currentLease
               this.currentLease = undefined
               expiredLease?.release()
-              void this.reactivateAfterReconnect(generation)
+              if (requiresRemount) {
+                this.setStateServingReady(false)
+                this.setLocalStateReadiness(false)
+                this.options.onBootstrapRetry?.()
+              } else {
+                void this.reactivateAfterReconnect(generation)
+              }
             } else {
               void this.joinWithCapability()
             }
           }
+        }
+        break
+      case 'yjs-no-responder':
+        // Contract C2: the gateway saw our state request and knows no other activated
+        // lease can answer it. Waiting out MAX_CORRELATED_STATE_ATTEMPTS timeouts would
+        // only keep the editor read-only; fail over to a fresh bootstrap election now.
+        if (this.options && this.joined && frame.requestId === this.awaitingStateRequestId) {
+          this.clearStateRequest()
+          this.reportSyncFailure('encrypted-yjs-no-responder')
+          this.requestBootstrapFailover()
         }
         break
       case 'room-presence':

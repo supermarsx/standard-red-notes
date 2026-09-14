@@ -9,8 +9,10 @@ import { prepareCollaborationAccess, resolveCollaborationKeySource } from './Col
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import type { CollabFrame } from './CollabChannel'
 import {
+  ACTIVITY_RETRY_THROTTLE_MS,
   beginEditorLeaseReservation,
   prepareSynchronizedEditorAccess,
+  RATE_LIMITED_RETRY_DELAY_MS,
   useCollaborationRoomAccess,
 } from './useCollaborationRoomAccess'
 
@@ -585,10 +587,18 @@ describe('useCollaborationRoomAccess security transitions', () => {
     const editorLease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
     expect(editorLease?.validateAttachment()).toBe(true)
     expect(editorLease?.isAttached()).toBe(false)
-    editorLease?.setProviderCanonicalOwnership?.(true)
+    expect(latestAccess).toMatchObject({ status: 'ready', providerOwnsCanonicalState: false })
+    act(() => {
+      editorLease?.setProviderCanonicalOwnership?.(true)
+    })
     expect(editorLease?.isAttached()).toBe(true)
-    editorLease?.setProviderCanonicalOwnership?.(false)
+    // The React mirror the status chip reads (D11): live only while the provider owns canonical state.
+    expect(latestAccess).toMatchObject({ status: 'ready', providerOwnsCanonicalState: true })
+    act(() => {
+      editorLease?.setProviderCanonicalOwnership?.(false)
+    })
     expect(editorLease?.isAttached()).toBe(false)
+    expect(latestAccess).toMatchObject({ status: 'ready', providerOwnsCanonicalState: false })
   })
 
   it('rejects activation when the gateway changes the negotiated room epoch', async () => {
@@ -1587,5 +1597,389 @@ describe('useCollaborationRoomAccess security transitions', () => {
       room: 'note-1',
       requestId: reserve!.requestId,
     })
+  })
+
+  /**
+   * A channel whose gateway knows the room's CURRENT epoch: a reserve presenting
+   * any other epoch is denied `epoch-mismatch` (contract C1) and reports it.
+   */
+  const createEpochAwareChannel = (sent: CollabFrame[], serverEpoch: () => string) => {
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const denials: string[] = []
+    return {
+      denials,
+      channel: {
+        isConnected: () => true,
+        authorize: jest.fn(),
+        send: (frame: CollabFrame) => {
+          sent.push(frame)
+          if (frame.t === 'room-reserve') {
+            if (frame.expectedRoomEpoch !== serverEpoch()) {
+              denials.push(frame.expectedRoomEpoch)
+              inbound?.({
+                t: 'room-denied',
+                room: frame.room,
+                requestId: frame.requestId,
+                reason: 'epoch-mismatch',
+                roomEpoch: serverEpoch(),
+              })
+              return
+            }
+            inbound?.({
+              t: 'room-reserved',
+              room: frame.room,
+              requestId: frame.requestId,
+              bootstrap: true,
+              bootstrapChallenge: `challenge:${frame.requestId}`,
+              protocolVersion,
+              maxTransferBytes,
+              roomEpoch: frame.expectedRoomEpoch,
+            })
+          } else if (frame.t === 'room-join') {
+            inbound?.({
+              t: 'room-joined',
+              room: frame.room,
+              requestId: frame.requestId,
+              bootstrap: true,
+              protocolVersion,
+              maxTransferBytes,
+              roomEpoch: frame.expectedRoomEpoch,
+            })
+          }
+        },
+        subscribe: (handler: (frame: CollabFrame) => void) => {
+          inbound = handler
+          return () => {
+            inbound = undefined
+          }
+        },
+      },
+    }
+  }
+
+  const reservesOf = (sent: CollabFrame[]) =>
+    sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve')
+
+  it('re-enters a rotated room after an epoch-mismatch denial once discovery reports the current epoch', async () => {
+    const sent: CollabFrame[] = []
+    const rotatedEpoch = 'room_epoch_0000000000000002'
+    const { channel, denials } = createEpochAwareChannel(sent, () => rotatedEpoch)
+    mockedCreateChannel.mockImplementation(() => channel as never)
+    // The first (unpinned) discovery still reports the initial HMAC epoch; every
+    // later discovery reports the rotated room (contract C4).
+    let discoveries = 0
+    mockedPrepare.mockImplementation(async (_application, note, context) => {
+      discoveries += 1
+      const epoch = context?.expectedRoomEpoch ?? (discoveries === 1 ? roomEpoch : rotatedEpoch)
+      return {
+        available: true,
+        noteUuid: note.uuid,
+        sourceId: 'root-same-uuid:version-1',
+        roomKey: {} as CryptoKey,
+        capability: `capability:${epoch}`,
+        roomEpoch: epoch,
+        serverUpdatedAtTimestamp: 100,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }
+    })
+    const note = { uuid: 'note-rotated', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(40)
+    })
+
+    expect(denials).toEqual([roomEpoch])
+    expect(reservesOf(sent).map((frame) => frame.expectedRoomEpoch)).toEqual([roomEpoch, rotatedEpoch])
+    expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch: rotatedEpoch })
+    const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(joins.map((frame) => frame.expectedRoomEpoch)).toEqual([rotatedEpoch])
+  })
+
+  it('remounts into the rotated room when a reconnect reserve is denied for its old epoch', async () => {
+    const sent: CollabFrame[] = []
+    let serverEpoch = roomEpoch
+    const { channel, denials } = createEpochAwareChannel(sent, () => serverEpoch)
+    mockedCreateChannel.mockImplementation(() => channel as never)
+    mockedPrepare.mockImplementation(async (_application, note, context) => {
+      const epoch = context?.expectedRoomEpoch ?? serverEpoch
+      return {
+        available: true,
+        noteUuid: note.uuid,
+        sourceId: 'root-same-uuid:version-1',
+        roomKey: {} as CryptoKey,
+        capability: `capability:${epoch}`,
+        roomEpoch: epoch,
+        serverUpdatedAtTimestamp: 100,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }
+    })
+    const note = { uuid: 'note-blip', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+    const lease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(lease).toBeDefined()
+    expect(denials).toEqual([])
+
+    // The lone editor's socket blipped: the gateway released its last lease and
+    // rotated the room. The provider's reconnect reserve presents the old epoch.
+    const rotatedEpoch = 'room_epoch_0000000000000002'
+    serverEpoch = rotatedEpoch
+    let result: unknown
+    await act(async () => {
+      result = await lease!.reactivate()
+      await flushMicrotasks(30)
+    })
+
+    expect(result).toMatchObject({
+      reason: 'The collaboration room epoch changed while collaboration was reconnecting.',
+      requiresRemount: true,
+      denial: { reason: 'epoch-mismatch', roomEpoch: rotatedEpoch },
+    })
+    expect(denials).toEqual([roomEpoch])
+    expect(reservesOf(sent).at(-1)).toMatchObject({ expectedRoomEpoch: rotatedEpoch })
+    expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch: rotatedEpoch })
+  })
+
+  it('tells the user why the gateway denied the room, and reads a reason-less denial as policy', async () => {
+    const run = async (denied: Partial<Extract<CollabFrame, { t: 'room-denied' }>>): Promise<string | undefined> => {
+      const sent: CollabFrame[] = []
+      const { channel, receive } = createAutoLeaseChannel(sent)
+      channel.send = (frame: CollabFrame) => {
+        sent.push(frame)
+        if (frame.t === 'room-reserve') {
+          receive({ t: 'room-denied', room: frame.room, requestId: frame.requestId, ...denied })
+        }
+      }
+      mockedCreateChannel.mockImplementation(() => channel as never)
+      const note = {
+        uuid: `note-${JSON.stringify(denied)}`,
+        text: 'x',
+        dirty: false,
+        serverUpdatedAtTimestamp: 100,
+      } as never
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: () => jest.fn(),
+      } as never
+      let access: ReturnType<typeof useCollaborationRoomAccess> | undefined
+      const View = () => {
+        access = useCollaborationRoomAccess(application, note, true)
+        return createElement('div', null, access.status)
+      }
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      await act(async () => {
+        root.unmount()
+      })
+      root = createRoot(container)
+      return access?.status === 'disabled' ? access.reason : undefined
+    }
+
+    expect(await run({ reason: 'room-full' })).toBe('This note already has the maximum number of live collaborators.')
+    expect(await run({ reason: 'relay-unhealthy' })).toBe(
+      'The collaboration gateway relay is unavailable right now. Live collaboration will retry.',
+    )
+    expect(await run({})).toBe('The server did not authorize an editor lease for this note.')
+    expect(await run({ reason: 'not-a-real-reason' as never })).toBe(
+      'The server did not authorize an editor lease for this note.',
+    )
+  })
+
+  it('waits out the gateway control window after a rate-limited denial instead of spending the sync retry budget', async () => {
+    // The hook defers its first preparation through queueMicrotask; keep that real.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    try {
+      const sent: CollabFrame[] = []
+      let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+      let rateLimited = true
+      const { channel, receive } = createAutoLeaseChannel(sent)
+      const autoSend = channel.send
+      channel.send = (frame: CollabFrame) => {
+        if (frame.t === 'room-reserve' && rateLimited) {
+          sent.push(frame)
+          receive({ t: 'room-denied', room: frame.room, requestId: frame.requestId, reason: 'rate-limited' })
+          return
+        }
+        autoSend(frame)
+      }
+      mockedCreateChannel.mockImplementation(() => channel as never)
+      const note = {
+        uuid: 'note-rate-limited',
+        text: 'canonical',
+        dirty: false,
+        serverUpdatedAtTimestamp: 100,
+      } as never
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+          applicationObserver = observer
+          return jest.fn()
+        },
+      } as never
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note, true)
+        return createElement('div', null, latestAccess.status)
+      }
+
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      expect(latestAccess).toMatchObject({
+        status: 'disabled',
+        reason: 'The collaboration gateway is rate-limiting this connection. Live collaboration will retry shortly.',
+      })
+      expect(reservesOf(sent)).toHaveLength(1)
+
+      // Syncs completing inside the closed window must not burn the budget.
+      for (let index = 0; index < 4; index += 1) {
+        await act(async () => {
+          await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+          await flushMicrotasks(30)
+        })
+      }
+      expect(reservesOf(sent)).toHaveLength(1)
+
+      rateLimited = false
+      await act(async () => {
+        jest.advanceTimersByTime(RATE_LIMITED_RETRY_DELAY_MS)
+        await flushMicrotasks(30)
+      })
+      expect(reservesOf(sent)).toHaveLength(2)
+      expect(latestAccess).toMatchObject({ status: 'ready' })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('re-arms a stood-down room when the tab becomes visible and when the note revision advances', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const visibility = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    try {
+      const sent: CollabFrame[] = []
+      let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+      mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
+      const stale = { uuid: 'note-stand-down', text: 'stale', dirty: false, serverUpdatedAtTimestamp: 100 }
+      let live = stale
+      // Authorization keeps naming a revision the live note never reaches, so
+      // every preparation fails the freshness barrier.
+      mockedPrepare.mockResolvedValue({
+        available: true,
+        noteUuid: 'note-stand-down',
+        sourceId: 'root-same-uuid:version-1',
+        roomKey: {} as CryptoKey,
+        capability: 'capability-at-900',
+        roomEpoch,
+        serverUpdatedAtTimestamp: 900,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      })
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => live },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn() },
+        addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+          applicationObserver = observer
+          return jest.fn()
+        },
+      } as never
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, stale as never, true)
+        return createElement('div', null, latestAccess.status)
+      }
+      const completeSync = async (): Promise<void> => {
+        await act(async () => {
+          await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+          await flushMicrotasks(30)
+        })
+      }
+
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      expect(latestAccess).toMatchObject({ status: 'disabled' })
+      expect(latestAccess).not.toHaveProperty('retriesExhausted')
+      expect(mockedPrepare).toHaveBeenCalledTimes(3)
+
+      await completeSync()
+      await completeSync()
+      await completeSync()
+      expect(mockedPrepare).toHaveBeenCalledTimes(12)
+      expect(latestAccess).toMatchObject({ status: 'disabled', retriesExhausted: true })
+
+      // Budget spent: a sync that changed nothing does not retry.
+      await completeSync()
+      expect(mockedPrepare).toHaveBeenCalledTimes(12)
+
+      // The user comes back to the tab: one refill, one immediate retry.
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+        await flushMicrotasks(30)
+      })
+      expect(mockedPrepare).toHaveBeenCalledTimes(15)
+      expect(latestAccess).toMatchObject({ status: 'disabled' })
+      expect(latestAccess).not.toHaveProperty('retriesExhausted')
+
+      // Spend the refilled budget again, then prove a durable revision advance
+      // (the user edited the note) re-arms it, once the activity throttle allows.
+      await completeSync()
+      await completeSync()
+      await completeSync()
+      expect(mockedPrepare).toHaveBeenCalledTimes(24)
+      expect(latestAccess).toMatchObject({ status: 'disabled', retriesExhausted: true })
+
+      live = { ...stale, serverUpdatedAtTimestamp: 101 }
+      await completeSync()
+      // Throttled: the visibility refill happened just now.
+      expect(mockedPrepare).toHaveBeenCalledTimes(24)
+
+      now.mockReturnValue(1_000_000 + ACTIVITY_RETRY_THROTTLE_MS)
+      await completeSync()
+      expect(mockedPrepare).toHaveBeenCalledTimes(27)
+    } finally {
+      now.mockRestore()
+      visibility.mockRestore()
+    }
   })
 })

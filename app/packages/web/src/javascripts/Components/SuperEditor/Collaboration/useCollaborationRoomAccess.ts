@@ -17,12 +17,55 @@ import {
   COLLABORATION_MAX_TRANSFER_BYTES,
   COLLABORATION_PROTOCOL_VERSION,
   createCollaborationRequestId,
+  resolveRoomDeniedReason,
+  type CollabFrame,
+  type RoomDeniedReason,
 } from './CollabChannel'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import { SUPER_COLLABORATION_TRANSPORT_REASON } from './CollaborationAvailability'
 import { isValidCollaborationRoomEpoch } from './RoomCrypto'
 
-type LeaseFailure = { reason: string; requiresRemount?: true }
+/** A gateway `room-denied` as the client read it (contract C1). */
+export type RoomDenial = { reason: RoomDeniedReason; roomEpoch?: string }
+
+type LeaseFailure = { reason: string; requiresRemount?: true; denial?: RoomDenial }
+
+export const SUPER_COLLABORATION_NO_GATEWAY_REASON =
+  'Live collaboration is not available on this deployment because no realtime gateway is configured.'
+
+/**
+ * What the user is told for each gateway denial reason. The wording is the chip
+ * detail, so it must say what happened AND whether anything will retry.
+ */
+export function describeRoomDenial(reason: RoomDeniedReason): string {
+  switch (reason) {
+    case 'epoch-mismatch':
+      return 'The collaboration room was reset while this note was joining. Retrying with the current room.'
+    case 'security-revoked':
+      return 'Live collaboration was refused because access to this note was revoked or its encryption key changed.'
+    case 'rate-limited':
+      return 'The collaboration gateway is rate-limiting this connection. Live collaboration will retry shortly.'
+    case 'relay-unhealthy':
+      return 'The collaboration gateway relay is unavailable right now. Live collaboration will retry.'
+    case 'capability-invalid':
+      return 'The collaboration gateway rejected the edit authorization for this note. Edit permission is required.'
+    case 'room-full':
+      return 'This note already has the maximum number of live collaborators.'
+    case 'reservation-expired':
+      return 'The collaboration reservation expired before this note finished syncing. Live collaboration will retry.'
+    case 'room-limit':
+      return 'This connection has reached its limit of live collaboration rooms.'
+    case 'policy':
+      return 'The server did not authorize an editor lease for this note.'
+  }
+}
+
+function readRoomDenial(frame: Extract<CollabFrame, { t: 'room-denied' }>): RoomDenial {
+  const reason = resolveRoomDeniedReason(frame.reason)
+  return reason === 'epoch-mismatch' && isValidCollaborationRoomEpoch(frame.roomEpoch)
+    ? { reason, roomEpoch: frame.roomEpoch }
+    : { reason }
+}
 
 export type ActiveEditorCollaborationLease = {
   requestId: string
@@ -54,7 +97,13 @@ type AvailablePreparedRoomAccess = Extract<PreparedCollaborationAccess, { availa
   initialEditorState?: string
 }
 
-type PreparedRoomAccess = Exclude<PreparedCollaborationAccess, { available: true }> | AvailablePreparedRoomAccess
+type UnavailableRoomAccess = Exclude<PreparedCollaborationAccess, { available: true }> & {
+  /** The sync-driven retry budget is spent; only user activity or a transport change re-arms it. */
+  retriesExhausted?: true
+  denial?: RoomDenial
+}
+
+type PreparedRoomAccess = UnavailableRoomAccess | AvailablePreparedRoomAccess
 
 type AvailableSynchronizedEditorAccess = AvailablePreparedRoomAccess & {
   noteUuid: string
@@ -65,7 +114,23 @@ type SynchronizedEditorAccess =
   Exclude<PreparedCollaborationAccess, { available: true }> | AvailableSynchronizedEditorAccess
 
 export type CollaborationRoomAccessState =
-  { status: 'disabled'; reason: string } | { status: 'preparing' } | ({ status: 'ready' } & AvailablePreparedRoomAccess)
+  | {
+      status: 'disabled'
+      reason: string
+      /** True once automatic retries have stood down (see MAX_SYNC_DRIVEN_PREPARATION_RETRIES). */
+      retriesExhausted?: true
+    }
+  | { status: 'preparing' }
+  | ({
+      status: 'ready'
+      /**
+       * True only while the mounted provider is joined and owns canonical state, i.e. the room
+       * is genuinely live. A newcomer waiting for a peer's copy, or a provider riding out a
+       * socket loss, has a ready lease but no canonical ownership. Optional only so
+       * consumers that fabricate a ready state (comment relay specs) keep compiling.
+       */
+      providerOwnsCanonicalState?: boolean
+    } & AvailablePreparedRoomAccess)
 
 const EDITOR_LEASE_TIMEOUT_MS = 10_000
 const MAX_BOOTSTRAP_REVISION_ATTEMPTS = 3
@@ -75,6 +140,21 @@ const MAX_BOOTSTRAP_REVISION_ATTEMPTS = 3
  * waits for a real change. Enough to ride out an ordinary revision race, far short of a loop.
  */
 const MAX_SYNC_DRIVEN_PREPARATION_RETRIES = 3
+
+/**
+ * A stood-down room re-arms on user activity (tab visible, window focus, a durable revision of
+ * the note advancing). One refill per this window bounds the authorize/sync traffic a room that
+ * keeps failing can generate while the user keeps typing.
+ */
+export const ACTIVITY_RETRY_THROTTLE_MS = 30_000
+
+/**
+ * Mirrors the gateway's CONTROL_FRAME_WINDOW_MS. A `rate-limited` denial means every retry
+ * inside the same window is denied too, so those retries wait the window out instead of burning
+ * the sync-driven budget.
+ */
+export const RATE_LIMITED_RETRY_DELAY_MS = 10_000
+const MAX_RATE_LIMITED_RETRIES = 3
 
 type CanonicalEditorSnapshot = {
   noteUuid: string
@@ -266,7 +346,7 @@ export function beginEditorLeaseReservation(
       // Socket cleanup is best-effort; connection cleanup/lease expiry backstop it.
     }
   }
-  const fail = (reason: string): void => {
+  const fail = (reason: string, denial?: RoomDenial): void => {
     if (phase === 'failed' || phase === 'released') {
       return
     }
@@ -274,7 +354,7 @@ export function beginEditorLeaseReservation(
     phase = 'failed'
     cleanupListener()
     release()
-    const failure = { reason }
+    const failure: LeaseFailure = denial ? { reason, denial } : { reason }
     if (previousPhase === 'reserving') {
       resolveReservation(failure)
     }
@@ -290,7 +370,8 @@ export function beginEditorLeaseReservation(
       return
     }
     if (frame.t === 'room-denied') {
-      fail('The server did not authorize an editor lease for this note.')
+      const denial = readRoomDenial(frame)
+      fail(describeRoomDenial(denial.reason), denial)
       return
     }
     if (frame.t === 'room-reserved' && phase === 'reserving' && reserveSent) {
@@ -427,7 +508,40 @@ function matchesExpectedEditorIdentity(
   )
 }
 
+/**
+ * One full reserve/activate pass, plus the contract-C1 answer to an `epoch-mismatch` denial:
+ * the room rotated (its last editor left, or a failover released the last lease) between
+ * discovery and the reserve. Discovery now reports the room's current epoch, so a fresh pass
+ * re-enters the rotated room. A reconnecting provider cannot take that path (its cipher is
+ * bound to the epoch it mounted with), so it is told to remount instead.
+ */
 async function establishEditorAccess(
+  application: WebApplication,
+  initialNote: SNNote,
+  expectedIdentity?: ExpectedEditorIdentity,
+): Promise<EstablishedEditorAccess | LeaseFailure> {
+  const first = await attemptEditorAccess(application, initialNote, expectedIdentity)
+  if (!('reason' in first) || first.denial?.reason !== 'epoch-mismatch') {
+    return first
+  }
+  if (expectedIdentity?.roomEpoch !== undefined) {
+    return {
+      reason: 'The collaboration room epoch changed while collaboration was reconnecting.',
+      requiresRemount: true,
+      denial: first.denial,
+    }
+  }
+  const second = await attemptEditorAccess(application, initialNote, expectedIdentity)
+  if ('reason' in second && second.denial?.reason === 'epoch-mismatch') {
+    return {
+      ...second,
+      reason: 'The collaboration room was reset again while this note was joining. Sync and retry.',
+    }
+  }
+  return second
+}
+
+async function attemptEditorAccess(
   application: WebApplication,
   initialNote: SNNote,
   expectedIdentity?: ExpectedEditorIdentity,
@@ -562,6 +676,13 @@ export function useCollaborationRoomAccess(
    * (see resetSyncDrivenRetryBudget), never by the sync that preparation itself caused.
    */
   const syncDrivenRetryBudget = useRef(MAX_SYNC_DRIVEN_PREPARATION_RETRIES)
+  /** Durable revision of the note when preparation last failed; an advance means someone edited. */
+  const lastFailedRevision = useRef<number | undefined>(undefined)
+  const lastActivityRefillAt = useRef(0)
+  /** While set, sync-driven retries are held: the gateway's control window is still closed. */
+  const rateLimitedUntil = useRef(0)
+  const rateLimitedRetries = useRef(0)
+  const [providerOwnsCanonicalState, setProviderOwnsCanonicalState] = useState(false)
 
   useLayoutEffect(() => {
     committedNote.current = { noteUuid: note.uuid, note }
@@ -574,7 +695,35 @@ export function useCollaborationRoomAccess(
     /** Something other than our own sync changed the inputs, so retrying can now succeed. */
     const resetSyncDrivenRetryBudget = (): void => {
       syncDrivenRetryBudget.current = MAX_SYNC_DRIVEN_PREPARATION_RETRIES
+      rateLimitedRetries.current = 0
+      rateLimitedUntil.current = 0
     }
+    /**
+     * The user came back (tab visible, window focused) or a durable revision of the note
+     * advanced: a stood-down room gets its budget back and one immediate retry, at most once
+     * per ACTIVITY_RETRY_THROTTLE_MS.
+     */
+    const refillOnActivity = (): void => {
+      if (hasReadyAccess.current) {
+        return
+      }
+      const now = Date.now()
+      if (now - lastActivityRefillAt.current < ACTIVITY_RETRY_THROTTLE_MS) {
+        return
+      }
+      lastActivityRefillAt.current = now
+      resetSyncDrivenRetryBudget()
+      if (activePreparations.current === 0) {
+        retryPreparation()
+      }
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') {
+        refillOnActivity()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('focus', refillOnActivity)
     const disposeItems = application.items.streamItems(
       [ContentType.TYPES.KeySystemRootKey, ContentType.TYPES.VaultListing],
       () => {
@@ -601,9 +750,23 @@ export function useCollaborationRoomAccess(
     const disposeApplication = application.addEventObserver((event) => {
       if (event === ApplicationEvent.CompletedFullSync) {
         refresh()
-        if (!hasReadyAccess.current && activePreparations.current === 0 && syncDrivenRetryBudget.current > 0) {
+        if (hasReadyAccess.current || activePreparations.current > 0) {
+          return Promise.resolve()
+        }
+        if (Date.now() < rateLimitedUntil.current) {
+          // The deferred rate-limit retry is already scheduled; do not spend the budget on a
+          // sync that lands inside the same closed control window.
+          return Promise.resolve()
+        }
+        if (syncDrivenRetryBudget.current > 0) {
           syncDrivenRetryBudget.current -= 1
           retryPreparation()
+          return Promise.resolve()
+        }
+        const current = application.items.findItem<SNNote>(committedNote.current.noteUuid)
+        const revision = current?.serverUpdatedAtTimestamp
+        if (revision !== undefined && revision !== lastFailedRevision.current) {
+          refillOnActivity()
         }
         return Promise.resolve()
       }
@@ -623,6 +786,8 @@ export function useCollaborationRoomAccess(
     })
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('focus', refillOnActivity)
       disposeItems()
       disposeVaultLocks()
       disposeSocket()
@@ -693,17 +858,50 @@ export function useCollaborationRoomAccess(
       sessionUser: sourceSessionUser,
     }
     setPrepared(preparedIdentity)
+    setProviderOwnsCanonicalState(false)
+    let rateLimitedRetryTimer: ReturnType<typeof setTimeout> | undefined
 
     if (sourceUnavailableReason) {
       setPrepared({ ...preparedIdentity, result: { available: false, reason: sourceUnavailableReason } })
       return
     }
     if (application.sockets.isWebSocketConnectionOpen?.() === false) {
+      const gatewayConfigured = application.sockets.hasConfiguredWebSocketUrl?.() ?? true
       setPrepared({
         ...preparedIdentity,
-        result: { available: false, reason: SUPER_COLLABORATION_TRANSPORT_REASON, sourceId },
+        result: {
+          available: false,
+          reason: gatewayConfigured ? SUPER_COLLABORATION_TRANSPORT_REASON : SUPER_COLLABORATION_NO_GATEWAY_REASON,
+          sourceId,
+        },
       })
       return
+    }
+
+    /**
+     * Every failed preparation lands here so the stand-down is visible (retriesExhausted) and
+     * a rate-limited denial waits the gateway's control window out instead of spending retries.
+     */
+    const unavailable = (reason: string, denial?: RoomDenial): UnavailableRoomAccess => {
+      lastFailedRevision.current = application.items.findItem<SNNote>(noteUuid)?.serverUpdatedAtTimestamp
+      if (denial?.reason === 'rate-limited' && !cancelled && rateLimitedRetries.current < MAX_RATE_LIMITED_RETRIES) {
+        rateLimitedRetries.current += 1
+        rateLimitedUntil.current = Date.now() + RATE_LIMITED_RETRY_DELAY_MS
+        rateLimitedRetryTimer = setTimeout(() => {
+          rateLimitedRetryTimer = undefined
+          rateLimitedUntil.current = 0
+          if (!cancelled && !hasReadyAccess.current && activePreparations.current === 0) {
+            retryPreparation()
+          }
+        }, RATE_LIMITED_RETRY_DELAY_MS)
+      }
+      return {
+        available: false,
+        sourceId,
+        reason,
+        ...(denial ? { denial } : {}),
+        ...(syncDrivenRetryBudget.current === 0 && rateLimitedUntil.current === 0 ? { retriesExhausted: true } : {}),
+      }
     }
 
     const startPreparation = (): void => {
@@ -773,10 +971,7 @@ export function useCollaborationRoomAccess(
           }
           const { result } = preparedResult
           if ('reason' in result) {
-            setPrepared({
-              ...preparedIdentity,
-              result: { available: false, sourceId, reason: result.reason },
-            })
+            setPrepared({ ...preparedIdentity, result: unavailable(result.reason, result.denial) })
             return
           }
 
@@ -815,6 +1010,7 @@ export function useCollaborationRoomAccess(
               }
               invalidated = true
               providerOwnsCanonicalState = false
+              setProviderOwnsCanonicalState(false)
               if (canonicalEditorSnapshot.current === snapshot) {
                 canonicalEditorSnapshot.current = undefined
               }
@@ -854,6 +1050,9 @@ export function useCollaborationRoomAccess(
             isAttached: () => attached && providerOwnsCanonicalState && !cancelled && !invalidated,
             setProviderCanonicalOwnership: (active: boolean) => {
               providerOwnsCanonicalState = active && attached && !cancelled && !invalidated
+              if (!cancelled && canonicalEditorSnapshot.current === snapshot) {
+                setProviderOwnsCanonicalState(providerOwnsCanonicalState)
+              }
             },
             reactivate: async () => {
               const current = application.items.findItem<SNNote>(noteUuid)
@@ -878,16 +1077,14 @@ export function useCollaborationRoomAccess(
                 return
               }
               providerOwnsCanonicalState = false
+              setProviderOwnsCanonicalState(false)
               for (const lease of liveLeases) {
                 lease.release()
               }
               if (canonicalEditorSnapshot.current === snapshot) {
                 canonicalEditorSnapshot.current = undefined
               }
-              setPrepared({
-                ...preparedIdentity,
-                result: { available: false, sourceId, reason },
-              })
+              setPrepared({ ...preparedIdentity, result: unavailable(reason) })
             },
             retryBootstrap: () => {
               snapshot.invalidate()
@@ -899,7 +1096,7 @@ export function useCollaborationRoomAccess(
           if (!cancelled) {
             setPrepared({
               ...preparedIdentity,
-              result: { available: false, sourceId, reason: 'Live collaboration could not establish a secure room.' },
+              result: unavailable('Live collaboration could not establish a secure room.'),
             })
           }
         })
@@ -914,6 +1111,10 @@ export function useCollaborationRoomAccess(
 
     return () => {
       cancelled = true
+      if (rateLimitedRetryTimer !== undefined) {
+        clearTimeout(rateLimitedRetryTimer)
+        rateLimitedRetryTimer = undefined
+      }
       const snapshot = canonicalEditorSnapshot.current
       if (snapshot?.noteUuid === noteUuid && snapshot.sourceId === sourceId) {
         canonicalEditorSnapshot.current = undefined
@@ -937,8 +1138,12 @@ export function useCollaborationRoomAccess(
     return source.available ? { status: 'preparing' } : { status: 'disabled', reason: source.reason }
   }
   if (!prepared.result.available) {
-    return { status: 'disabled', reason: prepared.result.reason }
+    return {
+      status: 'disabled',
+      reason: prepared.result.reason,
+      ...(prepared.result.retriesExhausted ? { retriesExhausted: true } : {}),
+    }
   }
 
-  return { status: 'ready', ...prepared.result }
+  return { status: 'ready', ...prepared.result, providerOwnsCanonicalState }
 }

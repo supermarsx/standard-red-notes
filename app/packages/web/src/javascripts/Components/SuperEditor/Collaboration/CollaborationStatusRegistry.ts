@@ -17,12 +17,20 @@
  */
 
 export type CollaborationRoomStatus =
-  /** The room is being derived/authorized; the editor is usable meanwhile. */
-  | { kind: 'preparing' }
+  /**
+   * The room is being derived/authorized; the editor is usable meanwhile. With
+   * `awaitingPeerState` the lease is live but the provider still waits for a
+   * collaborator's copy of the note, and the editor is read-only until it lands.
+   */
+  | { kind: 'preparing'; awaitingPeerState?: boolean }
   /** A live encrypted room owns the editor right now. */
   | { kind: 'active' }
-  /** Collaboration is not running. `reason` is the human-readable explanation. */
-  | { kind: 'unavailable'; reason: string }
+  /**
+   * Collaboration is not running. `reason` is the human-readable explanation.
+   * `retriesExhausted` says the automatic retries have stood down and only user
+   * activity (focus, an edit) or a transport change will start them again.
+   */
+  | { kind: 'unavailable'; reason: string; retriesExhausted?: boolean }
 
 export type CollaborationRoomState = {
   status: CollaborationRoomStatus
@@ -35,6 +43,19 @@ export type CollaborationRoomState = {
 }
 
 const MAX_REASON_LENGTH = 512
+
+function sameStatus(a: CollaborationRoomStatus, b: CollaborationRoomStatus): boolean {
+  if (a.kind !== b.kind) {
+    return false
+  }
+  if (a.kind === 'unavailable' && b.kind === 'unavailable') {
+    return a.reason === b.reason && a.retriesExhausted === b.retriesExhausted
+  }
+  if (a.kind === 'preparing' && b.kind === 'preparing') {
+    return a.awaitingPeerState === b.awaitingPeerState
+  }
+  return true
+}
 
 type RoomListener = (state: CollaborationRoomState | undefined) => void
 
@@ -53,21 +74,23 @@ class CollaborationStatusRegistryImpl {
    * as long as the room stays registered.
    */
   setStatus(room: string, status: CollaborationRoomStatus): void {
+    // Flags are stored only when set, so the common shapes stay `{ kind }` exactly.
     const normalized: CollaborationRoomStatus =
       status.kind === 'unavailable'
-        ? { kind: 'unavailable', reason: String(status.reason ?? '').slice(0, MAX_REASON_LENGTH) }
-        : status
+        ? {
+            kind: 'unavailable',
+            reason: String(status.reason ?? '').slice(0, MAX_REASON_LENGTH),
+            ...(status.retriesExhausted === true ? { retriesExhausted: true } : {}),
+          }
+        : status.kind === 'preparing'
+          ? { kind: 'preparing', ...(status.awaitingPeerState === true ? { awaitingPeerState: true } : {}) }
+          : status
     const previous = this.rooms.get(room)
     const next: CollaborationRoomState = {
       status: normalized,
       hasBeenActive: (previous?.hasBeenActive ?? false) || normalized.kind === 'active',
     }
-    if (
-      previous &&
-      previous.hasBeenActive === next.hasBeenActive &&
-      previous.status.kind === next.status.kind &&
-      (previous.status.kind !== 'unavailable' || previous.status.reason === (next.status as { reason: string }).reason)
-    ) {
+    if (previous && previous.hasBeenActive === next.hasBeenActive && sameStatus(previous.status, normalized)) {
       return
     }
     this.rooms.set(room, next)

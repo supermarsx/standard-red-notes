@@ -459,21 +459,32 @@ export const SuperEditor: FunctionComponent<Props> = ({
    *
    * "Active" deliberately tracks the real `collaboration` object rather than
    * `status === 'ready'`: an authorized room that has not produced a usable lease
-   * and initial state is still settling, not live.
+   * and initial state is still settling, not live. And a mounted provider that
+   * does not yet own canonical state (a newcomer waiting for a peer's copy, a
+   * socket loss) is reported as still preparing: the editor is read-only or
+   * offline then, so a green chip would be a lie.
    */
   const collaborationRoom = lifetimeNote.uuid
   const collaborationIsLive = Boolean(collaboration)
+  const collaborationIsCanonical =
+    collaborationAccess.status === 'ready' && collaborationAccess.providerOwnsCanonicalState === true
   const collaborationUnavailableReason =
     collaborationAccess.status === 'disabled' ? collaborationAccess.reason : undefined
+  const collaborationRetriesExhausted =
+    collaborationAccess.status === 'disabled' && collaborationAccess.retriesExhausted === true
   const publishedCollaborationStatus = useMemo<CollaborationRoomStatus>(() => {
     if (collaborationIsLive) {
-      return { kind: 'active' }
+      return collaborationIsCanonical ? { kind: 'active' } : { kind: 'preparing', awaitingPeerState: true }
     }
     if (collaborationUnavailableReason !== undefined) {
-      return { kind: 'unavailable', reason: collaborationUnavailableReason }
+      return {
+        kind: 'unavailable',
+        reason: collaborationUnavailableReason,
+        ...(collaborationRetriesExhausted ? { retriesExhausted: true } : {}),
+      }
     }
     return { kind: 'preparing' }
-  }, [collaborationIsLive, collaborationUnavailableReason])
+  }, [collaborationIsLive, collaborationIsCanonical, collaborationUnavailableReason, collaborationRetriesExhausted])
 
   useEffect(() => {
     if (!interactiveOwner) {

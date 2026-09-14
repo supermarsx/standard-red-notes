@@ -84,32 +84,48 @@ function presentationFor(state: CollaborationRoomState, peers: PresentPeer[]): P
   }
 
   if (state.status.kind === 'preparing') {
-    return state.hasBeenActive
-      ? {
-          icon: 'sync',
-          chipClassName: 'bg-warning text-warning-contrast',
-          animateIcon: true,
-          label: 'Reconnecting encrypted collaboration. Your edits are still being saved.',
-          heading: 'Reconnecting encrypted collaboration',
-          detail: 'Live editing dropped and is reconnecting. Your edits are still saved as usual meanwhile.',
-        }
-      : {
-          icon: 'sync',
-          chipClassName: 'bg-contrast text-passive-1',
-          animateIcon: true,
-          label: 'Preparing encrypted collaboration. You can keep editing.',
-          heading: 'Preparing encrypted collaboration',
-          detail: 'Setting up the end-to-end encrypted room. You can keep editing while this finishes.',
-        }
+    if (state.hasBeenActive) {
+      return {
+        icon: 'sync',
+        chipClassName: 'bg-warning text-warning-contrast',
+        animateIcon: true,
+        label: 'Reconnecting encrypted collaboration. Your edits are still being saved.',
+        heading: 'Reconnecting encrypted collaboration',
+        detail: 'Live editing dropped and is reconnecting. Your edits are still saved as usual meanwhile.',
+      }
+    }
+    if (state.status.awaitingPeerState) {
+      return {
+        icon: 'sync',
+        chipClassName: 'bg-warning text-warning-contrast',
+        animateIcon: true,
+        label: "Waiting for a collaborator's copy of this note. Editing resumes when it arrives.",
+        heading: 'Waiting for a collaborator',
+        detail:
+          "This note is being edited live elsewhere and a collaborator's copy has not arrived yet. " +
+          'The editor is read-only until it does; if no one answers, this device takes over shortly.',
+      }
+    }
+    return {
+      icon: 'sync',
+      chipClassName: 'bg-contrast text-passive-1',
+      animateIcon: true,
+      label: 'Preparing encrypted collaboration. You can keep editing.',
+      heading: 'Preparing encrypted collaboration',
+      detail: 'Setting up the end-to-end encrypted room. You can keep editing while this finishes.',
+    }
   }
 
+  const standDown = state.status.retriesExhausted
+    ? ' Automatic retries have paused; they resume when you return to this tab or edit the note.'
+    : ''
   return {
     icon: 'cloud-off',
     chipClassName: 'bg-warning text-warning-contrast',
     animateIcon: false,
     label: `Encrypted collaboration unavailable. ${state.status.reason}`,
     heading: 'Encrypted collaboration unavailable',
-    detail: state.status.reason,
+    detail: `${state.status.reason}${standDown}`,
   }
 }
 
@@ -126,9 +142,13 @@ function presentationFor(state: CollaborationRoomState, peers: PresentPeer[]): P
  * reporting:
  *  - no entry in the registry (plain/component editor, no Super editor) -> hidden
  *  - unavailable and never once live -> hidden, because "this deployment has no
- *    live collaboration" is not news on every note open
+ *    live collaboration" is not news on every note open — UNLESS the room's
+ *    automatic retries have stood down (`retriesExhausted`): the gateway was
+ *    reachable and still refused three times, which the user must be able to see
  *  - preparing for the first time -> hidden until PREPARING_QUIET_PERIOD_MS, and
- *    hidden again after PREPARING_STAND_DOWN_MS if it still has not settled
+ *    hidden again after PREPARING_STAND_DOWN_MS if it still has not settled —
+ *    except while waiting for a collaborator's copy, when the editor is locked
+ *    and the wait is bounded, so it stays visible
  * so the common quiet path really is silent rather than a permanent dead icon.
  */
 const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) => {
@@ -139,6 +159,7 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) =>
   const buttonRef = useRef<HTMLButtonElement>(null)
 
   const isFirstPreparation = state?.status.kind === 'preparing' && !state.hasBeenActive
+  const isAwaitingPeerState = state?.status.kind === 'preparing' && state.status.awaitingPeerState === true
 
   useEffect(() => {
     if (!isFirstPreparation) {
@@ -146,12 +167,16 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) =>
       return
     }
     const show = setTimeout(() => setFirstPreparationPhase('visible'), PREPARING_QUIET_PERIOD_MS)
-    const standDown = setTimeout(() => setFirstPreparationPhase('stood-down'), PREPARING_STAND_DOWN_MS)
+    const standDown = isAwaitingPeerState
+      ? undefined
+      : setTimeout(() => setFirstPreparationPhase('stood-down'), PREPARING_STAND_DOWN_MS)
     return () => {
       clearTimeout(show)
-      clearTimeout(standDown)
+      if (standDown !== undefined) {
+        clearTimeout(standDown)
+      }
     }
-  }, [isFirstPreparation])
+  }, [isFirstPreparation, isAwaitingPeerState])
 
   const toggleTooltip = useCallback(() => {
     setIsTooltipVisible((visible) => !visible)
@@ -160,7 +185,7 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) =>
   if (!state) {
     return null
   }
-  if (state.status.kind === 'unavailable' && !state.hasBeenActive) {
+  if (state.status.kind === 'unavailable' && !state.hasBeenActive && !state.status.retriesExhausted) {
     return null
   }
   if (isFirstPreparation && firstPreparationPhase !== 'visible') {
