@@ -16,6 +16,8 @@ import {
   MAX_ROOM_JOIN_FRAMES_PER_ROOM,
   MAX_ROOM_RESERVE_FRAMES_PER_CONNECTION,
   MAX_ROOM_RESERVE_FRAMES_PER_ROOM,
+  MAX_TRACKED_CONTROL_WINDOWS,
+  MAX_YJS_RETRY_FRAMES_PER_ROOM as MAX_YJS_RETRY_FRAMES_PER_ROOM_SOURCE,
   MAX_YJS_CLIENT_ID,
   MAX_YJS_TRANSFER_BYTES,
   MAX_YJS_RETRY_FRAMES_PER_CONNECTION,
@@ -27,9 +29,12 @@ import {
   COLLABORATION_PROTOCOL_VERSION as COLLABORATION_PROTOCOL_VERSION_SOURCE,
   type RoomDeniedReason,
   type RoomJoinAuthorization,
+  type RoomJoinAuthorizer,
   type RoomRelayLifecycle,
 } from '../src/rooms.js'
 import type { Conn } from '../src/registry.js'
+import { CollaborationLifecycleError, CollaborationRoomSecurityRevokedError } from '../src/collaborationRedisBridge.js'
+import { CollaborationRoomEpochMismatchError, roomDeniedReasonFor } from '../src/rooms.js'
 
 /** The exact `room-denied` frame the gateway emits (C1): every denial names its funnel. */
 function denied(room: string, requestId: string | undefined, reason: RoomDeniedReason): string {
@@ -2105,5 +2110,432 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
     const reach = await handleRelayFrame(rooms, removed, { t: 'awareness', room: 'n1', payload: 'QQ' })
     expect(reach).toBe(0)
     expect(member.sent).not.toContain(JSON.stringify({ t: 'awareness', room: 'n1', payload: 'QQ' }))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// t92 contracts on the relay handler: C1 (reason on every denial), C2
+// (yjs-no-responder), C3 (activationTtlMs), R14 ((room, user) control windows),
+// R15 (local broadcast before the cross-replica publish).
+// ---------------------------------------------------------------------------
+describe('handleRelayFrame t92 contracts', () => {
+  const MAX_YJS_RETRY_FRAMES_PER_ROOM = MAX_YJS_RETRY_FRAMES_PER_ROOM_SOURCE
+  function grantAuthorizer(expiresAt = 60_000) {
+    return vi.fn((_userUuid: string, _room: string, capability?: string): RoomJoinAuthorization => ({
+      authorized: true,
+      expiresAt,
+      serverUpdatedAtTimestamp: 1,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: capability,
+    }))
+  }
+  function reserveFrame(requestId: string, room = 'n1') {
+    return {
+      t: 'room-reserve' as const,
+      room,
+      cap: requestId,
+      requestId,
+      role: 'editor' as const,
+      protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      expectedRoomEpoch: TEST_ROOM_EPOCH,
+    }
+  }
+  function lastFrame(conn: { sent: string[] }): Record<string, unknown> {
+    return JSON.parse(conn.sent.at(-1) as string) as Record<string, unknown>
+  }
+
+  it('C1: a lifecycle failure is named by its code, and only an epoch mismatch discloses the current epoch', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const authorize = grantAuthorizer()
+    const lifecycle = fakeLifecycle()
+    const cases: Array<[unknown, string, string | undefined]> = [
+      [
+        new CollaborationRoomEpochMismatchError('room_epoch_0000000000000002'),
+        'epoch-mismatch',
+        'room_epoch_0000000000000002',
+      ],
+      [new CollaborationRoomSecurityRevokedError('room_epoch_0000000000000003'), 'security-revoked', undefined],
+      [new CollaborationLifecycleError('room-limit', 'full', true), 'room-limit', undefined],
+      [new CollaborationLifecycleError('reservation-expired', 'gone'), 'reservation-expired', undefined],
+      [new CollaborationLifecycleError('redis-unavailable', 'down'), 'relay-unhealthy', undefined],
+      [new CollaborationLifecycleError('relay-unhealthy', 'closed'), 'relay-unhealthy', undefined],
+      [new CollaborationLifecycleError('incompatible-protocol', 'v2', true), 'policy', undefined],
+      [Object.assign(new Error('unknown code'), { code: 'ECONNRESET' }), 'policy', undefined],
+      [new Error('plain'), 'policy', undefined],
+      ['not-an-error', 'policy', undefined],
+    ]
+    for (const [index, [error, reason, roomEpoch]] of cases.entries()) {
+      expect(roomDeniedReasonFor(error)).toBe(reason)
+      const conn = fakeConn(`cause-${index}`)
+      vi.mocked(lifecycle.reserveEditorLease).mockRejectedValueOnce(error)
+      await handleRelayFrame(rooms, conn, reserveFrame(`cause-${index}`), authorize, undefined, lifecycle)
+      expect(lastFrame(conn)).toEqual({
+        t: 'room-denied',
+        room: 'n1',
+        requestId: `cause-${index}`,
+        ...(roomEpoch ? { roomEpoch } : {}),
+        reason,
+      })
+      expect(rooms.hasPendingEditorReservation('n1', conn, `cause-${index}`)).toBe(false)
+    }
+    // The same mapping on the activation (room-join) and heartbeat legs.
+    const joiner = fakeConn('cause-join')
+    await handleRelayFrame(rooms, joiner, reserveFrame('cause-join'), authorize, undefined, lifecycle)
+    vi.mocked(lifecycle.activateEditorLease).mockRejectedValueOnce(
+      new CollaborationRoomEpochMismatchError('room_epoch_0000000000000004'),
+    )
+    await handleRelayFrame(
+      rooms,
+      joiner,
+      { ...reserveFrame('cause-join'), t: 'room-join' },
+      authorize,
+      undefined,
+      lifecycle,
+    )
+    expect(lastFrame(joiner)).toEqual({
+      t: 'room-denied',
+      room: 'n1',
+      requestId: 'cause-join',
+      roomEpoch: 'room_epoch_0000000000000004',
+      reason: 'epoch-mismatch',
+    })
+    const beating = fakeConn('cause-heartbeat')
+    const heartbeatLifecycle = { ...fakeLifecycle(), heartbeatPresence: vi.fn() }
+    rooms.join('n1', beating, 60_000, 'hb', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    vi.mocked(heartbeatLifecycle.heartbeatPresence).mockRejectedValueOnce(
+      new CollaborationLifecycleError('room-limit', 'presence limit'),
+    )
+    await handleRelayFrame(
+      rooms,
+      beating,
+      {
+        t: 'room-presence-heartbeat',
+        room: 'n1',
+        requestId: 'hb',
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        clientId: 1,
+      },
+      authorize,
+      undefined,
+      heartbeatLifecycle,
+    )
+    expect(lastFrame(beating)).toEqual({ t: 'room-denied', room: 'n1', requestId: 'hb', reason: 'room-limit' })
+    await handleRelayFrame(
+      rooms,
+      fakeConn('cause-no-lease'),
+      {
+        t: 'room-presence-heartbeat',
+        room: 'n1',
+        requestId: 'missing',
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        clientId: 1,
+      },
+      authorize,
+      undefined,
+      heartbeatLifecycle,
+    ).then(() => undefined)
+  })
+
+  it('C1: every registry-side funnel names its reason', async () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const authorize = grantAuthorizer()
+    const lifecycle = fakeLifecycle()
+
+    // no lifecycle attached -> reservations are a policy refusal
+    const standalone = fakeConn('funnel-standalone')
+    await handleRelayFrame(new RoomRegistry(), standalone, reserveFrame('standalone'), authorize)
+    expect(lastFrame(standalone)).toEqual({ t: 'room-denied', room: 'n1', requestId: 'standalone', reason: 'policy' })
+
+    // per-connection reserve budget -> rate-limited
+    const bursty = fakeConn('funnel-bursty')
+    for (let index = 0; index < MAX_ROOM_RESERVE_FRAMES_PER_CONNECTION; index += 1) {
+      await handleRelayFrame(rooms, bursty, reserveFrame(`burst-${index}`), authorize, undefined, lifecycle)
+      await handleRelayFrame(
+        rooms,
+        bursty,
+        { t: 'room-leave', room: 'n1', requestId: `burst-${index}` },
+        authorize,
+        undefined,
+        lifecycle,
+      )
+    }
+    await handleRelayFrame(rooms, bursty, reserveFrame('burst-over'), authorize, undefined, lifecycle)
+    expect(lastFrame(bursty)).toEqual({ t: 'room-denied', room: 'n1', requestId: 'burst-over', reason: 'rate-limited' })
+
+    // pending-reservation ledger -> room-limit
+    const hoarder = fakeConn('funnel-hoarder')
+    for (let index = 0; index < MAX_PENDING_EDITOR_RESERVATIONS_PER_CONNECTION; index += 1) {
+      await handleRelayFrame(
+        rooms,
+        hoarder,
+        reserveFrame(`hoard-${index}`, `hoard-room-${index}`),
+        authorize,
+        undefined,
+        lifecycle,
+      )
+    }
+    await handleRelayFrame(
+      rooms,
+      hoarder,
+      reserveFrame('hoard-over', 'hoard-room-over'),
+      authorize,
+      undefined,
+      lifecycle,
+    )
+    expect(lastFrame(hoarder)).toEqual({
+      t: 'room-denied',
+      room: 'hoard-room-over',
+      requestId: 'hoard-over',
+      reason: 'room-limit',
+    })
+
+    // authorizer refusal -> capability-invalid
+    const refused = fakeConn('funnel-refused')
+    await handleRelayFrame(rooms, refused, reserveFrame('refused'), () => ({ authorized: false }), undefined, lifecycle)
+    expect(lastFrame(refused)).toEqual({
+      t: 'room-denied',
+      room: 'n1',
+      requestId: 'refused',
+      reason: 'capability-invalid',
+    })
+
+    // the activation window elapsed while the authorizer ran -> reservation-expired
+    const slow = fakeConn('funnel-slow')
+    const slowAuthorize: RoomJoinAuthorizer = (userUuid, room, capability) => {
+      now += PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS + 1
+      return authorize(userUuid, room, capability)
+    }
+    await handleRelayFrame(rooms, slow, reserveFrame('slow'), slowAuthorize, undefined, lifecycle)
+    expect(lastFrame(slow)).toEqual({ t: 'room-denied', room: 'n1', requestId: 'slow', reason: 'reservation-expired' })
+
+    // the room is at its connection cap -> room-full
+    const crowded = new RoomRegistry(() => 1_000)
+    for (let index = 0; index < MAX_CONNECTIONS_PER_ROOM; index += 1) {
+      expect(crowded.join('full', fakeConn(`occupant-${index}`), 60_000, `occupant-${index}`, 'comment').joined).toBe(
+        true,
+      )
+    }
+    const late = fakeConn('funnel-late')
+    await handleRelayFrame(
+      crowded,
+      late,
+      { t: 'room-join', room: 'full', cap: 'late', requestId: 'late', role: 'comment' },
+      authorize,
+    )
+    expect(lastFrame(late)).toEqual({ t: 'room-denied', room: 'full', requestId: 'late', reason: 'room-full' })
+
+    // relay lost for every room -> relay-unhealthy, the bridge's default
+    const evicted = fakeConn('funnel-evicted')
+    crowded.join('other', evicted, 60_000, 'evicted', 'editor')
+    crowded.denyAllRooms()
+    expect(lastFrame(evicted)).toEqual({
+      t: 'room-denied',
+      room: 'other',
+      requestId: 'evicted',
+      reason: 'relay-unhealthy',
+    })
+    const policed = fakeConn('funnel-policed')
+    crowded.join('policed', policed, 60_000, 'policed', 'editor')
+    crowded.denyRoom('policed')
+    expect(lastFrame(policed)).toEqual({ t: 'room-denied', room: 'policed', requestId: 'policed', reason: 'policy' })
+  })
+
+  it('C3: room-reserved carries the remaining activation budget as activationTtlMs', async () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const lifecycle = fakeLifecycle()
+
+    const fresh = fakeConn('ttl-fresh')
+    await handleRelayFrame(rooms, fresh, reserveFrame('ttl-fresh'), grantAuthorizer(60_000), undefined, lifecycle)
+    expect(lastFrame(fresh)).toMatchObject({
+      t: 'room-reserved',
+      requestId: 'ttl-fresh',
+      activationTtlMs: PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+    })
+
+    // A capability that expires sooner than the activation window bounds the budget.
+    const short = fakeConn('ttl-short')
+    await handleRelayFrame(rooms, short, reserveFrame('ttl-short'), grantAuthorizer(6_000), undefined, lifecycle)
+    expect(lastFrame(short)).toMatchObject({ t: 'room-reserved', requestId: 'ttl-short', activationTtlMs: 5_000 })
+
+    // Time spent in the authorizer is already gone from the budget.
+    const delayed = fakeConn('ttl-delayed')
+    const authorize = grantAuthorizer(60_000)
+    const slowAuthorize: RoomJoinAuthorizer = (userUuid, room, capability) => {
+      now += 4_000
+      return authorize(userUuid, room, capability)
+    }
+    await handleRelayFrame(rooms, delayed, reserveFrame('ttl-delayed'), slowAuthorize, undefined, lifecycle)
+    expect(lastFrame(delayed)).toMatchObject({
+      t: 'room-reserved',
+      requestId: 'ttl-delayed',
+      activationTtlMs: PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS - 4_000,
+    })
+  })
+
+  it('C2: a yjs-retry that no other activated editor can answer gets yjs-no-responder instead of a silent relay', async () => {
+    const retry = (requestId: string) => ({ t: 'yjs-retry' as const, room: 'n1', requestId, requesterClientId: 7 })
+    const noResponder = (requestId: string) => JSON.stringify({ t: 'yjs-no-responder', room: 'n1', requestId })
+
+    // Standalone (no lifecycle): the local registry is the whole world.
+    const local = new RoomRegistry()
+    const lone = fakeConn('responder-lone')
+    await handleRelayFrame(local, lone, { t: 'room-join', room: 'n1' })
+    expect(await handleRelayFrame(local, lone, retry('alone'))).toBe(0)
+    expect(lone.sent).toContain(noResponder('alone'))
+    const commenter = fakeConn('responder-commenter')
+    await handleRelayFrame(local, commenter, { t: 'room-join', room: 'n1', role: 'comment' })
+    expect(await handleRelayFrame(local, lone, retry('only-comments'))).toBe(0)
+    expect(lone.sent).toContain(noResponder('only-comments'))
+    expect(commenter.sent.some((message) => message.includes('"t":"yjs-retry"'))).toBe(false)
+    const editor = fakeConn('responder-editor')
+    await handleRelayFrame(local, editor, { t: 'room-join', room: 'n1' })
+    lone.sent.length = 0
+    expect(await handleRelayFrame(local, lone, retry('has-editor'))).toBe(2)
+    expect(lone.sent).toEqual([])
+    expect(editor.sent).toContain(JSON.stringify(retry('has-editor')))
+
+    // With a lifecycle: local editors win; otherwise the distributed view decides.
+    const distributed = new RoomRegistry(() => 1_000)
+    const asker = fakeConn('responder-asker')
+    distributed.join('n1', asker, 60_000, 'lease-asker', 'editor', true, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    const lifecycle = { ...fakeLifecycle(), hasOtherActivatedEditorLease: vi.fn().mockResolvedValue(false) }
+    expect(await handleRelayFrame(distributed, asker, retry('remote-none'), undefined, undefined, lifecycle)).toBe(0)
+    expect(asker.sent).toContain(noResponder('remote-none'))
+    expect(lifecycle.hasOtherActivatedEditorLease).toHaveBeenCalledWith(asker, 'n1')
+    expect(lifecycle.publish).not.toHaveBeenCalled()
+    asker.sent.length = 0
+    lifecycle.hasOtherActivatedEditorLease.mockResolvedValueOnce(true)
+    expect(await handleRelayFrame(distributed, asker, retry('remote-some'), undefined, undefined, lifecycle)).toBe(0)
+    expect(asker.sent).toEqual([])
+    expect(lifecycle.publish).toHaveBeenCalledWith(retry('remote-some'))
+    // Unsure lifecycles (no view, or a failing view) relay as before.
+    lifecycle.hasOtherActivatedEditorLease.mockRejectedValueOnce(new Error('redis down'))
+    expect(await handleRelayFrame(distributed, asker, retry('remote-error'), undefined, undefined, lifecycle)).toBe(0)
+    expect(asker.sent).toEqual([])
+    const blind = fakeLifecycle()
+    const blindAsker = fakeConn('responder-blind')
+    distributed.join('n1', blindAsker, 60_000, 'lease-blind', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    await handleRelayFrame(distributed, blindAsker, retry('blind'), undefined, undefined, blind)
+    expect(blindAsker.sent).toEqual([])
+    expect(blind.publish).toHaveBeenCalledWith(retry('blind'))
+    // (asker now has a peer, so a later retry from it would relay; use the budget case below instead)
+    // The retry budget still applies before the responder check.
+    const exhausted = fakeConn('responder-exhausted')
+    distributed.join('n1', exhausted, 60_000, 'lease-exhausted', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    for (let index = 0; index < MAX_YJS_RETRY_FRAMES_PER_ROOM; index += 1) {
+      await handleRelayFrame(distributed, exhausted, retry(`budget-${index}`), undefined, undefined, lifecycle)
+    }
+    exhausted.sent.length = 0
+    await handleRelayFrame(distributed, exhausted, retry('budget-over'), undefined, undefined, lifecycle)
+    expect(exhausted.sent).toEqual([])
+  })
+
+  it('R14: reserve storms from two users in one room are budgeted separately, not cross-throttled', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const authorize = grantAuthorizer()
+    const lifecycle = fakeLifecycle()
+    const reservesPerUser = 100
+    const connectionsPerUser = reservesPerUser / 10
+
+    for (const user of ['user-a', 'user-b']) {
+      for (let connectionIndex = 0; connectionIndex < connectionsPerUser; connectionIndex += 1) {
+        const conn = fakeConn(`${user}-conn-${connectionIndex}`)
+        conn.userUuid = user
+        for (let reserveIndex = 0; reserveIndex < reservesPerUser / connectionsPerUser; reserveIndex += 1) {
+          const requestId = `${user}-${connectionIndex}-${reserveIndex}`
+          await handleRelayFrame(rooms, conn, reserveFrame(requestId, 'storm'), authorize, undefined, lifecycle)
+          expect(lastFrame(conn)).toMatchObject({ t: 'room-reserved', requestId })
+          await handleRelayFrame(
+            rooms,
+            conn,
+            { t: 'room-leave', room: 'storm', requestId },
+            authorize,
+            undefined,
+            lifecycle,
+          )
+        }
+      }
+    }
+    expect(authorize).toHaveBeenCalledTimes(2 * reservesPerUser)
+
+    // User A exhausts ITS (room, user) budget (spread over connections so the
+    // per-connection budget never trips first); user B is still admitted.
+    for (let index = 0; index < MAX_ROOM_RESERVE_FRAMES_PER_ROOM - reservesPerUser; index += 1) {
+      const aExtra = fakeConn(`user-a-extra-${Math.floor(index / 10)}`)
+      aExtra.userUuid = 'user-a'
+      const requestId = `a-extra-${index}`
+      await handleRelayFrame(rooms, aExtra, reserveFrame(requestId, 'storm'), authorize, undefined, lifecycle)
+      expect(lastFrame(aExtra)).toMatchObject({ t: 'room-reserved', requestId })
+      await handleRelayFrame(
+        rooms,
+        aExtra,
+        { t: 'room-leave', room: 'storm', requestId },
+        authorize,
+        undefined,
+        lifecycle,
+      )
+    }
+    const aOver = fakeConn('user-a-over')
+    aOver.userUuid = 'user-a'
+    await handleRelayFrame(rooms, aOver, reserveFrame('a-over', 'storm'), authorize, undefined, lifecycle)
+    expect(lastFrame(aOver)).toEqual({ t: 'room-denied', room: 'storm', requestId: 'a-over', reason: 'rate-limited' })
+    const bStill = fakeConn('user-b-still')
+    bStill.userUuid = 'user-b'
+    await handleRelayFrame(rooms, bStill, reserveFrame('b-still', 'storm'), authorize, undefined, lifecycle)
+    expect(lastFrame(bStill)).toMatchObject({ t: 'room-reserved', requestId: 'b-still' })
+  })
+
+  it('R15: local peers receive a relay frame before the cross-replica publish, and a failed publish still denies the room', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const sender = fakeConn('order-sender')
+    const peer = fakeConn('order-peer')
+    rooms.join('n1', sender, 60_000, 'lease-sender', 'editor', true, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    rooms.join('n1', peer, 60_000, 'lease-peer', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    const frame = { t: 'yjs' as const, room: 'n1', payload: 'ordered' }
+    const seenByPeerAtPublish: boolean[] = []
+    const lifecycle = fakeLifecycle()
+    vi.mocked(lifecycle.publish).mockImplementation(async () => {
+      seenByPeerAtPublish.push(peer.sent.includes(JSON.stringify(frame)))
+    })
+
+    expect(await handleRelayFrame(rooms, sender, frame, undefined, undefined, lifecycle)).toBe(1)
+    expect(seenByPeerAtPublish).toEqual([true])
+
+    peer.sent.length = 0
+    vi.mocked(lifecycle.publish).mockRejectedValueOnce(new Error('relay down'))
+    expect(await handleRelayFrame(rooms, sender, frame, undefined, undefined, lifecycle)).toBe(1)
+    expect(peer.sent[0]).toBe(JSON.stringify(frame))
+    expect(peer.sent).toContain(
+      JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-peer', reason: 'relay-unhealthy' }),
+    )
+    expect(rooms.roomCount()).toBe(0)
+  })
+
+  it('R14: the bounded control-window ledger recycles the stalest scope instead of denying new rooms', () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const conn = fakeConn('ledger')
+    // Exhaust one room's retry budget in an OLDER window ...
+    for (let index = 0; index < MAX_YJS_RETRY_FRAMES_PER_ROOM; index += 1) {
+      expect(rooms.allowControlFrame('yjs-retry', 'stale-room', fakeConn(`ledger-${index}`))).toBe(true)
+    }
+    expect(rooms.allowControlFrame('yjs-retry', 'stale-room', conn)).toBe(false)
+    // ... then fill the ledger with fresher scopes: the cap holds and nobody is denied.
+    now += 1
+    for (let index = 0; index < MAX_TRACKED_CONTROL_WINDOWS; index += 1) {
+      expect(rooms.allowControlFrame('yjs-response-claim', `fresh-room-${index}`, fakeConn(`fresh-${index}`))).toBe(
+        true,
+      )
+    }
+    expect(rooms.trackedControlWindowCount()).toBe(MAX_TRACKED_CONTROL_WINDOWS)
+    // The stalest scope (the exhausted room) was recycled, so its budget is fresh again.
+    expect(rooms.allowControlFrame('yjs-retry', 'stale-room', fakeConn('ledger-after'))).toBe(true)
+    expect(rooms.trackedControlWindowCount()).toBe(MAX_TRACKED_CONTROL_WINDOWS)
   })
 })

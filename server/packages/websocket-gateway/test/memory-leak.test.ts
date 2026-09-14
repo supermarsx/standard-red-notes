@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { RoomRegistry, handleRelayFrame } from '../src/rooms.js'
+import { CONTROL_FRAME_WINDOW_MS, RoomRegistry, handleRelayFrame } from '../src/rooms.js'
 import { ConnectionRegistry, type Conn } from '../src/registry.js'
 
 // Leak guards for the gateway's long-lived in-memory structures. The gateway is a
@@ -111,5 +111,22 @@ describe('RoomRegistry — no leak', () => {
     expect(rooms.roomCount()).toBe(100)
     rooms.leaveAll(c)
     expect(rooms.roomCount()).toBe(0)
+  })
+})
+
+describe('RoomRegistry control-frame ledger — no leak', () => {
+  it('releases every (room, user) and room window once its 10 s window lapses', () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    for (let index = 0; index < 500; index++) {
+      rooms.allowControlFrame('room-reserve', `room-${index}`, fakeConn(`user-${index}`))
+      rooms.allowControlFrame('yjs-retry', `room-${index}`, fakeConn(`user-${index}`))
+    }
+    expect(rooms.trackedControlWindowCount()).toBe(1_000)
+
+    now += CONTROL_FRAME_WINDOW_MS
+    // The next control frame prunes everything whose window lapsed.
+    rooms.allowControlFrame('room-join', 'fresh', fakeConn('fresh'))
+    expect(rooms.trackedControlWindowCount()).toBe(1)
   })
 })

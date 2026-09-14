@@ -281,6 +281,169 @@ describe('v3 discovery and challenge misuse never reach the collaboration grant 
     }
   }
 
+  // --- B3 / C4: A USED ROOM CAN BE RE-ENTERED -------------------------------
+  // The gateway half of t90 §5.4 item 2: reserve -> join -> leave rotates the
+  // room in Redis; the deterministic initial epoch is then refused WITH the
+  // current epoch and a named reason, and a capability minted for the epoch the
+  // bridge reports (what sync-lane discovery substitutes via the C4 resolver)
+  // re-enters through the real handler, real authorizer and real bridge.
+  it('B3/C4: after the last editor leaves, the epoch the bridge reports re-enters the room and the initial one is refused by name', async () => {
+    const h = harness()
+    const first = fakeConn('user-a')
+    const second = fakeConn('user-b')
+
+    await handleRelayFrame(
+      h.rooms,
+      first,
+      {
+        t: 'room-reserve',
+        room: 'note-1',
+        cap: capabilityFor('user-a', 'note-1', { leaseRequestId: 'lease-a' }),
+        requestId: 'lease-a',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
+      },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    const reserved = JSON.parse(first.sent.at(-1) as string) as { bootstrapChallenge: string; activationTtlMs: number }
+    expect(reserved.activationTtlMs).toBeGreaterThan(0)
+    await handleRelayFrame(
+      h.rooms,
+      first,
+      {
+        t: 'room-join',
+        room: 'note-1',
+        cap: capabilityFor('user-a', 'note-1', {
+          leaseRequestId: 'lease-a',
+          bootstrapChallenge: reserved.bootstrapChallenge,
+        }),
+        requestId: 'lease-a',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
+      },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    expect(h.rooms.isMember('note-1', first)).toBe(true)
+    expect(await h.bridge.currentRoomEpoch('note-1', SECURITY_EPOCH)).toBe(ROOM_EPOCH)
+
+    await handleRelayFrame(
+      h.rooms,
+      first,
+      { t: 'room-leave', room: 'note-1', requestId: 'lease-a' },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    expect(h.rooms.members('note-1')).toHaveLength(0)
+
+    const current = await h.bridge.currentRoomEpoch('note-1', SECURITY_EPOCH)
+    expect(current).toMatch(/^[A-Za-z0-9_-]{16,128}$/)
+    expect(current).not.toBe(ROOM_EPOCH)
+    expect(await h.bridge.currentRoomEpoch('note-1', 'security_epoch_0000000000000009')).toBeUndefined()
+
+    // The initial epoch (a client that never learned the rotation) is refused by name, with the current epoch.
+    await handleRelayFrame(
+      h.rooms,
+      second,
+      {
+        t: 'room-reserve',
+        room: 'note-1',
+        cap: capabilityFor('user-b', 'note-1', { leaseRequestId: 'lease-b' }),
+        requestId: 'lease-b',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
+      },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    expect(second.sent.at(-1)).toBe(
+      JSON.stringify({
+        t: 'room-denied',
+        room: 'note-1',
+        requestId: 'lease-b',
+        roomEpoch: current,
+        reason: 'epoch-mismatch',
+      }),
+    )
+    expect(h.rooms.hasPendingEditorReservation('note-1', second, 'lease-b')).toBe(false)
+
+    // A capability minted for the reported epoch re-enters as the bootstrapper.
+    second.sent.length = 0
+    await handleRelayFrame(
+      h.rooms,
+      second,
+      {
+        t: 'room-reserve',
+        room: 'note-1',
+        cap: capabilityFor('user-b', 'note-1', { leaseRequestId: 'lease-b2', roomEpoch: current }),
+        requestId: 'lease-b2',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: current as string,
+      },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    const reentered = JSON.parse(second.sent.at(-1) as string) as {
+      t: string
+      bootstrap: boolean
+      bootstrapChallenge: string
+    }
+    expect(reentered).toMatchObject({ t: 'room-reserved', bootstrap: true, roomEpoch: current })
+    await handleRelayFrame(
+      h.rooms,
+      second,
+      {
+        t: 'room-join',
+        room: 'note-1',
+        cap: capabilityFor('user-b', 'note-1', {
+          leaseRequestId: 'lease-b2',
+          roomEpoch: current,
+          bootstrapChallenge: reentered.bootstrapChallenge,
+        }),
+        requestId: 'lease-b2',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: current as string,
+      },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    expect(second.sent.at(-1)).toBe(
+      JSON.stringify({
+        t: 'room-joined',
+        room: 'note-1',
+        requestId: 'lease-b2',
+        bootstrap: true,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: current,
+      }),
+    )
+    expect(h.rooms.isMember('note-1', second)).toBe(true)
+    // Nobody else holds a lease, so a full-state retry is answered with yjs-no-responder at once (C2).
+    second.sent.length = 0
+    await handleRelayFrame(
+      h.rooms,
+      second,
+      { t: 'yjs-retry', room: 'note-1', requestId: 'state-1', requesterClientId: 1 },
+      authorize,
+      undefined,
+      h.bridge,
+    )
+    expect(second.sent).toEqual([JSON.stringify({ t: 'yjs-no-responder', room: 'note-1', requestId: 'state-1' })])
+  })
+
   // --- POSITIVE CONTROL ----------------------------------------------------
   // Without this, every "backend not invoked" assertion below could pass
   // vacuously (e.g. if the recorder were mis-wired and saw nothing at all).

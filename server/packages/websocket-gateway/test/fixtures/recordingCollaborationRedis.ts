@@ -14,7 +14,11 @@
  * positive control test in the same file genuinely exercises the recorder.
  */
 export type CollaborationScriptName =
-  'SRN_RESERVE_LEASE_V3' | 'SRN_REFRESH_OWNED_LEASE_V3' | 'SRN_RELEASE_LEASE_V3' | 'SRN_CLAIM_YJS_RESPONSE_V1'
+  | 'SRN_RESERVE_LEASE_V3'
+  | 'SRN_REFRESH_OWNED_LEASE_V3'
+  | 'SRN_RELEASE_LEASE_V3'
+  | 'SRN_CLAIM_YJS_RESPONSE_V1'
+  | 'SRN_COUNT_OTHER_LEASES_V1'
 
 type MessageHandler = (channel: string, message: string) => void
 type SubscriptionCallback = (error: Error | null | undefined, count?: unknown) => void
@@ -24,6 +28,7 @@ const SCRIPT_NAMES: CollaborationScriptName[] = [
   'SRN_REFRESH_OWNED_LEASE_V3',
   'SRN_RELEASE_LEASE_V3',
   'SRN_CLAIM_YJS_RESPONSE_V1',
+  'SRN_COUNT_OTHER_LEASES_V1',
 ]
 
 function scriptNameOf(script: string): CollaborationScriptName {
@@ -74,11 +79,17 @@ export class RecordingCollaborationRedis {
       subscribe: (_channel: string, callback: SubscriptionCallback) => {
         callback(null, 1)
       },
+      get: async (key: string) => this.roomStates.get(key) ?? null,
       eval: async (script: string, _keyCount: number, ...args: Array<string | number>) => {
         const name = scriptNameOf(script)
         this.scriptCalls.push(name)
         if (name === 'SRN_CLAIM_YJS_RESPONSE_V1') {
           return 1
+        }
+        if (name === 'SRN_COUNT_OTHER_LEASES_V1') {
+          const members = this.sets.get(String(args[0])) ?? new Set<string>()
+          const own = new Set(args.slice(1).map(String))
+          return [...members].filter((leaseKey) => !own.has(leaseKey) && this.leases.has(leaseKey)).length
         }
         const roomSetKey = String(args[0])
         const leaseKey = String(args[1])

@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   COLLABORATION_RELAY_CHANNEL,
+  CollaborationLifecycleError,
   CollaborationRedisBridge,
+  CollaborationRoomSecurityRevokedError,
+  collaborationKeyPrefix,
+  collaborationRelayChannel,
   MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
   YJS_RESPONSE_CLAIM_TTL_MS,
 } from '../src/collaborationRedisBridge.js'
@@ -71,11 +75,15 @@ class FakeRedisNetwork {
   readonly commandReconnectingHandlers = new Set<(delay: number) => void>()
   readonly commandEndHandlers = new Set<() => void>()
   readonly subscriptionCallbacks: SubscriptionCallback[] = []
+  /** Every Lua script text handed to EVAL, oldest first (lets a test read the real script). */
+  readonly evalScripts: string[] = []
+  readonly subscribedChannels: string[] = []
   private nextClientRole: 'command' | 'subscriber' = 'command'
   autoCompleteSubscriptions = true
   failEval = false
   failedEvalCalls = 0
   failPublish = false
+  failGet = false
   readonly forcedLeasePolicyResults = new Map<string, -1 | -2>()
   reserveEvalGate: Promise<void> | undefined
   reserveEvalCalls = 0
@@ -181,16 +189,29 @@ class FakeRedisNetwork {
         }
         return this
       },
-      subscribe: (_channel: string, callback: SubscriptionCallback) => {
+      subscribe: (channel: string, callback: SubscriptionCallback) => {
+        this.subscribedChannels.push(channel)
         this.subscriptionCallbacks.push(callback)
         if (this.autoCompleteSubscriptions) {
           callback(null, 1)
         }
       },
+      get: async (key: string) => {
+        if (this.failGet) {
+          throw new Error('redis get unavailable')
+        }
+        return this.roomStates.get(key) ?? null
+      },
       eval: async (script: string, _keyCount: number, ...args: Array<string | number>) => {
+        this.evalScripts.push(script)
         if (this.failEval) {
           this.failedEvalCalls += 1
           throw new Error('redis eval unavailable')
+        }
+        if (script.includes('SRN_COUNT_OTHER_LEASES_V1')) {
+          const members = this.sets.get(String(args[0])) ?? new Set<string>()
+          const own = new Set(args.slice(1).map(String))
+          return [...members].filter((leaseKey) => !own.has(leaseKey) && this.leases.has(leaseKey)).length
         }
         if (script.includes('SRN_CLAIM_YJS_RESPONSE_V1')) {
           const leaseKey = String(args[0])
@@ -2406,5 +2427,464 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       lifecycle,
     )
     expect(lifecycle.releaseLease).toHaveBeenCalledWith(member, 'note-1', 'lease-1', 'clean-leave')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// t92 (t90 B3/M1/M2, D11, R45, C4, C9, C10): the bridge must let a used room be
+// re-entered, must never re-arm the tombstone on a denied attempt, must name
+// every failure, and must answer the responder question across replicas.
+// ---------------------------------------------------------------------------
+describe('CollaborationRedisBridge current-epoch resolver, cause codes, responder view and namespace', () => {
+  function bridgeFor(
+    redis: FakeRedisNetwork,
+    rooms: RoomRegistry<SendableSocket>,
+    label: string,
+    options: { keyPrefix?: string } = {},
+  ): CollaborationRedisBridge<SendableSocket> {
+    return new CollaborationRedisBridge(
+      rooms,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId(label),
+      options,
+    )
+  }
+
+  async function reserveAndActivate(
+    bridge: CollaborationRedisBridge<SendableSocket>,
+    conn: Conn<SendableSocket>,
+    room: string,
+    requestId: string,
+    roomEpoch: string,
+    securityEpoch = TEST_SECURITY_EPOCH,
+    issuedAt = 1_000,
+  ): Promise<{ shouldBootstrap: boolean }> {
+    const expiresAt = Date.now() + 60_000
+    const reservation = await bridge.reserveEditorLease(
+      conn,
+      room,
+      requestId,
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      roomEpoch,
+      securityEpoch,
+      issuedAt,
+    )
+    return bridge.activateEditorLease(
+      conn,
+      room,
+      requestId,
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      reservation.bootstrapChallenge,
+      roomEpoch,
+      securityEpoch,
+      issuedAt,
+    )
+  }
+
+  function codeOf(promise: Promise<unknown>): Promise<string | undefined> {
+    return promise.then(
+      () => undefined,
+      (error: unknown) => (error as { code?: string }).code,
+    )
+  }
+
+  it('C4: after the last release the bridge reports the rotated epoch, refuses the initial one and admits the reported one', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = bridgeFor(redis, rooms, 'resolver-a')
+    const room = 'resolver-room'
+    const first = connection('resolver-first')
+    const second = connection('resolver-second')
+
+    // No state yet: nothing to report, so discovery keeps the initial epoch.
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBeUndefined()
+    expect((await reserveAndActivate(bridge, first, room, 'lease-first', TEST_ROOM_EPOCH)).shouldBootstrap).toBe(true)
+    // While the initial generation is active it IS the current epoch.
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBe(TEST_ROOM_EPOCH)
+
+    await bridge.releaseLease(first, room, 'lease-first', 'clean-leave')
+
+    const rotated = await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)
+    expect(rotated).toEqual(expect.any(String))
+    expect(rotated).not.toBe(TEST_ROOM_EPOCH)
+    // The deterministic initial epoch (what discovery would answer without the
+    // resolver) is refused and names the current one ...
+    await expect(
+      bridge.reserveEditorLease(
+        second,
+        room,
+        'lease-second',
+        Date.now() + 60_000,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        1_000,
+      ),
+    ).rejects.toMatchObject({ code: 'epoch-mismatch', currentRoomEpoch: rotated })
+    // ... and the epoch the resolver reports re-enters the room as bootstrapper.
+    expect((await reserveAndActivate(bridge, second, room, 'lease-second-2', rotated as string)).shouldBootstrap).toBe(
+      true,
+    )
+  })
+
+  it('C4 (t90 M2): a security-epoch change rotates the room once, then the resolver re-admits under the new generation', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = bridgeFor(redis, rooms, 'resolver-security')
+    const room = 'resolver-security-room'
+    const nextSecurityEpoch = 'security_epoch_0000000000000002'
+    const nextInitialEpoch = 'room_epoch_0000000000000002'
+    await reserveAndActivate(bridge, connection('gen-1'), room, 'lease-gen-1', TEST_ROOM_EPOCH)
+
+    // The first presenter of the new generation evicts the old one and is denied once.
+    await expect(
+      bridge.reserveEditorLease(
+        connection('gen-2'),
+        room,
+        'lease-gen-2',
+        Date.now() + 60_000,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        nextInitialEpoch,
+        nextSecurityEpoch,
+        2_000,
+      ),
+    ).rejects.toBeInstanceOf(CollaborationRoomSecurityRevokedError)
+
+    const current = await bridge.currentRoomEpoch(room, nextSecurityEpoch)
+    expect(current).toEqual(expect.any(String))
+    expect(current).not.toBe(nextInitialEpoch)
+    // The superseded generation can no longer learn an epoch for this room.
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBeUndefined()
+    expect(
+      (
+        await reserveAndActivate(
+          bridge,
+          connection('gen-2b'),
+          room,
+          'lease-gen-2b',
+          current as string,
+          nextSecurityEpoch,
+          2_000,
+        )
+      ).shouldBootstrap,
+    ).toBe(true)
+  })
+
+  it('C4: currentRoomEpoch is undefined for invalid inputs, an unparseable state or a failing GET, and never throws', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = bridgeFor(redis, rooms, 'resolver-guards')
+    const room = 'resolver-guard-room'
+
+    expect(await bridge.currentRoomEpoch('', TEST_SECURITY_EPOCH)).toBeUndefined()
+    expect(await bridge.currentRoomEpoch(room, 'short')).toBeUndefined()
+    const stateKey = `srn:collaboration:room-state:${createHash('sha256').update(room, 'utf8').digest('hex')}`
+    redis.roomStates.set(stateKey, 'not an epoch:' + TEST_SECURITY_EPOCH + ':1')
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBeUndefined()
+    redis.roomStates.set(stateKey, `${TEST_ROOM_EPOCH}:${TEST_SECURITY_EPOCH}:1`)
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBe(TEST_ROOM_EPOCH)
+
+    vi.mocked(logger.warn).mockClear()
+    redis.failGet = true
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBeUndefined()
+    expect(
+      vi.mocked(logger.warn).mock.calls.some(([message]) => String(message).includes('{"cause":"redis-unavailable"}')),
+    ).toBe(true)
+  })
+
+  it('M1: the reserve script re-arms the room-state tombstone only on a successful reserve, never on a denied one', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = bridgeFor(redis, rooms, 'tombstone')
+    await reserveAndActivate(bridge, connection('tombstone'), 'tombstone-room', 'lease-tombstone', TEST_ROOM_EPOCH)
+
+    // The fake re-implements the scripts in JS, so read the REAL Lua the bridge
+    // handed to EVAL: the state key is refreshed exactly once, on the success
+    // path after the lease is written, and neither denial branch touches it.
+    const reserveScript = redis.evalScripts.find((script) => script.includes('SRN_RESERVE_LEASE_V3'))
+    expect(reserveScript).toBeDefined()
+    const lines = (reserveScript as string).split('\n').map((line) => line.trim())
+    expect(lines.filter((line) => line.includes("PEXPIRE', KEYS[3]"))).toHaveLength(1)
+    const denialReturns = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.startsWith("return 'epoch:'"))
+    expect(denialReturns).toHaveLength(2)
+    for (const { index } of denialReturns) {
+      const preceding = lines.slice(Math.max(0, index - 3), index)
+      expect(preceding.some((line) => line.includes('PEXPIRE'))).toBe(false)
+    }
+    // And the successful path refreshes AFTER the lease key is written.
+    const successRefresh = lines.findIndex((line) => line.includes("PEXPIRE', KEYS[3]"))
+    expect(successRefresh).toBeGreaterThan(lines.findIndex((line) => line.startsWith("redis.call('SET', KEYS[2]")))
+  })
+
+  it('R45: every bridge failure carries a stable code and the denial log line names the cause', async () => {
+    const room = 'cause-room'
+    const expiresAt = Date.now() + 60_000
+    const reserve = (
+      bridge: CollaborationRedisBridge<SendableSocket>,
+      conn: Conn<SendableSocket>,
+      requestId: string,
+      overrides: { expiresAt?: number; roomEpoch?: string; securityEpoch?: string; issuedAt?: number } = {},
+    ) =>
+      bridge.reserveEditorLease(
+        conn,
+        room,
+        requestId,
+        overrides.expiresAt ?? expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        overrides.roomEpoch ?? TEST_ROOM_EPOCH,
+        overrides.securityEpoch ?? TEST_SECURITY_EPOCH,
+        overrides.issuedAt ?? 1_000,
+      )
+
+    // relay not healthy (subscription never acknowledged)
+    const unhealthy = new FakeRedisNetwork()
+    unhealthy.autoCompleteSubscriptions = false
+    const unhealthyBridge = bridgeFor(unhealthy, new RoomRegistry<SendableSocket>(), 'cause-unhealthy')
+    expect(await codeOf(reserve(unhealthyBridge, connection('cause-1'), 'lease-1'))).toBe('relay-unhealthy')
+    expect(await codeOf(unhealthyBridge.publish({ t: 'yjs', room, payload: 'x' }))).toBe('relay-unhealthy')
+
+    // invalid / expired inputs
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = bridgeFor(redis, rooms, 'cause-main')
+    expect(await codeOf(reserve(bridge, connection('cause-2'), 'lease-2', { expiresAt: Date.now() - 1 }))).toBe(
+      'reservation-expired',
+    )
+
+    // activation without a reservation / with the wrong challenge
+    expect(
+      await codeOf(
+        bridge.activateEditorLease(
+          connection('cause-3'),
+          room,
+          'lease-3',
+          expiresAt,
+          COLLABORATION_PROTOCOL_VERSION,
+          1,
+          undefined,
+          TEST_ROOM_EPOCH,
+          TEST_SECURITY_EPOCH,
+          1_000,
+        ),
+      ),
+    ).toBe('reservation-expired')
+    const challenged = connection('cause-4')
+    await reserve(bridge, challenged, 'lease-4')
+    expect(
+      await codeOf(
+        bridge.activateEditorLease(
+          challenged,
+          room,
+          'lease-4',
+          expiresAt,
+          COLLABORATION_PROTOCOL_VERSION,
+          1,
+          'wrong-challenge',
+          TEST_ROOM_EPOCH,
+          TEST_SECURITY_EPOCH,
+          1_000,
+        ),
+      ),
+    ).toBe('incompatible-protocol')
+
+    // distributed policy results and transport failure on the reserve path
+    const leaseKeyFor = (conn: Conn<SendableSocket>, requestId: string): string =>
+      `srn:collaboration:lease:${createHash('sha256')
+        .update(
+          `${replicaId('cause-main')}\u0000${conn.userUuid}\u0000${conn.connectionId}\u0000${room}\u0000${requestId}`,
+          'utf8',
+        )
+        .digest('hex')}`
+    const incompatible = connection('cause-5')
+    redis.forcedLeasePolicyResults.set(leaseKeyFor(incompatible, 'lease-5'), -1)
+    const incompatibleError = await reserve(bridge, incompatible, 'lease-5').catch((error: unknown) => error)
+    expect(incompatibleError).toBeInstanceOf(CollaborationLifecycleError)
+    expect(incompatibleError).toMatchObject({ code: 'incompatible-protocol', policy: true })
+    const full = connection('cause-6')
+    redis.forcedLeasePolicyResults.set(leaseKeyFor(full, 'lease-6'), -2)
+    expect(await codeOf(reserve(bridge, full, 'lease-6'))).toBe('room-limit')
+
+    vi.mocked(logger.warn).mockClear()
+    redis.failEval = true
+    expect(await codeOf(reserve(bridge, connection('cause-7'), 'lease-7'))).toBe('redis-unavailable')
+    expect(
+      vi
+        .mocked(logger.warn)
+        .mock.calls.some(
+          ([message]) =>
+            String(message).startsWith('[collab-redis] lease reservation unavailable; denying collaboration') &&
+            String(message).endsWith('{"cause":"redis-unavailable"}'),
+        ),
+    ).toBe(true)
+    redis.failEval = false
+    redis.emitCommandReady()
+
+    // epoch mismatch after rotation, and a security revocation, on a fresh bridge
+    const rotation = new FakeRedisNetwork()
+    const rotationBridge = bridgeFor(rotation, new RoomRegistry<SendableSocket>(), 'cause-rotation')
+    const leaver = connection('cause-8')
+    await reserveAndActivate(rotationBridge, leaver, room, 'lease-8', TEST_ROOM_EPOCH)
+    await rotationBridge.releaseLease(leaver, room, 'lease-8', 'clean-leave')
+    vi.mocked(logger.warn).mockClear()
+    expect(await codeOf(reserve(rotationBridge, connection('cause-9'), 'lease-9'))).toBe('epoch-mismatch')
+    expect(
+      vi.mocked(logger.warn).mock.calls.some(([message]) => String(message).endsWith('{"cause":"epoch-mismatch"}')),
+    ).toBe(true)
+    const rotated = (await rotationBridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)) as string
+    await reserveAndActivate(rotationBridge, connection('cause-10'), room, 'lease-10', rotated)
+    expect(
+      await codeOf(
+        reserve(rotationBridge, connection('cause-11'), 'lease-11', {
+          roomEpoch: 'room_epoch_0000000000000009',
+          securityEpoch: 'security_epoch_0000000000000009',
+          issuedAt: 2_000,
+        }),
+      ),
+    ).toBe('security-revoked')
+  })
+
+  it('C2: hasOtherActivatedEditorLease answers from local activated leases first, then the distributed room set, and errs towards "someone may answer"', async () => {
+    const redis = new FakeRedisNetwork()
+    const roomsA = new RoomRegistry<SendableSocket>()
+    const roomsB = new RoomRegistry<SendableSocket>()
+    const bridgeA = bridgeFor(redis, roomsA, 'responder-a')
+    const bridgeB = bridgeFor(redis, roomsB, 'responder-b')
+    const room = 'responder-room'
+    const asker = connection('responder-asker')
+    const peer = connection('responder-peer')
+    const remote = connection('responder-remote')
+    const countQueries = () => redis.evalScripts.filter((script) => script.includes('SRN_COUNT_OTHER_LEASES_V1')).length
+
+    await reserveAndActivate(bridgeA, asker, room, 'lease-asker', TEST_ROOM_EPOCH)
+    // Alone: the distributed set holds only the asker's own lease.
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(false)
+    expect(countQueries()).toBe(1)
+
+    // A local peer that has only RESERVED cannot answer yet; Redis is consulted and
+    // the own-replica pending key is excluded, so the answer stays "nobody".
+    await bridgeA.reserveEditorLease(
+      peer,
+      room,
+      'lease-peer',
+      Date.now() + 60_000,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_000,
+    )
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(false)
+    expect(countQueries()).toBe(2)
+
+    // Once activated locally the answer is immediate, without a Redis round trip.
+    await bridgeA
+      .activateEditorLease(
+        peer,
+        room,
+        'lease-peer',
+        Date.now() + 60_000,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        redis.leaseValues.size > 0 ? undefined : undefined,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        1_000,
+      )
+      .catch(() => undefined)
+    // (activation needs the exact challenge; re-run through the helper instead)
+    await bridgeA.releaseLease(peer, room, 'lease-peer', 'clean-leave')
+    await reserveAndActivate(bridgeA, peer, room, 'lease-peer-2', TEST_ROOM_EPOCH)
+    const before = countQueries()
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(true)
+    expect(countQueries()).toBe(before)
+    await bridgeA.releaseLease(peer, room, 'lease-peer-2', 'clean-leave')
+
+    // A lease held by ANOTHER replica counts as a potential responder, pending or not.
+    await bridgeB.reserveEditorLease(
+      remote,
+      room,
+      'lease-remote',
+      Date.now() + 60_000,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_000,
+    )
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(true)
+    await bridgeB.releaseLease(remote, room, 'lease-remote', 'clean-leave')
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(false)
+
+    // Unsure means "maybe": a failing lookup or an unhealthy relay never yields a false no-responder.
+    redis.failEval = true
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(true)
+    redis.failEval = false
+    redis.emitCommandClose()
+    expect(bridgeA.isRelayHealthy()).toBe(false)
+    expect(await bridgeA.hasOtherActivatedEditorLease(asker, room)).toBe(true)
+  })
+
+  it('C9/C10: isRelayHealthy tracks both Redis paths, and keyPrefix namespaces every key and the relay channel', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = bridgeFor(redis, rooms, 'namespaced', { keyPrefix: 'tenant-a:' })
+    expect(bridge.isRelayHealthy()).toBe(true)
+    expect(redis.subscribedChannels).toEqual(['tenant-a:srn-collaboration-relay-v1'])
+
+    const member = connection('namespaced-member')
+    const room = 'namespaced-room'
+    const expiresAt = Date.now() + 60_000
+    rooms.join(room, member, expiresAt, 'lease-ns', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    await reserveAndActivate(bridge, member, room, 'lease-ns', TEST_ROOM_EPOCH)
+    expect([...redis.leases.keys()].every((key) => key.startsWith('tenant-a:srn:collaboration:lease:'))).toBe(true)
+    expect([...redis.roomStates.keys()]).toEqual([
+      `tenant-a:srn:collaboration:room-state:${createHash('sha256').update(room, 'utf8').digest('hex')}`,
+    ])
+    expect([...redis.sets.keys()]).toEqual([
+      `tenant-a:srn:collaboration:room:${createHash('sha256').update(room, 'utf8').digest('hex')}`,
+    ])
+    await bridge.heartbeatPresence(member, room, 'lease-ns', TEST_ROOM_EPOCH, 7)
+    expect(redis.published.map(({ channel }) => channel)).toEqual(['tenant-a:srn-collaboration-relay-v1'])
+    expect(await bridge.currentRoomEpoch(room, TEST_SECURITY_EPOCH)).toBe(TEST_ROOM_EPOCH)
+
+    // A frame on the un-namespaced channel belongs to another deployment and is ignored.
+    member.send.mockClear()
+    const foreign = JSON.stringify({
+      v: 1,
+      origin: replicaId('elsewhere'),
+      frame: { t: 'awareness', room, payload: 'foreign' },
+    })
+    for (const subscriber of redis.subscribers) {
+      subscriber(COLLABORATION_RELAY_CHANNEL, foreign)
+    }
+    expect(member.send).not.toHaveBeenCalled()
+    for (const subscriber of redis.subscribers) {
+      subscriber('tenant-a:srn-collaboration-relay-v1', foreign)
+    }
+    expect(member.send).toHaveBeenCalledTimes(1)
+
+    redis.emitCommandClose()
+    expect(bridge.isRelayHealthy()).toBe(false)
+    redis.emitCommandReady()
+    // Recovery waits for the deferred lease cleanup that the outage queued.
+    await vi.waitFor(() => expect(bridge.isRelayHealthy()).toBe(true))
+
+    expect(collaborationKeyPrefix(undefined)).toBe('')
+    expect(collaborationKeyPrefix('')).toBe('')
+    expect(collaborationKeyPrefix('ns')).toBe('ns:')
+    expect(collaborationKeyPrefix('ns::')).toBe('ns:')
+    expect(collaborationRelayChannel(undefined)).toBe(COLLABORATION_RELAY_CHANNEL)
+    expect(collaborationRelayChannel('ns')).toBe(`ns:${COLLABORATION_RELAY_CHANNEL}`)
   })
 })
