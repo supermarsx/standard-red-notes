@@ -54,6 +54,13 @@ describe('SQSDomainEventSubscriber', () => {
     expect(consumer.start).toHaveBeenCalled()
   })
 
+  it('names the queue it consumes at info so a shared SQS_QUEUE_URL is visible in the boot logs', () => {
+    createSubscriber().start()
+
+    expect(logger.info).toHaveBeenCalledWith('Consuming SQS queue https://sqs/queue')
+    expect(logger.info.mock.invocationCallOrder[0]).toBeLessThan(consumer.start.mock.invocationCallOrder[0])
+  })
+
   it('routes both error and processing_error to safe logger metadata', () => {
     createSubscriber().start()
     const error = new Error('sqs blew up')
@@ -101,7 +108,7 @@ describe('SQSDomainEventSubscriber', () => {
     subscriber.stop()
 
     expect(consumer.stop).not.toHaveBeenCalled()
-    expect(logger.info).not.toHaveBeenCalled()
+    expect(logger.info).not.toHaveBeenCalledWith('Stopping SQS consumer...')
   })
 
   it('tolerates stop() before start()', () => {

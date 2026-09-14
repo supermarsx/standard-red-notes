@@ -33,6 +33,7 @@ describe('SQSEventMessageHandler', () => {
 
     logger = {} as jest.Mocked<Logger>
     logger.debug = jest.fn()
+    logger.warn = jest.fn()
     logger.error = jest.fn()
   })
 
@@ -80,11 +81,50 @@ describe('SQSEventMessageHandler', () => {
     expect(handler.handle).toHaveBeenCalledTimes(1)
   })
 
-  it('ignores an event with no registered handler', async () => {
-    await createHandler().handleMessage(snsEnvelope({ ...domainEvent, type: 'UNREGISTERED' }))
+  it('warns once per unhandled event type, then counts further occurrences at debug', async () => {
+    const messageHandler = createHandler()
+
+    await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: 'UNREGISTERED' }))
 
     expect(handler.handle).not.toHaveBeenCalled()
-    expect(logger.debug).toHaveBeenCalledWith('Event handler for event type UNREGISTERED does not exist')
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn).toHaveBeenCalledWith('unhandled event type UNREGISTERED; check the SQS_QUEUE_URL of this worker')
+    expect(logger.debug).not.toHaveBeenCalled()
+
+    await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: 'UNREGISTERED' }))
+    await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: 'ALSO_UNREGISTERED' }))
+
+    expect(logger.warn).toHaveBeenCalledTimes(2)
+    expect(logger.warn).toHaveBeenLastCalledWith(
+      'unhandled event type ALSO_UNREGISTERED; check the SQS_QUEUE_URL of this worker',
+    )
+    expect(logger.debug).toHaveBeenCalledWith(
+      'Event handler for event type UNREGISTERED does not exist (2 unhandled so far)',
+    )
+    expect([...messageHandler.unhandledEventTypeCounts()]).toEqual([
+      ['UNREGISTERED', 2],
+      ['ALSO_UNREGISTERED', 1],
+    ])
+    expect(handler.handle).not.toHaveBeenCalled()
+  })
+
+  it('stops remembering new unhandled types once 256 distinct ones were seen', async () => {
+    const messageHandler = createHandler()
+    for (let index = 0; index < 256; index += 1) {
+      await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: `UNREGISTERED_${index}` }))
+    }
+    expect(logger.warn).toHaveBeenCalledTimes(256)
+
+    await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: 'ONE_TOO_MANY' }))
+
+    expect(logger.warn).toHaveBeenCalledTimes(256)
+    expect(logger.debug).toHaveBeenCalledWith('Event handler for event type ONE_TOO_MANY does not exist')
+    expect(messageHandler.unhandledEventTypeCounts().has('ONE_TOO_MANY')).toBe(false)
+    expect(messageHandler.unhandledEventTypeCounts().size).toBe(256)
+
+    // A type already tracked keeps counting past the cap.
+    await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: 'UNREGISTERED_0' }))
+    expect(messageHandler.unhandledEventTypeCounts().get('UNREGISTERED_0')).toBe(2)
   })
 
   it('throws on an envelope that is not valid json', async () => {

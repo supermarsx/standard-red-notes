@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  INVITE_AVAILABILITY_FAILURE_COOLDOWN_MS,
+  inviteAvailabilityChannelPrefix,
   RedisInviteEventAvailabilityBus,
   RedisInviteEventPublisher,
   RedisInviteEventSubscriber,
   SharedInviteEventsAdapter,
 } from '../src/inviteEventAvailability.js'
-import { InviteEventStore, InviteEventStoreError } from '../src/inviteEventStore.js'
+import { InviteEventConfigurationError, InviteEventStore, InviteEventStoreError } from '../src/inviteEventStore.js'
 import { inviteAccountMember, inviteAccountOwner } from './fixtures/inviteRealtimeEvents.js'
 
 class FakeRedisBroker {
@@ -323,6 +325,199 @@ describe('RedisInviteEventAvailabilityBus', () => {
           subscribeAvailability: () => () => undefined,
         }),
     ).toThrow('shared persistence')
+  })
+})
+
+/**
+ * A subscriber whose first `failures` SUBSCRIBE calls reject the way ioredis
+ * does mid-reconnect (`maxRetriesPerRequest` exhausted), then confirm.
+ */
+function flakySubscriber(failures: number) {
+  let attempts = 0
+  let unsubscribes = 0
+  const subscribed = new Set<string>()
+  const listeners = new Set<(channel: string, message: string) => void>()
+  const subscriber: RedisInviteEventSubscriber = {
+    status: 'ready',
+    subscribe: async (channel) => {
+      attempts += 1
+      if (attempts <= failures) {
+        throw new Error('simulated: Redis connection is closed')
+      }
+      subscribed.add(channel)
+    },
+    unsubscribe: async (channel) => {
+      unsubscribes += 1
+      subscribed.delete(channel)
+    },
+    on: (_event, listener) => listeners.add(listener),
+    off: (_event, listener) => listeners.delete(listener),
+  }
+  return {
+    subscriber,
+    subscribed,
+    attempts: () => attempts,
+    unsubscribes: () => unsubscribes,
+    emit: (channel: string) => {
+      for (const listener of listeners) {
+        listener(channel, 'available')
+      }
+    },
+  }
+}
+
+function thrown(operation: () => unknown): unknown {
+  try {
+    operation()
+  } catch (error) {
+    return error
+  }
+  return undefined
+}
+
+describe('RedisInviteEventAvailabilityBus failure handling', () => {
+  it('turns a rejected SUBSCRIBE into a latched, retryable failure instead of an unhandled rejection', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      const redis = flakySubscriber(1)
+      const bus = new RedisInviteEventAvailabilityBus({ status: 'ready', publish: async () => 1 }, redis.subscriber)
+      const onAvailable = vi.fn()
+
+      const dispose = bus.subscribeAvailability(inviteAccountOwner, onAvailable)
+      // Node reports an unhandled rejection only after the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      expect(unhandled).not.toHaveBeenCalled()
+      // The session is woken once so it rereads and observes the failure.
+      expect(onAvailable).toHaveBeenCalledTimes(1)
+      expect(bus.ready()).toBe(false)
+      expect(redis.subscribed.size).toBe(0)
+
+      dispose()
+      await flush()
+      expect(redis.unsubscribes()).toBe(0)
+      await bus.close()
+      expect(redis.attempts()).toBe(1)
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+
+  it('clears the failure latch on the next successful SUBSCRIBE and wakes every waiting listener', async () => {
+    const redis = flakySubscriber(1)
+    const bus = new RedisInviteEventAvailabilityBus({ status: 'ready', publish: async () => 1 }, redis.subscriber)
+    const first = vi.fn()
+    bus.subscribeAvailability(inviteAccountOwner, first)
+    await flush()
+    expect(bus.ready()).toBe(false)
+    first.mockClear()
+
+    const second = vi.fn()
+    bus.subscribeAvailability(inviteAccountOwner, second)
+    await flush()
+
+    expect(bus.ready()).toBe(true)
+    expect(redis.attempts()).toBe(2)
+    expect(redis.subscribed.size).toBe(1)
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(1)
+
+    redis.emit([...redis.subscribed][0])
+    expect(first).toHaveBeenCalledTimes(2)
+    expect(second).toHaveBeenCalledTimes(2)
+
+    await bus.close()
+    expect(redis.subscribed.size).toBe(0)
+    expect(redis.unsubscribes()).toBe(1)
+  })
+
+  it('clears the failure latch on a well-formed publish', async () => {
+    const redis = flakySubscriber(1)
+    const bus = new RedisInviteEventAvailabilityBus({ status: 'ready', publish: async () => 0 }, redis.subscriber)
+    bus.subscribeAvailability(inviteAccountOwner, vi.fn())
+    await flush()
+    expect(bus.ready()).toBe(false)
+
+    await bus.publishAvailability(inviteAccountMember)
+
+    expect(bus.ready()).toBe(true)
+    await bus.close()
+  })
+
+  it('lets the latch expire after the cool-down so one blip cannot hold the lane closed', async () => {
+    let now = 1_000
+    const redis = flakySubscriber(Number.POSITIVE_INFINITY)
+    const bus = new RedisInviteEventAvailabilityBus({ status: 'ready', publish: async () => 0 }, redis.subscriber, {
+      clock: () => now,
+    })
+    bus.subscribeAvailability(inviteAccountOwner, vi.fn())
+    await flush()
+    expect(bus.ready()).toBe(false)
+
+    now += INVITE_AVAILABILITY_FAILURE_COOLDOWN_MS - 1
+    expect(bus.ready()).toBe(false)
+    now += 1
+    expect(bus.ready()).toBe(true)
+
+    // A persistent failure is re-observed by the next attempt.
+    bus.subscribeAvailability(inviteAccountMember, vi.fn())
+    await flush()
+    expect(bus.ready()).toBe(false)
+    await bus.close()
+  })
+
+  it('shares one in-flight SUBSCRIBE between sessions of the same account', async () => {
+    let confirm!: () => void
+    let attempts = 0
+    const subscriber: RedisInviteEventSubscriber = {
+      status: 'ready',
+      subscribe: () => {
+        attempts += 1
+        return new Promise<void>((resolve) => (confirm = resolve))
+      },
+      unsubscribe: async () => undefined,
+      on: () => undefined,
+      off: () => undefined,
+    }
+    const bus = new RedisInviteEventAvailabilityBus({ status: 'ready', publish: async () => 0 }, subscriber)
+    const sessionA = vi.fn()
+    const sessionB = vi.fn()
+    bus.subscribeAvailability(inviteAccountOwner, sessionA)
+    bus.subscribeAvailability(inviteAccountOwner, sessionB)
+    expect(attempts).toBe(1)
+
+    confirm()
+    await flush()
+    expect(sessionA).toHaveBeenCalledTimes(1)
+    expect(sessionB).toHaveBeenCalledTimes(1)
+
+    const sessionC = vi.fn()
+    bus.subscribeAvailability(inviteAccountOwner, sessionC)
+    expect(attempts).toBe(1)
+    await bus.close()
+  })
+
+  it('namespaces the channel per deployment and rejects a malformed namespace', async () => {
+    const broker = new FakeRedisBroker()
+    const bus = new RedisInviteEventAvailabilityBus(broker.publisher(), broker.subscriber(), { namespace: 'tenant-a' })
+    bus.subscribeAvailability(inviteAccountOwner, vi.fn())
+    await flush()
+
+    const channel = [...broker.subscriptions.keys()][0]
+    expect(channel.startsWith('tenant-a:ws:invite-events:available:v1:')).toBe(true)
+    expect(channel).not.toContain(inviteAccountOwner)
+    expect(inviteAvailabilityChannelPrefix('tenant-a')).toBe('tenant-a:ws:invite-events:available:v1:')
+    expect(inviteAvailabilityChannelPrefix('')).toBe('ws:invite-events:available:v1:')
+    expect(inviteAvailabilityChannelPrefix()).toBe('ws:invite-events:available:v1:')
+
+    const invalid = thrown(
+      () =>
+        new RedisInviteEventAvailabilityBus(broker.publisher(), broker.subscriber(), { namespace: 'Bad Namespace' }),
+    )
+    expect(invalid).toBeInstanceOf(InviteEventConfigurationError)
+    expect(invalid).toMatchObject({ code: 'INVITE_REDIS_NAMESPACE_INVALID' })
+    await bus.close()
   })
 })
 

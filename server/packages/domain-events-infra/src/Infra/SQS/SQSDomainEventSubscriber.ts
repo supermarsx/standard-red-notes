@@ -28,6 +28,11 @@ export class SQSDomainEventSubscriber implements DomainEventSubscriberInterface 
 
     this.consumer = sqsConsumer
 
+    // Every worker names the queue it drains. Four workers that inherit one
+    // bare SQS_QUEUE_URL silently steal each other's (and the gateway's)
+    // messages; with this line the collision is visible in the boot logs.
+    this.logger.info(`Consuming SQS queue ${this.queueUrl}`)
+
     sqsConsumer.start()
   }
 

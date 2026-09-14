@@ -108,6 +108,47 @@ export class InviteEventStoreError extends Error {
   }
 }
 
+/**
+ * A boot-time composition mistake, distinct from runtime store errors. Carries a
+ * stable `code` so a host that logs only `safeErrorLogMetadata(error)` can still
+ * name the cause (the message is stripped from operational logs by design).
+ */
+export class InviteEventConfigurationError extends Error {
+  constructor(
+    readonly code: 'INVITE_CURSOR_SECRET_TOO_SHORT' | 'INVITE_REDIS_NAMESPACE_INVALID',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'InviteEventConfigurationError'
+  }
+}
+
+export const DEFAULT_INVITE_EVENT_KEY_PREFIX = 'ws:invite-events:v1:'
+const REDIS_NAMESPACE_PATTERN = /^[a-z0-9:_-]{1,64}$/u
+
+/**
+ * Applies the per-deployment Redis namespace (`WEBSOCKET_REDIS_NAMESPACE`) to a
+ * key or channel prefix as `<namespace>:<prefix>`. Undefined or empty keeps the
+ * prefix byte-identical, so a rolling upgrade keeps replicas talking.
+ */
+export function namespacedInviteEventPrefix(prefix: string, namespace: string | undefined): string {
+  if (namespace === undefined || namespace === '') {
+    return prefix
+  }
+  if (!REDIS_NAMESPACE_PATTERN.test(namespace)) {
+    throw new InviteEventConfigurationError(
+      'INVITE_REDIS_NAMESPACE_INVALID',
+      'Invite event Redis namespace is invalid.',
+    )
+  }
+  return `${namespace}:${prefix}`
+}
+
+/** Store key prefix for a deployment namespace; `undefined` or empty keeps the current key names. */
+export function inviteEventStoreKeyPrefix(namespace?: string): string {
+  return namespacedInviteEventPrefix(DEFAULT_INVITE_EVENT_KEY_PREFIX, namespace)
+}
+
 export interface InviteEventStore {
   readonly distribution: 'process' | 'shared'
   ready(): boolean
@@ -166,6 +207,8 @@ export interface RedisInviteEventClient {
 export type RedisInviteEventStoreOptions = {
   cursorSecret: string | Uint8Array
   keyPrefix?: string
+  /** Per-deployment namespace (`WEBSOCKET_REDIS_NAMESPACE`), prepended as `<namespace>:`; empty keeps the current keys. */
+  namespace?: string
   retentionMilliseconds?: number
   maxEventsPerUser?: number
   clock?: () => number
@@ -184,7 +227,10 @@ export class RedisInviteEventStore implements InviteEventStore {
     options: RedisInviteEventStoreOptions,
   ) {
     this.cursorCodec = new InviteCursorCodec(options.cursorSecret)
-    this.keyPrefix = options.keyPrefix ?? 'ws:invite-events:v1:'
+    this.keyPrefix = namespacedInviteEventPrefix(
+      options.keyPrefix ?? DEFAULT_INVITE_EVENT_KEY_PREFIX,
+      options.namespace,
+    )
     this.retentionMilliseconds = positiveInteger(
       options.retentionMilliseconds ?? DEFAULT_RETENTION_MS,
       'retentionMilliseconds',
@@ -417,7 +463,10 @@ class InviteCursorCodec {
   constructor(secret: string | Uint8Array) {
     this.secret = Buffer.from(secret)
     if (this.secret.byteLength < 32) {
-      throw new Error('Invite cursor secret must contain at least 32 bytes.')
+      throw new InviteEventConfigurationError(
+        'INVITE_CURSOR_SECRET_TOO_SHORT',
+        'Invite cursor secret must contain at least 32 bytes.',
+      )
     }
   }
 

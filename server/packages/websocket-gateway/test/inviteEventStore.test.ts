@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   appendInviteEventForAffectedUsers,
   InMemoryInviteEventStore,
+  inviteEventStoreKeyPrefix,
   isInviteEventInvalidation,
   isInviteEventUserUuid,
   isOpaqueInviteEventCursor,
+  InviteEventConfigurationError,
   InviteEventInvalidation,
   InviteEventStoreError,
+  namespacedInviteEventPrefix,
   RedisInviteEventClient,
   RedisInviteEventStore,
   SharedVaultMembershipEventAction,
@@ -15,6 +18,15 @@ import {
 const secret = '0123456789abcdef0123456789abcdef'
 const accountA = '00000000-0000-4000-8000-000000000001'
 const accountB = '00000000-0000-4000-8000-000000000002'
+
+function thrownBy(operation: () => unknown): unknown {
+  try {
+    operation()
+  } catch (error) {
+    return error
+  }
+  return undefined
+}
 
 const redisClient = (overrides: Partial<RedisInviteEventClient> = {}): RedisInviteEventClient =>
   ({
@@ -244,6 +256,17 @@ describe('InMemoryInviteEventStore', () => {
     expect(() => new InMemoryInviteEventStore({ cursorSecret: 'too-short' })).toThrow(
       'Invite cursor secret must contain at least 32 bytes.',
     )
+    // Hosts log boot failures through safeErrorLogMetadata, which strips the
+    // message; the stable code is the only thing an operator gets to see.
+    const shortSecret = thrownBy(() => new InMemoryInviteEventStore({ cursorSecret: 'too-short' }))
+    expect(shortSecret).toBeInstanceOf(InviteEventConfigurationError)
+    expect(shortSecret).toMatchObject({
+      code: 'INVITE_CURSOR_SECRET_TOO_SHORT',
+      name: 'InviteEventConfigurationError',
+    })
+    expect(
+      thrownBy(() => new RedisInviteEventStore(redisClient(), { cursorSecret: '0123456789abcdef' })),
+    ).toMatchObject({ code: 'INVITE_CURSOR_SECRET_TOO_SHORT' })
     expect(() => new InMemoryInviteEventStore({ cursorSecret: secret, maxEventsPerUser: 0 })).toThrow(
       'maxEventsPerUser must be a positive safe integer.',
     )
@@ -384,6 +407,36 @@ describe('invite event validation', () => {
 })
 
 describe('RedisInviteEventStore', () => {
+  it('prefixes every key with the deployment namespace and rejects a malformed one', async () => {
+    const evalCommand = vi.fn().mockResolvedValue(['1', 1])
+    const redis = { status: 'ready', eval: evalCommand } as unknown as RedisInviteEventClient
+    const store = new RedisInviteEventStore(redis, { cursorSecret: secret, namespace: 'tenant-a' })
+
+    await store.append(accountA, inviteEvent(1))
+
+    const keys = evalCommand.mock.calls[0].filter(
+      (argument: unknown): argument is string => typeof argument === 'string' && argument.includes('invite-events'),
+    )
+    expect(keys.length).toBeGreaterThan(0)
+    for (const key of keys) {
+      expect(key.startsWith('tenant-a:ws:invite-events:v1:')).toBe(true)
+    }
+
+    expect(inviteEventStoreKeyPrefix()).toBe('ws:invite-events:v1:')
+    expect(inviteEventStoreKeyPrefix('')).toBe('ws:invite-events:v1:')
+    expect(inviteEventStoreKeyPrefix('tenant-a')).toBe('tenant-a:ws:invite-events:v1:')
+    expect(namespacedInviteEventPrefix('custom:', 'tenant_b')).toBe('tenant_b:custom:')
+
+    const invalid = thrownBy(
+      () => new RedisInviteEventStore(redisClient(), { cursorSecret: secret, namespace: 'Tenant A' }),
+    )
+    expect(invalid).toBeInstanceOf(InviteEventConfigurationError)
+    expect(invalid).toMatchObject({ code: 'INVITE_REDIS_NAMESPACE_INVALID' })
+    expect(thrownBy(() => namespacedInviteEventPrefix('x:', 'a'.repeat(65)))).toMatchObject({
+      code: 'INVITE_REDIS_NAMESPACE_INVALID',
+    })
+  })
+
   it('fails closed when shared state is not ready', async () => {
     const redis = { status: 'connecting' } as RedisInviteEventClient
     const store = new RedisInviteEventStore(redis, { cursorSecret: secret })

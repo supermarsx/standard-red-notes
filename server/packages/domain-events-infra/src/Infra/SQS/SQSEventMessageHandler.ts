@@ -9,7 +9,12 @@ import {
 } from '@standardnotes/domain-events'
 import { DomainEventDeduplicator } from '../DomainEventDeduplicator'
 
+/** Distinct unhandled types remembered per process; a poisoned queue cannot grow the map without bound. */
+const MAX_TRACKED_UNHANDLED_EVENT_TYPES = 256
+
 export class SQSEventMessageHandler implements DomainEventMessageHandlerInterface {
+  private readonly unhandledEventTypes = new Map<string, number>()
+
   constructor(
     private handlers: Map<string, DomainEventHandlerInterface>,
     private logger: Logger,
@@ -27,7 +32,7 @@ export class SQSEventMessageHandler implements DomainEventMessageHandlerInterfac
 
     const handler = this.handlers.get(domainEvent.type)
     if (!handler) {
-      this.logger.debug(`Event handler for event type ${domainEvent.type} does not exist`)
+      this.recordUnhandledEventType(domainEvent.type)
 
       return
     }
@@ -39,5 +44,31 @@ export class SQSEventMessageHandler implements DomainEventMessageHandlerInterfac
 
   async handleError(error: Error): Promise<void> {
     this.logger.error('Error occurred while handling an SQS message.', safeErrorLogMetadata(error))
+  }
+
+  /** How many messages of each type this process acknowledged without a handler. */
+  unhandledEventTypeCounts(): ReadonlyMap<string, number> {
+    return this.unhandledEventTypes
+  }
+
+  /**
+   * An unhandled type is acknowledged and gone, so the first occurrence per
+   * type is a warning: a worker that keeps seeing types it never registered is
+   * almost always polling another service's queue.
+   */
+  private recordUnhandledEventType(type: string): void {
+    const count = (this.unhandledEventTypes.get(type) ?? 0) + 1
+    if (count === 1 && this.unhandledEventTypes.size >= MAX_TRACKED_UNHANDLED_EVENT_TYPES) {
+      this.logger.debug(`Event handler for event type ${type} does not exist`)
+
+      return
+    }
+    this.unhandledEventTypes.set(type, count)
+    if (count === 1) {
+      this.logger.warn(`unhandled event type ${type}; check the SQS_QUEUE_URL of this worker`)
+
+      return
+    }
+    this.logger.debug(`Event handler for event type ${type} does not exist (${count} unhandled so far)`)
   }
 }
