@@ -32,11 +32,11 @@ export async function waitForRedisReady(
   }
 
   return new Promise<RedisReadinessOutcome>((resolve) => {
-    let timer: NodeJS.Timeout | undefined
+    // `settle` closes over `timer`, which is declared after the listeners are
+    // attached; every path that calls it runs asynchronously, after the timer
+    // exists, so the closure never observes it unset.
     const settle = (outcome: RedisReadinessOutcome): void => {
-      if (timer) {
-        clearTimeout(timer)
-      }
+      clearTimeout(timer)
       redis.removeListener('ready', onReady)
       redis.removeListener('end', onEnd)
       resolve(outcome)
@@ -48,7 +48,7 @@ export async function waitForRedisReady(
 
     redis.once('ready', onReady)
     redis.once('end', onEnd)
-    timer = setTimeout(() => settle('timeout'), timeoutMs)
+    const timer = setTimeout(() => settle('timeout'), timeoutMs)
     timer.unref()
   })
 }
