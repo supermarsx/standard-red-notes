@@ -1217,10 +1217,9 @@ export class HomeServer implements HomeServerInterface {
       return adapter
     } catch (error) {
       // A missing or unusable storage root must not take realtime sync down
-      // with it; the capability is simply not advertised.
-      logger.warn('WebSocket FILES_V1 transport could not be initialized.', {
-        error: error instanceof Error ? error.message : String(error),
-      })
+      // with it; the capability is simply not advertised. Redacted
+      // classification only: the message can embed the resolved storage path.
+      logger.warn('WebSocket FILES_V1 transport could not be initialized.', safeErrorLogMetadata(error))
       return undefined
     }
   }
