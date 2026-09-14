@@ -795,7 +795,11 @@ describe('WebSocketSyncTransport', () => {
     worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'proxy-failed' })
     await flush()
 
-    expect(transport.transportStatus).toEqual({ state: 'HTTP_FALLBACK', fallbackReason: 'proxy-failed', operations: [] })
+    expect(transport.transportStatus).toEqual({
+      state: 'HTTP_FALLBACK',
+      fallbackReason: 'proxy-failed',
+      operations: [],
+    })
   })
 
   describe('a session with no socket lane', () => {
@@ -851,9 +855,7 @@ describe('WebSocketSyncTransport', () => {
 
       const result = await recovery
       expect(fallback).toHaveBeenCalledWith(request(), command)
-      expect(result).toEqual(
-        expect.objectContaining({ response: response('replayed'), request: request() }),
-      )
+      expect(result).toEqual(expect.objectContaining({ response: response('replayed'), request: request() }))
       expect(result?.markCheckpointDurable).toBeDefined()
     })
   })
