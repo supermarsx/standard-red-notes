@@ -16,6 +16,10 @@ const sqs = vi.hoisted(() => {
     /** Resolves once the loop has drained every queued response. */
     drained: undefined as Promise<void> | undefined,
     signalDrained: undefined as (() => void) | undefined,
+    /** DeleteMessage rejects with the mapped error for these receipt handles. */
+    deleteRejects: new Map<string, Error>(),
+    /** Invoked (before any rejection) when DeleteMessage is sent for the receipt handle. */
+    deleteHooks: new Map<string, () => void>(),
   }
 
   class ReceiveMessageCommand {
@@ -37,6 +41,12 @@ const sqs = vi.hoisted(() => {
       state.sent.push({ kind: command.kind, input: command.input })
 
       if (command.kind === 'delete') {
+        const receiptHandle = String(command.input.ReceiptHandle)
+        state.deleteHooks.get(receiptHandle)?.()
+        const rejection = state.deleteRejects.get(receiptHandle)
+        if (rejection) {
+          throw rejection
+        }
         return {}
       }
 
@@ -67,10 +77,27 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   DeleteMessageCommand: sqs.DeleteMessageCommand,
 }))
 
+/**
+ * Counts every inflate the consumer performs. `decodeSqsBodyToDomainEvent` is
+ * called internally, so a spy on the export would not see it; the one zlib
+ * call per decode is the observable that proves a body is decoded once (N7).
+ */
+const inflate = vi.hoisted(() => ({ count: 0 }))
+
+vi.mock('node:zlib', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:zlib')>()
+  const unzipSync: typeof actual.unzipSync = (...args) => {
+    inflate.count += 1
+    return actual.unzipSync(...args)
+  }
+  return { ...actual, unzipSync }
+})
+
 import {
   createInMemorySqsEventDedupStore,
   decodeSqsBodyToDispatch,
   startSqsConsumer,
+  type SqsConsumerHandle,
   type SqsEventDedupStore,
 } from '../src/sqsConsumer.js'
 import { ConnectionRegistry, type SendableSocket } from '../src/registry.js'
@@ -120,6 +147,9 @@ beforeEach(() => {
   sqs.state.destroyed = 0
   sqs.state.receiveQueue = []
   sqs.state.signalDrained = undefined
+  sqs.state.deleteRejects.clear()
+  sqs.state.deleteHooks.clear()
+  inflate.count = 0
 })
 
 afterEach(() => {
@@ -445,5 +475,131 @@ describe('startSqsConsumer', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     expect(logger.error).not.toHaveBeenCalled()
+  })
+
+  it('inflates each message body exactly once before branching on its type', async () => {
+    const { registry, send } = makeRegistry()
+    const handle = vi.fn().mockResolvedValue(undefined)
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-a')), ReceiptHandle: 'rh-ws' },
+          { Body: snsEnvelope(inviteEvent()), ReceiptHandle: 'rh-invite' },
+          // The queue is unfiltered (N7): every other syncing-server/auth event lands here too.
+          { Body: snsEnvelope({ type: 'USER_SIGNED_IN', payload: { userUuid: 'user-1' } }), ReceiptHandle: 'rh-other' },
+        ],
+      },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, {
+      queueUrl: 'https://sqs/q',
+      logger: makeLogger(),
+      inviteRealtimeHandler: { handle },
+    })
+    await drained
+
+    expect(inflate.count).toBe(3)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(handle).toHaveBeenCalledTimes(1)
+    expect(
+      sqs.state.sent.filter((command) => command.kind === 'delete').map((command) => command.input.ReceiptHandle),
+    ).toEqual(['rh-ws', 'rh-invite', 'rh-other'])
+    stop()
+  })
+
+  it('keeps dispatching and acknowledging the rest of a batch when one DeleteMessage rejects', async () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    sqs.state.deleteRejects.set('rh-b', new Error('delete rejected'))
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-a')), ReceiptHandle: 'rh-a' },
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-b')), ReceiptHandle: 'rh-b' },
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-c')), ReceiptHandle: 'rh-c' },
+        ],
+      },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, { queueUrl: 'https://sqs/q', logger })
+    await drained
+
+    // R35: b is dispatched once (never re-dispatched), c still goes out and is acknowledged.
+    expect(send.mock.calls).toEqual([['payload-a'], ['payload-b'], ['payload-c']])
+    expect(
+      sqs.state.sent.filter((command) => command.kind === 'delete').map((command) => command.input.ReceiptHandle),
+    ).toEqual(['rh-a', 'rh-b', 'rh-c'])
+    expect(logger.error).toHaveBeenCalledTimes(1)
+    expect(logger.error).toHaveBeenCalledWith('[sqs] message acknowledgement failed', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('delete rejected')
+    stop()
+  })
+
+  it('abandons the remainder of a batch once stopped and stays quiet about the interrupted delete', async () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-a')), ReceiptHandle: 'rh-a' },
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-b')), ReceiptHandle: 'rh-b' },
+        ],
+      },
+    ]
+    let handle: SqsConsumerHandle | undefined
+    sqs.state.deleteHooks.set('rh-a', () => {
+      handle?.()
+      throw new Error('client destroyed')
+    })
+    handle = startSqsConsumer(registry, { queueUrl: 'https://sqs/q', logger })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(send.mock.calls).toEqual([['payload-a']])
+    expect(handle.running()).toBe(false)
+    expect(sqs.state.destroyed).toBe(1)
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(sqs.state.sent.filter((command) => command.kind === 'receive')).toHaveLength(1)
+  })
+
+  it('exposes stop() and running() on the callable handle', async () => {
+    const drained = whenDrained()
+    const handle = startSqsConsumer(makeRegistry().registry, { queueUrl: 'https://sqs/q', logger: makeLogger() })
+    await drained
+
+    expect(handle.running()).toBe(true)
+    expect(handle.stop).toBe(handle)
+    handle.stop()
+    expect(handle.running()).toBe(false)
+    expect(sqs.state.destroyed).toBe(1)
+  })
+
+  it('reports every dispatched push through onDispatched and skips suppressed duplicates', async () => {
+    const { registry } = makeRegistry()
+    const onDispatched = vi.fn()
+    const durable = snsEnvelope(wsEvent('user-1', 'payload-a', undefined, 'event-1'))
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          { Body: durable, ReceiptHandle: 'rh-first' },
+          { Body: durable, ReceiptHandle: 'rh-duplicate' },
+          { Body: snsEnvelope(wsEvent('user-1', 'payload-b', 'session-1')), ReceiptHandle: 'rh-legacy' },
+        ],
+      },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, {
+      queueUrl: 'https://sqs/q',
+      logger: makeLogger(),
+      dedupStore: createInMemorySqsEventDedupStore(),
+      onDispatched,
+    })
+    await drained
+
+    // The duplicate is suppressed; the legacy push reached no socket (origin excluded) but still counts.
+    expect(onDispatched.mock.calls).toEqual([[1], [0]])
+    stop()
   })
 })

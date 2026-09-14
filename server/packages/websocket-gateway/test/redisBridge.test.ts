@@ -47,7 +47,12 @@ const redis = vi.hoisted(() => {
 
 vi.mock('ioredis', () => ({ Redis: redis.FakeRedisClient }))
 
-import { WEBSOCKET_MESSAGES_CHANNEL, startRedisBridge } from '../src/redisBridge.js'
+import {
+  WEBSOCKET_MESSAGES_CHANNEL,
+  applyRedisNamespace,
+  namespacedPushChannel,
+  startRedisBridge,
+} from '../src/redisBridge.js'
 import { ConnectionRegistry, type Conn, type SendableSocket } from '../src/registry.js'
 
 function makeLogger() {
@@ -234,5 +239,62 @@ describe('startRedisBridge', () => {
       originExcluded: true,
     })
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-origin')
+  })
+
+  it('subscribes to the namespaced channel and ignores the bare one when channelPrefix is set', () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    startRedisBridge(registry, { host: 'h', port: 1, logger, channelPrefix: 'prod' })
+
+    expect(redis.instances[0].subscriptions).toEqual(['prod:websocket-messages'])
+    redis.instances[0].subscribeCallback?.(null, 1)
+    expect(logger.info).toHaveBeenCalledWith('[redis] subscribed to prod:websocket-messages (1 channels)')
+
+    const payload = JSON.stringify({ userUuid: 'user-1', message: 'payload-a' })
+    redis.instances[0].emit('message', WEBSOCKET_MESSAGES_CHANNEL, payload)
+    expect(send).not.toHaveBeenCalled()
+    redis.instances[0].emit('message', 'prod:websocket-messages', payload)
+    expect(send).toHaveBeenCalledWith('payload-a')
+  })
+
+  it('refuses to start with a namespace that violates the contract', () => {
+    expect(() =>
+      startRedisBridge(makeRegistry().registry, { host: 'h', port: 1, logger: makeLogger(), channelPrefix: 'prod:' }),
+    ).toThrow('WEBSOCKET_REDIS_NAMESPACE')
+    expect(redis.instances).toHaveLength(0)
+  })
+
+  it('counts every dispatched push through onDispatched, malformed payloads excluded', () => {
+    const { registry } = makeRegistry()
+    const onDispatched = vi.fn()
+    startRedisBridge(registry, { host: 'h', port: 1, logger: makeLogger(), onDispatched })
+
+    const client = redis.instances[0]
+    client.emit('message', WEBSOCKET_MESSAGES_CHANNEL, JSON.stringify({ userUuid: 'user-1', message: 'a' }))
+    client.emit('message', WEBSOCKET_MESSAGES_CHANNEL, '{ not json')
+    client.emit('message', WEBSOCKET_MESSAGES_CHANNEL, JSON.stringify({ userUuid: 'user-2', message: 'b' }))
+
+    expect(onDispatched.mock.calls).toEqual([[1], [0]])
+  })
+})
+
+describe('applyRedisNamespace', () => {
+  it('leaves the shared names untouched when no namespace is configured', () => {
+    expect(namespacedPushChannel()).toBe('websocket-messages')
+    expect(namespacedPushChannel('')).toBe(WEBSOCKET_MESSAGES_CHANNEL)
+    expect(applyRedisNamespace(undefined, 'srn:collaboration:')).toBe('srn:collaboration:')
+  })
+
+  it('prefixes the original name with the namespace and a colon', () => {
+    expect(namespacedPushChannel('prod')).toBe('prod:websocket-messages')
+    expect(namespacedPushChannel('eu-1:blue_2')).toBe('eu-1:blue_2:websocket-messages')
+    expect(applyRedisNamespace('prod', 'ws:sqs:event:v1:')).toBe('prod:ws:sqs:event:v1:')
+    expect(applyRedisNamespace('a'.repeat(64), 'x')).toBe(`${'a'.repeat(64)}:x`)
+  })
+
+  it('rejects a namespace outside the contract pattern or with a leading or trailing colon', () => {
+    for (const bad of ['Prod', 'a b', 'ns/1', 'a'.repeat(65), ':prod', 'prod:']) {
+      expect(() => applyRedisNamespace(bad, 'x')).toThrow('WEBSOCKET_REDIS_NAMESPACE')
+    }
   })
 })

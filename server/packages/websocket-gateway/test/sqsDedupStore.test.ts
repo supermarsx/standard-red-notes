@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createRedisSqsEventDedupStore, type RedisSqsEventDedupClient } from '../src/sqsConsumer.js'
+import {
+  DEFAULT_SQS_DEDUP_KEY_PREFIX,
+  createRedisSqsEventDedupStore,
+  namespacedDedupPrefix,
+  type RedisSqsEventDedupClient,
+} from '../src/sqsConsumer.js'
 
 class FakeRedisDedupClient implements RedisSqsEventDedupClient {
   status = 'ready'
@@ -84,5 +89,27 @@ describe('Redis SQS event deduplication', () => {
 
     await expect(createRedisSqsEventDedupStore(redis).executeOnce('event-1', operation)).rejects.toThrow('not ready')
     expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('keys the store under the namespaced prefix so two stacks on one Redis never share a claim', async () => {
+    expect(namespacedDedupPrefix()).toBe('ws:sqs:event:v1:')
+    expect(namespacedDedupPrefix('')).toBe(DEFAULT_SQS_DEDUP_KEY_PREFIX)
+    expect(namespacedDedupPrefix('prod')).toBe('prod:ws:sqs:event:v1:')
+    expect(() => namespacedDedupPrefix('prod:')).toThrow('WEBSOCKET_REDIS_NAMESPACE')
+
+    const redis = new FakeRedisDedupClient()
+    expect(await createRedisSqsEventDedupStore(redis).executeOnce('event-1', vi.fn())).toBe('executed')
+    // Same event identity, different namespace: a fresh claim, not a duplicate.
+    expect(
+      await createRedisSqsEventDedupStore(redis, { keyPrefix: namespacedDedupPrefix('prod') }).executeOnce(
+        'event-1',
+        vi.fn(),
+      ),
+    ).toBe('executed')
+
+    const keys = [...redis.values.keys()]
+    expect(keys).toHaveLength(2)
+    expect(keys[0]).toMatch(/^ws:sqs:event:v1:[0-9a-f]{64}$/)
+    expect(keys[1]).toMatch(/^prod:ws:sqs:event:v1:[0-9a-f]{64}$/)
   })
 })

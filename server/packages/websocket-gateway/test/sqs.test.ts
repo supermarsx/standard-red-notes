@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as zlib from 'node:zlib'
-import { decodeSqsBodyToDispatch } from '../src/sqsConsumer.js'
+import { decodeSqsBodyToDispatch, decodeSqsBodyToDomainEvent, domainEventToDispatch } from '../src/sqsConsumer.js'
 
 function snsEnvelope(event: unknown): string {
   const compressed = zlib.gzipSync(Buffer.from(JSON.stringify(event))).toString('base64')
@@ -46,5 +46,28 @@ describe('decodeSqsBodyToDispatch', () => {
   it('returns null when payload is missing required fields', () => {
     const bad = { type: 'WEB_SOCKET_MESSAGE_REQUESTED', payload: { userUuid: 'u' } }
     expect(decodeSqsBodyToDispatch(snsEnvelope(bad))).toBeNull()
+  })
+})
+
+describe('domainEventToDispatch', () => {
+  it('projects an already-decoded event exactly like decoding the body does', () => {
+    const body = snsEnvelope(wsEvent)
+    expect(domainEventToDispatch(decodeSqsBodyToDomainEvent(body))).toEqual(decodeSqsBodyToDispatch(body))
+    expect(domainEventToDispatch(null)).toBeNull()
+    expect(domainEventToDispatch({ type: 'SOME_OTHER_EVENT', payload: wsEvent.payload })).toBeNull()
+  })
+
+  it('rejects a malformed eventId on a durable event', () => {
+    const base = { type: 'WEB_SOCKET_MESSAGE_REQUESTED', payload: { userUuid: 'u', message: 'm' } }
+    expect(domainEventToDispatch({ ...base, eventId: 42 })).toBeNull()
+    expect(domainEventToDispatch({ ...base, eventId: '' })).toBeNull()
+    expect(domainEventToDispatch({ ...base, eventId: 'x'.repeat(513) })).toBeNull()
+    expect(domainEventToDispatch({ ...base, eventId: 'x'.repeat(512) })?.eventId).toHaveLength(512)
+    expect(domainEventToDispatch(base)).toEqual({
+      eventId: undefined,
+      userUuid: 'u',
+      message: 'm',
+      originatingSessionUuid: undefined,
+    })
   })
 })
