@@ -27,7 +27,7 @@ import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startCollaborationRedisBridge } from './collaborationRedisBridge.js'
 import { createLogThrottle, type LogThrottle } from './logThrottle.js'
 import { safeErrorLogMetadata } from './safeLog.js'
-import { startSqsConsumer, type SqsEventDedupStore } from './sqsConsumer.js'
+import { startSqsConsumer, type SqsConsumerHandle, type SqsEventDedupStore } from './sqsConsumer.js'
 import {
   SyncCommandHandler,
   sessionAuthorizationReady,
@@ -127,6 +127,13 @@ export interface SyncCapabilityResponse {
 export interface SyncTicketResponse {
   ticket: string
   expiresAt: number
+  /**
+   * Server clock at issue time, so a client whose clock is skewed derives the
+   * ticket's remaining life from `expiresAt - issuedAt` instead of comparing
+   * `expiresAt` with its own clock. The gateway always sets it; optional only
+   * so host-side doubles that predate it keep compiling.
+   */
+  issuedAt?: number
   endpoint: typeof SYNC_SOCKET_PATH
   capability: typeof SYNC_CAPABILITY_ID
   version: typeof SYNC_PROTOCOL_VERSION
@@ -998,6 +1005,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         return {
           ticket: issued.ticket,
           expiresAt: issued.expiresAt,
+          issuedAt: issued.issuedAt ?? Date.now(),
           endpoint: SYNC_SOCKET_PATH,
           capability: SYNC_CAPABILITY_ID,
           version: SYNC_PROTOCOL_VERSION,
@@ -1043,21 +1051,14 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     host: config.redisHost,
     port: config.redisPort,
     logger,
-    ...(config.redisNamespace ? { keyPrefix: `${config.redisNamespace}:` } : {}),
+    ...(config.redisNamespace ? { keyPrefix: config.redisNamespace } : {}),
   }
   const collaborationRedis = startCollaborationRedisBridge(rooms, collaborationBridgeOptions)
   // The fleet-shared room state is the only place a rotated epoch lives, so
-  // the bridge is the default resolver. Guarded structurally: the method is
-  // added to the bridge in this same wave, and until then (or on a test
-  // double without it) discovery keeps answering the initial epoch.
-  const bridgeEpochs = collaborationRedis as unknown as {
-    currentRoomEpoch?: (room: string, collaborationSecurityEpoch: string) => Promise<string | undefined>
-  }
-  const collaborationRoomEpochResolver: SyncGatewayOptions['collaborationRoomEpochResolver'] =
+  // the bridge is the default resolver; a composition root may supply its own.
+  const collaborationRoomEpochResolver: NonNullable<SyncGatewayOptions['collaborationRoomEpochResolver']> =
     syncOptions?.collaborationRoomEpochResolver ??
-    (typeof bridgeEpochs.currentRoomEpoch === 'function'
-      ? (room, collaborationSecurityEpoch) => bridgeEpochs.currentRoomEpoch!(room, collaborationSecurityEpoch)
-      : undefined)
+    ((room, collaborationSecurityEpoch) => collaborationRedis.currentRoomEpoch(room, collaborationSecurityEpoch))
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -1329,28 +1330,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     host: config.redisHost,
     port: config.redisPort,
     logger,
-    ...(config.redisNamespace ? { channelPrefix: `${config.redisNamespace}:` } : {}),
+    ...(config.redisNamespace ? { channelPrefix: config.redisNamespace } : {}),
   }
   const redis = startRedisBridge(registry, pushBridgeOptions)
 
-  // The consumer's stop handle is either the bare stop function or, once it
-  // reports its own state, `{ stop, running }`; both shapes are honoured.
-  let sqsHandle: unknown
-  const sqsConsumerRunning = (): boolean => {
-    if (sqsHandle === undefined) {
-      return false
-    }
-    const handle = sqsHandle as { running?: () => boolean }
-    return typeof handle.running === 'function' ? handle.running() : !stopping
-  }
-  const stopSqs = (): void => {
-    const handle = sqsHandle as (() => void) | { stop(): void } | undefined
-    if (typeof handle === 'function') {
-      handle()
-    } else {
-      handle?.stop()
-    }
-  }
+  let sqsHandle: SqsConsumerHandle | undefined
   if (config.sqs?.queueUrl) {
     sqsHandle = startSqsConsumer(registry, {
       queueUrl: config.sqs.queueUrl,
@@ -1366,18 +1350,15 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     })
   }
 
-  const health = (): GatewayHealth => {
-    const relay = collaborationRedis as unknown as { isRelayHealthy?: () => boolean }
-    return {
-      attached: true,
-      pushBridge: config.redisHost ? 'redis' : 'none',
-      pushBridgeReady: (redis as { status?: string }).status === 'ready',
-      sqsConsumerRunning: sqsConsumerRunning(),
-      collaborationRelayHealthy: typeof relay.isRelayHealthy === 'function' ? relay.isRelayHealthy() : false,
-      syncLane: syncAvailable() ? 'up' : 'down',
-      pushesDispatched,
-    }
-  }
+  const health = (): GatewayHealth => ({
+    attached: true,
+    pushBridge: config.redisHost ? 'redis' : 'none',
+    pushBridgeReady: (redis as { status?: string }).status === 'ready',
+    sqsConsumerRunning: sqsHandle?.running() ?? false,
+    collaborationRelayHealthy: collaborationRedis.isRelayHealthy(),
+    syncLane: syncAvailable() ? 'up' : 'down',
+    pushesDispatched,
+  })
 
   let stopPromise: Promise<void> | undefined
   const stop = (): Promise<void> => {
@@ -1387,7 +1368,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     stopPromise = (async () => {
       stopping = true
       clearInterval(heartbeat)
-      stopSqs()
+      sqsHandle?.stop()
 
       const websocketClosed = new Promise<void>((resolve) => {
         let settled = false
@@ -1523,7 +1504,26 @@ export {
   type InviteRealtimeDomainEventBridge,
   type InviteRealtimeSubscriberFactory,
 } from './inviteEventDomainEventBridge.js'
-export { createRedisSqsEventDedupStore, createInMemorySqsEventDedupStore } from './sqsConsumer.js'
+export {
+  createRedisSqsEventDedupStore,
+  createInMemorySqsEventDedupStore,
+  namespacedDedupPrefix,
+  domainEventToDispatch,
+  DEFAULT_SQS_DEDUP_KEY_PREFIX,
+} from './sqsConsumer.js'
+export type { SqsConsumerHandle, SqsConsumerOptions } from './sqsConsumer.js'
+// One namespace rule for every host: derive channel and key names from these
+// rather than mirroring the `<ns>:<original>` convention by hand.
+export {
+  applyRedisNamespace,
+  namespacedPushChannel,
+  REDIS_NAMESPACE_PATTERN,
+  WEBSOCKET_MESSAGES_CHANNEL,
+} from './redisBridge.js'
+export type { PushDispatchedHook, RedisBridgeOptions } from './redisBridge.js'
+export { InviteEventConfigurationError, inviteEventStoreKeyPrefix } from './inviteEventStore.js'
+export { inviteAvailabilityChannelPrefix } from './inviteEventAvailability.js'
+export type { RedisInviteEventAvailabilityBusOptions } from './inviteEventAvailability.js'
 export type {
   InMemorySqsEventDedupOptions,
   RedisSqsEventDedupClient,

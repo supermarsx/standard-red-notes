@@ -310,6 +310,8 @@ export interface SyncTicketIdentity {
 export interface IssuedSyncTicket {
   ticket: string
   expiresAt: number
+  /** Server clock at issue time (see `SyncTicketResponse.issuedAt`). */
+  issuedAt?: number
 }
 
 export interface SyncAuthTicketStore {
@@ -373,9 +375,10 @@ export class InMemorySyncAuthTicketStore implements SyncAuthTicketStore {
     this.sweepExpired()
     const ticket = randomBytes(32).toString('base64url')
     const digest = ticketDigest(ticket)
-    const expiresAt = this.now() + ttlMs
+    const issuedAt = this.now()
+    const expiresAt = issuedAt + ttlMs
     this.tickets.set(digest.toString('hex'), { digest, identity: { ...identity }, expiresAt })
-    return { ticket, expiresAt }
+    return { ticket, expiresAt, issuedAt }
   }
 
   async consume(ticket: string): Promise<SyncTicketIdentity | undefined> {

@@ -101,6 +101,8 @@ async function importEntry(env: Record<string, string> = REQUIRED_ENV): Promise<
     'REDIS_PORT',
     'WEB_SOCKET_CONNECTION_TOKEN_SECRET',
     'WEB_SOCKET_CONNECTION_TOKEN_TTL',
+    'WEBSOCKET_MAX_CONNECTIONS_PER_USER',
+    'WEBSOCKET_REDIS_NAMESPACE',
     'WEBSOCKET_GATEWAY_INTERNAL_SECRET',
     'AUTH_JWT_SECRET',
     'SQS_QUEUE_URL',
@@ -208,6 +210,36 @@ describe('standalone entry', () => {
     })
   })
 
+  it('normalises a bare-integer ttl to seconds and passes the per-user ceiling and namespace through', async () => {
+    await importEntry({
+      ...REQUIRED_ENV,
+      WEB_SOCKET_CONNECTION_TOKEN_TTL: '60',
+      WEBSOCKET_MAX_CONNECTIONS_PER_USER: '8',
+      WEBSOCKET_REDIS_NAMESPACE: 'tenant-a',
+    })
+
+    expect(exitSpy).not.toHaveBeenCalled()
+    // jsonwebtoken reads a bare "60" as milliseconds; the entry now hands it "60s".
+    expect(harness.state.attachOptions?.config).toMatchObject({
+      connectionTokenTtl: '60s',
+      maxConnectionsPerUser: 8,
+      redisNamespace: 'tenant-a',
+    })
+  })
+
+  it.each([
+    ['WEB_SOCKET_CONNECTION_TOKEN_TTL', 'abc'],
+    ['WEB_SOCKET_CONNECTION_TOKEN_TTL', '0'],
+    ['WEBSOCKET_MAX_CONNECTIONS_PER_USER', 'many'],
+    ['WEBSOCKET_MAX_CONNECTIONS_PER_USER', '4096'],
+    ['WEBSOCKET_REDIS_NAMESPACE', 'Tenant A'],
+  ])('exits non-zero naming the variable when %s is %s', async (variable, value) => {
+    await importEntry({ ...REQUIRED_ENV, [variable]: value }).catch(() => undefined)
+
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(console.error).toHaveBeenCalledWith(expect.any(String), '[error]', expect.stringContaining(variable))
+  })
+
   it('attaches without an express app so the token route is dispatched manually', async () => {
     await importEntry()
 
@@ -267,6 +299,9 @@ describe('standalone entry', () => {
       fakeRequest('POST', '/health'),
       fakeRequest('GET', '/sockets/tokens'),
       fakeRequest('GET', '/unknown'),
+      // The gateway-native sync routes are gone from the standalone entry too.
+      fakeRequest('POST', '/sockets/sync/tickets'),
+      fakeRequest('GET', '/sockets/sync/capabilities'),
     ]) {
       const { res, status, body } = fakeResponse()
       harness.state.requestListener?.(req, res)

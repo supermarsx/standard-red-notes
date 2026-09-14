@@ -12,10 +12,14 @@ const redis = vi.hoisted(() => {
     quitRejects: false,
     evalCalls: 0,
     evalGate: undefined as Promise<void> | undefined,
+    status: undefined as string | undefined,
   }
 
   class FakeRedisClient {
     constructor(readonly options: Record<string, unknown>) {}
+    get status(): string | undefined {
+      return state.status
+    }
     on(): this {
       return this
     }
@@ -56,9 +60,11 @@ import {
   createLoggerSyncCommandMetrics,
   defaultRoomJoinAuthorizer,
   MAX_WEBSOCKET_MESSAGE_BYTES,
+  SyncUnavailableError,
   WebSocketIngressLimiter,
   WebSocketRelayBacklog,
   type GatewayConfig,
+  type GatewayHealth,
   type SyncFilesAdapter,
   type SyncGatewayOptions,
 } from '../src/gateway.js'
@@ -113,11 +119,23 @@ function fakeResponse(): { res: ServerResponse; status: () => number; body: () =
   }
 }
 
-/** A request double: headers plus an optional raw body streamed on 'data'/'end'. */
-function fakeRequest(headers: Record<string, unknown>, rawBody?: string): IncomingMessage {
+/**
+ * A request double: headers plus an optional raw body streamed on 'data'/'end'.
+ * The peer defaults to a direct loopback caller, which is what the
+ * internal-secret mint path requires; pass `remoteAddress` to model another.
+ */
+function fakeRequest(
+  headers: Record<string, unknown>,
+  rawBody?: string,
+  peer: { remoteAddress?: string } = { remoteAddress: '127.0.0.1' },
+): IncomingMessage {
   const stream = rawBody === undefined ? new Readable({ read() {} }) : Readable.from([rawBody])
 
-  return Object.assign(stream, { headers, destroy: vi.fn(stream.destroy.bind(stream)) }) as unknown as IncomingMessage
+  return Object.assign(stream, {
+    headers,
+    socket: peer,
+    destroy: vi.fn(stream.destroy.bind(stream)),
+  }) as unknown as IncomingMessage
 }
 
 /** Runs the mint handler against a request whose body arrives as a stream. */
@@ -150,6 +168,7 @@ beforeEach(() => {
   redis.state.quitRejects = false
   redis.state.evalCalls = 0
   redis.state.evalGate = undefined
+  redis.state.status = undefined
 })
 
 afterEach(async () => {
@@ -369,7 +388,8 @@ describe('POST /sockets/tokens', () => {
     expect(status()).toBe(200)
     const minted = (body() as { token: string }).token
     expect(jwt.verify(minted, CONNECTION_SECRET)).toMatchObject({ userUuid: 'user-1', sessionUuid: 'session-1' })
-    expect(logger.info).toHaveBeenCalledWith('[token] minted (x-auth) user=user-1')
+    expect(logger.info).toHaveBeenCalledWith('[token] minted (x-auth)')
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('user-1')
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-1')
   })
 
@@ -425,6 +445,51 @@ describe('POST /sockets/tokens', () => {
     }
   })
 
+  it('refuses the internal-secret path for a proxied or remote caller before comparing the secret', async () => {
+    await attachWith(baseConfig())
+    const body = { userUuid: 'user-1', sessionUuid: 'session-1' }
+
+    for (const [headers, peer] of [
+      [{ 'x-internal-secret': INTERNAL_SECRET, 'x-forwarded-for': '203.0.113.9' }, { remoteAddress: '127.0.0.1' }],
+      [{ 'x-internal-secret': INTERNAL_SECRET, 'x-forwarded-for': '' }, { remoteAddress: '127.0.0.1' }],
+      [{ 'x-internal-secret': INTERNAL_SECRET }, { remoteAddress: '203.0.113.9' }],
+      [{ 'x-internal-secret': INTERNAL_SECRET }, { remoteAddress: '::ffff:10.0.0.7' }],
+      [{ 'x-internal-secret': INTERNAL_SECRET }, {}],
+    ] as const) {
+      const { res, status, body: responseBody } = fakeResponse()
+      handleMintToken(Object.assign(fakeRequest(headers, undefined, peer), { body }), res)
+      expect(status()).toBe(403)
+      expect(responseBody()).toEqual({ error: 'forbidden' })
+    }
+    expect(JSON.stringify(logger.warn.mock.calls)).toContain('proxied or remote')
+
+    for (const remoteAddress of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '127.8.8.8']) {
+      const { res, status } = fakeResponse()
+      handleMintToken(
+        Object.assign(fakeRequest({ 'x-internal-secret': INTERNAL_SECRET }, undefined, { remoteAddress }), { body }),
+        res,
+      )
+      expect(status()).toBe(200)
+    }
+  })
+
+  it('still honours the forwarded x-auth-token path for a proxied caller', async () => {
+    await attachWith(baseConfig())
+    const crossServiceToken = jwt.sign({ user: { uuid: 'user-1' }, session: { uuid: 'session-1' } }, AUTH_SECRET, {
+      algorithm: 'HS256',
+    })
+    const { res, status } = fakeResponse()
+    handleMintToken(
+      fakeRequest({ 'x-auth-token': crossServiceToken, 'x-forwarded-for': '203.0.113.9' }, undefined, {
+        remoteAddress: '10.0.0.2',
+      }),
+      res,
+    )
+
+    expect(status()).toBe(200)
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('user-1')
+  })
+
   it('mints from an already-parsed body (attached mode, express has parsed json)', async () => {
     await attachWith(baseConfig())
 
@@ -437,7 +502,8 @@ describe('POST /sockets/tokens', () => {
     expect(status()).toBe(200)
     const minted = (body() as { token: string }).token
     expect(jwt.verify(minted, CONNECTION_SECRET)).toMatchObject({ userUuid: 'user-9', sessionUuid: 'session-9' })
-    expect(logger.info).toHaveBeenCalledWith('[token] minted user=user-9')
+    expect(logger.info).toHaveBeenCalledWith('[token] minted (internal)')
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('user-9')
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-9')
   })
 
@@ -518,11 +584,17 @@ describe('websocket connection lifecycle', () => {
   }
 
   function connect(query: string): WebSocket {
-    return new WebSocket(`ws://127.0.0.1:${port}/${query}`)
+    return new WebSocket(`ws://127.0.0.1:${port}/sockets${query}`)
   }
 
   function closedWith(socket: WebSocket): Promise<number> {
     return new Promise((resolve) => socket.once('close', (code) => resolve(code)))
+  }
+
+  function closedWithReason(socket: WebSocket): Promise<{ code: number; reason: string }> {
+    return new Promise((resolve) =>
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })),
+    )
   }
 
   function opened(socket: WebSocket): Promise<void> {
@@ -540,22 +612,86 @@ describe('websocket connection lifecycle', () => {
     await attachGateway()
     const socket = connect('')
 
-    expect(await closedWith(socket)).toBe(1008)
+    expect(await closedWithReason(socket)).toEqual({ code: 1008, reason: 'missing authToken' })
     expect(attached!.registry.size()).toBe(0)
-    expect(logger.warn).toHaveBeenCalledWith('[ws] connection rejected: missing authToken')
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[ws] connection rejected: missing authToken',
+      JSON.stringify({ suppressedSinceLastLog: 0 }),
+    )
   })
 
-  it('closes a connection whose authToken does not verify', async () => {
+  it('closes a connection whose authToken does not verify and names the jwt failure class', async () => {
     await attachGateway()
     const forged = jwt.sign({ userUuid: 'user-1', sessionUuid: 'session-1' }, 'wrong-secret', { algorithm: 'HS256' })
     const socket = connect(`?authToken=${forged}`)
 
     expect(await closedWith(socket)).toBe(1008)
     expect(attached!.registry.size()).toBe(0)
-    expect(logger.warn).toHaveBeenCalledWith('[ws] connection rejected: bad token', {
-      errorType: 'Error',
-      errorCode: undefined,
-    })
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[ws] connection rejected: bad token',
+      JSON.stringify({ errorType: 'Error', jwtError: 'invalid-signature', suppressedSinceLastLog: 0 }),
+    )
+  })
+
+  it.each([
+    ['expired', () => mintConnectionToken({ userUuid: 'user-1', sessionUuid: 'session-1' }, CONNECTION_SECRET, -60)],
+    ['malformed', () => 'not-a-jwt'],
+    ['other', () => jwt.sign({ userUuid: 'user-1' }, CONNECTION_SECRET, { algorithm: 'HS256', expiresIn: '60s' })],
+  ])('classifies a rejected legacy token as %s without echoing it', async (jwtError, token) => {
+    await attachGateway()
+    const socket = connect(`?authToken=${token()}`)
+
+    expect(await closedWith(socket)).toBe(1008)
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    const [message, metadata] = logger.warn.mock.calls[0] as [string, string]
+    expect(message).toBe('[ws] connection rejected: bad token')
+    expect(JSON.parse(metadata)).toMatchObject({ jwtError })
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(token().slice(0, 12))
+  })
+
+  it('throttles a storm of legacy refusals to one line per cause', async () => {
+    await attachGateway()
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await closedWith(connect(''))
+    }
+
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('upgrades the legacy lane only on /sockets', async () => {
+    await attachGateway()
+    const token = mintConnectionToken({ userUuid: 'user-1', sessionUuid: 'session-1' }, CONNECTION_SECRET, '60s')
+
+    for (const path of ['/', '/sockets/', '/sockets/legacy', '/anything']) {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}${path}?authToken=${token}`)
+      expect(await closedWithReason(socket)).toEqual({ code: 1008, reason: 'unknown path' })
+    }
+    expect(attached!.registry.size()).toBe(0)
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('/sockets/legacy')
+
+    const pinned = connect(`?authToken=${token}`)
+    await opened(pinned)
+    expect(attached!.registry.size()).toBe(1)
+    pinned.close()
+  })
+
+  it('logs connect and disconnect without the user identifier', async () => {
+    await attachGateway()
+    const token = mintConnectionToken(
+      { userUuid: 'user-uuid-sentinel', sessionUuid: 'session-1' },
+      CONNECTION_SECRET,
+      '60s',
+    )
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+    socket.close()
+    await closedWith(socket)
+    await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
+
+    const emitted = JSON.stringify(logger.info.mock.calls)
+    expect(emitted).toContain('[ws] connect conn=')
+    expect(emitted).toContain('[ws] disconnect conn=')
+    expect(emitted).not.toContain('user-uuid-sentinel')
   })
 
   it('registers a connection presenting a valid token and deregisters it on close', async () => {
@@ -570,7 +706,7 @@ describe('websocket connection lifecycle', () => {
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
   })
 
-  it('rejects the N+1 socket at the per-user ceiling and reclaims the user bucket on close', async () => {
+  it('rejects the N+1 socket at the per-user ceiling without logging the user, and reclaims the bucket on close', async () => {
     await attachGateway({ maxConnectionsPerUser: 2 })
     const token = mintConnectionToken({ userUuid: 'user-tabs', sessionUuid: 'session-tabs' }, CONNECTION_SECRET, '60s')
     const first = connect(`?authToken=${token}`)
@@ -581,7 +717,11 @@ describe('websocket connection lifecycle', () => {
     const rejected = connect(`?authToken=${token}`)
     expect(await closedWith(rejected)).toBe(1008)
     expect(attached!.registry.get('user-tabs')).toHaveLength(2)
-    expect(logger.warn).toHaveBeenCalledWith('[ws] connection rejected: per-user limit user=user-tabs')
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[ws] connection rejected: per-user limit',
+      JSON.stringify({ limit: 2, suppressedSinceLastLog: 0 }),
+    )
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('user-tabs')
 
     first.close()
     await vi.waitFor(() => expect(attached!.registry.get('user-tabs')).toHaveLength(1))
@@ -664,7 +804,7 @@ describe('websocket connection lifecycle', () => {
     expect(attached!.rooms.roomCount()).toBe(0)
     expect(messages.some((message) => message.includes('room-reserved'))).toBe(false)
     expect(
-      logger.info.mock.calls.filter(([message]) => String(message).includes('disconnect user=user-race')),
+      logger.info.mock.calls.filter(([message]) => String(message).includes('[ws] disconnect conn=')),
     ).toHaveLength(1)
   })
 
@@ -738,7 +878,8 @@ describe('websocket connection lifecycle', () => {
     socket.send('ping')
     expect(await closed).toBe(1008)
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[ws] ingress rate exceeded user=user-frames'))
+    expect(logger.warn).toHaveBeenCalledWith('[ws] ingress rate exceeded', expect.stringContaining('"conn":'))
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('user-frames')
   })
 
   it('closes a connection that exhausts its per-connection byte bucket', async () => {
@@ -768,7 +909,8 @@ describe('websocket connection lifecycle', () => {
     socket.send('ping')
     expect(await closed).toBe(1008)
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[ws] ingress rate exceeded user=user-bytes'))
+    expect(logger.warn).toHaveBeenCalledWith('[ws] ingress rate exceeded', expect.stringContaining('"conn":'))
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('user-bytes')
   })
 
   it('closes a socket before a slow relay lifecycle can retain an unbounded frame backlog', async () => {
@@ -820,9 +962,7 @@ describe('websocket connection lifecycle', () => {
         socket.send(JSON.stringify({ t: 'room-leave', room: 'slow-frame-room', requestId: `queued-${index}` }))
       }
       await vi.waitFor(() =>
-        expect(logger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('[ws] relay backlog exceeded user=user-relay-frames'),
-        ),
+        expect(logger.warn).toHaveBeenCalledWith('[ws] relay backlog exceeded', expect.stringContaining('"conn":')),
       )
       redis.state.evalGate = undefined
       releaseEval()
@@ -882,9 +1022,7 @@ describe('websocket connection lifecycle', () => {
       const closed = closedWith(socket)
       socket.send(JSON.stringify({ t: 'room-leave', room: 'slow-byte-room', requestId: 'queued-byte-frame' }))
       await vi.waitFor(() =>
-        expect(logger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('[ws] relay backlog exceeded user=user-relay-bytes'),
-        ),
+        expect(logger.warn).toHaveBeenCalledWith('[ws] relay backlog exceeded', expect.stringContaining('"conn":')),
       )
       redis.state.evalGate = undefined
       releaseEval()
@@ -977,7 +1115,8 @@ describe('websocket connection lifecycle', () => {
 
     const denied = nextMessage(socket)
     socket.send(JSON.stringify({ t: 'room-join', room: 'note-1' }))
-    expect(JSON.parse(await denied)).toEqual({ t: 'room-denied', room: 'note-1' })
+    // `room-denied` gains a `reason` field in this wave (C1); match the shape.
+    expect(JSON.parse(await denied)).toMatchObject({ t: 'room-denied', room: 'note-1' })
     expect(attached!.rooms.members('note-1').length).toBe(0)
 
     socket.close()
@@ -995,7 +1134,8 @@ describe('websocket connection lifecycle', () => {
 
     const denied = nextMessage(socket)
     socket.send(JSON.stringify({ t: 'room-join', room: 'note-1' }))
-    expect(JSON.parse(await denied)).toEqual({ t: 'room-denied', room: 'note-1' })
+    // `room-denied` gains a `reason` field in this wave (C1); match the shape.
+    expect(JSON.parse(await denied)).toMatchObject({ t: 'room-denied', room: 'note-1' })
     expect(socket.readyState).toBe(WebSocket.OPEN)
     expect(attached!.rooms.members('note-1').length).toBe(0)
 
@@ -1023,7 +1163,7 @@ describe('websocket connection lifecycle', () => {
       // autoPong: false makes this client ignore the server's ping, which is what a
       // wedged/half-open connection looks like to the gateway.
       const socket = new WebSocket(
-        `ws://127.0.0.1:${port}/?authToken=${mintConnectionToken(
+        `ws://127.0.0.1:${port}/sockets?authToken=${mintConnectionToken(
           { userUuid: 'user-1', sessionUuid: 'session-1' },
           CONNECTION_SECRET,
           '60s',
@@ -1054,7 +1194,7 @@ describe('websocket connection lifecycle', () => {
     try {
       await attachGateway()
       const socket = new WebSocket(
-        `ws://127.0.0.1:${port}/?authToken=${mintConnectionToken(
+        `ws://127.0.0.1:${port}/sockets?authToken=${mintConnectionToken(
           { userUuid: 'user-1', sessionUuid: 'session-1' },
           CONNECTION_SECRET,
           '60s',
@@ -1201,11 +1341,10 @@ describe('authenticated /sockets/sync command plane', () => {
     )
   }
 
-  async function invokeSyncTicket(req: IncomingMessage): Promise<{ status: number; body: unknown }> {
-    const capture = fakeResponse()
-    attached!.handleSyncTicket(req, capture.res)
-    await vi.waitFor(() => expect(capture.status()).toBeGreaterThan(0))
-    return { status: capture.status(), body: capture.body() }
+  function closedWithReason(socket: WebSocket): Promise<{ code: number; reason: string }> {
+    return new Promise((resolve) =>
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })),
+    )
   }
 
   it('advertises no capability unless every adapter and kill switch is ready', async () => {
@@ -1215,14 +1354,185 @@ describe('authenticated /sockets/sync command plane', () => {
     await expect(
       attached.sync.issueTicket({ userUuid: 'user-1', sessionUuid: 'session-1', deviceId: 'device-1' }),
     ).rejects.toThrow(/unavailable/i)
+    // The gateway-native ticket/capability handlers are gone: neither host
+    // ever registered them and the ticket one had no session in front of it.
+    expect(attached).not.toHaveProperty('handleSyncTicket')
+    expect(attached).not.toHaveProperty('handleSyncCapabilities')
+  })
 
-    const capabilityResponse = fakeResponse()
-    attached.handleSyncCapabilities(fakeRequest({}), capabilityResponse.res)
-    expect(capabilityResponse.status()).toBe(200)
-    expect(capabilityResponse.body()).toEqual({ capabilities: [] })
+  it('refuses a ticket with a typed error that says whether the cause is transient', async () => {
+    await listen()
+    const notReadyTickets = new InMemorySyncAuthTicketStore()
+    vi.spyOn(notReadyTickets, 'ready').mockReturnValue(false)
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), tickets: notReadyTickets },
+    })
+    const identity = { userUuid: 'user-1', sessionUuid: 'session-1', deviceId: 'device-1' }
+    const storeRefusal = await attached.sync.issueTicket(identity).catch((error: unknown) => error)
+    expect(storeRefusal).toBeInstanceOf(SyncUnavailableError)
+    expect(storeRefusal).toMatchObject({ reasons: ['ticket-store-unavailable'], transient: true })
+    await attached.stop()
 
-    const disabledTicket = await invokeSyncTicket(fakeRequest({}))
-    expect(disabledTicket).toEqual({ status: 503, body: { error: { code: 'SYNC_DISABLED' } } })
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), tickets: notReadyTickets, isEnabled: () => false },
+    })
+    const mixedRefusal = await attached.sync.issueTicket(identity).catch((error: unknown) => error)
+    expect(mixedRefusal).toMatchObject({
+      reasons: ['disabled-by-configuration', 'ticket-store-unavailable'],
+      transient: false,
+    })
+  })
+
+  it('does not gate the whole lane on the invite availability bus', async () => {
+    port = await listen()
+    // A 1-2 s Redis reconnect window used to make whoever negotiated during
+    // it HTTP-only for the session; INVITE_EVENTS alone depends on the bus.
+    const shared = sharedSyncState()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...syncOptions(),
+        ...shared,
+        inviteEvents: { ...shared.inviteEvents!, ready: () => false },
+        requireSharedState: true,
+        filesUnsupported: true,
+      },
+    })
+
+    expect(attached.sync.unavailabilityReasons?.()).toEqual([])
+    expect(attached.sync.capabilities().capabilities).toHaveLength(1)
+    expect(attached.health().syncLane).toBe('up')
+  })
+
+  it('closes a rejected sync upgrade with the cause as the close reason', async () => {
+    await attachSync()
+    const queryString = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync?ticket=x`, {
+      origin: 'https://app.example.test',
+    })
+    expect(await closedWithReason(queryString)).toEqual({ code: 1008, reason: 'query-string-not-permitted' })
+
+    const foreignOrigin = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://evil.example' })
+    expect(await closedWithReason(foreignOrigin)).toEqual({ code: 1008, reason: 'origin-not-allowed' })
+    await attached!.stop()
+
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), isEnabled: () => false },
+    })
+    const unavailable = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    expect(await closedWithReason(unavailable)).toEqual({
+      code: 1013,
+      reason: 'sync-unavailable:disabled-by-configuration',
+    })
+  })
+
+  // Contract C4 end to end through attach: the adapter reports the HMAC
+  // initial epoch, the fleet-shared room state holds a rotated one, and the
+  // gateway-supplied resolver is what lets the client echo an epoch the room
+  // will actually accept. Skipped, not todo: the body is complete and passes
+  // against w1-e5's handler change, which had not been committed when this
+  // landed. The wave verifier flips `it.skip` to `it` once it has.
+  it.skip('replaces the discovery roomEpoch with the resolver answer so a grant bound to the rotated epoch succeeds', async () => {
+    const INITIAL = 'initial_room_epoch_0001'
+    const ROTATED = 'rotated_room_epoch_0002'
+    const authorizeCollaboration = vi.fn(async ({ request }: { request: Record<string, unknown> }) =>
+      request.epochDiscovery === true
+        ? {
+            authorized: true as const,
+            epochDiscovery: true as const,
+            room: request.noteUuid as string,
+            serverUpdatedAtTimestamp: 123,
+            collaborationProtocolVersion: 3 as const,
+            roomEpoch: INITIAL,
+            collaborationSecurityEpoch: SECURITY_EPOCH,
+          }
+        : {
+            authorized: true as const,
+            capability: 'collaboration-capability',
+            room: request.noteUuid as string,
+            expiresIn: 300,
+            serverUpdatedAtTimestamp: 123,
+            collaborationProtocolVersion: 3 as const,
+            roomEpoch: request.expectedRoomEpoch as string,
+            collaborationSecurityEpoch: SECURITY_EPOCH,
+            leaseRequestId: request.leaseRequestId as string,
+          },
+    )
+    const collaborationRoomEpochResolver = vi.fn(async () => ROTATED)
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...syncOptions(),
+        collaborationAuthorization: { collaborationAuthorizationReady: () => true, authorizeCollaboration },
+        collaborationRoomEpochResolver,
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      deviceId: 'device-1',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+    const frame = (type: string, sequence: number, payload: Record<string, unknown>) =>
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type,
+        requestId: `${type.toLowerCase()}-${sequence}`,
+        commandId: `${type.toLowerCase()}-${sequence}`,
+        sequence,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+      })
+
+    const authenticated = nextJson(socket)
+    socket.send(frame('AUTH', 0, { ticket: issued.ticket, deviceId: 'device-1' }))
+    expect(await authenticated).toMatchObject({ type: 'AUTHENTICATED' })
+
+    const discovered = nextJson(socket)
+    socket.send(
+      frame('COLLABORATION_AUTHORIZE', 1, {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        epochDiscovery: true,
+      }),
+    )
+    const discovery = (await discovered) as { type: string; payload: Record<string, unknown> }
+    expect(discovery).toMatchObject({ type: 'COLLABORATION_AUTHORIZED', payload: { roomEpoch: ROTATED } })
+    expect(collaborationRoomEpochResolver).toHaveBeenCalledWith('note-1', SECURITY_EPOCH)
+
+    const granted = nextJson(socket)
+    socket.send(
+      frame('COLLABORATION_AUTHORIZE', 2, {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: ROTATED,
+        epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+        epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+        leaseRequestId: 'lease-1',
+      }),
+    )
+    expect(await granted).toMatchObject({
+      type: 'COLLABORATION_AUTHORIZED',
+      payload: { roomEpoch: ROTATED, leaseRequestId: 'lease-1' },
+    })
+    socket.close()
   })
 
   it('advertises and admits exact same-origin sync when no explicit origin list is configured', async () => {
@@ -1374,69 +1684,15 @@ describe('authenticated /sockets/sync command plane', () => {
       sessionUuid: 'shutdown-session',
       deviceId: 'shutdown-device',
     })
+    // D7: the server's own clock rides along so a skewed client can derive
+    // the ticket's remaining life instead of trusting its wall clock.
+    expect(issued.expiresAt - issued.issuedAt!).toBe(30_000)
 
     await attached.stop()
     expect(clear).toHaveBeenCalledTimes(1)
     await expect(tickets.consume(issued.ticket)).resolves.toBeUndefined()
     await expect(attached.stop()).resolves.toBeUndefined()
     attached = undefined
-  })
-
-  it('issues HTTPS tickets through forwarded or internal authentication and rejects invalid input', async () => {
-    await attachSync()
-    const crossServiceToken = jwt.sign({ user: { uuid: 'user-1' }, session: { uuid: 'session-1' } }, AUTH_SECRET, {
-      algorithm: 'HS256',
-    })
-    const forwardedRequest = Object.assign(fakeRequest({ 'x-auth-token': crossServiceToken }), {
-      body: { deviceId: 'device-1' },
-    })
-    const forwarded = await invokeSyncTicket(forwardedRequest)
-    expect(forwarded).toMatchObject({
-      status: 200,
-      body: { endpoint: '/sockets/sync', capability: 'ws-sync', version: 1 },
-    })
-    expect((forwarded.body as { ticket: string }).ticket).not.toContain('user-1')
-
-    const internalRequest = Object.assign(fakeRequest({ 'x-internal-secret': INTERNAL_SECRET }), {
-      body: { deviceId: 'device-2', userUuid: 'user-2', sessionUuid: 'session-2' },
-    })
-    expect(await invokeSyncTicket(internalRequest)).toMatchObject({ status: 200 })
-
-    const badDevice = Object.assign(fakeRequest({ 'x-auth-token': crossServiceToken }), {
-      body: { deviceId: '../bad' },
-    })
-    expect(await invokeSyncTicket(badDevice)).toEqual({
-      status: 400,
-      body: { error: { code: 'INVALID_DEVICE' } },
-    })
-
-    const forged = Object.assign(fakeRequest({ 'x-auth-token': 'not-a-jwt' }), {
-      body: { deviceId: 'device-1' },
-    })
-    expect(await invokeSyncTicket(forged)).toEqual({
-      status: 401,
-      body: { error: { code: 'AUTH_REJECTED' } },
-    })
-
-    const incompleteInternal = Object.assign(fakeRequest({ 'x-internal-secret': INTERNAL_SECRET }), {
-      body: { deviceId: 'device-1', userUuid: 'user-1' },
-    })
-    expect(await invokeSyncTicket(incompleteInternal)).toEqual({
-      status: 401,
-      body: { error: { code: 'AUTH_REJECTED' } },
-    })
-  })
-
-  it('bounds and validates streamed ticket bodies before authentication', async () => {
-    await attachSync()
-    const malformed = await mintWithStreamedBody(attached!.handleSyncTicket, {}, '{')
-    expect(malformed).toEqual({ status: 400, body: { error: { code: 'INVALID_DEVICE' } } })
-
-    const nonObject = await mintWithStreamedBody(attached!.handleSyncTicket, {}, '[]')
-    expect(nonObject).toEqual({ status: 400, body: { error: { code: 'INVALID_DEVICE' } } })
-
-    const oversized = await mintWithStreamedBody(attached!.handleSyncTicket, {}, 'x'.repeat(16_385))
-    expect(oversized).toEqual({ status: 400, body: { error: { code: 'INVALID_DEVICE' } } })
   })
 
   it('fails ticket minting closed if the ready shared store rejects issuance', async () => {
@@ -1455,17 +1711,10 @@ describe('authenticated /sockets/sync command plane', () => {
         },
       },
     })
-    const crossServiceToken = jwt.sign({ user: { uuid: 'user-1' }, session: { uuid: 'session-1' } }, AUTH_SECRET, {
-      algorithm: 'HS256',
-    })
-    const request = Object.assign(fakeRequest({ 'x-auth-token': crossServiceToken }), {
-      body: { deviceId: 'device-1' },
-    })
 
-    expect(await invokeSyncTicket(request)).toEqual({
-      status: 503,
-      body: { error: { code: 'SYNC_DISABLED' } },
-    })
+    await expect(
+      attached.sync.issueTicket({ userUuid: 'user-1', sessionUuid: 'session-1', deviceId: 'device-1' }),
+    ).rejects.toThrow('shared store unavailable')
   })
 
   it('rejects query credentials without consuming the opaque ticket', async () => {
@@ -1789,5 +2038,119 @@ describe('authenticated /sockets/sync command plane', () => {
     const received = Buffer.concat(binaries.map((frame) => Buffer.from(decodeFileBinaryFrame(frame).bytes)))
     expect(new Uint8Array(received)).toEqual(payload)
     socket.close()
+  })
+})
+
+describe('attach-time configuration parsing', () => {
+  it('normalises the connection token ttl and refuses one jsonwebtoken would misread', async () => {
+    await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig({ connectionTokenTtl: '60' }),
+      logger: makeLogger(),
+    })
+    const { res, body } = fakeResponse()
+    attached.handleMintToken(
+      Object.assign(fakeRequest({ 'x-internal-secret': INTERNAL_SECRET }), {
+        body: { userUuid: 'user-1', sessionUuid: 'session-1' },
+      }),
+      res,
+    )
+    const decoded = jwt.decode((body() as { token: string }).token) as { iat: number; exp: number }
+    // "60" used to mean 60 ms (a 0 s token); it now means 60 seconds.
+    expect(decoded.exp - decoded.iat).toBe(60)
+    await attached.stop()
+    attached = undefined
+
+    for (const connectionTokenTtl of ['abc', '0', '60ms', '-5s']) {
+      expect(() =>
+        attachWebSocketGateway({ httpServer, config: baseConfig({ connectionTokenTtl }), logger: makeLogger() }),
+      ).toThrow(/WEB_SOCKET_CONNECTION_TOKEN_TTL/)
+    }
+  })
+
+  it('caps the per-user ceiling at 1024 from either the config or the attach override', async () => {
+    await listen()
+    expect(() =>
+      attachWebSocketGateway({
+        httpServer,
+        config: baseConfig({ maxConnectionsPerUser: 1_025 }),
+        logger: makeLogger(),
+      }),
+    ).toThrow(/no greater than 1024/)
+    expect(() =>
+      attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger(), maxConnectionsPerUser: 4_096 }),
+    ).toThrow(/no greater than 1024/)
+  })
+
+  it('validates the redis namespace and passes it to both bridges as a prefix', async () => {
+    await listen()
+    // The gateway's own parser answers, before either bridge sees the value.
+    expect(() =>
+      attachWebSocketGateway({ httpServer, config: baseConfig({ redisNamespace: 'Tenant A' }), logger: makeLogger() }),
+    ).toThrow('WEBSOCKET_REDIS_NAMESPACE must match ^[a-z0-9:_-]{1,64}$ when set.')
+
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig({ redisNamespace: ' tenant-a ' }),
+      logger: makeLogger(),
+    })
+    expect(attached.health().attached).toBe(true)
+  })
+})
+
+describe('health()', () => {
+  it('reports the push bridge, consumer, relay, sync lane and dispatch count without side effects', async () => {
+    await listen()
+    attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
+
+    expect(attached.health()).toEqual<GatewayHealth>({
+      attached: true,
+      pushBridge: 'redis',
+      pushBridgeReady: false,
+      sqsConsumerRunning: false,
+      collaborationRelayHealthy: expect.any(Boolean),
+      syncLane: 'down',
+      pushesDispatched: 0,
+    })
+
+    // Every push transport fans out through the registry the gateway exposes.
+    attached.registry.pushToUser('user-1', 'hello')
+    attached.registry.pushToUser('user-2', 'hello')
+    expect(attached.health().pushesDispatched).toBe(2)
+    expect(attached.health().pushesDispatched).toBe(2)
+  })
+
+  it('tracks redis readiness, the sqs consumer and the sync lane live', async () => {
+    await listen()
+    redis.state.status = 'ready'
+    let enabled = true
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig({ sqs: { queueUrl: 'http://localstack:4566/000000000000/queue' } }),
+      logger: makeLogger(),
+      sync: {
+        isEnabled: () => enabled,
+        allowedOrigins: ['https://app.example.test'],
+        authorization: { ready: () => true, authorize: vi.fn(async () => ({ authorized: true as const })) },
+        backend: { ready: () => true, execute: vi.fn(), status: vi.fn() } as unknown as SyncGatewayOptions['backend'],
+      },
+    })
+
+    expect(attached.health()).toMatchObject({ pushBridgeReady: true, sqsConsumerRunning: true, syncLane: 'up' })
+    enabled = false
+    redis.state.status = 'reconnecting'
+    expect(attached.health()).toMatchObject({ pushBridgeReady: false, sqsConsumerRunning: true, syncLane: 'down' })
+
+    await attached.stop()
+    expect(attached.health()).toMatchObject({ sqsConsumerRunning: false, syncLane: 'down' })
+    attached = undefined
+  })
+
+  it('reports no push bridge when no redis host is configured', async () => {
+    await listen()
+    attached = attachWebSocketGateway({ httpServer, config: baseConfig({ redisHost: '' }), logger: makeLogger() })
+
+    expect(attached.health().pushBridge).toBe('none')
   })
 })

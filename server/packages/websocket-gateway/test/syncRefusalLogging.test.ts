@@ -19,6 +19,7 @@ vi.mock('ioredis', () => ({
 
 import {
   attachWebSocketGateway,
+  SyncUnavailableError,
   type GatewayConfig,
   type SyncGatewayOptions,
   type SyncUnavailabilityReason,
@@ -77,9 +78,14 @@ function fakeResponse(): { res: ServerResponse; status: () => number; body: () =
   return { res, status: () => captured.statusCode as number, body: () => JSON.parse(captured.chunks.join('')) }
 }
 
+/** A direct loopback caller, which is the only peer the internal mint path accepts. */
 function fakeRequest(headers: Record<string, unknown>, rawBody?: string): IncomingMessage {
   const stream = rawBody === undefined ? new Readable({ read() {} }) : Readable.from([rawBody])
-  return Object.assign(stream, { headers, destroy: vi.fn(stream.destroy.bind(stream)) }) as unknown as IncomingMessage
+  return Object.assign(stream, {
+    headers,
+    socket: { remoteAddress: '127.0.0.1' },
+    destroy: vi.fn(stream.destroy.bind(stream)),
+  }) as unknown as IncomingMessage
 }
 
 let httpServer: Server | undefined
@@ -190,14 +196,33 @@ describe('sync refusal logging', () => {
   // the thing that made this undiagnosable from the server side.
   it('names the unmet precondition when a sync ticket is refused', async () => {
     const logger = await attach(syncOptions({ isEnabled: () => false }))
-    const { res, status } = fakeResponse()
 
-    attached!.handleSyncTicket(fakeRequest({}, JSON.stringify({ deviceId: 'device-1' })), res)
-    await new Promise((resolve) => setImmediate(resolve))
+    const refusal = await attached!.sync
+      .issueTicket({ userUuid: 'user-1', sessionUuid: 'session-1', deviceId: 'device-1' })
+      .catch((error: unknown) => error)
 
-    expect(status()).toBe(503)
+    expect(refusal).toBeInstanceOf(SyncUnavailableError)
+    expect(refusal).toMatchObject({ reasons: ['disabled-by-configuration'], transient: false })
     expect(logger.warn).toHaveBeenCalled()
     expect(emitted(logger)).toContain('disabled-by-configuration')
+  })
+
+  it('marks a refusal transient only when every unmet clause is a store that has not reported ready', async () => {
+    await attach(
+      syncOptions({
+        tickets: { distribution: 'shared', ready: () => false, issue: vi.fn(), consume: vi.fn() },
+        leases: { distribution: 'shared', ready: () => false, acquire: vi.fn(), renew: vi.fn(), release: vi.fn() },
+      } as unknown as Partial<SyncGatewayOptions>),
+    )
+
+    const refusal = await attached!.sync
+      .issueTicket({ userUuid: 'user-1', sessionUuid: 'session-1', deviceId: 'device-1' })
+      .catch((error: unknown) => error)
+
+    expect(refusal).toMatchObject({
+      reasons: ['ticket-store-unavailable', 'command-lease-store-unavailable'],
+      transient: true,
+    })
   })
 
   // Three completely different fixes used to share one log line reading only
@@ -209,8 +234,13 @@ describe('sync refusal logging', () => {
     const logger = await attach(syncOptions())
     const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers })
 
-    await new Promise<void>((resolve) => socket.once('close', () => resolve()))
+    const closeReason = await new Promise<string>((resolve) =>
+      socket.once('close', (_code, reason) => resolve(reason.toString())),
+    )
 
+    // The same code reaches the client as the close reason, so support can
+    // tell the three causes apart from a browser's close event alone.
+    expect(closeReason).toBe(expectedRejection)
     expect(emitted(logger)).toContain(expectedRejection)
     // The attacker-controlled Origin itself is never echoed into the log.
     expect(emitted(logger)).not.toContain('evil.example.test')
@@ -230,19 +260,28 @@ describe('sync refusal logging', () => {
 
   it('never emits a secret, token or user identifier in a refusal line', async () => {
     const logger = await attach(syncOptions({ isEnabled: () => false }))
-    const { res } = fakeResponse()
 
-    attached!.handleSyncTicket(
-      fakeRequest(
-        { 'x-auth-token': 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln', 'x-internal-secret': INTERNAL_SECRET },
-        JSON.stringify({ deviceId: 'device-1', userUuid: 'user-uuid-1' }),
-      ),
-      res,
-    )
-    await new Promise((resolve) => setImmediate(resolve))
+    await attached!.sync
+      .issueTicket({
+        userUuid: 'user-uuid-1',
+        sessionUuid: 'session-uuid-1',
+        deviceId: 'device-1',
+        authorization: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln',
+      })
+      .catch(() => undefined)
+    const { res } = fakeResponse()
+    attached!.handleMintToken(fakeRequest({ 'x-internal-secret': 'wrong-secret-value' }), res)
 
     const lines = emitted(logger)
-    for (const secret of [CONNECTION_SECRET, INTERNAL_SECRET, AUTH_SECRET, 'eyJhbGciOiJIUzI1NiJ9', 'user-uuid-1']) {
+    for (const secret of [
+      CONNECTION_SECRET,
+      INTERNAL_SECRET,
+      AUTH_SECRET,
+      'eyJhbGciOiJIUzI1NiJ9',
+      'user-uuid-1',
+      'session-uuid-1',
+      'wrong-secret-value',
+    ]) {
       expect(lines).not.toContain(secret)
     }
   })

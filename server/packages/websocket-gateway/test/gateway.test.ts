@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import jwt from 'jsonwebtoken'
-import { mintConnectionToken, verifyConnectionToken } from '../src/auth.js'
+import {
+  classifyConnectionTokenError,
+  InMemorySyncAuthTicketStore,
+  mintConnectionToken,
+  parseConnectionTokenTtl,
+  parseMaxConnectionsPerUser,
+  parseRedisNamespace,
+  verifyConnectionToken,
+} from '../src/auth.js'
 import { ConnectionRegistry, parseDispatchMessage, type Conn, type SendableSocket } from '../src/registry.js'
 import { handleRawMessage, type Logger } from '../src/redisBridge.js'
 
@@ -167,5 +175,107 @@ describe('redis dispatch: handleRawMessage', () => {
     const sent = handleRawMessage(reg, 'not-json', { ...silentLogger, warn })
     expect(sent).toBe(0)
     expect(warn).toHaveBeenCalled()
+  })
+})
+
+describe('auth: parseConnectionTokenTtl', () => {
+  it('reads a bare integer as seconds and normalises unit suffixes', () => {
+    expect(parseConnectionTokenTtl('60')).toBe('60s')
+    expect(parseConnectionTokenTtl('0060')).toBe('60s')
+    expect(parseConnectionTokenTtl('60s')).toBe('60s')
+    expect(parseConnectionTokenTtl(' 5m ')).toBe('5m')
+    expect(parseConnectionTokenTtl('2h')).toBe('2h')
+  })
+
+  it('defaults to 60s when unset or blank', () => {
+    expect(parseConnectionTokenTtl(undefined)).toBe('60s')
+    expect(parseConnectionTokenTtl('')).toBe('60s')
+    expect(parseConnectionTokenTtl('   ')).toBe('60s')
+  })
+
+  it.each(['abc', '0', '00s', '-5s', '60ms', '1.5m', '60 s', '1d'])('refuses %s by naming the variable', (value) => {
+    expect(() => parseConnectionTokenTtl(value)).toThrow(/^WEB_SOCKET_CONNECTION_TOKEN_TTL must be/)
+  })
+
+  it('produces a value jsonwebtoken reads as the intended number of seconds', () => {
+    const token = mintConnectionToken({ userUuid: 'u', sessionUuid: 's' }, SECRET, parseConnectionTokenTtl('90'))
+    const payload = verifyConnectionToken(token, SECRET)
+    expect(payload.exp! - payload.iat!).toBe(90)
+  })
+})
+
+describe('auth: parseMaxConnectionsPerUser', () => {
+  it('returns undefined for unset or blank so the gateway default applies', () => {
+    expect(parseMaxConnectionsPerUser(undefined)).toBeUndefined()
+    expect(parseMaxConnectionsPerUser('')).toBeUndefined()
+    expect(parseMaxConnectionsPerUser('  ')).toBeUndefined()
+  })
+
+  it('accepts an integer between 1 and 1024', () => {
+    expect(parseMaxConnectionsPerUser('1')).toBe(1)
+    expect(parseMaxConnectionsPerUser(' 16 ')).toBe(16)
+    expect(parseMaxConnectionsPerUser('1024')).toBe(1024)
+  })
+
+  it.each(['0', '1025', '-1', '1.5', 'abc', '16x', '1e3'])('refuses %s by naming the variable', (value) => {
+    expect(() => parseMaxConnectionsPerUser(value)).toThrow(/^WEBSOCKET_MAX_CONNECTIONS_PER_USER must be/)
+  })
+})
+
+describe('auth: parseRedisNamespace', () => {
+  it('returns undefined for unset or blank so channel and key names stay byte-identical', () => {
+    expect(parseRedisNamespace(undefined)).toBeUndefined()
+    expect(parseRedisNamespace('')).toBeUndefined()
+    expect(parseRedisNamespace('  ')).toBeUndefined()
+  })
+
+  it('accepts a trimmed lowercase namespace of at most 64 characters', () => {
+    expect(parseRedisNamespace(' tenant-a ')).toBe('tenant-a')
+    expect(parseRedisNamespace('srn:eu_1')).toBe('srn:eu_1')
+    expect(parseRedisNamespace('a'.repeat(64))).toBe('a'.repeat(64))
+  })
+
+  it.each(['Tenant', 'a b', 'a/b', 'a'.repeat(65), 'é'])('refuses %s by naming the variable', (value) => {
+    expect(() => parseRedisNamespace(value)).toThrow(/^WEBSOCKET_REDIS_NAMESPACE must match/)
+  })
+})
+
+describe('auth: classifyConnectionTokenError', () => {
+  function rejection(token: string): unknown {
+    try {
+      verifyConnectionToken(token, SECRET)
+    } catch (error) {
+      return error
+    }
+    throw new Error('expected the token to be rejected')
+  }
+
+  it('separates expired, forged and garbage tokens that the redacted metadata collapses', () => {
+    const expired = jwt.sign({ userUuid: 'u1', sessionUuid: 's1' }, SECRET, { algorithm: 'HS256', expiresIn: -60 })
+    const forged = jwt.sign({ userUuid: 'u1', sessionUuid: 's1' }, 'other-secret', { algorithm: 'HS256' })
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
+    const body = Buffer.from(JSON.stringify({ userUuid: 'u1', sessionUuid: 's1' })).toString('base64url')
+
+    expect(classifyConnectionTokenError(rejection(expired))).toBe('expired')
+    expect(classifyConnectionTokenError(rejection(forged))).toBe('invalid-signature')
+    expect(classifyConnectionTokenError(rejection('garbage'))).toBe('malformed')
+    expect(classifyConnectionTokenError(rejection(`${header}.${body}.`))).toBe('malformed')
+  })
+
+  it("reports 'other' for payload-shape failures and non-errors", () => {
+    const missingSession = jwt.sign({ userUuid: 'u1' }, SECRET, { algorithm: 'HS256' })
+    expect(classifyConnectionTokenError(rejection(missingSession))).toBe('other')
+    expect(classifyConnectionTokenError('not an error')).toBe('other')
+    expect(classifyConnectionTokenError(new RangeError('jwt expired'))).toBe('other')
+  })
+})
+
+describe('auth: InMemorySyncAuthTicketStore', () => {
+  it('stamps the issue time next to the expiry so a skewed client can derive the remaining life', async () => {
+    const store = new InMemorySyncAuthTicketStore(() => 1_700_000_000_000)
+
+    const issued = await store.issue({ userUuid: 'u', sessionUuid: 's', deviceId: 'd' })
+
+    expect(issued).toEqual({ ticket: expect.any(String), issuedAt: 1_700_000_000_000, expiresAt: 1_700_000_030_000 })
   })
 })
