@@ -214,6 +214,11 @@ export function createLoggerSyncCommandMetrics(logger: Pick<Logger, 'info'>): Sy
     increment(event, code) {
       logger.info('[ws-sync-metric]', JSON.stringify(code === undefined ? { event } : { event, code }))
     },
+    // Gauge-style samples (per-RPC backpressure count / max wait) ride the
+    // same line shape with a `value`, so one log grep finds both kinds.
+    observe(event, code, value) {
+      logger.info('[ws-sync-metric]', JSON.stringify({ event, code, value }))
+    },
   }
 }
 
@@ -1107,6 +1112,10 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         backend: syncOptions!.backend,
         collaborationAuthorization: syncOptions!.collaborationAuthorization,
         collaborationRoomEpochResolver,
+        // The handler's own refusals (a lease that outlived a crashed socket,
+        // and whatever else it names) share the gateway's throttled logger;
+        // without this they were computed and then dropped on the floor.
+        logRefusal,
         apiRpc: syncOptions!.apiRpc,
         inviteEvents: syncOptions!.inviteEvents,
         files: syncOptions!.files,

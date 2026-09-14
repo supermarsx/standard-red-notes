@@ -70,6 +70,7 @@ import {
 } from '../src/gateway.js'
 import { decodeFileBinaryFrame, encodeFileBinaryFrame, sha256Hex } from '../src/filesProtocol.js'
 import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
+import { digestSyncCommandBody } from '../src/syncProtocol.js'
 import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
 import { COLLABORATION_PROTOCOL_VERSION, type RoomJoinAuthorization } from '../src/rooms.js'
 
@@ -1441,10 +1442,8 @@ describe('authenticated /sockets/sync command plane', () => {
   // Contract C4 end to end through attach: the adapter reports the HMAC
   // initial epoch, the fleet-shared room state holds a rotated one, and the
   // gateway-supplied resolver is what lets the client echo an epoch the room
-  // will actually accept. Skipped, not todo: the body is complete and passes
-  // against w1-e5's handler change, which had not been committed when this
-  // landed. The wave verifier flips `it.skip` to `it` once it has.
-  it.skip('replaces the discovery roomEpoch with the resolver answer so a grant bound to the rotated epoch succeeds', async () => {
+  // will actually accept.
+  it('replaces the discovery roomEpoch with the resolver answer so a grant bound to the rotated epoch succeeds', async () => {
     const INITIAL = 'initial_room_epoch_0001'
     const ROTATED = 'rotated_room_epoch_0002'
     const authorizeCollaboration = vi.fn(async ({ request }: { request: Record<string, unknown> }) =>
@@ -1764,6 +1763,74 @@ describe('authenticated /sockets/sync command plane', () => {
     desktop.close()
   })
 
+  it('hands the handler the throttled refusal logger so a lease that outlived its socket reaches the log', async () => {
+    // R36 through attach: the handler names the refusal, but only reaches the
+    // log if the gateway wires its logger in. A stub lease store that always
+    // answers BUSY models a lease left behind by a SIGKILLed gateway.
+    port = await listen()
+    const logger = makeLogger()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger,
+      sync: {
+        ...syncOptions(),
+        leases: {
+          distribution: 'shared',
+          ready: () => true,
+          acquire: vi.fn(async () => ({ acquired: false as const, reason: 'BUSY' as const })),
+          renew: vi.fn(async () => false),
+          release: vi.fn(async () => undefined),
+        },
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      deviceId: 'device-1',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+    const authPayload = { ticket: issued.ticket, deviceId: 'device-1' }
+    const authenticated = nextJson(socket)
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-1',
+        commandId: 'auth-1',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify(authPayload)),
+        payload: authPayload,
+      }),
+    )
+    expect(await authenticated).toMatchObject({ type: 'AUTHENTICATED' })
+
+    const body = { api: '20200115', items: [] }
+    const payload = { command: 'SYNC_ITEMS', body }
+    const refused = nextJson(socket)
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'COMMAND',
+        requestId: 'request-after-crash',
+        commandId: 'after-crash',
+        sequence: 1,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+        digest: digestSyncCommandBody(body),
+      }),
+    )
+    expect(await refused).toMatchObject({ type: 'ERROR', payload: { code: 'BUSY', retryable: true } })
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/lease outlived its socket/i),
+      JSON.stringify({ code: 'BUSY', suppressedSinceLastLog: 0 }),
+    )
+    socket.close()
+  })
+
   it('registers logger-backed production metrics and closes a sync frame above 512KiB before JSON parsing', async () => {
     port = await listen()
     const logger = makeLogger()
@@ -1783,6 +1850,14 @@ describe('authenticated /sockets/sync command plane', () => {
     expect(logger.info).toHaveBeenCalledWith(
       '[ws-sync-metric]',
       JSON.stringify({ event: 'protocol', code: 'FRAME_TOO_LARGE' }),
+    )
+
+    // Gauge samples (N6 backpressure) share the line shape with a `value`.
+    const metrics = createLoggerSyncCommandMetrics(logger)
+    metrics.observe?.('rpc', 'backpressure_wait_max_ms', 42)
+    expect(logger.info).toHaveBeenCalledWith(
+      '[ws-sync-metric]',
+      JSON.stringify({ event: 'rpc', code: 'backpressure_wait_max_ms', value: 42 }),
     )
   })
 
