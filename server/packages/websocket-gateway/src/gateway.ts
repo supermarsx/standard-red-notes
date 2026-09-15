@@ -22,7 +22,13 @@ import {
   type SyncCommandLeaseRegistry,
   type SyncSocketBudget,
 } from './registry.js'
-import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
+import {
+  RoomRegistry,
+  parseRelayFrame,
+  handleRelayFrame,
+  type RoomDeniedReason,
+  type RoomJoinAuthorizer,
+} from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startCollaborationRedisBridge } from './collaborationRedisBridge.js'
 import { createLogThrottle, type LogThrottle } from './logThrottle.js'
@@ -42,7 +48,7 @@ import type { SyncFilesAdapter } from './filesSession.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
 import { InviteRealtimeDomainEventHandler } from './inviteEventDomainEventHandler.js'
 import type { InviteEventOutboxDispatcher } from './inviteEventOutbox.js'
-import { MAX_SYNC_FRAME_BYTES, SYNC_PROTOCOL_VERSION } from './syncProtocol.js'
+import { MAX_SYNC_FRAME_BYTES, SYNC_BACKEND_TIMEOUT_MS, SYNC_PROTOCOL_VERSION } from './syncProtocol.js'
 
 // ---------------------------------------------------------------------------
 // Shared gateway logic.
@@ -204,22 +210,144 @@ export interface SyncGatewayOptions {
   socketBudgetRenewIntervalMs?: number
 }
 
+/** One `[ws-sync-metric]` line per this window, however many events it covers. */
+export const SYNC_METRIC_FLUSH_INTERVAL_MS = 60_000
+/**
+ * Distinct `event`/`code` pairs held before a window is cut short. Every pair
+ * is an internal literal (a protocol code, a refusal cause), so ~40 is the real
+ * ceiling; this only stops an unforeseen caller from growing the map unbounded.
+ */
+const MAX_TRACKED_SYNC_METRICS = 256
+
+export interface AggregatingSyncCommandMetrics extends SyncCommandMetrics {
+  observe(event: string, code: string, value: number): void
+  /** Emit the pending window immediately (shutdown, tests). */
+  flush(): void
+  /** Flush and release the backstop timer. */
+  close(): void
+}
+
+interface SyncMetricCount {
+  event: string
+  code?: string
+  count: number
+}
+
+interface SyncMetricSample {
+  event: string
+  code: string
+  count: number
+  sum: number
+  max: number
+}
+
 /**
  * Production-safe sync telemetry adapter. Keeping the payload as one compact
  * JSON value preserves its fields through the minimal variadic logger bridge
  * used by both api-gateway and home-server.
+ *
+ * N6: the counters are AGGREGATED into one line per window rather than logged
+ * per event. Every rate-limited frame, every protocol error and every
+ * backpressure sample used to write its own line at info level, so the one
+ * thing these numbers are for -- noticing a rate -- was the thing the volume
+ * made unreadable, and a client in a retry loop could drive the log on its own.
+ * A window carries the same stable, non-sensitive identifiers as before, so
+ * `grep '[ws-sync-metric]'` still finds everything; it now finds counts.
  */
-export function createLoggerSyncCommandMetrics(logger: Pick<Logger, 'info'>): SyncCommandMetrics {
-  return {
+export function createLoggerSyncCommandMetrics(
+  logger: Pick<Logger, 'info'>,
+  options: { flushIntervalMs?: number; now?: () => number; backstopTimer?: boolean } = {},
+): AggregatingSyncCommandMetrics {
+  const flushIntervalMs = options.flushIntervalMs ?? SYNC_METRIC_FLUSH_INTERVAL_MS
+  const now = options.now ?? Date.now
+  if (!Number.isSafeInteger(flushIntervalMs) || flushIntervalMs < 1) {
+    throw new Error('Invalid sync metric flush interval: expected a positive safe integer number of milliseconds.')
+  }
+
+  const counts = new Map<string, SyncMetricCount>()
+  const samples = new Map<string, SyncMetricSample>()
+  let windowStartedAt = now()
+
+  const flushAt = (at: number): void => {
+    if (counts.size === 0 && samples.size === 0) {
+      windowStartedAt = at
+      return
+    }
+    logger.info(
+      '[ws-sync-metric]',
+      JSON.stringify({
+        windowMs: Math.max(0, at - windowStartedAt),
+        ...(counts.size > 0 ? { counts: [...counts.values()] } : {}),
+        ...(samples.size > 0 ? { samples: [...samples.values()] } : {}),
+      }),
+    )
+    counts.clear()
+    samples.clear()
+    windowStartedAt = at
+  }
+
+  /**
+   * Cut the window BEFORE recording, so the event that rolls it over opens the
+   * next one instead of being counted twice. A key space that is already full
+   * also cuts it, which bounds retention without discarding a measurement.
+   */
+  const rollWindow = (tracked: number, isNewKey: boolean): void => {
+    const at = now()
+    if (at - windowStartedAt >= flushIntervalMs || (isNewKey && tracked >= MAX_TRACKED_SYNC_METRICS)) {
+      flushAt(at)
+    }
+  }
+
+  const metrics: AggregatingSyncCommandMetrics = {
     increment(event, code) {
-      logger.info('[ws-sync-metric]', JSON.stringify(code === undefined ? { event } : { event, code }))
+      const key = `${event}\u0000${code ?? ''}`
+      rollWindow(counts.size + samples.size, !counts.has(key))
+      const existing = counts.get(key)
+      if (existing) {
+        existing.count += 1
+        return
+      }
+      counts.set(key, code === undefined ? { event, count: 1 } : { event, code, count: 1 })
     },
-    // Gauge-style samples (per-RPC backpressure count / max wait) ride the
-    // same line shape with a `value`, so one log grep finds both kinds.
+    // Gauge-style samples (per-RPC backpressure count / max wait) ride the same
+    // window with a count/sum/max, so one log grep finds both kinds and a
+    // single outlier is still visible inside the aggregate.
     observe(event, code, value) {
-      logger.info('[ws-sync-metric]', JSON.stringify({ event, code, value }))
+      if (!Number.isFinite(value)) {
+        return
+      }
+      const key = `${event}\u0000${code}`
+      rollWindow(counts.size + samples.size, !samples.has(key))
+      const existing = samples.get(key)
+      if (existing) {
+        existing.count += 1
+        existing.sum += value
+        existing.max = Math.max(existing.max, value)
+        return
+      }
+      samples.set(key, { event, code, count: 1, sum: value, max: value })
+    },
+    flush() {
+      flushAt(now())
+    },
+    close() {
+      if (backstop) {
+        clearInterval(backstop)
+        backstop = undefined
+      }
+      flushAt(now())
     },
   }
+
+  // A window that rolls only when the next event arrives would sit unlogged for
+  // as long as the gateway is quiet -- exactly when an operator is looking.
+  let backstop: NodeJS.Timeout | undefined
+  if (options.backstopTimer !== false) {
+    backstop = setInterval(() => metrics.flush(), flushIntervalMs)
+    backstop.unref()
+  }
+
+  return metrics
 }
 
 /**
@@ -306,7 +434,16 @@ export interface WebSocketRelayBacklogLimits {
 }
 
 export const DEFAULT_WEBSOCKET_RELAY_BACKLOG_LIMITS: Readonly<WebSocketRelayBacklogLimits> = Object.freeze({
-  frameCapacity: 128,
+  /**
+   * At least the legacy lane's instantaneous ingress burst
+   * (`DEFAULT_WEBSOCKET_INGRESS_LIMITS.frameCapacity`). The backlog used to be
+   * 128 against a 512-frame burst, so a client the rate limiter deliberately
+   * admits -- a Yjs bootstrap chunk train, or a tab returning from background
+   * with queued awareness updates -- could overflow the ordered relay queue
+   * purely because room authorization is async. The two limits are one policy
+   * and must not disagree; this one is the wider of the pair by construction.
+   */
+  frameCapacity: DEFAULT_WEBSOCKET_INGRESS_LIMITS.frameCapacity,
   // Covers one maximum 4 MiB Yjs transfer after base64/JSON overhead while
   // still placing a hard per-socket ceiling on retained queued input.
   byteCapacity: 8 * 1024 * 1024,
@@ -1034,6 +1171,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   const rooms = new RoomRegistry<WebSocket>()
   const alive = new WeakMap<WebSocket, boolean>()
   const syncHandlers = new Set<SyncCommandHandler>()
+  /** Sync sockets that spoke after shutdown began; closed 1013 rather than 1001. */
+  const drainingRefusals = new Set<WebSocket>()
 
   const handleMintToken = buildMintTokenHandler(config, logger)
   if (app) {
@@ -1139,6 +1278,17 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         alive.set(socket, true)
       })
       socket.on('message', (data, isBinary) => {
+        // Shutdown has begun: the command already in flight is being drained
+        // and answered, but nothing new is admitted -- refusing here is what
+        // bounds the drain. The socket is NOT closed on this path: closing runs
+        // `stopHandler`, which aborts the very command the drain exists to
+        // finish. The shutdown sweep closes it instead, with 1013 'draining'
+        // rather than 1001 so this client knows to come back rather than that
+        // the server is going away.
+        if (stopping) {
+          drainingRefusals.add(socket)
+          return
+        }
         const rawBytes = rawDataByteLength(data)
         const maxFrameBytes = isBinary ? MAX_FILE_BINARY_FRAME_BYTES : MAX_SYNC_FRAME_BYTES
         if (rawBytes > maxFrameBytes) {
@@ -1225,6 +1375,48 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     // race ahead of the authorization result, and a leave could race behind a
     // late successful join during provider teardown.
     let relayQueue = Promise.resolve()
+    /**
+     * Rooms this connection may still hold. `RoomRegistry` publishes no
+     * per-connection room list, so track the rooms our own frames referenced
+     * and confirm each against the registry before denying it. Pruned as every
+     * frame settles, so it stays bounded by real membership plus the frames
+     * still in flight.
+     */
+    const referencedRooms = new Set<string>()
+
+    /**
+     * Shed this connection's collaboration state without closing its socket
+     * (R15). Each room it actually holds is denied with a stable reason, the
+     * local memberships are dropped and the fleet-shared leases released, so
+     * the client re-reserves deliberately instead of losing the whole socket --
+     * which, on the legacy lane, is also its push, invite and MFA transport.
+     */
+    const evictRooms = (reason: RoomDeniedReason): void => {
+      for (const room of referencedRooms) {
+        if (!rooms.isMember(room, conn)) {
+          continue
+        }
+        try {
+          socket.send(JSON.stringify({ t: 'room-denied', room, reason }))
+        } catch {
+          /* socket unwritable; the membership is evicted regardless */
+        }
+      }
+      referencedRooms.clear()
+      rooms.leaveAll(conn)
+      // A frame already queued may re-reserve behind us, so sweep again once
+      // the backlog has drained -- the same two-phase shape `cleanup` uses.
+      const release = (): Promise<void> => {
+        rooms.leaveAll(conn)
+        return collaborationRedis
+          .releaseAll(conn)
+          .catch((error) =>
+            logger.warn('[ws] collaboration release after room eviction failed', safeErrorLogMetadata(error)),
+          )
+      }
+      void release()
+      void relayQueue.then(release, release)
+    }
 
     const cleanup = (): void => {
       if (connectionClosed) {
@@ -1232,6 +1424,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       }
       connectionClosed = true
       relayBacklog.clear()
+      referencedRooms.clear()
       registry.remove(identity.userUuid, conn)
       rooms.leaveAll(conn)
       // A room authorizer may already be in flight. The handler observes the
@@ -1281,14 +1474,16 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       if (frame) {
         if (!relayBacklog.tryEnqueue(rawBytes)) {
           logRefusal('[ws] relay backlog exceeded', 'legacy:relay-backlog', { conn: conn.connectionId })
-          cleanup()
-          try {
-            socket.close(1008, 'relay backlog exceeded')
-          } catch {
-            /* cleanup already removed all connection state */
-          }
+          // R15: drop the frame and evict the rooms, but KEEP THE SOCKET. The
+          // legacy socket also carries push, invite and MFA notifications, so
+          // closing it over one collaboration burst took four unrelated lanes
+          // down and left the client reconnecting with backoff. The backlog is
+          // already >= the ingress burst, so reaching this is a genuinely
+          // pathological producer, not a fast one.
+          evictRooms('rate-limited')
           return
         }
+        referencedRooms.add(frame.room)
         // handleRelayFrame is async (room-join may consult the membership
         // authorizer). Swallow rejections so a failing authorizer can never crash
         // the message handler / gateway; the authorizer itself already fails closed.
@@ -1304,6 +1499,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           })
           .finally(() => {
             relayBacklog.settle(rawBytes)
+            if (!rooms.isMember(frame.room, conn)) {
+              referencedRooms.delete(frame.room)
+            }
           })
       }
     })
@@ -1379,6 +1577,18 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       clearInterval(heartbeat)
       sqsHandle?.stop()
 
+      // R1: a command already accepted from a client is finished and ANSWERED
+      // before its socket is closed. `handler.stop()` disconnects first, which
+      // aborts the active command -- so shutting down mid-`SYNC_ITEMS` used to
+      // drop the answer on the floor even though the write had committed, and
+      // the client could only learn the outcome by replaying over HTTP. New
+      // frames are already refused (`stopping` above), so this is bounded by
+      // the backend timeout and by the drain deadline below.
+      await settleWithin(
+        Promise.allSettled([...syncHandlers].map((handler) => handler.drain())),
+        syncOptions?.backendTimeoutMs ?? SYNC_BACKEND_TIMEOUT_MS,
+      )
+
       const websocketClosed = new Promise<void>((resolve) => {
         let settled = false
         const finish = (): void => {
@@ -1410,7 +1620,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         }
         for (const socket of wss.clients) {
           try {
-            socket.close(1001, 'server shutting down')
+            if (drainingRefusals.has(socket)) {
+              socket.close(1013, 'draining')
+            } else {
+              socket.close(1001, 'server shutting down')
+            }
           } catch {
             socket.terminate()
           }
@@ -1428,6 +1642,10 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         redis.disconnect()
       }
       await settleWithin(collaborationRedis.stop(), 4_000)
+      // The last window is the shutdown's own -- disconnects, refusals, the
+      // drain's outcome. Aggregation must not be the reason it is never written.
+      // Duck-typed: a composition root may pass any SyncCommandMetrics.
+      ;(syncOptions?.metrics as Partial<AggregatingSyncCommandMetrics> | undefined)?.close?.()
     })()
     return stopPromise
   }

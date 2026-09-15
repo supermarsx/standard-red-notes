@@ -548,6 +548,25 @@ export class SyncCommandHandler {
     this.options.metrics?.increment('disconnect')
   }
 
+  /**
+   * Resolve once no queued or in-flight command work remains, WITHOUT closing
+   * the socket or aborting anything (R1). `stop()` disconnects first, which
+   * aborts `activeAbort` -- so a shutdown that only called `stop()` cancelled
+   * the command a client was waiting on and answered it with nothing. The
+   * gateway drains every handler first, bounded, and only then closes 1001.
+   *
+   * The queue is re-chained by `enqueue`, so awaiting one snapshot can miss a
+   * frame that arrived while we waited; loop until the chain stops moving.
+   * During a drain the gateway refuses new frames with 1013, so this settles.
+   */
+  async drain(): Promise<void> {
+    let awaited: Promise<void> | undefined
+    while (awaited !== this.queue) {
+      awaited = this.queue
+      await awaited.catch(() => undefined)
+    }
+  }
+
   /** Await queued work and distributed cleanup; the gateway bounds this during shutdown. */
   async stop(): Promise<void> {
     this.disconnect()

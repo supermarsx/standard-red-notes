@@ -59,6 +59,8 @@ import {
   attachWebSocketGateway,
   createLoggerSyncCommandMetrics,
   defaultRoomJoinAuthorizer,
+  DEFAULT_WEBSOCKET_INGRESS_LIMITS,
+  DEFAULT_WEBSOCKET_RELAY_BACKLOG_LIMITS,
   MAX_WEBSOCKET_MESSAGE_BYTES,
   SyncUnavailableError,
   WebSocketIngressLimiter,
@@ -914,11 +916,13 @@ describe('websocket connection lifecycle', () => {
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('user-bytes')
   })
 
-  it('closes a socket before a slow relay lifecycle can retain an unbounded frame backlog', async () => {
+  // R15. The relay backlog used to close the socket on overflow. On the legacy
+  // lane that socket is also the push, invite and MFA transport, so one
+  // collaboration burst took four unrelated lanes down and left the client
+  // reconnecting with backoff. Overflow now sheds the collaboration state and
+  // keeps the connection.
+  it('denies the rooms and keeps the socket when a slow relay lifecycle overflows the frame backlog', async () => {
     let releaseEval!: () => void
-    redis.state.evalGate = new Promise<void>((resolve) => {
-      releaseEval = resolve
-    })
     try {
       await attachGateway({
         relayBacklogLimits: { frameCapacity: 3, byteCapacity: 64 * 1024 },
@@ -928,15 +932,19 @@ describe('websocket connection lifecycle', () => {
           byteCapacity: 1024 * 1024,
           byteRefillPerSecond: 1024 * 1024,
         },
-        authorizeRoomJoin: (_userUuid, _room, capability) => ({
-          authorized: true,
-          expiresAt: Date.now() + 60_000,
-          serverUpdatedAtTimestamp: 1,
-          collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
-          roomEpoch: ROOM_EPOCH,
-          collaborationSecurityEpoch: SECURITY_EPOCH,
-          leaseRequestId: capability,
-        }),
+        authorizeRoomJoin: (_userUuid, _room, capability) => {
+          const binding = JSON.parse(capability ?? '{}') as { requestId?: string; challenge?: string }
+          return {
+            authorized: true,
+            expiresAt: Date.now() + 60_000,
+            serverUpdatedAtTimestamp: 1,
+            collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+            roomEpoch: ROOM_EPOCH,
+            collaborationSecurityEpoch: SECURITY_EPOCH,
+            ...(binding.requestId ? { leaseRequestId: binding.requestId } : {}),
+            ...(binding.challenge ? { bootstrapChallenge: binding.challenge } : {}),
+          }
+        },
       })
       const token = mintConnectionToken(
         { userUuid: 'user-relay-frames', sessionUuid: 'session-relay-frames' },
@@ -945,39 +953,89 @@ describe('websocket connection lifecycle', () => {
       )
       const socket = connect(`?authToken=${token}`)
       await opened(socket)
+      const received: Record<string, unknown>[] = []
+      socket.on('message', (data) => {
+        const raw = data.toString()
+        if (raw !== 'pong') {
+          received.push(JSON.parse(raw) as Record<string, unknown>)
+        }
+      })
+
+      // Join for real first: a pending reservation is not a membership, and
+      // only a membership can be denied.
       socket.send(
         JSON.stringify({
           t: 'room-reserve',
           room: 'slow-frame-room',
-          cap: 'slow-frame-lease',
           requestId: 'slow-frame-lease',
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
           expectedRoomEpoch: ROOM_EPOCH,
+          cap: JSON.stringify({ requestId: 'slow-frame-lease' }),
         }),
       )
-      await vi.waitFor(() => expect(redis.state.evalCalls).toBe(1))
+      await vi.waitFor(() => expect(received.at(-1)).toMatchObject({ t: 'room-reserved' }))
+      const reserved = received.at(-1) as { bootstrapChallenge?: string }
+      socket.send(
+        JSON.stringify({
+          t: 'room-join',
+          room: 'slow-frame-room',
+          requestId: 'slow-frame-lease',
+          role: 'editor',
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: ROOM_EPOCH,
+          cap: JSON.stringify({ requestId: 'slow-frame-lease', challenge: reserved.bootstrapChallenge }),
+        }),
+      )
+      await vi.waitFor(() => expect(attached!.rooms.members('slow-frame-room').length).toBe(1))
 
-      const closed = closedWith(socket)
+      // Now stall the relay lifecycle and overflow the ordered queue behind it.
+      redis.state.evalGate = new Promise<void>((resolve) => {
+        releaseEval = resolve
+      })
+      const evalCallsBeforeStall = redis.state.evalCalls
+      socket.send(
+        JSON.stringify({
+          t: 'room-reserve',
+          room: 'slow-frame-room',
+          requestId: 'stalled-lease',
+          role: 'editor',
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: ROOM_EPOCH,
+          cap: JSON.stringify({ requestId: 'stalled-lease' }),
+        }),
+      )
+      await vi.waitFor(() => expect(redis.state.evalCalls).toBeGreaterThan(evalCallsBeforeStall))
       for (let index = 0; index < 4; index += 1) {
-        socket.send(JSON.stringify({ t: 'room-leave', room: 'slow-frame-room', requestId: `queued-${index}` }))
+        socket.send(JSON.stringify({ t: 'yjs', room: 'slow-frame-room', payload: `queued-${index}` }))
       }
+
       await vi.waitFor(() =>
         expect(logger.warn).toHaveBeenCalledWith('[ws] relay backlog exceeded', expect.stringContaining('"conn":')),
       )
+      await vi.waitFor(() =>
+        expect(received).toContainEqual({ t: 'room-denied', room: 'slow-frame-room', reason: 'rate-limited' }),
+      )
+
+      // The socket survives: still registered, still serving push, still
+      // answering the application-level ping.
+      expect(socket.readyState).toBe(WebSocket.OPEN)
+      expect(attached!.registry.size()).toBe(1)
+      expect(attached!.rooms.members('slow-frame-room').length).toBe(0)
+      const pong = nextMessage(socket)
+      socket.send('ping')
+      expect(await pong).toBe('pong')
+
       redis.state.evalGate = undefined
       releaseEval()
-
-      expect(await closed).toBe(1008)
-      await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
-      expect(attached!.rooms.roomCount()).toBe(0)
+      socket.close()
     } finally {
       redis.state.evalGate = undefined
       releaseEval?.()
     }
   })
 
-  it('closes a socket when a slow relay lifecycle exceeds the retained-byte ceiling', async () => {
+  it('keeps the socket open when a slow relay lifecycle exceeds the retained-byte ceiling', async () => {
     let releaseEval!: () => void
     redis.state.evalGate = new Promise<void>((resolve) => {
       releaseEval = resolve
@@ -1020,7 +1078,6 @@ describe('websocket connection lifecycle', () => {
       socket.send(reserveFrame)
       await vi.waitFor(() => expect(redis.state.evalCalls).toBe(1))
 
-      const closed = closedWith(socket)
       socket.send(JSON.stringify({ t: 'room-leave', room: 'slow-byte-room', requestId: 'queued-byte-frame' }))
       await vi.waitFor(() =>
         expect(logger.warn).toHaveBeenCalledWith('[ws] relay backlog exceeded', expect.stringContaining('"conn":')),
@@ -1028,13 +1085,27 @@ describe('websocket connection lifecycle', () => {
       redis.state.evalGate = undefined
       releaseEval()
 
-      expect(await closed).toBe(1008)
-      await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
-      expect(attached!.rooms.roomCount()).toBe(0)
+      // The byte ceiling sheds the same way the frame ceiling does.
+      expect(socket.readyState).toBe(WebSocket.OPEN)
+      expect(attached!.registry.size()).toBe(1)
+      const pong = nextMessage(socket)
+      socket.send('ping')
+      expect(await pong).toBe('pong')
+      await vi.waitFor(() => expect(attached!.rooms.roomCount()).toBe(0))
+      socket.close()
     } finally {
       redis.state.evalGate = undefined
       releaseEval?.()
     }
+  })
+
+  it('sizes the default relay backlog to at least one full legacy ingress burst', async () => {
+    // The two limits are one policy. A 128-frame backlog behind a 512-frame
+    // burst meant the rate limiter deliberately admitted traffic the relay
+    // queue then refused -- a self-inflicted overflow, not a hostile client.
+    expect(DEFAULT_WEBSOCKET_RELAY_BACKLOG_LIMITS.frameCapacity).toBeGreaterThanOrEqual(
+      DEFAULT_WEBSOCKET_INGRESS_LIMITS.frameCapacity,
+    )
   })
 
   it('relays a yjs frame between two sockets that joined the same room', async () => {
@@ -1834,11 +1905,12 @@ describe('authenticated /sockets/sync command plane', () => {
   it('registers logger-backed production metrics and closes a sync frame above 512KiB before JSON parsing', async () => {
     port = await listen()
     const logger = makeLogger()
+    const metrics = createLoggerSyncCommandMetrics(logger)
     attached = attachWebSocketGateway({
       httpServer,
       config: baseConfig(),
       logger,
-      sync: { ...syncOptions(), metrics: createLoggerSyncCommandMetrics(logger) },
+      sync: { ...syncOptions(), metrics },
     })
     const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
       origin: 'https://app.example.test',
@@ -1847,18 +1919,324 @@ describe('authenticated /sockets/sync command plane', () => {
     const closed = closedWith(socket)
     socket.send('x'.repeat(512 * 1024 + 1))
     expect(await closed).toBe(1009)
+
+    // N6: the counter is aggregated, so nothing is written until the window is
+    // cut. The gateway's own shutdown cuts it, which is what stops the last
+    // window of a process from being lost.
+    expect(logger.info).not.toHaveBeenCalledWith('[ws-sync-metric]', expect.stringContaining('FRAME_TOO_LARGE'))
+    metrics.flush()
     expect(logger.info).toHaveBeenCalledWith(
       '[ws-sync-metric]',
-      JSON.stringify({ event: 'protocol', code: 'FRAME_TOO_LARGE' }),
+      expect.stringContaining('{"event":"protocol","code":"FRAME_TOO_LARGE","count":1}'),
+    )
+  })
+
+  // N6 through attach, closing the seam a verifier flagged: the handler-emits
+  // half and the sink-aggregates half were only ever tested apart, joined by an
+  // unconditional pass-through of `syncOptions.metrics` into the handler. Here a
+  // real RPC over a real socket stalls on credit, and the aggregate line that
+  // reaches the logger is the assertion.
+  it('aggregates the backpressure samples a credit-stalled RPC emits into one window line', async () => {
+    const chunk = Buffer.alloc(8, 1)
+    const apiRpc = {
+      idempotencyScope: 'shared-durable' as const,
+      ready: () => true,
+      operations: () => ['API_RPC' as const],
+      execute: async () => ({
+        status: 200,
+        stream: (async function* () {
+          yield new Uint8Array(chunk)
+        })(),
+      }),
+    }
+    port = await listen()
+    const logger = makeLogger()
+    let now = 0
+    const metrics = createLoggerSyncCommandMetrics(logger, {
+      flushIntervalMs: 60_000,
+      now: () => now,
+      backstopTimer: false,
+    })
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger,
+      sync: { ...syncOptions(), apiRpc, metrics },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-rpc-metric',
+      sessionUuid: 'session-rpc-metric',
+      deviceId: 'device-rpc-metric',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+    const received: { type: string }[] = []
+    socket.on('message', (data) => received.push(JSON.parse(data.toString()) as { type: string }))
+
+    const frame = (type: string, sequence: number, payload: Record<string, unknown>) =>
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type,
+        requestId: `rpc-${sequence}`,
+        commandId: `rpc-${sequence}`,
+        sequence,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+      })
+
+    socket.send(frame('AUTH', 0, { ticket: issued.ticket, deviceId: 'device-rpc-metric' }))
+    await vi.waitFor(() => expect(received.map((entry) => entry.type)).toContain('AUTHENTICATED'))
+
+    // One byte of credit against an 8-byte chunk: the stream genuinely parks in
+    // `consumeRpcCredit` until the client grants more.
+    socket.send(
+      frame('RPC_REQUEST', 1, {
+        method: 'GET',
+        path: '/v1/users/me',
+        stream: true,
+        initialCreditBytes: 1,
+        deadlineMs: 5_000,
+      }),
+    )
+    await vi.waitFor(() => expect(received.map((entry) => entry.type)).toContain('RPC_RESPONSE'))
+
+    now = 10
+    socket.send(frame('RPC_CREDIT', 2, { targetRequestId: 'rpc-1', creditBytes: 64 * 1024 }))
+    await vi.waitFor(() => expect(received.map((entry) => entry.type)).toContain('RPC_END'))
+
+    // Nothing written yet: every one of those events is inside the open window.
+    expect(logger.info).not.toHaveBeenCalledWith('[ws-sync-metric]', expect.stringContaining('backpressure'))
+
+    now = 60_000
+    metrics.increment('rpc', 'window-roll')
+    const lines = logger.info.mock.calls.filter(([prefix]) => prefix === '[ws-sync-metric]')
+    expect(lines).toHaveLength(1)
+    const window = JSON.parse(lines[0][1] as string) as {
+      counts: { event: string; code?: string; count: number }[]
+      samples: { event: string; code: string; count: number; max: number }[]
+    }
+    expect(window.counts).toContainEqual({ event: 'rpc', code: 'backpressure_wait', count: 1 })
+    expect(window.samples).toContainEqual(
+      expect.objectContaining({ event: 'rpc', code: 'backpressure_wait_count', count: 1 }),
+    )
+    expect(window.samples).toContainEqual(expect.objectContaining({ event: 'rpc', code: 'backpressure_wait_max_ms' }))
+    socket.close()
+  })
+
+  it('writes one aggregate line per window however many increments land in it', async () => {
+    const logger = makeLogger()
+    let now = 0
+    const metrics = createLoggerSyncCommandMetrics(logger, {
+      flushIntervalMs: 60_000,
+      now: () => now,
+      backstopTimer: false,
+    })
+
+    for (let index = 0; index < 100; index += 1) {
+      metrics.increment('rate_limit', 'ingress')
+      metrics.observe('rpc', 'backpressure_wait_max_ms', index)
+      now += 100
+    }
+    // 100 increments and 100 samples inside one 60s window: still silent.
+    expect(logger.info).not.toHaveBeenCalled()
+
+    now = 60_000
+    metrics.increment('disconnect')
+
+    const lines = logger.info.mock.calls.filter(([prefix]) => prefix === '[ws-sync-metric]')
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0][1] as string)).toEqual({
+      windowMs: 60_000,
+      counts: [{ event: 'rate_limit', code: 'ingress', count: 100 }],
+      samples: [{ event: 'rpc', code: 'backpressure_wait_max_ms', count: 100, sum: 4_950, max: 99 }],
+    })
+
+    // The increment that rolled the window opens the next one rather than
+    // being counted twice, and `close` writes the tail.
+    metrics.close()
+    const after = logger.info.mock.calls.filter(([prefix]) => prefix === '[ws-sync-metric]')
+    expect(after).toHaveLength(2)
+    expect(JSON.parse(after[1][1] as string)).toEqual({
+      windowMs: 0,
+      counts: [{ event: 'disconnect', count: 1 }],
+    })
+  })
+
+  it('refuses a nonsensical metric flush interval rather than silently never flushing', () => {
+    expect(() => createLoggerSyncCommandMetrics(makeLogger(), { flushIntervalMs: 0 })).toThrow(
+      /sync metric flush interval/,
+    )
+    expect(() => createLoggerSyncCommandMetrics(makeLogger(), { flushIntervalMs: Number.NaN })).toThrow(
+      /sync metric flush interval/,
+    )
+  })
+
+  // R1. `handler.stop()` disconnects first, which aborts the active command, so
+  // a shutdown mid-SYNC_ITEMS closed 1001 over a write that had already
+  // committed and the client could only learn the outcome by replaying over
+  // HTTP. The drain runs before the close sweep.
+  it('answers an in-flight sync command before stop() closes its socket', async () => {
+    let releaseBackend!: () => void
+    const backendGate = new Promise<void>((resolve) => {
+      releaseBackend = resolve
+    })
+    const base = syncOptions()
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...base,
+        backend: {
+          ...base.backend,
+          execute: vi.fn(async (input: { digest: string }) => {
+            await backendGate
+            return { digest: input.digest, payload: { ok: true } }
+          }),
+        },
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-drain',
+      sessionUuid: 'session-drain',
+      deviceId: 'device-drain',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    // The client's own view of the order: every frame, then the close.
+    const observed: string[] = []
+    socket.on('message', (data) => observed.push((JSON.parse(data.toString()) as { type: string }).type))
+    const closed = new Promise<void>((resolve) =>
+      socket.once('close', (code) => {
+        observed.push(`close:${code}`)
+        resolve()
+      }),
     )
 
-    // Gauge samples (N6 backpressure) share the line shape with a `value`.
-    const metrics = createLoggerSyncCommandMetrics(logger)
-    metrics.observe?.('rpc', 'backpressure_wait_max_ms', 42)
-    expect(logger.info).toHaveBeenCalledWith(
-      '[ws-sync-metric]',
-      JSON.stringify({ event: 'rpc', code: 'backpressure_wait_max_ms', value: 42 }),
+    const authPayload = { ticket: issued.ticket, deviceId: 'device-drain' }
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-drain',
+        commandId: 'auth-drain',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify(authPayload)),
+        payload: authPayload,
+      }),
     )
+    await vi.waitFor(() => expect(observed).toContain('AUTHENTICATED'))
+
+    const body = { api: '20200115', items: [] }
+    const payload = { command: 'SYNC_ITEMS', body }
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'COMMAND',
+        requestId: 'request-drain',
+        commandId: 'command-drain',
+        sequence: 1,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+        digest: digestSyncCommandBody(body),
+      }),
+    )
+    await vi.waitFor(() => expect(observed).toContain('ACCEPTED'))
+
+    const stopped = attached.stop()
+    // A commit landing well after shutdown began is exactly the case R1 is
+    // about. The real-timer delay matters: a drain that only yields a microtask
+    // would let this commit through by accident and prove nothing.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    releaseBackend()
+    await stopped
+    attached = undefined
+    await closed
+
+    expect(observed).toEqual(['AUTHENTICATED', 'ACCEPTED', 'COMMITTED', 'close:1001'])
+  })
+
+  it('refuses a frame sent during the drain with 1013 draining without losing the in-flight answer', async () => {
+    let releaseBackend!: () => void
+    const backendGate = new Promise<void>((resolve) => {
+      releaseBackend = resolve
+    })
+    const base = syncOptions()
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...base,
+        backend: {
+          ...base.backend,
+          execute: vi.fn(async (input: { digest: string }) => {
+            await backendGate
+            return { digest: input.digest, payload: { ok: true } }
+          }),
+        },
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-draining',
+      sessionUuid: 'session-draining',
+      deviceId: 'device-draining',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+    const observed: string[] = []
+    socket.on('message', (data) => observed.push((JSON.parse(data.toString()) as { type: string }).type))
+    const closure = closedWithReason(socket)
+
+    const authPayload = { ticket: issued.ticket, deviceId: 'device-draining' }
+    const command = (sequence: number, requestId: string) => {
+      const body = { api: '20200115', items: [], requestId }
+      const payload = { command: 'SYNC_ITEMS', body }
+      return JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'COMMAND',
+        requestId,
+        commandId: requestId,
+        sequence,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+        digest: digestSyncCommandBody(body),
+      })
+    }
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-draining',
+        commandId: 'auth-draining',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify(authPayload)),
+        payload: authPayload,
+      }),
+    )
+    await vi.waitFor(() => expect(observed).toContain('AUTHENTICATED'))
+    socket.send(command(1, 'request-first'))
+    await vi.waitFor(() => expect(observed).toContain('ACCEPTED'))
+
+    const stopped = attached.stop()
+    // A second command arriving mid-drain must not be admitted, and must not
+    // take the first one's answer down with it by closing the socket early.
+    socket.send(command(2, 'request-late'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    releaseBackend()
+    await stopped
+    attached = undefined
+
+    expect(await closure).toEqual({ code: 1013, reason: 'draining' })
+    expect(observed).toEqual(['AUTHENTICATED', 'ACCEPTED', 'COMMITTED'])
   })
 
   it('routes owned binary FILES_V1 frames to the file session instead of the JSON parser', async () => {
