@@ -73,7 +73,11 @@ function pdfWorkerLocation(source, relativePath) {
   const start = candidates
     .map((candidate) => source.indexOf(candidate))
     .find((index) => index >= 0);
-  assert.notEqual(start, undefined, `${relativePath}: PDF worker location missing`);
+  assert.notEqual(
+    start,
+    undefined,
+    `${relativePath}: PDF worker location missing`,
+  );
   const end = source.indexOf("\n  }", start);
   assert.ok(end > start, `${relativePath}: PDF worker location is not bounded`);
   return source.slice(start, end);
@@ -130,13 +134,24 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
     assert.ok(!parentScripts.includes("'unsafe-inline'"), relativePath);
     assert.ok(!parentScripts.includes("'unsafe-eval'"), relativePath);
 
+    // Realtime dials only the page's own host. wss: covers TLS pages; the
+    // plain-http self-host case is spelled out as ws://$http_host on purpose:
+    // Chromium and Firefox let 'self' match ws: on an http: page but WebKit's
+    // 'self' matcher only widens http -> https, so relying on 'self' alone
+    // would silently drop both realtime lanes in Safari. A bare ws: (the old
+    // shape) would admit cleartext sockets to ANY host. The LXC installer
+    // renders nginx from a heredoc, so its dollar sign is shell-escaped.
+    const sameHostWebSocket =
+      relativePath === "deploy/lxc/install.sh"
+        ? "ws://\\$http_host"
+        : "ws://$http_host";
     const parentConnections = directive(parentPolicy, "connect-src");
     for (const allowed of [
       "'self'",
       "https:",
       "http://localhost:*",
       "http://127.0.0.1:*",
-      "ws:",
+      sameHostWebSocket,
       "wss:",
     ]) {
       assert.ok(
@@ -145,6 +160,16 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
       );
     }
     assert.ok(!parentConnections.includes("http:"), relativePath);
+    assert.ok(
+      !parentConnections.includes("ws:"),
+      `${relativePath}: bare ws: admits cleartext sockets to any host`,
+    );
+    assert.ok(
+      !parentConnections.some(
+        (source) => source.startsWith("ws://") && source !== sameHostWebSocket,
+      ),
+      `${relativePath}: ws:// sources other than the page's own host`,
+    );
 
     assert.deepEqual(directive(parentPolicy, "img-src"), [
       "'self'",
@@ -645,11 +670,19 @@ test("a failing-upstream navigation is passed through but never cached as the ap
   });
 
   const response = await responsePromise;
-  assert.equal(response.status, 502, "the real upstream failure reaches the page");
+  assert.equal(
+    response.status,
+    502,
+    "the real upstream failure reaches the page",
+  );
   // A cached 502 becomes the offline shell and is then served under the app CSP,
   // whose inline-script hash pins the real index.html — the proxy error page's
   // own inline script would be blocked as a script-src-elem violation.
-  assert.deepEqual(cachePuts, [], "an error page must never enter the shell cache");
+  assert.deepEqual(
+    cachePuts,
+    [],
+    "an error page must never enter the shell cache",
+  );
 });
 
 test("deployment marker requests bypass the service worker and every cache", () => {
@@ -1081,7 +1114,10 @@ test("activating a new build evicts every previous shell cache and nothing else"
         deleted.push(key);
         return true;
       },
-      open: async () => ({ put: async () => undefined, match: async () => undefined }),
+      open: async () => ({
+        put: async () => undefined,
+        match: async () => undefined,
+      }),
     },
     self: {
       location: { origin: "https://notes.example.test" },

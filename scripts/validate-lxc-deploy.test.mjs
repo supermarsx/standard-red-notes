@@ -442,12 +442,15 @@ function validate(files) {
   const socketLocation = installer.match(
     /location \/sockets \{([\s\S]*?)\n  \}/,
   )?.[1];
+  // Host keeps its port ($http_host, not $host): the sync lane's same-origin
+  // check rebuilds "<proto>://<Host>" and compares it with the browser's
+  // Origin, so a port-less Host fails every upgrade on a non-80/443 port.
   const webSocketProxyContract = [
     "proxy_pass http://127.0.0.1:3000;",
     "proxy_http_version 1.1;",
     "proxy_set_header Upgrade \\$http_upgrade;",
     "proxy_set_header Connection \\$connection_upgrade;",
-    "proxy_set_header Host \\$host;",
+    "proxy_set_header Host \\$http_host;",
     "proxy_read_timeout 86400s;",
     "proxy_send_timeout 86400s;",
   ];
@@ -457,12 +460,25 @@ function validate(files) {
       "map \\$http_upgrade \\$connection_upgrade { default upgrade; '' close; }",
     ) ||
     !socketLocation ||
+    socketLocation.includes("proxy_set_header Host \\$host;") ||
     webSocketProxyContract.some(
       (fragment) => !socketLocation.includes(fragment),
     )
   ) {
     errors.push(
       "LXC nginx must preserve WebSocket upgrades and long-lived /sockets proxy timeouts",
+    );
+  }
+  // POST /sockets/tokens mints a legacy connection token for ANY user when it
+  // carries the server-internal secret. This nginx is the public trust
+  // boundary, so the header must be blanked before the request reaches the
+  // home-server; a client on the front door must never be able to present it.
+  if (
+    !socketLocation ||
+    !socketLocation.includes('proxy_set_header X-Internal-Secret "";')
+  ) {
+    errors.push(
+      "LXC nginx must blank X-Internal-Secret on /sockets so the public front door cannot mint connection tokens",
     );
   }
   if (
@@ -720,6 +736,7 @@ test("LXC requires the full WebSocket, download deadline, and proxy matrix", () 
     "location /sockets {",
     "proxy_set_header Upgrade \\$http_upgrade;",
     "proxy_set_header Connection \\$connection_upgrade;",
+    "proxy_set_header Host \\$http_host;",
     "proxy_read_timeout 86400s;",
     "proxy_send_timeout 86400s;",
   ]) {
@@ -728,6 +745,22 @@ test("LXC requires the full WebSocket, download deadline, and proxy matrix", () 
       /preserve WebSocket upgrades and long-lived \/sockets proxy timeouts/,
     );
   }
+  assert.match(
+    validate(
+      mutate(
+        "installer",
+        "proxy_set_header Host \\$http_host;",
+        "proxy_set_header Host \\$host;",
+      ),
+    ).join("\n"),
+    /preserve WebSocket upgrades and long-lived \/sockets proxy timeouts/,
+  );
+  assert.match(
+    validate(
+      mutate("installer", 'proxy_set_header X-Internal-Secret "";'),
+    ).join("\n"),
+    /blank X-Internal-Secret on \/sockets/,
+  );
 
   for (const fragment of [
     "same private trusted network",
