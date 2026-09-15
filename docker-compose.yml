@@ -120,6 +120,17 @@ x-server-env: &server-env
   WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS: ${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS:-1500}
   WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS: ${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS:-30000}
   WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS: ${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS:-75000}
+  # Inlining of changed item payloads into the SYNC_ITEMS_PUSHED push, read by
+  # the syncing-server. Empty (the default) sends the plain
+  # ITEMS_CHANGED_ON_SERVER notification and the receiver pulls over HTTP: the
+  # sync token a push carries is the saver's own request-start microsecond, so
+  # the receiver's strict base-token gate never matched and every inlined
+  # payload was discarded and re-pulled anyway. Only the exact string `true`
+  # turns inlining on. WEBSOCKET_SYNC_PUSH_MAX_BYTES bounds the serialised
+  # projections (default 200 KiB); a larger change set degrades to the plain
+  # notification instead of blowing up the frame or the 256 KiB SNS limit.
+  WEBSOCKET_SYNC_PUSH_ENABLED: ${WEBSOCKET_SYNC_PUSH_ENABLED:-}
+  WEBSOCKET_SYNC_PUSH_MAX_BYTES: ${WEBSOCKET_SYNC_PUSH_MAX_BYTES:-}
   # SNS/SQS event source for realtime push: the in-process gateway inside the
   # api-gateway consumes WEB_SOCKET_MESSAGE_REQUESTED (item changes, MFA, roles,
   # notifications) and INVITE_REALTIME_INVALIDATION_REQUESTED from this queue.

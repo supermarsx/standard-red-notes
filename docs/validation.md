@@ -89,7 +89,11 @@ The current app scope is `api`, `encryption`, `features`, `filepicker`, `files`,
 The current server scope is `analytics`, `api-gateway`, `auth`, `common`,
 `domain-core`, `domain-events`, `domain-events-infra`, `files`, `home-server`,
 `predicates`, `revisions`, `scheduler`, `security`, `settings`, `sncrypto-node`,
-`syncing-server`, `time`, and `websockets`.
+`syncing-server`, `time`, and `websockets`. The last of those is the dormant
+standalone AWS-era gateway: nothing imports it and it serves no route, but it is
+still compiled, so it stays in the denominator until the workspace itself is
+removed. The realtime gateway that actually runs is `websocket-gateway`, hosted
+in-process by the api-gateway and the home-server.
 
 The source denominator excludes non-Jest app workspaces (`clipper`, `desktop`,
 `filepicker/example`, `icons`, `releases`, `sncrypto-common`, `sncrypto-web`,

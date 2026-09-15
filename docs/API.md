@@ -306,16 +306,23 @@ shared-vault variants under `/v1/shared-vault/files/*`.
 
 | Method | Path                      | Resolver id                         | Notes                                                                                                                        |
 | ------ | ------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/v1/sockets/tokens`      | `sockets/tokens`                    | Create a WebSocket **connection token**. Requires cross-service token. Used to authenticate the realtime gateway connection. |
-| POST   | `/v1/sockets/connections` | `sockets/connections/:connectionId` | Register a connection (requires `connectionid` header).                                                                      |
-| DELETE | `/v1/sockets/connections` | `sockets/connections/:connectionId` | Deregister a connection.                                                                                                     |
-| GET    | `/v1/sockets/sync/capabilities` | local controller | Advertise protocol-v1 worker sync only when exact origin, durable backend, and shared Redis state are ready; otherwise returns an empty capability list. |
-| POST   | `/v1/sockets/sync/ticket` | local controller | Mint a short-lived, one-use sync ticket for the authenticated session and validated `deviceId`; returns `503 SYNC_DISABLED` when unavailable. |
+| POST   | `/v1/sockets/tokens`      | `websockets.tokens.create`          | Create a WebSocket **connection token**. Requires cross-service token. Used to authenticate the realtime gateway connection. |
+| GET    | `/v1/sockets/sync/capabilities` | local controller | Unauthenticated. Advertises the protocol-v1 worker sync descriptor when the three transport conditions hold: the connection-token secret is set, `WEBSOCKET_SYNC_ENABLED` is not the exact string `false`, and the shared ticket, command-lease and socket-budget stores report ready. Otherwise an empty capability list. An unbound gRPC command port does **not** empty this list; it only withholds the `SYNC_ITEMS` operation from the negotiated socket. |
+| POST   | `/v1/sockets/sync/ticket` | local controller | Mint a short-lived, one-use sync ticket for the authenticated session and validated `deviceId`. `503 SYNC_DISABLED` when unavailable; a refusal caused only by a store that is still connecting adds `Retry-After: 5` and `transient: true`. |
 
 The worker upgrades the exact `/sockets/sync` path with an allowed `Origin` and
 no query string. It sends the one-use ticket in the first protocol `AUTH` frame;
 credentials and tickets are never put in this URL. HTTP item sync is the
 fallback when this capability is absent or the socket disconnects.
+
+The legacy realtime lane upgrades the exact path `/sockets` with
+`?authToken=<connection token>`; any other path under that prefix is closed with
+`1008 unknown path`.
+
+Earlier releases exposed `POST` and `DELETE /v1/sockets/connections` for the
+AWS-era standalone gateway, together with an auth-side
+`/sockets/tokens/validate`. The realtime gateway runs in-process and registers
+no such routes; all three have been removed and now answer 404.
 
 ### Subscriptions and offline tokens
 

@@ -80,12 +80,20 @@ const REALTIME_QUEUE_UNSET_LOOP_PATTERN =
 // Multi: the gRPC proxy switch (empty = HTTP proxies; never forced by the
 // entrypoint), the container-internal files URL behind FILES_V1, and the
 // per-deployment Redis namespace. Single: the legacy-lane tunables and both
-// websocket secrets that were previously unreachable from .env.single.
+// websocket secrets that were previously unreachable from .env.single. Both
+// topologies also carry the SYNC_ITEMS_PUSHED inlining switch and its byte cap:
+// the defaults live in the syncing-server (off / 200 KiB) and were documented as
+// operator-tunable while no Compose key delivered a value from .env.
+const PUSH_PAYLOAD_SWITCH_ENV = Object.freeze({
+  WEBSOCKET_SYNC_PUSH_ENABLED: "${WEBSOCKET_SYNC_PUSH_ENABLED:-}",
+  WEBSOCKET_SYNC_PUSH_MAX_BYTES: "${WEBSOCKET_SYNC_PUSH_MAX_BYTES:-}",
+});
 export const MULTI_REALTIME_SWITCH_ENV = Object.freeze({
   API_GATEWAY_SERVICE_PROXY_TYPE: "${SERVICE_PROXY_TYPE:-}",
   API_GATEWAY_WEBSOCKET_SYNC_FILES_URL:
     "${WEBSOCKET_SYNC_FILES_URL:-http://localhost:3104}",
   WEBSOCKET_REDIS_NAMESPACE: "${WEBSOCKET_REDIS_NAMESPACE:-}",
+  ...PUSH_PAYLOAD_SWITCH_ENV,
 });
 export const SINGLE_REALTIME_SWITCH_ENV = Object.freeze({
   WEBSOCKET_GATEWAY_INTERNAL_SECRET: "${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-}",
@@ -95,6 +103,7 @@ export const SINGLE_REALTIME_SWITCH_ENV = Object.freeze({
   COLLABORATION_CAPABILITY_TTL_SECONDS:
     "${COLLABORATION_CAPABILITY_TTL_SECONDS:-}",
   WEBSOCKET_REDIS_NAMESPACE: "${WEBSOCKET_REDIS_NAMESPACE:-}",
+  ...PUSH_PAYLOAD_SWITCH_ENV,
 });
 // The gateway handles exactly these two SNS event types; the emulator bootstrap
 // subscribes websocket-local-queue with this FilterPolicy so the other ~36

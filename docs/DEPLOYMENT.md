@@ -11,25 +11,31 @@ and keep your notes end-to-end encrypted.
 
 | Mode                                  | Containers / services                                                            | Datastore                                 | Best for                                                       |
 | ------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------- |
-| **A. Full multi-container** (default) | app, server (6 node services under supervisord), MariaDB, Redis, floci (SNS/SQS) | MySQL + Redis                             | Production, many users, horizontal scaling, realtime push      |
+| **A. Full multi-container** (default) | app, server (5 services as 9 supervisord programs), MariaDB, Redis, floci (SNS/SQS) | MySQL + Redis                             | Production, many users, horizontal scaling, realtime push      |
 | **B. All-in-one single container**    | 1 container (home-server + nginx under supervisord)                              | embedded **sqlite** + **in-memory** cache | Local use, a household/small team, the simplest Docker deploy  |
 | **C. LXC / systemd**                  | native systemd service + nginx (no Docker)                                       | embedded **sqlite** + **in-memory** cache | Proxmox / lxd system containers, bare VMs, Docker-averse hosts |
 
 Modes B and C run the **home-server**: a single Node process that mounts auth,
 syncing, files, revisions and the api-gateway together, with **in-process domain
 events** (no SNS/SQS) — so they need **no MySQL, no Redis, and no floci**. The
-trade-off vs. Mode A: no horizontal scaling, and live realtime _push_ (the
-websocket bridge) is disabled without Redis, so clients fall back to normal
-periodic sync. Everything else — accounts, notes, files, revisions, admin panel,
-AI proxy, OCR, CalDAV — works the same.
+trade-off vs. Mode A: no horizontal scaling, and **without `REDIS_HOST` no
+realtime gateway is started at all**. That is more than push: there is no live
+collaboration, presence or comments, no realtime invites and no push-approved
+multi-factor prompts, and clients fall back to normal periodic sync. Everything
+else — accounts, notes, files, revisions, admin panel, AI proxy, OCR, CalDAV —
+works the same, and collaboration still works through ordinary sync, just
+without the live session.
 
-Providing a private `REDIS_HOST`/`REDIS_PORT` enables worker WebSocket sync for
-Modes B and C without changing their SQLite/in-memory data path. This connector
-supports only host and port, without Redis authentication or TLS, so it is
-supported only when Redis stays on the same private trusted network. Their
-durable sync adapter remains in-process. Only Mode A's separate API gateway and
-syncing server use the setup-generated `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`
-to authenticate durable gRPC command/status metadata.
+Providing a private `REDIS_HOST`/`REDIS_PORT` turns the whole realtime plane on
+for Modes B and C without changing their SQLite/in-memory data path. This
+connector supports only host and port, without Redis authentication or TLS, so
+it is supported only when Redis stays on the same private trusted network. Their
+durable sync adapter remains in-process, so they need no gRPC switch: only Mode A
+binds the durable command port, with `SERVICE_PROXY_TYPE=grpc` plus the
+setup-generated `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET` that authenticates
+durable gRPC command/status metadata. Mode A leaves `SERVICE_PROXY_TYPE` empty by
+default, so realtime item sync is opt-in there; every other realtime capability
+is on out of the box.
 
 {% include mermaid.html %}
 

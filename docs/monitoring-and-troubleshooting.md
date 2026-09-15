@@ -147,9 +147,25 @@ UUID, so those diagnostics need no exception.
 ### Realtime updates are missing
 
 - Confirm ordinary sync works first.
-- Check WebSocket gateway `/health`, token issuance, reverse-proxy upgrade
-  headers, and client connection logs.
-- Confirm the user’s realtime feature flag.
+- Read `/healthcheck/readiness`. Its `gateway.realtime` block says whether the
+  gateway is attached, which push bridge it uses, whether that bridge and the
+  SQS consumer are running, whether the collaboration relay is healthy, and how
+  many pushes it has dispatched. It is informational and never fails the
+  healthcheck, so a green `status` with a degraded realtime block is expected.
+- Read `/v1/sockets/sync/capabilities`. An empty list means the socket transport
+  is closed; the three causes are a missing `WEB_SOCKET_CONNECTION_TOKEN_SECRET`,
+  `WEBSOCKET_SYNC_ENABLED=false`, and unreachable Redis. An unbound gRPC command
+  port withholds only the `SYNC_ITEMS` operation and leaves the list populated.
+- Read the gateway's own log lines. The realtime gateway runs in-process inside
+  the api-gateway, and supervisord writes that program's output to
+  `/var/lib/server/logs/api-gateway.log` (with `.err` alongside), so
+  `docker compose logs server` shows only supervisord bookkeeping. Boot lines to
+  look for name the unmet preconditions and the `SYNC_ITEMS` decision.
+- Check token issuance, reverse-proxy upgrade headers, and client connection
+  logs. There is no separate gateway container and no gateway `/health`: through
+  the front door, `/health` is the web app's own static response.
+- Confirm the user's **Live sync (`LIVE_SYNC_ENABLED`)** setting. A user with it
+  off is refused `SYNC_ITEMS` with the code `LIVE_SYNC_DISABLED`.
 - Do not treat WebSocket failure as item loss until manual sync is tested.
 
 ### Files fail but notes sync

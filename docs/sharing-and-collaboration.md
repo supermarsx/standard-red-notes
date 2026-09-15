@@ -102,6 +102,17 @@ comments persist through ordinary encrypted item sync, so a gateway outage
 falls back to normal save/sync behavior and reconnecting editors can converge
 again.
 
+Realtime collaboration needs a running realtime gateway, and the single-container
+and LXC deployments start one only when `REDIS_HOST` is configured. Without it
+those deployments have no live relay at all: co-editing, presence and live
+comments are unavailable, and collaborators fall back to ordinary encrypted sync
+with the usual conflict handling. The multi-container stack ships Redis and has
+the relay on by default.
+
+On desktop, mobile and the browser extension the live relay rides the legacy
+socket the app derives from the server it syncs with. Item sync on those
+platforms stays on HTTP by design, which does not affect co-editing.
+
 The full Redis-backed deployment also supports multiple API-gateway replicas.
 Encrypted room frames and room-sync requests cross replicas through Redis, and
 a short-lived atomic Redis lease elects exactly one initial editor bootstrapper.

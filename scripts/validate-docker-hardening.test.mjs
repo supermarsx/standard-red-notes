@@ -1891,6 +1891,36 @@ test("opens the realtime switches in both Compose topologies without forcing gRP
       validateRealtimeSwitchComposeContract(config, pinned, options).join("\n"),
       /WEBSOCKET_REDIS_NAMESPACE must remain operator-overridable as \$\{WEBSOCKET_REDIS_NAMESPACE:-\}/,
     );
+
+    // The SYNC_ITEMS_PUSHED inlining switch and its byte cap are documented as
+    // operator-tunable in docs/self-hosting.md; without a Compose key an
+    // operator's .env value never reaches the syncing-server, so the documented
+    // defaults would be the only reachable values.
+    for (const key of [
+      "WEBSOCKET_SYNC_PUSH_ENABLED",
+      "WEBSOCKET_SYNC_PUSH_MAX_BYTES",
+    ]) {
+      const withoutPushSwitch = structuredClone(config);
+      delete withoutPushSwitch.services[serviceName].environment[key];
+      assert.match(
+        validateRealtimeSwitchComposeContract(
+          withoutPushSwitch,
+          source,
+          options,
+        ).join("\n"),
+        new RegExp(`must propagate ${key}`),
+      );
+      const pinnedPushSwitch = source.replace(`${key}: \${${key}:-}`, `${key}: true`);
+      assert.notEqual(pinnedPushSwitch, source);
+      assert.match(
+        validateRealtimeSwitchComposeContract(
+          config,
+          pinnedPushSwitch,
+          options,
+        ).join("\n"),
+        new RegExp(`${key} must remain operator-overridable`),
+      );
+    }
   }
 
   const multiSource = readFileSync(resolve("docker-compose.yml"), "utf8");

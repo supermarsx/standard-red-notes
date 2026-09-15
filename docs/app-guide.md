@@ -759,24 +759,24 @@ Own the whole stack — even the sync metadata stays on your infrastructure.
 
 Standard Red Notes is designed to be self-hosted. Running your own server means the encrypted data and the limited sync metadata both live on infrastructure you control, and you set your own limits with no subscriptions involved.
 
-The bundled deployment uses containers orchestrated together: the app (static web UI), the server (sync, auth, files), a realtime gateway, a database, and a cache.
+The bundled deployment uses containers orchestrated together: the app (static web UI and front door), the server (sync, auth, files, revisions and the API gateway, with the realtime gateway running inside it), a database, a cache, and a local SNS/SQS emulator.
 
 Related: [self-hosting/architecture](#self-hosting-architecture), [self-hosting/cookies-auth](#self-hosting-cookies-auth), [self-hosting/smtp](#self-hosting-smtp)
 
 <a id="self-hosting-architecture"></a>
 ### Architecture
 
-How the app, server, gateway, database, and cache fit together.
+How the app, server, database, and cache fit together behind one origin.
 
 | Topic | Details |
 | --- | --- |
-| App | The static web client served over HTTP. Talks to the server’s API. |
-| Server | Auth, syncing, and files services. Stores ciphertext and authenticates you. |
-| Gateway | A WebSocket service for realtime push and collaboration relay. |
+| App | The static web client plus the front door. Its nginx serves the UI and proxies the API, files and the realtime socket on the same origin. |
+| Server | Auth, syncing, files, revisions and the API gateway, run together under one supervisor. Stores ciphertext and authenticates you. This container publishes no ports of its own. |
+| Realtime gateway | Not a separate container. It runs inside the API gateway process and answers on the same port, behind the front door’s /sockets path. |
 | Database | Stores encrypted items and account metadata. |
-| Cache | Speeds up sessions and ephemeral state. |
+| Cache | Sessions, ephemeral state, and the shared state the realtime gateway needs. |
 
-> **Info.** The app and server run on separate ports/origins by default, so the client is configured to send credentials cross-origin and the server allows it. See "How authentication works".
+> **Info.** Everything reaches the browser through one origin, so there is no cross-origin credential setup to do. The client defaults to its own origin as the sync server and follows the address the server advertises for files.
 
 Related: [self-hosting/cookies-auth](#self-hosting-cookies-auth), [collaboration/realtime](#collaboration-realtime), [automation/mcp-overview](#automation-mcp-overview)
 
@@ -794,7 +794,7 @@ For browser sessions, the server authenticates requests using session cookies it
 | COOKIE_DOMAIN | Leave empty for a host-only cookie that works on localhost, a bare hostname, or an IP. Set it only for an HTTPS deployment behind a real domain. |
 | COOKIE_SECURE | false for plain HTTP self-hosting; true when serving over HTTPS. |
 | COOKIE_SAME_SITE | Lax is appropriate for a same-site app+API; None requires Secure. |
-| CORS | The server echoes your app’s origin and allows credentials so cookies flow across the app/API ports. |
+| CORS | Not needed for the bundled stack, where the app and API share one origin. The server still echoes a configured origin and allows credentials for a client you host somewhere else. |
 
 {% include safety-alert.html
   level="caution"
@@ -973,6 +973,12 @@ Co-edit notes live, with changes relayed end-to-end encrypted.
 Realtime collaboration lets shared-vault members with current write or admin permission—including the note creator—edit the same note together, with presence, encrypted comments, and live updates. Changes are encrypted on each client and relayed through the self-hosted gateway, which forwards ciphertext without being able to read it.
 
 > **Info.** Read-only vault members and read-only account or MCP sessions cannot join the live relay. They keep ordinary encrypted sync and can still view content their vault permission allows. If the relay is unavailable, editors fall back to ordinary encrypted note persistence and sync.
+
+{% include safety-alert.html
+  level="danger"
+  title="Important safety warning"
+  body="The all-in-one container and the LXC install start a realtime gateway only when an external Redis host is configured. Without one there is no live relay at all — no co-editing session, presence, or live comments — and collaborators work through ordinary encrypted sync instead. The full multi-container deployment ships its own cache and has the relay on by default."
+%}
 
 Related: [collaboration/vaults](#collaboration-vaults), [self-hosting/architecture](#self-hosting-architecture)
 

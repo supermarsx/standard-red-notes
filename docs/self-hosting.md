@@ -169,7 +169,7 @@ to boot otherwise).
 | `AUTH_SERVER_ENCRYPTION_SERVER_KEY`     | Server-side encryption key for sensitive auth data (for example MFA secrets). Purpose-specific keys derived from it also protect email relay credentials and queued message payloads. Must be exactly 32 bytes of hex.    | `openssl rand -hex 32` / .NET RNG                                  |
 | `VALET_TOKEN_SECRET`                    | Signs the short-lived valet tokens that authorize file uploads/downloads.                                                                                                                                                 | `openssl rand -hex 32` / .NET RNG                                  |
 | `AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY`     | Seed for pseudo key-params returned on login for unknown accounts (prevents user enumeration). The container auto-generates one if unset, but it would then change on every restart - so it is pinned in `.env`.          | `openssl rand -hex 32` / .NET RNG                                  |
-| `WEBSOCKET_GATEWAY_INTERNAL_SECRET`     | Shared secret authenticating the server -> websocket-gateway internal calls. Must match on both.                                                                                                                          | `openssl rand -hex 32` / .NET RNG                                  |
+| `WEBSOCKET_GATEWAY_INTERNAL_SECRET`     | Loopback-only credential for minting a legacy connection token. Treat it as one of the most sensitive values here: whoever holds it can open a realtime socket **as any user**. The front doors now blank the header on `/sockets`, and the gateway refuses an internal mint that arrives proxied or from a non-loopback peer, but never expose it to a client or a browser. | `openssl rand -hex 32` / .NET RNG                                  |
 | `WEB_SOCKET_CONNECTION_TOKEN_SECRET`    | Signs the short-lived tokens browsers use to open a realtime websocket connection.                                                                                                                                        | `openssl rand -hex 32` / .NET RNG                                  |
 | `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY` | Encrypts optional guided ChatGPT/Codex pairing credentials in the persistent gateway store. Supported setup and LXC installers generate it once and preserve it automatically; never rotate it while pairing data exists. | Automatic installer secret; manual RNG only for custom deployments |
 | `MYSQL_PASSWORD`                        | Password for the application database user.                                                                                                                                                                               | `openssl rand -hex 32` / .NET RNG                                  |
@@ -446,31 +446,119 @@ disconnects, and the operator kill switch.
 The transport defaults on. Set exact `WEBSOCKET_SYNC_ENABLED=false` to disable
 it; any other non-empty value is a startup error. An empty
 `WEBSOCKET_SYNC_ALLOWED_ORIGINS` derives one exact HTTP(S) origin from
-`PUBLIC_URL`. Explicit entries are comma-separated exact origins; wildcard,
-`null`, `file:`, credential-bearing, path, query, and fragment values are
-rejected. Redis backs one-use tickets, command leases, and the fleet-wide
-per-user socket budget, so every production replica observes the same state.
-If the exact origin, durable sync backend, connection secret, or Redis state is
-missing, capability negotiation stays closed and the client uses HTTP.
+`PUBLIC_URL`, and any browser origin that matches the upgrade's own `Host` is
+accepted as a same-origin fallback. Explicit entries are comma-separated exact
+origins; wildcard, `null`, `file:`, credential-bearing, path, query, and
+fragment values are rejected. Redis backs one-use tickets, command leases, and
+the fleet-wide per-user socket budget, so every production replica observes the
+same state.
 
-Relevant tuning variables are `WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER` (default
-`4`), `WEBSOCKET_SYNC_REDIS_KEY_PREFIX` (default `srn:ws-sync:v1`),
-`WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS` (default `1500`),
-`WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS` (default `30000`), and
-`WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS` (default `75000`). The single-container
-and LXC topologies do not bundle Redis; provide `REDIS_HOST`/`REDIS_PORT` to
-enable socket sync there, or leave them unset for HTTP fallback. Their connector
-supports only host and port, without Redis authentication or TLS, so external
-Redis is supported only on the same private trusted network. Never publish it
-or route it across a trust boundary.
+**What actually gates the lane.** Three conditions gate the socket **transport**. If any is unmet, capability
+negotiation returns an empty list and every client uses HTTP:
+
+| Condition | Unmet code | What it needs |
+| --- | --- | --- |
+| Connection-token secret | `WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING` | `WEB_SOCKET_CONNECTION_TOKEN_SECRET` set to at least 32 bytes |
+| Kill switch off | `WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION` | `WEBSOCKET_SYNC_ENABLED` is not the exact string `false` |
+| Fleet-shared state | `REDIS_UNBOUND` | `REDIS_URL` (or `REDIS_HOST`/`REDIS_PORT`), not `CACHE_TYPE=memory` |
+
+A **fourth, separate** condition gates only the `SYNC_ITEMS` operation:
+
+| Condition | Unmet code | What it needs |
+| --- | --- | --- |
+| Durable command port | `SYNCING_SERVER_GRPC_UNBOUND` | `SERVICE_PROXY_TYPE=grpc` plus `SYNCING_SERVER_GRPC_URL` |
+
+This one is **not** all-or-nothing. When it is unmet the socket still opens and
+still serves live collaboration, API RPC, invite events, the assistant stream
+and the files lane; only item sync falls back to HTTP, and the boot log says so
+once:
+`[ws-sync] SYNC_ITEMS will not be advertised (durable-backend-unavailable).`
+
+`SERVICE_PROXY_TYPE` is the switch that binds that port, and it is **empty by
+default**: the bundled Compose stack talks HTTP between its own services. Set
+`SERVICE_PROXY_TYPE=grpc` in `.env` and recreate the `server` service to enable
+realtime `SYNC_ITEMS`; Compose passes the value through as
+`API_GATEWAY_SERVICE_PROXY_TYPE` and the entrypoint supplies the matching
+`AUTH_SERVER_GRPC_URL` / `SYNCING_SERVER_GRPC_URL`. Flipping it moves every
+api-gateway-to-auth and api-gateway-to-syncing-server call onto gRPC, not just
+`SYNC_ITEMS`. The single container and the LXC install use an in-process durable
+adapter instead and never need this switch.
+
+The files lane over the socket needs one more container-internal URL,
+`WEBSOCKET_SYNC_FILES_URL` (Compose default `http://localhost:3104`, passed
+through as `API_GATEWAY_WEBSOCKET_SYNC_FILES_URL`). Without it the gateway
+logs `Realtime FILES_V1 transport not advertised` and uploads and downloads use
+the ordinary HTTP path.
+
+**Tuning variables.**
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER` | `4` | Fleet-wide per-user sync-socket budget. |
+| `WEBSOCKET_SYNC_REDIS_KEY_PREFIX` | `srn:ws-sync:v1` | Ticket, lease and budget keys. |
+| `WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS` | `1500` | Per Redis operation. |
+| `WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS` | `30000` | Per-device command lease. |
+| `WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS` | `75000` | Socket-budget reservation. |
+| `WEBSOCKET_MAX_CONNECTIONS_PER_USER` | `16` | Legacy `/sockets` lane; 1..1024 or the boot fails. |
+| `WEB_SOCKET_CONNECTION_TOKEN_TTL` | `60s` | See the format note below. |
+| `WEBSOCKET_REDIS_NAMESPACE` | empty | See the namespace note below. |
+| `WEBSOCKET_SYNC_PUSH_ENABLED` | empty (off) | See the push note below. |
+| `WEBSOCKET_SYNC_PUSH_MAX_BYTES` | `204800` | Byte cap on inlined push payloads. |
+
+`WEB_SOCKET_CONNECTION_TOKEN_TTL` accepts `<n>s`, `<n>m`, `<n>h`, or a bare
+integer meaning **seconds**. It is validated at boot: an unparseable or
+zero value stops the api-gateway with the variable named rather than minting
+unusable tokens. A bare `60` therefore means 60 seconds, which is also the
+default.
+
+`WEBSOCKET_REDIS_NAMESPACE` (empty by default) prefixes every realtime Redis
+name: the push channel, the collaboration relay channel, the collaboration room
+keys, the SQS dedup keys and the invite-event streams. Set it to a value
+matching `^[a-z0-9:_-]{1,64}$` when two stacks share one Redis instance; leave
+it empty and the names are byte-identical to previous releases, so a rolling
+upgrade keeps replicas talking. An **invalid** value behaves differently by
+topology on purpose: the multi-container api-gateway refuses to start and logs
+the variable name, while the single container and LXC keep serving HTTP and
+record the precondition `WEBSOCKET_REDIS_NAMESPACE_INVALID` rather than
+publishing on a sibling stack's un-namespaced channels.
+
+`WEBSOCKET_SYNC_PUSH_ENABLED` is **off unless set to the exact string `true`**.
+With it off, a save publishes the plain `ITEMS_CHANGED_ON_SERVER` notification
+and the receiving device pulls the change over HTTP. With it on, the changed
+encrypted payloads are also inlined into the push. Inlining is off by default
+because the sync token a push carries is the saving request's own timestamp, and
+no receiver ever holds that value, so the receiver's strict base-token check
+always failed and re-pulled over HTTP anyway: inlining only doubled the bytes on
+the wire. Cross-device latency is the same either way.
+`WEBSOCKET_SYNC_PUSH_MAX_BYTES` (default 200 KiB) bounds the serialised
+payloads; a larger change set degrades to the plain notification rather than
+overflowing a frame or the 256 KiB SNS message limit.
+
+The single-container and LXC topologies do not bundle Redis. Without
+`REDIS_HOST` the realtime gateway is **not started at all**: no push, no live
+collaboration, presence or comments, no realtime invites, no push-approved
+multi-factor prompts — only HTTP and periodic sync. Provide
+`REDIS_HOST`/`REDIS_PORT` to turn realtime on there. Their connector supports
+only host and port, without Redis authentication or TLS, so external Redis is
+supported only on the same private trusted network. Never publish it or route
+it across a trust boundary.
 
 In the multi-process topology, setup also generates
 `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`. This purpose-specific key signs the
 API-gateway's durable gRPC command/status metadata and is verified by the
-syncing-server; never reuse `AUTH_JWT_SECRET`. Missing it keeps the worker
-WebSocket capability closed while HTTP sync remains available. The bundled
+syncing-server; never reuse `AUTH_JWT_SECRET`. Missing it keeps `SYNC_ITEMS`
+closed while the rest of the socket and HTTP sync remain available. The bundled
 HomeServer uses a direct in-process durable adapter and intentionally does not
 invent or validate gRPC credentials.
+
+**Desktop, mobile and the browser extension.** Those clients have no configurable gateway URL. They derive
+`ws(s)://<sync-host>/sockets` from the server they already sync with and open
+the **legacy** lane on every launch that has a session, which carries push,
+realtime invites, push-approved multi-factor prompts and the collaboration
+relay. They do not use the worker sync lane: their page origin is `file:`, which
+can never pass the origin check, so item sync there stays on HTTP by design. A
+gateway that answers 503 or closes the socket is retried when the app returns to
+the foreground, regains connectivity or signs in again, not on a fixed timer.
 
 When upgrading an older multi-container installation, run the normal setup
 script once (`./scripts/setup.sh --yes` or `./scripts/setup.ps1 -Yes`) before
@@ -491,6 +579,17 @@ to loopback or reach the `app` service only over the proxy's private Docker
 network. Existing installations must set both the flag and
 `APP_BIND_ADDRESS=127.0.0.1` after verifying those conditions; new setup-script
 installs do so when you answer that the configured domain is served over HTTPS.
+
+The flag also decides whether the realtime same-origin fallback can work behind
+TLS. When `WEBSOCKET_SYNC_ALLOWED_ORIGINS` and `PUBLIC_URL` are both empty, the
+gateway accepts an upgrade whose browser `Origin` equals the origin it rebuilds
+from the request's own `Host` plus its effective scheme. Inside the container
+that scheme is `http` unless the front door forwards the validated outer
+`X-Forwarded-Proto`, which only happens in this trusted mode — so behind a TLS
+terminator the fallback needs `ENFORCE_HTTPS_FROM_PROXY=true`, and a proxy that
+appends a second comma-separated value to `X-Forwarded-Proto` fails the check
+outright. Setting `PUBLIC_URL` to the exact browser origin is the simpler route:
+an explicit origin is matched directly and no proxy header is consulted.
 
 The LXC installer preserves its documented externally reachable HTTP topology
 and does not enable this inner forwarded-header gate. Its nginx always replaces
@@ -1008,16 +1107,45 @@ Confirm the queues exist (the `-compat` image ships `awslocal`):
 docker compose exec floci awslocal sqs list-queues
 ```
 
+Restarting the emulator drops whatever was in flight, and nothing re-drives
+those pushes; connected clients pick the changes up on their next sync, which
+happens as soon as a window regains focus or comes back online. Durable
+`SYNC_ITEMS` commands are journaled in the outbox and are retried.
+
 For item-sync sockets, also inspect the capability response:
 
 ```bash
 curl -fsS https://notes.example.com/v1/sockets/sync/capabilities
 ```
 
-An empty `capabilities` array means the server intentionally failed closed.
-Verify `PUBLIC_URL` (or the exact allowed-origin list), the two WebSocket
-secrets, the durable syncing service, and Redis reachability. HTTP sync should
-continue while you repair the socket plane.
+An empty `capabilities` array means the socket transport failed closed. Exactly
+three things can cause it: a missing `WEB_SOCKET_CONNECTION_TOKEN_SECRET`,
+`WEBSOCKET_SYNC_ENABLED=false`, or unreachable Redis. An unbound gRPC proxy does
+**not** empty this list; it only withholds the `SYNC_ITEMS` operation from an
+otherwise working socket. HTTP sync continues while you repair the socket plane.
+
+The gateway runs in-process inside the api-gateway, and supervisord keeps that
+process's output in a file rather than on the container's stdout, so
+`docker compose logs server` shows only supervisord bookkeeping. Read the
+gateway's own lines instead:
+
+```bash
+docker compose exec server tail -n 200 /var/lib/server/logs/api-gateway.log
+docker compose exec server supervisorctl status
+curl -fsS https://notes.example.com/healthcheck/readiness
+```
+
+The readiness payload carries a `gateway.realtime` block reporting whether the
+gateway is attached, which push bridge it uses, whether that bridge and the SQS
+consumer are running, whether the collaboration relay is healthy, and how many
+pushes have been dispatched. It is informational: a Redis blip degrades realtime
+without failing the healthcheck and restarting the container. The same object
+appears in the admin panel's sync diagnostics.
+
+If you stop a worker by hand, stop it through supervisord
+(`supervisorctl stop <program>`) rather than killing the process: every program
+is now configured to stop and kill as a process group, so no orphaned Node
+process is left polling the queue.
 
 If you previously ran the LocalStack-based stack, a leftover
 `standard-red-notes_localstack-data` volume can be deleted — floci doesn't use

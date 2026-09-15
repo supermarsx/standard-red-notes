@@ -6,8 +6,10 @@ single-process backend as the all-in-one container image: the **home-server**
 (auth + syncing + files + revisions + api-gateway in one Node process) with
 **embedded sqlite + in-memory cache + in-process events**, fronted by **nginx**
 serving the web app. The baseline needs no MySQL or Redis. An external Redis
-instance is optional and enables the primary WebSocket sync transport; without
-it, clients keep using the normal HTTP sync path.
+instance is optional and turns the realtime plane on. Without it no realtime
+gateway is started at all: no push, no live collaboration, presence or comments,
+no realtime invites and no push-approved multi-factor prompts. Clients keep
+using the normal HTTP sync path and everything else works unchanged.
 
 ## What the installer does
 
@@ -30,13 +32,19 @@ container:
 The home-server backend is pinned to `127.0.0.1:3000` in both the generated
 environment and launcher. nginx is the only network-facing listener.
 
-### Optional WebSocket sync
+### Optional realtime (WebSocket) plane
 
 WebSocket sync is default-on at the application level, but it deliberately
-fails closed unless the HomeServer has a connection-token secret, an exact
-browser origin, and shared Redis state. The installer creates and preserves the
-two WebSocket secrets automatically. To activate the socket transport, provide
-Redis and the canonical public URL when installing or upgrading:
+fails closed unless the HomeServer has a connection-token secret, the kill
+switch is off, and shared Redis state is bound. The installer creates and
+preserves the two WebSocket secrets automatically, so Redis is the one thing
+you have to add. An admissible browser origin is checked per upgrade rather than
+at negotiation: with `WEBSOCKET_SYNC_ALLOWED_ORIGINS` and `PUBLIC_URL` both
+empty, the server falls back to accepting an origin equal to the request's own
+`Host`. That fallback works over plain HTTP, but behind the LXC nginx the
+forwarded scheme is `http`, so on an HTTPS site the browser's `https://` origin
+will not match and `PUBLIC_URL` becomes mandatory. Provide Redis and the
+canonical public URL when installing or upgrading:
 
 ```sh
 PUBLIC_URL=https://notes.example.com \
@@ -51,8 +59,11 @@ credentials, queries, and fragments are rejected at startup. The only disable
 value is exact `WEBSOCKET_SYNC_ENABLED=false`; misspellings also fail startup
 instead of silently changing transport policy.
 
-If Redis is absent or unreachable, the WebSocket capability stays unavailable
-and clients fall back to HTTP. The installer does not install or expose Redis.
+If Redis is absent or unreachable, no realtime gateway is attached: the socket
+capability stays unavailable, clients fall back to HTTP for item sync, and live
+collaboration, presence, comments, realtime invites and push-approved
+multi-factor prompts are absent rather than merely slower. The installer does
+not install or expose Redis.
 This integration supports only a host and port, without Redis authentication or
 TLS, so the Redis endpoint must stay on the same private trusted network as the
 LXC. Do not publish it or route it across a trust boundary; leave Redis unset

@@ -620,12 +620,17 @@ APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2=0.0.0
 APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3=0.0.0
 
 # ----- Realtime websocket gateway --------------------------------------------
-# Shared secrets between the server and the websocket-gateway. Must match.
+# WEBSOCKET_GATEWAY_INTERNAL_SECRET is a loopback-only credential: whoever holds
+# it can mint a realtime connection token FOR ANY USER. Never hand it to a
+# client or a browser.
 WEBSOCKET_GATEWAY_INTERNAL_SECRET=${WEBSOCKET_GATEWAY_INTERNAL_SECRET}
 WEB_SOCKET_CONNECTION_TOKEN_SECRET=${WEB_SOCKET_CONNECTION_TOKEN_SECRET}
 
 # Worker WebSocket is the primary durable sync transport. Empty allowed origins
 # derive the exact browser origin from PUBLIC_URL below; HTTP remains fallback.
+# The socket transport is gated on three things: the connection secret above,
+# this kill switch, and Redis. SERVICE_PROXY_TYPE below is a separate, fourth
+# condition gating only the SYNC_ITEMS operation.
 WEBSOCKET_SYNC_ENABLED=true
 WEBSOCKET_SYNC_ALLOWED_ORIGINS=
 WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER=4
@@ -633,6 +638,19 @@ WEBSOCKET_SYNC_REDIS_KEY_PREFIX=srn:ws-sync:v1
 WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=1500
 WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=30000
 WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=75000
+# Transport between the api-gateway and auth/syncing-server. Empty keeps the
+# HTTP proxies, which is the shipped default. Set grpc to bind the durable
+# command port and enable realtime SYNC_ITEMS; it moves EVERY internal call to
+# gRPC, not only sync. Recreate the server service after changing it.
+SERVICE_PROXY_TYPE=
+# Optional prefix (^[a-z0-9:_-]{1,64}$) for the realtime Redis names when two
+# stacks share one Redis. Empty keeps today's names.
+WEBSOCKET_REDIS_NAMESPACE=
+# Inline changed payloads into a realtime push. Off unless exactly true; the
+# plain change notification plus an HTTP pull is the same latency, half the
+# bytes. WEBSOCKET_SYNC_PUSH_MAX_BYTES (default 204800) caps an inlined push.
+WEBSOCKET_SYNC_PUSH_ENABLED=
+WEBSOCKET_SYNC_PUSH_MAX_BYTES=
 
 # ----- Domain / cookies / origins --------------------------------------------
 # Empty COOKIE_DOMAIN => host-only cookie (works on localhost / any bare host/IP).

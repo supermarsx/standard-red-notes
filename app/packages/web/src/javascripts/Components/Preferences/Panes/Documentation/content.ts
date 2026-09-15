@@ -1022,7 +1022,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'The bundled deployment uses containers orchestrated together: the app (static web UI), the server (sync, auth, files), a realtime gateway, a database, and a cache.',
+            text: 'The bundled deployment uses containers orchestrated together: the app (static web UI and front door), the server (sync, auth, files, revisions and the API gateway, with the realtime gateway running inside it), a database, a cache, and a local SNS/SQS emulator.',
           },
         ],
         related: ['self-hosting/architecture', 'self-hosting/cookies-auth', 'self-hosting/smtp'],
@@ -1030,22 +1030,31 @@ export const DOC_CATEGORIES: DocCategory[] = [
       {
         id: 'self-hosting/architecture',
         title: 'Architecture',
-        summary: 'How the app, server, gateway, database, and cache fit together.',
+        summary: 'How the app, server, database, and cache fit together behind one origin.',
         blocks: [
           {
             type: 'table',
             rows: [
-              ['App', 'The static web client served over HTTP. Talks to the server’s API.'],
-              ['Server', 'Auth, syncing, and files services. Stores ciphertext and authenticates you.'],
-              ['Gateway', 'A WebSocket service for realtime push and collaboration relay.'],
+              [
+                'App',
+                'The static web client plus the front door. Its nginx serves the UI and proxies the API, files and the realtime socket on the same origin.',
+              ],
+              [
+                'Server',
+                'Auth, syncing, files, revisions and the API gateway, run together under one supervisor. Stores ciphertext and authenticates you. This container publishes no ports of its own.',
+              ],
+              [
+                'Realtime gateway',
+                'Not a separate container. It runs inside the API gateway process and answers on the same port, behind the front door’s /sockets path.',
+              ],
               ['Database', 'Stores encrypted items and account metadata.'],
-              ['Cache', 'Speeds up sessions and ephemeral state.'],
+              ['Cache', 'Sessions, ephemeral state, and the shared state the realtime gateway needs.'],
             ],
           },
           {
             type: 'callout',
             variant: 'info',
-            text: 'The app and server run on separate ports/origins by default, so the client is configured to send credentials cross-origin and the server allows it. See "How authentication works".',
+            text: 'Everything reaches the browser through one origin, so there is no cross-origin credential setup to do. The client defaults to its own origin as the sync server and follows the address the server advertises for files.',
           },
         ],
         related: ['self-hosting/cookies-auth', 'collaboration/realtime', 'automation/mcp-overview'],
@@ -1074,7 +1083,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
               ['COOKIE_SAME_SITE', 'Lax is appropriate for a same-site app+API; None requires Secure.'],
               [
                 'CORS',
-                'The server echoes your app’s origin and allows credentials so cookies flow across the app/API ports.',
+                'Not needed for the bundled stack, where the app and API share one origin. The server still echoes a configured origin and allows credentials for a client you host somewhere else.',
               ],
             ],
           },
@@ -1360,6 +1369,11 @@ export const DOC_CATEGORIES: DocCategory[] = [
             type: 'callout',
             variant: 'info',
             text: 'Read-only vault members and read-only account or MCP sessions cannot join the live relay. They keep ordinary encrypted sync and can still view content their vault permission allows. If the relay is unavailable, editors fall back to ordinary encrypted note persistence and sync.',
+          },
+          {
+            type: 'callout',
+            variant: 'warning',
+            text: 'The all-in-one container and the LXC install start a realtime gateway only when an external Redis host is configured. Without one there is no live relay at all — no co-editing session, presence, or live comments — and collaborators work through ordinary encrypted sync instead. The full multi-container deployment ships its own cache and has the relay on by default.',
           },
         ],
         related: ['collaboration/vaults', 'self-hosting/architecture'],

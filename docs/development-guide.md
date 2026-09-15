@@ -23,7 +23,8 @@ systems. The root scripts compose those systems into repository-wide gates.
 | `server/packages/syncing-server` | Item sync, shared-vault enforcement, backup events |
 | `server/packages/files` | Encrypted file transfer |
 | `server/packages/revisions` | Revision storage and retrieval |
-| `server/packages/websocket-gateway` / `websockets` | Realtime token and socket paths |
+| `server/packages/websocket-gateway` | Realtime token and socket paths. Runs in-process inside the api-gateway and the home-server; there is no separate gateway service. |
+| `server/packages/websockets` | Dormant. The standalone AWS-era gateway service; nothing imports it, and it serves no route in any shipped topology. It is still compiled and still counted by the coverage tooling. |
 | `mcp` | Headless Standard Notes MCP bridge |
 | `openclaw` | Provider-driven CLI assistant over MCP |
 | `cli/srn-client` | Standalone encrypted note CLI |

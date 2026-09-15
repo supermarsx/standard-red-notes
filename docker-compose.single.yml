@@ -95,6 +95,10 @@ services:
       WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS: ${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS:-1500}
       WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS: ${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS:-30000}
       WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS: ${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS:-75000}
+      # Payload inlining in SYNC_ITEMS_PUSHED: off unless set to the exact
+      # string `true`, byte cap 200 KiB (see docker-compose.yml).
+      WEBSOCKET_SYNC_PUSH_ENABLED: ${WEBSOCKET_SYNC_PUSH_ENABLED:-}
+      WEBSOCKET_SYNC_PUSH_MAX_BYTES: ${WEBSOCKET_SYNC_PUSH_MAX_BYTES:-}
       REDIS_HOST: ${REDIS_HOST:-}
       REDIS_PORT: ${REDIS_PORT:-6379}
       # Optional discovery link to an independently deployed/authenticated n8n.
