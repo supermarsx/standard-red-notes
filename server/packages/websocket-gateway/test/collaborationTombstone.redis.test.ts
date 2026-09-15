@@ -3,10 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Redis } from 'ioredis'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import {
-  startCollaborationRedisBridge,
-  type CollaborationRedisBridge,
-} from '../src/collaborationRedisBridge.js'
+import { startCollaborationRedisBridge, type CollaborationRedisBridge } from '../src/collaborationRedisBridge.js'
 import type { Conn, SendableSocket } from '../src/registry.js'
 import { COLLABORATION_PROTOCOL_VERSION, CollaborationRoomEpochMismatchError, RoomRegistry } from '../src/rooms.js'
 
@@ -48,10 +45,8 @@ const STALE_ROOM_EPOCH = 'room_epoch_0000000000000000'
 const SECURITY_EPOCH = 'security_epoch_0000000000000001'
 
 function connection(id: string): Conn<SendableSocket> {
-  const send = vi.fn()
   return {
-    socket: { send },
-    send,
+    socket: { send: vi.fn() },
     userUuid: `user-${id}`,
     sessionUuid: `session-${id}`,
     connectionId: `connection-${id}`,
