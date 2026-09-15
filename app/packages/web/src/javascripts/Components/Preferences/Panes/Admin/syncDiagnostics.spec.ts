@@ -1,10 +1,13 @@
 import {
+  BOOT_GATE_HEADER,
   buildCapabilityRows,
   CLIENT_RECOGNIZED_ONLY_OPERATIONS,
   CLIENT_SYNC_OPERATIONS,
   describeDeployment,
+  describeRealtimeHealth,
   describeTransport,
   diagnose,
+  REALTIME_UNATTACHED_NOTE,
   sanitizeServerCopy,
   summarizeTestRun,
   type SyncDiagnosticsPayload,
@@ -72,14 +75,56 @@ describe('sync diagnostics model', () => {
       expect(describeTransport({ state: 'HTTP_FALLBACK', operations: [] }).detail).toContain('attempted and abandoned')
     })
 
+    /**
+     * This case used to assert on `'ticket-refused'` — a code the transport has
+     * never been able to emit. While `fallbackReason` was typed `string`,
+     * neither the compiler nor a green run could tell, so the panel was pinned
+     * to a fiction. The field is now `SyncFallbackReason`, which is what makes
+     * a made-up code here a compile error rather than a passing test.
+     */
     it('appends the transport’s own fallback reason when it has one', () => {
-      const verdict = describeTransport({ state: 'HTTP_FALLBACK', fallbackReason: 'ticket-refused', operations: [] })
+      const verdict = describeTransport({ state: 'HTTP_FALLBACK', fallbackReason: 'ticket-expired', operations: [] })
 
-      expect(verdict.detail).toContain('ticket-refused')
+      expect(verdict.detail).toContain('ticket-expired')
+      expect(verdict.detail).toContain('aged out')
+    })
+
+    it('explains what a fallback code MEANS, so the operator is not left holding a token', () => {
+      const verdict = describeTransport({ state: 'HTTP_ONLY', fallbackReason: 'live-sync-disabled', operations: [] })
+
+      // The one reason that is a deliberate administrative decision rather than
+      // a fault. Naming the flag is what connects it to the switch that set it.
+      expect(verdict.detail).toContain('live-sync-disabled')
+      expect(verdict.detail).toContain('LIVE_SYNC_ENABLED')
+      expect(verdict.detail).toContain('administrator')
+    })
+
+    it('says nothing extra when the transport reported no reason', () => {
+      expect(describeTransport({ state: 'HTTP_ONLY', operations: [] }).detail).not.toContain('Reported reason')
     })
 
     it('reports a live socket as good', () => {
       expect(describeTransport({ state: 'READY', operations: ['SYNC_ITEMS'] }).tone).toBe('good')
+    })
+  })
+
+  /**
+   * N32. The header is the first sentence an operator reads on the Boot gate
+   * section, and it said "All four must hold; a single unmet condition turns the
+   * whole lane off" long after that stopped being true — directly above a chip
+   * reading "Lane up". A panel that contradicts itself in adjacent elements is
+   * not a panel anyone acts on.
+   */
+  describe('BOOT_GATE_HEADER', () => {
+    it('states the split gate: three conditions close the lane, the fourth withholds SYNC_ITEMS', () => {
+      expect(BOOT_GATE_HEADER).toContain('THREE')
+      expect(BOOT_GATE_HEADER).toContain('SYNC_ITEMS ONLY')
+      expect(BOOT_GATE_HEADER).toContain('falls back to HTTP')
+    })
+
+    it('no longer claims one unmet condition turns the whole lane off', () => {
+      expect(BOOT_GATE_HEADER).not.toContain('All four must hold')
+      expect(BOOT_GATE_HEADER).not.toContain('turns the whole lane off')
     })
   })
 
@@ -160,6 +205,111 @@ describe('sync diagnostics model', () => {
 
       expect(diagnosis.findings[0].title).toBe('no-allowed-origins')
       expect(diagnosis.findings[0].detail).toContain('WEBSOCKET_SYNC_ALLOWED_ORIGINS')
+    })
+
+    /**
+     * The screen an invalid WEBSOCKET_REDIS_NAMESPACE produced: the host refuses
+     * to attach and closes the push bridge, and the panel reported the lane
+     * ENABLED, the gateway UNATTACHED and an EMPTY condition list — wrong in
+     * every field at once, with nothing for the operator to search for.
+     */
+    it('names a host-recorded condition the shared list left out', () => {
+      const diagnosis = diagnose(
+        {
+          gate: {
+            recorded: true,
+            gatewayAttached: false,
+            syncLaneEnabled: false,
+            unmetPreconditions: [],
+            unmetCodes: [],
+            host: {
+              unmetCondition: 'WEBSOCKET_REDIS_NAMESPACE_INVALID',
+              remedy: 'WEBSOCKET_REDIS_NAMESPACE is set but does not match the allowed pattern; fix or unset it',
+            },
+          },
+          live: { unavailabilityReasons: [], ticketAvailable: false },
+          protocol: { serverOperations: [...CLIENT_SYNC_OPERATIONS] },
+        },
+        { state: 'HTTP_ONLY', operations: [] },
+      )
+
+      expect(diagnosis.findings.map((finding) => finding.title)).toContain('WEBSOCKET_REDIS_NAMESPACE_INVALID')
+      expect(diagnosis.tone).toBe('bad')
+    })
+
+    it('does not print a host condition twice when the server already merged it in', () => {
+      const code = 'WEBSOCKET_REDIS_NAMESPACE_INVALID'
+      const diagnosis = diagnose(
+        {
+          gate: {
+            recorded: true,
+            gatewayAttached: false,
+            syncLaneEnabled: false,
+            unmetPreconditions: [{ code, remedy: 'fix or unset it' }],
+            unmetCodes: [code],
+            host: { unmetCondition: code, remedy: 'fix or unset it' },
+          },
+          live: { unavailabilityReasons: [], ticketAvailable: false },
+          protocol: { serverOperations: [...CLIENT_SYNC_OPERATIONS] },
+        },
+        { state: 'HTTP_ONLY', operations: [] },
+      )
+
+      expect(diagnosis.findings.filter((finding) => finding.title === code)).toHaveLength(1)
+    })
+
+    it('reports a lane called enabled over a gateway that never attached', () => {
+      const diagnosis = diagnose(
+        { ...gateSatisfied, gate: { ...gateSatisfied.gate, gatewayAttached: false } },
+        { state: 'HTTP_ONLY', operations: [] },
+      )
+
+      const finding = diagnosis.findings.find((entry) => entry.title.includes('no attached gateway'))
+      expect(finding).toBeDefined()
+      // True on an older server too, where the outcome was simply never recorded.
+      expect(finding?.detail).toContain('never set')
+    })
+
+    it('says nothing about the attach outcome while the gate is unrecorded', () => {
+      const diagnosis = diagnose(
+        { gate: { recorded: false, gatewayAttached: false, syncLaneEnabled: true } },
+        undefined,
+      )
+
+      expect(diagnosis.findings.some((entry) => entry.title.includes('no attached gateway'))).toBe(false)
+    })
+
+    it('reports an attached gateway with no push bridge, which every other row calls healthy', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          live: {
+            ...gateSatisfied.live,
+            realtime: { attached: true, pushBridge: 'none', syncLane: 'up', pushesDispatched: 0 },
+          },
+        },
+        { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+      )
+
+      const finding = diagnosis.findings.find((entry) => entry.title.includes('no push bridge'))
+      expect(finding).toBeDefined()
+      expect(finding?.detail).toContain('never reaches another')
+    })
+
+    it('adds no push-bridge finding when a bridge is bound', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          live: {
+            ...gateSatisfied.live,
+            realtime: { attached: true, pushBridge: 'redis', pushBridgeReady: true, syncLane: 'up' },
+          },
+        },
+        { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+      )
+
+      expect(diagnosis.findings).toHaveLength(0)
+      expect(diagnosis.tone).toBe('good')
     })
 
     it('refuses to present an unrecorded gate as a healthy one', () => {
@@ -303,6 +453,93 @@ describe('sync diagnostics model', () => {
       const rows = buildCapabilityRows(['SYNC_ITEMS'], [], false)
 
       expect(rows.find((row) => row.operation === 'INVITE_EVENTS')?.explanation).toContain('older than the client')
+    })
+  })
+
+  /**
+   * R38/C9. The health snapshot is reported INFORMATIONALLY — readiness is not
+   * gated on it, because a container that restarts itself on a Redis blip turns
+   * a ten-second degradation into an outage. These cases pin that the rows say
+   * what is degraded AND, just as importantly, when a bad-looking value is
+   * normal: an operator who restarts on a "not running" row that was never
+   * going to run has been actively misled.
+   */
+  describe('describeRealtimeHealth', () => {
+    it('renders nothing at all when the server reported no snapshot', () => {
+      expect(describeRealtimeHealth(undefined)).toEqual([])
+      expect(REALTIME_UNATTACHED_NOTE).toContain('predates')
+    })
+
+    it('reports a fully healthy gateway as good on every verdict row', () => {
+      const rows = describeRealtimeHealth({
+        attached: true,
+        pushBridge: 'redis',
+        pushBridgeReady: true,
+        sqsConsumerRunning: true,
+        collaborationRelayHealthy: true,
+        syncLane: 'up',
+        pushesDispatched: 12,
+      })
+
+      expect(rows.map((row) => row.label)).toEqual([
+        'Gateway',
+        'Push bridge',
+        'Queue consumer',
+        'Collaboration relay',
+        'Sync lane',
+        'Pushes dispatched',
+      ])
+      expect(rows.filter((row) => row.tone === 'bad')).toHaveLength(0)
+      expect(rows.find((row) => row.label === 'Push bridge')?.value).toBe('redis (ready)')
+      expect(rows.find((row) => row.label === 'Pushes dispatched')?.value).toBe('12')
+    })
+
+    it('calls an absent push bridge down, not merely a note', () => {
+      const rows = describeRealtimeHealth({ attached: true, pushBridge: 'none', syncLane: 'up' })
+      const bridge = rows.find((row) => row.label === 'Push bridge')
+
+      expect(bridge?.value).toBe('none')
+      expect(bridge?.tone).toBe('bad')
+      expect(bridge?.note).toContain('never pushed')
+    })
+
+    it('treats a bound-but-unready bridge as a reconnect window rather than a fault to act on', () => {
+      const rows = describeRealtimeHealth({ attached: true, pushBridge: 'redis', pushBridgeReady: false })
+      const bridge = rows.find((row) => row.label === 'Push bridge')
+
+      expect(bridge?.tone).toBe('warn')
+      expect(bridge?.note).toContain('nothing here needs a restart')
+    })
+
+    it('does not call a stopped queue consumer a failure, because most topologies never start one', () => {
+      const rows = describeRealtimeHealth({ attached: true, pushBridge: 'redis', sqsConsumerRunning: false })
+      const consumer = rows.find((row) => row.label === 'Queue consumer')
+
+      expect(consumer?.tone).toBe('neutral')
+      expect(consumer?.note).toContain('Expected')
+    })
+
+    it('names the quiet failure mode of an unhealthy relay: same replica works, so nobody notices', () => {
+      const rows = describeRealtimeHealth({ attached: true, collaborationRelayHealthy: false })
+      const relay = rows.find((row) => row.label === 'Collaboration relay')
+
+      expect(relay?.tone).toBe('warn')
+      expect(relay?.note).toContain('SAME replica')
+    })
+
+    it('reports an unattached gateway as down whatever else the snapshot claims', () => {
+      const rows = describeRealtimeHealth({ attached: false, pushBridge: 'redis', pushBridgeReady: true })
+
+      expect(rows[0].tone).toBe('bad')
+      expect(rows[0].note).toContain('regardless of what the boot gate decided')
+    })
+
+    it('reports a down sync lane', () => {
+      const rows = describeRealtimeHealth({ attached: true, syncLane: 'down' })
+      const lane = rows.find((row) => row.label === 'Sync lane')
+
+      expect(lane?.value).toBe('down')
+      expect(lane?.tone).toBe('bad')
     })
   })
 

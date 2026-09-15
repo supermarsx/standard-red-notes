@@ -1,4 +1,8 @@
-import type { SyncNegotiatedOperation, SyncTransportState } from '@/Services/SyncTransport/syncTransportProtocol'
+import type {
+  SyncFallbackReason,
+  SyncNegotiatedOperation,
+  SyncTransportState,
+} from '@/Services/SyncTransport/syncTransportProtocol'
 import type { DeploymentTopology } from './diagnosticRemedies'
 
 /**
@@ -103,11 +107,39 @@ export type SyncDiagnosticsPayload = {
     unmetPreconditions?: { code?: string; remedy?: string }[]
     unmetCodes?: string[]
     files?: { advertised?: boolean; unmetCondition?: string | null; remedy?: string | null }
+    /**
+     * A condition only the HOST that composed the gateway can see, on top of the
+     * shared four. It exists because the shared gate has no word for "this
+     * process refused to attach": with a malformed WEBSOCKET_REDIS_NAMESPACE the
+     * home server closes its push bridge rather than publish on a sibling
+     * stack's un-namespaced channels, and the panel used to report the lane
+     * ENABLED, the gateway UNATTACHED and an EMPTY condition list — a screen
+     * that was wrong in every field at once.
+     *
+     * Optional and additive: a host with nothing to add, or a server older than
+     * the field, sends no block and the panel reads exactly as it did before.
+     */
+    host?: { unmetCondition?: string | null; remedy?: string | null }
   }
   live?: {
     capabilities?: { id?: string; version?: number; endpoint?: string }[]
     unavailabilityReasons?: string[]
     ticketAvailable?: boolean
+    /**
+     * The attached gateway's own health snapshot (C9). INFORMATIONAL — readiness
+     * is deliberately not gated on it, because gating would restart the
+     * container on a Redis blip. Absent when no gateway is attached at all,
+     * which is itself the single most useful thing this block can say.
+     */
+    realtime?: {
+      attached?: boolean
+      pushBridge?: string
+      pushBridgeReady?: boolean
+      sqsConsumerRunning?: boolean
+      collaborationRelayHealthy?: boolean
+      syncLane?: string
+      pushesDispatched?: number
+    }
   }
   protocol?: { version?: number; serverOperations?: string[] }
 }
@@ -151,7 +183,17 @@ export function sanitizeServerCopy(text: string): string {
 
 export type TransportStatusInput = {
   state: SyncTransportState
-  fallbackReason?: string
+  /**
+   * The transport's OWN closed code, never server text — which is why it is
+   * printed without going through the redactor.
+   *
+   * Typed as the union rather than `string` deliberately: while this was
+   * `string` the panel's own spec asserted on `'ticket-refused'`, a reason that
+   * has never existed in the protocol, and neither the compiler nor the test
+   * run could tell. A panel whose job is to be believed cannot be pinned to a
+   * code the transport cannot emit.
+   */
+  fallbackReason?: SyncFallbackReason
   operations: readonly SyncNegotiatedOperation[]
 }
 
@@ -203,9 +245,43 @@ const TRANSPORT_COPY: Record<SyncTransportState, { label: string; tone: Tone; de
 }
 
 /**
+ * What each fallback code MEANS, in an operator's terms.
+ *
+ * Exhaustive `Record` on purpose: a new reason added to the protocol fails this
+ * file to compile rather than rendering as a bare token nobody can act on. The
+ * distinction the panel has to carry is whether the operator should change
+ * something, wait, or do nothing at all — several of these describe a working
+ * system making a correct decision, and reading them as faults sends an
+ * operator after a problem that does not exist.
+ */
+const FALLBACK_REASON_COPY: Record<SyncFallbackReason, string> = {
+  'http-only': 'This client is configured never to use the socket.',
+  'unsupported-browser': 'This browser has no worker or WebSocket support the transport can use.',
+  'capability-unavailable': 'The server ANSWERED that it does not advertise the socket sync capability.',
+  'ticket-unavailable': 'A ticket could not be obtained. Retryable — a network error or a restarting gateway.',
+  'ticket-expired': 'The ticket aged out before it was redeemed.',
+  'auth-failed': 'The gateway rejected the ticket at the handshake.',
+  'proxy-failed': 'The socket was refused or cut before it authenticated — commonly a proxy that does not upgrade.',
+  'frame-too-large': 'A request exceeded the socket frame limit and was replayed over HTTP.',
+  'result-too-large': 'The committed result exceeded the frame limit, so it was collected over HTTP instead.',
+  'ack-timeout': 'The gateway did not acknowledge in time.',
+  'server-kill': 'The gateway closed the socket deliberately.',
+  'reconnect-gap': 'The socket was gone long enough that the session could not be resumed in place.',
+  backpressure: 'The client was sending faster than the socket could drain.',
+  'outbox-unavailable': 'The local outbox database could not be opened, so no command can be journaled.',
+  'multi-tab-not-owner': 'Another tab of this account holds the socket. Expected, and not a fault.',
+  'worker-error': 'The sync worker itself failed.',
+  'operation-unavailable': 'The socket is up but did not negotiate the operation this request needed.',
+  // Not a fault and not a misconfiguration: an administrator turned this
+  // account's switch off. Named with the flag so the reader can find it.
+  'live-sync-disabled':
+    'An administrator turned Live sync (LIVE_SYNC_ENABLED) off for this account, so note syncing stays on HTTP. Invites, API RPC, collaboration and files are unaffected.',
+}
+
+/**
  * What lane this client is on RIGHT NOW, and why. When the transport reports a
  * fallback reason it is appended verbatim — those are the transport's own closed
- * codes, not free text from the server.
+ * codes, not free text from the server — followed by what that code means.
  */
 export function describeTransport(status: TransportStatusInput | undefined): TransportVerdict {
   if (!status) {
@@ -223,9 +299,15 @@ export function describeTransport(status: TransportStatusInput | undefined): Tra
     detail: 'Unrecognised transport state.',
   }
 
+  if (!status.fallbackReason) {
+    return { ...copy }
+  }
+
+  const meaning = FALLBACK_REASON_COPY[status.fallbackReason]
+
   return {
     ...copy,
-    detail: status.fallbackReason ? `${copy.detail} Reported reason: ${status.fallbackReason}.` : copy.detail,
+    detail: `${copy.detail} Reported reason: ${status.fallbackReason}.${meaning ? ` ${meaning}` : ''}`,
   }
 }
 
@@ -346,6 +428,26 @@ const LIVE_REASON_COPY: Record<string, string> = {
 }
 
 /**
+ * The Boot gate section's header, kept here rather than inline in the JSX so the
+ * wording is testable without a DOM — the same reason every other decision about
+ * what the operator is TOLD lives in this module.
+ *
+ * It is a correction, not a refresh. The header used to read "All four must
+ * hold; a single unmet condition turns the whole lane off", which had been
+ * false since the gate was split and was contradicted by the "Lane up" chip
+ * rendered directly beneath it. An operator reading a live lane described as
+ * dead stops believing the screen, and the screen's only asset is that it can
+ * be believed.
+ */
+export const BOOT_GATE_HEADER =
+  'The conditions the gateway checks at boot. THREE of them gate the socket lane itself — the connection-token ' +
+  'secret, shared Redis state, and the WEBSOCKET_SYNC_ENABLED kill switch — and an unmet one closes the lane ' +
+  'outright. The fourth, the durable gRPC backend, withholds SYNC_ITEMS ONLY: the socket stays up and keeps ' +
+  'carrying collaboration, API RPC, invite events and files while note syncing falls back to HTTP. Each unmet ' +
+  'condition below carries the fix for THIS deployment’s topology, which is not always the fix the condition’s ' +
+  'own name suggests.'
+
+/**
  * The highest-value output of this tab: turn "unavailable" into the one thing an
  * operator has to change.
  *
@@ -395,6 +497,39 @@ export function diagnose(
     })
   }
 
+  // The HOST's own condition. A current server already merges it into
+  // `unmetPreconditions`, so this fires only when it did not — and it is
+  // deduplicated by code rather than trusted to be absent, because printing a
+  // condition twice is a cosmetic fault and dropping one is the fault this
+  // whole block exists to prevent.
+  const hostCondition = gate.host?.unmetCondition
+  const hostConditionUnlisted =
+    typeof hostCondition === 'string' &&
+    hostCondition.length > 0 &&
+    !unmet.some((precondition) => precondition.code === hostCondition)
+  if (hostConditionUnlisted) {
+    findings.push({
+      title: sanitizeServerCopy(hostCondition),
+      detail: sanitizeServerCopy(gate.host?.remedy ?? 'No remedy was reported for this condition.'),
+    })
+  }
+
+  // A lane the gate calls enabled on a host that recorded no attach. The two
+  // come from different places — the gate records a DECISION, the composition
+  // root records an OUTCOME — so they can disagree, and the panel must say so
+  // instead of choosing the cheerful one. This is the screen an invalid
+  // WEBSOCKET_REDIS_NAMESPACE produced before the host reported its own
+  // condition: lane enabled, gateway unattached, not one condition named.
+  // Worded to stay true on an older server too, where the attach outcome was
+  // simply never recorded and `false` means "not reported" rather than "no".
+  if (gate.recorded === true && gate.gatewayAttached === false && gate.syncLaneEnabled === true) {
+    findings.push({
+      title: 'The lane is enabled but no attached gateway was recorded',
+      detail:
+        'The boot gate built the sync lane and the host recorded no successful gateway attach. On a current server build that combination means the host declined to attach AFTER the gate passed — an invalid WEBSOCKET_REDIS_NAMESPACE does exactly this, closing the push bridge rather than publishing on a sibling stack’s channels — so tickets mint while nothing is ever delivered. On a server older than the attach-outcome record the field is never set and this line only means it was not reported.',
+    })
+  }
+
   // Live refusals only add information when the LANE itself came up; otherwise
   // they merely restate the gate. Keyed on the lane rather than on "no unmet
   // conditions at all", because since the gate was split an unmet
@@ -405,7 +540,8 @@ export function diagnose(
   // correct reading of an old payload, and the new field is the correct reading
   // of a new one. Treating a missing field as "up" would make an old server's
   // gate failure print its live reason twice.
-  const laneDown = gate.syncLaneEnabled === false || (gate.syncLaneEnabled === undefined && unmet.length > 0)
+  const unmetCount = unmet.length + (hostConditionUnlisted ? 1 : 0)
+  const laneDown = gate.syncLaneEnabled === false || (gate.syncLaneEnabled === undefined && unmetCount > 0)
   if (!laneDown) {
     for (const reason of live.unavailabilityReasons ?? []) {
       findings.push({
@@ -413,6 +549,19 @@ export function diagnose(
         detail: LIVE_REASON_COPY[reason] ?? 'The gateway reported this refusal reason.',
       })
     }
+  }
+
+  // A lane that is up and can never deliver a push. The gate cannot see this:
+  // it decides whether to BUILD the lane, and the push bridge is a separate
+  // attach-time outcome. Reported as a finding rather than left to the health
+  // rows because "realtime is on" and "your other devices are never told
+  // anything changed" look identical from every other panel on this screen.
+  if (live.realtime?.attached === true && live.realtime.pushBridge === 'none') {
+    findings.push({
+      title: 'The socket is attached with no push bridge',
+      detail:
+        'The lane accepts clients, but no transport carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is what a deployment with no Redis reports today: the push bridge is bound to Redis pub/sub, and without it there is nothing to bind.',
+    })
   }
 
   if (gate.files?.advertised === false && gate.files.unmetCondition) {
@@ -485,6 +634,101 @@ export function diagnose(
     tone: blocking ? 'bad' : 'warn',
     findings,
   }
+}
+
+export type RealtimeHealthRow = {
+  label: string
+  /** Short, closed-enum-shaped answer. Never a configured value. */
+  value: string
+  tone: Tone
+  /** What this row means when it reads badly — and, as often, when it does not. */
+  note: string
+}
+
+/**
+ * What the panel says when the server reports no `live.realtime` block at all.
+ *
+ * Two very different causes share this shape, and the sentence has to cover
+ * both without asserting either: no gateway is attached to this process, or the
+ * server build predates the health snapshot. Guessing between them is how a
+ * panel earns its reputation for being wrong.
+ */
+export const REALTIME_UNATTACHED_NOTE =
+  'This server reported no realtime health snapshot. Either no websocket gateway is attached to the process that answered — in which case nothing is delivered over the socket, whatever the boot gate says — or this build predates the snapshot. The Boot gate section distinguishes the two.'
+
+/**
+ * The attached gateway's own view of itself (C9), as rows an operator can read.
+ *
+ * INFORMATIONAL BY DESIGN, and the rows say so where it matters. Readiness is
+ * deliberately not gated on any of this, because a container that restarts
+ * itself on a Redis blip converts a ten-second degradation into an outage. The
+ * panel's job is to make the degradation VISIBLE, not to act on it.
+ */
+export function describeRealtimeHealth(
+  realtime: NonNullable<SyncDiagnosticsPayload['live']>['realtime'],
+): RealtimeHealthRow[] {
+  if (!realtime) {
+    return []
+  }
+
+  const bridge = realtime.pushBridge ?? 'unknown'
+  const bridgeBound = bridge === 'redis' || bridge === 'in-process'
+  const bridgeValue = bridgeBound
+    ? `${sanitizeServerCopy(bridge)} (${realtime.pushBridgeReady ? 'ready' : 'not ready'})`
+    : 'none'
+
+  return [
+    {
+      label: 'Gateway',
+      value: realtime.attached === true ? 'attached' : 'not attached',
+      tone: realtime.attached === true ? 'good' : 'bad',
+      note:
+        realtime.attached === true
+          ? 'A websocket gateway is attached to this process, so sockets can be accepted and tokens minted.'
+          : 'No gateway is attached to the process that answered. Nothing reaches a client over a socket, regardless of what the boot gate decided.',
+    },
+    {
+      label: 'Push bridge',
+      value: bridgeValue,
+      tone: !bridgeBound ? 'bad' : realtime.pushBridgeReady ? 'good' : 'warn',
+      note: !bridgeBound
+        ? 'No transport carries server-side change notifications, so a change saved on one device is never pushed to another. A deployment with no Redis reports this.'
+        : realtime.pushBridgeReady
+          ? 'The push subscriber is connected, so changes committed elsewhere are delivered to live sockets.'
+          : 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.',
+    },
+    {
+      label: 'Queue consumer',
+      value: realtime.sqsConsumerRunning ? 'running' : 'not running',
+      tone: realtime.sqsConsumerRunning ? 'good' : 'neutral',
+      note: realtime.sqsConsumerRunning
+        ? 'The realtime queue consumer loop is running and draining websocket events.'
+        : 'No queue consumer is running. Expected where pushes are delivered through the bridge alone; on a stack that provisions the websocket queue this means those events are not being drained.',
+    },
+    {
+      label: 'Collaboration relay',
+      value: realtime.collaborationRelayHealthy ? 'healthy' : 'unhealthy',
+      tone: realtime.collaborationRelayHealthy ? 'good' : 'warn',
+      note: realtime.collaborationRelayHealthy
+        ? 'Room traffic is relayed fleet-wide, so collaborators served by different replicas see each other.'
+        : 'The relay subscription is not established. Collaboration still works between clients on the SAME replica, which is why this fails quietly on a multi-replica deployment.',
+    },
+    {
+      label: 'Sync lane',
+      value: realtime.syncLane === 'up' ? 'up' : 'down',
+      tone: realtime.syncLane === 'up' ? 'good' : 'bad',
+      note:
+        realtime.syncLane === 'up'
+          ? 'The gateway would admit a client on /sockets/sync right now.'
+          : 'The gateway would refuse a client on /sockets/sync right now. The live refusal reasons above say why.',
+    },
+    {
+      label: 'Pushes dispatched',
+      value: String(realtime.pushesDispatched ?? 0),
+      tone: 'neutral',
+      note: 'Push messages handed to local sockets since this gateway attached. It resets on every restart; a count that stays at zero on a busy deployment is the signature of a delivery path that never fires.',
+    },
+  ]
 }
 
 export type DeploymentIdentityView = {

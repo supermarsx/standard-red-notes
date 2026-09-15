@@ -133,12 +133,12 @@ function grpcRemedy(topology: DeploymentTopology): Remedy {
     return {
       code,
       summary:
-        'Nothing in the environment can satisfy this condition on a home-server deployment. Do not set SYNCING_SERVER_GRPC_URL — it will never be read.',
+        'Not applicable on a single-container (home-server) deployment: the durable backend is called in-process, so there is no gRPC proxy to bind. Do not set SYNCING_SERVER_GRPC_URL — it will never be read.',
       steps: [],
       effort: 'none',
       basis: 'verified',
       because: [
-        'MODE is home-server, so the gateway binds the in-process direct-call service proxy.',
+        'MODE is home-server — the single container — so the gateway binds the in-process direct-call service proxy.',
         'The block that constructs a gRPC syncing proxy is the other branch of that same check, so it cannot run in this mode.',
         urlSet
           ? 'SYNCING_SERVER_GRPC_URL is already set on this deployment, and is being ignored.'
@@ -150,7 +150,13 @@ function grpcRemedy(topology: DeploymentTopology): Remedy {
   }
 
   if (topology.serviceProxySetting !== 'grpc') {
-    const bundled = topology.mode === 'self-hosted'
+    // `self-hosted` is the bundled MULTI-container `server` image: its entrypoint
+    // exports MODE=self-hosted, so this is what the shipped compose stack
+    // reports. It is emphatically NOT the single container — that reports
+    // `home-server` and is handled above, where gRPC is not applicable at all.
+    // The panel used to call this branch "the bundled single-container image",
+    // which sent compose operators looking for a container they do not run.
+    const composeStack = topology.mode === 'self-hosted'
 
     return {
       code,
@@ -167,9 +173,9 @@ function grpcRemedy(topology: DeploymentTopology): Remedy {
         internalSecretSet
           ? 'Confirm SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is at least 32 bytes and identical on the syncing server. Shorter than 32 bytes counts as unconfigured, and the durable adapter then never reports ready — the lane stays closed even with the proxy bound.'
           : 'Set SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET, at least 32 bytes, to the same value on the gateway and the syncing server. Below 32 bytes it counts as unconfigured and the durable adapter never reports ready, which closes the lane even once the proxy is bound.',
-        ...(bundled
+        ...(composeStack
           ? [
-              'On the bundled single-container image, add API_GATEWAY_SERVICE_PROXY_TYPE=grpc to the container environment. The entrypoint already exports API_GATEWAY_SYNCING_SERVER_GRPC_URL and API_GATEWAY_AUTH_SERVER_GRPC_URL, and it regenerates the gateway dotenv from the environment on every start — so a restart picks this up and the image does not have to be rebuilt.',
+              'On the bundled compose stack, set SERVICE_PROXY_TYPE=grpc in your .env. Compose forwards it to the server as API_GATEWAY_SERVICE_PROXY_TYPE, and the entrypoint already exports API_GATEWAY_SYNCING_SERVER_GRPC_URL and API_GATEWAY_AUTH_SERVER_GRPC_URL and regenerates the gateway dotenv on every start — so docker compose up -d picks this up and the image does not have to be rebuilt.',
             ]
           : []),
         'Restart the container, then re-run the checks on this page.',
@@ -308,6 +314,43 @@ function killSwitchRemedy(topology: DeploymentTopology): Remedy {
 }
 
 /**
+ * The HOST's own condition, not one of the shared four.
+ *
+ * Worth its own block because the failure it describes is invisible everywhere
+ * else: with a malformed namespace the host refuses to attach and closes the
+ * push bridge — deliberately, because attaching WITHOUT the namespace would
+ * publish on the un-namespaced channels of whatever sibling stack shares that
+ * Redis. Until the host reported this, the panel showed the lane enabled, the
+ * gateway unattached and no condition at all, and an operator had nothing to
+ * search for.
+ */
+function redisNamespaceRemedy(serverRemedy: string | undefined): Remedy {
+  return {
+    code: 'WEBSOCKET_REDIS_NAMESPACE_INVALID',
+    summary:
+      'WEBSOCKET_REDIS_NAMESPACE is set to a value the gateway will not use, so it attached nothing. Fix or unset it. Restart only — no rebuild.',
+    steps: [
+      'Set WEBSOCKET_REDIS_NAMESPACE to lowercase letters, digits, colon, underscore or hyphen, 1 to 64 characters, with no leading or trailing colon — or unset it entirely, which is the default and keeps today’s channel and key names.',
+      'Unsetting it is safe on a Redis this deployment does not share. The namespace exists to keep two stacks on one Redis from reading each other’s channels; with a single stack there is nothing to separate.',
+      'Use the SAME value on every process in the stack. A gateway and a home server that disagree publish and subscribe on different channels and deliver nothing to each other, with no error on either side.',
+      'Restart the container, then re-run the checks on this page.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The host refused to attach rather than fall back to the un-namespaced names, because that fallback would publish this stack’s events onto a sibling stack’s channels.',
+      'This is why the lane can read as configured while nothing is delivered: the gate’s four conditions were all met, and the host declined afterwards.',
+      // The SERVER's own sentence for this condition, printed verbatim beside
+      // the panel's. It is a frozen constant over there (SYNC_HOST_REMEDIES);
+      // reproducing it here instead would let the two drift silently, and the
+      // whole point of this condition is that it has no other symptom to check
+      // the wording against.
+      ...(serverRemedy ? [`The server states: ${sanitizeServerCopy(serverRemedy)}`] : []),
+    ],
+  }
+}
+
+/**
  * The remedy for one unmet boot-gate precondition.
  *
  * `serverRemedy` is the constant copy the server sent. It is used ONLY when this
@@ -334,6 +377,8 @@ export function remedyForPrecondition(
       return connectionTokenRemedy(topology)
     case 'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION':
       return killSwitchRemedy(topology)
+    case 'WEBSOCKET_REDIS_NAMESPACE_INVALID':
+      return redisNamespaceRemedy(serverRemedy)
     default:
       return generic(code, serverRemedy)
   }
@@ -382,6 +427,59 @@ export function remedyForLiveReason(reason: string, topology: DeploymentTopology
         effort: 'wait',
         basis: 'verified',
         because: ['The gate passed, so Redis is configured; the store itself is not responding.'],
+      }
+    /**
+     * The session plane, not the durable one. On the api-gateway this adapter
+     * reports unready for exactly one reason — an empty AUTH_JWT_SECRET — and
+     * that single variable gates EVERY capability on the socket, because every
+     * command and status revalidates the original session token before it runs.
+     * Left with no remedy block, this reason printed the panel's "no guidance
+     * for it" line for the one condition with the shortest fix on the screen.
+     */
+    case 'authorization-adapter-unavailable':
+      return {
+        code: reason,
+        summary:
+          'The session-revalidation adapter is not ready. On this gateway that means AUTH_JWT_SECRET is empty. Restart only — no rebuild.',
+        steps: [
+          'Set AUTH_JWT_SECRET, and set it to the SAME value the auth server uses. A session token signed by one and verified by the other must agree on the key.',
+          'This is not the durable backend and not the connection-token secret: those are separate variables with separate conditions. Every socket capability rests on this one, because each command revalidates the session before it runs.',
+          'Restart the container, then re-run the checks on this page.',
+        ],
+        effort: 'restart',
+        basis: isRecorded(topology) ? 'verified' : 'generic',
+        because: isRecorded(topology)
+          ? [
+              present(topology, 'AUTH_JWT_SECRET')
+                ? 'AUTH_JWT_SECRET is set now but the adapter still reports the session plane unready — confirm the value reached this process, and that it is not whitespace.'
+                : 'AUTH_JWT_SECRET is not set on this deployment.',
+              'This is independent of the durable backend: an unbound gRPC proxy withholds SYNC_ITEMS only, whereas this closes the lane outright.',
+            ]
+          : ['The deployment topology was not reported, so only the generic advice applies.'],
+      }
+    /**
+     * Reported, but no longer a lane precondition: the invite bus gates
+     * INVITE_EVENTS per socket inside the command handler, which is why a
+     * client that connected during a one-second Redis reconnect used to be
+     * HTTP-only for the whole session. Saying that plainly is the remedy — the
+     * wrong action here is a restart.
+     */
+    case 'invite-event-store-unavailable':
+      return {
+        code: reason,
+        summary:
+          'The durable invite-event store is not answering. This withholds INVITE_EVENTS only; the socket and every other capability stay up.',
+        steps: [
+          'Check that the Redis this gateway points at is up and reachable from the gateway container.',
+          'Do not restart on this alone. It clears by itself when Redis answers, and a restart costs every live socket for a condition that no longer closes the lane.',
+          'While it persists, invitations are delivered by the ordinary HTTP polling path instead of being pushed.',
+        ],
+        effort: 'wait',
+        basis: 'verified',
+        because: [
+          'The gate passed, so Redis is configured; the invite store itself is not responding.',
+          'This reason was removed from the lane conjunction precisely because gating the whole socket on it turned a brief reconnect into an HTTP-only session.',
+        ],
       }
     case 'durable-backend-unavailable':
       return {

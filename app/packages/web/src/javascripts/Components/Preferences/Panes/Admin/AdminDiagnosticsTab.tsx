@@ -11,10 +11,13 @@ import Tab from '@/Components/Tabs/Tab'
 import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import {
+  BOOT_GATE_HEADER,
   buildCapabilityRows,
   describeDeployment,
+  describeRealtimeHealth,
   describeTransport,
   diagnose,
+  REALTIME_UNATTACHED_NOTE,
   sanitizeServerCopy,
   summarizeTestRun,
   type CapabilityTestOutcome,
@@ -354,6 +357,23 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     [payload, transport],
   )
   const environmentGroups = useMemo(() => buildEnvironmentGroups(topology), [topology])
+  const realtimeRows = useMemo(() => describeRealtimeHealth(payload?.live?.realtime), [payload])
+  /**
+   * The unmet conditions to RENDER: the shared list, plus the host's own when the
+   * server reported one and did not already merge it in. Merged here rather than
+   * trusted to arrive merged, because the whole point of the host condition is
+   * that a lane can read as configured while the host attached nothing — and a
+   * condition the panel silently drops is worse than no panel.
+   */
+  const gateConditions = useMemo(() => {
+    const listed = payload?.gate?.unmetPreconditions ?? []
+    const hostCondition = payload?.gate?.host?.unmetCondition
+    if (!hostCondition || listed.some((entry) => entry.code === hostCondition)) {
+      return listed
+    }
+
+    return [...listed, { code: hostCondition, remedy: payload?.gate?.host?.remedy ?? undefined }]
+  }, [payload])
   const topologyFacts = useMemo(() => describeTopology(topology), [topology])
   const clientGaps = useMemo(
     () => rows.filter((row) => row.status === 'client-gap').map((row) => row.operation),
@@ -455,11 +475,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       <TabPanel state={tabState} id="diag-gate">
         <PreferencesSegment>
           <Subtitle>Boot gate</Subtitle>
-          <Text>
-            The conditions the gateway checks before it builds the realtime sync lane. All four must hold; a single
-            unmet condition turns the whole lane off. Each unmet condition carries the fix for THIS deployment&apos;s
-            topology — which is not always the fix the condition&apos;s own name suggests.
-          </Text>
+          <Text>{BOOT_GATE_HEADER}</Text>
           {payload?.gate?.recorded === false && (
             <Text className="text-warning mt-2">
               The server has not recorded a gate decision yet, so no condition below can be confirmed.
@@ -490,14 +506,25 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
               </Chip>
               <span>Ticket minting</span>
             </span>
+            {/* The gate records a DECISION; the composition root records the
+                attach OUTCOME. They can disagree — a host that refuses to attach
+                after the gate passes is exactly what an invalid Redis namespace
+                produces — and showing only the decision is how this panel came
+                to report a working lane over a gateway that was never there. */}
+            <span className="flex items-center gap-2 text-sm">
+              <Chip tone={payload?.gate?.gatewayAttached ? 'good' : 'bad'}>
+                {payload?.gate?.gatewayAttached ? 'Attached' : 'Not attached'}
+              </Chip>
+              <span>Gateway</span>
+            </span>
           </div>
           <ul className="mt-3 flex flex-col gap-2">
-            {(payload?.gate?.unmetCodes ?? []).length === 0 && payload?.gate?.recorded ? (
+            {gateConditions.length === 0 && payload?.gate?.recorded ? (
               <li className="text-sm">
                 <Chip tone="good">Met</Chip> <span className="ml-2">All boot conditions are satisfied.</span>
               </li>
             ) : (
-              (payload?.gate?.unmetPreconditions ?? []).map((precondition) => (
+              gateConditions.map((precondition) => (
                 <li key={precondition.code} className="border-border rounded border p-3">
                   <div className="flex items-center gap-2">
                     <Chip tone="bad">Unmet</Chip>
@@ -535,6 +562,34 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
                 })}
               </ul>
             </>
+          )}
+
+          <HorizontalSeparator classes="mt-4 mb-4" />
+          <Subtitle>Realtime health</Subtitle>
+          <Text>
+            What the attached gateway says about itself right now. Informational only: readiness is deliberately not
+            gated on any of it, because a container that restarts itself on a Redis blip turns ten seconds of
+            degradation into an outage.
+          </Text>
+          {realtimeRows.length === 0 ? (
+            <Text className="mt-2">{REALTIME_UNATTACHED_NOTE}</Text>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-max text-left text-sm">
+                <tbody>
+                  {realtimeRows.map((row) => (
+                    <tr key={row.label} className="border-border border-t align-top">
+                      <td className="py-2 pr-4 font-semibold">{row.label}</td>
+                      <td className="py-2 pr-4 font-mono">{row.value}</td>
+                      <td className="py-2 pr-4">
+                        <Chip tone={row.tone}>{row.tone === 'good' ? 'OK' : row.tone === 'bad' ? 'Down' : 'Note'}</Chip>
+                      </td>
+                      <td className="text-passive-0 py-2">{row.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
           {payload?.gate?.files && (

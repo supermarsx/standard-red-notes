@@ -338,6 +338,120 @@ describe('AdminDiagnosticsTab — Boot gate and its remedies', () => {
   })
 })
 
+/**
+ * The Boot gate section's copy and the realtime health rows. Driven through the
+ * real component because both are things that typecheck and render nowhere:
+ * the header is prose inside an inactive TabPanel, and the health table is a
+ * whole block that simply does not exist when the payload omits its key.
+ */
+describe('AdminDiagnosticsTab — the split gate and realtime health', () => {
+  /** A payload that exercises the host condition and the health snapshot. */
+  const withRealtime = (
+    realtime: Record<string, unknown> | undefined,
+    gate: Record<string, unknown> = {},
+  ): ReturnType<typeof makeApplication> =>
+    makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        data: {
+          ...unavailablePayload,
+          gate: { ...unavailablePayload.gate, ...gate },
+          live: { ...unavailablePayload.live, ...(realtime ? { realtime } : {}) },
+        },
+      }),
+    })
+
+  it('states the split gate in the header instead of the old all-or-nothing claim', async () => {
+    await renderTab(makeApplication())
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('THREE of them gate the socket lane')
+    expect(text).toContain('withholds SYNC_ITEMS ONLY')
+    expect(text).not.toContain('All four must hold')
+    expect(text).not.toContain('turns the whole lane off')
+  })
+
+  it('shows the attach outcome beside the lane verdict, because they can disagree', async () => {
+    await renderTab(withRealtime(undefined, { gatewayAttached: false, syncLaneEnabled: true }))
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('Not attached')
+    expect(text).toContain('Gateway')
+  })
+
+  /**
+   * The failure this block exists for: with an invalid namespace the host
+   * refuses to attach, and the panel used to show the lane enabled, the gateway
+   * unattached and no condition at all.
+   */
+  it('renders a host-recorded condition the shared list left out, with its own remedy', async () => {
+    await renderTab(
+      withRealtime(undefined, {
+        gatewayAttached: false,
+        syncLaneEnabled: true,
+        unmetPreconditions: [],
+        unmetCodes: [],
+        host: { unmetCondition: 'WEBSOCKET_REDIS_NAMESPACE_INVALID', remedy: 'fix or unset it' },
+      }),
+    )
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('WEBSOCKET_REDIS_NAMESPACE_INVALID')
+    expect(text).toContain('unset it entirely')
+    expect(text).toContain('SAME value on every process')
+    // The server's frozen copy travels through to the screen beside the panel's
+    // own, so a drift between the two packages is visible rather than silent.
+    expect(text).toContain('The server states: fix or unset it')
+  })
+
+  it('renders every realtime health row the gateway reported', async () => {
+    await renderTab(
+      withRealtime({
+        attached: true,
+        pushBridge: 'redis',
+        pushBridgeReady: true,
+        sqsConsumerRunning: true,
+        collaborationRelayHealthy: true,
+        syncLane: 'up',
+        pushesDispatched: 7,
+      }),
+    )
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('Realtime health')
+    for (const label of ['Gateway', 'Push bridge', 'Queue consumer', 'Collaboration relay', 'Sync lane']) {
+      expect(text).toContain(label)
+    }
+    expect(text).toContain('redis (ready)')
+    expect(text).toContain('Pushes dispatched')
+  })
+
+  it('names an attached gateway with no push bridge rather than leaving every row green', async () => {
+    await renderTab(withRealtime({ attached: true, pushBridge: 'none', syncLane: 'up', pushesDispatched: 0 }))
+
+    const gate = await openSubtab('Boot gate')
+    expect(gate).toContain('never pushed')
+
+    // And it reaches the Overview diagnosis, which is where an operator looks first.
+    const overview = await openSubtab('Overview')
+    expect(overview).toContain('no push bridge')
+  })
+
+  it('says why there is no health table rather than rendering an empty one', async () => {
+    await renderTab(makeApplication())
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('Realtime health')
+    expect(text).toContain('reported no realtime health snapshot')
+  })
+})
+
 describe('AdminDiagnosticsTab — Capabilities', () => {
   /**
    * Asserted against the ROW, not the page text. The Capabilities section has a

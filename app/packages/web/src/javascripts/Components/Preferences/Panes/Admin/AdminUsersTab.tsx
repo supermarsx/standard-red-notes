@@ -105,7 +105,11 @@ const BULK_CONCURRENCY = 5
 const BULK_FLAG_OPTIONS: { label: string; value: string }[] = [
   { label: 'AI access', value: AI_ENABLED },
   { label: 'Collaboration', value: COLLABORATION_ENABLED },
-  { label: 'Live sync', value: LIVE_SYNC_ENABLED },
+  // N38: one name for this switch everywhere. It has been called the "realtime
+  // feature flag" in the docs, "Live sync" here, LIVE_SYNC_ENABLED in the
+  // settings store and live_sync_enabled in the token — four names for one
+  // control, none of which an operator could search for from the others.
+  { label: 'Live sync (LIVE_SYNC_ENABLED)', value: LIVE_SYNC_ENABLED },
   { label: 'Server-side OCR', value: OCR_SERVER_ALLOWED },
   { label: 'Workflows', value: WORKFLOWS_ENABLED },
   { label: 'Nextcloud backups', value: NEXTCLOUD_BACKUP_ALLOWED },
@@ -1921,8 +1925,12 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
               <div className="flex items-center justify-between gap-2">
                 <div className="flex flex-col">
-                  <Subtitle>Live sync</Subtitle>
-                  <Text>Push real-time updates to this user's other devices. Disabling keeps manual sync working.</Text>
+                  <Subtitle>Live sync (LIVE_SYNC_ENABLED)</Subtitle>
+                  <Text>
+                    Push real-time updates to this user&apos;s other devices. Disabling keeps manual sync working: their
+                    socket still carries invitations, collaboration and API calls, and note syncing falls back to HTTP
+                    with the code LIVE_SYNC_DISABLED.
+                  </Text>
                 </div>
                 <Switch
                   checked={liveSyncEnabled}

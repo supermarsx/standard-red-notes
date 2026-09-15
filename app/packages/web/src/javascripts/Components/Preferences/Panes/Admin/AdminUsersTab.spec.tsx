@@ -172,6 +172,22 @@ describe('AdminUsersTab — Suspend + Delete sections mount and the Delete gate 
   })
 })
 
+/**
+ * N38. One control had four names — "realtime feature flag" in the docs, "Live
+ * sync" on this screen, LIVE_SYNC_ENABLED in the settings store and
+ * live_sync_enabled in the token — so an admin who read one could not search
+ * for any of the others, and a user refused over the socket saw a code that
+ * matched nothing they had ever seen.
+ */
+describe('AdminUsersTab — the live-sync switch is named after the flag it sets', () => {
+  it('labels the switch with LIVE_SYNC_ENABLED and names the refusal code it produces', async () => {
+    await renderTab(makeApplication())
+
+    expect(container.textContent).toContain('Live sync (LIVE_SYNC_ENABLED)')
+    expect(container.textContent).toContain('LIVE_SYNC_DISABLED')
+  })
+})
+
 describe('AdminUsersTab — durable AI access control', () => {
   it('renders an unset AI gate as effectively enabled', async () => {
     const application = makeApplication()
