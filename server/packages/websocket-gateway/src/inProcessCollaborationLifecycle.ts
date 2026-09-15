@@ -346,7 +346,10 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
       [...this.presences.values()].filter((presence) => presence.lease.room === room).length >=
       MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM
     ) {
-      throw lifecycleError('room-limit', 'Collaboration room presence limit exceeded', true)
+      // NOT a policy error, matching the Redis bridge exactly: a lease-policy
+      // failure makes the caller deny and release the whole ROOM, and hitting
+      // the presence cap must cost this heartbeat alone.
+      throw lifecycleError('room-limit', 'Collaboration room presence limit exceeded')
     }
 
     const presence: InProcessPresence<S> = {

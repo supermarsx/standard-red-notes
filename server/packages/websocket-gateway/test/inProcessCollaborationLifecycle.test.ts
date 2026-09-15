@@ -212,7 +212,7 @@ describe('InProcessCollaborationLifecycle', () => {
     await expect(lifecycle.currentRoomEpoch(ROOM, 'short')).resolves.toBeUndefined()
   })
 
-  it('M1: a denied reserve does not extend the room-epoch tombstone', async () => {
+  it('M1: a denied reserve does not extend the room-epoch tombstone (epoch mismatch)', async () => {
     const { lifecycle, now, advance } = setup()
     const conn = connection('conn-1')
 
@@ -230,6 +230,62 @@ describe('InProcessCollaborationLifecycle', () => {
       await expect(
         lifecycle.reserveEditorLease(conn, ROOM, `retry-${hour}`, now() + 60_000, 3, 1, EPOCH, SECURITY_EPOCH, now()),
       ).rejects.toMatchObject({ code: 'epoch-mismatch' })
+    }
+
+    // Just before the tombstone elapses it is still in force...
+    advance(IN_PROCESS_ROOM_EPOCH_TOMBSTONE_TTL_MS - elapsed - 1)
+    await expect(lifecycle.currentRoomEpoch(ROOM, SECURITY_EPOCH)).resolves.toBe(rotated)
+
+    // ...and one millisecond later the room is free again, 24 h after the
+    // RELEASE rather than 24 h after the last denial.
+    advance(2)
+    await expect(lifecycle.currentRoomEpoch(ROOM, SECURITY_EPOCH)).resolves.toBeUndefined()
+    await expect(
+      lifecycle.reserveEditorLease(conn, ROOM, 'lease-after', now() + 60_000, 3, 1, EPOCH, SECURITY_EPOCH, now()),
+    ).resolves.toMatchObject({ shouldBootstrap: true })
+  })
+
+  /**
+   * The SECOND denial return, which the epoch-mismatch test above cannot reach.
+   * A reserve carrying another security generation with an authorization no
+   * NEWER than the room's is refused rather than allowed to rotate the room --
+   * and that refusal, like the other one, must leave the tombstone's expiry
+   * exactly where the release put it. Without this case the security branch is
+   * unguarded: the code is right, but a future edit could re-arm the tombstone
+   * there and every other test would stay green.
+   */
+  it('M1: a denied reserve does not extend the room-epoch tombstone (stale security generation)', async () => {
+    const { lifecycle, now, advance } = setup()
+    const conn = connection('conn-1')
+    const authorizedAt = now()
+
+    await enterRoom(lifecycle, conn, now, 'lease-1')
+    await lifecycle.releaseLease(conn, ROOM, 'lease-1', 'clean-leave')
+    const rotated = await lifecycle.currentRoomEpoch(ROOM, SECURITY_EPOCH)
+    expect(rotated).not.toBe(EPOCH)
+
+    // A client holding a grant from ANOTHER security generation, issued no
+    // later than the one the room recorded, retries for most of the day. Every
+    // one of these is refused without rotating; NONE may re-arm the tombstone.
+    let elapsed = 0
+    for (const hour of [1, 6, 12, 23]) {
+      advance(hour * HOUR_MS - elapsed)
+      elapsed = hour * HOUR_MS
+      await expect(
+        lifecycle.reserveEditorLease(
+          conn,
+          ROOM,
+          `stale-security-${hour}`,
+          now() + 60_000,
+          3,
+          1,
+          EPOCH,
+          NEXT_SECURITY_EPOCH,
+          authorizedAt,
+        ),
+      ).rejects.toMatchObject({ code: 'epoch-mismatch', currentRoomEpoch: rotated })
+      // Nothing rotated: a refused reserve leaves the room's generation alone.
+      await expect(lifecycle.currentRoomEpoch(ROOM, SECURITY_EPOCH)).resolves.toBe(rotated)
     }
 
     // Just before the tombstone elapses it is still in force...
