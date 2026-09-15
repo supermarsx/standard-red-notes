@@ -66,7 +66,7 @@ export interface ConsoleLoggerOptions {
 
 export function createConsoleLogger(options: ConsoleLoggerOptions = {}): Required<Logger> {
   const level = resolveLogLevel(options.level)
-   
+
   const sink = options.sink ?? console
   const now = options.now ?? ((): Date => new Date())
 

@@ -372,7 +372,9 @@ async function bounded<T>(operation: Promise<T>): Promise<T> {
   try {
     return await Promise.race([operation, timeout])
   } finally {
-    if (timer) {clearTimeout(timer)}
+    if (timer) {
+      clearTimeout(timer)
+    }
   }
 }
 

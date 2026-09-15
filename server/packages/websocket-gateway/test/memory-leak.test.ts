@@ -62,13 +62,17 @@ describe('RoomRegistry — no leak', () => {
     const conns = Array.from({ length: 50 }, (_, i) => fakeConn(`c${i}`))
     // every conn joins 10 shared rooms
     for (const c of conns) {
-      for (let r = 0; r < 10; r++) {rooms.join(`room-${r}`, c)}
+      for (let r = 0; r < 10; r++) {
+        rooms.join(`room-${r}`, c)
+      }
     }
     expect(rooms.roomCount()).toBe(10)
 
     // leave one room at a time
     for (const c of conns) {
-      for (let r = 0; r < 10; r++) {rooms.leave(`room-${r}`, c)}
+      for (let r = 0; r < 10; r++) {
+        rooms.leave(`room-${r}`, c)
+      }
     }
     expect(rooms.roomCount()).toBe(0)
   })
@@ -104,7 +108,9 @@ describe('RoomRegistry — no leak', () => {
     const c = fakeConn('flooder')
     let accepted = 0
     for (let r = 0; r < 10_000; r++) {
-      if (rooms.join(`junk-${r}`, c).joined) {accepted++}
+      if (rooms.join(`junk-${r}`, c).joined) {
+        accepted++
+      }
     }
     expect(accepted).toBe(100) // MAX_ROOMS_PER_CONNECTION
     expect(rooms.roomCountForConn(c)).toBe(100)

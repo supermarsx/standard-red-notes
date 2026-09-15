@@ -87,10 +87,7 @@ describe('WEB_SOCKET_MESSAGE_REQUESTED wire contract', () => {
   // the same file, so no package on the push path can drift alone.
   const fixture = JSON.parse(
     readFileSync(
-      resolve(
-        __dirname,
-        '../../../../../../websocket-gateway/test/fixtures/websocket-message-requested.json',
-      ),
+      resolve(__dirname, '../../../../../../websocket-gateway/test/fixtures/websocket-message-requested.json'),
       'utf8',
     ),
   ) as {
@@ -125,11 +122,7 @@ describe('WEB_SOCKET_MESSAGE_REQUESTED wire contract', () => {
     // with itself: it feeds the producer from the same file it asserts against.
     expect(fixture.type).toBe('WEB_SOCKET_MESSAGE_REQUESTED')
     expect(fixture.channel).toBe('websocket-messages')
-    expect(Object.keys(fixture.payload).sort()).toEqual([
-      'message',
-      'originatingSessionUuid',
-      'userUuid',
-    ])
+    expect(Object.keys(fixture.payload).sort()).toEqual(['message', 'originatingSessionUuid', 'userUuid'])
     // The producer hands the factory exactly two of those three keys; the
     // originating session is added by the caller that knows the session.
     expect(Object.keys(JSON.parse(fixture.payload.message))).toEqual(['type'])

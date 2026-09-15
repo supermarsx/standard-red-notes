@@ -229,7 +229,9 @@ const CONTROL_FRAME_LIMITS = Object.freeze({
  * well-formed relay frame (so the caller can fall through to other handlers).
  */
 export function parseRelayFrame(raw: string): RelayFrame | null {
-  if (raw.length === 0 || raw[0] !== '{') {return null}
+  if (raw.length === 0 || raw[0] !== '{') {
+    return null
+  }
   let obj: Record<string, unknown>
   try {
     obj = JSON.parse(raw) as Record<string, unknown>
@@ -237,9 +239,13 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
     return null
   }
   const t = obj.t
-  if (typeof t !== 'string' || !RELAY_TYPES.has(t)) {return null}
+  if (typeof t !== 'string' || !RELAY_TYPES.has(t)) {
+    return null
+  }
   const room = obj.room
-  if (typeof room !== 'string' || room.length === 0 || room.length > MAX_ROOM_ID) {return null}
+  if (typeof room !== 'string' || room.length === 0 || room.length > MAX_ROOM_ID) {
+    return null
+  }
 
   if (t === 'room-leave') {
     const requestId = obj.requestId
@@ -374,7 +380,9 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
     } as RelayFrame
   }
   const payload = obj.payload
-  if (typeof payload !== 'string' || payload.length === 0 || payload.length > MAX_PAYLOAD) {return null}
+  if (typeof payload !== 'string' || payload.length === 0 || payload.length > MAX_PAYLOAD) {
+    return null
+  }
   const stateRequestId = obj.stateRequestId
   if (
     stateRequestId !== undefined &&
@@ -965,7 +973,9 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       }
     }
     members.delete(conn)
-    if (members.size === 0) {this.byRoom.delete(room)}
+    if (members.size === 0) {
+      this.byRoom.delete(room)
+    }
     this.byConn.get(conn)?.delete(room)
   }
 
@@ -998,12 +1008,16 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     }
     this.controlWindowsByConn.delete(conn)
     const rooms = this.byConn.get(conn)
-    if (!rooms) {return}
+    if (!rooms) {
+      return
+    }
     for (const room of rooms) {
       const members = this.byRoom.get(room)
       if (members) {
         members.delete(conn)
-        if (members.size === 0) {this.byRoom.delete(room)}
+        if (members.size === 0) {
+          this.byRoom.delete(room)
+        }
       }
     }
     this.byConn.delete(conn)
@@ -1346,8 +1360,12 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   broadcast(room: string, message: string, from: Conn<S>): number {
     let sent = 0
     for (const member of this.members(room)) {
-      if (member === from) {continue}
-      if (!this.canSendWithoutBackpressure(member.socket)) {continue}
+      if (member === from) {
+        continue
+      }
+      if (!this.canSendWithoutBackpressure(member.socket)) {
+        continue
+      }
       // A dead/closing socket's send() can throw synchronously; never let one
       // bad peer abort the broadcast or bubble out of the message handler (which
       // would crash the whole gateway for everyone).
@@ -1365,7 +1383,9 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   broadcastAll(room: string, message: string): number {
     let sent = 0
     for (const member of this.members(room)) {
-      if (!this.canSendWithoutBackpressure(member.socket)) {continue}
+      if (!this.canSendWithoutBackpressure(member.socket)) {
+        continue
+      }
       try {
         member.socket.send(message)
         sent += 1

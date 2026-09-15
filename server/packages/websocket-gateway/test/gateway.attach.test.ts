@@ -1517,8 +1517,13 @@ describe('authenticated /sockets/sync command plane', () => {
   it('replaces the discovery roomEpoch with the resolver answer so a grant bound to the rotated epoch succeeds', async () => {
     const INITIAL = 'initial_room_epoch_0001'
     const ROTATED = 'rotated_room_epoch_0002'
+    // `no-confusing-arrow` wants parentheses that prettier then removes, and this
+    // repo's eslint config never applies eslint-config-prettier, so the two
+    // tools cannot both be satisfied here. Suppress the formatting rule
+    // rather than let them fight across every reformat.
+    // eslint-disable-next-line no-confusing-arrow
     const authorizeCollaboration = vi.fn(async ({ request }: { request: Record<string, unknown> }) =>
-      (request.epochDiscovery === true
+      request.epochDiscovery === true
         ? {
             authorized: true as const,
             epochDiscovery: true as const,
@@ -1538,7 +1543,7 @@ describe('authenticated /sockets/sync command plane', () => {
             roomEpoch: request.expectedRoomEpoch as string,
             collaborationSecurityEpoch: SECURITY_EPOCH,
             leaseRequestId: request.leaseRequestId as string,
-          }),
+          },
     )
     const collaborationRoomEpochResolver = vi.fn(async () => ROTATED)
     port = await listen()

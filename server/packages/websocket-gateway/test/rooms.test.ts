@@ -1793,8 +1793,13 @@ describe('handleRelayFrame room-join authorization', () => {
     const intruder = fakeConn('intruder')
 
     // Only user "a" is a member of note "n1".
+    // `no-confusing-arrow` wants parentheses that prettier then removes, and this
+    // repo's eslint config never applies eslint-config-prettier, so the two
+    // tools cannot both be satisfied here. Suppress the formatting rule
+    // rather than let them fight across every reformat.
+    // eslint-disable-next-line no-confusing-arrow
     const authorize = (userUuid: string, room: string, capability?: string) =>
-      (userUuid === 'a' && room === 'n1'
+      userUuid === 'a' && room === 'n1'
         ? {
             authorized: true as const,
             expiresAt: Date.now() + 60_000,
@@ -1804,7 +1809,7 @@ describe('handleRelayFrame room-join authorization', () => {
             collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
             leaseRequestId: capability,
           }
-        : { authorized: false as const })
+        : { authorized: false as const }
 
     await handleRelayFrame(
       rooms,

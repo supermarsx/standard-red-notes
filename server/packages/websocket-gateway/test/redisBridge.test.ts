@@ -313,7 +313,10 @@ describe('WEB_SOCKET_MESSAGE_REQUESTED wire contract', () => {
   }
 
   /** A registry holding exactly the connection the fixture describes. */
-  const fixtureRegistry = (): { registry: InstanceType<typeof ConnectionRegistry<SendableSocket>>; send: ReturnType<typeof vi.fn> } => {
+  const fixtureRegistry = (): {
+    registry: InstanceType<typeof ConnectionRegistry<SendableSocket>>
+    send: ReturnType<typeof vi.fn>
+  } => {
     const send = vi.fn()
     const registry = new ConnectionRegistry<SendableSocket>()
     registry.add(fixture.payload.userUuid, {
