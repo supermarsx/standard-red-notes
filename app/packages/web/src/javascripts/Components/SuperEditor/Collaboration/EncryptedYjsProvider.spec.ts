@@ -158,6 +158,134 @@ async function flushMicrotasksUntil(predicate: () => boolean, turns = 40): Promi
   }
 }
 
+/** A joined, epoch-bound provider whose inbound frames the test drives directly. */
+function createPresenceProvider(room: string): {
+  provider: EncryptedYjsProvider
+  sent: CollabFrame[]
+  inbound: { deliver(frame: CollabFrame): void }
+  onFatal: jest.Mock
+  release: jest.Mock
+} {
+  const sent: CollabFrame[] = []
+  const release = jest.fn()
+  const onFatal = jest.fn()
+  let handler: ((frame: CollabFrame) => void) | undefined
+  const lease = {
+    requestId: `${room}-lease`,
+    shouldBootstrap: true,
+    protocolVersion: 3 as const,
+    maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+    roomEpoch: TEST_ROOM_EPOCH,
+    release,
+  }
+  const provider = new EncryptedYjsProvider(
+    new Y.Doc(),
+    room,
+    {
+      isConnected: () => true,
+      authorize: jest.fn(),
+      subscribe: (received) => {
+        handler = received
+        return () => {
+          handler = undefined
+        }
+      },
+      send: (frame) => sent.push(frame),
+    },
+    createTestTransportCipher(),
+    undefined,
+    lease.requestId,
+    {
+      activeLease: lease,
+      shouldBootstrap: true,
+      expectedRoomEpoch: TEST_ROOM_EPOCH,
+      validateAttachment: jest.fn(() => true),
+      reactivate: jest.fn(),
+      onFatal,
+    },
+  )
+  return { provider, sent, inbound: { deliver: (frame) => handler?.(frame) }, onFatal, release }
+}
+
+/** Seed a remote cursor exactly as `applyAwarenessUpdate` would: both `states` and `meta`. */
+function seedRemoteAwareness(
+  provider: EncryptedYjsProvider,
+  clientId: number,
+): { getStates(): Map<number, Record<string, unknown>> } {
+  const awareness = provider.awareness as unknown as {
+    getStates(): Map<number, Record<string, unknown>>
+    meta: Map<number, { clock: number; lastUpdated: number }>
+  }
+  awareness.getStates().set(clientId, { name: 'Alice' })
+  awareness.meta.set(clientId, { clock: 1, lastUpdated: Date.now() })
+  return awareness
+}
+
+function remotePresenceJoin(
+  room: string,
+  localClientId: number,
+  ttlMilliseconds: number,
+): Extract<CollabFrame, { t: 'room-presence' }> {
+  return {
+    t: 'room-presence',
+    room,
+    roomEpoch: TEST_ROOM_EPOCH,
+    protocolVersion: 3,
+    action: 'joined',
+    presenceId: `${room}-remote-presence`,
+    userUuid: 'remote-user',
+    clientId: localClientId === 9_001 ? 9_002 : 9_001,
+    ttlMilliseconds,
+  }
+}
+
+/**
+ * The provider reads the ambient `document` for visibility; this node-environment spec has
+ * none, so install a minimal one for the duration of a test.
+ */
+function installFakeVisibilityDocument(): {
+  document: {
+    visibilityState: string
+    dispatchVisibilityChange(): void
+    listenerCount(): number
+  }
+  restore(): void
+} {
+  const listeners = new Set<() => void>()
+  const fake = {
+    visibilityState: 'visible',
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === 'visibilitychange') {
+        listeners.add(listener)
+      }
+    },
+    removeEventListener: (type: string, listener: () => void) => {
+      if (type === 'visibilitychange') {
+        listeners.delete(listener)
+      }
+    },
+    dispatchVisibilityChange: () => {
+      for (const listener of [...listeners]) {
+        listener()
+      }
+    },
+    listenerCount: () => listeners.size,
+  }
+  const host = globalThis as { document?: unknown }
+  const previous = host.document
+  host.document = fake
+  return {
+    document: fake,
+    restore: () => {
+      if (previous === undefined) {
+        delete host.document
+      } else {
+        host.document = previous
+      }
+    },
+  }
+}
+
 describe('EncryptedYjsProvider convergence', () => {
   it('fails closed and releases the active lease when a ciphertext room epoch mismatches', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
@@ -420,6 +548,112 @@ describe('EncryptedYjsProvider convergence', () => {
       jest.useRealTimers()
     }
     expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('beats at a third of the presence TTL the gateway advertised rather than a hardcoded period', async () => {
+    // R31: the server owns the presence TTL; a client that assumes its own period is one
+    // server-side change away from being evicted for a timeout it could not have avoided.
+    jest.useFakeTimers()
+    const { provider, sent, inbound } = createPresenceProvider('ttl-derived-room')
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const heartbeats = () => sent.filter((frame) => frame.t === 'room-presence-heartbeat').length
+
+      inbound.deliver(remotePresenceJoin('ttl-derived-room', provider.doc.clientID, 60_000))
+      const afterAdoption = heartbeats()
+
+      jest.advanceTimersByTime(COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS)
+      expect(heartbeats()).toBe(afterAdoption)
+      jest.advanceTimersByTime(20_000 - COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS)
+      expect(heartbeats()).toBe(afterAdoption + 1)
+    } finally {
+      provider.destroy()
+      jest.clearAllTimers()
+      jest.useRealTimers()
+    }
+  })
+
+  it('beats immediately when a hidden tab becomes visible again', async () => {
+    // R31: a hidden tab's interval is throttled past the presence TTL, so returning to the
+    // tab must re-announce presence without waiting for the next (throttled) tick.
+    jest.useFakeTimers()
+    const { document: fakeDocument, restore } = installFakeVisibilityDocument()
+    const { provider, sent } = createPresenceProvider('visibility-room')
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const heartbeats = () => sent.filter((frame) => frame.t === 'room-presence-heartbeat').length
+      const afterJoin = heartbeats()
+
+      fakeDocument.visibilityState = 'hidden'
+      fakeDocument.dispatchVisibilityChange()
+      expect(heartbeats()).toBe(afterJoin)
+
+      fakeDocument.visibilityState = 'visible'
+      fakeDocument.dispatchVisibilityChange()
+      expect(heartbeats()).toBe(afterJoin + 1)
+
+      provider.disconnect()
+      fakeDocument.visibilityState = 'visible'
+      fakeDocument.dispatchVisibilityChange()
+      expect(heartbeats()).toBe(afterJoin + 1)
+      expect(fakeDocument.listenerCount()).toBe(0)
+    } finally {
+      provider.destroy()
+      restore()
+      jest.clearAllTimers()
+      jest.useRealTimers()
+    }
+  })
+
+  it('drops remote cursors instead of ending the session on an oversized awareness frame', async () => {
+    // R32: awareness carries cursors, not document bytes. Only the yjs transfer budget is fatal.
+    const { provider, sent, inbound, onFatal } = createPresenceProvider('oversized-awareness-room')
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const remoteClientId = provider.doc.clientID === 9_101 ? 9_102 : 9_101
+      const awareness = seedRemoteAwareness(provider, remoteClientId)
+
+      inbound.deliver({
+        t: 'awareness',
+        room: 'oversized-awareness-room',
+        payload: 'A'.repeat(8 * 1024 * 1024),
+      })
+      await flushMicrotasksUntil(() => !awareness.getStates().has(remoteClientId))
+
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(onFatal).not.toHaveBeenCalled()
+      expect(awareness.getStates().has(remoteClientId)).toBe(false)
+      expect(sent.some((frame) => frame.t === 'room-leave')).toBe(false)
+    } finally {
+      provider.destroy()
+    }
+  })
+
+  it('drops remote cursors instead of ending the session on an undecodable awareness update', async () => {
+    const { provider, inbound, onFatal } = createPresenceProvider('malformed-awareness-room')
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const remoteClientId = provider.doc.clientID === 9_201 ? 9_202 : 9_201
+      const awareness = seedRemoteAwareness(provider, remoteClientId)
+
+      // The transport cipher is base64, so this decrypts to bytes yjs cannot decode.
+      inbound.deliver({
+        t: 'awareness',
+        room: 'malformed-awareness-room',
+        payload: Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]).toString('base64'),
+      })
+      await flushMicrotasksUntil(() => !awareness.getStates().has(remoteClientId))
+
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(onFatal).not.toHaveBeenCalled()
+      expect(awareness.getStates().has(remoteClientId)).toBe(false)
+    } finally {
+      provider.destroy()
+    }
   })
 
   it('keeps a fresh bootstrap editor non-canonical with bounded work until its exact snapshot is accepted', async () => {

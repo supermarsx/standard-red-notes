@@ -5,9 +5,29 @@
 
 export const COLLABORATION_PROTOCOL_VERSION = 3 as const
 export const COLLABORATION_MAX_TRANSFER_BYTES = 4 * 1024 * 1024
+/** Fallback beat interval used only until the gateway advertises its presence TTL. */
 export const COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS = 15_000
 export const COLLABORATION_PRESENCE_MIN_TTL_MS = 30_000
 export const COLLABORATION_PRESENCE_MAX_TTL_MS = 120_000
+
+/**
+ * Derive the client heartbeat interval from the TTL the gateway advertises on every
+ * `room-presence` join rather than assuming the server's constant. Three beats per TTL
+ * leaves room for one dropped beat and one timer the browser throttled while the tab was
+ * hidden; with today's 45 s server TTL this is the historical 15 s. An out-of-range or
+ * missing TTL keeps the conservative fallback.
+ */
+export function resolvePresenceHeartbeatIntervalMs(ttlMilliseconds: unknown): number {
+  if (
+    typeof ttlMilliseconds !== 'number' ||
+    !Number.isSafeInteger(ttlMilliseconds) ||
+    ttlMilliseconds < COLLABORATION_PRESENCE_MIN_TTL_MS ||
+    ttlMilliseconds > COLLABORATION_PRESENCE_MAX_TTL_MS
+  ) {
+    return COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS
+  }
+  return Math.max(1_000, Math.floor(ttlMilliseconds / 3))
+}
 
 /**
  * Why a `room-denied` frame was sent (contract C1, declared in
@@ -111,6 +131,12 @@ export type CollabFrame =
       protocolVersion: 3
       maxTransferBytes: number
       roomEpoch: string
+      /**
+       * Contract C3: how long, in milliseconds from receipt, the gateway will hold this
+       * reservation open for its `room-join`. Optional so a frame from an older gateway
+       * still parses; the client then falls back to its own activation timeout.
+       */
+      activationTtlMs?: number
     }
   | {
       t: 'room-joined'

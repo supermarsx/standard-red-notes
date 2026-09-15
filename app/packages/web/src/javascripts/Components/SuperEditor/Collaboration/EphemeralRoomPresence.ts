@@ -6,6 +6,15 @@ import {
 } from './CollabChannel'
 
 const MAX_PRESENCE_SESSIONS = 64
+
+/**
+ * R31. A backgrounded tab can miss enough heartbeats to be evicted and then re-join the
+ * moment the user comes back. Announcing "X left" and "X joined" for that round trip is
+ * noise about the transport, not about the collaborator, so the departure notice is held
+ * this long and cancelled outright when the same user returns inside the window.
+ */
+export const PRESENCE_REJOIN_GRACE_MS = 90_000
+
 const MAX_PRESENCE_ID_LENGTH = 128
 const MAX_USER_UUID_LENGTH = 128
 const MAX_DISPLAY_LABEL_LENGTH = 128
@@ -37,6 +46,13 @@ type PresenceSession = {
   joinedActivityEmitted: boolean
 }
 
+/** A `heartbeat-timeout` departure withheld in case the same user is only reconnecting. */
+type HeldDeparture = {
+  activity: CollaborationPresenceActivity
+  label: string
+  releaseAt: number
+}
+
 export type EphemeralRoomPresenceOptions = {
   room: string
   roomEpoch: string
@@ -59,6 +75,9 @@ export class EphemeralRoomPresence {
   private readonly sessions = new Map<string, PresenceSession>()
   private readonly presenceIdByClientId = new Map<number, string>()
   private expiryTimeout: ReturnType<typeof setTimeout> | undefined
+  /** Departures held back for PRESENCE_REJOIN_GRACE_MS, keyed by user (R31). */
+  private readonly heldDepartures = new Map<string, HeldDeparture>()
+  private heldDepartureTimeout: ReturnType<typeof setTimeout> | undefined
 
   constructor(private readonly options: EphemeralRoomPresenceOptions) {}
 
@@ -110,6 +129,13 @@ export class EphemeralRoomPresence {
       clearTimeout(this.expiryTimeout)
       this.expiryTimeout = undefined
     }
+    if (this.heldDepartureTimeout !== undefined) {
+      clearTimeout(this.heldDepartureTimeout)
+      this.heldDepartureTimeout = undefined
+    }
+    // The whole room is going away, so a withheld departure is dropped rather than released:
+    // announcing that everyone left as this editor tears down would be about us, not them.
+    this.heldDepartures.clear()
     this.sessions.clear()
     this.presenceIdByClientId.clear()
   }
@@ -146,12 +172,15 @@ export class EphemeralRoomPresence {
       return false
     }
 
+    // R31: this user's own withheld departure means the tab was only away, so neither the
+    // "left" nor a matching "joined" is worth telling anyone about.
+    const resumed = this.claimHeldDeparture(frame.userUuid)
     this.sessions.set(frame.presenceId, {
       presenceId: frame.presenceId,
       userUuid: frame.userUuid,
       clientId: frame.clientId,
       expiresAt: this.now() + frame.ttlMilliseconds,
-      joinedActivityEmitted: false,
+      ...(resumed ? { label: resumed.label, joinedActivityEmitted: true } : { joinedActivityEmitted: false }),
     })
     this.presenceIdByClientId.set(frame.clientId, frame.presenceId)
     this.scheduleExpiry()
@@ -184,16 +213,81 @@ export class EphemeralRoomPresence {
     } catch {
       // Presence cleanup and editor teardown must not depend on UI observers.
     }
-    if (session.joinedActivityEmitted && session.label) {
-      this.emitActivity({
-        action: 'left',
-        presenceId: session.presenceId,
-        userUuid: session.userUuid,
-        clientId: session.clientId,
-        label: session.label,
-        reason,
-      })
+    if (!session.joinedActivityEmitted || !session.label) {
+      return
     }
+    const activity: CollaborationPresenceActivity = {
+      action: 'left',
+      presenceId: session.presenceId,
+      userUuid: session.userUuid,
+      clientId: session.clientId,
+      label: session.label,
+      reason,
+    }
+    // R31. Only a missed heartbeat is ambiguous: a clean leave, a disconnect or a revocation
+    // all mean the collaborator really is gone, and those are announced at once.
+    if (reason !== 'heartbeat-timeout') {
+      this.emitActivity(activity)
+      return
+    }
+    this.holdDeparture(session.userUuid, {
+      activity,
+      label: session.label,
+      releaseAt: this.now() + PRESENCE_REJOIN_GRACE_MS,
+    })
+  }
+
+  private holdDeparture(userUuid: string, held: HeldDeparture): void {
+    if (!this.heldDepartures.has(userUuid) && this.heldDepartures.size >= MAX_PRESENCE_SESSIONS) {
+      // A room that churns beyond its own session ceiling gets the plain notice instead of
+      // an unbounded ledger of pending ones.
+      this.emitActivity(held.activity)
+      return
+    }
+    this.heldDepartures.set(userUuid, held)
+    this.scheduleHeldDepartureRelease()
+  }
+
+  /**
+   * The user came back inside the grace window: drop the withheld "left" and report the
+   * return as a continuation rather than a fresh arrival.
+   */
+  private claimHeldDeparture(userUuid: string): HeldDeparture | undefined {
+    const held = this.heldDepartures.get(userUuid)
+    if (!held) {
+      return undefined
+    }
+    this.heldDepartures.delete(userUuid)
+    this.scheduleHeldDepartureRelease()
+    return held
+  }
+
+  private scheduleHeldDepartureRelease(): void {
+    if (this.heldDepartureTimeout !== undefined) {
+      clearTimeout(this.heldDepartureTimeout)
+      this.heldDepartureTimeout = undefined
+    }
+    let earliest = Number.POSITIVE_INFINITY
+    for (const held of this.heldDepartures.values()) {
+      earliest = Math.min(earliest, held.releaseAt)
+    }
+    if (!Number.isFinite(earliest)) {
+      return
+    }
+    this.heldDepartureTimeout = setTimeout(
+      () => {
+        this.heldDepartureTimeout = undefined
+        const now = this.now()
+        for (const [userUuid, held] of [...this.heldDepartures.entries()]) {
+          if (held.releaseAt <= now) {
+            this.heldDepartures.delete(userUuid)
+            this.emitActivity(held.activity)
+          }
+        }
+        this.scheduleHeldDepartureRelease()
+      },
+      Math.max(0, earliest - this.now()),
+    )
   }
 
   private scheduleExpiry(): void {

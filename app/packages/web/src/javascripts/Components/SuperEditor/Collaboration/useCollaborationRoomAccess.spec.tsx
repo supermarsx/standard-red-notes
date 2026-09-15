@@ -11,6 +11,7 @@ import type { CollabFrame } from './CollabChannel'
 import {
   ACTIVITY_RETRY_THROTTLE_MS,
   beginEditorLeaseReservation,
+  EDITOR_ACTIVATION_SAFETY_MARGIN_MS,
   prepareSynchronizedEditorAccess,
   RATE_LIMITED_RETRY_DELAY_MS,
   useCollaborationRoomAccess,
@@ -33,7 +34,7 @@ const maxTransferBytes = 4 * 1024 * 1024
 const roomEpoch = 'room_epoch_0000000000000001'
 const sessionUser = { uuid: 'user-1', email: 'alice@example.test' }
 
-const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true) => {
+const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true, activationTtlMs?: number) => {
   let inbound: ((frame: CollabFrame) => void) | undefined
   return {
     channel: {
@@ -51,6 +52,7 @@ const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true) => {
             protocolVersion,
             maxTransferBytes,
             roomEpoch: frame.expectedRoomEpoch,
+            ...(activationTtlMs === undefined ? {} : { activationTtlMs }),
           })
         } else if (frame.t === 'room-join') {
           inbound?.({
@@ -785,9 +787,24 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
   it('releases and re-elects when the durable revision advances after activation acknowledgement', async () => {
     const sent: CollabFrame[] = []
-    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
     const initial = { uuid: 'post-ack-race', text: 'revision 100', dirty: false, serverUpdatedAtTimestamp: 100 }
     let live = initial
+    // The advance lands while the gateway is acknowledging the join, which is the only
+    // window the post-activation check still covers now that it is synchronous (R30).
+    let joinsSent = 0
+    mockedCreateChannel.mockImplementation(() => {
+      const base = createAutoLeaseChannel(sent).channel
+      return {
+        ...base,
+        send: (frame: CollabFrame) => {
+          joinsSent += frame.t === 'room-join' ? 1 : 0
+          if (frame.t === 'room-join' && joinsSent === 1) {
+            live = { ...initial, text: 'revision 200 from another device', serverUpdatedAtTimestamp: 200 }
+          }
+          base.send(frame)
+        },
+      }
+    })
     mockedResolve.mockReturnValue({
       available: true,
       noteUuid: 'post-ack-race',
@@ -811,11 +828,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         username: 'Alice',
       }
     })
-    const sync = jest.fn(async () => {
-      if (sync.mock.calls.length === 3) {
-        live = { ...initial, text: 'revision 200 from another device', serverUpdatedAtTimestamp: 200 }
-      }
-    })
+    const sync = jest.fn().mockResolvedValue(undefined)
     const application = {
       items: { streamItems: () => jest.fn(), findItem: () => live },
       sync: { sync },
@@ -847,7 +860,173 @@ describe('useCollaborationRoomAccess security transitions', () => {
       leaseRequestId: reserves[0].requestId,
       bootstrapChallenge: `challenge:${reserves[0].requestId}`,
     })
-    expect(mockedPrepare.mock.calls[2][2]).toEqual(mockedPrepare.mock.calls[1][2])
+    // R30: the abandoned reservation authorizes exactly twice — the barrier and the
+    // challenge-bound activation. The next call already belongs to the re-election.
+    expect(mockedPrepare).toHaveBeenCalledTimes(4)
+    expect(mockedPrepare.mock.calls[2][2]).toMatchObject({ leaseRequestId: reserves[1].requestId })
+    expect(mockedPrepare.mock.calls[3][2]).toMatchObject({
+      leaseRequestId: reserves[1].requestId,
+      bootstrapChallenge: `challenge:${reserves[1].requestId}`,
+    })
+  })
+
+  it('activates inside the advertised window when the freshness barrier needed three slow syncs', async () => {
+    // Contract C3 + R30. The gateway holds a reservation for activationTtlMs; a device whose
+    // encrypted sync is slower than that window must still activate, which is only true while
+    // the awaited multi-sync barrier runs BEFORE the reservation exists.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    try {
+      const activationTtlMs = 15_000
+      const syncDurationMs = 20_000
+      const sent: CollabFrame[] = []
+      let reserveSentAt: number | undefined
+      let joinSentAt: number | undefined
+      mockedCreateChannel.mockImplementation(() => {
+        const base = createAutoLeaseChannel(sent, true, activationTtlMs).channel
+        return {
+          ...base,
+          send: (frame: CollabFrame) => {
+            if (frame.t === 'room-reserve') {
+              reserveSentAt = Date.now()
+            }
+            if (frame.t === 'room-join') {
+              joinSentAt = Date.now()
+            }
+            base.send(frame)
+          },
+        }
+      })
+      const settled = {
+        uuid: 'note-slow-sync',
+        text: 'canonical revision 100',
+        dirty: false,
+        serverUpdatedAtTimestamp: 100,
+      }
+      let live = { ...settled, text: 'revision 97', serverUpdatedAtTimestamp: 97 }
+      mockedPrepare.mockImplementation(async (_application, note) => ({
+        available: true,
+        noteUuid: note.uuid,
+        sourceId: 'root-same-uuid:version-1',
+        roomKey: {} as CryptoKey,
+        capability: `capability-${mockedPrepare.mock.calls.length}`,
+        roomEpoch,
+        serverUpdatedAtTimestamp: 100,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }))
+      const sync = jest.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              // Only the third awaited sync brings the item up to the authorized revision.
+              live =
+                sync.mock.calls.length >= 3
+                  ? settled
+                  : { ...live, serverUpdatedAtTimestamp: live.serverUpdatedAtTimestamp + 1 }
+              resolve()
+            }, syncDurationMs)
+          }),
+      )
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => live },
+        sync: { sync },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: () => jest.fn(),
+      } as never
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, settled as never, true)
+        return createElement('div', null, latestAccess.status)
+      }
+
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      // Each awaited sync is a separate act scope: React only drains its act queue when the
+      // callback settles, so advancing fake time inside one scope would outrun the barrier.
+      for (let step = 0; step < 5; step += 1) {
+        await act(async () => {
+          jest.advanceTimersByTime(syncDurationMs)
+          await flushMicrotasks(30)
+        })
+      }
+
+      expect(sync).toHaveBeenCalledTimes(3)
+      expect(reservesOf(sent)).toHaveLength(1)
+      expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(1)
+      expect(joinSentAt! - reserveSentAt!).toBeLessThanOrEqual(activationTtlMs - EDITOR_ACTIVATION_SAFETY_MARGIN_MS)
+      // The single reservation was never handed back: the slow work all happened before it.
+      expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
+      expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'canonical revision 100' })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('gives the reservation back instead of joining once its advertised window has closed', async () => {
+    // The other half of C3: work that does outlast the window must not be followed by a
+    // room-join the gateway has already pruned; the reservation is released and re-elected.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] })
+    try {
+      const activationTtlMs = 15_000
+      const sent: CollabFrame[] = []
+      mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent, true, activationTtlMs).channel)
+      const note = { uuid: 'note-slow-authorize', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 }
+      mockedPrepare.mockImplementation(async (_application, target, context) => {
+        if (context?.bootstrapChallenge !== undefined) {
+          // The challenge-bound authorization under the reservation answers too late.
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, activationTtlMs + 5_000)
+          })
+        }
+        return {
+          available: true,
+          noteUuid: target.uuid,
+          sourceId: 'root-same-uuid:version-1',
+          roomKey: {} as CryptoKey,
+          capability: 'capability-1',
+          roomEpoch,
+          serverUpdatedAtTimestamp: 100,
+          userUuid: 'user-1',
+          sessionUser,
+          username: 'Alice',
+        }
+      })
+      const application = {
+        items: { streamItems: () => jest.fn(), findItem: () => note },
+        sync: { sync: jest.fn().mockResolvedValue(undefined) },
+        vaultLocks: { addEventObserver: () => jest.fn() },
+        sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+        addEventObserver: () => jest.fn(),
+      } as never
+      const View = () => {
+        latestAccess = useCollaborationRoomAccess(application, note as never, true)
+        return createElement('div', null, latestAccess.status)
+      }
+
+      await act(async () => {
+        root.render(createElement(View))
+        await flushMicrotasks(30)
+      })
+      for (let step = 0; step < 5; step += 1) {
+        await act(async () => {
+          jest.advanceTimersByTime(activationTtlMs + 5_000)
+          await flushMicrotasks(30)
+        })
+      }
+
+      expect(reservesOf(sent)).toHaveLength(3)
+      expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(0)
+      expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(3)
+      expect(latestAccess).toMatchObject({
+        status: 'disabled',
+        reason: 'Live collaboration could not establish a stable current revision. Sync and retry.',
+      })
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('reauthorizes after an awaited full-sync revision race before allowing bootstrap', async () => {
@@ -931,8 +1110,10 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await flushMicrotasks()
     })
 
-    expect(mockedPrepare).toHaveBeenCalledTimes(3)
-    expect(sync).toHaveBeenCalledTimes(3)
+    // One awaited barrier (authorize + sync) before the reservation, then one
+    // challenge-bound authorization under it and no further sync at all (R30).
+    expect(mockedPrepare).toHaveBeenCalledTimes(2)
+    expect(sync).toHaveBeenCalledTimes(1)
     const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
     expect(joins).toHaveLength(1)
     expect(latestAccess?.status).toBe('ready')
@@ -987,8 +1168,9 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
     const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
     expect(join).toBeDefined()
-    expect(mockedPrepare).toHaveBeenCalledTimes(6)
-    expect(sync).toHaveBeenCalledTimes(6)
+    // Three exhausted barrier attempts, then one barrier plus one activation authorization.
+    expect(mockedPrepare).toHaveBeenCalledTimes(5)
+    expect(sync).toHaveBeenCalledTimes(4)
     expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'canonical after later sync' })
 
     const sentAtReady = [...sent]
@@ -996,8 +1178,8 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await applicationObserver?.(ApplicationEvent.CompletedFullSync)
       await Promise.resolve()
     })
-    expect(mockedPrepare).toHaveBeenCalledTimes(6)
-    expect(sync).toHaveBeenCalledTimes(6)
+    expect(mockedPrepare).toHaveBeenCalledTimes(5)
+    expect(sync).toHaveBeenCalledTimes(4)
     expect(sent).toEqual(sentAtReady)
     expect(latestAccess?.status).toBe('ready')
   })
@@ -1307,7 +1489,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       editorLease: { requestId: join!.requestId },
     })
     expect(sent).toEqual(sentBeforeReplacement)
-    expect(mockedPrepare).toHaveBeenCalledTimes(3)
+    expect(mockedPrepare).toHaveBeenCalledTimes(2)
   })
 
   it('releases and re-prepares when the canonical note advances between the final barrier and provider attach', async () => {

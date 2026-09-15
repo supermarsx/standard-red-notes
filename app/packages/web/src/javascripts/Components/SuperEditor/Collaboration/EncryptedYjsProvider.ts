@@ -13,6 +13,7 @@ import {
   COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS,
   COLLABORATION_PROTOCOL_VERSION,
   createCollaborationRequestId,
+  resolvePresenceHeartbeatIntervalMs,
   resolveRoomDeniedReason,
   type CollabChannel,
   type CollabFrame,
@@ -226,6 +227,9 @@ export class EncryptedYjsProvider implements Provider {
   private readonly expectedRoomEpoch?: string
   private readonly ephemeralPresence?: EphemeralRoomPresence
   private presenceHeartbeatInterval: ReturnType<typeof setInterval> | undefined
+  /** Beat period in force; replaced by `ttl / 3` as soon as the gateway advertises a TTL (R31). */
+  private presenceHeartbeatIntervalMs = COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS
+  private visibilityListenerTarget: Document | undefined
 
   constructor(
     public readonly doc: Y.Doc,
@@ -383,6 +387,7 @@ export class EncryptedYjsProvider implements Provider {
 
     this.doc.on('update', this.onLocalDocUpdate)
     this.yAwareness.on('update', this.onLocalAwarenessUpdate)
+    this.addVisibilityListener()
     this.unsubscribe = this.channel.subscribe(this.onFrame)
     this.unsubscribeStatus = this.channel.subscribeStatus?.(this.onTransportStatus) ?? null
     this.restoreLocalAwarenessState()
@@ -604,16 +609,69 @@ export class EncryptedYjsProvider implements Provider {
     if (!this.connected || !this.joined || !this.currentLease || !this.expectedRoomEpoch) {
       return
     }
-    this.presenceHeartbeatInterval = setInterval(
-      () => this.sendPresenceHeartbeat(),
-      COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS,
-    )
+    this.presenceHeartbeatInterval = setInterval(() => this.sendPresenceHeartbeat(), this.presenceHeartbeatIntervalMs)
   }
 
   private stopPresenceHeartbeat(): void {
     if (this.presenceHeartbeatInterval !== undefined) {
       clearInterval(this.presenceHeartbeatInterval)
       this.presenceHeartbeatInterval = undefined
+    }
+  }
+
+  /**
+   * R31. The gateway advertises its presence TTL on every join; three beats per TTL is the
+   * client's side of that contract. Adopting it live means a server-side TTL change cannot
+   * silently start timing this tab out, and the restart re-anchors the interval.
+   */
+  private adoptPresenceHeartbeatInterval(ttlMilliseconds: number): void {
+    const intervalMs = resolvePresenceHeartbeatIntervalMs(ttlMilliseconds)
+    if (intervalMs === this.presenceHeartbeatIntervalMs) {
+      return
+    }
+    this.presenceHeartbeatIntervalMs = intervalMs
+    if (this.presenceHeartbeatInterval !== undefined) {
+      this.startPresenceHeartbeat()
+    }
+  }
+
+  /**
+   * R31. A hidden tab's `setInterval` is throttled to roughly one minute, which outlives the
+   * presence TTL and gets the editor evicted for a heartbeat timeout it never had a chance to
+   * send. Beat immediately on the way back to visible and restart the interval from now.
+   */
+  private readonly onVisibilityChange = (): void => {
+    if (this.visibilityListenerTarget?.visibilityState !== 'visible') {
+      return
+    }
+    if (!this.connected || !this.joined || !this.currentLease || !this.expectedRoomEpoch) {
+      return
+    }
+    this.startPresenceHeartbeat()
+  }
+
+  private addVisibilityListener(): void {
+    if (this.visibilityListenerTarget !== undefined || typeof document === 'undefined') {
+      return
+    }
+    try {
+      document.addEventListener('visibilitychange', this.onVisibilityChange)
+      this.visibilityListenerTarget = document
+    } catch {
+      // A host without a usable document simply keeps the interval-only heartbeat.
+    }
+  }
+
+  private removeVisibilityListener(): void {
+    const target = this.visibilityListenerTarget
+    this.visibilityListenerTarget = undefined
+    if (!target) {
+      return
+    }
+    try {
+      target.removeEventListener('visibilitychange', this.onVisibilityChange)
+    } catch {
+      // Listener cleanup must never make editor teardown throw.
     }
   }
 
@@ -652,6 +710,7 @@ export class EncryptedYjsProvider implements Provider {
     this.connected = false
     this.joined = false
     this.stopPresenceHeartbeat()
+    this.removeVisibilityListener()
     this.ephemeralPresence?.clear()
     this.setCanonicalOwnership(false)
     this.awaitingBootstrapSeed = false
@@ -1502,6 +1561,22 @@ export class EncryptedYjsProvider implements Provider {
     }
   }
 
+  /**
+   * R32. Awareness is transient decoration: a bad frame loses cursors, not the session. The
+   * failure is still reported so the chip and the console say why the cursors went away.
+   */
+  private dropRemoteAwareness(origin: string): void {
+    this.clearRemoteAwareness(origin)
+    console.error(`[collab] ${origin}`)
+  }
+
+  private dropRemoteAwarenessClients(clientIds: readonly number[], origin: string): void {
+    for (const clientId of clientIds) {
+      this.removeRemoteAwarenessClient(clientId, origin)
+    }
+    console.error(`[collab] ${origin}`)
+  }
+
   private removeRemoteAwarenessClient(clientId: number, origin: string): void {
     if (clientId === this.doc.clientID) {
       return
@@ -1611,6 +1686,11 @@ export class EncryptedYjsProvider implements Provider {
         break
       case 'room-presence':
         if (this.joined) {
+          if (frame.action === 'joined') {
+            // Every join — including this client's own, which the gateway broadcasts back —
+            // carries the server's presence TTL (R31).
+            this.adoptPresenceHeartbeatInterval(frame.ttlMilliseconds)
+          }
           this.ephemeralPresence?.accept(frame)
         }
         break
@@ -1697,7 +1777,10 @@ export class EncryptedYjsProvider implements Provider {
           frame.payload.length === 0 ||
           frame.payload.length > MAX_AWARENESS_ENCODED_BYTES
         ) {
-          this.fatal('Live collaboration stopped because a remote presence frame exceeded safe limits.')
+          // R32: awareness is cursors, not the document. An oversized or malformed frame
+          // costs the room its remote cursors until the next good update, never the editing
+          // session. Only the yjs transfer budget, which bounds real document bytes, is fatal.
+          this.dropRemoteAwareness('oversized-remote-awareness')
           break
         }
         this.enqueueInboundCrypto({
@@ -1710,8 +1793,9 @@ export class EncryptedYjsProvider implements Provider {
             const update = await this.cipher.decrypt(frame.payload, encodeFrameAdditionalData(this.room, 'awareness'))
             const validated = this.validateInboundAwareness(update)
             if (!validated) {
-              this.clearRemoteAwareness('invalid-remote-awareness')
-              this.fatal('Live collaboration stopped because a remote presence frame was invalid.')
+              // R32: the frame carries no attributable client id, so the whole remote cursor
+              // set goes and the session stays joined.
+              this.dropRemoteAwareness('invalid-remote-awareness')
               return
             }
             const resultingRemoteIds = this.remoteAwarenessClientIds()
@@ -1719,8 +1803,9 @@ export class EncryptedYjsProvider implements Provider {
               resultingRemoteIds.add(clientId)
             }
             if (resultingRemoteIds.size > MAX_REMOTE_AWARENESS_CLIENTS) {
-              this.clearRemoteAwareness('remote-awareness-capacity')
-              this.fatal('Live collaboration stopped because remote presence exceeded safe capacity.')
+              // R32: this frame's own clients are the ones over the line, so drop exactly
+              // those rather than every peer's cursor.
+              this.dropRemoteAwarenessClients(validated.liveClientIds, 'remote-awareness-capacity')
               return
             }
             if (
@@ -1732,8 +1817,7 @@ export class EncryptedYjsProvider implements Provider {
               applyAwarenessUpdate(this.yAwareness, validated.update, 'remote')
               this.ephemeralPresence?.reconcileEncryptedAwareness()
               if (this.remoteAwarenessClientIds().size > MAX_REMOTE_AWARENESS_CLIENTS) {
-                this.clearRemoteAwareness('remote-awareness-capacity')
-                this.fatal('Live collaboration stopped because remote presence exceeded safe capacity.')
+                this.dropRemoteAwarenessClients(validated.liveClientIds, 'remote-awareness-capacity')
               }
             }
           },
