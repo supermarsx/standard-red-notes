@@ -48,17 +48,22 @@ import {
   applyRedisNamespace,
   createLoggerSyncCommandMetrics,
   createInviteRealtimeDomainEventBridge,
+  createInProcessInviteEventComposition,
   createSharedInviteEventComposition,
   createRedisSyncState,
   createSyncFilesTokenDecoder,
+  InMemoryInviteEventStore,
+  InProcessInviteEventAvailabilityBus,
   parseConnectionTokenTtl,
   parseMaxConnectionsPerUser,
   RedisInviteEventAvailabilityBus,
   WEBSOCKET_MESSAGES_CHANNEL,
   RedisInviteEventStore,
+  type InProcessInviteEventComposition,
   type RedisInviteEventClient,
   type RedisInviteEventPublisher,
   type RedisInviteEventSubscriber,
+  type SharedInviteEventComposition,
   type SyncGatewayOptions,
   type InviteRealtimeDomainEventBridge,
   type SyncRedisClient,
@@ -84,6 +89,7 @@ import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
 import { WebSocketRedisBridge } from './WebSocketRedisBridge'
+import { WebSocketInProcessBridge } from './WebSocketInProcessBridge'
 import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerRuntime'
 import { HomeServerSyncFilesAdapter } from './HomeServerSyncFilesAdapter'
 import {
@@ -271,12 +277,18 @@ export interface HomeServerRealtimeGate {
   hostUnmetCondition?: SyncHostUnmetCondition
   /**
    * The gateway (legacy `/sockets?authToken=` lane + token minting) attaches on
-   * ANY non-empty secret with Redis configured, exactly as the api-gateway does;
-   * a short secret only costs the sync lane.
+   * ANY non-empty secret; a short secret only costs the sync lane. Redis is NOT
+   * required: without it the bundled server runs the realtime state in-process
+   * (C16), which is the whole point of D1.
    */
   attachGateway: boolean
   /** The sync lane (tickets, invite store, SYNC_ITEMS…) needs the USABLE secret. */
   buildSyncLane: boolean
+  /**
+   * Which plane the attach uses (C16). `'redis'` whenever REDIS_HOST is set --
+   * byte-identical to the previous behaviour -- and `'in-process'` otherwise.
+   */
+  sharedState: 'redis' | 'in-process'
 }
 
 /**
@@ -296,16 +308,28 @@ export function resolveHomeServerRealtimeGate(input: HomeServerRealtimeGateInput
   const secret = input.connectionTokenSecret ?? ''
   const redisConfigured = Boolean(input.redisHost)
   const connectionTokenSecretUsable = Buffer.byteLength(secret, 'utf8') >= 32
+  // C16/D1. One process holds every socket in this topology, so the state a
+  // fleet would have to share has nowhere else it needs to be. Without this,
+  // an operator running the single container got no push, no live
+  // collaboration, no realtime invites and no push-MFA until they stood up a
+  // Redis that nothing else in the image uses.
+  const sharedState: 'redis' | 'in-process' = redisConfigured ? 'redis' : 'in-process'
   const observation: SyncPreconditionState = {
     connectionTokenSecretPresent: connectionTokenSecretUsable,
     webSocketSyncEnabled: input.webSocketSyncEnabled,
     redisBound: redisConfigured,
+    sharedState,
     // The durable command backend is in-process here, satisfied by construction.
     syncingServerGrpcBound: true,
   }
 
   const unmetSyncPreconditions: HomeServerRealtimePrecondition[] = resolveUnmetSyncPreconditions(observation)
-  if (!input.redisNamespaceValid) {
+  // The namespace only names SHARED Redis keys and channels. With no Redis
+  // there is no sibling stack to collide with and nothing is published
+  // anywhere, so a malformed value cannot do the harm this condition exists to
+  // prevent -- and blocking realtime over it would be a gate that fails for no
+  // reachable reason.
+  if (redisConfigured && !input.redisNamespaceValid) {
     // A malformed namespace cannot be applied consistently (the gateway's own
     // attach refuses it), and attaching WITHOUT it would put this stack's
     // pushes, relay frames and invite keys on the bare names of whichever
@@ -315,14 +339,15 @@ export function resolveHomeServerRealtimeGate(input: HomeServerRealtimeGateInput
     unmetSyncPreconditions.push({ code: REDIS_NAMESPACE_INVALID_CODE, remedy: REDIS_NAMESPACE_INVALID_REMEDY })
   }
 
+  const namespaceBlocks = redisConfigured && !input.redisNamespaceValid
   return {
     connectionTokenSecretUsable,
     observation,
     unmetSyncPreconditions,
-    ...(input.redisNamespaceValid ? {} : { hostUnmetCondition: REDIS_NAMESPACE_INVALID_CODE }),
-    attachGateway: secret.length > 0 && redisConfigured && input.redisNamespaceValid,
-    buildSyncLane:
-      connectionTokenSecretUsable && redisConfigured && input.webSocketSyncEnabled && input.redisNamespaceValid,
+    ...(namespaceBlocks ? { hostUnmetCondition: REDIS_NAMESPACE_INVALID_CODE } : {}),
+    sharedState,
+    attachGateway: secret.length > 0 && !namespaceBlocks,
+    buildSyncLane: connectionTokenSecretUsable && input.webSocketSyncEnabled && !namespaceBlocks,
   }
 }
 
@@ -859,6 +884,8 @@ export class HomeServer implements HomeServerInterface {
       let syncStateRedis: Redis | undefined
       let inviteAvailabilityRedis: Redis | undefined
       let inviteEventAvailability: RedisInviteEventAvailabilityBus | undefined
+      let inProcessInviteAvailability: InProcessInviteEventAvailabilityBus | undefined
+      let webSocketInProcessBridge: WebSocketInProcessBridge | undefined
       let inviteDomainEventBridge: InviteRealtimeDomainEventBridge | undefined
       let filesAdapter: HomeServerSyncFilesAdapter | undefined
       let realtime: { stop(): Promise<void> } | undefined
@@ -920,39 +947,53 @@ export class HomeServer implements HomeServerInterface {
       }
       // `attachGateway` already implies both values are set; the conjunction is
       // for the type narrowing only.
-      if (realtimeGate.attachGateway && connectionTokenSecret && redisHost) {
+      if (realtimeGate.attachGateway && connectionTokenSecret) {
         try {
           let sync: SyncGatewayOptions | undefined
           if (realtimeGate.buildSyncLane) {
-            syncStateRedis = new Redis({
-              host: redisHost,
-              port: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
-              lazyConnect: false,
-              maxRetriesPerRequest: 1,
-            })
-            syncStateRedis.on('error', () => logger.warn('WebSocket sync shared-state Redis connection error.'))
-            inviteAvailabilityRedis = syncStateRedis.duplicate()
-            inviteAvailabilityRedis.on('error', () =>
-              logger.warn('WebSocket invite availability Redis connection error.'),
-            )
-            // C10: the invite availability channels and the invite stream keys
-            // take the same per-deployment namespace as the push channel. The
-            // gate already validated it, so neither constructor can throw
-            // INVITE_REDIS_NAMESPACE_INVALID here; a usable secret is likewise
-            // guaranteed by `buildSyncLane`, so INVITE_CURSOR_SECRET_TOO_SHORT
-            // cannot be reached from this boot path.
-            inviteEventAvailability = new RedisInviteEventAvailabilityBus(
-              syncStateRedis as unknown as RedisInviteEventPublisher,
-              inviteAvailabilityRedis as unknown as RedisInviteEventSubscriber,
-              { namespace: webSocketRedisNamespace },
-            )
-            const inviteEventComposition = createSharedInviteEventComposition({
-              store: new RedisInviteEventStore(syncStateRedis as unknown as RedisInviteEventClient, {
-                cursorSecret: connectionTokenSecret,
-                namespace: webSocketRedisNamespace,
-              }),
-              availability: inviteEventAvailability,
-            })
+            let inviteEventComposition: SharedInviteEventComposition | InProcessInviteEventComposition
+            if (realtimeGate.sharedState === 'redis') {
+              syncStateRedis = new Redis({
+                host: redisHost,
+                port: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+                lazyConnect: false,
+                maxRetriesPerRequest: 1,
+              })
+              syncStateRedis.on('error', () => logger.warn('WebSocket sync shared-state Redis connection error.'))
+              inviteAvailabilityRedis = syncStateRedis.duplicate()
+              inviteAvailabilityRedis.on('error', () =>
+                logger.warn('WebSocket invite availability Redis connection error.'),
+              )
+              // C10: the invite availability channels and the invite stream keys
+              // take the same per-deployment namespace as the push channel. The
+              // gate already validated it, so neither constructor can throw
+              // INVITE_REDIS_NAMESPACE_INVALID here; a usable secret is likewise
+              // guaranteed by `buildSyncLane`, so INVITE_CURSOR_SECRET_TOO_SHORT
+              // cannot be reached from this boot path.
+              inviteEventAvailability = new RedisInviteEventAvailabilityBus(
+                syncStateRedis as unknown as RedisInviteEventPublisher,
+                inviteAvailabilityRedis as unknown as RedisInviteEventSubscriber,
+                { namespace: webSocketRedisNamespace },
+              )
+              inviteEventComposition = createSharedInviteEventComposition({
+                store: new RedisInviteEventStore(syncStateRedis as unknown as RedisInviteEventClient, {
+                  cursorSecret: connectionTokenSecret,
+                  namespace: webSocketRedisNamespace,
+                }),
+                availability: inviteEventAvailability,
+              })
+            } else {
+              // C16: the same durable stream and the same wakeups, in the one
+              // process that holds the sockets. The stream is memory-resident,
+              // so a restart loses undelivered invalidations -- which is
+              // exactly what the client's cursor catch-up over HTTP covers,
+              // and strictly more than the nothing this topology had before.
+              inProcessInviteAvailability = new InProcessInviteEventAvailabilityBus()
+              inviteEventComposition = createInProcessInviteEventComposition({
+                store: new InMemoryInviteEventStore({ cursorSecret: connectionTokenSecret }),
+                availability: inProcessInviteAvailability,
+              })
+            }
             inviteDomainEventBridge = createInviteRealtimeDomainEventBridge({
               dispatcher: inviteEventComposition.dispatcher,
               directCallPublisher: directCallDomainEventPublisher,
@@ -1001,12 +1042,22 @@ export class HomeServer implements HomeServerInterface {
               // Explicit either way: the gateway rejects a shared-state
               // composition that neither supplies nor waives FILES_V1.
               ...(filesAdapter ? { files: filesAdapter } : { filesUnsupported: true }),
-              ...createRedisSyncState(syncStateRedis as unknown as SyncRedisClient, syncRedisOptions),
-              requireSharedState: true,
+              // The fleet-shared ticket, lease and socket-budget stores, and
+              // the assertion that every one of them really is shared. With no
+              // Redis the gateway's own in-memory stores serve the single
+              // process instead, and `requireSharedState` must be false rather
+              // than merely unenforced -- the gateway refuses the combination
+              // outright, so this cannot drift into a fleet by accident.
+              ...(syncStateRedis
+                ? {
+                    ...createRedisSyncState(syncStateRedis as unknown as SyncRedisClient, syncRedisOptions),
+                    requireSharedState: true,
+                  }
+                : { maxSocketsPerUser: syncRedisOptions.maxSocketsPerUser, requireSharedState: false }),
             }
           }
 
-          webSocketRuntime.attach({
+          const attachedGateway = webSocketRuntime.attach({
             httpServer: serverInstance,
             logger: gatewayLogger,
             config: {
@@ -1023,17 +1074,38 @@ export class HomeServer implements HomeServerInterface {
               // store keys take the same prefix inside the gateway.
               redisNamespace: webSocketRedisNamespace,
             },
+            // C16. Explicit rather than inferred from the empty host, so the
+            // choice this host made at its gate is the one the gateway makes.
+            sharedState: realtimeGate.sharedState,
             sync,
           })
+          if (realtimeGate.sharedState === 'in-process') {
+            // There is no channel to publish on, so the push domain event is
+            // handed straight to the gateway's connection registry. Registered
+            // ALONGSIDE the Redis bridge, which disables itself without a host,
+            // so exactly one of the two ever delivers.
+            webSocketInProcessBridge = new WebSocketInProcessBridge(logger, attachedGateway)
+            directCallDomainEventPublisher.register(webSocketInProcessBridge)
+          }
           realtime = {
             stop: async (): Promise<void> => {
               try {
                 await webSocketRuntime.stop()
               } finally {
+                // Withdraw the push target first: an event that arrives during
+                // shutdown is a counted drop, never a dispatch into a registry
+                // whose sockets are already closing.
+                // No `.catch` on these two: both closes are in-memory (drop a
+                // reference, clear a Map) and cannot reject, unlike the Redis
+                // handles below.
+                await webSocketInProcessBridge?.close()
+                webSocketInProcessBridge = undefined
                 await inviteDomainEventBridge?.close().catch(() => undefined)
                 inviteDomainEventBridge = undefined
                 await inviteEventAvailability?.close().catch(() => undefined)
                 inviteEventAvailability = undefined
+                await inProcessInviteAvailability?.close()
+                inProcessInviteAvailability = undefined
                 const availabilityRedis = inviteAvailabilityRedis
                 inviteAvailabilityRedis = undefined
                 if (availabilityRedis) {
@@ -1060,13 +1132,21 @@ export class HomeServer implements HomeServerInterface {
           logger.info('Realtime WebSocket gateway attached to the HomeServer HTTP server', {
             syncLane: sync ? 'built' : 'not-built',
             legacyLane: 'attached',
+            // The one line that tells an operator which plane booted, and the
+            // string the single-container smoke test greps for.
+            pushBridge: realtimeGate.sharedState,
+            sharedState: realtimeGate.sharedState,
           })
         } catch (error) {
           await webSocketRuntime.stop().catch(() => undefined)
+          await webSocketInProcessBridge?.close()
+          webSocketInProcessBridge = undefined
           await inviteDomainEventBridge?.close().catch(() => undefined)
           inviteDomainEventBridge = undefined
           await inviteEventAvailability?.close().catch(() => undefined)
           inviteEventAvailability = undefined
+          await inProcessInviteAvailability?.close()
+          inProcessInviteAvailability = undefined
           inviteAvailabilityRedis?.disconnect()
           inviteAvailabilityRedis = undefined
           syncStateRedis?.disconnect()

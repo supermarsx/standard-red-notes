@@ -215,17 +215,19 @@ function redisRemedy(topology: DeploymentTopology): Remedy {
   if (topology.mode === 'home-server') {
     return {
       code,
-      summary: 'Set REDIS_HOST (and REDIS_PORT if it is not 6379). Restart only — no rebuild.',
+      summary:
+        'A single container needs no Redis for realtime: it keeps that state in the one process holding the sockets. Seeing this condition here means the server predates that, or its gate recorded no plane at all. Upgrade the image, or set REDIS_HOST (and REDIS_PORT if it is not 6379) as a workaround. Restart only — no rebuild.',
       steps: [
+        'Upgrade to a server build that attaches the in-process realtime plane. The realtime health row then reads "in-process", and this condition disappears.',
         hostSet
-          ? 'REDIS_HOST is set but the gate did not see it at boot — confirm the value reached the process, then restart.'
-          : 'Set REDIS_HOST to the Redis this deployment should use, and REDIS_PORT if it is not 6379.',
+          ? 'On an older build: REDIS_HOST is set but the gate did not see it at boot — confirm the value reached the process, then restart.'
+          : 'On an older build: set REDIS_HOST to the Redis this deployment should use, and REDIS_PORT if it is not 6379.',
         'Restart the container, then re-run the checks on this page.',
       ],
       effort: 'restart',
       basis: 'verified',
       because: [
-        'MODE is home-server. That path reads REDIS_HOST for the realtime lane.',
+        'MODE is home-server: one process holds every socket, so the ticket, lease, socket-budget and room state a fleet would share has nowhere else it needs to be. Redis is for running SEVERAL gateway replicas.',
         'Do not try to fix this with CACHE_TYPE: home-server forces CACHE_TYPE=memory for the gateway container, and that is deliberate — it is a separate cache from the shared state the realtime lane needs.',
       ],
     }

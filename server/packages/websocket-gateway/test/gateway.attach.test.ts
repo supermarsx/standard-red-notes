@@ -13,10 +13,14 @@ const redis = vi.hoisted(() => {
     evalCalls: 0,
     evalGate: undefined as Promise<void> | undefined,
     status: undefined as string | undefined,
+    /** How many ioredis clients the attach constructed (0 proves no Redis). */
+    constructed: 0,
   }
 
   class FakeRedisClient {
-    constructor(readonly options: Record<string, unknown>) {}
+    constructor(readonly options: Record<string, unknown>) {
+      state.constructed += 1
+    }
     get status(): string | undefined {
       return state.status
     }
@@ -172,6 +176,7 @@ beforeEach(() => {
   redis.state.evalCalls = 0
   redis.state.evalGate = undefined
   redis.state.status = undefined
+  redis.state.constructed = 0
 })
 
 afterEach(async () => {
@@ -2605,10 +2610,229 @@ describe('health()', () => {
     attached = undefined
   })
 
-  it('reports no push bridge when no redis host is configured', async () => {
+  it('reports no push bridge when the redis plane was selected with no host', async () => {
     await listen()
-    attached = attachWebSocketGateway({ httpServer, config: baseConfig({ redisHost: '' }), logger: makeLogger() })
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig({ redisHost: '' }),
+      logger: makeLogger(),
+      sharedState: 'redis',
+    })
 
     expect(attached.health().pushBridge).toBe('none')
+  })
+})
+
+describe('in-process shared state (C16)', () => {
+  let port: number
+
+  async function attachInProcess(
+    overrides: Partial<Parameters<typeof attachWebSocketGateway>[0]> = {},
+  ): Promise<ReturnType<typeof attachWebSocketGateway>> {
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      // No REDIS_HOST at all: the single container's configuration.
+      config: baseConfig({ redisHost: undefined }),
+      logger: makeLogger(),
+      ...overrides,
+    })
+    return attached
+  }
+
+  function connect(query: string): WebSocket {
+    return new WebSocket(`ws://127.0.0.1:${port}/sockets${query}`)
+  }
+
+  function opened(socket: WebSocket): Promise<void> {
+    return new Promise((resolve, reject) => {
+      socket.once('open', () => resolve())
+      socket.once('error', reject)
+    })
+  }
+
+  function collect(socket: WebSocket): Record<string, unknown>[] {
+    const received: Record<string, unknown>[] = []
+    socket.on('message', (data) => {
+      const raw = data.toString()
+      if (raw !== 'pong') {
+        try {
+          received.push(JSON.parse(raw) as Record<string, unknown>)
+        } catch {
+          received.push({ raw })
+        }
+      }
+    })
+    return received
+  }
+
+  it('defaults to the in-process plane when no redis host is configured', async () => {
+    const gateway = await attachInProcess()
+
+    expect(gateway.health()).toMatchObject({
+      attached: true,
+      pushBridge: 'in-process',
+      pushBridgeReady: true,
+      collaborationRelayHealthy: true,
+    })
+    // The whole point: not one ioredis client is constructed, so there is no
+    // connection to fail, no reconnect loop and no unready push bridge.
+    expect(redis.state.constructed).toBe(0)
+  })
+
+  it('opens the redis plane when a host is configured, so the default is host-driven', async () => {
+    port = await listen()
+    attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
+
+    expect(attached.health().pushBridge).toBe('redis')
+    expect(redis.state.constructed).toBeGreaterThan(0)
+  })
+
+  it('delivers a dispatched push to a legacy socket without any redis bridge', async () => {
+    const gateway = await attachInProcess()
+    const token = mintConnectionToken(
+      { userUuid: 'user-in-process', sessionUuid: 'session-in-process' },
+      CONNECTION_SECRET,
+      '60s',
+    )
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+    const received = collect(socket)
+    await vi.waitFor(() => expect(gateway.registry.size()).toBe(1))
+
+    const delivered = gateway.dispatch({
+      userUuid: 'user-in-process',
+      message: JSON.stringify({ type: 'ITEMS_CHANGED_ON_SERVER' }),
+    })
+
+    expect(delivered).toBe(1)
+    await vi.waitFor(() => expect(received).toContainEqual({ type: 'ITEMS_CHANGED_ON_SERVER' }))
+    // Counted like every other transport, so readiness reports one number.
+    expect(gateway.health().pushesDispatched).toBe(1)
+    // The originating session is still excluded, exactly as on the Redis path.
+    expect(
+      gateway.dispatch({
+        userUuid: 'user-in-process',
+        message: 'echo',
+        originatingSessionUuid: 'session-in-process',
+      }),
+    ).toBe(0)
+
+    socket.close()
+  })
+
+  it('refuses to attach when a fleet-shared composition asks for the in-process plane', async () => {
+    port = await listen()
+
+    expect(() =>
+      attachWebSocketGateway({
+        httpServer,
+        config: baseConfig({ redisHost: undefined }),
+        logger: makeLogger(),
+        sharedState: 'in-process',
+        sync: {
+          isEnabled: () => true,
+          allowedOrigins: ['https://app.example.test'],
+          authorization: { ready: () => true, authorize: vi.fn(async () => ({ authorized: true as const })) },
+          backend: { ready: () => true, execute: vi.fn(), status: vi.fn() } as unknown as SyncGatewayOptions['backend'],
+          requireSharedState: true,
+        },
+      }),
+    ).toThrow(/cannot require fleet-shared state on an in-process gateway/)
+  })
+
+  it('rotates the room epoch when the last editor leaves and denies a stale grant with the rotated one', async () => {
+    const gateway = await attachInProcess({
+      authorizeRoomJoin: (_userUuid, _room, capability) => {
+        const binding = JSON.parse(capability ?? '{}') as { requestId?: string; challenge?: string; epoch?: string }
+        return {
+          authorized: true,
+          expiresAt: Date.now() + 60_000,
+          serverUpdatedAtTimestamp: 1,
+          collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          roomEpoch: binding.epoch ?? ROOM_EPOCH,
+          collaborationSecurityEpoch: SECURITY_EPOCH,
+          ...(binding.requestId ? { leaseRequestId: binding.requestId } : {}),
+          ...(binding.challenge ? { bootstrapChallenge: binding.challenge } : {}),
+        }
+      },
+    })
+    const token = mintConnectionToken(
+      { userUuid: 'user-epoch', sessionUuid: 'session-epoch' },
+      CONNECTION_SECRET,
+      '60s',
+    )
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+    const received = collect(socket)
+
+    socket.send(
+      JSON.stringify({
+        t: 'room-reserve',
+        room: 'rotating-room',
+        requestId: 'lease-1',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
+        cap: JSON.stringify({ requestId: 'lease-1' }),
+      }),
+    )
+    await vi.waitFor(() => expect(received.at(-1)).toMatchObject({ t: 'room-reserved' }))
+    const reserved = received.at(-1) as { bootstrapChallenge?: string; bootstrap?: boolean }
+    // First lease in an empty room elects the bootstrapper.
+    expect(reserved.bootstrap).toBe(true)
+
+    socket.send(
+      JSON.stringify({
+        t: 'room-join',
+        room: 'rotating-room',
+        requestId: 'lease-1',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
+        cap: JSON.stringify({ requestId: 'lease-1', challenge: reserved.bootstrapChallenge }),
+      }),
+    )
+    await vi.waitFor(() => expect(gateway.rooms.members('rotating-room').length).toBe(1))
+
+    // The last editor leaves: the room's epoch rotates behind a 24 h tombstone.
+    socket.send(JSON.stringify({ t: 'room-leave', room: 'rotating-room', requestId: 'lease-1' }))
+    await vi.waitFor(() => expect(gateway.rooms.members('rotating-room').length).toBe(0))
+
+    // Re-entering with the OLD epoch is refused, and the denial carries the
+    // room's CURRENT epoch so the client can re-discover it (C1/C4).
+    socket.send(
+      JSON.stringify({
+        t: 'room-reserve',
+        room: 'rotating-room',
+        requestId: 'lease-2',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
+        cap: JSON.stringify({ requestId: 'lease-2' }),
+      }),
+    )
+    await vi.waitFor(() =>
+      expect(received.at(-1)).toMatchObject({ t: 'room-denied', room: 'rotating-room', reason: 'epoch-mismatch' }),
+    )
+    const denied = received.at(-1) as { roomEpoch?: string }
+    expect(denied.roomEpoch).toEqual(expect.any(String))
+    expect(denied.roomEpoch).not.toBe(ROOM_EPOCH)
+
+    // And the rotated epoch is usable: the same room re-opens under it.
+    socket.send(
+      JSON.stringify({
+        t: 'room-reserve',
+        room: 'rotating-room',
+        requestId: 'lease-3',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: denied.roomEpoch,
+        cap: JSON.stringify({ requestId: 'lease-3', epoch: denied.roomEpoch }),
+      }),
+    )
+    await vi.waitFor(() => expect(received.at(-1)).toMatchObject({ t: 'room-reserved', requestId: 'lease-3' }))
+
+    socket.close()
   })
 })

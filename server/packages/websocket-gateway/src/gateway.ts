@@ -18,7 +18,9 @@ import {
   ConnectionRegistry,
   InMemorySyncCommandLeaseRegistry,
   InMemorySyncSocketBudget,
+  dispatch as dispatchToRegistry,
   type Conn,
+  type DispatchMessage,
   type SyncCommandLeaseRegistry,
   type SyncSocketBudget,
 } from './registry.js'
@@ -31,6 +33,7 @@ import {
 } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startCollaborationRedisBridge } from './collaborationRedisBridge.js'
+import { InProcessCollaborationLifecycle, type CollaborationPlane } from './inProcessCollaborationLifecycle.js'
 import { createLogThrottle, type LogThrottle } from './logThrottle.js'
 import { safeErrorLogMetadata } from './safeLog.js'
 import { startSqsConsumer, type SqsConsumerHandle, type SqsEventDedupStore } from './sqsConsumer.js'
@@ -583,7 +586,14 @@ export interface GatewayConfig {
   internalSecret: string
   /** AUTH_JWT_SECRET — verifies the api-gateway's forwarded x-auth-token. */
   authJwtSecret: string
-  redisHost: string
+  /**
+   * REDIS_HOST. OPTIONAL since the single-container and LXC topologies attach
+   * with `sharedState: 'in-process'` (C16) and open no Redis connection at all;
+   * omitting it used to mean the host attached no gateway, so those
+   * deployments shipped with no push, no live collaboration, no realtime
+   * invites and no push-MFA.
+   */
+  redisHost?: string
   redisPort: number
   /**
    * WEBSOCKET_REDIS_NAMESPACE. When set (`^[a-z0-9:_-]{1,64}$`) it prefixes the
@@ -656,6 +666,20 @@ export interface AttachOptions {
   maxConnectionsPerUser?: number
   /** Separate authenticated command plane. Omitted means capability off. */
   sync?: SyncGatewayOptions
+  /**
+   * Where the state several gateway replicas would have to agree on lives (C16).
+   *
+   *   - `'redis'` (the default whenever `config.redisHost` is set): the push
+   *     bridge subscribes to the shared channel and the collaboration plane is
+   *     the Redis bridge. This is the ONLY correct choice for more than one
+   *     gateway process.
+   *   - `'in-process'` (the default when `config.redisHost` is empty): the same
+   *     decisions over in-memory maps, with no Redis connection. Correct for
+   *     exactly one process -- the single container, the LXC image -- and
+   *     wrong for any fleet, which is why `sync.requireSharedState` is refused
+   *     alongside it rather than quietly downgraded.
+   */
+  sharedState?: 'redis' | 'in-process'
 }
 
 /**
@@ -684,6 +708,15 @@ export interface AttachedGateway {
   rooms: RoomRegistry<WebSocket>
   /** POST /sockets/tokens handler, exposed for callers that own their own http server. */
   handleMintToken(req: IncomingMessage, res: ServerResponse): void
+  /**
+   * Push one already-composed message to a user's live sockets, returning how
+   * many received it (C16). This is the SAME fan-out the Redis bridge performs
+   * on a received channel message, exposed for a host that has no Redis to
+   * publish through: `WebSocketInProcessBridge` in home-server calls it
+   * directly from the domain event. Counted by `health().pushesDispatched`
+   * like every other transport.
+   */
+  dispatch(message: DispatchMessage): number
   sync: SyncGatewayAccess
   /** A point-in-time, side-effect-free snapshot; cheap enough to call per readiness probe. */
   health(): GatewayHealth
@@ -1022,6 +1055,17 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     )
   }
 
+  // C16. An explicit choice always wins; otherwise a configured Redis host
+  // means the fleet-shared plane and its absence means the single-process one.
+  // The absence used to mean "attach nothing at all" at the HOST level, which
+  // is what left the single container with no realtime anything.
+  const sharedState: 'redis' | 'in-process' = opts.sharedState ?? (config.redisHost ? 'redis' : 'in-process')
+  if (sharedState === 'in-process' && opts.sync?.requireSharedState) {
+    throw new Error(
+      'WebSocket sync cannot require fleet-shared state on an in-process gateway: configure REDIS_HOST, or drop requireSharedState for this single-process deployment.',
+    )
+  }
+
   const syncOptions = opts.sync
   const syncAllowedOrigins = normalizeAllowedOrigins(syncOptions?.allowedOrigins ?? [])
   const syncAllowsSameOrigin = syncOptions?.allowSameOrigin === true
@@ -1192,17 +1236,20 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     perMessageDeflate: false,
   })
   const collaborationBridgeOptions = {
-    host: config.redisHost,
+    host: config.redisHost ?? '',
     port: config.redisPort,
     logger,
     ...(config.redisNamespace ? { keyPrefix: config.redisNamespace } : {}),
   }
-  const collaborationRedis = startCollaborationRedisBridge(rooms, collaborationBridgeOptions)
-  // The fleet-shared room state is the only place a rotated epoch lives, so
-  // the bridge is the default resolver; a composition root may supply its own.
+  const collaborationPlane: CollaborationPlane<WebSocket> =
+    sharedState === 'in-process'
+      ? new InProcessCollaborationLifecycle<WebSocket>(rooms, logger)
+      : startCollaborationRedisBridge(rooms, collaborationBridgeOptions)
+  // The shared room state is the only place a rotated epoch lives, so the
+  // plane is the default resolver; a composition root may supply its own.
   const collaborationRoomEpochResolver: NonNullable<SyncGatewayOptions['collaborationRoomEpochResolver']> =
     syncOptions?.collaborationRoomEpochResolver ??
-    ((room, collaborationSecurityEpoch) => collaborationRedis.currentRoomEpoch(room, collaborationSecurityEpoch))
+    ((room, collaborationSecurityEpoch) => collaborationPlane.currentRoomEpoch(room, collaborationSecurityEpoch))
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -1408,7 +1455,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       // the backlog has drained -- the same two-phase shape `cleanup` uses.
       const release = (): Promise<void> => {
         rooms.leaveAll(conn)
-        return collaborationRedis
+        return collaborationPlane
           .releaseAll(conn)
           .catch((error) =>
             logger.warn('[ws] collaboration release after room eviction failed', safeErrorLogMetadata(error)),
@@ -1433,11 +1480,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       void relayQueue.then(
         async () => {
           rooms.leaveAll(conn)
-          await collaborationRedis.releaseAll(conn)
+          await collaborationPlane.releaseAll(conn)
         },
         async () => {
           rooms.leaveAll(conn)
-          await collaborationRedis.releaseAll(conn)
+          await collaborationPlane.releaseAll(conn)
         },
       )
       logger.info(`[ws] disconnect conn=${conn.connectionId} total=${registry.size()}`)
@@ -1491,7 +1538,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           .then(() => {
             return connectionClosed
               ? 0
-              : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationRedis)
+              : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationPlane)
           })
           .then(() => undefined)
           .catch((err) => {
@@ -1510,13 +1557,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   // Periodic ping sweep: terminate sockets that didn't respond since last sweep.
   const heartbeat = setInterval(() => {
     for (const reservation of rooms.evictExpired()) {
-      void collaborationRedis
+      void collaborationPlane
         .releaseLease(reservation.conn, reservation.room, reservation.requestId)
         .catch((error) =>
           logger.warn('[ws] expired collaboration reservation cleanup failed', safeErrorLogMetadata(error)),
         )
     }
-    void collaborationRedis.refreshLeases()
+    void collaborationPlane.refreshLeases()
     for (const socket of wss.clients) {
       if (alive.get(socket) === false) {
         logger.warn('[ws] terminating dead socket')
@@ -1534,12 +1581,15 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   heartbeat.unref()
 
   const pushBridgeOptions = {
-    host: config.redisHost,
+    host: config.redisHost ?? '',
     port: config.redisPort,
     logger,
     ...(config.redisNamespace ? { channelPrefix: config.redisNamespace } : {}),
   }
-  const redis = startRedisBridge(registry, pushBridgeOptions)
+  // No Redis client is opened in the in-process topology: the host publishes
+  // by calling `dispatch` below, so subscribing to a channel nobody publishes
+  // on would only produce reconnect noise and a permanently-unready bridge.
+  const redis = sharedState === 'in-process' ? undefined : startRedisBridge(registry, pushBridgeOptions)
 
   let sqsHandle: SqsConsumerHandle | undefined
   if (config.sqs?.queueUrl) {
@@ -1559,10 +1609,16 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
   const health = (): GatewayHealth => ({
     attached: true,
-    pushBridge: config.redisHost ? 'redis' : 'none',
-    pushBridgeReady: (redis as { status?: string }).status === 'ready',
+    // Honest rather than flattering: `'in-process'` is NOT `'redis'`, and the
+    // admin diagnostics render the difference. `'none'` remains what an
+    // attached gateway reports when it was pointed at the Redis plane with no
+    // host to reach -- a real misconfiguration the panel raises a finding for.
+    pushBridge: sharedState === 'in-process' ? 'in-process' : config.redisHost ? 'redis' : 'none',
+    // An in-process bridge is ready by construction: delivery is a function
+    // call into the same registry the Redis subscriber would have fed.
+    pushBridgeReady: sharedState === 'in-process' || (redis as { status?: string } | undefined)?.status === 'ready',
     sqsConsumerRunning: sqsHandle?.running() ?? false,
-    collaborationRelayHealthy: collaborationRedis.isRelayHealthy(),
+    collaborationRelayHealthy: collaborationPlane.isRelayHealthy(),
     syncLane: syncAvailable() ? 'up' : 'down',
     pushesDispatched,
   })
@@ -1638,10 +1694,10 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       await settleWithin(Promise.resolve(syncTickets.clear?.()), 1_000)
       await websocketClosed
 
-      if (!(await settleWithin(redis.quit(), 1_500))) {
+      if (redis && !(await settleWithin(redis.quit(), 1_500))) {
         redis.disconnect()
       }
-      await settleWithin(collaborationRedis.stop(), 4_000)
+      await settleWithin(collaborationPlane.stop(), 4_000)
       // The last window is the shutdown's own -- disconnects, refusals, the
       // drain's outcome. Aggregation must not be the reason it is never written.
       // Duck-typed: a composition root may pass any SyncCommandMetrics.
@@ -1650,7 +1706,15 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     return stopPromise
   }
 
-  return { registry, rooms, handleMintToken, sync, health, stop }
+  return {
+    registry,
+    rooms,
+    handleMintToken,
+    dispatch: (message: DispatchMessage): number => dispatchToRegistry(registry, message),
+    sync,
+    health,
+    stop,
+  }
 }
 
 export * from './syncProtocol.js'
@@ -1704,7 +1768,22 @@ export {
 export type { RedisSyncState, RedisSyncStateOptions, SyncRedisClient } from './syncRedisState.js'
 export type { SyncAuthTicketStore } from './auth.js'
 export type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
-export { RedisInviteEventStore } from './inviteEventStore.js'
+// The payload a host hands to `AttachedGateway.dispatch` (C16).
+export type { Conn, DispatchMessage } from './registry.js'
+export {
+  InProcessCollaborationLifecycle,
+  IN_PROCESS_ROOM_EPOCH_TOMBSTONE_TTL_MS,
+  type CollaborationPlane,
+  type InProcessCollaborationLifecycleOptions,
+} from './inProcessCollaborationLifecycle.js'
+export {
+  createInProcessInviteEventComposition,
+  InProcessInviteEventAvailabilityBus,
+  InProcessInviteEventsAdapter,
+  type InProcessInviteEventComposition,
+} from './inProcessInviteEventAvailability.js'
+export { InMemoryInviteEventStore, RedisInviteEventStore } from './inviteEventStore.js'
+export type { InMemoryInviteEventStoreOptions } from './inviteEventStore.js'
 export type { InviteEventStore, RedisInviteEventClient, RedisInviteEventStoreOptions } from './inviteEventStore.js'
 export { RedisInviteEventAvailabilityBus, SharedInviteEventsAdapter } from './inviteEventAvailability.js'
 export type {

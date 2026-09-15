@@ -1,5 +1,6 @@
 import {
   describeUnmetSyncPreconditions,
+  resolveSyncSharedState,
   resolveUnmetSyncItemsPreconditions,
   resolveUnmetSyncPreconditions,
   resolveUnmetSyncTransportPreconditions,
@@ -130,5 +131,36 @@ describe('resolveUnmetSyncPreconditions', () => {
       expect(described).toContain('SYNC_ITEMS ONLY')
       expect(described).toContain('SYNCING_SERVER_GRPC_URL')
     })
+  })
+})
+
+describe('shared state (C16)', () => {
+  const base = {
+    connectionTokenSecretPresent: true,
+    webSocketSyncEnabled: true,
+    syncingServerGrpcBound: true,
+  }
+
+  it('derives the plane from redisBound when the host records none', () => {
+    expect(resolveSyncSharedState({ ...base, redisBound: true })).toBe('redis')
+    expect(resolveSyncSharedState({ ...base, redisBound: false })).toBe('none')
+    expect(resolveSyncSharedState({ ...base, redisBound: false, sharedState: 'in-process' })).toBe('in-process')
+  })
+
+  // D1: the single container keeps tickets, leases and socket budgets in the
+  // one process that holds the sockets. Reporting REDIS_UNBOUND there sent an
+  // operator to configure a Redis the deployment does not need.
+  it('does not report REDIS_UNBOUND when the realtime state lives in-process', () => {
+    const state = { ...base, redisBound: false, sharedState: 'in-process' as const }
+
+    expect(resolveUnmetSyncPreconditions(state)).toEqual([])
+    expect(resolveUnmetSyncTransportPreconditions(state)).toEqual([])
+  })
+
+  it('still reports REDIS_UNBOUND when the realtime state has nowhere to live', () => {
+    const state = { ...base, redisBound: false, sharedState: 'none' as const }
+
+    expect(resolveUnmetSyncPreconditions(state).map(({ code }) => code)).toEqual(['REDIS_UNBOUND'])
+    expect(describeUnmetSyncPreconditions(resolveUnmetSyncPreconditions(state))).toContain('MULTI-CONTAINER')
   })
 })

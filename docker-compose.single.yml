@@ -74,12 +74,13 @@ services:
       # before enabling workflows or subscription pairing. The setup scripts
       # generate a correct local or production value.
       PUBLIC_URL: ${PUBLIC_URL:-}
-      # Realtime WebSocket gateway (in-process on the home-server's :3000). The
-      # legacy push/relay lane needs only the two secrets below (auto-generated
-      # and persisted when empty, like the others) and a same-origin browser;
-      # the worker sync lane (/sockets/sync) additionally needs the shared
-      # Redis state configured with REDIS_HOST until the in-process shared-state
-      # adapter lands. Empty values keep the home-server defaults.
+      # Realtime WebSocket gateway (in-process on the home-server's :3000).
+      # BOTH lanes work with NO Redis: this container runs one process, so the
+      # push bridge, the collaboration plane and the sync lane's ticket, lease
+      # and socket-budget state live in it. All they need is the connection
+      # secret below (auto-generated and persisted when empty, like the others)
+      # and a same-origin browser. REDIS_HOST is for a MULTI-REPLICA gateway
+      # only. Empty values keep the home-server defaults.
       WEBSOCKET_GATEWAY_INTERNAL_SECRET: ${WEBSOCKET_GATEWAY_INTERNAL_SECRET:-}
       WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-}
       WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-}

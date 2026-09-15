@@ -17,19 +17,23 @@ and keep your notes end-to-end encrypted.
 
 Modes B and C run the **home-server**: a single Node process that mounts auth,
 syncing, files, revisions and the api-gateway together, with **in-process domain
-events** (no SNS/SQS) — so they need **no MySQL, no Redis, and no floci**. The
-trade-off vs. Mode A: no horizontal scaling, and **without `REDIS_HOST` no
-realtime gateway is started at all**. That is more than push: there is no live
-collaboration, presence or comments, no realtime invites and no push-approved
-multi-factor prompts, and clients fall back to normal periodic sync. Everything
-else — accounts, notes, files, revisions, admin panel, AI proxy, OCR, CalDAV —
-works the same, and collaboration still works through ordinary sync, just
-without the live session.
+events** (no SNS/SQS) — so they need **no MySQL, no Redis, and no floci**. That
+now includes realtime: **the gateway attaches without `REDIS_HOST`** and keeps
+the push bridge, the collaboration plane and the sync lane's ticket, lease and
+socket-budget state in the one process that holds the sockets. Push, live
+collaboration, presence, comments, realtime invites and push-approved
+multi-factor prompts all work out of the box. The trade-off vs. Mode A is no
+horizontal scaling, plus two properties of an in-process plane: the realtime
+state is lost on restart (clients re-discover and re-sync; nothing durable is at
+stake), and the invite-event stream is memory-resident, so a client offline
+across a restart catches up over HTTP instead of over the socket.
 
-Providing a private `REDIS_HOST`/`REDIS_PORT` turns the whole realtime plane on
-for Modes B and C without changing their SQLite/in-memory data path. This
-connector supports only host and port, without Redis authentication or TLS, so
-it is supported only when Redis stays on the same private trusted network. Their
+`REDIS_HOST`/`REDIS_PORT` is for a MULTI-REPLICA gateway: several gateway
+processes against one database have to agree on room epochs, editor leases,
+tickets and socket budgets, and only Redis gives them that. Setting it on Modes
+B and C is supported and changes nothing about their SQLite/in-memory data path.
+This connector supports only host and port, without Redis authentication or TLS,
+so it is supported only when Redis stays on the same private trusted network. Their
 durable sync adapter remains in-process, so they need no gRPC switch: only Mode A
 binds the durable command port, with `SERVICE_PROXY_TYPE=grpc` plus the
 setup-generated `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET` that authenticates

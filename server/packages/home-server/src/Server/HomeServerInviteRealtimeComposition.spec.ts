@@ -16,6 +16,16 @@ const mockCreateSharedInviteEventComposition = jest.fn(() => ({
   dispatcher: mockInviteDispatcher,
   gatewayAdapter: mockInviteGatewayAdapter,
 }))
+// C16: the single-container composition. Same three seams as the shared one,
+// so a boot with no REDIS_HOST can be asserted without a real Redis double.
+const mockInProcessDispatcher = { dispatch: jest.fn() }
+const mockInProcessGatewayAdapter = { distribution: 'process', ready: jest.fn(() => true) }
+const mockCreateInProcessInviteEventComposition = jest.fn(() => ({
+  dispatcher: mockInProcessDispatcher,
+  gatewayAdapter: mockInProcessGatewayAdapter,
+}))
+const mockInProcessAvailabilityClose = jest.fn<Promise<void>, []>().mockResolvedValue(undefined)
+const mockInProcessAvailabilityInstances: Array<{ close: jest.Mock }> = []
 const mockInviteBridgeStart = jest.fn()
 const mockInviteBridgeClose = jest.fn<Promise<void>, []>().mockResolvedValue(undefined)
 const mockCreateInviteRealtimeDomainEventBridge = jest.fn(() => ({
@@ -281,10 +291,30 @@ jest.mock('@standard-red-notes/websocket-gateway', () => ({
       mockInviteStoreInstances.push(this)
     }
   },
+  InMemoryInviteEventStore: class {
+    readonly options: unknown
+
+    constructor(options: unknown) {
+      this.options = options
+      mockInviteStoreInstances.push(this)
+    }
+  },
+  InProcessInviteEventAvailabilityBus: class {
+    readonly close = mockInProcessAvailabilityClose
+
+    constructor() {
+      mockInProcessAvailabilityInstances.push(this)
+    }
+  },
   createInviteRealtimeDomainEventBridge: (...args: unknown[]) => mockCreateInviteRealtimeDomainEventBridge(...args),
+  createInProcessInviteEventComposition: (...args: unknown[]) => mockCreateInProcessInviteEventComposition(...args),
   createLoggerSyncCommandMetrics: jest.fn(() => ({})),
   createRedisSyncState: jest.fn(() => ({})),
   createSharedInviteEventComposition: (...args: unknown[]) => mockCreateSharedInviteEventComposition(...args),
+  // Used by WebSocketInProcessBridge, which this composition constructs when
+  // there is no Redis; both are covered for real in their own specs.
+  createLogThrottle: jest.fn(() => ({ consider: () => ({ emit: true, suppressed: 0 }) })),
+  domainEventToDispatch: jest.fn(() => null),
   createSyncFilesTokenDecoder: (secret: string) => mockCreateSyncFilesTokenDecoder(secret),
   // C8 parsers, stubbed as pass-throughs; their rules are covered in the gateway.
   parseConnectionTokenTtl: jest.fn((value: string | undefined) => value ?? '60s'),
@@ -389,6 +419,7 @@ describe('HomeServer invite realtime composition', () => {
     mockHomeRuntimeInstances.length = 0
     mockHttpServers.length = 0
     mockInviteStoreInstances.length = 0
+    mockInProcessAvailabilityInstances.length = 0
     mockRedisInstances.length = 0
     mockServiceContainerInstances.length = 0
     mockWebSocketRedisBridgeInstances.length = 0
@@ -671,6 +702,7 @@ describe('HomeServer FILES_V1 composition', () => {
     mockHomeRuntimeInstances.length = 0
     mockHttpServers.length = 0
     mockInviteStoreInstances.length = 0
+    mockInProcessAvailabilityInstances.length = 0
     mockRedisInstances.length = 0
     mockServiceContainerInstances.length = 0
     mockWebSocketRedisBridgeInstances.length = 0
@@ -829,14 +861,70 @@ describe('HomeServer FILES_V1 composition', () => {
     })
     // Presence only: every recorded field is a boolean or a literal key, never a
     // configured value. This is the structural guarantee the endpoint relies on.
+    // Two literal shapes exist: the SCREAMING_CASE condition codes, and C16's
+    // lower-case plane names (`redis` / `in-process` / `none`), which are the
+    // same spellings `GatewayHealth.pushBridge` uses on the wire. Both are
+    // compile-time constants; neither can carry a host, URL or secret.
     for (const [key, value] of Object.entries(recorded)) {
       expect({ key, safe: typeof value === 'boolean' || typeof value === 'string' }).toEqual({ key, safe: true })
       if (typeof value === 'string') {
-        expect(value).toMatch(/^[A-Z0-9_]+$/)
+        expect(value).toMatch(/^([A-Z0-9_]+|redis|in-process|none)$/)
       }
     }
+    // C16: which plane the attach used is recorded too, so the panel can say
+    // whether this deployment needs a Redis at all. This fixture configures
+    // one; the no-Redis verdict is pinned in HomeServerWebSocketRuntime.
+    expect(recorded.sharedState).toBe('redis')
 
     await server.stop()
+  })
+
+  /**
+   * D1/C16, pinned at the composition root. Without a REDIS_HOST this boot
+   * attached NO gateway at all, so the single container and the LXC image
+   * shipped with no push, no live collaboration, no realtime invites and no
+   * push-MFA. It now attaches the in-process plane, and the assertions below
+   * are the seams that must not quietly revert to the Redis ones.
+   */
+  it('attaches the in-process realtime plane when no Redis is configured', async () => {
+    const uploadRoot = await fs.mkdtemp(join(tmpdir(), 'srn-home-files-'))
+    uploadRoots.push(uploadRoot)
+    mockValidateSession.mockResolvedValue({ status: 200, data: { authToken: crossServiceToken() } })
+    const server = createServer()
+
+    const result = await server.start({
+      ...configuration,
+      environment: {
+        ...configuration.environment,
+        FILE_UPLOAD_PATH: uploadRoot,
+        VALET_TOKEN_SECRET: 'valet-secret',
+        REDIS_HOST: '',
+      },
+    })
+
+    expect(result.isFailed()).toBe(false)
+    const attachOptions = latest(mockWebSocketRuntimeInstances).attach.mock.calls[0][0]
+    expect(attachOptions.sharedState).toBe('in-process')
+    expect(attachOptions.config.redisHost).toBeUndefined()
+    // The lane is BUILT, not merely attached: tickets, collaboration, API RPC
+    // and invite events all negotiate on a deployment with no Redis.
+    expect(attachOptions.sync).toBeDefined()
+    expect(attachOptions.sync.requireSharedState).toBe(false)
+    expect(attachOptions.sync.inviteEvents).toBe(mockInProcessGatewayAdapter)
+    expect(mockCreateInProcessInviteEventComposition).toHaveBeenCalledTimes(1)
+    expect(mockCreateSharedInviteEventComposition).not.toHaveBeenCalled()
+    expect(mockInProcessAvailabilityInstances).toHaveLength(1)
+    // Not one ioredis client is constructed for the realtime path.
+    expect(mockRedisInstances).toHaveLength(0)
+    // The push domain event now has a listener again: the in-process bridge is
+    // registered alongside the (self-disabling) Redis one.
+    expect(latest(mockDirectCallPublisherInstances).register).toHaveBeenCalledTimes(2)
+    // And the gate the admin panel reads says so, with no REDIS_UNBOUND.
+    const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(recorded).toMatchObject({ sharedState: 'in-process', redisBound: false, gatewayAttached: true })
+
+    await server.stop()
+    expect(mockInProcessAvailabilityClose).toHaveBeenCalled()
   })
 
   it('omits the adapter when the capability is switched off', async () => {

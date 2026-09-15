@@ -156,6 +156,13 @@ export type SyncGateDiagnosticsReport = {
  * Recorded by bin/server.ts at the gate. Every field is a boolean or a literal
  * key — see the security note above.
  */
+/**
+ * Recorded by each composition root at its gate. Beyond the shared
+ * `SyncPreconditionState` booleans it carries only literal keys -- including
+ * C16's `sharedState` (`'redis' | 'in-process' | 'none'`), which is what keeps
+ * REDIS_UNBOUND off a single container that keeps its realtime state in the one
+ * process holding the sockets. Nothing here is ever a configured VALUE.
+ */
 export type SyncGateObservation = SyncPreconditionState & {
   filesAdvertised: boolean
   filesUnmetCondition?: SyncFilesUnmetCondition

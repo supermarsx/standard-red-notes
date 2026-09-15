@@ -327,11 +327,13 @@ describe('resolveHomeServerRealtimeGate', () => {
     expect(gate.connectionTokenSecretUsable).toBe(true)
     expect(gate.attachGateway).toBe(true)
     expect(gate.buildSyncLane).toBe(true)
+    expect(gate.sharedState).toBe('redis')
     expect(gate.unmetSyncPreconditions).toEqual([])
     expect(gate.observation).toEqual({
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
       redisBound: true,
+      sharedState: 'redis',
       syncingServerGrpcBound: true,
     })
   })
@@ -367,6 +369,7 @@ describe('resolveHomeServerRealtimeGate', () => {
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
       redisBound: true,
+      sharedState: 'redis',
       syncingServerGrpcBound: true,
     })
     expect(describeHomeServerRealtimePreconditions(gate.unmetSyncPreconditions)).toBe(
@@ -441,7 +444,12 @@ describe('parseHomeServerRedisNamespace', () => {
     expect(gate.buildSyncLane).toBe(true)
   })
 
-  it('attaches nothing without Redis, whatever the secret', () => {
+  // D1/C16. This used to attach NOTHING: the single container and the LXC
+  // image shipped with no push, no live collaboration, no realtime invites and
+  // no push-MFA unless the operator stood up a Redis nothing else in the image
+  // uses. One process holds every socket here, so the state a fleet would have
+  // to share lives in it.
+  it('attaches the in-process plane without Redis and reports no unmet precondition', () => {
     const gate = resolveHomeServerRealtimeGate({
       connectionTokenSecret: USABLE_SECRET,
       redisHost: undefined,
@@ -449,9 +457,47 @@ describe('parseHomeServerRedisNamespace', () => {
       redisNamespaceValid: true,
     })
 
-    expect(gate.attachGateway).toBe(false)
+    expect(gate.attachGateway).toBe(true)
+    expect(gate.buildSyncLane).toBe(true)
+    expect(gate.sharedState).toBe('in-process')
+    expect(gate.unmetSyncPreconditions).toEqual([])
+    expect(gate.observation).toEqual({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: false,
+      sharedState: 'in-process',
+      syncingServerGrpcBound: true,
+    })
+  })
+
+  it('still refuses the sync lane without Redis when the secret is too short', () => {
+    const gate = resolveHomeServerRealtimeGate({
+      connectionTokenSecret: SHORT_SECRET,
+      redisHost: undefined,
+      webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
+    })
+
+    expect(gate.attachGateway).toBe(true)
     expect(gate.buildSyncLane).toBe(false)
-    expect(gate.unmetSyncPreconditions.map(({ code }) => code)).toEqual(['REDIS_UNBOUND'])
+    expect(gate.unmetSyncPreconditions.map(({ code }) => code)).toEqual(['WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING'])
+  })
+
+  // The namespace names SHARED Redis keys and channels. With no Redis there is
+  // no sibling stack to collide with, so a malformed value cannot do the harm
+  // the condition exists to prevent, and must not cost this topology realtime.
+  it('ignores an invalid namespace when there is no Redis to namespace', () => {
+    const gate = resolveHomeServerRealtimeGate({
+      connectionTokenSecret: USABLE_SECRET,
+      redisHost: undefined,
+      webSocketSyncEnabled: true,
+      redisNamespaceValid: false,
+    })
+
+    expect(gate.attachGateway).toBe(true)
+    expect(gate.buildSyncLane).toBe(true)
+    expect(gate.hostUnmetCondition).toBeUndefined()
+    expect(gate.unmetSyncPreconditions).toEqual([])
   })
 
   it('attaches nothing without a secret', () => {

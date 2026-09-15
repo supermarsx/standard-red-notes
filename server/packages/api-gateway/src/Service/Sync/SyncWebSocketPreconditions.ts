@@ -32,6 +32,32 @@ export interface SyncPreconditionState {
   redisBound: boolean
   /** The gRPC syncing-server proxy is bound (see SYNCING_SERVER_GRPC_URL). */
   syncingServerGrpcBound: boolean
+  /**
+   * Where the state several gateway replicas would have to agree on lives (C16):
+   *
+   *   - `'redis'`   — the fleet-shared plane, the only correct choice for more
+   *                   than one gateway process;
+   *   - `'in-process'` — in-memory maps inside the one process that holds the
+   *                   sockets. The single container and the LXC image run this,
+   *                   and they need no Redis for realtime to work;
+   *   - `'none'`    — neither: the lane has nowhere to keep tickets, leases and
+   *                   socket budgets, which is the only case REDIS_UNBOUND
+   *                   describes.
+   *
+   * Optional so a host that has not been taught about it (or an older recorded
+   * observation) keeps its previous meaning exactly: no value derives
+   * `'redis'`/`'none'` from `redisBound`, as before.
+   */
+  sharedState?: 'redis' | 'in-process' | 'none'
+}
+
+/**
+ * The effective plane for an observation, with the pre-C16 fallback. Exported
+ * so the boot log, the diagnostics report and the host gate all read the same
+ * answer rather than each re-deriving it from `redisBound`.
+ */
+export function resolveSyncSharedState(state: SyncPreconditionState): 'redis' | 'in-process' | 'none' {
+  return state.sharedState ?? (state.redisBound ? 'redis' : 'none')
 }
 
 const REMEDIES: Readonly<Record<SyncPreconditionCode, string>> = Object.freeze({
@@ -40,7 +66,7 @@ const REMEDIES: Readonly<Record<SyncPreconditionCode, string>> = Object.freeze({
   WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION:
     'WEBSOCKET_SYNC_ENABLED is set to the exact string "false"; unset it or set it to "true" to re-enable the realtime transport',
   REDIS_UNBOUND:
-    'no Redis client is bound; configure REDIS_URL (or REDIS_HOST/REDIS_PORT) and do not run with CACHE_TYPE=memory, because sync requires fleet-shared ticket, lease and socket-budget state',
+    'no Redis client is bound AND this deployment does not run the realtime state in-process; configure REDIS_URL (or REDIS_HOST/REDIS_PORT) and do not run with CACHE_TYPE=memory, because a MULTI-CONTAINER gateway requires fleet-shared ticket, lease and socket-budget state. A single container keeps that state in-process and does not report this condition at all',
   SYNCING_SERVER_GRPC_UNBOUND:
     'the gRPC syncing-server proxy is not bound; configure SERVICE_PROXY_TYPE=grpc and SYNCING_SERVER_GRPC_URL so realtime SYNC_ITEMS has a durable backend. This disables SYNC_ITEMS ONLY -- the socket still serves collaboration, API RPC, invite events and files, and clients transparently sync over HTTP',
 })
@@ -75,7 +101,12 @@ export function resolveUnmetSyncPreconditions(state: SyncPreconditionState): Syn
   if (!state.webSocketSyncEnabled) {
     unmet.push('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION')
   }
-  if (!state.redisBound) {
+  // C16: an in-process plane satisfies this condition. REDIS_UNBOUND now means
+  // "the realtime state has nowhere to live", not "no Redis": a single
+  // container keeps tickets, leases and socket budgets in the one process that
+  // holds the sockets, and reporting a Redis it does not need would send the
+  // operator to fix something that is not broken.
+  if (resolveSyncSharedState(state) === 'none') {
     unmet.push('REDIS_UNBOUND')
   }
   if (!state.syncingServerGrpcBound) {

@@ -534,14 +534,22 @@ the wire. Cross-device latency is the same either way.
 payloads; a larger change set degrades to the plain notification rather than
 overflowing a frame or the 256 KiB SNS message limit.
 
-The single-container and LXC topologies do not bundle Redis. Without
-`REDIS_HOST` the realtime gateway is **not started at all**: no push, no live
-collaboration, presence or comments, no realtime invites, no push-approved
-multi-factor prompts — only HTTP and periodic sync. Provide
-`REDIS_HOST`/`REDIS_PORT` to turn realtime on there. Their connector supports
-only host and port, without Redis authentication or TLS, so external Redis is
-supported only on the same private trusted network. Never publish it or route
-it across a trust boundary.
+The single-container and LXC topologies bundle no Redis and need none: the
+gateway attaches with `REDIS_HOST` unset and keeps the push bridge, the
+collaboration plane and the sync lane's ticket, lease and socket-budget state in
+the one process that holds the sockets. The boot line `Realtime WebSocket
+gateway attached to the HomeServer HTTP server` reports `pushBridge:
+in-process`, and the admin diagnostics panel shows the same value; `REDIS_UNBOUND`
+is not reported there, because nothing is missing. Two properties follow from
+that plane: the realtime state is lost on restart (clients re-discover their
+rooms and re-sync), and the invite-event stream is memory-resident, so a client
+offline across a restart catches up over HTTP instead of over the socket.
+
+Set `REDIS_HOST`/`REDIS_PORT` on those topologies only to run several gateway
+replicas against one database. Their connector supports only host and port,
+without Redis authentication or TLS, so external Redis is supported only on the
+same private trusted network. Never publish it or route it across a trust
+boundary.
 
 In the multi-process topology, setup also generates
 `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`. This purpose-specific key signs the

@@ -5,11 +5,11 @@ container** (Proxmox or `lxd`/`incus`) — no Docker required. Uses the same
 single-process backend as the all-in-one container image: the **home-server**
 (auth + syncing + files + revisions + api-gateway in one Node process) with
 **embedded sqlite + in-memory cache + in-process events**, fronted by **nginx**
-serving the web app. The baseline needs no MySQL or Redis. An external Redis
-instance is optional and turns the realtime plane on. Without it no realtime
-gateway is started at all: no push, no live collaboration, presence or comments,
-no realtime invites and no push-approved multi-factor prompts. Clients keep
-using the normal HTTP sync path and everything else works unchanged.
+serving the web app. The baseline needs no MySQL and no Redis, and the
+realtime plane is part of that baseline: push, live collaboration, presence,
+comments, realtime invites and push-approved multi-factor prompts all run on
+in-process state, because one process holds every socket. An external Redis is
+needed only to run SEVERAL gateway replicas against one database.
 
 ## What the installer does
 
@@ -59,15 +59,20 @@ credentials, queries, and fragments are rejected at startup. The only disable
 value is exact `WEBSOCKET_SYNC_ENABLED=false`; misspellings also fail startup
 instead of silently changing transport policy.
 
-If Redis is absent or unreachable, no realtime gateway is attached: the socket
-capability stays unavailable, clients fall back to HTTP for item sync, and live
-collaboration, presence, comments, realtime invites and push-approved
-multi-factor prompts are absent rather than merely slower. The installer does
-not install or expose Redis.
-This integration supports only a host and port, without Redis authentication or
-TLS, so the Redis endpoint must stay on the same private trusted network as the
-LXC. Do not publish it or route it across a trust boundary; leave Redis unset
-and use HTTP fallback when that isolation is unavailable.
+With `REDIS_HOST` unset the gateway attaches anyway and keeps its realtime
+state in the service process: both socket lanes negotiate, and the boot line
+`Realtime WebSocket gateway attached to the HomeServer HTTP server` reports
+`pushBridge: in-process`. Two consequences of that plane: the realtime state is
+lost on restart (clients re-discover their rooms and re-sync; nothing durable is
+at stake, since every note has already been written through the normal sync
+path), and the invite-event stream is memory-resident, so a client offline
+across a restart catches up over HTTP rather than over the socket.
+
+Set `REDIS_HOST` only to run more than one gateway replica against one database.
+The installer does not install or expose Redis. This integration supports only a
+host and port, without Redis authentication or TLS, so the Redis endpoint must
+stay on the same private trusted network as the LXC. Do not publish it or route
+it across a trust boundary.
 
 File downloads have one request-wide 30-second deadline by default, covering
 metadata lookup, stream acquisition, and the response body. Set a positive
