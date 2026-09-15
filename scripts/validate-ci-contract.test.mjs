@@ -741,13 +741,47 @@ test("all setup start paths must resolve and verify immutable deployment identit
 });
 
 test("the required stack cannot skip encrypted two-editor convergence", () => {
+  // replaceAll, not replace: more than one container step now passes
+  // `-e REQUIRE_GATEWAY=1`, so flipping only the first would leave the fragment
+  // present elsewhere and this assertion would pass against a disabled drill.
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
-    content.replace("-e REQUIRE_GATEWAY=1", "-e REQUIRE_GATEWAY=0"),
+    content.replaceAll("-e REQUIRE_GATEWAY=1", "-e REQUIRE_GATEWAY=0"),
   );
   assert.match(
     validateCiContract(files).join("\n"),
     /container-smoke required realtime gateway mode/,
   );
+});
+
+test("the required stack cannot skip the realtime mint boundary drill", () => {
+  // The script existed and worked for a whole wave while no workflow ran it,
+  // which is the same shape as a contract pointing at the wrong file: present,
+  // green, protecting nothing.
+  for (const [current, replacement, expected] of [
+    [
+      "packages/websocket-gateway/e2e/realtime.e2e.mjs",
+      "packages/websocket-gateway/e2e/disabled.e2e.mjs",
+      /container-smoke realtime mint boundary and Redis push drill/,
+    ],
+    // Both origins are load-bearing: drop the loopback one and the internal
+    // mint legs silently downgrade to `skip` while the script still exits 0.
+    [
+      "-e GATEWAY_INTERNAL_HTTP=http://127.0.0.1:3000",
+      "-e GATEWAY_INTERNAL_HTTP=",
+      /container-smoke loopback origin for the internal mint legs/,
+    ],
+    [
+      "-e GATEWAY_HTTP=http://app:8080",
+      "-e GATEWAY_HTTP=http://127.0.0.1:3000",
+      /container-smoke public front door origin for the refused-mint leg/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.ok(content.includes(current));
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
 });
 
 test("the required stack cannot skip the cross-device realtime push round trip", () => {

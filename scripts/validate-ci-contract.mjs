@@ -914,6 +914,18 @@ export function validateCiContract(files) {
       "encrypted two-editor convergence drill",
     ],
     [
+      "packages/websocket-gateway/e2e/realtime.e2e.mjs",
+      "realtime mint boundary and Redis push drill",
+    ],
+    [
+      "-e GATEWAY_INTERNAL_HTTP=http://127.0.0.1:3000",
+      "loopback origin for the internal mint legs",
+    ],
+    [
+      "-e GATEWAY_HTTP=http://app:8080",
+      "public front door origin for the refused-mint leg",
+    ],
+    [
       "e2e/push-roundtrip.e2e.mjs",
       "cross-device realtime push round trip",
     ],

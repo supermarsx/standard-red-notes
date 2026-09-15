@@ -341,6 +341,21 @@ jobs:
             -e GATEWAY_WS=ws://127.0.0.1:3000/sockets \
             -e GATEWAY_HEALTH_PATH=/healthcheck/readiness \
             server yarn node packages/websocket-gateway/e2e/collab-yjs.e2e.mjs
+      # The realtime script needs BOTH origins in one process: the public front
+      # door, to prove the x-internal-secret mint is REFUSED there (R46), and a
+      # loopback peer, the only place that mint is accepted. Only something
+      # inside the server container reaches both — the server publishes no
+      # ports, and the front door is the app container's nginx on the compose
+      # network (app:8080), so `docker compose exec` is the one vantage point.
+      - name: Verify realtime mint boundaries and Redis push delivery
+        run: |
+          docker compose exec -T \
+            -e REQUIRE_GATEWAY=1 \
+            -e GATEWAY_HTTP=http://app:8080 \
+            -e GATEWAY_WS=ws://app:8080/sockets \
+            -e GATEWAY_INTERNAL_HTTP=http://127.0.0.1:3000 \
+            -e REDIS_HOST=cache \
+            server yarn node packages/websocket-gateway/e2e/realtime.e2e.mjs
       # The whole cross-device push chain (save -> syncing-server -> SNS/SQS ->
       # gateway worker -> the other device's socket) from the PUBLIC front door,
       # which is the only origin a browser uses. A broken queue, a filtered
