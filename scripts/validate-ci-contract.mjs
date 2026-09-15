@@ -758,6 +758,29 @@ export function validateCiContract(files) {
     }
   }
 
+  // `yarn check` typechecks api-gateway and home-server against the
+  // websocket-gateway's EMITTED declarations (`dist/gateway.d.ts`), which are
+  // gitignored. If the workspace build stops running first, or stops running
+  // before the checks, those packages typecheck against whatever declarations
+  // happen to be on disk — stale ones locally, none at all on a clean runner —
+  // and `tsc` still exits 0. Pin the order so a green check means the
+  // declarations it checked against were built from this commit.
+  const checkBlock = jobBlock(workflow, "check");
+  const appBuildIndex = checkBlock.indexOf("run: yarn build:all");
+  const serverBuildIndex = checkBlock.indexOf("Build server workspaces");
+  const coordinatedChecksIndex = checkBlock.indexOf("run: yarn check");
+  if (
+    appBuildIndex < 0 ||
+    serverBuildIndex < 0 ||
+    coordinatedChecksIndex < 0 ||
+    serverBuildIndex > coordinatedChecksIndex ||
+    appBuildIndex > coordinatedChecksIndex
+  ) {
+    errors.push(
+      `${file}: check must build the app and server workspaces before running coordinated checks, so dependent packages never typecheck against stale or missing emitted declarations`,
+    );
+  }
+
   requireJob(errors, workflow, "desktop-electron", [
     [approvedWorkflowAction("cache"), "dependency cache"],
     ["sudo apt-get install --yes xvfb", "Xvfb installation"],

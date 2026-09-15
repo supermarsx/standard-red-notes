@@ -839,6 +839,44 @@ test("the gRPC phase must follow hardening and precede publication", () => {
   );
 });
 
+test("coordinated checks cannot run before the workspaces are built", () => {
+  // api-gateway and home-server typecheck against the websocket-gateway's
+  // EMITTED `dist/gateway.d.ts`, which is gitignored. Drop or reorder the build
+  // and `tsc` still exits 0 against stale or absent declarations, so the order
+  // is the only thing making a green check mean anything.
+  const serverBuild = `      - name: Build server workspaces
+        working-directory: server
+        run: yarn build
+`;
+  const expected =
+    /check must build the app and server workspaces before running coordinated checks/;
+
+  const dropped = withFileChanged(".github/workflows/ci.yml", (content) => {
+    assert.ok(content.includes(serverBuild));
+    return content.replace(serverBuild, "");
+  });
+  assert.match(validateCiContract(dropped).join("\n"), expected);
+
+  const reordered = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content
+      .replace(serverBuild, "")
+      .replace(
+        `      - name: Run coordinated checks
+        run: yarn check
+`,
+        `      - name: Run coordinated checks
+        run: yarn check
+${serverBuild}`,
+      ),
+  );
+  assert.match(validateCiContract(reordered).join("\n"), expected);
+
+  const appDropped = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace("run: yarn build:all", "run: echo app-build-disabled"),
+  );
+  assert.match(validateCiContract(appDropped).join("\n"), expected);
+});
+
 test("the websocket gateway cannot fall back out of the server lint gate", () => {
   // `yarn workspaces foreach -ptA run lint` SKIPS a workspace with no `lint`
   // script instead of failing, which is how this package's realtime sources sat
