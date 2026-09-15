@@ -71,6 +71,12 @@ disposable stack. Between them they cover the two realtime lanes end to end: the
 legacy socket that carries pushes, collaboration and invites, and the worker sync
 lane that carries durable commands.
 
+None of it can be quietly removed. The workflow contract in
+`scripts/validate-ci-contract.mjs` pins each of the four scripts by name, the two
+origins the mint-boundary drill needs, and the switch that starts the gRPC phase,
+so deleting a step fails the `contracts` lane rather than shrinking the evidence
+the container lane produces.
+
 ### Cross-device push round trip
 
 `push-roundtrip.e2e.mjs` is the only test that walks the whole delivery chain:
