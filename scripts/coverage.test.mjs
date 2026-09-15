@@ -542,7 +542,7 @@ test("requires an explicit reason for an inventory workspace with no eligible so
 test("rejects unexpected or stale source-only inventory entries", async (t) => {
   const reviewed = EXPECTED_COVERAGE_WORKSPACES.server.find(
     ({ location: workspaceLocation }) =>
-      workspaceLocation === "packages/domain-events",
+      workspaceLocation === "packages/predicates",
   );
   assert.ok(reviewed?.sourceOnlyReason);
 
@@ -821,7 +821,7 @@ test("allows a reviewed source-only workspace to synthesize a missing report as 
   const server = path.join(repository, "server");
   const reviewed = EXPECTED_COVERAGE_WORKSPACES.server.find(
     ({ location: workspaceLocation }) =>
-      workspaceLocation === "packages/domain-events",
+      workspaceLocation === "packages/predicates",
   );
   assert.ok(reviewed?.sourceOnlyReason);
   const directory = path.join(server, reviewed.location);

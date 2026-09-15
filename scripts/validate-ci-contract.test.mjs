@@ -892,16 +892,14 @@ test("coordinated checks cannot run before the workspaces are built", () => {
   assert.match(validateCiContract(dropped).join("\n"), expected);
 
   const reordered = withFileChanged(".github/workflows/ci.yml", (content) =>
-    content
-      .replace(serverBuild, "")
-      .replace(
-        `      - name: Run coordinated checks
+    content.replace(serverBuild, "").replace(
+      `      - name: Run coordinated checks
         run: yarn check
 `,
-        `      - name: Run coordinated checks
+      `      - name: Run coordinated checks
         run: yarn check
 ${serverBuild}`,
-      ),
+    ),
   );
   assert.match(validateCiContract(reordered).join("\n"), expected);
 
@@ -1572,4 +1570,81 @@ test("server developer runtime stays aligned with app, engine, Docker, and CI", 
     validateCiContract(staleCi).join("\n"),
     /NODE_VERSION 20 must match server\/\.nvmrc major 26/,
   );
+});
+
+test("no workspace can sit outside the eslint aggregate unnoticed", () => {
+  // `yarn workspaces foreach ... run lint` SKIPS a workspace that defines no
+  // `lint` script rather than failing, which is how the whole realtime gateway
+  // package sat outside eslint while the gate read green. A missing script now
+  // has to be declared, with a reason, or it is an error.
+  const dropped = withFileChanged(
+    "server/packages/syncing-server/package.json",
+    (content) => {
+      const manifest = JSON.parse(content);
+      assert.ok(manifest.scripts.lint);
+      delete manifest.scripts.lint;
+      return JSON.stringify(manifest);
+    },
+  );
+  assert.match(
+    validateCiContract(dropped).join("\n"),
+    /server\/packages\/syncing-server\/package\.json: no lint script and no WORKSPACE_LINT_EXEMPTIONS entry/,
+  );
+
+  // A workspace added tomorrow is caught the same way: the rule reconciles
+  // against the manifests on disk, not against a list someone has to update.
+  const added = new Map(baseline);
+  added.set(
+    "app/packages/brand-new/package.json",
+    JSON.stringify({
+      name: "@standardnotes/brand-new",
+      scripts: { build: "tsc" },
+    }),
+  );
+  assert.match(
+    validateCiContract(added).join("\n"),
+    /app\/packages\/brand-new\/package\.json: no lint script and no WORKSPACE_LINT_EXEMPTIONS entry/,
+  );
+
+  // An exemption list nobody prunes is a second hiding place, so a workspace
+  // that has since gained a lint script must lose its entry.
+  const stale = withFileChanged(
+    "app/packages/icons/package.json",
+    (content) => {
+      const manifest = JSON.parse(content);
+      manifest.scripts.lint = "eslint src";
+      return JSON.stringify(manifest);
+    },
+  );
+  assert.match(
+    validateCiContract(stale).join("\n"),
+    /app\/packages\/icons\/package\.json: defines a lint script, so its WORKSPACE_LINT_EXEMPTIONS entry is stale/,
+  );
+});
+
+test("the eslint aggregates themselves cannot be narrowed", () => {
+  for (const [file, replacement, expected] of [
+    [
+      "package.json",
+      "yarn lint:app && yarn lint:server",
+      /^package\.json: lint script must be/m,
+    ],
+    [
+      "app/package.json",
+      "yarn workspace @standardnotes/web lint",
+      /^app\/package\.json: lint script must be/m,
+    ],
+    [
+      "server/package.json",
+      "yarn workspace @standardnotes/api-gateway lint",
+      /^server\/package\.json: lint script must be/m,
+    ],
+  ]) {
+    const narrowed = withFileChanged(file, (content) => {
+      const manifest = JSON.parse(content);
+      manifest.scripts.lint = replacement;
+      return JSON.stringify(manifest);
+    });
+    assert.match(validateCiContract(narrowed).join("\n"), expected);
+  }
 });

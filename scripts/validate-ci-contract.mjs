@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ export const CI_CONTRACT_FILES = Object.freeze([
   ".github/workflows/docs-pages.yml",
   ".github/workflows/srn-mcp.yml",
   "app/.nvmrc",
+  "app/package.json",
   "package.json",
   "server/.nvmrc",
   "server/Dockerfile",
@@ -23,6 +24,81 @@ export const CI_CONTRACT_FILES = Object.freeze([
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
 ]);
+
+// Both aggregates are `yarn workspaces foreach ... run lint`, which SKIPS a
+// workspace that defines no `lint` script instead of failing on it. That is
+// how `@standard-red-notes/websocket-gateway` — every realtime source file in
+// it — sat entirely outside eslint while the gate read green for a whole
+// review cycle. Pinning one package's script fixed that package; this rule
+// closes the shape, so the next workspace cannot repeat it.
+//
+// A workspace either defines `lint`, or it is listed here with the reason it
+// does not. A workspace that exists on disk and is in neither set is an error,
+// and so is a stale exemption (removed workspace, or one that has since gained
+// a `lint` script) — an exemption list nobody prunes becomes a second hiding
+// place.
+export const WORKSPACE_LINT_EXEMPTIONS = Object.freeze({
+  "app/packages/icons":
+    "Generated SVG-to-React output plus a webpack/svgo config; `build` runs tsc over it.",
+  "app/packages/releases":
+    "Three build scripts that emit release JSON; `build` runs tsc over them.",
+  "server/packages/grpc":
+    "Generated protobuf stubs under lib/ plus .proto sources; `build` runs tsc over them.",
+  mcp: "Root `lint:mcp` runs this workspace's `typecheck` instead of eslint.",
+  openclaw:
+    "Root `lint:openclaw` runs this workspace's `typecheck` instead of eslint.",
+});
+
+const WORKSPACE_MANIFEST_PATTERN =
+  /^(?:(?:app|server)\/packages\/[^/]+|mcp|openclaw)\/package\.json$/;
+
+/**
+ * Every workspace manifest on disk, so the lint rule below reconciles against
+ * what the repository actually contains rather than a list that has to be
+ * remembered. Reading happens here; `validateCiContract` stays a pure function
+ * of the file map, which is what the test harness mutates.
+ */
+export function discoverWorkspaceManifests(
+  repositoryRoot = defaultRepositoryRoot,
+) {
+  const manifests = [];
+  for (const workspaceRoot of ["app", "server"]) {
+    const packagesDirectory = path.join(
+      repositoryRoot,
+      workspaceRoot,
+      "packages",
+    );
+    if (!existsSync(packagesDirectory)) {
+      continue;
+    }
+    for (const entry of readdirSync(packagesDirectory, {
+      withFileTypes: true,
+    })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifest = `${workspaceRoot}/packages/${entry.name}/package.json`;
+      if (existsSync(path.join(repositoryRoot, manifest))) {
+        manifests.push(manifest);
+      }
+    }
+  }
+
+  const rootManifest = JSON.parse(
+    readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
+  );
+  for (const pattern of rootManifest.workspaces ?? []) {
+    if (typeof pattern !== "string" || pattern.includes("*")) {
+      continue;
+    }
+    const manifest = `${pattern}/package.json`;
+    if (existsSync(path.join(repositoryRoot, manifest))) {
+      manifests.push(manifest);
+    }
+  }
+
+  return manifests.sort();
+}
 
 export const CI_PAGES_ACTIONS = Object.freeze({
   attestBuildProvenance: Object.freeze({
@@ -154,12 +230,95 @@ export function validateImmutableWorkflowActions(file, workflow) {
 }
 
 export function loadCiContractFiles(repositoryRoot = defaultRepositoryRoot) {
+  const files = new Set([
+    ...CI_CONTRACT_FILES,
+    ...discoverWorkspaceManifests(repositoryRoot),
+  ]);
   return new Map(
-    CI_CONTRACT_FILES.map((file) => [
+    [...files].map((file) => [
       file,
       readFileSync(path.join(repositoryRoot, file), "utf8"),
     ]),
   );
+}
+
+/**
+ * Every workspace is either inside the eslint aggregate or listed as exempt
+ * with its reason. `yarn workspaces foreach run lint` skips silently, so a
+ * missing script is invisible at the aggregate level — this is where it stops.
+ */
+export function validateWorkspaceLintCoverage(files) {
+  const errors = [];
+  const aggregates = [
+    [
+      "package.json",
+      "lint",
+      "yarn lint:mcp && yarn lint:openclaw && yarn lint:app && yarn lint:server",
+    ],
+    [
+      "app/package.json",
+      "lint",
+      "yarn workspaces foreach -A -t --verbose run lint",
+    ],
+    ["server/package.json", "lint", "yarn workspaces foreach -ptA run lint"],
+  ];
+  for (const [file, script, expected] of aggregates) {
+    let manifest;
+    try {
+      manifest = JSON.parse(files.get(file) ?? "{}");
+    } catch {
+      errors.push(`${file}: is not valid JSON`);
+      continue;
+    }
+    if (manifest.scripts?.[script] !== expected) {
+      errors.push(
+        `${file}: ${script} script must be "${expected}" so no workspace can drop out of the eslint gate`,
+      );
+    }
+  }
+
+  const seen = new Set();
+  for (const file of [...files.keys()].sort()) {
+    if (!WORKSPACE_MANIFEST_PATTERN.test(file)) {
+      continue;
+    }
+    const workspace = file.slice(0, -"/package.json".length);
+    seen.add(workspace);
+    let manifest;
+    try {
+      manifest = JSON.parse(files.get(file) ?? "{}");
+    } catch {
+      errors.push(`${file}: is not valid JSON`);
+      continue;
+    }
+    const hasLint = typeof manifest.scripts?.lint === "string";
+    const exemption = Object.hasOwn(WORKSPACE_LINT_EXEMPTIONS, workspace);
+    if (!hasLint && !exemption) {
+      errors.push(
+        `${file}: no lint script and no WORKSPACE_LINT_EXEMPTIONS entry; "yarn workspaces foreach run lint" would skip this workspace silently`,
+      );
+    }
+    if (hasLint && exemption) {
+      errors.push(
+        `${file}: defines a lint script, so its WORKSPACE_LINT_EXEMPTIONS entry is stale and must be removed`,
+      );
+    }
+  }
+
+  for (const workspace of Object.keys(WORKSPACE_LINT_EXEMPTIONS)) {
+    if (!seen.has(workspace)) {
+      errors.push(
+        `scripts/validate-ci-contract.mjs: WORKSPACE_LINT_EXEMPTIONS lists ${workspace}, which is not a workspace in this repository`,
+      );
+    }
+    if (!WORKSPACE_LINT_EXEMPTIONS[workspace]) {
+      errors.push(
+        `scripts/validate-ci-contract.mjs: WORKSPACE_LINT_EXEMPTIONS[${workspace}] must state why the workspace is outside eslint`,
+      );
+    }
+  }
+
+  return errors;
 }
 
 function requireFragment(errors, file, text, fragment, description) {
@@ -925,10 +1084,7 @@ export function validateCiContract(files) {
       "-e GATEWAY_HTTP=http://app:8080",
       "public front door origin for the refused-mint leg",
     ],
-    [
-      "e2e/push-roundtrip.e2e.mjs",
-      "cross-device realtime push round trip",
-    ],
+    ["e2e/push-roundtrip.e2e.mjs", "cross-device realtime push round trip"],
     [
       "e2e/sync-items-oversized.e2e.mjs",
       "oversized committed SYNC_ITEMS result drill",
@@ -1595,6 +1751,9 @@ export function validateCiContract(files) {
       );
     }
   }
+
+  errors.push(...validateWorkspaceLintCoverage(files));
+
   const appNodeVersion = exactNodeVersion(files.get("app/.nvmrc"));
   const serverNodeVersion = exactNodeVersion(files.get("server/.nvmrc"));
   const serverNodeEngine = minimumNodeEngine(serverPackage.engines?.node);

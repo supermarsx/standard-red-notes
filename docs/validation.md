@@ -107,6 +107,77 @@ and Playwright e2e scripts; MCP's `run-e2e.mjs`; and the coverage tool's own
 `node:test` suite. Native code, Docker health/integration behavior, backup and
 restore drills, and uninstrumented runtime paths are also outside this metric.
 
+**Enforced coverage floors.** The badge above is descriptive: `scripts/coverage.mjs` runs every workspace with
+`--coverageThreshold={}`, so it measures and never fails on a number. Enforcement
+lives in each package's own Jest or Vitest config, and a floor only fires when
+coverage is actually collected. Every floor below was set from a measured value,
+minus one percentage point on the server and two on the app, and the measurement
+is recorded in `.orchestration/logs/t92/t92-w3-e2.md`.
+
+| Package | Scope of the floor | How coverage is collected |
+| --- | --- | --- |
+| `@standardnotes/api-gateway` | package-wide `global` | `--coverage` in its `test` script |
+| `@standardnotes/home-server` | per path, `src/Server/HomeServer.ts` | already in its `test` script |
+| `@standard-red-notes/websocket-gateway` | per file, `gateway.ts`, `syncCommandHandler.ts`, `inviteEventOutbox.ts` | Vitest `coverage.thresholds` |
+| `@standardnotes/services` | per directory, `src/Domain/Api/`, `src/Domain/Invite/` | `collectCoverage` in `jest.config.js` |
+| `@standardnotes/web` | per directory, `Services/SyncTransport/`, `Components/SuperEditor/Collaboration/` | `collectCoverage` in `jest.config.js` |
+
+Jest and Vitest differ on one point that changes what a `global` floor means.
+Jest subtracts path-keyed files from the global group, so the `global` entry in
+the services and home-server configs judges only what is left over. Vitest keeps
+glob-matched files in the global denominator as well, so the gateway's global 90
+still judges the three per-file modules too.
+
+The app workspaces decide `collectCoverage` in their config rather than in the
+`test` script, because CI runs `yarn workspace <name> run test` and those scripts
+are shared. Coverage is collected for a whole-suite run and skipped for a
+filtered one, so running a single spec never fails on a floor it could not
+possibly meet. `SRN_COVERAGE=1` forces collection on and `SRN_COVERAGE=0` forces
+it off. Note that the web Collaboration directory is a *whole-suite* floor:
+specs outside that directory contribute about four percentage points to it, so a
+run limited to the directory measures lower and will trip the floor unless you
+turn coverage off.
+
+Two known limits, stated rather than implied. The api-gateway config has no
+`collectCoverageFrom`, so its denominator is only the files its tests load and a
+brand-new untested file does not move the number. Web's denominator is only the
+two realtime directories, by design, so the rest of that workspace has no floor.
+
+**Every workspace is inside the eslint gate.** `yarn workspaces foreach ... run lint` skips a workspace that defines no `lint`
+script instead of failing on it, which is how an entire package can sit outside
+eslint while the gate reads green. `scripts/validate-ci-contract.mjs` reconciles
+every workspace manifest on disk against `WORKSPACE_LINT_EXEMPTIONS`: a
+workspace either defines `lint`, or it is listed there with the reason it does
+not. A workspace in neither set is an error, and so is a stale exemption. The
+three aggregates (`lint` in the root, `app` and `server` manifests) are pinned so
+none of them can be narrowed.
+
+Five workspaces are currently exempt. `app/packages/icons`,
+`app/packages/releases` and `server/packages/grpc` are generated or
+build-script-only and are covered by `tsc` through their `build`; `mcp` and
+`openclaw` are linted through `typecheck`, which is what the root `lint:mcp` and
+`lint:openclaw` scripts run.
+
+**Checks that no CI job runs yet.** Two gaps are recorded here rather than left to look covered.
+
+`server/packages/websocket-gateway/test/collaborationTombstone.redis.test.ts`
+pins the collaboration tombstone by behaviour against a real Redis: a denied
+room reservation must not extend the 24-hour lock-out. The unit-test job has no
+Redis, so the suite is opt-in and skips by default. To run it:
+
+```powershell
+docker run --rm -d --name srn-collab-redis -p 6396:6379 redis:8-alpine
+$env:SRN_COLLAB_REDIS_HOST = "127.0.0.1"; $env:SRN_COLLAB_REDIS_PORT = "6396"
+yarn workspace @standard-red-notes/websocket-gateway vitest run test/collaborationTombstone.redis.test.ts
+docker rm -f srn-collab-redis
+```
+
+Api-gateway specs are not typechecked. The shared server `tsconfig.json`
+excludes `**/*.spec.ts` and Jest transpiles through swc without checking types,
+so a spec-inclusive compile reports 35 errors in 14 spec files that no gate sees.
+A `tsconfig.test.json` like the websocket-gateway's is the right fix, and it
+cannot be switched on until those 35 are resolved or explicitly listed.
+
 Install the three independent Yarn projects, test the coverage infrastructure,
 and reproduce the CI report with:
 

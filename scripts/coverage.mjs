@@ -61,8 +61,11 @@ const TEST_DISCOVERY_EXCLUDED_DIRECTORIES = new Set([
 const REVIEWED_SOURCE_ONLY_WORKSPACES = Object.freeze({
   app: Object.freeze({}),
   server: Object.freeze({
-    "packages/domain-events":
-      "Domain event contracts with no package-local Jest test/spec files.",
+    // `packages/domain-events` was here until it gained a package-local spec
+    // (`InviteRealtimeInvalidationRequestedEventPayload.spec.ts`). A
+    // source-only entry claims a workspace has no tests to run, so leaving it
+    // listed would have told the collector to synthesize the whole package as
+    // zero-covered and ignore the suite that now exists.
     "packages/predicates":
       "Predicate contracts with no package-local Jest test/spec files.",
   }),
@@ -101,8 +104,6 @@ export const EXPECTED_COVERAGE_WORKSPACES = Object.freeze({
     {
       location: "packages/domain-events",
       name: "@standardnotes/domain-events",
-      sourceOnlyReason:
-        REVIEWED_SOURCE_ONLY_WORKSPACES.server["packages/domain-events"],
     },
     {
       location: "packages/domain-events-infra",

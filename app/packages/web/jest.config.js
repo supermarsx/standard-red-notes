@@ -3,7 +3,72 @@ const tsConfig = require('./tsconfig.json')
 
 const pathsFromTsconfig = tsConfig.compilerOptions.paths
 
+// Coverage is collected for a WHOLE-suite run and skipped for a filtered one.
+//
+// Why it is decided here instead of on the command line: a `coverageThreshold`
+// is only ever evaluated when coverage is actually collected, and this
+// workspace's `test` script (`jest --config jest.config.js`, no `--coverage`)
+// is what CI runs. Registering the realtime floors below without collecting
+// coverage would produce a gate that reads green because nothing runs it.
+//
+// The denominator is deliberately just the two realtime directories, so the
+// >4.7k-test suite pays instrumentation for ~40 files rather than the whole
+// app. A filtered run legitimately exercises a subset, so it must not be
+// judged against the floors. `SRN_COVERAGE=1` forces collection on (used to
+// measure the floors and to prove they bite), `SRN_COVERAGE=0` forces it off.
+function hasTestFilter(argv) {
+  const filterFlags =
+    /^(-t|--testNamePattern|--testPathPatterns?|--onlyChanged|--changedSince|--findRelatedTests|--runTestsByPath|--shard)(=|$)/
+  return argv.some((argument, index) => {
+    if (filterFlags.test(argument)) {
+      return true
+    }
+    if (argument.startsWith('-')) {
+      return false
+    }
+    // A bare word straight after a `--flag` with no `=` is that flag's VALUE,
+    // not a test pattern — `--config jest.config.js` is exactly that shape.
+    // Reading it as a pattern would switch the gate off for the real suite.
+    const previous = argv[index - 1]
+    if (previous !== undefined && previous.startsWith('-') && !previous.includes('=')) {
+      return false
+    }
+    return true
+  })
+}
+
+const forcedCoverage = process.env.SRN_COVERAGE
+const collectCoverage =
+  forcedCoverage === '1' ? true : forcedCoverage === '0' ? false : !hasTestFilter(process.argv.slice(2))
+
 module.exports = {
+  collectCoverage,
+  collectCoverageFrom: [
+    'src/javascripts/Services/SyncTransport/**/*.{ts,tsx}',
+    'src/javascripts/Components/SuperEditor/Collaboration/**/*.{ts,tsx}',
+  ],
+  coverageReporters: ['text', 'text-summary'],
+  // Directory floors, MEASURED on the full suite (486 suites / 5 349 tests) and
+  // recorded in `.orchestration/logs/t92/t92-w3-e2.md`, each minus 2 pp.
+  // There is deliberately NO `global` entry: the denominator above is only
+  // these two directories, so a global floor would say the same thing twice
+  // and would move whenever the split between them moved.
+  coverageThreshold: {
+    // measured 72.28 / 70.53 / 82.48 / 72.46
+    './src/javascripts/Services/SyncTransport/': {
+      statements: 70.28,
+      branches: 68.53,
+      functions: 80.48,
+      lines: 70.46,
+    },
+    // measured 82.79 / 77.43 / 88.85 / 82.86
+    './src/javascripts/Components/SuperEditor/Collaboration/': {
+      statements: 80.79,
+      branches: 75.43,
+      functions: 86.85,
+      lines: 80.86,
+    },
+  },
   restoreMocks: true,
   clearMocks: true,
   resetMocks: true,
