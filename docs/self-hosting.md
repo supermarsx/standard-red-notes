@@ -449,9 +449,10 @@ it; any other non-empty value is a startup error. An empty
 `PUBLIC_URL`, and any browser origin that matches the upgrade's own `Host` is
 accepted as a same-origin fallback. Explicit entries are comma-separated exact
 origins; wildcard, `null`, `file:`, credential-bearing, path, query, and
-fragment values are rejected. Redis backs one-use tickets, command leases, and
-the fleet-wide per-user socket budget, so every production replica observes the
-same state.
+fragment values are rejected. On a multi-container deployment Redis backs
+one-use tickets, command leases and the fleet-wide per-user socket budget, so
+every replica observes the same state; a single process keeps the same three in
+memory.
 
 #### What actually gates the lane
 
