@@ -57,6 +57,14 @@ export interface SyncOutboxStore {
    * before a one-use ticket is minted to ask the same question.
    */
   heldByAnotherOwner(transportScope: string, sessionScope: string, ownerId: string, now: number): Promise<boolean>
+  /**
+   * The same question for a tab that does not yet know its own transport scope:
+   * does ANY live lease for this session belong to another owner? A tab learns
+   * its scope only from a ticket (the endpoint comes back with it), so a point
+   * lookup cannot answer before the first dial — and paying a ticket to learn
+   * what this store already knows is the cost this exists to remove.
+   */
+  sessionHeldByAnotherOwner(sessionScope: string, ownerId: string, now: number): Promise<boolean>
   acquireOwner(
     transportScope: string,
     sessionScope: string,
@@ -167,6 +175,18 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
       current.sessionScope === sessionScope &&
       current.ownerId !== ownerId &&
       current.expiresAt > now
+    )
+  }
+
+  async sessionHeldByAnotherOwner(sessionScope: string, ownerId: string, now: number): Promise<boolean> {
+    const database = await this.database()
+    const transaction = database.transaction(LEASE_STORE, 'readonly')
+    const leases = (await requestResult(transaction.objectStore(LEASE_STORE).getAll())) as OwnerLease[]
+    await transactionDone(transaction)
+    // One row per transport scope, and a scope is a session plus an endpoint
+    // plus a device, so this store holds a handful of rows at most.
+    return leases.some(
+      (lease) => lease.sessionScope === sessionScope && lease.ownerId !== ownerId && lease.expiresAt > now,
     )
   }
 

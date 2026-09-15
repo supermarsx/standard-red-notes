@@ -57,6 +57,15 @@ class FakeOutbox implements SyncOutboxStore {
     )
   }
 
+  async sessionHeldByAnotherOwner(sessionScope: string, ownerId: string, now: number): Promise<boolean> {
+    if (this.unopenable) {
+      throw new SyncOutboxUnavailableError('Sync outbox upgrade was blocked')
+    }
+    return [...this.owners.values()].some(
+      (lease) => lease.sessionScope === sessionScope && lease.ownerId !== ownerId && lease.expiresAt > now,
+    )
+  }
+
   async quarantineSessionScope(sessionScope: string): Promise<void> {
     for (const [commandId, record] of this.records) {
       if (record.sessionScope === sessionScope) {
@@ -2686,13 +2695,8 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(fallbacks(harness, 'c2')).toHaveLength(0)
     })
 
-    it('P4: a tab that has learned it cannot own the socket stops asking for tickets', async () => {
+    it('P4: a tab that loses the ownership race at the socket does not re-buy the answer', async () => {
       const harness = setup()
-      harness.outbox.owners.set(TRANSPORT_SCOPE, {
-        sessionScope: SESSION_A,
-        ownerId: 'other-tab',
-        expiresAt: Date.now() + 15_000,
-      })
 
       await harness.runtime.handle({
         type: 'EXECUTE',
@@ -2700,7 +2704,17 @@ describe('SyncTransportWorkerRuntime', () => {
         body: body(),
         sessionScope: SESSION_A,
       })
+      // The store was free when this tab looked, so it asked for a ticket.
       expect(ticketRequests(harness, 'c1')).toHaveLength(1)
+
+      // Another tab claims the lease while this one waits for that ticket. The
+      // race is settled at `acquireOwner`, and it is the only way a ticket can
+      // still be spent on a socket this tab cannot have.
+      harness.outbox.owners.set(TRANSPORT_SCOPE, {
+        sessionScope: SESSION_A,
+        ownerId: 'other-tab',
+        expiresAt: Date.now() + 15_000,
+      })
       await dial(harness, 'c1')
       expect(harness.sockets).toHaveLength(0)
       expect(fallbacks(harness, 'c1').map((message) => message.reason)).toEqual(['multi-tab-not-owner'])
@@ -2723,6 +2737,56 @@ describe('SyncTransportWorkerRuntime', () => {
         sessionScope: SESSION_A,
       })
       expect(ticketRequests(harness, 'c3')).toHaveLength(1)
+    })
+
+    it('P4: a tab that has never dialled reads the lease store rather than buying a ticket to ask', async () => {
+      const harness = setup()
+      // Keyed under a scope this tab cannot compute: the endpoint arrives with
+      // the ticket it is trying not to request.
+      harness.outbox.owners.set(TRANSPORT_SCOPE, {
+        sessionScope: SESSION_A,
+        ownerId: 'other-tab',
+        expiresAt: Date.now() + 15_000,
+      })
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+
+      expect(ticketRequests(harness, 'c1')).toHaveLength(0)
+      expect(harness.sockets).toHaveLength(0)
+      expect(fallbacks(harness, 'c1').map((message) => message.reason)).toEqual(['multi-tab-not-owner'])
+    })
+
+    it('P4: spends no further ticket across lease windows while the owner keeps renewing', async () => {
+      const harness = setup()
+      const renewLease = () =>
+        harness.outbox.owners.set(TRANSPORT_SCOPE, {
+          sessionScope: SESSION_A,
+          ownerId: 'other-tab',
+          expiresAt: Date.now() + 15_000,
+        })
+      renewLease()
+
+      // Four syncs spread over three lease windows, the owner renewing between
+      // them exactly as its 5 s interval would.
+      for (let sync = 0; sync < 4; sync++) {
+        await harness.runtime.handle({
+          type: 'EXECUTE',
+          clientRequestId: `c${sync}`,
+          body: body(String(sync)),
+          sessionScope: SESSION_A,
+        })
+        expect(fallbacks(harness, `c${sync}`).map((message) => message.reason)).toEqual(['multi-tab-not-owner'])
+        jest.advanceTimersByTime(16_000)
+        renewLease()
+      }
+
+      expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(0)
+      expect(harness.sockets).toHaveLength(0)
     })
 
     it('P5: losing the owner lease while idle closes the socket instead of waiting for the next command', async () => {

@@ -633,11 +633,14 @@ export class SyncTransportWorkerRuntime {
    */
   private async socketOwnedByAnotherTab(sessionScope: string): Promise<boolean> {
     const transportScope = this.transportScope ?? this.lastTransportScope
-    if (!transportScope) {
-      return false
-    }
     try {
-      return await this.outbox.heldByAnotherOwner(transportScope, sessionScope, this.ownerId, this.now())
+      // Exact while this tab knows the scope it dials; otherwise — a tab that
+      // has not connected once, which is every tab on its first sync — the
+      // session-wide read, because the scope string only arrives with a ticket
+      // and asking for one is the cost being avoided.
+      return transportScope
+        ? await this.outbox.heldByAnotherOwner(transportScope, sessionScope, this.ownerId, this.now())
+        : await this.outbox.sessionHeldByAnotherOwner(sessionScope, this.ownerId, this.now())
     } catch {
       return false
     }

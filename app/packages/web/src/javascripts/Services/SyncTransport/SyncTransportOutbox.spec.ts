@@ -20,6 +20,15 @@ class FakeStore {
     })
     return request
   }
+
+  getAll(): FakeIdbRequest<Lease[]> {
+    const request = new FakeIdbRequest<Lease[]>()
+    queueMicrotask(() => {
+      request.result = [...this.rows.values()]
+      request.onsuccess?.()
+    })
+    return request
+  }
 }
 
 class FakeTransaction {
@@ -161,6 +170,23 @@ describe('IndexedDbSyncOutbox', () => {
     await expect(outbox.heldByAnotherOwner(SCOPE, SESSION, 'other-tab', 500)).resolves.toBe(false)
     await expect(outbox.heldByAnotherOwner(SCOPE, SESSION, 'owner-1', 1_000)).resolves.toBe(false)
     await expect(outbox.heldByAnotherOwner(SCOPE, 'sync-session-v1:zzz', 'owner-1', 500)).resolves.toBe(false)
+  })
+
+  it('answers for a session whose transport scope the caller cannot name yet', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    factory.rows.set('some|scope|this-tab-has-never-seen', {
+      transportScope: 'some|scope|this-tab-has-never-seen',
+      sessionScope: SESSION,
+      ownerId: 'other-tab',
+      expiresAt: 1_000,
+    })
+
+    await expect(outbox.sessionHeldByAnotherOwner(SESSION, 'owner-1', 500)).resolves.toBe(true)
+    // Our own lease, an expired one, and another session's all leave the lane open.
+    await expect(outbox.sessionHeldByAnotherOwner(SESSION, 'other-tab', 500)).resolves.toBe(false)
+    await expect(outbox.sessionHeldByAnotherOwner(SESSION, 'owner-1', 1_000)).resolves.toBe(false)
+    await expect(outbox.sessionHeldByAnotherOwner('sync-session-v1:zzz', 'owner-1', 500)).resolves.toBe(false)
   })
 
   it('reports an absent IndexedDB as the store being unavailable', async () => {
