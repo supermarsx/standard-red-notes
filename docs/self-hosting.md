@@ -462,7 +462,7 @@ negotiation returns an empty list and every client uses HTTP:
 | --- | --- | --- |
 | Connection-token secret | `WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING` | `WEB_SOCKET_CONNECTION_TOKEN_SECRET` set to at least 32 bytes |
 | Kill switch off | `WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION` | `WEBSOCKET_SYNC_ENABLED` is not the exact string `false` |
-| Fleet-shared state | `REDIS_UNBOUND` | `REDIS_URL` (or `REDIS_HOST`/`REDIS_PORT`), not `CACHE_TYPE=memory` |
+| Somewhere to keep the state | `REDIS_UNBOUND` | Either plane: a multi-container gateway needs `REDIS_URL` (or `REDIS_HOST`/`REDIS_PORT`) and not `CACHE_TYPE=memory`; the single container and LXC keep it in-process and never report this code |
 
 A **fourth, separate** condition gates only the `SYNC_ITEMS` operation:
 
