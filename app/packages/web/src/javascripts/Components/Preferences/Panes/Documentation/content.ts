@@ -1375,6 +1375,10 @@ export const DOC_CATEGORIES: DocCategory[] = [
             variant: 'warning',
             text: 'The all-in-one container and the LXC install start a realtime gateway only when an external Redis host is configured. Without one there is no live relay at all — no co-editing session, presence, or live comments — and collaborators work through ordinary encrypted sync instead. The full multi-container deployment ships its own cache and has the relay on by default.',
           },
+          {
+            type: 'paragraph',
+            text: 'If live updates stop while ordinary sync keeps working, an administrator can read Settings → Admin → Diagnostics. Its Realtime health section reports whether a gateway is attached to the process that answered, whether a push bridge is carrying change notifications, whether the collaboration relay is established, and how many pushes have been dispatched since that gateway started. It is informational: readiness is deliberately not gated on it, so a healthy server with a degraded realtime section is a real and expected combination.',
+          },
         ],
         related: ['collaboration/vaults', 'self-hosting/architecture'],
       },

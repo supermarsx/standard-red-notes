@@ -29,7 +29,7 @@ green.
 | `check`              | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                               |  45 min |
 | `build`              | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                             |  45 min |
 | `desktop-electron`   | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                           |  45 min |
-| `container-smoke`    | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
+| `container-smoke`    | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, the realtime mint boundaries and Redis push delivery, a cross-device push round trip through the public front door, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, image/container hardening assertions, and a closing gRPC phase that proves `SYNC_ITEMS` and the oversized-result contract. |  70 min |
 | `production-gate`    | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                            |   5 min |
 | `publish-containers` | On an accepted first-party `main` push only, verify and publish the exact app/server archive produced by `container-smoke`, re-pull both images, verify their identities and labels, attest both registry digests, and record digest-pinned deployment references.                                                                     |  45 min |
 
@@ -63,6 +63,101 @@ or no-longer-observed exceptions also fail so the allowlist cannot become a
 permanent suppression list. The app graph contract additionally preserves the
 loopback-only embedded server patch, patched PDF.js, and both supported
 fast-xml-parser major lines.
+
+## Realtime proofs in the container lane
+
+Four scripts under `server/packages/websocket-gateway/e2e` run against the live
+disposable stack. Between them they cover the two realtime lanes end to end: the
+legacy socket that carries pushes, collaboration and invites, and the worker sync
+lane that carries durable commands.
+
+### Cross-device push round trip
+
+`push-roundtrip.e2e.mjs` is the only test that walks the whole delivery chain:
+a save reaches the syncing-server, becomes a `WEB_SOCKET_MESSAGE_REQUESTED`
+event, crosses SNS/SQS, is drained by a gateway worker, and lands on another
+device's socket. A broken queue, a filtered subscription, a dead worker, or a
+swallowed event fails here and nowhere else.
+
+The script runs from the runner against the public front door, which is the only
+origin a browser uses. It registers an account, signs a second session in, opens
+that session's legacy socket, then makes twenty saves one second apart from the
+first session. Every save must be accepted, every push must arrive inside the
+first settle window, and nothing may arrive only in the wider window that
+follows. A straggler is reported as a late arrival and fails the run rather than
+passing quietly.
+
+Push payload mode is read off the **frames**, never off the
+`WEBSOCKET_SYNC_PUSH_ENABLED` flag. Any frame carrying items puts the run in
+payload mode, where accounting is by item UUID and a redelivery collapses;
+otherwise the run is in notification mode, where each push frame is worth exactly
+one unit and nothing can be deduplicated. The same script is therefore correct on
+either side of the default, and payload mode can name the item that never
+arrived while notification mode does not pretend it can.
+
+Run the parser, the accounting rules, and the socket plumbing with no stack and
+no Docker:
+
+```bash
+cd server
+yarn workspace @standard-red-notes/websocket-gateway node \
+  e2e/push-roundtrip.e2e.mjs --self-test
+```
+
+### Oversized sync results under gRPC proxies
+
+The worker sync lane carries `SYNC_ITEMS` only when the api-gateway speaks gRPC
+to the syncing-server, so the oversized-result contract is unprovable under the
+default HTTP proxies. The lane closes with a gRPC phase: it appends
+`SERVICE_PROXY_TYPE=grpc`, recreates the stack without rebuilding, and reruns the
+realtime scripts. This is last because every later step inspects images rather
+than containers, so nothing needs the default proxy configuration restored.
+
+`sync-items-oversized.e2e.mjs` requests a ticket through the front door and reads
+the operations it negotiated. With `REQUIRE_SYNC_ITEMS=1` a ticket that does not
+negotiate `SYNC_ITEMS` fails the lane instead of skipping, so a silently
+misconfigured proxy cannot turn this step green.
+
+It then commits enough notes over the lane that the committed result cannot fit
+one 512 KiB frame, and asserts the full contract:
+
+- the answer is a `STATUS` frame, never an `ERROR`;
+- its status is `COMMITTED` and its code is `RESULT_TOO_LARGE`;
+- it omits the result entirely;
+- it keeps the same request, command, and digest identity;
+- the socket stays open afterwards.
+
+The client then replays the identical command over HTTP with `x-sync-command-id`
+and `x-sync-command-digest`. The journal must return every item committed over
+the socket, and a second identical replay must return the same result without
+double-committing. `ERROR RESULT_TOO_LARGE` stays reserved for oversized ingress
+and must not appear on this path.
+
+The push round trip runs a second time under the gRPC proxies, so the delivery
+chain is proved in both service-proxy configurations.
+
+### Where each realtime script mints its token
+
+`WEBSOCKET_GATEWAY_INTERNAL_SECRET` can mint a socket token for any user, so the
+front doors blank `X-Internal-Secret` on `/sockets` and the gateway refuses an
+internal mint that arrives proxied or from a non-loopback peer. That refusal is
+asserted in CI rather than assumed.
+
+`realtime.e2e.mjs` runs inside the server container because it is the one
+vantage point that reaches both origins at once: the front door on the Compose
+network, and loopback. It requires the internal mint through the front door to
+return no token, then requires the same mint from loopback to succeed. It also
+mints over the cross-service `x-auth-token` path the api-gateway uses for the web
+client and requires a bad token to be rejected. Finally it publishes to the Redis
+push channel and asserts the message reaches a connected client, that a push
+tagged with the listener's own originating session is suppressed, and that a push
+for a different user is not delivered there.
+
+`collab-yjs.e2e.mjs` mints with the internal secret as well, so it likewise runs
+from loopback inside the container. `push-roundtrip.e2e.mjs` and
+`sync-items-oversized.e2e.mjs` need no internal secret at all: they register real
+accounts and mint with the user's own access token, which is why they run from
+the runner through the public front door.
 
 ## Protected publication after the gate
 

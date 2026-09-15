@@ -102,26 +102,46 @@ comments persist through ordinary encrypted item sync, so a gateway outage
 falls back to normal save/sync behavior and reconnecting editors can converge
 again.
 
-Realtime collaboration needs a running realtime gateway, and the single-container
-and LXC deployments start one only when `REDIS_HOST` is configured. Without it
-those deployments have no live relay at all: co-editing, presence and live
-comments are unavailable, and collaborators fall back to ordinary encrypted sync
-with the usual conflict handling. The multi-container stack ships Redis and has
-the relay on by default.
-
 On desktop, mobile and the browser extension the live relay rides the legacy
 socket the app derives from the server it syncs with. Item sync on those
 platforms stays on HTTP by design, which does not affect co-editing.
 
-The full Redis-backed deployment also supports multiple API-gateway replicas.
-Encrypted room frames and room-sync requests cross replicas through Redis, and
-a short-lived atomic Redis lease elects exactly one initial editor bootstrapper.
+### Realtime topology and Redis
+
+The realtime gateway is not a separate service and has no container, port or
+origin of its own. It runs inside the process that already answers the API — the
+API gateway on the multi-container stack, the combined server process on the
+all-in-one container — and the front door proxies it under `/sockets` on the same
+origin as everything else.
+
+That placement is why two collaborators served by the *same* process can be
+relayed directly, and why everything Redis carries is about crossing a boundary
+that one process does not have:
+
+- shared room state, so a room lease, its epoch and its tombstone mean the same
+  thing to every replica;
+- the cross-replica relay for encrypted room frames and room-sync requests;
+- the push bridge that tells a device something changed elsewhere;
+- the worker sync lane's ticket, command-lease and socket-budget stores;
+- the durable invite-event streams.
+
+A short-lived atomic Redis lease elects exactly one initial editor bootstrapper.
 Lease keys are refreshed only while the socket is alive and expire after a
 bounded interval if a process disappears. Redis never receives note plaintext,
-room keys, or room capabilities. Keep Redis internal and healthy when scaling
-the gateway; during a Redis outage each replica remains fail-closed on room
-authorization and durable encrypted item sync still works, but realtime relay
-is guaranteed only between clients on the same replica until Redis recovers.
+room keys, or room capabilities.
+
+Multiple API-gateway replicas therefore **require** Redis. Keep it internal and
+healthy when scaling the gateway. During a Redis outage each replica stays
+fail-closed on room authorization and durable encrypted item sync keeps working,
+but realtime relay is guaranteed only between clients on the same replica until
+Redis recovers — which is the failure that looks like nothing at all on a small
+deployment and like intermittent staleness on a large one.
+
+Single-container and LXC deployments start a realtime gateway only when
+`REDIS_HOST` is configured. Without it those deployments have no live relay at
+all: co-editing, presence and live comments are unavailable, and collaborators
+fall back to ordinary encrypted sync with the usual conflict handling. The
+multi-container stack ships Redis and has the relay on by default.
 
 If collaborators see stale content:
 

@@ -236,6 +236,12 @@ on `/sockets`, and the gateway refuses an internal mint that arrives proxied or
 from a non-loopback peer. Keep the value out of clients, browsers and build
 artefacts regardless.
 
+That refusal is a required check rather than an assumption. The container lane
+runs a script inside the server container, the one vantage point that reaches
+both the public front door and loopback, and fails if a front-door mint carrying
+the real secret returns a token — or if the same mint from loopback does not.
+See [Realtime proofs in the container lane](ci-production-gates.md#realtime-proofs-in-the-container-lane).
+
 On a multi-container upgrade from a keyless release, a normal setup rerun adds
 only this missing key using one atomic, permission-preserving `.env` migration
 and timestamped backup. It refuses malformed or duplicate assignments and does

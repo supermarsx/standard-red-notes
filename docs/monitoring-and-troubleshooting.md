@@ -124,6 +124,68 @@ The reviewed-residual list is intentionally empty. WebSocket bridges record
 `originExcluded` as structured boolean metadata, never the underlying session
 UUID, so those diagnostics need no exception.
 
+## Realtime health in the admin panel
+
+**Settings → Admin → Diagnostics** reads the same health snapshot that
+`/healthcheck/readiness` reports, but splits it into rows an operator can act on.
+Everything in its **Realtime health** section is informational. Readiness is
+deliberately not gated on any of it, because a container that restarts itself on
+a Redis blip turns ten seconds of degradation into an outage. The panel's job is
+to make a degradation visible, not to act on it.
+
+### Boot gate versus attach outcome
+
+The **Boot gate** section shows separate verdicts rather than one combined
+answer: whether the socket transport came up, whether `SYNC_ITEMS` was advertised
+or withheld, whether ticket minting is answering right now, and a **Gateway**
+chip reading *Attached* or *Not attached*. The lane and `SYNC_ITEMS` are split
+because they became two decisions — a durable-backend condition withholds
+`SYNC_ITEMS` without taking the socket down — and one combined verdict would
+either hide a live lane or hide a missing operation.
+
+The gateway chip is not a restatement of the lane verdict. The gate records a
+**decision** to build the lane; the composition root records the **outcome** of
+attaching a gateway. They come from different places and can disagree. An invalid
+`WEBSOCKET_REDIS_NAMESPACE` produces exactly that disagreement: the gate passes,
+the host then declines to attach rather than publish on a sibling stack's
+channels, and tickets mint while nothing is ever delivered. Showing only the
+decision is how this panel once reported a working lane over a gateway that was
+never there.
+
+### The six realtime health rows
+
+When a gateway is attached, the panel renders the gateway's own view of itself as
+six rows:
+
+| Row                  | Reads                            | What a bad value means                                                                                                              |
+| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway              | attached / not attached          | Unattached means nothing reaches a client over a socket, whatever the boot gate decided.                                            |
+| Push bridge          | the bridge and whether it is ready | `none` means no transport carries change notifications, so a save on one device is never pushed to another. Bound but not ready is a reconnect window that recovers on its own. |
+| Queue consumer       | running / not running            | Expected to be idle where pushes arrive through the bridge alone; on a stack that provisions the websocket queue it means those events are not being drained. |
+| Collaboration relay  | healthy / unhealthy              | Unhealthy still leaves collaboration working between clients on the **same** replica, which is why it fails quietly on a multi-replica deployment. |
+| Sync lane            | up / down                        | Down means the gateway would refuse a client on `/sockets/sync` right now; the live refusal reasons above the rows say why.          |
+| Pushes dispatched    | a count since this gateway attached | It resets on every restart. A count that stays at zero on a busy deployment is the signature of a delivery path that never fires.   |
+
+When the server reports no realtime snapshot at all the panel prints no rows and
+says so without guessing between the two causes: either no gateway is attached to
+the process that answered, or the build predates the snapshot. The boot-gate
+section distinguishes them.
+
+### Two findings the rows cannot state on their own
+
+Two combinations are raised as explicit findings because every other panel on the
+screen would look healthy:
+
+- **The lane is enabled but no attached gateway was recorded.** The gate built
+  the lane and the host recorded no successful attach, so tickets mint while
+  nothing is delivered. On a server older than the attach-outcome record the
+  field is simply never set, and the line then means only that it was not
+  reported.
+- **The socket is attached with no push bridge.** The lane accepts clients, but
+  nothing carries server-side change notifications to them, so a save on one
+  device never reaches another until that device syncs on its own. A deployment
+  with no Redis reports this today.
+
 ## Symptom guide
 
 ### Cannot sign in

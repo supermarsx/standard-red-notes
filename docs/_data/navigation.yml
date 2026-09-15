@@ -437,7 +437,11 @@
         - title: Encryption and membership
           url: /sharing-and-collaboration.html#encryption-and-membership
         - title: Realtime collaboration
-          url: /sharing-and-collaboration.html#realtime-collaboration
+          items:
+            - title: Realtime overview
+              url: /sharing-and-collaboration.html#realtime-collaboration
+            - title: Realtime topology and Redis
+              url: /sharing-and-collaboration.html#realtime-topology-and-redis
         - title: Comments and mentions
           url: /sharing-and-collaboration.html#comments-and-mentions
         - title: Public share links
@@ -635,6 +639,16 @@
               url: /monitoring-and-troubleshooting.html#logs
             - title: Safe operational logging
               url: /monitoring-and-troubleshooting.html#safe-operational-logging
+        - title: Realtime health in the admin panel
+          items:
+            - title: Realtime health overview
+              url: /monitoring-and-troubleshooting.html#realtime-health-in-the-admin-panel
+            - title: Boot gate versus attach outcome
+              url: /monitoring-and-troubleshooting.html#boot-gate-versus-attach-outcome
+            - title: The six realtime health rows
+              url: /monitoring-and-troubleshooting.html#the-six-realtime-health-rows
+            - title: Findings the rows cannot state
+              url: /monitoring-and-troubleshooting.html#two-findings-the-rows-cannot-state-on-their-own
         - title: Symptom guide
           items:
             - title: Symptom guide overview
@@ -965,6 +979,16 @@
           url: /ci-production-gates.html
         - title: Required lanes
           url: /ci-production-gates.html#required-lanes
+        - title: Realtime proofs
+          items:
+            - title: Realtime proofs overview
+              url: /ci-production-gates.html#realtime-proofs-in-the-container-lane
+            - title: Cross-device push round trip
+              url: /ci-production-gates.html#cross-device-push-round-trip
+            - title: Oversized sync results
+              url: /ci-production-gates.html#oversized-sync-results-under-grpc-proxies
+            - title: Where each script mints
+              url: /ci-production-gates.html#where-each-realtime-script-mints-its-token
         - title: Protected publication
           url: /ci-production-gates.html#protected-publication-after-the-gate
         - title: Extended profiles
