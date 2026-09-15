@@ -1518,7 +1518,7 @@ describe('authenticated /sockets/sync command plane', () => {
     const INITIAL = 'initial_room_epoch_0001'
     const ROTATED = 'rotated_room_epoch_0002'
     const authorizeCollaboration = vi.fn(async ({ request }: { request: Record<string, unknown> }) =>
-      request.epochDiscovery === true
+      (request.epochDiscovery === true
         ? {
             authorized: true as const,
             epochDiscovery: true as const,
@@ -1538,7 +1538,7 @@ describe('authenticated /sockets/sync command plane', () => {
             roomEpoch: request.expectedRoomEpoch as string,
             collaborationSecurityEpoch: SECURITY_EPOCH,
             leaseRequestId: request.leaseRequestId as string,
-          },
+          }),
     )
     const collaborationRoomEpochResolver = vi.fn(async () => ROTATED)
     port = await listen()

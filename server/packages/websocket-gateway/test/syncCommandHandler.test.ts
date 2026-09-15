@@ -1071,7 +1071,7 @@ describe('SyncCommandHandler', () => {
     const securityEpoch = 'security_epoch_0001'
     const authorizeCollaboration = vi.fn<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>(
       async ({ request }) =>
-        request.epochDiscovery === true
+        (request.epochDiscovery === true
           ? {
               authorized: true,
               epochDiscovery: true,
@@ -1096,7 +1096,7 @@ describe('SyncCommandHandler', () => {
               // unchanged, which is what this test asserts on the granted frame.
               leaseRequestId: optionalString(request.leaseRequestId),
               bootstrapChallenge: optionalString(request.bootstrapChallenge),
-            },
+            }),
     )
     const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
       collaborationAuthorizationReady: () => true,
@@ -1265,7 +1265,7 @@ describe('SyncCommandHandler', () => {
   function twoPhaseCollaborationAdapter(epochs = collaborationEpochs) {
     const authorizeCollaboration = vi.fn(
       async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
-        request.epochDiscovery === true
+        (request.epochDiscovery === true
           ? {
               authorized: true as const,
               epochDiscovery: true as const,
@@ -1288,7 +1288,7 @@ describe('SyncCommandHandler', () => {
               ...(typeof request.bootstrapChallenge === 'string'
                 ? { bootstrapChallenge: request.bootstrapChallenge }
                 : {}),
-            },
+            }),
     )
     const adapter: SyncCollaborationAuthorizationAdapter = {
       collaborationAuthorizationReady: () => true,
@@ -3135,7 +3135,7 @@ describe('SyncCommandHandler', () => {
   function echoingCollaborationAdapter() {
     const authorizeCollaboration = vi.fn(
       async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
-        request.epochDiscovery === true
+        (request.epochDiscovery === true
           ? {
               authorized: true as const,
               epochDiscovery: true as const,
@@ -3158,7 +3158,7 @@ describe('SyncCommandHandler', () => {
               ...(typeof request.bootstrapChallenge === 'string'
                 ? { bootstrapChallenge: request.bootstrapChallenge }
                 : {}),
-            },
+            }),
     )
     const adapter: SyncCollaborationAuthorizationAdapter = {
       collaborationAuthorizationReady: () => true,

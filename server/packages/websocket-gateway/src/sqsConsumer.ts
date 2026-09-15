@@ -354,6 +354,9 @@ export function startSqsConsumer<S extends SendableSocket>(
   }
 
   const loop = async (): Promise<void> => {
+    // `running` is flipped by stop() through the enclosing closure, which this
+    // rule cannot follow.
+    // eslint-disable-next-line no-unmodified-loop-condition
     while (running) {
       let received: { Messages?: Message[] }
       try {

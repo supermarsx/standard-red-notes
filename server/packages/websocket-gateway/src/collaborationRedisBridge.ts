@@ -372,7 +372,7 @@ async function bounded<T>(operation: Promise<T>): Promise<T> {
   try {
     return await Promise.race([operation, timeout])
   } finally {
-    if (timer) clearTimeout(timer)
+    if (timer) {clearTimeout(timer)}
   }
 }
 
@@ -1170,8 +1170,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       return
     }
     const batch = [...this.pendingLeaseReleases.entries()]
-    let cleanup: Promise<void>
-    cleanup = Promise.all(
+    const cleanup: Promise<void> = Promise.all(
       batch.map(async ([leaseKey, lease]) => {
         const released = await this.release(lease)
         if (released && this.pendingLeaseReleases.get(leaseKey) === lease) {

@@ -549,6 +549,9 @@ describe('startSqsConsumer', () => {
         ],
       },
     ]
+    // The deleteHooks closure below reads `handle` before startSqsConsumer() can
+    // return it, so this binding cannot be initialised at its declaration.
+    // eslint-disable-next-line prefer-const
     let handle: SqsConsumerHandle | undefined
     sqs.state.deleteHooks.set('rh-a', () => {
       handle?.()

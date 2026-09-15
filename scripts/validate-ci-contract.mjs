@@ -17,6 +17,7 @@ export const CI_CONTRACT_FILES = Object.freeze([
   "server/.nvmrc",
   "server/Dockerfile",
   "server/package.json",
+  "server/packages/websocket-gateway/package.json",
   "scripts/setup.ps1",
   "scripts/setup.sh",
   "docs/ci-production-gates.md",
@@ -1539,6 +1540,26 @@ export function validateCiContract(files) {
   }
 
   const serverPackage = JSON.parse(files.get("server/package.json") ?? "{}");
+
+  // `server`'s aggregate lint is `yarn workspaces foreach -ptA run lint`, which
+  // SKIPS a workspace that does not define the script rather than failing. The
+  // websocket-gateway package had no `lint` at all, so every realtime source
+  // file in it was silently outside the eslint gate. Pin the script so the
+  // package cannot fall back out of the aggregate unnoticed.
+  const websocketGatewayPackage = JSON.parse(
+    files.get("server/packages/websocket-gateway/package.json") ?? "{}",
+  );
+  const websocketGatewayScripts = websocketGatewayPackage.scripts ?? {};
+  for (const [name, expected] of [
+    ["lint", "eslint src test"],
+    ["lint:fix", "eslint src test --fix"],
+  ]) {
+    if (websocketGatewayScripts[name] !== expected) {
+      errors.push(
+        `server/packages/websocket-gateway/package.json: ${name} script must be "${expected}" so the realtime sources stay inside the server lint gate`,
+      );
+    }
+  }
   const appNodeVersion = exactNodeVersion(files.get("app/.nvmrc"));
   const serverNodeVersion = exactNodeVersion(files.get("server/.nvmrc"));
   const serverNodeEngine = minimumNodeEngine(serverPackage.engines?.node);

@@ -31,10 +31,11 @@ import {
   type RoomJoinAuthorization,
   type RoomJoinAuthorizer,
   type RoomRelayLifecycle,
+  CollaborationRoomEpochMismatchError,
+  roomDeniedReasonFor,
 } from '../src/rooms.js'
 import type { Conn } from '../src/registry.js'
 import { CollaborationLifecycleError, CollaborationRoomSecurityRevokedError } from '../src/collaborationRedisBridge.js'
-import { CollaborationRoomEpochMismatchError, roomDeniedReasonFor } from '../src/rooms.js'
 
 /** The exact `room-denied` frame the gateway emits (C1): every denial names its funnel. */
 function denied(room: string, requestId: string | undefined, reason: RoomDeniedReason): string {
@@ -1793,7 +1794,7 @@ describe('handleRelayFrame room-join authorization', () => {
 
     // Only user "a" is a member of note "n1".
     const authorize = (userUuid: string, room: string, capability?: string) =>
-      userUuid === 'a' && room === 'n1'
+      (userUuid === 'a' && room === 'n1'
         ? {
             authorized: true as const,
             expiresAt: Date.now() + 60_000,
@@ -1803,7 +1804,7 @@ describe('handleRelayFrame room-join authorization', () => {
             collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
             leaseRequestId: capability,
           }
-        : { authorized: false as const }
+        : { authorized: false as const })
 
     await handleRelayFrame(
       rooms,

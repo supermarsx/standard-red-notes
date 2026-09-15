@@ -839,6 +839,41 @@ test("the gRPC phase must follow hardening and precede publication", () => {
   );
 });
 
+test("the websocket gateway cannot fall back out of the server lint gate", () => {
+  // `yarn workspaces foreach -ptA run lint` SKIPS a workspace with no `lint`
+  // script instead of failing, which is how this package's realtime sources sat
+  // outside eslint entirely. Removing the script must be caught, not skipped.
+  for (const [mutate, expected] of [
+    [
+      (pkg) => {
+        delete pkg.scripts.lint;
+        return pkg;
+      },
+      /websocket-gateway\/package\.json: lint script must be "eslint src test"/,
+    ],
+    [
+      (pkg) => {
+        pkg.scripts.lint = "eslint src";
+        return pkg;
+      },
+      /websocket-gateway\/package\.json: lint script must be "eslint src test"/,
+    ],
+    [
+      (pkg) => {
+        delete pkg.scripts["lint:fix"];
+        return pkg;
+      },
+      /websocket-gateway\/package\.json: lint:fix script must be "eslint src test --fix"/,
+    ],
+  ]) {
+    const files = withFileChanged(
+      "server/packages/websocket-gateway/package.json",
+      (content) => JSON.stringify(mutate(JSON.parse(content)), null, 2),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
 test("the required stack cannot skip durable email queue and delivery integration", () => {
   for (const [command, replacement, expected] of [
     [
