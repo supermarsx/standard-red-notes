@@ -532,7 +532,19 @@
             - title: External host
               url: /self-hosting.html#standard-red-notes-external-host
             - title: Worker WebSocket sync
-              url: /self-hosting.html#worker-websocket-sync-and-http-fallback
+              items:
+                - title: Worker WebSocket sync overview
+                  url: /self-hosting.html#worker-websocket-sync-and-http-fallback
+                - title: What actually gates the lane
+                  url: /self-hosting.html#what-actually-gates-the-lane
+                - title: Tuning variables
+                  url: /self-hosting.html#tuning-variables
+                - title: Durable gRPC command secret
+                  url: /self-hosting.html#the-durable-grpc-command-secret
+                - title: Desktop, mobile and the extension
+                  url: /self-hosting.html#desktop-mobile-and-the-browser-extension
+                - title: Forwarded headers and same-origin
+                  url: /self-hosting.html#forwarded-headers-and-the-same-origin-fallback
             - title: Drop Compose host ports
               url: /self-hosting.html#compose-dropping-host-ports
             - title: nginx example

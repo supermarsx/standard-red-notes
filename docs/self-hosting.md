@@ -453,7 +453,9 @@ fragment values are rejected. Redis backs one-use tickets, command leases, and
 the fleet-wide per-user socket budget, so every production replica observes the
 same state.
 
-**What actually gates the lane.** Three conditions gate the socket **transport**. If any is unmet, capability
+#### What actually gates the lane
+
+Three conditions gate the socket **transport**. If any is unmet, capability
 negotiation returns an empty list and every client uses HTTP:
 
 | Condition | Unmet code | What it needs |
@@ -490,7 +492,7 @@ through as `API_GATEWAY_WEBSOCKET_SYNC_FILES_URL`). Without it the gateway
 logs `Realtime FILES_V1 transport not advertised` and uploads and downloads use
 the ordinary HTTP path.
 
-**Tuning variables.**
+#### Tuning variables
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -551,6 +553,8 @@ without Redis authentication or TLS, so external Redis is supported only on the
 same private trusted network. Never publish it or route it across a trust
 boundary.
 
+#### The durable gRPC command secret
+
 In the multi-process topology, setup also generates
 `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`. This purpose-specific key signs the
 API-gateway's durable gRPC command/status metadata and is verified by the
@@ -558,15 +562,6 @@ syncing-server; never reuse `AUTH_JWT_SECRET`. Missing it keeps `SYNC_ITEMS`
 closed while the rest of the socket and HTTP sync remain available. The bundled
 HomeServer uses a direct in-process durable adapter and intentionally does not
 invent or validate gRPC credentials.
-
-**Desktop, mobile and the browser extension.** Those clients have no configurable gateway URL. They derive
-`ws(s)://<sync-host>/sockets` from the server they already sync with and open
-the **legacy** lane on every launch that has a session, which carries push,
-realtime invites, push-approved multi-factor prompts and the collaboration
-relay. They do not use the worker sync lane: their page origin is `file:`, which
-can never pass the origin check, so item sync there stays on HTTP by design. A
-gateway that answers 503 or closes the socket is retried when the app returns to
-the foreground, regains connectivity or signs in again, not on a fixed timer.
 
 When upgrading an older multi-container installation, run the normal setup
 script once (`./scripts/setup.sh --yes` or `./scripts/setup.ps1 -Yes`) before
@@ -576,6 +571,19 @@ timestamped backup; it preserves every existing value, comment, and permission.
 A valid existing key is never rotated, while a duplicate or malformed value
 stops migration without modifying `.env`. Recreate the bundled server only
 after that migration so its API-gateway and syncing-server receive the same key.
+
+#### Desktop, mobile and the browser extension
+
+Those clients have no configurable gateway URL. They derive
+`ws(s)://<sync-host>/sockets` from the server they already sync with and open
+the **legacy** lane on every launch that has a session, which carries push,
+realtime invites, push-approved multi-factor prompts and the collaboration
+relay. They do not use the worker sync lane: their page origin is `file:`, which
+can never pass the origin check, so item sync there stays on HTTP by design. A
+gateway that answers 503 or closes the socket is retried when the app returns to
+the foreground, regains connectivity or signs in again, not on a fixed timer.
+
+#### Forwarded headers and the same-origin fallback
 
 `ENFORCE_HTTPS_FROM_PROXY=true` is defense in depth, not a TLS terminator. The
 outer proxy is the public trust boundary: it must overwrite (not append to)
