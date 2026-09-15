@@ -270,7 +270,8 @@ export function validateContractGateAggregate(rootPackage) {
   if (typeof script !== "string") {
     return ["package.json: ci:contracts script is missing"];
   }
-  const prefix = "yarn release:policy:install && node scripts/run-contract-gates.mjs";
+  const prefix =
+    "yarn release:policy:install && node scripts/run-contract-gates.mjs";
   if (!script.startsWith(prefix)) {
     errors.push(
       `package.json: ci:contracts must start with "${prefix}" so every gate runs and reports, instead of stopping at the first failure`,
@@ -971,7 +972,10 @@ export function validateCiContract(files) {
   // `describe.skipIf` behind SRN_COLLAB_REDIS_HOST — unset, it reports as a
   // skip and the job still goes green. Exact counts, not presence: a second
   // step carrying the same fragment must not be able to satisfy this.
-  const activeCheckBlock = jobBlock(workflow, "check").replace(/^\s*#.*$/gm, "");
+  const activeCheckBlock = jobBlock(workflow, "check").replace(
+    /^\s*#.*$/gm,
+    "",
+  );
   for (const [fragment, description] of [
     [
       "test/collaborationTombstone.redis.test.ts",

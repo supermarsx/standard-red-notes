@@ -47,11 +47,16 @@ export function parseLegs(argv) {
     if (typeof command !== "string" || command.trim().length === 0) {
       throw new ContractGateArgumentError(`Missing command after ${argument}`);
     }
-    legs.push({ command: command.trim(), prerequisite: argument === "--prerequisite" });
+    legs.push({
+      command: command.trim(),
+      prerequisite: argument === "--prerequisite",
+    });
     index += 1;
   }
   if (legs.length === 0) {
-    throw new ContractGateArgumentError("No gates given; pass at least one --leg");
+    throw new ContractGateArgumentError(
+      "No gates given; pass at least one --leg",
+    );
   }
   return legs;
 }
@@ -65,7 +70,12 @@ export const NOT_RUN = "not run";
 export function summarize(results) {
   const width = Math.max(...results.map(({ command }) => command.length));
   const lines = results.map(({ command, status }) => {
-    const verdict = status === NOT_RUN ? "NOT RUN" : status === 0 ? "pass" : `FAIL (exit ${status})`;
+    const verdict =
+      status === NOT_RUN
+        ? "NOT RUN"
+        : status === 0
+          ? "pass"
+          : `FAIL (exit ${status})`;
     return `  ${command.padEnd(width)}  ${verdict}`;
   });
   const failed = results.filter(({ status }) => status !== 0);
@@ -79,7 +89,11 @@ export function summarize(results) {
   return lines.join("\n");
 }
 
-export function runContractGates(legs, run = defaultRun) {
+export function runContractGates(
+  legs,
+  run = defaultRun,
+  announce = defaultAnnounce,
+) {
   const results = [];
   let prerequisiteFailed = false;
   for (const { command, prerequisite } of legs) {
@@ -87,7 +101,7 @@ export function runContractGates(legs, run = defaultRun) {
       results.push({ command, status: NOT_RUN });
       continue;
     }
-    process.stdout.write(`\n=== contract gate: ${command}\n`);
+    announce(`\n=== contract gate: ${command}\n`);
     const status = run(command);
     results.push({ command, status });
     if (status !== 0 && prerequisite) {
@@ -95,6 +109,12 @@ export function runContractGates(legs, run = defaultRun) {
     }
   }
   return results;
+}
+
+// Injectable so a unit test driving `runContractGates` with a stub runner does
+// not print six fake gate banners into the real CI log it is running inside.
+function defaultAnnounce(line) {
+  process.stdout.write(line);
 }
 
 function defaultRun(command) {

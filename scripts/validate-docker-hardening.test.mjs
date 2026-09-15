@@ -851,9 +851,13 @@ function windowsDrivePrefix() {
     const rest = probe.slice(2);
     cachedWindowsDrivePrefix = null;
     for (const prefix of ["/mnt/", "/"]) {
-      const result = spawnSync("bash", ["-lc", `test -d '${prefix}${drive}${rest}'`], {
-        encoding: "utf8",
-      });
+      const result = spawnSync(
+        "bash",
+        ["-lc", `test -d '${prefix}${drive}${rest}'`],
+        {
+          encoding: "utf8",
+        },
+      );
       if (!result.error && result.status === 0) {
         cachedWindowsDrivePrefix = prefix;
         break;
@@ -1944,7 +1948,10 @@ test("opens the realtime switches in both Compose topologies without forcing gRP
         ).join("\n"),
         new RegExp(`must propagate ${key}`),
       );
-      const pinnedPushSwitch = source.replace(`${key}: \${${key}:-}`, `${key}: true`);
+      const pinnedPushSwitch = source.replace(
+        `${key}: \${${key}:-}`,
+        `${key}: true`,
+      );
       assert.notEqual(pinnedPushSwitch, source);
       assert.match(
         validateRealtimeSwitchComposeContract(

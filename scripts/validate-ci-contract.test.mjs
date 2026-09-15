@@ -1606,7 +1606,9 @@ test("ci:contracts cannot go back to an && chain that hides later gates", () => 
     });
     assert.match(
       validateCiContract(dropped).join("\n"),
-      new RegExp(`ci:contracts must run the ${leg.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")} gate`),
+      new RegExp(
+        `ci:contracts must run the ${leg.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")} gate`,
+      ),
     );
   }
 });
@@ -1633,10 +1635,14 @@ test("the contract gate runner runs every gate, even after one fails", () => {
   );
 
   const attempted = [];
-  const results = runContractGates(legs, (command) => {
-    attempted.push(command);
-    return command === "first" ? 3 : 0;
-  });
+  const results = runContractGates(
+    legs,
+    (command) => {
+      attempted.push(command);
+      return command === "first" ? 3 : 0;
+    },
+    () => {},
+  );
   // The point of the runner: "second" and "third" still ran.
   assert.deepEqual(attempted, ["install", "first", "second", "third"]);
   assert.deepEqual(
@@ -1649,10 +1655,14 @@ test("the contract gate runner runs every gate, even after one fails", () => {
   // A failed PREREQUISITE is different: the gates that depend on it are
   // reported as never run rather than as failures they did not cause.
   const skipped = [];
-  const afterPrerequisite = runContractGates(legs, (command) => {
-    skipped.push(command);
-    return command === "install" ? 1 : 0;
-  });
+  const afterPrerequisite = runContractGates(
+    legs,
+    (command) => {
+      skipped.push(command);
+      return command === "install" ? 1 : 0;
+    },
+    () => {},
+  );
   assert.deepEqual(skipped, ["install"]);
   assert.deepEqual(
     afterPrerequisite.map(({ status }) => status),
