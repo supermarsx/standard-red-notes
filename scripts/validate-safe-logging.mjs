@@ -33,6 +33,7 @@ const contractSourceFiles = [
   "server/packages/api-gateway/src/Service/gRPC/GRPCServiceProxy.ts",
   "server/packages/api-gateway/src/Service/gRPC/GRPCSyncingServerServiceProxy.ts",
   "server/packages/websocket-gateway/src/index.ts",
+  "server/packages/websocket-gateway/src/logger.ts",
   "server/packages/websocket-gateway/src/gateway.ts",
   "server/packages/websocket-gateway/src/redisBridge.ts",
   "server/packages/websocket-gateway/src/sqsConsumer.ts",
@@ -247,7 +248,7 @@ const forbiddenRules = [
   },
 ];
 
-const requiredRules = [
+export const requiredRules = [
   {
     id: "gateway-fixed-online-subscription-route",
     file: "server/packages/api-gateway/src/Controller/SubscriptionTokenAuthMiddleware.ts",
@@ -284,20 +285,31 @@ const requiredRules = [
     file: "server/packages/auth/src/Infra/InversifyExpressUtils/AnnotatedOfflineController.ts",
     pattern: /@httpPost\('\/subscription-tokens\/:token\/validate'\)/,
   },
+  // The standalone gateway's console boundary lives in `logger.ts`, not
+  // `index.ts`: `createConsoleLogger` is the only place in the package allowed
+  // to touch `console`, and every level funnels through one `write()` that
+  // spreads `safeLogArguments`. These four contracts pin that shape — the
+  // single redaction choke point, and each level reaching the console method it
+  // claims to. Aimed at `index.ts` they matched nothing and protected nothing.
+  {
+    id: "standalone-websocket-redaction-boundary",
+    file: "server/packages/websocket-gateway/src/logger.ts",
+    pattern: /target\([^;\n]*\.\.\.safeLogArguments\(args\)\)/,
+  },
   {
     id: "standalone-websocket-info-boundary",
-    file: "server/packages/websocket-gateway/src/index.ts",
-    pattern: /console\.log\([^;\n]*\.\.\.safeLogArguments\(args\)\)/,
+    file: "server/packages/websocket-gateway/src/logger.ts",
+    pattern: /info:\s*\(\.\.\.args\)\s*=>\s*write\('info',\s*sink\.log\.bind\(sink\),\s*args\)/,
   },
   {
     id: "standalone-websocket-warn-boundary",
-    file: "server/packages/websocket-gateway/src/index.ts",
-    pattern: /console\.warn\([^;\n]*\.\.\.safeLogArguments\(args\)\)/,
+    file: "server/packages/websocket-gateway/src/logger.ts",
+    pattern: /warn:\s*\(\.\.\.args\)\s*=>\s*write\('warn',\s*sink\.warn\.bind\(sink\),\s*args\)/,
   },
   {
     id: "standalone-websocket-error-boundary",
-    file: "server/packages/websocket-gateway/src/index.ts",
-    pattern: /console\.error\([^;\n]*\.\.\.safeLogArguments\(args\)\)/,
+    file: "server/packages/websocket-gateway/src/logger.ts",
+    pattern: /error:\s*\(\.\.\.args\)\s*=>\s*write\('error',\s*sink\.error\.bind\(sink\),\s*args\)/,
   },
   {
     id: "gateway-rate-limit-logger-metadata-forwarding",
@@ -457,6 +469,7 @@ const repositoryWideCallRules = [
         "diagnosticMessage",
         "redactSensitiveText",
         "redactForAudit",
+        "boundedBootFailureText",
       ]);
 
       return /(?:\(|,)\s*(?:err|error|exception|failure|cleanupError|rollbackError|startupError)\s*[,)]/.test(
@@ -512,6 +525,9 @@ const repositoryWideCallRules = [
         stripReviewedFunctionCalls(call, [
           "safeErrorLogMetadata",
           "safeHttpErrorLogMetadata",
+          // Reduces a Result error to a constant string or a fixed placeholder,
+          // so an inline boot refusal carries no path, URL or configured value.
+          "boundedBootFailureText",
         ]),
       ),
   },

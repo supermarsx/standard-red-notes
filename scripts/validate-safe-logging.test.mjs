@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -8,9 +8,12 @@ import { fileURLToPath } from "node:url";
 import {
   discoverLiveSourceFiles,
   guardedRuntimeRoots,
+  requiredRules,
   validateRepositoryWideSafeLoggingSources,
   validateSafeLoggingSources,
 } from "./validate-safe-logging.mjs";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("discovers every guarded runtime surface, including exact app roots and nested server executables", async () => {
   assert.deepEqual(guardedRuntimeRoots, [
@@ -422,4 +425,85 @@ test("repository-wide detector rejects stale reviewed exceptions", () => {
   assert.deepEqual(result.failures, [
     "server/packages/auth/src/safe.ts:1: stale safe-logging allowlist entry raw-error-detail",
   ]);
+});
+
+test("an audited bounded boot refusal may be logged inline", () => {
+  // `boundedBootFailureText` reduces a Result error to a constant string or a
+  // fixed placeholder, so the inline form is safe. Without it on the reviewed
+  // boundary list the only way past the validator was to hoist the call into a
+  // local first, which hid the boundary instead of declaring it.
+  const safe = validateRepositoryWideSafeLoggingSources(
+    {
+      "server/packages/home-server/bin/server.ts":
+        "console.error('Could not start server.', { cause: boundedBootFailureText(result.getError()) })",
+    },
+    [],
+  );
+  assert.deepEqual(safe.failures, []);
+
+  // The boundary is the only thing that makes it safe: the same call without it
+  // still leaks the raw Result error.
+  const unsafe = validateRepositoryWideSafeLoggingSources(
+    {
+      "server/packages/home-server/bin/server.ts":
+        "console.error('Could not start server.', { cause: result.getError() })",
+    },
+    [],
+  );
+  assert.deepEqual(unsafe.failures, [
+    "server/packages/home-server/bin/server.ts:1: unreviewed repository-wide finding raw-domain-result-error",
+  ]);
+});
+
+test("the standalone gateway console boundary contracts point at the file that owns it", async () => {
+  // These contracts named `index.ts` long after the boundary moved to
+  // `logger.ts`, so they matched nothing: a gate that protects nothing. Run the
+  // REAL rule objects against the REAL source rather than a restated copy, so
+  // the test fails if either side drifts again.
+  const loggerFile = "server/packages/websocket-gateway/src/logger.ts";
+  const gatewayBoundaryRules = requiredRules.filter((rule) =>
+    rule.id.startsWith("standalone-websocket-"),
+  );
+  assert.equal(gatewayBoundaryRules.length, 4);
+  for (const rule of gatewayBoundaryRules) {
+    assert.equal(rule.file, loggerFile);
+  }
+
+  const source = await readFile(resolve(repoRoot, loggerFile), "utf8");
+  assert.deepEqual(
+    validateSafeLoggingSources(
+      { [loggerFile]: source },
+      { forbiddenRules: [], requiredRules: gatewayBoundaryRules },
+    ),
+    [],
+  );
+
+  // Dropping the redaction spread, or pointing a level at the wrong console
+  // method, must each be caught rather than silently accepted.
+  for (const [find, replaceWith, id] of [
+    [
+      "...safeLogArguments(args)",
+      "...args",
+      "standalone-websocket-redaction-boundary",
+    ],
+    [
+      "write('warn', sink.warn.bind(sink)",
+      "write('warn', sink.log.bind(sink)",
+      "standalone-websocket-warn-boundary",
+    ],
+    [
+      "write('error', sink.error.bind(sink)",
+      "write('error', sink.log.bind(sink)",
+      "standalone-websocket-error-boundary",
+    ],
+  ]) {
+    assert.ok(source.includes(find), `logger.ts no longer contains ${find}`);
+    assert.deepEqual(
+      validateSafeLoggingSources(
+        { [loggerFile]: source.replace(find, replaceWith) },
+        { forbiddenRules: [], requiredRules: gatewayBoundaryRules },
+      ),
+      [`${loggerFile}: missing required contract ${id}`],
+    );
+  }
 });

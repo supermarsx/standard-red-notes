@@ -329,6 +329,10 @@ jobs:
             --expected-revision "$SRN_DEPLOY_REVISION" \
             --expected-version "$SRN_DEPLOY_VERSION"
           rm -f artifacts-app-deployment.json artifacts-server-deployment.json
+      # Reproducing this locally from Git Bash on Windows needs MSYS_NO_PATHCONV=1:
+      # MSYS rewrites any argument starting with `/`, so `/healthcheck/readiness`
+      # and `/sockets` arrive inside the container as `C:/Program Files/Git/...`.
+      # The runner is ubuntu, so the workflow itself is unaffected.
       - name: Verify encrypted two-editor realtime convergence
         run: |
           docker compose exec -T \

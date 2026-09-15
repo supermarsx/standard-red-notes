@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 type Handler = (...args: unknown[]) => void
 
@@ -296,5 +297,51 @@ describe('applyRedisNamespace', () => {
     for (const bad of ['Prod', 'a b', 'ns/1', 'a'.repeat(65), ':prod', 'prod:']) {
       expect(() => applyRedisNamespace(bad, 'x')).toThrow('WEBSOCKET_REDIS_NAMESPACE')
     }
+  })
+})
+
+describe('WEB_SOCKET_MESSAGE_REQUESTED wire contract', () => {
+  // The consumer leg of the shared fixture. The producer (syncing-server) and
+  // the publisher (home-server bridge) assert the same file, so none of the
+  // three packages can change the shape without the other two failing.
+  const fixture = JSON.parse(
+    readFileSync(new URL('./fixtures/websocket-message-requested.json', import.meta.url), 'utf8'),
+  ) as {
+    type: string
+    channel: string
+    payload: { userUuid: string; message: string; originatingSessionUuid: string }
+  }
+
+  /** A registry holding exactly the connection the fixture describes. */
+  const fixtureRegistry = (): { registry: InstanceType<typeof ConnectionRegistry<SendableSocket>>; send: ReturnType<typeof vi.fn> } => {
+    const send = vi.fn()
+    const registry = new ConnectionRegistry<SendableSocket>()
+    registry.add(fixture.payload.userUuid, {
+      socket: { send },
+      userUuid: fixture.payload.userUuid,
+      sessionUuid: fixture.payload.originatingSessionUuid,
+      connectionId: 'conn-fixture',
+    })
+    return { registry, send }
+  }
+
+  it('consumes the fixture from the channel the fixture names', () => {
+    expect(fixture.type).toBe('WEB_SOCKET_MESSAGE_REQUESTED')
+    expect(WEBSOCKET_MESSAGES_CHANNEL).toBe(fixture.channel)
+
+    const { registry, send } = fixtureRegistry()
+    startRedisBridge(registry, { host: 'h', port: 1, logger: makeLogger() })
+    const { originatingSessionUuid: _excluded, ...broadcast } = fixture.payload
+    redis.instances[0].emit('message', fixture.channel, JSON.stringify(broadcast))
+
+    expect(send).toHaveBeenCalledWith(fixture.payload.message)
+  })
+
+  it('skips the originating session named by the fixture', () => {
+    const { registry, send } = fixtureRegistry()
+    startRedisBridge(registry, { host: 'h', port: 1, logger: makeLogger() })
+    redis.instances[0].emit('message', fixture.channel, JSON.stringify(fixture.payload))
+
+    expect(send).not.toHaveBeenCalled()
   })
 })

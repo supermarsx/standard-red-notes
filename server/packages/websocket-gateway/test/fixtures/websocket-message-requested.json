@@ -1,0 +1,10 @@
+{
+  "_comment": "The one WEB_SOCKET_MESSAGE_REQUESTED wire shape, shared by the three packages that make up the realtime push path so none of them can drift alone. The syncing-server produces the payload, the home-server bridge publishes JSON.stringify(payload) on `channel`, and the websocket-gateway consumes it from that channel and delivers `payload.message` to `payload.userUuid`, skipping `payload.originatingSessionUuid`. Asserted by SendEventToClient.spec.ts, WebSocketRedisBridge.spec.ts and redisBridge.test.ts.",
+  "type": "WEB_SOCKET_MESSAGE_REQUESTED",
+  "channel": "websocket-messages",
+  "payload": {
+    "userUuid": "00000000-0000-0000-0000-000000000000",
+    "message": "{\"type\":\"ITEMS_CHANGED_ON_SERVER\"}",
+    "originatingSessionUuid": "11111111-1111-1111-1111-111111111111"
+  }
+}

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Logger } from 'winston'
 import Redis from 'ioredis'
 import { createLogThrottle } from '@standard-red-notes/websocket-gateway'
@@ -291,5 +293,48 @@ describe('WebSocketRedisBridge lifecycle', () => {
 
     expect(logger.error).toHaveBeenCalledWith('WebSocketRedisBridge domain subscriber error.')
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('handler failed')
+  })
+})
+
+describe('WEB_SOCKET_MESSAGE_REQUESTED wire contract', () => {
+  // The publisher leg of the shared fixture. The producer (syncing-server) and
+  // the consumer (websocket-gateway) assert the same file, so none of the three
+  // packages that make up the push path can change the shape on its own.
+  const fixture = JSON.parse(
+    readFileSync(
+      resolve(__dirname, '../../../websocket-gateway/test/fixtures/websocket-message-requested.json'),
+      'utf8',
+    ),
+  ) as {
+    type: string
+    channel: string
+    payload: { userUuid: string; message: string; originatingSessionUuid: string }
+  }
+
+  it('publishes the fixture payload verbatim on the fixture channel', async () => {
+    const logger = {
+      debug: jest.fn(),
+      error: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+    } as unknown as jest.Mocked<Logger>
+    const publisher = {
+      status: 'ready',
+      on: jest.fn(),
+      publish: jest.fn().mockResolvedValue(1),
+      quit: jest.fn().mockResolvedValue('OK'),
+      disconnect: jest.fn(),
+    } as unknown as jest.Mocked<WebSocketRedisPublisher>
+    const bridge = new WebSocketRedisBridge(logger, 'redis', 6379, {
+      createPublisher: jest.fn().mockReturnValue(publisher),
+    })
+
+    expect(WebSocketRedisBridge.channelFor(undefined)).toBe(fixture.channel)
+
+    bridge.connect()
+    await bridge.handleMessage({ type: fixture.type, payload: fixture.payload } as never)
+
+    // The gateway parses exactly this string, so the bridge must not reshape it.
+    expect(publisher.publish).toHaveBeenCalledWith(fixture.channel, JSON.stringify(fixture.payload))
   })
 })
