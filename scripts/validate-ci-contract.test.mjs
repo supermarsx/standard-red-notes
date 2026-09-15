@@ -873,6 +873,50 @@ test("the gRPC phase must follow hardening and precede publication", () => {
   );
 });
 
+test("the real-Redis collaboration tombstone suite cannot stop running", () => {
+  // The suite is `describe.skipIf` behind SRN_COLLAB_REDIS_HOST, so removing
+  // the env var does not fail anything: vitest reports a skip and the job stays
+  // green. That is the exact failure mode the rule exists for.
+  for (const [current, replacement, expected] of [
+    [
+      "test/collaborationTombstone.redis.test.ts",
+      "test/disabled.test.ts",
+      /check must contain exactly 1 active real-Redis collaboration tombstone suite, found 0/,
+    ],
+    [
+      "SRN_COLLAB_REDIS_HOST: 127.0.0.1",
+      "SRN_COLLAB_REDIS_HOST_DISABLED: 127.0.0.1",
+      /check must contain exactly 1 active opt-in host that un-skips the tombstone suite, found 0/,
+    ],
+    [
+      'SRN_COLLAB_REDIS_PORT: "6396"',
+      'SRN_COLLAB_REDIS_PORT: ""',
+      /check must contain exactly 1 active throwaway Redis port for that suite, found 0/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.ok(content.includes(current));
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("a commented-out tombstone step cannot satisfy the contract", () => {
+  // Comments are stripped before counting, so commenting the step out reads as
+  // absent rather than as an active step.
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      "            test/collaborationTombstone.redis.test.ts",
+      "            # test/collaborationTombstone.redis.test.ts",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /check must contain exactly 1 active real-Redis collaboration tombstone suite, found 0/,
+  );
+});
+
 test("coordinated checks cannot run before the workspaces are built", () => {
   // api-gateway and home-server typecheck against the websocket-gateway's
   // EMITTED `dist/gateway.d.ts`, which is gitignored. Drop or reorder the build

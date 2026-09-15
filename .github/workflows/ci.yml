@@ -131,6 +131,40 @@ jobs:
         run: yarn build
       - name: Run coordinated checks
         run: yarn check
+      # The collaboration tombstone's other guard asserts the Lua SOURCE TEXT,
+      # so a rewrite that re-arms the 24 h tombstone by a different shape reads
+      # clean and still regresses. This one asserts the observable PTTL through
+      # the real bridge against a real Redis: a DENIED reserve must not extend
+      # it (59998 -> 86399997 before the fix, 59998 -> 59994 after).
+      #
+      # It runs HERE, not in container-smoke: the compose `cache` is
+      # deliberately internal-only with no published host port, so it is
+      # unreachable from a runner-side vitest, and container-smoke installs only
+      # the root workspace. This job already has the server workspace installed,
+      # so a throwaway Redis is the whole setup. The suite namespaces every key
+      # by a per-run UUID, so it cannot collide with anything.
+      - name: Verify the collaboration tombstone against a real Redis
+        working-directory: server
+        env:
+          SRN_COLLAB_REDIS_HOST: 127.0.0.1
+          SRN_COLLAB_REDIS_PORT: "6396"
+        run: |
+          set -euo pipefail
+          container="srn-ci-collab-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run --rm -d --name "$container" -p 127.0.0.1:6396:6379 redis:8.8.0-alpine
+          for _ in $(seq 1 30); do
+            if docker exec "$container" redis-cli ping | grep -q PONG; then break; fi
+            sleep 1
+          done
+          docker exec "$container" redis-cli ping | grep -q PONG
+          yarn workspace @standard-red-notes/websocket-gateway vitest run \
+            test/collaborationTombstone.redis.test.ts
+      - name: Remove the throwaway collaboration Redis
+        if: always()
+        run: >-
+          docker ps --all --quiet
+          --filter "name=srn-ci-collab-redis-${{ github.run_id }}-${{ github.run_attempt }}"
+          | xargs -r docker rm -f
 
   build:
     name: build

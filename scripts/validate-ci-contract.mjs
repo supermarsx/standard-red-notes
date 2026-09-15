@@ -917,6 +917,32 @@ export function validateCiContract(files) {
     }
   }
 
+  // The collaboration tombstone's other guard asserts Lua SOURCE TEXT, so it
+  // passes against a rewrite that re-arms the 24 h tombstone by a different
+  // shape. Only the real-Redis suite pins the observable PTTL, and it is
+  // `describe.skipIf` behind SRN_COLLAB_REDIS_HOST — unset, it reports as a
+  // skip and the job still goes green. Exact counts, not presence: a second
+  // step carrying the same fragment must not be able to satisfy this.
+  const activeCheckBlock = jobBlock(workflow, "check").replace(/^\s*#.*$/gm, "");
+  for (const [fragment, description] of [
+    [
+      "test/collaborationTombstone.redis.test.ts",
+      "real-Redis collaboration tombstone suite",
+    ],
+    [
+      "SRN_COLLAB_REDIS_HOST: 127.0.0.1",
+      "opt-in host that un-skips the tombstone suite",
+    ],
+    ['SRN_COLLAB_REDIS_PORT: "6396"', "throwaway Redis port for that suite"],
+  ]) {
+    const count = activeCheckBlock.split(fragment).length - 1;
+    if (count !== 1) {
+      errors.push(
+        `${file}: check must contain exactly 1 active ${description}, found ${count}`,
+      );
+    }
+  }
+
   // `yarn check` typechecks api-gateway and home-server against the
   // websocket-gateway's EMITTED declarations (`dist/gateway.d.ts`), which are
   // gitignored. If the workspace build stops running first, or stops running
