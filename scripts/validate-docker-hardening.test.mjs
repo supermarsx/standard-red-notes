@@ -836,13 +836,47 @@ test("rejects a missing or non-executable srn-admin wrapper", () => {
   );
 });
 
-test("srn-admin wrapper uses the generated home-server env directory without sourcing it", () => {
+// How the `bash` on PATH spells a Windows drive, discovered rather than assumed.
+// WSL mounts drives at /mnt/<letter>; Git Bash and MSYS2 mount them at
+// /<letter>. This test hard-coded the WSL form, so on a machine whose `bash` is
+// Git Bash it failed for a reason that has nothing to do with the contract it
+// checks — and because `yarn ci:contracts` is an `&&` chain that begins with
+// `yarn test:ci-tools`, that one failure stopped the chain before any release
+// leg ran. A platform quirk must never stand in for a gate verdict.
+let cachedWindowsDrivePrefix;
+function windowsDrivePrefix() {
+  if (cachedWindowsDrivePrefix === undefined) {
+    const probe = process.cwd().replaceAll("\\", "/");
+    const drive = probe[0].toLowerCase();
+    const rest = probe.slice(2);
+    cachedWindowsDrivePrefix = null;
+    for (const prefix of ["/mnt/", "/"]) {
+      const result = spawnSync("bash", ["-lc", `test -d '${prefix}${drive}${rest}'`], {
+        encoding: "utf8",
+      });
+      if (!result.error && result.status === 0) {
+        cachedWindowsDrivePrefix = prefix;
+        break;
+      }
+    }
+  }
+  return cachedWindowsDrivePrefix;
+}
+
+test("srn-admin wrapper uses the generated home-server env directory without sourcing it", (t) => {
+  const drivePrefix = process.platform === "win32" ? windowsDrivePrefix() : "";
+  if (drivePrefix === null) {
+    t.skip(
+      "no bash on PATH resolves this drive as /mnt/<letter> or /<letter>; install WSL bash or Git Bash to run it",
+    );
+    return;
+  }
   const shellPath = (value) => {
     if (process.platform !== "win32") {
       return value;
     }
     const normalized = value.replaceAll("\\", "/");
-    return `/mnt/${normalized[0].toLowerCase()}${normalized.slice(2)}`;
+    return `${drivePrefix}${normalized[0].toLowerCase()}${normalized.slice(2)}`;
   };
   const fixtureRoot = mkdtempSync(join(tmpdir(), "srn-admin-wrapper-"));
   const authDir = join(fixtureRoot, "packages", "auth");

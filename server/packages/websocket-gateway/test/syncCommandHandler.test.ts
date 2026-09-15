@@ -1070,11 +1070,6 @@ describe('SyncCommandHandler', () => {
     const roomEpoch = 'room_epoch_00000001'
     const securityEpoch = 'security_epoch_0001'
     const authorizeCollaboration = vi.fn<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>(
-      // `no-confusing-arrow` wants parentheses that prettier then removes, and this
-      // repo's eslint config never applies eslint-config-prettier, so the two
-      // tools cannot both be satisfied here. Suppress the formatting rule
-      // rather than let them fight across every reformat.
-      // eslint-disable-next-line no-confusing-arrow
       async ({ request }) =>
         request.epochDiscovery === true
           ? {
@@ -1269,11 +1264,6 @@ describe('SyncCommandHandler', () => {
 
   function twoPhaseCollaborationAdapter(epochs = collaborationEpochs) {
     const authorizeCollaboration = vi.fn(
-      // `no-confusing-arrow` wants parentheses that prettier then removes, and this
-      // repo's eslint config never applies eslint-config-prettier, so the two
-      // tools cannot both be satisfied here. Suppress the formatting rule
-      // rather than let them fight across every reformat.
-      // eslint-disable-next-line no-confusing-arrow
       async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
         request.epochDiscovery === true
           ? {
@@ -3144,11 +3134,6 @@ describe('SyncCommandHandler', () => {
   /** Discovery reports the initial epoch; a grant echoes whatever epoch the request expects (as the real service does). */
   function echoingCollaborationAdapter() {
     const authorizeCollaboration = vi.fn(
-      // `no-confusing-arrow` wants parentheses that prettier then removes, and this
-      // repo's eslint config never applies eslint-config-prettier, so the two
-      // tools cannot both be satisfied here. Suppress the formatting rule
-      // rather than let them fight across every reformat.
-      // eslint-disable-next-line no-confusing-arrow
       async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
         request.epochDiscovery === true
           ? {

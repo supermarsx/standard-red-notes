@@ -19,10 +19,18 @@ import { fileURLToPath } from "node:url";
 
 import {
   approvedWorkflowAction,
+  CONTRACT_GATE_LEGS,
   loadCiContractFiles,
   validateCiContract,
   validateSetupOverwriteContract,
 } from "./validate-ci-contract.mjs";
+import {
+  ContractGateArgumentError,
+  NOT_RUN,
+  parseLegs,
+  runContractGates,
+  summarize,
+} from "./run-contract-gates.mjs";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -751,6 +759,33 @@ test("the required stack cannot skip encrypted two-editor convergence", () => {
     validateCiContract(files).join("\n"),
     /container-smoke required realtime gateway mode/,
   );
+});
+
+test("disabling EITHER realtime drill alone is caught, not just both", () => {
+  // The hole the count rule closes. `-e REQUIRE_GATEWAY=1` gained a second
+  // occurrence during t92, and a presence rule cannot tell two copies from
+  // one: turning the flag off on a single step left the other copy satisfying
+  // the rule, so the validator passed while that drill downgraded itself to a
+  // skip and exited 0 against an unreachable stack.
+  const workflow = readFileSync(
+    path.join(repositoryRoot, ".github/workflows/ci.yml"),
+    "utf8",
+  );
+  assert.equal(workflow.split("-e REQUIRE_GATEWAY=1").length - 1, 2);
+
+  for (const occurrence of [0, 1]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      let seen = -1;
+      return content.replaceAll("-e REQUIRE_GATEWAY=1", (match) => {
+        seen += 1;
+        return seen === occurrence ? "-e REQUIRE_GATEWAY=0" : match;
+      });
+    });
+    assert.match(
+      validateCiContract(files).join("\n"),
+      /container-smoke must apply the required realtime gateway mode on both the convergence and the mint-boundary drills exactly 2 times, found 1/,
+    );
+  }
 });
 
 test("the required stack cannot skip the realtime mint boundary drill", () => {
@@ -1499,30 +1534,135 @@ test("root CI script wiring is enforced", () => {
   );
   assert.match(
     validateCiContract(files).join("\n"),
-    /ci:contracts script is not wired/,
+    /ci:contracts script is missing/,
   );
 });
 
 test("CI contracts install release policy dependencies before direct checks", () => {
-  for (const [current, replacement] of [
-    ["yarn release:policy:install && ", ""],
-    ["yarn test:release-impact:run", "yarn test:release-impact"],
-    ["yarn test:release-contract:run", "yarn test:release-contract"],
-    ["yarn release:contract:run", "yarn release:contract"],
+  for (const [current, replacement, expected] of [
+    [
+      "yarn release:policy:install && ",
+      "",
+      /ci:contracts must start with "yarn release:policy:install && node scripts\/run-contract-gates\.mjs"/,
+    ],
+    [
+      "yarn test:release-impact:run",
+      "yarn test:release-impact",
+      /ci:contracts must run the yarn test:release-impact:run gate/,
+    ],
+    [
+      "yarn test:release-contract:run",
+      "yarn test:release-contract",
+      /ci:contracts must run the yarn test:release-contract:run gate/,
+    ],
+    [
+      "yarn release:contract:run",
+      "yarn release:contract",
+      /ci:contracts must run the yarn release:contract:run gate/,
+    ],
   ]) {
     const files = withFileChanged("package.json", (content) => {
       const packageJson = JSON.parse(content);
+      assert.ok(packageJson.scripts["ci:contracts"].includes(current));
+      // replaceAll, not replace: these fragments are one edit away from
+      // occurring twice, and a first-occurrence mutation would leave the
+      // second copy satisfying the rule and the assertion passing against a
+      // gate that is actually disabled.
       packageJson.scripts["ci:contracts"] = packageJson.scripts[
         "ci:contracts"
-      ].replace(current, replacement);
+      ].replaceAll(current, replacement);
       return JSON.stringify(packageJson);
     });
 
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("ci:contracts cannot go back to an && chain that hides later gates", () => {
+  // The exact shape that cost a verifier a manual run of all six legs: an
+  // environmental failure in the first gate stopped the chain, and the five
+  // release and docs gates were never executed at all.
+  const chained = withFileChanged("package.json", (content) => {
+    const packageJson = JSON.parse(content);
+    packageJson.scripts["ci:contracts"] = [
+      "yarn release:policy:install",
+      ...CONTRACT_GATE_LEGS,
+    ].join(" && ");
+    return JSON.stringify(packageJson);
+  });
+  const chainedErrors = validateCiContract(chained).join("\n");
+  assert.match(chainedErrors, /ci:contracts chains gates with && again/);
+  assert.match(chainedErrors, /ci:contracts must start with/);
+
+  // And every single leg is individually required, so none can be quietly
+  // dropped from the runner's argument list.
+  for (const leg of CONTRACT_GATE_LEGS) {
+    const dropped = withFileChanged("package.json", (content) => {
+      const packageJson = JSON.parse(content);
+      packageJson.scripts["ci:contracts"] = packageJson.scripts[
+        "ci:contracts"
+      ].replaceAll(` --leg '${leg}'`, "");
+      return JSON.stringify(packageJson);
+    });
     assert.match(
-      validateCiContract(files).join("\n"),
-      /ci:contracts script is not wired/,
+      validateCiContract(dropped).join("\n"),
+      new RegExp(`ci:contracts must run the ${leg.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")} gate`),
     );
   }
+});
+
+test("the contract gate runner runs every gate, even after one fails", () => {
+  const legs = parseLegs([
+    "--prerequisite",
+    "install",
+    "--leg",
+    "first",
+    "--leg",
+    "second",
+    "--leg",
+    "third",
+  ]);
+  assert.deepEqual(
+    legs.map(({ command, prerequisite }) => [command, prerequisite]),
+    [
+      ["install", true],
+      ["first", false],
+      ["second", false],
+      ["third", false],
+    ],
+  );
+
+  const attempted = [];
+  const results = runContractGates(legs, (command) => {
+    attempted.push(command);
+    return command === "first" ? 3 : 0;
+  });
+  // The point of the runner: "second" and "third" still ran.
+  assert.deepEqual(attempted, ["install", "first", "second", "third"]);
+  assert.deepEqual(
+    results.map(({ status }) => status),
+    [0, 3, 0, 0],
+  );
+  assert.match(summarize(results), /FAIL \(exit 3\)/);
+  assert.match(summarize(results), /1 of 4 contract gates did not pass: first/);
+
+  // A failed PREREQUISITE is different: the gates that depend on it are
+  // reported as never run rather than as failures they did not cause.
+  const skipped = [];
+  const afterPrerequisite = runContractGates(legs, (command) => {
+    skipped.push(command);
+    return command === "install" ? 1 : 0;
+  });
+  assert.deepEqual(skipped, ["install"]);
+  assert.deepEqual(
+    afterPrerequisite.map(({ status }) => status),
+    [1, NOT_RUN, NOT_RUN, NOT_RUN],
+  );
+  assert.match(summarize(afterPrerequisite), /NOT RUN/);
+
+  assert.throws(() => parseLegs([]), ContractGateArgumentError);
+  assert.throws(() => parseLegs(["--leg"]), ContractGateArgumentError);
+  assert.throws(() => parseLegs(["yarn lint"]), ContractGateArgumentError);
 });
 
 test("release policy dependency installation stays locked and non-executing", () => {

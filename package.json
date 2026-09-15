@@ -22,7 +22,7 @@
     "build:openclaw": "yarn workspace @standard-red-notes/openclaw build",
     "build:server": "cd server && yarn build",
     "check": "yarn typecheck && yarn lint && yarn format:check && yarn test",
-    "ci:contracts": "yarn release:policy:install && yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-impact:run && yarn test:release-contract:run && yarn release:contract:run && yarn docs:check",
+    "ci:contracts": "yarn release:policy:install && node scripts/run-contract-gates.mjs --leg 'yarn test:ci-tools' --leg 'node scripts/validate-ci-contract.mjs' --leg 'yarn test:release-impact:run' --leg 'yarn test:release-contract:run' --leg 'yarn release:contract:run' --leg 'yarn docs:check'",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "coverage": "yarn coverage:clean && yarn coverage:collect:app-core && yarn coverage:collect:app-web && yarn coverage:collect:server && yarn coverage:report",

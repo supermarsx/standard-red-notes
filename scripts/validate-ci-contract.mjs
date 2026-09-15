@@ -242,6 +242,54 @@ export function loadCiContractFiles(repositoryRoot = defaultRepositoryRoot) {
   );
 }
 
+// The six gates `yarn ci:contracts` is responsible for, in order. They stay
+// spelled out in package.json so the script reads as what it runs and the
+// release contract can still find its own legs in it.
+export const CONTRACT_GATE_LEGS = Object.freeze([
+  "yarn test:ci-tools",
+  "node scripts/validate-ci-contract.mjs",
+  "yarn test:release-impact:run",
+  "yarn test:release-contract:run",
+  "yarn release:contract:run",
+  "yarn docs:check",
+]);
+
+/**
+ * `ci:contracts` must run EVERY gate and report every verdict.
+ *
+ * It used to be one long `&&` chain, which stops at the first failure. An
+ * environmental failure in the first leg therefore left the five release and
+ * docs gates unverified while the run showed a single red — a verifier had to
+ * execute all six by hand to discover the other five were green. A gate that
+ * never ran is not a gate that passed. The only `&&` allowed is the one before
+ * the runner: the release-policy install is a genuine prerequisite.
+ */
+export function validateContractGateAggregate(rootPackage) {
+  const errors = [];
+  const script = rootPackage.scripts?.["ci:contracts"];
+  if (typeof script !== "string") {
+    return ["package.json: ci:contracts script is missing"];
+  }
+  const prefix = "yarn release:policy:install && node scripts/run-contract-gates.mjs";
+  if (!script.startsWith(prefix)) {
+    errors.push(
+      `package.json: ci:contracts must start with "${prefix}" so every gate runs and reports, instead of stopping at the first failure`,
+    );
+  }
+  const chained = script.split("&&").length - 1;
+  if (chained > 1) {
+    errors.push(
+      "package.json: ci:contracts chains gates with && again; a chain hides every gate after the first failure",
+    );
+  }
+  for (const leg of CONTRACT_GATE_LEGS) {
+    if (!script.includes(`--leg '${leg}'`)) {
+      errors.push(`package.json: ci:contracts must run the ${leg} gate`);
+    }
+  }
+  return errors;
+}
+
 /**
  * Every workspace is either inside the eslint aggregate or listed as exempt
  * with its reason. `yarn workspaces foreach run lint` skips silently, so a
@@ -1257,6 +1305,17 @@ export function validateCiContract(files) {
       "realtime push round trip under both the default and the gRPC service proxies",
     ],
     [
+      // A presence rule stops discriminating the moment its anchor occurs
+      // twice. This fragment gained a second copy during t92 when the realtime
+      // mint-boundary drill was added, and from that point setting
+      // REQUIRE_GATEWAY=0 on EITHER step alone left the other copy satisfying
+      // the presence check: the validator stayed green while one drill
+      // downgraded itself to a skip and exited 0 on an unreachable stack.
+      "-e REQUIRE_GATEWAY=1",
+      2,
+      "required realtime gateway mode on both the convergence and the mint-boundary drills",
+    ],
+    [
       "docker compose up -d --no-build --wait --wait-timeout 900",
       2,
       "bounded stack startup for the default phase and the gRPC phase",
@@ -1732,8 +1791,6 @@ export function validateCiContract(files) {
 
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   const expectedScripts = {
-    "ci:contracts":
-      "yarn release:policy:install && yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-impact:run && yarn test:release-contract:run && yarn release:contract:run && yarn docs:check",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "deps:security:production":
@@ -1755,6 +1812,8 @@ export function validateCiContract(files) {
       );
     }
   }
+
+  errors.push(...validateContractGateAggregate(rootPackage));
 
   const serverPackage = JSON.parse(files.get("server/package.json") ?? "{}");
 
