@@ -1,5 +1,5 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
-import { SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
+import { SyncOutboxRecord, SyncOutboxStore, SyncOutboxUnavailableError } from './SyncTransportOutbox'
 import { SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
 import {
   CollaborationAuthorizationTransportRequest,
@@ -15,6 +15,10 @@ class FakeOutbox implements SyncOutboxStore {
   records = new Map<string, SyncOutboxRecord>()
   owners = new Map<string, { sessionScope: string; ownerId: string; expiresAt: number }>()
   failWrites = false
+  /** Reads throw like a store whose `open()` never resolved (R21). */
+  unopenable = false
+  /** Reads throw with an ordinary error: a single failed operation, not a dead store. */
+  failReads = false
 
   async put(record: SyncOutboxRecord): Promise<void> {
     if (this.failWrites) {
@@ -24,9 +28,33 @@ class FakeOutbox implements SyncOutboxStore {
   }
 
   async oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined> {
+    if (this.unopenable) {
+      throw new SyncOutboxUnavailableError('Sync outbox upgrade was blocked')
+    }
+    if (this.failReads) {
+      throw new Error('idb read failed')
+    }
     return [...this.records.values()]
       .filter((record) => record.sessionScope === sessionScope && record.revoked !== true)
       .sort((left, right) => left.createdAt - right.createdAt)[0]
+  }
+
+  async heldByAnotherOwner(
+    transportScope: string,
+    sessionScope: string,
+    ownerId: string,
+    now: number,
+  ): Promise<boolean> {
+    if (this.unopenable) {
+      throw new SyncOutboxUnavailableError('Sync outbox upgrade was blocked')
+    }
+    const current = this.owners.get(transportScope)
+    return (
+      current !== undefined &&
+      current.sessionScope === sessionScope &&
+      current.ownerId !== ownerId &&
+      current.expiresAt > now
+    )
   }
 
   async quarantineSessionScope(sessionScope: string): Promise<void> {
@@ -1776,11 +1804,7 @@ describe('SyncTransportWorkerRuntime', () => {
   })
 
   describe('a committed result the socket cannot carry', () => {
-    const oversizedVerdict = (
-      frameType: 'STATUS' | 'COMMITTED',
-      commandId: string,
-      digest: string,
-    ): SyncServerFrame =>
+    const oversizedVerdict = (frameType: 'STATUS' | 'COMMITTED', commandId: string, digest: string): SyncServerFrame =>
       serverFrame(
         frameType,
         commandId,
@@ -1830,9 +1854,11 @@ describe('SyncTransportWorkerRuntime', () => {
       const shared = new FakeOutbox()
       const first = setup(shared)
       const firstSocket = await authorize(first)
-      const command = JSON.parse(
-        firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string,
-      ) as { commandId: string; digest: string; sequence: number }
+      const command = JSON.parse(firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+        commandId: string
+        digest: string
+        sequence: number
+      }
       // The tab dies before the main thread could replay the first verdict.
       firstSocket.receive(oversizedVerdict('STATUS', command.commandId, command.digest))
       await flush()
@@ -1902,11 +1928,7 @@ describe('SyncTransportWorkerRuntime', () => {
       replayOverHttp: 'http-only',
     })
 
-    expect(recovered.messages.map((message) => message.type)).toEqual([
-      'COMMAND_PERSISTED',
-      'STATE',
-      'HTTP_FALLBACK',
-    ])
+    expect(recovered.messages.map((message) => message.type)).toEqual(['COMMAND_PERSISTED', 'STATE', 'HTTP_FALLBACK'])
     expect(recovered.messages).toContainEqual({
       type: 'HTTP_FALLBACK',
       clientRequestId: 'recover-1',
@@ -1987,7 +2009,15 @@ describe('SyncTransportWorkerRuntime', () => {
     })
     const authorizationFrames = () =>
       socket.sent
-        .map((entry) => JSON.parse(entry) as { type: string; requestId: string; commandId: string; payload: Record<string, unknown> })
+        .map(
+          (entry) =>
+            JSON.parse(entry) as {
+              type: string
+              requestId: string
+              commandId: string
+              payload: Record<string, unknown>
+            },
+        )
         .filter((frame) => frame.type === 'COLLABORATION_AUTHORIZE')
 
     socket.receive(discoveryAnswer(discovery.requestId, discovery.commandId))
@@ -2050,7 +2080,12 @@ describe('SyncTransportWorkerRuntime', () => {
     })
 
     const framesBefore = socket.sent.length
-    await harness.runtime.handle({ type: 'EXECUTE', clientRequestId: 'client-2', body: body('b'), sessionScope: SESSION_A })
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'client-2',
+      body: body('b'),
+      sessionScope: SESSION_A,
+    })
     await flush()
 
     expect(socket.sent).toHaveLength(framesBefore)
@@ -2060,12 +2095,19 @@ describe('SyncTransportWorkerRuntime', () => {
       reason: 'live-sync-disabled',
       body: body('b'),
     })
-    expect(harness.messages).not.toContainEqual(expect.objectContaining({ type: 'NEED_TICKET', clientRequestId: 'client-2' }))
+    expect(harness.messages).not.toContainEqual(
+      expect.objectContaining({ type: 'NEED_TICKET', clientRequestId: 'client-2' }),
+    )
   })
 
   it('dials on a ticket whose server-clock expiry is already behind the local clock when no local expiry is known', async () => {
     const harness = setup()
-    await harness.runtime.handle({ type: 'EXECUTE', clientRequestId: 'client-1', body: body(), sessionScope: SESSION_A })
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'client-1',
+      body: body(),
+      sessionScope: SESSION_A,
+    })
     await harness.runtime.handle({
       type: 'CONNECT',
       clientRequestId: 'client-1',
@@ -2363,7 +2405,8 @@ describe('SyncTransportWorkerRuntime', () => {
     })
     expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE'])
 
-    jest.advanceTimersByTime(1)
+    // The reconnect backoff has a 1 s floor (R24), so nothing is dialled sooner.
+    jest.advanceTimersByTime(1_000)
     await flush()
     expect(harness.messages).toContainEqual({
       type: 'NEED_TICKET',
@@ -2407,5 +2450,441 @@ describe('SyncTransportWorkerRuntime', () => {
       'INVITE_ACK',
     ])
     expect(JSON.parse(reconnectSocket.sent.at(-1)!).payload).toEqual({ cursor: 'cursor-1' })
+  })
+
+  /**
+   * Ported from the t90-e6 runtime probes (P1-P5) that observed these paths on a
+   * live runtime. Each case asserts the behaviour the fix installs, so reverting
+   * the fix fails the case rather than merely changing an internal.
+   */
+  describe('multi-tab leases, outbox recovery and reconnect budget', () => {
+    const ENDPOINT = 'wss://sync.example.test/sockets/sync'
+    const TRANSPORT_SCOPE = `${SESSION_A}|wss://sync.example.test/sockets/sync|device-1`
+
+    const dial = async (harness: ReturnType<typeof setup>, clientRequestId: string, sessionScope = SESSION_A) => {
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId,
+        sessionScope,
+        authorization: {
+          endpoint: ENDPOINT,
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      return harness.sockets.at(-1) as FakeSocket
+    }
+
+    const handshake = (socket: FakeSocket, operations: string[] = ['SYNC_ITEMS']) => {
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations,
+          nextClientSequence: 1,
+        }),
+      )
+    }
+
+    const ticketRequests = (harness: ReturnType<typeof setup>, clientRequestId: string) =>
+      harness.messages.filter(
+        (message): message is Extract<SyncWorkerToMainMessage, { type: 'NEED_TICKET' }> =>
+          message.type === 'NEED_TICKET' && message.clientRequestId === clientRequestId,
+      )
+
+    const fallbacks = (harness: ReturnType<typeof setup>, clientRequestId: string) =>
+      harness.messages.filter(
+        (message): message is Extract<SyncWorkerToMainMessage, { type: 'HTTP_FALLBACK' }> =>
+          message.type === 'HTTP_FALLBACK' && message.clientRequestId === clientRequestId,
+      )
+
+    const settleCommand = async (harness: ReturnType<typeof setup>, socket: FakeSocket) => {
+      const command = JSON.parse(socket.sent[1]) as { commandId: string; digest: string }
+      socket.receive(serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest))
+      await flush()
+      await harness.runtime.handle({
+        type: 'CHECKPOINT_DURABLE',
+        requestId: 'checkpoint-1',
+        sessionScope: SESSION_A,
+        commandId: command.commandId,
+      })
+      await flush()
+      return command
+    }
+
+    it('P1: an outbox that cannot be opened sends the command to HTTP instead of demanding recovery', async () => {
+      const harness = setup()
+      harness.outbox.unopenable = true
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+
+      expect(fallbacks(harness, 'c1')).toEqual([
+        { type: 'HTTP_FALLBACK', clientRequestId: 'c1', reason: 'outbox-unavailable', body: body() },
+      ])
+      expect(harness.messages.filter((message) => message.type === 'RECOVERY_REQUIRED')).toHaveLength(0)
+    })
+
+    it('P1: an unopenable outbox reports nothing to recover instead of wedging every later sync', async () => {
+      const harness = setup()
+      harness.outbox.unopenable = true
+
+      await harness.runtime.handle({ type: 'RECOVER', clientRequestId: 'r1', sessionScope: SESSION_A })
+
+      expect(harness.messages).toEqual([{ type: 'RECOVERY_EMPTY', clientRequestId: 'r1' }])
+    })
+
+    it('still demands durable recovery when a single outbox read fails on a healthy store', async () => {
+      const harness = setup()
+      harness.outbox.failReads = true
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+      await harness.runtime.handle({ type: 'RECOVER', clientRequestId: 'r1', sessionScope: SESSION_A })
+
+      expect(harness.messages).toEqual([
+        { type: 'RECOVERY_REQUIRED', clientRequestId: 'c1' },
+        { type: 'RECOVERY_REQUIRED', clientRequestId: 'r1' },
+      ])
+    })
+
+    it('P2: a command takes over a bootstrap that exists only to open the socket', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc1',
+        sessionScope: SESSION_A,
+        request: {
+          method: 'GET' as const,
+          path: '/v1/workflows/status',
+          headers: { accept: 'application/json' },
+          deadlineMs: 30_000,
+          initialCreditBytes: 8,
+          stream: false,
+        },
+      })
+      expect(ticketRequests(harness, 'rpc1')).toHaveLength(1)
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+
+      expect(harness.messages.filter((message) => message.type === 'RECOVERY_REQUIRED')).toHaveLength(0)
+      expect(ticketRequests(harness, 'c1')).toHaveLength(1)
+
+      const socket = await dial(harness, 'c1')
+      socket.open()
+      handshake(socket, ['SYNC_ITEMS', 'API_RPC'])
+      await flush()
+      await flush()
+
+      expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'RPC_REQUEST', 'COMMAND'])
+    })
+
+    it('leaves a bootstrap running when a recovery finds nothing to take over', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc1',
+        sessionScope: SESSION_A,
+        request: {
+          method: 'GET' as const,
+          path: '/v1/workflows/status',
+          headers: { accept: 'application/json' },
+          deadlineMs: 30_000,
+          initialCreditBytes: 8,
+          stream: false,
+        },
+      })
+      expect(ticketRequests(harness, 'rpc1')).toHaveLength(1)
+
+      await harness.runtime.handle({ type: 'RECOVER', clientRequestId: 'r1', sessionScope: SESSION_A })
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_EMPTY', clientRequestId: 'r1' })
+
+      // The ticket the bootstrap already asked for still arrives to an owner; a
+      // recovery that took the bootstrap over and then bailed would drop it, and
+      // the RPC would hang to its deadline on a socket nobody dialled.
+      const socket = await dial(harness, 'rpc1')
+      socket.open()
+      handshake(socket, ['SYNC_ITEMS', 'API_RPC'])
+      await flush()
+      await flush()
+
+      expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'RPC_REQUEST'])
+    })
+
+    it('P3: three reconnects are spent before a command gives up on the socket', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const socket = await dial(harness, 'c1')
+        socket.open()
+        socket.close(1006)
+        await flush()
+        jest.advanceTimersByTime(1_000)
+        await flush()
+      }
+
+      expect(ticketRequests(harness, 'c1').filter((message) => message.reconnect === true)).toHaveLength(3)
+      expect(fallbacks(harness, 'c1')).toHaveLength(1)
+    })
+
+    it('P3: a successful handshake replenishes the reconnect budget for later commands', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const socket = await dial(harness, 'c1')
+        socket.open()
+        socket.close(1006)
+        await flush()
+        jest.advanceTimersByTime(1_000)
+        await flush()
+      }
+      expect(fallbacks(harness, 'c1')).toHaveLength(1)
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c2',
+        body: body('b'),
+        sessionScope: SESSION_A,
+      })
+      const socket = await dial(harness, 'c2')
+      socket.open()
+      handshake(socket)
+      await flush()
+      await flush()
+      socket.close(1006)
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+
+      expect(ticketRequests(harness, 'c2').filter((message) => message.reconnect === true)).toHaveLength(1)
+      expect(fallbacks(harness, 'c2')).toHaveLength(0)
+    })
+
+    it('P4: a tab that has learned it cannot own the socket stops asking for tickets', async () => {
+      const harness = setup()
+      harness.outbox.owners.set(TRANSPORT_SCOPE, {
+        sessionScope: SESSION_A,
+        ownerId: 'other-tab',
+        expiresAt: Date.now() + 15_000,
+      })
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+      expect(ticketRequests(harness, 'c1')).toHaveLength(1)
+      await dial(harness, 'c1')
+      expect(harness.sockets).toHaveLength(0)
+      expect(fallbacks(harness, 'c1').map((message) => message.reason)).toEqual(['multi-tab-not-owner'])
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c2',
+        body: body('b'),
+        sessionScope: SESSION_A,
+      })
+      expect(ticketRequests(harness, 'c2')).toHaveLength(0)
+      expect(fallbacks(harness, 'c2').map((message) => message.reason)).toEqual(['multi-tab-not-owner'])
+
+      // ... and it takes the socket back as soon as the other tab's lease lapses.
+      jest.advanceTimersByTime(16_000)
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c3',
+        body: body('c'),
+        sessionScope: SESSION_A,
+      })
+      expect(ticketRequests(harness, 'c3')).toHaveLength(1)
+    })
+
+    it('P5: losing the owner lease while idle closes the socket instead of waiting for the next command', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      await settleCommand(harness, socket)
+      expect(socket.readyState).toBe(1)
+
+      harness.outbox.owners.set(TRANSPORT_SCOPE, {
+        sessionScope: SESSION_A,
+        ownerId: 'other-tab',
+        expiresAt: Date.now() + 15_000,
+      })
+      const before = harness.messages.length
+      jest.advanceTimersByTime(5_100)
+      await flush()
+      await flush()
+
+      expect(harness.messages.slice(before)).toEqual([
+        { type: 'STATE', state: 'DEGRADED', reason: 'multi-tab-not-owner' },
+      ])
+      expect(socket.readyState).toBe(3)
+
+      // The renewal interval is gone with the socket: no second verdict arrives.
+      const afterClose = harness.messages.length
+      jest.advanceTimersByTime(20_000)
+      await flush()
+      expect(harness.messages).toHaveLength(afterClose)
+    })
+
+    it('hands the owner lease back when the page goes away, and keeps it while work is in flight', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      // A command is still in flight: releasing here would strand it.
+      await harness.runtime.handle({ type: 'RELEASE_OWNER' })
+      expect(socket.readyState).toBe(1)
+      expect(harness.outbox.owners.has(TRANSPORT_SCOPE)).toBe(true)
+
+      await settleCommand(harness, socket)
+      await harness.runtime.handle({ type: 'RELEASE_OWNER' })
+
+      expect(socket.readyState).toBe(3)
+      expect(harness.outbox.owners.has(TRANSPORT_SCOPE)).toBe(false)
+    })
+
+    it('reports that shutdown finished so the page need not terminate the worker blind', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      await settleCommand(harness, socket)
+
+      await harness.runtime.handle({ type: 'SHUTDOWN' })
+
+      expect(harness.outbox.owners.has(TRANSPORT_SCOPE)).toBe(false)
+      expect(harness.messages.at(-1)).toEqual({ type: 'SHUTDOWN_COMPLETE' })
+    })
+
+    it('closes a socket that stops answering PING, and keeps one that answers', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      await settleCommand(harness, socket)
+
+      jest.advanceTimersByTime(30_000)
+      await flush()
+      expect(JSON.parse(socket.sent.at(-1) as string).type).toBe('PING')
+
+      jest.advanceTimersByTime(60_000)
+      await flush()
+      expect(socket.readyState).toBe(3)
+
+      const answering = setup()
+      const liveSocket = await authorize(answering)
+      await settleCommand(answering, liveSocket)
+      jest.advanceTimersByTime(30_000)
+      await flush()
+      const ping = JSON.parse(liveSocket.sent.at(-1) as string) as { commandId: string }
+      liveSocket.receive(serverFrame('PONG', ping.commandId, {}))
+      await flush()
+      jest.advanceTimersByTime(59_000)
+      await flush()
+      expect(liveSocket.readyState).toBe(1)
+    })
+
+    it('gives the backend its full deadline before calling a command unanswered', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      jest.advanceTimersByTime(15_000)
+      await flush()
+      expect(socket.readyState).toBe(1)
+
+      jest.advanceTimersByTime(5_000)
+      await flush()
+      expect(socket.readyState).toBe(3)
+    })
+
+    it('treats a missing invite lane on a READY socket as settled for the session', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      const socket = await dial(harness, 'invite-1')
+      socket.open()
+      handshake(socket, ['SYNC_ITEMS'])
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-1',
+        code: 'OPERATION_UNAVAILABLE',
+        retryable: false,
+      })
+
+      socket.close(1006)
+      await flush()
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-2',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+
+      expect(ticketRequests(harness, 'invite-2')).toHaveLength(0)
+      expect(harness.messages.at(-1)).toEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-2',
+        code: 'OPERATION_UNAVAILABLE',
+        retryable: false,
+      })
+    })
+
+    it('refuses a discovery challenge the gateway would reject when it is echoed back', async () => {
+      const harness = setup()
+      const { socket, discovery } = await startCollaborationHandshake(harness)
+
+      socket.receive({
+        ...serverFrame('COLLABORATION_AUTHORIZED', discovery.commandId, {
+          epochDiscovery: true,
+          room: 'note-1',
+          serverUpdatedAtTimestamp: 123,
+          collaborationProtocolVersion: 3,
+          roomEpoch: ROOM_EPOCH,
+          collaborationSecurityEpoch: SECURITY_EPOCH,
+          // base64url leads with `-` or `_` 2/64 of the time; the gateway's own
+          // envelope rule refuses that, and it closes the socket over it.
+          epochDiscoveryChallenge: '_hallenge_abcdefghijklmnopqrstuvwxyz0123456789',
+          epochDiscoveryRequestId: discovery.requestId,
+          challengeExpiresAt: Date.now() + 10_000,
+        }),
+        requestId: discovery.requestId,
+      })
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'COLLABORATION_FALLBACK',
+        clientRequestId: 'collaboration-client-1',
+        reason: 'proxy-failed',
+      })
+      expect(socket.sent.filter((entry) => JSON.parse(entry).type === 'COLLABORATION_AUTHORIZE')).toHaveLength(1)
+    })
   })
 })

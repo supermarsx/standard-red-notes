@@ -32,6 +32,7 @@ import {
   utf8Bytes,
   WorkerAuthenticatedRpcRequest,
 } from './syncTransportProtocol'
+import { OWNER_LEASE_TTL_MS } from './SyncTransportOutbox'
 
 type SyncWorkerLike = {
   onmessage: ((event: MessageEvent<SyncWorkerToMainMessage>) => void) | null
@@ -287,6 +288,13 @@ type PendingFileDownload = {
 const CAPABILITY_REPROBE_MS = 60_000
 
 /**
+ * How long the worker is given to hand its multi-tab owner lease back before the
+ * page terminates it. Short enough to be invisible on a tab close, long enough
+ * for one IndexedDB write.
+ */
+const WORKER_SHUTDOWN_GRACE_MS = 500
+
+/**
  * The worker lane rides a same-origin websocket, so it only makes sense from a
  * page served over http(s). Electron `file:`, a React Native webview or an
  * extension popup have no such origin and run the legacy socket lane only.
@@ -367,6 +375,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    */
   private ticketFailureCache?: { reason: SyncFallbackReason; until: number }
   private fallbackReason?: SyncFallbackReason
+  private pageHideListener?: () => void
+  private shutdownBarrier?: () => void
 
   constructor(private readonly options: WebSocketSyncTransportOptions) {}
 
@@ -681,8 +691,17 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     this.deinitialized = true
-    this.worker?.postMessage({ type: 'SHUTDOWN' })
-    this.terminateWorker()
+    this.unregisterPageHideRelease()
+    const worker = this.worker
+    this.worker = undefined
+    this.workerSessionScope = undefined
+    if (worker) {
+      // `terminate()` used to run in the same tick as SHUTDOWN, so the worker
+      // never reached the line that hands its owner lease back and the next tab
+      // waited out the whole lease TTL before it could sync over the socket.
+      worker.postMessage({ type: 'SHUTDOWN' })
+      void this.terminateAfterShutdown(worker)
+    }
     const error = new Error('Websocket sync transport was deinitialized.')
     for (const pending of this.pending.values()) {
       pending.reject(error)
@@ -886,6 +905,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       worker.onerror = () => void this.onWorkerError()
       this.worker = worker
       this.workerSessionScope = sessionScope
+      this.registerPageHideRelease()
       return worker
     } catch {
       this.state = 'HTTP_ONLY'
@@ -924,10 +944,67 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     worker?.terminate()
   }
 
+  /** Terminates on `SHUTDOWN_COMPLETE`, or when the grace window runs out. */
+  private terminateAfterShutdown(worker: SyncWorkerLike): Promise<void> {
+    this.negotiated = undefined
+    return new Promise<void>((resolve) => {
+      let settled = false
+      const finish = () => {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(timeout)
+        if (this.shutdownBarrier === finish) {
+          this.shutdownBarrier = undefined
+        }
+        worker.terminate()
+        resolve()
+      }
+      const timeout = setTimeout(finish, WORKER_SHUTDOWN_GRACE_MS)
+      this.shutdownBarrier = finish
+    })
+  }
+
+  /**
+   * A tab being closed or navigated away from should hand the socket over at
+   * once rather than leaving the next tab to wait out the lease. `pagehide`
+   * fires for both, and for the back/forward cache, where the worker's own
+   * in-flight check keeps the release from costing anything.
+   */
+  private registerPageHideRelease(): void {
+    if (this.pageHideListener || typeof globalThis.addEventListener !== 'function') {
+      return
+    }
+    const listener = () => {
+      this.worker?.postMessage({ type: 'RELEASE_OWNER' })
+    }
+    this.pageHideListener = listener
+    globalThis.addEventListener('pagehide', listener)
+  }
+
+  private unregisterPageHideRelease(): void {
+    const listener = this.pageHideListener
+    this.pageHideListener = undefined
+    if (listener && typeof globalThis.removeEventListener === 'function') {
+      globalThis.removeEventListener('pagehide', listener)
+    }
+  }
+
   private async onWorkerMessage(message: SyncWorkerToMainMessage): Promise<void> {
+    if (message.type === 'SHUTDOWN_COMPLETE') {
+      this.shutdownBarrier?.()
+      return
+    }
     if (message.type === 'STATE') {
       this.state = message.state
       this.fallbackReason = message.reason
+      if (message.reason === 'multi-tab-not-owner') {
+        // Another tab owns the socket for this scope and its lease stands for a
+        // known span. Asking again before then can only mint and spend another
+        // one-use ticket to be told the same thing, once per sync per tab.
+        this.ticketFailureCache = { reason: 'multi-tab-not-owner', until: Date.now() + OWNER_LEASE_TTL_MS }
+      }
       // A worker-initiated close never posts DEGRADED (its own onClose is skipped),
       // so HTTP_FALLBACK must clear the negotiation too or the negative ticket
       // cache is bypassed on every sync and the reported operations go stale.
@@ -1367,7 +1444,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     // for the life of the tab, so they always get a fresh answer.
     const bootstrap = this.pendingInviteSubscriptions.has(clientRequestId) || this.pendingRpcs.has(clientRequestId)
     const cached = this.ticketFailureCache
-    if (!bootstrap && !this.negotiated && cached && Date.now() < cached.until) {
+    // `multi-tab-not-owner` is the exception: it is not a verdict about the
+    // deployment but about this tab, it expires with the other tab's lease, and
+    // a bootstrap that ignores it burns a ticket on every one of its retries.
+    if (
+      cached &&
+      !this.negotiated &&
+      Date.now() < cached.until &&
+      (!bootstrap || cached.reason === 'multi-tab-not-owner')
+    ) {
       unavailable(cached.reason)
       return
     }

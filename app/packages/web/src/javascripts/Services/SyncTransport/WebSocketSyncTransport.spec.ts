@@ -1371,4 +1371,119 @@ describe('WebSocketSyncTransport', () => {
       await expect(transport.downloadFileOverSocket(fileRequest())).resolves.toEqual({ outcome: 'unavailable' })
     })
   })
+
+  describe('handing the socket between tabs', () => {
+    const startExecute = async (transport: WebSocketSyncTransport) => {
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+      const execution = transport.execute(request(), fallback)
+      await flush()
+      const execute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+      return { execution, clientRequestId: execute.clientRequestId }
+    }
+
+    const settleOverHttp = async (
+      execution: Promise<unknown>,
+      clientRequestId: string,
+      reason: 'multi-tab-not-owner',
+    ) => {
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason })
+      worker.emit({ type: 'HTTP_FALLBACK', clientRequestId, reason, body: request() })
+      await expect(execution).resolves.toEqual({ response: response('http') })
+    }
+
+    it('stops minting tickets while another tab holds the owner lease', async () => {
+      const transport = createTransport()
+      const first = await startExecute(transport)
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: first.clientRequestId, reconnect: false })
+      await flush()
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+      await settleOverHttp(first.execution, first.clientRequestId, 'multi-tab-not-owner')
+
+      const second = await startExecute(transport)
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: second.clientRequestId, reconnect: false })
+      await flush()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+      expect(worker.posts).toContainEqual({
+        type: 'TICKET_UNAVAILABLE',
+        clientRequestId: second.clientRequestId,
+        reason: 'multi-tab-not-owner',
+      })
+      await settleOverHttp(second.execution, second.clientRequestId, 'multi-tab-not-owner')
+    })
+
+    it('applies the lease verdict to a bootstrap too, which retries far more often than a sync', async () => {
+      const transport = createTransport()
+      const first = await startExecute(transport)
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: first.clientRequestId, reconnect: false })
+      await flush()
+      await settleOverHttp(first.execution, first.clientRequestId, 'multi-tab-not-owner')
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+
+      await transport.subscribeInviteEvents({
+        applyBatch: jest.fn().mockResolvedValue('cursor-1'),
+        reconcile: jest.fn().mockResolvedValue(undefined),
+      })
+      const subscribe = worker.posts.find((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'SUBSCRIBE_INVITE_EVENTS' }
+      >
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: subscribe.clientRequestId, reconnect: false })
+      await flush()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+      expect(worker.posts).toContainEqual({
+        type: 'TICKET_UNAVAILABLE',
+        clientRequestId: subscribe.clientRequestId,
+        reason: 'multi-tab-not-owner',
+      })
+    })
+
+    it('asks the worker to hand the lease back when the page is hidden', async () => {
+      const transport = createTransport()
+      const { execution, clientRequestId } = await startExecute(transport)
+
+      globalThis.dispatchEvent(new Event('pagehide'))
+
+      expect(worker.posts).toContainEqual({ type: 'RELEASE_OWNER' })
+      await settleOverHttp(execution, clientRequestId, 'multi-tab-not-owner')
+    })
+
+    it('gives the worker a moment to release the lease before terminating it', async () => {
+      const transport = createTransport()
+      const { execution } = await startExecute(transport)
+
+      transport.deinit()
+      await expect(execution).rejects.toThrow('deinitialized')
+
+      expect(worker.posts.at(-1)).toEqual({ type: 'SHUTDOWN' })
+      expect(worker.terminated).toBe(false)
+
+      worker.emit({ type: 'SHUTDOWN_COMPLETE' })
+      await flush()
+      expect(worker.terminated).toBe(true)
+    })
+
+    it('terminates anyway when the worker never reports that it shut down', async () => {
+      jest.useFakeTimers()
+      try {
+        const transport = createTransport()
+        const { execution } = await startExecute(transport)
+
+        transport.deinit()
+        await expect(execution).rejects.toThrow('deinitialized')
+        expect(worker.terminated).toBe(false)
+
+        jest.advanceTimersByTime(500)
+        expect(worker.terminated).toBe(true)
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+  })
 })

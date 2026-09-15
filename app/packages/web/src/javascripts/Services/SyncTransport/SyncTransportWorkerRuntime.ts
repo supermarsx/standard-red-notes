@@ -16,6 +16,7 @@ import {
   fileBinaryPayloadMatchesDigest,
   isFileIdentifier,
   isFileSha256,
+  isSyncIdentifier,
   isWorkerFileDownloadRequest,
   isWorkerFileUploadRequest,
   MAX_FILE_BINARY_FRAME_BYTES,
@@ -45,14 +46,46 @@ import {
   WorkerAuthenticatedRpcRequest,
   utf8Bytes,
 } from './syncTransportProtocol'
-import { IndexedDbSyncOutbox, SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
+import {
+  IndexedDbSyncOutbox,
+  isSyncOutboxUnavailable,
+  OWNER_LEASE_TTL_MS,
+  SyncOutboxRecord,
+  SyncOutboxStore,
+} from './SyncTransportOutbox'
 
 const AUTH_ACK_TIMEOUT_MS = 5_000
-const COMMAND_ACK_TIMEOUT_MS = 15_000
+/**
+ * The gateway's own budget for a durable sync command (`wg/syncProtocol.ts`
+ * SYNC_BACKEND_TIMEOUT_MS). Mirrored, not imported: the worker bundle does not
+ * take a server dependency.
+ */
+const SYNC_BACKEND_TIMEOUT_MS = 15_000
+/**
+ * Deliberately later than the server's own deadline. Set equal to it, the two
+ * verdicts raced: the client could tear the socket down for "no answer" in the
+ * same millisecond the gateway was answering, turning a decided command into an
+ * ambiguous one that only a STATUS round trip could settle.
+ */
+const COMMAND_ACK_TIMEOUT_MS = SYNC_BACKEND_TIMEOUT_MS + 5_000
 const HEARTBEAT_INTERVAL_MS = 30_000
-const OWNER_LEASE_TTL_MS = 15_000
+/**
+ * Two heartbeat periods without a PONG. Below this a single slow tick would
+ * close a healthy socket; above it a half-open connection (a proxy that dropped
+ * the TCP session without a FIN) stays "READY" long enough to be discovered by
+ * the next command's ack deadline instead, which costs that command a fallback.
+ */
+const PONG_DEADLINE_MS = 2 * HEARTBEAT_INTERVAL_MS
 const OWNER_RENEW_INTERVAL_MS = 5_000
-const MAX_RECONNECT_ATTEMPTS = 2
+/**
+ * Reconnects allowed per connected session, replenished by every successful
+ * handshake. The budget bounds a dial loop against a broken endpoint; it is not
+ * a lifetime quota, and spending it once must not leave every later command
+ * with zero reconnects.
+ */
+const MAX_RECONNECT_ATTEMPTS = 3
+/** No reconnect dials faster than this, however small the backoff window is. */
+const MIN_RECONNECT_DELAY_MS = 1_000
 const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
 
 /**
@@ -318,9 +351,18 @@ export class SyncTransportWorkerRuntime {
   private inviteSubscription?: ActiveInviteSubscription
   private shuttingDown = false
   private ackTimeout?: ReturnType<typeof setTimeout>
+  private pongTimeout?: ReturnType<typeof setTimeout>
   private reconnectTimeout?: ReturnType<typeof setTimeout>
   private heartbeatInterval?: ReturnType<typeof setInterval>
   private ownerRenewInterval?: ReturnType<typeof setInterval>
+  /**
+   * The last scope this tab dialled, kept after the lease is released so the
+   * next request can read the lease before paying for a ticket to discover the
+   * same thing. Cleared only when the session changes.
+   */
+  private lastTransportScope?: string
+  /** A READY socket that did not negotiate the invite lane never will (see sendInviteSubscription). */
+  private inviteEventsUnavailable = false
 
   constructor(private readonly dependencies: SyncWorkerRuntimeDependencies) {
     this.outbox = dependencies.outbox ?? new IndexedDbSyncOutbox()
@@ -410,6 +452,9 @@ export class SyncTransportWorkerRuntime {
       case 'SESSION_REVOKED':
         await this.revokeSession(message.requestId, message.sessionScope)
         break
+      case 'RELEASE_OWNER':
+        await this.releaseOwnership()
+        break
       case 'SHUTDOWN':
         await this.shutdown()
         break
@@ -425,12 +470,27 @@ export class SyncTransportWorkerRuntime {
       this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
       return
     }
-    if (this.active) {
+    if (this.activeBlocksNewWork()) {
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
       return
     }
+    let record: SyncOutboxRecord | undefined
     try {
-      const record = await this.outbox.oldest(sessionScope)
+      record = await this.outbox.oldest(sessionScope)
+    } catch (error) {
+      // A store that will not open cannot be read, so STATUS can never be asked
+      // about whatever it may hold and no amount of retrying changes that.
+      // Reporting "recovery required" here wedged every later sync until
+      // sign-out; reporting "nothing to recover" lets the ordinary HTTP sync
+      // proceed, and the record — if there is one — is reconciled by the next
+      // recovery once the store opens again.
+      this.dependencies.postMessage({
+        type: isSyncOutboxUnavailable(error) ? 'RECOVERY_EMPTY' : 'RECOVERY_REQUIRED',
+        clientRequestId,
+      })
+      return
+    }
+    try {
       if (!record || record.sessionScope !== sessionScope || record.revoked === true) {
         this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
         return
@@ -469,8 +529,7 @@ export class SyncTransportWorkerRuntime {
         await this.prepareActiveRequest()
         return
       }
-      this.transition('HALF_OPEN')
-      this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+      await this.requestTicket(clientRequestId, sessionScope, false)
     } catch {
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
     }
@@ -486,12 +545,7 @@ export class SyncTransportWorkerRuntime {
       this.postFallback(clientRequestId, body, 'worker-error')
       return
     }
-    if (this.active?.mode === 'invite-bootstrap') {
-      // A command may supersede the connection-only invite bootstrap. The
-      // subscription is sent after AUTH on the command's ticket instead.
-      this.active = undefined
-    }
-    if (this.active) {
+    if (this.activeBlocksNewWork()) {
       // Never create a parallel HTTP owner while an earlier command may be in
       // flight. The durable owner must be reconciled first.
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
@@ -500,12 +554,25 @@ export class SyncTransportWorkerRuntime {
     let normalizedBody: AccountSyncTransportRequest
     try {
       normalizedBody = normalizeSyncRequestForWire(body)
+    } catch {
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+      return
+    }
+    try {
       const stale = await this.outbox.oldest(sessionScope)
       if (stale) {
         this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
         return
       }
-    } catch {
+    } catch (error) {
+      if (isSyncOutboxUnavailable(error)) {
+        // Nothing was ever written for this command, so there is no durable
+        // owner to reconcile and HTTP is free to take it. Demanding a recovery
+        // that this store can never serve locked the account out of sync
+        // entirely; the store is re-opened on the next attempt.
+        this.postFallback(clientRequestId, normalizedBody, 'outbox-unavailable')
+        return
+      }
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
       return
     }
@@ -521,8 +588,59 @@ export class SyncTransportWorkerRuntime {
       return
     }
 
+    await this.requestTicket(clientRequestId, sessionScope, false)
+  }
+
+  /**
+   * A command may take over a connection-only bootstrap: both exist only to get
+   * a socket up, and the RPC request or invite subscription that asked for one
+   * is re-sent on the command's ticket the moment AUTH lands. Refusing the
+   * command instead (`RECOVERY_REQUIRED`) failed a sync that had nothing to
+   * recover, every time a keystroke met an assistant call.
+   *
+   * The takeover itself is the later `this.active = …` assignment, deliberately
+   * not done here: a caller that bails out before it (nothing to recover, an
+   * unusable store) must leave the bootstrap running, or the ticket already in
+   * flight for it would arrive to no owner and its RPC would hang to its
+   * deadline.
+   */
+  private activeBlocksNewWork(): boolean {
+    return this.active !== undefined && this.active.mode !== 'invite-bootstrap' && this.active.mode !== 'rpc-bootstrap'
+  }
+
+  /**
+   * The one place that asks the main thread for a ticket. A tab that cannot own
+   * the socket used to find out only after minting and spending a one-use
+   * ticket — an authenticated request plus a server-side ticket write per sync,
+   * for the life of the tab. The lease lives in this worker's own store, so the
+   * cheap read answers it first.
+   */
+  private async requestTicket(clientRequestId: string, sessionScope: string, reconnect: boolean): Promise<void> {
+    if (await this.socketOwnedByAnotherTab(sessionScope)) {
+      await this.fallback('multi-tab-not-owner')
+      return
+    }
     this.transition('HALF_OPEN')
-    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect })
+  }
+
+  /**
+   * Only ever true when another owner holds an unexpired lease on the scope this
+   * tab last dialled. An unreadable store, an expired lease, our own lease or a
+   * tab that has never connected all fall through to the ordinary ticket path,
+   * so this can delay a handover by at most one lease TTL and can never deny a
+   * socket that is actually free.
+   */
+  private async socketOwnedByAnotherTab(sessionScope: string): Promise<boolean> {
+    const transportScope = this.transportScope ?? this.lastTransportScope
+    if (!transportScope) {
+      return false
+    }
+    try {
+      return await this.outbox.heldByAnotherOwner(transportScope, sessionScope, this.ownerId, this.now())
+    } catch {
+      return false
+    }
   }
 
   private async authorizeCollaboration(
@@ -551,8 +669,7 @@ export class SyncTransportWorkerRuntime {
       await this.prepareActiveRequest()
       return
     }
-    this.transition('HALF_OPEN')
-    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+    await this.requestTicket(clientRequestId, sessionScope, false)
   }
 
   private async openRpc(
@@ -597,8 +714,7 @@ export class SyncTransportWorkerRuntime {
     if (!this.active) {
       this.active = { clientRequestId, sessionScope, mode: 'rpc-bootstrap' }
       this.sessionScope = sessionScope
-      this.transition('HALF_OPEN')
-      this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+      await this.requestTicket(clientRequestId, sessionScope, false)
     }
   }
 
@@ -689,6 +805,18 @@ export class SyncTransportWorkerRuntime {
       })
       return
     }
+    if (this.inviteEventsUnavailable) {
+      // Already answered for this session by a socket that reached READY without
+      // the lane (see sendInviteSubscription). Dialling again to be told the
+      // same thing is what the retry loop this flag exists to stop was doing.
+      this.dependencies.postMessage({
+        type: 'INVITE_ERROR',
+        clientRequestId,
+        code: 'OPERATION_UNAVAILABLE',
+        retryable: false,
+      })
+      return
+    }
 
     const subscription: ActiveInviteSubscription = {
       clientRequestId,
@@ -706,8 +834,7 @@ export class SyncTransportWorkerRuntime {
     }
     if (!this.active) {
       this.active = { clientRequestId, sessionScope, mode: 'invite-bootstrap' }
-      this.transition('HALF_OPEN')
-      this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+      await this.requestTicket(clientRequestId, sessionScope, false)
     }
   }
 
@@ -1435,6 +1562,7 @@ export class SyncTransportWorkerRuntime {
     this.authorization = authorization
     this.sessionScope = sessionScope
     this.transportScope = `${sessionScope}|${endpoint.origin}${endpoint.pathname}|${authorization.deviceId}`
+    this.lastTransportScope = this.transportScope
     try {
       const owner = await this.outbox.acquireOwner(
         this.transportScope,
@@ -1559,6 +1687,10 @@ export class SyncTransportWorkerRuntime {
       this.clearAckDeadline()
       this.sequence = Number(nextSequence)
       this.negotiatedOperations = new Set(operations as SyncNegotiatedOperation[])
+      // The reconnect budget is per connected session, not per tab. Without this
+      // reset one bad patch of network spent it permanently, and every command
+      // for the rest of the tab's life fell back to HTTP on its first close.
+      this.reconnectAttempts = 0
       this.transition('READY')
       this.dependencies.postMessage({
         type: 'NEGOTIATED',
@@ -1577,6 +1709,7 @@ export class SyncTransportWorkerRuntime {
     }
 
     if (frame.type === 'PONG') {
+      this.clearPongDeadline()
       return
     }
     const rpc = this.rpcByCommandId(frame.commandId)
@@ -1783,8 +1916,7 @@ export class SyncTransportWorkerRuntime {
     }
     this.clearAckDeadline()
     await this.closeSocketAndReleaseOwner()
-    this.transition('HALF_OPEN')
-    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId: active.clientRequestId, reconnect: true })
+    await this.requestTicket(active.clientRequestId, active.sessionScope, true)
   }
 
   private async prepareActiveRequest(): Promise<void> {
@@ -1809,12 +1941,13 @@ export class SyncTransportWorkerRuntime {
       return
     }
     if (!this.negotiatedOperations.has('INVITE_EVENTS')) {
-      this.dependencies.postMessage({
-        type: 'INVITE_ERROR',
-        clientRequestId: subscription.clientRequestId,
-        code: 'OPERATION_UNAVAILABLE',
-        retryable: true,
-      })
+      // The gateway advertises this lane whenever its invite store is ready for
+      // the session, so a socket that reached READY without it describes a
+      // deployment that does not serve it — not a moment that will pass.
+      // Reported as retryable, the durable coordinator re-dialled every 30 s for
+      // the life of the tab against a socket that would never carry the lane.
+      this.inviteEventsUnavailable = true
+      this.failInviteSubscription(subscription, 'OPERATION_UNAVAILABLE', false)
       return
     }
     const payload = {
@@ -2427,17 +2560,16 @@ export class SyncTransportWorkerRuntime {
       await this.fallback(this.outboxRecord ? 'reconnect-gap' : 'proxy-failed', this.outboxRecord)
       return
     }
-    const delay = this.random() * Math.min(5_000, 250 * 2 ** this.reconnectAttempts)
+    // Floored: the un-floored window put both retries inside 750 ms, which is
+    // shorter than most of the interruptions worth retrying and spent the whole
+    // budget before the network came back.
+    const delay = Math.max(MIN_RECONNECT_DELAY_MS, this.random() * Math.min(5_000, 250 * 2 ** this.reconnectAttempts))
     this.reconnectAttempts += 1
     this.reconnectTimeout = this.scheduleTimeout(() => {
       this.reconnectTimeout = undefined
-      if (this.active) {
-        this.transition('HALF_OPEN')
-        this.dependencies.postMessage({
-          type: 'NEED_TICKET',
-          clientRequestId: this.active.clientRequestId,
-          reconnect: true,
-        })
+      const active = this.active
+      if (active) {
+        void this.requestTicket(active.clientRequestId, active.sessionScope, true)
       }
     }, delay)
   }
@@ -2481,11 +2613,37 @@ export class SyncTransportWorkerRuntime {
       }
       if (frameByteLength(frame) <= MAX_SYNC_FRAME_BYTES && this.socket.bufferedAmount <= MAX_SYNC_BUFFERED_BYTES) {
         this.socket.send(JSON.stringify(frame))
+        this.awaitPong()
       }
     }, HEARTBEAT_INTERVAL_MS)
   }
 
+  /**
+   * One deadline covers however many pings go unanswered: a socket whose peer
+   * has gone silent is dead after the first missed pair either way, and rearming
+   * per ping would only move the same close a tick later. The close runs the
+   * ordinary `onClose` path, so an idle tab re-dials instead of discovering the
+   * dead connection through the next command's ack timeout.
+   */
+  private awaitPong(): void {
+    if (this.pongTimeout) {
+      return
+    }
+    this.pongTimeout = this.scheduleTimeout(() => {
+      this.pongTimeout = undefined
+      this.socket?.close(4000, 'pong-timeout')
+    }, PONG_DEADLINE_MS)
+  }
+
+  private clearPongDeadline(): void {
+    if (this.pongTimeout) {
+      this.cancelTimeout(this.pongTimeout)
+      this.pongTimeout = undefined
+    }
+  }
+
   private clearHeartbeat(): void {
+    this.clearPongDeadline()
     if (this.heartbeatInterval) {
       this.cancelInterval(this.heartbeatInterval)
       this.heartbeatInterval = undefined
@@ -2504,11 +2662,49 @@ export class SyncTransportWorkerRuntime {
         .renewOwner(this.transportScope, this.sessionScope, this.ownerId, this.now(), OWNER_LEASE_TTL_MS)
         .then((owned) => {
           if (!owned) {
-            void this.fallback('multi-tab-not-owner', this.outboxRecord)
+            void this.surrenderOwnership('multi-tab-not-owner')
           }
         })
-        .catch(() => this.fallback('outbox-unavailable', this.outboxRecord))
+        .catch(() => this.surrenderOwnership('outbox-unavailable'))
     }, OWNER_RENEW_INTERVAL_MS)
+  }
+
+  /**
+   * The lease is gone — another tab took it while this one was frozen, or the
+   * store stopped answering. With a request in flight the caller is told and the
+   * socket goes; with none, the socket used to stay open and unowned until the
+   * NEXT command was cut off by the following renewal tick, so two tabs each
+   * held a live sync socket and one of them lost a command to prove it.
+   */
+  private async surrenderOwnership(reason: SyncFallbackReason): Promise<void> {
+    if (this.active) {
+      await this.fallback(reason, this.outboxRecord)
+      return
+    }
+    this.transition('DEGRADED', reason)
+    await this.closeSocketAndReleaseOwner()
+  }
+
+  /**
+   * The page is going away. Handing the lease back turns the TTL handover into
+   * an immediate one for the next tab. Skipped whenever anything is in flight:
+   * a page that may yet be restored from the back/forward cache must not lose a
+   * command, an RPC or a file transfer to a tidy-up.
+   */
+  private async releaseOwnership(): Promise<void> {
+    if (
+      this.shuttingDown ||
+      !this.transportScope ||
+      this.active ||
+      this.outboxRecord ||
+      this.rpcRequests.size > 0 ||
+      this.fileDownloads.size > 0 ||
+      this.fileUploads.size > 0
+    ) {
+      return
+    }
+    this.transition('DEGRADED')
+    await this.closeSocketAndReleaseOwner()
   }
 
   private async fallback(
@@ -2702,6 +2898,8 @@ export class SyncTransportWorkerRuntime {
     this.inviteSubscription = undefined
     this.outboxRecord = undefined
     this.liveSyncDisabled = false
+    this.inviteEventsUnavailable = false
+    this.lastTransportScope = undefined
     this.outbox.close()
     this.transition('HTTP_ONLY')
     this.dependencies.postMessage(
@@ -2725,6 +2923,9 @@ export class SyncTransportWorkerRuntime {
     this.outboxRecord = undefined
     this.outbox.close()
     this.transition('HTTP_ONLY')
+    // The owner lease is released by now. Saying so lets the main thread stop
+    // waiting and terminate; without it the wait always ran to its full bound.
+    this.dependencies.postMessage({ type: 'SHUTDOWN_COMPLETE' })
   }
 }
 
@@ -2877,8 +3078,15 @@ function parseCollaborationEpochDiscoveryResult(
     payload.collaborationProtocolVersion !== 3 ||
     !isValidCollaborationEpoch(payload.roomEpoch) ||
     !isValidCollaborationEpoch(payload.collaborationSecurityEpoch) ||
-    typeof payload.epochDiscoveryChallenge !== 'string' ||
-    !/^[A-Za-z0-9_-]{32,128}$/u.test(payload.epochDiscoveryChallenge) ||
+    // Both values are echoed back inside the grant frame, where the gateway
+    // holds every identifier to IDENTIFIER_PATTERN and closes the whole sync
+    // socket when one fails. The old rule here accepted a leading `-` or `_`,
+    // which base64url produces 2/64 of the time: those handshakes minted a
+    // challenge this client could not present, and the socket died proving it.
+    // Refusing locally costs one clean HTTP fallback instead.
+    !isSyncIdentifier(payload.epochDiscoveryChallenge) ||
+    payload.epochDiscoveryChallenge.length < 32 ||
+    !isSyncIdentifier(responseRequestId) ||
     payload.epochDiscoveryRequestId !== responseRequestId ||
     !Number.isSafeInteger(payload.challengeExpiresAt) ||
     Number(payload.challengeExpiresAt) <= now ||

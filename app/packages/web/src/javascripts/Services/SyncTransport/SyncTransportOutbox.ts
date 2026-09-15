@@ -21,11 +21,42 @@ export type SyncOutboxRecord = {
   revoked?: boolean
 }
 
+/**
+ * The store itself could not be opened, so nothing can be read or written. Every
+ * other failure describes one operation; this one describes the whole lane, and
+ * the caller answers it by going to HTTP rather than by demanding a durable
+ * recovery it can never perform.
+ */
+export class SyncOutboxUnavailableError extends Error {
+  readonly outboxUnavailable = true
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'SyncOutboxUnavailableError'
+  }
+}
+
+export function isSyncOutboxUnavailable(error: unknown): boolean {
+  return (
+    error instanceof SyncOutboxUnavailableError ||
+    (error as { outboxUnavailable?: boolean })?.outboxUnavailable === true
+  )
+}
+
+/** How long one tab's claim on a transport scope stands without renewal. */
+export const OWNER_LEASE_TTL_MS = 15_000
+
 export interface SyncOutboxStore {
   put(record: SyncOutboxRecord): Promise<void>
   oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined>
   quarantineSessionScope(sessionScope: string): Promise<void>
   delete(sessionScope: string, commandId: string): Promise<void>
+  /**
+   * True only when a DIFFERENT owner holds an unexpired lease on this scope. A
+   * cheap read that answers "is another tab already driving this socket?"
+   * before a one-use ticket is minted to ask the same question.
+   */
+  heldByAnotherOwner(transportScope: string, sessionScope: string, ownerId: string, now: number): Promise<boolean>
   acquireOwner(
     transportScope: string,
     sessionScope: string,
@@ -76,6 +107,8 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 
 export class IndexedDbSyncOutbox implements SyncOutboxStore {
   private databasePromise?: Promise<IDBDatabase>
+  /** Identifies the open attempt that owns `databasePromise` right now. */
+  private openAttempt = 0
 
   constructor(private readonly factory: IDBFactory | undefined = globalThis.indexedDB) {}
 
@@ -116,6 +149,25 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     const transaction = database.transaction(COMMAND_STORE, 'readwrite')
     transaction.objectStore(COMMAND_STORE).delete([sessionScope, commandId])
     await transactionDone(transaction)
+  }
+
+  async heldByAnotherOwner(
+    transportScope: string,
+    sessionScope: string,
+    ownerId: string,
+    now: number,
+  ): Promise<boolean> {
+    const database = await this.database()
+    const transaction = database.transaction(LEASE_STORE, 'readonly')
+    const current = (await requestResult(transaction.objectStore(LEASE_STORE).get(transportScope))) as
+      OwnerLease | undefined
+    await transactionDone(transaction)
+    return (
+      current !== undefined &&
+      current.sessionScope === sessionScope &&
+      current.ownerId !== ownerId &&
+      current.expiresAt > now
+    )
   }
 
   async acquireOwner(
@@ -175,32 +227,62 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
 
   private database(): Promise<IDBDatabase> {
     if (!this.factory) {
-      return Promise.reject(new Error('IndexedDB is unavailable'))
+      return Promise.reject(new SyncOutboxUnavailableError('IndexedDB is unavailable'))
     }
-    if (!this.databasePromise) {
-      this.databasePromise = new Promise((resolve, reject) => {
-        const request = this.factory?.open(DATABASE_NAME, DATABASE_VERSION)
-        if (!request) {
-          reject(new Error('IndexedDB is unavailable'))
-          return
-        }
-        request.onupgradeneeded = () => {
-          const database = request.result
-          if (!database.objectStoreNames.contains(COMMAND_STORE)) {
-            const commands = database.createObjectStore(COMMAND_STORE, {
-              keyPath: ['sessionScope', 'commandId'],
-            })
-            commands.createIndex(SESSION_SCOPE_INDEX, SESSION_SCOPE_INDEX, { unique: false })
-          }
-          if (!database.objectStoreNames.contains(LEASE_STORE)) {
-            database.createObjectStore(LEASE_STORE, { keyPath: 'transportScope' })
-          }
-        }
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error ?? new Error('Could not open sync outbox'))
-        request.onblocked = () => reject(new Error('Sync outbox upgrade was blocked'))
-      })
+    if (this.databasePromise) {
+      return this.databasePromise
     }
-    return this.databasePromise
+    // A rejected open must never be remembered. Caching it turned one blocked
+    // version bump (an older tab still holding the previous version open) into a
+    // permanently unusable store for the life of this worker, and every sync
+    // after it asked for a durable recovery that could never run.
+    //
+    // Guarded by the attempt number rather than by promise identity so a late
+    // handler from a superseded attempt (including one this `close()` dropped)
+    // cannot discard the connection a later attempt opened.
+    const attempt = ++this.openAttempt
+    const forget = () => {
+      if (this.openAttempt === attempt) {
+        this.databasePromise = undefined
+      }
+    }
+    const pending = new Promise<IDBDatabase>((resolve, reject) => {
+      const request = this.factory?.open(DATABASE_NAME, DATABASE_VERSION)
+      if (!request) {
+        reject(new SyncOutboxUnavailableError('IndexedDB is unavailable'))
+        return
+      }
+      request.onupgradeneeded = () => {
+        const database = request.result
+        if (!database.objectStoreNames.contains(COMMAND_STORE)) {
+          const commands = database.createObjectStore(COMMAND_STORE, {
+            keyPath: ['sessionScope', 'commandId'],
+          })
+          commands.createIndex(SESSION_SCOPE_INDEX, SESSION_SCOPE_INDEX, { unique: false })
+        }
+        if (!database.objectStoreNames.contains(LEASE_STORE)) {
+          database.createObjectStore(LEASE_STORE, { keyPath: 'transportScope' })
+        }
+      }
+      request.onsuccess = () => {
+        const database = request.result
+        // Another tab is upgrading the schema. Holding this connection open
+        // blocks its open (and therefore its whole sync lane) until this page
+        // closes; step aside and re-open on the next operation instead.
+        database.onversionchange = () => {
+          database.close()
+          forget()
+        }
+        resolve(database)
+      }
+      request.onerror = () =>
+        reject(new SyncOutboxUnavailableError(request.error?.message ?? 'Could not open sync outbox'))
+      request.onblocked = () => reject(new SyncOutboxUnavailableError('Sync outbox upgrade was blocked'))
+    }).catch((error: unknown) => {
+      forget()
+      throw error
+    })
+    this.databasePromise = pending
+    return pending
   }
 }

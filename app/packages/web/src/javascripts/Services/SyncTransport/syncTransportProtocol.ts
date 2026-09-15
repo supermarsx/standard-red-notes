@@ -52,7 +52,20 @@ function hasControlCharacters(value: string): boolean {
 
 const FILE_BINARY_MAGIC = [0x53, 0x52, 0x4e, 0x46] as const
 const FILE_BINARY_PREFIX_BYTES = 8
-const FILE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+/**
+ * The gateway's envelope rule for every identifier a client may put on the wire
+ * (`wg/syncProtocol.ts` IDENTIFIER_PATTERN). Anything this rejects cannot be
+ * echoed back: the gateway fails envelope validation and closes the whole sync
+ * socket, so a value the server hands us that does not satisfy it has to be
+ * refused here, where the cost is one clean HTTP fallback.
+ */
+export const SYNC_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+
+export function isSyncIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && SYNC_IDENTIFIER_PATTERN.test(value)
+}
+
+const FILE_IDENTIFIER_PATTERN = SYNC_IDENTIFIER_PATTERN
 const FILE_SHA256_PATTERN = /^[a-f0-9]{64}$/u
 
 /**
@@ -597,6 +610,12 @@ export type MainToSyncWorkerMessage =
   | { type: 'TICKET_UNAVAILABLE'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'CHECKPOINT_DURABLE'; requestId: string; sessionScope: string; commandId: string }
   | { type: 'SESSION_REVOKED'; requestId: string; sessionScope: string }
+  /**
+   * The page is going away (`pagehide`). Hand the multi-tab owner lease back now
+   * so the next tab takes over immediately instead of waiting out the TTL. The
+   * worker ignores it while anything is in flight.
+   */
+  | { type: 'RELEASE_OWNER' }
   | { type: 'SHUTDOWN' }
 
 export type SyncFallbackReason =
@@ -765,6 +784,12 @@ export type SyncWorkerToMainMessage =
   | { type: 'CHECKPOINT_FAILED'; requestId: string; sessionScope: string; commandId: string }
   | { type: 'SESSION_REVOKED_ACK'; requestId: string; sessionScope: string }
   | { type: 'SESSION_REVOKED_FAILED'; requestId: string; sessionScope: string }
+  /**
+   * SHUTDOWN finished, owner lease included. The main thread waits a bounded
+   * moment for this before `terminate()`, because terminating in the same tick
+   * killed the release and left the lease to expire on its TTL.
+   */
+  | { type: 'SHUTDOWN_COMPLETE' }
 
 /**
  * Materializes the exact value that JSON HTTP serialization puts on the wire.
