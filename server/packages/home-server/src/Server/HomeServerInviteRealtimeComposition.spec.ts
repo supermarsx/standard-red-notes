@@ -379,7 +379,7 @@ jest.mock('./WebSocketRedisBridge', () => ({ WebSocketRedisBridge: WebSocketRedi
 // Deliberately require after the dependency doubles are initialized. A static
 // import is hoisted ahead of the captured class doubles by the Jest transform.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { HomeServer } = require('./HomeServer') as typeof import('./HomeServer')
+const { HomeServer, IN_PROCESS_PUSH_BRIDGE_REASON } = require('./HomeServer') as typeof import('./HomeServer')
 type HomeServerInstance = InstanceType<typeof HomeServer>
 
 const configuration = {
@@ -699,6 +699,11 @@ describe('HomeServer FILES_V1 composition', () => {
     })
     expect(result.isFailed()).toBe(false)
     const attachOptions = latest(mockWebSocketRuntimeInstances).attach.mock.calls[0][0]
+    // With a Redis host configured the bridge is the push transport, so it is
+    // given no reason to report itself closed.
+    expect(
+      (latest(mockWebSocketRedisBridgeInstances).options as { disabledReason?: string }).disabledReason,
+    ).toBeUndefined()
     return { server, uploadRoot, files: attachOptions.sync?.files }
   }
 
@@ -925,6 +930,12 @@ describe('HomeServer FILES_V1 composition', () => {
     // The push domain event now has a listener again: the in-process bridge is
     // registered alongside the (self-disabling) Redis one.
     expect(latest(mockDirectCallPublisherInstances).register).toHaveBeenCalledTimes(2)
+    // ...and that Redis bridge is told WHY it is closed, so its one boot line
+    // names the transport carrying push instead of flatly contradicting the
+    // `pushBridge: in-process` line two above it.
+    expect(latest(mockWebSocketRedisBridgeInstances).options).toMatchObject({
+      disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON,
+    })
     // And the gate the admin panel reads says so, with no REDIS_UNBOUND.
     const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0] as Record<string, unknown>
     expect(recorded).toMatchObject({ sharedState: 'in-process', redisBound: false, gatewayAttached: true })

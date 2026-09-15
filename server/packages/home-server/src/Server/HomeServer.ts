@@ -230,6 +230,21 @@ export function parseHomeServerRedisNamespace(raw: string | undefined): {
 
 export const REDIS_NAMESPACE_INVALID_CODE = 'WEBSOCKET_REDIS_NAMESPACE_INVALID' satisfies SyncHostUnmetCondition
 
+/**
+ * What the Redis push bridge says about itself when this deployment does not
+ * use it (C16/D1).
+ *
+ * `WebSocketRedisBridge` otherwise logs "REDIS_HOST not set; realtime push
+ * bridge disabled." -- written when an unset REDIS_HOST really did mean no push
+ * at all. On a single container that line now prints TWO LINES AFTER
+ * `pushBridge: in-process`, so the first thing a self-hoster reads at boot is
+ * their own server contradicting itself about whether push works. The bridge
+ * already accepts a `disabledReason` that replaces that exact line, so the
+ * truthful sentence goes through the mechanism that is already there.
+ */
+export const IN_PROCESS_PUSH_BRIDGE_REASON =
+  'REDIS_HOST is not set, and this deployment does not need it: realtime push is delivered in-process by the gateway attached to this server. Set REDIS_HOST only to run several gateway replicas against one database.'
+
 /** The one constant copy, shared with the admin diagnostics report. */
 export const REDIS_NAMESPACE_INVALID_REMEDY = SYNC_HOST_REMEDIES[REDIS_NAMESPACE_INVALID_CODE]
 
@@ -485,15 +500,23 @@ export class HomeServer implements HomeServerInterface {
       // a sibling stack's bare channel.
       const redisNamespaceParse = parseHomeServerRedisNamespace(env.get('WEBSOCKET_REDIS_NAMESPACE', true))
       const webSocketRedisNamespace = redisNamespaceParse.namespace
+      const configuredRedisHost = env.get('REDIS_HOST', true) || undefined
       const webSocketRedisBridge = new WebSocketRedisBridge(
         winston.loggers.get('home-server'),
-        env.get('REDIS_HOST', true) || undefined,
+        configuredRedisHost,
         env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
         {
           namespace: webSocketRedisNamespace,
-          ...(redisNamespaceParse.valid
-            ? {}
-            : { disabledReason: `${REDIS_NAMESPACE_INVALID_CODE} (${REDIS_NAMESPACE_INVALID_REMEDY})` }),
+          // Which sentence this bridge prints about being closed. With no Redis
+          // at all the namespace is moot (nothing is published anywhere, so
+          // there is no sibling stack to collide with), and the honest reason is
+          // that another transport carries push -- otherwise the boot log
+          // announces `pushBridge: in-process` and then calls push disabled.
+          ...(!configuredRedisHost
+            ? { disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON }
+            : redisNamespaceParse.valid
+              ? {}
+              : { disabledReason: `${REDIS_NAMESPACE_INVALID_CODE} (${REDIS_NAMESPACE_INVALID_REMEDY})` }),
         },
       )
       directCallDomainEventPublisher.register(webSocketRedisBridge)

@@ -13,10 +13,12 @@ import {
 import type { SyncCommandBackendAdapter, SyncLiveAuthorizationAdapter } from '@standard-red-notes/websocket-gateway'
 
 import { HomeServerRuntime } from './HomeServerRuntime'
+import { WebSocketRedisBridge } from './WebSocketRedisBridge'
 import {
   boundedBootFailureText,
   describeHomeServerRealtimePreconditions,
   formatGatewayLogArguments,
+  IN_PROCESS_PUSH_BRIDGE_REASON,
   parseHomeServerRedisNamespace,
   REDIS_NAMESPACE_INVALID_CODE,
   REDIS_NAMESPACE_INVALID_REMEDY,
@@ -668,5 +670,61 @@ describe('boot failure reporting', () => {
     expect(boundedBootFailureText(message)).toBe(
       '(details withheld: the message may carry a path, URL or configured value; see the redacted log line above)',
     )
+  })
+})
+
+/**
+ * D1: the boot log must not contradict itself. `pushBridge: in-process` and
+ * "realtime push bridge disabled" two lines apart is the same defect class this
+ * whole task is about, in the surface a self-hoster reads first. These drive the
+ * REAL bridge rather than a double, because the thing under test IS its output.
+ */
+describe('WebSocketRedisBridge boot line on the in-process plane', () => {
+  function bridgeLogger() {
+    return { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }
+  }
+
+  function linesFrom(logger: ReturnType<typeof bridgeLogger>): string {
+    return [...logger.info.mock.calls, ...logger.warn.mock.calls, ...logger.error.mock.calls]
+      .map((call) => String(call[0]))
+      .join(' | ')
+  }
+
+  it('says what carries push instead, never that push is disabled', () => {
+    const logger = bridgeLogger()
+    const bridge = new WebSocketRedisBridge(
+      logger as unknown as ConstructorParameters<typeof WebSocketRedisBridge>[0],
+      undefined,
+      6379,
+      { disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON },
+    )
+
+    bridge.connect()
+    const lines = linesFrom(logger)
+
+    // The line that used to contradict `pushBridge: in-process` is gone...
+    expect(lines).not.toContain('REDIS_HOST not set; realtime push bridge disabled')
+    // ...replaced by one that names the transport that IS carrying push, and
+    // says when an operator would actually want to set REDIS_HOST.
+    expect(lines).toContain('realtime push is delivered in-process')
+    expect(lines).toContain('only to run several gateway replicas')
+    // Said once, however many events arrive.
+    bridge.connect()
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('still reports a genuinely absent push bridge when no reason is supplied', () => {
+    const logger = bridgeLogger()
+
+    new WebSocketRedisBridge(
+      logger as unknown as ConstructorParameters<typeof WebSocketRedisBridge>[0],
+      undefined,
+      6379,
+      {},
+    ).connect()
+
+    // The original line is the right one for a caller that has no other
+    // transport: it means what it says there.
+    expect(linesFrom(logger)).toContain('REDIS_HOST not set; realtime push bridge disabled')
   })
 })
