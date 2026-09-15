@@ -130,18 +130,28 @@ Lease keys are refreshed only while the socket is alive and expire after a
 bounded interval if a process disappears. Redis never receives note plaintext,
 room keys, or room capabilities.
 
-Multiple API-gateway replicas therefore **require** Redis. Keep it internal and
+A deployment that runs exactly one gateway process keeps that same state in its
+own memory instead, which is what the single container does. Multiple
+API-gateway replicas **require** Redis. Keep it internal and
 healthy when scaling the gateway. During a Redis outage each replica stays
 fail-closed on room authorization and durable encrypted item sync keeps working,
 but realtime relay is guaranteed only between clients on the same replica until
 Redis recovers — which is the failure that looks like nothing at all on a small
 deployment and like intermittent staleness on a large one.
 
-Single-container and LXC deployments start a realtime gateway only when
-`REDIS_HOST` is configured. Without it those deployments have no live relay at
-all: co-editing, presence and live comments are unavailable, and collaborators
-fall back to ordinary encrypted sync with the usual conflict handling. The
-multi-container stack ships Redis and has the relay on by default.
+Single-container and LXC deployments bundle no Redis and need none. One process
+holds every socket there, so the gateway attaches with `REDIS_HOST` unset and
+keeps the collaboration plane, the push bridge and the sync lane's ticket, lease
+and socket-budget state in that same process. Co-editing, presence and live
+comments work out of the box. Two properties follow from a plane that lives in
+memory: realtime state is lost on restart, so collaborators re-discover their
+rooms and resync, and a client that was offline across a restart catches up over
+HTTP rather than over the socket. Nothing durable is at stake either way, because
+edits and comments persist through ordinary encrypted item sync.
+
+Set `REDIS_HOST` on those topologies only to run several gateway replicas against
+one database. The multi-container stack ships Redis and has the relay on by
+default.
 
 If collaborators see stale content:
 

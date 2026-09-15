@@ -974,11 +974,7 @@ Realtime collaboration lets shared-vault members with current write or admin per
 
 > **Info.** Read-only vault members and read-only account or MCP sessions cannot join the live relay. They keep ordinary encrypted sync and can still view content their vault permission allows. If the relay is unavailable, editors fall back to ordinary encrypted note persistence and sync.
 
-{% include safety-alert.html
-  level="danger"
-  title="Important safety warning"
-  body="The all-in-one container and the LXC install start a realtime gateway only when an external Redis host is configured. Without one there is no live relay at all — no co-editing session, presence, or live comments — and collaborators work through ordinary encrypted sync instead. The full multi-container deployment ships its own cache and has the relay on by default."
-%}
+> **Info.** Every deployment has the live relay on by default, including the all-in-one container and the LXC install. Those run one process that holds every socket, so the relay lives in that process and needs no external Redis host. Realtime state is not kept across a restart: collaborators rejoin the room and resync, and nothing is lost, because edits and comments persist through ordinary encrypted sync either way. An external Redis host is needed only to run several gateway replicas against one database.
 
 If live updates stop while ordinary sync keeps working, an administrator can read Settings → Admin → Diagnostics. Its Realtime health section reports whether a gateway is attached to the process that answered, whether a push bridge is carrying change notifications, whether the collaboration relay is established, and how many pushes have been dispatched since that gateway started. It is informational: readiness is deliberately not gated on it, so a healthy server with a degraded realtime section is a real and expected combination.
 

@@ -160,7 +160,7 @@ six rows:
 | Row                  | Reads                            | What a bad value means                                                                                                              |
 | -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Gateway              | attached / not attached          | Unattached means nothing reaches a client over a socket, whatever the boot gate decided.                                            |
-| Push bridge          | the bridge and whether it is ready | `none` means no transport carries change notifications, so a save on one device is never pushed to another. Bound but not ready is a reconnect window that recovers on its own. |
+| Push bridge          | `redis`, `in-process`, or `none`, with readiness | Both `redis` and `in-process` count as bound and healthy; a single process that holds every socket needs no Redis to deliver a push. `none` means nothing carries change notifications at all. Bound but not ready is a reconnect window that recovers on its own. |
 | Queue consumer       | running / not running            | Expected to be idle where pushes arrive through the bridge alone; on a stack that provisions the websocket queue it means those events are not being drained. |
 | Collaboration relay  | healthy / unhealthy              | Unhealthy still leaves collaboration working between clients on the **same** replica, which is why it fails quietly on a multi-replica deployment. |
 | Sync lane            | up / down                        | Down means the gateway would refuse a client on `/sockets/sync` right now; the live refusal reasons above the rows say why.          |
@@ -183,8 +183,10 @@ screen would look healthy:
   reported.
 - **The socket is attached with no push bridge.** The lane accepts clients, but
   nothing carries server-side change notifications to them, so a save on one
-  device never reaches another until that device syncs on its own. A deployment
-  with no Redis reports this today.
+  device never reaches another until that device syncs on its own. This is a
+  misconfiguration rather than a topology: a process that was asked for a
+  Redis-backed plane without a reachable Redis host. A deployment that simply has
+  no Redis reports an in-process bridge instead and is healthy.
 
 ## Symptom guide
 
