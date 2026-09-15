@@ -539,17 +539,6 @@ const SERVER_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS = Object.freeze([
       "This nested server reusable definition is non-root-active in the monorepo and runs test-only home-server E2E coverage.",
   },
   {
-    path: "server/.github/workflows/e2e-self-hosted.yml",
-    owner: "embedded-server-e2e",
-    classification: "embedded-nonmutating-support",
-    status: "non-root-active",
-    activation: "workflow-call-portable",
-    targetKind: "test-support",
-    targets: ["self-hosted E2E test artifacts"],
-    reason:
-      "This nested server reusable definition is non-root-active in the monorepo and runs test-only self-hosted E2E coverage.",
-  },
-  {
     path: "server/.github/workflows/e2e-test-suite.yml",
     owner: "embedded-server-e2e",
     classification: "embedded-nonmutating-support",
@@ -820,7 +809,6 @@ const WORKFLOW_TRIGGER_CONTRACTS = Object.freeze({
   "app/.github/upstream-workflows-disabled/web.release.prod.yml": ["push"],
   "server/.github/workflows/common-e2e.yml": ["workflow_call"],
   "server/.github/workflows/e2e-home-server.yml": ["workflow_call"],
-  "server/.github/workflows/e2e-self-hosted.yml": ["workflow_call"],
   "server/.github/workflows/e2e-test-suite.yml": [
     "schedule",
     "workflow_dispatch",

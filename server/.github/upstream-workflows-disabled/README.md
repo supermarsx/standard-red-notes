@@ -20,7 +20,7 @@ These files are preserved as upstream source history, but they are intentionally
 | `common-docker-image.yml` | Logs in to Docker Hub and Amazon ECR, builds multi-architecture service images, and pushes mutable `latest` plus commit-SHA tags to both upstream registries. |
 | `common-self-hosting.yml` | Logs in to Docker Hub and pushes multi-architecture `standardnotes/server:latest` and commit-SHA self-hosting images. |
 
-The five nested test/support definitions remain in `server/.github/workflows/`: `pr.yml`, `e2e-test-suite.yml`, `e2e-self-hosted.yml`, `e2e-home-server.yml`, and `common-e2e.yml`. They build or test code and upload test artifacts; they do not publish packages, push images, deploy infrastructure, dispatch external repositories, or write releases. They remain upstream reference material and are still not repository-root workflows in this monorepo.
+The four nested test/support definitions remain in `server/.github/workflows/`: `pr.yml`, `e2e-test-suite.yml`, `e2e-home-server.yml`, and `common-e2e.yml`. They build or test code and upload test artifacts; they do not publish packages, push images, deploy infrastructure, dispatch external repositories, or write releases. They remain upstream reference material and are still not repository-root workflows in this monorepo.
 
 ## Re-enable contract
 

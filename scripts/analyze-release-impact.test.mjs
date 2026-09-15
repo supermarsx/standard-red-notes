@@ -326,7 +326,6 @@ function writeRepositoryWorkflowInventory(repo) {
   for (const filename of [
     "common-e2e.yml",
     "e2e-home-server.yml",
-    "e2e-self-hosted.yml",
   ]) {
     write(
       repo,
@@ -1785,7 +1784,7 @@ test("repository mode inventories every workspace without inventing publishers",
       managedProducts: 8,
       yarnWorkspaces: 10,
       standaloneManagedPackages: 2,
-      workflowOwners: 42,
+      workflowOwners: 41,
       distributionSurfaces: 2,
     });
     assert.deepEqual(result.categoryCounts, {
@@ -1849,11 +1848,11 @@ test("repository mode inventories every workspace without inventing publishers",
       "noncanonical-external-mutation": 3,
       "protected-main-container-publication": 1,
       "root-nonmutating-support": 1,
-      "embedded-nonmutating-support": 7,
+      "embedded-nonmutating-support": 6,
     });
     assert.deepEqual(result.workflowOwnership.scopeCounts, {
       rootDiscoverable: 11,
-      embeddedPortable: 12,
+      embeddedPortable: 11,
       quarantined: 19,
     });
     assert.deepEqual(result.workflowOwnership.quarantineCounts, {
@@ -1863,8 +1862,8 @@ test("repository mode inventories every workspace without inventing publishers",
     });
     assert.deepEqual(result.workflowOwnership.embeddedSupportCounts, {
       app: 2,
-      server: 5,
-      total: 7,
+      server: 4,
+      total: 6,
     });
     const workflowsByPath = new Map(
       result.workflowOwnership.workflows.map((entry) => [entry.path, entry]),
@@ -1911,7 +1910,7 @@ test("repository mode inventories every workspace without inventing publishers",
           entry.classification === "embedded-nonmutating-support" &&
           entry.path.startsWith("server/"),
       ).length,
-      5,
+      4,
     );
     assert.equal(result.distributionSurfaces.length, 2);
     assert.equal(
@@ -2281,7 +2280,7 @@ test("repository CLI writes JSON, Markdown, and GitHub outputs", () => {
     assert.equal(machine.products.length, 8);
     assert.equal(machine.workspaces.length, 10);
     assert.equal(machine.standaloneManagedPackages.length, 2);
-    assert.equal(machine.workflowOwnership.workflows.length, 42);
+    assert.equal(machine.workflowOwnership.workflows.length, 41);
     assert.equal(machine.distributionSurfaces.length, 2);
     assert.match(
       readFileSync(path.join(context.repo, "release-impact.md"), "utf8"),

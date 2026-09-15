@@ -207,7 +207,6 @@ const APP_QUARANTINED_WORKFLOWS = Object.freeze([
 const SERVER_EMBEDDED_WORKFLOWS = Object.freeze([
   "server/.github/workflows/common-e2e.yml",
   "server/.github/workflows/e2e-home-server.yml",
-  "server/.github/workflows/e2e-self-hosted.yml",
   "server/.github/workflows/e2e-test-suite.yml",
   "server/.github/workflows/pr.yml",
 ]);
