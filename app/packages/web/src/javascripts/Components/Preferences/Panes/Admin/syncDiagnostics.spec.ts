@@ -301,6 +301,15 @@ describe('sync diagnostics model', () => {
       expect(finding?.detail).toContain('misconfiguration rather than a topology')
       expect(finding?.detail).toContain('in-process bridge instead and is healthy')
       expect(finding?.detail).not.toContain('what a deployment with no Redis reports')
+      // Name BOTH healthy values, not just the one this deployment has. An
+      // operator who only reads "in-process is fine" cannot tell whether their
+      // multi-container `redis` is the third state or the broken one.
+      expect(finding?.detail).toContain('multi-container one reports redis')
+      // `'none'` has a second cause with a completely different fix. Telling an
+      // operator on an old build to check their Redis host sends them after a
+      // setting that will not help.
+      expect(finding?.detail).toContain('older than the in-process plane')
+      expect(finding?.detail).toContain('upgrade')
     })
 
     it('raises no push-bridge finding for the in-process plane, which is a healthy single process', () => {
@@ -530,6 +539,33 @@ describe('sync diagnostics model', () => {
       // when the in-process plane landed.
       expect(bridge?.note).toContain('in-process bridge instead and is healthy')
       expect(bridge?.note).not.toContain('A deployment with no Redis reports this')
+      expect(bridge?.note).toContain('multi-container one reports redis')
+      expect(bridge?.note).toContain('older than the in-process plane')
+    })
+
+    /**
+     * The row and the Overview finding are written separately and have drifted
+     * apart once already. This pins the facts they must BOTH carry, so the next
+     * edit to either one cannot silently leave the other behind.
+     */
+    it('keeps the push-bridge row and the Overview finding telling the same story', () => {
+      const realtime = { attached: true, pushBridge: 'none', syncLane: 'up', pushesDispatched: 0 }
+      const note = describeRealtimeHealth(realtime).find((row) => row.label === 'Push bridge')?.note ?? ''
+      const detail =
+        diagnose(
+          { ...gateSatisfied, live: { ...gateSatisfied.live, realtime } },
+          { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+        ).findings.find((entry) => entry.title.includes('no push bridge'))?.detail ?? ''
+
+      for (const fact of [
+        'misconfiguration rather than a topology',
+        'in-process bridge instead and is healthy',
+        'multi-container one reports redis',
+        'older than the in-process plane',
+      ]) {
+        expect(note).toContain(fact)
+        expect(detail).toContain(fact)
+      }
     })
 
     /**

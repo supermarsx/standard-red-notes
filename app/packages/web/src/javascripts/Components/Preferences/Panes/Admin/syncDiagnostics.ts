@@ -569,7 +569,7 @@ export function diagnose(
     findings.push({
       title: 'The socket is attached with no push bridge',
       detail:
-        'The lane accepts clients, but nothing carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is a misconfiguration rather than a topology: a process that was asked for a Redis-backed plane without a reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy.',
+        'The lane accepts clients, but nothing carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is a misconfiguration rather than a topology: a process that was asked for a Redis-backed plane without a reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy, and a multi-container one reports redis — only "none" is a fault. The other way to reach it is a server build older than the in-process plane, which an upgrade fixes rather than any setting.',
     })
   }
 
@@ -695,7 +695,7 @@ export function describeRealtimeHealth(
    * an operator about to add a second replica needs to know which one they have.
    */
   const bridgeNote = !bridgeBound
-    ? 'Nothing carries server-side change notifications, so a change saved on one device is never pushed to another. This is a misconfiguration rather than a topology: a process asked for a Redis-backed plane with no reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy.'
+    ? 'Nothing carries server-side change notifications, so a change saved on one device is never pushed to another. This is a misconfiguration rather than a topology: a process asked for a Redis-backed plane with no reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy, and a multi-container one reports redis. A server build older than the in-process plane also lands here, and needs an upgrade rather than a setting.'
     : !realtime.pushBridgeReady
       ? 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.'
       : bridge === 'in-process'
