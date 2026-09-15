@@ -249,7 +249,11 @@ describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
   it('keys the counter on a digest of the bearer credential, never on the credential itself', async () => {
     const redis = buildRedis()
     const next: NextFunction = jest.fn()
-    const middleware = createRateLimitMiddleware({ redis, config: { enabled: true, rules }, logger: { warn: jest.fn() } })
+    const middleware = createRateLimitMiddleware({
+      redis,
+      config: { enabled: true, rules },
+      logger: { warn: jest.fn() },
+    })
 
     middleware(
       buildRequest({ path: '/v1/sockets/tokens', headers: { authorization: 'Bearer session-secret' } as never }),
@@ -266,7 +270,11 @@ describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
 
   it('throttles one session while another session from the same IP keeps its allowance', async () => {
     const redis = buildRedis()
-    const middleware = createRateLimitMiddleware({ redis, config: { enabled: true, rules }, logger: { warn: jest.fn() } })
+    const middleware = createRateLimitMiddleware({
+      redis,
+      config: { enabled: true, rules },
+      logger: { warn: jest.fn() },
+    })
     const call = async (authorization: string) => {
       const next: NextFunction = jest.fn()
       const { response, status } = buildResponse()
@@ -286,7 +294,11 @@ describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
 
   it('falls back to the client IP when no bearer credential is presented', async () => {
     const redis = buildRedis()
-    const middleware = createRateLimitMiddleware({ redis, config: { enabled: true, rules }, logger: { warn: jest.fn() } })
+    const middleware = createRateLimitMiddleware({
+      redis,
+      config: { enabled: true, rules },
+      logger: { warn: jest.fn() },
+    })
 
     middleware(buildRequest({ path: '/sockets/tokens', headers: {} }), buildResponse().response, jest.fn())
     await flush()

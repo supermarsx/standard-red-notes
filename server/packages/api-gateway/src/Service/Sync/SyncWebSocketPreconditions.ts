@@ -143,9 +143,7 @@ export function resolveUnmetSyncItemsPreconditions(state: SyncPreconditionState)
  * condition (`SyncGateDiagnostics.SyncHostUnmetCondition`) whose code is not a
  * member of the closed set above, and the rendering is the same for both.
  */
-export function describeUnmetSyncPreconditions(
-  preconditions: readonly { code: string; remedy: string }[],
-): string {
+export function describeUnmetSyncPreconditions(preconditions: readonly { code: string; remedy: string }[]): string {
   if (preconditions.length === 0) {
     return 'none'
   }

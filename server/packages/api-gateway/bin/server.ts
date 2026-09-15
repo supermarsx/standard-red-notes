@@ -876,7 +876,9 @@ void container
       10_000,
     )
     if (redisReadiness === 'timeout' || redisReadiness === 'ended') {
-      logger.warn(`Redis client did not reach ready before the listener opened (${redisReadiness}); marking ready anyway`)
+      logger.warn(
+        `Redis client did not reach ready before the listener opened (${redisReadiness}); marking ready anyway`,
+      )
     }
 
     serverInstance.listen(env.get('PORT'), () => {

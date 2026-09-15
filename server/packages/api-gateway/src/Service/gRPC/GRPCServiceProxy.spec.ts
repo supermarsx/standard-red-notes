@@ -570,7 +570,9 @@ describe('GRPCServiceProxy', () => {
       expect(handleMintToken).toHaveBeenCalledTimes(1)
       expect(httpClient.request).not.toHaveBeenCalled()
       expect(status).toHaveBeenCalledWith(200)
-      expect(send).toHaveBeenCalledWith(expect.objectContaining({ meta: expect.anything(), data: { token: 'ws-token' } }))
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ meta: expect.anything(), data: { token: 'ws-token' } }),
+      )
     })
 
     it('keeps a gateway-originated websocket call in the minimal legacy format', async () => {

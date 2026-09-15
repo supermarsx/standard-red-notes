@@ -88,7 +88,9 @@ describe('SQSEventMessageHandler', () => {
 
     expect(handler.handle).not.toHaveBeenCalled()
     expect(logger.warn).toHaveBeenCalledTimes(1)
-    expect(logger.warn).toHaveBeenCalledWith('unhandled event type UNREGISTERED; check the SQS_QUEUE_URL of this worker')
+    expect(logger.warn).toHaveBeenCalledWith(
+      'unhandled event type UNREGISTERED; check the SQS_QUEUE_URL of this worker',
+    )
     expect(logger.debug).not.toHaveBeenCalled()
 
     await messageHandler.handleMessage(snsEnvelope({ ...domainEvent, type: 'UNREGISTERED' }))

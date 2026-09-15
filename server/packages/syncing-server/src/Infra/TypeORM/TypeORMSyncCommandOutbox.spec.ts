@@ -1,7 +1,11 @@
 import 'reflect-metadata'
 import { DataSource, getMetadataArgsStorage } from 'typeorm'
 
-import { TypeORMSyncCommandOutbox, eventJsonColumnOptions, resolveEventJsonColumnType } from './TypeORMSyncCommandOutbox'
+import {
+  TypeORMSyncCommandOutbox,
+  eventJsonColumnOptions,
+  resolveEventJsonColumnType,
+} from './TypeORMSyncCommandOutbox'
 
 /**
  * `event_json` is `longtext` in the MySQL migration and `text` in SQLite; the
@@ -41,7 +45,11 @@ describe('TypeORMSyncCommandOutbox', () => {
   it('builds MySQL entity metadata with a longtext event_json column', async () => {
     process.env.DB_TYPE = 'mysql'
     // Metadata only: nothing connects, but the validator insists on a database name.
-    const dataSource = new DataSource({ type: 'mysql', database: 'syncing_server', entities: [TypeORMSyncCommandOutbox] })
+    const dataSource = new DataSource({
+      type: 'mysql',
+      database: 'syncing_server',
+      entities: [TypeORMSyncCommandOutbox],
+    })
 
     await (dataSource as unknown as { buildMetadatas(): Promise<void> }).buildMetadatas()
 

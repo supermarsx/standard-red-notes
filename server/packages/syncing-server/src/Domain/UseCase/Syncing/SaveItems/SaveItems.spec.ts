@@ -812,9 +812,12 @@ describe('SaveItems', () => {
       ['1', false],
       ['', false],
       [undefined, false],
-    ])('parses WEBSOCKET_SYNC_PUSH_ENABLED=%p as %p (only the exact string true enables inlining)', (value, expected) => {
-      expect(parseWebsocketSyncPushEnabled(value)).toBe(expected)
-    })
+    ])(
+      'parses WEBSOCKET_SYNC_PUSH_ENABLED=%p as %p (only the exact string true enables inlining)',
+      (value, expected) => {
+        expect(parseWebsocketSyncPushEnabled(value)).toBe(expected)
+      },
+    )
 
     it.each<[string | undefined, number]>([
       [undefined, WEBSOCKET_SYNC_PUSH_MAX_BYTES_DEFAULT],

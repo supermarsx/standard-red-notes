@@ -225,9 +225,7 @@ export class SyncGateDiagnosticsRecorder {
     const hostUnmetCondition = observed.hostUnmetCondition
     const unmetPreconditions: SyncGateUnmetPrecondition[] = [
       ...resolveUnmetSyncPreconditions(observed),
-      ...(hostUnmetCondition
-        ? [{ code: hostUnmetCondition, remedy: SYNC_HOST_REMEDIES[hostUnmetCondition] }]
-        : []),
+      ...(hostUnmetCondition ? [{ code: hostUnmetCondition, remedy: SYNC_HOST_REMEDIES[hostUnmetCondition] }] : []),
     ]
     const laneEnabled =
       resolveUnmetSyncTransportPreconditions(observed).length === 0 && hostUnmetCondition === undefined

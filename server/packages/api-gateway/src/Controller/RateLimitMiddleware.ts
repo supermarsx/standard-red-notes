@@ -119,7 +119,11 @@ export const normalizeRateLimitPath = (path: string): string => {
  * legitimate provider redirects. Extend/retune via the overlay/env limits.
  */
 /** The realtime control-plane endpoints the `realtime-tokens` bucket covers (N41). */
-export const REALTIME_TOKEN_PATHS: readonly string[] = ['/v1/sockets/tokens', '/v1/sockets/sync/ticket', '/sockets/tokens']
+export const REALTIME_TOKEN_PATHS: readonly string[] = [
+  '/v1/sockets/tokens',
+  '/v1/sockets/sync/ticket',
+  '/sockets/tokens',
+]
 
 /**
  * Per-session subject for the realtime-token bucket: a digest of the presented

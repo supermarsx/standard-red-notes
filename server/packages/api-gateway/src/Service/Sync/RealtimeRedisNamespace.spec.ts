@@ -23,10 +23,13 @@ describe('resolveRealtimeRedisNamespace (C10)', () => {
     expect(resolveRealtimeRedisNamespace('tenant-a').sqsDedupKeyPrefix).toBe(namespacedDedupPrefix('tenant-a'))
   })
 
-  it.each(['Tenant A', 'a b', ':a', 'a:', 'x'.repeat(65)])('refuses %j and names the variable, never the value', (raw) => {
-    expect(() => resolveRealtimeRedisNamespace(raw)).toThrow(/WEBSOCKET_REDIS_NAMESPACE/)
-    expect(() => resolveRealtimeRedisNamespace(raw)).not.toThrow(raw)
-  })
+  it.each(['Tenant A', 'a b', ':a', 'a:', 'x'.repeat(65)])(
+    'refuses %j and names the variable, never the value',
+    (raw) => {
+      expect(() => resolveRealtimeRedisNamespace(raw)).toThrow(/WEBSOCKET_REDIS_NAMESPACE/)
+      expect(() => resolveRealtimeRedisNamespace(raw)).not.toThrow(raw)
+    },
+  )
 
   // The value bin/server.ts resolves is the one both invite-event consumers
   // accept (their constructors take `{ namespace }`); a validated namespace can

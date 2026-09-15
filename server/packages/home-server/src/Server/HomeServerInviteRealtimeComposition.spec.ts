@@ -590,7 +590,10 @@ describe('HomeServer invite realtime composition', () => {
     expect(mockInviteStoreInstances).toHaveLength(0)
     expect(mockAvailabilityInstances).toHaveLength(0)
     expect(mockRedisInstances).toHaveLength(0)
-    const bridgeOptions = latest(mockWebSocketRedisBridgeInstances).options as { namespace?: string; disabledReason?: string }
+    const bridgeOptions = latest(mockWebSocketRedisBridgeInstances).options as {
+      namespace?: string
+      disabledReason?: string
+    }
     expect(bridgeOptions.namespace).toBeUndefined()
     expect(bridgeOptions.disabledReason).toContain('WEBSOCKET_REDIS_NAMESPACE_INVALID')
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('WEBSOCKET_REDIS_NAMESPACE_INVALID'), {
@@ -612,7 +615,10 @@ describe('HomeServer invite realtime composition', () => {
   })
 
   it('records no host condition when the namespace is valid or unset', async () => {
-    for (const environment of [configuration.environment, { ...configuration.environment, WEBSOCKET_REDIS_NAMESPACE: 'ok' }]) {
+    for (const environment of [
+      configuration.environment,
+      { ...configuration.environment, WEBSOCKET_REDIS_NAMESPACE: 'ok' },
+    ]) {
       mockSyncGateDiagnostics.record.mockClear()
       const server = createServer()
 

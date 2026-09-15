@@ -1,10 +1,7 @@
 export const INVITE_REALTIME_INVALIDATION_VERSION = 1 as const
 
 export type InviteRealtimeEventKind =
-  | 'shared-vault-invite'
-  | 'subscription-invite'
-  | 'shared-vault-membership'
-  | 'application-state'
+  'shared-vault-invite' | 'subscription-invite' | 'shared-vault-membership' | 'application-state'
 export type InviteRealtimeEventAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
 // `role-changed` was dropped together with the client contract (N16): no producer
 // emits it and a client disconnects on an action it does not know.
@@ -12,13 +9,7 @@ export type InviteRealtimeMembershipAction = 'invited' | 'accepted' | 'joined' |
 export type InviteRealtimeMembershipRole = 'read' | 'write' | 'admin'
 export type InviteRealtimeApplicationStateAction = 'updated' | 'invalidated'
 export type InviteRealtimeApplicationStateResource =
-  | 'items'
-  | 'shared-vaults'
-  | 'shared-vault-members'
-  | 'files-metadata'
-  | 'preferences'
-  | 'account'
-  | 'subscriptions'
+  'items' | 'shared-vaults' | 'shared-vault-members' | 'files-metadata' | 'preferences' | 'account' | 'subscriptions'
 
 type InviteRealtimeInvalidationBase = {
   version: typeof INVITE_REALTIME_INVALIDATION_VERSION

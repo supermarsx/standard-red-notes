@@ -433,7 +433,9 @@ describe('SyncWebSocketController transient refusals (C15)', () => {
   afterEach(() => syncWebSocketAccessService.clearProvider())
 
   it('marks a refusal transient with Retry-After when every unmet reason is a store-readiness one', async () => {
-    syncWebSocketAccessService.setProvider(providerRefusing(['ticket-store-unavailable', 'socket-budget-store-unavailable']))
+    syncWebSocketAccessService.setProvider(
+      providerRefusing(['ticket-store-unavailable', 'socket-budget-store-unavailable']),
+    )
     const { response, status, send, setHeader } = responseWithHeaders()
 
     await new SyncWebSocketController().ticket(ticketRequest(), response)

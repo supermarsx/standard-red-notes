@@ -464,7 +464,11 @@ describe('HttpServiceProxy', () => {
       })
 
       it('falls back to the configured websocket host when the locals carry no session', async () => {
-        await buildProxy().callWebSocketServer(buildRequest(), buildResponse({ user: { uuid: 'u-1' } }), 'sockets/tokens')
+        await buildProxy().callWebSocketServer(
+          buildRequest(),
+          buildResponse({ user: { uuid: 'u-1' } }),
+          'sockets/tokens',
+        )
 
         expect(handleMintToken).not.toHaveBeenCalled()
         expect(httpClient.request).toHaveBeenCalledTimes(1)
