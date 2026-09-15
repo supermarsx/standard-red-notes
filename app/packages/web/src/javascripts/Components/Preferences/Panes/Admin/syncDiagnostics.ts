@@ -556,11 +556,20 @@ export function diagnose(
   // attach-time outcome. Reported as a finding rather than left to the health
   // rows because "realtime is on" and "your other devices are never told
   // anything changed" look identical from every other panel on this screen.
+  //
+  // `'none'` is a MISCONFIGURATION, not a topology. It stopped describing "a
+  // deployment without Redis" when the in-process shared-state plane landed: a
+  // single process that holds every socket now reports `'in-process'` and is
+  // healthy, because delivery is a function call into the same registry the
+  // Redis subscriber would have fed. What is left is a process asked for the
+  // Redis-backed plane with no host to reach. Saying "you have no Redis" here
+  // would send a single-container operator to install one they do not need,
+  // and would contradict the Push bridge row on this same screen.
   if (live.realtime?.attached === true && live.realtime.pushBridge === 'none') {
     findings.push({
       title: 'The socket is attached with no push bridge',
       detail:
-        'The lane accepts clients, but no transport carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is what a deployment with no Redis reports today: the push bridge is bound to Redis pub/sub, and without it there is nothing to bind.',
+        'The lane accepts clients, but nothing carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is a misconfiguration rather than a topology: a process that was asked for a Redis-backed plane without a reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy.',
     })
   }
 
@@ -677,6 +686,22 @@ export function describeRealtimeHealth(
     ? `${sanitizeServerCopy(bridge)} (${realtime.pushBridgeReady ? 'ready' : 'not ready'})`
     : 'none'
 
+  /**
+   * `redis` and `in-process` are BOTH bound and both healthy — a single process
+   * that holds every socket needs no Redis to deliver a push, because delivery
+   * is a function call into the same registry a Redis subscriber would feed.
+   * They are still told apart here rather than merged into one cheerful
+   * sentence: the in-process plane only reaches sockets THIS process holds, so
+   * an operator about to add a second replica needs to know which one they have.
+   */
+  const bridgeNote = !bridgeBound
+    ? 'Nothing carries server-side change notifications, so a change saved on one device is never pushed to another. This is a misconfiguration rather than a topology: a process asked for a Redis-backed plane with no reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy.'
+    : !realtime.pushBridgeReady
+      ? 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.'
+      : bridge === 'in-process'
+        ? 'Pushes are delivered in-process, to the sockets this process holds, so no Redis is needed for them. Correct for a single process serving every socket; a second replica would need the Redis plane to reach sockets it does not hold itself.'
+        : 'The push subscriber is connected, so changes committed elsewhere — including on another replica — are delivered to live sockets.'
+
   return [
     {
       label: 'Gateway',
@@ -691,11 +716,7 @@ export function describeRealtimeHealth(
       label: 'Push bridge',
       value: bridgeValue,
       tone: !bridgeBound ? 'bad' : realtime.pushBridgeReady ? 'good' : 'warn',
-      note: !bridgeBound
-        ? 'No transport carries server-side change notifications, so a change saved on one device is never pushed to another. A deployment with no Redis reports this.'
-        : realtime.pushBridgeReady
-          ? 'The push subscriber is connected, so changes committed elsewhere are delivered to live sockets.'
-          : 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.',
+      note: bridgeNote,
     },
     {
       label: 'Queue consumer',

@@ -294,6 +294,29 @@ describe('sync diagnostics model', () => {
       const finding = diagnosis.findings.find((entry) => entry.title.includes('no push bridge'))
       expect(finding).toBeDefined()
       expect(finding?.detail).toContain('never reaches another')
+      // `'none'` is a misconfiguration, not a topology — since the in-process
+      // plane landed, a deployment without Redis reports `'in-process'` and is
+      // healthy. Telling that operator they have no Redis would send them to
+      // install one they do not need.
+      expect(finding?.detail).toContain('misconfiguration rather than a topology')
+      expect(finding?.detail).toContain('in-process bridge instead and is healthy')
+      expect(finding?.detail).not.toContain('what a deployment with no Redis reports')
+    })
+
+    it('raises no push-bridge finding for the in-process plane, which is a healthy single process', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          live: {
+            ...gateSatisfied.live,
+            realtime: { attached: true, pushBridge: 'in-process', pushBridgeReady: true, syncLane: 'up' },
+          },
+        },
+        { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+      )
+
+      expect(diagnosis.findings).toHaveLength(0)
+      expect(diagnosis.tone).toBe('good')
     })
 
     it('adds no push-bridge finding when a bridge is bound', () => {
@@ -494,13 +517,49 @@ describe('sync diagnostics model', () => {
       expect(rows.find((row) => row.label === 'Pushes dispatched')?.value).toBe('12')
     })
 
-    it('calls an absent push bridge down, not merely a note', () => {
+    it('calls an absent push bridge down, and names it a misconfiguration rather than a topology', () => {
       const rows = describeRealtimeHealth({ attached: true, pushBridge: 'none', syncLane: 'up' })
       const bridge = rows.find((row) => row.label === 'Push bridge')
 
       expect(bridge?.value).toBe('none')
       expect(bridge?.tone).toBe('bad')
       expect(bridge?.note).toContain('never pushed')
+      expect(bridge?.note).toContain('misconfiguration rather than a topology')
+      // The row and the Overview finding have to agree; they used to both say
+      // "a deployment with no Redis reports this", which stopped being true
+      // when the in-process plane landed.
+      expect(bridge?.note).toContain('in-process bridge instead and is healthy')
+      expect(bridge?.note).not.toContain('A deployment with no Redis reports this')
+    })
+
+    /**
+     * The row this correction exists for. A single container reports
+     * `'in-process'`, and the panel must call it healthy — the operator has no
+     * Redis and needs none, because delivery is a function call into the
+     * registry holding their sockets.
+     */
+    it('reports an in-process bridge as bound and healthy, not as a missing Redis', () => {
+      const rows = describeRealtimeHealth({ attached: true, pushBridge: 'in-process', pushBridgeReady: true })
+      const bridge = rows.find((row) => row.label === 'Push bridge')
+
+      expect(bridge?.value).toBe('in-process (ready)')
+      expect(bridge?.tone).toBe('good')
+      expect(bridge?.note).toContain('no Redis is needed')
+      // And it still says what the operator loses by scaling out, because the
+      // in-process plane only reaches sockets THIS process holds.
+      expect(bridge?.note).toContain('second replica')
+      expect(bridge?.note).not.toContain('misconfiguration')
+    })
+
+    it('tells a Redis bridge apart from an in-process one, since only one of them crosses replicas', () => {
+      const redis = describeRealtimeHealth({ attached: true, pushBridge: 'redis', pushBridgeReady: true })
+      const inProcess = describeRealtimeHealth({ attached: true, pushBridge: 'in-process', pushBridgeReady: true })
+
+      const noteOf = (rows: ReturnType<typeof describeRealtimeHealth>) =>
+        rows.find((row) => row.label === 'Push bridge')?.note
+
+      expect(noteOf(redis)).toContain('another replica')
+      expect(noteOf(redis)).not.toBe(noteOf(inProcess))
     })
 
     it('treats a bound-but-unready bridge as a reconnect window rather than a fault to act on', () => {

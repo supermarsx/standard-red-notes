@@ -436,10 +436,29 @@ describe('AdminDiagnosticsTab — the split gate and realtime health', () => {
 
     const gate = await openSubtab('Boot gate')
     expect(gate).toContain('never pushed')
+    expect(gate).toContain('misconfiguration rather than a topology')
 
     // And it reaches the Overview diagnosis, which is where an operator looks first.
     const overview = await openSubtab('Overview')
     expect(overview).toContain('no push bridge')
+    expect(overview).toContain('misconfiguration rather than a topology')
+  })
+
+  /**
+   * The single container after the in-process plane landed. Every surface has
+   * to agree that this is healthy: the panel briefly told such an operator they
+   * had no push transport while its own Push bridge row called it bound.
+   */
+  it('shows a single container’s in-process bridge as healthy, with no finding against it', async () => {
+    await renderTab(withRealtime({ attached: true, pushBridge: 'in-process', pushBridgeReady: true, syncLane: 'up' }))
+
+    const gate = await openSubtab('Boot gate')
+    expect(gate).toContain('in-process (ready)')
+    expect(gate).toContain('no Redis is needed')
+    expect(gate).not.toContain('misconfiguration rather than a topology')
+
+    const overview = await openSubtab('Overview')
+    expect(overview).not.toContain('no push bridge')
   })
 
   it('says why there is no health table rather than rendering an empty one', async () => {
