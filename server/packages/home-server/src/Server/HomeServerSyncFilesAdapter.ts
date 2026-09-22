@@ -97,6 +97,34 @@ type PersistedUploadManifest = {
 }
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+const RESUME_ID_BYTES = 24
+/** The two non-alphanumeric symbols in the base64url alphabet. */
+const BASE64URL_NON_ALPHANUMERIC_LEADING_CHAR = /^[A-Za-z0-9]/u
+
+/**
+ * base64url's 64-symbol alphabet includes `-` and `_`, so a plain
+ * `randomBytes(n).toString('base64url')` starts with one of those about
+ * 3.1% of the time (2/64). `IDENTIFIER_PATTERN` (and `validGeneratedIdentifier`
+ * below) requires an alphanumeric first character, so that ~1-in-32 id was
+ * rejected -- and with it, the upload/download open that generated it.
+ *
+ * Fixed by rejection sampling: redraw the full 24 random bytes whenever the
+ * encoded string's first character isn't alphanumeric, rather than fixing up
+ * or re-mapping just that character. This keeps the output uniformly
+ * distributed over the (now slightly smaller) space of valid identifiers --
+ * i.e. it does not reduce the effective entropy of any single character, it
+ * only conditions the whole 192-bit draw on landing in the ~96.9% of outputs
+ * that were always going to be accepted. The conditional entropy loss is
+ * -log2(0.969) ≈ 0.045 bits; for all practical purposes this is still a full
+ * 192 bits of randomness per accepted id.
+ */
+function createDefaultResumeId(): string {
+  let candidate: string
+  do {
+    candidate = randomBytes(RESUME_ID_BYTES).toString('base64url')
+  } while (!BASE64URL_NON_ALPHANUMERIC_LEADING_CHAR.test(candidate))
+  return candidate
+}
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const MAX_CHUNK_BYTES = 256 * 1024
 const MAX_TRANSFER_BYTES = 5 * 1024 * 1024 * 1024
@@ -141,7 +169,7 @@ export class HomeServerSyncFilesAdapter implements SyncFilesAdapter {
     this.transferTtlMs = options.transferTtlMs ?? DEFAULT_TRANSFER_TTL_MS
     this.now = options.now ?? Date.now
     this.createTransferId = options.createTransferId ?? randomUUID
-    this.createResumeId = options.createResumeId ?? (() => randomBytes(24).toString('base64url'))
+    this.createResumeId = options.createResumeId ?? createDefaultResumeId
     if (!Number.isSafeInteger(this.maxActiveTransfers) || this.maxActiveTransfers < 1) {
       throw new Error('maxActiveTransfers must be a positive safe integer.')
     }

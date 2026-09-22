@@ -3,6 +3,30 @@ import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+// A swap-in-and-out `randomBytes` override, used by exactly one test below to
+// deterministically force the base64url leading-character edge case. Every
+// other caller (createHash above, randomUUID transfer ids, randomBytes(8)
+// manifest temp-file suffixes) must keep hitting the REAL implementation, so
+// the mock factory defaults `mockRandomBytesOverride` to undefined and falls
+// through to the actual module in that case.
+let mockRandomBytesOverride: ((size: number) => Buffer | undefined) | undefined
+jest.mock('node:crypto', () => {
+  const actual = jest.requireActual('node:crypto') as typeof import('node:crypto')
+  return {
+    ...actual,
+    randomBytes: (...args: Parameters<typeof actual.randomBytes>) => {
+      const size = args[0] as number
+      if (mockRandomBytesOverride) {
+        const overridden = mockRandomBytesOverride(size)
+        if (overridden !== undefined) {
+          return overridden
+        }
+      }
+      return (actual.randomBytes as (...a: typeof args) => Buffer)(...args)
+    },
+  }
+})
+
 import {
   encodeFileBinaryFrame,
   decodeFileBinaryFrame,
@@ -81,6 +105,80 @@ describe('HomeServerSyncFilesAdapter', () => {
 
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
+  })
+
+  /**
+   * The default `createResumeId` (no injected override -- every other test in
+   * this file injects one, see `createAdapter` above) encodes
+   * `randomBytes(24)` as base64url. That alphabet has 64 symbols including
+   * `-` and `_`, so the first character lands on one of those two roughly
+   * 2/64 = 3.1% of the time. `validGeneratedIdentifier` requires an
+   * alphanumeric first character (mirroring `IDENTIFIER_PATTERN`), so an
+   * unguarded generator throws on about 1 upload-open in 32.
+   *
+   * This does NOT run the generator many times and hope randomness cooperates
+   * -- that would only fail ~99.97% of the time on the bug, not
+   * deterministically, and the team explicitly rejected a flaky test here.
+   * Instead it forges the exact byte pattern whose base64url encoding starts
+   * with `-`, and controls `randomBytes` to hand that out first: the buggy
+   * generator returns/throws on that draw every single run; the fixed
+   * generator must discard it and try again.
+   */
+  describe('default createResumeId (base64url leading-character bug)', () => {
+    it('discards a base64url draw that starts with "-" or "_" instead of returning it', async () => {
+      // Byte 0 = 0xf8 = 0b11111000: base64 packs the first output character
+      // from the top 6 bits of byte 0, i.e. 111110 = 62 = '-' in the base64url
+      // alphabet, regardless of the remaining bytes. This is deterministic,
+      // not a random sample that happens to collide.
+      const forgedLeadingHyphen = Buffer.alloc(24, 0)
+      forgedLeadingHyphen[0] = 0xf8
+      expect(forgedLeadingHyphen.toString('base64url')[0]).toBe('-')
+
+      // A second, ordinary draw so the retry has something valid to land on.
+      const ordinaryDraw = Buffer.alloc(24, 0)
+      expect(ordinaryDraw.toString('base64url')[0]).toBe('A')
+
+      let resumeIdDraws = 0
+      mockRandomBytesOverride = (size) => {
+        // Every OTHER randomBytes caller in the adapter (manifest temp-file
+        // suffixes are randomBytes(8)) must keep behaving normally -- only
+        // the 24-byte resume-id draw is forged. Returning undefined falls
+        // through to the real implementation (see the jest.mock factory).
+        if (size !== 24) {
+          return undefined
+        }
+        resumeIdDraws += 1
+        return resumeIdDraws === 1 ? forgedLeadingHyphen : ordinaryDraw
+      }
+
+      try {
+        const root = await fs.mkdtemp(join(tmpdir(), 'srn-files-v1-'))
+        roots.push(root)
+        // createResumeId intentionally NOT overridden: this exercises the
+        // real production default, not a test double.
+        const adapter = new HomeServerSyncFilesAdapter({ storageRoot: root, authorizer: authorizer() })
+        await adapter.initialize()
+
+        const opened = await adapter.openUpload({ identity, descriptor }, new AbortController().signal)
+
+        // Proves the rejected '-…' draw was discarded, not thrown or returned:
+        // the accepted id is the SECOND draw's encoding.
+        expect(resumeIdDraws).toBe(2)
+        expect(opened.resumeId[0]).not.toBe('-')
+        expect(opened.resumeId[0]).not.toBe('_')
+        expect(opened.resumeId).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u)
+      } finally {
+        mockRandomBytesOverride = undefined
+      }
+    })
+
+    it('the id-validity rule itself rejects a leading "-" or "_" (why the undiscarded draw used to throw)', () => {
+      const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+      expect(identifierPattern.test('-abc123def456')).toBe(false)
+      expect(identifierPattern.test('_abc123def456')).toBe(false)
+      // Non-leading '-'/'_' are fine; only the first character is constrained.
+      expect(identifierPattern.test('a-bc123def456')).toBe(true)
+    })
   })
 
   it('streams an upload to private staging, deduplicates retries, publishes atomically, and downloads it', async () => {
