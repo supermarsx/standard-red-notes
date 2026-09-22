@@ -696,7 +696,10 @@ describe('WebSocketRedisBridge boot line on the in-process plane', () => {
       logger as unknown as ConstructorParameters<typeof WebSocketRedisBridge>[0],
       undefined,
       6379,
-      { disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON },
+      // disabledSeverity mirrors exactly what HomeServer.ts composition sends
+      // for this reason (see HomeServer.ts): a healthy alternative transport
+      // must log at info, never warn.
+      { disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON, disabledSeverity: 'info' },
     )
 
     bridge.connect()
@@ -710,7 +713,10 @@ describe('WebSocketRedisBridge boot line on the in-process plane', () => {
     expect(lines).toContain('only to run several gateway replicas')
     // Said once, however many events arrive.
     bridge.connect()
-    expect(logger.warn).toHaveBeenCalledTimes(1)
+    // A healthy config must never warn at boot: a warning that fires on every
+    // correct boot teaches operators to ignore the channel.
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.info).toHaveBeenCalledTimes(1)
   })
 
   it('still reports a genuinely absent push bridge when no reason is supplied', () => {

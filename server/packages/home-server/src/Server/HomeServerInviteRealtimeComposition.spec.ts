@@ -593,9 +593,13 @@ describe('HomeServer invite realtime composition', () => {
     const bridgeOptions = latest(mockWebSocketRedisBridgeInstances).options as {
       namespace?: string
       disabledReason?: string
+      disabledSeverity?: 'info' | 'warn'
     }
     expect(bridgeOptions.namespace).toBeUndefined()
     expect(bridgeOptions.disabledReason).toContain('WEBSOCKET_REDIS_NAMESPACE_INVALID')
+    // Genuinely degraded (Redis wanted, namespace bad): must default to warn,
+    // not be marked healthy.
+    expect(bridgeOptions.disabledSeverity).toBeUndefined()
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('WEBSOCKET_REDIS_NAMESPACE_INVALID'), {
       unmetPreconditions: ['WEBSOCKET_REDIS_NAMESPACE_INVALID'],
     })
@@ -935,6 +939,9 @@ describe('HomeServer FILES_V1 composition', () => {
     // `pushBridge: in-process` line two above it.
     expect(latest(mockWebSocketRedisBridgeInstances).options).toMatchObject({
       disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON,
+      // Healthy (in-process push works): must log at info, not warn, or a
+      // correct single-container boot warns forever.
+      disabledSeverity: 'info',
     })
     // And the gate the admin panel reads says so, with no REDIS_UNBOUND.
     const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0] as Record<string, unknown>

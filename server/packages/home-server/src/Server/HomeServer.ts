@@ -513,7 +513,9 @@ export class HomeServer implements HomeServerInterface {
           // that another transport carries push -- otherwise the boot log
           // announces `pushBridge: in-process` and then calls push disabled.
           ...(!configuredRedisHost
-            ? { disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON }
+            ? // Healthy: push is carried in-process, so this line must not train
+              // operators to ignore the channel by warning on every correct boot.
+              { disabledReason: IN_PROCESS_PUSH_BRIDGE_REASON, disabledSeverity: 'info' as const }
             : redisNamespaceParse.valid
               ? {}
               : { disabledReason: `${REDIS_NAMESPACE_INVALID_CODE} (${REDIS_NAMESPACE_INVALID_REMEDY})` }),

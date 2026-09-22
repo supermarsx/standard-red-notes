@@ -83,6 +83,8 @@ describe('WebSocketRedisBridge lifecycle', () => {
     const bridge = new WebSocketRedisBridge(logger, 'redis', 6379, {
       createPublisher,
       disabledReason: 'WEBSOCKET_REDIS_NAMESPACE_INVALID (fix or unset it)',
+      // No disabledSeverity given: a genuinely degraded state (an invalid
+      // namespace) must default to warn, not silently drop to info.
     })
 
     bridge.connect()
@@ -101,6 +103,28 @@ describe('WebSocketRedisBridge lifecycle', () => {
       droppedPublishes: 0,
       connectionErrors: 0,
     })
+    await bridge.close()
+  })
+
+  it('logs the disabled reason at info, not warn, when it names a healthy alternative transport', async () => {
+    const bridge = new WebSocketRedisBridge(logger, 'redis', 6379, {
+      createPublisher,
+      disabledReason: 'push is delivered in-process by the attached gateway',
+      disabledSeverity: 'info',
+    })
+
+    bridge.connect()
+    await bridge.handleMessage(event)
+    await bridge.handleMessage(event)
+
+    expect(createPublisher).not.toHaveBeenCalled()
+    // A healthy config must never warn at boot: a warning that fires on every
+    // correct boot teaches operators to ignore the channel.
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.info).toHaveBeenCalledTimes(1)
+    expect(logger.info).toHaveBeenCalledWith(
+      'WebSocketRedisBridge disabled: push is delivered in-process by the attached gateway',
+    )
     await bridge.close()
   })
 

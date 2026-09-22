@@ -33,6 +33,14 @@ export interface WebSocketRedisBridgeOptions {
    * publish on the un-namespaced channel of a sibling stack).
    */
   disabledReason?: string
+  /**
+   * Level of the `disabledReason` line. Defaults to `warn`, which is right
+   * for a degraded state (an invalid namespace). A reason that describes a
+   * HEALTHY alternative transport (push delivered in-process on a single
+   * container) must log at `info`: a warning that fires on every correct boot
+   * teaches operators to ignore the channel.
+   */
+  disabledSeverity?: 'info' | 'warn'
   createPublisher?: (options: RedisOptions) => WebSocketRedisPublisher
   /** Bounds the warn lines to one per cause per interval (default 60 s). */
   throttle?: LogThrottle
@@ -93,6 +101,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
 
   readonly channel: string
   private readonly disabledReason: string | undefined
+  private readonly disabledSeverity: 'info' | 'warn'
   private readonly createPublisher: (options: RedisOptions) => WebSocketRedisPublisher
   private readonly throttle: LogThrottle
   private publisher: WebSocketRedisPublisher | undefined
@@ -108,6 +117,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
   ) {
     this.channel = WebSocketRedisBridge.channelFor(options.namespace)
     this.disabledReason = options.disabledReason
+    this.disabledSeverity = options.disabledSeverity ?? 'warn'
     this.createPublisher = options.createPublisher ?? ((redisOptions) => new Redis(redisOptions))
     this.throttle = options.throttle ?? createLogThrottle({ intervalMs: WebSocketRedisBridge.WARN_INTERVAL_MS })
   }
@@ -135,7 +145,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
   private getPublisher(): WebSocketRedisPublisher | undefined {
     if (this.disabledReason !== undefined) {
       if (!this.warned) {
-        this.logger.warn(`WebSocketRedisBridge disabled: ${this.disabledReason}`)
+        this.logger[this.disabledSeverity](`WebSocketRedisBridge disabled: ${this.disabledReason}`)
         this.warned = true
       }
       return undefined
