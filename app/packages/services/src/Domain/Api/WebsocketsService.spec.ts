@@ -1124,5 +1124,44 @@ describe('webSocketsService', () => {
       await flush()
       expect(sockets()).toHaveLength(2)
     })
+
+    // R17 residual. FALSE-GREEN: drop the throttle floor from
+    // reconnectIfClosed() → a flapping focus/online burst re-dials on every
+    // call within the window → RED (3 sockets/tokens instead of 2 at the
+    // burst checkpoint).
+    it('reconnectIfClosed() throttles rapid re-triggers to a minimum interval, so a flapping focus/online burst cannot defeat the backoff', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      // 1008: the gateway refuses outright, so no backoff timer is armed —
+      // isolates the throttle from the unrelated scheduled-retry timer.
+      sockets()[0].fireClose(1008)
+
+      // A genuine, isolated foreground return still dials immediately.
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(2)
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+
+      sockets()[1].fireClose(1008)
+
+      // A flapping burst well within the throttle window (rapid focus/blur,
+      // or a flapping network re-raising `online`) must be coalesced away
+      // rather than each re-dialling.
+      await jest.advanceTimersByTimeAsync(500)
+      service.reconnectIfClosed()
+      await flush()
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(2)
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+
+      // Once the throttle window has fully elapsed since the last dial, a
+      // further re-trigger dials again.
+      await jest.advanceTimersByTimeAsync(5_000)
+      service.reconnectIfClosed()
+      await flush()
+      expect(sockets()).toHaveLength(3)
+      expect(createConnectionToken).toHaveBeenCalledTimes(3)
+    })
   })
 })

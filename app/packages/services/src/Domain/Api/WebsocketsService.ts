@@ -253,8 +253,22 @@ export class WebSocketsService extends AbstractService<
   private RECONNECT_LONG_MAX_MS = 300_000
   /** A connection must stay open this long before its backoff is reset. */
   private RECONNECT_STABLE_MS = 10_000
+  /**
+   * Minimum time between re-dials triggered by reconnectIfClosed() (R17
+   * residual). Its callers — the app's `online`/`visibilitychange`/focus
+   * handlers — live outside this class and can fire in rapid bursts: a
+   * flapping network re-raises `online` on every blip, and alt-tabbing raises
+   * `visibilitychange` on every switch. Each call cancels the pending backoff
+   * and resets reconnectAttempts to 0 before dialling, so without a floor a
+   * burst like that defeats the exponential backoff entirely and hammers a
+   * refusing gateway exactly as hard as the reconnect storm this class exists
+   * to prevent. A single, isolated foreground return still dials immediately:
+   * only a re-trigger within this window of the last one is suppressed.
+   */
+  private RECONNECT_IF_CLOSED_MIN_INTERVAL_MS = 5_000
 
   private reconnectAttempts = 0
+  private lastReconnectIfClosedDialAt = 0
   private reconnectTimeout?: ReturnType<typeof setTimeout>
   private stableConnectionTimeout?: ReturnType<typeof setTimeout>
   private pongDeadlineTimeout?: ReturnType<typeof setTimeout>
@@ -407,11 +421,24 @@ export class WebSocketsService extends AbstractService<
    * the last closeWebSocketConnection(). Otherwise any pending backoff is
    * cancelled, the attempt counter reset and a dial started now: a socket
    * that gave up (1008, a 503 mint) gets one fresh try per foreground event.
+   *
+   * Also throttled to at most one such reset-and-redial per
+   * RECONNECT_IF_CLOSED_MIN_INTERVAL_MS (R17 residual): a burst of calls from
+   * a flapping `online`/`visibilitychange`/focus source is coalesced into the
+   * first one, so it cannot repeatedly zero the backoff and hammer a refusing
+   * gateway. A re-trigger inside the window is a silent no-op — it does not
+   * touch the pending backoff timer or the attempt counter — so a real
+   * scheduled retry underneath it is unaffected.
    */
   public reconnectIfClosed(): void {
     if (!this.webSocketUrl || !this.connectionRequested || this.connecting || this.isWebSocketConnectionOpen()) {
       return
     }
+    const now = Date.now()
+    if (now - this.lastReconnectIfClosedDialAt < this.RECONNECT_IF_CLOSED_MIN_INTERVAL_MS) {
+      return
+    }
+    this.lastReconnectIfClosedDialAt = now
     this.clearReconnectTimeout()
     this.reconnectAttempts = 0
     void this.startWebSocketConnection()
