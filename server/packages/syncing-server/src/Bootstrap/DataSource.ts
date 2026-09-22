@@ -32,6 +32,23 @@ export class AppDataSource {
   }
 
   get dataSource(): DataSource {
+    // Standard Red Notes: this getter used to build and return a brand-new,
+    // never-initialized `DataSource` on every access. `initialize()` builds one
+    // instance and connects it, but any later read of `.dataSource` (Container.ts
+    // wires ExecuteSyncCommand and InviteMutationTransactionRunner this way, read
+    // *after* `appDataSource.initialize()` already ran) silently replaced the
+    // connected instance with a fresh, unconnected one and handed that out instead.
+    // TypeORM drivers only open their actual connection/pool during `connect()`
+    // (invoked by `.initialize()`), so any transaction against the unconnected
+    // instance failed — for better-sqlite3 as
+    // `TypeError: Cannot read properties of undefined (reading 'prepare')` inside
+    // BetterSqlite3QueryRunner, since `databaseConnection` was never set. This broke
+    // every durable sync command end to end on the SQLite/home-server topology.
+    // Cache and reuse the initialized instance instead of rebuilding one each call.
+    if (this._dataSource) {
+      return this._dataSource
+    }
+
     this.configuration.env.load()
 
     const isConfiguredForMySQL = this.configuration.env.get('DB_TYPE') === 'mysql'
