@@ -1843,7 +1843,20 @@ export class ItemListController
 
     const activeRegularTagUuid = selectedTag instanceof SNTag ? selectedTag.uuid : undefined
 
-    return this.itemControllerGroup.createItemController({
+    /**
+     * Standard Red Notes: mirrors the tag-inheritance above, for folders. A folder is
+     * a distinct entity (SNFolder / FolderContentType), not a tag, so it never matched
+     * the `instanceof SNTag` check and a new note never inherited the open folder. Use
+     * the same "is the current selection actually this folder" guard the notes-list
+     * display filter already relies on (see reloadNotesDisplayOptions above) so a stale
+     * `selectedFolder_` left over from a previous folder selection — it is not reset
+     * when a tag/smart view is selected — can't leak a folder assignment onto a note
+     * created while a tag or smart view is active.
+     */
+    const selectedFolder = this.navigationController.selectedFolder
+    const isFolderSelected = selectedFolder && selectedFolder.uuid === this.navigationController.selectedUuid
+
+    const controller = await this.itemControllerGroup.createItemController({
       templateOptions: {
         title,
         tag: activeRegularTagUuid,
@@ -1853,6 +1866,12 @@ export class ItemListController
       },
       openInNewTile,
     })
+
+    if (isFolderSelected && controller instanceof NoteViewController) {
+      await this.navigationController.moveNoteToFolder(controller.item, selectedFolder)
+    }
+
+    return controller
   }
 
   /**

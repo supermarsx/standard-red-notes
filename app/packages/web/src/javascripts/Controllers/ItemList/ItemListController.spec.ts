@@ -1,8 +1,10 @@
 import {
   ContentType,
+  FolderContentType,
   NoteType,
   PayloadEmitSource,
   Result,
+  SNFolder,
   SNNote,
   SNTag,
   SystemViewId,
@@ -10,6 +12,7 @@ import {
 } from '@standardnotes/snjs'
 import { InternalEventBus, ItemManagerInterface } from '@standardnotes/services'
 import { WebApplication } from '@/Application/WebApplication'
+import { NoteViewController } from '@/Components/NoteView/Controller/NoteViewController'
 import { NavigationController } from '../Navigation/NavigationController'
 import { NotesController } from '../NotesController/NotesController'
 import { SearchOptionsController } from '../SearchOptionsController'
@@ -386,6 +389,66 @@ describe('item list controller', () => {
 
       expect(selectHomeNavigationView).not.toHaveBeenCalled()
       expect(controller.createNewNoteController).toHaveBeenCalled()
+    })
+  })
+
+  describe('createNewNoteController folder inheritance', () => {
+    const folder = { uuid: 'folder-1', content_type: FolderContentType } as SNFolder
+    const newNote = { uuid: 'new-note', content_type: ContentType.TYPES.Note } as SNNote
+
+    const fakeNoteController = () => {
+      // Bypass the real constructor (it needs a full DI graph) while still
+      // satisfying the `instanceof NoteViewController` narrowing the fix relies on.
+      const fake = Object.create(NoteViewController.prototype) as NoteViewController
+      ;(fake as unknown as { item: SNNote }).item = newNote
+      return fake
+    }
+
+    beforeEach(() => {
+      application.itemControllerGroup.createItemController = jest.fn().mockResolvedValue(fakeNoteController())
+      Object.assign(application.navigationController, {
+        moveNoteToFolder: jest.fn().mockResolvedValue(undefined),
+      })
+    })
+
+    it('files a newly created note into the currently open folder', async () => {
+      Object.assign(application.navigationController, {
+        selected: folder,
+        selectedFolder: folder,
+        selectedUuid: folder.uuid,
+      })
+
+      await controller.createNewNoteController()
+
+      expect(application.navigationController.moveNoteToFolder).toHaveBeenCalledWith(newNote, folder)
+    })
+
+    it('does not file a note into a stale selected folder once a tag becomes the active selection', async () => {
+      // selectedFolder_ is only cleared on deinit (see NavigationController), so it can
+      // still report the previously selected folder after the user switches to a tag.
+      const tag = { uuid: 'tag-1', content_type: ContentType.TYPES.Tag } as SNTag
+      Object.assign(application.navigationController, {
+        selected: tag,
+        selectedFolder: folder,
+        selectedUuid: tag.uuid,
+      })
+
+      await controller.createNewNoteController()
+
+      expect(application.navigationController.moveNoteToFolder).not.toHaveBeenCalled()
+    })
+
+    it('still creates the note when no folder or tag is selected', async () => {
+      Object.assign(application.navigationController, {
+        selected: undefined,
+        selectedFolder: undefined,
+        selectedUuid: undefined,
+      })
+
+      const result = await controller.createNewNoteController()
+
+      expect(result.item).toBe(newNote)
+      expect(application.navigationController.moveNoteToFolder).not.toHaveBeenCalled()
     })
   })
 
