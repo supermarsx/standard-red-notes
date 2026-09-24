@@ -24,6 +24,7 @@ import {
   nextNodeId,
   parseFlowchartSource,
 } from './MermaidGraphBuilder'
+import MermaidSvgViewport from './MermaidSvgViewport'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
@@ -552,9 +553,9 @@ function MermaidComponent({
         ) : null}
 
         {showPreview ? (
-          <div className={'overflow-auto p-2 ' + (viewMode === 'split' ? 'md:w-1/2' : 'w-full')}>
+          <div className={'p-2 ' + (viewMode === 'split' ? 'md:w-1/2' : 'w-full')}>
             {svg ? (
-              <div dangerouslySetInnerHTML={{ __html: svg }} />
+              <MermaidSvgViewport svg={svg} />
             ) : (
               !error && (
                 <div className="text-passive-1 text-sm" data-srn-print-exclude="true">
