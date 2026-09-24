@@ -14,7 +14,7 @@ import RevisionDiffView from '@/Components/RevisionHistoryModal/RevisionDiffView
 import { getDiffableTextFromContent } from '@/Components/RevisionHistoryModal/RevisionDiff'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 
-import { ConflictPair, useConflicts } from './useConflicts'
+import { ComparableConflictPair, ConflictPair, isComparableConflictPair, useConflicts } from './useConflicts'
 import { autoMergeText, buildManualMergeStartingText } from './mergeText'
 import { runAiConflictMerge } from './conflictMerge'
 import { ConflictAiSettings, loadConflictAiSettings, saveConflictAiSettings } from './conflictAiSettings'
@@ -47,8 +47,63 @@ const splitMergedText = (merged: string): { title: string; text: string } => {
   }
 }
 
-const ConflictRow: FunctionComponent<{
+/**
+ * A conflicted copy whose original is gone. There is no second version to diff
+ * against, so the whole compare-and-choose UI would be misleading here. Present the
+ * copy on its own terms instead: it is a recovered note, and the only decision left
+ * is whether to keep it.
+ */
+const RecoveredCopyRow: FunctionComponent<{
   pair: ConflictPair
+  controller: ReturnType<typeof useConflicts>
+}> = ({ pair, controller }) => {
+  const [busy, setBusy] = useState(false)
+
+  const run = useCallback(async (action: () => Promise<void>, successMessage: string) => {
+    setBusy(true)
+    try {
+      await action()
+      addToast({ type: ToastType.Success, message: successMessage })
+    } catch (error) {
+      console.error(error)
+      addToast({ type: ToastType.Error, message: 'Failed to resolve the conflict.' })
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  return (
+    <div className="border-border mt-4 rounded border border-solid p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <Subtitle>{pair.conflictedCopy.title || 'Untitled note'}</Subtitle>
+        <span className="bg-info text-info-contrast rounded px-1.5 py-0.5 text-xs font-bold">Recovered</span>
+      </div>
+
+      <Text className="mb-3">
+        The note this copy came from no longer exists &mdash; it was deleted, or its identity was replaced during a
+        sync. Your unsaved changes were kept here, so this copy is now the only version of this content. Keep it to
+        clear the conflict flag, or delete it if you do not need it.
+      </Text>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          primary
+          disabled={busy}
+          label="Keep this note"
+          onClick={() => void run(() => controller.keepBoth(pair), 'Kept the recovered note.')}
+        />
+        <Button
+          disabled={busy}
+          label="Delete this note"
+          onClick={() => void run(() => controller.keepRemote(pair), 'Deleted the recovered note.')}
+        />
+      </div>
+    </div>
+  )
+}
+
+const ConflictRow: FunctionComponent<{
+  pair: ComparableConflictPair
   controller: ReturnType<typeof useConflicts>
   application: WebApplication
   aiSettings: ConflictAiSettings
@@ -369,16 +424,24 @@ const Conflicts: FunctionComponent<Props> = ({ application }: Props) => {
         {controller.count === 0 ? (
           <Text className="mt-2">You have no unresolved sync conflicts.</Text>
         ) : (
-          controller.pairs.map((pair) => (
-            <ConflictRow
-              key={pair.id}
-              pair={pair}
-              controller={controller}
-              application={application}
-              aiSettings={aiSettings}
-              aiAvailability={aiAvailability}
-            />
-          ))
+          controller.pairs.map((pair) => {
+            // A copy whose original is gone has no second version to compare against,
+            // so it gets the recovered-note treatment instead of the diff UI.
+            if (!isComparableConflictPair(pair)) {
+              return <RecoveredCopyRow key={pair.id} pair={pair} controller={controller} />
+            }
+
+            return (
+              <ConflictRow
+                key={pair.id}
+                pair={pair}
+                controller={controller}
+                application={application}
+                aiSettings={aiSettings}
+                aiAvailability={aiAvailability}
+              />
+            )
+          })
         )}
       </PreferencesSegment>
     </PreferencesGroup>

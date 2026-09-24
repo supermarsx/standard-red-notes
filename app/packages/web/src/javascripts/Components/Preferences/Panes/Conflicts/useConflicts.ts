@@ -28,8 +28,41 @@ const CONFLICT_RESOLUTION_STRATEGY_SETTING = 'CONFLICT_RESOLUTION_STRATEGY'
 export type ConflictPair = {
   /** Stable identity for list keys: the conflicted copy uuid. */
   id: string
-  original: SNNote
+  /**
+   * The note the copy diverged from, or undefined when it no longer exists —
+   * it was deleted while the copy was being made, or its identity was discarded
+   * by a sync that regenerated it. The copy is then the ONLY surviving carrier
+   * of that content, which is precisely when the user most needs to be shown it,
+   * so these are listed rather than skipped.
+   */
+  original: SNNote | undefined
   conflictedCopy: SNNote
+}
+
+/** A pair whose original survives, so the two versions can be diffed and merged. */
+export type ComparableConflictPair = ConflictPair & { original: SNNote }
+
+export const isComparableConflictPair = (pair: ConflictPair): pair is ComparableConflictPair =>
+  pair.original !== undefined
+
+/**
+ * Build the conflict list from the note set. A conflicted copy is listed whether or
+ * not its original still exists: requiring the original to be present used to hide
+ * exactly the copies that matter most, since a vanished original is what leaves the
+ * copy holding the only version of that content.
+ */
+export const buildConflictPairs = (notes: SNNote[], findNote: (uuid: string) => SNNote | undefined): ConflictPair[] => {
+  const result: ConflictPair[] = []
+
+  for (const note of notes) {
+    if (!note.conflictOf) {
+      continue
+    }
+
+    result.push({ id: note.uuid, original: findNote(note.conflictOf), conflictedCopy: note })
+  }
+
+  return result
 }
 
 export type ConflictResolutionController = {
@@ -105,20 +138,7 @@ export const useConflicts = (application: WebApplication): ConflictResolutionCon
   const pairs = useMemo<ConflictPair[]>(() => {
     void version
     const notes = application.items.getItems<SNNote>(ContentType.TYPES.Note)
-    const result: ConflictPair[] = []
-    for (const note of notes) {
-      if (!note.conflictOf) {
-        continue
-      }
-      const original = application.items.findItem<SNNote>(note.conflictOf)
-      if (!original) {
-        // The original was deleted; there is nothing to compare against, so just
-        // surface the copy paired with itself would be meaningless. Skip it.
-        continue
-      }
-      result.push({ id: note.uuid, original, conflictedCopy: note })
-    }
-    return result
+    return buildConflictPairs(notes, (uuid) => application.items.findItem<SNNote>(uuid))
   }, [application, version])
 
   const clientStrategy = application.getPreference(
@@ -160,9 +180,12 @@ export const useConflicts = (application: WebApplication): ConflictResolutionCon
   const keepLocal = useCallback(
     async (pair: ConflictPair) => {
       // Keep the conflicted copy as the survivor; clear its conflict flag and
-      // delete the original.
+      // delete the original. With no surviving original there is nothing to
+      // delete — clearing the flag is the whole of "keep this one".
       await clearConflictRelationship(pair.conflictedCopy)
-      await application.mutator.deleteItem(pair.original)
+      if (pair.original) {
+        await application.mutator.deleteItem(pair.original)
+      }
       await application.sync.sync()
     },
     [application, clearConflictRelationship],
@@ -190,14 +213,25 @@ export const useConflicts = (application: WebApplication): ConflictResolutionCon
   const saveMerged = useCallback(
     async (pair: ConflictPair, mergedTitle: string, mergedText: string) => {
       // Write the merged content onto the original note, then delete the copy.
-      await application.mutator.changeItem<NoteMutator, SNNote>(pair.original, (mutator) => {
+      // With no surviving original the copy IS the only carrier of the content, so
+      // the merge lands on it and it simply stops being flagged as a conflict —
+      // deleting it here would destroy the very thing that was preserved.
+      const target = pair.original ?? pair.conflictedCopy
+
+      await application.mutator.changeItem<NoteMutator, SNNote>(target, (mutator) => {
         mutator.title = mergedTitle
         mutator.text = mergedText
       })
-      await application.mutator.deleteItem(pair.conflictedCopy)
+
+      if (pair.original) {
+        await application.mutator.deleteItem(pair.conflictedCopy)
+      } else {
+        await clearConflictRelationship(pair.conflictedCopy)
+      }
+
       await application.sync.sync()
     },
-    [application],
+    [application, clearConflictRelationship],
   )
 
   return {
