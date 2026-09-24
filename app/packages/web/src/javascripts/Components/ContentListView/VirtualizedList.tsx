@@ -62,6 +62,8 @@ type Props<T extends { uuid: string }> = {
 const DEFAULT_ESTIMATED_HEIGHT = 60
 const DEFAULT_OVERSCAN = 6
 const NEAR_END_THRESHOLD_PX = 400
+// How close to the true bottom counts as "at the bottom" for pinning purposes.
+const BOTTOM_PIN_EPSILON_PX = 1.5
 
 export type VirtualizedListInterface = {
   /** Scroll so the row with this uuid is brought into view (expanding the window). */
@@ -187,6 +189,11 @@ function VirtualizedListInner<T extends { uuid: string }>(
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
 
+  // Standard Red Notes: whether the user was resting at the true bottom of the
+  // list as of the last scroll event. Read (and re-pinned against) by the
+  // height-correction effect below — see the comment there for why this exists.
+  const atBottomRef = useRef(false)
+
   const heightFor = useCallback((uuid: string) => heightCache.current.get(uuid) ?? estimate, [estimate])
 
   // Fenwick tree over per-row heights. Rebuilt O(N) ONLY when the items set
@@ -260,6 +267,8 @@ function VirtualizedListInner<T extends { uuid: string }>(
 
     const onScroll = () => {
       setScrollTop(container.scrollTop)
+      atBottomRef.current =
+        container.scrollHeight - container.scrollTop - container.clientHeight < BOTTOM_PIN_EPSILON_PX
       if (onNearEnd && container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_END_THRESHOLD_PX) {
         onNearEnd()
       }
@@ -351,6 +360,39 @@ function VirtualizedListInner<T extends { uuid: string }>(
       setMeasureVersion((v) => v + 1)
     }
   })
+
+  // Standard Red Notes: fixes the "scroll to bottom bounces back onto the last
+  // item" bug. Rows are estimated at DEFAULT_ESTIMATED_HEIGHT until they are
+  // first rendered and measured above. The tail of the list is only ever
+  // rendered (and thus only ever measured) once the user scrolls into it — so
+  // the very gesture that lands the user at what looks like the bottom is also
+  // what corrects a whole batch of previously-estimated tail rows for the
+  // first time. When the real heights are shorter than the estimate, that
+  // correction SHRINKS totalHeight/bottomSpacer, and with it the container's
+  // real scrollHeight, right out from under the user's current scrollTop. With
+  // nothing to compensate, the browser (or the next paint of the now-smaller
+  // spacer) snaps the viewport back up to the new, smaller max — felt as a
+  // bounce that resettles on the last item. This effect runs after a
+  // measurement-driven re-render commits (keyed on measureVersion, which only
+  // changes when `changed` above was true) and, if the user was at the bottom
+  // right before the correction landed, re-pins the container to the
+  // corrected bottom in the same commit so the shrink is never visible as a
+  // jump.
+  useLayoutEffect(() => {
+    if (!atBottomRef.current) {
+      return
+    }
+    const container = scrollContainerRef.current
+    if (!container) {
+      return
+    }
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+    if (Math.abs(container.scrollTop - maxScrollTop) > 0.5) {
+      container.scrollTop = maxScrollTop
+      setScrollTop(maxScrollTop)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measureVersion])
 
   // Scroll the container so the row at `index` is brought into view.
   const scrollToIndex = useCallback(
