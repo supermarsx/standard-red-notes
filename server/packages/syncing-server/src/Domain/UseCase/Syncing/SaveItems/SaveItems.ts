@@ -159,9 +159,10 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         // save-new path below. UpdateExistingItem.execute normally returns a
         // failed Result on error, but a thrown/rejected execution (e.g. a
         // transient DB error) would otherwise propagate as an unhandled
-        // rejection and abort the whole batch. Turn it into a per-item conflict
-        // instead — the item is NOT pushed into savedItems, so we never ack a
-        // save that did not persist; the client retries it on the next sync.
+        // rejection and abort the whole batch. The item is NOT pushed into
+        // savedItems, so we never ack a save that did not persist; the client
+        // retries it on the next sync (see the t97 fix note in the catch below
+        // for why that must NOT be reported as ConflictType.UuidConflict).
         try {
           const udpatedItemOrError = await this.updateExistingItem.execute({
             existingItem,
@@ -197,15 +198,32 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
             continue
           }
 
+          /**
+           * Standard Red Notes (t97): a genuine cross-account uuid collision for an
+           * EXISTING item is already caught upstream, before this call ever runs, by
+           * OwnershipFilter (ItemSaveValidatorInterface.validate above, `itemHash`
+           * validated against `existingItem.props.userUuid`) — that is the one place
+           * in this codebase that reliably knows this uuid belongs to someone else,
+           * and it already reports ConflictType.UuidConflict when it does. Anything
+           * that reaches THIS catch has therefore already passed ownership: it is an
+           * unclassified failure from the update call itself (a DB connection error,
+           * a timeout, a deadlock — SQLItemRepository.update's own "item disappeared"
+           * throw included), not an identity conflict.
+           *
+           * Reporting it as UuidConflict was a bug, not a feature: on the client,
+           * UuidConflict is a destructive instruction (PayloadsByAlternatingUuid
+           * duplicates the item under a brand-new uuid and unconditionally discards
+           * the original, dirty:false, in the same pass it is applied) triggered by
+           * nothing more than this transient infrastructure fault. A note the user
+           * was actively editing would vanish out from under them for no reason
+           * connected to anything they did. Log and leave the item unacknowledged
+           * instead (neither saved nor conflicted) so it stays dirty locally and the
+           * client's ordinary next sync attempt retries it once the fault clears.
+           */
           this.logger.error(
             `[${dto.userUuid}] Updating item ${itemHash.props.uuid} threw.`,
             safeErrorLogMetadata(error),
           )
-
-          conflicts.push({
-            unsavedItem: itemHash,
-            type: ConflictType.UuidConflict,
-          })
 
           continue
         }
@@ -233,12 +251,13 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
           savedItems.push(newItem)
         } catch (error) {
+          // Standard Red Notes (t97): same reasoning as the update branch above — an
+          // unclassified thrown error here (a DB connection fault, not a rejection
+          // this use case itself decided on) is an infrastructure fault, not a
+          // uuid identity conflict. Do not report ConflictType.UuidConflict for it;
+          // leave the item unacknowledged so the client retries the create on its
+          // next sync rather than being told to regenerate the item's uuid.
           this.logger.error(`[${dto.userUuid}] Saving item ${itemHash.props.uuid} failed.`, safeErrorLogMetadata(error))
-
-          conflicts.push({
-            unsavedItem: itemHash,
-            type: ConflictType.UuidConflict,
-          })
 
           continue
         }

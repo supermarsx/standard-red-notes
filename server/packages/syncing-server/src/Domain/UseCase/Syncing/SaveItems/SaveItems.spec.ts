@@ -212,7 +212,19 @@ describe('SaveItems', () => {
     expect(sendEventToClient.execute).not.toHaveBeenCalled()
   })
 
-  it('should mark items as conflicts if saving new item throws an error', async () => {
+  /**
+   * Standard Red Notes (t97): a thrown, unclassified error here is an infrastructure
+   * fault (DB connection, timeout -- exactly the shape the now-fixed AppDataSource
+   * uncached-getter bug produced), not a uuid identity conflict. Reporting it as
+   * ConflictType.UuidConflict used to be destructive on the client:
+   * PayloadsByAlternatingUuid treats UuidConflict as authoritative and unconditionally
+   * discards the item's original uuid, regenerating a new one -- so a transient
+   * database hiccup on an ordinary save could make a healthy note the user was
+   * actively editing vanish out from under them for no reason connected to anything
+   * they did. The item must instead be left unacknowledged (neither saved nor
+   * conflicted) so it stays dirty and the client's next regular sync retries it.
+   */
+  it('leaves the item unacknowledged (not a conflict) when saving a new item throws an unclassified error', async () => {
     const useCase = createUseCase()
 
     saveNewItem.execute = jest.fn().mockRejectedValue(new Error('error'))
@@ -230,15 +242,15 @@ describe('SaveItems', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(result.getValue().conflicts).toEqual([
-      {
-        unsavedItem: itemHash1,
-        type: 'uuid_conflict',
-      },
-    ])
+    expect(result.getValue().savedItems).toEqual([])
+    expect(result.getValue().conflicts).toEqual([])
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('Saving item'),
+      expect.objectContaining({ errorType: 'Error' }),
+    )
   })
 
-  it('should mark items as conflicts if updating an existing item throws an error', async () => {
+  it('leaves the item unacknowledged (not a conflict) when updating an existing item throws an unclassified error', async () => {
     const useCase = createUseCase()
 
     itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
@@ -258,17 +270,49 @@ describe('SaveItems', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(result.getValue().savedItems).toEqual([])
-    expect(result.getValue().conflicts).toEqual([
-      {
-        unsavedItem: itemHash1,
-        type: 'uuid_conflict',
-      },
-    ])
+    expect(result.getValue().conflicts).toEqual([])
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('Updating item'),
       expect.objectContaining({ errorType: 'Error' }),
     )
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('update blew up')
+  })
+
+  /**
+   * Standard Red Notes (t97): the ONE place in this codebase that reliably knows a
+   * uuid genuinely belongs to a different account is OwnershipFilter, reached through
+   * itemSaveValidator.validate BEFORE either try/catch above ever runs. That path is
+   * untouched by the t97 fix -- a real collision must still surface as UuidConflict so
+   * the client's uuid-regeneration recovery still fires for the case it exists for.
+   */
+  it('still reports a genuine cross-account uuid collision (surfaced by the validator) as UuidConflict', async () => {
+    const useCase = createUseCase()
+
+    const collisionConflict = {
+      unsavedItem: itemHash1,
+      type: 'uuid_conflict',
+    }
+    itemSaveValidator.validate = jest.fn().mockResolvedValue({ passed: false, conflict: collisionConflict })
+
+    const result = await useCase.execute({
+      itemHashes: [itemHash1],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().savedItems).toEqual([])
+    expect(result.getValue().conflicts).toEqual([collisionConflict])
+    // Neither execute call ran: the collision was decided before either branch, so
+    // this is the validator's verdict passing through, not the try/catch path.
+    expect(saveNewItem.execute).not.toHaveBeenCalled()
+    expect(updateExistingItem.execute).not.toHaveBeenCalled()
   })
 
   it('returns the persisted winner as a sync conflict when a concurrent update loses', async () => {
