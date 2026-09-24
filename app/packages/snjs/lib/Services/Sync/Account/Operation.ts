@@ -146,6 +146,28 @@ export class AccountSyncOperation {
     return arrayByDifference(this.payloads, this.pendingPayloads)
   }
 
+  /**
+   * Standard Red Notes (t97 hot-loop fix): true if ANY response page this operation has
+   * received so far actually acknowledged something -- saved at least one item, reported at
+   * least one conflict (of any type), or returned at least one retrieved item. False only when
+   * every page received so far came back completely blank relative to what was uploaded.
+   *
+   * Exists so a caller can tell "the server is genuinely idle, nothing to do" apart from "we
+   * uploaded a batch and the server silently accepted none of it" -- the latter is exactly the
+   * shape SaveItems.ts's t97 fix produces for a sustained transient failure (the item is left
+   * unacknowledged rather than force-resolved), and a caller that cannot distinguish the two
+   * would otherwise retry an all-or-nothing failure immediately and indefinitely.
+   */
+  get madeProgress(): boolean {
+    return this.responses.some((response) => {
+      if (response.savedPayloads.length > 0 || response.retrievedPayloads.length > 0) {
+        return true
+      }
+
+      return Object.values(response.conflicts).some((entries) => (entries?.length ?? 0) > 0)
+    })
+  }
+
   popPayloads(count: number) {
     const payloads = this.pendingPayloads.slice(0, count)
     subtractFromArray(this.pendingPayloads, payloads)

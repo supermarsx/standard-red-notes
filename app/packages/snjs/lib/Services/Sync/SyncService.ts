@@ -2179,12 +2179,22 @@ export class SyncService
         return
       }
 
+      /**
+       * Standard Red Notes (t97 hot-loop fix): true only when this round actually uploaded
+       * something AND got zero acknowledgment of any kind back, on every page. See the
+       * madeProgress doc comment (Operation.ts) and the gate itself
+       * (potentiallySyncAgainAfterSyncCompletion) for why this matters and what it does.
+       */
+      const syncRoundExhaustedWithoutProgress =
+        operation instanceof AccountSyncOperation && operation.payloads.length > 0 && !operation.madeProgress
+
       const didSyncAgain = await this.potentiallySyncAgainAfterSyncCompletion(
         syncMode,
         options,
         inTimeResolveQueue,
         online,
         isReadOnlySession,
+        syncRoundExhaustedWithoutProgress,
       )
       if (didSyncAgain) {
         return
@@ -2660,6 +2670,7 @@ export class SyncService
     inTimeResolveQueue: SyncPromise[],
     online: boolean,
     isReadOnlySession = false,
+    syncRoundExhaustedWithoutProgress = false,
   ) {
     if (syncMode === SyncMode.DownloadFirst) {
       if (isReadOnlySession) {
@@ -2694,6 +2705,48 @@ export class SyncService
     if (newItemsNeedingSync.length > 0) {
       if (isReadOnlySession) {
         this.logger.debug('Read-only session still has local dirty items; not spawning an unbounded empty sync.')
+        return false
+      }
+
+      /**
+       * Standard Red Notes (t97 hot-loop fix): SaveItems.ts (03f4090c) stopped force-resolving a
+       * transient per-item save failure as a destructive UuidConflict; the item now simply stays
+       * dirty until the server genuinely accepts it. That is correct, but it means a SUSTAINED
+       * server-side fault (the whole batch fails, nothing acknowledged) previously self-healed by
+       * destroying the item's identity now instead leaves it dirty -- and this immediate re-chain
+       * would otherwise hammer the very server that is struggling, bounded only by the flat
+       * SyncFrequencyGuard (200 calls/minute), not a deliberate pace.
+       *
+       * If this round acknowledged NOTHING AT ALL (uploaded something, got zero saves, zero
+       * conflicts, zero retrieved items, on every page -- see AccountSyncOperation.madeProgress),
+       * an instant retry cannot succeed either: defer to the normal cadence instead of chaining
+       * immediately. "Normal cadence" here is a FLOOR for an otherwise-idle item, not the latency
+       * this actually costs the scenario the fix targets: for a note the user is actively editing,
+       * NoteSyncController.undebouncedMutateAndSync calls sync() directly and unconditionally on
+       * every debounced save, so the very next keystroke pause re-triggers a real sync and never
+       * waits on either timer below. The timers only matter once editing stops:
+       *   - autoSync (SyncService.ts:126-135) fires unconditionally every 30s while the websocket
+       *     is CLOSED, but only every AUTO_SYNC_BACKSTOP_TICKS=10 ticks (5 min) while it is OPEN
+       *     and quiet -- verify this bound before citing it elsewhere, it is not a flat 30s.
+       *   - manualSyncMode disables that timer entirely; a dirty item then waits for the user's
+       *     next explicit sync, same as every other dirty item in that mode today -- this gate
+       *     does not create a new stall class, so it is deliberately not special-cased here.
+       * A round that acknowledges ANYTHING (even one item out of a large batch) still chains
+       * immediately below, unaffected -- this only gates the all-or-nothing failure case, so
+       * large-queue draining is untouched.
+       *
+       * Deliberately coarse: this is a per-ROUND gate, not a per-item one. In the rare case a
+       * wholesale-failed round coincides with an unrelated brand-new edit landing mid-round, that
+       * edit's push is also deferred to the same bound rather than sent instantly -- a slow
+       * retry, not a lost one (it is still dirty, still picked up by itemsNeedingSync() above,
+       * just not chained THIS instant). Per-item tracking would need SyncBackoffService, which
+       * has no way to clear an item's backoff penalty on a later success (t97 finding) -- not
+       * worth half-finishing that contract to shave a few seconds off an already-rare edge case.
+       */
+      if (syncRoundExhaustedWithoutProgress) {
+        this.logger.debug(
+          'Sync round uploaded items but the server acknowledged none of them (no saves, no conflicts, nothing retrieved); deferring the retry to normal cadence instead of re-syncing immediately.',
+        )
         return false
       }
 

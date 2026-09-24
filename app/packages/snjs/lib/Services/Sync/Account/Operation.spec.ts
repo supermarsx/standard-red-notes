@@ -371,3 +371,138 @@ describe('AccountSyncOperation paginated-upload error handling', () => {
     expect(call).toBe(2)
   })
 })
+
+/**
+ * t97 hot-loop fix: SaveItems.ts (03f4090c) stopped force-resolving a transient per-item save
+ * failure as a destructive UuidConflict -- the item is now simply left unacknowledged (absent
+ * from BOTH saved_items and conflicts) so it stays dirty and retries. That is correct for a
+ * single item, but SyncService's immediate re-chain (potentiallySyncAgainAfterSyncCompletion)
+ * needs a way to tell "the server genuinely had nothing to do" apart from "we uploaded a batch
+ * and it silently accepted none of it" -- otherwise a sustained fault turns into an immediate,
+ * back-to-back retry loop against a server that is already struggling. madeProgress is that
+ * signal: true the moment ANY page's response acknowledges anything at all.
+ */
+describe('AccountSyncOperation.madeProgress (t97 hot-loop fix)', () => {
+  it('is false when every page comes back with nothing saved, no conflicts, and nothing retrieved', async () => {
+    const apiService = {
+      sync: jest.fn().mockResolvedValue({
+        status: 200,
+        data: { saved_items: [], retrieved_items: [], conflicts: [] },
+      }),
+    }
+    const receiver = jest.fn(async () => undefined)
+
+    const operation = new AccountSyncOperation([{ uuid: 'stuck-item' }] as never, receiver as never, apiService as never, {})
+
+    await operation.run()
+
+    expect(operation.madeProgress).toBe(false)
+  })
+
+  it('is true when at least one item was saved', async () => {
+    const apiService = {
+      sync: jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          saved_items: [{ uuid: 'ok-item', content: '004:...', content_type: 'Note', updated_at_timestamp: 1 }],
+          retrieved_items: [],
+          conflicts: [],
+        },
+      }),
+    }
+    const receiver = jest.fn(async () => undefined)
+
+    const operation = new AccountSyncOperation(
+      [{ uuid: 'ok-item' }, { uuid: 'stuck-item' }] as never,
+      receiver as never,
+      apiService as never,
+      {},
+    )
+
+    await operation.run()
+
+    expect(operation.madeProgress).toBe(true)
+  })
+
+  it('is true when the response reports a conflict (of any type), even with nothing saved', async () => {
+    const apiService = {
+      sync: jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          saved_items: [],
+          retrieved_items: [],
+          conflicts: [{ type: 'sync_conflict' }],
+        },
+      }),
+    }
+    const receiver = jest.fn(async () => undefined)
+
+    const operation = new AccountSyncOperation([{ uuid: 'conflicted-item' }] as never, receiver as never, apiService as never, {})
+
+    await operation.run()
+
+    expect(operation.madeProgress).toBe(true)
+  })
+
+  it('is true when the response retrieves items, even with nothing saved or conflicted', async () => {
+    const apiService = {
+      sync: jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          saved_items: [],
+          retrieved_items: [{ uuid: 'from-another-device', content: '004:...', content_type: 'Note', updated_at_timestamp: 1 }],
+          conflicts: [],
+        },
+      }),
+    }
+    const receiver = jest.fn(async () => undefined)
+
+    const operation = new AccountSyncOperation([{ uuid: 'stuck-item' }] as never, receiver as never, apiService as never, {})
+
+    await operation.run()
+
+    expect(operation.madeProgress).toBe(true)
+  })
+
+  it('is false when nothing was ever uploaded and the response is empty (no responses received)', () => {
+    const apiService = { sync: jest.fn() }
+    const receiver = jest.fn()
+
+    // No .run() call: zero responses accumulated -- must not default to true.
+    const operation = new AccountSyncOperation([], receiver as never, apiService as never, {})
+
+    expect(operation.madeProgress).toBe(false)
+  })
+
+  it('is true overall if ANY page (not just the last) acknowledged something across a multi-page operation', async () => {
+    let call = 0
+    const apiService = {
+      sync: jest.fn(async () => {
+        call += 1
+        if (call === 1) {
+          // First page: saves one item, more pages to come.
+          return {
+            status: 200,
+            data: {
+              saved_items: [{ uuid: 'u0', content: '004:...', content_type: 'Note', updated_at_timestamp: 1 }],
+              retrieved_items: [],
+              conflicts: [],
+              cursor_token: 'more',
+            },
+          }
+        }
+        // Second (final) page: nothing acknowledged for its own batch.
+        return { status: 200, data: { saved_items: [], retrieved_items: [], conflicts: [] } }
+      }),
+    }
+    const receiver = jest.fn(async () => undefined)
+    const payloads = Array.from({ length: 200 }, (_, i) => ({ uuid: `u${i}` })) as never[]
+
+    const operation = new AccountSyncOperation(payloads, receiver as never, apiService as never, {})
+
+    await operation.run()
+
+    expect(apiService.sync).toHaveBeenCalledTimes(2)
+    expect(operation.madeProgress).toBe(true)
+  })
+})

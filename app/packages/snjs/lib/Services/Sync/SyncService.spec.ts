@@ -1,6 +1,7 @@
 import { LoggerInterface } from '@standardnotes/utils'
 import { StorageKey, SyncEvent, SyncMode, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
+import { AccountSyncOperation } from './Account/Operation'
 import { SNLog } from '../../Log'
 import {
   DecryptedItemInterface,
@@ -3412,6 +3413,290 @@ describe('SyncService auto-sync backstop and legacy socket re-dial (D3 / C11)', 
 
       expect(() => registeredHandler('online')()).not.toThrow()
       expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
+  })
+})
+
+/**
+ * t97 hot-loop fix: SaveItems.ts (03f4090c) stopped force-resolving a transient per-item save
+ * failure as a destructive UuidConflict -- the item now simply stays dirty (unacknowledged,
+ * absent from BOTH saved_items and conflicts) until the server genuinely accepts it. Correct for
+ * the item, but potentiallySyncAgainAfterSyncCompletion used to treat "itemsNeedingSync() is
+ * non-empty" as sufficient reason to chain an immediate re-sync, with no check on whether the
+ * round that just finished could possibly have changed that. A SUSTAINED server-side fault (the
+ * whole uploaded batch fails silently, every round) turned "destroy the note" into "hammer the
+ * already-struggling server", bounded only by the flat 200-calls/minute SyncFrequencyGuard.
+ *
+ * The fix: gate the immediate re-chain on syncRoundExhaustedWithoutProgress -- true only when
+ * this round uploaded something AND AccountSyncOperation.madeProgress is false, i.e. every page
+ * came back with nothing saved, no conflicts, and nothing retrieved. When true, defer to the
+ * normal cadence (autoSync backstop, or the next real trigger: an edit, an explicit sync call, a
+ * websocket push) instead of chaining immediately.
+ */
+describe('SyncService t97 hot-loop fix (no-progress round defers to normal cadence)', () => {
+  const buildDirtyItem = (uuid: string): DecryptedItemInterface => {
+    const payload = new DecryptedPayload<NoteContent>(
+      {
+        uuid,
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: uuid, text: 'stuck edit' }),
+        dirty: true,
+        dirtyIndex: getIncrementedDirtyIndex(),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    )
+    return {
+      uuid,
+      payload,
+      payloadRepresentation: () => payload,
+    } as unknown as DecryptedItemInterface
+  }
+
+  describe('gate logic (potentiallySyncAgainAfterSyncCompletion)', () => {
+    const buildService = (dirtyItems: DecryptedItemInterface[]) => {
+      const logger = {
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+      } as unknown as jest.Mocked<LoggerInterface>
+      const noop = () => undefined
+
+      const itemManager = { getDirtyItems: jest.fn().mockReturnValue(dirtyItems) }
+      const syncBackoffService = { isItemInBackoff: jest.fn().mockReturnValue(false) }
+
+      const service = new SyncService(
+        itemManager as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        'test-identifier',
+        {} as never,
+        logger,
+        {} as never,
+        {} as never,
+        syncBackoffService as never,
+        { addEventHandler: noop } as never,
+      )
+
+      const syncAgainByHandlingNewDirtyItems = jest.fn().mockResolvedValue(undefined)
+      ;(service as unknown as { syncAgainByHandlingNewDirtyItems: jest.Mock }).syncAgainByHandlingNewDirtyItems =
+        syncAgainByHandlingNewDirtyItems
+
+      const callGate = (syncRoundExhaustedWithoutProgress: boolean, isReadOnlySession = false) =>
+        (
+          service as unknown as {
+            potentiallySyncAgainAfterSyncCompletion: (
+              m: SyncMode,
+              o: Record<string, unknown>,
+              q: unknown[],
+              online: boolean,
+              isReadOnlySession: boolean,
+              syncRoundExhaustedWithoutProgress: boolean,
+            ) => Promise<boolean>
+          }
+        ).potentiallySyncAgainAfterSyncCompletion(
+          SyncMode.Default,
+          {},
+          [],
+          true,
+          isReadOnlySession,
+          syncRoundExhaustedWithoutProgress,
+        )
+
+      return { service, logger, itemManager, syncAgainByHandlingNewDirtyItems, callGate }
+    }
+
+    it('BOTH-DIRECTIONS core case: a round that exhausted without progress defers instead of chaining', async () => {
+      const stuck = buildDirtyItem('stuck-item')
+      const { syncAgainByHandlingNewDirtyItems, callGate, logger } = buildService([stuck])
+
+      const didSyncAgain = await callGate(true)
+
+      expect(didSyncAgain).toBe(false)
+      expect(syncAgainByHandlingNewDirtyItems).not.toHaveBeenCalled()
+      // Identifiable in logs -- the next person debugging a slow save must be able to find this.
+      expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('deferring the retry to normal cadence'))
+    })
+
+    it('REQUIRED CASE 1: a round with partial progress still chains immediately, unaffected', async () => {
+      const stuck = buildDirtyItem('stuck-item')
+      const { syncAgainByHandlingNewDirtyItems, callGate } = buildService([stuck])
+
+      const didSyncAgain = await callGate(false)
+
+      expect(didSyncAgain).toBe(true)
+      expect(syncAgainByHandlingNewDirtyItems).toHaveBeenCalledTimes(1)
+    })
+
+    it('REQUIRED CASE 2: a deferred item is not abandoned -- stays dirty and is re-gathered by the next sync', async () => {
+      const stuck = buildDirtyItem('stuck-item')
+      const { itemManager, callGate } = buildService([stuck])
+
+      const didSyncAgain = await callGate(true)
+      expect(didSyncAgain).toBe(false)
+
+      // The gate never touches the item's own state -- confirm directly on the real payload.
+      expect(stuck.payload.dirty).toBe(true)
+
+      // Exactly what itemsNeedingSync() reads on the very next sync call: still there.
+      expect(itemManager.getDirtyItems()).toContain(stuck)
+    })
+
+    it('a read-only session still takes its own early return, unaffected by the new gate', async () => {
+      const stuck = buildDirtyItem('stuck-item')
+      const { syncAgainByHandlingNewDirtyItems, callGate, logger } = buildService([stuck])
+
+      // syncRoundExhaustedWithoutProgress=true here should be irrelevant: read-only bails first.
+      const didSyncAgain = await callGate(true, true)
+
+      expect(didSyncAgain).toBe(false)
+      expect(syncAgainByHandlingNewDirtyItems).not.toHaveBeenCalled()
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Read-only session still has local dirty items'),
+      )
+    })
+  })
+
+  describe('wiring: performSync derives syncRoundExhaustedWithoutProgress from a REAL AccountSyncOperation', () => {
+    const buildOpStatus = () => ({
+      syncInProgress: false,
+      setDidBegin: jest.fn(),
+      setDidEnd: jest.fn(),
+      hasError: jest.fn().mockReturnValue(false),
+      reset: jest.fn(),
+      clearError: jest.fn(),
+      setError: jest.fn(),
+      setUploadStatus: jest.fn(),
+      setDownloadStatus: jest.fn(),
+    })
+
+    const buildService = (dirtyItems: DecryptedItemInterface[], apiServiceSync: jest.Mock) => {
+      const logger = {
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+      } as unknown as jest.Mocked<LoggerInterface>
+      const noop = () => undefined
+
+      const itemManager = { getDirtyItems: jest.fn().mockReturnValue(dirtyItems) }
+      const sessionManager = {
+        online: jest.fn().mockReturnValue(true),
+        isCurrentSessionReadOnly: jest.fn().mockReturnValue(false),
+      }
+      const syncFrequencyGuard = { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) }
+      const syncBackoffService = { isItemInBackoff: jest.fn().mockReturnValue(false) }
+      const apiService = { sync: apiServiceSync }
+
+      const service = new SyncService(
+        itemManager as never,
+        sessionManager as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        apiService as never,
+        {} as never,
+        {} as never,
+        'test-identifier',
+        {} as never,
+        logger,
+        {} as never,
+        syncFrequencyGuard as never,
+        syncBackoffService as never,
+        { addEventHandler: noop } as never,
+      )
+
+      ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+      ;(service as unknown as { opStatus: unknown }).opStatus = buildOpStatus()
+      ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
+        items: [],
+        beginDate: new Date(),
+        frozenDirtyIndex: getCurrentDirtyIndex(),
+        neverSyncedDeleted: [],
+        localOnlyPersistedItems: [],
+      })
+      ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = jest
+        .fn()
+        .mockResolvedValue([])
+      ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish = jest
+        .fn()
+        .mockResolvedValue({ hasError: false })
+      ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+      ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
+
+      const syncAgainByHandlingNewDirtyItems = jest.fn().mockResolvedValue(undefined)
+      ;(service as unknown as { syncAgainByHandlingNewDirtyItems: jest.Mock }).syncAgainByHandlingNewDirtyItems =
+        syncAgainByHandlingNewDirtyItems
+
+      return { service, logger, syncAgainByHandlingNewDirtyItems }
+    }
+
+    // A no-op receiver: this test only cares whether performSync's call-site correctly reads
+    // operation.payloads/madeProgress off a REAL AccountSyncOperation after a REAL .run() -- not
+    // about exercising handleSuccessServerResponse's own delta-application machinery (proven
+    // separately, and separately proven again live against the real classes in t97-e6's findings).
+    const noopReceiver = jest.fn().mockResolvedValue(undefined)
+
+    it('BOTH-DIRECTIONS wiring proof: a real operation with zero acknowledgment defers, and does not chain', async () => {
+      const stuck = buildDirtyItem('stuck-item')
+      const apiServiceSync = jest.fn().mockResolvedValue({
+        status: 200,
+        data: { saved_items: [], retrieved_items: [], conflicts: [] },
+      })
+      const { service, logger, syncAgainByHandlingNewDirtyItems } = buildService([stuck], apiServiceSync)
+
+      const realOperation = new AccountSyncOperation(
+        [{ uuid: 'stuck-item' }] as never,
+        noopReceiver as never,
+        { sync: apiServiceSync } as never,
+        {},
+      )
+      ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
+        operation: realOperation,
+        mode: SyncMode.Default,
+      })
+
+      await service.sync({ source: SyncSource.External })
+
+      expect(apiServiceSync).toHaveBeenCalledTimes(1)
+      expect(realOperation.madeProgress).toBe(false)
+      expect(syncAgainByHandlingNewDirtyItems).not.toHaveBeenCalled()
+      expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('deferring the retry to normal cadence'))
+    })
+
+    it('a real operation that acknowledged even one item still chains immediately', async () => {
+      const stuck = buildDirtyItem('stuck-item')
+      const apiServiceSync = jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          saved_items: [{ uuid: 'ok-item', content: '004:...', content_type: 'Note', updated_at_timestamp: 1 }],
+          retrieved_items: [],
+          conflicts: [],
+        },
+      })
+      const { service, syncAgainByHandlingNewDirtyItems } = buildService([stuck], apiServiceSync)
+
+      const realOperation = new AccountSyncOperation(
+        [{ uuid: 'ok-item' }, { uuid: 'stuck-item' }] as never,
+        noopReceiver as never,
+        { sync: apiServiceSync } as never,
+        {},
+      )
+      ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
+        operation: realOperation,
+        mode: SyncMode.Default,
+      })
+
+      await service.sync({ source: SyncSource.External })
+
+      expect(realOperation.madeProgress).toBe(true)
+      expect(syncAgainByHandlingNewDirtyItems).toHaveBeenCalledTimes(1)
     })
   })
 })
