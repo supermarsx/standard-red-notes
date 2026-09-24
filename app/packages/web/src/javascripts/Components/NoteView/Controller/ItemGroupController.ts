@@ -1,4 +1,5 @@
 import { removeFromArray } from '@standardnotes/utils'
+import { ContentType } from '@standardnotes/domain-core'
 import {
   AlertService,
   ComponentManagerInterface,
@@ -84,7 +85,27 @@ export class ItemGroupController {
     private components: ComponentManagerInterface,
     private alerts: AlertService,
     private _isNativeMobileWeb: IsNativeMobileWeb,
-  ) {}
+  ) {
+    /**
+     * Standard Red Notes (t97): a note/file can be removed from the local item store out
+     * from under an open editor — a remote delete, or a conflict resolution that discards
+     * this uuid in favor of a duplicate (see recoverRemovedItemController below) — and
+     * nothing previously reacted to that here. The controller kept holding a uuid that no
+     * longer resolved, so the FIRST anyone heard about it was NoteSyncController's
+     * save-time guard raising InfoStrings.InvalidNote on the user's next keystroke. This
+     * mirrors the existing vault-scoped close-on-removal in ItemListController
+     * (closeRemovedVaultItemControllers) but generalizes it to any removal, and — unlike
+     * that one — tries to recover first rather than only closing.
+     */
+    this.eventObservers.push(
+      this.items.streamItems<SNNote | FileItem>([ContentType.TYPES.Note, ContentType.TYPES.File], ({ removed }) => {
+        if (removed.length === 0) {
+          return
+        }
+        this.handleRemovedItems(removed)
+      }),
+    )
+  }
 
   public deinit(): void {
     this.cancelChecklistEditorReservationsForSecurity()
@@ -565,6 +586,126 @@ export class ItemGroupController {
     this.activeControllerRef = undefined
 
     this.notifyObservers()
+  }
+
+  /**
+   * Standard Red Notes (t97): react to a note/file disappearing from the local item store
+   * while it is open in a tile. Dispatches recovery per affected controller; fire-and-forget
+   * is safe here because recoverRemovedItemController re-checks membership in
+   * itemControllers before and after its only await, so a stale/duplicate notification, or
+   * the user closing the tab themselves in the meantime, is a no-op rather than a race.
+   */
+  private handleRemovedItems(removed: { uuid: string }[]): void {
+    const removedUuids = new Set(removed.map((item) => item.uuid))
+
+    for (const controller of [...this.itemControllers]) {
+      const uuid = controller.item?.uuid
+      if (!uuid || !removedUuids.has(uuid)) {
+        continue
+      }
+
+      void this.recoverRemovedItemController(controller, uuid)
+    }
+  }
+
+  /**
+   * Standard Red Notes (t97): the removed uuid may have lost a conflict against an
+   * incoming remote delete while its local copy was dirty. When that happens, the conflict
+   * resolver has ALREADY preserved the user's unsaved content by duplicating it into a
+   * fresh item tagged `content.conflict_of` = this uuid (GenericItem.strategyWhenConflictingWithItem
+   * -> ConflictStrategy.DuplicateBaseKeepApply) before discarding the original. Prefer
+   * migrating the open tile to that rescue copy in place over closing it outright — the
+   * alternative is telling the user to manually copy text the app already copied for them,
+   * into a note they have no idea exists. Only when no rescue copy exists is the note
+   * genuinely just gone, and the tile is closed instead.
+   */
+  private async recoverRemovedItemController(
+    controller: NoteViewController | FileViewController,
+    removedUuid: string,
+  ): Promise<void> {
+    if (!this.itemControllers.includes(controller)) {
+      return
+    }
+
+    const rescueCopy = this.findConflictRescueCopy(removedUuid)
+    if (!rescueCopy) {
+      this.closeItemController(controller, { securitySensitive: true })
+      return
+    }
+
+    let replacement: NoteViewController | FileViewController
+    try {
+      replacement =
+        rescueCopy.content_type === ContentType.TYPES.File
+          ? new FileViewController(rescueCopy as unknown as FileItem, this.items)
+          : new NoteViewController(
+              rescueCopy as unknown as SNNote,
+              this.items,
+              this.mutator,
+              this.sync,
+              this.sessions,
+              this.preferences,
+              this.components,
+              this.alerts,
+              this._isNativeMobileWeb,
+            )
+      await replacement.initialize()
+    } catch {
+      // Recovery failed (e.g. the rescue copy itself vanished mid-initialize). Fall back to
+      // a clean close rather than leaving a half-initialized controller mounted.
+      if (this.itemControllers.includes(controller)) {
+        this.closeItemController(controller, { securitySensitive: true })
+      }
+      return
+    }
+
+    if (!this.itemControllers.includes(controller)) {
+      // Superseded while the replacement was initializing (the user closed the tab, or a
+      // second removal notification for the same uuid already handled it). Discard it.
+      if (replacement instanceof NoteViewController) {
+        replacement.deinitImmediatelyForSecurity()
+      } else {
+        replacement.deinit()
+      }
+      return
+    }
+
+    const index = this.itemControllers.indexOf(controller)
+    const wasActive = this.activeControllerRef === controller
+
+    this.closeItemController(controller, { securitySensitive: true, notify: false })
+
+    this.itemControllers.splice(index, 0, replacement)
+    if (wasActive) {
+      this.activeControllerRef = replacement
+    }
+
+    this.notifyObservers()
+  }
+
+  /**
+   * `ItemManager.conflictsOf` reads the conflict relationship ItemCollection already
+   * maintains off `content.conflict_of`, so no separate content search/heuristic is
+   * needed. Its results are, by construction, always decrypted items (Collection only
+   * indexes a decrypted element's `content.conflict_of` into the map) — content_type is
+   * filtered rather than re-checked for decryption. If more than one candidate exists
+   * (unexpected — normally at most one conflict copy is created per removal), the most
+   * recently created one wins.
+   */
+  private findConflictRescueCopy(removedUuid: string): SNNote | FileItem | undefined {
+    const candidates = this.items
+      .conflictsOf(removedUuid)
+      .filter(
+        (candidate) => candidate.content_type === ContentType.TYPES.Note || candidate.content_type === ContentType.TYPES.File,
+      ) as unknown as (SNNote | FileItem)[]
+
+    if (candidates.length === 0) {
+      return undefined
+    }
+
+    return candidates.reduce((newest, candidate) =>
+      (candidate.payload.dirtyIndex ?? 0) > (newest.payload.dirtyIndex ?? 0) ? candidate : newest,
+    )
   }
 
   get activeItemViewController(): NoteViewController | FileViewController | undefined {

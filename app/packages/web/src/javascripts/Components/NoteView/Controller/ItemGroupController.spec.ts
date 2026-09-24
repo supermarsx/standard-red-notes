@@ -44,10 +44,16 @@ describe('ItemGroupController tabs/tiles', () => {
   let group: ItemGroupController
   let items: jest.Mocked<ItemManagerInterface>
   let sessions: jest.Mocked<SessionsClientInterface>
+  let emitRemoved: (removed: { uuid: string }[]) => void
 
   beforeEach(() => {
     items = {
       findItem: jest.fn((uuid: string) => ({ uuid, noteType: NoteType.Super })),
+      streamItems: jest.fn((_contentType: unknown, stream: (data: { removed: { uuid: string }[] }) => void) => {
+        emitRemoved = (removed) => stream({ removed })
+        return jest.fn()
+      }),
+      conflictsOf: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<ItemManagerInterface>
     sessions = {
       isSignedIn: jest.fn().mockReturnValue(false),
@@ -435,6 +441,96 @@ describe('ItemGroupController tabs/tiles', () => {
       expect(group.itemControllers).toHaveLength(1)
       expect(group.itemControllers.length > 1).toBe(false)
       expect(group.activeItemViewController).toBe(first)
+    })
+  })
+
+  /**
+   * Standard Red Notes (t97): a note/file can be removed from the local item store while
+   * open in a tile (a remote delete, or a conflict resolution that discards this uuid in
+   * favor of a duplicate) with nothing previously reacting to it. These exercise the
+   * itemManager.streamItems `removed` hook that closes/migrates the affected tile.
+   */
+  describe('reacting to an open item being removed from the store', () => {
+    it('closes the open tile when the removed item has no conflict_of rescue copy', async () => {
+      const controller = (await addTab()) as unknown as {
+        item: { uuid: string }
+        deinitImmediatelyForSecurity: jest.Mock
+      }
+      const observer = jest.fn()
+      group.addActiveControllerChangeObserver(observer)
+      observer.mockClear()
+
+      emitRemoved([{ uuid: controller.item.uuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(items.conflictsOf).toHaveBeenCalledWith(controller.item.uuid)
+      expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+      expect(group.itemControllers).not.toContain(controller)
+      expect(group.activeItemViewController).toBeUndefined()
+      expect(observer).toHaveBeenCalledWith(undefined)
+    })
+
+    it('migrates the open tile to its conflict_of rescue copy instead of closing', async () => {
+      const controller = (await addTab()) as unknown as {
+        item: { uuid: string }
+        deinitImmediatelyForSecurity: jest.Mock
+      }
+      const removedUuid = controller.item.uuid
+      const rescueCopy = {
+        uuid: 'rescue-copy-uuid',
+        content_type: 'Note',
+        payload: { dirtyIndex: 5 },
+      }
+      items.conflictsOf.mockReturnValue([rescueCopy] as never)
+
+      emitRemoved([{ uuid: removedUuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+      expect(group.itemControllers).toHaveLength(1)
+      expect(group.itemControllers).not.toContain(controller)
+      expect(group.activeItemViewController?.item.uuid).toBe('rescue-copy-uuid')
+    })
+
+    it('preserves tile position when migrating a non-active tile to its rescue copy', async () => {
+      const first = (await addTab()) as unknown as { item: { uuid: string } }
+      const second = await addTab()
+      expect(group.activeItemViewController).toBe(second)
+
+      const rescueCopy = { uuid: 'rescue-copy-uuid', content_type: 'Note', payload: { dirtyIndex: 1 } }
+      items.conflictsOf.mockReturnValue([rescueCopy] as never)
+
+      emitRemoved([{ uuid: first.item.uuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(group.itemControllers).toHaveLength(2)
+      expect(group.itemControllers[0].item.uuid).toBe('rescue-copy-uuid')
+      expect(group.itemControllers[1]).toBe(second)
+      // The tile that was active (second) stays active; migrating the OTHER tile must not steal focus.
+      expect(group.activeItemViewController).toBe(second)
+    })
+
+    it('falls back to closing when the rescue copy itself fails to initialize', async () => {
+      const controller = (await addTab()) as unknown as {
+        item: { uuid: string }
+        deinitImmediatelyForSecurity: jest.Mock
+      }
+      // The mocked FileViewController (unlike the mocked NoteViewController) has no
+      // `initialize` method, so routing the rescue copy through it exercises the
+      // catch-and-fall-back-to-close path without hand-rolling a rejecting mock.
+      const rescueCopy = { uuid: 'rescue-copy-uuid', content_type: 'File', payload: { dirtyIndex: 1 } }
+      items.conflictsOf.mockReturnValue([rescueCopy] as never)
+
+      emitRemoved([{ uuid: controller.item.uuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+      expect(group.itemControllers).not.toContain(controller)
     })
   })
 })
