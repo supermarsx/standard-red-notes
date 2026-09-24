@@ -409,18 +409,50 @@ describe('item list controller', () => {
       Object.assign(application.navigationController, {
         moveNoteToFolder: jest.fn().mockResolvedValue(undefined),
       })
+      // Standard Red Notes (t97): stand in for the item store the app checks
+      // before saving (NoteSyncController.undebouncedMutateAndSync's
+      // `this.items.findItem(this.item.uuid)` guard) so this suite can assert the
+      // created note stays resolvable through it, not just that a mock was called.
+      application.items.findItem = jest.fn((uuid: string) =>
+        uuid === newNote.uuid ? newNote : undefined,
+      ) as unknown as ItemManagerInterface['findItem']
     })
 
-    it('files a newly created note into the currently open folder', async () => {
+    it('files a newly created note into the currently open folder, keeping it resolvable via the item store', async () => {
       Object.assign(application.navigationController, {
         selected: folder,
         selectedFolder: folder,
         selectedUuid: folder.uuid,
       })
 
-      await controller.createNewNoteController()
+      const result = await controller.createNewNoteController()
 
       expect(application.navigationController.moveNoteToFolder).toHaveBeenCalledWith(newNote, folder)
+      // The controller must still be pointing at the SAME item the app is about to
+      // save -- moveNoteToFolder mutates the folder's own references, never the
+      // note, so this must hold whether or not the folder step ran.
+      expect(result.item).toBe(newNote)
+      expect(application.items.findItem(result.item.uuid)).toBe(newNote)
+    })
+
+    it('still returns a saveable note when filing it into the folder fails (e.g. the sync call rejects)', async () => {
+      // Standard Red Notes (t97): moveNoteToFolder ends with a real network
+      // `sync.sync()` call. A rejection there must never take the whole note
+      // creation down with it -- the editor is already mounted and active by
+      // this point (ItemGroupController activates it before this awaits), so a
+      // thrown/unhandled rejection here would otherwise surface as a broken
+      // creation flow for a note the user can already see and is about to type into.
+      Object.assign(application.navigationController, {
+        selected: folder,
+        selectedFolder: folder,
+        selectedUuid: folder.uuid,
+        moveNoteToFolder: jest.fn().mockRejectedValue(new Error('sync failed')),
+      })
+
+      const result = await controller.createNewNoteController()
+
+      expect(result.item).toBe(newNote)
+      expect(application.items.findItem(result.item.uuid)).toBe(newNote)
     })
 
     it('does not file a note into a stale selected folder once a tag becomes the active selection', async () => {

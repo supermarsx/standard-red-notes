@@ -1868,7 +1868,21 @@ export class ItemListController
     })
 
     if (isFolderSelected && controller instanceof NoteViewController) {
-      await this.navigationController.moveNoteToFolder(controller.item, selectedFolder)
+      /**
+       * Standard Red Notes (t97): moveNoteToFolder ends with a real `sync.sync()`
+       * network call. By this point the controller has already been pushed/activated
+       * and its change observers notified (see ItemGroupController.createItemController),
+       * so the new note's editor is already mounted and the user can already be typing
+       * into it. A rejection here (offline, a transient sync error, ...) must file as a
+       * best-effort step, not take the whole note-creation call down with it and strand
+       * the caller (e.g. ItemListController.createNewNote) mid-flow with an already-visible
+       * but never-"created" controller.
+       */
+      try {
+        await this.navigationController.moveNoteToFolder(controller.item, selectedFolder)
+      } catch (error) {
+        console.error('Failed to file newly created note into the currently open folder', error)
+      }
     }
 
     return controller
