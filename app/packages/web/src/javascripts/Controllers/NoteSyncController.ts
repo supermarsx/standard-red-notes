@@ -1,6 +1,7 @@
 import { MutationType, NoteMutator, SNNote } from '@standardnotes/models'
 import {
   AlertService,
+  ContentType,
   InfoStrings,
   ItemManagerInterface,
   MutatorClientInterface,
@@ -62,6 +63,14 @@ export class NoteSyncController {
   private largeNoteSyncTimeout?: ReturnType<typeof setTimeout>
   private statusChangeTimeout?: ReturnType<typeof setTimeout>
   private deallocated = false
+  /**
+   * Standard Red Notes (work-preservation): set once `undebouncedMutateAndSync` discovers this
+   * controller's item has been discarded from the item store (a server-asserted deletion was
+   * applied -- see t97 investigation, no other removal path exists). From that point the note
+   * can never save again, so every further status change and save attempt is refused instead of
+   * silently pretending the (dead) editor is still live.
+   */
+  private noteIsGone = false
 
   status: NoteStatus | undefined = undefined
 
@@ -81,6 +90,16 @@ export class NoteSyncController {
   }
 
   setStatus(status: NoteStatus, wait = true) {
+    /**
+     * Standard Red Notes (work-preservation): once the note is confirmed gone, the status stays
+     * pinned at whatever `markNoteAsGone` set it to. Without this, NoteView's per-keystroke
+     * showSavingStatus()/showAllChangesSavedStatus() calls (which do not go through the save
+     * guard below) would keep flickering "Saving…"/"All changes saved" for a note that can never
+     * save again.
+     */
+    if (this.noteIsGone) {
+      return
+    }
     if (this.statusChangeTimeout) {
       clearTimeout(this.statusChangeTimeout)
     }
@@ -158,6 +177,7 @@ export class NoteSyncController {
     this.largeNoteSyncTimeout = undefined
     this.status = undefined
     this.statusChangeTimeout = undefined
+    this.noteIsGone = false
     ;(this.item as unknown) = undefined
   }
 
@@ -215,6 +235,15 @@ export class NoteSyncController {
      * undefined — treat a post-deinit save as a safe NO-OP instead of throwing.
      */
     if (this.deallocated || (this.item as unknown) === undefined) {
+      return
+    }
+
+    /**
+     * Standard Red Notes (work-preservation): once markNoteAsGone has fired, this note can never
+     * save again (its uuid was discarded). Refuse to even queue further attempts instead of
+     * scheduling a debounced save that will just re-discover the same dead uuid 700ms later.
+     */
+    if (this.noteIsGone) {
       return
     }
 
@@ -289,6 +318,67 @@ export class NoteSyncController {
     return this.strictSavingLocallyPromise?.promise ?? this.lastStrictLocalPropagationPromise
   }
 
+  /**
+   * Standard Red Notes (work-preservation, t97): the only way `findItem` stops resolving this
+   * controller's uuid is a server-asserted deletion being applied (confirmed by investigation --
+   * there is no false-positive removal path). Report that honestly, point the user at the
+   * automatic conflict-copy the sync engine already created for any text that was unsynced at
+   * the moment of deletion (see GenericItem.strategyWhenConflictingWithItem ->
+   * ConflictStrategy.DuplicateBaseKeepApply, handled in Conflict.ts) when one exists, and
+   * permanently stop this controller from pretending further edits are being saved.
+   *
+   * Deliberately does NOT create a rescue note itself: when the sync engine already made one,
+   * creating another would strand the user with two divergent copies, which is worse than the
+   * bug. When it did not (the note was clean at the moment of deletion, so there was nothing to
+   * preserve), there is nothing to point at either.
+   */
+  private handleNoteDiscoveredGone(): void {
+    if (this.noteIsGone) {
+      return
+    }
+
+    const rescueCopy = this.findConflictCopyOfDiscoveredNote()
+
+    const message = rescueCopy
+      ? `${InfoStrings.NoteDeletedRemotely} The text you had not yet saved was automatically kept as a new note titled "${rescueCopy.title || 'Untitled'}". Further changes made in this editor will not be saved.`
+      : `${InfoStrings.NoteDeletedRemotely} Further changes made in this editor will not be saved.`
+
+    this.setStatus(
+      {
+        type: 'error',
+        message: 'Note deleted',
+        description: message,
+      },
+      false,
+    )
+    this.noteIsGone = true
+
+    void this.alerts.alert(message, 'Note deleted')
+  }
+
+  /**
+   * The item-store's own conflict index (`ItemManagerInterface.conflictsOf`) cannot be used
+   * here: discarding an item scrubs its own entries from that index (Collection.discard ->
+   * conflictMap.removeFromMap), which erases the very relationship that gets established when
+   * the rescue copy is inserted in the same sync batch that discards the original. Scanning by
+   * the copy's own `conflictOf` content field is unaffected by that bookkeeping and finds it
+   * reliably. Ties (more than one historical conflict copy of the same uuid) resolve to the
+   * most recently updated one.
+   */
+  private findConflictCopyOfDiscoveredNote(): SNNote | undefined {
+    const candidates = this.items
+      .getItems<SNNote>(ContentType.TYPES.Note)
+      .filter((note) => note.conflictOf === this.item.uuid)
+
+    if (candidates.length === 0) {
+      return undefined
+    }
+
+    return candidates.reduce((newest, candidate) =>
+      (candidate.updated_at?.getTime() ?? 0) > (newest.updated_at?.getTime() ?? 0) ? candidate : newest,
+    )
+  }
+
   private queueLargeNoteSyncIfNeeded(): void {
     if (this.deallocated) {
       return
@@ -322,7 +412,7 @@ export class NoteSyncController {
 
   private async undebouncedMutateAndSync(params: NoteSaveFunctionParams & { localOnly: boolean }): Promise<void> {
     if (!this.items.findItem(this.item.uuid)) {
-      void this.alerts.alert(InfoStrings.InvalidNote)
+      this.handleNoteDiscoveredGone()
       /**
        * Standard Red Notes (hang fix): resolve the save promise before bailing.
        * Without this the resolver wired in saveAndAwaitLocalPropagation

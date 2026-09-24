@@ -1,5 +1,6 @@
 import {
   AlertService,
+  ContentType,
   ItemManagerInterface,
   MutatorClientInterface,
   Result,
@@ -29,6 +30,7 @@ describe('NoteSyncController save cancellation', () => {
     } as SNNote
     items = {
       findItem: jest.fn().mockReturnValue(item),
+      getItems: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<ItemManagerInterface>
     mutator = {
       changeItem: jest.fn().mockResolvedValue(undefined),
@@ -188,5 +190,140 @@ describe('NoteSyncController save cancellation', () => {
     await expect(save).resolves.toBeUndefined()
     await expect(controller.awaitCurrentLocalPropagationStrict()).rejects.toBe(failure)
     consoleError.mockRestore()
+  })
+})
+
+describe('NoteSyncController work-preservation on a discovered-gone note (t97)', () => {
+  let item: SNNote
+  let items: jest.Mocked<ItemManagerInterface>
+  let mutator: jest.Mocked<MutatorClientInterface>
+  let sessions: jest.Mocked<SessionsClientInterface>
+  let sync: jest.Mocked<SyncServiceInterface>
+  let alerts: jest.Mocked<AlertService>
+  let isNativeMobileWeb: jest.Mocked<IsNativeMobileWeb>
+  let controller: NoteSyncController
+
+  beforeEach(() => {
+    jest.useFakeTimers()
+    item = {
+      uuid: 'deleted-note-uuid',
+      text: 'text the user was still typing',
+      title: 'My Note',
+    } as SNNote
+    items = {
+      // The note has already been discarded from the item store by the time the debounced
+      // save fires -- this is the exact condition the guard in undebouncedMutateAndSync checks.
+      findItem: jest.fn().mockReturnValue(undefined),
+      getItems: jest.fn().mockReturnValue([]),
+    } as unknown as jest.Mocked<ItemManagerInterface>
+    mutator = {
+      changeItem: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<MutatorClientInterface>
+    sessions = {
+      isSignedOut: jest.fn().mockReturnValue(false),
+      isSignedIn: jest.fn().mockReturnValue(true),
+    } as unknown as jest.Mocked<SessionsClientInterface>
+    sync = {
+      sync: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<SyncServiceInterface>
+    alerts = {
+      alert: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<AlertService>
+    isNativeMobileWeb = {
+      execute: jest.fn().mockReturnValue(Result.ok(false)),
+    } as unknown as jest.Mocked<IsNativeMobileWeb>
+
+    controller = new NoteSyncController(item, items, mutator, sessions, sync, alerts, isNativeMobileWeb)
+  })
+
+  afterEach(() => {
+    controller.deinit()
+    jest.useRealTimers()
+  })
+
+  it('tells the user the note was deleted (not the old "can not be found or has been deleted" hedge) when no unsynced text was preserved', async () => {
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await save
+
+    expect(items.getItems).toHaveBeenCalledWith(ContentType.TYPES.Note)
+    expect(alerts.alert).toHaveBeenCalledTimes(1)
+    const [message, title] = alerts.alert.mock.calls[0]
+    expect(title).toBe('Note deleted')
+    expect(message).toContain('This note was deleted')
+    expect(message).not.toContain('kept as a new note')
+    expect(mutator.changeItem).not.toHaveBeenCalled()
+  })
+
+  it('points the user at the automatic conflict-copy instead of the old copy-it-out-by-hand instruction when one exists', async () => {
+    const rescueCopy = {
+      uuid: 'rescue-uuid',
+      title: 'My Note (recovered)',
+      conflictOf: item.uuid,
+      updated_at: new Date('2026-09-24T00:00:00Z'),
+    } as unknown as SNNote
+    items.getItems.mockReturnValue([rescueCopy])
+
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await save
+
+    expect(alerts.alert).toHaveBeenCalledTimes(1)
+    const [message] = alerts.alert.mock.calls[0]
+    expect(message).toContain('kept as a new note titled "My Note (recovered)"')
+  })
+
+  it('picks the most recently updated conflict-copy when more than one exists', async () => {
+    const older = {
+      uuid: 'older-rescue',
+      title: 'Older copy',
+      conflictOf: item.uuid,
+      updated_at: new Date('2026-09-01T00:00:00Z'),
+    } as unknown as SNNote
+    const newer = {
+      uuid: 'newer-rescue',
+      title: 'Newer copy',
+      conflictOf: item.uuid,
+      updated_at: new Date('2026-09-24T00:00:00Z'),
+    } as unknown as SNNote
+    items.getItems.mockReturnValue([older, newer])
+
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await save
+
+    const [message] = alerts.alert.mock.calls[0]
+    expect(message).toContain('Newer copy')
+    expect(message).not.toContain('Older copy')
+  })
+
+  it('pins the status at the deletion error instead of letting later showSavingStatus/showAllChangesSavedStatus calls pretend the editor is still live', async () => {
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await save
+
+    expect(controller.status?.type).toBe('error')
+    expect(controller.status?.message).toBe('Note deleted')
+
+    controller.showSavingStatus()
+    expect(controller.status?.type).toBe('error')
+
+    controller.showAllChangesSavedStatus()
+    expect(controller.status?.type).toBe('error')
+  })
+
+  it('never attempts to save again and never re-alerts once the note has been reported gone', async () => {
+    const firstSave = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await firstSave
+
+    expect(alerts.alert).toHaveBeenCalledTimes(1)
+
+    const secondSave = controller.saveAndAwaitLocalPropagation({ text: 'more typing into a dead editor', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await secondSave
+
+    expect(mutator.changeItem).not.toHaveBeenCalled()
+    expect(alerts.alert).toHaveBeenCalledTimes(1)
   })
 })
