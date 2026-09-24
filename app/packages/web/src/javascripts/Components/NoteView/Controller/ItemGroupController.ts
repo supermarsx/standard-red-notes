@@ -684,27 +684,31 @@ export class ItemGroupController {
   }
 
   /**
-   * `ItemManager.conflictsOf` reads the conflict relationship ItemCollection already
-   * maintains off `content.conflict_of`, so no separate content search/heuristic is
-   * needed. Its results are, by construction, always decrypted items (Collection only
-   * indexes a decrypted element's `content.conflict_of` into the map) — content_type is
-   * filtered rather than re-checked for decryption. If more than one candidate exists
-   * (unexpected — normally at most one conflict copy is created per removal), the most
-   * recently created one wins.
+   * Standard Red Notes (t97): NOT `ItemManager.conflictsOf`. It looks like the right
+   * API — it reads the same `content.conflict_of` relationship — but it is backed by
+   * `Collection`'s conflictMap, and `Collection.discard()` unconditionally calls
+   * `conflictMap.removeFromMap(originalUuid)` when the original uuid is removed
+   * (PayloadManager.applyPayloads -> ItemCollection.onChange's `set` then `discard`).
+   * That wipes the very relationship entry this method would need, established moments
+   * earlier in the SAME batch when the rescue copy was inserted. By the time this
+   * removal observer runs, `conflictsOf(removedUuid)` reliably returns nothing —
+   * indistinguishable from "no copy exists" — so it cannot be used even as a first
+   * attempt behind a fallback. Scan `content.conflict_of` directly instead, which
+   * sidesteps the map entirely and is unaffected by discard ordering. If more than one
+   * candidate exists (unexpected — normally at most one conflict copy is created per
+   * removal), the most recently updated one wins.
    */
   private findConflictRescueCopy(removedUuid: string): SNNote | FileItem | undefined {
     const candidates = this.items
-      .conflictsOf(removedUuid)
-      .filter(
-        (candidate) => candidate.content_type === ContentType.TYPES.Note || candidate.content_type === ContentType.TYPES.File,
-      ) as unknown as (SNNote | FileItem)[]
+      .getItems<SNNote | FileItem>([ContentType.TYPES.Note, ContentType.TYPES.File])
+      .filter((candidate) => candidate.conflictOf === removedUuid)
 
     if (candidates.length === 0) {
       return undefined
     }
 
     return candidates.reduce((newest, candidate) =>
-      (candidate.payload.dirtyIndex ?? 0) > (newest.payload.dirtyIndex ?? 0) ? candidate : newest,
+      (candidate.serverUpdatedAtTimestamp ?? 0) > (newest.serverUpdatedAtTimestamp ?? 0) ? candidate : newest,
     )
   }
 

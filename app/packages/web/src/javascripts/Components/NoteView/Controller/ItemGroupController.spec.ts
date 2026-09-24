@@ -53,6 +53,13 @@ describe('ItemGroupController tabs/tiles', () => {
         emitRemoved = (removed) => stream({ removed })
         return jest.fn()
       }),
+      // Standard Red Notes (t97): the rescue-copy lookup scans content.conflictOf
+      // directly (ItemManager.conflictsOf is unusable here -- see the comment on
+      // findConflictRescueCopy in ItemGroupController.ts), so the mock surface is
+      // getItems, not conflictsOf. conflictsOf is still stubbed (always empty) so
+      // that a false-green mutation reverting to the broken API fails cleanly
+      // (falls back to "no copy found") instead of throwing.
+      getItems: jest.fn().mockReturnValue([]),
       conflictsOf: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<ItemManagerInterface>
     sessions = {
@@ -464,7 +471,7 @@ describe('ItemGroupController tabs/tiles', () => {
       await Promise.resolve()
       await Promise.resolve()
 
-      expect(items.conflictsOf).toHaveBeenCalledWith(controller.item.uuid)
+      expect(items.getItems).toHaveBeenCalled()
       expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
       expect(group.itemControllers).not.toContain(controller)
       expect(group.activeItemViewController).toBeUndefined()
@@ -480,9 +487,10 @@ describe('ItemGroupController tabs/tiles', () => {
       const rescueCopy = {
         uuid: 'rescue-copy-uuid',
         content_type: 'Note',
-        payload: { dirtyIndex: 5 },
+        conflictOf: removedUuid,
+        serverUpdatedAtTimestamp: 5,
       }
-      items.conflictsOf.mockReturnValue([rescueCopy] as never)
+      items.getItems.mockReturnValue([rescueCopy] as never)
 
       emitRemoved([{ uuid: removedUuid }])
       await Promise.resolve()
@@ -494,13 +502,41 @@ describe('ItemGroupController tabs/tiles', () => {
       expect(group.activeItemViewController?.item.uuid).toBe('rescue-copy-uuid')
     })
 
+    it('ignores a conflict copy whose conflictOf points at a different (unrelated) uuid', async () => {
+      const controller = (await addTab()) as unknown as {
+        item: { uuid: string }
+        deinitImmediatelyForSecurity: jest.Mock
+      }
+      const unrelatedCopy = {
+        uuid: 'unrelated-copy-uuid',
+        content_type: 'Note',
+        conflictOf: 'some-other-note-uuid',
+        serverUpdatedAtTimestamp: 5,
+      }
+      items.getItems.mockReturnValue([unrelatedCopy] as never)
+
+      emitRemoved([{ uuid: controller.item.uuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      // No candidate's conflictOf matches the removed uuid, so this falls back to a
+      // plain close rather than "migrating" to an unrelated note.
+      expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+      expect(group.itemControllers).not.toContain(controller)
+    })
+
     it('preserves tile position when migrating a non-active tile to its rescue copy', async () => {
       const first = (await addTab()) as unknown as { item: { uuid: string } }
       const second = await addTab()
       expect(group.activeItemViewController).toBe(second)
 
-      const rescueCopy = { uuid: 'rescue-copy-uuid', content_type: 'Note', payload: { dirtyIndex: 1 } }
-      items.conflictsOf.mockReturnValue([rescueCopy] as never)
+      const rescueCopy = {
+        uuid: 'rescue-copy-uuid',
+        content_type: 'Note',
+        conflictOf: first.item.uuid,
+        serverUpdatedAtTimestamp: 1,
+      }
+      items.getItems.mockReturnValue([rescueCopy] as never)
 
       emitRemoved([{ uuid: first.item.uuid }])
       await Promise.resolve()
@@ -513,6 +549,20 @@ describe('ItemGroupController tabs/tiles', () => {
       expect(group.activeItemViewController).toBe(second)
     })
 
+    it('breaks a tie between multiple conflict copies by picking the most recently updated one', async () => {
+      const controller = (await addTab()) as unknown as { item: { uuid: string } }
+      const removedUuid = controller.item.uuid
+      const older = { uuid: 'older-copy', content_type: 'Note', conflictOf: removedUuid, serverUpdatedAtTimestamp: 1 }
+      const newer = { uuid: 'newer-copy', content_type: 'Note', conflictOf: removedUuid, serverUpdatedAtTimestamp: 9 }
+      items.getItems.mockReturnValue([older, newer] as never)
+
+      emitRemoved([{ uuid: removedUuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(group.activeItemViewController?.item.uuid).toBe('newer-copy')
+    })
+
     it('falls back to closing when the rescue copy itself fails to initialize', async () => {
       const controller = (await addTab()) as unknown as {
         item: { uuid: string }
@@ -521,8 +571,13 @@ describe('ItemGroupController tabs/tiles', () => {
       // The mocked FileViewController (unlike the mocked NoteViewController) has no
       // `initialize` method, so routing the rescue copy through it exercises the
       // catch-and-fall-back-to-close path without hand-rolling a rejecting mock.
-      const rescueCopy = { uuid: 'rescue-copy-uuid', content_type: 'File', payload: { dirtyIndex: 1 } }
-      items.conflictsOf.mockReturnValue([rescueCopy] as never)
+      const rescueCopy = {
+        uuid: 'rescue-copy-uuid',
+        content_type: 'File',
+        conflictOf: controller.item.uuid,
+        serverUpdatedAtTimestamp: 1,
+      }
+      items.getItems.mockReturnValue([rescueCopy] as never)
 
       emitRemoved([{ uuid: controller.item.uuid }])
       await Promise.resolve()
