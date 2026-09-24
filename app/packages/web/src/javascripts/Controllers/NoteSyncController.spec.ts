@@ -319,7 +319,10 @@ describe('NoteSyncController work-preservation on a discovered-gone note (t97)',
 
     expect(alerts.alert).toHaveBeenCalledTimes(1)
 
-    const secondSave = controller.saveAndAwaitLocalPropagation({ text: 'more typing into a dead editor', bypassDebouncer: true })
+    const secondSave = controller.saveAndAwaitLocalPropagation({
+      text: 'more typing into a dead editor',
+      bypassDebouncer: true,
+    })
     jest.runOnlyPendingTimers()
     await secondSave
 
