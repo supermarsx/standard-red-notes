@@ -1,9 +1,20 @@
 import {
   AlertService,
   ComponentManagerInterface,
+  ContentType,
+  DecryptedPayload,
+  DeletedPayload,
+  FillItemContent,
+  InternalEventBusInterface,
+  ItemManager,
   ItemManagerInterface,
+  LoggerInterface,
   MutatorClientInterface,
+  NoteContent,
   NoteType,
+  PayloadEmitSource,
+  PayloadManager,
+  PayloadTimestampDefaults,
   PreferenceServiceInterface,
   SessionsClientInterface,
   SyncServiceInterface,
@@ -587,5 +598,94 @@ describe('ItemGroupController tabs/tiles', () => {
       expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
       expect(group.itemControllers).not.toContain(controller)
     })
+  })
+
+  /**
+   * Standard Red Notes (t97): a mocked `items.getItems`/`items.conflictsOf` return can
+   * only prove the migration logic works GIVEN a lookup result — it cannot prove the
+   * lookup itself ever finds anything in reality. That exact gap is how this codebase's
+   * first version of this fix shipped calling ItemManager.conflictsOf(), which looks
+   * like the right API but is unusable here: Collection.discard() unconditionally wipes
+   * the conflictMap entry for a uuid the moment it is discarded (PayloadManager.applyPayloads
+   * -> ItemCollection.onChange's `set` then `discard`), including the relationship
+   * established moments earlier in the SAME batch when the rescue copy was inserted. A
+   * mocked conflictsOf/getItems return sails right past that -- it was never wired to a
+   * real Collection, so it can't reproduce the wipe. This test uses the REAL ItemManager
+   * and PayloadManager (same pattern as ItemManager.spec.ts), drives the exact production
+   * sequence (PayloadManager.emitPayloads applying the conflict copy and the original's
+   * tombstone in ONE call, precisely as DeltaRemoteRetrieved/ConflictDelta's
+   * DuplicateBaseKeepApply does), and lets the real streamItems observer -- not a manually
+   * invoked callback -- deliver the removal. No part of the lookup or the removal
+   * detection is mocked.
+   */
+  it('finds and migrates to the conflict_of rescue copy through a real ItemManager/Collection, not a mocked lookup', async () => {
+    const logger = { debug: jest.fn() } as unknown as LoggerInterface
+    const internalEventBus = { publish: jest.fn() } as unknown as InternalEventBusInterface
+    const payloadManager = new PayloadManager(logger, internalEventBus)
+    const realItems = new ItemManager(payloadManager, internalEventBus)
+
+    const originalUuid = 'real-original-note-uuid'
+    await payloadManager.emitPayload(
+      new DecryptedPayload({
+        uuid: originalUuid,
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: 'original', text: 'unsaved edit' }),
+        ...PayloadTimestampDefaults(),
+      }),
+      PayloadEmitSource.LocalInserted,
+    )
+
+    const realGroup = new ItemGroupController(
+      realItems,
+      {} as MutatorClientInterface,
+      {} as SyncServiceInterface,
+      { isSignedIn: jest.fn().mockReturnValue(false), getUser: jest.fn() } as unknown as SessionsClientInterface,
+      {} as PreferenceServiceInterface,
+      {} as ComponentManagerInterface,
+      {} as AlertService,
+      (() => false) as unknown as IsNativeMobileWeb,
+    )
+
+    const originalNote = realItems.findItem(originalUuid)
+    await realGroup.createItemController({ note: originalNote as never, openInNewTile: true })
+    expect(realGroup.itemControllers).toHaveLength(1)
+
+    // Applied in ONE PayloadManager call -- this is what actually wipes the conflictMap
+    // entry conflictsOf() would have needed, and it is what the real sync/conflict-delta
+    // code path does (both payloads arrive in the same DeltaEmit).
+    await payloadManager.emitPayloads(
+      [
+        new DecryptedPayload({
+          uuid: 'real-rescue-copy-uuid',
+          content_type: ContentType.TYPES.Note,
+          content: FillItemContent<NoteContent>({
+            title: 'original',
+            text: 'unsaved edit',
+            conflict_of: originalUuid,
+          }),
+          ...PayloadTimestampDefaults(),
+        }),
+        new DeletedPayload({
+          uuid: originalUuid,
+          content_type: ContentType.TYPES.Note,
+          content: undefined,
+          deleted: true,
+          dirty: false,
+          ...PayloadTimestampDefaults(),
+        }),
+      ],
+      PayloadEmitSource.RemoteRetrieved,
+    )
+
+    // No emitRemoved(...) call: the real ItemManager's own streamItems observer
+    // (registered by ItemGroupController's own constructor) delivers this removal.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(realItems.findItem(originalUuid)).toBeUndefined()
+    expect(realGroup.activeItemViewController?.item.uuid).toBe('real-rescue-copy-uuid')
+
+    realGroup.deinit()
   })
 })
