@@ -609,15 +609,27 @@ export class ItemGroupController {
   }
 
   /**
-   * Standard Red Notes (t97): the removed uuid may have lost a conflict against an
-   * incoming remote delete while its local copy was dirty. When that happens, the conflict
-   * resolver has ALREADY preserved the user's unsaved content by duplicating it into a
-   * fresh item tagged `content.conflict_of` = this uuid (GenericItem.strategyWhenConflictingWithItem
-   * -> ConflictStrategy.DuplicateBaseKeepApply) before discarding the original. Prefer
-   * migrating the open tile to that rescue copy in place over closing it outright — the
+   * Standard Red Notes (t97): the removed uuid may already have a successor item under a
+   * new uuid, reachable via `findRescueCopy` below. Two distinct, unrelated mechanisms
+   * produce one:
+   *   - A conflict resolver preserving a dirty local edit against an incoming remote
+   *     delete (GenericItem.strategyWhenConflictingWithItem -> ConflictStrategy.DuplicateBaseKeepApply):
+   *     the user's unsaved content survives as a genuine conflict copy, tagged BOTH
+   *     `content.conflict_of` and `content.duplicate_of` = this uuid.
+   *   - A uuid alternation (PayloadsByAlternatingUuid, e.g. importing a backup whose uuids
+   *     collide with the account's own): the SAME item is simply re-identified under a new
+   *     uuid. Nothing was lost or conflicted — the item is tagged ONLY
+   *     `content.duplicate_of`, deliberately not `conflict_of` (setting the latter there
+   *     would misrepresent a clean re-identification as a conflict, and would fire a
+   *     "Recovered" notification per item during a bulk import).
+   * Either way the editor's job is the same — follow to the new uuid — so prefer migrating
+   * the open tile to it in place over closing outright. For the conflict case, the
    * alternative is telling the user to manually copy text the app already copied for them,
-   * into a note they have no idea exists. Only when no rescue copy exists is the note
-   * genuinely just gone, and the tile is closed instead.
+   * into a note they have no idea exists (worse still: the notes list does not surface
+   * conflict copies at all, so migrating here is their only route to it). For the
+   * alternation case, closing would show the "this note was deleted" backstop alert, which
+   * is simply untrue — the content is intact, just under a different uuid. Only when
+   * neither relationship is found is the note genuinely just gone, and the tile is closed.
    */
   private async recoverRemovedItemController(
     controller: NoteViewController | FileViewController,
@@ -627,7 +639,7 @@ export class ItemGroupController {
       return
     }
 
-    const rescueCopy = this.findConflictRescueCopy(removedUuid)
+    const rescueCopy = this.findRescueCopy(removedUuid)
     if (!rescueCopy) {
       this.closeItemController(controller, { securitySensitive: true })
       return
@@ -693,15 +705,24 @@ export class ItemGroupController {
    * earlier in the SAME batch when the rescue copy was inserted. By the time this
    * removal observer runs, `conflictsOf(removedUuid)` reliably returns nothing —
    * indistinguishable from "no copy exists" — so it cannot be used even as a first
-   * attempt behind a fallback. Scan `content.conflict_of` directly instead, which
-   * sidesteps the map entirely and is unaffected by discard ordering. If more than one
-   * candidate exists (unexpected — normally at most one conflict copy is created per
-   * removal), the most recently updated one wins.
+   * attempt behind a fallback. Scan `content.conflict_of` / `content.duplicate_of`
+   * directly instead, which sidesteps the map entirely and is unaffected by discard
+   * ordering.
+   *
+   * Matches BOTH relationships in one pass (see the class-doc on
+   * recoverRemovedItemController for what each means) rather than two separate lookups
+   * concatenated, specifically so an item matching both (every conflict-path copy also
+   * carries `duplicate_of`) appears in `candidates` exactly once — not twice, and not
+   * tie-broken against itself. Precedent for OR-ing the two relationships in one
+   * predicate: `ItemsEncryption.itemsKeyForEncryptedPayload`
+   * (`key.uuid === id || key.duplicateOf === id`). If more than one distinct candidate
+   * exists (unexpected — normally at most one successor is created per removal), the
+   * most recently updated one wins.
    */
-  private findConflictRescueCopy(removedUuid: string): SNNote | FileItem | undefined {
+  private findRescueCopy(removedUuid: string): SNNote | FileItem | undefined {
     const candidates = this.items
       .getItems<SNNote | FileItem>([ContentType.TYPES.Note, ContentType.TYPES.File])
-      .filter((candidate) => candidate.conflictOf === removedUuid)
+      .filter((candidate) => candidate.conflictOf === removedUuid || candidate.duplicateOf === removedUuid)
 
     if (candidates.length === 0) {
       return undefined

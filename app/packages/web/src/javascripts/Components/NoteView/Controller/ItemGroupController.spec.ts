@@ -513,6 +513,73 @@ describe('ItemGroupController tabs/tiles', () => {
       expect(group.activeItemViewController?.item.uuid).toBe('rescue-copy-uuid')
     })
 
+    /**
+     * Standard Red Notes (t97): PayloadsByAlternatingUuid (a uuid collision on import,
+     * e.g. an old backup whose uuids clash with the account's own) re-identifies an item
+     * under a new uuid WITHOUT going through PayloadsByDuplicating -- it inlines its own
+     * copy and sets ONLY `duplicate_of`, deliberately not `conflict_of` (setting the
+     * latter there would misrepresent a clean re-identification as a conflict, and would
+     * fire a "Recovered" notification per item during a bulk import). Nothing was lost on
+     * this path -- the scan must still find the successor, or the user gets the "this note
+     * was deleted" backstop alert for a note that was simply renamed.
+     */
+    it('migrates to a duplicate_of-only successor (the uuid-alternation path, no conflictOf set)', async () => {
+      const controller = (await addTab()) as unknown as {
+        item: { uuid: string }
+        deinitImmediatelyForSecurity: jest.Mock
+      }
+      const removedUuid = controller.item.uuid
+      const successor = {
+        uuid: 'alternated-uuid',
+        content_type: 'Note',
+        duplicateOf: removedUuid,
+        serverUpdatedAtTimestamp: 5,
+      }
+      items.getItems.mockReturnValue([successor] as never)
+
+      emitRemoved([{ uuid: removedUuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+      expect(group.itemControllers).toHaveLength(1)
+      expect(group.itemControllers).not.toContain(controller)
+      expect(group.activeItemViewController?.item.uuid).toBe('alternated-uuid')
+    })
+
+    /**
+     * Standard Red Notes (t97): every conflict-path copy carries BOTH conflict_of AND
+     * duplicate_of pointing at the same removed uuid (PayloadsByDuplicating sets
+     * duplicate_of unconditionally, conflict_of only when isConflict). Matching both
+     * relationships in one OR'd predicate (rather than two separate lookups concatenated)
+     * means such an item appears in the candidate set exactly once -- this guards against
+     * it being counted twice, or "tying" against its own second appearance and reducing to
+     * a wrong/undefined result.
+     */
+    it('counts an item matching both conflictOf and duplicateOf exactly once, not twice', async () => {
+      const controller = (await addTab()) as unknown as { item: { uuid: string } }
+      const removedUuid = controller.item.uuid
+      const bothFieldsCopy = {
+        uuid: 'both-fields-copy-uuid',
+        content_type: 'Note',
+        conflictOf: removedUuid,
+        duplicateOf: removedUuid,
+        serverUpdatedAtTimestamp: 5,
+      }
+      items.getItems.mockReturnValue([bothFieldsCopy] as never)
+
+      emitRemoved([{ uuid: removedUuid }])
+      await Promise.resolve()
+      await Promise.resolve()
+
+      // A single genuine candidate migrates cleanly -- if it were double-counted by two
+      // concatenated lookups, reduce()'s self-comparison would still land on the same
+      // object here, so the sharper regression guard is the getItems call count below:
+      // exactly one scan of the store, not two.
+      expect(group.activeItemViewController?.item.uuid).toBe('both-fields-copy-uuid')
+      expect(items.getItems).toHaveBeenCalledTimes(1)
+    })
+
     it('ignores a conflict copy whose conflictOf points at a different (unrelated) uuid', async () => {
       const controller = (await addTab()) as unknown as {
         item: { uuid: string }
