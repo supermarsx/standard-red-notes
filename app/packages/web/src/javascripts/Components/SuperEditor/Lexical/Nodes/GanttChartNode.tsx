@@ -11,6 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import MermaidSvgViewport from './MermaidSvgViewport'
 
 /**
  * Gantt-chart block. Reuses **mermaid** (already a dependency — see MermaidNode)
@@ -170,7 +171,11 @@ function prefersDark(): boolean {
 
 let renderSeq = 0
 
-function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; nodeKey: NodeKey }): React.JSX.Element {
+// Exported (not just used internally) so its render contract — specifically,
+// that the preview goes through MermaidSvgViewport rather than a raw
+// dangerouslySetInnerHTML div — is directly testable without a full Lexical
+// composer harness; mirrors CommentView's export in CommentNode.tsx.
+export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const [editing, setEditing] = useState(data.tasks.length === 0)
   const [svg, setSvg] = useState<string>('')
@@ -306,9 +311,9 @@ function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; nodeKey:
         </div>
       ) : null}
 
-      <div className="overflow-auto p-2">
+      <div className="p-2">
         {svg ? (
-          <div dangerouslySetInnerHTML={{ __html: svg }} />
+          <MermaidSvgViewport svg={svg} />
         ) : (
           !error && (
             <div className="text-passive-1 text-sm" data-srn-print-exclude="true">
