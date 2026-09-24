@@ -17,8 +17,11 @@ export const InfoStrings = {
    * discarded uuid was a `PayloadsByAlternatingUuid` re-identification (the copy carries
    * `content.duplicate_of` but never `content.conflict_of`) rather than a deletion -- the note's
    * content survives verbatim under a new uuid and is still on the server. Nothing was lost;
-   * saying "deleted" here would be false.
+   * saying "deleted" here would be false. Deliberately does not name a cause: per ee11b67f the
+   * trigger is a uuid COLLISION (e.g. restoring an old backup whose uuids clash with the
+   * account's own), not a sync/edit conflict -- an earlier draft of this string said "a sync
+   * conflict gave it a new identity", which was itself inaccurate.
    */
   NoteReidentifiedRemotely:
-    'This note was not deleted. A sync conflict gave it a new identity, and its content is safe.',
+    'This note was not deleted. It was automatically given a new identity, and its content is safe.',
 }
