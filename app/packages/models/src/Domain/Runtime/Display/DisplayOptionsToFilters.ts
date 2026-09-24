@@ -98,10 +98,17 @@ export function computeFiltersForDisplayOptions(
     filters.push((item) => itemMatchesQuery(item, query, collection))
   }
 
-  if (
-    !viewsPredicate?.keypathIncludesString('conflict_of') &&
-    !options.views?.some((v) => v.uuid === SystemViewId.TrashedNotes)
-  ) {
+  /**
+   * Conflicted copies are kept out of ordinary lists. Trash shows them so a deleted copy
+   * is still findable, and Conflicts exists precisely to list them — without that second
+   * exemption the Conflicts view inherited this filter and showed every note EXCEPT the
+   * conflicts it is named for. A user-authored predicate naming `conflict_of` opts out too.
+   */
+  const viewIsExemptFromConflictFilter = options.views?.some(
+    (v) => v.uuid === SystemViewId.TrashedNotes || v.uuid === SystemViewId.Conflicts,
+  )
+
+  if (!viewsPredicate?.keypathIncludesString('conflict_of') && !viewIsExemptFromConflictFilter) {
     filters.push((item) => !item.conflictOf)
   }
 

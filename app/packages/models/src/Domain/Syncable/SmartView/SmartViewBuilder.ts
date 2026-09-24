@@ -217,7 +217,21 @@ function starredNotesPredicate(options: NotesAndFilesDisplayOptions) {
 }
 
 function conflictsPredicate(options: NotesAndFilesDisplayOptions) {
-  const subPredicates: Predicate<SNNote>[] = [new Predicate('content_type', '=', ContentType.TYPES.Note)]
+  const subPredicates: Predicate<SNNote>[] = [
+    new Predicate('content_type', '=', ContentType.TYPES.Note),
+    /**
+     * Selects only conflicted copies. Without it this view listed every ordinary note
+     * and none of the conflicts — the exact inverse of its name — because it had no
+     * selecting clause and also inherited the blanket hide-conflicts filter that
+     * computeFiltersForDisplayOptions applies (that filter now exempts this view by
+     * uuid, alongside Trash).
+     *
+     * `!= ''` rather than a truthiness test because valueMatchesTargetValue routes an
+     * undefined value through its falsey-target branch: an unset conflictOf is
+     * excluded, a real uuid passes.
+     */
+    new Predicate('conflictOf', '!=', ''),
+  ]
 
   if (options.includeTrashed === false) {
     subPredicates.push(new Predicate('trashed', '=', false))
