@@ -273,6 +273,53 @@ describe('NoteSyncController work-preservation on a discovered-gone note (t97)',
     expect(message).toContain('kept as a new note titled "My Note (recovered)"')
   })
 
+  it('reports a uuid alternation (re-identification) as NOT a deletion, distinct from a conflict rescue', async () => {
+    // PayloadsByAlternatingUuid: the successor carries duplicate_of but never conflict_of --
+    // nothing was deleted, the note is intact under a new uuid.
+    const successor = {
+      uuid: 'successor-uuid',
+      title: 'My Note',
+      duplicateOf: item.uuid,
+      updated_at: new Date('2026-09-24T00:00:00Z'),
+    } as unknown as SNNote
+    items.getItems.mockReturnValue([successor])
+
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await save
+
+    expect(alerts.alert).toHaveBeenCalledTimes(1)
+    const [message, title] = alerts.alert.mock.calls[0]
+    expect(title).toBe('Note re-identified')
+    expect(message).toContain('This note was not deleted')
+    expect(message).toContain('now titled "My Note"')
+    expect(message).not.toContain('was deleted')
+    expect(message).not.toContain('kept as a new note')
+    expect(controller.status?.message).toBe('Note re-identified')
+  })
+
+  it('prefers the conflict-copy explanation over the alternation explanation when a candidate carries both fields', async () => {
+    // handleDuplicateBaseKeepApply's rescue copy carries BOTH duplicate_of and conflict_of --
+    // the deletion+rescue wording must win, since it is the more specific, more urgent case.
+    const rescueCopy = {
+      uuid: 'rescue-uuid',
+      title: 'My Note (recovered)',
+      conflictOf: item.uuid,
+      duplicateOf: item.uuid,
+      updated_at: new Date('2026-09-24T00:00:00Z'),
+    } as unknown as SNNote
+    items.getItems.mockReturnValue([rescueCopy])
+
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'stale edit', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+    await save
+
+    const [message, title] = alerts.alert.mock.calls[0]
+    expect(title).toBe('Note deleted')
+    expect(message).toContain('kept as a new note titled "My Note (recovered)"')
+    expect(message).not.toContain('re-identified')
+  })
+
   it('picks the most recently updated conflict-copy when more than one exists', async () => {
     const older = {
       uuid: 'older-rescue',

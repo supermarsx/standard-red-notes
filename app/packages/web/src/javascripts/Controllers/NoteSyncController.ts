@@ -319,56 +319,95 @@ export class NoteSyncController {
   }
 
   /**
-   * Standard Red Notes (work-preservation, t97): the only way `findItem` stops resolving this
-   * controller's uuid is a server-asserted deletion being applied (confirmed by investigation --
-   * there is no false-positive removal path). Report that honestly, point the user at the
-   * automatic conflict-copy the sync engine already created for any text that was unsynced at
-   * the moment of deletion (see GenericItem.strategyWhenConflictingWithItem ->
-   * ConflictStrategy.DuplicateBaseKeepApply, handled in Conflict.ts) when one exists, and
-   * permanently stop this controller from pretending further edits are being saved.
+   * Standard Red Notes (work-preservation, t97): `findItem` can stop resolving this
+   * controller's uuid for more than one reason -- NOT only a server-asserted deletion. Two
+   * distinct, confirmed causes exist:
    *
-   * Deliberately does NOT create a rescue note itself: when the sync engine already made one,
-   * creating another would strand the user with two divergent copies, which is worse than the
-   * bug. When it did not (the note was clean at the moment of deletion, so there was nothing to
-   * preserve), there is nothing to point at either.
+   * 1. A genuine deletion (this uuid's payload arrives with `deleted: true` and is applied).
+   *    If the local copy was dirty, the conflict resolver preserves the unsynced text as a
+   *    fresh item tagged `content.conflict_of` before discarding the original (see
+   *    GenericItem.strategyWhenConflictingWithItem -> ConflictStrategy.DuplicateBaseKeepApply,
+   *    handled in Conflict.ts). This IS a deletion, and the message must say so.
+   * 2. A uuid ALTERNATION (re-identification), not a deletion: `PayloadsByAlternatingUuid`
+   *    copies this note's content verbatim to a brand-new uuid (tagged `duplicate_of`, never
+   *    `conflict_of`) and discards the OLD uuid's payload with `dirty: false` purely so the
+   *    non-syncable old identity is dropped locally -- nothing was deleted server-side, the
+   *    note is intact under its new identity. Reporting this as a deletion would be false: the
+   *    original, uncorrected version of this comment asserted no such path existed, which was
+   *    wrong.
+   *
+   * Classify which happened and report it honestly, pointing at the surviving copy by title
+   * when one exists, and permanently stop this controller from pretending further edits are
+   * being saved (the uuid itself is gone either way, so a save can never land again regardless
+   * of which case this is).
+   *
+   * Reachability note: ItemGroupController's item-removal observer (streamItems) can migrate
+   * the open editor to a `conflict_of`/`duplicate_of` successor before this guard ever fires,
+   * which would make this whole method moot for that tile. That is NOT guaranteed: its recovery
+   * path awaits `replacement.initialize()` before closing/deiniting the old controller, and this
+   * controller's own debounced save timer runs on an entirely independent clock that can elapse
+   * during that async gap. So this must stay correct on its own rather than depend on winning
+   * (or losing) that race.
+   *
+   * Deliberately does NOT create anything itself: when the sync engine already made a surviving
+   * copy, creating another would strand the user with two divergent copies, which is worse than
+   * the bug. When it did not (the note was clean at the moment of deletion, so there was nothing
+   * to preserve), there is nothing to point at either.
    */
   private handleNoteDiscoveredGone(): void {
     if (this.noteIsGone) {
       return
     }
 
-    const rescueCopy = this.findConflictCopyOfDiscoveredNote()
-
-    const message = rescueCopy
-      ? `${InfoStrings.NoteDeletedRemotely} The text you had not yet saved was automatically kept as a new note titled "${rescueCopy.title || 'Untitled'}". Further changes made in this editor will not be saved.`
-      : `${InfoStrings.NoteDeletedRemotely} Further changes made in this editor will not be saved.`
+    const { statusTitle, message } = this.describeDiscoveredGoneNote()
 
     this.setStatus(
       {
         type: 'error',
-        message: 'Note deleted',
+        message: statusTitle,
         description: message,
       },
       false,
     )
     this.noteIsGone = true
 
-    void this.alerts.alert(message, 'Note deleted')
+    void this.alerts.alert(message, statusTitle)
+  }
+
+  private describeDiscoveredGoneNote(): { statusTitle: string; message: string } {
+    const rescueCopy = this.findRelatedNote((note) => note.conflictOf === this.item.uuid)
+    if (rescueCopy) {
+      return {
+        statusTitle: 'Note deleted',
+        message: `${InfoStrings.NoteDeletedRemotely} The text you had not yet saved was automatically kept as a new note titled "${rescueCopy.title || 'Untitled'}". Further changes made in this editor will not be saved.`,
+      }
+    }
+
+    const successor = this.findRelatedNote((note) => note.duplicateOf === this.item.uuid)
+    if (successor) {
+      return {
+        statusTitle: 'Note re-identified',
+        message: `${InfoStrings.NoteReidentifiedRemotely} It is now titled "${successor.title || 'Untitled'}". This editor is no longer connected to it -- open the new copy to keep editing. Further changes made in this editor will not be saved.`,
+      }
+    }
+
+    return {
+      statusTitle: 'Note deleted',
+      message: `${InfoStrings.NoteDeletedRemotely} Further changes made in this editor will not be saved.`,
+    }
   }
 
   /**
    * The item-store's own conflict index (`ItemManagerInterface.conflictsOf`) cannot be used
    * here: discarding an item scrubs its own entries from that index (Collection.discard ->
    * conflictMap.removeFromMap), which erases the very relationship that gets established when
-   * the rescue copy is inserted in the same sync batch that discards the original. Scanning by
-   * the copy's own `conflictOf` content field is unaffected by that bookkeeping and finds it
-   * reliably. Ties (more than one historical conflict copy of the same uuid) resolve to the
-   * most recently updated one.
+   * the surviving copy is inserted in the same sync batch that discards the original. Scanning
+   * by the copy's own `conflictOf`/`duplicateOf` fields is unaffected by that bookkeeping and
+   * finds it reliably. Ties (more than one historical copy) resolve to the most recently
+   * updated one.
    */
-  private findConflictCopyOfDiscoveredNote(): SNNote | undefined {
-    const candidates = this.items
-      .getItems<SNNote>(ContentType.TYPES.Note)
-      .filter((note) => note.conflictOf === this.item.uuid)
+  private findRelatedNote(predicate: (note: SNNote) => boolean): SNNote | undefined {
+    const candidates = this.items.getItems<SNNote>(ContentType.TYPES.Note).filter(predicate)
 
     if (candidates.length === 0) {
       return undefined
