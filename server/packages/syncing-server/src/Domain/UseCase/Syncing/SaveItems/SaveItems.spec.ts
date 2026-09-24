@@ -185,7 +185,15 @@ describe('SaveItems', () => {
     expect(sendEventToClient.execute).not.toHaveBeenCalled()
   })
 
-  it('should mark items as conflicts if saving new item fails', async () => {
+  /**
+   * Standard Red Notes (t97): this is a STRUCTURAL validation failure inside
+   * SaveNewItem itself, not the infrastructure catch below and not OwnershipFilter's
+   * genuine uuid collision -- it must never regenerate the item's uuid
+   * (ConflictType.UuidConflict is destructive on the client). itemHash1's content_type
+   * is valid Note, so the item's data is malformed in some OTHER way -- the generic
+   * ContentError, matching ContentFilter's role, not the more specific ContentTypeError.
+   */
+  it('reports a structural new-item failure as ContentError when the content_type itself is valid', async () => {
     const useCase = createUseCase()
 
     saveNewItem.execute = jest.fn().mockResolvedValue(Result.fail('error'))
@@ -206,10 +214,47 @@ describe('SaveItems', () => {
     expect(result.getValue().conflicts).toEqual([
       {
         unsavedItem: itemHash1,
-        type: 'uuid_conflict',
+        type: 'content_error',
       },
     ])
     expect(sendEventToClient.execute).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Standard Red Notes (t97): same structural-failure case as above, but the item
+   * hash's OWN content_type field is itself unparsable -- reuses the exact check
+   * ContentTypeFilter already runs, so this must resolve to the more specific
+   * ContentTypeError rather than the generic ContentError.
+   */
+  it('reports a structural new-item failure as ContentTypeError when the content_type itself is malformed', async () => {
+    const useCase = createUseCase()
+
+    saveNewItem.execute = jest.fn().mockResolvedValue(Result.fail('error'))
+
+    const malformedContentTypeHash = ItemHash.create({
+      ...itemHash1.props,
+      content_type: 'NotARealContentType',
+    }).getValue()
+
+    const result = await useCase.execute({
+      itemHashes: [malformedContentTypeHash],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().conflicts).toEqual([
+      {
+        unsavedItem: malformedContentTypeHash,
+        type: 'content_type_error',
+      },
+    ])
   })
 
   /**
@@ -594,7 +639,13 @@ describe('SaveItems', () => {
     expect(sendEventToClients.execute).toHaveBeenCalled()
   })
 
-  it('should mark items as conflicts if updating existing item fails', async () => {
+  /**
+   * Standard Red Notes (t97): same reasoning as the new-item case above, for the
+   * existing-item structural-failure branch. itemHash1's content_type is valid, so
+   * this resolves to the generic ContentError, not UuidConflict (which would
+   * regenerate the item's identity and discard the original over a malformed field).
+   */
+  it('reports a structural existing-item failure as ContentError when the content_type itself is valid', async () => {
     const useCase = createUseCase()
 
     itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
@@ -616,7 +667,39 @@ describe('SaveItems', () => {
     expect(result.getValue().conflicts).toEqual([
       {
         unsavedItem: itemHash1,
-        type: 'uuid_conflict',
+        type: 'content_error',
+      },
+    ])
+  })
+
+  it('reports a structural existing-item failure as ContentTypeError when the content_type itself is malformed', async () => {
+    const useCase = createUseCase()
+
+    itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
+    updateExistingItem.execute = jest.fn().mockResolvedValue(Result.fail('error'))
+
+    const malformedContentTypeHash = ItemHash.create({
+      ...itemHash1.props,
+      content_type: 'NotARealContentType',
+    }).getValue()
+
+    const result = await useCase.execute({
+      itemHashes: [malformedContentTypeHash],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().conflicts).toEqual([
+      {
+        unsavedItem: malformedContentTypeHash,
+        type: 'content_type_error',
       },
     ])
   })

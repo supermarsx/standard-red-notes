@@ -1,9 +1,17 @@
-import { safeErrorLogMetadata, MapperInterface, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import {
+  ContentType,
+  safeErrorLogMetadata,
+  MapperInterface,
+  Result,
+  UseCaseInterface,
+  Uuid,
+} from '@standardnotes/domain-core'
 
 import { SaveItemsResult } from './SaveItemsResult'
 import { SaveItemsDTO } from './SaveItemsDTO'
 import { Item } from '../../../Item/Item'
 import { ItemConflict } from '../../../Item/ItemConflict'
+import { ItemHash } from '../../../Item/ItemHash'
 import { ConflictType } from '@standardnotes/responses'
 import { Time, TimerInterface } from '@standardnotes/time'
 import { Logger } from 'winston'
@@ -179,7 +187,7 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
             conflicts.push({
               unsavedItem: itemHash,
-              type: ConflictType.UuidConflict,
+              type: this.structuralFailureConflictType(itemHash),
             })
 
             continue
@@ -242,7 +250,7 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
             conflicts.push({
               unsavedItem: itemHash,
-              type: ConflictType.UuidConflict,
+              type: this.structuralFailureConflictType(itemHash),
             })
 
             continue
@@ -455,5 +463,42 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       }`,
       'utf-8',
     ).toString('base64')
+  }
+
+  /**
+   * Standard Red Notes (t97): the udpatedItemOrError/newItemOrError `isFailed()`
+   * branches above are UpdateExistingItem/SaveNewItem's OWN internal validation
+   * rejecting the item's data -- a malformed content_type, an invalid
+   * duplicate_of/session uuid, unparsable dates -- never an infrastructure fault (the
+   * catch blocks handle that, unacknowledged/retried) and never a uuid collision
+   * (OwnershipFilter, in the validator pass before either try block runs, already owns
+   * that and still reports UuidConflict correctly when it fires). Unlike a transient
+   * failure, a structural one will never succeed on retry: leaving it unacknowledged
+   * forever, the catch blocks' treatment, would produce an item that never syncs and
+   * never tells anyone -- a silent, permanent failure to inform. That is a real
+   * product gap, tracked separately, not something to improvise here.
+   *
+   * What IS in scope: UuidConflict was still the wrong type for this case, for the
+   * same client-side reason as the catch blocks -- it is a destructive instruction
+   * (PayloadsByAlternatingUuid regenerates the item's uuid and discards the original)
+   * triggered by nothing more than a malformed field, most of which the user never
+   * touched directly. Silent-but-harmless beats silent-and-destructive: report the
+   * most accurate of the conflict types this codebase already uses for "this item's
+   * data is structurally invalid, give up" (both already resolve identically and
+   * non-destructively on the client -- dirty:false, no identity change -- via
+   * DeltaRemoteRejected.getResultForConflictWithOnlyUnsavedItem).
+   *
+   * `Result.fail()` does not preserve WHICH internal check failed, so this cannot
+   * inspect UpdateExistingItem/SaveNewItem's own reasoning directly -- it re-derives
+   * the one distinction that matters using the SAME check ContentTypeFilter already
+   * runs earlier in the validator pass (ContentType.create on the item hash's own
+   * content_type): ContentTypeError when that specifically is what is malformed,
+   * ContentError (ContentFilter's role: "this item's data is malformed" more
+   * generally) for every other structural failure.
+   */
+  private structuralFailureConflictType(itemHash: ItemHash): ConflictType {
+    return ContentType.create(itemHash.props.content_type).isFailed()
+      ? ConflictType.ContentTypeError
+      : ConflictType.ContentError
   }
 }
