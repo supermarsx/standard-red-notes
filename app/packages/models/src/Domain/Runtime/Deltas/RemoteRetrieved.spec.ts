@@ -210,6 +210,17 @@ describe('remote retrieved delta', () => {
       expect(emits.some((payload) => payload.uuid !== NOTE_UUID)).toBe(false)
     })
 
+    /**
+     * A KNOWN, DELIBERATE gap — please do not "fix" this by widening the guard above.
+     *
+     * An incoming errored (undecryptable) payload against a dirty base is dropped by the
+     * same loop, which is the same shape of defect as the deletion case. Routing it through
+     * the strategy would answer DuplicateBaseKeepApply and mint a conflict copy every time an
+     * undecryptable payload arrives for a dirty item — turning a transient key-rotation
+     * problem into a pile of duplicates the user has to clean up by hand. The local decrypted
+     * copy is the good one here, so dropping and retrying on a later sync is defensible.
+     * This test pins that behaviour so the choice is visible rather than silent.
+     */
     it('REGRESSION: an incoming ERRORED payload against a dirty base is still left for a later sync', () => {
       const base = localNote(true)
       const incomingErrored = new EncryptedPayload({

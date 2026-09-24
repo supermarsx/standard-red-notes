@@ -98,10 +98,15 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
 
       if (isDeletedConflict && isErrorDecryptingPayload(base)) {
         /**
-         * An errored base holds no readable local edit worth preserving, and the conflict
-         * strategy would answer KeepBaseDuplicateApply here — duplicating the incoming deletion
-         * into a *dirty* tombstone, which is not discardable and would be pushed back to the
-         * server as a new deleted item. Apply the deletion directly instead.
+         * Deliberately NOT routed through ConflictDelta, and this asymmetry should stay.
+         *
+         * An errored base holds no readable local edit, so there is nothing for the conflict
+         * strategy to protect. It would answer KeepBaseDuplicateApply here, and
+         * PayloadsByDuplicating on a DELETED payload yields a copy that is still
+         * `deleted: true` but `dirty: true` — and `DeletedPayload.discardable` is `!dirty`,
+         * so that duplicate would never be discarded from the collection and would instead be
+         * pushed up as a brand-new deleted item on the server. Manufacturing that garbage to
+         * satisfy a symmetry argument is strictly worse than applying the deletion directly.
          */
         result.emits.push(payloadByFinalizingSyncState(conflict, this.baseCollection))
 
