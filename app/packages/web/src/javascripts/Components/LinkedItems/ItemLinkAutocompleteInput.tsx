@@ -90,7 +90,7 @@ const ItemLinkAutocompleteInput = forwardRef(
       <div>
         <form onSubmit={onFormSubmit}>
           <label>
-            <VisuallyHidden>Link topics, notes or files, or file into a folder</VisuallyHidden>
+            <VisuallyHidden>Link topics, notes or files, or move to a folder</VisuallyHidden>
             <Combobox
               store={combobox}
               placeholder="Link topics, notes, files, folders..."

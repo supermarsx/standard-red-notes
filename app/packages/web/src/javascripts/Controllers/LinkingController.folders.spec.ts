@@ -228,11 +228,31 @@ describe('folder attribution', () => {
     })
 
     it('honours a folder icon the user picked', () => {
+      const folder = createFolder('Work', { iconString: 'archive' })
+
+      const [icon] = getIconForItem(folder, application)
+
+      expect(icon).toBe('archive')
+      expect(Object.keys(IconNameToSvgMapping)).toContain(icon)
+    })
+
+    it('keeps an emoji folder icon, which has no mapping by design', () => {
+      const folder = createFolder('Work', { iconString: '📁' })
+
+      const [icon] = getIconForItem(folder, application)
+
+      expect(icon).toBe('📁')
+    })
+
+    it('falls back rather than handing Icon a name that resolves to nothing', () => {
+      // Not reachable through the icon picker, but sync can deliver it from another
+      // client or an older version — and Icon would print it as text.
       const folder = createFolder('Work', { iconString: 'briefcase' })
 
       const [icon] = getIconForItem(folder, application)
 
-      expect(icon).toBe('briefcase')
+      expect(icon).toBe('folder')
+      expect(Object.keys(IconNameToSvgMapping)).toContain(icon)
     })
   })
 })

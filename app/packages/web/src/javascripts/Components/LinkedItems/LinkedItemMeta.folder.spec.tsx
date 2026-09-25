@@ -64,6 +64,19 @@ describe('LinkedItemMeta with a folder result', () => {
     expect(container.textContent).not.toContain('folder')
   })
 
+  it('prints no raw text for a folder icon that resolves to no glyph', () => {
+    act(() => root.render(createElement(LinkedItemMeta, { item: folder('Work', 'briefcase') })))
+
+    expect(container.querySelector('label')).toBeNull()
+    expect(container.textContent).toBe('Work')
+  })
+
+  it('still renders an emoji folder icon, which deliberately has no mapping', () => {
+    act(() => root.render(createElement(LinkedItemMeta, { item: folder('Work', '📁') })))
+
+    expect(container.querySelector('label')?.textContent).toBe('📁')
+  })
+
   it('highlights the matched part of the folder title like any other result', () => {
     act(() => root.render(createElement(LinkedItemMeta, { item: folder('Work'), searchQuery: 'Wor' })))
 
