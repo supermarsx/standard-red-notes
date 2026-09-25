@@ -2,11 +2,11 @@ import { observer } from 'mobx-react-lite'
 import ItemLinkAutocompleteInput from './ItemLinkAutocompleteInput'
 import { LinkingController } from '@/Controllers/LinkingController'
 import LinkedItemBubble from './LinkedItemBubble'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MouseEventHandler, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { classNames } from '@standardnotes/utils'
-import { ContentType, DecryptedItemInterface, SNNote } from '@standardnotes/snjs'
+import { ContentType, DecryptedItemInterface, isNote } from '@standardnotes/snjs'
 import Icon from '../Icon/Icon'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
 import { ItemLink } from '@/Utils/Items/Search/ItemLink'
@@ -48,8 +48,24 @@ const LinkedItemBubblesContainer = ({ item, linkingController, readonly = false,
 
   // The single folder the note currently lives in, rendered as a distinct chip below.
   // Folders are no longer tags, so the tag chip list needs no folder exclusion.
-  const noteFolder = useMemo(
-    () => (item instanceof SNNote ? navigationController.getNoteFolder(item) : undefined),
+  //
+  // Deliberately NOT memoized: `navigationController.folders` is a mobx observable, so a
+  // useMemo keyed on [item, navigationController] would hand back the folder from before
+  // a move, and — because its body stops running — would also drop the observer's
+  // subscription to that read, freezing the chip permanently.
+  const noteFolder = isNote(item) ? navigationController.getNoteFolder(item) : undefined
+
+  const removeFromFolder: MouseEventHandler = useCallback(
+    (event) => {
+      event.stopPropagation()
+      if (!isNote(item)) {
+        return
+      }
+      // moveNoteToFolder syncs internally and can reject; the chip is already gone
+      // locally by then, so a failure files as best-effort rather than an unhandled
+      // rejection out of a click handler.
+      navigationController.moveNoteToFolder(item, undefined).catch(console.error)
+    },
     [item, navigationController],
   )
 
@@ -185,6 +201,18 @@ const LinkedItemBubblesContainer = ({ item, linkingController, readonly = false,
           >
             <Icon type="folder" className="text-info mr-1 flex-shrink-0" size="small" />
             <span className="overflow-hidden overflow-ellipsis whitespace-nowrap">{noteFolder.title}</span>
+            {!readonly && (
+              <a
+                role="button"
+                aria-label="Remove from folder"
+                title="Remove from folder"
+                data-remove-from-folder
+                className="-mr-1 ml-2 flex cursor-pointer border-0 bg-transparent p-0"
+                onClick={removeFromFolder}
+              >
+                <Icon type="close" className="text-neutral hover:text-info" size="small" />
+              </a>
+            )}
           </button>
         )}
 

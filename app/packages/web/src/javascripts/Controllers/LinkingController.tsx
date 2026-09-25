@@ -11,9 +11,11 @@ import {
   FileItem,
   naturalSort,
   PrefKey,
+  SNFolder,
   SNNote,
   SNTag,
   isFile,
+  isFolderItem,
   isNote,
   InternalEventBusInterface,
   isTag,
@@ -310,11 +312,57 @@ export class LinkingController extends AbstractViewController implements Interna
     }
   }
 
+  /**
+   * Files an item into a folder — the folder equivalent of adding a tag, except that
+   * folder membership is single-valued: `moveNoteToFolder` clears every other folder
+   * first. A folder is an SNFolder and never an SNTag, so none of the tag paths below
+   * can express this; it mutates the folder's references, not the item's.
+   */
+  private moveItemToFolder = async (item: LinkableItem, folder: SNFolder): Promise<boolean> => {
+    if (!isNote(item) && !isFile(item)) {
+      throw new Error('Only notes and files can be filed into a folder')
+    }
+
+    if (item.uuid === this.activeItem?.uuid) {
+      await this.ensureActiveItemIsInserted()
+    }
+
+    /**
+     * Standard Red Notes (t98): moveNoteToFolder/moveFileToFolder end with a real
+     * `sync.sync()` network call, after the local reference mutation has already
+     * committed. A rejection (offline, transient sync error) must not take the
+     * autocomplete interaction down with it — the same best-effort treatment
+     * ItemListController gives the note-creation path.
+     */
+    try {
+      if (isNote(item)) {
+        await this.navigationController.moveNoteToFolder(item, folder)
+      } else {
+        await this.navigationController.moveFileToFolder(item, folder)
+      }
+    } catch (error) {
+      console.error('Failed to file item into folder', error)
+      return false
+    }
+
+    return true
+  }
+
   private linkItemsAndReportMutation = async (
     item: LinkableItem,
     itemToLink: LinkableItem,
     sync = true,
   ): Promise<boolean> => {
+    /**
+     * Handled ahead of the note/file dispatch below, and returned early: both folder
+     * movers sync internally, so falling through to the trailing `this.sync.sync()`
+     * would sync the same change twice.
+     */
+
+    if (isFolderItem(itemToLink)) {
+      return this.moveItemToFolder(item, itemToLink)
+    }
+
     const linkNoteAndFile = async (note: SNNote, file: FileItem) => {
       const updatedFile = await this.mutator.associateFileWithNote(file, note)
 

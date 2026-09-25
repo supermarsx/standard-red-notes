@@ -47,7 +47,12 @@ const ItemLinkAutocompleteInput = forwardRef(
     const value = combobox.useState('value')
     const searchQuery = useDeferredValue(value)
 
-    const { unlinkedItems, shouldShowCreateTag } = getLinkingSearchResults(searchQuery, application, item)
+    // Folders are offered here (and only here) so a note can be filed into one from the
+    // same input that attaches a topic. See getLinkingSearchResults' includeFolders.
+    const { unlinkedItems, shouldShowCreateTag } = getLinkingSearchResults(searchQuery, application, item, {
+      returnEmptyIfQueryEmpty: true,
+      includeFolders: true,
+    })
 
     const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -85,10 +90,10 @@ const ItemLinkAutocompleteInput = forwardRef(
       <div>
         <form onSubmit={onFormSubmit}>
           <label>
-            <VisuallyHidden>Link topics, notes or files</VisuallyHidden>
+            <VisuallyHidden>Link topics, notes or files, or file into a folder</VisuallyHidden>
             <Combobox
               store={combobox}
-              placeholder="Link topics, notes, files..."
+              placeholder="Link topics, notes, files, folders..."
               className={classNames(
                 `${tagsLinkedToItem.length > 0 ? 'w-80' : 'mr-10 w-70'}`,
                 'text-text focus:border-info h-7 w-70 bg-transparent text-sm focus:border-b-2 focus:shadow-none focus:outline-none lg:text-xs',

@@ -1,6 +1,6 @@
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useLinkingController } from '@/Controllers/LinkingControllerProvider'
-import { ContentType, DecryptedItem } from '@standardnotes/snjs'
+import { ContentType, DecryptedItem, FolderContentType } from '@standardnotes/snjs'
 import { useEffect, useState } from 'react'
 
 export const useItemLinks = (item: DecryptedItem | undefined) => {
@@ -17,9 +17,14 @@ export const useItemLinks = (item: DecryptedItem | undefined) => {
 
   useEffect(
     () =>
-      application.items.streamItems([ContentType.TYPES.Note, ContentType.TYPES.File, ContentType.TYPES.Tag], () => {
-        refresh(Date.now())
-      }),
+      application.items.streamItems(
+        // Folders included so that filing a note (which mutates only the folder's
+        // references, never the note's) still refreshes the consumers of this hook.
+        [ContentType.TYPES.Note, ContentType.TYPES.File, ContentType.TYPES.Tag, FolderContentType],
+        () => {
+          refresh(Date.now())
+        },
+      ),
     [application],
   )
 

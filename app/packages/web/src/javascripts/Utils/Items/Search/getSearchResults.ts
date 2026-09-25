@@ -1,4 +1,4 @@
-import { naturalSort, ContentType } from '@standardnotes/snjs'
+import { naturalSort, ContentType, FolderContentType } from '@standardnotes/snjs'
 import { createLinkFromItem } from './createLinkFromItem'
 import { doesItemMatchSearchQuery } from './doesItemMatchSearchQuery'
 import { isSearchResultAlreadyLinkedToItem } from './isSearchResultAlreadyLinkedToItem'
@@ -21,6 +21,13 @@ export function getLinkingSearchResults(
   options: {
     contentType?: string
     returnEmptyIfQueryEmpty?: boolean
+    /**
+     * Offer folders alongside tags/notes/files. Opt-in, because the other consumers of
+     * this function embed whatever is picked into the note body (the SuperEditor
+     * `@`-mention plugin dispatches INSERT_BUBBLE_COMMAND) and a folder is a location,
+     * not something to embed.
+     */
+    includeFolders?: boolean
   } = { returnEmptyIfQueryEmpty: true },
 ): {
   linkedResults: ItemLink<LinkableItem>[]
@@ -48,11 +55,15 @@ export function getLinkingSearchResults(
     return defaultReturnValue
   }
 
-  const searchableItems = naturalSort(
-    application.items.getItems([ContentType.TYPES.Note, ContentType.TYPES.File, ContentType.TYPES.Tag]),
-    'title',
-  )
+  const searchableContentTypes = [ContentType.TYPES.Note, ContentType.TYPES.File, ContentType.TYPES.Tag]
 
+  if (options.includeFolders) {
+    searchableContentTypes.push(FolderContentType)
+  }
+
+  const searchableItems = naturalSort(application.items.getItems(searchableContentTypes), 'title')
+
+  const unlinkedFolders: LinkableItem[] = []
   const unlinkedTags: LinkableItem[] = []
   const unlinkedNotes: LinkableItem[] = []
   const unlinkedFiles: LinkableItem[] = []
@@ -85,6 +96,14 @@ export function getLinkingSearchResults(
     const limitPerContentType = resultLimitForSearchQuery(searchQuery)
 
     if (
+      item.content_type === FolderContentType &&
+      (!enforceResultLimit || unlinkedFolders.length < limitPerContentType)
+    ) {
+      unlinkedFolders.push(item)
+      continue
+    }
+
+    if (
       item.content_type === ContentType.TYPES.Tag &&
       (!enforceResultLimit ||
         (unlinkedTags.length < limitPerContentType && item.content_type === ContentType.TYPES.Tag))
@@ -110,7 +129,9 @@ export function getLinkingSearchResults(
     }
   }
 
-  unlinkedItems = [...unlinkedTags, ...unlinkedNotes, ...unlinkedFiles]
+  // Folders lead: filing a note is the most decisive of these actions, and there is at
+  // most one folder result the user can act on per note.
+  unlinkedItems = [...unlinkedFolders, ...unlinkedTags, ...unlinkedNotes, ...unlinkedFiles]
 
   shouldShowCreateTag =
     !linkedResults.find((link) => isSearchResultExistingTag(link.item, searchQuery)) &&

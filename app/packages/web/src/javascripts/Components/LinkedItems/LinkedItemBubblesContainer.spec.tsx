@@ -18,6 +18,15 @@ type MockLinks = {
 
 let mockLinks: MockLinks
 
+type MockFolder = { uuid: string; title: string }
+
+/**
+ * The folder the note currently lives in. Swapped between renders by the folder tests to
+ * prove the chip tracks it: folder membership is stored on the folder, not on the note,
+ * so a memoized read would keep showing the folder from before the move.
+ */
+let mockNoteFolder: MockFolder | undefined
+
 const mockApplication = {
   keyboardService: {
     addCommandHandler: () => () => undefined,
@@ -25,8 +34,9 @@ const mockApplication = {
   },
   commands: { add: () => () => undefined },
   navigationController: {
-    getNoteFolder: () => undefined,
-    setSelectedFolder: () => Promise.resolve(),
+    getNoteFolder: jest.fn(() => mockNoteFolder),
+    setSelectedFolder: jest.fn(() => Promise.resolve()),
+    moveNoteToFolder: jest.fn(() => Promise.resolve()),
   },
 }
 
@@ -86,9 +96,14 @@ describe('LinkedItemBubblesContainer', () => {
   let container: HTMLElement
   let root: Root
 
+  // One stable object across renders, as in the app: re-rendering because a FOLDER
+  // changed does not hand the component a new note, so anything memoized on the note's
+  // identity would keep showing the pre-move answer.
+  const sourceNote = { uuid: 'source-note', content_type: 'Note' }
+
   const component = (readonly = true) =>
     createElement(LinkedItemBubblesContainer, {
-      item: { uuid: 'source-note', content_type: 'Note' } as never,
+      item: sourceNote as never,
       linkingController: { unlinkItems: jest.fn(), activateItem: jest.fn() } as never,
       readonly,
     })
@@ -99,6 +114,11 @@ describe('LinkedItemBubblesContainer', () => {
 
   beforeEach(() => {
     mockLinks = links(0)
+    mockNoteFolder = undefined
+    // resetMocks wipes implementations before every test, so they are restored here.
+    mockApplication.navigationController.getNoteFolder.mockImplementation(() => mockNoteFolder)
+    mockApplication.navigationController.setSelectedFolder.mockImplementation(() => Promise.resolve())
+    mockApplication.navigationController.moveNoteToFolder.mockImplementation(() => Promise.resolve())
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -137,5 +157,69 @@ describe('LinkedItemBubblesContainer', () => {
 
     expect(container.querySelector('[data-link-input]')).not.toBeNull()
     expect(container.querySelector('.note-view-linking-toggle')).toBeNull()
+  })
+
+  describe('the folder the note is filed into', () => {
+    const folderChip = () => container.querySelector<HTMLButtonElement>('[title^="Folder: "]')
+    const removeControl = () => container.querySelector<HTMLElement>('[data-remove-from-folder]')
+
+    it('shows the folder as a chip with a real glyph', () => {
+      mockNoteFolder = { uuid: 'folder-work', title: 'Work' }
+      render(false)
+
+      expect(folderChip()).not.toBeNull()
+      expect(folderChip()!.textContent).toContain('Work')
+      expect(folderChip()!.querySelector('[data-icon="folder"]')).not.toBeNull()
+    })
+
+    it('tracks the folder across a move rather than showing the one it was filed in before', () => {
+      mockNoteFolder = { uuid: 'folder-work', title: 'Work' }
+      render(false)
+      expect(folderChip()!.textContent).toContain('Work')
+
+      mockNoteFolder = { uuid: 'folder-personal', title: 'Personal' }
+      render(false)
+
+      expect(folderChip()!.textContent).toContain('Personal')
+      expect(folderChip()!.textContent).not.toContain('Work')
+    })
+
+    it('drops the chip once the note is filed out of every folder', () => {
+      mockNoteFolder = { uuid: 'folder-work', title: 'Work' }
+      render(false)
+      expect(folderChip()).not.toBeNull()
+
+      mockNoteFolder = undefined
+      render(false)
+
+      expect(folderChip()).toBeNull()
+    })
+
+    it('offers a control that files the note out of the folder', () => {
+      mockNoteFolder = { uuid: 'folder-work', title: 'Work' }
+      render(false)
+
+      expect(removeControl()).not.toBeNull()
+      act(() => {
+        removeControl()!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+
+      expect(mockApplication.navigationController.moveNoteToFolder).toHaveBeenCalledWith(
+        expect.objectContaining({ uuid: 'source-note' }),
+        undefined,
+      )
+      // Removing must not also navigate into the folder the click bubbled through.
+      expect(mockApplication.navigationController.setSelectedFolder).not.toHaveBeenCalled()
+    })
+
+    it('hides the remove control on a readonly note', () => {
+      // A readonly note with nothing linked renders nothing at all, so give it one link.
+      mockLinks = links(1)
+      mockNoteFolder = { uuid: 'folder-work', title: 'Work' }
+      render(true)
+
+      expect(folderChip()).not.toBeNull()
+      expect(removeControl()).toBeNull()
+    })
   })
 })

@@ -1,4 +1,13 @@
-import { IconType, FileItem, SNNote, SNTag, DecryptedItemInterface, SmartView } from '@standardnotes/snjs'
+import {
+  IconType,
+  FileItem,
+  SNNote,
+  SNTag,
+  DecryptedItemInterface,
+  SmartView,
+  isFolderItem,
+  DefaultFolderIconName,
+} from '@standardnotes/snjs'
 import { getIconAndTintForNoteType } from './getIconAndTintForNoteType'
 import { getIconForFileType } from './getIconForFileType'
 import { WebApplicationInterface } from '@standardnotes/ui-services'
@@ -14,6 +23,14 @@ export function getIconForItem(item: DecryptedItemInterface, application: WebApp
     return [icon, 'text-info']
   } else if (item instanceof SNTag || item instanceof SmartView) {
     return [item.iconString as IconType, 'text-info']
+  } else if (isFolderItem(item)) {
+    /**
+     * A folder is an SNFolder, never an SNTag, so neither branch above catches it and
+     * every caller here (LinkedItemMeta, LinkedItemBubble, LinkedItemsSectionItem) would
+     * have thrown mid-render. `iconString` mirrors the tag branch and already defaults to
+     * `DefaultFolderIconName`; the fallback covers a folder whose content omitted it.
+     */
+    return [(item.iconString || DefaultFolderIconName) as IconType, 'text-info']
   }
 
   throw new Error('Unhandled case in getItemIcon')
