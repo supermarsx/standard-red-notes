@@ -738,18 +738,92 @@ test("deployment marker requests bypass the service worker and every cache", () 
 });
 
 test("runtime CSP hashing cannot overwrite the fixed sandbox hash", () => {
-  assert.match(
-    dockerEntrypoint,
-    /script-src 'self' 'wasm-unsafe-eval' '\[\^'\]\*'[\s\S]*sha256-\$\{_b64\}/,
+  // The parent rewrite is anchored to script-src's unique self/wasm prefix AND
+  // bounded by the `;` that ends that directive, so it can reach neither the
+  // sandbox location's fixed hash nor the script-src-attr policy that follows.
+  // The bound is also what makes restarts idempotent: the hashes an earlier start
+  // wrote are consumed by the match instead of accumulating beside the new ones.
+  const dockerSed = `"s|script-src 'self' 'wasm-unsafe-eval'[^;]*;|script-src 'self' 'wasm-unsafe-eval' \${_sources};|"`;
+  assert.ok(
+    dockerEntrypoint.includes(dockerSed),
+    "docker rewrite must target only the parent script-src, bounded by its `;`",
   );
   assert.doesNotMatch(
     dockerEntrypoint,
     /sed -i "s\|'sha256-\[A-Za-z0-9\+\/_=\]\*'/,
   );
-  assert.match(
-    lxcInstaller,
-    /sed -i "s\|__CSP_INLINE_SCRIPT_HASH__\|\$\{b64\}\|g"/,
+  const lxcSed = `sed -i "s|'sha256-__CSP_INLINE_SCRIPT_HASH__'|\${sources}|g"`;
+  assert.ok(
+    lxcInstaller.includes(lxcSed),
+    "LXC rewrite must replace the placeholder source, not any sha256 it finds",
   );
+
+  // Both topologies must walk EVERY inline script rather than hashing the first
+  // one and stopping: an unpinned second inline script is refused by the browser
+  // with the build, the bundle assertions and this suite all still green.
+  for (const [name, source] of [
+    ["app/docker/docker-entrypoint.sh", dockerEntrypoint],
+    ["deploy/lxc/install.sh", lxcInstaller],
+  ]) {
+    assert.match(source, /awk -v want=/, name);
+    assert.match(source, /seen\s*==\s*want/, name);
+    assert.match(source, /count.*-ge 1|-ge 1/, name);
+  }
+});
+
+test("docker CSP hashing pins EVERY inline script in the served index.html", () => {
+  const temporaryDirectory = mkdtempSync(path.join(root, ".tmp-csp-multi-"));
+  const relative = (filePath) =>
+    path.relative(root, filePath).split(path.sep).join("/");
+  const indexPath = path.join(temporaryDirectory, "index.html");
+  const configPath = path.join(temporaryDirectory, "nginx.conf");
+  const firstBody = "\n  window.first = 1\n";
+  const secondBody = "\n  window.second = 2\n";
+
+  try {
+    writeFileSync(
+      indexPath,
+      [
+        "<!doctype html><html><head>",
+        "<!-- a commented <script>ignored</script> -->",
+        `<script>${firstBody}</script>`,
+        `<script>${secondBody}</script>`,
+        '<script src="./app.js"></script>',
+        "</head><body></body></html>",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(configPath, read("app/docker/nginx.conf"));
+
+    const result = spawnSync("sh", ["app/docker/docker-entrypoint.sh"], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SRN_ENTRYPOINT_INDEX_HTML: relative(indexPath),
+        SRN_ENTRYPOINT_NGINX_CONF: relative(configPath),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+
+    const hashFor = (body) =>
+      `sha256-${createHash("sha256").update(body, "utf8").digest("base64")}`;
+    const config = readFileSync(configPath, "utf8");
+    const rewritten = config.match(
+      /script-src 'self' 'wasm-unsafe-eval'[^;]*;/,
+    )?.[0];
+    assert.equal(
+      rewritten,
+      `script-src 'self' 'wasm-unsafe-eval' '${hashFor(firstBody)}' '${hashFor(secondBody)}';`,
+      "both inline scripts must be pinned, and the commented and external ones must not be",
+    );
+    assert.ok(
+      config.includes(`script-src 'unsafe-eval' '${sandboxRunnerHash()}`),
+      "the fixed sandbox hash must survive a multi-script rewrite",
+    );
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
 test("single-container startup requires successful CSP runtime configuration before supervisord", () => {

@@ -803,7 +803,7 @@ server {
   }
 
   location / {
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'self' 'unsafe-hashes' 'sha256-nIvOnptGOkcUoTPVOYWoDnWbMyGMgUTK8pMzXf87azw='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://\$http_host wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'none'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://\$http_host wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
     try_files \$uri \$uri/ /index.html;
   }
 
@@ -823,31 +823,60 @@ apply_csp_hash() {
   local index="${DEPLOY_ROOT}/app/packages/web/dist/index.html"
   local conf="${STAGED_NGINX_SITE}"
   [ -f "${index}" ] || { warn "index.html missing; leaving CSP fallback"; return 1; }
-  local body hex b64
-  body="$(awk '
-    { buf = buf $0 "\n" }
-    END {
-      L=length(buf); clean=""; i=1
-      while (i<=L) {
-        if (substr(buf,i,4)=="<!--") { rest=substr(buf,i+4); j=index(rest,"-->"); if(j==0)break; i=i+4+j+2 }
-        else { clean=clean substr(buf,i,1); i=i+1 }
-      }
-      CL=length(clean); sp=1
-      while (sp<=CL) {
-        seg=substr(clean,sp); p=index(seg,"<script"); if(p==0)exit 1
-        abs=sp+p-1; gt=index(substr(clean,abs),">"); if(gt==0)exit 1
-        tag=substr(clean,abs,gt); if(tag ~ /src/){sp=abs+gt;continue}
-        bs=abs+gt; ce=index(substr(clean,bs),"</script>"); if(ce==0)exit 1
-        printf "%s", substr(clean,bs,ce-1); exit 0
-      }
-      exit 1
-    }' "${index}")" || { warn "could not extract inline script; leaving CSP fallback"; return 1; }
-  [ -n "${body}" ] || return 1
-  hex="$(printf '%s' "${body}" | sha256sum | awk '{print $1}')"
-  printf '%s' "${hex}" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
-  b64="$(printf '%s' "${hex}" | xxd -r -p | base64 | tr -d '\n')"
-  sed -i "s|__CSP_INLINE_SCRIPT_HASH__|${b64}|g" "${conf}"
-  log "CSP inline-script hash: sha256-${b64}"
+  local hex b64 tmp sources hashes count want
+  sources=""
+  hashes=""
+  count=0
+  want=1
+  # Pin EVERY inline <script>, not just the first. The awk emits the Nth inline
+  # script's byte-exact body and exits non-zero once there is no Nth one, which is
+  # how this loop learns how many there are. Pinning only the first would let a
+  # second inline script be added to index.html and then silently refused by the
+  # browser, with the build and the whole test suite still green. Output goes to a
+  # file rather than a command substitution on purpose: `$( )` strips trailing
+  # newlines, which would change the hashed bytes for any script whose `</script>`
+  # sits at the start of a line and produce a white screen on this topology alone.
+  while [ "${want}" -le 32 ]; do
+    tmp="$(mktemp)" || return 1
+    if ! awk -v want="${want}" '
+      { buf = buf $0 "\n" }
+      END {
+        L=length(buf); clean=""; i=1
+        while (i<=L) {
+          if (substr(buf,i,4)=="<!--") { rest=substr(buf,i+4); j=index(rest,"-->"); if(j==0)break; i=i+4+j+2 }
+          else { clean=clean substr(buf,i,1); i=i+1 }
+        }
+        CL=length(clean); sp=1; seen=0
+        while (sp<=CL) {
+          seg=substr(clean,sp); p=index(seg,"<script"); if(p==0)exit 1
+          abs=sp+p-1; gt=index(substr(clean,abs),">"); if(gt==0)exit 1
+          tag=substr(clean,abs,gt); if(tag ~ /src/){sp=abs+gt;continue}
+          bs=abs+gt; ce=index(substr(clean,bs),"</script>"); if(ce==0)exit 1
+          seen=seen+1
+          if (seen==want) { printf "%s", substr(clean,bs,ce-1); exit 0 }
+          sp=bs+ce-1+9
+        }
+        exit 1
+      }' "${index}" > "${tmp}" 2>/dev/null; then
+      rm -f "${tmp}"
+      break
+    fi
+    hex="$(sha256sum < "${tmp}" | awk '{print $1}')"
+    rm -f "${tmp}"
+    printf '%s' "${hex}" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
+    b64="$(printf '%s' "${hex}" | xxd -r -p | base64 | tr -d '\n')"
+    printf '%s' "${b64}" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
+    sources="${sources}${sources:+ }'sha256-${b64}'"
+    hashes="${hashes}${hashes:+ }${b64}"
+    count=$((count + 1))
+    want=$((want + 1))
+  done
+  # Fail closed rather than stage a policy we did not fully derive.
+  [ "${count}" -ge 1 ] || { warn "no inline script found in the built index.html"; return 1; }
+  [ "${want}" -le 32 ] || return 1
+  sed -i "s|'sha256-__CSP_INLINE_SCRIPT_HASH__'|${sources}|g" "${conf}"
+  grep -Fq "script-src 'self' 'wasm-unsafe-eval' ${sources};" "${conf}" || return 1
+  for hex in ${hashes}; do log "CSP inline-script hash: sha256-${hex}"; done
 }
 apply_csp_hash || die "Could not derive the staged web CSP hash; live release was not switched."
 cat > "${DEPLOY_ROOT}/.srn-nginx-test.conf" <<EOF

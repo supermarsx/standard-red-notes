@@ -203,10 +203,12 @@ if ! configure_proxy_transport; then
   exit 1
 fi
 
-# Emit the byte-exact body of the first inline <script> (no src attr), skipping
-# any <script> occurring inside an HTML comment. Exits non-zero if not found.
+# Emit the byte-exact body of the Nth inline <script> (no src attr), skipping any
+# <script> occurring inside an HTML comment. $2 selects which one (1-based,
+# default 1); exiting non-zero when there is no Nth inline script is how the
+# caller discovers how many the document actually has.
 extract_inline_script() {
-  awk '
+  awk -v want="${2:-1}" '
     { buf = buf $0 "\n" }
     END {
       L = length(buf)
@@ -226,6 +228,7 @@ extract_inline_script() {
       }
       CL = length(clean)
       sp = 1
+      seen = 0
       while (sp <= CL) {
         seg = substr(clean, sp)
         p = index(seg, "<script")
@@ -238,42 +241,76 @@ extract_inline_script() {
         bodystart = abs + gt              # first byte after the opening `>`
         ce = index(substr(clean, bodystart), "</script>")
         if (ce == 0) { exit 1 }
-        printf "%s", substr(clean, bodystart, ce - 1)
-        exit 0
+        seen = seen + 1
+        if (seen == want) {
+          printf "%s", substr(clean, bodystart, ce - 1)
+          exit 0
+        }
+        sp = bodystart + ce - 1 + 9       # resume just past this `</script>`
       }
       exit 1
     }
   ' "$1"
 }
 
-# Compute + substitute the hash. Returns 0 on success, non-zero on any failure.
+# Compute + substitute the hashes. Returns 0 on success, non-zero on any failure.
 apply_csp_inline_hash() {
   [ -f "$INDEX_HTML" ] || return 1
   [ -f "$CONF" ] || return 1
 
-  _tmp="$(mktemp 2>/dev/null)" || return 1
-  extract_inline_script "$INDEX_HTML" > "$_tmp" 2>/dev/null || { rm -f "$_tmp"; return 1; }
-  [ -s "$_tmp" ] || { rm -f "$_tmp"; return 1; }
+  # Pin EVERY inline <script>, not just the first one. Pinning only the first
+  # means the day a second inline script is added to index.html the browser
+  # silently refuses to execute it, while the build, the bundle assertions and
+  # the whole test suite stay green -- an afternoon of debugging for a policy
+  # that looks correct. The loop stops at the first index with no script; 32 is
+  # a runaway guard, not an expected shape.
+  _sources=""
+  _hashes=""
+  _count=0
+  _index=1
+  while [ "$_index" -le 32 ]; do
+    _tmp="$(mktemp 2>/dev/null)" || return 1
+    if ! extract_inline_script "$INDEX_HTML" "$_index" > "$_tmp" 2>/dev/null; then
+      rm -f "$_tmp"
+      break
+    fi
 
-  _hex="$(sha256sum < "$_tmp" | awk '{print $1}')"
-  rm -f "$_tmp"
-  printf '%s' "$_hex" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
+    _hex="$(sha256sum < "$_tmp" | awk '{print $1}')"
+    rm -f "$_tmp"
+    printf '%s' "$_hex" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
 
-  # hex -> raw bytes -> base64 (the form CSP expects), single line.
-  _b64="$(printf '%s' "$_hex" | xxd -r -p | base64 | tr -d '\n')" || return 1
-  printf '%s' "$_b64" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
+    # hex -> raw bytes -> base64 (the form CSP expects), single line.
+    _b64="$(printf '%s' "$_hex" | xxd -r -p | base64 | tr -d '\n')" || return 1
+    printf '%s' "$_b64" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
 
-  # Replace only the app-shell source following its unique self/wasm prefix.
-  # This accepts the image placeholder or a hash written by an earlier container
-  # start. Container restarts can therefore re-template index.html and rotate the
-  # parent hash without ever touching the sandbox runner's distinct fixed hash.
+    _sources="${_sources}${_sources:+ }'sha256-${_b64}'"
+    _hashes="${_hashes}${_hashes:+ }${_b64}"
+    _count=$((_count + 1))
+    _index=$((_index + 1))
+  done
+
+  # Fail closed when index.html carries no inline script at all, and when the
+  # runaway guard tripped: serving an unpinned bootstrap, or a policy we did not
+  # fully derive, is exactly the silent breakage this whole mechanism exists to
+  # prevent.
+  [ "$_count" -ge 1 ] || return 1
+  [ "$_index" -le 32 ] || return 1
+
+  # Replace the app-shell source list following its unique self/wasm prefix,
+  # bounded by the `;` that ends the directive. The bound is what keeps this from
+  # ever reaching the sandbox runner's distinct fixed hash or the script-src-attr
+  # policy that follows, and it is also what makes restarts idempotent: every
+  # hash an earlier container start wrote is consumed here instead of
+  # accumulating next to the new ones. It accepts the image placeholder equally.
   [ "$(grep -F -c "script-src 'self' 'wasm-unsafe-eval' " "$CONF")" -eq 1 ] || return 1
   sed -i \
-    "s|script-src 'self' 'wasm-unsafe-eval' '[^']*'|script-src 'self' 'wasm-unsafe-eval' 'sha256-${_b64}'|" \
+    "s|script-src 'self' 'wasm-unsafe-eval'[^;]*;|script-src 'self' 'wasm-unsafe-eval' ${_sources};|" \
     "$CONF" || return 1
-  grep -Fq "script-src 'self' 'wasm-unsafe-eval' 'sha256-${_b64}'" "$CONF" || return 1
+  grep -Fq "script-src 'self' 'wasm-unsafe-eval' ${_sources};" "$CONF" || return 1
 
-  echo "[entrypoint] CSP inline-script hash: sha256-${_b64}"
+  for _hash in $_hashes; do
+    echo "[entrypoint] CSP inline-script hash: sha256-${_hash}"
+  done
   return 0
 }
 
