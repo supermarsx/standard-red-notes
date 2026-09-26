@@ -413,9 +413,9 @@ export class NoteSyncController {
       return undefined
     }
 
-    return candidates.reduce((newest, candidate) =>
-      (candidate.updated_at?.getTime() ?? 0) > (newest.updated_at?.getTime() ?? 0) ? candidate : newest,
-    )
+    return candidates.reduce((newest, candidate) => {
+      return (candidate.updated_at?.getTime() ?? 0) > (newest.updated_at?.getTime() ?? 0) ? candidate : newest
+    })
   }
 
   private queueLargeNoteSyncIfNeeded(): void {
