@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   $getNodeByKey,
   DecoratorNode,
@@ -11,77 +11,43 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { sanitizeTweetUrl } from './sanitizeTweetUrl'
+import { parseTweetUrl, sanitizeTweetUrl } from './sanitizeTweetUrl'
 
 export type TweetEmbedData = { url: string }
 
 const DEFAULT_TWEET_EMBED: TweetEmbedData = { url: '' }
 
-const WIDGETS_SRC = 'https://platform.twitter.com/widgets.js'
-
-type TwttrWidgets = {
-  widgets?: { load?: (element?: HTMLElement) => void }
-}
-
-declare global {
-  interface Window {
-    twttr?: TwttrWidgets
-  }
-}
-
 /**
- * Load platform.twitter.com/widgets.js exactly once for the whole document and
- * resolve when window.twttr.widgets is available. Subsequent callers reuse the
- * same promise. Rejects (caught by callers) if the script fails to load so we
- * can fall back to the raw link.
+ * WHY THIS BLOCK DOES NOT RENDER THE REAL POST.
+ *
+ * It used to load platform.twitter.com/widgets.js and let X upgrade a blockquote
+ * in place. Two independent reasons that is gone:
+ *
+ *  1. It never worked here. The app shell is served with `script-src 'self'
+ *     'wasm-unsafe-eval' 'sha256-<bootstrap>'`, so the appended third-party script
+ *     was refused and never requested — the post silently stayed a bare link from
+ *     2026-07-03, the commit that introduced the policy, onward.
+ *  2. Fixing it by permitting that host would be worse than the missing feature.
+ *     A CSP governs the whole document, and this script was appended to the TOP
+ *     document — so permitting the host would let X's script run beside decrypted
+ *     note content, localStorage and IndexedDB. And because the widget then loads
+ *     its own subresources, the allowlist could only be found by loosening until
+ *     it worked, which is not a boundary.
+ *
+ * There is also a privacy reason to prefer this even where it would work: fetching
+ * the post means telling X the reader's address and the time EVERY time the note
+ * is opened, and by timing, which note they are in. For an end-to-end encrypted
+ * notes app that is a leak the encryption does not cover. So the block renders a
+ * reference from the URL already in the note, contacts nobody, and keeps a plain
+ * link out for the reader who wants the original.
  */
-let widgetsPromise: Promise<TwttrWidgets> | null = null
-
-function loadTwitterWidgets(): Promise<TwttrWidgets> {
-  if (widgetsPromise) {
-    return widgetsPromise
-  }
-
-  widgetsPromise = new Promise<TwttrWidgets>((resolve, reject) => {
-    if (window.twttr?.widgets?.load) {
-      resolve(window.twttr)
-      return
-    }
-
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${WIDGETS_SRC}"]`)
-    const onReady = () => {
-      if (window.twttr?.widgets?.load) {
-        resolve(window.twttr)
-      } else {
-        reject(new Error('Twitter widgets failed to initialize'))
-      }
-    }
-
-    if (existing) {
-      existing.addEventListener('load', onReady, { once: true })
-      existing.addEventListener('error', () => reject(new Error('Twitter widgets failed to load')), { once: true })
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = WIDGETS_SRC
-    script.async = true
-    script.charset = 'utf-8'
-    script.addEventListener('load', onReady, { once: true })
-    script.addEventListener('error', () => reject(new Error('Twitter widgets failed to load')), { once: true })
-    document.head.appendChild(script)
-  })
-
-  return widgetsPromise
-}
 
 function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
-  const safeUrl = sanitizeTweetUrl(data.url)
+  const reference = parseTweetUrl(data.url)
+  const safeUrl = reference?.url ?? ''
   const [draft, setDraft] = useState(data.url)
   const [editing, setEditing] = useState(!safeUrl)
-  const [failed, setFailed] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
 
   const commit = useCallback(
     (url: string) => {
@@ -92,39 +58,9 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
         }
       })
       setEditing(false)
-      setFailed(false)
     },
     [editor, nodeKey],
   )
-
-  // Hydrate the embed once we have a trusted URL and are not in edit mode. The
-  // <blockquote class="twitter-tweet"> is rendered by React below; here we just
-  // ask widgets.js to upgrade it in place, scoped to this decorator's DOM node.
-  useEffect(() => {
-    if (!safeUrl || editing) {
-      return
-    }
-    const container = containerRef.current
-    if (!container) {
-      return
-    }
-    let cancelled = false
-    setFailed(false)
-    loadTwitterWidgets()
-      .then((twttr) => {
-        if (!cancelled) {
-          twttr.widgets?.load?.(container)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setFailed(true)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [safeUrl, editing])
 
   if (editing) {
     return (
@@ -179,33 +115,30 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
           Edit
         </button>
       </div>
-      {!safeUrl ? (
+      {!reference ? (
         <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
           Enter a valid twitter.com or x.com status URL.
         </div>
       ) : (
-        <div className="p-2" ref={containerRef}>
-          {/* widgets.js upgrades this blockquote in place. If the script fails
-              to load, the blockquote degrades to a plain link to the post. */}
-          <blockquote className="twitter-tweet">
-            <a href={safeUrl} target="_blank" rel="noopener noreferrer">
-              {safeUrl}
+        /* A reference built entirely from the URL in the note. Nothing here
+           fetches the post, so opening a note never tells X that it was read. */
+        <div className="p-2">
+          <blockquote className="border-info m-0 border-l-2 pl-3">
+            <span className="text-foreground block text-sm font-semibold">@{reference.handle}</span>
+            <span className="text-passive-1 block text-xs">Post {reference.statusId} on X</span>
+            <a
+              href={reference.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-info mt-1 inline-block text-sm underline"
+            >
+              Open on X
             </a>
           </blockquote>
-          {/* The usual cause is not a network failure: this app's CSP permits
-              scripts only from its own origin, so X's widgets.js is refused and the
-              post can never expand in place. Say so, rather than implying a retry
-              would help. The post URL above remains the way to read it. */}
-          {failed ? (
-            <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
-              This post can&apos;t be expanded here — the app&apos;s security policy does not permit loading X&apos;s
-              embed script (platform.twitter.com). Your note is intact.{' '}
-              <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="underline">
-                Open it on X
-              </a>
-              .
-            </p>
-          ) : null}
+          <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
+            Shown as a link on purpose: rendering the post would require loading X&apos;s script, which would tell X
+            each time you open this note.
+          </p>
         </div>
       )}
     </div>

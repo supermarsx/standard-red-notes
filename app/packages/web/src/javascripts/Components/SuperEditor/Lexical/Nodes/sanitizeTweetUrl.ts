@@ -67,3 +67,25 @@ export function sanitizeTweetUrl(raw: string | null | undefined): string {
 export function isValidTweetUrl(raw: string | null | undefined): boolean {
   return sanitizeTweetUrl(raw) !== ''
 }
+
+export type TweetReference = { handle: string; statusId: string; url: string }
+
+/**
+ * Split an already-sanitized status URL back into its handle and status id so the
+ * block can render a readable reference WITHOUT contacting X. Returns null for
+ * anything sanitizeTweetUrl would reject, so callers cannot display a reference
+ * to a URL they would not have been allowed to link to in the first place.
+ */
+export function parseTweetUrl(raw: string | null | undefined): TweetReference | null {
+  const url = sanitizeTweetUrl(raw)
+  if (!url) {
+    return null
+  }
+  // Safe to match against the CANONICAL output rather than the caller's input:
+  // sanitizeTweetUrl rebuilt this string itself from the two captured groups.
+  const match = url.match(/^https:\/\/twitter\.com\/([A-Za-z0-9_]{1,15})\/status\/(\d{1,25})$/)
+  if (!match) {
+    return null
+  }
+  return { handle: match[1], statusId: match[2], url }
+}
