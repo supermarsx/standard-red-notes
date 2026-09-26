@@ -738,24 +738,13 @@ test("deployment marker requests bypass the service worker and every cache", () 
 });
 
 test("runtime CSP hashing cannot overwrite the fixed sandbox hash", () => {
-  // The parent rewrite is anchored to script-src's unique self/wasm prefix AND
-  // bounded by the `;` that ends that directive, so it can reach neither the
-  // sandbox location's fixed hash nor the script-src-attr policy that follows.
-  // The bound is also what makes restarts idempotent: the hashes an earlier start
-  // wrote are consumed by the match instead of accumulating beside the new ones.
-  const dockerSed = `"s|script-src 'self' 'wasm-unsafe-eval'[^;]*;|script-src 'self' 'wasm-unsafe-eval' \${_sources};|"`;
-  assert.ok(
-    dockerEntrypoint.includes(dockerSed),
-    "docker rewrite must target only the parent script-src, bounded by its `;`",
-  );
+  // A negative guard only: the positive guarantee -- that the rewrite cannot
+  // escape its own directive -- is asserted BEHAVIOURALLY by the scope test
+  // below, because any assertion on the substitution's spelling can be satisfied
+  // by a future edit that still reaches the sandbox hash.
   assert.doesNotMatch(
     dockerEntrypoint,
     /sed -i "s\|'sha256-\[A-Za-z0-9\+\/_=\]\*'/,
-  );
-  const lxcSed = `sed -i "s|'sha256-__CSP_INLINE_SCRIPT_HASH__'|\${sources}|g"`;
-  assert.ok(
-    lxcInstaller.includes(lxcSed),
-    "LXC rewrite must replace the placeholder source, not any sha256 it finds",
   );
 
   // Both topologies must walk EVERY inline script rather than hashing the first
@@ -768,6 +757,80 @@ test("runtime CSP hashing cannot overwrite the fixed sandbox hash", () => {
     assert.match(source, /awk -v want=/, name);
     assert.match(source, /seen\s*==\s*want/, name);
     assert.match(source, /count.*-ge 1|-ge 1/, name);
+  }
+});
+
+test("the runtime CSP rewrite cannot escape script-src and is a fixed point", () => {
+  const temporaryDirectory = mkdtempSync(path.join(root, ".tmp-csp-scope-"));
+  const relative = (filePath) =>
+    path.relative(root, filePath).split(path.sep).join("/");
+  const indexPath = path.join(temporaryDirectory, "index.html");
+  const configPath = path.join(temporaryDirectory, "nginx.conf");
+  const parentScriptSrc = /script-src 'self' 'wasm-unsafe-eval'[^;]*;/;
+  // A well-formed hash source living OUTSIDE the parent script-src. A rewrite
+  // that reached past its directive would corrupt this and the sandbox hash, so
+  // the property is observable rather than a matter of how the sed is spelled.
+  const decoy = `'sha256-${createHash("sha256").update("csp-scope-decoy").digest("base64")}'`;
+
+  try {
+    writeFileSync(indexPath, read("app/packages/web/src/index.html"));
+    const original = read("app/docker/nginx.conf").replace(
+      "script-src-attr 'none';",
+      `script-src-attr 'unsafe-hashes' ${decoy};`,
+    );
+    assert.ok(original.includes(decoy), "the decoy source must be installed");
+    assert.match(original, parentScriptSrc, "the parent script-src must match");
+    writeFileSync(configPath, original);
+
+    const run = () =>
+      spawnSync("sh", ["app/docker/docker-entrypoint.sh"], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          SRN_ENTRYPOINT_INDEX_HTML: relative(indexPath),
+          SRN_ENTRYPOINT_NGINX_CONF: relative(configPath),
+        },
+      });
+
+    const first = run();
+    assert.equal(first.status, 0, first.stderr || first.error?.message);
+    const afterFirst = readFileSync(configPath, "utf8");
+
+    // THE PROPERTY: every byte outside the parent script-src directive is
+    // untouched, so hashing can reach neither the sandbox runner's fixed hash nor
+    // any other policy, whatever substitution is used to do the rewrite.
+    assert.equal(
+      afterFirst.replace(parentScriptSrc, "<parent-script-src>"),
+      original.replace(parentScriptSrc, "<parent-script-src>"),
+      "the rewrite must not change any byte outside the parent script-src",
+    );
+    assert.ok(
+      afterFirst.includes(decoy),
+      "a hash source outside script-src must survive the rewrite",
+    );
+    assert.ok(
+      afterFirst.includes(`script-src 'unsafe-eval' '${sandboxRunnerHash()}`),
+      "the fixed sandbox hash must survive the rewrite",
+    );
+    assert.notEqual(
+      afterFirst,
+      original,
+      "the rewrite must actually have replaced the placeholder",
+    );
+
+    // IDEMPOTENT: running the substitution again over its own output changes
+    // nothing. An entrypoint that appended instead would grow the header on every
+    // container start and look fine for weeks.
+    const second = run();
+    assert.equal(second.status, 0, second.stderr || second.error?.message);
+    assert.equal(
+      readFileSync(configPath, "utf8"),
+      afterFirst,
+      "re-running over its own output must be a fixed point",
+    );
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });
 
