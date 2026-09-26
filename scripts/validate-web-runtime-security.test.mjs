@@ -737,6 +737,37 @@ test("deployment marker requests bypass the service worker and every cache", () 
   assert.equal(cacheCalls, 0);
 });
 
+test("the app script policy is byte-identical across all three topologies", () => {
+  // One security policy, three hand-maintained copies (compose, single container,
+  // LXC). The stale script-src-attr hash removed alongside this guard survived
+  // precisely BECAUSE it was duplicated and nobody compared the copies, so compare
+  // them: the script source lists must agree byte for byte, and a failure must name
+  // the file that drifted. Only the script directives are compared here -- the LXC
+  // installer renders nginx from a heredoc, so its connect-src carries a
+  // shell-escaped dollar sign and legitimately differs in spelling.
+  const shared = ["script-src", "script-src-attr"];
+  const [reference, ...others] = configs.map(({ relativePath, source }) => {
+    const policy = policyForLocation(source, "/");
+    return {
+      relativePath,
+      directives: new Map(
+        shared.map((name) => [name, directive(policy, name).join(" ")]),
+      ),
+    };
+  });
+  assert.ok(others.length >= 2, "every topology's config must be compared");
+
+  for (const other of others) {
+    for (const name of shared) {
+      assert.equal(
+        other.directives.get(name),
+        reference.directives.get(name),
+        `${other.relativePath} has drifted from ${reference.relativePath}: ${name}`,
+      );
+    }
+  }
+});
+
 test("runtime CSP hashing cannot overwrite the fixed sandbox hash", () => {
   // A negative guard only: the positive guarantee -- that the rewrite cannot
   // escape its own directive -- is asserted BEHAVIOURALLY by the scope test
