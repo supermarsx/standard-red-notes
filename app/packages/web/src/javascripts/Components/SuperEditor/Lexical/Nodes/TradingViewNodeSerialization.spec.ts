@@ -133,4 +133,27 @@ describe('buildTradingViewSrcDoc', () => {
     // No raw closing-script sequence inside the injected JSON config.
     expect(doc).not.toContain('"</script')
   })
+
+  // The widget script is refused by the app's own CSP (srcdoc inherits the page
+  // policy, which allows scripts from 'self' only), so without this the iframe
+  // renders BLANK and reads as an empty note. The notice must be CSS-revealed: a
+  // script that reported the failure would be refused by the same policy.
+  it('carries a no-JS notice revealed only while the widget container is empty', () => {
+    const doc = buildTradingViewSrcDoc({
+      version: 1,
+      symbol: 'NASDAQ:AAPL',
+      interval: 'D',
+      theme: 'light',
+    })
+    expect(doc).toContain('Chart not shown')
+    expect(doc).toContain('s3.tradingview.com')
+    // Revealed by adjacent-sibling + :empty, so it disappears the moment the
+    // widget draws anything into the container.
+    expect(doc).toMatch(/#w:empty \+ #fb\{[^}]*display:flex/)
+    // The notice must be the container's immediate next sibling or the selector
+    // above never matches.
+    expect(doc).toMatch(/id="w"[^>]*><\/div><div id="fb">/)
+    // No script may be added to carry the notice: it would be refused too.
+    expect(doc.match(/<script/g) ?? []).toHaveLength(1)
+  })
 })

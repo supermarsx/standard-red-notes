@@ -192,9 +192,14 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
               {safeUrl}
             </a>
           </blockquote>
+          {/* The usual cause is not a network failure: this app's CSP permits
+              scripts only from its own origin, so X's widgets.js is refused and the
+              post can never expand in place. Say so, rather than implying a retry
+              would help. The post URL above remains the way to read it. */}
           {failed ? (
             <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
-              Could not load the embedded post.{' '}
+              This post can&apos;t be expanded here — the app&apos;s security policy does not permit loading X&apos;s
+              embed script (platform.twitter.com). Your note is intact.{' '}
               <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="underline">
                 Open it on X
               </a>

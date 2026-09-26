@@ -11,6 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { EMBED_BLOCKED_STYLE, EMBED_WIDGET_ID, embedBlockedNotice } from './embedBlockedNotice'
 
 /**
  * TradingView "Advanced Chart" embed block.
@@ -139,7 +140,14 @@ export function buildTradingViewSrcDoc(data: TradingViewData): string {
   // JSON.stringify keeps the injected value structured and quote-safe; we then
   // escape the closing-script sequence as defense-in-depth.
   const json = JSON.stringify(config).replace(/<\/script/gi, '<\\/script')
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body,#c{margin:0;height:100%;width:100%}</style></head><body><div class="tradingview-widget-container" id="c"><div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>${json}</script></div></body></html>`
+  // The notice is revealed only while the widget container is still empty — see
+  // embedBlockedNotice.ts for why a blocked embed would otherwise render blank.
+  const notice = embedBlockedNotice(
+    `Chart not shown. This app's security policy does not permit loading TradingView's widget script ` +
+      `(s3.tradingview.com), so the chart cannot be drawn here. Your note is intact and the symbol ` +
+      `${data.symbol} is saved — look it up on TradingView to see the chart.`,
+  )
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body,#c{margin:0;height:100%;width:100%}${EMBED_BLOCKED_STYLE}</style></head><body><div class="tradingview-widget-container" id="c"><div class="tradingview-widget-container__widget" id="${EMBED_WIDGET_ID}" style="height:100%;width:100%"></div>${notice}<script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>${json}</script></div></body></html>`
 }
 
 const NOTE_DISMISS_KEY = 'sn-super-tradingview-note-dismissed'

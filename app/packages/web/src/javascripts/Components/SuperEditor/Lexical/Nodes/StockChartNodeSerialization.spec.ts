@@ -111,4 +111,20 @@ describe('buildStockChartSrcDoc', () => {
     const doc = buildStockChartSrcDoc({ version: 1, symbol: 'AAPL', range: '1M' }, true)
     expect(doc).toContain('"colorTheme":"dark"')
   })
+
+  // Same blank-iframe problem as the TradingView block: srcdoc inherits the page
+  // CSP, which allows scripts from 'self' only, so the widget script is refused and
+  // nothing is ever drawn. This widget also sets isTransparent, which is why the
+  // notice is a SIBLING revealed by :empty rather than a backdrop behind the
+  // widget — a backdrop would show through a perfectly healthy chart.
+  it('carries a no-JS notice revealed only while the widget container is empty', () => {
+    const doc = buildStockChartSrcDoc({ version: 1, symbol: 'NYSE:TSLA', range: 'YTD' }, false)
+    expect(doc).toContain('Price chart not shown')
+    expect(doc).toContain('s3.tradingview.com')
+    expect(doc).toMatch(/#w:empty \+ #fb\{[^}]*display:flex/)
+    expect(doc).toMatch(/id="w"[^>]*><\/div><div id="fb">/)
+    expect(doc.match(/<script/g) ?? []).toHaveLength(1)
+    // The notice must never be stacked behind this transparent widget.
+    expect(doc).not.toMatch(/#fb\{[^}]*z-index/)
+  })
 })
