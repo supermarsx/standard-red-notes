@@ -64,7 +64,7 @@ const PreferencesMenuView: FunctionComponent<Props> = ({ menu, onSelectPane }) =
   const clearSearch = useCallback(() => setQuery(''), [])
 
   return (
-    <div className="border-border bg-default md:border-0 md:bg-[--preferences-background-color]">
+    <div className="border-border bg-default md:border-0 md:bg-(--preferences-background-color)">
       {/*
         Desktop (>= md): narrow fixed sidebar shown alongside the content column.
         Mobile (< md): full-width tappable menu list; selecting an item tells the

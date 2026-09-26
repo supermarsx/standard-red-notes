@@ -27,7 +27,7 @@ $content-horizontal-padding: 16px;
   }
 
   .root-drop {
-    width: '100%';
+    width: 100%;
     padding: 12px;
     opacity: 0;
     transition: opacity 0.3s ease-in;
@@ -126,7 +126,7 @@ $content-horizontal-padding: 16px;
 
         &:focus {
           outline: 0;
-          box-shadow: 0;
+          box-shadow: none;
         }
       }
 

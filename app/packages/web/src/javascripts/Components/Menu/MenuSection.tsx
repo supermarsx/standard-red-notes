@@ -13,7 +13,7 @@ const MenuSection = ({
   return (
     <div
       className={classNames(
-        'md:border-border md:translucent-ui:border-[--popover-border-color] my-4 md:my-2 md:border-b md:pb-2 md:last:mb-0 md:last:border-b-0 md:last:pb-0 md:first:last:mt-0',
+        'md:border-border md:translucent-ui:border-(--popover-border-color) my-4 md:my-2 md:border-b md:pb-2 md:last:mb-0 md:last:border-b-0 md:last:pb-0 md:first:last:mt-0',
         className,
       )}
     >

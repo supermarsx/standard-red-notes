@@ -330,7 +330,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
                   <ContentEditable
                     id={SuperEditorContentId}
                     className={classNames(
-                      'ContentEditable__root relative overflow-y-auto p-4 text-[length:--font-size] leading-[--line-height] focus:shadow-none focus:outline-none',
+                      'ContentEditable__root relative overflow-y-auto p-4 text-(length:--font-size) leading-(--line-height) focus:shadow-none focus:outline-none',
                       className,
                     )}
                     spellCheck={spellcheck}
@@ -342,7 +342,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
               </div>
             }
             placeholder={
-              <div className="text-passive-1 pointer-events-none absolute top-4 left-4 text-[length:--font-size]">
+              <div className="text-passive-1 pointer-events-none absolute top-4 left-4 text-(length:--font-size)">
                 Type <span className="bg-passive-4-opacity-variant rounded p-0.5">/</span> for commands...
               </div>
             }

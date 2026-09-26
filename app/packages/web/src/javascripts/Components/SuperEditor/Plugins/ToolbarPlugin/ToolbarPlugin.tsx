@@ -3133,7 +3133,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           !isMobile && 'border-border bg-default border-b',
           !isMobile
             ? !isToolbarFixedToTop
-              ? 'z-tooltip translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] fixed top-0 left-0 hidden translate-x-[--translate-x] translate-y-[--translate-y] rounded border py-0.5'
+              ? 'z-tooltip translucent-ui:border-(--popover-border-color) translucent-ui:bg-(--popover-background-color) translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] fixed top-0 left-0 hidden translate-x-(--translate-x) translate-y-(--translate-y) rounded border py-0.5'
               : 'w-full px-1 py-1'
             : '',
         )}

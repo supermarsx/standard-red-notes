@@ -78,7 +78,7 @@ const ModalOverlay = forwardRef(
       <Dialog
         tabIndex={0}
         className={classNames(
-          'bg-default md:shadow-main pointer-events-auto z-[1] m-0 flex h-full w-full flex-col border-[--popover-border-color] p-0 md:h-auto md:max-h-[85vh] md:w-160 md:rounded md:border md:bg-[--popover-background-color] md:[backdrop-filter:var(--popover-backdrop-filter)]',
+          'bg-default md:shadow-main pointer-events-auto z-[1] m-0 flex h-full w-full flex-col border-(--popover-border-color) p-0 md:h-auto md:max-h-[85vh] md:w-160 md:rounded md:border md:bg-(--popover-background-color) md:[backdrop-filter:var(--popover-backdrop-filter)]',
           'focus-visible:shadow-none focus-visible:outline-none',
           className,
         )}

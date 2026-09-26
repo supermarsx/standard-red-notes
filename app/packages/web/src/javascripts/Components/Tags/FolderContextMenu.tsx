@@ -124,7 +124,7 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
           />
           <button
             aria-label="Save folder name"
-            className="border-border active:bg-default translucent-ui:border-[--popover-border-color] rounded border bg-transparent px-1.5 md:hidden"
+            className="border-border active:bg-default translucent-ui:border-(--popover-border-color) rounded border bg-transparent px-1.5 md:hidden"
             onClick={() => saveTitle(true)}
           >
             <Icon type="check" />

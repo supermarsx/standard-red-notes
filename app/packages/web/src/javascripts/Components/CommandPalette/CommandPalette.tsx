@@ -376,7 +376,7 @@ function CommandPalette() {
   return (
     <Dialog
       store={dialog}
-      className="z-modal shadow-main fixed inset-3 top-[10vh] bottom-[10vh] m-auto mt-0 flex h-fit max-h-[70vh] w-[min(45rem,90vw)] flex-col gap-3 overflow-auto rounded-xl border border-[--popover-border-color] bg-[--popover-background-color] px-3 py-3 [backdrop-filter:var(--popover-backdrop-filter)]"
+      className="z-modal shadow-main fixed inset-3 top-[10vh] bottom-[10vh] m-auto mt-0 flex h-fit max-h-[70vh] w-[min(45rem,90vw)] flex-col gap-3 overflow-auto rounded-xl border border-(--popover-border-color) bg-(--popover-background-color) px-3 py-3 [backdrop-filter:var(--popover-backdrop-filter)]"
       backdrop={<div className="bg-passive-5 opacity-50 transition-opacity duration-75 data-[enter]:opacity-85" />}
     >
       <ComboboxProvider
@@ -388,7 +388,7 @@ function CommandPalette() {
         }}
       >
         <TabProvider selectedId={selectedTab} setSelectedId={(id) => setSelectedTab((id as TabId) || 'all')}>
-          <div className="flex rounded-lg border border-[--popover-border-color] bg-[--popover-background-color] px-2">
+          <div className="flex rounded-lg border border-(--popover-border-color) bg-(--popover-background-color) px-2">
             <ComboboxInput />
           </div>
           <TabList className="flex items-center gap-1">

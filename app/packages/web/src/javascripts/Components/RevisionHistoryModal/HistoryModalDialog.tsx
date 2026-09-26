@@ -38,7 +38,7 @@ const HistoryModalDialog = forwardRef(({ children, onDismiss }: Props, ref: Forw
       />
       <div
         className={classNames(
-          'absolute z-[1] my-0 flex h-full w-full flex-col rounded-md bg-[--modal-background-color]',
+          'absolute z-[1] my-0 flex h-full w-full flex-col rounded-md bg-(--modal-background-color)',
           'pb-safe-bottom pt-safe-top p-0 shadow-lg md:max-h-[90%] md:w-[90%] md:max-w-[90%]',
           'md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:transform',
           getPlatformString(),

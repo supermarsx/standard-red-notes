@@ -188,7 +188,7 @@ const LinkEditor = ({
         'z-dropdown-menu border-border bg-contrast shadow-contrast absolute rounded-lg border px-2 py-1 shadow-sm',
         isMobile
           ? 'bottom-12 left-1/2 w-[calc(100%_-_1rem)] -translate-x-1/2'
-          : 'translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] top-0 left-0 hidden w-auto translate-x-0',
+          : 'translucent-ui:border-(--popover-border-color) translucent-ui:bg-(--popover-background-color) translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] top-0 left-0 hidden w-auto translate-x-0',
       )}
       ref={linkEditorRef}
     >

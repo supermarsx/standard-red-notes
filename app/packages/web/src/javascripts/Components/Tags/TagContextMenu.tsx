@@ -117,7 +117,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
           />
           <button
             aria-label="Save topic name"
-            className="border-border active:bg-default translucent-ui:border-[--popover-border-color] rounded border bg-transparent px-1.5 md:hidden"
+            className="border-border active:bg-default translucent-ui:border-(--popover-border-color) rounded border bg-transparent px-1.5 md:hidden"
             onClick={() => saveTitle(true)}
           >
             <Icon type="check" />

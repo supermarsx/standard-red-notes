@@ -119,7 +119,7 @@ const StyledTooltip = ({
         autoFocusOnShow={!showOnHover}
         store={tooltip}
         className={classNames(
-          'z-tooltip border-border bg-contrast text-foreground translucent-ui:border-[--popover-border-color] translucent-ui:bg-[--popover-background-color] max-w-max rounded border px-3 py-1.5 text-sm shadow [backdrop-filter:var(--popover-backdrop-filter)]',
+          'z-tooltip border-border bg-contrast text-foreground translucent-ui:border-(--popover-border-color) translucent-ui:bg-(--popover-background-color) max-w-max rounded border px-3 py-1.5 text-sm shadow [backdrop-filter:var(--popover-backdrop-filter)]',
           'opacity-60 transition-opacity duration-75 [&[data-enter]]:opacity-100 [&[data-leave]]:opacity-60',
           'focus-visible:shadow-none focus-visible:outline-none',
           className,

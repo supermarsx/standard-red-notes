@@ -20,7 +20,7 @@ function RadioButtonGroup<Value extends string>({ value, items, onChange, classN
   return (
     <RadioGroup
       store={radio}
-      className={`divide-border border-border md:translucent-ui:border-[--popover-border-color] flex divide-x rounded border ${
+      className={`divide-border border-border md:translucent-ui:border-(--popover-border-color) flex divide-x rounded border ${
         className ?? ''
       }`}
     >

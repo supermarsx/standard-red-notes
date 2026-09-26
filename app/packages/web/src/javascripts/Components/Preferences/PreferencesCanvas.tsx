@@ -28,7 +28,7 @@ const PreferencesCanvas: FunctionComponent<Props> = (props) => (
     </div>
     <div
       className={classNames(
-        'min-h-0 flex-grow overflow-auto bg-[--preferences-background-color] md:block',
+        'min-h-0 flex-grow overflow-auto bg-(--preferences-background-color) md:block',
         props.mobileShowContent ? 'block' : 'hidden',
       )}
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
