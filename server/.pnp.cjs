@@ -2590,21 +2590,32 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["@humanfs/core", [\
-      ["npm:0.19.1", {\
-        "packageLocation": "./.yarn/cache/@humanfs-core-npm-0.19.1-e2e7aaeb6e-270d936be4.zip/node_modules/@humanfs/core/",\
+      ["npm:0.19.2", {\
+        "packageLocation": "./.yarn/cache/@humanfs-core-npm-0.19.2-ad081ed090-c6c0273721.zip/node_modules/@humanfs/core/",\
         "packageDependencies": [\
-          ["@humanfs/core", "npm:0.19.1"]\
+          ["@humanfs/core", "npm:0.19.2"],\
+          ["@humanfs/types", "npm:0.15.0"]\
         ],\
         "linkType": "HARD"\
       }]\
     ]],\
     ["@humanfs/node", [\
-      ["npm:0.16.7", {\
-        "packageLocation": "./.yarn/cache/@humanfs-node-npm-0.16.7-fa16bdb590-b3633d3dce.zip/node_modules/@humanfs/node/",\
+      ["npm:0.16.8", {\
+        "packageLocation": "./.yarn/cache/@humanfs-node-npm-0.16.8-80d1509ded-ed01b3c066.zip/node_modules/@humanfs/node/",\
         "packageDependencies": [\
-          ["@humanfs/core", "npm:0.19.1"],\
-          ["@humanfs/node", "npm:0.16.7"],\
+          ["@humanfs/core", "npm:0.19.2"],\
+          ["@humanfs/node", "npm:0.16.8"],\
+          ["@humanfs/types", "npm:0.15.0"],\
           ["@humanwhocodes/retry", "npm:0.4.3"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["@humanfs/types", [\
+      ["npm:0.15.0", {\
+        "packageLocation": "./.yarn/cache/@humanfs-types-npm-0.15.0-e47e8568ba-dea3cc7fd8.zip/node_modules/@humanfs/types/",\
+        "packageDependencies": [\
+          ["@humanfs/types", "npm:0.15.0"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -10193,7 +10204,7 @@ const RAW_RUNTIME_STATE =
           ["@eslint/config-helpers", "npm:0.6.0"],\
           ["@eslint/core", "npm:1.2.1"],\
           ["@eslint/plugin-kit", "npm:0.7.2"],\
-          ["@humanfs/node", "npm:0.16.7"],\
+          ["@humanfs/node", "npm:0.16.8"],\
           ["@humanwhocodes/module-importer", "npm:1.0.1"],\
           ["@humanwhocodes/retry", "npm:0.4.3"],\
           ["@types/estree", "npm:1.0.8"],\
