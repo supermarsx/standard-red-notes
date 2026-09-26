@@ -32,20 +32,26 @@ const makeNote = (uuid: string, createdAtMs: number): SNNote =>
  * we were doing before" / "mid typing a new note title it will unfocus from the input title and
  * be borked".
  *
- * Both symptoms are one fault. `ItemGroupController` closes the OUTGOING editor controller before
- * it constructs the incoming one, so across `await controller.initialize()` there is no active
- * item controller at all. `createNewNote` has also just published UnselectAllNotes, so the
- * selection is empty for the whole flow. An item-stream emission landing in that window (the
- * outgoing note's own save propagating and its sync response returning, the tag mutation from
- * inheriting the open tag, a websocket-pushed change) used to drive
- * `recomputeSelectionAfterItemsReload` into `selectFirstItem()` — which SELECTS and then OPENS the
- * first note in the list, starting a second concurrent open that closed the brand-new note out
- * from under the user. Because NoteView is keyed on `controller.runtimeId`, that also unmounted
- * the title input the user was typing into and discarded its unsaved value.
+ * Both symptoms are one fault. `ItemGroupController` USED TO close the outgoing editor controller
+ * before constructing the incoming one, so across `await controller.initialize()` there was no
+ * active item controller at all. `createNewNote` also publishes UnselectAllNotes, so the selection
+ * is empty for the whole flow. An item-stream emission landing in that window (the outgoing note's
+ * own save propagating and its sync response returning, the tag mutation from inheriting the open
+ * tag, a websocket-pushed change) drove `recomputeSelectionAfterItemsReload` into
+ * `selectFirstItem()` — which SELECTS and then OPENS the first note in the list, starting a second
+ * concurrent open that closed the brand-new note out from under the user. Because NoteView is keyed
+ * on `controller.runtimeId`, that also unmounted the title input the user was typing into and
+ * discarded its unsaved value.
+ *
+ * Two things now hold, and both are covered below: the handover keeps the outgoing controller
+ * listed until the incoming one is ready (so no reader of `activeItemViewController` /
+ * `itemControllers` is ever told "nothing is open" mid-open), and the selection recompute declines
+ * to draw any conclusion while an open is in flight (so the about-to-be-replaced outgoing note is
+ * not re-selected either).
  *
  * This suite drives the REAL `ItemGroupController` and REAL `NoteViewController`s on purpose: the
- * close-then-await-then-push ordering and the in-flight-open flag the guard reads are exactly what
- * is under test, so a fake stand-in for either would test nothing.
+ * handover ordering and the in-flight-open flag the guard reads are exactly what is under test, so
+ * a fake stand-in for either would test nothing.
  */
 describe('new-note editor handover (t99)', () => {
   let application: WebApplication
@@ -56,6 +62,13 @@ describe('new-note editor handover (t99)', () => {
   let displayed: SNNote[]
   /** Fires while the incoming controller is still initializing (see addTagToNote below). */
   let emitDuringInitialize: (() => Promise<void>) | undefined
+  /**
+   * Same, for the `openNote` path: a cold-loaded note is a lazy-decrypt "lite" item in the
+   * real app, so `initialize()` awaits an IndexedDB read through `sync.getFullContentPayload`.
+   */
+  let emitDuringRehydrate: (() => Promise<void>) | undefined
+  /** What `activeItemViewController` / `itemControllers` looked like inside the window. */
+  let observedInsideWindow: { active: string | undefined; openCount: number } | undefined
 
   /**
    * Must satisfy `selectedTag instanceof SNTag` — createNewNoteController narrows on that to
@@ -74,9 +87,16 @@ describe('new-note editor handover (t99)', () => {
     payload: { value: {}, enumerable: true },
   }) as SNTag
   const noteA = makeNote('note-A', 1000)
+  /**
+   * A cold-loaded note: `lazyDecryptEnabled` is on in the web app, so its body is stripped and
+   * `payload.content` carries the lite marker. That makes `openNote` await a real IndexedDB
+   * read inside `initialize()` — the same window the new-note path has.
+   */
+  const liteNoteC = Object.assign(makeNote('note-C', 2000), {
+    payload: { content: { __lazyLite: true } },
+  }) as SNNote
 
-  /** Proof that the emission really landed in the no-active-controller hole. */
-  let activeControllerDuringEmission: unknown
+  /** Proof that the emission really landed inside the handover window. */
   let emissionLandedInWindow: boolean
 
   const noteStreamCallbacks = () =>
@@ -87,7 +107,10 @@ describe('new-note editor handover (t99)', () => {
   /** A remote/local item change for an ALREADY existing note, i.e. not the new note itself. */
   const emitChangeForNoteA = async () => {
     emissionLandedInWindow = true
-    activeControllerDuringEmission = group.activeItemViewController
+    observedInsideWindow = {
+      active: group.activeItemViewController?.item?.uuid,
+      openCount: group.itemControllers.length,
+    }
     for (const callback of noteStreamCallbacks()) {
       callback({ changed: [noteA], inserted: [], removed: [], source: PayloadEmitSource.RemoteSaved })
     }
@@ -98,24 +121,29 @@ describe('new-note editor handover (t99)', () => {
 
   /**
    * Guards this suite against testing nothing: the emission must have fired, and it must have
-   * fired while there was genuinely no active item controller. Without both, the assertions
-   * below would pass against the unfixed code too.
+   * fired while the incoming controller was not yet pushed (i.e. genuinely mid-handover).
+   * Deliberately does NOT assert what the group controller reported during the window — that is
+   * what the invariant tests below are for — so this check holds both before and after the fix
+   * and cannot mask the outcome assertions.
    */
-  const expectEmissionLandedInTheHandoverHole = () => {
+  const expectEmissionLandedMidHandover = () => {
     expect(emissionLandedInWindow).toBe(true)
-    expect(activeControllerDuringEmission).toBeUndefined()
+    expect(observedInsideWindow).toBeDefined()
+    expect(observedInsideWindow?.active).not.toBe('new-note')
   }
 
   beforeEach(() => {
     streamRegistrations = []
     store = new Map<string, SNNote | SNTag>([
       [noteA.uuid, noteA],
+      [liteNoteC.uuid, liteNoteC],
       [tag.uuid, tag],
     ])
-    displayed = [noteA]
+    displayed = [noteA, liteNoteC]
     emitDuringInitialize = undefined
+    emitDuringRehydrate = undefined
+    observedInsideWindow = undefined
     emissionLandedInWindow = false
-    activeControllerDuringEmission = undefined
 
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
@@ -173,7 +201,17 @@ describe('new-note editor handover (t99)', () => {
 
     const sync = {
       sync: jest.fn().mockResolvedValue(undefined),
-      getFullContentPayload: jest.fn().mockResolvedValue(undefined),
+      /**
+       * `initialize()` awaits this for a lazy-decrypt "lite" note, which every cold-loaded
+       * note in the real app is. Returning undefined ("no full payload on disk") is itself a
+       * realistic outcome; the point is that the await really happens.
+       */
+      getFullContentPayload: jest.fn(async () => {
+        if (emitDuringRehydrate) {
+          await emitDuringRehydrate()
+        }
+        return undefined
+      }),
     }
 
     const preferences = {
@@ -274,7 +312,7 @@ describe('new-note editor handover (t99)', () => {
     await controller.createNewNote(undefined, undefined, 'title', false)
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expectEmissionLandedInTheHandoverHole()
+    expectEmissionLandedMidHandover()
 
     const active = group.activeItemViewController as NoteViewController | undefined
 
@@ -290,7 +328,7 @@ describe('new-note editor handover (t99)', () => {
     await controller.createNewNote(undefined, undefined, 'title', false)
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expectEmissionLandedInTheHandoverHole()
+    expectEmissionLandedMidHandover()
 
     expect(group.itemControllers.some((open) => open.item?.uuid === noteA.uuid)).toBe(false)
     expect([...controller.selectedUuids]).not.toContain(noteA.uuid)
@@ -342,5 +380,58 @@ describe('new-note editor handover (t99)', () => {
 
     expect(created.dealloced).toBe(false)
     expect(group.itemControllers.map((open) => open.item?.uuid)).toEqual(['new-note'])
+  })
+  it('never reports "nothing is open" while an open is in flight (new-note path)', async () => {
+    /**
+     * The invariant, tested directly rather than through one reader's symptom. The outgoing
+     * controller stays listed until the incoming one is ready, so every reader of
+     * `activeItemViewController` / `itemControllers` during the window gets a live, truthful
+     * answer -- the outgoing note IS still what the user is looking at until React re-renders.
+     * This is what protects the readers beyond the selection recompute: openNote's and
+     * openFile's already-open short-circuits, openNoteInNewTile's alreadyOpen scan,
+     * closeVaultItemControllers' security sweep, and the CompletedFullSync placeholder check.
+     */
+    await openNoteAAsActiveEditor()
+    emitDuringInitialize = emitChangeForNoteA
+
+    await controller.createNewNote(undefined, undefined, 'title', false)
+
+    expect(observedInsideWindow).toEqual({ active: noteA.uuid, openCount: 1 })
+  })
+
+  it('never reports "nothing is open" while an open is in flight (openNote path)', async () => {
+    // Same invariant on the plain open path: a cold-loaded ("lite") note makes initialize()
+    // await a real IndexedDB read, which is the same window.
+    await openNoteAAsActiveEditor()
+    emitDuringRehydrate = emitChangeForNoteA
+
+    await controller.openNote(liteNoteC.uuid)
+
+    expect(observedInsideWindow).toEqual({ active: noteA.uuid, openCount: 1 })
+    expect(group.activeItemViewController?.item?.uuid).toBe(liteNoteC.uuid)
+    expect(group.itemControllers.map((open) => open.item?.uuid)).toEqual([liteNoteC.uuid])
+  })
+
+  it('leaves no open in flight after a rejected open, and keeps the outgoing note', async () => {
+    /**
+     * Belt and braces on the in-flight counter: if a throwing path could leave it set, the
+     * early return in recomputeSelectionAfterItemsReload would stop the list ever selecting
+     * anything. The increment sits immediately before the `try` whose `finally` decrements it,
+     * so there is no statement in between that can throw -- assert that end to end.
+     *
+     * Deferring the outgoing close to the swap also makes this path strictly safer than before:
+     * a failed open now leaves the user on the note they were already editing instead of with
+     * nothing open at all.
+     */
+    await openNoteAAsActiveEditor()
+    const boom = new Error('initialize failed')
+    ;(application.items.createTemplateItem as jest.Mock).mockImplementation(() => {
+      throw boom
+    })
+
+    await expect(controller.createNewNote(undefined, undefined, 'title', false)).rejects.toThrow('initialize failed')
+
+    expect(group.isOpeningItemController).toBe(false)
+    expect(group.activeItemViewController?.item?.uuid).toBe(noteA.uuid)
   })
 })

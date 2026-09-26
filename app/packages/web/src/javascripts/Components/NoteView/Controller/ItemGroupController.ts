@@ -79,20 +79,19 @@ export class ItemGroupController {
   /**
    * Standard Red Notes (t99): how many item-controller opens are currently in flight.
    *
-   * Opening a note REPLACES the active tile, and the outgoing controller is closed
-   * BEFORE the incoming one is constructed (see createItemControllerAfterChecklistPreflight:
-   * flushAndCloseItemController -> `await controller.initialize()` -> push). For the
-   * duration of that await `itemControllers` is empty and `activeItemViewController` is
-   * undefined — a transient hole in the middle of a handover, NOT the fact that the user
-   * has nothing open.
+   * The primary fix for the mid-typing note switch is the handover ordering in
+   * createItemControllerAfterChecklistPreflight — the outgoing controller now stays listed
+   * until the incoming one is ready, so `itemControllers` is never transiently empty and
+   * `activeItemViewController` never lies. This counter is the second line of defence: a
+   * reader that still finds NO active controller can at least tell "the user has nothing
+   * open" apart from "an open is in progress", instead of acting on the wrong one.
    *
-   * ItemListController's selection recompute runs on every item-stream emission and used to
-   * read that hole as "nothing is open", conclude the user had no selection, and
-   * `selectFirstItem()` — which opens the first note in the list. That threw the user back
-   * to the previously-open note mid-keystroke and unmounted the editor (and, with it, the
-   * unsaved title being typed into a brand-new note). A counter rather than a boolean
-   * because that very bug starts a SECOND concurrent open, so the flag must not be cleared
-   * by whichever finishes first.
+   * A counter rather than a boolean because opens demonstrably overlap — the very bug this
+   * fixes started a second `createItemController` while the first was still inside its
+   * window — so a boolean would be cleared by whichever finished first, reopening the hole
+   * for the one still running. Incremented immediately before the `try` that owns the whole
+   * open and decremented in its `finally`, with no statement in between that could throw,
+   * so it cannot be stranded.
    */
   private pendingItemControllerOpens = 0
 
@@ -184,21 +183,44 @@ export class ItemGroupController {
     reservation?: VisibleChecklistReservation,
   ): Promise<NoteViewController | FileViewController> {
     /**
-     * Default (legacy) behavior replaces the active tile by closing it first, so that
-     * selecting a note in the list reuses the single open editor. When `openInNewTile`
-     * is set we keep the existing controllers open and simply add a new one.
+     * Default (legacy) behavior replaces the active tile, so that selecting a note in the
+     * list reuses the single open editor. When `openInNewTile` is set we keep the existing
+     * controllers open and simply add a new one (and so never empty the list).
+     *
+     * Standard Red Notes (t99): the outgoing controller is FLUSHED here but CLOSED at the
+     * swap below, after the incoming controller is fully initialized, so the two happen
+     * with no await between them. It used to be closed here instead — which left
+     * `itemControllers` empty, and `activeItemViewController` undefined, for the whole of
+     * `await controller.initialize()`. Every reader of those during that window got
+     * "nothing is open" as an answer, when the truth was "an open is in progress":
+     *   - ItemListController.recomputeSelectionAfterItemsReload concluded the user had
+     *     nothing open and no selection, and selected AND OPENED the first note in the
+     *     list — throwing the user back to the previously-open note mid-keystroke.
+     *   - openNote's `activeControllerItem?.uuid === uuid` short-circuit, openFile's
+     *     equivalent, and openNoteInNewTile's `alreadyOpen` scan all silently failed,
+     *     so a redundant open became a real second concurrent open.
+     *   - closeVaultItemControllers found no controller to scrub, so a vault lock landing
+     *     in the window could not reach the editor being opened from that vault.
+     * Keeping the outgoing controller listed until the incoming one is ready makes every
+     * one of those answers truthful: the outgoing note IS still what the user is looking
+     * at until React re-renders.
      */
-    if (!context.openInNewTile && this.activeItemViewController) {
+    const outgoing = context.openInNewTile ? undefined : this.activeItemViewController
+
+    if (outgoing) {
       /**
-       * Standard Red Notes (last-edit-loss fix — note-switch): the outgoing controller
-       * is closed/deinited SYNCHRONOUSLY here, BEFORE React unmounts its
-       * <SuperEditor key={uuid}>. The editor's unmount-flush would then fire on a
-       * deinited controller (item nulled) and the edit would be lost. So FLUSH the
-       * outgoing editor's pending debounced serialize AND await local propagation
-       * (also inserts a brand-new template note) BEFORE closing it.
+       * Standard Red Notes (last-edit-loss fix — note-switch): the outgoing controller is
+       * closed/deinited SYNCHRONOUSLY (at the swap below), BEFORE React unmounts its
+       * <SuperEditor key={uuid}>. The editor's unmount-flush would then fire on a deinited
+       * controller (item nulled) and the edit would be lost. So FLUSH the outgoing editor's
+       * pending debounced serialize AND await local propagation (also inserts a brand-new
+       * template note) BEFORE closing it. Deferring only the close preserves that ordering
+       * exactly — the flush still completes before anything is torn down — and makes the
+       * failure path safer: if the incoming controller cannot initialize, the outgoing one
+       * is still open and the user keeps the note they were on.
        */
-      await this.flushAndCloseItemController(
-        this.activeItemViewController,
+      await this.flushOutgoingItemControllerForHandover(
+        outgoing,
         reservation ? () => this.visibleChecklistReservationIsCurrent(reservation) : undefined,
       )
       if (reservation) {
@@ -263,6 +285,17 @@ export class ItemGroupController {
 
     if (reservation) {
       this.assertVisibleChecklistReservationCurrent(reservation)
+    }
+
+    /**
+     * Standard Red Notes (t99): the swap. Closing the outgoing controller and pushing the
+     * incoming one must stay in ONE synchronous block — an await between them is exactly
+     * the window this bug lived in. `includes` because the outgoing controller can legitimately
+     * have been closed by something else while the incoming one initialized (a vault lock, a
+     * remote delete recovery), and closing it twice must not be an error.
+     */
+    if (outgoing && this.itemControllers.includes(outgoing)) {
+      this.closeItemController(outgoing, { notify: false })
     }
     this.itemControllers.push(controller)
     this.activeControllerRef = controller
@@ -523,28 +556,34 @@ export class ItemGroupController {
    * so an edit typed within the ~1s debounce window (not yet dirty) is persisted rather
    * than dropped when its <SuperEditor> later unmounts onto a deinited controller. For
    * a template note the flush goes through saveAndAwaitLocalPropagation, which inserts
-   * the template first. File controllers have no editor debounce, so this just closes.
+   * the template first. File controllers have no editor debounce, so there is nothing
+   * to flush.
+   *
+   * Standard Red Notes (t99): this no longer closes the controller. The caller closes it
+   * at the swap, in the same synchronous block as pushing the incoming controller, so
+   * `itemControllers` is never transiently empty. The flush still completes first, which
+   * is the whole point of the last-edit-loss fix above.
    */
-  private async flushAndCloseItemController(
+  private async flushOutgoingItemControllerForHandover(
     controller: NoteViewController | FileViewController,
     canContinue?: () => boolean,
   ): Promise<void> {
-    if (controller instanceof NoteViewController) {
-      try {
-        await controller.flushAndAwaitPendingSave()
-        if (canContinue && !canContinue()) {
-          throw new ChecklistEditorOpeningCanceledError('Source-note authorization changed while opening the editor.')
-        }
-      } catch (error) {
-        if (!(error instanceof ChecklistEditorOpeningCanceledError)) {
-          console.error(error)
-        }
-        // A live collaboration durability flush failed. Keep the authoritative
-        // controller mounted; closing it would discard its only unsent Y.Doc.
-        throw error
-      }
+    if (!(controller instanceof NoteViewController)) {
+      return
     }
-    this.closeItemController(controller, { notify: false })
+    try {
+      await controller.flushAndAwaitPendingSave()
+      if (canContinue && !canContinue()) {
+        throw new ChecklistEditorOpeningCanceledError('Source-note authorization changed while opening the editor.')
+      }
+    } catch (error) {
+      if (!(error instanceof ChecklistEditorOpeningCanceledError)) {
+        console.error(error)
+      }
+      // A live collaboration durability flush failed. Keep the authoritative
+      // controller mounted; closing it would discard its only unsent Y.Doc.
+      throw error
+    }
   }
 
   public closeItemController(
@@ -759,9 +798,9 @@ export class ItemGroupController {
       return undefined
     }
 
-    return candidates.reduce((newest, candidate) =>
-      (candidate.serverUpdatedAtTimestamp ?? 0) > (newest.serverUpdatedAtTimestamp ?? 0) ? candidate : newest,
-    )
+    return candidates.reduce((newest, candidate) => {
+      return (candidate.serverUpdatedAtTimestamp ?? 0) > (newest.serverUpdatedAtTimestamp ?? 0) ? candidate : newest
+    })
   }
 
   get activeItemViewController(): NoteViewController | FileViewController | undefined {

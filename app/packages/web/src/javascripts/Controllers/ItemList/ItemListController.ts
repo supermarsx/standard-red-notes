@@ -1608,31 +1608,33 @@ export class ItemListController
     const activeController = this.getActiveItemController()
 
     /**
-     * Standard Red Notes (t99): an editor handover is in flight and has no active
-     * controller RIGHT NOW. ItemGroupController closes the outgoing controller before it
-     * constructs the incoming one, so between those two steps (across
-     * `await controller.initialize()`) `activeItemViewController` is undefined. That is a
-     * transient hole in the middle of an open, not evidence that the user has nothing open
-     * — and every inference below rests on the active item being knowable.
+     * Standard Red Notes (t99): an editor handover is in flight, so WHICHEVER controller is
+     * active right now is not the one the user is going to be looking at — it is the outgoing
+     * one, about to be replaced by the incoming one the moment it finishes initializing. Every
+     * inference below reads the active item to decide what should be selected, so drawing any
+     * conclusion here is deciding the user's selection from state that is one swap out of date.
      *
-     * Reading the hole as "nothing is open" sent this method down its
-     * `shouldSelectFirstItem` branch (creating a note publishes UnselectAllNotes first, so
-     * `hasNoSelectedItem` is true for the whole flow), which SELECTS and then OPENS the
-     * first note in the list. Any item-stream emission landing in the window — the outgoing
-     * note's own save propagating and its sync response returning, a tag mutation from
-     * inheriting the open tag, a websocket-pushed change — therefore started a second,
-     * concurrent open that closed the brand-new note out from under the user mid-keystroke
-     * and put the editor back on the note they were previously on. Because NoteView is keyed
-     * on `controller.runtimeId`, that also unmounted the title input: focus lost, and the
+     * The severe form of this was: creating a note publishes UnselectAllNotes first, so
+     * `hasNoSelectedItem` was true for the whole flow, and the group controller used to close
+     * the outgoing controller BEFORE constructing the incoming one — so there was no active
+     * controller at all. This method then took its `shouldSelectFirstItem` branch, which
+     * SELECTS and then OPENS the first note in the list, starting a second concurrent open that
+     * closed the brand-new note out from under the user mid-keystroke. Because NoteView is
+     * keyed on `controller.runtimeId`, that unmounted the title input too: focus lost, and the
      * typed-but-not-yet-saved title gone with it.
      *
-     * Skipping is safe: the open that is in flight ends by pushing and activating its
-     * controller and notifying observers, and any later item emission reloads again — so
-     * nothing is permanently left unselected by declining to guess mid-handover. Where the
-     * user ends up is decided by the open they asked for, never by a network response that
-     * happened to land inside it.
+     * The ordering fix in ItemGroupController keeps the outgoing controller listed until the
+     * incoming one is ready, which closes that hole for every reader. What remains, and what
+     * this guard covers, is the milder form: acting on the OUTGOING note re-selects it, leaving
+     * the list highlighting the note the user just navigated away from.
+     *
+     * Skipping is safe: the open in flight ends by pushing and activating its controller and
+     * notifying observers, `openNote` publishes ActiveEditorChanged, and any later item
+     * emission reloads again — so nothing is permanently left unselected by declining to guess
+     * mid-handover. Where the user ends up is decided by the open they asked for, never by a
+     * network response that happened to land inside it.
      */
-    if (!activeController && this.itemControllerGroup.isOpeningItemController) {
+    if (this.itemControllerGroup.isOpeningItemController) {
       log(LoggingDomain.Selection, 'Leaving selection unchanged: an item controller open is in flight')
       return
     }
