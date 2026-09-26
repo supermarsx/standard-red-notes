@@ -153,7 +153,54 @@ export class ItemGroupController {
     this.itemControllers.length = 0
   }
 
+  /**
+   * Standard Red Notes (t99): opens currently in flight, keyed by the item uuid they are opening.
+   *
+   * The "already open, do nothing" short-circuits in ItemListController.openNote / openFile and
+   * openNoteInNewTile's `alreadyOpen` scan can all only see CLOSED-over-or-pushed controllers, and
+   * the incoming controller is deliberately not pushed until the swap. So none of them can tell
+   * that an open of the same note is already in progress, and a second request starts a second
+   * controller for it.
+   *
+   * That is reachable by ordinary clicking: NoteListItem.onClick takes a different path when the
+   * clicked row is ALREADY selected — it calls openSingleSelectedItem directly, bypassing
+   * selectItemUsingInstance's `selectedUuids.has(uuid)` dedupe — so the first click selects and
+   * opens, React re-renders the row as selected, and a second click reaches openNote again while
+   * the first open is still awaiting `initialize()`. A cold-loaded ("lite") note waits on a real
+   * IndexedDB read there, which is exactly the delay that invites a second click. The duplicates
+   * also compound: each extra open has its own window for the next one.
+   *
+   * Deduped by JOINING the in-flight open rather than refusing it: the second caller gets the same
+   * controller the first one is building. Refusing would risk the worse failure of a note that
+   * declines to open. Templates are never keyed — each one is a distinct new note.
+   */
+  private readonly openingControllersByUuid = new Map<string, Promise<NoteViewController | FileViewController>>()
+
   async createItemController(context: CreateItemControllerContext): Promise<NoteViewController | FileViewController> {
+    const targetUuid = context.note?.uuid ?? context.file?.uuid
+
+    if (targetUuid !== undefined) {
+      const alreadyOpening = this.openingControllersByUuid.get(targetUuid)
+      if (alreadyOpening) {
+        return alreadyOpening
+      }
+    }
+
+    const open = this.performCreateItemController(context)
+
+    if (targetUuid !== undefined) {
+      this.openingControllersByUuid.set(targetUuid, open)
+      // Attached before the promise is returned so a rejection cannot become unhandled here; the
+      // caller still sees the original rejection from its own `await`.
+      void open.catch(() => undefined).finally(() => this.openingControllersByUuid.delete(targetUuid))
+    }
+
+    return open
+  }
+
+  private async performCreateItemController(
+    context: CreateItemControllerContext,
+  ): Promise<NoteViewController | FileViewController> {
     const reservation =
       context.note?.noteType === NoteType.Super ? this.reserveVisibleChecklistOwner(context.note) : undefined
     // Standard Red Notes (t99): mark the whole open — checklist preflight included, since

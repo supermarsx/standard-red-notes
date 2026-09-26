@@ -479,4 +479,45 @@ describe('new-note editor handover (t99)', () => {
 
     expect(group.itemControllers.map((open) => open.item?.uuid)).toEqual([liteVaultNoteV.uuid])
   })
+  it('does not open a second controller when the row is clicked again mid-open', async () => {
+    /**
+     * Standard Red Notes (t99): the open-dedupe exposure, with a real trigger.
+     *
+     * NoteListItem.onClick takes a DIFFERENT path when the clicked row is already selected: it
+     * calls `openSingleSelectedItem` directly, bypassing selectItemUsingInstance's
+     * `selectedUuids.has(uuid)` dedupe entirely. So the first click selects and opens, React
+     * re-renders the row as selected, and a second click — an impatient double-click, which this
+     * surface invites because opening a cold-loaded note awaits a real IndexedDB read — reaches
+     * `openNote` again while the first open is still inside `await controller.initialize()`.
+     *
+     * `openNote`'s `activeControllerItem?.uuid === uuid` short-circuit cannot catch it: mid-handover
+     * the active controller is the OUTGOING note, so the uuids do not match and the open proceeds.
+     * (Before the handover reorder it was `undefined`, which did not match either — the reorder
+     * neither caused nor fixed this.) The result is two controllers for the same note.
+     */
+    await openNoteAAsActiveEditor()
+
+    /**
+     * The second click must land INSIDE the window, which means after `replaceSelection` has made
+     * the row selected (it runs just before openNote) and while `initialize()` is still awaiting.
+     * Firing it from the rehydrate hook pins it there exactly; firing it right after
+     * `selectItem(...)` returns its promise does NOT — at that point selectItemUsingInstance is
+     * still suspended on `authorizeItemAccess`, before replaceSelection, so selectedItemsCount is
+     * 0 and openSingleSelectedItem returns without doing anything.
+     */
+    let secondOpen: Promise<void> | undefined
+    emitDuringRehydrate = async () => {
+      expect([...controller.selectedUuids]).toEqual([liteNoteC.uuid])
+      secondOpen = controller.openSingleSelectedItem({ userTriggered: true })
+      await Promise.resolve()
+    }
+
+    await controller.selectItem(liteNoteC.uuid, true)
+    await secondOpen
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const openedC = group.itemControllers.filter((open) => open.item?.uuid === liteNoteC.uuid)
+    expect(openedC).toHaveLength(1)
+    expect(group.activeItemViewController?.item?.uuid).toBe(liteNoteC.uuid)
+  })
 })
