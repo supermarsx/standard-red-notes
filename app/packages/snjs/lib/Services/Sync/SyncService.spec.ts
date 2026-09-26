@@ -3252,7 +3252,11 @@ describe('SyncService auto-sync backstop and legacy socket re-dial (D3 / C11)', 
   const AUTO_SYNC_TICK_MS = 30_000
   const BACKSTOP_TICKS = 10
 
-  type SocketsStub = { isWebSocketConnectionOpen: jest.Mock; reconnectIfClosed?: jest.Mock }
+  type SocketsStub = {
+    isWebSocketConnectionOpen: jest.Mock
+    reconnectIfClosed?: jest.Mock
+    reconnectIfAbandoned?: jest.Mock
+  }
 
   const createService = (sockets: SocketsStub): SyncService => {
     logger = {
@@ -3412,6 +3416,57 @@ describe('SyncService auto-sync backstop and legacy socket re-dial (D3 / C11)', 
       const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
 
       expect(() => registeredHandler('online')()).not.toThrow()
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  /**
+   * t99. The periodic tick already KNEW the socket was closed and did nothing
+   * about it: it paid the HTTP sync and returned. A terminal mint failure (a 503
+   * while the gateway restarts during a deploy, or a 403) schedules no retry at
+   * all, so recovery hung entirely on an online/focus/visibility event -- and a
+   * tab that keeps focus fires none, staying non-live indefinitely while paying a
+   * 30 s HTTP sync instead of a 5 min one.
+   */
+  describe('auto-sync tick revives an ABANDONED legacy socket (t99)', () => {
+    it('asks the socket to revive on every tick while it reads closed', () => {
+      const sockets = {
+        isWebSocketConnectionOpen: jest.fn().mockReturnValue(false),
+        reconnectIfAbandoned: jest.fn(),
+      }
+      const service = createService(sockets)
+      jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * 3)
+
+      // Once per tick. The no-hammer guarantee lives in reconnectIfAbandoned()
+      // itself (pending-backoff check plus the 5 s floor), not in the caller.
+      expect(sockets.reconnectIfAbandoned).toHaveBeenCalledTimes(3)
+    })
+
+    // FALSE-GREEN: move reviveAbandonedLegacySocket() above the
+    // isWebSocketConnectionOpen() branch -> it runs on OPEN ticks too -> RED.
+    it('never asks while the socket reads OPEN, including on the backstop tick', () => {
+      const sockets = {
+        isWebSocketConnectionOpen: jest.fn().mockReturnValue(true),
+        reconnectIfAbandoned: jest.fn(),
+      }
+      const service = createService(sockets)
+      jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      jest.advanceTimersByTime(AUTO_SYNC_TICK_MS * (BACKSTOP_TICKS + 1))
+
+      expect(sockets.reconnectIfAbandoned).not.toHaveBeenCalled()
+    })
+
+    it('tolerates a sockets service without reconnectIfAbandoned (headless / older wiring)', () => {
+      const service = createService({ isWebSocketConnectionOpen: jest.fn().mockReturnValue(false) })
+      const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+
+      service.beginAutoSyncTimer()
+      expect(() => jest.advanceTimersByTime(AUTO_SYNC_TICK_MS)).not.toThrow()
       expect(syncSpy).toHaveBeenCalledTimes(1)
     })
   })

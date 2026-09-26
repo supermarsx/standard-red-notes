@@ -444,6 +444,38 @@ export class WebSocketsService extends AbstractService<
     void this.startWebSocketConnection()
   }
 
+  /**
+   * Standard Red Notes (t99): revive a lane that was ABANDONED rather than one
+   * that is backing off.
+   *
+   * A TERMINAL mint failure (503 "no gateway attached", 403) routes to
+   * stopUntilNextSignInOrForeground(), which clears the retry timer and the
+   * attempt counter and schedules NOTHING. Recovery then depends entirely on an
+   * `online`/`focus`/`visibilitychange` event reaching reconnectIfClosed() — so a
+   * tab that keeps focus and stays online never recovers. A deploy is a few
+   * seconds of 503 from the mint route, and any tab open across one latches this
+   * way; the user then pays a 30 s HTTP sync instead of a 5 min one and loses
+   * pushes, invites, MFA approvals and collaboration, silently and indefinitely.
+   *
+   * This is deliberately NOT reconnectIfClosed(): that resets `reconnectAttempts`
+   * to 0 and cancels the pending timer, and its 5 s throttle only coalesces a
+   * BURST. A caller on a 30 s cadence is always outside that window, so it would
+   * zero the backoff on every tick and the long cap could never be reached —
+   * reintroducing exactly the "token mint every 30 s per tab" that
+   * RECONNECT_LONG_AFTER_ATTEMPTS / RECONNECT_LONG_MAX_MS exist to escape.
+   *
+   * So: if a retry is already scheduled, the retryable path owns recovery and
+   * this is a no-op. Only the abandoned state — closed, with nothing pending —
+   * gets a dial, and that dial still passes every reconnectIfClosed() guard
+   * (URL, connectionRequested, not connecting, not OPEN) and its throttle.
+   */
+  public reconnectIfAbandoned(): void {
+    if (this.reconnectTimeout) {
+      return
+    }
+    this.reconnectIfClosed()
+  }
+
   async startWebSocketConnection(): Promise<Result<void>> {
     if (!this.webSocketUrl) {
       return Result.fail('WebSocket URL is not set')

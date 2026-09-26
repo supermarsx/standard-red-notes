@@ -342,6 +342,17 @@ export class SyncService
     sockets.reconnectIfClosed?.()
   }
 
+  /**
+   * Re-dial the legacy push socket from the periodic tick, but ONLY when it was
+   * abandoned rather than left backing off — see
+   * WebsocketsService.reconnectIfAbandoned(). Optional call so lightweight specs
+   * that pass `{}` as the sockets service stay valid, same as above.
+   */
+  private reviveAbandonedLegacySocket(): void {
+    const sockets = this.sockets as WebSocketsService & { reconnectIfAbandoned?: () => void }
+    sockets.reconnectIfAbandoned?.()
+  }
+
   /** Cancel any pending failure-backoff auto-retry so it doesn't delay a fresher sync. */
   private cancelFailureBackoff(): void {
     if (this.failureBackoffTimeout) {
@@ -862,6 +873,22 @@ export class SyncService
     if (!this.sockets.isWebSocketConnectionOpen()) {
       this.autoSyncTicksSinceBackstop = 0
       this.logger.debug('WebSocket connection is closed, doing autosync')
+
+      /**
+       * Standard Red Notes (t99): this branch already KNOWS the socket is closed and
+       * used to do nothing about it — it paid the HTTP sync and returned. A terminal
+       * mint failure (503 while the gateway restarts during a deploy, 403) schedules
+       * no retry at all, so recovery hung entirely on an online/focus/visibility
+       * event; a tab that keeps focus never fired one and stayed non-live
+       * indefinitely, at 30 s HTTP syncs instead of 5 min and with no pushes,
+       * invites, MFA approvals or collaboration.
+       *
+       * reconnectIfAbandoned() is a no-op whenever a backoff retry is already
+       * pending, so the retryable path keeps its exponential backoff and its long
+       * cap; only the abandoned state gets a dial. A deployment with no gateway at
+       * all therefore settles into one refused mint per 30 s rather than escalating.
+       */
+      this.reviveAbandonedLegacySocket()
 
       this.syncDetached({ sourceDescription: 'Auto Sync' }, 'automatic sync')
 

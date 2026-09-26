@@ -1125,6 +1125,91 @@ describe('webSocketsService', () => {
       expect(sockets()).toHaveLength(2)
     })
 
+    // t99. A TERMINAL mint (503 "no gateway attached", 403) schedules nothing at
+    // all, so before this the lane could only be revived by an online/focus/
+    // visibility event -- a foregrounded tab fired none and stayed non-live
+    // indefinitely. A deploy is a few seconds of 503, so any tab open across one
+    // latched. FALSE-GREEN: make reconnectIfAbandoned() return unconditionally
+    // (or gate it on something always truthy) -> the mint is never retried -> RED.
+    it('reconnectIfAbandoned() revives a lane abandoned by a terminal mint failure', async () => {
+      createConnectionToken.mockImplementation(async () => errorToken(503))
+      const service = createDialService()
+
+      await service.startWebSocketConnection()
+
+      // The latched state: closed, and NOTHING scheduled to recover it.
+      expect(sockets()).toHaveLength(0)
+      expect(jest.getTimerCount()).toBe(0)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+      await jest.advanceTimersByTimeAsync(600_000)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+
+      service.reconnectIfAbandoned()
+      await flush()
+
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+    })
+
+    // t99. The guard that keeps the periodic caller from becoming a hot loop.
+    // reconnectIfClosed() zeroes reconnectAttempts and cancels the pending timer,
+    // and its 5 s throttle only coalesces a BURST -- a 30 s caller is always
+    // outside that window, so delegating unconditionally would zero the backoff
+    // every tick and RECONNECT_LONG_MAX_MS could never be reached.
+    // FALSE-GREEN: drop the `if (this.reconnectTimeout) return` guard from
+    // reconnectIfAbandoned() -> a second socket is dialled and the armed timer is
+    // cancelled -> RED.
+    it('reconnectIfAbandoned() leaves a pending retryable backoff strictly alone', async () => {
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      sockets()[0].fireOpen()
+      sockets()[0].fireClose(1006)
+
+      // A real backoff is armed; this is NOT the abandoned state.
+      expect(jest.getTimerCount()).toBe(1)
+      expect(sockets()).toHaveLength(1)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+
+      service.reconnectIfAbandoned()
+      await flush()
+
+      expect(sockets()).toHaveLength(1)
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+      expect(jest.getTimerCount()).toBe(1)
+
+      // And the attempt counter was NOT reset: the backoff keeps escalating from
+      // where it was rather than restarting at the 1 s base.
+      await jest.advanceTimersByTimeAsync(lastDelay())
+      await flush()
+      sockets()[1].fireClose(1006)
+      expect(lastDelay()).toBe(2_000)
+    })
+
+    // t99. A deployment with no gateway AT ALL must settle into a harmless
+    // cadence rather than escalating: the throttle still applies to this caller.
+    // FALSE-GREEN: remove the RECONNECT_IF_CLOSED_MIN_INTERVAL_MS floor -> both
+    // calls dial -> RED.
+    it('reconnectIfAbandoned() is still throttled, so a repeating caller cannot hammer a refusing gateway', async () => {
+      createConnectionToken.mockImplementation(async () => errorToken(503))
+      const service = createDialService()
+      await service.startWebSocketConnection()
+      expect(createConnectionToken).toHaveBeenCalledTimes(1)
+
+      service.reconnectIfAbandoned()
+      await flush()
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+
+      // Inside the 5 s floor: silently ignored.
+      service.reconnectIfAbandoned()
+      await flush()
+      expect(createConnectionToken).toHaveBeenCalledTimes(2)
+
+      // Past it: one more mint, one per window and no faster.
+      await jest.advanceTimersByTimeAsync(5_000)
+      service.reconnectIfAbandoned()
+      await flush()
+      expect(createConnectionToken).toHaveBeenCalledTimes(3)
+    })
+
     // R17 residual. FALSE-GREEN: drop the throttle floor from
     // reconnectIfClosed() → a flapping focus/online burst re-dials on every
     // call within the window → RED (3 sockets/tokens instead of 2 at the
