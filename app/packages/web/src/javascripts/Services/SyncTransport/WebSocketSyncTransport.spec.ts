@@ -1486,4 +1486,116 @@ describe('WebSocketSyncTransport', () => {
       }
     })
   })
+  /**
+   * Standard Red Notes (t99): the transport used to change which network path
+   * carried every save without emitting a single line anywhere. The only readout
+   * was `transportStatus`, rendered exclusively in the admin-gated diagnostics
+   * pane, so a non-admin user watching a burst of `POST /v1/items` had no way to
+   * learn that saves had left the socket, or why.
+   */
+  describe('announcing which transport carries saves', () => {
+    let warn: jest.SpyInstance
+    let info: jest.SpyInstance
+
+    beforeEach(() => {
+      warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined)
+      info = jest.spyOn(console, 'info').mockImplementation(() => undefined)
+    })
+
+    afterEach(() => {
+      warn.mockRestore()
+      info.mockRestore()
+    })
+
+    const connectWorker = async () => {
+      const transport = createTransport()
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+      return transport
+    }
+
+    it('names the state and the reason when saves fall back to HTTP', async () => {
+      await connectWorker()
+
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'operation-unavailable' })
+      await flush()
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0][0])
+      expect(line).toContain('[sync-transport]')
+      expect(line).toContain('HTTP_FALLBACK')
+      expect(line).toContain('operation-unavailable')
+      // The explanation is what turns the reason into something actionable.
+      expect(line).toContain('did not negotiate the operation this request needed')
+      expect(line).toContain('POST /v1/items')
+    })
+
+    it('logs one line per genuine transition, not one per sync round', async () => {
+      await connectWorker()
+
+      for (let round = 0; round < 5; round += 1) {
+        worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'operation-unavailable' })
+      }
+      await flush()
+
+      expect(warn).toHaveBeenCalledTimes(1)
+
+      // A DIFFERENT reason is a genuine transition and must be announced.
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'frame-too-large' })
+      await flush()
+
+      expect(warn).toHaveBeenCalledTimes(2)
+      expect(String(warn.mock.calls[1][0])).toContain('frame-too-large')
+    })
+
+    it('says so, with the operation list, when the socket does carry sync', async () => {
+      await connectWorker()
+
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: ['SYNC_ITEMS', 'INVITE_EVENTS'],
+      })
+      await flush()
+
+      expect(info).toHaveBeenCalledTimes(1)
+      const line = String(info.mock.calls[0][0])
+      expect(line).toContain('Account sync is on the websocket')
+      expect(line).toContain('SYNC_ITEMS, INVITE_EVENTS')
+      expect(warn).not.toHaveBeenCalled()
+    })
+
+    it('calls out a negotiation that omits SYNC_ITEMS, the silent-HTTP case', async () => {
+      await connectWorker()
+
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: ['AUTHORIZE_COLLABORATION', 'API_RPC', 'INVITE_EVENTS', 'FILES_V1'],
+      })
+      await flush()
+
+      expect(info).toHaveBeenCalledTimes(1)
+      const line = String(info.mock.calls[0][0])
+      expect(line).toContain('NOT SYNC_ITEMS')
+      expect(line).toContain('saves stay on HTTP')
+      // The operator-facing precondition code, so the reader can search for it.
+      expect(line).toContain('SYNCING_SERVER_GRPC_UNBOUND')
+    })
+
+    it('stays quiet through the intermediate states on the way to READY', async () => {
+      await connectWorker()
+
+      worker.emit({ type: 'STATE', state: 'CONNECTING' })
+      worker.emit({ type: 'STATE', state: 'AUTHENTICATING' })
+      await flush()
+
+      expect(warn).not.toHaveBeenCalled()
+      expect(info).not.toHaveBeenCalled()
+    })
+  })
 })

@@ -1,7 +1,8 @@
-import type {
-  SyncFallbackReason,
-  SyncNegotiatedOperation,
-  SyncTransportState,
+import {
+  SYNC_FALLBACK_REASON_EXPLANATIONS,
+  type SyncFallbackReason,
+  type SyncNegotiatedOperation,
+  type SyncTransportState,
 } from '@/Services/SyncTransport/syncTransportProtocol'
 import type { DeploymentTopology } from './diagnosticRemedies'
 
@@ -254,29 +255,7 @@ const TRANSPORT_COPY: Record<SyncTransportState, { label: string; tone: Tone; de
  * system making a correct decision, and reading them as faults sends an
  * operator after a problem that does not exist.
  */
-const FALLBACK_REASON_COPY: Record<SyncFallbackReason, string> = {
-  'http-only': 'This client is configured never to use the socket.',
-  'unsupported-browser': 'This browser has no worker or WebSocket support the transport can use.',
-  'capability-unavailable': 'The server ANSWERED that it does not advertise the socket sync capability.',
-  'ticket-unavailable': 'A ticket could not be obtained. Retryable — a network error or a restarting gateway.',
-  'ticket-expired': 'The ticket aged out before it was redeemed.',
-  'auth-failed': 'The gateway rejected the ticket at the handshake.',
-  'proxy-failed': 'The socket was refused or cut before it authenticated — commonly a proxy that does not upgrade.',
-  'frame-too-large': 'A request exceeded the socket frame limit and was replayed over HTTP.',
-  'result-too-large': 'The committed result exceeded the frame limit, so it was collected over HTTP instead.',
-  'ack-timeout': 'The gateway did not acknowledge in time.',
-  'server-kill': 'The gateway closed the socket deliberately.',
-  'reconnect-gap': 'The socket was gone long enough that the session could not be resumed in place.',
-  backpressure: 'The client was sending faster than the socket could drain.',
-  'outbox-unavailable': 'The local outbox database could not be opened, so no command can be journaled.',
-  'multi-tab-not-owner': 'Another tab of this account holds the socket. Expected, and not a fault.',
-  'worker-error': 'The sync worker itself failed.',
-  'operation-unavailable': 'The socket is up but did not negotiate the operation this request needed.',
-  // Not a fault and not a misconfiguration: an administrator turned this
-  // account's switch off. Named with the flag so the reader can find it.
-  'live-sync-disabled':
-    'An administrator turned Live sync (LIVE_SYNC_ENABLED) off for this account, so note syncing stays on HTTP. Invites, API RPC, collaboration and files are unaffected.',
-}
+const FALLBACK_REASON_COPY: Record<SyncFallbackReason, string> = SYNC_FALLBACK_REASON_EXPLANATIONS
 
 /**
  * What lane this client is on RIGHT NOW, and why. When the transport reports a

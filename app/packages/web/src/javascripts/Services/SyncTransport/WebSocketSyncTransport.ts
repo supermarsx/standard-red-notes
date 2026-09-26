@@ -25,6 +25,7 @@ import {
   MAX_RPC_DEADLINE_MS,
   MIN_RPC_DEADLINE_MS,
   normalizeSyncRequestForWire,
+  SYNC_FALLBACK_REASON_EXPLANATIONS,
   SyncFallbackReason,
   SyncTransportState,
   SyncNegotiatedOperation,
@@ -375,6 +376,13 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    */
   private ticketFailureCache?: { reason: SyncFallbackReason; until: number }
   private fallbackReason?: SyncFallbackReason
+  /**
+   * Signature of the last transition this transport announced to the console, so
+   * a state that is re-reported on every sync round (HTTP_FALLBACK with the same
+   * reason is the normal case on a gateway that advertises no SYNC_ITEMS) is
+   * logged once per genuine change rather than once per save.
+   */
+  private lastLoggedTransition?: string
   private pageHideListener?: () => void
   private shutdownBarrier?: () => void
 
@@ -991,6 +999,60 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
   }
 
+  /**
+   * Standard Red Notes (t99): say out loud which transport carries saves.
+   *
+   * This lane degrades to HTTP silently and correctly — a gateway with no durable
+   * command port withholds SYNC_ITEMS, every other capability negotiates, and the
+   * socket stays open — so there was NO signal anywhere that saves had left the
+   * socket. The only readout was `transportStatus`, rendered exclusively in the
+   * admin-gated diagnostics pane, which the affected user usually cannot open. The
+   * observable symptom was a burst of `POST /v1/items` and no way to explain it.
+   *
+   * One line per genuine transition, never per sync round: `announceTransition` is
+   * reached on every STATE message and a fallback re-reports the same state and
+   * reason for each save, so the signature is deduplicated.
+   */
+  private announceTransition(state: SyncTransportState, reason: SyncFallbackReason | undefined): void {
+    const signature = `${state}:${reason ?? 'none'}`
+    if (this.lastLoggedTransition === signature) {
+      return
+    }
+    this.lastLoggedTransition = signature
+
+    const usesHttp = state === 'HTTP_ONLY' || state === 'HTTP_FALLBACK' || state === 'DEGRADED'
+    if (!usesHttp) {
+      // CONNECTING/AUTHENTICATING/HALF_OPEN are steps on the way to READY, and
+      // READY itself is announced by announceNegotiation with the operation list.
+      return
+    }
+
+    const explanation = reason ? SYNC_FALLBACK_REASON_EXPLANATIONS[reason] : undefined
+    console.warn(
+      `[sync-transport] Account sync is using HTTP (state ${state}${reason ? `, reason ${reason}` : ''}).` +
+        ` Every save is one POST /v1/items.${explanation ? ` ${explanation}` : ''}`,
+    )
+  }
+
+  /** The counterpart: a successful negotiation, with what the socket actually carries. */
+  private announceNegotiation(operations: readonly SyncNegotiatedOperation[]): void {
+    const signature = `NEGOTIATED:${[...operations].join(',')}`
+    if (this.lastLoggedTransition === signature) {
+      return
+    }
+    this.lastLoggedTransition = signature
+
+    const carriesSync = operations.includes('SYNC_ITEMS')
+    const list = operations.join(', ') || 'nothing'
+    // eslint-disable-next-line no-console
+    console.info(
+      carriesSync
+        ? `[sync-transport] Account sync is on the websocket. Negotiated: ${list}.`
+        : `[sync-transport] Websocket negotiated ${list}, but NOT SYNC_ITEMS — saves stay on HTTP.` +
+            ' The server bound no durable sync command port (see SYNCING_SERVER_GRPC_UNBOUND).',
+    )
+  }
+
   private async onWorkerMessage(message: SyncWorkerToMainMessage): Promise<void> {
     if (message.type === 'SHUTDOWN_COMPLETE') {
       this.shutdownBarrier?.()
@@ -999,6 +1061,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     if (message.type === 'STATE') {
       this.state = message.state
       this.fallbackReason = message.reason
+      this.announceTransition(message.state, message.reason)
       if (message.reason === 'multi-tab-not-owner') {
         // Another tab owns the socket for this scope and its lease stands for a
         // known span. Asking again before then can only mint and spend another
@@ -1022,6 +1085,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
       this.ticketFailureCache = undefined
       this.fallbackReason = undefined
+      this.announceNegotiation(message.operations)
       return
     }
     if (message.type === 'CHECKPOINT_CLEARED' || message.type === 'CHECKPOINT_FAILED') {

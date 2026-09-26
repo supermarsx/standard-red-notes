@@ -17,6 +17,7 @@ import TimezonePreference from './TimezonePreference'
 import FileUploadPrivacy from './FileUploadPrivacy'
 import Updates from './Updates'
 import ReloadApp from './ReloadApp'
+import SyncConnection from './SyncConnection'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useTabState } from '@/Components/Tabs/useTabState'
 
@@ -34,6 +35,7 @@ const General: FunctionComponent = () => {
           <Language />
           <Persistence application={application} />
           <TimezonePreference application={application} />
+          <SyncConnection application={application} />
           <Updates />
           <ReloadApp />
         </>
