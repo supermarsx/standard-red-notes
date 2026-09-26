@@ -104,6 +104,17 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+      # Deliberately its own step, run this early, with no dependency on any
+      # install/build step below: `yarn check` chains typecheck && lint &&
+      # format:check && test with `&&`, so an unrelated earlier failure would
+      # silently skip `lint` (and this check with it) and nobody would notice
+      # it never ran. The script itself has zero npm dependencies (plain
+      # fs/path), so it needs nothing but Node — see
+      # .orchestration/logs/t99/t99-e4.md for the incident this guards
+      # against (36 call sites of a Tailwind v4 syntax regression that
+      # silently dropped CSS declarations, shipped to production undetected).
+      - name: Guard against Tailwind v4 bracket CSS-variable regressions
+        run: node app/packages/web/scripts/CheckCssVarBrackets.mjs
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache Yarn packages
@@ -120,6 +131,18 @@ jobs:
       - name: Install app dependencies immutably
         working-directory: app
         run: yarn install --immutable
+      # Same independence rationale as the bracket-CSS-variable guard above,
+      # placed here instead of earlier because stylelint (unlike that script)
+      # is a real dependency that needs `node_modules` — this is the first
+      # point that's ready. Scoped to only the source stylesheets that caused
+      # the incident (app/packages/web/src/stylesheets), not the pre-built
+      # third-party component bundles under src/components/assets, and to
+      # only 3 targeted rules (see app/packages/web/.stylelintrc.json) chosen
+      # so the gate reports real defects, not house-style nitpicks — see
+      # .orchestration/logs/t99/t99-e4.md for what it does and does not catch.
+      - name: Guard against known-bad CSS declarations in our stylesheets
+        working-directory: app
+        run: yarn workspace @standardnotes/web run lint:scss
       - name: Install server dependencies immutably
         working-directory: server
         run: yarn install --immutable

@@ -1,0 +1,8 @@
+{
+  "customSyntax": "postcss-scss",
+  "rules": {
+    "declaration-property-value-no-unknown": true,
+    "keyframe-declaration-no-important": true,
+    "property-no-unknown": [true, { "checkPrefixed": true }]
+  }
+}
