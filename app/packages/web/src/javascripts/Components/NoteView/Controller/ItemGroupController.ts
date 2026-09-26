@@ -76,6 +76,31 @@ export class ItemGroupController {
    */
   private activeControllerRef: NoteViewController | FileViewController | undefined = undefined
 
+  /**
+   * Standard Red Notes (t99): how many item-controller opens are currently in flight.
+   *
+   * Opening a note REPLACES the active tile, and the outgoing controller is closed
+   * BEFORE the incoming one is constructed (see createItemControllerAfterChecklistPreflight:
+   * flushAndCloseItemController -> `await controller.initialize()` -> push). For the
+   * duration of that await `itemControllers` is empty and `activeItemViewController` is
+   * undefined — a transient hole in the middle of a handover, NOT the fact that the user
+   * has nothing open.
+   *
+   * ItemListController's selection recompute runs on every item-stream emission and used to
+   * read that hole as "nothing is open", conclude the user had no selection, and
+   * `selectFirstItem()` — which opens the first note in the list. That threw the user back
+   * to the previously-open note mid-keystroke and unmounted the editor (and, with it, the
+   * unsaved title being typed into a brand-new note). A counter rather than a boolean
+   * because that very bug starts a SECOND concurrent open, so the flag must not be cleared
+   * by whichever finishes first.
+   */
+  private pendingItemControllerOpens = 0
+
+  /** True while any item-controller open is mid-flight (see pendingItemControllerOpens). */
+  public get isOpeningItemController(): boolean {
+    return this.pendingItemControllerOpens > 0
+  }
+
   constructor(
     private items: ItemManagerInterface,
     private mutator: MutatorClientInterface,
@@ -132,6 +157,10 @@ export class ItemGroupController {
   async createItemController(context: CreateItemControllerContext): Promise<NoteViewController | FileViewController> {
     const reservation =
       context.note?.noteType === NoteType.Super ? this.reserveVisibleChecklistOwner(context.note) : undefined
+    // Standard Red Notes (t99): mark the whole open — checklist preflight included, since
+    // that too can close controllers — as in flight, so a concurrent selection recompute
+    // cannot mistake the handover gap for "the user has nothing open".
+    this.pendingItemControllerOpens++
     try {
       if (reservation) {
         // Reserve before any asynchronous outgoing-controller flush so Todo
@@ -145,6 +174,8 @@ export class ItemGroupController {
         this.clearVisibleChecklistReservation(reservation)
       }
       throw error
+    } finally {
+      this.pendingItemControllerOpens--
     }
   }
 

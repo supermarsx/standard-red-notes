@@ -1607,6 +1607,36 @@ export class ItemListController
   private async recomputeSelectionAfterItemsReload(itemsReloadSource: ItemsReloadSource) {
     const activeController = this.getActiveItemController()
 
+    /**
+     * Standard Red Notes (t99): an editor handover is in flight and has no active
+     * controller RIGHT NOW. ItemGroupController closes the outgoing controller before it
+     * constructs the incoming one, so between those two steps (across
+     * `await controller.initialize()`) `activeItemViewController` is undefined. That is a
+     * transient hole in the middle of an open, not evidence that the user has nothing open
+     * — and every inference below rests on the active item being knowable.
+     *
+     * Reading the hole as "nothing is open" sent this method down its
+     * `shouldSelectFirstItem` branch (creating a note publishes UnselectAllNotes first, so
+     * `hasNoSelectedItem` is true for the whole flow), which SELECTS and then OPENS the
+     * first note in the list. Any item-stream emission landing in the window — the outgoing
+     * note's own save propagating and its sync response returning, a tag mutation from
+     * inheriting the open tag, a websocket-pushed change — therefore started a second,
+     * concurrent open that closed the brand-new note out from under the user mid-keystroke
+     * and put the editor back on the note they were previously on. Because NoteView is keyed
+     * on `controller.runtimeId`, that also unmounted the title input: focus lost, and the
+     * typed-but-not-yet-saved title gone with it.
+     *
+     * Skipping is safe: the open that is in flight ends by pushing and activating its
+     * controller and notifying observers, and any later item emission reloads again — so
+     * nothing is permanently left unselected by declining to guess mid-handover. Where the
+     * user ends up is decided by the open they asked for, never by a network response that
+     * happened to land inside it.
+     */
+    if (!activeController && this.itemControllerGroup.isOpeningItemController) {
+      log(LoggingDomain.Selection, 'Leaving selection unchanged: an item controller open is in flight')
+      return
+    }
+
     if (this.shouldLeaveSelectionUnchanged(activeController)) {
       log(LoggingDomain.Selection, 'Leaving selection unchanged')
       return
@@ -1866,6 +1896,24 @@ export class ItemListController
       },
       openInNewTile,
     })
+
+    /**
+     * Standard Red Notes (t99): shield the note we just created from the list-absence
+     * close heuristic, exactly as every other "open a note that may not be in the current
+     * view's results" call site does (Bookmarks, Home cards, Quick actions, the command
+     * palette, Todo, Research, Constellation, Dashboard, Reminders, BaseEditor links).
+     *
+     * A brand-new note needs it as much as any of those, and for a reason unique to it:
+     * NoteViewController.insertTemplatedNote sets `isTemplateNote = false` SYNCHRONOUSLY,
+     * before `mutator.insertItem` has applied the note to the collection. For that window
+     * the template shield (shouldLeaveSelectionUnchanged) is already gone while the note is
+     * still absent from the list, which is precisely what arms
+     * `closeBecauseActiveItemDoesntExistInCurrentSystemView` — in All Notes, the default
+     * view. The note the user is typing into must not be closed for not yet existing.
+     */
+    if (controller instanceof NoteViewController) {
+      this.keepActiveItemOpenForSystemView(controller.item.uuid)
+    }
 
     if (isFolderSelected && controller instanceof NoteViewController) {
       /**
