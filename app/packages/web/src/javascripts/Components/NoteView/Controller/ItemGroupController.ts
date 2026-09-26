@@ -287,6 +287,8 @@ export class ItemGroupController {
       this.assertVisibleChecklistReservationCurrent(reservation)
     }
 
+    this.assertIncomingVaultItemStillUnlocked(controller)
+
     /**
      * Standard Red Notes (t99): the swap. Closing the outgoing controller and pushing the
      * incoming one must stay in ONE synchronous block — an await between them is exactly
@@ -542,6 +544,62 @@ export class ItemGroupController {
         )
       }
     }
+  }
+
+  /**
+   * Standard Red Notes (t99): refuse to display a vault item whose vault locked while its
+   * controller was initializing.
+   *
+   * The handover reorder keeps the OUTGOING controller listed across
+   * `await controller.initialize()`, so a vault lock landing in that window can still scrub it.
+   * The INCOMING controller is a different matter: it is deliberately not pushed until the
+   * synchronous swap, so for the whole of its initialization it is invisible to
+   * ItemListController.closeVaultItemControllers, which only walks `itemControllers`. A vault
+   * locking during the open of a note FROM that vault therefore could not reach the very
+   * editor about to display its plaintext — it scrubbed the outgoing controller and then the
+   * incoming one was pushed anyway.
+   *
+   * Checked here rather than made visible to the scrub because this runs in the same
+   * synchronous block as the push: nothing can lock between the check and the controller
+   * becoming visible, so there is no residual race. `items.findItem` resolves DECRYPTED items
+   * only (ItemManager.findItem -> collection.findDecrypted), so a vault lock — which
+   * re-encrypts the vault's items — makes the item unresolvable, which is exactly the signal.
+   *
+   * Scoped to vault items (`key_system_identifier`), mirroring closeVaultItemControllers' own
+   * gate. A template note is skipped because it is deliberately absent from the item store
+   * until its first save, including one created into a vault via PayloadVaultOverrides. A
+   * non-vault item that disappears mid-initialize is deliberately NOT refused here: t97's
+   * recoverRemovedItemController exists to follow such an item to its conflict/duplicate
+   * successor, and failing closed would regress that.
+   */
+  private assertIncomingVaultItemStillUnlocked(controller: NoteViewController | FileViewController): void {
+    if (controller instanceof NoteViewController && controller.isTemplateNote) {
+      return
+    }
+
+    const item = controller.item
+    if (!item?.key_system_identifier) {
+      return
+    }
+
+    if (this.items.findItem(item.uuid)) {
+      return
+    }
+
+    if (controller instanceof NoteViewController) {
+      controller.deinitImmediatelyForSecurity()
+    } else {
+      controller.deinit()
+    }
+
+    /**
+     * Reuses the existing open-cancellation error: `openNote` / `openNoteInNewTile` already
+     * treat it as fail-closed and expected, returning quietly instead of surfacing an
+     * unhandled rejection. Its class name says Checklist, but it is already the codebase's
+     * error for an authorization change during an open (see
+     * flushOutgoingItemControllerForHandover), which is the same shape as this.
+     */
+    throw new ChecklistEditorOpeningCanceledError('The vault containing this item locked while its editor was opening.')
   }
 
   private notifyDetachedControllerClosed(controller: NoteViewController): void {

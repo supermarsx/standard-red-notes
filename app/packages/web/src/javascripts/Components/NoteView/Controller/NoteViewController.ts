@@ -386,6 +386,19 @@ export class NoteViewController implements ItemViewControllerInterface {
    * dirtying the item, so a subsequent close/logout/unload no longer drops it. Safe
    * no-op if there is no editor or nothing pending.
    */
+  /**
+   * Standard Red Notes (t99): true while a local save for this note is queued or in flight.
+   *
+   * The editor's save is DEBOUNCED (~700ms on desktop) before the item is mutated, so between
+   * a keystroke and its propagation `item.title` still holds the PREVIOUS value. Anything that
+   * wants to re-read the item as authoritative — see NoteView's deferred remote-title
+   * reconciliation — must wait for this to go false first, or it would show stale text and
+   * silently discard what the user just typed.
+   */
+  public get hasPendingLocalSave(): boolean {
+    return this.inFlightSavePromise !== null
+  }
+
   public flushEditorSerialize(): void {
     if (this.dealloced) {
       return

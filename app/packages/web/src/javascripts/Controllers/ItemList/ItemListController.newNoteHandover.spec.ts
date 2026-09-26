@@ -96,6 +96,16 @@ describe('new-note editor handover (t99)', () => {
     payload: { content: { __lazyLite: true } },
   }) as SNNote
 
+  /**
+   * A cold-loaded note that lives in a VAULT. Same lite payload (so `initialize()` awaits the
+   * IndexedDB read), plus a `key_system_identifier`, which is what makes it subject to
+   * ItemListController.closeVaultItemControllers' scrub.
+   */
+  const liteVaultNoteV = Object.assign(makeNote('note-V', 3000), {
+    payload: { content: { __lazyLite: true } },
+    key_system_identifier: 'vault-key-system',
+  }) as SNNote
+
   /** Proof that the emission really landed inside the handover window. */
   let emissionLandedInWindow: boolean
 
@@ -137,6 +147,7 @@ describe('new-note editor handover (t99)', () => {
     store = new Map<string, SNNote | SNTag>([
       [noteA.uuid, noteA],
       [liteNoteC.uuid, liteNoteC],
+      [liteVaultNoteV.uuid, liteVaultNoteV],
       [tag.uuid, tag],
     ])
     displayed = [noteA, liteNoteC]
@@ -433,5 +444,39 @@ describe('new-note editor handover (t99)', () => {
 
     expect(group.isOpeningItemController).toBe(false)
     expect(group.activeItemViewController?.item?.uuid).toBe(noteA.uuid)
+  })
+  it('refuses to display a vault item whose vault locked while its editor was initializing', async () => {
+    /**
+     * The reorder keeps the OUTGOING controller listed during the window, so a vault lock landing
+     * there can still scrub it. The INCOMING controller is a different matter: it is deliberately
+     * not pushed until the synchronous swap, so for the whole of its initialization it is invisible
+     * to ItemListController.closeVaultItemControllers, which only walks `itemControllers`. A vault
+     * locking during the open of a note FROM that vault therefore could not reach the very editor
+     * about to display its plaintext.
+     *
+     * The lock is modelled the way it actually presents: the vault's items are re-encrypted, so
+     * `items.findItem` (which resolves DECRYPTED items only) stops returning the note.
+     */
+    await openNoteAAsActiveEditor()
+    emitDuringRehydrate = async () => {
+      store.delete(liteVaultNoteV.uuid)
+      await Promise.resolve()
+    }
+
+    await controller.openNote(liteVaultNoteV.uuid)
+
+    // openNote swallows the fail-closed cancellation, so assert on the resulting state.
+    expect(group.itemControllers.map((open) => open.item?.uuid)).toEqual([noteA.uuid])
+    expect(group.activeItemViewController?.item?.uuid).toBe(noteA.uuid)
+    expect(group.isOpeningItemController).toBe(false)
+  })
+
+  it('still opens a vault item whose vault stays unlocked', async () => {
+    // The guard must not refuse the ordinary case.
+    await openNoteAAsActiveEditor()
+
+    await controller.openNote(liteVaultNoteV.uuid)
+
+    expect(group.itemControllers.map((open) => open.item?.uuid)).toEqual([liteVaultNoteV.uuid])
   })
 })

@@ -338,7 +338,25 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     let title = this.state.editorTitle
 
     if (isPayloadSourceRetrieved(source) || source === PayloadEmitSource.AssistantChanged) {
-      title = note.title
+      /**
+       * Standard Red Notes (t99): adopting a retrieved title is correct — it is how a genuine
+       * edit from another device reaches this input — but NOT while the user is typing into
+       * this very field. A sync round-trip landing mid-keystroke used to overwrite the input
+       * with the server's copy, discarding everything typed since, which is the second half of
+       * the "mid typing a new note title it will unfocus and be borked" report. (The first half
+       * was the editor handover; that is fixed separately. This mechanism is independent and
+       * needs no lost focus to bite.)
+       *
+       * The narrowing is deliberately the smallest one that cannot lose typing: defer ONLY when
+       * this note's title input actually holds focus AND its value has diverged from the item,
+       * i.e. there are uncommitted local changes in the field. Anything else — the field
+       * unfocused, or focused but clean — adopts exactly as before.
+       */
+      if (this.shouldDeferRetrievedTitle()) {
+        this.pendingRetrievedTitle = note.title
+      } else {
+        title = note.title
+      }
     }
 
     if (!this.state.editorTitle) {
@@ -350,6 +368,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         editorTitle: title,
       })
     }
+
+    // A deferred adoption must not leave the input permanently diverged from the item.
+    this.reconcileDeferredRemoteTitle()
 
     if (note.last_edited_by_uuid !== this.state.noteLastEditedByUuid) {
       this.setState({
@@ -656,6 +677,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   onTitleChange: ChangeEventHandler<HTMLInputElement> = ({ currentTarget }) => {
     log(LoggingDomain.NoteView, 'Performing save after title change')
 
+    // Uncommitted local changes now exist in the field; a retrieved title must not clobber them.
+    this.titleEditedSinceFocus = true
+
     const title = currentTarget.value
 
     this.setState({
@@ -673,6 +697,78 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
   focusTitle() {
     document.getElementById(ElementIds.NoteTitleEditor)?.focus()
+  }
+
+  /**
+   * Standard Red Notes (t99): a retrieved title we declined to display because the user was
+   * mid-edit in the field. Held so the adoption can still happen once they are done, rather
+   * than being dropped (which would leave the input permanently diverged from the item).
+   */
+  private pendingRetrievedTitle: string | undefined = undefined
+
+  /**
+   * Is THIS note's title input the focused element? Scoped by `data-srn-note-uuid` rather than
+   * by `ElementIds.NoteTitleEditor`, because the tiled editor mounts one NoteView per open note
+   * and they all render an input carrying that same id — matching on the id alone would treat a
+   * sibling tile's focused title as this one's.
+   */
+  private isTitleInputFocused(): boolean {
+    const active = document.activeElement as HTMLElement | null
+    return active?.dataset?.srnNoteUuid !== undefined && active.dataset.srnNoteUuid === this.note?.uuid
+  }
+
+  /**
+   * Has the user typed into the title field since they entered it? This, not a value comparison,
+   * is the "uncommitted local changes" half of the predicate.
+   *
+   * A comparison cannot work here: by the time this observer runs, NoteViewController.streamItems
+   * has ALREADY advanced `this.item` to the incoming note, so `this.note.title` equals the
+   * retrieved title and the pre-change value is gone. Comparing `state.editorTitle` against the
+   * incoming title instead would report "dirty" for every retrieved change that actually differs
+   * — which is every one worth adopting — so the field would never accept a remote edit while
+   * merely focused.
+   */
+  private titleEditedSinceFocus = false
+
+  private shouldDeferRetrievedTitle(): boolean {
+    // Focused but untouched: there is nothing of the user's to lose, so adopt normally.
+    return this.isTitleInputFocused() && this.titleEditedSinceFocus
+  }
+
+  onTitleFocus = (event: FocusEvent<HTMLInputElement>) => {
+    this.titleEditedSinceFocus = false
+    event.target.select()
+  }
+
+  /**
+   * Apply a deferred remote title once the user is no longer editing the field.
+   *
+   * Waits for `hasPendingLocalSave` to clear because the editor save is debounced (~700ms)
+   * before the item is mutated: adopting `note.title` while the user's own keystrokes are still
+   * in flight would show the PREVIOUS value and throw away what they just typed. Leaving the
+   * deferral in place is safe — that pending save propagates locally, which emits an inner
+   * change, which calls back here with the item finally authoritative. If the user's edit landed
+   * last it simply wins, which is the correct outcome for a title they were actively editing.
+   */
+  private reconcileDeferredRemoteTitle(): void {
+    if (this.pendingRetrievedTitle === undefined) {
+      return
+    }
+    if (this.isTitleInputFocused() || this.controller.hasPendingLocalSave) {
+      return
+    }
+
+    this.pendingRetrievedTitle = undefined
+    this.titleEditedSinceFocus = false
+
+    const authoritativeTitle = this.note?.title
+    if (authoritativeTitle !== undefined && authoritativeTitle !== this.state.editorTitle) {
+      this.setState({ editorTitle: authoritativeTitle })
+    }
+  }
+
+  onTitleBlur = () => {
+    this.reconcileDeferredRemoteTitle()
   }
 
   setShowProtectedOverlay(show: boolean) {
@@ -1134,9 +1230,8 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                     disabled={this.state.noteLocked || this.state.readonly}
                     id={ElementIds.NoteTitleEditor}
                     onChange={this.onTitleChange}
-                    onFocus={(event) => {
-                      event.target.select()
-                    }}
+                    onFocus={this.onTitleFocus}
+                    onBlur={this.onTitleBlur}
                     onKeyUp={this.onTitleEnter}
                     spellCheck={false}
                     value={this.state.editorTitle}

@@ -335,4 +335,189 @@ describe('NoteView', () => {
       })
     })
   })
+  /**
+   * Standard Red Notes (t99): a sync that RETRIEVES the note used to overwrite the title input
+   * with the server's copy unconditionally, discarding whatever the user had typed since. That is
+   * an independent mechanism from the editor-handover bug — it needs no lost focus at all, just a
+   * round-trip landing mid-keystroke — and it produces the same user-visible symptom: the typed
+   * title vanishes.
+   *
+   * Adopting a retrieved title is correct behaviour (it is how an edit from another device reaches
+   * the field), so it is narrowed rather than removed: deferred ONLY while this note's title input
+   * holds focus AND its value has diverged from the item.
+   */
+  describe('retrieved title vs. the title the user is typing', () => {
+    const noteUuid = 'note-title-1'
+
+    /** The real input carries `data-srn-note-uuid`; focus is scoped by it, not by the shared id. */
+    const focusTitleInputFor = (uuid: string) => {
+      const input = document.createElement('input')
+      input.setAttribute('data-srn-note-uuid', uuid)
+      document.body.appendChild(input)
+      input.focus()
+      return input
+    }
+
+    /**
+     * Enter the field and type, exactly as the component sees it: onFocus arms the "untouched"
+     * state and onTitleChange records the uncommitted local change. Driving the flag through the
+     * real handlers rather than setting it directly keeps the test honest about the wiring.
+     */
+    const typeIntoTitle = (view: NoteView, input: HTMLInputElement, value: string) => {
+      view.onTitleFocus({ target: input } as unknown as Parameters<typeof view.onTitleFocus>[0])
+      input.value = value
+      view.onTitleChange({ currentTarget: input } as unknown as Parameters<typeof view.onTitleChange>[0])
+    }
+
+    const hasDeferredTitle = (view: NoteView) =>
+      (view as unknown as { pendingRetrievedTitle: string | undefined }).pendingRetrievedTitle !== undefined
+
+    const noteWithTitle = (title: string) =>
+      ({
+        uuid: noteUuid,
+        title,
+        locked: false,
+        getAppDomainValue: jest.fn(),
+      }) as unknown as jest.Mocked<SNNote>
+
+    /**
+     * `setState` is replaced with a recorder that also updates `state`, because the deferral and
+     * its reconciliation both READ `state.editorTitle` — a pure `jest.fn()` would leave the view
+     * frozen at its initial state and the divergence check could never be false.
+     */
+    const viewWithLiveState = (editorTitle: string) => {
+      const view = createNoteView()
+      const calls: Partial<{ editorTitle: string }>[] = []
+      ;(view as unknown as { state: { editorTitle: string } }).state = {
+        ...view.state,
+        editorTitle,
+      }
+      view.setState = jest.fn((partial: unknown) => {
+        const update = partial as Partial<{ editorTitle: string }>
+        calls.push(update)
+        ;(view as unknown as { state: Record<string, unknown> }).state = {
+          ...(view as unknown as { state: Record<string, unknown> }).state,
+          ...update,
+        }
+      }) as unknown as typeof view.setState
+      return { view, titleUpdates: () => calls.filter((call) => 'editorTitle' in call) }
+    }
+
+    beforeEach(() => {
+      document.body.innerHTML = ''
+      noteViewController.item = noteWithTitle('Local typed title')
+      ;(noteViewController as unknown as { hasPendingLocalSave: boolean }).hasPendingLocalSave = false
+      // resetMocks is global, so the save stub has to be re-established per test.
+      noteViewController.saveAndAwaitLocalPropagation = jest.fn().mockResolvedValue(undefined)
+    })
+
+    it('does not overwrite the title the user is actively typing', () => {
+      const { view, titleUpdates } = viewWithLiveState('Local')
+      const input = focusTitleInputFor(noteUuid)
+      typeIntoTitle(view, input, 'Local typed title')
+
+      // A round-trip lands with the server's older copy while the field is focused and dirty.
+      view.onNoteInnerChange(noteWithTitle('Server copy'), PayloadEmitSource.RemoteRetrieved)
+
+      // The server's value was never applied to the input, and the typed text survives.
+      expect(titleUpdates()).not.toContainEqual({ editorTitle: 'Server copy' })
+      expect(view.state.editorTitle).toBe('Local typed title')
+    })
+
+    it('still adopts a retrieved title when the field is not focused', () => {
+      const { view } = viewWithLiveState('Local typed title')
+      // Nothing focused: a genuine edit from another device must land.
+
+      view.onNoteInnerChange(noteWithTitle('Edited on another device'), PayloadEmitSource.RemoteRetrieved)
+
+      expect(view.state.editorTitle).toBe('Edited on another device')
+    })
+
+    it('still adopts a retrieved title when the field is focused but clean', () => {
+      const { view } = viewWithLiveState('Same as item')
+      const input = focusTitleInputFor(noteUuid)
+      // Entered the field but typed nothing: there is nothing of the user's to lose.
+      view.onTitleFocus({ target: input } as unknown as Parameters<typeof view.onTitleFocus>[0])
+
+      view.onNoteInnerChange(noteWithTitle('Edited on another device'), PayloadEmitSource.RemoteRetrieved)
+
+      expect(view.state.editorTitle).toBe('Edited on another device')
+    })
+
+    it('ignores focus that belongs to another tile’s title input', () => {
+      const { view } = viewWithLiveState('Local')
+      const input = focusTitleInputFor(noteUuid)
+      typeIntoTitle(view, input, 'Local typed title')
+      // The tiled editor renders one input per open note, all sharing ElementIds.NoteTitleEditor.
+      // Focus now sits on a SIBLING tile's title input, so this view must not treat it as its own.
+      focusTitleInputFor('a-different-note')
+
+      view.onNoteInnerChange(noteWithTitle('Edited on another device'), PayloadEmitSource.RemoteRetrieved)
+
+      expect(view.state.editorTitle).toBe('Edited on another device')
+    })
+
+    it('adopts the deferred title once the field is blurred', () => {
+      const { view } = viewWithLiveState('Local')
+      const input = focusTitleInputFor(noteUuid)
+      typeIntoTitle(view, input, 'Local typed title')
+
+      view.onNoteInnerChange(noteWithTitle('Server copy'), PayloadEmitSource.RemoteRetrieved)
+      expect(view.state.editorTitle).toBe('Local typed title')
+
+      // The user leaves the field; their own save has already landed, so the item is authoritative.
+      noteViewController.item = noteWithTitle('Server copy')
+      input.blur()
+      view.onTitleBlur()
+
+      expect(view.state.editorTitle).toBe('Server copy')
+    })
+
+    it('waits for the user’s own debounced save before reconciling, then reconciles', () => {
+      /**
+       * The editor save is debounced (~700ms) BEFORE the item is mutated, so immediately after a
+       * keystroke `item.title` still holds the previous value. Reconciling then would display that
+       * stale value and discard what the user just typed -- so the deferral is held until the
+       * pending save clears, and the save's own local propagation brings us back here.
+       */
+      const { view } = viewWithLiveState('Local')
+      const input = focusTitleInputFor(noteUuid)
+      typeIntoTitle(view, input, 'Local typed title')
+
+      view.onNoteInnerChange(noteWithTitle('Server copy'), PayloadEmitSource.RemoteRetrieved)
+
+      ;(noteViewController as unknown as { hasPendingLocalSave: boolean }).hasPendingLocalSave = true
+      input.blur()
+      view.onTitleBlur()
+
+      // Still the user's text: the item is not authoritative yet.
+      expect(view.state.editorTitle).toBe('Local typed title')
+
+      // The debounced save lands, mutating the item and emitting a local change.
+      ;(noteViewController as unknown as { hasPendingLocalSave: boolean }).hasPendingLocalSave = false
+      noteViewController.item = noteWithTitle('Local typed title')
+      view.onNoteInnerChange(noteWithTitle('Local typed title'), PayloadEmitSource.LocalChanged)
+
+      // Reconciled, and the user's edit won -- correct for a title they were actively editing.
+      expect(view.state.editorTitle).toBe('Local typed title')
+      expect(hasDeferredTitle(view)).toBe(false)
+    })
+
+    it('does not leave the input diverged from the item after a deferral', () => {
+      const { view } = viewWithLiveState('Local')
+      const input = focusTitleInputFor(noteUuid)
+      typeIntoTitle(view, input, 'Local typed title')
+
+      view.onNoteInnerChange(noteWithTitle('Server copy'), PayloadEmitSource.RemoteRetrieved)
+      expect(hasDeferredTitle(view)).toBe(true)
+
+      // Focus moves away and a later emission arrives (any source).
+      document.body.innerHTML = ''
+      noteViewController.item = noteWithTitle('Server copy')
+      view.onNoteInnerChange(noteWithTitle('Server copy'), PayloadEmitSource.LocalChanged)
+
+      expect(view.state.editorTitle).toBe('Server copy')
+      expect(hasDeferredTitle(view)).toBe(false)
+    })
+  })
 })
