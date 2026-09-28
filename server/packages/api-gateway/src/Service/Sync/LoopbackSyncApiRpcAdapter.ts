@@ -5,6 +5,8 @@ import type {
   SyncNegotiatedOperation,
 } from '@standard-red-notes/websocket-gateway'
 
+import { sessionCookiesToHeader } from './sessionCookies'
+
 const MAX_BUFFERED_RPC_RESPONSE_BYTES = 512 * 1024
 const RESPONSE_HEADER_NAMES = [
   'cache-control',
@@ -73,6 +75,20 @@ export class LoopbackSyncApiRpcAdapter implements SyncApiRpcAdapter {
     }
     const headers = new Headers(input.headers)
     headers.set('authorization', input.identity.authorization)
+    // This lane re-enters the gateway over HTTP, so unlike the sync and files lanes its
+    // half of the session credential has to travel as a real Cookie header for
+    // AuthMiddleware to parse back out. A cookie-based session cannot authenticate from
+    // the bearer alone, so without this every API_RPC call 401s.
+    //
+    // Always set or delete, never merge: `input.headers` comes off the client's RPC
+    // frame, so leaving a caller-supplied cookie in place would let a client put
+    // arbitrary cookies on a loopback request to our own gateway.
+    const cookieHeader = sessionCookiesToHeader(input.identity.sessionCookies)
+    if (cookieHeader) {
+      headers.set('cookie', cookieHeader)
+    } else {
+      headers.delete('cookie')
+    }
     if (input.idempotencyKey) {
       headers.set('idempotency-key', input.idempotencyKey)
     }

@@ -18,6 +18,7 @@ import type {
 
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
+import { sessionCookiesToMap } from './sessionCookies'
 import { CollaborationAuthorizationService } from './CollaborationAuthorizationService'
 
 export interface DurableSyncCommandPort {
@@ -294,10 +295,15 @@ export class SyncWebSocketCommandAdapter
       throw new SessionValidationError('Live sync authorization is unavailable.', 'revoked')
     }
     const authorization = identity.authorization.replace(/^Bearer\s+/i, '')
+    // A cookie-based session is authenticated by auth ONLY through the cookie
+    // (`GetSessionFromToken` refuses its header-token branch outright), so omitting
+    // this made every such session fail SESSION_STALE on every command.
+    const cookies = sessionCookiesToMap(identity.sessionCookies)
     const authResponse = await abortable(
       this.serviceProxy.validateSession({
         headers: { authorization },
         requestMetadata: { url: '/sockets/sync', method: 'POST' },
+        ...(cookies ? { cookies } : {}),
       }),
       signal,
     )

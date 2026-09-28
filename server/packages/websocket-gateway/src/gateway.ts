@@ -1757,6 +1757,9 @@ export {
   parseConnectionTokenTtl,
   parseMaxConnectionsPerUser,
   parseRedisNamespace,
+  isValidSyncTicketIdentity,
+  SESSION_ACCESS_TOKEN_COOKIE_PREFIX,
+  syncTicketIdentitySecretValues,
 } from './auth.js'
 export type { ConnectionTokenErrorClass } from './auth.js'
 export {

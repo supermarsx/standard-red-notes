@@ -14,6 +14,7 @@ import {
 } from '../../Service/Sync/SyncWebSocketAccessService'
 import { describeUnmetSyncPreconditions } from '../../Service/Sync/SyncWebSocketPreconditions'
 import { syncGateDiagnostics, SyncGateDiagnosticsRecorder } from '../../Service/Sync/SyncGateDiagnostics'
+import { captureSessionCookies } from '../../Service/Sync/sessionCookies'
 
 @controller('/v1/sockets/sync')
 export class SyncWebSocketController extends BaseHttpController {
@@ -144,11 +145,18 @@ export class SyncWebSocketController extends BaseHttpController {
     }
 
     try {
+      // A cookie-based session cannot be revalidated from the bearer alone (auth's
+      // GetSessionFromToken refuses the header branch for it and reads
+      // `access_token_<uuid>` from the cookies instead), so the ticket has to carry
+      // the cookie too or every socket lane is refused SESSION_STALE forever.
+      // Server-side only: this never travels back in the ticket response.
+      const sessionCookies = captureSessionCookies(request.headers.cookie)
       const ticket = await this.accessService.issueTicket({
         userUuid: locals.user.uuid,
         sessionUuid: locals.session.uuid,
         deviceId,
         authorization,
+        ...(sessionCookies ? { sessionCookies } : {}),
       })
       response.status(200).send(ticket)
     } catch (error) {

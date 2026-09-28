@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express'
 
 import type { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
+import { sessionCookiesToMap } from '../Sync/sessionCookies'
 import type { EndpointResolverInterface } from '../Resolver/EndpointResolverInterface'
 import type {
   MultiContainerFileAuthorization,
@@ -136,6 +137,9 @@ export class ValetTokenFileResourceAuthorizer implements MultiContainerFileResou
     }
     const ownerContext =
       input.resource.ownershipType === 'shared-vault' ? input.resource.sharedVaultOwnerUuid : undefined
+    // Same credential gap as the sync lane: a cookie-based session authenticates
+    // ONLY through `access_token_<uuid>`, so the bearer alone can never validate it.
+    const cookies = sessionCookiesToMap(input.identity.sessionCookies)
     const response = await abortable(
       this.options.serviceProxy.validateSession({
         headers: {
@@ -143,6 +147,7 @@ export class ValetTokenFileResourceAuthorizer implements MultiContainerFileResou
           ...(ownerContext ? { sharedVaultOwnerContext: ownerContext } : {}),
         },
         requestMetadata: { url: '/sockets/sync/files', method: 'POST' },
+        ...(cookies ? { cookies } : {}),
       }),
       signal,
     )

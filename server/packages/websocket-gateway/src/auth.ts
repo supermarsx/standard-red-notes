@@ -323,6 +323,46 @@ export interface SyncTicketIdentity {
   deviceId: string
   /** Server-side only bearer credential used for live per-command revalidation. */
   authorization?: string
+  /**
+   * Server-side only. The `access_token_<sessionUuid>` cookie(s) captured at ticket
+   * mint, keyed by cookie name.
+   *
+   * WHY THIS EXISTS: a COOKIE-BASED session (auth's
+   * `SessionService.COOKIE_SESSION_TOKEN_VERSION`) can be authenticated by exactly ONE
+   * route. `GetSessionFromToken` reads `authCookies.get('access_token_<uuid>')` and
+   * fails `Invalid token` when it is absent, and its header-token branch separately
+   * refuses any session whose `version === COOKIE_BASED_SESSION_VERSION`. So the bearer
+   * alone can NEVER authenticate such a session. `AuthMiddleware` passes cookies on
+   * every ordinary HTTP request; before this field existed no socket lane could, because
+   * the credential had nowhere to live — every lane that revalidates (sync, files,
+   * API_RPC) sent the bearer and nothing else and was refused 100% of the time.
+   *
+   * SECURITY: this is an access-token credential. It is captured server-side, stored
+   * only in the ticket store, and must NEVER be serialized toward a client, logged, or
+   * placed in any diagnostic. `syncTicketIdentitySecretValues()` exists so tests can
+   * assert that mechanically rather than by review.
+   */
+  sessionCookies?: Readonly<Record<string, readonly string[]>>
+}
+
+/** Only session access-token cookies are captured; nothing else is a credential we need. */
+export const SESSION_ACCESS_TOKEN_COOKIE_PREFIX = 'access_token_'
+
+/**
+ * Every value in an identity that must never reach a client, a log or a diagnostic.
+ * Returned as plain strings so a test can scan any serialized output for all of them
+ * without knowing the identity's shape — the point is that adding a new secret field
+ * to `SyncTicketIdentity` and forgetting it here is what the leak tests catch.
+ */
+export function syncTicketIdentitySecretValues(identity: SyncTicketIdentity): string[] {
+  const values: string[] = []
+  if (identity.authorization) {
+    values.push(identity.authorization, identity.authorization.replace(/^Bearer\s+/i, ''))
+  }
+  for (const cookieValues of Object.values(identity.sessionCookies ?? {})) {
+    values.push(...cookieValues)
+  }
+  return values.filter((value) => value.length > 0)
 }
 
 export interface IssuedSyncTicket {
@@ -363,8 +403,40 @@ export function isValidSyncTicketIdentity(identity: SyncTicketIdentity): boolean
     (identity.authorization === undefined ||
       (typeof identity.authorization === 'string' &&
         identity.authorization.length > 0 &&
-        identity.authorization.length <= 16_384))
+        identity.authorization.length <= 16_384)) &&
+    isValidSyncSessionCookies(identity.sessionCookies)
   )
+}
+
+/**
+ * Bounded exactly like `authorization` above: a ticket identity crosses a store (Redis
+ * on multi-replica deployments), so an unbounded map here would be an unbounded write
+ * driven by a request header. Only `access_token_*` names are accepted, so a caller that
+ * captured the whole cookie jar by mistake is rejected rather than silently stored.
+ */
+function isValidSyncSessionCookies(cookies: SyncTicketIdentity['sessionCookies']): boolean {
+  if (cookies === undefined) {
+    return true
+  }
+  if (typeof cookies !== 'object' || cookies === null || Array.isArray(cookies)) {
+    return false
+  }
+  const names = Object.keys(cookies)
+  if (names.length === 0 || names.length > 8) {
+    return false
+  }
+  return names.every((name) => {
+    if (!name.startsWith(SESSION_ACCESS_TOKEN_COOKIE_PREFIX) || name.length > 256) {
+      return false
+    }
+    const values = cookies[name]
+    return (
+      Array.isArray(values) &&
+      values.length > 0 &&
+      values.length <= 8 &&
+      values.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 16_384)
+    )
+  })
 }
 
 /**
