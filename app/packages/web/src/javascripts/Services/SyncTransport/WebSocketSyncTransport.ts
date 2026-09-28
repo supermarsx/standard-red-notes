@@ -1071,7 +1071,26 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       // A worker-initiated close never posts DEGRADED (its own onClose is skipped),
       // so HTTP_FALLBACK must clear the negotiation too or the negative ticket
       // cache is bypassed on every sync and the reported operations go stale.
-      if (message.state === 'DEGRADED' || message.state === 'HTTP_ONLY' || message.state === 'HTTP_FALLBACK') {
+      //
+      // ...but ONLY when the socket is actually gone. A fallback that deliberately
+      // KEEPS a healthy socket (`operation-unavailable`, `frame-too-large`) posts
+      // HTTP_FALLBACK and then immediately posts READY again, and `NEGOTIATED` is
+      // only ever posted after a fresh handshake — so clearing here left the steady
+      // state as `{ state: READY, operations: [] }` on a socket still carrying every
+      // operation it negotiated. That is not merely a wrong readout: `negotiated` is
+      // what `isFileLaneAvailable()` and the API_RPC gate in `execute()` read, so a
+      // single refused operation silently pushed FILES_V1 and every control-plane
+      // request onto HTTP for the life of the connection. On a deployment where one
+      // operation is permanently unavailable that fired on every round, forever.
+      //
+      // The worker reports which case it is, because only the worker knows: at the
+      // moment this transition is posted its socket reference is still set even when
+      // it is about to be closed, so the main thread cannot infer it.
+      const socketIsGone = message.socketPreserved !== true
+      if (
+        socketIsGone &&
+        (message.state === 'DEGRADED' || message.state === 'HTTP_ONLY' || message.state === 'HTTP_FALLBACK')
+      ) {
         this.negotiated = undefined
       }
       return

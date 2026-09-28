@@ -2726,7 +2726,7 @@ export class SyncTransportWorkerRuntime {
         this.failRpc(rpc, reason.toUpperCase().replaceAll('-', '_'), true, !rpc.sent)
       }
       this.active = undefined
-      this.transition('HTTP_FALLBACK', reason)
+      this.transition('HTTP_FALLBACK', reason, preserveHealthySocket)
       if (!preserveHealthySocket) {
         await this.closeSocketAndReleaseOwner()
       }
@@ -2750,7 +2750,7 @@ export class SyncTransportWorkerRuntime {
         }
       }
       this.active = undefined
-      this.transition('DEGRADED', reason)
+      this.transition('DEGRADED', reason, preserveHealthySocket)
       if (!preserveHealthySocket) {
         await this.closeSocketAndReleaseOwner()
       }
@@ -2770,7 +2770,7 @@ export class SyncTransportWorkerRuntime {
       await this.requireDurableRecovery(active.clientRequestId, reason)
       return
     }
-    this.transition('HTTP_FALLBACK', reason)
+    this.transition('HTTP_FALLBACK', reason, preserveHealthySocket)
     const storedBody = record?.sessionScope === active.sessionScope ? parseStoredBody(record) : undefined
     this.dependencies.postMessage({
       type: 'HTTP_FALLBACK',
@@ -2838,9 +2838,21 @@ export class SyncTransportWorkerRuntime {
     this.dependencies.postMessage({ type: 'HTTP_FALLBACK', clientRequestId, reason, body })
   }
 
-  private transition(state: SyncTransportState, reason?: SyncFallbackReason): void {
+  /**
+   * `socketPreserved` says whether this transition leaves a usable socket behind.
+   * It is passed explicitly rather than read off `this.socket` because the socket
+   * reference is still set at the moment a closing fallback posts its state — the
+   * close happens after. It defaults to false so any transition that does not
+   * claim preservation keeps the old, safe behaviour on the main thread.
+   */
+  private transition(state: SyncTransportState, reason?: SyncFallbackReason, socketPreserved = false): void {
     this.state = state
-    this.dependencies.postMessage({ type: 'STATE', state, ...(reason ? { reason } : {}) })
+    this.dependencies.postMessage({
+      type: 'STATE',
+      state,
+      ...(reason ? { reason } : {}),
+      ...(socketPreserved ? { socketPreserved: true } : {}),
+    })
   }
 
   private async closeSocketAndReleaseOwner(): Promise<void> {

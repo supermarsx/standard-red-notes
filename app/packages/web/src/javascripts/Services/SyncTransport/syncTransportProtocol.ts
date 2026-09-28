@@ -812,7 +812,15 @@ export type SyncWorkerToMainMessage =
       endpoint: string
       operations: SyncNegotiatedOperation[]
     }
-  | { type: 'STATE'; state: SyncTransportState; reason?: SyncFallbackReason }
+  /**
+   * `socketPreserved` is true when the worker is reporting a fallback state while
+   * DELIBERATELY keeping a healthy socket. Only the worker can say: at the moment
+   * it posts the transition its socket reference is still set even when it is
+   * about to be closed. The main thread uses it to decide whether the negotiated
+   * operation list is stale (socket gone) or still true (socket alive), which
+   * gates FILES_V1 and API_RPC as well as the reported status.
+   */
+  | { type: 'STATE'; state: SyncTransportState; reason?: SyncFallbackReason; socketPreserved?: boolean }
   | { type: 'CHECKPOINT_CLEARED'; requestId: string; sessionScope: string; commandId: string }
   | { type: 'CHECKPOINT_FAILED'; requestId: string; sessionScope: string; commandId: string }
   | { type: 'SESSION_REVOKED_ACK'; requestId: string; sessionScope: string }

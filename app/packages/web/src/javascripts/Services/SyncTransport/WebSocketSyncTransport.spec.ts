@@ -1598,4 +1598,91 @@ describe('WebSocketSyncTransport', () => {
       expect(info).not.toHaveBeenCalled()
     })
   })
+
+  /**
+   * A fallback that deliberately KEEPS a healthy socket used to wipe the negotiated
+   * operation list anyway, because the main thread could not tell the two cases
+   * apart. The worker posts HTTP_FALLBACK and then immediately posts READY again,
+   * and NEGOTIATED is only ever posted after a fresh handshake — so the steady
+   * state became `{ state: READY, operations: [] }` on a socket still carrying
+   * everything it had negotiated.
+   *
+   * That is not only a wrong readout. `negotiated` is the field `isFileLaneAvailable()`
+   * and the API_RPC gate both read, so one refused operation silently pushed FILES_V1
+   * and every control-plane request onto HTTP for the life of the connection — and on
+   * a deployment where an operation is permanently unavailable, that fired every round.
+   */
+  describe('a fallback that keeps a healthy socket keeps what that socket negotiated', () => {
+    const connect = async () => {
+      const transport = createTransport()
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+      // Order mirrors the worker's own handshake: it transitions to READY and then
+      // posts NEGOTIATED. `isFileLaneAvailable()` requires both, so a helper that
+      // emitted only NEGOTIATED would assert against a lane that was never up.
+      worker.emit({ type: 'STATE', state: 'READY', socketPreserved: true })
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: ['SYNC_ITEMS', 'API_RPC', 'FILES_V1'],
+      })
+      await flush()
+      return transport
+    }
+
+    it('reports READY with its operations after an operation-unavailable fallback', async () => {
+      const transport = await connect()
+
+      worker.emit({
+        type: 'STATE',
+        state: 'HTTP_FALLBACK',
+        reason: 'operation-unavailable',
+        socketPreserved: true,
+      })
+      worker.emit({ type: 'STATE', state: 'READY', socketPreserved: true })
+      await flush()
+
+      expect(transport.transportStatus.state).toBe('READY')
+      expect([...transport.transportStatus.operations].sort()).toEqual(['API_RPC', 'FILES_V1', 'SYNC_ITEMS'])
+    })
+
+    it('keeps the file lane usable, since the socket still carries FILES_V1', async () => {
+      const transport = await connect()
+      expect(transport.isFileLaneAvailable()).toBe(true)
+
+      worker.emit({
+        type: 'STATE',
+        state: 'HTTP_FALLBACK',
+        reason: 'operation-unavailable',
+        socketPreserved: true,
+      })
+      worker.emit({ type: 'STATE', state: 'READY', socketPreserved: true })
+      await flush()
+
+      expect(transport.isFileLaneAvailable()).toBe(true)
+    })
+
+    it('still clears the list when the socket is actually gone', async () => {
+      const transport = await connect()
+
+      // No `socketPreserved`: the worker closed the socket after this transition,
+      // so the operation list it negotiated is stale and must not be reported.
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'server-kill' })
+      await flush()
+
+      expect(transport.transportStatus.operations).toEqual([])
+      expect(transport.isFileLaneAvailable()).toBe(false)
+    })
+
+    it('still clears the list on DEGRADED when the socket is gone', async () => {
+      const transport = await connect()
+
+      worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
+      await flush()
+
+      expect(transport.transportStatus.operations).toEqual([])
+    })
+  })
 })
