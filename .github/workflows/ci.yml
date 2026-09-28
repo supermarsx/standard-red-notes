@@ -480,27 +480,31 @@ jobs:
         run: >-
           yarn workspace @standard-red-notes/websocket-gateway node
           e2e/push-roundtrip.e2e.mjs
-      # The gRPC switch moves exactly two things off HTTP: `validateSession`,
+      # THIS GUARDS THE SOCKET SYNC LANE'S AUTHENTICATION, not the gRPC proxies.
+      # Do not delete it if SERVICE_PROXY_TYPE goes away: gRPC is only HOW this
+      # topology reaches the lane. Setting it binds the durable command port, so
+      # the gateway advertises realtime SYNC_ITEMS and the client carries saves
+      # over the socket instead of HTTP. Single-container and self-hosted bind
+      # that port unconditionally and advertise the lane by default, with no
+      # gRPC anywhere — so on compose this switch is the only way to exercise
+      # what those topologies ship. The switch also moves `validateSession`,
       # which runs on EVERY authenticated request and retries three times on
-      # UNAVAILABLE before throwing with NO HTTP fallback, and `items/sync`. It
-      # also binds the durable command port, so the gateway starts advertising
-      # the realtime SYNC_ITEMS lane and the client may pick a different
-      # transport for saves than it does by default. Every browser step above
-      # ran under the default HTTP proxies, so before this step nothing in CI
-      # ever signed in through the real client while the switch was on — the one
-      # path those two changes govern. The grep is a separate step on purpose:
-      # if the switch silently failed to reach the container, the browser drill
-      # would pass on HTTP and prove nothing.
+      # UNAVAILABLE before throwing with NO HTTP fallback, and `items/sync`.
+      # Every browser step above ran under the default HTTP proxies, where the
+      # lane is never advertised, so before this step nothing in CI ever signed
+      # in through the real client while any of that was reachable. The grep is
+      # a separate step on purpose: if the switch silently failed to reach the
+      # container, the browser drill would pass on HTTP and prove nothing.
       - name: Confirm the api-gateway is really on gRPC service proxies
         run: >-
           test "$(docker compose exec -T server grep -cx 'SERVICE_PROXY_TYPE=grpc'
           /opt/server/packages/api-gateway/.env)" = '1'
-      - name: Verify a browser sign-in and note round trip under gRPC proxies
+      - name: Verify a browser sign-in and note round trip over the socket sync lane
         working-directory: e2e
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-grpc-auth.json
         run: npx playwright test tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json
-      - name: Reject a skipped or incomplete gRPC browser sign-in
+      - name: Reject a skipped or incomplete socket sync lane sign-in
         run: yarn ci:verify-playwright --report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0
       - name: Resolve retry-stable publication handoff identity
         id: publication_identity

@@ -1430,10 +1430,10 @@ export function validateCiContract(files) {
     "Confirm the api-gateway is really on gRPC service proxies",
   );
   const grpcSignInIndex = containerSmokeBlock.indexOf(
-    "Verify a browser sign-in and note round trip under gRPC proxies",
+    "Verify a browser sign-in and note round trip over the socket sync lane",
   );
   const grpcSignInVerifyIndex = containerSmokeBlock.indexOf(
-    "Reject a skipped or incomplete gRPC browser sign-in",
+    "Reject a skipped or incomplete socket sync lane sign-in",
   );
   if (
     grpcProxyAssertionIndex <= grpcRecreateIndex ||

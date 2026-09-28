@@ -941,7 +941,7 @@ test("the gRPC browser sign-in cannot be silently disarmed", () => {
 test("the gRPC browser sign-in cannot run outside the gRPC phase", () => {
   // Hoisted above the recreate it would sign in against the default HTTP
   // proxies and prove nothing, while every presence rule stayed green.
-  const signIn = `      - name: Verify a browser sign-in and note round trip under gRPC proxies
+  const signIn = `      - name: Verify a browser sign-in and note round trip over the socket sync lane
         working-directory: e2e
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-grpc-auth.json
