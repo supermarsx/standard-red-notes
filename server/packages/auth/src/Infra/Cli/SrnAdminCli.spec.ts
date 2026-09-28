@@ -4,8 +4,10 @@ import {
   CLI_MANAGEABLE_FLAGS,
   findFlagSpec,
   formatBytes,
+  formatLockTtl,
   formatTable,
   helpFor,
+  lockSubjectsFor,
   matchGroupUuidInList,
   parseArgs,
   parseBanOptions,
@@ -446,6 +448,81 @@ describe('SrnAdminCli helpers', () => {
       expect(helpFor('limits')).toContain('rate-limit tiers')
       expect(helpFor('unknown-topic')).toEqual(usage())
       expect(helpFor(undefined)).toEqual(usage())
+    })
+
+    /**
+     * `lock clear` is the ONLY way back into a locked-out sole-administrator
+     * instance without direct database surgery. If it is missing from the
+     * command tree, the operator who needs it most has no way to discover it.
+     */
+    it('should advertise the lock commands and say why they exist', () => {
+      expect(usage()).toContain('lock clear <user>')
+      expect(usage()).toContain('ANTI-ABUSE')
+
+      const help = helpFor('lock')
+      expect(help).toContain('no HTTP, no session')
+      expect(help).toContain('srn-admin lock clear')
+    })
+  })
+
+  describe('failed-login locks', () => {
+    describe('formatLockTtl', () => {
+      it('should render a remaining lock duration compactly', () => {
+        expect(formatLockTtl(0)).toEqual('0s')
+        expect(formatLockTtl(45)).toEqual('45s')
+        expect(formatLockTtl(90)).toEqual('1m 30s')
+        expect(formatLockTtl(3600)).toEqual('1h 0s')
+        expect(formatLockTtl(86400)).toEqual('24h 0s')
+        expect(formatLockTtl(3723)).toEqual('1h 2m 3s')
+      })
+
+      /**
+       * A missing TTL must never render as '0s'. Redis answers -1 for a key with
+       * no expiry and -2 for one that is gone, and the listing passes -1 through
+       * when it cannot determine one. Showing '0s' would tell an operator the
+       * lock is about to clear itself when it may in fact never expire.
+       */
+      it('should render an unknown or absent expiry as a dash, never as zero', () => {
+        expect(formatLockTtl(-1)).toEqual('-')
+        expect(formatLockTtl(-2)).toEqual('-')
+        expect(formatLockTtl(Number.NaN)).toEqual('-')
+        expect(formatLockTtl(Number.POSITIVE_INFINITY)).toEqual('-')
+      })
+    })
+
+    describe('lockSubjectsFor', () => {
+      /**
+       * Failed attempts key on the user's uuid when the account resolves and on
+       * the RAW submitted string when it does not. Clearing only one of those
+       * leaves a lock alive behind a command that reported success — the exact
+       * failure an operator cannot debug while locked out.
+       */
+      it('should clear every subject a lock could be recorded under', () => {
+        expect(lockSubjectsFor('you@example.com', { uuid: 'uuid-1', email: 'you@example.com' })).toEqual([
+          'you@example.com',
+          'uuid-1',
+        ])
+        expect(lockSubjectsFor('uuid-1', { uuid: 'uuid-1', email: 'you@example.com' })).toEqual([
+          'uuid-1',
+          'you@example.com',
+        ])
+      })
+
+      it('should keep the raw identifier usable when it maps to no user', () => {
+        expect(lockSubjectsFor('deleted@example.com')).toEqual(['deleted@example.com'])
+        expect(lockSubjectsFor('not-an-email-at-all')).toEqual(['not-an-email-at-all'])
+      })
+
+      it('should ignore empty or absent user fields rather than clearing a blank key', () => {
+        expect(lockSubjectsFor('you@example.com', { uuid: 'uuid-1', email: '' })).toEqual(['you@example.com', 'uuid-1'])
+        expect(lockSubjectsFor('you@example.com', {})).toEqual(['you@example.com'])
+      })
+
+      it('should place the operator-supplied identifier first', () => {
+        expect(lockSubjectsFor('alias@example.com', { uuid: 'uuid-1', email: 'primary@example.com' })[0]).toEqual(
+          'alias@example.com',
+        )
+      })
     })
   })
 

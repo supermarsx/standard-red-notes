@@ -50,8 +50,10 @@ import {
   STORAGE_USED_SETTING,
   findFlagSpec,
   formatBytes,
+  formatLockTtl,
   formatTable,
   helpFor,
+  lockSubjectsFor,
   matchGroupUuidInList,
   parseArgs,
   parseBanOptions,
@@ -1607,6 +1609,224 @@ async function cmdIp(args: ParsedArgs, sub: string | undefined): Promise<number>
   return 0
 }
 
+/* ---------------------------------------------------------------------------
+ * FAILED-LOGIN LOCKS
+ *
+ * Standard Red Notes: the OUT-OF-BAND recovery path for account lockout.
+ *
+ * Lockout is account-scoped: after MAX_LOGIN_ATTEMPTS non-captcha failures plus
+ * MAX_LOGIN_ATTEMPTS captcha-tier failures, LockMiddleware answers 423 on
+ * /auth/pkce_sign_in AND /auth/recovery/login for FAILED_LOGIN_CAPTCHA_LOCKOUT
+ * seconds (24h by default). Until now the ONLY way to clear that was the admin
+ * panel's Unlock button, which needs an admin SESSION — which needs signing in,
+ * which is exactly what is locked.
+ *
+ * For the single-administrator self-hosted deployment this project targets, that
+ * made a locked-out sole admin unrecoverable without direct database surgery.
+ * These commands run inside the container against the bound repository, with no
+ * HTTP and no session, so there is always a way back in.
+ * ------------------------------------------------------------------------- */
+
+/** Minimal slice of the bound lock repository these commands drive. */
+type LockRepositoryLike = {
+  resetLockCounter(userIdentifier: string): Promise<void>
+  getLockCounter(userIdentifier: string, mode: 'captcha' | 'non-captcha'): Promise<number>
+  isUserLocked(userIdentifier: string): Promise<boolean>
+  listLockedAccounts?(): Promise<
+    { identifier: string; counter: number; captchaCounter: number; ttlSeconds: number; locked: boolean }[]
+  >
+}
+
+function getLockRepository(container: ContainerLike): LockRepositoryLike {
+  try {
+    return container.get<LockRepositoryLike>(TYPES.Auth_LockRepository)
+  } catch {
+    throw new Error('Account lockout is not available on this deployment (no lock repository is bound).')
+  }
+}
+
+/**
+ * Resolve the identifier to a user when we can, then hand both to the pure
+ * subject-derivation helper. resolveUser THROWS for an unknown identifier; here
+ * that is not an error — clearing a lock has to work for a subject that no
+ * longer (or never did) map to a user row, which is precisely the case an
+ * operator hits when reading an identifier straight off the admin panel.
+ */
+async function resolveLockSubjects(container: ContainerLike, identifier: string): Promise<string[]> {
+  try {
+    const user = await resolveUser(container, identifier)
+
+    return lockSubjectsFor(identifier, { uuid: user.uuid, email: user.email })
+  } catch {
+    return lockSubjectsFor(identifier)
+  }
+}
+
+async function cmdLock(args: ParsedArgs, sub: string | undefined): Promise<number> {
+  if (sub === 'list' || sub === undefined) {
+    const container = await loadContainer()
+    const lockRepository = getLockRepository(container)
+
+    if (!lockRepository.listLockedAccounts) {
+      outLine(
+        'Listing locks is not available on this deployment (the bound cache cannot enumerate keys). ' +
+          "'lock show <user>' and 'lock clear <user>' still work.",
+      )
+
+      return 0
+    }
+
+    const accounts = await lockRepository.listLockedAccounts()
+    if (args.options.json === true) {
+      outJson({ accounts })
+
+      return 0
+    }
+    if (accounts.length === 0) {
+      outLine('(no failed-login locks are currently tracked)')
+
+      return 0
+    }
+
+    outLine(
+      formatTable(
+        ['IDENTIFIER', 'ATTEMPTS', 'CAPTCHA-TIER', 'EXPIRES IN', 'LOCKED'],
+        accounts.map((account) => [
+          account.identifier,
+          String(account.counter),
+          String(account.captchaCounter),
+          formatLockTtl(account.ttlSeconds),
+          account.locked ? 'YES' : 'no',
+        ]),
+      ),
+    )
+    outLine('')
+    outLine("LOCKED=YES means sign-in is refused (423). Clear one with 'srn-admin lock clear <identifier>'.")
+
+    return 0
+  }
+
+  if (sub === 'show') {
+    const identifier = args.positionals[0]
+    if (!identifier) {
+      throw new UsageError('lock show <user|identifier> — a user (email or uuid) or a raw lock identifier is required')
+    }
+
+    const container = await loadContainer()
+    const lockRepository = getLockRepository(container)
+    const subjects = await resolveLockSubjects(container, identifier)
+
+    // TTL is only exposed by the enumerating repository; absent it we still
+    // report the counters, which is what decides whether sign-in is refused.
+    let ttlBySubject = new Map<string, number>()
+    if (lockRepository.listLockedAccounts) {
+      try {
+        const tracked = await lockRepository.listLockedAccounts()
+        ttlBySubject = new Map(tracked.map((entry) => [entry.identifier, entry.ttlSeconds]))
+      } catch {
+        /* best-effort: a cache read error costs the TTL column, not the command */
+      }
+    }
+
+    const rows = []
+    for (const subject of subjects) {
+      rows.push({
+        subject,
+        attempts: await lockRepository.getLockCounter(subject, 'non-captcha'),
+        captchaAttempts: await lockRepository.getLockCounter(subject, 'captcha'),
+        locked: await lockRepository.isUserLocked(subject),
+        ttlSeconds: ttlBySubject.get(subject) ?? -1,
+      })
+    }
+
+    if (args.options.json === true) {
+      outJson({ identifier, subjects: rows })
+
+      return 0
+    }
+
+    outLine(
+      formatTable(
+        ['SUBJECT', 'ATTEMPTS', 'CAPTCHA-TIER', 'EXPIRES IN', 'LOCKED'],
+        rows.map((row) => [
+          row.subject,
+          String(row.attempts),
+          String(row.captchaAttempts),
+          formatLockTtl(row.ttlSeconds),
+          row.locked ? 'YES' : 'no',
+        ]),
+      ),
+    )
+    if (rows.some((row) => row.locked)) {
+      outLine('')
+      outLine(`Sign-in is currently REFUSED for this account. Clear it with 'srn-admin lock clear ${identifier}'.`)
+    }
+
+    return 0
+  }
+
+  if (sub === 'clear') {
+    const container = await loadContainer()
+    const lockRepository = getLockRepository(container)
+
+    /* lock clear --all --confirm ALL ------------------------------------- */
+    if (args.options.all === true) {
+      const confirm = stringOption(args.options, 'confirm')
+      if (confirm !== 'ALL') {
+        throw new UsageError('refusing to clear every lock: pass --confirm ALL (exactly) alongside --all.')
+      }
+      if (!lockRepository.listLockedAccounts) {
+        throw new Error(
+          'Clearing every lock needs a repository that can enumerate keys, which this deployment does not have. ' +
+            'Clear individual accounts with: srn-admin lock clear <user>',
+        )
+      }
+
+      const accounts = await lockRepository.listLockedAccounts()
+      for (const account of accounts) {
+        await lockRepository.resetLockCounter(account.identifier)
+      }
+
+      await writeAudit(
+        container,
+        AuditAction.AccountUnlocked,
+        { type: 'user', uuid: null },
+        { scope: 'all', cleared: accounts.length },
+      )
+
+      outLine(`Cleared ${accounts.length} failed-login lock${accounts.length === 1 ? '' : 's'}.`)
+
+      return 0
+    }
+
+    const identifier = args.positionals[0]
+    if (!identifier) {
+      throw new UsageError(
+        'lock clear <user|identifier> — a user (email or uuid) or a raw lock identifier is required ' +
+          '(or --all --confirm ALL to clear every tracked lock)',
+      )
+    }
+
+    const subjects = await resolveLockSubjects(container, identifier)
+    for (const subject of subjects) {
+      await lockRepository.resetLockCounter(subject)
+    }
+
+    await writeAudit(
+      container,
+      AuditAction.AccountUnlocked,
+      { type: 'user', uuid: null },
+      { identifier, subjects, scope: 'single' },
+    )
+
+    outLine(`Cleared the failed-login lock for ${identifier} (subjects: ${subjects.join(', ')}). Sign-in works again.`)
+
+    return 0
+  }
+
+  throw new UsageError(`unknown lock subcommand '${sub}' — list | show | clear`)
+}
+
 async function cmdLimits(args: ParsedArgs): Promise<number> {
   // Rate-limit tiers live in the SERVER_SETTINGS overlay (security.rateLimit),
   // layered over RATE_LIMIT_* env, over the safe defaults. Read the overlay file
@@ -2909,6 +3129,9 @@ async function main(): Promise<number> {
     /* ANTI-ABUSE ----------------------------------------------------------- */
     case 'ip':
       return cmdIp({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
+
+    case 'lock':
+      return cmdLock({ positionals: args.positionals.slice(1), options: args.options }, args.positionals[0])
 
     case 'limits':
       return cmdLimits(args)

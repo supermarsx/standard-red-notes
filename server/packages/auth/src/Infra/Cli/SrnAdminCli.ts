@@ -224,6 +224,48 @@ export function formatTable(headers: string[], rows: string[][]): string {
   return [renderRow(headers), renderRow(widths.map((width) => '-'.repeat(width))), ...rows.map(renderRow)].join('\n')
 }
 
+/**
+ * Standard Red Notes: remaining life of a failed-login lock, for `lock list` and
+ * `lock show`. A negative TTL means "no expiry recorded" (Redis -1/-2, or a
+ * repository that cannot report one) and must NOT be rendered as '0s', which
+ * would read as "about to clear itself" when the opposite may be true.
+ */
+export function formatLockTtl(ttlSeconds: number): string {
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds < 0) {
+    return '-'
+  }
+  const hours = Math.floor(ttlSeconds / 3600)
+  const minutes = Math.floor((ttlSeconds % 3600) / 60)
+  const seconds = Math.floor(ttlSeconds % 60)
+
+  return [hours ? `${hours}h` : '', minutes ? `${minutes}m` : '', `${seconds}s`].filter((part) => part !== '').join(' ')
+}
+
+/**
+ * Standard Red Notes: every key subject a failed-login lock could be recorded
+ * under for one operator-supplied identifier.
+ *
+ * IncreaseLoginAttempts keys on the user's uuid when the account resolves and on
+ * the RAW submitted string when it does not, so `lock clear` has to clear both
+ * or a lock survives the command that claims to have cleared it. The raw
+ * identifier comes FIRST and is always present: an identifier read straight off
+ * the admin panel may no longer map to a user row at all, and clearing it is
+ * still the operation the operator asked for.
+ *
+ * Order is preserved and duplicates are dropped, so passing an email, the uuid,
+ * or a bare lock key all converge on the same set.
+ */
+export function lockSubjectsFor(identifier: string, user?: { uuid?: string; email?: string }): string[] {
+  const subjects = [identifier]
+  for (const candidate of [user?.uuid, user?.email]) {
+    if (candidate !== undefined && candidate !== '' && !subjects.includes(candidate)) {
+      subjects.push(candidate)
+    }
+  }
+
+  return subjects
+}
+
 /** Human-readable byte count. null → '-', -1 → 'unlimited' (files-server convention). */
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) {
@@ -998,6 +1040,11 @@ ANTI-ABUSE
   ip unblock <ip|cidr>               Remove an entry from the block list
   ip allow <ip|cidr>                 Allowlist an IP/CIDR (bypasses rate limits)
   ip unallow <ip|cidr>               Remove an entry from the allow list
+  lock list                          Failed-login locks currently tracked
+  lock show <user>                   Attempt counters + remaining lock for one account
+  lock clear <user>                  Clear an account's failed-login lock (no session
+                                     needed — the way back in for a locked-out admin)
+  lock clear --all --confirm ALL     Clear every tracked failed-login lock
   limits                             Show effective rate-limit + lockout config
 
 DIAGNOSTICS
@@ -1184,6 +1231,40 @@ block). Entries are an exact IPv4, an IPv4 CIDR (a.b.c.d/0..32) or a bare IPv6
 literal (exact match; IPv6 CIDR is not supported). The lists live in Redis and
 are shared with the gateway admin panel's Anti-abuse view. Enforcement fails
 OPEN on a Redis outage (a cache blip never hard-blocks legitimate traffic).`,
+  lock: `lock — failed-login locks (the out-of-band way back into a locked account)
+
+USAGE
+  srn-admin lock list [--json]
+  srn-admin lock show  <user|identifier> [--json]
+  srn-admin lock clear <user|identifier>
+  srn-admin lock clear --all --confirm ALL
+
+Sign-in lockout is ACCOUNT-scoped. After MAX_LOGIN_ATTEMPTS failures the
+non-captcha tier hands over to the captcha tier; once that tier also reaches
+MAX_LOGIN_ATTEMPTS the account is locked and /auth/pkce_sign_in AND
+/auth/recovery/login answer 423 for FAILED_LOGIN_CAPTCHA_LOCKOUT seconds
+(86400 — 24 hours — by default). Anyone who knows the address can drive those
+counters, so a lock is not by itself evidence the owner did anything wrong.
+
+WHY THIS EXISTS. The admin panel's Unlock button needs an admin SESSION, which
+needs signing in, which is the thing that is locked. On a single-administrator
+self-hosted instance that made a locked-out admin unrecoverable without direct
+database surgery. These commands run inside the container against the bound lock
+repository — no HTTP, no session — so there is always a way back in:
+
+  docker compose exec server srn-admin lock clear you@example.com
+
+'clear' clears EVERY subject the lock could be recorded under: the uuid, the
+account email, and the raw string you passed. Failed attempts key on the uuid
+when the account resolves and on the raw submitted string when it does not, so
+an identifier read straight off the admin panel always works — including one
+that no longer maps to a user row.
+
+'list' needs a cache that can enumerate keys (Redis). Under the TypeORM cache
+topology it says so plainly; 'show' and 'clear' still work there, and so does
+'--all', which enumerates before clearing and refuses if it cannot.
+
+Every clear is written to the audit log as account.unlocked with via=srn-admin.`,
   limits: `limits — effective anti-abuse configuration (read-only)
 
 Shows the effective rate-limit tiers (the persisted admin overlay over the
