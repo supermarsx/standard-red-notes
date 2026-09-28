@@ -32,6 +32,8 @@ import { VerifyEmailConfirmation } from '../../../Domain/UseCase/VerifyEmailConf
 import { ResendEmailConfirmation } from '../../../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { GetAccountRecoveryEscrow } from '../../../Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow'
 import { safeErrorLogMetadata } from '../../../Domain/Logging/SafeLog'
+import { LoginLockGuard } from '../../../Domain/User/LoginLockGuard'
+import { resolveLoginLockRequest, sleepSeconds } from '../Middleware/LoginLockRequest'
 
 const PROOF_OF_WORK_REQUIRED_TAG = 'proof-of-work-required'
 
@@ -64,6 +66,11 @@ export class BaseAuthController extends BaseHttpController {
     protected resendEmailConfirmationUseCase: ResendEmailConfirmation,
     protected getAccountRecoveryEscrow: GetAccountRecoveryEscrow,
     protected controllerContainer?: ControllerContainerInterface,
+    // Standard Red Notes: failed-login lockout for the DirectCall topology, where
+    // Express middleware never runs. Trailing optional so existing call sites and
+    // specs keep compiling; absent means the controller enforces nothing and the
+    // middleware remains the only arm, exactly as before.
+    protected loginLockGuard?: LoginLockGuard,
   ) {
     super()
 
@@ -79,6 +86,53 @@ export class BaseAuthController extends BaseHttpController {
       this.controllerContainer.register('auth.emailConfirmation.verify', this.verifyEmailConfirmation.bind(this))
       this.controllerContainer.register('auth.emailConfirmation.resend', this.resendEmailConfirmation.bind(this))
     }
+  }
+
+  /**
+   * Standard Red Notes: failed-login lockout on the path middleware cannot reach.
+   *
+   * LockMiddleware guards /auth/pkce_sign_in and /auth/recovery/login on the HTTP
+   * topology, but under DirectCall (single container) the gateway calls
+   * Service.handleRequest, which invokes the registered controller method
+   * directly and runs NO Express middleware — so enforcement kept only in the
+   * middleware is absent there entirely. Both arms consult the same
+   * LoginLockGuard so the two topologies cannot drift apart.
+   *
+   * When the middleware already ran it marks `response.locals`, and this returns
+   * immediately rather than evaluating the guard (and stalling) a second time.
+   *
+   * With no guard bound — older wiring, and every existing spec that constructs
+   * this controller positionally — this is a no-op, so behaviour is unchanged
+   * unless the guard is present.
+   */
+  protected async enforceLoginLock(request: Request, response?: Response): Promise<results.JsonResult | null> {
+    if (this.loginLockGuard === undefined) {
+      return null
+    }
+    if ((response?.locals as Record<string, unknown> | undefined)?.loginLockEvaluated === true) {
+      return null
+    }
+
+    try {
+      const decision = await this.loginLockGuard.evaluate(resolveLoginLockRequest(request))
+
+      // The delay applies to refusals and exemptions alike: an exemption buys an
+      // attacker patience, never speed.
+      await sleepSeconds(decision.delaySeconds)
+
+      if (!decision.allowed) {
+        return this.json(
+          { error: { message: 'Too many successive login requests. Please try your request again later.' } },
+          423,
+        )
+      }
+    } catch (error) {
+      // Never let a lock-evaluation fault cost somebody access to their notes:
+      // fall through to the ordinary credential check, exactly as before.
+      this.logger.warn('Login lock evaluation failed; allowing the request to proceed.', safeErrorLogMetadata(error))
+    }
+
+    return null
   }
 
   /**
@@ -328,6 +382,11 @@ export class BaseAuthController extends BaseHttpController {
   }
 
   async pkceSignIn(request: Request, response: Response): Promise<results.JsonResult> {
+    const locked = await this.enforceLoginLock(request, response)
+    if (locked !== null) {
+      return locked
+    }
+
     if (!request.body.email || !request.body.password || !request.body.code_verifier) {
       this.logger.debug('/auth/pkce_sign_in request is missing one or more required credential fields', {
         hasEmail: typeof request.body.email === 'string' && request.body.email.length > 0,
@@ -427,6 +486,13 @@ export class BaseAuthController extends BaseHttpController {
   }
 
   async recoveryLogin(request: Request, response: Response): Promise<results.JsonResult> {
+    // Still evaluated, so the recovery route is still DELAYED by the ramp; the
+    // guard never returns a refusal for it. See LoginLockGuard.evaluate().
+    const locked = await this.enforceLoginLock(request, response)
+    if (locked !== null) {
+      return locked
+    }
+
     const result = await this.signInWithRecoveryCodes.execute({
       apiVersion: request.body.api_version,
       userAgent: request.headers['user-agent'] as string,
@@ -453,7 +519,7 @@ export class BaseAuthController extends BaseHttpController {
       } else {
         const increasLoginAttemtpsResult = increasLoginAttemtpsResultOrError.getValue()
         if (increasLoginAttemtpsResult.isNonCaptchaLimitReached) {
-          response.setHeader('x-captcha-required', this.captchaUIUrl)
+          this.setCaptchaRequiredHeader(response)
         }
       }
 

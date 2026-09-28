@@ -427,6 +427,7 @@ import { SessionMiddleware } from '../Infra/InversifyExpressUtils/Middleware/Ses
 import { ApiGatewayOfflineAuthMiddleware } from '../Infra/InversifyExpressUtils/Middleware/ApiGatewayOfflineAuthMiddleware'
 import { OfflineUserAuthMiddleware } from '../Infra/InversifyExpressUtils/Middleware/OfflineUserAuthMiddleware'
 import { LockMiddleware } from '../Infra/InversifyExpressUtils/Middleware/LockMiddleware'
+import { LoginLockGuard } from '../Domain/User/LoginLockGuard'
 import { RequiredCrossServiceTokenMiddleware } from '../Infra/InversifyExpressUtils/Middleware/RequiredCrossServiceTokenMiddleware'
 import { OptionalCrossServiceTokenMiddleware } from '../Infra/InversifyExpressUtils/Middleware/OptionalCrossServiceTokenMiddleware'
 import { BaseSettingsController } from '../Infra/InversifyExpressUtils/Base/BaseSettingsController'
@@ -1328,6 +1329,34 @@ export class ContainerConfigLoader {
       .toConstantValue(
         env.get('FAILED_LOGIN_CAPTCHA_LOCKOUT', true) ? +env.get('FAILED_LOGIN_CAPTCHA_LOCKOUT', true) : 86400,
       )
+    /**
+     * Standard Red Notes: anti-denial-of-service knobs for failed-login lockout.
+     *
+     * The lock is account-scoped, so anyone who knows an address can drive the
+     * counter. These two soften the blast radius without removing the protection.
+     * Both default ON with values that only ever ADD leniency to what shipped
+     * before, so a deployment that sets neither is strictly better off.
+     *
+     * The cap is clamped to 0..120s: a huge value would turn the back-off into
+     * the denial of service it exists to prevent, so it cannot be configured into
+     * one. 0 disables the ramp (the hard lock still applies).
+     */
+    container
+      .bind(TYPES.Auth_LOCKOUT_PROGRESSIVE_DELAY_CAP_SECONDS)
+      .toConstantValue(
+        Math.min(
+          120,
+          Math.max(
+            0,
+            env.get('LOCKOUT_PROGRESSIVE_DELAY_CAP_SECONDS', true)
+              ? +env.get('LOCKOUT_PROGRESSIVE_DELAY_CAP_SECONDS', true)
+              : 30,
+          ) || 0,
+        ),
+      )
+    container
+      .bind(TYPES.Auth_LOCKOUT_TRUSTED_SOURCE_EXEMPTION)
+      .toConstantValue(env.get('LOCKOUT_TRUSTED_SOURCE_EXEMPTION', true) !== 'false')
     container.bind(TYPES.Auth_PSEUDO_KEY_PARAMS_KEY).toConstantValue(env.get('PSEUDO_KEY_PARAMS_KEY'))
     container
       .bind(TYPES.Auth_EPHEMERAL_SESSION_AGE)
@@ -1533,17 +1562,21 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_Timer),
           ),
         )
-      container
-        .bind<LockRepositoryInterface>(TYPES.Auth_LockRepository)
-        .toConstantValue(
-          new TypeORMLockRepository(
-            container.get(TYPES.Auth_CacheEntryRepository),
-            container.get(TYPES.Auth_Timer),
-            container.get(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
-            container.get(TYPES.Auth_FAILED_LOGIN_LOCKOUT),
-            container.get(TYPES.Auth_FAILED_LOGIN_CAPTCHA_LOCKOUT),
-          ),
-        )
+      container.bind<LockRepositoryInterface>(TYPES.Auth_LockRepository).toConstantValue(
+        new TypeORMLockRepository(
+          container.get(TYPES.Auth_CacheEntryRepository),
+          container.get(TYPES.Auth_Timer),
+          // Standard Red Notes: isUserLocked compares the CAPTCHA-tier counter,
+          // so the threshold it takes is MAX_CAPTCHA_LOGIN_ATTEMPTS. It was
+          // wired to MAX_LOGIN_ATTEMPTS, leaving MAX_CAPTCHA_LOGIN_ATTEMPTS
+          // bound but never read — a setting an operator could change with no
+          // effect whatsoever. Both default to 6, so stock behaviour is
+          // unchanged; the difference is that the knob now does what it says.
+          container.get(TYPES.Auth_MAX_CAPTCHA_LOGIN_ATTEMPTS),
+          container.get(TYPES.Auth_FAILED_LOGIN_LOCKOUT),
+          container.get(TYPES.Auth_FAILED_LOGIN_CAPTCHA_LOCKOUT),
+        ),
+      )
       container
         .bind<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository)
         .toConstantValue(
@@ -1585,16 +1618,16 @@ export class ContainerConfigLoader {
       container
         .bind<ProofOfWorkChallengeRepositoryInterface>(TYPES.Auth_ProofOfWorkChallengeRepository)
         .to(RedisProofOfWorkChallengeRepository)
-      container
-        .bind<LockRepositoryInterface>(TYPES.Auth_LockRepository)
-        .toConstantValue(
-          new RedisLockRepository(
-            container.get<Redis>(TYPES.Auth_Redis),
-            container.get<number>(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
-            container.get<number>(TYPES.Auth_FAILED_LOGIN_LOCKOUT),
-            container.get<number>(TYPES.Auth_FAILED_LOGIN_CAPTCHA_LOCKOUT),
-          ),
-        )
+      container.bind<LockRepositoryInterface>(TYPES.Auth_LockRepository).toConstantValue(
+        new RedisLockRepository(
+          container.get<Redis>(TYPES.Auth_Redis),
+          // See the TypeORM binding above: isUserLocked compares the CAPTCHA
+          // tier, so this is MAX_CAPTCHA_LOGIN_ATTEMPTS. Same default (6).
+          container.get<number>(TYPES.Auth_MAX_CAPTCHA_LOGIN_ATTEMPTS),
+          container.get<number>(TYPES.Auth_FAILED_LOGIN_LOCKOUT),
+          container.get<number>(TYPES.Auth_FAILED_LOGIN_CAPTCHA_LOCKOUT),
+        ),
+      )
       container.bind<MfaSecretRepositoryInterface>(TYPES.Auth_MfaSecretRepository).to(RedisMfaSecretRepository)
       container
         .bind<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository)
@@ -1969,6 +2002,23 @@ export class ContainerConfigLoader {
           env.get('COOKIE_DOMAIN', true) ?? '',
           env.get('COOKIE_SECURE', true) ? env.get('COOKIE_SECURE', true) === 'true' : true,
           env.get('COOKIE_PARTITIONED', true) ? env.get('COOKIE_PARTITIONED', true) === 'true' : true,
+        ),
+      )
+
+    // Standard Red Notes: the shared failed-login lockout decision. Bound before
+    // LockMiddleware, which injects it, and also handed to the sign-in controller
+    // so the DirectCall topology (no Express middleware) enforces the same rules.
+    container
+      .bind<LoginLockGuard>(TYPES.Auth_LoginLockGuard)
+      .toConstantValue(
+        new LoginLockGuard(
+          container.get(TYPES.Auth_UserRepository),
+          container.get(TYPES.Auth_LockRepository),
+          container.get(TYPES.Auth_SessionRepository),
+          container.get<number>(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
+          container.get<number>(TYPES.Auth_LOCKOUT_PROGRESSIVE_DELAY_CAP_SECONDS),
+          container.get<boolean>(TYPES.Auth_LOCKOUT_TRUSTED_SOURCE_EXEMPTION),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
 
@@ -3573,37 +3623,40 @@ export class ContainerConfigLoader {
         )
     }
 
-    container
-      .bind<BaseAuthController>(TYPES.Auth_BaseAuthController)
-      .toConstantValue(
-        new BaseAuthController(
-          container.get<VerifyMFA>(TYPES.Auth_VerifyMFA),
-          container.get<SignIn>(TYPES.Auth_SignIn),
-          container.get<GetUserKeyParams>(TYPES.Auth_GetUserKeyParams),
-          container.get<ClearLoginAttempts>(TYPES.Auth_ClearLoginAttempts),
-          container.get<IncreaseLoginAttempts>(TYPES.Auth_IncreaseLoginAttempts),
-          container.get<winston.Logger>(TYPES.Auth_Logger),
-          container.get<AuthController>(TYPES.Auth_AuthController),
-          container.get<Register>(TYPES.Auth_Register),
-          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
-          container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
-          container.get<SessionServiceInterface>(TYPES.Auth_SessionService),
-          container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
-          container.get<CookieFactoryInterface>(TYPES.Auth_CookieFactory),
-          container.get<SignInWithRecoveryCodes>(TYPES.Auth_SignInWithRecoveryCodes),
-          container.get<DeleteSessionByToken>(TYPES.Auth_DeleteSessionByToken),
-          container.get<string>(TYPES.Auth_CAPTCHA_UI_URL),
-          container.get<VerifyAppPassword>(TYPES.Auth_VerifyAppPassword),
-          container.get<VerifyTrustedDevice>(TYPES.Auth_VerifyTrustedDevice),
-          container.get<CreatePendingMfaApproval>(TYPES.Auth_CreatePendingMfaApproval),
-          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate),
-          container.get<VerifyEmailConfirmation>(TYPES.Auth_VerifyEmailConfirmation),
-          container.get<ResendEmailConfirmation>(TYPES.Auth_ResendEmailConfirmation),
-          container.get<GetAccountRecoveryEscrow>(TYPES.Auth_GetAccountRecoveryEscrow),
-          container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
-        ),
-      )
+    container.bind<BaseAuthController>(TYPES.Auth_BaseAuthController).toConstantValue(
+      new BaseAuthController(
+        container.get<VerifyMFA>(TYPES.Auth_VerifyMFA),
+        container.get<SignIn>(TYPES.Auth_SignIn),
+        container.get<GetUserKeyParams>(TYPES.Auth_GetUserKeyParams),
+        container.get<ClearLoginAttempts>(TYPES.Auth_ClearLoginAttempts),
+        container.get<IncreaseLoginAttempts>(TYPES.Auth_IncreaseLoginAttempts),
+        container.get<winston.Logger>(TYPES.Auth_Logger),
+        container.get<AuthController>(TYPES.Auth_AuthController),
+        container.get<Register>(TYPES.Auth_Register),
+        container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
+        container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+        container.get<SessionServiceInterface>(TYPES.Auth_SessionService),
+        container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
+        container.get<CookieFactoryInterface>(TYPES.Auth_CookieFactory),
+        container.get<SignInWithRecoveryCodes>(TYPES.Auth_SignInWithRecoveryCodes),
+        container.get<DeleteSessionByToken>(TYPES.Auth_DeleteSessionByToken),
+        container.get<string>(TYPES.Auth_CAPTCHA_UI_URL),
+        container.get<VerifyAppPassword>(TYPES.Auth_VerifyAppPassword),
+        container.get<VerifyTrustedDevice>(TYPES.Auth_VerifyTrustedDevice),
+        container.get<CreatePendingMfaApproval>(TYPES.Auth_CreatePendingMfaApproval),
+        container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+        container.get<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate),
+        container.get<VerifyEmailConfirmation>(TYPES.Auth_VerifyEmailConfirmation),
+        container.get<ResendEmailConfirmation>(TYPES.Auth_ResendEmailConfirmation),
+        container.get<GetAccountRecoveryEscrow>(TYPES.Auth_GetAccountRecoveryEscrow),
+        container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
+        // Standard Red Notes: THIS is the construction the DirectCall topology
+        // uses. Service.handleRequest invokes the registered method directly
+        // and runs no Express middleware, so without this argument failed-login
+        // lockout is not enforced at all on a single-container deployment.
+        container.get<LoginLockGuard>(TYPES.Auth_LoginLockGuard),
+      ),
+    )
 
     // Inversify Controllers
     if (isConfiguredForHomeServer) {

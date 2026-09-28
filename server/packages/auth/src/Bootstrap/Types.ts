@@ -125,6 +125,9 @@ const TYPES = {
   Auth_ApiGatewayOfflineAuthMiddleware: Symbol.for('Auth_ApiGatewayOfflineAuthMiddleware'),
   Auth_OfflineUserAuthMiddleware: Symbol.for('Auth_OfflineUserAuthMiddleware'),
   Auth_LockMiddleware: Symbol.for('Auth_LockMiddleware'),
+  // Standard Red Notes: the shared failed-login lockout decision, consulted by
+  // LockMiddleware (HTTP topology) AND the sign-in controller (DirectCall).
+  Auth_LoginLockGuard: Symbol.for('Auth_LoginLockGuard'),
   Auth_SessionMiddleware: Symbol.for('Auth_SessionMiddleware'),
   // Projectors
   Auth_SessionProjector: Symbol.for('Auth_SessionProjector'),
@@ -149,6 +152,9 @@ const TYPES = {
   Auth_MAX_LOGIN_ATTEMPTS: Symbol.for('Auth_MAX_LOGIN_ATTEMPTS'),
   Auth_MAX_CAPTCHA_LOGIN_ATTEMPTS: Symbol.for('Auth_MAX_CAPTCHA_LOGIN_ATTEMPTS'),
   Auth_FAILED_LOGIN_LOCKOUT: Symbol.for('Auth_FAILED_LOGIN_LOCKOUT'),
+  // Standard Red Notes: anti-denial-of-service knobs for failed-login lockout.
+  Auth_LOCKOUT_PROGRESSIVE_DELAY_CAP_SECONDS: Symbol.for('Auth_LOCKOUT_PROGRESSIVE_DELAY_CAP_SECONDS'),
+  Auth_LOCKOUT_TRUSTED_SOURCE_EXEMPTION: Symbol.for('Auth_LOCKOUT_TRUSTED_SOURCE_EXEMPTION'),
   Auth_FAILED_LOGIN_CAPTCHA_LOCKOUT: Symbol.for('Auth_FAILED_LOGIN_CAPTCHA_LOCKOUT'),
   Auth_PSEUDO_KEY_PARAMS_KEY: Symbol.for('Auth_PSEUDO_KEY_PARAMS_KEY'),
   Auth_REDIS_URL: Symbol.for('Auth_REDIS_URL'),

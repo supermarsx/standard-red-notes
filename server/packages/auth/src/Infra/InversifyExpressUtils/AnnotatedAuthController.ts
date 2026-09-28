@@ -4,6 +4,7 @@ import { controller, httpPost, results } from 'inversify-express-utils'
 import TYPES from '../../Bootstrap/Types'
 import { SignIn } from '../../Domain/UseCase/SignIn'
 import { ClearLoginAttempts } from '../../Domain/UseCase/ClearLoginAttempts'
+import { LoginLockGuard } from '../../Domain/User/LoginLockGuard'
 import { VerifyMFA } from '../../Domain/UseCase/VerifyMFA'
 import { IncreaseLoginAttempts } from '../../Domain/UseCase/IncreaseLoginAttempts'
 import { Logger } from 'winston'
@@ -55,6 +56,11 @@ export class AnnotatedAuthController extends BaseAuthController {
     @inject(TYPES.Auth_VerifyEmailConfirmation) override verifyEmailConfirmationUseCase: VerifyEmailConfirmation,
     @inject(TYPES.Auth_ResendEmailConfirmation) override resendEmailConfirmationUseCase: ResendEmailConfirmation,
     @inject(TYPES.Auth_GetAccountRecoveryEscrow) override getAccountRecoveryEscrow: GetAccountRecoveryEscrow,
+    // Standard Red Notes: LockMiddleware already guards these routes on this
+    // topology and marks response.locals so the controller does not evaluate
+    // twice. Passed anyway so the enforcement does not silently disappear if the
+    // middleware is ever detached from a route.
+    @inject(TYPES.Auth_LoginLockGuard) override loginLockGuard: LoginLockGuard,
   ) {
     super(
       verifyMFA,
@@ -81,6 +87,8 @@ export class AnnotatedAuthController extends BaseAuthController {
       verifyEmailConfirmationUseCase,
       resendEmailConfirmationUseCase,
       getAccountRecoveryEscrow,
+      undefined,
+      loginLockGuard,
     )
   }
 

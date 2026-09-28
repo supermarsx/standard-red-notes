@@ -1,5 +1,8 @@
 import 'reflect-metadata'
 
+import { readFileSync } from 'fs'
+import { join } from 'path'
+
 import { Result } from '@standardnotes/domain-core'
 import { Request, Response } from 'express'
 import { Logger } from 'winston'
@@ -8,6 +11,7 @@ import { ProofOfWorkGate } from '../../../Domain/ProofOfWork/ProofOfWorkGate'
 import { ClearLoginAttempts } from '../../../Domain/UseCase/ClearLoginAttempts'
 import { IncreaseLoginAttempts } from '../../../Domain/UseCase/IncreaseLoginAttempts'
 import { SignIn } from '../../../Domain/UseCase/SignIn'
+import { SignInWithRecoveryCodes } from '../../../Domain/UseCase/SignInWithRecoveryCodes/SignInWithRecoveryCodes'
 import { BaseAuthController } from './BaseAuthController'
 
 /**
@@ -24,6 +28,7 @@ import { BaseAuthController } from './BaseAuthController'
  */
 describe('BaseAuthController captcha-required header', () => {
   let signInUseCase: SignIn
+  let signInWithRecoveryCodes: SignInWithRecoveryCodes
   let increaseLoginAttempts: IncreaseLoginAttempts
   let clearLoginAttempts: ClearLoginAttempts
   let proofOfWorkGate: ProofOfWorkGate
@@ -62,7 +67,7 @@ describe('BaseAuthController captcha-required header', () => {
       {} as never,
       {} as never,
       {} as never,
-      {} as never,
+      signInWithRecoveryCodes,
       {} as never,
       captchaUIUrl,
       {} as never,
@@ -89,6 +94,19 @@ describe('BaseAuthController captcha-required header', () => {
       headers: {},
     }) as unknown as Request
 
+  const recoveryRequest = () =>
+    ({
+      body: {
+        username: 'person@example.com',
+        recovery_codes: 'aaaa bbbb cccc',
+        code_verifier: 'a-verifier-long-enough-to-pass-the-presence-check',
+        api_version: '20200115',
+      },
+      headers: {},
+      path: '/recovery/login',
+      originalUrl: '/auth/recovery/login',
+    }) as unknown as Request
+
   // jest.config sets resetMocks: true globally, so every implementation has to
   // be (re)established here rather than at declaration.
   beforeEach(() => {
@@ -105,6 +123,10 @@ describe('BaseAuthController captcha-required header', () => {
     clearLoginAttempts = {
       execute: jest.fn().mockResolvedValue(Result.ok()),
     } as unknown as jest.Mocked<ClearLoginAttempts>
+
+    signInWithRecoveryCodes = {
+      execute: jest.fn().mockResolvedValue(Result.fail('Invalid recovery codes')),
+    } as unknown as jest.Mocked<SignInWithRecoveryCodes>
 
     proofOfWorkGate = {
       enforceSignInParams: jest.fn().mockResolvedValue({ satisfied: true }),
@@ -159,5 +181,52 @@ describe('BaseAuthController captcha-required header', () => {
 
     expect(result.statusCode).toEqual(401)
     expect(headers['x-captcha-required']).toBeUndefined()
+  })
+
+  /**
+   * The recovery route advertises the same challenge from its own call site, with
+   * differently-named locals. The first fix converted only the sign-in site, and
+   * the unit tests stayed green because none of them drove recoveryLogin — the
+   * live probe found it. Hence both a behavioural test and the source guard below.
+   */
+  it('should answer the recovery route without 500-ing when no captcha UI is configured', async () => {
+    const { response, headers } = createResponse()
+
+    const result = await createController('').recoveryLogin(recoveryRequest(), response)
+
+    expect(result.statusCode).not.toEqual(500)
+    expect(headers['x-captcha-required']).toBeUndefined()
+  })
+
+  it('should still advertise the challenge on the recovery route when one IS configured', async () => {
+    const { response, headers } = createResponse()
+
+    await createController('https://captcha.example.com').recoveryLogin(recoveryRequest(), response)
+
+    expect(headers['x-captcha-required']).toEqual('https://captcha.example.com')
+  })
+
+  /**
+   * DRIFT GUARD. Two call sites advertise this header and a third could be added.
+   * Every one of them must go through setCaptchaRequiredHeader, which is the only
+   * place allowed to touch response.setHeader for it — a raw call anywhere else
+   * reintroduces the 500 on every deployment with no captcha service, and no
+   * behavioural test will catch it until someone exercises that exact path.
+   */
+  it('should route every captcha-header write through the single guarded helper', () => {
+    const source = readFileSync(join(__dirname, 'BaseAuthController.ts'), 'utf8')
+    // Strip comments first: the helper's own doc quotes the broken call verbatim,
+    // and prose about the bug must not be mistaken for the bug.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+
+    const rawWrites = code.match(/response\.setHeader\(\s*'x-captcha-required'/g) ?? []
+    expect(rawWrites).toHaveLength(1)
+
+    // ...and that one write is the helper's own, which guards the value first.
+    const helper = code.slice(code.indexOf('protected setCaptchaRequiredHeader'))
+    expect(helper).toContain("response.setHeader('x-captcha-required'")
+    expect(helper.slice(0, helper.indexOf("response.setHeader('x-captcha-required'"))).toContain(
+      "this.captchaUIUrl.trim() === ''",
+    )
   })
 })
