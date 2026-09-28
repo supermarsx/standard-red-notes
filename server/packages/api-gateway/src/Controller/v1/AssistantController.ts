@@ -19,6 +19,7 @@ import {
   safeSubscriptionBaseUrl,
 } from '../../Service/Assistant/providers/openaiAuth'
 import { ChatMessage, Provider, ProviderEvent, ToolDescriptor } from '../../Service/Assistant/providers/types'
+import { fetchProviderCredits } from '../../Service/Assistant/providers/credits'
 import {
   ASSISTANT_PROFILE_LIMITS,
   effectiveBackendProfiles,
@@ -428,6 +429,58 @@ export class AssistantController extends BaseHttpController {
 
     const models = await listProviderModels(provider, providerConfig)
     response.json({ provider, models })
+  }
+
+  /**
+   * Standard Red Notes: remaining CREDIT / BALANCE for one profile's provider.
+   *
+   * ADMIN-GATED. The key is server-held, so an unprivileged caller must not be
+   * able to use this to confirm that a configured key is valid — the same reason
+   * the subscription routes are admin-only.
+   *
+   * The reply is the normalized CreditsResult and nothing else: no key, no raw
+   * upstream body. Only two providers publish a balance an inference key can
+   * read, so `unsupported` is the ordinary answer rather than an error, and the
+   * lookup never throws or blocks (bounded timeout, typed failure reasons).
+   */
+  @httpGet('/credits', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async credits(request: Request, response: Response): Promise<void> {
+    this.setPrivateAuthenticatedResponseHeaders(response)
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (!this.serverSettingsResolver) {
+      response.status(503).json({ error: { message: 'Assistant profile configuration is unavailable.' } })
+      return
+    }
+
+    const requestedProfileId = typeof request.query.profileId === 'string' ? request.query.profileId.trim() : ''
+    if (!requestedProfileId) {
+      response.status(400).json({ error: { message: 'A profileId is required.' } })
+      return
+    }
+
+    let profile
+    try {
+      profile = await this.serverSettingsResolver.resolveActiveProfile(requestedProfileId)
+    } catch {
+      profile = undefined
+    }
+    if (!profile || profile.id !== requestedProfileId) {
+      response.status(400).json({ error: { message: 'Requested profile is not configured on this server.' } })
+      return
+    }
+
+    // resolveActiveProfile has already merged any referenced backend profile, so
+    // `apiKey` is the effective credential wherever the admin actually stored it.
+    response.json(
+      await fetchProviderCredits({
+        kind: profile.provider,
+        baseUrl: profile.baseUrl,
+        apiKey: profile.apiKey,
+      }),
+    )
   }
 
   @httpGet('/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)

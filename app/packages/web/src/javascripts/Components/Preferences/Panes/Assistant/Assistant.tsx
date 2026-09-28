@@ -25,6 +25,14 @@ import {
 import AgentRuntimeSettings from '@/Components/Assistant/AgentRuntimeSettings'
 import NarrationSettings from '@/Components/Narration/NarrationSettings'
 import SttModelSettings from '@/Components/AudioRecorder/SttModelSettings'
+import {
+  CreditsProviderKind,
+  CreditsResult,
+  creditsProviderLabel,
+  describeCreditsResult,
+  fetchDirectProviderCredits,
+  supportsCreditsLookup,
+} from '@/Assistant/providerCredits'
 import { loadDictationSettings, saveDictationSettings, DictationSettings } from '@/Assistant/dictationSettings'
 import { getSttAvailability, getSpeechRecognitionCtor } from '@/Assistant/transcription'
 import { loadContextualSearchSettings, saveContextualSearchSettings } from '@/Assistant/contextualSearchSettings'
@@ -455,6 +463,16 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const [baseURLError, setBaseURLError] = useState<string | null>(null)
   const [fetchingModels, setFetchingModels] = useState(false)
 
+  // Direct-mode remaining credit. On demand only — no timer, no fetch at
+  // startup, none when this pane opens.
+  const [directCredits, setDirectCredits] = useState<CreditsResult | null>(null)
+  const [checkingCredits, setCheckingCredits] = useState(false)
+  // Subscription mode targets the Codex backend, which publishes no balance.
+  const directCreditsKind: CreditsProviderKind =
+    authMode === 'subscription' ? 'codex-subscription' : 'openai-compatible'
+  const directCreditsProvider = creditsProviderLabel(directCreditsKind, baseURL)
+  const directCreditsSupported = supportsCreditsLookup(directCreditsKind, baseURL)
+
   const handleConnectionModeChange = useCallback(
     (value: ConnectionMode) => {
       setConnectionMode(value)
@@ -653,6 +671,27 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       setFetchingModels(false)
     }
   }, [baseURL, apiKey, authMode, subscriptionToken])
+
+  /**
+   * Asks the configured endpoint for the remaining credit on this browser's own
+   * key. The key never leaves this browser — it is the same credential already
+   * sent to the same host on every assistant turn. Never throws: a refusal, a
+   * CORS block or a timeout all land in a typed, specific rendered state.
+   */
+  const handleCheckCredits = useCallback(async () => {
+    setCheckingCredits(true)
+    try {
+      setDirectCredits(
+        await fetchDirectProviderCredits({
+          kind: directCreditsKind,
+          baseUrl: baseURL,
+          apiKey: apiKey,
+        }),
+      )
+    } finally {
+      setCheckingCredits(false)
+    }
+  }, [directCreditsKind, baseURL, apiKey])
 
   // Dictation / speech-to-text settings (device-local; persisted in localStorage).
   // dictationEnabled is DEFAULT OFF — it gates the editor mic toggle.
@@ -986,6 +1025,41 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                   ))}
                 </select>
               )}
+
+              <HorizontalSeparator classes="my-4" />
+
+              {/*
+                Remaining provider credit. Direct mode already sends this key to
+                this endpoint on every turn, so asking the same host for a balance
+                exposes nothing new and never involves the server. Shown for every
+                endpoint, so the majority that publish nothing read as deliberate.
+              */}
+              <Subtitle>Remaining credit</Subtitle>
+              <Text>
+                Only a few providers publish a balance an API key can read. Checked only when you ask — never
+                automatically.
+              </Text>
+              <div className="mt-2 flex items-center gap-2">
+                {directCreditsSupported && (
+                  <Button
+                    label={checkingCredits ? 'Checking…' : 'Check credits'}
+                    onClick={() => void handleCheckCredits()}
+                    disabled={checkingCredits}
+                  />
+                )}
+                {/* Text forwards only children/className, so the test hook lives on a wrapper. */}
+                <div data-test-id="direct-credits-status">
+                  <Text className="text-passive-1 text-xs">
+                    {!directCreditsSupported
+                      ? describeCreditsResult({ status: 'unsupported', provider: directCreditsProvider })
+                      : checkingCredits
+                        ? `Checking ${directCreditsProvider}…`
+                        : directCredits
+                          ? describeCreditsResult(directCredits)
+                          : 'Not checked yet.'}
+                  </Text>
+                </div>
+              </div>
             </PreferencesSegment>
           </PreferencesGroup>
         )}

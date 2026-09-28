@@ -21,6 +21,14 @@ import {
 } from './aiProfiles'
 import { AdminBackendProfileView } from './adminHelpers'
 import { backendOptionLabel } from './aiBackendProfiles'
+import {
+  asCreditsResult,
+  CreditsProviderKind,
+  CreditsResult,
+  creditsProviderLabel,
+  describeCreditsResult,
+  supportsCreditsLookup,
+} from '@/Assistant/providerCredits'
 
 type Props = {
   application: WebApplication
@@ -58,6 +66,11 @@ const AiProfilesSection: FunctionComponent<Props> = ({
   const [defaultId, setDefaultId] = useState<string | null>(defaultProfileId)
   const [dirty, setDirty] = useState(false)
   const [savingModelsFor, setSavingModelsFor] = useState<string | null>(null)
+  // Remaining-credit lookups, keyed by profile id. On demand only: never on a
+  // timer, never at startup, and not even when the pane opens — a provider being
+  // slow or unreachable must not delay this pane.
+  const [creditsByProfile, setCreditsByProfile] = useState<Record<string, CreditsResult>>({})
+  const [checkingCreditsFor, setCheckingCreditsFor] = useState<string | null>(null)
   const migrationNeeded = rows.some((row) => row.legacyInlineCredentialIgnored)
 
   // Re-sync from the server view whenever it actually changes (after a save /
@@ -119,6 +132,39 @@ const AiProfilesSection: FunctionComponent<Props> = ({
     [application, savedIds, mutateRow],
   )
 
+  /**
+   * Reads the remaining credit for one saved profile from the admin-gated
+   * server endpoint. The key stays server-held; only the normalized result
+   * comes back. Never throws — every outcome becomes a rendered state.
+   */
+  const checkCredits = useCallback(
+    async (row: ProfileRow, provider: string) => {
+      setCheckingCreditsFor(row.id)
+      try {
+        const { ok, status, data } = await application.serverGetJsonRequest<unknown>(
+          `/v1/assistant/credits?profileId=${encodeURIComponent(row.id)}`,
+        )
+        const result = ok ? asCreditsResult(data) : null
+        setCreditsByProfile((current) => ({
+          ...current,
+          [row.id]: result ?? {
+            status: 'unavailable',
+            provider,
+            reason: status === 403 ? 'unauthorized' : 'unreadable',
+          },
+        }))
+      } catch {
+        setCreditsByProfile((current) => ({
+          ...current,
+          [row.id]: { status: 'unavailable', provider, reason: 'network' },
+        }))
+      } finally {
+        setCheckingCreditsFor(null)
+      }
+    },
+    [application],
+  )
+
   const handleSave = useCallback(async () => {
     const validation = validateProfileRows(rows, defaultId, backendProfiles)
     if (!validation.ok) {
@@ -165,6 +211,15 @@ const AiProfilesSection: FunctionComponent<Props> = ({
         const selectedBackend = backendProfiles.find((backend) => backend.id === row.backendProfileId)
         const hasEffectiveModel = row.model.trim() !== '' || Boolean(selectedBackend?.model?.trim())
         const usesBackend = row.backendProfileId !== ''
+        // A referenced backend owns the provider and base URL, so the credit
+        // capability follows the backend rather than the profile's own fields.
+        const creditsKind: CreditsProviderKind = usesBackend
+          ? ((selectedBackend?.provider ?? row.provider) as CreditsProviderKind)
+          : row.provider
+        const creditsBaseUrl = usesBackend ? (selectedBackend?.baseUrl ?? '') : row.baseUrl
+        const creditsProvider = creditsProviderLabel(creditsKind, creditsBaseUrl)
+        const creditsSupported = supportsCreditsLookup(creditsKind, creditsBaseUrl)
+        const creditsResult = creditsByProfile[row.id]
         return (
           <div key={row.id} className="border-border mt-3 rounded border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -342,6 +397,39 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                   </div>
                 </div>
               )}
+
+              {/*
+                Remaining provider credit. Rendered for every profile — including
+                the majority whose provider publishes nothing — so that the
+                absence of a button reads as deliberate and names the provider,
+                rather than looking like something silently broke.
+              */}
+              <div>
+                <label className="text-sm font-semibold">Remaining credit</label>
+                <div className="mt-1 flex items-center gap-2">
+                  {creditsSupported && (
+                    <Button
+                      label={checkingCreditsFor === row.id ? '…' : 'Check credits'}
+                      onClick={() => void checkCredits(row, creditsProvider)}
+                      disabled={busy || !isSaved || checkingCreditsFor === row.id}
+                    />
+                  )}
+                  {/* Text forwards only children/className, so the test hook lives on a wrapper. */}
+                  <div data-test-id={`credits-status-${row.id}`}>
+                    <Text className="text-passive-1 text-xs">
+                      {!creditsSupported
+                        ? describeCreditsResult({ status: 'unsupported', provider: creditsProvider })
+                        : !isSaved
+                          ? 'Save the profile to check its remaining credit.'
+                          : checkingCreditsFor === row.id
+                            ? `Checking ${creditsProvider}…`
+                            : creditsResult
+                              ? describeCreditsResult(creditsResult)
+                              : 'Not checked yet.'}
+                    </Text>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <details className="border-border bg-contrast mt-3 rounded border px-3 py-2">
