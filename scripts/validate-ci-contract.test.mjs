@@ -908,6 +908,60 @@ test("the gRPC phase must follow hardening and precede publication", () => {
   );
 });
 
+test("the gRPC browser sign-in cannot be silently disarmed", () => {
+  // `validateSession` runs on EVERY authenticated request and, over gRPC, has no
+  // HTTP fallback — yet every other browser step in the job runs under the
+  // default HTTP proxies. This drill is the only one that signs in through the
+  // real client while the switch is on, so each way of neutering it has to fail.
+  for (const [current, replacement, expected] of [
+    [
+      "tests/grpc-auth-session.spec.ts",
+      "tests/app-opens.spec.ts",
+      /gRPC-phase browser sign-in drill exactly 1 times, found 0/,
+    ],
+    [
+      "--report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0",
+      "--report e2e/artifacts/playwright-grpc-auth.json --min-expected 0 --max-skipped 9",
+      /container-smoke zero-skip gRPC sign-in report assertion/,
+    ],
+    [
+      "grep -cx 'SERVICE_PROXY_TYPE=grpc'",
+      "grep -c 'SERVICE_PROXY_TYPE'",
+      /live assertion that the gateway really took the gRPC branch/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.ok(content.includes(current));
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("the gRPC browser sign-in cannot run outside the gRPC phase", () => {
+  // Hoisted above the recreate it would sign in against the default HTTP
+  // proxies and prove nothing, while every presence rule stayed green.
+  const signIn = `      - name: Verify a browser sign-in and note round trip under gRPC proxies
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-grpc-auth.json
+        run: npx playwright test tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json
+`;
+  const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+    assert.ok(content.includes(signIn));
+    return content
+      .replace(signIn, "")
+      .replace(
+        "      - name: Switch the stack to gRPC service proxies\n",
+        `${signIn}      - name: Switch the stack to gRPC service proxies\n`,
+      );
+  });
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /must assert the live gRPC proxy configuration, then sign in through the browser, then reject a skipped sign-in/,
+  );
+});
+
 test("the real-Redis collaboration tombstone suite cannot stop running", () => {
   // The suite is `describe.skipIf` behind SRN_COLLAB_REDIS_HOST, so removing
   // the env var does not fail anything: vitest reports a skip and the job stays
