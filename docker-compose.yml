@@ -150,9 +150,20 @@ x-server-env: &server-env
   API_GATEWAY_SQS_ACCESS_KEY_ID: ${SQS_ACCESS_KEY_ID:-floci}
   API_GATEWAY_SQS_SECRET_ACCESS_KEY: ${SQS_SECRET_ACCESS_KEY:-floci}
   # api-gateway <-> auth/syncing-server transport. Empty (the default) keeps the
-  # HTTP proxies; `grpc` switches every internal call to gRPC and is what binds
-  # the durable SYNC_ITEMS command port the worker WebSocket sync lane needs
-  # (the entrypoint supplies AUTH_SERVER_GRPC_URL / SYNCING_SERVER_GRPC_URL).
+  # HTTP proxies. `grpc` moves exactly TWO call paths, not every internal call:
+  # validateSession, which runs on every authenticated request and, over gRPC,
+  # retries three times on UNAVAILABLE and then throws with no HTTP fallback;
+  # and callSyncingServer for the single endpoint `items/sync` at api 20200115.
+  # The seven other paths -- auth, legacy auth, legacy syncing, revisions,
+  # email, websockets and payments -- stay on HTTP either way. See
+  # api-gateway/src/Service/gRPC/GRPCServiceProxy.ts.
+  # What it ALSO does, and what people actually notice: it binds the durable
+  # SYNC_ITEMS command port, so the gateway advertises the realtime sync lane
+  # and clients carry saves over the socket instead of HTTP. Single-container
+  # and self-hosted bind that port unconditionally and advertise the lane with
+  # no gRPC involved, so this setting is how the multi-container topology
+  # reaches behaviour those topologies already ship.
+  # (The entrypoint supplies AUTH_SERVER_GRPC_URL / SYNCING_SERVER_GRPC_URL.)
   # Only the api-gateway reads it, hence the prefix.
   API_GATEWAY_SERVICE_PROXY_TYPE: ${SERVICE_PROXY_TYPE:-}
   # Container-INTERNAL files service URL the gateway uses to advertise and
