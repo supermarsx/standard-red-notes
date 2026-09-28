@@ -1488,33 +1488,46 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       })
 
       /**
-       * A 401/498 here is a statement about THIS LANE's credential, not about
-       * the caller's session.
+       * DEFENCE IN DEPTH, NOT THE REPAIR. This degradation keeps a control-plane
+       * read working when the lane's credential is rejected; it does not make
+       * the lane able to authenticate, and a lane that always lands here is
+       * broken and must be fixed where it is broken.
        *
-       * The socket replays the `Authorization` header captured when it was
-       * TICKETED: `SyncWebSocketController.ticket` stores the raw header in the
-       * ticket identity and `LoopbackSyncApiRpcAdapter` sets it verbatim on the
-       * loopback request. The worker is keyed on an opaque scope derived from
-       * the session UUID, which `deriveOpaqueSyncSessionScope` deliberately
-       * keeps "stable when only token secret material rotates" — so an
-       * access-token rotation does NOT recycle the socket, and from then on the
-       * lane presents a dead access token for the life of that connection: 498
-       * `expired-access-token` while auth's cooldown window holds (120s by
-       * default), then a flat 401 `invalid-auth` once it lapses. Every ordinary
-       * HTTP request reads the live token per call and keeps working, which is
-       * why note syncing stayed healthy while every admin control-plane read
-       * answered 401.
+       * The known cause is that `SyncTicketIdentity` carries only an optional
+       * `authorization` string and no cookies. A cookie-based session has
+       * exactly one authentication route and it needs the request cookies, so
+       * the sync, files and API_RPC lanes — none of which carry them — cannot
+       * authenticate such a session at all, from the very first command. That
+       * fix lives in the ticket identity and its three callers, not here.
        *
-       * Degrade to HTTP, which retries with the current token. A caller who is
-       * genuinely unauthenticated simply gets the same status back from the
-       * HTTP leg, so this cannot mask a real auth failure.
+       * A header-based session degrades more slowly into the same place: the
+       * socket replays the `Authorization` header captured when it was
+       * TICKETED (`SyncWebSocketController.ticket` stores the raw header in the
+       * ticket identity; `LoopbackSyncApiRpcAdapter` sets it verbatim on the
+       * loopback request), while the worker is keyed on a scope that
+       * `deriveOpaqueSyncSessionScope` deliberately keeps "stable when only
+       * token secret material rotates". So a token rotation does not recycle
+       * the socket and the lane then presents a dead token for the life of that
+       * connection: 498 `expired-access-token` while auth's cooldown window
+       * holds (120 s by default), then a flat 401 `invalid-auth`. HTTP reads
+       * the live token per call and keeps working throughout, which is why note
+       * syncing stayed healthy while every admin control-plane read answered
+       * 401.
+       *
+       * Either way a 401/498 here is a statement about THIS LANE's credential,
+       * not about the caller's session, so retry over HTTP. A caller who is
+       * genuinely unauthenticated gets the same status back from the HTTP leg,
+       * so this cannot mask a real auth failure — and no other status is
+       * retried, so a healthy lane is never second-guessed.
        *
        * GET only, and that is not a limitation in practice: a non-GET never
        * reaches this lane from here at all, because
        * `normalizeAuthenticatedRpcRequest` refuses one without an idempotency
        * key — which this helper never sets — and that refusal is already
-       * `safeToFallback`. A GET cannot have applied anything, so there is
-       * nothing a replay could duplicate.
+       * `safeToFallback`. Retrying is safe on top of that: the gateway's
+       * authentication middleware answers 401 without calling `next()`, so no
+       * handler ran and nothing was applied. That ordering is asserted by
+       * `AdminEmailDeliveryController.endpoint.spec.ts`, not assumed here.
        */
       if (method === 'GET' && (response.status === 401 || response.status === 498)) {
         return undefined

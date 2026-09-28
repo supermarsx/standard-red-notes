@@ -456,4 +456,68 @@ describe('admin email delivery HTTP boundary', () => {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
     }
   })
+
+  /**
+   * A client may safely retry a request this boundary answered 401 over another
+   * transport, because the authentication middleware answers WITHOUT calling
+   * next() — so no handler ran and nothing was applied.
+   *
+   * That is load-bearing, not incidental: `WebApplication.controlPlaneRpc`
+   * degrades a control-plane GET to HTTP when the websocket lane answers 401,
+   * and the justification for retrying at all is exactly this ordering. It is
+   * asserted here rather than left as a comment so that moving the middleware
+   * after the handlers, or making it fall through on failure, breaks a test
+   * instead of quietly making that retry unsafe.
+   *
+   * Every route is covered, mutations included — the argument has to hold for
+   * the whole boundary, not just the one route the client happens to degrade
+   * today.
+   */
+  it('runs no handler at all when the authentication middleware answers 401, so a retry cannot duplicate work', async () => {
+    const rejectingAuthentication: RequestHandler = (_request, response) => {
+      response.status(401).send({ error: { message: 'Invalid login credentials.' } })
+    }
+
+    const app = express()
+    app.use(express.json({ limit: '64kb' }))
+    app.use(
+      '/v1/admin/email-delivery',
+      createAdminEmailDeliveryRouter(service, {
+        authenticationMiddleware: rejectingAuthentication,
+        mountTestRoute: true,
+      }),
+    )
+    const server = await new Promise<Server>((resolve) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening))
+    })
+    const address = server.address() as AddressInfo
+    const base = `http://127.0.0.1:${address.port}/v1/admin/email-delivery`
+
+    try {
+      const routes: { path: string; method: string; body?: string }[] = [
+        { path: '/relays', method: 'GET' },
+        { path: '/relays', method: 'PUT', body: JSON.stringify({ relays: [] }) },
+        { path: '/test', method: 'POST', body: JSON.stringify({ relayId: 'smtp-primary' }) },
+        { path: '/queue', method: 'GET' },
+        { path: '/logs', method: 'GET' },
+        { path: '/queue/job-1/retry', method: 'POST', body: '{}' },
+        { path: '/queue/job-1', method: 'DELETE' },
+      ]
+
+      for (const route of routes) {
+        const response = await fetch(`${base}${route.path}`, {
+          method: route.method,
+          ...(route.body === undefined ? {} : { body: route.body, headers: { 'content-type': 'application/json' } }),
+        })
+        expect([route.method, route.path, response.status]).toEqual([route.method, route.path, 401])
+      }
+
+      for (const [name, method] of Object.entries(service)) {
+        expect([name, (method as jest.Mock).mock.calls.length]).toEqual([name, 0])
+      }
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    }
+  })
 })

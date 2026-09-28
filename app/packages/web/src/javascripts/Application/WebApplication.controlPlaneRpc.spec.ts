@@ -191,6 +191,30 @@ describe('WebApplication control-plane websocket RPC lane', () => {
     })
   })
 
+  /**
+   * The net has to stay narrow. A lane that authenticates correctly answers
+   * every other status on its own authority, and quietly re-asking over HTTP
+   * would hide a disagreement between the two transports rather than report it.
+   */
+  it.each([403, 404, 409, 500, 503])('answers %i from the socket without a second HTTP attempt', async (status) => {
+    const transport: TransportMock = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({
+        status,
+        headers: {},
+        body: { error: { message: 'from the lane' } },
+        transport: 'websocket',
+      }),
+    }
+    globalThis.fetch = jest.fn()
+
+    await expect(get(applicationWith(transport), '/v1/admin/email-delivery/relays')).resolves.toMatchObject({
+      status,
+      ok: false,
+      data: { error: { message: 'from the lane' } },
+    })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
   it('never replays a mutation over HTTP on a 401, however the lane answered', async () => {
     const transport: TransportMock = {
       openAuthenticatedRpcStream: jest.fn().mockResolvedValue({
