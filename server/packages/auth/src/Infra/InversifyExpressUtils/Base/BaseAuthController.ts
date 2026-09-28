@@ -82,6 +82,35 @@ export class BaseAuthController extends BaseHttpController {
   }
 
   /**
+   * Standard Red Notes: advertise the captcha challenge URL once the non-captcha
+   * failed-login tier is exhausted — but ONLY when one is actually configured.
+   *
+   * CAPTCHA_UI_URL is empty on every deployment that does not run a captcha
+   * service, which is the default for self-hosting. `env.get(..., true)` yields
+   * undefined there, so this used to call
+   * `response.setHeader('x-captcha-required', undefined)`, which Node rejects
+   * with ERR_HTTP_INVALID_HEADER_VALUE. The throw escaped the controller and the
+   * request became a 500.
+   *
+   * The practical effect was that failed sign-in attempts 6 through 12 — every
+   * attempt between the non-captcha threshold and the lockout — answered
+   * "500 Internal Server Error" instead of "401 invalid credentials", on the
+   * ordinary path where somebody simply mistyped their password a few times.
+   * Live-reproduced on a stock compose stack before this fix.
+   *
+   * Skipping the header when there is nothing to point at is also the honest
+   * signal: a client cannot solve a challenge that this deployment does not
+   * serve, so claiming one is required would be a dead end.
+   */
+  protected setCaptchaRequiredHeader(response: Response): void {
+    if (typeof this.captchaUIUrl !== 'string' || this.captchaUIUrl.trim() === '') {
+      return
+    }
+
+    response.setHeader('x-captcha-required', this.captchaUIUrl)
+  }
+
+  /**
    * Standard Red Notes: PUBLIC. Consumes an email-confirmation token from the
    * verification link. Returns 200 on success (including a friendly
    * already-confirmed), 400 with a clear message on invalid/expired/used.
@@ -345,7 +374,7 @@ export class BaseAuthController extends BaseHttpController {
       } else {
         const result = resultOrError.getValue()
         if (result.isNonCaptchaLimitReached) {
-          response.setHeader('x-captcha-required', this.captchaUIUrl)
+          this.setCaptchaRequiredHeader(response)
         }
       }
 
