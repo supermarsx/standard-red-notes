@@ -805,10 +805,22 @@ test("the runtime CSP rewrite cannot escape script-src and is a fixed point", ()
 
   try {
     writeFileSync(indexPath, read("app/packages/web/src/index.html"));
-    const original = read("app/docker/nginx.conf").replace(
-      "script-src-attr 'none';",
-      `script-src-attr 'unsafe-hashes' ${decoy};`,
+    // Swap the real script-src-attr for one carrying the decoy. Split/join rather
+    // than a bare .replace, and assert the fragment occurs EXACTLY once first: a
+    // single-occurrence .replace silently stops testing its own target the day the
+    // fragment appears twice, and this fragment is a directive that also gets
+    // discussed in the comments right above it.
+    const config = read("app/docker/nginx.conf");
+    const attrDirective = /script-src-attr '[^;"]*;/g;
+    const attrMatches = config.match(attrDirective) ?? [];
+    assert.equal(
+      attrMatches.length,
+      1,
+      `expected exactly one script-src-attr directive, found ${attrMatches.length}`,
     );
+    const original = config
+      .split(attrMatches[0])
+      .join(`script-src-attr 'unsafe-hashes' ${decoy};`);
     assert.ok(original.includes(decoy), "the decoy source must be installed");
     assert.match(original, parentScriptSrc, "the parent script-src must match");
     writeFileSync(configPath, original);
