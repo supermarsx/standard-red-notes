@@ -112,6 +112,17 @@ services:
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-Lax}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # MUST stay false while COOKIE_SECURE is false. Partitioned (CHIPS) is
+      # only valid on a Secure cookie, so over plain http the browser rejects
+      # the WHOLE Set-Cookie: nothing is stored, every later request arrives
+      # without the session cookie, and auth answers "No cookies provided for
+      # cookie-based session token." -> 401 on every authenticated call. The
+      # account registers, the client reports signed in, and no note ever
+      # reaches the server. auth defaults this to TRUE when unset, so the
+      # quickstart at the top of this file needs the explicit false below.
+      # Turn it on together with COOKIE_SECURE=true when embedding the app
+      # cross-site behind HTTPS.
+      COOKIE_PARTITIONED: ${COOKIE_PARTITIONED:-false}
       # Trust a reverse proxy on loopback/private nets (see docker-compose.yml).
       TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
 
