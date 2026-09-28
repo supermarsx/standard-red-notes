@@ -1,3 +1,4 @@
+import { admitToken, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
 import { describeDeployment, describeTransport, type TransportStatusInput } from './syncDiagnostics'
 
 /**
@@ -51,17 +52,10 @@ export type HealthReportInput = {
   generatedAt?: string
 }
 
-const NOT_REPORTED = 'not reported'
-const WITHHELD = 'withheld (unrecognised format)'
-
 /** Supervisord program / service-row names: lowercase, hyphenated, bounded. */
 const SERVICE_NAME = /^[a-z][a-z0-9-]{0,63}$/
 /** Negotiated socket operation names, e.g. SYNC_ITEMS. */
 const OPERATION_NAME = /^[A-Z][A-Z0-9_]{0,31}$/
-/** A version token: the shape `SRN_DEPLOY_VERSION` itself is validated against. */
-const VERSION_TOKEN = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
-/** A deployment revision: exactly what `app/Dockerfile` accepts, and nothing else. */
-const DEPLOY_REVISION = /^[0-9a-f]{40}$/
 
 const SERVICE_STATUSES = ['ok', 'degraded', 'down', 'unknown'] as const
 /** Containers the server may offer to restart. Anything else is not named. */
@@ -89,13 +83,6 @@ const presence = (value: unknown): string => {
     return value.trim().length > 0 ? 'set (value withheld)' : 'not set (built-in default)'
   }
   return 'unknown'
-}
-
-const admitToken = (value: unknown, pattern: RegExp): string => {
-  if (typeof value !== 'string') {
-    return NOT_REPORTED
-  }
-  return pattern.test(value) ? value : WITHHELD
 }
 
 const admitEnum = <T extends string>(value: unknown, allowed: readonly T[]): string => {

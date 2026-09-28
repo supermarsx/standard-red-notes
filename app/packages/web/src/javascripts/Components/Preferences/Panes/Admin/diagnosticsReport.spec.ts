@@ -209,4 +209,39 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     // reprinted. The scan above covers it; this pins the intent explicitly.
     expect(report).not.toContain('hunter2')
   })
+
+  /**
+   * The marker is served by whatever fronts the web bundle and used to reach the
+   * report through `sanitizeServerCopy` alone — a denylist, which by its own
+   * admission cannot catch a secret with no structure. Both of these leaked in
+   * practice: the first has no address shape to match at all, and the second was
+   * printed as `v1.2.3-build@[address withheld]`, host removed, prefix intact.
+   */
+  it('refuses a deployment marker that does not match the shape the Dockerfile validates', () => {
+    const report = buildDiagnosticsReport(
+      input({
+        deploymentMarker: {
+          revision: 'token-sk-live-abcdef0123456789',
+          version: 'v1.2.3-build@ci.internal.example.com',
+        },
+      }),
+    )
+
+    expect(report).not.toContain('token-sk-live-abcdef0123456789')
+    expect(report).not.toContain('v1.2.3-build')
+    expect(report).toContain('- Revision: withheld (unrecognised format)')
+    expect(report).toContain('- Version: withheld (unrecognised format)')
+  })
+
+  it('still prints a real revision, a real version and the unstamped sentinel', () => {
+    const real = 'ab3f90'.repeat(6) + 'cdef'
+
+    expect(buildDiagnosticsReport(input({ deploymentMarker: { revision: real, version: 'rel-1.2.3' } }))).toContain(
+      `- Revision: ${real}`,
+    )
+    expect(buildDiagnosticsReport(input({ deploymentMarker: { revision: real, version: 'rel-1.2.3' } }))).toContain(
+      '- Version: rel-1.2.3',
+    )
+    expect(buildDiagnosticsReport(input())).toContain('- Revision: unstamped')
+  })
 })

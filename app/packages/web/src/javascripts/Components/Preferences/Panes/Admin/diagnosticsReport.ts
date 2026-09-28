@@ -1,4 +1,5 @@
 import { buildEnvironmentGroups, describeTopology } from './diagnosticEnvironment'
+import { admitToken, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
 import {
   EFFORT_LABEL,
   remedyForClientGap,
@@ -120,8 +121,16 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
 
   lines.push('## Deployment')
   lines.push('')
-  lines.push(`- Revision: ${marker.revision}`)
-  lines.push(`- Version: ${marker.version}`)
+  // Admitted by SHAPE, not by the redactor `describeDeployment` applies. That
+  // redactor is a denylist and says itself it cannot catch an unstructured secret:
+  // a marker reading `token-sk-live-...` has no address shape and printed verbatim,
+  // and `v1.2.3-build@<host>` printed with the host removed but the prefix intact.
+  // The marker is served by whatever fronts the bundle, and this report is written
+  // to be pasted in public, so an unrecognised value is refused rather than repaired.
+  // `marker.revision` is already `unstamped` or `—` in those cases, which the
+  // patterns reject, so the sentinels are restored explicitly.
+  lines.push(`- Revision: ${marker.unstamped ? marker.revision : admitToken(marker.revision, DEPLOY_REVISION)}`)
+  lines.push(`- Version: ${marker.unstamped ? marker.version : admitToken(marker.version, VERSION_TOKEN)}`)
   lines.push(`- Stamped: ${marker.unstamped ? 'no' : 'yes'}`)
   if (marker.note) {
     lines.push(`- Note: ${marker.note}`)
