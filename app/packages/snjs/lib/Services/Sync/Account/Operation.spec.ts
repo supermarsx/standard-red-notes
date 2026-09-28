@@ -392,7 +392,12 @@ describe('AccountSyncOperation.madeProgress (t97 hot-loop fix)', () => {
     }
     const receiver = jest.fn(async () => undefined)
 
-    const operation = new AccountSyncOperation([{ uuid: 'stuck-item' }] as never, receiver as never, apiService as never, {})
+    const operation = new AccountSyncOperation(
+      [{ uuid: 'stuck-item' }] as never,
+      receiver as never,
+      apiService as never,
+      {},
+    )
 
     await operation.run()
 
@@ -437,7 +442,12 @@ describe('AccountSyncOperation.madeProgress (t97 hot-loop fix)', () => {
     }
     const receiver = jest.fn(async () => undefined)
 
-    const operation = new AccountSyncOperation([{ uuid: 'conflicted-item' }] as never, receiver as never, apiService as never, {})
+    const operation = new AccountSyncOperation(
+      [{ uuid: 'conflicted-item' }] as never,
+      receiver as never,
+      apiService as never,
+      {},
+    )
 
     await operation.run()
 
@@ -450,14 +460,21 @@ describe('AccountSyncOperation.madeProgress (t97 hot-loop fix)', () => {
         status: 200,
         data: {
           saved_items: [],
-          retrieved_items: [{ uuid: 'from-another-device', content: '004:...', content_type: 'Note', updated_at_timestamp: 1 }],
+          retrieved_items: [
+            { uuid: 'from-another-device', content: '004:...', content_type: 'Note', updated_at_timestamp: 1 },
+          ],
           conflicts: [],
         },
       }),
     }
     const receiver = jest.fn(async () => undefined)
 
-    const operation = new AccountSyncOperation([{ uuid: 'stuck-item' }] as never, receiver as never, apiService as never, {})
+    const operation = new AccountSyncOperation(
+      [{ uuid: 'stuck-item' }] as never,
+      receiver as never,
+      apiService as never,
+      {},
+    )
 
     await operation.run()
 
