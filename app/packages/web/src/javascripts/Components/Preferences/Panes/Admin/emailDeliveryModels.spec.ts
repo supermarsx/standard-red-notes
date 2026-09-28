@@ -226,4 +226,50 @@ describe('email delivery control-plane models', () => {
     )
     expect(controlPlaneError(409, 'Retry delivery')).toContain('currently leased')
   })
+
+  /**
+   * "Failed. Check the server logs for the redacted diagnostic." used to answer
+   * for every status this function did not name, so a rate limit, a stranded
+   * realtime credential and a genuine server fault all read as the same
+   * unactionable sentence — on a hosted deployment whose operator cannot
+   * conveniently read a container log.
+   */
+  it('separates not permitted, not accepted, rate limited, unreachable and genuinely broken', () => {
+    expect(controlPlaneError(403, 'Load relay profiles')).toMatch(/do not have permission/i)
+    expect(controlPlaneError(403, 'Load relay profiles')).toMatch(/admin role/i)
+
+    for (const status of [401, 498]) {
+      const message = controlPlaneError(status, 'Load relay profiles')
+      expect(message).toMatch(/was not accepted/i)
+      expect(message).toMatch(/reload the page/i)
+    }
+
+    expect(controlPlaneError(429, 'Send test email')).toMatch(/rate limited/i)
+    expect(controlPlaneError(501, 'Load delivery queue')).toMatch(/not available on this server build/i)
+    expect(controlPlaneError(0, 'Load delivery logs')).toMatch(/could not reach the server/i)
+
+    const brokenMessage = controlPlaneError(500, 'Load relay profiles')
+    expect(brokenMessage).toContain('500')
+    expect(brokenMessage).toMatch(/api-gateway container log/i)
+
+    expect(controlPlaneError(418, 'Load relay profiles')).toContain('418')
+  })
+
+  /**
+   * The surrounding copy promises credentials are write-only and that recipient
+   * addresses, subjects, bodies and raw provider responses are never returned.
+   * A status code is the only input here, so each branch may name a category
+   * and a remedy and nothing else.
+   */
+  it('names a category and a remedy without ever quoting an upstream payload', () => {
+    const actions = ['Load relay profiles', 'Save relay profiles', 'Send test email', 'Retry delivery']
+    for (const status of [0, 400, 401, 403, 404, 409, 429, 498, 500, 501, 502, 503, 418]) {
+      for (const action of actions) {
+        const message = controlPlaneError(status, action)
+        expect(message.length).toBeGreaterThan(0)
+        expect(message).not.toMatch(/@/)
+        expect(message).not.toMatch(/api[_ -]?key|password|secret|token|bearer/i)
+      }
+    }
+  })
 })

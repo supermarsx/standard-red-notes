@@ -621,12 +621,38 @@ export function decodeEmailTestResult(value: unknown): EmailTestResult | undefin
   }
 }
 
+/**
+ * Turn a control-plane HTTP status into something the operator can act on.
+ *
+ * Four different situations used to collapse into one sentence — "… failed.
+ * Check the server logs for the redacted diagnostic." — which is unusable on a
+ * hosted deployment whose operator cannot conveniently read a container log,
+ * and which reported "broken" for cases that are nothing of the sort. Not
+ * permitted, not accepted, rate limited and genuinely broken are separated
+ * here; "not available on this server" (404/501) and "configured / no eligible
+ * relay" are states the pane renders in their own right, not errors.
+ *
+ * The redaction contract is untouched. Every branch names a CATEGORY and a
+ * REMEDY and nothing else: a status code is the only input this function has,
+ * so no credential, recipient address, subject, message body or raw provider
+ * response can reach the returned string.
+ */
 export function controlPlaneError(status: number, action: string): string {
+  if (status === 0) {
+    return `${action} could not reach the server. Check the connection and try again.`
+  }
   if (status === 400) {
     return `${action} was rejected because one or more fields are invalid.`
   }
+  if (status === 401 || status === 498) {
+    // Not "you are signed out": ordinary syncing keeps working through this.
+    // The realtime control-plane lane pins the access token it was ticketed
+    // with, so a rotated session strands that lane while HTTP stays healthy.
+    // Reloading re-tickets it, which is the whole remedy.
+    return `${action} was refused because this session was not accepted. Reload the page to re-establish it, then try again.`
+  }
   if (status === 403) {
-    return `You do not have permission to ${action.toLowerCase()}.`
+    return `You do not have permission to ${action.toLowerCase()}. This control needs the admin role on this server.`
   }
   if (status === 404) {
     return `${action} could not find the requested delivery record.`
@@ -634,11 +660,20 @@ export function controlPlaneError(status: number, action: string): string {
   if (status === 409) {
     return `${action} conflicted with a delivery job that is currently leased or no longer eligible.`
   }
+  if (status === 429) {
+    return `${action} was rate limited by the server. Wait a moment and try again.`
+  }
+  if (status === 501) {
+    return 'Advanced email delivery is not available on this server build.'
+  }
   if (status === 502) {
     return `${action} failed at the provider boundary. Check the redacted delivery log.`
   }
   if (status === 503) {
     return 'The email delivery subsystem is unavailable on this server.'
   }
-  return `${action} failed. Check the server logs for the redacted diagnostic.`
+  if (status >= 500) {
+    return `${action} failed inside the server (status ${status}). Retry; if it persists, the redacted diagnostic is in the api-gateway container log.`
+  }
+  return `${action} failed with an unexpected server status (${status}).`
 }

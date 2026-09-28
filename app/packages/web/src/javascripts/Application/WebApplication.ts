@@ -1487,6 +1487,39 @@ export class WebApplication extends SNApplication implements WebApplicationInter
         signal,
       })
 
+      /**
+       * A 401/498 here is a statement about THIS LANE's credential, not about
+       * the caller's session.
+       *
+       * The socket replays the `Authorization` header captured when it was
+       * TICKETED: `SyncWebSocketController.ticket` stores the raw header in the
+       * ticket identity and `LoopbackSyncApiRpcAdapter` sets it verbatim on the
+       * loopback request. The worker is keyed on an opaque scope derived from
+       * the session UUID, which `deriveOpaqueSyncSessionScope` deliberately
+       * keeps "stable when only token secret material rotates" — so an
+       * access-token rotation does NOT recycle the socket, and from then on the
+       * lane presents a dead access token for the life of that connection: 498
+       * `expired-access-token` while auth's cooldown window holds (120s by
+       * default), then a flat 401 `invalid-auth` once it lapses. Every ordinary
+       * HTTP request reads the live token per call and keeps working, which is
+       * why note syncing stayed healthy while every admin control-plane read
+       * answered 401.
+       *
+       * Degrade to HTTP, which retries with the current token. A caller who is
+       * genuinely unauthenticated simply gets the same status back from the
+       * HTTP leg, so this cannot mask a real auth failure.
+       *
+       * GET only, and that is not a limitation in practice: a non-GET never
+       * reaches this lane from here at all, because
+       * `normalizeAuthenticatedRpcRequest` refuses one without an idempotency
+       * key — which this helper never sets — and that refusal is already
+       * `safeToFallback`. A GET cannot have applied anything, so there is
+       * nothing a replay could duplicate.
+       */
+      if (method === 'GET' && (response.status === 401 || response.status === 498)) {
+        return undefined
+      }
+
       return {
         status: response.status,
         ok: response.status >= 200 && response.status < 300,
