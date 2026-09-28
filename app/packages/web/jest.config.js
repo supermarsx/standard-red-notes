@@ -93,6 +93,10 @@ module.exports = {
     // the package root stays proxied since its index pulls in React components.
     '^@standardnotes/toast/src/(.*)$': '<rootDir>/../toast/src/$1',
     '@standardnotes/toast': 'identity-obj-proxy',
+    // Same arrangement for styles: SKAlert is a plain DOM class with no React in
+    // it, so a deep import resolves to the real source and is testable, while the
+    // package root stays proxied (its index pulls in stylesheets).
+    '^@standardnotes/styles/src/(.*)$': '<rootDir>/../styles/src/$1',
     '@standardnotes/styles': 'identity-obj-proxy',
     '@simplewebauthn/browser': 'identity-obj-proxy',
     '^@lexical/headless$': '<rootDir>/../../node_modules/@lexical/headless/dist/LexicalHeadless.js',
