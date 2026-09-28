@@ -34,14 +34,14 @@ export const EMBED_WIDGET_ID = 'w'
  * ancestor so the notice can fill it.
  */
 export const EMBED_BLOCKED_STYLE =
-  `#c{position:relative}` +
+  '#c{position:relative}' +
   `#${EMBED_WIDGET_ID}{height:100%;width:100%}` +
   `#${NOTICE_ID}{display:none}` +
   `#${EMBED_WIDGET_ID}:empty + #${NOTICE_ID}{` +
-  `display:flex;position:absolute;inset:0;box-sizing:border-box;` +
-  `align-items:center;justify-content:center;padding:12px;` +
-  `font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;` +
-  `color:#eadde0;background:#16090f;text-align:center}`
+  'display:flex;position:absolute;inset:0;box-sizing:border-box;' +
+  'align-items:center;justify-content:center;padding:12px;' +
+  'font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;' +
+  'color:#eadde0;background:#16090f;text-align:center}'
 
 /**
  * Escape text for an HTML text node. Callers pass only their own copy plus an
