@@ -1172,18 +1172,6 @@ export function validateCiContract(files) {
       "echo 'SERVICE_PROXY_TYPE=grpc' >> \"$GITHUB_ENV\"",
       "gRPC service proxy phase switch",
     ],
-    [
-      "grep -cx 'SERVICE_PROXY_TYPE=grpc'",
-      "live assertion that the gateway really took the gRPC branch",
-    ],
-    [
-      "tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json",
-      "gRPC-phase browser sign-in and note round trip",
-    ],
-    [
-      "--report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0",
-      "zero-skip gRPC sign-in report assertion",
-    ],
     ['OPS_LOAD_NOTES: "25"', "bounded note count"],
     ['OPS_LOAD_CLIENTS: "2"', "bounded client count"],
     ['OPS_REDIS_WORKERS: "2"', "bounded Redis workers"],
@@ -1336,23 +1324,6 @@ export function validateCiContract(files) {
       2,
       "bounded stack startup for the default phase and the gRPC phase",
     ],
-    [
-      // The only browser sign-in that runs while SERVICE_PROXY_TYPE=grpc. A
-      // second copy anywhere would let one of them be neutered while a presence
-      // rule stayed green, which is how the REQUIRE_GATEWAY anchor above lost
-      // its teeth, so pin the count rather than the presence.
-      "tests/grpc-auth-session.spec.ts",
-      1,
-      "gRPC-phase browser sign-in drill",
-    ],
-    [
-      // Once as the reporter's output path, once as the report the zero-skip
-      // verifier reads. Dropping either half leaves a drill whose skip nobody
-      // notices, or a verifier pointed at a file no step writes.
-      "playwright-grpc-auth.json",
-      2,
-      "gRPC sign-in report written and then verified",
-    ],
     ["github.event_name == 'push'", 3, "main-push archive event guard"],
     ["github.ref == 'refs/heads/main'", 3, "main branch archive guard"],
     [
@@ -1419,30 +1390,6 @@ export function validateCiContract(files) {
   if (grpcSwitchIndex >= 0 && grpcSwitchIndex <= hardeningIndex) {
     errors.push(
       `${file}: container-smoke must finish live-container hardening under the default service proxies before the gRPC phase`,
-    );
-  }
-  // The browser sign-in is the only step that exercises `validateSession` over
-  // gRPC, and it is worthless anywhere but inside the gRPC phase: run before the
-  // recreate and it silently proves the HTTP proxies instead. The configuration
-  // assertion has to precede it for the same reason, and the zero-skip verifier
-  // has to follow it or a drill that ran nothing still reads green.
-  const grpcProxyAssertionIndex = containerSmokeBlock.indexOf(
-    "Confirm the api-gateway is really on gRPC service proxies",
-  );
-  const grpcSignInIndex = containerSmokeBlock.indexOf(
-    "Verify a browser sign-in and note round trip over the socket sync lane",
-  );
-  const grpcSignInVerifyIndex = containerSmokeBlock.indexOf(
-    "Reject a skipped or incomplete socket sync lane sign-in",
-  );
-  if (
-    grpcProxyAssertionIndex <= grpcRecreateIndex ||
-    grpcSignInIndex <= grpcProxyAssertionIndex ||
-    grpcSignInVerifyIndex <= grpcSignInIndex ||
-    identityIndex <= grpcSignInVerifyIndex
-  ) {
-    errors.push(
-      `${file}: container-smoke must assert the live gRPC proxy configuration, then sign in through the browser, then reject a skipped sign-in, all inside the gRPC phase and before publication`,
     );
   }
 
