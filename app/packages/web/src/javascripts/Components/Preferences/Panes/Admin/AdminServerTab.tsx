@@ -1,4 +1,5 @@
 import { FunctionComponent, ReactNode, useCallback, useEffect, useState } from 'react'
+import { buildHealthReport } from './healthReport'
 import { isErrorResponse } from '@standardnotes/snjs'
 import { confirmDialog } from '@standardnotes/ui-services'
 
@@ -206,6 +207,11 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
+  // Standard Red Notes: "Copy report" for Health & Services. The report is built
+  // on demand rather than held in state so it always reflects the transport and
+  // deployment marker AT THE MOMENT OF THE CLICK, which is the only moment the
+  // person reading it cares about.
+  const [healthReportCopied, setHealthReportCopied] = useState(false)
 
   // Service lifecycle control (restart/stop/start). `supported` is false when the
   // endpoint 404s (older image without the feature); `available` is false when the
@@ -342,6 +348,45 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
       setStatusLoading(false)
     }
   }, [application, noteIfForbidden])
+
+  /**
+   * Standard Red Notes: the whole Health & Services readout as one pasteable
+   * block. `buildHealthReport` admits every value by shape, so nothing free-form
+   * the server sent — a probe's failure detail, a trust-proxy CIDR, an auth status
+   * line — can reach the clipboard. See its header for the full rule.
+   */
+  const copyHealthReport = useCallback(async () => {
+    setHealthReportCopied(false)
+    // The marker is a same-origin static file beside the bundle, not an API route,
+    // so it is fetched directly rather than through the authenticated helpers.
+    let deploymentMarker: unknown = undefined
+    try {
+      const markerResponse = await fetch('/.well-known/srn-deployment.json', {
+        headers: { Accept: 'application/json' },
+      })
+      deploymentMarker = markerResponse.ok ? await markerResponse.json() : undefined
+    } catch {
+      deploymentMarker = undefined
+    }
+
+    const transportStatus = application.syncTransportStatus
+    const report = buildHealthReport({
+      serverStatus,
+      dockerControl,
+      transport: transportStatus ? { ...transportStatus, operations: [...transportStatus.operations] } : undefined,
+      deploymentMarker,
+      statusError,
+      isAdmin: true,
+    })
+
+    try {
+      await navigator.clipboard?.writeText(report)
+      setHealthReportCopied(true)
+    } catch {
+      setHealthReportCopied(false)
+      addToast({ type: ToastType.Error, message: 'Could not copy the report to the clipboard.' })
+    }
+  }, [application, serverStatus, dockerControl, statusError])
 
   const loadControllableServices = useCallback(async () => {
     try {
@@ -1175,11 +1220,23 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
         <PreferencesSegment>
           <div className="flex items-center justify-between gap-2">
             <Title>Server health</Title>
-            <Button label="Refresh" onClick={() => void loadServerStatus()} disabled={statusLoading} />
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                label={healthReportCopied ? 'Copied' : 'Copy report'}
+                onClick={() => void copyHealthReport()}
+                disabled={statusLoading}
+              />
+              <Button label="Refresh" onClick={() => void loadServerStatus()} disabled={statusLoading} />
+            </div>
           </div>
           <Text>
             Live reachability of the server's core dependencies, probed on request. The API gateway itself is reachable
             (this page loaded through it).
+          </Text>
+          <Text className="text-passive-1 mt-1 text-xs">
+            “Copy report” puts this whole page, plus this client's own sync transport and the deployment marker, on the
+            clipboard as text. It reports configuration <em>presence</em> only — never a URL, host, port, token or key —
+            so it is safe to paste into an issue or a support thread.
           </Text>
           {statusLoading ? (
             <Spinner className="mt-3 h-5 w-5" />

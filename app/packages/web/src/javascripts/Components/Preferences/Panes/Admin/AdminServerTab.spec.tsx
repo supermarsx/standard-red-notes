@@ -274,6 +274,14 @@ describe('AdminServerTab — 6 subtabs mount with content (vanish guard)', () =>
 
     await clickSubtab('Health & services')
     expect(container.textContent).toContain('Server health')
+    // The copy affordance is the user-requested part of this subtab, and a button
+    // that typechecks but never mounts is exactly what this spec exists to catch.
+    //
+    // Asserted on the BUTTON ELEMENT, not on textContent: the paragraph beside it
+    // explains what "Copy report" does, so a textContent match passes with no
+    // button on the page at all — verified by deleting the button and watching the
+    // textContent form of this assertion stay green.
+    expect(buttonWithExactText('Copy report')).toBeDefined()
 
     await clickSubtab('Integrations')
     expect(container.textContent).toContain('OCR (text extraction)')
