@@ -390,3 +390,87 @@ describe('applyToolbarConfig with new fields', () => {
     expect(defaults.every((g) => !('rows' in g))).toBe(true)
   })
 })
+
+/**
+ * Layout coverage, for EVERY group with an explicit `layout`.
+ *
+ * A group that declares a `layout` renders only the ids that layout names. A
+ * button listed in `buttons` but forgotten in `layout` therefore has a
+ * descriptor, a working renderer, and a row in the Customize Toolbar dialog
+ * offering to show or hide it — while never appearing in the toolbar at all. A
+ * setting that lies is worse than a missing button.
+ *
+ * This invariant used to be asserted for the Checklist group alone (in
+ * ToolbarPlugin.checklistGroup.spec.tsx), which is why the second instance of
+ * the same bug — `changeCase`, missing from the Paragraph group's layout — went
+ * unnoticed until someone counted the controls by hand. It is checked across all
+ * groups here instead.
+ */
+describe('group layout coverage', () => {
+  type Group = (typeof DEFAULT_TOOLBAR_GROUPS)[number]
+
+  /** Real (non-sentinel) button ids a group's layout actually places. */
+  const laidOutIds = (group: Group) => new Set((group.layout ?? []).flat().filter((id) => !isLayoutSentinel(id)))
+
+  /** "<group>/<button>" for every declared button its own layout never places. */
+  const buttonsMissingFromLayout = (groups: Group[]) =>
+    groups
+      .filter((group) => group.layout)
+      .flatMap((group) => {
+        const laidOut = laidOutIds(group)
+        return group.buttons.filter((button) => !laidOut.has(button.id)).map((button) => `${group.id}/${button.id}`)
+      })
+
+  /** "<group>/<button>" for every id a layout names that the group never declares. */
+  const layoutIdsNotDeclared = (groups: Group[]) =>
+    groups
+      .filter((group) => group.layout)
+      .flatMap((group) => {
+        const declared = new Set(group.buttons.map((button) => button.id))
+        return [...laidOutIds(group)].filter((id) => !declared.has(id)).map((id) => `${group.id}/${id}`)
+      })
+
+  /** JSON clone — these descriptors are plain strings and objects throughout. */
+  const cloneGroups = (): Group[] => JSON.parse(JSON.stringify(DEFAULT_TOOLBAR_GROUPS)) as Group[]
+
+  it('places every declared button somewhere in its own group layout', () => {
+    expect(buttonsMissingFromLayout(DEFAULT_TOOLBAR_GROUPS)).toEqual([])
+  })
+
+  it('never lays out a button the group does not declare', () => {
+    // The mirror failure: an id in `layout` that is not in `buttons` resolves to
+    // nothing and is silently dropped by the row renderer.
+    expect(layoutIdsNotDeclared(DEFAULT_TOOLBAR_GROUPS)).toEqual([])
+  })
+
+  it('keeps Change case in the Paragraph layout, not only in its button list', () => {
+    // Regression: it had a descriptor and a renderer but no layout slot, so it
+    // rendered nowhere while Customize Toolbar offered to hide it.
+    const paragraph = DEFAULT_TOOLBAR_GROUPS.find((group) => group.id === ToolbarGroupId.ParagraphList)
+    expect(paragraph).toBeDefined()
+    expect(laidOutIds(paragraph as Group).has(ToolbarButtonId.ChangeCase)).toBe(true)
+  })
+
+  describe('the guard itself bites', () => {
+    it('names the group and button when a layout stops placing one', () => {
+      const groups = cloneGroups()
+      const paragraph = groups.find((group) => group.id === ToolbarGroupId.ParagraphList)
+      expect(paragraph).toBeDefined()
+      paragraph!.layout = paragraph!.layout!.map((row) => row.filter((id) => id !== ToolbarButtonId.SortLines))
+
+      expect(buttonsMissingFromLayout(groups)).toEqual([`${ToolbarGroupId.ParagraphList}/${ToolbarButtonId.SortLines}`])
+      // The real config is untouched by the mutation.
+      expect(buttonsMissingFromLayout(DEFAULT_TOOLBAR_GROUPS)).toEqual([])
+    })
+
+    it('names the group and button when a layout places an undeclared one', () => {
+      const groups = cloneGroups()
+      const selection = groups.find((group) => group.id === ToolbarGroupId.Selection)
+      expect(selection).toBeDefined()
+      selection!.layout![0] = [...selection!.layout![0], ToolbarButtonId.Bold]
+
+      expect(layoutIdsNotDeclared(groups)).toEqual([`${ToolbarGroupId.Selection}/${ToolbarButtonId.Bold}`])
+      expect(layoutIdsNotDeclared(DEFAULT_TOOLBAR_GROUPS)).toEqual([])
+    })
+  })
+})

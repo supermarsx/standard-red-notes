@@ -302,6 +302,13 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
         ToolbarButtonId.NumberedList,
         ToolbarButtonId.MultiLevelList,
         ToolbarButtonId.Divider,
+        // Whole-line text transforms, in the same divider-delimited segment and
+        // the same order as this group's `buttons`. Change case was listed in
+        // `buttons` and had a renderer but was missing from this row, so it never
+        // reached the toolbar while still appearing in Customize Toolbar as a
+        // button you could show or hide — see the layout-coverage guard in
+        // ToolbarConfig.spec.ts, which now holds for every group.
+        ToolbarButtonId.ChangeCase,
         ToolbarButtonId.SortLines,
         ToolbarButtonId.Divider,
         ToolbarButtonId.FormattingMarks,

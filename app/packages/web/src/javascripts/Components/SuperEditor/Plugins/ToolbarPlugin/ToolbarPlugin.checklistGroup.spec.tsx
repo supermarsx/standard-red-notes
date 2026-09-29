@@ -23,7 +23,6 @@ import { BlocksEditorComposer } from '../../BlocksEditorComposer'
 import ToolbarPlugin from './ToolbarPlugin'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
-import { ToolbarButtonId, ToolbarGroupId, DEFAULT_TOOLBAR_GROUPS } from './ToolbarConfig'
 
 // Desktop layout; `alwaysShowToolbar` (below) then docks the full ribbon, which
 // is the surface the three buttons live on.
@@ -130,18 +129,10 @@ describe('checklist bulk-completion toolbar group renders', () => {
     }
   })
 
-  it('keeps every button present in the group layout, not just its button list', () => {
-    // Guards the second half of the failure mode: a group with an explicit
-    // `layout` renders ONLY the ids named in that layout, so a button listed in
-    // `buttons` but forgotten in `layout` is invisible.
-    const group = DEFAULT_TOOLBAR_GROUPS.find((candidate) => candidate.id === ToolbarGroupId.Checklist)
-    expect(group).toBeDefined()
-    const laidOut = new Set((group!.layout ?? []).flat())
-    for (const button of group!.buttons) {
-      expect(laidOut.has(button.id)).toBe(true)
-    }
-    expect(laidOut.has(ToolbarButtonId.CompleteAllChecklistItems)).toBe(true)
-    expect(laidOut.has(ToolbarButtonId.CompleteSelectedChecklistItems)).toBe(true)
-    expect(laidOut.has(ToolbarButtonId.UncompleteSelectedChecklistItems)).toBe(true)
-  })
+  // The second half of the failure mode — a button listed in `buttons` but
+  // forgotten in the group's `layout`, so it renders nowhere while Customize
+  // Toolbar still offers to hide it — used to be asserted here for the Checklist
+  // group alone. Scoping it to one group is exactly why the same bug went
+  // unnoticed in the Paragraph group (`changeCase`). It now lives in
+  // ToolbarConfig.spec.ts's "group layout coverage", which holds for every group.
 })
