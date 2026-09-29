@@ -30,9 +30,13 @@ $heading-height: 75px;
 .content-title-bar {
   width: 100%;
 
-  padding-top: 14px;
+  /* Standard Red Notes: the title bar's own padding was a quarter of its height.
+     Note that this rule is unlayered while Tailwind v4 utilities are not, so it
+     beats any `pt-*` / `pb-*` utility on the same element — change the density
+     here, not in the JSX. */
+  padding-top: 8px;
   padding-left: 14px;
-  padding-bottom: 10px;
+  padding-bottom: 6px;
   padding-right: 14px;
 
   border-bottom: 1px solid var(--editor-title-bar-border-bottom-color);

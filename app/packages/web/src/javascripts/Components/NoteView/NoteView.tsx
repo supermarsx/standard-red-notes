@@ -99,6 +99,7 @@ import {
 } from '../../Bookmarks/bookmarks'
 import { BOOKMARK_INSERT_DOM_EVENT } from '../SuperEditor/Plugins/BookmarkPlugin/BookmarkPlugin'
 import { BOOKMARK_SPOT_COMMAND } from '../../Bookmarks/bookmarkCommand'
+import { HERO_AFFORDANCE_HEIGHT, shouldShowHeroBanner } from './heroBannerScroll'
 
 function sortAlphabetically(array: ComponentInterface[]): ComponentInterface[] {
   return array.sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
@@ -133,6 +134,11 @@ type State = {
   customBackgroundColor?: string
   customTextColor?: string
   heroHeader: HeroHeader | null
+  /**
+   * Whether the cover banner may occupy space. True only while the note's scroll
+   * container is at the absolute top — see ./heroBannerScroll.
+   */
+  heroBannerVisible: boolean
 
   conflictedNotes: SNNote[]
 }
@@ -147,6 +153,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   private protectionTimeoutId: ReturnType<typeof setTimeout> | null = null
   private noteViewElementRef: RefObject<HTMLDivElement | null>
   private editorContentRef: RefObject<HTMLDivElement | null>
+  private heroBannerRef: RefObject<HTMLDivElement | null>
+  /** The element the scroll listener is attached to, kept so it can be detached. */
+  private scrollListenerTarget: HTMLElement | null = null
   private plainEditorRef?: PlainEditorInterface
 
   constructor(props: NoteViewProps) {
@@ -184,10 +193,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       customBackgroundColor: getNoteCustomBackgroundColor(this.controller.item),
       customTextColor: getNoteCustomTextColor(this.controller.item),
       heroHeader: getNoteHeroHeader(this.controller.item),
+      heroBannerVisible: true,
     }
 
     this.noteViewElementRef = createRef<HTMLDivElement>()
     this.editorContentRef = createRef<HTMLDivElement>()
+    this.heroBannerRef = createRef<HTMLDivElement>()
   }
 
   override deinit() {
@@ -215,6 +226,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     ;(this.toggleStackComponent as unknown) = undefined
     ;(this.debounceReloadEditorComponent as unknown) = undefined
     ;(this.editorContentRef as unknown) = undefined
+    ;(this.heroBannerRef as unknown) = undefined
     ;(this.plainEditorRef as unknown) = undefined
   }
 
@@ -251,6 +263,13 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
   override componentDidMount(): void {
     super.componentDidMount()
+
+    // The cover banner lives above the note's scroll container, so it can only
+    // learn about scrolling by listening. `scroll` does not bubble but it does
+    // capture, so one capture-phase listener on the note root sees whichever of
+    // the editors is actually doing the scrolling.
+    this.scrollListenerTarget = this.noteViewElementRef.current
+    this.scrollListenerTarget?.addEventListener('scroll', this.onNoteContentScroll, true)
 
     this.#observers.push(
       this.application.vaultUsers.addEventObserver((event, data) => {
@@ -424,7 +443,58 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     }
   }
 
+  /**
+   * The elements that scroll the note body itself. Anything else inside the note
+   * view that happens to scroll (a wide table, a code block, a popover list) must
+   * NOT move the cover banner — its scrollTop has nothing to do with where the
+   * reader is in the document.
+   */
+  private isNoteBodyScroller(element: HTMLElement): boolean {
+    return (
+      element.id === SuperEditorContentId ||
+      element.id === ElementIds.EditorContent ||
+      element.id === ElementIds.NoteTextEditor
+    )
+  }
+
+  /**
+   * How much height hiding the banner would hand back. Measured from the live
+   * element when there is one; `offsetHeight` is 0 on the frame before layout
+   * (and in any environment without one), so fall back to what the banner is
+   * configured to be rather than to 0 — a 0 here would switch off the
+   * anti-flicker guard in ./heroBannerScroll exactly when it is needed.
+   */
+  private heroBannerHeight(): number {
+    const measured = this.heroBannerRef?.current?.offsetHeight ?? 0
+    if (measured > 0) {
+      return measured
+    }
+    return this.state.heroHeader?.height ?? HERO_AFFORDANCE_HEIGHT
+  }
+
+  onNoteContentScroll = (event: Event): void => {
+    const target = event.target
+    if (!(target instanceof HTMLElement) || !this.isNoteBodyScroller(target)) {
+      return
+    }
+
+    const heroBannerVisible = shouldShowHeroBanner({
+      scrollTop: target.scrollTop,
+      scrollHeight: target.scrollHeight,
+      clientHeight: target.clientHeight,
+      bannerHeight: this.heroBannerHeight(),
+      currentlyVisible: this.state.heroBannerVisible,
+    })
+
+    if (heroBannerVisible !== this.state.heroBannerVisible) {
+      this.setState({ heroBannerVisible })
+    }
+  }
+
   override componentWillUnmount(): void {
+    this.scrollListenerTarget?.removeEventListener('scroll', this.onNoteContentScroll, true)
+    this.scrollListenerTarget = null
+
     if (this.state.editorComponentViewer) {
       this.application.componentManager?.destroyComponentViewer(this.state.editorComponentViewer)
     }
@@ -1197,16 +1267,25 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
           />
         )}
 
-        {this.note && (this.state.heroHeader || !(this.state.noteLocked || this.state.readonly)) && (
-          <HeroHeaderBanner
-            note={this.note}
-            hero={this.state.heroHeader}
-            notesController={this.application.notesController}
-            filesController={this.application.filesController}
-            disabled={this.state.noteLocked || !!this.state.readonly}
-            onError={this.showHeroError}
-          />
-        )}
+        {/* The cover banner is a decoration, not a control: it only occupies the
+            writing area while the reader is at the absolute top of the document,
+            and is unmounted (so the space is genuinely returned) the moment they
+            scroll. The locked / readonly warnings above are deliberately NOT
+            treated this way — a warning must not scroll out of existence. */}
+        {this.note &&
+          this.state.heroBannerVisible &&
+          (this.state.heroHeader || !(this.state.noteLocked || this.state.readonly)) && (
+            <div ref={this.heroBannerRef} data-note-hero-banner="">
+              <HeroHeaderBanner
+                note={this.note}
+                hero={this.state.heroHeader}
+                notesController={this.application.notesController}
+                filesController={this.application.filesController}
+                disabled={this.state.noteLocked || !!this.state.readonly}
+                onError={this.showHeroError}
+              />
+            </div>
+          )}
 
         {this.note && (
           <div
@@ -1315,7 +1394,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 linkingController={this.application.linkingController}
                 readonly={this.state.readonly}
               />
-              <div className="mt-2.5">
+              <div className="mt-1.5">
                 <CollaboratorsPresencePanel item={this.note} />
               </div>
             </div>

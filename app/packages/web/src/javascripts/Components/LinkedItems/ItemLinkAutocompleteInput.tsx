@@ -96,7 +96,7 @@ const ItemLinkAutocompleteInput = forwardRef(
               placeholder="Link topics, notes, files, folders..."
               className={classNames(
                 `${tagsLinkedToItem.length > 0 ? 'w-80' : 'mr-10 w-70'}`,
-                'text-text focus:border-info h-7 w-70 bg-transparent text-sm focus:border-b-2 focus:shadow-none focus:outline-none lg:text-xs',
+                'text-text focus:border-info h-6 w-70 bg-transparent text-sm focus:border-b-2 focus:shadow-none focus:outline-none lg:text-xs',
               )}
               title={hoverLabel}
               id={ElementIds.ItemLinkAutocompleteInput}

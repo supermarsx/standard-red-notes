@@ -182,8 +182,8 @@ const LinkedItemBubblesContainer = ({ item, linkingController, readonly = false,
     <div className={classNames('flex w-full flex-wrap gap-1', className.base)}>
       <div
         className={classNames(
-          'note-view-linking-container flex max-w-full min-w-0 flex-wrap items-center gap-2 bg-transparent md:min-w-80',
-          allItemsLinkedToItem.length || notesLinkingToItem.length ? 'mt-1' : 'mt-0.5',
+          'note-view-linking-container flex max-w-full min-w-0 flex-wrap items-center gap-1.5 bg-transparent md:min-w-80',
+          allItemsLinkedToItem.length || notesLinkingToItem.length ? 'mt-0.5' : 'mt-0',
         )}
       >
         {!!vault && <VaultNameBadge vault={vault} />}

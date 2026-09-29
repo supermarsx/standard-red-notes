@@ -482,7 +482,10 @@ const ToolbarButton = forwardRef(
         >
           <div
             className={classNames(
-              'flex items-center justify-center rounded-md p-2.5 transition-colors duration-75 md:p-2',
+              // Desktop padding is deliberately tighter than the touch target
+              // kept for mobile (p-2.5): three rows of these make up most of the
+              // ribbon's height, so each 2px here is 12px off the writing area.
+              'flex items-center justify-center rounded-md p-2.5 transition-colors duration-75 md:p-1.5',
               active && 'bg-info text-info-contrast shadow-sm',
             )}
           >
@@ -3168,62 +3171,85 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           />
         )}
         <div className="border-border flex w-full flex-shrink-0 flex-col border-t md:border-0">
+          {/* Standard Red Notes: the clipboard/history utility actions and the
+              Office-ribbon tab strip share ONE bar — actions on the left, the
+              formatting tabs pushed to the right — instead of stacking two
+              full-width bands above the ribbon. Nothing moved into an overflow:
+              both halves are still always rendered, and if the pane gets too
+              narrow it is the utility half that scrolls, so the tabs (the only
+              way to reach the other formatting groups) can never be pushed out
+              of reach. */}
           {canShowAllItems && (
-            <Toolbar
-              className="super-toolbar border-border flex w-full flex-nowrap items-center gap-0.5 overflow-x-auto border-b px-2 py-1"
-              store={utilityToolbarStore}
-              aria-label="Clipboard and history tools"
+            <div
+              className="super-toolbar-utility-bar border-border flex w-full flex-nowrap items-center gap-2 border-b px-2 py-1"
+              data-super-toolbar-utility-bar=""
             >
-              {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId, index) => {
-                if (buttonId === ToolbarButtonId.Divider) {
-                  const leftHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(0, index).some(
-                    (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
-                  )
-                  const rightHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(index + 1).some(
-                    (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
-                  )
-                  if (!leftHasVisibleButton || !rightHasVisibleButton) {
+              <Toolbar
+                // min-w-0 so this half is the one that gives way when the pane is
+                // tight. Its scrollbar is deliberately left visible: on a narrow
+                // pane Print or Redo can end up past the edge, and a silent
+                // scroller would make them unfindable — worth ~15px of bar.
+                className="super-toolbar flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto"
+                store={utilityToolbarStore}
+                aria-label="Clipboard and history tools"
+              >
+                {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId, index) => {
+                  if (buttonId === ToolbarButtonId.Divider) {
+                    const leftHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(0, index).some(
+                      (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
+                    )
+                    const rightHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(index + 1).some(
+                      (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
+                    )
+                    if (!leftHasVisibleButton || !rightHasVisibleButton) {
+                      return null
+                    }
+                    return <ToolbarSeparator key={`utility-divider-${index}`} />
+                  }
+                  if (!visibleUtilityButtonIds.has(buttonId)) {
                     return null
                   }
-                  return <ToolbarSeparator key={`utility-divider-${index}`} />
-                }
-                if (!visibleUtilityButtonIds.has(buttonId)) {
-                  return null
-                }
-                return <Fragment key={buttonId}>{buttonRenderers[buttonId]}</Fragment>
-              })}
-              <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
-            </Toolbar>
-          )}
-          {/* Office-ribbon tab strip: one mini tab per super group. Switching tabs
-              swaps which groups render below, so the bar rarely needs to scroll. */}
-          {canShowAllItems && ribbonTabs.length > 1 && (
-            <div className="super-toolbar-tabs flex items-center gap-1 overflow-x-auto px-2 pt-1" role="tablist">
-              {ribbonTabs.map((tab) => {
-                const isActive = tab.id === effectiveTabId
-                const isContextualTab = tab.id === CONTEXTUAL_TAB_ID
-                return (
-                  <button
-                    key={tab.id}
-                    role="tab"
-                    aria-selected={isActive}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => setActiveTabId(tab.id)}
-                    className={classNames(
-                      'rounded-t-md border-b-2 px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors',
-                      isContextualTab
-                        ? isActive
-                          ? 'border-info bg-info text-info-contrast'
-                          : 'border-info/40 text-info hover:bg-contrast'
-                        : isActive
-                          ? 'border-info bg-contrast text-info'
-                          : 'text-passive-1 hover:text-text border-transparent',
-                    )}
-                  >
-                    {tab.label}
-                  </button>
-                )
-              })}
+                  return <Fragment key={buttonId}>{buttonRenderers[buttonId]}</Fragment>
+                })}
+                <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
+              </Toolbar>
+              {ribbonTabs.length > 1 && (
+                <div
+                  // flex-shrink-0 so the tabs keep their width and it is the
+                  // clipboard half that scrolls when the pane is tight; max-w-full
+                  // + overflow-x-auto is the last resort for a pane narrower than
+                  // the tab strip itself, so a tab can still never be unreachable.
+                  className="super-toolbar-tabs ml-auto flex max-w-full flex-shrink-0 items-center gap-1 overflow-x-auto"
+                  role="tablist"
+                  aria-label="Formatting groups"
+                >
+                  {ribbonTabs.map((tab) => {
+                    const isActive = tab.id === effectiveTabId
+                    const isContextualTab = tab.id === CONTEXTUAL_TAB_ID
+                    return (
+                      <button
+                        key={tab.id}
+                        role="tab"
+                        aria-selected={isActive}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => setActiveTabId(tab.id)}
+                        className={classNames(
+                          'rounded-md border-b-2 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap transition-colors',
+                          isContextualTab
+                            ? isActive
+                              ? 'border-info bg-info text-info-contrast'
+                              : 'border-info/40 text-info hover:bg-contrast'
+                            : isActive
+                              ? 'border-info bg-contrast text-info'
+                              : 'text-passive-1 hover:text-text border-transparent',
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
           <div className="flex w-full">
@@ -3231,7 +3257,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
               <Toolbar
                 // Mirror the normal super-group layout: spaced, captioned segment
                 // blocks instead of one flat run of buttons.
-                className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-2 pb-1"
+                className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-1 pb-1"
                 store={contextualToolbarStore}
                 aria-label={`${contextualWidget?.label ?? ''} tools`}
               >
@@ -3245,7 +3271,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                     aria-label={segment.caption}
                     className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                   >
-                    <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
+                    <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
                       <div className="flex items-center justify-start gap-0.5">{segment.buttons}</div>
                     </div>
                     <span
@@ -3262,7 +3288,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 className={classNames(
                   // A little breathing room above the group blocks pushes the (scroll)
                   // content down so the horizontal scrollbar sits slightly lower.
-                  'super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-2 pb-1',
+                  'super-toolbar flex flex-grow items-center gap-1.5 px-1 pt-1 pb-1',
                   // Default: one horizontal line of groups (each group stacks into up
                   // to 3 rows), scrolling if they overflow. Opt-out wraps instead.
                   horizontalScroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap gap-y-1',
@@ -3289,7 +3315,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                             aria-label={group.label}
                             className="super-toolbar-group bg-contrast flex min-w-[12rem] flex-grow flex-col rounded-lg px-1 py-0.5"
                           >
-                            <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[7.375rem]">
+                            <div className="flex flex-col items-stretch justify-center gap-1 md:min-h-[6.25rem]">
                               {/* Line 1: the three action buttons. */}
                               <div className="flex items-center gap-1.5">
                                 <ToolbarButton
@@ -3414,7 +3440,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                           aria-label={group.label}
                           className="super-toolbar-group bg-contrast flex flex-shrink-0 flex-col rounded-lg px-1 py-0.5"
                         >
-                          <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[7.375rem]">
+                          <div className="flex flex-col items-start justify-center gap-0.5 md:min-h-[6.25rem]">
                             {buttonRows.map((rowButtons, rowIndex) => (
                               <div key={rowIndex} className="flex items-center justify-start gap-0.5">
                                 {rowButtons.map((button, buttonIndex) => {
