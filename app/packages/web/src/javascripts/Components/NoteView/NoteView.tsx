@@ -1290,7 +1290,11 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
         {this.note && (
           <div
             id="editor-title-bar"
-            className="content-title-bar section-title-bar z-editor-title-bar bg-default w-full pt-4"
+            // No `pt-*` here: `.content-title-bar` in _editor.scss is unlayered and
+            // Tailwind v4 utilities are not, so the SCSS padding wins regardless of
+            // specificity. A utility here would read as setting the top padding and
+            // would do nothing. Change the density in _editor.scss.
+            className="content-title-bar section-title-bar z-editor-title-bar bg-default w-full"
             style={{ backgroundColor: this.state.customBackgroundColor, color: this.state.customTextColor }}
           >
             <div
