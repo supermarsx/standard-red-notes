@@ -9831,12 +9831,15 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@standardnotes/sncrypto-common@workspace:packages/sncrypto-common"
   dependencies:
+    "@types/jest": "npm:^30.0.0"
     "@typescript-eslint/eslint-plugin": "npm:^8.64.0"
     "@typescript-eslint/parser": "npm:^8.64.0"
     eslint: "npm:^9.39.5"
     eslint-plugin-prettier: "npm:^5.5.6"
+    jest: "npm:^30.4.2"
     prettier: "npm:3.9.5"
     reflect-metadata: "npm:^0.2.2"
+    ts-jest: "npm:^29.4.11"
     typescript: "npm:6.0.3"
   languageName: unknown
   linkType: soft

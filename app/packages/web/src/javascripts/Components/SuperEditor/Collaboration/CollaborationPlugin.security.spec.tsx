@@ -1,6 +1,7 @@
 /**
  * @jest-environment jsdom
  */
+import { webcrypto } from 'node:crypto'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 
@@ -20,6 +21,13 @@ jest.mock('./GatewayCollabChannel', () => ({
 
 jest.mock('./RoomCrypto', () => ({
   createCollaborationRoomCipher: jest.fn(),
+  /**
+   * `CollaborationPlugin` imports this too, and the factory used to omit it. With WebCrypto
+   * absent the plugin bailed out before reaching it, so the missing export never surfaced; with
+   * WebCrypto installed, mounting the plugin threw
+   * `getCollaborationReplayLedger is not a function` instead of running any assertion.
+   */
+  getCollaborationReplayLedger: jest.fn(),
 }))
 
 jest.mock('./EncryptedYjsProvider', () => ({
@@ -28,8 +36,11 @@ jest.mock('./EncryptedYjsProvider', () => ({
 
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
-import { createCollaborationRoomCipher } from './RoomCrypto'
-import { getSuperCollaborationAvailability } from './CollaborationAvailability'
+import { createCollaborationRoomCipher, getCollaborationReplayLedger } from './RoomCrypto'
+import {
+  getSuperCollaborationAvailability,
+  SUPER_COLLABORATION_CRYPTO_UNAVAILABLE_REASON,
+} from './CollaborationAvailability'
 import { CollaborationConfig, SuperCollaborationPlugin } from './CollaborationPlugin'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -38,13 +49,44 @@ let container: HTMLElement
 let root: Root
 let providerDestroy: jest.Mock
 let providerCanonicalReadyListener: ((ready: boolean) => void) | undefined
+let replayLedger: { scope: string }
+let collabChannel: { id: string }
+let roomCipher: { id: string }
 
 beforeEach(() => {
+  /**
+   * Fail closed on WebCrypto instead of opting out of the assertions.
+   *
+   * Every test below used to begin `if (!globalThis.crypto?.subtle) { return }`, so in any
+   * environment without WebCrypto this file — the collaboration security gate — passed having
+   * asserted nothing at all. jsdom supplies `crypto.subtle` today, which is exactly why nobody
+   * noticed. Installing Node's implementation when it is missing, the pattern already used in
+   * `javascripts/Assistant/*.spec.ts`, means the assertions always run and a genuinely broken
+   * environment makes this suite red rather than empty.
+   */
+  if (!globalThis.crypto?.subtle) {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto })
+  }
+
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   providerDestroy = jest.fn()
   providerCanonicalReadyListener = undefined
+  /**
+   * `resetMocks: true` clears factory-level implementations, so set them per test.
+   *
+   * These three return identifiable objects rather than `undefined` on purpose: the provider
+   * assertion below checks that the channel, the cipher and the replay ledger are the ones the
+   * plugin was given. With bare `jest.fn()`s they were all `undefined`, and the assertion's
+   * `expect.anything()` could never have matched.
+   */
+  replayLedger = { scope: 'test-ledger' }
+  collabChannel = { id: 'test-channel' }
+  roomCipher = { id: 'test-cipher' }
+  jest.mocked(getCollaborationReplayLedger).mockReturnValue(replayLedger as never)
+  jest.mocked(createGatewayCollabChannel).mockReturnValue(collabChannel as never)
+  jest.mocked(createCollaborationRoomCipher).mockReturnValue(roomCipher as never)
   jest.mocked(EncryptedYjsProvider).mockImplementation(
     () =>
       ({
@@ -77,8 +119,48 @@ afterEach(() => {
 })
 
 describe('Super collaboration security gate', () => {
-  it('depends on WebCrypto capability, never the legacy window flag', () => {
-    expect(getSuperCollaborationAvailability().available).toBe(Boolean(globalThis.crypto?.subtle))
+  it('ignores the legacy window flag entirely, in both of its settings', () => {
+    /**
+     * This replaces `expect(availability.available).toBe(Boolean(globalThis.crypto?.subtle))`,
+     * which restated the implementation's own condition and so could not fail. It also did not
+     * test the half its name claimed: `beforeEach` sets `enableSuperCollaboration = true` and
+     * nothing ever set it false, so re-introducing a read of that flag would have kept it green.
+     */
+    const windowWithFlag = window as { enableSuperCollaboration?: boolean }
+
+    windowWithFlag.enableSuperCollaboration = false
+    expect(getSuperCollaborationAvailability()).toEqual({ available: true })
+
+    delete windowWithFlag.enableSuperCollaboration
+    expect(getSuperCollaborationAvailability()).toEqual({ available: true })
+
+    windowWithFlag.enableSuperCollaboration = true
+    expect(getSuperCollaborationAvailability()).toEqual({ available: true })
+  })
+
+  it('refuses collaboration when WebCrypto is absent, naming that as the reason', () => {
+    const realCrypto = globalThis.crypto
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined })
+    try {
+      expect(getSuperCollaborationAvailability()).toEqual({
+        available: false,
+        reason: SUPER_COLLABORATION_CRYPTO_UNAVAILABLE_REASON,
+      })
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: realCrypto })
+    }
+  })
+
+  it('refuses collaboration for a signed-out session or a missing note key, even with WebCrypto present', () => {
+    expect(getSuperCollaborationAvailability({ authenticated: false, encryptionKeyAvailable: true })).toMatchObject({
+      available: false,
+    })
+    expect(getSuperCollaborationAvailability({ authenticated: true, encryptionKeyAvailable: false })).toMatchObject({
+      available: false,
+    })
+    expect(getSuperCollaborationAvailability({ authenticated: true, encryptionKeyAvailable: true })).toEqual({
+      available: true,
+    })
   })
 
   it('attaches the already-active request lease without replaying activation', async () => {
@@ -114,34 +196,42 @@ describe('Super collaboration security gate', () => {
       )
     })
 
-    if (globalThis.crypto?.subtle) {
-      expect(createGatewayCollabChannel).toHaveBeenCalled()
-      expect(createCollaborationRoomCipher).toHaveBeenCalledWith(config.roomKey, config.roomEpoch)
-      expect(EncryptedYjsProvider).toHaveBeenCalledWith(
-        expect.anything(),
-        'note-uuid',
-        expect.anything(),
-        expect.anything(),
-        undefined,
-        'editor-lease',
-        {
-          activeLease: lease,
-          shouldBootstrap: true,
-          validateAttachment: lease.validateAttachment,
-          reactivate: lease.reactivate,
-          onFatal: lease.fail,
-          onBootstrapRetry: lease.retryBootstrap,
-        },
-      )
-    } else {
-      expect(EncryptedYjsProvider).not.toHaveBeenCalled()
-    }
+    expect(createGatewayCollabChannel).toHaveBeenCalled()
+    /**
+     * The room cipher is built from the room key, the epoch, no prior state, and the
+     * app-lifetime replay ledger for this room and epoch. The expectation used to name only the
+     * first two arguments, which cannot match the four-argument call the plugin makes — it never
+     * failed because the assertion was never reached.
+     */
+    expect(getCollaborationReplayLedger).toHaveBeenCalledWith({}, 'note-uuid', config.roomEpoch)
+    expect(createCollaborationRoomCipher).toHaveBeenCalledWith(
+      config.roomKey,
+      config.roomEpoch,
+      undefined,
+      replayLedger,
+    )
+    expect(EncryptedYjsProvider).toHaveBeenCalledWith(
+      expect.anything(),
+      'note-uuid',
+      collabChannel,
+      roomCipher,
+      undefined,
+      'editor-lease',
+      {
+        activeLease: lease,
+        shouldBootstrap: true,
+        /** The provider is handed the epoch it must stay pinned to; omitting it would let a stale room bind. */
+        expectedRoomEpoch: config.roomEpoch,
+        validateAttachment: lease.validateAttachment,
+        reactivate: lease.reactivate,
+        onFatal: lease.fail,
+        onBootstrapRetry: lease.retryBootstrap,
+        onPresenceActivity: expect.any(Function),
+      },
+    )
   })
 
   it('forwards only the live provider canonical-ready transition and clears it on teardown', async () => {
-    if (!globalThis.crypto?.subtle) {
-      return
-    }
     const onCanonicalReadyChange = jest.fn()
     const lease = {
       requestId: 'readiness-lease',
@@ -186,9 +276,6 @@ describe('Super collaboration security gate', () => {
   })
 
   it('cancels terminal destroy during StrictMode replay and destroys exactly once on genuine unmount', async () => {
-    if (!globalThis.crypto?.subtle) {
-      return
-    }
     const lease = {
       requestId: 'strict-lifetime-lease',
       shouldBootstrap: true,

@@ -21,14 +21,17 @@
     "build": "tsc -p tsconfig.json",
     "watch": "tsc -p tsconfig.json --watch",
     "lint": "eslint src",
-    "test": "yarn lint"
+    "test": "jest --coverage"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
     "eslint": "^9.39.5",
     "eslint-plugin-prettier": "^5.5.6",
+    "jest": "^30.4.2",
     "prettier": "3.9.5",
+    "ts-jest": "^29.4.11",
     "typescript": "6.0.3"
   },
   "dependencies": {
