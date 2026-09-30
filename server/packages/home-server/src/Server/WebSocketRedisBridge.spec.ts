@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Logger } from 'winston'
 import Redis from 'ioredis'
+import { DomainEventService, WebSocketMessageRequestedEvent } from '@standardnotes/domain-events'
 import { createLogThrottle } from '@standard-red-notes/websocket-gateway'
 
 import { WebSocketRedisBridge, WebSocketRedisPublisher } from './WebSocketRedisBridge'
@@ -25,10 +26,24 @@ describe('WebSocketRedisBridge lifecycle', () => {
   let publisher: jest.Mocked<WebSocketRedisPublisher>
   let createPublisher: jest.Mock
 
-  const event = {
+  /**
+   * Typed against the real contract rather than cast with `as never`.
+   *
+   * The cast that used to be here suppressed the only check that matters for a wire fixture: that
+   * it is a payload the publisher can actually receive. It was not — `WebSocketMessageRequestedEventPayload.message`
+   * is a `string` (an already-encrypted envelope), and the fixture used an object. The bridge
+   * stringifies the whole payload and so behaved identically either way, but the assertions below
+   * pin the exact bytes put on the Redis channel, and they were pinning bytes no producer emits.
+   */
+  const event: WebSocketMessageRequestedEvent = {
     type: 'WEB_SOCKET_MESSAGE_REQUESTED',
-    payload: { userUuid: 'user-1', message: { encrypted: true } },
-  } as never
+    createdAt: new Date(1),
+    payload: { userUuid: 'user-1', message: '004:encrypted-message-envelope' },
+    meta: {
+      correlation: { userIdentifier: 'user-1', userIdentifierType: 'uuid' },
+      origin: DomainEventService.SyncingServer,
+    },
+  }
 
   beforeEach(() => {
     logger = {

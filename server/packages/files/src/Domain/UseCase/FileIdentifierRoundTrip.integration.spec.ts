@@ -169,9 +169,18 @@ describe('file identifier round trip', () => {
       valetToken: 'read-valet-token',
     })
     expect(download.success).toBe(true)
+    /**
+     * `StreamDownloadFileResponse` is a discriminated union and only its success arm carries
+     * `readStream`, so the previous `download.readStream as NodeJS.ReadableStream` was a cast
+     * across the discriminant. Narrowing on `success` types the stream properly, and reports the
+     * failure message instead of iterating `undefined` when the download does not succeed.
+     */
+    if (!download.success) {
+      throw new Error(`expected the download to succeed, got: ${download.message}`)
+    }
 
     const downloadedChunks: Buffer[] = []
-    for await (const chunk of download.readStream as NodeJS.ReadableStream) {
+    for await (const chunk of download.readStream) {
       downloadedChunks.push(chunk as Buffer)
     }
     expect(Buffer.concat(downloadedChunks)).toEqual(Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]))

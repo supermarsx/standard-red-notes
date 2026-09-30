@@ -109,7 +109,12 @@ describe('CreateCrossServiceToken', () => {
     roleProjector.projectSimple = jest.fn().mockReturnValue({ name: 'role1', uuid: '1-3-4' })
 
     sessionProjector = {} as jest.Mocked<ProjectorInterface<Session>>
-    sessionProjector.projectCustom = jest.fn().mockReturnValue({ foo: 'bar' })
+    /**
+     * `projectCustom` belongs to `CustomProjectorInterface`, not the `ProjectorInterface<Session>`
+     * this use case is constructed with, and `CreateCrossServiceToken` only ever calls
+     * `projectSimple`. A stub for a method the collaborator cannot expose is dead weight, and the
+     * kind of dead weight that makes a spec look like it covers more than it does.
+     */
     sessionProjector.projectSimple = jest.fn().mockReturnValue({ test: 'test' })
 
     tokenEncoder = {} as jest.Mocked<TokenEncoderInterface<CrossServiceTokenData>>

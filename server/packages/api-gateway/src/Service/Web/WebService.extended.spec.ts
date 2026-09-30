@@ -446,12 +446,23 @@ describe('WebService.fetch limits and error handling', () => {
   it('preserves the SSRF validation error instead of masking it as a fetch failure', async () => {
     const { fn } = recordingFetch('')
 
-    const error = await makeService({}, fn)
+    /**
+     * `.catch((thrown) => thrown as WebValidationError)` widened the result to
+     * `WebFetchResult | WebValidationError`, so reading `.tag` off it did not typecheck. The cast
+     * hid that; keeping the rejection as `unknown` and matching on it does not need one, and
+     * `toMatchObject` checks the tag without asserting the whole error shape.
+     */
+    const thrown: unknown = await makeService({}, fn)
       .fetch('http://127.0.0.1/')
-      .catch((thrown) => thrown as WebValidationError)
+      .then(
+        () => {
+          throw new Error('expected fetch to reject for a blocked host')
+        },
+        (error: unknown) => error,
+      )
 
-    expect(error).toBeInstanceOf(WebValidationError)
-    expect(error.tag).toBe('blocked-host')
+    expect(thrown).toBeInstanceOf(WebValidationError)
+    expect(thrown).toMatchObject({ tag: 'blocked-host' })
   })
 
   it('rejects an empty URL before any network call', async () => {

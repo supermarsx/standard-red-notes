@@ -167,7 +167,13 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
     )
 
     expect(result.statusCode).toBe(401)
-    expect(result.json).toEqual({ error: { message: 'Operation not allowed.' } })
+    /**
+     * `updateSetting` returns `JsonResult | StatusCodeResult` and only the former carries `json`,
+     * so `result.json` did not typecheck. `toHaveProperty` matches the same thing across the union
+     * without a cast, and additionally asserts the property is present rather than reading
+     * `undefined` off the status-code arm.
+     */
+    expect(result).toHaveProperty('json', { error: { message: 'Operation not allowed.' } })
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
