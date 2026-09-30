@@ -22,7 +22,7 @@
     "prebuild": "yarn clean",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src",
-    "test": "jest"
+    "test": "jest --coverage"
   },
   "dependencies": {
     "@standardnotes/common": "^1.52.4",
