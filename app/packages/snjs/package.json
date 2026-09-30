@@ -35,7 +35,7 @@
     "lint:eslint": "eslint lib/",
     "lint:fix": "eslint lib/ --fix",
     "lint:tsc": "tsc --noEmit --emitDeclarationOnly false --project lib/tsconfig.json",
-    "test": "jest",
+    "test": "jest --coverage",
     "test:debug": "node --inspect-brk node_modules/.bin/jest --runInBand"
   },
   "devDependencies": {

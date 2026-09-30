@@ -22,12 +22,22 @@ module.exports = {
   roots: ['<rootDir>/lib'],
   setupFiles: ['<rootDir>/jest-global.ts'],
   setupFilesAfterEnv: [],
+  // RATCHET, NOT A TARGET. See the longer note in `packages/encryption/jest.config.js`.
+  //
+  // A record of where this package measured on 2026-09-30, minus about two points, so coverage
+  // cannot silently fall. Not an opinion about where it should be, and not something to raise
+  // because it looks low — raise it only after real tests have moved the measurement past it.
+  //
+  // The previous 13 br / 22 fn / 27 li / 27 st was never evaluated (the `test` script passed no
+  // `--coverage`) and was also far below reality, so enabling it unchanged would have produced a
+  // gate that could not fire — the same defect in a second form. Measured 43.48 st / 41.31 br /
+  // 34.46 fn / 43.24 li over 48 suites / 491 tests.
   coverageThreshold: {
     global: {
-      branches: 13,
-      functions: 22,
-      lines: 27,
-      statements: 27,
+      branches: 39,
+      functions: 32,
+      lines: 41,
+      statements: 41,
     },
   },
 }

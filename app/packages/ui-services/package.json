@@ -12,7 +12,7 @@
   "scripts": {
     "tsc": "tsc --project tsconfig.json",
     "lint": "eslint src",
-    "test": "jest"
+    "test": "jest --coverage"
   },
   "dependencies": {
     "@standardnotes/common": "^1.52.4",

@@ -20,7 +20,7 @@
     "lint": "yarn eslint src",
     "pods": "yarn install:pods",
     "start": "react-native start",
-    "test": "jest --config jest.config.js",
+    "test": "jest --coverage --config jest.config.js",
     "tsc": "tsc --noEmit",
     "upgrade:snjs": "ncu -u '@standardnotes/*'",
     "bundle:web": "mkdir -p html/Web.bundle/src/web-src/ && cp -r ../web/dist/. html/Web.bundle/src/web-src/ && node scripts/configure-web-bundle.js"
