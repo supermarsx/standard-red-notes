@@ -12,6 +12,13 @@ import {
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { V004Algorithm } from '../../../../Algorithm'
 import { ContentType } from '@standardnotes/domain-core'
+/**
+ * Side-effect import; the same unsoundness as `createItemsKey()` (see `001/Operator001.ts`), one
+ * content type over: this use case returns `CreateDecryptedItemFromPayload` for a
+ * KeySystemItemsKey, whose class is registered by its own module. This is the 004 shared-vault
+ * path, so it is the one that would bite a user on the current protocol rather than a legacy one.
+ */
+import '../../../../Keys/KeySystemItemsKey/Registration'
 
 export class CreateKeySystemItemsKeyUseCase {
   constructor(private readonly crypto: PureCryptoInterface) {}

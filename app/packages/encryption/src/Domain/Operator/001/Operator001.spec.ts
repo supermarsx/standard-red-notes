@@ -9,14 +9,6 @@ import {
 } from '@standardnotes/models'
 import { splitString } from '@standardnotes/utils'
 import { V001Algorithm } from '../../Algorithm'
-/**
- * Side-effect import. `createItemsKey()` builds its result through `CreateDecryptedItemFromPayload`,
- * which only produces an `SNItemsKey` once this module has registered that class against the
- * ItemsKey content type. Real consumers get it from the package index; a caller that reaches an
- * operator without it receives a bare `DecryptedItem` whose `itemsKey` and `keyVersion` are
- * undefined, and would then encrypt with an undefined key.
- */
-import '../../Keys/ItemsKey/Registration'
 import { SNItemsKey } from '../../Keys/ItemsKey/ItemsKey'
 import { Create001KeyParams } from '../../Keys/RootKey/KeyParamsFunctions'
 import { isErrorDecryptingParameters } from '../../Types/EncryptedParameters'

@@ -9,8 +9,6 @@ import {
 } from '@standardnotes/models'
 import { splitString } from '@standardnotes/utils'
 import { V003Algorithm } from '../../Algorithm'
-/** Side-effect import; see the note in `001/Operator001.spec.ts`. */
-import '../../Keys/ItemsKey/Registration'
 import { SNItemsKey } from '../../Keys/ItemsKey/ItemsKey'
 import { Create003KeyParams } from '../../Keys/RootKey/KeyParamsFunctions'
 import { isErrorDecryptingParameters } from '../../Types/EncryptedParameters'

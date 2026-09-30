@@ -20,6 +20,24 @@ import { PkcKeyPair, PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { firstHalfOfString, secondHalfOfString, splitString, UuidGenerator } from '@standardnotes/utils'
 import { V001Algorithm } from '../../Algorithm'
 import { isItemsKey } from '../../Keys/ItemsKey/ItemsKey'
+/**
+ * Side-effect import, required for correctness rather than convenience.
+ *
+ * `createItemsKey()` below returns `CreateDecryptedItemFromPayload(payload)`, which produces an
+ * `SNItemsKey` only once this module has registered that class against the ItemsKey content type.
+ * Without it the factory returns a bare `DecryptedItem` whose `itemsKey` and `keyVersion` are
+ * `undefined`, typed as `ItemsKeyInterface` — so the caller would go on to encrypt notes with an
+ * undefined key, with no error and no log, producing ciphertext nobody can decrypt.
+ *
+ * It used to be reachable only through the package index (`Domain/index.ts`), which made
+ * correctness a property of the caller's import path; this package is already deep-imported past
+ * that index in three places elsewhere in the repo. Importing it here makes the operator
+ * self-sufficient from any entry point, and resolves `@standardnotes/models` through the same
+ * module instance this file uses, so the registration cannot land in a different registry than
+ * the factory reads. No cycle: this module reaches only `models` and `domain-core`, neither of
+ * which depends on this package.
+ */
+import '../../Keys/ItemsKey/Registration'
 import { CreateNewRootKey } from '../../Keys/RootKey/Functions'
 import { Create001KeyParams } from '../../Keys/RootKey/KeyParamsFunctions'
 import { SNRootKey } from '../../Keys/RootKey/RootKey'

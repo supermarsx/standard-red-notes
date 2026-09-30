@@ -49,6 +49,8 @@ import { AsymmetricSignatureVerificationDetached004 } from './UseCase/Asymmetric
 import { DeriveKeySystemRootKeyUseCase } from './UseCase/KeySystem/DeriveKeySystemRootKey'
 import { SyncOperatorInterface } from '../OperatorInterface/SyncOperatorInterface'
 import { ContentType, Result } from '@standardnotes/domain-core'
+/** Side-effect import; `createItemsKey()` is unsound without it. See `001/Operator001.ts`. */
+import '../../Keys/ItemsKey/Registration'
 import { AsymmetricStringGetAdditionalData004 } from './UseCase/Asymmetric/AsymmetricStringGetAdditionalData'
 import { AsymmetricDecryptOwnMessage004 } from './UseCase/Asymmetric/AsymmetricDecryptOwnMessage'
 

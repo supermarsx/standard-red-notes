@@ -6,6 +6,8 @@ import * as Utils from '@standardnotes/utils'
 import { UuidGenerator } from '@standardnotes/utils'
 import { V002Algorithm } from '../../Algorithm'
 import { isItemsKey } from '../../Keys/ItemsKey/ItemsKey'
+/** Side-effect import; `createItemsKey()` is unsound without it. See `001/Operator001.ts`. */
+import '../../Keys/ItemsKey/Registration'
 import { CreateNewRootKey } from '../../Keys/RootKey/Functions'
 import { Create002KeyParams } from '../../Keys/RootKey/KeyParamsFunctions'
 import { SNRootKey } from '../../Keys/RootKey/RootKey'

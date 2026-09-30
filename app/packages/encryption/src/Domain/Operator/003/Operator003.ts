@@ -15,6 +15,8 @@ import { Create003KeyParams } from '../../Keys/RootKey/KeyParamsFunctions'
 import { SNRootKeyParams } from '../../Keys/RootKey/RootKeyParams'
 import { SNProtocolOperator002 } from '../002/Operator002'
 import { ContentType } from '@standardnotes/domain-core'
+/** Side-effect import; `createItemsKey()` is unsound without it. See `001/Operator001.ts`. */
+import '../../Keys/ItemsKey/Registration'
 
 /**
  * @legacy
