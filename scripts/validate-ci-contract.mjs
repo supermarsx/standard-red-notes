@@ -23,6 +23,12 @@ export const CI_CONTRACT_FILES = Object.freeze([
   "scripts/setup.sh",
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
+  // The socket-sync-lane sign-in and the session-type confirmation that gives it
+  // its meaning. A step that runs a spec which no longer checks what it claims is
+  // the exact failure mode this validator exists to prevent, so the substance is
+  // pinned here alongside the step.
+  "e2e/tests/grpc-auth-session.spec.ts",
+  "e2e/helpers/session.ts",
 ]);
 
 // Both aggregates are `yarn workspaces foreach ... run lint`, which SKIPS a
@@ -1172,6 +1178,18 @@ export function validateCiContract(files) {
       "echo 'SERVICE_PROXY_TYPE=grpc' >> \"$GITHUB_ENV\"",
       "gRPC service proxy phase switch",
     ],
+    [
+      "grep -cx 'SERVICE_PROXY_TYPE=grpc'",
+      "live assertion that the gateway really took the gRPC branch",
+    ],
+    [
+      "tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json",
+      "gRPC-phase browser sign-in and note round trip",
+    ],
+    [
+      "--report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0",
+      "zero-skip gRPC sign-in report assertion",
+    ],
     ['OPS_LOAD_NOTES: "25"', "bounded note count"],
     ['OPS_LOAD_CLIENTS: "2"', "bounded client count"],
     ['OPS_REDIS_WORKERS: "2"', "bounded Redis workers"],
@@ -1324,6 +1342,23 @@ export function validateCiContract(files) {
       2,
       "bounded stack startup for the default phase and the gRPC phase",
     ],
+    [
+      // The only browser sign-in that runs while SERVICE_PROXY_TYPE=grpc. A
+      // second copy anywhere would let one of them be neutered while a presence
+      // rule stayed green, which is how the REQUIRE_GATEWAY anchor above lost
+      // its teeth, so pin the count rather than the presence.
+      "tests/grpc-auth-session.spec.ts",
+      1,
+      "gRPC-phase browser sign-in drill",
+    ],
+    [
+      // Once as the reporter's output path, once as the report the zero-skip
+      // verifier reads. Dropping either half leaves a drill whose skip nobody
+      // notices, or a verifier pointed at a file no step writes.
+      "playwright-grpc-auth.json",
+      2,
+      "gRPC sign-in report written and then verified",
+    ],
     ["github.event_name == 'push'", 3, "main-push archive event guard"],
     ["github.ref == 'refs/heads/main'", 3, "main branch archive guard"],
     [
@@ -1390,6 +1425,30 @@ export function validateCiContract(files) {
   if (grpcSwitchIndex >= 0 && grpcSwitchIndex <= hardeningIndex) {
     errors.push(
       `${file}: container-smoke must finish live-container hardening under the default service proxies before the gRPC phase`,
+    );
+  }
+  // The browser sign-in is the only step that exercises `validateSession` over
+  // gRPC, and it is worthless anywhere but inside the gRPC phase: run before the
+  // recreate and it silently proves the HTTP proxies instead. The configuration
+  // assertion has to precede it for the same reason, and the zero-skip verifier
+  // has to follow it or a drill that ran nothing still reads green.
+  const grpcProxyAssertionIndex = containerSmokeBlock.indexOf(
+    "Confirm the api-gateway is really on gRPC service proxies",
+  );
+  const grpcSignInIndex = containerSmokeBlock.indexOf(
+    "Verify a browser sign-in and note round trip over the socket sync lane",
+  );
+  const grpcSignInVerifyIndex = containerSmokeBlock.indexOf(
+    "Reject a skipped or incomplete socket sync lane sign-in",
+  );
+  if (
+    grpcProxyAssertionIndex <= grpcRecreateIndex ||
+    grpcSignInIndex <= grpcProxyAssertionIndex ||
+    grpcSignInVerifyIndex <= grpcSignInIndex ||
+    identityIndex <= grpcSignInVerifyIndex
+  ) {
+    errors.push(
+      `${file}: container-smoke must assert the live gRPC proxy configuration, then sign in through the browser, then reject a skipped sign-in, all inside the gRPC phase and before publication`,
     );
   }
 
@@ -1955,6 +2014,70 @@ export function validateCiContract(files) {
     "/ci-production-gates.html",
     "CI documentation link",
   );
+
+  // THE SOCKET SYNC LANE SIGN-IN IS ONLY WORTH ITS RUNTIME IF IT RUNS ON A COOKIE
+  // SESSION. `forceLegacySessions` is bound to `E2E_TESTING === 'true'`, and under
+  // it auth issues legacy header-based sessions — the one configuration in which a
+  // cookie-session defect cannot occur, and where the socket lanes' missing cookie
+  // went unseen through an entire green suite. The CI step above cannot tell the
+  // difference on its own; the spec's per-run confirmation is what can. So the
+  // confirmation is pinned here, and by COUNT per leg rather than presence: one
+  // shared anchor would let the sign-in leg be dropped while the register leg kept
+  // the rule green, which is precisely how presence rules in this file have lost
+  // their teeth before.
+  const socketLaneSignIn = files.get("e2e/tests/grpc-auth-session.spec.ts") ?? "";
+  for (const [fragment, expectedCount, description] of [
+    [
+      "expectCookieBasedSession(",
+      2,
+      "session-type confirmation on both the register and the sign-in leg",
+    ],
+    [
+      "SESSION_ROUTES.register",
+      1,
+      "session-type confirmation of the registering context",
+    ],
+    [
+      "SESSION_ROUTES.signIn",
+      1,
+      "session-type confirmation of the second, signing-in context",
+    ],
+  ]) {
+    const count = socketLaneSignIn.split(fragment).length - 1;
+    if (count !== expectedCount) {
+      errors.push(
+        `e2e/tests/grpc-auth-session.spec.ts: must carry the ${description} exactly ${expectedCount} time(s), found ${count}`,
+      );
+    }
+  }
+
+  // And the confirmation has to keep asserting what makes a session cookie-based.
+  // These are the four wire facts, all fixed in auth source: the `2:` access-token
+  // version prefix and its exactly-two-part shape (a three-part token is the legacy
+  // `1:<uuid>:<token>`), the HttpOnly `access_token_*` cookie that is the only
+  // credential auth's cookie branch accepts, and the refusal of the legacy bare
+  // token body.
+  const sessionHelper = files.get("e2e/helpers/session.ts") ?? "";
+  for (const [fragment, description] of [
+    [
+      "const COOKIE_SESSION_TOKEN_VERSION = '2'",
+      "cookie-session access-token version prefix",
+    ],
+    [
+      "const ACCESS_TOKEN_COOKIE_PREFIX = 'access_token_'",
+      "cookie name auth's cookie branch reads",
+    ],
+    ["httpOnlyAccessTokenCookie", "HttpOnly access-token cookie assertion"],
+    ["legacyTokenBody", "refusal of the legacy header-session body shape"],
+  ]) {
+    requireFragment(
+      errors,
+      "e2e/helpers/session.ts",
+      sessionHelper,
+      fragment,
+      description,
+    );
+  }
 
   return errors;
 }

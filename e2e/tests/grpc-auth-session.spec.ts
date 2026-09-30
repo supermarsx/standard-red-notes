@@ -10,6 +10,7 @@ import {
   syncUntilQuiescent,
   waitForApplicationReady,
 } from '../helpers/sync'
+import { SESSION_ROUTES, expectCookieBasedSession, recordSessionMints } from '../helpers/session'
 
 /**
  * The AUTHENTICATED browser session under `SERVICE_PROXY_TYPE=grpc`.
@@ -38,6 +39,14 @@ import {
  * Asserting the configuration is CI's job (the step that greps the container's
  * api-gateway .env), so this file stays runnable against any stack.
  *
+ * IT IS NOT session-type-agnostic, and that is the point. `forceLegacySessions` is
+ * bound to `E2E_TESTING === 'true'`, and under it auth issues legacy header-based
+ * sessions — the one configuration in which a cookie-session defect cannot occur.
+ * Every save-loss defect this lane has shipped hid there. So both legs CONFIRM the
+ * session they obtained is genuinely cookie-based (`helpers/session.ts`) rather than
+ * assuming it: a run against an `E2E_TESTING` stack fails here instead of reading
+ * green and proving nothing.
+ *
  * REQUIRES the docker stack up (app front door proxying /v1). Chromium only:
  * this is a server round trip, not a cross-engine bootstrap smoke.
  */
@@ -51,6 +60,7 @@ test.describe('authenticated browser session over the configured service proxies
 
   test('registers, saves an acknowledged note, and reads it back after a fresh sign-in', async ({
     page,
+    context,
     browser,
     baseURL,
   }) => {
@@ -61,11 +71,29 @@ test.describe('authenticated browser session over the configured service proxies
     const unique = `grpc-auth-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     const noteText = `body ${unique}`
 
+    // 0. Watch the session-minting responses BEFORE navigating. A listener attached
+    //    later sees nothing, and step 1b reports that absence as a failure.
+    const registerMints = recordSessionMints(page)
+
     // 1. REGISTER through the real client. This is account creation + the first
     //    authenticated round trip, i.e. the first validateSession of this token.
     await page.goto(baseURL ?? '/', { waitUntil: 'domcontentloaded' })
     await waitForApplicationReady(page)
     await registerAccount(page, account)
+
+    // 1b. CONFIRM THE SESSION TYPE rather than assuming it. Under E2E_TESTING the
+    //     auth server forces legacy header-based sessions, which is the ONE
+    //     configuration in which a cookie-session defect cannot occur — so a green
+    //     run there would prove nothing about what production actually issues. This
+    //     fails loudly in that configuration instead of passing quietly.
+    await expectCookieBasedSession({
+      recorder: registerMints,
+      context,
+      page,
+      route: SESSION_ROUTES.register,
+      label: 'register context',
+      baseURL,
+    })
 
     // 2. The account bootstrap (items key, preferences, the default note) must
     //    reach the server before anything else is claimed about saves.
@@ -111,8 +139,22 @@ test.describe('authenticated browser session over the configured service proxies
     //    note can only appear if the server really holds it — and the sign-in
     //    itself mints a second fresh token that must survive validateSession.
     const reader = await openFreshContext(browser, baseURL)
+    const signInMints = recordSessionMints(reader.page)
     try {
       await signIn(reader.page, account)
+
+      // The sign-in mints a SECOND session, on a different code path from register
+      // (`BaseAuthController.signIn`, not `.register`). Confirm its type too: a
+      // cookie session here is what the pull below has to authenticate with.
+      await expectCookieBasedSession({
+        recorder: signInMints,
+        context: reader.context,
+        page: reader.page,
+        route: SESSION_ROUTES.signIn,
+        label: 'second sign-in context',
+        baseURL,
+      })
+
       const pull = await syncUntilQuiescent(reader.page, 'grpc-auth-pull')
       expect(
         pull.quiescent,
@@ -122,9 +164,11 @@ test.describe('authenticated browser session over the configured service proxies
       const texts = await noteTextsByTitle(reader.page, unique)
       expect(texts, 'the signed-in second client must pull back exactly the saved note').toEqual([noteText])
     } finally {
+      signInMints.dispose()
       await reader.context.close()
     }
 
+    registerMints.dispose()
     expect(pageErrors, 'the authenticated flow must not raise a page error').toEqual([])
   })
 })

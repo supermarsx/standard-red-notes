@@ -908,6 +908,130 @@ test("the gRPC phase must follow hardening and precede publication", () => {
   );
 });
 
+test("the gRPC browser sign-in cannot be silently disarmed", () => {
+  // `validateSession` runs on EVERY authenticated request and, over gRPC, has no
+  // HTTP fallback — yet every other browser step in the job runs under the
+  // default HTTP proxies. This drill is the only one that signs in through the
+  // real client while the switch is on, so each way of neutering it has to fail.
+  for (const [current, replacement, expected] of [
+    [
+      "tests/grpc-auth-session.spec.ts",
+      "tests/app-opens.spec.ts",
+      /gRPC-phase browser sign-in drill exactly 1 times, found 0/,
+    ],
+    [
+      "--report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0",
+      "--report e2e/artifacts/playwright-grpc-auth.json --min-expected 0 --max-skipped 9",
+      /container-smoke zero-skip gRPC sign-in report assertion/,
+    ],
+    [
+      "grep -cx 'SERVICE_PROXY_TYPE=grpc'",
+      "grep -c 'SERVICE_PROXY_TYPE'",
+      /live assertion that the gateway really took the gRPC branch/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.ok(content.includes(current));
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("the gRPC browser sign-in cannot run outside the gRPC phase", () => {
+  // Hoisted above the recreate it would sign in against the default HTTP
+  // proxies and prove nothing, while every presence rule stayed green.
+  const signIn = `      - name: Verify a browser sign-in and note round trip over the socket sync lane
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-grpc-auth.json
+        run: npx playwright test tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json
+`;
+  const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+    assert.ok(content.includes(signIn));
+    return content
+      .replace(signIn, "")
+      .replace(
+        "      - name: Switch the stack to gRPC service proxies\n",
+        `${signIn}      - name: Switch the stack to gRPC service proxies\n`,
+      );
+  });
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /must assert the live gRPC proxy configuration, then sign in through the browser, then reject a skipped sign-in/,
+  );
+});
+
+test("the socket lane sign-in cannot stop confirming it got a cookie session", () => {
+  // THE WHOLE POINT OF THE STEP. Under `E2E_TESTING=true` auth forces legacy
+  // header-based sessions, and the entire e2e suite historically ran that way —
+  // the one configuration in which a cookie-session defect cannot occur. The
+  // socket lanes shipped unable to authenticate a cookie session at all, and the
+  // suite stayed green throughout. The step alone cannot tell the two apart; the
+  // spec's per-run confirmation is what can, so dropping EITHER leg has to fail,
+  // not just dropping both.
+  for (const [current, replacement, expected] of [
+    [
+      "SESSION_ROUTES.register",
+      "SESSION_ROUTES.signIn",
+      /session-type confirmation of the registering context exactly 1 time\(s\), found 0/,
+    ],
+    [
+      "SESSION_ROUTES.signIn",
+      "SESSION_ROUTES.register",
+      /session-type confirmation of the second, signing-in context exactly 1 time\(s\), found 0/,
+    ],
+    [
+      "await expectCookieBasedSession(",
+      "await Promise.resolve(",
+      /session-type confirmation on both the register and the sign-in leg exactly 2 time\(s\), found 1/,
+    ],
+  ]) {
+    const files = withFileChanged(
+      "e2e/tests/grpc-auth-session.spec.ts",
+      (content) => {
+        assert.ok(content.includes(current));
+        return content.replace(current, replacement);
+      },
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("the cookie-session confirmation cannot lose the facts that define one", () => {
+  // Each fragment is a wire fact fixed in auth source. Weakening any one of them
+  // leaves a confirmation that would also pass against a legacy header session,
+  // which is the same as having none.
+  for (const [current, replacement, expected] of [
+    [
+      "const COOKIE_SESSION_TOKEN_VERSION = '2'",
+      "const COOKIE_SESSION_TOKEN_VERSION = '1'",
+      /missing cookie-session access-token version prefix/,
+    ],
+    [
+      "const ACCESS_TOKEN_COOKIE_PREFIX = 'access_token_'",
+      "const ACCESS_TOKEN_COOKIE_PREFIX = 'token_'",
+      /missing cookie name auth's cookie branch reads/,
+    ],
+    [
+      "httpOnlyAccessTokenCookie",
+      "anyAccessTokenCookie",
+      /missing HttpOnly access-token cookie assertion/,
+    ],
+    [
+      "legacyTokenBody",
+      "unusedBodyShape",
+      /missing refusal of the legacy header-session body shape/,
+    ],
+  ]) {
+    const files = withFileChanged("e2e/helpers/session.ts", (content) => {
+      assert.ok(content.includes(current));
+      return content.split(current).join(replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
 test("the real-Redis collaboration tombstone suite cannot stop running", () => {
   // The suite is `describe.skipIf` behind SRN_COLLAB_REDIS_HOST, so removing
   // the env var does not fail anything: vitest reports a skip and the job stays

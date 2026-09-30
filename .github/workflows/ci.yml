@@ -480,15 +480,59 @@ jobs:
         run: >-
           yarn workspace @standard-red-notes/websocket-gateway node
           e2e/push-roundtrip.e2e.mjs
-      # HELD, NOT ABANDONED: the browser sign-in over the socket sync lane
-      # (e2e/tests/grpc-auth-session.spec.ts) belongs here, between the gRPC
-      # recreate above and the publication steps below. It is withheld only
-      # because the lane cannot authenticate at this revision, so the step would
-      # fail, and a failed container-smoke skips publish-containers entirely —
-      # blocking every deploy for a defect that also reaches single-container
-      # and self-hosted, where the lane is advertised by default. Re-land it
-      # with the fix: commit 2cf2c4a5 carries the exact three steps and their
-      # contract rules. The spec itself is committed and runs against any stack.
+      # THIS IS THE ONLY BROWSER SIGN-IN THAT RUNS ON A GENUINE COOKIE SESSION,
+      # and the only one in the gRPC phase. Both halves matter.
+      #
+      # COOKIE SESSIONS. `forceLegacySessions` is bound to `E2E_TESTING === 'true'`
+      # and no compose file sets it, so this stack issues exactly the cookie
+      # sessions production does — while the external home-server suite sets the
+      # flag and therefore runs in the one configuration where a cookie-session
+      # defect cannot occur. That is how it shipped that no socket lane could
+      # authenticate a cookie session at all. The spec CONFIRMS the session type
+      # per run instead of assuming it, so a stack that quietly reverted to legacy
+      # header sessions fails here rather than passing and proving nothing.
+      # Verified live in both modes: green without the flag, red with it
+      # (`session.access_token must carry the cookie-session version prefix "2:";
+      # got "1:"`). Only the `2:` prefix and the bearer-alone refusal discriminate
+      # — at api 20240226 the legacy mode still returns a `session` object and
+      # still sets both HttpOnly cookies, so neither of those is a session-type
+      # check; `e2e/helpers/session.ts` says which is which and why.
+      #
+      # gRPC PHASE. Do not delete this if SERVICE_PROXY_TYPE goes away. The switch
+      # moves `validateSession` off HTTP — it runs on EVERY authenticated request
+      # and retries three times on UNAVAILABLE before throwing with NO HTTP
+      # fallback — plus `items/sync`. Every browser step above ran under the
+      # default HTTP proxies, so before this step nothing in CI ever signed in
+      # through the real client while any of that was reachable. The grep is a
+      # separate step on purpose: if the switch silently failed to reach the
+      # container, the browser drill would pass on HTTP and prove nothing.
+      #
+      # WHAT IT DOES NOT YET COVER, measured, not assumed: the socket SYNC_ITEMS
+      # lane. `SyncWebSocketCommandAdapter.ready()` needs
+      # `durableCommandAuthenticationReady()`, which needs
+      # SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET in the api-gateway's own .env —
+      # and server/docker/docker-entrypoint.sh projects no
+      # API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET, so on compose that
+      # secret can never reach it, SYNC_ITEMS is never advertised, and saves go
+      # over HTTP no matter what SERVICE_PROXY_TYPE says. Single-container and
+      # LXC bind the port unconditionally and DO advertise the lane, which is why
+      # the save-loss defect reached them and not this job. Proven by mutation:
+      # with the lane forced open, reverting eb77e407's three lane call sites
+      # makes this step fail deterministically (a fresh account's SN|ItemsKey
+      # never drains) and HEAD passes; with the lane in its compose default, the
+      # same revert passes. Closing that gap needs the entrypoint projection and
+      # a re-check of the other gRPC-phase steps, which is not done here.
+      - name: Confirm the api-gateway is really on gRPC service proxies
+        run: >-
+          test "$(docker compose exec -T server grep -cx 'SERVICE_PROXY_TYPE=grpc'
+          /opt/server/packages/api-gateway/.env)" = '1'
+      - name: Verify a browser sign-in and note round trip over the socket sync lane
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-grpc-auth.json
+        run: npx playwright test tests/grpc-auth-session.spec.ts --project=chromium --reporter=list,json
+      - name: Reject a skipped or incomplete socket sync lane sign-in
+        run: yarn ci:verify-playwright --report e2e/artifacts/playwright-grpc-auth.json --min-expected 1 --max-skipped 0
       - name: Resolve retry-stable publication handoff identity
         id: publication_identity
         if: >-
