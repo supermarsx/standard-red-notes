@@ -1032,6 +1032,39 @@ test("the cookie-session confirmation cannot lose the facts that define one", ()
   }
 });
 
+test("the socket SYNC_ITEMS lane cannot lose either half of its secret", () => {
+  // The gateway signs durable sync commands, the syncing-server verifies them,
+  // and before the entrypoint projection the secret reached only the verifier.
+  // The symptom is not an error: SYNC_ITEMS is silently withheld from the
+  // negotiated operations and clients sync over HTTP, so a step that claims to
+  // exercise the lane tests something else. Both halves have to be pinned,
+  // because either one alone leaves the lane shut.
+  const stackless = withFileChanged(".github/workflows/ci.yml", (content) => {
+    const loop =
+      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; do";
+    assert.equal(content.split(loop).length - 1, 3);
+    return content.replace(loop, "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do");
+  });
+  assert.match(
+    validateCiContract(stackless).join("\n"),
+    /every disposable stack must mint SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; 3 stack configurations but 2 mint it/,
+  );
+
+  const unprojected = withFileChanged(
+    "server/docker/docker-entrypoint.sh",
+    (content) => {
+      const projection =
+        'export API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"';
+      assert.ok(content.includes(projection));
+      return content.replace(projection, "");
+    },
+  );
+  assert.match(
+    validateCiContract(unprojected).join("\n"),
+    /missing projection of the internal gRPC auth secret into the api-gateway env/,
+  );
+});
+
 test("the real-Redis collaboration tombstone suite cannot stop running", () => {
   // The suite is `describe.skipIf` behind SRN_COLLAB_REDIS_HOST, so removing
   // the env var does not fail anything: vitest reports a skip and the job stays

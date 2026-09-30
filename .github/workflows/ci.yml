@@ -357,7 +357,20 @@ jobs:
             echo 'MYSQL_USER=std_notes_ci'
             echo 'LOG_LEVEL=warn'
           } >> "$GITHUB_ENV"
-          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
+          # SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is what opens the socket
+          # SYNC_ITEMS lane. A fresh checkout has no .env, so without it the
+          # api-gateway's InternalGrpcServiceAuth stays unconfigured, the lane is
+          # never advertised, and container-smoke's oversized-result step exits 1
+          # on REQUIRE_SYNC_ITEMS=1 -- which is what it was doing. scripts/setup.sh
+          # generates this for real operators; CI has to mint its own. `openssl rand
+          # -hex 32` yields 64 characters, well over the 32-byte floor
+          # InternalGrpcServiceAuth.ready() enforces. It is INERT in the two jobs
+          # that never switch proxies: the gRPC syncing proxy is bound only when
+          # SERVICE_PROXY_TYPE=grpc (api-gateway Container.ts:121), so with no
+          # durable port bound the adapter reports not-ready whatever the secret
+          # says. It stays in all three blocks so copying one cannot reintroduce
+          # the gap.
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
@@ -507,21 +520,25 @@ jobs:
       # separate step on purpose: if the switch silently failed to reach the
       # container, the browser drill would pass on HTTP and prove nothing.
       #
-      # WHAT IT DOES NOT YET COVER, measured, not assumed: the socket SYNC_ITEMS
-      # lane. `SyncWebSocketCommandAdapter.ready()` needs
+      # AND IT NOW RUNS ON THE SOCKET SYNC LANE, which it could not before. The
+      # lane was unreachable on this topology for a reason unrelated to
+      # SERVICE_PROXY_TYPE: `SyncWebSocketCommandAdapter.ready()` needs
       # `durableCommandAuthenticationReady()`, which needs
-      # SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET in the api-gateway's own .env —
-      # and server/docker/docker-entrypoint.sh projects no
-      # API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET, so on compose that
-      # secret can never reach it, SYNC_ITEMS is never advertised, and saves go
-      # over HTTP no matter what SERVICE_PROXY_TYPE says. Single-container and
-      # LXC bind the port unconditionally and DO advertise the lane, which is why
-      # the save-loss defect reached them and not this job. Proven by mutation:
-      # with the lane forced open, reverting eb77e407's three lane call sites
-      # makes this step fail deterministically (a fresh account's SN|ItemsKey
-      # never drains) and HEAD passes; with the lane in its compose default, the
-      # same revert passes. Closing that gap needs the entrypoint projection and
-      # a re-check of the other gRPC-phase steps, which is not done here.
+      # SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET in the api-gateway's OWN .env,
+      # and docker-entrypoint.sh projected no
+      # API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET — so the secret
+      # reached the syncing-server, which verifies proofs, and never the gateway,
+      # which signs them. SYNC_ITEMS was withheld from negotiation and saves went
+      # over HTTP whatever the proxy setting said, while single-container and LXC
+      # bind DirectCallSyncCommandPort unconditionally and served the lane — which
+      # is why the save-loss defect reached them and not this job. The entrypoint
+      # now projects it and the stack config above mints one.
+      #
+      # That is what makes this step bite. Proven by mutation on the as-landed
+      # configuration: reverting eb77e407's three lane call sites (type-valid)
+      # fails this step deterministically — a fresh account's SN|ItemsKey never
+      # drains — and HEAD passes. Before the projection the same revert PASSED,
+      # because the lane it breaks was never negotiated.
       - name: Confirm the api-gateway is really on gRPC service proxies
         run: >-
           test "$(docker compose exec -T server grep -cx 'SERVICE_PROXY_TYPE=grpc'
@@ -686,7 +703,20 @@ jobs:
             echo 'MYSQL_USER=std_notes_ci'
             echo 'LOG_LEVEL=warn'
           } >> "$GITHUB_ENV"
-          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
+          # SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is what opens the socket
+          # SYNC_ITEMS lane. A fresh checkout has no .env, so without it the
+          # api-gateway's InternalGrpcServiceAuth stays unconfigured, the lane is
+          # never advertised, and container-smoke's oversized-result step exits 1
+          # on REQUIRE_SYNC_ITEMS=1 -- which is what it was doing. scripts/setup.sh
+          # generates this for real operators; CI has to mint its own. `openssl rand
+          # -hex 32` yields 64 characters, well over the 32-byte floor
+          # InternalGrpcServiceAuth.ready() enforces. It is INERT in the two jobs
+          # that never switch proxies: the gRPC syncing proxy is bound only when
+          # SERVICE_PROXY_TYPE=grpc (api-gateway Container.ts:121), so with no
+          # durable port bound the adapter reports not-ready whatever the secret
+          # says. It stays in all three blocks so copying one cannot reintroduce
+          # the gap.
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
@@ -802,7 +832,20 @@ jobs:
             echo 'MYSQL_USER=std_notes_ci'
             echo 'LOG_LEVEL=warn'
           } >> "$GITHUB_ENV"
-          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
+          # SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is what opens the socket
+          # SYNC_ITEMS lane. A fresh checkout has no .env, so without it the
+          # api-gateway's InternalGrpcServiceAuth stays unconfigured, the lane is
+          # never advertised, and container-smoke's oversized-result step exits 1
+          # on REQUIRE_SYNC_ITEMS=1 -- which is what it was doing. scripts/setup.sh
+          # generates this for real operators; CI has to mint its own. `openssl rand
+          # -hex 32` yields 64 characters, well over the 32-byte floor
+          # InternalGrpcServiceAuth.ready() enforces. It is INERT in the two jobs
+          # that never switch proxies: the gRPC syncing proxy is bound only when
+          # SERVICE_PROXY_TYPE=grpc (api-gateway Container.ts:121), so with no
+          # durable port bound the adapter reports not-ready whatever the secret
+          # says. It stays in all three blocks so copying one cannot reintroduce
+          # the gap.
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"

@@ -576,6 +576,27 @@ fi
 # passes API_GATEWAY_SERVICE_PROXY_TYPE through from the operator's .env and
 # empty keeps the HTTP proxies. Do not auto-enable gRPC from the secret.
 
+# The api-gateway SIGNS durable sync commands with this secret and the
+# syncing-server VERIFIES them, so both halves need the same value. Only one
+# half ever got it. The syncing-server's .env is written from
+# `printenv | grep SYNCING_SERVER_`, which matches the bare name compose passes;
+# the api-gateway's is written from `printenv | grep API_GATEWAY_` below, which
+# matched nothing. So `InternalGrpcServiceAuth.ready()` (it wants >= 32 bytes)
+# was permanently false in the gateway, `SyncWebSocketCommandAdapter.ready()`
+# with it, and SYNC_ITEMS was never advertised on this topology no matter what
+# SERVICE_PROXY_TYPE said: clients silently synced over HTTP, while
+# single-container and LXC bind DirectCallSyncCommandPort unconditionally and
+# served the lane. Measured before this line: AUTHENTICATED advertised
+# [AUTHORIZE_COLLABORATION, API_RPC, STREAM_ASSISTANT, INVITE_EVENTS, FILES_V1]
+# and e2e/sync-items-oversized.e2e.mjs exited 1 under REQUIRE_SYNC_ITEMS=1.
+#
+# PROJECT it, never invent it. scripts/setup.sh already generates one into .env,
+# and the two halves must agree — a value minted here would be a value the
+# operator's syncing-server does not share on any topology that ever separates
+# them. An unset source leaves this empty, which is byte-identical to the
+# behaviour before this line, so a deployment with no secret is unaffected.
+export API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"
+
 printenv | grep API_GATEWAY_ | sed 's/API_GATEWAY_//g' > /opt/server/packages/api-gateway/.env
 chmod 600 /opt/server/packages/api-gateway/.env
 

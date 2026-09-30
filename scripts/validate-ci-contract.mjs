@@ -23,6 +23,11 @@ export const CI_CONTRACT_FILES = Object.freeze([
   "scripts/setup.sh",
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
+  // The one line that lets the socket SYNC_ITEMS lane exist on the container
+  // topologies at all. Without it the api-gateway signs durable commands with an
+  // unconfigured secret, the lane is never advertised, and every step below that
+  // claims to exercise it silently tests HTTP instead.
+  "server/docker/docker-entrypoint.sh",
   // The socket-sync-lane sign-in and the session-type confirmation that gives it
   // its meaning. A step that runs a spec which no longer checks what it claims is
   // the exact failure mode this validator exists to prevent, so the substance is
@@ -1451,6 +1456,33 @@ export function validateCiContract(files) {
       `${file}: container-smoke must assert the live gRPC proxy configuration, then sign in through the browser, then reject a skipped sign-in, all inside the gRPC phase and before publication`,
     );
   }
+
+  // EVERY disposable stack has to mint the internal gRPC auth secret, and the
+  // entrypoint has to hand it to the api-gateway. These are two halves of one
+  // thing and neither is any use alone: the gateway SIGNS durable sync commands
+  // with it and the syncing-server VERIFIES them, and before this the secret
+  // reached only the verifier. `InternalGrpcServiceAuth.ready()` wants >= 32
+  // bytes, so an absent or short value is indistinguishable from "no lane" —
+  // SYNC_ITEMS is withheld from negotiation and clients sync over HTTP while
+  // container-smoke's oversized-result step, which sets REQUIRE_SYNC_ITEMS=1,
+  // exits 1. Count, not presence: three stack blocks mint secrets and a fourth
+  // copied from any of them must not quietly omit this one.
+  const stackSecretLoop =
+    "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; do";
+  const stackSecretLoops = workflow.split(stackSecretLoop).length - 1;
+  const stackConfigurations = workflow.split("Configure isolated stack").length - 1;
+  if (stackSecretLoops !== stackConfigurations) {
+    errors.push(
+      `${file}: every disposable stack must mint SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; ${stackConfigurations} stack configurations but ${stackSecretLoops} mint it`,
+    );
+  }
+  requireFragment(
+    errors,
+    "server/docker/docker-entrypoint.sh",
+    files.get("server/docker/docker-entrypoint.sh") ?? "",
+    'export API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"',
+    "projection of the internal gRPC auth secret into the api-gateway env",
+  );
 
   requireJob(errors, workflow, "load-drill", [
     ["github.event_name == 'schedule'", "scheduled condition"],
