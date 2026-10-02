@@ -274,6 +274,43 @@ if [ "$ALLOW_INSECURE_DEFAULTS_NORM" != "true" ]; then
   fi
 fi
 
+##########################
+# SOCKET SYNC_ITEMS LANE #
+##########################
+#
+# Self-configure the durable-command secret the socket SYNC_ITEMS lane needs.
+# Placed AFTER the insecure-default guard on purpose: a boot that is about to be
+# refused must not leave a freshly minted secret behind on the volume. Placed
+# BEFORE every per-service dotenv projection below, so the api-gateway half and
+# the syncing-server half are written from the same resolved value.
+#
+# See server/docker/internal-grpc-lane-env.sh for the rules. In short: an
+# operator value of >= 32 bytes is never touched and never copied to disk; a
+# shorter or absent one is replaced by a value minted once and persisted to the
+# api-gateway's data volume, and ONLY because this image runs both halves under
+# one supervisord (a value minted for a syncing-server in a different container
+# would be a key the verifier does not share). Nothing below logs the value.
+# shellcheck disable=SC1091
+. /usr/local/bin/internal-grpc-lane-env.sh
+srn_prepare_internal_grpc_secret
+case "$SRN_INTERNAL_GRPC_SECRET_STATE" in
+  supplied)
+    echo "# Durable sync command secret: using the supplied SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET."
+    ;;
+  persisted)
+    echo "# Durable sync command secret: reusing the persisted per-instance value."
+    ;;
+  minted-persisted)
+    echo "# Durable sync command secret: generated a per-instance value and persisted it. The socket SYNC_ITEMS lane no longer needs a hand-edited .env."
+    ;;
+  minted-ephemeral)
+    echo >&2 "# WARNING: generated a durable sync command secret but could not persist it (${SRN_INTERNAL_GRPC_SECRET_FILE:-/opt/server/packages/api-gateway/data/internal-grpc-auth-secret} is not writable). It will change on the next start; set SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET in your .env to pin it."
+    ;;
+  mint-failed)
+    echo >&2 "# WARNING: could not generate a durable sync command secret. The socket SYNC_ITEMS lane stays closed and clients sync over HTTP."
+    ;;
+esac
+
 export AUTH_SERVER_SYNCING_SERVER_URL=http://localhost:$SYNCING_SERVER_PORT
 
 # File Uploads
@@ -572,9 +609,32 @@ export API_GATEWAY_FILES_SERVER_URL=$PUBLIC_FILES_SERVER_URL
 if [ -z "${API_GATEWAY_WEBSOCKET_SYNC_FILES_URL:-}" ]; then
   export API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http://localhost:$FILES_SERVER_PORT
 fi
-# SERVICE_PROXY_TYPE is deliberately NOT defaulted here: docker-compose.yml
-# passes API_GATEWAY_SERVICE_PROXY_TYPE through from the operator's .env and
-# empty keeps the HTTP proxies. Do not auto-enable gRPC from the secret.
+# SERVICE_PROXY_TYPE is still not set here, but the reason has changed and it is
+# no longer "empty means HTTP forever".
+#
+# It used to read "deliberately NOT defaulted; do not auto-enable gRPC from the
+# secret", and the consequence was that the socket SYNC_ITEMS lane could only be
+# switched on by hand-editing .env — which nothing told the operator to do.
+#
+# It is now defaulted, just not from here. This script runs BEFORE supervisord
+# has started anything, and supervisord (nodaemon) never returns to it, so at
+# this point in the boot no gRPC listener exists yet and none can be probed.
+# That matters because GRPCServiceProxy has NO HTTP fallback: validateSession
+# runs on every authenticated request and, over gRPC, retries three times on
+# UNAVAILABLE and then throws, and items/sync rejects outright. A `grpc` setting
+# aimed at a listener that is not answering is a dead API, not a slow one. So
+# the decision belongs to the first moment it is knowable, which is the
+# api-gateway's own launcher: see
+# server/packages/api-gateway/supervisor/supervisor-server.sh, which calls
+# srn_resolve_service_proxy_type from internal-grpc-lane-env.sh after the
+# backends are up and exports SERVICE_PROXY_TYPE for the gateway process only
+# (an inherited variable wins over the dotenv written below, so no file is
+# rewritten and no other service is affected).
+#
+# API_GATEWAY_SERVICE_PROXY_TYPE therefore stays exactly as docker-compose.yml
+# passed it through from the operator's .env — an explicit value always wins and
+# is never overwritten here. validate-docker-hardening.mjs enforces that this
+# script does not force it.
 
 # The api-gateway SIGNS durable sync commands with this secret and the
 # syncing-server VERIFIES them, so both halves need the same value. Only one
@@ -590,11 +650,15 @@ fi
 # [AUTHORIZE_COLLABORATION, API_RPC, STREAM_ASSISTANT, INVITE_EVENTS, FILES_V1]
 # and e2e/sync-items-oversized.e2e.mjs exited 1 under REQUIRE_SYNC_ITEMS=1.
 #
-# PROJECT it, never invent it. scripts/setup.sh already generates one into .env,
-# and the two halves must agree — a value minted here would be a value the
-# operator's syncing-server does not share on any topology that ever separates
-# them. An unset source leaves this empty, which is byte-identical to the
-# behaviour before this line, so a deployment with no secret is unaffected.
+# PROJECT it, never invent it HERE. The rule that a value minted for a
+# syncing-server in a DIFFERENT container would be a key the verifier does not
+# share still holds; what changed is that the SOCKET SYNC_ITEMS LANE section
+# above now resolves the source value once, and mints one only after proving
+# from /etc/supervisord.conf that this image runs both halves itself. That
+# section exports both names already, so this line is the unchanged projection
+# it has always been: it re-states the contract that the gateway's name tracks
+# the syncing-server's, and still leaves the gateway empty when no secret could
+# be resolved at all.
 export API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"
 
 printenv | grep API_GATEWAY_ | sed 's/API_GATEWAY_//g' > /opt/server/packages/api-gateway/.env

@@ -22,7 +22,10 @@ x-server-env: &server-env
   REDIS_PORT: 6379
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-auth-jwt-secret-change-me}
   # Purpose-specific HMAC shared by api-gateway and syncing-server for durable
-  # gRPC command/status calls. Empty keeps WebSocket sync capability closed.
+  # gRPC command/status calls. Empty no longer closes the lane: the entrypoint
+  # mints a per-instance value and persists it to the server-data volume,
+  # because this image runs both halves itself. A value set here always wins and
+  # is never overwritten; set one if you ever split the halves across containers.
   SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: ${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}
   # Must be a 64-char hex string (32 bytes); auth's CrypterNode validates this. Override in prod.
   AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef}
@@ -149,8 +152,12 @@ x-server-env: &server-env
   API_GATEWAY_SQS_AWS_REGION: ${SQS_AWS_REGION:-us-east-1}
   API_GATEWAY_SQS_ACCESS_KEY_ID: ${SQS_ACCESS_KEY_ID:-floci}
   API_GATEWAY_SQS_SECRET_ACCESS_KEY: ${SQS_SECRET_ACCESS_KEY:-floci}
-  # api-gateway <-> auth/syncing-server transport. Empty (the default) keeps the
-  # HTTP proxies. `grpc` moves exactly TWO call paths, not every internal call:
+  # api-gateway <-> auth/syncing-server transport. Empty, and the equivalent
+  # explicit `auto`, let the server container decide at start: the api-gateway's
+  # supervisor wrapper takes gRPC only when both halves are co-located, the
+  # durable-command secret is usable, and both gRPC listeners actually answer,
+  # and otherwise keeps the HTTP proxies. `grpc` and `http` force the choice.
+  # `grpc` moves exactly TWO call paths, not every internal call:
   # validateSession, which runs on every authenticated request and, over gRPC,
   # retries three times on UNAVAILABLE and then throws with no HTTP fallback;
   # and callSyncingServer for the single endpoint `items/sync` at api 20200115.

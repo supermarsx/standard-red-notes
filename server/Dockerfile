@@ -141,6 +141,10 @@ WORKDIR /opt/server
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY docker/deployment-identity-env.sh /usr/local/bin/deployment-identity-env.sh
+# Sourced by BOTH the entrypoint (to resolve the durable sync command secret)
+# and the api-gateway's supervisor wrapper (to resolve SERVICE_PROXY_TYPE once
+# the gRPC listeners are up), hence the shared /usr/local/bin location.
+COPY docker/internal-grpc-lane-env.sh /usr/local/bin/internal-grpc-lane-env.sh
 COPY docker/srn-admin.sh /usr/local/bin/srn-admin
 
 # The fully built workspace (sources, per-package dist, .yarn cache + unplugged
@@ -151,11 +155,11 @@ COPY --from=build /opt/server /opt/server
 # Normalize line endings (a CRLF checkout leaves `#!/bin/bash\r`), create the
 # writable runtime dirs, and create + own everything as the unprivileged `srn`
 # user. All service ports are >1024 so no CAP_NET_BIND_SERVICE is needed.
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/internal-grpc-lane-env.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
   && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
   && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} + \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads /opt/server/packages/api-gateway/data \
-  && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/srn-admin \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/internal-grpc-lane-env.sh /usr/local/bin/srn-admin \
   && find /opt/server -path '*/supervisor/*.sh' -exec chmod +x {} + \
   && addgroup -g 10001 -S srn \
   && adduser -u 10001 -S srn -G srn \

@@ -638,11 +638,20 @@ WEBSOCKET_SYNC_REDIS_KEY_PREFIX=srn:ws-sync:v1
 WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=1500
 WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=30000
 WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=75000
-# Transport between the api-gateway and auth/syncing-server. Empty keeps the
-# HTTP proxies, which is the shipped default. Set grpc to bind the durable
-# command port and enable realtime SYNC_ITEMS; it moves EVERY internal call to
-# gRPC, not only sync. Recreate the server service after changing it.
-SERVICE_PROXY_TYPE=
+# Transport between the api-gateway and auth/syncing-server. This is what binds
+# the durable command port, so it is also what makes the gateway advertise the
+# realtime SYNC_ITEMS lane.
+#   auto    (and empty, for older files) the server container decides at start:
+#           gRPC when both halves are co-located, the durable-command secret
+#           above is usable, and both gRPC listeners answer; otherwise the HTTP
+#           proxies. This is the shipped value and needs no attention.
+#   grpc    force it. There is NO HTTP fallback in GRPCServiceProxy: session
+#           validation runs on every authenticated request and, over gRPC,
+#           retries UNAVAILABLE three times and then throws. Only pin this if
+#           you want a boot with an unreachable gRPC listener to fail loudly.
+#   http    force the HTTP proxies and leave SYNC_ITEMS closed.
+# Recreate the server service after changing it.
+SERVICE_PROXY_TYPE=auto
 # Optional prefix (^[a-z0-9:_-]{1,64}$) for the realtime Redis names when two
 # stacks share one Redis. Empty keeps today's names.
 WEBSOCKET_REDIS_NAMESPACE=
