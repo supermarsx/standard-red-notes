@@ -43,7 +43,7 @@
     "@aws-sdk/client-sqs": "^3.1088.0",
     "@cbor-extract/cbor-extract-linux-arm64": "^2.2.2",
     "@cbor-extract/cbor-extract-linux-x64": "^2.2.2",
-    "@grpc/grpc-js": "1.14.4",
+    "@grpc/grpc-js": "1.14.5",
     "@simplewebauthn/server": "^13.3.2",
     "@smithy/node-http-handler": "^4.9.6",
     "@standardnotes/api": "^1.26.95",

@@ -1907,7 +1907,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@grpc/grpc-js@npm:1.14.4, @grpc/grpc-js@npm:^1.14.3":
+"@grpc/grpc-js@npm:1.14.5":
+  version: 1.14.5
+  resolution: "@grpc/grpc-js@npm:1.14.5"
+  dependencies:
+    "@grpc/proto-loader": "npm:^0.8.0"
+    "@js-sdsl/ordered-map": "npm:^4.4.2"
+  checksum: 10/3be7fe0105c94e83e8a18b895fd534290cf3a26712940e95e0149b869da775a59551dafd60fd6c17213d3032b83fbfa64c6c2c9a0f569f6ef5968607174b7d79
+  languageName: node
+  linkType: hard
+
+"@grpc/grpc-js@npm:^1.14.3":
   version: 1.14.4
   resolution: "@grpc/grpc-js@npm:1.14.4"
   dependencies:
@@ -4519,7 +4529,7 @@ __metadata:
     "@anthropic-ai/sdk": "npm:^0.111.0"
     "@aws-sdk/client-sesv2": "npm:3.1088.0"
     "@aws-sdk/client-sns": "npm:^3.1088.0"
-    "@grpc/grpc-js": "npm:1.14.4"
+    "@grpc/grpc-js": "npm:1.14.5"
     "@standard-red-notes/websocket-gateway": "workspace:*"
     "@standardnotes/domain-core": "workspace:^"
     "@standardnotes/domain-events": "workspace:*"
@@ -4583,7 +4593,7 @@ __metadata:
     "@aws-sdk/client-sqs": "npm:^3.1088.0"
     "@cbor-extract/cbor-extract-linux-arm64": "npm:^2.2.2"
     "@cbor-extract/cbor-extract-linux-x64": "npm:^2.2.2"
-    "@grpc/grpc-js": "npm:1.14.4"
+    "@grpc/grpc-js": "npm:1.14.5"
     "@simplewebauthn/server": "npm:^13.3.2"
     "@smithy/node-http-handler": "npm:^4.9.6"
     "@standardnotes/api": "npm:^1.26.95"
@@ -4782,7 +4792,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@standardnotes/grpc@workspace:packages/grpc"
   dependencies:
-    "@grpc/grpc-js": "npm:1.14.4"
+    "@grpc/grpc-js": "npm:1.14.5"
     "@types/google-protobuf": "npm:^3"
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^26.1.1"
@@ -5007,7 +5017,7 @@ __metadata:
     "@aws-sdk/client-s3": "npm:^3.1088.0"
     "@aws-sdk/client-sns": "npm:^3.1088.0"
     "@aws-sdk/client-sqs": "npm:^3.1088.0"
-    "@grpc/grpc-js": "npm:1.14.4"
+    "@grpc/grpc-js": "npm:1.14.5"
     "@standardnotes/api": "npm:^1.26.95"
     "@standardnotes/common": "workspace:*"
     "@standardnotes/domain-core": "workspace:^"

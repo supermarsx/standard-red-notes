@@ -2565,6 +2565,15 @@ const RAW_RUNTIME_STATE =
           ["@js-sdsl/ordered-map", "npm:4.4.2"]\
         ],\
         "linkType": "HARD"\
+      }],\
+      ["npm:1.14.5", {\
+        "packageLocation": "./.yarn/cache/@grpc-grpc-js-npm-1.14.5-c688c33830-3be7fe0105.zip/node_modules/@grpc/grpc-js/",\
+        "packageDependencies": [\
+          ["@grpc/grpc-js", "npm:1.14.5"],\
+          ["@grpc/proto-loader", "npm:0.8.1"],\
+          ["@js-sdsl/ordered-map", "npm:4.4.2"]\
+        ],\
+        "linkType": "HARD"\
       }]\
     ]],\
     ["@grpc/proto-loader", [\
@@ -6098,7 +6107,7 @@ const RAW_RUNTIME_STATE =
           ["@anthropic-ai/sdk", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:0.111.0"],\
           ["@aws-sdk/client-sesv2", "npm:3.1088.0"],\
           ["@aws-sdk/client-sns", "npm:3.1088.0"],\
-          ["@grpc/grpc-js", "npm:1.14.4"],\
+          ["@grpc/grpc-js", "npm:1.14.5"],\
           ["@standard-red-notes/websocket-gateway", "workspace:packages/websocket-gateway"],\
           ["@standardnotes/api-gateway", "workspace:packages/api-gateway"],\
           ["@standardnotes/domain-core", "workspace:packages/domain-core"],\
@@ -6150,7 +6159,7 @@ const RAW_RUNTIME_STATE =
           ["@aws-sdk/client-sqs", "npm:3.1088.0"],\
           ["@cbor-extract/cbor-extract-linux-arm64", "npm:2.2.2"],\
           ["@cbor-extract/cbor-extract-linux-x64", "npm:2.2.2"],\
-          ["@grpc/grpc-js", "npm:1.14.4"],\
+          ["@grpc/grpc-js", "npm:1.14.5"],\
           ["@simplewebauthn/server", "npm:13.3.2"],\
           ["@smithy/node-http-handler", "npm:4.9.6"],\
           ["@standardnotes/api", "npm:1.26.95"],\
@@ -6362,7 +6371,7 @@ const RAW_RUNTIME_STATE =
       ["workspace:packages/grpc", {\
         "packageLocation": "./packages/grpc/",\
         "packageDependencies": [\
-          ["@grpc/grpc-js", "npm:1.14.4"],\
+          ["@grpc/grpc-js", "npm:1.14.5"],\
           ["@standardnotes/grpc", "workspace:packages/grpc"],\
           ["@types/google-protobuf", "npm:3.15.10"],\
           ["@types/jest", "npm:30.0.0"],\
@@ -6606,7 +6615,7 @@ const RAW_RUNTIME_STATE =
           ["@aws-sdk/client-s3", "npm:3.1088.0"],\
           ["@aws-sdk/client-sns", "npm:3.1088.0"],\
           ["@aws-sdk/client-sqs", "npm:3.1088.0"],\
-          ["@grpc/grpc-js", "npm:1.14.4"],\
+          ["@grpc/grpc-js", "npm:1.14.5"],\
           ["@standardnotes/api", "npm:1.26.95"],\
           ["@standardnotes/common", "workspace:packages/common"],\
           ["@standardnotes/domain-core", "workspace:packages/domain-core"],\
