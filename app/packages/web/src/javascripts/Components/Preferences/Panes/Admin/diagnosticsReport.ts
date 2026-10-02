@@ -12,10 +12,12 @@ import {
 import {
   buildCapabilityRows,
   describeDeployment,
+  describeDiagnosticsReadFailure,
   describeTransport,
   diagnose,
   sanitizeServerCopy,
   type CapabilityTestOutcome,
+  type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
   type TransportStatusInput,
 } from './syncDiagnostics'
@@ -49,6 +51,13 @@ export type DiagnosticsReportInput = {
   deploymentMarker: unknown
   outcomes: readonly CapabilityTestOutcome[]
   loadError: string | null
+  /**
+   * The read failure behind `loadError`, when there was one. Carried separately
+   * so the report's Diagnosis line gets the SAME status-branched guidance the
+   * panel shows, rather than re-deriving a cause from the sentence — and so an
+   * unread diagnostics endpoint is never reported as a verdict about the socket.
+   */
+  readFailure?: DiagnosticsReadFailure
   /** Injected so the report is deterministic under test. */
   generatedAt?: string
 }
@@ -87,10 +96,10 @@ const remedyLines = (remedy: Remedy): string[] => {
 }
 
 export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
-  const { payload, transport, deploymentMarker, outcomes, loadError } = input
+  const { payload, transport, deploymentMarker, outcomes, loadError, readFailure } = input
   const topology: DeploymentTopology | undefined = payload?.deployment
   const verdict = describeTransport(transport)
-  const diagnosis = diagnose(payload, transport)
+  const diagnosis = diagnose(payload, transport, readFailure)
   const marker = describeDeployment(deploymentMarker)
   const rows = buildCapabilityRows(
     payload?.protocol?.serverOperations ?? [],
@@ -116,6 +125,14 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
   lines.push(`- Diagnosis: ${diagnosis.headline}`)
   if (loadError) {
     lines.push(`- Diagnostics endpoint: ${loadError}`)
+  }
+  // The status-branched meaning, included because the most common use of this
+  // report is to hand an unread diagnosis to someone else, and the status is the
+  // only fact in it that narrows the cause. Constant copy from this build plus a
+  // numeric status, so it carries nothing the public-report rule excludes.
+  if (readFailure && !payload) {
+    const failure = describeDiagnosticsReadFailure(readFailure)
+    lines.push(`- What that means: ${failure.title} — ${failure.detail}`)
   }
   lines.push('')
 

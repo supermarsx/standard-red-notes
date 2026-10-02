@@ -31,7 +31,8 @@ jest.mock('@standardnotes/ui-services', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }))
 
-import AdminDiagnosticsTab from './AdminDiagnosticsTab'
+import AdminDiagnosticsTab, { DIAGNOSIS_CHIP_LABEL, TONE_CHIP } from './AdminDiagnosticsTab'
+import { TONES } from './syncDiagnostics'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
@@ -781,4 +782,112 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
 
   const reportTextValue = (): string =>
     (container.querySelector('textarea[aria-label="Diagnostics report"]') as HTMLTextAreaElement | null)?.value ?? ''
+})
+
+/**
+ * *** "I COULD NOT ASK" IS NOT "IT IS DOWN." ***
+ *
+ * The defect these pin, rendered: a failure to READ /v1/admin/sync-diagnostics
+ * put an "Unavailable" chip directly beside a verdict chip reading "WebSocket",
+ * derived from `application.syncTransportStatus` and correct. Two independent
+ * sources of truth on one row, and the one that had read nothing overwrote the
+ * one that had measured something.
+ *
+ * The socket is deliberately LIVE in every case below. If the panel ever again
+ * renders the unread endpoint as a negative verdict about the socket, these fail.
+ */
+describe('AdminDiagnosticsTab — an unreadable diagnostics endpoint', () => {
+  const unreadable = (status: number) =>
+    makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({ status, ok: false, data: {} }),
+      syncTransportStatus: { state: 'READY', operations: ['SYNC_ITEMS', 'API_RPC'] },
+    })
+
+  it('keeps the live transport verdict and does NOT claim the socket is unavailable', async () => {
+    const text = await renderTab(unreadable(401))
+
+    expect(text).toContain('WebSocket')
+    expect(text).toContain('The socket lane is live')
+    expect(text).not.toContain('Unavailable')
+    expect(text).not.toContain('the realtime sync lane is unavailable')
+  })
+
+  it('renders the unread state as its own chip, not as a verdict about availability', async () => {
+    const text = await renderTab(unreadable(401))
+
+    expect(text).toContain('Unknown')
+    expect(text).toContain('could not be READ from the server')
+    expect(text).toContain('measured by this client')
+  })
+
+  it('does not blame the admin role for a 401 — the status rules that cause out', async () => {
+    const text = await renderTab(unreadable(401))
+
+    expect(text).toContain('not authenticated (401)')
+    expect(text).toContain('NOT an admin-role problem')
+    expect(text).not.toContain('check that your session carries the admin role')
+    expect(text).not.toContain('Either the running build predates this endpoint')
+  })
+
+  it('blames the admin role for a 403, which is the status that means it', async () => {
+    const text = await renderTab(unreadable(403))
+
+    expect(text).toContain('refused (403)')
+    expect(text).toContain('requires the admin role')
+    expect(text).not.toContain('predates')
+  })
+
+  it('reports a 404 as a build that predates the endpoint, not as a permissions problem', async () => {
+    const text = await renderTab(unreadable(404))
+
+    expect(text).toContain('no diagnostics endpoint (404)')
+    expect(text).toContain('predates')
+    expect(text).not.toContain('admin role')
+  })
+
+  it('reports an unrecognised status by number without guessing a cause', async () => {
+    const text = await renderTab(unreadable(502))
+
+    expect(text).toContain('answered 502')
+    expect(text).not.toContain('admin role')
+    expect(text).not.toContain('predates')
+  })
+
+  it('carries the same status-branched meaning into the copyable report', async () => {
+    await renderTab(unreadable(401))
+    const report = await openSubtab('Copyable report')
+
+    expect(report).toContain('What that means')
+    expect(report).toContain('NOT an admin-role problem')
+    expect(report).not.toContain('check that your session carries the admin role')
+  })
+})
+
+/**
+ * The chip mapping, asserted against the REAL tone union (`Tone` is derived from
+ * `TONES`). The bug was a ternary chain — `good ? 'Healthy' : warn ? 'Degraded'
+ * : 'Unavailable'` — in which every tone that was not good or warn inherited a
+ * confident claim that the socket was unavailable. `Record<Tone, string>` makes a
+ * new tone a compile error; these make a mapping that compiles and is still
+ * wrong a test failure.
+ */
+describe('AdminDiagnosticsTab — the diagnosis chip mapping', () => {
+  it('has a label for every tone in the union, with nothing falling through', () => {
+    expect(Object.keys(DIAGNOSIS_CHIP_LABEL).sort()).toEqual([...TONES].sort())
+    for (const tone of TONES) {
+      expect(DIAGNOSIS_CHIP_LABEL[tone]).toBeTruthy()
+      // And every one of them is renderable: Chip reads its styling from here.
+      expect(TONE_CHIP[tone]).toBeTruthy()
+    }
+  })
+
+  it('lets exactly one tone — the bad one — claim the lane is unavailable', () => {
+    expect(TONES.filter((tone) => DIAGNOSIS_CHIP_LABEL[tone] === 'Unavailable')).toEqual(['bad'])
+  })
+
+  it('gives the no-verdict tone a label of its own', () => {
+    expect(DIAGNOSIS_CHIP_LABEL.neutral).toBe('Unknown')
+    expect(DIAGNOSIS_CHIP_LABEL.neutral).not.toBe(DIAGNOSIS_CHIP_LABEL.bad)
+    expect(DIAGNOSIS_CHIP_LABEL.neutral).not.toBe(DIAGNOSIS_CHIP_LABEL.warn)
+  })
 })

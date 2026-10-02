@@ -10,6 +10,7 @@ import {
   REALTIME_UNATTACHED_NOTE,
   sanitizeServerCopy,
   summarizeTestRun,
+  TONES,
   type SyncDiagnosticsPayload,
   type TransportStatusInput,
 } from './syncDiagnostics'
@@ -400,11 +401,149 @@ describe('sync diagnostics model', () => {
       expect(diagnosis.findings).toHaveLength(0)
     })
 
-    it('explains an unreachable endpoint instead of rendering an empty screen', () => {
-      const diagnosis = diagnose(undefined, undefined)
+    /**
+     * *** "I COULD NOT ASK" IS NOT "IT IS DOWN." ***
+     *
+     * The state these replace: `diagnose(undefined, …)` returned tone `'bad'`
+     * with a headline about the sync lane, which the panel's chip row rendered as
+     * "Unavailable" immediately beside a verdict chip reading "WebSocket" — read
+     * from `application.syncTransportStatus`, which needs no server call and was
+     * right. Two independent sources of truth, and the one that had read NOTHING
+     * overwrote the one that had measured something.
+     *
+     * The old single remedy was also wrong about the cause: it told every failed
+     * read to "check that your session carries the admin role", and a 401 is the
+     * one status that rules that out — `AdminController.getSyncDiagnostics`
+     * answers 403 for a missing admin role, and the 401 comes from the
+     * cross-service-token middleware declared on the same route, which runs
+     * BEFORE the role check.
+     */
+    describe('a diagnostics read that failed', () => {
+      const live: TransportStatusInput = { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] }
 
-      expect(diagnosis.tone).toBe('bad')
-      expect(diagnosis.findings[0].detail).toContain('admin role')
+      it('does not report the socket as unavailable when it merely could not ask', () => {
+        const diagnosis = diagnose(undefined, live, { status: 401 })
+
+        expect(diagnosis.tone).toBe('neutral')
+        expect(diagnosis.headline).not.toMatch(/unavailable|running over HTTP/i)
+      })
+
+      it('says the locally measured transport verdict still stands', () => {
+        const diagnosis = diagnose(undefined, live, { status: 401 })
+
+        expect(diagnosis.headline).toContain('WebSocket')
+        expect(diagnosis.headline).toContain('measured by this client')
+        expect(diagnosis.headline).toContain('not a finding about the socket')
+      })
+
+      it('stays neutral for every status, because none of them observed the socket', () => {
+        for (const status of [401, 403, 404, 500, 502, undefined]) {
+          expect(diagnose(undefined, live, { status }).tone).toBe('neutral')
+        }
+      })
+
+      it('gives 401, 403 and 404 three different remedies rather than one catch-all', () => {
+        const details = [401, 403, 404].map((status) => diagnose(undefined, live, { status }).findings[0].detail)
+
+        expect(new Set(details).size).toBe(3)
+        for (const detail of details) {
+          expect(detail.length).toBeGreaterThan(0)
+        }
+      })
+
+      it('never sends a 401 to audit the admin role — the status rules that cause out', () => {
+        const [finding] = diagnose(undefined, live, { status: 401 }).findings
+
+        expect(finding.title).toContain('401')
+        expect(finding.detail).not.toContain('check that your session carries the admin role')
+        expect(finding.detail).not.toContain('requires the admin role')
+        // And it says WHY the role cannot be the cause: the role gate answers 403.
+        expect(finding.detail).toContain('NOT an admin-role problem')
+        expect(finding.detail).toContain('403')
+      })
+
+      /**
+       * The lane mechanism is real — the API_RPC lane's session credential is
+       * captured once at ticket mint (SyncWebSocketController) and never
+       * refreshed, and LoopbackSyncApiRpcAdapter 401s without it — but the panel
+       * cannot KNOW that is what happened here, so it is offered as a mechanism
+       * to be aware of, not announced as the cause.
+       */
+      it('names the API_RPC-lane mechanism as a possibility, not as the diagnosis', () => {
+        const detail = diagnose(undefined, live, { status: 401 }).findings[0].detail
+
+        expect(detail).toContain('API_RPC')
+        expect(detail).toContain('can be refused')
+        expect(detail).not.toMatch(/the cause is|this happened because|the reason is/i)
+      })
+
+      it('points a 403 — and only a 403 — at the admin role', () => {
+        expect(diagnose(undefined, live, { status: 403 }).findings[0].detail).toContain('requires the admin role')
+        expect(diagnose(undefined, live, { status: 403 }).findings[0].title).toContain('403')
+        expect(diagnose(undefined, live, { status: 404 }).findings[0].detail).not.toContain('admin role')
+        expect(diagnose(undefined, live, { status: 500 }).findings[0].detail).not.toContain('admin role')
+      })
+
+      it('points a 404 — and only a 404 — at a build that predates the endpoint', () => {
+        expect(diagnose(undefined, live, { status: 404 }).findings[0].detail).toContain('predates')
+        expect(diagnose(undefined, live, { status: 404 }).findings[0].title).toContain('404')
+        expect(diagnose(undefined, live, { status: 401 }).findings[0].detail).not.toContain('predates')
+        expect(diagnose(undefined, live, { status: 403 }).findings[0].detail).not.toContain('predates')
+      })
+
+      it('distinguishes a request that never completed from any status at all', () => {
+        const [finding] = diagnose(undefined, live, {}).findings
+
+        expect(finding.title).toContain('could not be reached')
+        expect(finding.detail).toContain('never completed')
+        expect(finding.detail).not.toContain('admin role')
+        expect(finding.detail).not.toContain('predates')
+      })
+
+      it('reports an unrecognised status by number instead of guessing a cause', () => {
+        const [finding] = diagnose(undefined, live, { status: 502 }).findings
+
+        expect(finding.title).toContain('502')
+        expect(finding.detail).not.toContain('admin role')
+        expect(finding.detail).not.toContain('predates')
+        expect(finding.detail).toContain('not a report about the socket lane')
+      })
+
+      it('says diagnostics have not been read yet before any read has been attempted', () => {
+        const diagnosis = diagnose(undefined, undefined)
+
+        expect(diagnosis.tone).toBe('neutral')
+        expect(diagnosis.headline).toContain('have not been read')
+        expect(diagnosis.findings).toHaveLength(0)
+      })
+    })
+  })
+
+  /**
+   * `Tone` is derived from `TONES`, so this iterates the real union rather than a
+   * copy of it. The panel's chip mapping is asserted against the same list in
+   * AdminDiagnosticsTab.spec.tsx; a tone added here without a label there fails
+   * that file to compile AND fails its test.
+   */
+  describe('TONES', () => {
+    it('includes the no-verdict tone, which is not a spare slot', () => {
+      expect([...TONES]).toContain('neutral')
+      expect([...TONES]).toEqual(expect.arrayContaining(['good', 'warn', 'bad', 'neutral']))
+      expect(TONES).toHaveLength(4)
+    })
+
+    it('is the tone every describe* helper actually emits', () => {
+      const emitted = [
+        describeTransport(undefined).tone,
+        describeTransport({ state: 'CONNECTING', operations: [] }).tone,
+        describeTransport({ state: 'READY', operations: [] }).tone,
+        diagnose(undefined, undefined).tone,
+        diagnose(undefined, undefined, { status: 401 }).tone,
+      ]
+
+      for (const tone of emitted) {
+        expect([...TONES]).toContain(tone)
+      }
     })
   })
 

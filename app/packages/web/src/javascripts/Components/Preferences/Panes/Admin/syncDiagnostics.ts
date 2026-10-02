@@ -198,7 +198,24 @@ export type TransportStatusInput = {
   operations: readonly SyncNegotiatedOperation[]
 }
 
-export type Tone = 'good' | 'warn' | 'bad' | 'neutral'
+/**
+ * Every tone the panel can render, as a VALUE as well as a type.
+ *
+ * `Tone` is derived from this list rather than written out as a bare union so
+ * that "exhaustive over the tones" is checkable by a test and not only by the
+ * compiler. The bug this closes was a ternary chain that mapped two tones to
+ * labels and silently gave every other tone — `'neutral'`, which means "no
+ * verdict" — the label "Unavailable", a confident claim about the socket. A
+ * `Record<Tone, …>` catches that at compile time; iterating this list catches a
+ * mapping that compiles and is still wrong.
+ *
+ * `'neutral'` is not a spare slot: it is already the tone for CONNECTING and
+ * AUTHENTICATING transports and for a capability that cannot be confirmed either
+ * way. It means the panel does not know, which is a different thing from bad.
+ */
+export const TONES = ['good', 'warn', 'bad', 'neutral'] as const
+
+export type Tone = (typeof TONES)[number]
 
 export type TransportVerdict = {
   label: string
@@ -427,6 +444,86 @@ export const BOOT_GATE_HEADER =
   'own name suggests.'
 
 /**
+ * Why the diagnostics endpoint could not be read, when it could not.
+ *
+ * Supplied ONLY when a read was actually attempted and failed, which keeps three
+ * states apart that the panel used to collapse into one: not read yet
+ * (`undefined`), answered with a status (`status` set), and never completed at
+ * all (`status` absent). Each wants different words, and the old single sentence
+ * was wrong for most of them.
+ */
+export type DiagnosticsReadFailure = {
+  /**
+   * The HTTP status the endpoint answered with. Absent when the request never
+   * completed — offline client, proxy, server not running — which is a different
+   * fact from any status and gets different guidance.
+   */
+  status?: number
+}
+
+/**
+ * What to tell the operator when the diagnostics could not be READ.
+ *
+ * *** BRANCHED ON THE STATUS, because the statuses exclude each other. ***
+ *
+ * The one sentence this replaces read "Either the running build predates this
+ * endpoint, or the request was rejected. If the build is current, check that
+ * your session carries the admin role." — and on a 401 the admin role is the one
+ * cause the status rules OUT. In the api-gateway,
+ * `AdminController.getSyncDiagnostics` answers 403 with "Admin role required."
+ * when the requestor is not an admin; a 401 comes from
+ * `ApiGateway_RequiredCrossServiceTokenMiddleware`, declared on the same route
+ * and therefore run BEFORE the role check ever happens. So a 401 means the
+ * request was never authenticated, and sending that operator to audit their
+ * roles is a guaranteed dead end.
+ *
+ * NO CAUSE IS STATED AS FACT HERE. Each entry says what the status MEANS and
+ * what to check; a mechanism that is merely plausible is named as a possibility,
+ * because this panel's only asset is that it can be believed.
+ */
+export function describeDiagnosticsReadFailure(failure: DiagnosticsReadFailure): Diagnosis['findings'][number] {
+  const status = failure.status
+
+  if (status === 401) {
+    return {
+      title: 'The diagnostics request was not authenticated (401)',
+      detail:
+        'The server rejected the request before it reached any role check, so this is NOT an admin-role problem — this endpoint answers 403 for that, and it answered 401. Reload the page; if that does not clear it, sign out and back in. One mechanism worth knowing on this deployment: an admin request can travel over the websocket API_RPC lane, and that lane carries a session credential captured once when the socket ticket was minted and never refreshed afterwards, so a session renewed since the socket connected can be refused there while plain HTTP requests still succeed. Reconnecting the socket, or a reload, re-mints it.',
+    }
+  }
+
+  if (status === 403) {
+    return {
+      title: 'The diagnostics request was refused (403)',
+      detail:
+        'The request WAS authenticated and was then refused on authorization: this endpoint requires the admin role and this session does not carry it. Grant the role to the account, then sign out and back in so a new session picks it up — an existing session keeps the roles it was issued with.',
+    }
+  }
+
+  if (status === 404) {
+    return {
+      title: 'This server build has no diagnostics endpoint (404)',
+      detail:
+        'The running build predates /v1/admin/sync-diagnostics. No configuration change reaches this one; deploy a build that includes the endpoint. The deployment identity on this screen says which build is actually live.',
+    }
+  }
+
+  if (status !== undefined) {
+    return {
+      title: `The diagnostics endpoint answered ${status}`,
+      detail:
+        'The request reached the server and came back without a diagnosis, so none of the server-reported sections could be filled in. That is a fault in answering this request; it is not a report about the socket lane. The gateway log for the request is the next place to look.',
+    }
+  }
+
+  return {
+    title: 'The diagnostics endpoint could not be reached',
+    detail:
+      'The request never completed, so none of the server-reported sections could be filled in. That is a reachability problem between this client and the server — an offline client, a proxy in the way, or a server that is not running — and it says nothing about the socket lane.',
+  }
+}
+
+/**
  * The highest-value output of this tab: turn "unavailable" into the one thing an
  * operator has to change.
  *
@@ -437,20 +534,34 @@ export const BOOT_GATE_HEADER =
 export function diagnose(
   payload: SyncDiagnosticsPayload | undefined,
   transport: TransportStatusInput | undefined,
+  readFailure?: DiagnosticsReadFailure,
 ): Diagnosis {
   const findings: Diagnosis['findings'] = []
 
   if (!payload) {
+    /**
+     * *** "I COULD NOT ASK" IS NOT "IT IS DOWN." ***
+     *
+     * This branch used to return tone `'bad'` with a headline about the sync
+     * lane, which the chip row rendered as "Unavailable" immediately beside a
+     * verdict chip reading "WebSocket" — derived, correctly, from the live
+     * transport this client had actually measured. Two independent sources of
+     * truth, and the one that had failed to read anything overwrote the one that
+     * had observed something.
+     *
+     * `'neutral'` is this module's existing tone for "no verdict" (see the
+     * CONNECTING and AUTHENTICATING transport states, and the unconfirmable
+     * capability row). The panel maps it to its own chip label, so the unread
+     * case can no longer borrow a negative claim about availability.
+     */
+    const verdict = describeTransport(transport)
+
     return {
-      headline: 'Diagnostics could not be read from the server.',
-      tone: 'bad',
-      findings: [
-        {
-          title: 'No response from /v1/admin/sync-diagnostics',
-          detail:
-            'Either the running build predates this endpoint, or the request was rejected. If the build is current, check that your session carries the admin role.',
-        },
-      ],
+      headline: readFailure
+        ? `Diagnostics could not be READ from the server, so nothing the server reports is known here. This is not a finding about the socket: the transport verdict on this screen (${verdict.label}) is measured by this client, needs no server call, and still stands.`
+        : 'Diagnostics have not been read from the server yet.',
+      tone: 'neutral',
+      findings: readFailure ? [describeDiagnosticsReadFailure(readFailure)] : [],
     }
   }
 

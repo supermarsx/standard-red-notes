@@ -21,6 +21,7 @@ import {
   sanitizeServerCopy,
   summarizeTestRun,
   type CapabilityTestOutcome,
+  type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
   type Tone,
   type TransportStatusInput,
@@ -43,7 +44,7 @@ type Props = {
   noteIfForbidden: (response: { status?: number }) => void
 }
 
-const TONE_CHIP: Record<Tone, string> = {
+export const TONE_CHIP: Record<Tone, string> = {
   good: 'bg-success-faded text-success',
   warn: 'bg-warning-faded text-warning',
   bad: 'bg-danger-faded text-danger',
@@ -55,6 +56,29 @@ const Chip: FunctionComponent<{ tone: Tone; children: string }> = ({ tone, child
     {children}
   </span>
 )
+
+/**
+ * The diagnosis chip, one label per tone.
+ *
+ * *** EXHAUSTIVE `Record` ON PURPOSE — the fall-through WAS the bug. ***
+ *
+ * This was a ternary chain: `good ? 'Healthy' : warn ? 'Degraded' : 'Unavailable'`.
+ * Every other tone therefore inherited "Unavailable", including the `'neutral'`
+ * that means "no verdict at all" — so a failure to READ the diagnostics endpoint
+ * was rendered as a confident claim that the socket was unavailable, directly
+ * beside a verdict chip reading "WebSocket" that said the opposite and was right.
+ * A tone added to the union now fails this file to compile rather than quietly
+ * acquiring that claim.
+ *
+ * `Chip` can render all four: `TONE_CHIP` above is itself a `Record<Tone, string>`
+ * and already carries the neutral styling.
+ */
+export const DIAGNOSIS_CHIP_LABEL: Record<Tone, string> = {
+  good: 'Healthy',
+  warn: 'Degraded',
+  bad: 'Unavailable',
+  neutral: 'Unknown',
+}
 
 const EFFORT_TONE: Record<RemedyEffort, Tone> = {
   restart: 'good',
@@ -145,6 +169,15 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const [payload, setPayload] = useState<SyncDiagnosticsPayload | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  /**
+   * The read failure itself, not just its sentence. The status is in hand right
+   * here at the call site, and the diagnosis needs it: 401, 403 and 404 exclude
+   * each other on this endpoint, so one catch-all remedy is wrong for at least
+   * two of them. Held as a distinct state from `loadError` — which is the red
+   * line under the chips — and left `undefined` while nothing has failed, so
+   * "not read yet" stays distinguishable from "the read failed".
+   */
+  const [readFailure, setReadFailure] = useState<DiagnosticsReadFailure | undefined>(undefined)
   const [deployment, setDeployment] = useState<unknown>(undefined)
   const [outcomes, setOutcomes] = useState<CapabilityTestOutcome[]>([])
   const [testing, setTesting] = useState(false)
@@ -170,11 +203,13 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const loadDiagnostics = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
+    setReadFailure(undefined)
     try {
       const response = await application.serverGetJsonRequest<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
       if (!response.ok) {
         noteIfForbidden(response)
         setPayload(undefined)
+        setReadFailure({ status: response.status })
         setLoadError(
           response.status === 404
             ? 'This server build does not have the sync diagnostics endpoint yet.'
@@ -185,6 +220,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       setPayload(response.data)
     } catch (error) {
       console.error(error)
+      // No status: the request never completed, which is a different fact from
+      // any status the server could have sent, and gets its own guidance.
+      setReadFailure({})
       setLoadError('Could not reach the sync diagnostics endpoint.')
     } finally {
       setLoading(false)
@@ -345,7 +383,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
   const topology: DeploymentTopology | undefined = payload?.deployment
   const verdict = useMemo(() => describeTransport(transport), [transport])
-  const diagnosis = useMemo(() => diagnose(payload, transport), [payload, transport])
+  const diagnosis = useMemo(() => diagnose(payload, transport, readFailure), [payload, transport, readFailure])
   const deploymentView = useMemo(() => describeDeployment(deployment), [deployment])
   const rows = useMemo(
     () =>
@@ -380,8 +418,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     [rows],
   )
   const report = useMemo(
-    () => buildDiagnosticsReport({ payload, transport, deploymentMarker: deployment, outcomes, loadError }),
-    [payload, transport, deployment, outcomes, loadError],
+    () =>
+      buildDiagnosticsReport({ payload, transport, deploymentMarker: deployment, outcomes, loadError, readFailure }),
+    [payload, transport, deployment, outcomes, loadError, readFailure],
   )
 
   const copyReport = useCallback(() => {
@@ -404,9 +443,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Chip tone={verdict.tone}>{verdict.label}</Chip>
-          <Chip tone={diagnosis.tone}>
-            {diagnosis.tone === 'good' ? 'Healthy' : diagnosis.tone === 'warn' ? 'Degraded' : 'Unavailable'}
-          </Chip>
+          <Chip tone={diagnosis.tone}>{DIAGNOSIS_CHIP_LABEL[diagnosis.tone]}</Chip>
           {loading && <Spinner className="h-4 w-4" />}
           <Button onClick={() => void loadDiagnostics()} disabled={loading}>
             Refresh
