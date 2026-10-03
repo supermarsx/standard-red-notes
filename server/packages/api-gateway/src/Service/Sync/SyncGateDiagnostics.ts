@@ -52,6 +52,13 @@ export const SYNC_SERVER_OPERATIONS = [
  * be passed through even by mistake. Every human-readable string in the payload
  * is a compile-time constant. Do not add a free-form string field here — route
  * new information through a new literal key instead.
+ *
+ * `observeSyncItems()` is the one method that takes a rich object rather than
+ * booleans, and it is not a hole in that boundary: the lane is READ and handed
+ * straight back, never retained, and the only thing kept from it is one value
+ * of the closed `SyncItemsProbeOutcome` set. Nothing derived from the lane —
+ * not a thrown message, not a resolved address, not a length — may be stored
+ * or reported.
  */
 
 /**
