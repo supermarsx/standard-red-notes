@@ -1,4 +1,4 @@
-import type { SyncNegotiatedOperation } from '@standard-red-notes/websocket-gateway'
+import type { AttachOptions, SyncNegotiatedOperation } from '@standard-red-notes/websocket-gateway'
 
 import {
   resolveUnmetSyncItemsPreconditions,
@@ -41,6 +41,9 @@ export const SYNC_SERVER_OPERATIONS = [
  *     lands during boot would otherwise render four green ticks on no evidence.
  *   - the FILES_V1 outcome, which is decided further inside the gate and has its
  *     own preconditions.
+ *   - the SYNC_ITEMS outcome, which is NOT a precondition question at all: the
+ *     handshake decides it by calling `backend.ready()`, so the gate reads that
+ *     same predicate instead of inferring it. See the SYNC_ITEMS block below.
  *
  * *** SECURITY BOUNDARY ***
  * This records configuration PRESENCE, never configuration VALUES. Enforced
@@ -116,6 +119,121 @@ export type SyncHostReport = {
   remedy: string | null
 }
 
+/**
+ * ---------------------------------------------------------------------------
+ * SYNC_ITEMS: observed from the handshake's own predicate, never derived.
+ * ---------------------------------------------------------------------------
+ *
+ * The bug this exists to make unrepeatable: the gate reported SYNC_ITEMS as
+ * AVAILABLE from `container.isBound(ApiGateway_GRPCSyncingServerServiceProxy)`
+ * -- that a proxy OBJECT was constructed -- while the handshake offers the
+ * operation only when `options.backend.ready()` is true (syncCommandHandler,
+ * at AUTHENTICATED). Those are not the same question. `ready()` additionally
+ * requires `AUTH_JWT_SECRET` (session revalidation) and a durable port whose
+ * `durableCommandAuthenticationReady()` holds -- which for the gRPC port means
+ * a `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET` of at least 32 bytes. So a
+ * deployment that sets `SERVICE_PROXY_TYPE=grpc` and forgets (or truncates)
+ * that secret binds the proxy, satisfies the old gate, and is refused by the
+ * socket: the panel read "available" for days while every client synced over
+ * HTTP. A diagnostic that is wrong in the operator's favour is worse than none.
+ *
+ * Two structural properties keep the claim and the handshake together, rather
+ * than one more boolean in the conjunction:
+ *
+ *   1. `SyncGateObservation` -- everything a composition root can `record()` --
+ *      has NO field for this verdict. A host cannot assert SYNC_ITEMS
+ *      availability at all, by accident or by re-derivation from a weaker
+ *      signal, because no such field exists to carry it. The verdict lives in
+ *      its own slot on the recorder, which `record()` neither sets nor clears,
+ *      so the repeated whole-record patches both hosts perform cannot touch it.
+ *   2. The ONLY way to reach `'ADVERTISED'` is `observeSyncItems()`, which
+ *      takes the sync lane the gateway is being handed and calls
+ *      `backend.ready()` on it itself. Its parameter type is derived from
+ *      `AttachOptions['sync']`, so it is the gateway's own option shape: the
+ *      object probed is the object that will answer the handshake, and
+ *      renaming either the option or the predicate is a compile error here.
+ *
+ * The one signal admitted WITHOUT a probe is admitted only in the direction
+ * that WITHHOLDS: an unbound durable port cannot be ready (`ready()` requires
+ * `durableSync !== undefined`), so `syncingServerGrpcBound === false` is
+ * sufficient for `'WITHHELD'`. Bound-ness is never sufficient for available.
+ *
+ * `'NOT_OBSERVED'` is deliberately NOT folded into "withheld". A host that
+ * never probed (or a probe that threw) leaves the gate unable to answer, and
+ * saying "withheld" there would be the same class of error in the other
+ * direction -- it would tell a single-container operator their notes are on
+ * HTTP when they are not. In that state `syncItemsAdvertised` is ABSENT from
+ * the report (the panel's own guard is `!== undefined`), so the panel makes no
+ * claim at all.
+ *
+ * SNAPSHOT, not a subscription: this is a boot-time reading of a live
+ * predicate, correct because every input to `ready()` is fixed at process
+ * start. The strictly better source is the attached gateway's own closure --
+ * `SyncGatewayAccess` would have to expose it -- which the admin endpoint could
+ * then read per request for every host at once.
+ */
+
+/** Exactly the lane object the gateway receives, so the probe cannot drift. */
+type GatewaySyncLane = NonNullable<AttachOptions['sync']>
+
+/**
+ * The handshake's predicate, and nothing else: `syncCommandHandler` advertises
+ * SYNC_ITEMS if and only if `options.backend.ready()`.
+ */
+export type SyncItemsHandshakeProbe = Pick<GatewaySyncLane, 'backend'>
+
+/** What the probe found. `'NEVER_PROBED'` is the recorder's initial state. */
+export type SyncItemsProbeOutcome = 'NEVER_PROBED' | 'READY' | 'NOT_READY' | 'NO_LANE' | 'PROBE_FAILED'
+
+/**
+ * Three states, never two: available, withheld, or not determined. The panel
+ * must be able to tell the third from the second.
+ */
+export type SyncItemsGateState = 'ADVERTISED' | 'WITHHELD' | 'NOT_OBSERVED'
+
+/**
+ * Why, as a closed enum. A too-short or missing internal secret is reported as
+ * `DURABLE_BACKEND_NOT_READY` -- never by length, never by content, never by
+ * naming which of the readiness terms failed, because the probe is a single
+ * boolean and inventing detail it does not carry would be a second lie.
+ */
+export type SyncItemsGateCause =
+  | 'LANE_PRECONDITION_UNMET'
+  | 'SYNC_LANE_NOT_BUILT'
+  | 'DURABLE_BACKEND_UNBOUND'
+  | 'DURABLE_BACKEND_NOT_READY'
+  | 'NEVER_PROBED'
+  | 'PROBE_FAILED'
+  | 'GATE_NOT_RECORDED'
+
+export const SYNC_ITEMS_CAUSE_REMEDIES: Readonly<Record<SyncItemsGateCause, string | null>> = Object.freeze({
+  // The lane's own conditions are already listed, with remedies, in
+  // `unmetPreconditions`; restating them here is how two copies drift.
+  LANE_PRECONDITION_UNMET: null,
+  SYNC_LANE_NOT_BUILT:
+    'a gateway is attached but it was given no sync lane, so no operation is negotiated on the socket at all; the unmet conditions in this report name why the lane was not built',
+  // Taken from SyncWebSocketPreconditions at report time, not copied here.
+  DURABLE_BACKEND_UNBOUND: null,
+  DURABLE_BACKEND_NOT_READY:
+    'the durable command port is bound but FAILED the readiness check the handshake itself makes, so the socket will not offer SYNC_ITEMS and notes sync over HTTP while every other capability stays realtime. That check needs AUTH_JWT_SECRET (the session behind each command is revalidated) and, for the gRPC port, SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes and identical on the syncing server. A bound proxy is not evidence of either',
+  NEVER_PROBED:
+    'this host recorded no reading of the handshake predicate, so the gate cannot say whether SYNC_ITEMS is offered. Treat it as unknown: it is neither a healthy lane nor a withheld operation. A host built before the gate took its own reading reports this',
+  PROBE_FAILED:
+    'the readiness check the handshake makes threw while the gate was reading it, so the answer is unknown. The boot log carries the failure; it is withheld here because a thrown message can embed a resolved service address',
+  GATE_NOT_RECORDED:
+    'the boot gate has not been recorded yet (a request that landed during startup), so there is nothing to read the lane from. See `recorded` in this report',
+})
+
+export type SyncItemsReport = {
+  state: SyncItemsGateState
+  /** Null only when `state` is `'ADVERTISED'`. */
+  cause: SyncItemsGateCause | null
+  /** Constant copy, or the shared precondition remedy. Null when there is none. */
+  remedy: string | null
+  /** The raw probe reading, so the panel can tell "unknown" apart from "no". */
+  probe: SyncItemsProbeOutcome
+}
+
 export type SyncGateDiagnosticsReport = {
   /**
    * False before the gate has run at all — a request that lands during boot, or
@@ -137,8 +255,15 @@ export type SyncGateDiagnosticsReport = {
    * while SYNC_ITEMS is withheld for want of a durable command port, with
    * clients syncing over HTTP. Collapsing the two would show an operator a
    * healthy lane and leave them no way to see the missing operation.
+   *
+   * ABSENT -- not `false` -- when `syncItems.state` is `'NOT_OBSERVED'`. The
+   * panel's guard on this field is `!== undefined`, so omitting it is how "the
+   * gate cannot say" renders as no claim instead of as a withheld operation.
+   * `syncItems` carries the same verdict in full, including that third state.
    */
-  syncItemsAdvertised: boolean
+  syncItemsAdvertised?: boolean
+  /** The SYNC_ITEMS verdict with its provenance (see `SyncItemsReport`). */
+  syncItems: SyncItemsReport
   /**
    * Every unmet boot condition: the shared ones from SyncWebSocketPreconditions,
    * then the host's own (see `host`), so the panel's single list names ALL of
@@ -182,6 +307,14 @@ export type SyncGateObservation = SyncPreconditionState & {
    * add, or an older host, records no key and the report reads as before.
    */
   hostUnmetCondition?: SyncHostUnmetCondition
+  /**
+   * There is deliberately NO field here for SYNC_ITEMS availability. It is the
+   * one verdict a composition root cannot assert: it comes only from
+   * `observeSyncItems()`, which reads the handshake's own predicate off the
+   * lane being handed to the gateway. `syncingServerGrpcBound` above is a
+   * weaker signal (a proxy object exists) and is admitted only where it
+   * WITHHOLDS. See the SYNC_ITEMS block above for why.
+   */
 }
 
 const NO_FILES: SyncFilesReport = Object.freeze({ advertised: false, unmetCondition: null, remedy: null })
@@ -193,23 +326,131 @@ const NO_HOST: SyncHostReport = Object.freeze({ unmetCondition: null, remedy: nu
  */
 export class SyncGateDiagnosticsRecorder {
   private observation?: SyncGateObservation
+  /**
+   * The SYNC_ITEMS reading, in its OWN slot. `record()` neither sets nor clears
+   * it, which is what makes it un-clobberable: both composition roots record
+   * the whole observation repeatedly as boot proceeds (files, then the attach
+   * outcome), so a verdict kept inside that object would be erased by whichever
+   * patch landed next, and a verdict a host could pass through `record()` could
+   * be re-derived from the wrong signal. Only `observeSyncItems()` writes here.
+   */
+  private syncItemsProbe: SyncItemsProbeOutcome = 'NEVER_PROBED'
 
   record(observation: SyncGateObservation): void {
     this.observation = observation
   }
 
+  /**
+   * Reads the handshake's own predicate off the sync lane the gateway is being
+   * given, and returns that same lane so this sits IN the call that hands it
+   * over:
+   *
+   *     webSocketRuntime.attach({ ..., sync: syncGateDiagnostics.observeSyncItems(sync) })
+   *
+   * The object probed is therefore the object that will answer the handshake --
+   * not a second one that could disagree -- and dropping the observation means
+   * editing the attach argument itself rather than silently deleting a line
+   * somewhere else. `undefined` (this deployment built no lane) is an answer,
+   * not a failure to answer.
+   *
+   * A thrown predicate is recorded as `'PROBE_FAILED'` -- unknown, never
+   * available -- and the thrown value is dropped here: it can embed a resolved
+   * service address, and nothing in this module may carry one.
+   */
+  observeSyncItems<TLane extends SyncItemsHandshakeProbe>(lane: TLane | undefined): TLane | undefined {
+    if (lane === undefined) {
+      this.syncItemsProbe = 'NO_LANE'
+      return undefined
+    }
+    try {
+      this.syncItemsProbe = lane.backend.ready() ? 'READY' : 'NOT_READY'
+    } catch {
+      this.syncItemsProbe = 'PROBE_FAILED'
+    }
+    return lane
+  }
+
   clear(): void {
     this.observation = undefined
+    this.syncItemsProbe = 'NEVER_PROBED'
+  }
+
+  /**
+   * The SYNC_ITEMS verdict. Three states, and the only route to `'ADVERTISED'`
+   * is a probe that returned `'READY'` over a lane the gate also found enabled.
+   */
+  private resolveSyncItems(lane: {
+    recorded: boolean
+    enabled: boolean
+    durableBackendBound: boolean
+    /** The shared module's own remedy for the unbound port, never a copy. */
+    unboundRemedy: string | null
+  }): SyncItemsReport {
+    const probe = this.syncItemsProbe
+    const report = (state: SyncItemsGateState, cause: SyncItemsGateCause | null, remedy?: string | null) => ({
+      state,
+      cause,
+      remedy: remedy !== undefined ? remedy : cause === null ? null : SYNC_ITEMS_CAUSE_REMEDIES[cause],
+      probe,
+    })
+
+    if (!lane.recorded) {
+      // No gate to read the lane from. A probe can still settle it NEGATIVELY
+      // -- a backend that refuses, or a lane that was never built, offers
+      // nothing whatever the gate would have said -- but never positively.
+      if (probe === 'NOT_READY') {
+        return report('WITHHELD', 'DURABLE_BACKEND_NOT_READY')
+      }
+      if (probe === 'NO_LANE') {
+        return report('WITHHELD', 'SYNC_LANE_NOT_BUILT')
+      }
+      if (probe === 'PROBE_FAILED') {
+        return report('NOT_OBSERVED', 'PROBE_FAILED')
+      }
+      return report('NOT_OBSERVED', 'GATE_NOT_RECORDED')
+    }
+
+    // SYNC_ITEMS cannot be offered over a socket that never opens, so the
+    // lane's own conditions outrank the backend reading and are named first.
+    if (!lane.enabled) {
+      return report('WITHHELD', 'LANE_PRECONDITION_UNMET')
+    }
+
+    switch (probe) {
+      case 'READY':
+        return report('ADVERTISED', null)
+      case 'NOT_READY':
+        return report('WITHHELD', 'DURABLE_BACKEND_NOT_READY')
+      case 'NO_LANE':
+        return report('WITHHELD', 'SYNC_LANE_NOT_BUILT')
+      case 'PROBE_FAILED':
+        return report('NOT_OBSERVED', 'PROBE_FAILED')
+      case 'NEVER_PROBED':
+        // The ONE inference allowed without a probe, and only because it can
+        // only withhold: `ready()` requires a durable port to exist, so an
+        // unbound one cannot be ready. Bound-ness never implies the reverse --
+        // that inference is the bug this whole block exists to prevent.
+        return lane.durableBackendBound
+          ? report('NOT_OBSERVED', 'NEVER_PROBED')
+          : report('WITHHELD', 'DURABLE_BACKEND_UNBOUND', lane.unboundRemedy)
+    }
   }
 
   report(): SyncGateDiagnosticsReport {
     const observed = this.observation
     if (!observed) {
+      const syncItems = this.resolveSyncItems({
+        recorded: false,
+        enabled: false,
+        durableBackendBound: false,
+        unboundRemedy: null,
+      })
       return {
         recorded: false,
         gatewayAttached: false,
         syncLaneEnabled: false,
-        syncItemsAdvertised: false,
+        ...(syncItems.state === 'NOT_OBSERVED' ? {} : { syncItemsAdvertised: syncItems.state === 'ADVERTISED' }),
+        syncItems,
         unmetPreconditions: [],
         unmetCodes: [],
         files: { ...NO_FILES },
@@ -229,12 +470,24 @@ export class SyncGateDiagnosticsRecorder {
     ]
     const laneEnabled =
       resolveUnmetSyncTransportPreconditions(observed).length === 0 && hostUnmetCondition === undefined
+    // The SYNC_ITEMS verdict is NOT derived from this list -- that is the
+    // divergence. The list still names the condition for the panel, and its
+    // remedy is reused verbatim when the port is unbound so the two cannot
+    // drift apart.
+    const unmetSyncItems = resolveUnmetSyncItemsPreconditions(observed)
+    const syncItems = this.resolveSyncItems({
+      recorded: true,
+      enabled: laneEnabled,
+      durableBackendBound: observed.syncingServerGrpcBound,
+      unboundRemedy: unmetSyncItems[0]?.remedy ?? null,
+    })
 
     return {
       recorded: true,
       gatewayAttached: observed.gatewayAttached ?? false,
       syncLaneEnabled: laneEnabled,
-      syncItemsAdvertised: laneEnabled && resolveUnmetSyncItemsPreconditions(observed).length === 0,
+      ...(syncItems.state === 'NOT_OBSERVED' ? {} : { syncItemsAdvertised: syncItems.state === 'ADVERTISED' }),
+      syncItems,
       unmetPreconditions,
       unmetCodes: unmetPreconditions.map(({ code }) => code),
       files: {

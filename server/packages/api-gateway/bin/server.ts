@@ -593,6 +593,12 @@ void container
       connectionTokenSecretPresent: connectionTokenSecretUsable,
       webSocketSyncEnabled,
       redisBound: container.isBound(TYPES.ApiGateway_Redis),
+      // `isBound` says a proxy OBJECT was constructed, which is strictly weaker
+      // than what the handshake asks of it, so it no longer decides whether
+      // SYNC_ITEMS is reported as available — it feeds the named condition
+      // list, and (only) withholds when it is false. The verdict itself is
+      // read from the lane's own `backend.ready()` at the attach below; see
+      // the SYNC_ITEMS block in SyncGateDiagnostics.
       syncingServerGrpcBound: container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy),
     }
     // N22: `gatewayAttached` is recorded from the ATTACH OUTCOME below, never
@@ -623,10 +629,14 @@ void container
         { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
       )
     }
-    // The SYNC_ITEMS verdict, stated separately and never folded into the line
-    // above. A client whose socket is healthy but carries no SYNC_ITEMS syncs
-    // over HTTP while everything else stays realtime, and an operator needs to
-    // be able to see exactly that rather than infer it from a silent lane.
+    // The SYNC_ITEMS CONDITION line, stated separately and never folded into
+    // the line above. A client whose socket is healthy but carries no
+    // SYNC_ITEMS syncs over HTTP while everything else stays realtime, and an
+    // operator needs to be able to see exactly that rather than infer it from a
+    // silent lane. This line is about the named condition only — an unbound
+    // durable port. The DEFINITIVE verdict is logged after the attach, from the
+    // lane's own readiness predicate, because a BOUND port is not evidence that
+    // the handshake will accept it.
     const unmetSyncItemsPreconditions = resolveUnmetSyncItemsPreconditions(gateObservation)
     if (unmetSyncItemsPreconditions.length > 0) {
       logger.warn(
@@ -818,7 +828,18 @@ void container
               secretAccessKey: env.get('SQS_SECRET_ACCESS_KEY', true) || undefined,
             },
           },
-          sync,
+          // The SYNC_ITEMS verdict for the admin gate is READ OFF THIS LANE,
+          // here, in the call that hands it to the gateway: `observeSyncItems`
+          // evaluates `backend.ready()` -- the very predicate syncCommandHandler
+          // evaluates at AUTHENTICATED -- and returns `sync` unchanged. Before
+          // this, the gate recorded `isBound(ApiGateway_GRPCSyncingServerServiceProxy)`,
+          // i.e. that a proxy object had been CONSTRUCTED, and reported
+          // SYNC_ITEMS available while the handshake withheld it: a bound proxy
+          // with a missing or under-32-byte SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET
+          // (or an empty AUTH_JWT_SECRET) fails `ready()` and the admin pane said
+          // the opposite for days. `undefined` here means this deployment built
+          // no lane, which is an answer and is recorded as one.
+          sync: syncGateDiagnostics.observeSyncItems(sync),
           sqsEventDedupStore: container.isBound(TYPES.ApiGateway_Redis)
             ? createRedisSqsEventDedupStore(container.get(TYPES.ApiGateway_Redis) as RedisSqsEventDedupClient, {
                 // N17: dedup claims are namespaced with everything else.
@@ -847,6 +868,22 @@ void container
         mintConnectionTokenHandler = gateway.handleMintToken
         recordGate({ gatewayAttached: true })
         logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
+        // The one SYNC_ITEMS line the gate can stand behind, stated once after
+        // the attach: the PROBED state, from the same predicate the handshake
+        // evaluates, not an inference from a constructed proxy. `state` and
+        // `cause` are closed enums and `remedy` is a compile-time constant, so
+        // this names variables and never a value.
+        const syncItemsVerdict = syncGateDiagnostics.report().syncItems
+        if (syncItemsVerdict.state === 'ADVERTISED') {
+          logger.info('Realtime SYNC_ITEMS WILL be advertised: the durable command backend reports ready.')
+        } else {
+          logger.warn(
+            `Realtime SYNC_ITEMS is ${syncItemsVerdict.state} (${syncItemsVerdict.cause}). The socket lane is unaffected and still serves its other capabilities; clients sync items over HTTP.${
+              syncItemsVerdict.remedy ? ` Remedy: ${syncItemsVerdict.remedy}` : ''
+            }`,
+            { syncItemsState: syncItemsVerdict.state, syncItemsCause: syncItemsVerdict.cause },
+          )
+        }
       } catch (error) {
         await inviteEventAvailability?.close().catch(() => undefined)
         inviteEventAvailability = undefined
