@@ -378,6 +378,23 @@ describe('the remedies that are not config changes', () => {
     expect(remedy.effort).toBe('client-update')
     expect(remedy.summary).toContain('FILES_V1')
   })
+
+  /**
+   * The operation names are the one thing this module interpolates from the
+   * wire, and they were joined raw. A server advertising an operation named
+   * after an internal address printed it on screen and into the copyable
+   * report — while `websocketSection.ts`'s finding told the reader they were
+   * "redacted on the way in like every other string off this wire".
+   */
+  it('redacts an address a server put in an operation name, without dropping the name', () => {
+    const remedy = remedyForClientGap(['syncing.internal.example:50051', 'FILES_V1'])
+
+    expect(remedy.summary).not.toContain('syncing.internal.example')
+    expect(remedy.summary).toContain('[address withheld]')
+    // A legitimate operation name is untouched, so the redaction does not cost
+    // the finding its only content.
+    expect(remedy.summary).toContain('FILES_V1')
+  })
 })
 
 /**
@@ -466,5 +483,47 @@ describe('secrecy', () => {
     expect(text).not.toMatch(/https?:\/\//)
     expect(text).not.toMatch(/redis:\/\//)
     expect(text).not.toMatch(/\d{1,3}(\.\d{1,3}){3}/)
+  })
+
+  /**
+   * The test above asserts the consequence of the TYPE: feed the topology its
+   * most "configured" legal values and only names come out. That passes against
+   * a module with no boundary discipline at all, because the fixture is legal.
+   *
+   * This one plants ILLEGAL values in the closed-enum fields. The topology is
+   * JSON cast at the boundary, so the union is a compile-time claim about a
+   * value this build never constructed, and two `because` lines interpolated
+   * those fields straight into prose — making a field believed to be an enum a
+   * channel for arbitrary text on a screen designed to be pasted into an issue.
+   */
+  it('will not echo a string a server put in a field this build believes is an enum', () => {
+    const hostile = {
+      ...topology({ serviceProxySetting: 'unset', syncSwitchSetting: 'nonsense' as 'other' }),
+      boundServiceProxy: 'syncing.internal.example:50051' as 'http',
+    }
+
+    const text = [
+      remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', 'server copy', hostile),
+      remedyForPrecondition('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION', 'server copy', hostile),
+    ]
+      .map((remedy) => JSON.stringify(remedy))
+      .join(' ')
+
+    expect(text).not.toContain('syncing.internal.example')
+    expect(text).not.toContain('nonsense')
+    // Collapsed to a constant this build owns, rather than dropped — the row
+    // still says that something unexpected was reported.
+    expect(text).toContain('unrecognised')
+  })
+
+  it('still prints a legal enum member, so the guard is not just a blanket redaction', () => {
+    const remedy = remedyForPrecondition(
+      'SYNCING_SERVER_GRPC_UNBOUND',
+      'server copy',
+      topology({ boundServiceProxy: 'direct-call' }),
+    )
+
+    expect(remedy.because.join(' ')).toContain('"direct-call"')
+    expect(remedy.because.join(' ')).not.toContain('unrecognised')
   })
 })

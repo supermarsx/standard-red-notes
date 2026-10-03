@@ -150,6 +150,28 @@ const isRecorded = (topology: DeploymentTopology | undefined): topology is Deplo
 
 const present = (topology: DeploymentTopology, key: string): boolean => topology.presence?.[key] === true
 
+/**
+ * A closed-enum field off the wire, admitted only if it IS one of the members.
+ *
+ * The `DeploymentTopology` type says these fields are closed unions. That is a
+ * compile-time claim about a value this module never constructs: the object is
+ * JSON from `/v1/admin/sync-diagnostics`, cast at the boundary, so a misbehaving
+ * (or newer) server can put any string in one. Interpolating it straight into a
+ * `because` line — which is what `${topology.boundServiceProxy}` did — makes a
+ * field this build believed was an enum into a channel for arbitrary text, on a
+ * screen built to be pasted into an issue. Same rule, and the same reason, as
+ * `safeEnum` in `diagnosticsSections.ts`.
+ *
+ * `sanitizeServerCopy` is deliberately NOT the fix here: it is a denylist that
+ * catches address- and credential-SHAPED text, and an enum has a known member
+ * list, so nothing outside it needs to be printed at all.
+ */
+const knownToken = <T extends string>(value: unknown, allowed: readonly T[]): T | 'unrecognised' =>
+  typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : 'unrecognised'
+
+const BOUND_SERVICE_PROXIES = ['direct-call', 'grpc', 'http'] as const
+const SYNC_SWITCH_SETTINGS = ['true', 'false', 'unset', 'other'] as const
+
 const generic = (code: string, serverRemedy: string | undefined): Remedy => ({
   code: sanitizeServerCopy(code),
   // The one place server-authored prose is printed verbatim. It goes through the
@@ -249,7 +271,7 @@ function grpcRemedy(topology: DeploymentTopology): Remedy {
           : topology.serviceProxySetting === 'auto'
             ? 'SERVICE_PROXY_TYPE is "auto" on this deployment, so the server container decided for itself and chose the HTTP proxies — it only chooses gRPC when both halves are co-located, the durable-command secret is usable and both gRPC listeners answer. Check the resolver decision on this screen before overriding it: forcing "grpc" removes the HTTP fallback that decision was protecting.'
             : 'SERVICE_PROXY_TYPE is not set to "grpc" on this deployment.',
-        `The bound service proxy is "${topology.boundServiceProxy ?? 'unknown'}".`,
+        `The bound service proxy is "${topology.boundServiceProxy === undefined ? 'unknown' : knownToken(topology.boundServiceProxy, BOUND_SERVICE_PROXIES)}".`,
         urlSet
           ? 'SYNCING_SERVER_GRPC_URL IS set — which is why the stock advice to "configure SYNCING_SERVER_GRPC_URL" would have led nowhere.'
           : 'SYNCING_SERVER_GRPC_URL is not set.',
@@ -375,7 +397,7 @@ function killSwitchRemedy(topology: DeploymentTopology): Remedy {
     because: [
       topology.syncSwitchSetting === 'false'
         ? 'WEBSOCKET_SYNC_ENABLED is set to "false". This is a deliberate kill switch, not a misconfiguration — someone turned the lane off.'
-        : `WEBSOCKET_SYNC_ENABLED currently reads as "${topology.syncSwitchSetting ?? 'unknown'}", which does not match the boot-time observation. The value changed after the container started; the restart is what will apply it.`,
+        : `WEBSOCKET_SYNC_ENABLED currently reads as "${topology.syncSwitchSetting === undefined ? 'unknown' : knownToken(topology.syncSwitchSetting, SYNC_SWITCH_SETTINGS)}", which does not match the boot-time observation. The value changed after the container started; the restart is what will apply it.`,
     ],
   }
 }
@@ -632,11 +654,26 @@ export function remedyForUnstampedDeployment(): Remedy {
   }
 }
 
-/** A capability the server can negotiate and this client build cannot consume. */
+/**
+ * A capability the server can negotiate and this client build cannot consume.
+ *
+ * The operation names come off the wire (`protocol.serverOperations`), and this
+ * is the one remedy that interpolates them, so they go through the redactor on
+ * the way in. They used to be joined raw: a server advertising an operation
+ * named after an internal address printed it on screen and into the copyable
+ * report, and `websocketSection.ts`'s own finding already TOLD the reader they
+ * were "redacted on the way in like every other string off this wire" — the
+ * claim was true of every other path and not of this one.
+ *
+ * A denylist redaction rather than an allow-list, deliberately: an operation
+ * this client does not implement is by definition not in its closed set, so
+ * there is no member list to check against, and dropping the name entirely
+ * would leave the one finding whose whole content is "which operation".
+ */
 export function remedyForClientGap(operations: readonly string[]): Remedy {
   return {
     code: 'CLIENT_GAP',
-    summary: `No server configuration enables ${operations.join(', ')} — this client build has no handler for it.`,
+    summary: `No server configuration enables ${operations.map(sanitizeServerCopy).join(', ')} — this client build has no handler for it.`,
     steps: ['Update the client. Nothing on the server changes this.'],
     effort: 'client-update',
     basis: 'verified',
