@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'fs'
+import { dirname, join } from 'path'
+
 import { EFFORT_LABEL, type DeploymentTopology } from './diagnosticRemedies'
 import { EFFORT_TONE } from './diagnosticsPresentation'
 import {
@@ -8,12 +11,17 @@ import {
   type SectionModel,
 } from './diagnosticsSections'
 import {
+  BOUND_SERVICE_PROXIES,
   buildEnvironmentSection,
+  CACHE_SETTINGS,
+  DEPLOYMENT_MODES,
   describeIdentityState,
   describeInternalGrpcSecret,
   ENVIRONMENT_RELEVANCES,
   GRPC_FAILURE_CLASSES,
   PROXY_DECISIONS,
+  SERVICE_PROXY_SETTINGS,
+  SYNC_SWITCH_SETTINGS,
   type EnvironmentRuntimeView,
   type EnvironmentSectionInput,
   type TransportFallbackView,
@@ -1217,5 +1225,214 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     for (const finding of allFindings(model)) {
       expect(VERDICTS).toContain(finding.verdict)
     }
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* The closed vocabularies, and the server they are supposed to mirror        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A value the server can emit must never render as "other (unrecognised)".
+ *
+ * This is the defect this block exists for, and it was not hypothetical:
+ * `SERVICE_PROXY_SETTINGS` admitted `['grpc', 'unset', 'other']` while the
+ * gateway reported `http` and `auto` distinctly, so an operator who had pinned
+ * HTTP, or left the self-configuring `auto` that `scripts/setup.sh` and
+ * `.env.example` WRITE by default, was told their setting was unrecognised —
+ * i.e. a typo. No verdict was wrong; only the label, on the row an operator
+ * greps their compose file for.
+ *
+ * Widening the list fixes today and drifts again at the next token, so the two
+ * halves below test different things on purpose:
+ *
+ *  1. The BEHAVIOUR an operator sees: each token goes through the real
+ *     `buildEnvironmentSection` and the row must print it, with the negative
+ *     control that a value genuinely outside the set still collapses and that
+ *     the row does not case-fold. Asserting only the collapse would pass against
+ *     the three-token list this fix replaced.
+ *  2. The TIE. `DeploymentTopology` is a hand-written mirror of the server's
+ *     `DeploymentDiagnostics.ts`, in a package that cannot import from the
+ *     server one, so nothing in either tree notices when the mirror falls
+ *     behind. The vocabularies are therefore pinned by parsing the server's own
+ *     unions back out of its source and comparing them for set equality — the
+ *     same recipe `2fc7213d` used to pin the Dockerfile version derivations. The
+ *     parse THROWS when its anchor is missing, and three controls plant a
+ *     divergence to prove the comparison actually fails on one.
+ *
+ * The compile-time half of the tie lives in `environmentSection.ts` itself: the
+ * `…IsNamed` assertions make a tuple that is too narrow a type error. That
+ * catches a token added to the mirror, and this block catches the mirror itself
+ * falling behind the server.
+ */
+describe('the topology vocabularies this section can name', () => {
+  /**
+   * Walk up to the repository root rather than counting `..` segments: nine of
+   * them is unreadable, and a silently wrong count would make every assertion
+   * below depend on `readFileSync` throwing in the right way. This throws with
+   * the directory it searched from instead.
+   */
+  const repositoryRoot = (): string => {
+    let directory = __dirname
+
+    for (let hop = 0; hop < 16; hop += 1) {
+      if (existsSync(join(directory, 'server', 'packages', 'api-gateway'))) {
+        return directory
+      }
+
+      const parent = dirname(directory)
+      if (parent === directory) {
+        break
+      }
+      directory = parent
+    }
+
+    throw new Error(`no directory above ${__dirname} holds server/packages/api-gateway`)
+  }
+
+  const SERVER_SOURCE = join(
+    repositoryRoot(),
+    'server',
+    'packages',
+    'api-gateway',
+    'src',
+    'Service',
+    'Diagnostics',
+    'DeploymentDiagnostics.ts',
+  )
+
+  const serverSource = (): string => readFileSync(SERVER_SOURCE, 'utf8')
+
+  /** The one line each union is declared on, matched once or not at all. */
+  const declarationPattern = (name: string): RegExp => new RegExp(`^export type ${name} = (.+)$`, 'm')
+
+  /**
+   * One exported union, as the tokens it admits.
+   *
+   * THROWS when the declaration is not there. A parse that answered `[]` on a
+   * renamed or reformatted union would turn every comparison below into a
+   * comparison against nothing, which is the shape of gate that reads green
+   * because it never ran.
+   */
+  const unionTokens = (source: string, name: string): string[] => {
+    const declaration = declarationPattern(name).exec(source)
+    if (declaration === null) {
+      throw new Error(`no "export type ${name} = …" line in ${SERVER_SOURCE}`)
+    }
+
+    const tokens = [...declaration[1].matchAll(/'([^']+)'/g)].map((match) => match[1])
+    if (tokens.length === 0) {
+      throw new Error(`"export type ${name}" declares no quoted members: ${declaration[1]}`)
+    }
+
+    return tokens
+  }
+
+  /**
+   * Add a member to one union in a COPY of the source, for the controls.
+   *
+   * The occurrence count is checked rather than assumed: a `.replace` against a
+   * fragment that has come to appear twice silently stops editing the one the
+   * test means, and the control then proves nothing.
+   */
+  const plantExtraMember = (source: string, name: string, member: string): string => {
+    const occurrences = source.split('\n').filter((line) => declarationPattern(name).test(line)).length
+    if (occurrences !== 1) {
+      throw new Error(`expected exactly one "export type ${name}" line, found ${occurrences}`)
+    }
+
+    return source.replace(declarationPattern(name), `export type ${name} = '${member}' | $1`)
+  }
+
+  const MIRRORED: ReadonlyArray<[string, readonly string[]]> = [
+    ['DeploymentMode', DEPLOYMENT_MODES],
+    ['ServiceProxySetting', SERVICE_PROXY_SETTINGS],
+    ['BoundServiceProxy', BOUND_SERVICE_PROXIES],
+    ['CacheSetting', CACHE_SETTINGS],
+    ['SyncSwitchSetting', SYNC_SWITCH_SETTINGS],
+  ]
+
+  for (const [name, tokens] of MIRRORED) {
+    it(`names exactly the ${name} tokens the server declares`, () => {
+      expect([...unionTokens(serverSource(), name)].sort()).toEqual([...tokens].sort())
+    })
+  }
+
+  it('is reading a real file with all five unions in it', () => {
+    const source = serverSource()
+
+    // Without this the five assertions above could all be comparing against a
+    // parse of the same accidental match, and the file being present at all is
+    // the premise the whole block rests on.
+    expect(source).toContain('export function observeDeployment')
+    for (const [name] of MIRRORED) {
+      expect(declarationPattern(name).test(source)).toBe(true)
+    }
+  })
+
+  it('fails when the server declares a proxy token this build does not name', () => {
+    const planted = plantExtraMember(serverSource(), 'ServiceProxySetting', 'quic')
+
+    expect(unionTokens(planted, 'ServiceProxySetting')).toContain('quic')
+    expect([...unionTokens(planted, 'ServiceProxySetting')].sort()).not.toEqual([...SERVICE_PROXY_SETTINGS].sort())
+  })
+
+  it('fails when the server declares a mode token this build does not name', () => {
+    const planted = plantExtraMember(serverSource(), 'DeploymentMode', 'kubernetes')
+
+    expect([...unionTokens(planted, 'DeploymentMode')].sort()).not.toEqual([...DEPLOYMENT_MODES].sort())
+  })
+
+  it('throws rather than passing vacuously when the declaration it parses is gone', () => {
+    const renamed = serverSource().replace(declarationPattern('ServiceProxySetting'), 'export type ProxyMode = never')
+
+    expect(() => unionTokens(renamed, 'ServiceProxySetting')).toThrow('no "export type ServiceProxySetting = …" line')
+    // And the un-renamed source does parse, so the control is not passing on a
+    // replace that did nothing.
+    expect(unionTokens(serverSource(), 'ServiceProxySetting').length).toBeGreaterThan(1)
+  })
+
+  it('pins the regression itself: the old three-token list is not the server set', () => {
+    expect([...unionTokens(serverSource(), 'ServiceProxySetting')].sort()).not.toEqual(['grpc', 'other', 'unset'])
+    expect(unionTokens(serverSource(), 'ServiceProxySetting')).toEqual(
+      expect.arrayContaining(['grpc', 'http', 'auto', 'unset', 'other']),
+    )
+  })
+})
+
+describe('the SERVICE_PROXY_TYPE row', () => {
+  /**
+   * The wire field is a `string`; `DeploymentTopology` types it as a union as a
+   * compile-time mirror of the server, and a newer or misbehaving server can put
+   * anything there. Crossing that boundary is the whole reason the row goes
+   * through `safeEnum`, so the fixture has to be able to cross it too.
+   */
+  const withSetting = (value: string): EnvironmentSectionInput => ({
+    topology: topology({ serviceProxySetting: value as DeploymentTopology['serviceProxySetting'] }),
+  })
+
+  for (const setting of ['grpc', 'http', 'auto', 'unset']) {
+    it(`prints ${setting} as itself rather than as unrecognised`, () => {
+      const row = rowOf(buildEnvironmentSection(withSetting(setting)), 'SERVICE_PROXY_TYPE')
+
+      expect(row.value).toBe(setting)
+      expect(row.value).not.toBe(UNRECOGNISED)
+      // Only the LABEL was ever wrong here: the row carries no verdict, and
+      // widening the vocabulary must not have given it one.
+      expect(row.verdict).toBe('informational')
+    })
+  }
+
+  it('still collapses a value outside the set, and does not case-fold', () => {
+    for (const rejected of ['GRPC', 'grpc ', 'direct', 'Auto', '']) {
+      expect(rowOf(buildEnvironmentSection(withSetting(rejected)), 'SERVICE_PROXY_TYPE').value).toBe(UNRECOGNISED)
+    }
+  })
+
+  it('never echoes the refused value, on the row or anywhere in the model', () => {
+    const model = buildEnvironmentSection(withSetting('PLANTED-PROXY-SETTING-MARKER'))
+
+    expect(JSON.stringify(model)).not.toContain('PLANTED-PROXY-SETTING-MARKER')
+    expect(rowOf(model, 'SERVICE_PROXY_TYPE').value).toBe(UNRECOGNISED)
   })
 })

@@ -246,17 +246,77 @@ export type EnvironmentSectionInput = {
 /* Closed vocabularies for the topology fields                                */
 /* -------------------------------------------------------------------------- */
 
-const DEPLOYMENT_MODES = ['home-server', 'self-hosted', 'unset', 'other'] as const
+/**
+ * The five topology vocabularies, as tuples `safeEnum` can admit — and, below,
+ * as a compile-time claim that each tuple still COVERS the field it is read on.
+ *
+ * A list here is not a judgement about which settings are *correct*; it is the
+ * set of readings this build can name. A value the server can emit and the
+ * tuple omits renders as "other (unrecognised)", and on an informational row
+ * that is the panel telling an operator their deliberate setting is a typo.
+ * `SERVICE_PROXY_TYPE` did exactly that: it admitted only `grpc`, so `http` (an
+ * explicit pin to the HTTP proxies) and `auto` (the value `scripts/setup.sh`
+ * and `.env.example` WRITE by default, so the most common reading in the fleet)
+ * both read as unrecognised — the same defect this section exists to end, one
+ * layer up, with no verdict wrong and only the label.
+ *
+ * Merely widening a list is a fix that lasts until the next token, so each list
+ * is tied to where its tokens are defined instead, in two places:
+ *
+ *   - at COMPILE time, by the `…IsNamed` assertions below, against the unions
+ *     on `DeploymentTopology`. A token added there and not here is a type error
+ *     in this file rather than a row that quietly reads "unrecognised".
+ *   - at TEST time, by `environmentSection.spec.ts`, which parses the unions
+ *     back out of the server's own
+ *     `api-gateway/src/Service/Diagnostics/DeploymentDiagnostics.ts` and
+ *     compares them with these tuples. That second check exists because
+ *     `DeploymentTopology` is a hand-written MIRROR of that file — this package
+ *     does not depend on the server one — and nothing else in either tree
+ *     notices when the mirror falls behind.
+ *
+ * They are exported for that second check, and for nothing else.
+ */
+export const DEPLOYMENT_MODES = ['home-server', 'self-hosted', 'unset', 'other'] as const
 
 type DeploymentModeToken = (typeof DEPLOYMENT_MODES)[number]
 
-const SERVICE_PROXY_SETTINGS = ['grpc', 'unset', 'other'] as const
+/**
+ * Three documented tokens plus the two sentinels. Only the exact string `grpc`
+ * selects the gRPC branch — an exact `===` with no trim and no case folding —
+ * which is a statement about the BRANCH, not about which settings are
+ * deliberate. `http` and `auto` are both deliberate and both reported here as
+ * themselves; `GRPC`, `grpc ` and anything genuinely outside the set still
+ * collapse to `other`, and no value is ever echoed either way.
+ */
+export const SERVICE_PROXY_SETTINGS = ['grpc', 'http', 'auto', 'unset', 'other'] as const
 
-const BOUND_SERVICE_PROXIES = ['direct-call', 'grpc', 'http'] as const
+export const BOUND_SERVICE_PROXIES = ['direct-call', 'grpc', 'http'] as const
 
-const CACHE_SETTINGS = ['memory', 'redis', 'unset', 'other'] as const
+export const CACHE_SETTINGS = ['memory', 'redis', 'unset', 'other'] as const
 
-const SYNC_SWITCH_SETTINGS = ['true', 'false', 'unset', 'other'] as const
+export const SYNC_SWITCH_SETTINGS = ['true', 'false', 'unset', 'other'] as const
+
+/**
+ * Each tuple above, asserted to cover every member of the `DeploymentTopology`
+ * field it is used on.
+ *
+ * `Uncovered` is `never` when the tuple is complete and `AssertNever` then
+ * compiles; a token the mirror gains and a tuple does not makes this file a
+ * type error. Note the direction: this catches a tuple that is too NARROW,
+ * which is the one that mislabels a real setting. A tuple carrying a token the
+ * server cannot emit is harmless to the operator but still wrong, and the
+ * spec's set-equality check against the server source is what catches that.
+ */
+type Uncovered<Field extends keyof DeploymentTopology, Tokens extends readonly string[]> = Exclude<
+  NonNullable<DeploymentTopology[Field]>,
+  Tokens[number]
+>
+
+export type EveryModeIsNamed = AssertNever<Uncovered<'mode', typeof DEPLOYMENT_MODES>>
+export type EveryProxySettingIsNamed = AssertNever<Uncovered<'serviceProxySetting', typeof SERVICE_PROXY_SETTINGS>>
+export type EveryBoundProxyIsNamed = AssertNever<Uncovered<'boundServiceProxy', typeof BOUND_SERVICE_PROXIES>>
+export type EveryCacheSettingIsNamed = AssertNever<Uncovered<'cacheSetting', typeof CACHE_SETTINGS>>
+export type EverySyncSwitchIsNamed = AssertNever<Uncovered<'syncSwitchSetting', typeof SYNC_SWITCH_SETTINGS>>
 
 /**
  * The relevance vocabulary, as a tuple so `safeEnum` can admit it, with a
@@ -594,7 +654,7 @@ function buildShapeBlock(topology: DeploymentTopology | undefined, runtime: Envi
       observed: recorded ? topology?.serviceProxySetting : undefined,
       value: safeEnum(recorded ? topology?.serviceProxySetting : undefined, SERVICE_PROXY_SETTINGS),
       verdict: 'informational',
-      note: 'Only the exact string "grpc" selects the gRPC branch. Read it together with the decision row in the next block: since the lane became self-configuring, "unset" here does not mean nobody decided — it means the resolver decided against gRPC and recorded why.',
+      note: 'Only the exact string "grpc" selects the gRPC branch. The other two documented values are deliberate rather than mistakes and are reported as themselves: "http" is an explicit pin to the HTTP proxies, and "auto" is the self-configuring default the setup script writes. Read any of them together with the decision row in the next block: since the lane became self-configuring, neither "auto" nor "unset" here means nobody decided — it means the resolver decided, and recorded why.',
     }),
     observedRow({
       label: safeConstant('Service proxy in use'),
