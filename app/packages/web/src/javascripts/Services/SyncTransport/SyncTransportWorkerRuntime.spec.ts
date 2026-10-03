@@ -1960,6 +1960,17 @@ describe('SyncTransportWorkerRuntime', () => {
     socket.receive(serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest))
     await flush()
 
+    // An in-place refresh is tried FIRST and keeps the socket. Only once it is
+    // reported unavailable does the pre-existing re-ticket run.
+    const refresh = harness.messages.find((message) => message.type === 'NEED_SESSION_REFRESH') as Extract<
+      SyncWorkerToMainMessage,
+      { type: 'NEED_SESSION_REFRESH' }
+    >
+    expect(refresh).toEqual({ type: 'NEED_SESSION_REFRESH', refreshId: expect.any(String), sessionScope: SESSION_A })
+    expect(socket.readyState).toBe(1)
+    await harness.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: refresh.refreshId })
+    await flush()
+
     expect(socket.readyState).toBe(3)
     expect(harness.messages).not.toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
     expect(harness.messages.at(-1)).toEqual({ type: 'NEED_TICKET', clientRequestId: 'client-1', reconnect: true })
@@ -1992,11 +2003,513 @@ describe('SyncTransportWorkerRuntime', () => {
     await flush()
     expect(JSON.parse(fresh.sent[1])).toEqual(expect.objectContaining({ type: 'STATUS', commandId: command.commandId }))
 
-    // A second stale verdict on the same request is no longer a retry: durable recovery.
+    // A second stale verdict on the same request gets one more in-place attempt —
+    // the budget is per socket and this is a new socket — but no second re-ticket:
+    // once the refresh is unavailable again the command goes to durable recovery.
     fresh.receive(serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest))
+    await flush()
+    const secondRefresh = harness.messages.filter((message) => message.type === 'NEED_SESSION_REFRESH') as Extract<
+      SyncWorkerToMainMessage,
+      { type: 'NEED_SESSION_REFRESH' }
+    >[]
+    expect(secondRefresh).toHaveLength(2)
+    await harness.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: secondRefresh[1].refreshId })
     await flush()
     expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
     expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(2)
+  })
+
+  describe('in-place session-credential refresh', () => {
+    const REFRESH_TICKET = 'r'.repeat(40)
+
+    const GET_RPC = {
+      method: 'GET' as const,
+      path: '/v1/admin/sync-diagnostics',
+      headers: { accept: 'application/json' },
+      deadlineMs: 30_000,
+      initialCreditBytes: 4_096,
+      stream: false,
+    }
+
+    const sentFrames = (socket: FakeSocket) =>
+      socket.sent.map(
+        (entry) =>
+          JSON.parse(entry) as {
+            type: string
+            requestId: string
+            commandId: string
+            sequence: number
+            digest?: string
+            payload: Record<string, unknown>
+          },
+      )
+
+    const framesOfType = (socket: FakeSocket, type: string) => sentFrames(socket).filter((frame) => frame.type === type)
+
+    const refreshRequests = (harness: ReturnType<typeof setup>) =>
+      harness.messages.filter((message) => message.type === 'NEED_SESSION_REFRESH') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'NEED_SESSION_REFRESH' }
+      >[]
+
+    const commandFrame = (socket: FakeSocket) => {
+      const frame = framesOfType(socket, 'COMMAND')[0]
+      return { commandId: frame.commandId, digest: frame.digest as string }
+    }
+
+    /** The gateway's `failAndClose` addresses its final ERROR to `protocol`/`protocol`. */
+    const protocolError = (code: string): SyncServerFrame => ({
+      ...serverFrame('ERROR', 'protocol', { code, retryable: false }),
+      requestId: 'protocol',
+    })
+
+    const openRpcSocket = async (harness: ReturnType<typeof setup>, clientRequestId = 'rpc-1') => {
+      await harness.runtime.handle({ type: 'OPEN_RPC', clientRequestId, sessionScope: SESSION_A, request: GET_RPC })
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId,
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = harness.sockets.at(-1) as FakeSocket
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS', 'API_RPC'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      return socket
+    }
+
+    const answerRefresh = async (harness: ReturnType<typeof setup>, index: number) => {
+      const refresh = refreshRequests(harness)[index]
+      expect(refresh).toBeDefined()
+      await harness.runtime.handle({
+        type: 'SESSION_REFRESH_TICKET',
+        refreshId: refresh.refreshId,
+        ticket: REFRESH_TICKET,
+        deviceId: 'device-1',
+      })
+      await flush()
+      return refresh
+    }
+
+    it('repairs the credential on the LIVE socket and settles the refused save through STATUS', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+      const command = commandFrame(socket)
+
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest),
+      )
+      await flush()
+
+      // The socket is kept: no close, no second socket, no reconnect ticket.
+      expect(socket.readyState).toBe(1)
+      expect(harness.sockets).toHaveLength(1)
+      expect(refreshRequests(harness)).toHaveLength(1)
+      expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(1)
+
+      await answerRefresh(harness, 0)
+      const reauth = framesOfType(socket, 'REAUTH')
+      expect(reauth).toHaveLength(1)
+      expect(reauth[0].payload).toEqual({ ticket: REFRESH_TICKET, deviceId: 'device-1' })
+      // The gateway refuses sequence 0 for REAUTH; it is a mid-stream frame.
+      expect(reauth[0].sequence).toBeGreaterThanOrEqual(1)
+      expect(reauth[0].commandId).not.toBe(command.commandId)
+
+      socket.receive(serverFrame('REAUTHENTICATED', reauth[0].commandId, {}))
+      await flush()
+      await flush()
+
+      // Resumed by asking STATUS for the SAME durable identity. Exactly one COMMAND
+      // frame ever crossed this socket, so nothing can have been applied twice.
+      expect(framesOfType(socket, 'COMMAND')).toHaveLength(1)
+      const status = framesOfType(socket, 'STATUS')
+      expect(status).toHaveLength(1)
+      expect(status[0].commandId).toBe(command.commandId)
+      expect(status[0].digest).toBe(command.digest)
+      expect(harness.sockets).toHaveLength(1)
+      expect(socket.readyState).toBe(1)
+
+      socket.receive(
+        serverFrame(
+          'STATUS',
+          command.commandId,
+          { status: 'COMMITTED', result: { status: 200, data: { ok: true } } },
+          command.digest,
+        ),
+      )
+      await flush()
+      expect(harness.messages).toContainEqual({
+        type: 'RESULT',
+        clientRequestId: 'client-1',
+        commandId: command.commandId,
+        result: { status: 200, data: { ok: true } },
+      })
+      expect(harness.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
+      expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+    })
+
+    it('refreshes and retries an API_RPC read answered 401, reusing the same request', async () => {
+      const harness = setup()
+      const socket = await openRpcSocket(harness)
+      const first = framesOfType(socket, 'RPC_REQUEST')[0]
+
+      socket.receive(serverFrame('RPC_ACCEPTED', first.commandId, { accepted: true }))
+      socket.receive(
+        serverFrame('RPC_RESPONSE', first.commandId, {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+          stream: false,
+          body: { error: { tag: 'expired-access-token' } },
+        }),
+      )
+      await flush()
+
+      // The refusal is withheld, not delivered: nothing reached the caller yet.
+      expect(harness.messages.some((message) => message.type === 'RPC_RESPONSE')).toBe(false)
+      expect(refreshRequests(harness)).toHaveLength(1)
+
+      await answerRefresh(harness, 0)
+      const reauth = framesOfType(socket, 'REAUTH')[0]
+      socket.receive(serverFrame('REAUTHENTICATED', reauth.commandId, {}))
+      await flush()
+
+      const requests = framesOfType(socket, 'RPC_REQUEST')
+      expect(requests).toHaveLength(2)
+      expect(requests[1].payload).toEqual(requests[0].payload)
+      expect(requests[1].commandId).not.toBe(requests[0].commandId)
+
+      // The trailer of the abandoned attempt must neither fail the retry nor kill
+      // the socket: it is addressed to a commandId nothing answers to any more.
+      socket.receive(serverFrame('RPC_END', first.commandId, { status: 'COMPLETED' }))
+      await flush()
+      expect(harness.messages.some((message) => message.type === 'RPC_ERROR')).toBe(false)
+      expect(socket.readyState).toBe(1)
+
+      socket.receive(serverFrame('RPC_ACCEPTED', requests[1].commandId, { accepted: true }))
+      socket.receive(
+        serverFrame('RPC_RESPONSE', requests[1].commandId, {
+          status: 200,
+          headers: {},
+          stream: false,
+          body: { ok: 1 },
+        }),
+      )
+      socket.receive(serverFrame('RPC_END', requests[1].commandId, { status: 'COMPLETED' }))
+      await flush()
+
+      expect(harness.messages.filter((message) => message.type === 'RPC_RESPONSE')).toEqual([
+        { type: 'RPC_RESPONSE', clientRequestId: 'rpc-1', status: 200, headers: {}, stream: false, body: { ok: 1 } },
+      ])
+      expect(harness.messages).toContainEqual({ type: 'RPC_END', clientRequestId: 'rpc-1' })
+    })
+
+    it('never retries a mutating API_RPC request and delivers its refusal untouched', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc-mutation',
+        sessionScope: SESSION_A,
+        request: {
+          method: 'POST',
+          path: '/v1/admin/email-delivery/test',
+          headers: { 'content-type': 'application/json' },
+          body: { to: 'someone' },
+          idempotencyKey: 'assistant-1',
+          deadlineMs: 30_000,
+          initialCreditBytes: 4_096,
+          stream: false,
+        },
+      })
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'rpc-mutation',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = harness.sockets.at(-1) as FakeSocket
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS', 'API_RPC'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+
+      const request = framesOfType(socket, 'RPC_REQUEST')[0]
+      expect(request.payload).toEqual(expect.objectContaining({ idempotencyKey: 'assistant-1' }))
+      socket.receive(serverFrame('RPC_ACCEPTED', request.commandId, { accepted: true }))
+      socket.receive(serverFrame('RPC_RESPONSE', request.commandId, { status: 401, headers: {}, stream: false }))
+      await flush()
+
+      // No refresh, no replay, no second frame: the client cannot establish whether
+      // the mutation was applied, so the refusal is the answer.
+      expect(refreshRequests(harness)).toHaveLength(0)
+      expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(1)
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(0)
+      expect(harness.messages).toContainEqual({
+        type: 'RPC_RESPONSE',
+        clientRequestId: 'rpc-mutation',
+        status: 401,
+        headers: {},
+        stream: false,
+      })
+    })
+
+    it('delivers the withheld API_RPC refusal verbatim when the refresh does not succeed', async () => {
+      const harness = setup()
+      const socket = await openRpcSocket(harness)
+      const first = framesOfType(socket, 'RPC_REQUEST')[0]
+      socket.receive(serverFrame('RPC_ACCEPTED', first.commandId, { accepted: true }))
+      socket.receive(
+        serverFrame('RPC_RESPONSE', first.commandId, {
+          status: 498,
+          headers: { 'content-type': 'application/json' },
+          stream: false,
+          body: { error: { tag: 'expired-access-token' } },
+        }),
+      )
+      await flush()
+
+      const refresh = refreshRequests(harness)[0]
+      await harness.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: refresh.refreshId })
+      await flush()
+
+      expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(1)
+      expect(harness.messages.filter((message) => message.type === 'RPC_RESPONSE')).toEqual([
+        {
+          type: 'RPC_RESPONSE',
+          clientRequestId: 'rpc-1',
+          status: 498,
+          headers: { 'content-type': 'application/json' },
+          stream: false,
+          body: { error: { tag: 'expired-access-token' } },
+        },
+      ])
+      expect(harness.messages).toContainEqual({ type: 'RPC_END', clientRequestId: 'rpc-1' })
+      expect(socket.readyState).toBe(1)
+    })
+
+    it('bounds refreshes per socket and is not replenished by a successful one', async () => {
+      const harness = setup()
+      const socket = await openRpcSocket(harness, 'rpc-0')
+
+      const refuseAndObserve = async (attempt: number, clientRequestId: string) => {
+        const requests = framesOfType(socket, 'RPC_REQUEST')
+        const pending = requests.at(-1) as (typeof requests)[number]
+        socket.receive(serverFrame('RPC_ACCEPTED', pending.commandId, { accepted: true }))
+        socket.receive(serverFrame('RPC_RESPONSE', pending.commandId, { status: 401, headers: {}, stream: false }))
+        await flush()
+        if (refreshRequests(harness).length === attempt + 1) {
+          await answerRefresh(harness, attempt)
+          const reauth = framesOfType(socket, 'REAUTH').at(-1) as (typeof requests)[number]
+          socket.receive(serverFrame('REAUTHENTICATED', reauth.commandId, {}))
+          await flush()
+          const retried = framesOfType(socket, 'RPC_REQUEST').at(-1) as (typeof requests)[number]
+          socket.receive(serverFrame('RPC_ACCEPTED', retried.commandId, { accepted: true }))
+          socket.receive(serverFrame('RPC_RESPONSE', retried.commandId, { status: 200, headers: {}, stream: false }))
+          socket.receive(serverFrame('RPC_END', retried.commandId, { status: 'COMPLETED' }))
+          await flush()
+        }
+        void clientRequestId
+      }
+
+      await refuseAndObserve(0, 'rpc-0')
+      for (let attempt = 1; attempt < 5; attempt++) {
+        await harness.runtime.handle({
+          type: 'OPEN_RPC',
+          clientRequestId: `rpc-${attempt}`,
+          sessionScope: SESSION_A,
+          request: GET_RPC,
+        })
+        await flush()
+        await refuseAndObserve(attempt, `rpc-${attempt}`)
+      }
+
+      // Four refreshes, each of which SUCCEEDED, and then no more: success does not
+      // replenish the budget, so a refusal that keeps recurring cannot spin.
+      expect(refreshRequests(harness)).toHaveLength(4)
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(4)
+      // The fifth refusal is simply delivered.
+      expect(harness.messages).toContainEqual({
+        type: 'RPC_RESPONSE',
+        clientRequestId: 'rpc-4',
+        status: 401,
+        headers: {},
+        stream: false,
+      })
+    })
+
+    it('coalesces refusals from two lanes into one refresh and resumes both', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'API_RPC'])
+      const command = commandFrame(socket)
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc-1',
+        sessionScope: SESSION_A,
+        request: GET_RPC,
+      })
+      await flush()
+      const rpcRequest = framesOfType(socket, 'RPC_REQUEST')[0]
+
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest),
+      )
+      socket.receive(serverFrame('RPC_ACCEPTED', rpcRequest.commandId, { accepted: true }))
+      socket.receive(serverFrame('RPC_RESPONSE', rpcRequest.commandId, { status: 401, headers: {}, stream: false }))
+      await flush()
+
+      // One credential, one ticket: the second lane joins the refresh already running.
+      expect(refreshRequests(harness)).toHaveLength(1)
+
+      await answerRefresh(harness, 0)
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(1)
+      socket.receive(serverFrame('REAUTHENTICATED', framesOfType(socket, 'REAUTH')[0].commandId, {}))
+      await flush()
+      await flush()
+
+      expect(framesOfType(socket, 'COMMAND')).toHaveLength(1)
+      expect(framesOfType(socket, 'STATUS')[0].commandId).toBe(command.commandId)
+      expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(2)
+      expect(socket.readyState).toBe(1)
+    })
+
+    it('stops asking once the gateway answers that it cannot refresh this credential', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+      const command = commandFrame(socket)
+
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest),
+      )
+      await flush()
+      await answerRefresh(harness, 0)
+      socket.receive(
+        serverFrame('ERROR', framesOfType(socket, 'REAUTH')[0].commandId, {
+          code: 'OPERATION_UNAVAILABLE',
+          retryable: false,
+        }),
+      )
+      await flush()
+
+      // The pre-existing recovery takes over: one fresh ticket on a fresh socket.
+      expect(socket.readyState).toBe(3)
+      expect(harness.messages.at(-1)).toEqual({ type: 'NEED_TICKET', clientRequestId: 'client-1', reconnect: true })
+
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'client-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 'n'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const fresh = harness.sockets.at(-1) as FakeSocket
+      fresh.open()
+      const auth = JSON.parse(fresh.sent[0]) as { commandId: string }
+      fresh.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      await flush()
+      fresh.receive(serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest))
+      await flush()
+
+      // The answer was structural, so it outlives the socket: no second ticket is
+      // minted and spent to be told the same thing.
+      expect(refreshRequests(harness)).toHaveLength(1)
+      expect(framesOfType(fresh, 'REAUTH')).toHaveLength(0)
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    })
+
+    it('terminates without retrying when the gateway reports the session is no longer authorized', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+      const command = commandFrame(socket)
+
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest),
+      )
+      await flush()
+      await answerRefresh(harness, 0)
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(1)
+
+      socket.receive(protocolError('NOT_AUTHORIZED'))
+      await flush()
+      socket.close(1008)
+      await flush()
+
+      expect(harness.messages).toContainEqual({ type: 'SESSION_NOT_AUTHORIZED', sessionScope: SESSION_A })
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      // No re-dial and no second refresh: a revoked session is not a retryable one.
+      expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(1)
+      expect(refreshRequests(harness)).toHaveLength(1)
+      // The command is retained for reconciliation rather than replayed.
+      expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+      expect(harness.outbox.records.get(command.commandId)).toEqual(
+        expect.objectContaining({ commandId: command.commandId, dispatchedAt: expect.any(Number) }),
+      )
+    })
+
+    it('ignores a refresh ticket that arrives after its socket is gone', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+      const command = commandFrame(socket)
+
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest),
+      )
+      await flush()
+      const refresh = refreshRequests(harness)[0]
+      socket.close(1006)
+      await flush()
+
+      await harness.runtime.handle({
+        type: 'SESSION_REFRESH_TICKET',
+        refreshId: refresh.refreshId,
+        ticket: REFRESH_TICKET,
+        deviceId: 'device-1',
+      })
+      await flush()
+
+      // The refresh belonged to a connection that no longer exists; the close path
+      // owns the command, and the one-use ticket is discarded rather than spent.
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(0)
+      expect(harness.messages.some((message) => message.type === 'SESSION_NOT_AUTHORIZED')).toBe(false)
+      expect(harness.outbox.records.get(command.commandId)).toEqual(
+        expect.objectContaining({ commandId: command.commandId, dispatchedAt: expect.any(Number) }),
+      )
+    })
   })
 
   it('runs discovery once more on the same socket when the grant reports the challenge expired', async () => {

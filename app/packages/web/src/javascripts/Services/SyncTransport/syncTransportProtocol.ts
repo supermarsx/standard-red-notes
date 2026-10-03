@@ -459,6 +459,19 @@ export type SyncClientFrame = {
   channel: typeof SYNC_CHANNEL
   type:
     | 'AUTH'
+    /**
+     * Standard Red Notes: in-place session-credential refresh on a LIVE socket.
+     *
+     * Payload is exactly `{ ticket, deviceId }` — an OPAQUE one-use ticket minted
+     * over authenticated HTTP, never credential material, which the gateway looks
+     * up in its own ticket store. Deliberately NOT `AUTH`: the gateway closes a
+     * socket that authenticates twice (`ALREADY_AUTHENTICATED`) and pins `AUTH` to
+     * sequence 0, while a REAUTH is an ordinary mid-stream frame and must carry the
+     * socket's next sequence (the gateway refuses sequence 0 for it), so the two
+     * frames are structurally distinct and a REAUTH can never stand in for
+     * admission.
+     */
+    | 'REAUTH'
     | 'COMMAND'
     | 'STATUS'
     | 'PING'
@@ -486,6 +499,13 @@ export type SyncServerFrame = {
   channel: typeof SYNC_CHANNEL
   type:
     | 'AUTHENTICATED'
+    /**
+     * The gateway adopted the credential a REAUTH frame presented. Carries no
+     * payload worth reading: the operation set is a property of the deployment's
+     * adapters rather than of the credential, so a refresh is not a second
+     * handshake and never re-negotiates.
+     */
+    | 'REAUTHENTICATED'
     | 'ACCEPTED'
     | 'COMMITTED'
     | 'STATUS'
@@ -608,6 +628,25 @@ export type MainToSyncWorkerMessage =
   | { type: 'CANCEL_FILE_UPLOAD'; clientRequestId: string }
   | { type: 'CONNECT'; clientRequestId: string; sessionScope: string; authorization: SyncTicket }
   | { type: 'TICKET_UNAVAILABLE'; clientRequestId: string; reason: SyncFallbackReason }
+  /**
+   * A freshly minted ticket for the in-place credential refresh the worker asked
+   * for with `NEED_SESSION_REFRESH`. Answered with the SAME `refreshId`, so a
+   * ticket that arrives after its refresh was abandoned is discarded instead of
+   * being spent on the wire.
+   *
+   * No endpoint: this ticket is never dialled. It is presented on the socket the
+   * worker already holds, which is the whole point — a reconnect would discard
+   * that socket's collaboration rooms, invite subscription, command lease, socket
+   * budget and in-flight file transfers to fix one credential field.
+   */
+  | { type: 'SESSION_REFRESH_TICKET'; refreshId: string; ticket: string; deviceId: string }
+  /**
+   * No ticket could be minted for this refresh. Deliberately carries no verdict
+   * about the session: a failed mint (network error, 5xx, a 401 during an auth
+   * blip) proves nothing, and the client never fabricates a revocation — only the
+   * gateway closing the socket does that.
+   */
+  | { type: 'SESSION_REFRESH_UNAVAILABLE'; refreshId: string }
   | { type: 'CHECKPOINT_DURABLE'; requestId: string; sessionScope: string; commandId: string }
   | { type: 'SESSION_REVOKED'; requestId: string; sessionScope: string }
   /**
@@ -701,6 +740,23 @@ export function isPermanentSyncFallbackReason(reason: SyncFallbackReason): boole
 
 export type SyncWorkerToMainMessage =
   | { type: 'NEED_TICKET'; clientRequestId: string; reconnect: boolean }
+  /**
+   * Standard Red Notes: re-mint a ticket for a LIVE socket whose frozen credential
+   * the server has started refusing.
+   *
+   * Not keyed to a client request, because it is not one: the credential belongs to
+   * the socket and one refresh repairs every lane riding it. The worker correlates
+   * the answer by `refreshId` and holds at most one refresh in flight, so a burst
+   * of refusals across lanes costs exactly one ticket.
+   */
+  | { type: 'NEED_SESSION_REFRESH'; refreshId: string; sessionScope: string }
+  /**
+   * The gateway closed the socket because the session plane says this session does
+   * not authenticate at all — signed out, deleted, revoked or banned, as opposed to
+   * merely holding an old token. Terminal: the main thread quarantines the scope so
+   * nothing re-dials, and the session is re-established by signing in again.
+   */
+  | { type: 'SESSION_NOT_AUTHORIZED'; sessionScope: string }
   | {
       type: 'COMMAND_PERSISTED'
       clientRequestId: string

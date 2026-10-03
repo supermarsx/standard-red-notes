@@ -860,6 +860,120 @@ describe('WebSocketSyncTransport', () => {
     })
   })
 
+  describe('in-place session-credential refresh', () => {
+    /**
+     * Gets a worker created and bound for SESSION_A. The returned execution is
+     * deliberately NOT awaited by the caller: it stays pending (or is rejected by a
+     * revocation) while the refresh under test runs.
+     */
+    const startWorker = async (transport: WebSocketSyncTransport) => {
+      const execution = transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+      await flush()
+      // Wrapped: an async function unwraps a returned promise, so handing the
+      // execution back directly would make `await startWorker(...)` wait for the
+      // sync itself to settle, which is exactly what must stay pending here.
+      return { execution }
+    }
+
+    const refreshTicketPost = () =>
+      worker.posts.find((message) => message.type === 'SESSION_REFRESH_TICKET') as
+        Extract<MainToSyncWorkerMessage, { type: 'SESSION_REFRESH_TICKET' }> | undefined
+
+    it('mints a fresh ticket over authenticated HTTP for a live socket, without dialling anything', async () => {
+      const transport = createTransport()
+      await startWorker(transport)
+
+      worker.emit({ type: 'NEED_SESSION_REFRESH', refreshId: 'refresh-1', sessionScope: SESSION_A })
+      await flush()
+      await flush()
+
+      expect(controlPlane.createTicket).toHaveBeenCalledWith('device-1')
+      expect(refreshTicketPost()).toEqual({
+        type: 'SESSION_REFRESH_TICKET',
+        refreshId: 'refresh-1',
+        ticket: 'ticket'.repeat(8),
+        deviceId: 'device-1',
+      })
+      // A refresh is presented on the socket the worker already holds. Dialling is
+      // what it exists to avoid, so nothing here may ask for a connection.
+      expect(worker.posts.filter((message) => message.type === 'CONNECT')).toHaveLength(0)
+      expect(controlPlane.getCapabilities).not.toHaveBeenCalled()
+    })
+
+    it('reports the refresh unavailable when no ticket can be minted, and leaves the ticket cache alone', async () => {
+      const transport = createTransport()
+      await startWorker(transport)
+      controlPlane.createTicket.mockRejectedValueOnce(new Error('network'))
+
+      worker.emit({ type: 'NEED_SESSION_REFRESH', refreshId: 'refresh-1', sessionScope: SESSION_A })
+      await flush()
+      await flush()
+
+      expect(worker.posts).toContainEqual({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: 'refresh-1' })
+      expect(refreshTicketPost()).toBeUndefined()
+      // Never classified as a capability verdict: the socket is up and working, and
+      // a failed mint says nothing about the deployment.
+      expect(controlPlane.getCapabilities).not.toHaveBeenCalled()
+    })
+
+    it('refuses to spend a refresh ticket once the authenticated session has changed', async () => {
+      let sessionScope = SESSION_A
+      const transport = createTransport({ getAuthenticatedSessionScope: async () => sessionScope })
+      await startWorker(transport)
+      controlPlane.createTicket.mockImplementationOnce(async () => {
+        // The sign-out lands inside the mint's round trip.
+        sessionScope = SESSION_B
+        return {
+          ticket: 'ticket'.repeat(8),
+          expiresAt: Date.now() + 30_000,
+          endpoint: '/sockets/sync',
+          capability: 'ws-sync' as const,
+          version: 1 as const,
+        }
+      })
+
+      worker.emit({ type: 'NEED_SESSION_REFRESH', refreshId: 'refresh-1', sessionScope: SESSION_A })
+      await flush()
+      await flush()
+
+      // The gateway closes a socket that is handed a ticket bound to another
+      // identity, so a ticket minted for a session the tab no longer holds is
+      // discarded rather than sent.
+      expect(refreshTicketPost()).toBeUndefined()
+      expect(worker.posts).toContainEqual({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: 'refresh-1' })
+    })
+
+    it('terminates the lane cleanly when the worker reports the session is no longer authorized', async () => {
+      const transport = createTransport()
+      const { execution } = await startWorker(transport)
+      const rejected = expect(execution).rejects.toThrow('revoked')
+
+      worker.emit({ type: 'SESSION_NOT_AUTHORIZED', sessionScope: SESSION_A })
+      await flush()
+      const revoke = worker.posts.find((message) => message.type === 'SESSION_REVOKED') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'SESSION_REVOKED' }
+      >
+      expect(revoke).toEqual(expect.objectContaining({ sessionScope: SESSION_A }))
+      worker.emit({ type: 'SESSION_REVOKED_ACK', requestId: revoke.requestId, sessionScope: SESSION_A })
+      await flush()
+      await rejected
+
+      expect(worker.terminated).toBe(true)
+      expect(transport.transportState).toBe('HTTP_ONLY')
+      // Quarantined: the scope is refused outright, so nothing re-dials and no
+      // further one-use ticket is minted for a session that cannot authenticate.
+      // The app sees a real failure and re-authentication produces a new scope.
+      controlPlane.createTicket.mockClear()
+      await expect(transport.execute(request('after'), jest.fn().mockResolvedValue(response('http')))).rejects.toThrow(
+        'revoked',
+      )
+      expect(controlPlane.createTicket).not.toHaveBeenCalled()
+      expect(worker.posts.filter((message) => message.type === 'CONNECT')).toHaveLength(0)
+    })
+  })
+
   it('closes and rejects an active execution when the session is revoked', async () => {
     const transport = createTransport()
     const execution = transport.execute(request(), jest.fn())

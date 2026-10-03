@@ -1133,6 +1133,30 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
       return
     }
+    if (message.type === 'NEED_SESSION_REFRESH') {
+      await this.supplySessionRefreshTicket(message.refreshId, message.sessionScope)
+      return
+    }
+    if (message.type === 'SESSION_NOT_AUTHORIZED') {
+      /**
+       * The gateway closed the socket because the session plane says this session
+       * does not authenticate — a sign-out, a deletion, an explicit revocation or a
+       * ban, as opposed to merely an old access token (which it reports as
+       * SESSION_STALE and which leaves the socket alone). Terminal by construction:
+       * the worker only reports it after its own REAUTH was answered that way, and
+       * it never infers it from a failed ticket mint or a timeout.
+       *
+       * `notifySessionRevoked` is the clean-termination path that already exists and
+       * is already tested: it quarantines the scope so nothing re-dials or mints
+       * another ticket, rejects every pending operation non-retryably, hands the
+       * worker its SESSION_REVOKED barrier and ends at HTTP_ONLY. Nothing retries
+       * this lane afterwards; the next HTTP request meets the same refusal and the
+       * session layer's own 401 handling takes the user to sign in again. The
+       * socket deliberately does not sign anyone out by itself.
+       */
+      await this.notifySessionRevoked()
+      return
+    }
     const pending = 'clientRequestId' in message ? this.pending.get(message.clientRequestId) : undefined
     const collaborationPending =
       'clientRequestId' in message ? this.pendingCollaboration.get(message.clientRequestId) : undefined
@@ -1496,6 +1520,68 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       this.pendingRpcs.delete(clientRequestId)
     }
     pending.abortCleanup?.()
+  }
+
+  /**
+   * Standard Red Notes: mint a ticket for an in-place credential refresh.
+   *
+   * Deliberately NOT `supplyTicket`. That one exists to get a socket up and is
+   * entangled with everything that decision needs: the negative ticket cache, the
+   * capability probe, per-request pending maps, the endpoint it resolves and the
+   * `CONNECT` it posts. None of that applies here — a live socket has already
+   * proved the capability exists and is already dialled. This is the one thing
+   * that cannot be done anywhere else: `POST /v1/sockets/sync/ticket` over
+   * authenticated HTTP, where the browser attaches the CURRENT session itself and
+   * the gateway captures the credential server-side off a real request. The
+   * refusal path touches nothing: a transient failure must not poison the ticket
+   * cache for the socket that is up and working.
+   */
+  private async supplySessionRefreshTicket(refreshId: string, sessionScope: string): Promise<void> {
+    const worker = this.worker
+    if (!worker) {
+      return
+    }
+    const unavailable = () => worker.postMessage({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId })
+    if (this.deinitialized || this.workerSessionScope !== sessionScope || this.revokedSessionScopes.has(sessionScope)) {
+      unavailable()
+      return
+    }
+    let ticket: SyncTicketResponse | SyncControlPlaneRefusal | undefined
+    try {
+      ticket = await this.options.controlPlane.createTicket(this.options.deviceId)
+    } catch {
+      unavailable()
+      return
+    }
+    /**
+     * Re-read the live scope AFTER the mint. The ticket is bound server-side to
+     * the user, session and device it was minted for, and the gateway closes the
+     * socket outright when a presented ticket is not bound to the identity the
+     * socket was admitted with. A sign-out or a different sign-in landing inside
+     * the round trip is exactly that mismatch, so it must never be sent.
+     */
+    const currentScope = await this.currentSessionScope().catch(() => undefined)
+    if (
+      this.worker !== worker ||
+      this.workerSessionScope !== sessionScope ||
+      currentScope !== sessionScope ||
+      this.revokedSessionScopes.has(sessionScope) ||
+      !ticket ||
+      isSyncControlPlaneRefusal(ticket) ||
+      ticket.capability !== 'ws-sync' ||
+      ticket.version !== 1 ||
+      typeof ticket.ticket !== 'string' ||
+      ticket.ticket.length < 32
+    ) {
+      unavailable()
+      return
+    }
+    worker.postMessage({
+      type: 'SESSION_REFRESH_TICKET',
+      refreshId,
+      ticket: ticket.ticket,
+      deviceId: this.options.deviceId,
+    })
   }
 
   private async supplyTicket(clientRequestId: string, sessionScope: string): Promise<void> {

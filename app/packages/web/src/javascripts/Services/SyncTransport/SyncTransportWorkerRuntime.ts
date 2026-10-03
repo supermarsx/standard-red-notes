@@ -89,6 +89,50 @@ const MIN_RECONNECT_DELAY_MS = 1_000
 const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
 
 /**
+ * In-place credential refreshes this client will ask ONE socket for.
+ *
+ * The gateway's own budget is eight per socket; this is deliberately smaller so
+ * the client always gives up first and never learns its bound by being closed.
+ * It is NOT reset by a successful refresh — that is exactly the loop shape (a
+ * refusal refreshes, the refusal recurs, the refresh succeeds again, forever) —
+ * and not by the clock, so no periodic caller can replenish it. It is reset only
+ * by a new `AUTHENTICATED` handshake, which is a genuinely new socket carrying a
+ * freshly minted credential that needs no refresh in the first place.
+ *
+ * Four covers four token rotations inside one socket's life. The fifth refusal
+ * takes the pre-existing recovery (re-ticket, then durable recovery), which
+ * cannot be lost and cannot double-apply.
+ */
+const MAX_SESSION_REFRESH_ATTEMPTS = 4
+
+/**
+ * How long one refresh may take, measured from the moment the worker asks the
+ * main thread for a ticket.
+ *
+ * Something must bound it or a parked operation waits forever: parking clears the
+ * command's ack deadline (the alternative is the ack deadline firing and closing
+ * a healthy socket mid-refresh, which is precisely the reconnect this change
+ * exists to avoid). Generous enough for one authenticated HTTP round trip plus
+ * the gateway's own call to the session plane.
+ */
+const SESSION_REFRESH_TIMEOUT_MS = 10_000
+
+/**
+ * The gateway's own `failAndClose` addresses its final ERROR frame to
+ * `requestId`/`commandId` `'protocol'` — it belongs to the socket, not to any
+ * command. Mirrored, not imported: the worker bundle takes no server dependency.
+ */
+const SYNC_PROTOCOL_FRAME_ID = 'protocol'
+
+/**
+ * Response statuses on the API_RPC lane that a credential refresh can plausibly
+ * repair. 498 is auth's "this access token is expired"; 401 is "this request did
+ * not authenticate", which a rotated token also produces. Both are answered by
+ * the gateway's authentication middleware BEFORE any handler runs.
+ */
+const REFRESHABLE_RPC_STATUSES = new Set([401, 498])
+
+/**
  * Every operation this build knows the gateway may advertise. An `AUTHENTICATED`
  * frame naming anything outside this set is rejected, because an unrecognized
  * operation means the peer is speaking a protocol this client cannot bound.
@@ -201,6 +245,47 @@ type ActiveRpcRequest = {
   responseStarted: boolean
   expectedChunkIndex: number
   deadlineTimer?: ReturnType<typeof setTimeout>
+  /**
+   * One credential refresh per request, independent of the socket's own budget.
+   * Without it a lane that answers 401 for a reason a refresh cannot fix would
+   * alternate refresh and retry until the request's deadline.
+   */
+  refreshRetried?: boolean
+  /**
+   * The refusing response, withheld while a refresh is attempted.
+   *
+   * Withheld rather than discarded: if the refresh does not succeed this exact
+   * answer is delivered, so the caller's existing net still fires — a GET 401/498
+   * is what `WebApplication.controlPlaneRpc` degrades to HTTP on, and a refresh
+   * that fails must not turn that degradation into a thrown error.
+   */
+  deferredResponse?: { status: number; headers: Record<string, string>; hasBody: boolean; body?: unknown }
+}
+
+/**
+ * One operation held while the socket's credential is refreshed, and what the
+ * refresh's outcome does to it. Parking NEVER mutates the operation's durable
+ * identity: a command keeps its outbox record, command id and digest, and an RPC
+ * keeps its request object including any idempotency key, so a resume reuses the
+ * key the server dedupes on rather than minting a new one.
+ */
+type ParkedRefreshOperation =
+  /** The durable SYNC_ITEMS command currently in `outboxRecord`. */
+  | { kind: 'command' }
+  /** A GET RPC with no idempotency key; see `parkRpcForSessionRefresh`. */
+  | { kind: 'rpc'; clientRequestId: string }
+
+type ActiveSessionRefresh = {
+  /** Correlates the main thread's ticket answer; a mismatched answer is discarded. */
+  refreshId: string
+  /** `requestId`/`commandId` of the REAUTH frame. The gateway echoes both back. */
+  commandId: string
+  sessionScope: string
+  socketGeneration: number
+  /** True once REAUTH bytes are on the socket, so a server verdict may be believed. */
+  sent: boolean
+  parked: ParkedRefreshOperation[]
+  timer?: ReturnType<typeof setTimeout>
 }
 
 type ActiveInviteSubscription = {
@@ -363,6 +448,20 @@ export class SyncTransportWorkerRuntime {
   private lastTransportScope?: string
   /** A READY socket that did not negotiate the invite lane never will (see sendInviteSubscription). */
   private inviteEventsUnavailable = false
+  /** At most one credential refresh is in flight; concurrent refusals join it. */
+  private sessionRefresh?: ActiveSessionRefresh
+  /** Refreshes asked for on THIS socket. Reset only by a new AUTHENTICATED handshake. */
+  private sessionRefreshAttempts = 0
+  /**
+   * The gateway ANSWERED that it will not refresh this socket's credential —
+   * `OPERATION_UNAVAILABLE` (the deployment composed no session revalidator) or
+   * `REAUTH_REJECTED` (the ticket was unknown, replayed, or not bound to this
+   * user, session and device). Both are structural, so this latch lives for the
+   * worker's whole life rather than the socket's: one worker instance serves
+   * exactly one session scope, so asking again after a reconnect could only mint
+   * and spend another one-use ticket to be told the same thing.
+   */
+  private sessionRefreshUnsupported = false
 
   constructor(private readonly dependencies: SyncWorkerRuntimeDependencies) {
     this.outbox = dependencies.outbox ?? new IndexedDbSyncOutbox()
@@ -444,6 +543,14 @@ export class SyncTransportWorkerRuntime {
       case 'TICKET_UNAVAILABLE':
         if (this.active?.clientRequestId === message.clientRequestId) {
           await this.fallback(message.reason)
+        }
+        break
+      case 'SESSION_REFRESH_TICKET':
+        await this.sendSessionRefresh(message.refreshId, message.ticket, message.deviceId)
+        break
+      case 'SESSION_REFRESH_UNAVAILABLE':
+        if (this.sessionRefresh?.refreshId === message.refreshId) {
+          await this.settleSessionRefresh('failed')
         }
         break
       case 'CHECKPOINT_DURABLE':
@@ -1690,6 +1797,12 @@ export class SyncTransportWorkerRuntime {
       this.clearAckDeadline()
       this.sequence = Number(nextSequence)
       this.negotiatedOperations = new Set(operations as SyncNegotiatedOperation[])
+      // A new socket carries a credential captured moments ago, so the refresh
+      // budget it has not spent starts over. This is the ONLY thing that
+      // replenishes it: a success must not, or a refusal that keeps recurring
+      // would refresh for as long as the tab is open. `sessionRefreshUnsupported`
+      // is deliberately NOT cleared — the two refusals that set it are structural.
+      this.sessionRefreshAttempts = 0
       // The reconnect budget is per connected session, not per tab. Without this
       // reset one bad patch of network spent it permanently, and every command
       // for the rest of the tab's life fell back to HTTP on its first close.
@@ -1713,6 +1826,12 @@ export class SyncTransportWorkerRuntime {
 
     if (frame.type === 'PONG') {
       this.clearPongDeadline()
+      return
+    }
+    // Before every lane lookup: a refresh frame belongs to the socket, not to any
+    // request, and the socket-level refusal is addressed to `'protocol'`, which no
+    // lane would recognise and which would otherwise fall through unnoticed.
+    if (await this.handleSessionRefreshFrame(frame)) {
       return
     }
     const rpc = this.rpcByCommandId(frame.commandId)
@@ -1870,14 +1989,31 @@ export class SyncTransportWorkerRuntime {
         }
         break
       case 'ERROR':
-        if (frame.payload.code === 'SESSION_STALE' && !this.reticketedForStaleSession) {
+        if (frame.payload.code === 'SESSION_STALE') {
           // The ticket captured a bearer the auth service has since rotated. The
-          // gateway refused before the backend saw the command, so one fresh
-          // ticket on a fresh socket is the retry; the STATUS query that follows
-          // it settles whether the command must be replayed over HTTP.
-          this.reticketedForStaleSession = true
-          await this.reticket()
-          break
+          // gateway refused before the backend saw the command, so the command is
+          // intact and only the credential is wrong.
+          //
+          // FIRST try to repair the credential IN PLACE. A re-ticket fixes the same
+          // field by throwing the socket away, and with it the collaboration rooms,
+          // invite subscription, command lease, socket budget and any in-flight file
+          // transfers riding the same connection. The parked command is resumed with
+          // STATUS — never a second COMMAND — so the repair cannot apply anything
+          // twice, and the ack deadline is cleared because the refresh owns the
+          // timeout now (left armed it would close the healthy socket mid-refresh,
+          // which is the very reconnect being avoided).
+          if (this.requestSessionRefresh({ kind: 'command' })) {
+            this.clearAckDeadline()
+            break
+          }
+          if (!this.reticketedForStaleSession) {
+            // No refresh available (or budget spent): the behaviour that existed
+            // before — one fresh ticket on a fresh socket, then the STATUS query
+            // that settles whether the command must be replayed over HTTP.
+            this.reticketedForStaleSession = true
+            await this.reticket()
+            break
+          }
         }
         if (frame.payload.code === 'LIVE_SYNC_DISABLED') {
           this.liveSyncDisabled = true
@@ -1920,6 +2056,450 @@ export class SyncTransportWorkerRuntime {
     this.clearAckDeadline()
     await this.closeSocketAndReleaseOwner()
     await this.requestTicket(active.clientRequestId, active.sessionScope, true)
+  }
+
+  /*
+   * ===========================================================================
+   * Standard Red Notes: in-place session-credential refresh (client half).
+   *
+   * A sync socket replays the credential captured when its ticket was minted for
+   * its whole life. A token rotation therefore strands every lane that
+   * revalidates — sync, collaboration, API_RPC, files — while HTTP keeps reading
+   * the live token per request and looks perfectly healthy. The server half
+   * (53fd0129) accepts a `REAUTH` frame carrying an opaque one-use ticket; this
+   * is the half that sends one.
+   *
+   * THREE PROPERTIES, in the order they matter:
+   *
+   * 1. NO REFUSED OPERATION IS LOST. Parking never discards anything. A command
+   *    keeps its outbox record, `commandSent` and ack bookkeeping untouched, so
+   *    every exit — refreshed, refused, socket closed, worker shut down — lands
+   *    on a path that already existed and already surfaces the operation.
+   *
+   * 2. NOTHING IS APPLIED TWICE. A resumed command re-asks STATUS for its own
+   *    command id and digest; it never re-sends the COMMAND frame. STATUS is a
+   *    query, and the only replay it can lead to is on an explicit `UNKNOWN`,
+   *    which is the backend stating the command did not take effect. A resumed
+   *    RPC is restricted to requests carrying NO idempotency key, which given
+   *    `isValidWorkerRpcRequest` is exactly GET.
+   *
+   * 3. IT CANNOT SPIN. One refresh in flight at a time, a per-socket attempt
+   *    budget that nothing replenishes but a new handshake, and a latch for the
+   *    two refusals that are structural rather than transient.
+   * ===========================================================================
+   */
+
+  /**
+   * Whether a refusal may be answered with a refresh rather than the recovery
+   * that already existed.
+   *
+   * Every clause is a refusal to try, not a precondition to arrange. In
+   * particular this requires a live READY socket: a refresh exists only to avoid
+   * tearing one down, so with no socket to keep there is nothing to gain and the
+   * ordinary reconnect — which mints a fresh credential anyway — is the answer.
+   */
+  private canRefreshSession(): boolean {
+    return (
+      !this.shuttingDown &&
+      !this.sessionRefreshUnsupported &&
+      this.state === 'READY' &&
+      this.socket?.readyState === 1 &&
+      this.sessionScope !== undefined &&
+      (this.sessionRefresh !== undefined || this.sessionRefreshAttempts < MAX_SESSION_REFRESH_ATTEMPTS)
+    )
+  }
+
+  /**
+   * Park `operation` and make sure a refresh is running for it. Returns false
+   * when no refresh will be attempted, in which case the caller MUST take the
+   * path it would have taken before this existed.
+   *
+   * A second refusal arriving while a refresh is in flight joins that refresh and
+   * spends no attempt: the credential is a property of the socket, so one refresh
+   * repairs every lane riding it and a burst across lanes must cost one ticket,
+   * not one per lane.
+   */
+  private requestSessionRefresh(operation: ParkedRefreshOperation): boolean {
+    if (!this.canRefreshSession()) {
+      return false
+    }
+    const existing = this.sessionRefresh
+    if (existing) {
+      existing.parked.push(operation)
+      return true
+    }
+    const refresh: ActiveSessionRefresh = {
+      refreshId: this.uuid(),
+      commandId: this.uuid(),
+      sessionScope: this.sessionScope as string,
+      socketGeneration: this.socketGeneration,
+      sent: false,
+      parked: [operation],
+    }
+    this.sessionRefreshAttempts += 1
+    this.sessionRefresh = refresh
+    refresh.timer = this.scheduleTimeout(() => {
+      if (this.sessionRefresh === refresh) {
+        void this.settleSessionRefresh('failed')
+      }
+    }, SESSION_REFRESH_TIMEOUT_MS)
+    this.dependencies.postMessage({
+      type: 'NEED_SESSION_REFRESH',
+      refreshId: refresh.refreshId,
+      sessionScope: refresh.sessionScope,
+    })
+    return true
+  }
+
+  /**
+   * Present the freshly minted ticket on the socket we already hold.
+   *
+   * A ticket that arrives after the connection it was meant for has gone must not
+   * be spent on a different socket: the gateway compares it against the identity
+   * that socket was ADMITTED with and closes the connection on a mismatch, so a
+   * late ticket could end a healthy socket to deliver a refresh nobody is waiting
+   * for. The primary defence is the discard in every teardown path, which clears
+   * `sessionRefresh` before a replacement socket can exist, and that is what the
+   * tests exercise. The `socketGeneration` comparison below is a second line
+   * behind it and is deliberately unreachable today — a mutation of it survives,
+   * which is the honest statement that the discard is doing the work; it is kept
+   * so that a future teardown path which forgets to discard fails closed rather
+   * than spending a bound ticket on the wrong connection.
+   */
+  private async sendSessionRefresh(refreshId: string, ticket: string, deviceId: string): Promise<void> {
+    const refresh = this.sessionRefresh
+    if (!refresh || refresh.refreshId !== refreshId || refresh.sent) {
+      return
+    }
+    if (
+      this.state !== 'READY' ||
+      this.socket?.readyState !== 1 ||
+      this.socketGeneration !== refresh.socketGeneration ||
+      this.sessionScope !== refresh.sessionScope ||
+      // Mirrors the gateway's own REAUTH envelope rule. A ticket it would refuse
+      // costs an attempt here instead of costing the socket there.
+      typeof ticket !== 'string' ||
+      ticket.length < 32 ||
+      ticket.length > 256 ||
+      typeof deviceId !== 'string' ||
+      deviceId.length === 0
+    ) {
+      await this.settleSessionRefresh('failed')
+      return
+    }
+    const payload = { ticket, deviceId }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'REAUTH',
+      requestId: refresh.commandId,
+      commandId: refresh.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
+      await this.settleSessionRefresh('failed')
+      return
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+    } catch {
+      await this.settleSessionRefresh('failed')
+      return
+    }
+    if (this.sessionRefresh === refresh) {
+      refresh.sent = true
+    }
+  }
+
+  /**
+   * Route a server frame that belongs to the refresh rather than to any lane.
+   * Returns true when the frame was consumed.
+   *
+   * Two shapes arrive. The gateway's verdict on the refresh itself is addressed to
+   * the REAUTH frame's own ids. A refusal that ENDS the socket is addressed to
+   * `'protocol'` by `failAndClose`, and is believed only while our own REAUTH is
+   * outstanding — `NOT_AUTHORIZED` is otherwise an ordinary per-command policy
+   * denial, and mistaking one of those for a revocation would sign a lane off for
+   * a vault the user merely cannot read.
+   */
+  private async handleSessionRefreshFrame(frame: SyncServerFrame): Promise<boolean> {
+    const refresh = this.sessionRefresh
+    if (!refresh) {
+      return false
+    }
+    if (frame.commandId === refresh.commandId) {
+      if (frame.type === 'REAUTHENTICATED') {
+        await this.settleSessionRefresh(refresh.sent ? 'refreshed' : 'failed')
+        return true
+      }
+      if (frame.type === 'ERROR') {
+        if (frame.payload.code === 'OPERATION_UNAVAILABLE') {
+          // This deployment composed no session revalidator. Structural.
+          this.sessionRefreshUnsupported = true
+        } else if (frame.payload.code === 'SESSION_STALE') {
+          // We just minted a current credential and the session plane still would
+          // not take it. Nothing is gained by presenting another one on this
+          // socket, so the budget is spent rather than merely decremented.
+          this.sessionRefreshAttempts = MAX_SESSION_REFRESH_ATTEMPTS
+        }
+        await this.settleSessionRefresh('failed')
+        return true
+      }
+      return false
+    }
+    if (
+      refresh.sent &&
+      frame.type === 'ERROR' &&
+      frame.commandId === SYNC_PROTOCOL_FRAME_ID &&
+      frame.requestId === SYNC_PROTOCOL_FRAME_ID
+    ) {
+      if (frame.payload.code === 'NOT_AUTHORIZED') {
+        await this.settleSessionRefresh('revoked')
+        return true
+      }
+      if (frame.payload.code === 'REAUTH_REJECTED') {
+        // Unknown, replayed, or not bound to this user, session and device. The
+        // socket is already closing; never ask this session again.
+        this.sessionRefreshUnsupported = true
+        await this.settleSessionRefresh('failed')
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * End the refresh and hand every parked operation its outcome.
+   *
+   * `revoked` is the only outcome that says anything about the session, and only
+   * the gateway can produce it: a failed ticket mint, a timeout or an unreadable
+   * answer are all `failed`, because an auth blip must never be able to sign a
+   * user out. It is also latched, because a revoked session cannot be refreshed
+   * by trying harder.
+   */
+  private async settleSessionRefresh(outcome: 'refreshed' | 'failed' | 'revoked'): Promise<void> {
+    const refresh = this.sessionRefresh
+    if (!refresh) {
+      return
+    }
+    this.sessionRefresh = undefined
+    if (refresh.timer) {
+      this.cancelTimeout(refresh.timer)
+      refresh.timer = undefined
+    }
+    if (outcome === 'revoked') {
+      this.sessionRefreshUnsupported = true
+      this.dependencies.postMessage({ type: 'SESSION_NOT_AUTHORIZED', sessionScope: refresh.sessionScope })
+    }
+    for (const parked of refresh.parked) {
+      if (parked.kind === 'rpc') {
+        await this.resumeRefreshedRpc(parked.clientRequestId, outcome)
+      } else {
+        await this.resumeRefreshedCommand(outcome)
+      }
+    }
+  }
+
+  /**
+   * Abandon a refresh without resuming anything, because the socket it belonged to
+   * is gone.
+   *
+   * Deliberately NOT a `settleSessionRefresh('failed')`: the close path already
+   * owns every operation on this socket and settles each one correctly — the
+   * command through its retained outbox record (reconnect, then STATUS) and an
+   * unsent RPC through the reconnect bootstrap that re-sends it. Resuming here as
+   * well would have two owners racing for the same operation.
+   */
+  private discardSessionRefresh(): void {
+    const refresh = this.sessionRefresh
+    if (!refresh) {
+      return
+    }
+    this.sessionRefresh = undefined
+    if (refresh.timer) {
+      this.cancelTimeout(refresh.timer)
+      refresh.timer = undefined
+    }
+    for (const parked of refresh.parked) {
+      if (parked.kind === 'rpc') {
+        const rpc = this.rpcRequests.get(parked.clientRequestId)
+        if (rpc) {
+          // The withheld answer came from a socket that no longer exists, so it is
+          // not an answer any more. The request itself is intact and unsent.
+          rpc.deferredResponse = undefined
+        }
+      }
+    }
+  }
+
+  /**
+   * Resume the durable SYNC_ITEMS command the refusal belonged to.
+   *
+   * On success this sends STATUS and nothing else. That is written out here rather
+   * than delegated to `prepareActiveCommand` so the no-double-apply property is
+   * LOCAL: there is no branch at this call site that can mint or re-send a COMMAND
+   * frame, whatever the rest of the state machine grows into. The command id and
+   * digest are the server journal's idempotency identity and both are reused
+   * verbatim, so a committed command is answered with its result, one the backend
+   * confirms `UNKNOWN` is replayed over the identity-bearing HTTP path, and an
+   * `ACCEPTED` one keeps waiting.
+   *
+   * On failure this is the behaviour that existed before an in-place refresh was
+   * possible: one re-ticket for the request, and durable recovery after that.
+   * `RECOVERY_REQUIRED` rejects the caller's promise, which is a real failure the
+   * sync service handles — the command stays in the outbox and is reconciled
+   * through STATUS by the next recovery, so it is never dropped.
+   */
+  private async resumeRefreshedCommand(outcome: 'refreshed' | 'failed' | 'revoked'): Promise<void> {
+    const active = this.active
+    if (!active || (active.mode !== 'execute' && active.mode !== 'recover')) {
+      return
+    }
+    if (outcome === 'refreshed' && this.state === 'READY' && this.socket?.readyState === 1) {
+      const record = this.outboxRecord
+      if (record && record.sessionScope === active.sessionScope && record.revoked !== true) {
+        try {
+          await this.sendStatus(record)
+        } catch {
+          await this.fallback('server-kill', record)
+        }
+        return
+      }
+      // No durable record left to ask STATUS about, which is unreachable for a
+      // command that was actually refused — only a record that exists can match the
+      // refusing frame's id. Surfaced rather than trusted: `fallback` sends a
+      // dispatched command to durable recovery and an undispatched one to the
+      // identity-bearing HTTP replay. Minting a replacement command here would be
+      // the one move that could apply a mutation twice.
+      await this.fallback('server-kill', record)
+      return
+    }
+    if (outcome === 'failed' && !this.reticketedForStaleSession && this.socket?.readyState === 1) {
+      this.reticketedForStaleSession = true
+      await this.reticket()
+      return
+    }
+    // `server-kill` rather than a reason of its own: `fallback` routes a dispatched
+    // command to durable recovery regardless of reason, and an undispatched one to
+    // the identity-bearing HTTP replay. Inventing a reason here would only change
+    // the diagnostic wording while both of those stay the same.
+    await this.fallback('server-kill', this.outboxRecord)
+  }
+
+  /**
+   * Resume — or honestly refuse — the RPC whose 401/498 triggered the refresh.
+   *
+   * The retry is a fresh frame with a NEW `commandId` and the SAME request object.
+   * That ordering is not cosmetic: the gateway refuses a second RPC bearing an
+   * idempotency key it has already seen on this socket (`DUPLICATE_REQUEST`), so
+   * only a request carrying no key can be retried in place at all — which is why
+   * `parkRpcForSessionRefresh` admits GET and nothing else. A new `commandId`
+   * keeps the frames unambiguous and cannot defeat a dedupe that is keyed on the
+   * absent idempotency key.
+   */
+  private async resumeRefreshedRpc(
+    clientRequestId: string,
+    outcome: 'refreshed' | 'failed' | 'revoked',
+  ): Promise<void> {
+    const rpc = this.rpcRequests.get(clientRequestId)
+    if (!rpc) {
+      // Cancelled, deadlined or failed while parked. Already settled for its caller.
+      return
+    }
+    const deferred = rpc.deferredResponse
+    rpc.deferredResponse = undefined
+    if (
+      outcome === 'refreshed' &&
+      this.state === 'READY' &&
+      this.socket?.readyState === 1 &&
+      rpc.sessionScope === this.sessionScope
+    ) {
+      rpc.sent = false
+      rpc.accepted = false
+      rpc.responseStarted = false
+      rpc.expectedChunkIndex = 0
+      await this.sendRpc(rpc)
+      return
+    }
+    if (!deferred) {
+      this.failRpc(rpc, 'SESSION_STALE', true, true)
+      return
+    }
+    // Deliver the answer that was withheld, exactly as it would have arrived. The
+    // caller's own handling of a 401/498 — degrade this read to HTTP — is the net
+    // that kept working before this lane could refresh at all, and a refresh that
+    // did not succeed must leave it intact.
+    rpc.responseStarted = true
+    this.dependencies.postMessage({
+      type: 'RPC_RESPONSE',
+      clientRequestId: rpc.clientRequestId,
+      status: deferred.status,
+      headers: deferred.headers,
+      stream: false,
+      ...(deferred.hasBody ? { body: deferred.body } : {}),
+    })
+    this.dependencies.postMessage({ type: 'RPC_END', clientRequestId: rpc.clientRequestId })
+    this.finishRpc(rpc)
+  }
+
+  /**
+   * Withhold a refusing API_RPC response and ask for a refresh, or decline.
+   *
+   * ADMITTED: a non-streaming GET with no idempotency key whose response has not
+   * started, answered 401 or 498, not already refreshed once. Nothing else.
+   *
+   *   - GET only, and no idempotency key. For a mutation the client cannot
+   *     establish whether the refused request was applied, and a replay carrying
+   *     the same key is refused `DUPLICATE_REQUEST` by the gateway anyway, so
+   *     there is no safe retry to attempt — it is surfaced instead.
+   *   - Non-streaming only. The whole answer is then in this one frame and can be
+   *     delivered verbatim later; a stream's refusal body arrives as chunks that
+   *     would be dropped with the abandoned `commandId`, turning a withheld 401
+   *     into an empty 401.
+   *   - Before `responseStarted`. Nothing has crossed to the main thread, so the
+   *     retry is invisible to the caller rather than a second response.
+   *
+   * The `commandId` is retired HERE rather than at retry time. The gateway always
+   * follows a response with `RPC_END`, and that trailer must not find a request
+   * whose response it believes has not started — that is reported as
+   * `INVALID_RESPONSE` and would kill the request the refresh is trying to save.
+   * Retired, the trailer matches nothing and is dropped, which is what the frame
+   * router already does with every unaddressed frame.
+   */
+  private parkRpcForSessionRefresh(rpc: ActiveRpcRequest, frame: SyncServerFrame): boolean {
+    if (
+      rpc.responseStarted ||
+      rpc.refreshRetried === true ||
+      rpc.request.method !== 'GET' ||
+      rpc.request.idempotencyKey !== undefined ||
+      frame.payload.stream !== false ||
+      !Number.isSafeInteger(frame.payload.status) ||
+      !REFRESHABLE_RPC_STATUSES.has(Number(frame.payload.status)) ||
+      !isStringRecord(frame.payload.headers) ||
+      !this.canRefreshSession()
+    ) {
+      return false
+    }
+    // Asked BEFORE anything on the request is touched: a refusal to refresh must
+    // leave the response to be delivered the ordinary way, and retiring the
+    // `commandId` first would strand the caller on a trailer that matches nothing.
+    if (!this.requestSessionRefresh({ kind: 'rpc', clientRequestId: rpc.clientRequestId })) {
+      return false
+    }
+    rpc.refreshRetried = true
+    rpc.deferredResponse = {
+      status: Number(frame.payload.status),
+      headers: frame.payload.headers,
+      hasBody: Object.hasOwn(frame.payload, 'body'),
+      ...(Object.hasOwn(frame.payload, 'body') ? { body: frame.payload.body } : {}),
+    }
+    rpc.commandId = this.uuid()
+    rpc.sent = false
+    rpc.accepted = false
+    rpc.expectedChunkIndex = 0
+    return true
   }
 
   private async prepareActiveRequest(): Promise<void> {
@@ -2132,6 +2712,14 @@ export class SyncTransportWorkerRuntime {
           !isStringRecord(frame.payload.headers)
         ) {
           this.failRpc(rpc, 'INVALID_RESPONSE', false, false)
+          return
+        }
+        // Only sync emits SESSION_STALE. API_RPC reports a rotated credential as a
+        // 401/498 RESPONSE, so a client driven by SESSION_STALE alone never notices
+        // one here — which is how an admin read over this lane could 401 while the
+        // socket looked healthy. Withheld, refreshed and retried where that is
+        // provably safe; delivered untouched where it is not.
+        if (this.parkRpcForSessionRefresh(rpc, frame)) {
           return
         }
         rpc.responseStarted = true
@@ -2516,6 +3104,11 @@ export class SyncTransportWorkerRuntime {
     this.socket = undefined
     this.clearAckDeadline()
     this.clearHeartbeat()
+    // The credential refresh belonged to THIS socket. Abandon it and let the close
+    // path below own every operation that was parked on it, which it already does
+    // correctly: the command through its retained outbox record, an unsent RPC
+    // through the reconnect bootstrap.
+    this.discardSessionRefresh()
     // A download cannot survive its socket: the gateway aborts the transfer on
     // disconnect, and its transferId/generation do not carry to a new connection.
     this.failAllFileDownloads('SOCKET_CLOSED', true)
@@ -2858,6 +3451,7 @@ export class SyncTransportWorkerRuntime {
   private async closeSocketAndReleaseOwner(): Promise<void> {
     this.clearAckDeadline()
     this.clearHeartbeat()
+    this.discardSessionRefresh()
     if (this.reconnectTimeout) {
       this.cancelTimeout(this.reconnectTimeout)
       this.reconnectTimeout = undefined
