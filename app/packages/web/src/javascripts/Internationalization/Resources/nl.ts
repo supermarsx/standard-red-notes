@@ -690,8 +690,6 @@ const nl: LocaleResource = {
     copiedExclaim: 'Gekopieerd!',
     shareUnavailableTitle: 'Delen niet beschikbaar',
     shareUnavailableMessage: 'Deze deellink is niet meer beschikbaar.',
-    invalidLinkTitle: 'Ongeldige link',
-    invalidLinkMessage: 'Deze deellink is ongeldig of de sleutel ontbreekt.',
     selfDestructTitle: 'Deze notitie vernietigt zichzelf na het bekijken',
     oneTimeViewConsumed: 'Je leest een eenmalige-weergavelink. Deze is nu verbruikt en kan niet opnieuw worden geopend',
     oneTimeViewExpiresClause_one: ', en verloopt volledig {{count}} minuut na de eerste opening',

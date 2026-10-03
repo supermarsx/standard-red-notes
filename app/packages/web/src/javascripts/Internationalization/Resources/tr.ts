@@ -689,8 +689,6 @@ const tr: LocaleResource = {
     copiedExclaim: 'Kopyalandı!',
     shareUnavailableTitle: 'Paylaşım kullanılamıyor',
     shareUnavailableMessage: 'Bu paylaşım bağlantısı artık kullanılamıyor.',
-    invalidLinkTitle: 'Geçersiz bağlantı',
-    invalidLinkMessage: 'Bu paylaşım bağlantısı geçersiz veya anahtar eksik.',
     selfDestructTitle: 'Bu not görüntülendikten sonra kendini imha eder',
     oneTimeViewConsumed: 'Tek seferlik görüntüleme bağlantısı okuyorsunuz. Artık kullanıldı ve yeniden açılamaz',
     oneTimeViewExpiresClause_one: ' ve ilk açılıştan {{count}} dakika sonra tamamen sona erer',

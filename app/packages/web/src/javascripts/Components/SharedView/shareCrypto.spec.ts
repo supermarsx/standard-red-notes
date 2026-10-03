@@ -3,7 +3,7 @@
  */
 import sodium from 'libsodium-wrappers-sumo'
 
-import { decryptShare, encryptShare, ShareCrypto, SharePayload } from './shareCrypto'
+import { decryptShare, encryptShare, ShareCrypto, ShareDecryptError, SharePayload } from './shareCrypto'
 
 /**
  * Real libsodium-backed crypto that mirrors `@standardnotes/sncrypto-web`'s
@@ -102,5 +102,70 @@ describe('share link crypto', () => {
     const wrongKey = crypto.generateRandomKey(256)
 
     await expect(decryptShare(encryptedPayload, wrongKey, crypto)).rejects.toThrow()
+  })
+
+  /**
+   * A failed decrypt used to be a bare `new Error`, so the viewer could not tell
+   * "the server stored something that is not a share envelope" from "this key
+   * does not open it" — and it rendered one sentence for both. `reason` is what
+   * the viewer now switches on, so each of these is pinned against real
+   * libsodium rather than a stub.
+   */
+  describe('failure reasons', () => {
+    const reasonOf = async (encryptedPayload: string, keyHex: string): Promise<unknown> => {
+      try {
+        await decryptShare(encryptedPayload, keyHex, crypto)
+      } catch (error) {
+        return (error as ShareDecryptError).reason
+      }
+      throw new Error('expected decryptShare to reject')
+    }
+
+    it('reports a non-JSON envelope as malformed-envelope', async () => {
+      await expect(reasonOf('<!doctype html>', crypto.generateRandomKey(256))).resolves.toBe('malformed-envelope')
+    })
+
+    it('reports an envelope with no nonce/ciphertext pair as malformed-envelope', async () => {
+      await expect(reasonOf('{"v":1}', crypto.generateRandomKey(256))).resolves.toBe('malformed-envelope')
+      await expect(reasonOf('{"v":1,"nonce":"aa"}', crypto.generateRandomKey(256))).resolves.toBe('malformed-envelope')
+      await expect(reasonOf('null', crypto.generateRandomKey(256))).resolves.toBe('malformed-envelope')
+    })
+
+    it('reports a well-formed envelope opened with the wrong key as wrong-key', async () => {
+      const { encryptedPayload } = await encryptShare({ kind: 'note', title: 'T', text: 'body' }, crypto)
+
+      await expect(reasonOf(encryptedPayload, crypto.generateRandomKey(256))).resolves.toBe('wrong-key')
+    })
+
+    it('reports a truncated (non-hex-length) fragment key as wrong-key, not as a crash', async () => {
+      const { encryptedPayload, keyHex } = await encryptShare({ kind: 'note', title: 'T', text: 'body' }, crypto)
+
+      // A hand-copied link losing its tail is the single most likely bad key.
+      await expect(reasonOf(encryptedPayload, keyHex.slice(0, 40))).resolves.toBe('wrong-key')
+    })
+
+    it('carries a ShareDecryptError whose message leaks neither the key nor the plaintext', async () => {
+      const { encryptedPayload, keyHex } = await encryptShare(
+        { kind: 'note', title: 'Secret', text: 'super-secret-body' },
+        crypto,
+      )
+      const wrongKey = crypto.generateRandomKey(256)
+
+      await expect(decryptShare(encryptedPayload, wrongKey, crypto)).rejects.toMatchObject({
+        name: 'ShareDecryptError',
+        reason: 'wrong-key',
+      })
+
+      let message = ''
+      try {
+        await decryptShare(encryptedPayload, wrongKey, crypto)
+      } catch (error) {
+        message = (error as ShareDecryptError).message
+      }
+      expect(message).not.toBe('')
+      expect(message).not.toContain(wrongKey)
+      expect(message).not.toContain(keyHex)
+      expect(message).not.toContain('super-secret-body')
+    })
   })
 })

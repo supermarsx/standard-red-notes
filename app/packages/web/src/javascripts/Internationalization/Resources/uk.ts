@@ -690,8 +690,6 @@ const uk: LocaleResource = {
     copiedExclaim: 'Скопійовано!',
     shareUnavailableTitle: 'Спільний доступ недоступний',
     shareUnavailableMessage: 'Це посилання спільного доступу більше недоступне.',
-    invalidLinkTitle: 'Недійсне посилання',
-    invalidLinkMessage: 'Це посилання спільного доступу недійсне або відсутній ключ.',
     selfDestructTitle: 'Ця нотатка самознищується після перегляду',
     oneTimeViewConsumed:
       'Ви читаєте посилання одноразового перегляду. Тепер його використано, і його не можна відкрити знову',

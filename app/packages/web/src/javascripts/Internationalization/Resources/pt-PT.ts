@@ -838,8 +838,6 @@ const ptPT: LocaleResource = {
     copiedExclaim: 'Copiado!',
     shareUnavailableTitle: 'Partilha indisponível',
     shareUnavailableMessage: 'Esta ligação de partilha já não está disponível.',
-    invalidLinkTitle: 'Ligação inválida',
-    invalidLinkMessage: 'Esta ligação de partilha é inválida ou falta a chave.',
     selfDestructTitle: 'Esta nota autodestrói-se após a visualização',
     oneTimeViewConsumed: 'Está a ler uma ligação de visualização única. Foi agora consumida e não pode ser reaberta',
     oneTimeViewExpiresClause_one: ', e expira totalmente {{count}} minuto após a primeira abertura',

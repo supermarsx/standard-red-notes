@@ -692,8 +692,6 @@ const ptBR: LocaleResource = {
     copiedExclaim: 'Copiado!',
     shareUnavailableTitle: 'Compartilhamento indisponível',
     shareUnavailableMessage: 'Este link de compartilhamento não está mais disponível.',
-    invalidLinkTitle: 'Link inválido',
-    invalidLinkMessage: 'Este link de compartilhamento é inválido ou a chave está ausente.',
     selfDestructTitle: 'Esta nota se autodestrói após a visualização',
     oneTimeViewConsumed: 'Você está lendo um link de visualização única. Ele já foi consumido e não pode ser reaberto',
     oneTimeViewExpiresClause_one: ', e expira totalmente {{count}} minuto após a primeira abertura',

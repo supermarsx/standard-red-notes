@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite'
 import { SNNote, isErrorResponse } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { WebApplication } from '@/Application/WebApplication'
+import { fallbackCopyTextToClipboard } from '@/Utils/copyTextToClipboard'
 import Modal from '../Modal/Modal'
 import ModalOverlay from '../Modal/ModalOverlay'
 import { encryptShare } from '../SharedView/shareCrypto'
@@ -14,12 +15,43 @@ type Props = {
   close: () => void
 }
 
+/**
+ * Copy the share link and report whether it ACTUALLY reached the clipboard.
+ *
+ * `navigator.clipboard` exists only in a secure context. The previous code wrote
+ * `await navigator?.clipboard?.writeText(link)` — optional chaining, so where the
+ * Clipboard API is absent the whole expression short-circuits to `undefined`,
+ * nothing throws, and the `catch` that was meant to report the failure never
+ * runs. Measured in Chrome with `navigator.clipboard` deleted: the modal said
+ * "Share link copied to clipboard." and the panel repeated the claim, having
+ * copied nothing at all.
+ *
+ * So presence is checked explicitly, and the shared `execCommand`-based fallback
+ * (which needs no Clipboard API and mounts its own detached textarea, so it also
+ * works before the link field has rendered) is tried before giving up.
+ */
+const copyShareLink = async (link: string): Promise<boolean> => {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(link)
+      return true
+    } catch {
+      // Permission denied / not focused: fall through to the fallback below.
+    }
+  }
+
+  return fallbackCopyTextToClipboard(link)
+}
+
 const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props, 'isOpen'>) => {
   const [oneTimeView, setOneTimeView] = useState(false)
   const [useExpiry, setUseExpiry] = useState(false)
   const [expiryMinutes, setExpiryMinutes] = useState('15')
   const [submitting, setSubmitting] = useState(false)
   const [createdLink, setCreatedLink] = useState<string | null>(null)
+  // Whether the link genuinely reached the clipboard. The panel below used to
+  // assert it unconditionally, which is false whenever the copy did not happen.
+  const [copied, setCopied] = useState(false)
 
   const parsedMinutes = Number(expiryMinutes)
   const expiryValid = !useExpiry || (Number.isInteger(parsedMinutes) && parsedMinutes > 0)
@@ -58,12 +90,13 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
       const link = `${window.location.origin}/?shared=${shareId}#${keyHex}`
       setCreatedLink(link)
 
-      try {
-        await navigator?.clipboard?.writeText(link)
-        addToast({ type: ToastType.Success, message: 'Share link copied to clipboard.' })
-      } catch {
-        addToast({ type: ToastType.Regular, message: 'Share link created (copy it below).' })
-      }
+      const didCopy = await copyShareLink(link)
+      setCopied(didCopy)
+      addToast(
+        didCopy
+          ? { type: ToastType.Success, message: 'Share link copied to clipboard.' }
+          : { type: ToastType.Regular, message: 'Share link created — copy it below.' },
+      )
     } catch (error) {
       console.error(error)
       addToast({ type: ToastType.Error, message: 'Failed to create share link.' })
@@ -173,8 +206,26 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
               value={createdLink}
               onFocus={(event) => event.currentTarget.select()}
             />
+            <button
+              className="border-border bg-default hover:bg-contrast self-start rounded border px-3 py-1.5 text-sm"
+              onClick={() => {
+                void copyShareLink(createdLink).then((didCopy) => {
+                  setCopied(didCopy)
+                  addToast(
+                    didCopy
+                      ? { type: ToastType.Success, message: 'Share link copied to clipboard.' }
+                      : { type: ToastType.Error, message: 'Could not copy — select the link above and copy it.' },
+                  )
+                })
+              }}
+            >
+              Copy link
+            </button>
             <div className="text-passive-0 text-xs">
-              It has been copied to your clipboard. The decryption key is in the part after the <code>#</code> and never
+              {copied
+                ? 'It has been copied to your clipboard. '
+                : 'It was NOT copied to your clipboard — select the whole link above, or use Copy link. '}
+              The decryption key is the part after the <code>#</code>; a link without it cannot be opened, and it never
               reaches the server.
             </div>
           </div>

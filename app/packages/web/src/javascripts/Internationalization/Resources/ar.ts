@@ -685,8 +685,6 @@ const ar: LocaleResource = {
     copiedExclaim: 'تم النسخ!',
     shareUnavailableTitle: 'المشاركة غير متاحة',
     shareUnavailableMessage: 'لم يعد رابط المشاركة هذا متاحًا.',
-    invalidLinkTitle: 'رابط غير صالح',
-    invalidLinkMessage: 'رابط المشاركة هذا غير صالح أو المفتاح مفقود.',
     selfDestructTitle: 'تدمّر هذه الملاحظة نفسها بعد العرض',
     oneTimeViewConsumed: 'أنت تقرأ رابط عرض لمرة واحدة. لقد تم استهلاكه الآن ولا يمكن إعادة فتحه',
     oneTimeViewExpiresClause_zero: '، وتنتهي صلاحيته بالكامل بعد {{count}} دقيقة من أول فتح',

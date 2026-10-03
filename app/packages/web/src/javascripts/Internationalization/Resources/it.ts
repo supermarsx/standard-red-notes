@@ -760,8 +760,6 @@ const it: LocaleResource = {
     copiedExclaim: 'Copiato!',
     shareUnavailableTitle: 'Condivisione non disponibile',
     shareUnavailableMessage: 'Questo link di condivisione non è più disponibile.',
-    invalidLinkTitle: 'Link non valido',
-    invalidLinkMessage: 'Questo link di condivisione non è valido o la chiave è mancante.',
     selfDestructTitle: 'Questa nota si autodistrugge dopo la visualizzazione',
     oneTimeViewConsumed:
       'Stai leggendo un link a visualizzazione singola. È stato ora consumato e non può essere riaperto',

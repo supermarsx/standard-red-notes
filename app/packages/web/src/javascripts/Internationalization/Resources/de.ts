@@ -837,8 +837,6 @@ const de: LocaleResource = {
     copiedExclaim: 'Kopiert!',
     shareUnavailableTitle: 'Teilen nicht verfügbar',
     shareUnavailableMessage: 'Dieser Freigabelink ist nicht mehr verfügbar.',
-    invalidLinkTitle: 'Ungültiger Link',
-    invalidLinkMessage: 'Dieser Freigabelink ist ungültig oder der Schlüssel fehlt.',
     selfDestructTitle: 'Diese Notiz zerstört sich nach dem Ansehen selbst',
     oneTimeViewConsumed:
       'Sie lesen einen Einmalansicht-Link. Er wurde nun verbraucht und kann nicht erneut geöffnet werden',

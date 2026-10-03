@@ -837,8 +837,6 @@ const fr: LocaleResource = {
     copiedExclaim: 'Copié !',
     shareUnavailableTitle: 'Partage indisponible',
     shareUnavailableMessage: "Ce lien de partage n'est plus disponible.",
-    invalidLinkTitle: 'Lien invalide',
-    invalidLinkMessage: 'Ce lien de partage est invalide ou la clé est manquante.',
     selfDestructTitle: "Cette note s'autodétruit après consultation",
     oneTimeViewConsumed:
       'Vous consultez un lien à usage unique. Il a maintenant été consommé et ne peut plus être rouvert',

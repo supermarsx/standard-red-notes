@@ -691,8 +691,6 @@ const pl: LocaleResource = {
     copiedExclaim: 'Skopiowano!',
     shareUnavailableTitle: 'Udostępnianie niedostępne',
     shareUnavailableMessage: 'Ten link udostępniania nie jest już dostępny.',
-    invalidLinkTitle: 'Nieprawidłowy link',
-    invalidLinkMessage: 'Ten link udostępniania jest nieprawidłowy lub brakuje klucza.',
     selfDestructTitle: 'Ta notatka samoczynnie usuwa się po wyświetleniu',
     oneTimeViewConsumed:
       'Czytasz link jednorazowego wyświetlenia. Został on teraz wykorzystany i nie można go ponownie otworzyć',

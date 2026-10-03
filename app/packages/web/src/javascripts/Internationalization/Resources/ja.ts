@@ -751,8 +751,6 @@ const ja: LocaleResource = {
     copiedExclaim: 'コピーしました!',
     shareUnavailableTitle: '共有は利用できません',
     shareUnavailableMessage: 'この共有リンクは利用できなくなりました。',
-    invalidLinkTitle: '無効なリンク',
-    invalidLinkMessage: 'この共有リンクは無効か、キーが見つかりません。',
     selfDestructTitle: 'このノートは閲覧後に自動消去されます',
     oneTimeViewConsumed: 'あなたは一度きりの閲覧リンクを読んでいます。このリンクは消費され、再度開くことはできません',
     oneTimeViewExpiresClause_other: '。また、最初に開いてから{{count}}分後に完全に期限切れになります',
