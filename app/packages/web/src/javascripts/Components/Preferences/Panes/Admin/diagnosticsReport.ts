@@ -1,5 +1,6 @@
 import { buildEnvironmentGroups, describeTopology } from './diagnosticEnvironment'
 import { admitToken, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
+import { SECTION_IDS, type SectionId, type SectionModel } from './diagnosticsSections'
 import {
   EFFORT_LABEL,
   remedyForClientGap,
@@ -60,6 +61,27 @@ export type DiagnosticsReportInput = {
    * unread diagnostics endpoint is never reported as a verdict about the socket.
    */
   readFailure?: DiagnosticsReadFailure
+  /**
+   * The five section models, as a COMPLETE `Record` over `SectionId`.
+   *
+   * Typed as a record rather than a list so a section cannot be left out by
+   * forgetting it: the compiler requires every member, and this builder iterates
+   * `SECTION_IDS` rather than whatever order a caller happened to assemble. The
+   * user asked for a pasteable report early in this project and it has to keep
+   * covering the whole pane — a report that silently omits a section is worse
+   * than no report, because the reader cannot tell an omitted section from a
+   * section that had nothing to say.
+   *
+   * Optional only so the many call sites that predate the sections keep working.
+   * When it is absent the report SAYS SO, in words, rather than quietly ending
+   * four sections early.
+   *
+   * Nothing here needs sanitising on the way out. Every line of a section's
+   * `reportLines` is a `SafeValue`, obtainable only from the constructors in
+   * `diagnosticsSections.ts` — a name, a boolean, a closed enum, a bounded count,
+   * a duration, a bucket or a literal from this build.
+   */
+  sections?: Readonly<Record<SectionId, SectionModel>>
   /** Injected so the report is deterministic under test. */
   generatedAt?: string
 }
@@ -267,6 +289,24 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
     lines.push(`- [${outcome.passed ? 'PASS' : 'FAIL'}] ${outcome.name} — ${outcome.reportDetail}`)
   }
   lines.push('')
+
+  // The five topic sections. Iterated over SECTION_IDS, not over the caller's
+  // object, so the order is the pane's order and no section can be skipped.
+  if (input.sections === undefined) {
+    lines.push(
+      'The five topic sections were not supplied to this report, so WebSocket, Environment & setup, Database & internal comms, Account, space & requirements and Browser are missing from it. That is a caller defect, not a server that reported nothing.',
+    )
+    lines.push('')
+  } else {
+    lines.push(
+      'The five topic sections follow, each with the worst verdict it derived from its own rows and findings. Every value in them is a variable name, a boolean, a closed code, a bounded count, a duration or a closed bucket.',
+    )
+    lines.push('')
+    for (const id of SECTION_IDS) {
+      lines.push(...input.sections[id].reportLines)
+      lines.push('')
+    }
+  }
 
   return lines.join('\n')
 }

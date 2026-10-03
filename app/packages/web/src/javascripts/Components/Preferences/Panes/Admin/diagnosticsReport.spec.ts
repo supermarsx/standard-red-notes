@@ -1,5 +1,11 @@
 import { buildDiagnosticsReport, type DiagnosticsReportInput } from './diagnosticsReport'
 import type { SyncDiagnosticsPayload } from './syncDiagnostics'
+import { SECTION_IDS, SECTION_TITLE, type SectionId, type SectionModel } from './diagnosticsSections'
+import { buildWebsocketSection } from './websocketSection'
+import { buildEnvironmentSection } from './environmentSection'
+import { buildBackendSection } from './backendSection'
+import { buildAccountSection } from './accountSection'
+import { buildBrowserSection } from './browserSection'
 
 /**
  * The report is written on the assumption that it becomes public. These tests
@@ -62,6 +68,20 @@ const input = (overrides: Partial<DiagnosticsReportInput> = {}): DiagnosticsRepo
   ...overrides,
 })
 
+/**
+ * The five section models, built from the same payload the rest of this file
+ * uses. Real models rather than hand-made ones: a fixture that fakes a
+ * `SectionModel` would also fake `reportLines`, and the thing under test is
+ * whether the REAL lines of all five arrive.
+ */
+const sections = (): Record<SectionId, SectionModel> => ({
+  websocket: buildWebsocketSection({ payload, transport: { state: 'READY', operations: ['FILES_V1'] } }),
+  environment: buildEnvironmentSection({ topology: payload.deployment }),
+  backend: buildBackendSection({ topology: payload.deployment }),
+  account: buildAccountSection({ observations: { signedIn: true } }),
+  browser: buildBrowserSection({ observations: { pageScheme: 'https:' } }),
+})
+
 describe('buildDiagnosticsReport — what it says', () => {
   it('carries every section an issue reader needs', () => {
     const report = buildDiagnosticsReport(input())
@@ -77,6 +97,76 @@ describe('buildDiagnosticsReport — what it says', () => {
     ]) {
       expect(report).toContain(heading)
     }
+  })
+
+  /**
+   * *** ALL FIVE SECTIONS, IN THE CONTRACT'S ORDER. ***
+   *
+   * The pane is five topic sections plus three tabs that are not topics, and a
+   * report that silently omits one is worse than no report: the reader cannot
+   * tell a section that was dropped from a section that had nothing to say. The
+   * builder iterates `SECTION_IDS` rather than the caller's object, so this also
+   * pins that a sixth section added to the contract cannot be skipped.
+   */
+  it('carries every section in the contract, in the contract’s order', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+
+    const positions = SECTION_IDS.map((id) => report.indexOf(`## ${SECTION_TITLE[id]}`))
+    for (const position of positions) {
+      expect(position).toBeGreaterThan(-1)
+    }
+    expect([...positions].sort((left, right) => left - right)).toEqual(positions)
+  })
+
+  it('carries each section’s own worst verdict and its blocks, not just its heading', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+
+    expect(report.split('- Worst verdict: ').length - 1).toBe(SECTION_IDS.length)
+    for (const block of [
+      '### Socket lane and boot gate',
+      '### Deployment identity',
+      '### Durable storage',
+      '### Account and access',
+      '### Clock',
+    ]) {
+      expect(report).toContain(block)
+    }
+  })
+
+  /**
+   * The caller is required to supply all five by the type, so an absent object
+   * can only be a call site that predates them. It says so in words rather than
+   * ending four sections early and leaving the reader to notice.
+   */
+  it('says the sections are missing rather than quietly ending early', () => {
+    const report = buildDiagnosticsReport(input())
+
+    expect(report).toContain('five topic sections were not supplied')
+    for (const id of SECTION_IDS) {
+      expect(report).not.toContain(`## ${SECTION_TITLE[id]}`)
+    }
+  })
+
+  /** A section's lines are all `SafeValue`s, so the public-report rule holds. */
+  it('admits nothing from a section but names, booleans, codes, counts and durations', () => {
+    const poisoned: SyncDiagnosticsPayload = {
+      ...payload,
+      gate: {
+        ...payload.gate,
+        syncItems: { state: 'redis://admin:hunter2@redis.internal.example:6379', cause: 'hunter2', remedy: null },
+      },
+    }
+    const report = buildDiagnosticsReport(
+      input({
+        sections: {
+          ...sections(),
+          websocket: buildWebsocketSection({ payload: poisoned }),
+        },
+      }),
+    )
+
+    expect(report).not.toContain('hunter2')
+    expect(report).not.toMatch(/redis:\/\//)
   })
 
   it('separates the lane verdict from the SYNC_ITEMS verdict', () => {
