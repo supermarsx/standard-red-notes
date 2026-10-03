@@ -32,7 +32,7 @@ jest.mock('@standardnotes/ui-services', () => ({
 }))
 
 import AdminDiagnosticsTab, { DIAGNOSIS_CHIP_LABEL, TONE_CHIP } from './AdminDiagnosticsTab'
-import { TONES } from './syncDiagnostics'
+import { SYNC_ITEMS_CAUSES, TONES } from './syncDiagnostics'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
@@ -81,6 +81,10 @@ const unavailablePayload = {
     gatewayAttached: true,
     syncLaneEnabled: false,
     syncItemsAdvertised: false,
+    // The structured verdict, in the server's own precedence: a lane that did not
+    // come up outranks the backend reading, so the cause is the lane's conditions
+    // and the server sends no remedy of its own for it.
+    syncItems: { state: 'WITHHELD', cause: 'LANE_PRECONDITION_UNMET', remedy: null, probe: 'NEVER_PROBED' },
     unmetPreconditions: [
       {
         code: 'SYNCING_SERVER_GRPC_UNBOUND',
@@ -257,7 +261,12 @@ describe('AdminDiagnosticsTab — Overview', () => {
         ok: true,
         data: {
           ...unavailablePayload,
-          gate: { ...unavailablePayload.gate, syncLaneEnabled: true, syncItemsAdvertised: false },
+          gate: {
+            ...unavailablePayload.gate,
+            syncLaneEnabled: true,
+            syncItemsAdvertised: false,
+            syncItems: { state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: null, probe: 'NOT_READY' },
+          },
           live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
         },
       }),
@@ -336,6 +345,214 @@ describe('AdminDiagnosticsTab — Boot gate and its remedies', () => {
 
     expect(text).toContain('Generic advice')
     expect(text).toContain('may not apply here')
+  })
+})
+
+/**
+ * The SYNC_ITEMS verdict, on screen.
+ *
+ * The server reports three states, a closed cause and the frozen remedy copy for
+ * it. The panel rendered one boolean behind a `!== undefined` guard — so the state
+ * the server OMITS that boolean for rendered as no chip at all, and the cause an
+ * operator can actually fix rendered nowhere. These tests drive the real component
+ * because a chip inside an inactive TabPanel is exactly the kind of correct code
+ * this repo has shipped twice with nothing on screen.
+ */
+describe('AdminDiagnosticsTab — the SYNC_ITEMS verdict', () => {
+  const withVerdict = (
+    syncItems: Record<string, unknown> | undefined,
+    gate: Record<string, unknown> = {},
+  ): ReturnType<typeof makeApplication> =>
+    makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        data: {
+          ...unavailablePayload,
+          gate: {
+            ...unavailablePayload.gate,
+            syncLaneEnabled: true,
+            unmetPreconditions: [],
+            unmetCodes: [],
+            ...gate,
+            syncItems,
+          },
+          live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
+        },
+      }),
+      syncTransportStatus: { state: 'READY', operations: ['API_RPC'] },
+    })
+
+  const reportText = (): string =>
+    (container.querySelector('textarea[aria-label="Diagnostics report"]') as HTMLTextAreaElement | null)?.value ?? ''
+
+  /** The chip beside the SYNC_ITEMS label, as an element, so its tone is checkable. */
+  const syncItemsChip = (): HTMLElement => {
+    const row = [...container.querySelectorAll('span')].find((element) =>
+      element.textContent?.includes('note syncing over the socket'),
+    )
+    expect(row).toBeDefined()
+    const chip = row?.querySelector('span')
+    expect(chip).not.toBeNull()
+
+    return chip as HTMLElement
+  }
+
+  it('renders ADVERTISED as a good chip with nothing further to say', async () => {
+    await renderTab(withVerdict({ state: 'ADVERTISED', cause: null, remedy: null, probe: 'READY' }))
+
+    const text = await openSubtab('Boot gate')
+
+    expect(syncItemsChip().textContent).toBe('Advertised')
+    expect(syncItemsChip().className).toContain(TONE_CHIP.good)
+    expect(text).not.toContain('is withheld')
+    expect(text).not.toContain('Not observed')
+  })
+
+  /**
+   * *** THE FALSE GREEN. *** This payload has an EMPTY condition list — the durable
+   * port is bound, so nothing is unmet — a lane that is up and a ticket being
+   * issued. Before the verdict was read, every heading on this screen said healthy
+   * while the socket refused note syncing.
+   */
+  it('renders a withheld cause and its remedy, on a payload where no condition is unmet', async () => {
+    const stockRemedy =
+      'the durable command port is bound but FAILED the readiness check the handshake itself makes. That check needs AUTH_JWT_SECRET and SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes'
+    const text = await renderTab(
+      withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: stockRemedy, probe: 'NOT_READY' }),
+    )
+
+    // The Overview must not call this healthy any more.
+    expect(text).not.toContain('fully configured and available')
+    expect(text).toContain('SYNC_ITEMS is not advertised')
+
+    const gate = await openSubtab('Boot gate')
+
+    expect(syncItemsChip().textContent).toBe('Withheld')
+    expect(syncItemsChip().className).toContain(TONE_CHIP.warn)
+    // The cause, named, with the two things to check.
+    expect(gate).toContain('DURABLE_BACKEND_NOT_READY')
+    expect(gate).toContain('readiness check')
+    expect(gate).toContain('AUTH_JWT_SECRET')
+    expect(gate).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+    expect(gate).toContain('32 bytes')
+    expect(gate).toContain('The server reports:')
+    // And it still says all boot CONDITIONS are satisfied, because they are —
+    // the point is that the condition list was never where this fault appears.
+    expect(gate).toContain('All boot conditions are satisfied')
+  })
+
+  /**
+   * "Could not determine" must stay visually and verbally distinct from
+   * "unavailable". The chip used to vanish entirely here, which reads as a panel
+   * that has not finished loading.
+   */
+  it('renders NOT_OBSERVED as its own neutral chip, never as Unavailable', async () => {
+    await renderTab(withVerdict({ state: 'NOT_OBSERVED', cause: 'PROBE_FAILED', remedy: null, probe: 'PROBE_FAILED' }))
+
+    const text = await openSubtab('Boot gate')
+
+    expect(syncItemsChip().textContent).toBe('Not observed')
+    expect(syncItemsChip().textContent).not.toBe(DIAGNOSIS_CHIP_LABEL.bad)
+    expect(syncItemsChip().className).toContain(TONE_CHIP.neutral)
+    expect(syncItemsChip().className).not.toContain(TONE_CHIP.bad)
+    expect(syncItemsChip().className).not.toContain(TONE_CHIP.warn)
+    expect(text).toContain('PROBE_FAILED')
+    expect(text).toContain('unknown rather than no')
+  })
+
+  /**
+   * *** BACKWARD COMPATIBILITY. *** A server build older than the verdict sends
+   * only the boolean, and derived it from whether a proxy OBJECT existed rather
+   * than from the predicate the handshake asks — so `true` there appeared over
+   * sockets that withheld the operation. The panel makes no claim from it.
+   */
+  it('claims nothing from a server build that predates the verdict', async () => {
+    await renderTab(withVerdict(undefined, { syncItemsAdvertised: true }))
+
+    const text = await openSubtab('Boot gate')
+
+    expect(syncItemsChip().textContent).toBe('Not observed')
+    expect(syncItemsChip().textContent).not.toBe('Advertised')
+    expect(syncItemsChip().className).toContain(TONE_CHIP.neutral)
+    expect(text).toContain('does not report the SYNC_ITEMS verdict')
+    expect(text).toContain('a proxy OBJECT had been constructed')
+    // No cause code is invented for it.
+    for (const cause of SYNC_ITEMS_CAUSES) {
+      expect(text).not.toContain(cause)
+    }
+  })
+
+  /**
+   * The stock remedy for an unbound port is the one this panel exists to replace:
+   * on this deployment it sends the reader after SYNCING_SERVER_GRPC_URL, which is
+   * already set and never read. The verdict block must not put it back.
+   */
+  it('does not reprint the stock remedy for a cause the condition list already carries', async () => {
+    const text = await renderTab(
+      withVerdict(
+        {
+          state: 'WITHHELD',
+          cause: 'DURABLE_BACKEND_UNBOUND',
+          remedy:
+            'the gRPC syncing-server proxy is not bound; configure SYNCING_SERVER_GRPC_URL so realtime commands have a durable backend',
+          probe: 'NEVER_PROBED',
+        },
+        {
+          unmetPreconditions: [{ code: 'SYNCING_SERVER_GRPC_UNBOUND', remedy: 'configure SYNCING_SERVER_GRPC_URL' }],
+          unmetCodes: ['SYNCING_SERVER_GRPC_UNBOUND'],
+        },
+      ),
+    )
+    const gate = await openSubtab('Boot gate')
+
+    expect(gate).toContain('DURABLE_BACKEND_UNBOUND')
+    expect(gate).not.toContain('so realtime commands have a durable backend')
+    expect(gate).not.toContain('The server reports:')
+    // The topology-conditional remedy beside the condition is still there.
+    expect(gate).toContain('SERVICE_PROXY_TYPE=grpc')
+    expect(text).not.toContain('fully configured and available')
+  })
+
+  it('carries the verdict into the copyable report', async () => {
+    await renderTab(
+      withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: null, probe: 'NOT_READY' }),
+    )
+    await openSubtab('Copyable report')
+    const report = reportText()
+
+    expect(report).toContain('- SYNC_ITEMS advertised: no')
+    expect(report).toContain('- SYNC_ITEMS cause: DURABLE_BACKEND_NOT_READY')
+    expect(report).toContain('- What that means:')
+  })
+
+  it('carries the undetermined verdict into the report as undetermined', async () => {
+    await renderTab(withVerdict({ state: 'NOT_OBSERVED', cause: 'NEVER_PROBED', remedy: null }))
+    await openSubtab('Copyable report')
+    const report = reportText()
+
+    expect(report).toContain('- SYNC_ITEMS advertised: could not be determined')
+    expect(report).not.toContain('- SYNC_ITEMS advertised: yes')
+    expect(report).toContain('- SYNC_ITEMS cause: NEVER_PROBED')
+  })
+
+  it('redacts an address a misbehaving server put in the verdict remedy', async () => {
+    await renderTab(
+      withVerdict({
+        state: 'WITHHELD',
+        cause: 'DURABLE_BACKEND_NOT_READY',
+        remedy: `the durable backend at ${SECRETS[1]} refused`,
+        probe: 'NOT_READY',
+      }),
+    )
+
+    const gate = await openSubtab('Boot gate')
+
+    expect(gate).not.toContain(SECRETS[1])
+    expect(gate).toContain('[address withheld]')
+
+    await openSubtab('Copyable report')
+    expect(reportText()).not.toContain(SECRETS[1])
   })
 })
 

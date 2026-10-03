@@ -36,6 +36,14 @@ const payload: SyncDiagnosticsPayload = {
     gatewayAttached: true,
     syncLaneEnabled: true,
     syncItemsAdvertised: false,
+    // The structured verdict as a current server sends it. The boolean above is
+    // derived FROM this state server-side; the report reads the state.
+    syncItems: {
+      state: 'WITHHELD',
+      cause: 'DURABLE_BACKEND_UNBOUND',
+      remedy: 'the gRPC syncing-server proxy is not bound; configure SYNCING_SERVER_GRPC_URL',
+      probe: 'NEVER_PROBED',
+    },
     unmetPreconditions: [{ code: 'SYNCING_SERVER_GRPC_UNBOUND', remedy: 'configure SYNCING_SERVER_GRPC_URL' }],
     unmetCodes: ['SYNCING_SERVER_GRPC_UNBOUND'],
     files: { advertised: false, unmetCondition: 'FILES_INTERNAL_URL', remedy: 'no INTERNAL files service URL' },
@@ -76,6 +84,84 @@ describe('buildDiagnosticsReport — what it says', () => {
 
     expect(report).toContain('Sync lane enabled: yes')
     expect(report).toContain('SYNC_ITEMS advertised: no')
+  })
+
+  /**
+   * The SYNC_ITEMS verdict, in the report that gets pasted into an issue.
+   *
+   * `cause` is a closed enum re-validated against this build's own list before it
+   * is printed, so the code in the report is a literal from this build. The
+   * explanation is constant copy from this build too — the `- What that means:`
+   * shape the read-failure branch already uses — because the whole point of this
+   * report is that someone else reads it without the panel in front of them.
+   */
+  describe('the SYNC_ITEMS verdict', () => {
+    const withVerdict = (syncItems: NonNullable<NonNullable<SyncDiagnosticsPayload['gate']>['syncItems']>) =>
+      input({ payload: { ...payload, gate: { ...payload.gate, syncItems } } })
+
+    it('names the cause and what it means when SYNC_ITEMS is withheld', () => {
+      const report = buildDiagnosticsReport(
+        withVerdict({
+          state: 'WITHHELD',
+          cause: 'DURABLE_BACKEND_NOT_READY',
+          remedy: 'the durable command port is bound but FAILED the readiness check the handshake itself makes',
+          probe: 'NOT_READY',
+        }),
+      )
+
+      expect(report).toContain('- SYNC_ITEMS advertised: no')
+      expect(report).toContain('- SYNC_ITEMS cause: DURABLE_BACKEND_NOT_READY')
+      expect(report).toContain('- What that means:')
+      expect(report).toContain('AUTH_JWT_SECRET')
+      expect(report).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      expect(report).toContain('  - The server reports: the durable command port is bound')
+    })
+
+    it('reports the third state as undetermined rather than as a no', () => {
+      const report = buildDiagnosticsReport(withVerdict({ state: 'NOT_OBSERVED', cause: 'PROBE_FAILED', remedy: null }))
+
+      expect(report).toContain('- SYNC_ITEMS advertised: could not be determined')
+      expect(report).not.toContain('- SYNC_ITEMS advertised: no')
+      expect(report).not.toContain('- SYNC_ITEMS advertised: yes')
+      expect(report).toContain('- SYNC_ITEMS cause: PROBE_FAILED')
+      expect(report).toContain('unknown rather than no')
+    })
+
+    it('says nothing beyond yes when SYNC_ITEMS is advertised', () => {
+      const report = buildDiagnosticsReport(withVerdict({ state: 'ADVERTISED', cause: null, remedy: null }))
+
+      expect(report).toContain('- SYNC_ITEMS advertised: yes')
+      expect(report).not.toContain('- SYNC_ITEMS cause:')
+      expect(report).not.toContain('- What that means:')
+    })
+
+    /**
+     * *** BACKWARD COMPATIBILITY, PINNED. *** A server older than the verdict
+     * sends only the boolean, and on those builds it was derived from whether a
+     * proxy OBJECT existed rather than from the predicate the handshake asks — so a
+     * `true` there was printed over sockets that withheld the operation. The report
+     * states that it cannot say, and never echoes the claim.
+     */
+    it('claims nothing from a payload that predates the verdict', () => {
+      const report = buildDiagnosticsReport(
+        input({ payload: { ...payload, gate: { ...payload.gate, syncItems: undefined, syncItemsAdvertised: true } } }),
+      )
+
+      expect(report).toContain('- SYNC_ITEMS advertised: could not be determined')
+      expect(report).not.toContain('- SYNC_ITEMS advertised: yes')
+      expect(report).toContain('does not report the SYNC_ITEMS verdict')
+      expect(report).toContain('- What that means:')
+    })
+
+    it('prints the cause code only when this build recognises it', () => {
+      const report = buildDiagnosticsReport(
+        withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_ON_FIRE', remedy: null }),
+      )
+
+      expect(report).not.toContain('DURABLE_BACKEND_ON_FIRE')
+      expect(report).toContain('- SYNC_ITEMS advertised: no')
+      expect(report).toContain('does not recognise')
+    })
   })
 
   it('carries the topology-conditional remedy, not the server default', () => {
@@ -165,6 +251,14 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     capturedAt: 'redis://admin:hunter2@redis.internal.example:6379',
     gate: {
       ...payload.gate,
+      // The SYNC_ITEMS remedy is a frozen constant in the contract; this is the
+      // future server change that breaks that assumption.
+      syncItems: {
+        state: 'WITHHELD',
+        cause: 'DURABLE_BACKEND_NOT_READY',
+        remedy: 'the durable backend at syncing.internal.example:50051 refused',
+        probe: 'NOT_READY',
+      },
       unmetPreconditions: [
         { code: 'REDIS_UNBOUND', remedy: 'set REDIS_URL to redis://admin:hunter2@redis.internal.example:6379' },
       ],

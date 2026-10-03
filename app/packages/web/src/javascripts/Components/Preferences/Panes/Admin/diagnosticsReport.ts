@@ -13,9 +13,11 @@ import {
   buildCapabilityRows,
   describeDeployment,
   describeDiagnosticsReadFailure,
+  describeSyncItems,
   describeTransport,
   diagnose,
   sanitizeServerCopy,
+  SYNC_ITEMS_STATE_REPORT,
   type CapabilityTestOutcome,
   type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
@@ -100,6 +102,7 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
   const topology: DeploymentTopology | undefined = payload?.deployment
   const verdict = describeTransport(transport)
   const diagnosis = diagnose(payload, transport, readFailure)
+  const syncItems = describeSyncItems(payload)
   const marker = describeDeployment(deploymentMarker)
   const rows = buildCapabilityRows(
     payload?.protocol?.serverOperations ?? [],
@@ -168,7 +171,28 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
   lines.push('')
   lines.push(`- Recorded: ${yesNo(payload?.gate?.recorded)}`)
   lines.push(`- Sync lane enabled: ${yesNo(payload?.gate?.syncLaneEnabled)}`)
-  lines.push(`- SYNC_ITEMS advertised: ${yesNo(payload?.gate?.syncItemsAdvertised)}`)
+  // Sourced from `syncItems.state`, never from `gate.syncItemsAdvertised`: one
+  // source of truth, and the third state has no boolean to read. A server too old
+  // to send the verdict reads "could not be determined" here rather than echoing a
+  // boolean that build derived from a weaker signal than the handshake's own
+  // predicate.
+  lines.push(`- SYNC_ITEMS advertised: ${SYNC_ITEMS_STATE_REPORT[syncItems.state]}`)
+  // The cause is a closed enum this build re-validated against its OWN list, so
+  // the code printed here is a literal from this file's build and not server text.
+  // `- What that means:` follows the read-failure branch above: constant copy from
+  // this build, which is what keeps a pasteable report free of server prose.
+  if (syncItems.state !== 'ADVERTISED') {
+    if (syncItems.cause) {
+      lines.push(`- SYNC_ITEMS cause: ${syncItems.cause}`)
+    }
+    lines.push(`- What that means: ${syncItems.title} — ${syncItems.detail}`)
+    if (syncItems.remedy) {
+      // The server's remedy is a frozen compile-time constant in the contract and
+      // goes through the redactor on the way in regardless — the same treatment
+      // every precondition remedy in this report already gets.
+      lines.push(`  - The server reports: ${syncItems.remedy}`)
+    }
+  }
   lines.push(`- Gateway attached: ${yesNo(payload?.gate?.gatewayAttached)}`)
   lines.push(`- Ticket available: ${yesNo(payload?.live?.ticketAvailable)}`)
   const unmet = payload?.gate?.unmetPreconditions ?? []

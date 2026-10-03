@@ -5,13 +5,20 @@ import {
   CLIENT_SYNC_OPERATIONS,
   describeDeployment,
   describeRealtimeHealth,
+  describeSyncItems,
   describeTransport,
   diagnose,
   REALTIME_UNATTACHED_NOTE,
   sanitizeServerCopy,
   summarizeTestRun,
+  SYNC_ITEMS_CAUSE_COPY,
+  SYNC_ITEMS_CAUSES,
+  SYNC_ITEMS_STATE_CHIP,
+  SYNC_ITEMS_STATE_REPORT,
+  SYNC_ITEMS_STATES,
   TONES,
   type SyncDiagnosticsPayload,
+  type SyncItemsCause,
   type TransportStatusInput,
 } from './syncDiagnostics'
 
@@ -516,6 +523,388 @@ describe('sync diagnostics model', () => {
         expect(diagnosis.headline).toContain('have not been read')
         expect(diagnosis.findings).toHaveLength(0)
       })
+    })
+  })
+
+  /**
+   * The SYNC_ITEMS verdict, which the server reports in full and this panel used
+   * to read as one boolean.
+   *
+   * The fixtures are deliberately shaped like the states the live deployment can
+   * be in, and two of them are shaped like nothing a correct server sends: a
+   * payload whose `syncItemsAdvertised` CONTRADICTS `syncItems.state`, and a
+   * payload with no `syncItems` block at all. Neither is realistic, and both are
+   * the only fixtures that can prove WHICH field the panel is reading — a payload
+   * where the two agree passes whichever one the code picks.
+   */
+  describe('describeSyncItems', () => {
+    /** Copied verbatim from the server's frozen `SYNC_ITEMS_CAUSE_REMEDIES`. */
+    const NOT_READY_REMEDY =
+      'the durable command port is bound but FAILED the readiness check the handshake itself makes, so the socket will not offer SYNC_ITEMS and notes sync over HTTP while every other capability stays realtime. That check needs AUTH_JWT_SECRET (the session behind each command is revalidated) and, for the gRPC port, SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes and identical on the syncing server. A bound proxy is not evidence of either'
+    /** The shared precondition remedy the panel deliberately overrides. */
+    const UNBOUND_REMEDY =
+      'the gRPC syncing-server proxy is not bound; configure SYNCING_SERVER_GRPC_URL so realtime commands have a durable backend'
+
+    type WireVerdict = NonNullable<NonNullable<SyncDiagnosticsPayload['gate']>['syncItems']>
+
+    const withVerdict = (syncItems: WireVerdict, gate: Partial<NonNullable<SyncDiagnosticsPayload['gate']>> = {}) => ({
+      ...gateSatisfied,
+      gate: { ...gateSatisfied.gate, ...gate, syncItems },
+    })
+
+    it('reads ADVERTISED from the state, not from the boolean beside it', () => {
+      // The boolean says the opposite. A current server derives it FROM the state
+      // so the two cannot disagree in the field; this fixture exists only to pin
+      // which of them the panel is actually reading.
+      const verdict = describeSyncItems(
+        withVerdict(
+          { state: 'ADVERTISED', cause: null, remedy: null },
+          {
+            syncItemsAdvertised: false,
+          },
+        ),
+      )
+
+      expect(verdict.state).toBe('ADVERTISED')
+      expect(verdict.label).toBe('Advertised')
+      expect(verdict.tone).toBe('good')
+      expect(verdict.cause).toBeNull()
+      expect(verdict.remedy).toBeNull()
+      // The copy has to be the advertised copy too — a verdict that reaches this
+      // state down any other path carries the wrong explanation with it.
+      expect(verdict.title).toContain('is advertised on the socket')
+      expect(verdict.detail).toContain('answered ready')
+      expect(verdict.unrecognisedCause).toBe(false)
+    })
+
+    it('reads WITHHELD from the state even when the boolean claims advertised', () => {
+      const verdict = describeSyncItems(
+        withVerdict(
+          { state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: NOT_READY_REMEDY },
+          {
+            syncItemsAdvertised: true,
+          },
+        ),
+      )
+
+      expect(verdict.state).toBe('WITHHELD')
+      expect(verdict.label).toBe('Withheld')
+      expect(verdict.tone).toBe('warn')
+    })
+
+    /**
+     * The actionable half. This cause is INVISIBLE in `unmetCodes` — the durable
+     * port is bound, so nothing reads as unmet — and it is the one an operator can
+     * fix, so the copy has to name both terms of the readiness check.
+     */
+    it('explains DURABLE_BACKEND_NOT_READY in terms of the two things to check', () => {
+      const verdict = describeSyncItems(
+        withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: NOT_READY_REMEDY }),
+      )
+
+      expect(verdict.cause).toBe('DURABLE_BACKEND_NOT_READY')
+      expect(verdict.title).toContain('readiness check')
+      expect(verdict.detail).toContain('AUTH_JWT_SECRET')
+      expect(verdict.detail).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      expect(verdict.detail).toContain('32 bytes')
+      // And it says why no condition list can show this, which is the whole
+      // reason the old derivation produced a false green.
+      expect(verdict.detail).toContain('nothing reads as unmet')
+      // The server's own remedy survives the redactor intact — over-redaction
+      // would quietly mangle the variable names that are the point of it.
+      expect(verdict.remedy).toBe(NOT_READY_REMEDY)
+    })
+
+    it('gives NOT_OBSERVED the neutral tone and a label of its own, never "Unavailable"', () => {
+      const verdict = describeSyncItems(
+        withVerdict({ state: 'NOT_OBSERVED', cause: 'PROBE_FAILED', remedy: 'the readiness check threw' }),
+      )
+
+      expect(verdict.state).toBe('NOT_OBSERVED')
+      expect(verdict.tone).toBe('neutral')
+      expect(verdict.label).toBe('Not observed')
+      expect(verdict.label).not.toBe('Unavailable')
+      expect(verdict.label).not.toBe('Withheld')
+      // "Could not determine" must not borrow the words of "not available".
+      expect(verdict.title).not.toContain('withheld')
+      expect(verdict.detail).toContain('unknown rather than no')
+    })
+
+    it('keeps the three state labels and tones distinct from one another', () => {
+      const labels = SYNC_ITEMS_STATES.map((state) => SYNC_ITEMS_STATE_CHIP[state].label)
+      const tones = SYNC_ITEMS_STATES.map((state) => SYNC_ITEMS_STATE_CHIP[state].tone)
+
+      expect(new Set(labels).size).toBe(SYNC_ITEMS_STATES.length)
+      expect(new Set(tones).size).toBe(SYNC_ITEMS_STATES.length)
+      expect(new Set(SYNC_ITEMS_STATES.map((state) => SYNC_ITEMS_STATE_REPORT[state])).size).toBe(
+        SYNC_ITEMS_STATES.length,
+      )
+      for (const tone of tones) {
+        expect([...TONES]).toContain(tone)
+      }
+      // The third state is the one that must not read as a verdict.
+      expect(SYNC_ITEMS_STATE_CHIP.NOT_OBSERVED.tone).toBe('neutral')
+      expect(SYNC_ITEMS_STATE_REPORT.NOT_OBSERVED).toContain('could not be determined')
+    })
+
+    /**
+     * Every cause gets copy written in THIS build. Iterating the real list rather
+     * than a copy of it is what catches a mapping that compiles and is still
+     * wrong: a generic fall-through sentence shared by two causes would pass the
+     * compiler and fail here.
+     */
+    it('maps all seven causes to distinct, specific copy', () => {
+      expect(SYNC_ITEMS_CAUSES).toHaveLength(7)
+
+      const titles = new Set<string>()
+      const details = new Set<string>()
+      for (const cause of SYNC_ITEMS_CAUSES) {
+        const copy = SYNC_ITEMS_CAUSE_COPY[cause]
+
+        expect(copy.title.length).toBeGreaterThan(20)
+        expect(copy.detail.length).toBeGreaterThan(60)
+        expect(copy.title).not.toContain('recognise')
+        titles.add(copy.title)
+        details.add(copy.detail)
+      }
+
+      expect(titles.size).toBe(SYNC_ITEMS_CAUSES.length)
+      expect(details.size).toBe(SYNC_ITEMS_CAUSES.length)
+    })
+
+    it('renders every cause the server can send without falling through to one explanation', () => {
+      const rendered = SYNC_ITEMS_CAUSES.map((cause) =>
+        describeSyncItems(withVerdict({ state: 'WITHHELD', cause, remedy: null })),
+      )
+
+      for (const [index, verdict] of rendered.entries()) {
+        expect(verdict.cause).toBe(SYNC_ITEMS_CAUSES[index])
+        expect(verdict.unrecognisedCause).toBe(false)
+        expect(verdict.title).toBe(SYNC_ITEMS_CAUSE_COPY[SYNC_ITEMS_CAUSES[index]].title)
+      }
+      expect(new Set(rendered.map((verdict) => verdict.title)).size).toBe(SYNC_ITEMS_CAUSES.length)
+    })
+
+    /**
+     * These two causes are already named, with better advice, in the gate's
+     * condition list. The server's remedy for them is a restatement of a
+     * precondition remedy, and on this deployment the stock sentence sends the
+     * reader after a variable that is already set — the exact text
+     * `remedyForPrecondition` exists to replace.
+     */
+    it.each(['LANE_PRECONDITION_UNMET', 'DURABLE_BACKEND_UNBOUND'] as const satisfies readonly SyncItemsCause[])(
+      'defers %s to the condition list instead of reprinting the stock remedy',
+      (cause) => {
+        const verdict = describeSyncItems(withVerdict({ state: 'WITHHELD', cause, remedy: UNBOUND_REMEDY }))
+
+        expect(verdict.cause).toBe(cause)
+        expect(verdict.remedy).toBeNull()
+        expect(verdict.detail).not.toContain('so realtime commands have a durable backend')
+        // It still tells the reader where the fix is.
+        expect(verdict.detail).toContain('condition')
+      },
+    )
+
+    it('keeps the state and refuses to paraphrase a cause this build does not know', () => {
+      const verdict = describeSyncItems(
+        withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_ON_FIRE', remedy: 'restart the kiln' }),
+      )
+
+      expect(verdict.state).toBe('WITHHELD')
+      expect(verdict.cause).toBeNull()
+      expect(verdict.unrecognisedCause).toBe(true)
+      expect(verdict.title).toContain('does not recognise')
+      // It must not have borrowed any known cause's explanation.
+      for (const cause of SYNC_ITEMS_CAUSES) {
+        expect(verdict.detail).not.toBe(SYNC_ITEMS_CAUSE_COPY[cause].detail)
+      }
+      // The newer server's own words are still offered, as the server's.
+      expect(verdict.remedy).toBe('restart the kiln')
+    })
+
+    it('makes no verdict at all out of a state this build does not know', () => {
+      const verdict = describeSyncItems(withVerdict({ state: 'PARTIALLY_ADVERTISED', cause: null, remedy: null }))
+
+      expect(verdict.state).toBe('NOT_OBSERVED')
+      expect(verdict.tone).toBe('neutral')
+      expect(verdict.title).toContain('state this client build does not recognise')
+    })
+
+    it('says so when a state arrives with no cause attached', () => {
+      const verdict = describeSyncItems(withVerdict({ state: 'WITHHELD', cause: null, remedy: null }))
+
+      expect(verdict.state).toBe('WITHHELD')
+      expect(verdict.cause).toBeNull()
+      expect(verdict.unrecognisedCause).toBe(false)
+      expect(verdict.title).toContain('without naming a cause')
+    })
+
+    /**
+     * *** BACKWARD COMPATIBILITY. *** A server older than the verdict sends the
+     * boolean and nothing else, and on those builds the boolean was derived from
+     * whether a proxy OBJECT existed — not from the predicate the handshake asks —
+     * so it read `true` over sockets that withheld the operation. The panel
+     * therefore makes NO claim from it in either direction.
+     */
+    it('treats a payload with no syncItems block as no claim, not as the boolean', () => {
+      const legacy = { ...gateSatisfied, gate: { ...gateSatisfied.gate, syncItemsAdvertised: true } }
+      const verdict = describeSyncItems(legacy)
+
+      expect(verdict.state).toBe('NOT_OBSERVED')
+      expect(verdict.tone).toBe('neutral')
+      expect(verdict.label).toBe('Not observed')
+      expect(verdict.reported).toBe(false)
+      expect(verdict.cause).toBeNull()
+      expect(verdict.title).toContain('does not report the SYNC_ITEMS verdict')
+      expect(verdict.detail).toContain('a proxy OBJECT had been constructed')
+      // And it does not read as a fault either.
+      expect(verdict.detail).toContain('cannot tell you')
+    })
+
+    it('says nothing was read when nothing was read', () => {
+      const verdict = describeSyncItems(undefined)
+
+      expect(verdict.state).toBe('NOT_OBSERVED')
+      expect(verdict.reported).toBe(false)
+      expect(verdict.title).toContain('was not read from the server')
+      expect(verdict.detail).toContain('still stands')
+    })
+
+    it('reports a block the server sent as reported, even when it could not determine the state', () => {
+      const verdict = describeSyncItems(withVerdict({ state: 'NOT_OBSERVED', cause: 'NEVER_PROBED', remedy: null }))
+
+      expect(verdict.reported).toBe(true)
+      expect(verdict.cause).toBe('NEVER_PROBED')
+    })
+
+    it('redacts an address a misbehaving server put in the remedy', () => {
+      const verdict = describeSyncItems(
+        withVerdict({
+          state: 'WITHHELD',
+          cause: 'DURABLE_BACKEND_NOT_READY',
+          remedy: 'the backend at syncing.internal.example:50051 refused',
+        }),
+      )
+
+      expect(verdict.remedy).not.toContain('syncing.internal.example')
+      expect(verdict.remedy).toContain('[address withheld]')
+    })
+  })
+
+  /**
+   * The false green, in the one function that produced it. These are kept with
+   * `diagnose` rather than with `describeSyncItems` because the defect was not in
+   * reading the verdict — it was that a verdict nothing turned into a FINDING left
+   * the finding list empty, and an empty finding list is this function's trigger
+   * for "fully configured and available".
+   */
+  describe('diagnose and the SYNC_ITEMS verdict', () => {
+    const laneUpWithheld: SyncDiagnosticsPayload = {
+      ...gateSatisfied,
+      gate: {
+        ...gateSatisfied.gate,
+        // EMPTY. The durable port is bound, so no condition is unmet — this is
+        // exactly the payload that used to render as healthy.
+        unmetPreconditions: [],
+        unmetCodes: [],
+        syncItemsAdvertised: false,
+        syncItems: {
+          state: 'WITHHELD',
+          cause: 'DURABLE_BACKEND_NOT_READY',
+          remedy: 'the durable command port is bound but FAILED the readiness check',
+          probe: 'NOT_READY',
+        },
+      },
+    }
+    const socketReady: TransportStatusInput = { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] }
+
+    it('refuses to call a lane healthy while SYNC_ITEMS is withheld on an empty condition list', () => {
+      const diagnosis = diagnose(laneUpWithheld, socketReady)
+
+      expect(diagnosis.tone).toBe('warn')
+      expect(diagnosis.headline).toContain('SYNC_ITEMS is not advertised')
+      expect(diagnosis.headline).not.toContain('fully configured and available')
+      expect(diagnosis.findings).toHaveLength(1)
+      expect(diagnosis.findings[0].title).toContain('readiness check')
+      expect(diagnosis.findings[0].detail).toContain('AUTH_JWT_SECRET')
+      expect(diagnosis.findings[0].detail).toContain('The server reports:')
+    })
+
+    it('does not call the lane unavailable over a withheld operation', () => {
+      const diagnosis = diagnose(laneUpWithheld, socketReady)
+
+      expect(diagnosis.tone).not.toBe('bad')
+      expect(diagnosis.headline).not.toContain('unavailable')
+    })
+
+    /**
+     * `NOT_OBSERVED` adds nothing here ON PURPOSE. "The gate could not say" is not
+     * a gap in the lane, and inventing a finding for it would make every server
+     * build older than the verdict read as degraded on no evidence — the same
+     * error as the false green, in the other direction. The dedicated chip and its
+     * copy are where that state is reported.
+     */
+    it('leaves the global diagnosis alone when the verdict could not be determined', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          gate: { ...gateSatisfied.gate, syncItems: { state: 'NOT_OBSERVED', cause: 'NEVER_PROBED' } },
+        },
+        { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+      )
+
+      expect(diagnosis.tone).toBe('good')
+      expect(diagnosis.findings).toHaveLength(0)
+    })
+
+    /**
+     * An older server's boolean does not drive the headline either — but nothing
+     * actionable is lost, because on those builds a `false` could only arise from
+     * an unbound proxy, which IS listed as a condition with its own topology
+     * remedy.
+     */
+    it('makes no withheld claim from an older build, and still names the condition', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          gate: {
+            ...gateSatisfied.gate,
+            syncItemsAdvertised: false,
+            unmetPreconditions: [{ code: 'SYNCING_SERVER_GRPC_UNBOUND', remedy: 'configure SYNCING_SERVER_GRPC_URL' }],
+            unmetCodes: ['SYNCING_SERVER_GRPC_UNBOUND'],
+          },
+        },
+        socketReady,
+      )
+
+      expect(diagnosis.headline).not.toContain('SYNC_ITEMS is not advertised')
+      expect(diagnosis.findings.map((finding) => finding.title)).toEqual(['SYNCING_SERVER_GRPC_UNBOUND'])
+    })
+
+    it('still reports a dead lane as dead when SYNC_ITEMS is withheld with it', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          gate: {
+            ...gateSatisfied.gate,
+            syncLaneEnabled: false,
+            unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'configure REDIS_URL' }],
+            unmetCodes: ['REDIS_UNBOUND'],
+            syncItems: { state: 'WITHHELD', cause: 'LANE_PRECONDITION_UNMET', remedy: null },
+          },
+          live: { capabilities: [], unavailabilityReasons: ['sync-not-configured'], ticketAvailable: false },
+        },
+        { state: 'HTTP_ONLY', operations: [] },
+      )
+
+      expect(diagnosis.tone).toBe('bad')
+      expect(diagnosis.headline).toContain('running over HTTP')
+      expect(diagnosis.findings.map((finding) => finding.title)).toContain('REDIS_UNBOUND')
+      // The withheld operation is reported as a consequence, not as a second
+      // independent problem, and does not reprint the precondition's remedy.
+      const withheld = diagnosis.findings.find((finding) => finding.title.includes('did not come up'))
+      expect(withheld).toBeDefined()
+      expect(withheld?.detail).not.toContain('The server reports:')
     })
   })
 

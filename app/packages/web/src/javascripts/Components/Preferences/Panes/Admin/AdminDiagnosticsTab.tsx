@@ -15,6 +15,7 @@ import {
   buildCapabilityRows,
   describeDeployment,
   describeRealtimeHealth,
+  describeSyncItems,
   describeTransport,
   diagnose,
   REALTIME_UNATTACHED_NOTE,
@@ -35,8 +36,13 @@ import {
   remedyForUnstampedDeployment,
   type DeploymentTopology,
   type Remedy,
-  type RemedyEffort,
 } from './diagnosticRemedies'
+// The one shared copy of the effort→tone mapping. It lived here as a verbatim
+// duplicate for the duration of the pane split, and a duplicated exhaustive
+// `Record` over a union that gains members needs hand-syncing every time one is
+// added — which it has now needed twice, the second time leaving HEAD unable to
+// typecheck. Imported rather than re-copied so the class of problem is gone.
+import { EFFORT_TONE } from './diagnosticsPresentation'
 import { buildDiagnosticsReport } from './diagnosticsReport'
 
 type Props = {
@@ -78,14 +84,6 @@ export const DIAGNOSIS_CHIP_LABEL: Record<Tone, string> = {
   warn: 'Degraded',
   bad: 'Unavailable',
   neutral: 'Unknown',
-}
-
-const EFFORT_TONE: Record<RemedyEffort, Tone> = {
-  restart: 'good',
-  rebuild: 'warn',
-  'client-update': 'warn',
-  none: 'bad',
-  wait: 'neutral',
 }
 
 /**
@@ -384,6 +382,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const topology: DeploymentTopology | undefined = payload?.deployment
   const verdict = useMemo(() => describeTransport(transport), [transport])
   const diagnosis = useMemo(() => diagnose(payload, transport, readFailure), [payload, transport, readFailure])
+  const syncItems = useMemo(() => describeSyncItems(payload), [payload])
   const deploymentView = useMemo(() => describeDeployment(deployment), [deployment])
   const rows = useMemo(
     () =>
@@ -529,14 +528,18 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
               </Chip>
               <span>Socket transport</span>
             </span>
-            {payload?.gate?.syncItemsAdvertised !== undefined && (
-              <span className="flex items-center gap-2 text-sm">
-                <Chip tone={payload.gate.syncItemsAdvertised ? 'good' : 'warn'}>
-                  {payload.gate.syncItemsAdvertised ? 'Advertised' : 'Withheld'}
-                </Chip>
-                <span>SYNC_ITEMS — note syncing over the socket</span>
-              </span>
-            )}
+            {/* Always rendered, because the third state is now sayable. This chip
+                used to hide behind `syncItemsAdvertised !== undefined`, and the
+                server OMITS that boolean when the gate could not determine the
+                verdict — so "could not say" rendered as no chip at all, which
+                looks exactly like a panel that has not finished loading. The
+                label and tone come from an exhaustive `Record` over the three
+                states; "Not observed" in `neutral` is deliberately distinct from
+                "Unavailable" in `bad`, in both the word and the colour. */}
+            <span className="flex items-center gap-2 text-sm">
+              <Chip tone={syncItems.tone}>{syncItems.label}</Chip>
+              <span>SYNC_ITEMS — note syncing over the socket</span>
+            </span>
             <span className="flex items-center gap-2 text-sm">
               <Chip tone={payload?.live?.ticketAvailable ? 'good' : 'bad'}>
                 {payload?.live?.ticketAvailable ? 'Issuing' : 'Refusing'}
@@ -555,6 +558,25 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
               <span>Gateway</span>
             </span>
           </div>
+          {/* Why SYNC_ITEMS is not on the socket — the half of the verdict the
+              chip cannot carry. It is NOT in the condition list below: the one
+              cause an operator can fix, `DURABLE_BACKEND_NOT_READY`, leaves that
+              list empty because the durable port IS bound. The cause code is
+              rendered from this build's own closed set (never echoed off the
+              wire), the explanation is this build's copy, and the server's own
+              remedy is shown beneath it only where this build has nothing better
+              to say — the conditions below carry topology-conditional advice that
+              replaces it. */}
+          {syncItems.state !== 'ADVERTISED' && (
+            <div className="border-border mt-3 rounded border p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold">{syncItems.title}</span>
+                {syncItems.cause && <span className="font-mono text-xs">{syncItems.cause}</span>}
+              </div>
+              <div className="text-passive-0 mt-1 text-sm">{syncItems.detail}</div>
+              {syncItems.remedy && <div className="mt-2 text-sm">The server reports: {syncItems.remedy}</div>}
+            </div>
+          )}
           <ul className="mt-3 flex flex-col gap-2">
             {gateConditions.length === 0 && payload?.gate?.recorded ? (
               <li className="text-sm">

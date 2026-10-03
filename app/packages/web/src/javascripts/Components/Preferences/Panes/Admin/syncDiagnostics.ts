@@ -105,6 +105,31 @@ export type SyncDiagnosticsPayload = {
      * read of it distinguishes `false` from `undefined`.
      */
     syncItemsAdvertised?: boolean
+    /**
+     * The SYNC_ITEMS verdict in FULL: three states, a closed cause, and the
+     * frozen remedy copy for that cause. This is the block the boolean above
+     * cannot express — `WITHHELD` for want of a ready durable backend appears in
+     * NO unmet condition (the port is bound, so nothing is unmet), and
+     * `NOT_OBSERVED` is not a boolean value at all.
+     *
+     * Typed with WIDE strings rather than the closed unions on purpose. These are
+     * the SERVER's enums and this build cannot be recompiled against a newer
+     * server, so `state` and `cause` are parsed against THIS build's own lists
+     * (`SYNC_ITEMS_STATES`, `SYNC_ITEMS_CAUSES`) in `describeSyncItems`, and a
+     * member added server-side degrades to "this client does not recognise it"
+     * instead of being rendered as one of the members it does know. Declaring the
+     * unions here would make that mismatch unrepresentable in the type and
+     * therefore unhandled in the code.
+     *
+     * Absent on a server build older than the verdict. `describeSyncItems` treats
+     * a missing block as NO CLAIM rather than falling back to
+     * `syncItemsAdvertised`, because on those builds that boolean was derived from
+     * whether a proxy OBJECT had been constructed — not from the predicate the
+     * handshake actually asks — and it read `true` over sockets that withheld the
+     * operation. The panel does not repeat a claim that was wrong in the
+     * operator's favour.
+     */
+    syncItems?: { state?: string; cause?: string | null; remedy?: string | null; probe?: string }
     unmetPreconditions?: { code?: string; remedy?: string }[]
     unmetCodes?: string[]
     files?: { advertised?: boolean; unmetCondition?: string | null; remedy?: string | null }
@@ -524,6 +549,313 @@ export function describeDiagnosticsReadFailure(failure: DiagnosticsReadFailure):
 }
 
 /**
+ * ---------------------------------------------------------------------------
+ * SYNC_ITEMS: three states, never two.
+ * ---------------------------------------------------------------------------
+ *
+ * The server reports this verdict in full — `state`, a closed `cause`, and the
+ * frozen remedy copy for that cause — and until this module read it the panel
+ * rendered a single boolean with a two-arm ternary. That lost BOTH halves of the
+ * server's answer:
+ *
+ *   - `NOT_OBSERVED` has no boolean value, so the server omits the boolean
+ *     entirely and the chip simply vanished. "The gate cannot say" is a thing an
+ *     operator needs told; a missing chip is indistinguishable from a panel that
+ *     has not finished loading.
+ *   - `WITHHELD` printed the word "Withheld" and nothing else, while the one
+ *     cause an operator can actually FIX — `DURABLE_BACKEND_NOT_READY`, a missing
+ *     or under-length internal gRPC secret, or an empty `AUTH_JWT_SECRET` — is
+ *     invisible in `unmetCodes`, because the port IS bound and so nothing is
+ *     unmet. `diagnose()` derived its headline from that empty list and returned
+ *     "fully configured and available" over a socket that refuses note syncing.
+ *     That false green is what this block exists to make impossible.
+ *
+ * Everything below is a closed set mapped by an exhaustive `Record`. The copy is
+ * written HERE, in the client, for every member: a cause the panel cannot explain
+ * is worth less than no cause, and server prose is admitted only as a secondary
+ * "the server reports" line, redacted, and only where this build has nothing
+ * better to say (the same rule `diagnosticRemedies.ts` applies to precondition
+ * remedies).
+ */
+export const SYNC_ITEMS_STATES = ['ADVERTISED', 'WITHHELD', 'NOT_OBSERVED'] as const
+
+export type SyncItemsState = (typeof SYNC_ITEMS_STATES)[number]
+
+/**
+ * Every cause the server can name, as a VALUE as well as a type — so "exhaustive
+ * over the causes" is checkable by a test iterating this list, and not only by the
+ * compiler checking a `Record`.
+ */
+export const SYNC_ITEMS_CAUSES = [
+  'LANE_PRECONDITION_UNMET',
+  'SYNC_LANE_NOT_BUILT',
+  'DURABLE_BACKEND_UNBOUND',
+  'DURABLE_BACKEND_NOT_READY',
+  'NEVER_PROBED',
+  'PROBE_FAILED',
+  'GATE_NOT_RECORDED',
+] as const
+
+export type SyncItemsCause = (typeof SYNC_ITEMS_CAUSES)[number]
+
+/**
+ * The chip, one entry per state.
+ *
+ * *** EXHAUSTIVE `Record`, NOT A TERNARY — the fall-through was the bug. *** The
+ * chip this replaces was `advertised ? 'Advertised' : 'Withheld'` behind a
+ * `!== undefined` guard, which is a two-state vocabulary for a three-state answer.
+ *
+ * `NOT_OBSERVED` takes `'neutral'`, this module's existing tone for "no verdict"
+ * (see the CONNECTING transport and the unconfirmable capability row), and a label
+ * of its own. It must stay distinct from `'bad'`/"Unavailable" in BOTH the word
+ * and the colour: "could not determine" and "not available" are different facts
+ * and an operator acts differently on each.
+ */
+export const SYNC_ITEMS_STATE_CHIP: Record<SyncItemsState, { label: string; tone: Tone }> = {
+  ADVERTISED: { label: 'Advertised', tone: 'good' },
+  WITHHELD: { label: 'Withheld', tone: 'warn' },
+  NOT_OBSERVED: { label: 'Not observed', tone: 'neutral' },
+}
+
+/**
+ * The same three states as the copyable report's yes/no/unknown vocabulary. The
+ * report's other gate lines are `yesNo(...)`, and the third state has to read as
+ * something other than a quiet "unknown" there too.
+ */
+export const SYNC_ITEMS_STATE_REPORT: Record<SyncItemsState, string> = {
+  ADVERTISED: 'yes',
+  WITHHELD: 'no',
+  NOT_OBSERVED: 'could not be determined',
+}
+
+type SyncItemsCopy = {
+  /** One clause, the finding's title. Written by this build, never the server. */
+  title: string
+  /** What it means and what to do, in an operator's terms. */
+  detail: string
+  /**
+   * True when the cause is ALREADY named, with better advice, in the gate's own
+   * condition list. The server's remedy for these two is a restatement of a
+   * precondition remedy, and this panel deliberately REPLACES that text with a
+   * topology-conditional one (`remedyForPrecondition`) — on this very deployment
+   * the stock sentence sends the reader after `SYNCING_SERVER_GRPC_URL`, which is
+   * already set and never read. Printing the server's copy here would put back
+   * the exact sentence the panel exists to suppress.
+   */
+  deferToConditions: boolean
+}
+
+/**
+ * What each cause MEANS, and what to do about it.
+ *
+ * *** EXHAUSTIVE OVER THE UNION, both directions. *** `satisfies` rather than a
+ * type annotation so the key set stays LITERAL: a missing cause fails to compile,
+ * an extra key fails to compile, and the two `AssertNever` lines below state both
+ * halves as a type so neither can be weakened without a visible edit. A generic
+ * fall-through string for an unmapped member would be the defect pattern this
+ * file has already been corrected for twice.
+ */
+export const SYNC_ITEMS_CAUSE_COPY = {
+  LANE_PRECONDITION_UNMET: {
+    title: 'SYNC_ITEMS is withheld because the socket lane itself did not come up',
+    detail:
+      'Nothing is negotiated over a socket that never opens, so this is a consequence of the unmet boot conditions on this screen rather than an independent problem — fix those and it clears with them. Note syncing is on HTTP in the meantime, and so is everything else.',
+    deferToConditions: true,
+  },
+  SYNC_LANE_NOT_BUILT: {
+    title: 'A gateway is attached but it was given no sync lane',
+    detail:
+      'The socket accepts clients and then negotiates nothing at all — not note syncing, not collaboration, not API RPC — because the lane object the handshake reads its operations from was never built. Tickets still mint, so this looks healthy from every other panel. The unmet conditions in this report name why the lane was not built.',
+    deferToConditions: false,
+  },
+  DURABLE_BACKEND_UNBOUND: {
+    title: 'SYNC_ITEMS is withheld because no durable command port is bound',
+    detail:
+      'The handshake offers note syncing only when a durable backend exists to carry the commands, and this deployment bound none. The condition is named in the list on this screen, and the fix printed beside it there is the one written for THIS deployment’s topology — which is not always the fix the condition’s own name suggests. The socket stays up and keeps carrying everything else.',
+    deferToConditions: true,
+  },
+  DURABLE_BACKEND_NOT_READY: {
+    title: 'SYNC_ITEMS is withheld: the durable command port is bound but FAILED the handshake’s readiness check',
+    detail:
+      'This is the state no condition list can show you. The port is bound, so nothing reads as unmet, and the socket still refuses to offer note syncing — notes sync over HTTP while collaboration, API RPC, invite events and files stay realtime, which is exactly why every other panel looks healthy. The check the handshake makes needs AUTH_JWT_SECRET set, because the session behind each command is revalidated, and for the gRPC port it needs SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET at least 32 bytes long and identical on the syncing server. A bound proxy is evidence of neither. The gate reports only the single boolean the handshake computes, so it cannot say which of the two failed: check both.',
+    deferToConditions: false,
+  },
+  NEVER_PROBED: {
+    title: 'This server recorded no reading of the handshake predicate',
+    detail:
+      'The gate cannot say whether SYNC_ITEMS is offered, so this screen does not guess: it is neither a healthy lane nor a withheld operation. A host built before the gate took its own reading reports exactly this. Until the server is upgraded, the Capabilities section is the measurement to use — what this client actually negotiated is observed here and needs no server call.',
+    deferToConditions: false,
+  },
+  PROBE_FAILED: {
+    title: 'The readiness check threw while the gate was reading it',
+    detail:
+      'The server asked the durable backend whether it was ready and the question itself failed, so the answer is unknown rather than no. The thrown message is deliberately not sent here because it can embed a resolved service address; the gateway’s boot log carries it. Meanwhile the Capabilities section — what this client negotiated — is a direct measurement that does not depend on this reading.',
+    deferToConditions: false,
+  },
+  GATE_NOT_RECORDED: {
+    title: 'The boot gate has not been recorded, so there is no lane to read the verdict from',
+    detail:
+      'The server answered while it was still starting, or this build never wired the recorder. Nothing about SYNC_ITEMS can be confirmed yet; reload in a moment. If it persists well past startup then the recorder is not wired in this build, which an upgrade fixes rather than any setting.',
+    deferToConditions: false,
+  },
+} satisfies Record<SyncItemsCause, SyncItemsCopy>
+
+/** Every cause has copy. */
+export type EverySyncItemsCauseHasCopy = AssertNever<Exclude<SyncItemsCause, keyof typeof SYNC_ITEMS_CAUSE_COPY>>
+/** And nothing that is not a cause has copy, so a typo cannot masquerade as one. */
+export type NoStraySyncItemsCauseCopy = AssertNever<Exclude<keyof typeof SYNC_ITEMS_CAUSE_COPY, SyncItemsCause>>
+
+/**
+ * The cases where there is no server verdict to render, each with its own words.
+ *
+ * They are kept APART from the cause copy above rather than folded in as extra
+ * members, because none of them is a thing the server said: they are this build
+ * describing what it was given. Collapsing them into one "unknown" is how a panel
+ * ends up telling an operator their notes are on HTTP when the truth is that
+ * nobody asked.
+ */
+export const SYNC_ITEMS_NO_VERDICT_COPY = {
+  /** Nothing was read from the server at all. */
+  'not-read': {
+    title: 'The SYNC_ITEMS verdict was not read from the server',
+    detail:
+      'No diagnostics answer has been read, so there is no verdict to show. This is not a finding about note syncing: the transport verdict on this screen is measured by this client and still stands.',
+    deferToConditions: false,
+  },
+  /** An older server: the boolean, and nothing else. */
+  'not-reported': {
+    title: 'This server build does not report the SYNC_ITEMS verdict',
+    detail:
+      'The running server predates the three-state verdict and sends only a single boolean. That boolean was derived on those builds from whether a proxy OBJECT had been constructed, not from the predicate the handshake asks — a deployment with the proxy bound and a short or missing internal secret got a green claim over a socket that withheld the operation — so this panel will not repeat it. Nothing here says note syncing is broken; it says this build cannot tell you. The Capabilities section measures what this client actually negotiated and needs no server call, and a server upgrade restores the verdict.',
+    deferToConditions: false,
+  },
+  /** A fourth state from a newer server. */
+  'state-unrecognised': {
+    title: 'The server reported a SYNC_ITEMS state this client build does not recognise',
+    detail:
+      'The server is newer than this client and named a state outside the closed set this build knows, so the panel will not map it onto one of the three it does know. Update the client to read this server’s verdict; until then the Capabilities section is the measurement that does not depend on it.',
+    deferToConditions: false,
+  },
+  /** A recognised state, a cause from outside the closed set. */
+  'cause-unrecognised': {
+    title: 'The server named a SYNC_ITEMS cause this client build does not recognise',
+    detail:
+      'The state above is the server’s own verdict and stands. The reason it gave is outside the closed set this build knows, so the panel will not paraphrase it as one it does know; any server-reported fix below is printed as sent, with addresses redacted. Updating the client restores the explanation.',
+    deferToConditions: false,
+  },
+  /** A recognised state with no cause at all, which the contract allows only for ADVERTISED. */
+  'cause-missing': {
+    title: 'The server reported this SYNC_ITEMS state without naming a cause',
+    detail:
+      'The state above is the server’s own verdict and stands, but it arrived with no reason attached, so this build cannot say why. The gate’s condition list and the Capabilities section are what is left to narrow it.',
+    deferToConditions: false,
+  },
+} satisfies Record<string, SyncItemsCopy>
+
+const SYNC_ITEMS_ADVERTISED_COPY: SyncItemsCopy = {
+  title: 'SYNC_ITEMS is advertised on the socket',
+  detail:
+    'The gate read the handshake’s own predicate on the lane the gateway was handed, and it answered ready — so note syncing is offered over the socket rather than falling back to HTTP.',
+  deferToConditions: false,
+}
+
+/**
+ * The whole SYNC_ITEMS verdict, as the panel and the report both render it.
+ *
+ * ONE source of truth. `state` comes from `gate.syncItems.state` and never from
+ * `gate.syncItemsAdvertised`: the two agree on a current server because the server
+ * derives the boolean FROM the state, and where they disagree the structured
+ * verdict is the one measured at the handshake's own predicate.
+ */
+export type SyncItemsVerdict = {
+  state: SyncItemsState
+  tone: Tone
+  /** The chip label for `state`. */
+  label: string
+  title: string
+  detail: string
+  /** The cause, when the server named one this build recognises. */
+  cause: SyncItemsCause | null
+  /** The server named a cause outside this build's closed set. */
+  unrecognisedCause: boolean
+  /**
+   * The server's own remedy copy, redacted. Null when it sent none, and null for
+   * a cause whose `deferToConditions` holds (see `SyncItemsCopy`).
+   */
+  remedy: string | null
+  /** The server reported the structured verdict at all. False on an older build. */
+  reported: boolean
+}
+
+const isSyncItemsState = (value: unknown): value is SyncItemsState =>
+  typeof value === 'string' && (SYNC_ITEMS_STATES as readonly string[]).includes(value)
+
+const isSyncItemsCause = (value: unknown): value is SyncItemsCause =>
+  typeof value === 'string' && (SYNC_ITEMS_CAUSES as readonly string[]).includes(value)
+
+/**
+ * Read the verdict, parsing both enums against this build's own closed sets.
+ *
+ * Early returns rather than a chain of ternaries, deliberately: these branches are
+ * five structurally different situations, not one union being mapped to copy, and
+ * the mapping of the union itself is the `Record` above.
+ */
+export function describeSyncItems(payload: SyncDiagnosticsPayload | undefined): SyncItemsVerdict {
+  const wire = payload?.gate?.syncItems
+  const reported = wire !== undefined
+
+  const verdict = (
+    state: SyncItemsState,
+    copy: SyncItemsCopy,
+    fields: Partial<SyncItemsVerdict> = {},
+  ): SyncItemsVerdict => ({
+    state,
+    ...SYNC_ITEMS_STATE_CHIP[state],
+    title: copy.title,
+    detail: copy.detail,
+    cause: null,
+    unrecognisedCause: false,
+    remedy: null,
+    reported,
+    ...fields,
+  })
+
+  if (payload === undefined) {
+    return verdict('NOT_OBSERVED', SYNC_ITEMS_NO_VERDICT_COPY['not-read'])
+  }
+  if (wire === undefined) {
+    return verdict('NOT_OBSERVED', SYNC_ITEMS_NO_VERDICT_COPY['not-reported'])
+  }
+  if (!isSyncItemsState(wire.state)) {
+    return verdict('NOT_OBSERVED', SYNC_ITEMS_NO_VERDICT_COPY['state-unrecognised'])
+  }
+
+  // `cause` is null only for ADVERTISED in the server contract. A cause sent
+  // alongside ADVERTISED is dropped rather than rendered: the state is the
+  // verdict, and there is no "advertised, but" to report.
+  if (wire.state === 'ADVERTISED') {
+    return verdict('ADVERTISED', SYNC_ITEMS_ADVERTISED_COPY)
+  }
+
+  const named = typeof wire.cause === 'string' && wire.cause.length > 0
+  const cause = isSyncItemsCause(wire.cause) ? wire.cause : null
+  const copy =
+    cause !== null
+      ? SYNC_ITEMS_CAUSE_COPY[cause]
+      : SYNC_ITEMS_NO_VERDICT_COPY[named ? 'cause-unrecognised' : 'cause-missing']
+  // Server-authored prose, so it goes through the redactor on the way in — the
+  // same rule every other string off this wire follows. It is a frozen constant
+  // in a correct server, and "in a correct server" is the assumption a leak breaks.
+  const sent = typeof wire.remedy === 'string' && wire.remedy.trim().length > 0 ? sanitizeServerCopy(wire.remedy) : null
+
+  return verdict(wire.state, copy, {
+    cause,
+    unrecognisedCause: named && cause === null,
+    remedy: copy.deferToConditions ? null : sent,
+  })
+}
+
+/**
  * The highest-value output of this tab: turn "unavailable" into the one thing an
  * operator has to change.
  *
@@ -641,6 +973,27 @@ export function diagnose(
     }
   }
 
+  // *** THE FALSE GREEN. *** A withheld SYNC_ITEMS has to become a FINDING, not
+  // merely a chip, because the one cause an operator can fix —
+  // `DURABLE_BACKEND_NOT_READY` — leaves `unmetPreconditions` EMPTY: the durable
+  // port is bound, so no condition reads as unmet. This function returns "fully
+  // configured and available" whenever the finding list is empty, so before this
+  // was pushed a deployment whose socket refuses note syncing was reported as
+  // healthy, in the `good` tone, with the real fault named nowhere on the screen.
+  //
+  // Pushed for `WITHHELD` only. `NOT_OBSERVED` deliberately adds nothing here:
+  // "the gate could not say" is not a gap in the lane, and inventing a finding
+  // for it would make every pre-verdict server build read as degraded on no
+  // evidence — the same error in the other direction. It gets its own chip and
+  // its own copy instead, which is where a reader looks for it.
+  const syncItems = describeSyncItems(payload)
+  if (syncItems.state === 'WITHHELD') {
+    findings.push({
+      title: syncItems.title,
+      detail: syncItems.remedy ? `${syncItems.detail} The server reports: ${syncItems.remedy}` : syncItems.detail,
+    })
+  }
+
   // A lane that is up and can never deliver a push. The gate cannot see this:
   // it decides whether to BUILD the lane, and the push bridge is a separate
   // attach-time outcome. Reported as a finding rather than left to the health
@@ -713,7 +1066,13 @@ export function diagnose(
   // worst possible error: it would send an operator chasing a dead lane that is
   // in fact up, and it would hide the one operation that really is missing.
   const blocking = laneDown || live.ticketAvailable === false
-  const itemsWithheld = !blocking && gate.syncItemsAdvertised === false
+  // Sourced from the structured verdict, never from `gate.syncItemsAdvertised`.
+  // One source of truth: a current server derives that boolean FROM this state, so
+  // they agree; where they disagree the state is the one measured at the
+  // handshake's own predicate, and the boolean is the signal that used to read
+  // green over a socket withholding the operation. A server too old to send the
+  // verdict reports `NOT_OBSERVED` and therefore makes no claim here either.
+  const itemsWithheld = !blocking && syncItems.state === 'WITHHELD'
 
   if (itemsWithheld) {
     return {
