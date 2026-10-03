@@ -454,7 +454,7 @@ function remedyForWithheldSyncItems(): Remedy {
     summary:
       'The durable command port is bound and FAILED the readiness check the handshake makes, so the socket will not offer note syncing. Two variables decide that check. Restart only — no rebuild.',
     steps: [
-      'Set AUTH_JWT_SECRET, to the same value the auth server uses. Every socket command revalidates the session behind it before it runs, so an empty or disagreeing secret fails the readiness check without any gRPC involvement at all.',
+      'Set AUTH_JWT_SECRET to the same value the auth server uses. Every socket command revalidates the session behind it before it runs, so a secret that DISAGREES with the one the auth server holds fails the readiness check without any gRPC involvement at all. An EMPTY one is a different failure and not this one: the gateway requires this variable non-optionally at boot, so an empty value is a fatal startup and a restart loop rather than a withheld operation — there would be no gateway left to serve this page.',
       'For the gRPC durable port, set SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET to at least 32 bytes and to the IDENTICAL value on the syncing server. Below 32 bytes the adapter counts it as unconfigured; two valid secrets that disagree fail exactly like one short secret.',
       'Do not read the empty condition list as a clean bill of health. This is the one cause that leaves it empty — the port IS bound, so nothing is unmet — and it is the reason this pane once reported the deployment fully available.',
       'Restart, then re-read this pane. The Environment & setup section reports which of the two variables is set, and the readiness check itself reports a single boolean, so it cannot say which of them failed: check both.',
@@ -1281,19 +1281,24 @@ function buildRefusalBlock(
  *
  * `describeRealtimeHealth` is reused for its NOTES — the copy that distinguishes
  * an in-process push bridge from a missing one, and a relay that only reaches one
- * replica — and its VALUES are re-derived from the typed fields instead. Two
- * reasons, both structural:
+ * replica — and its VALUES are re-derived from the typed fields instead. ONE
+ * structural reason, which is sufficient on its own:
  *
  *   - Its values are plain strings with server text already interpolated into
  *     them (`${sanitizeServerCopy(bridge)} (ready)`), so crossing the presence-only
  *     boundary with one would need the brand cast that
  *     `diagnosticsSections.spec.ts` greps every section module for. This is the
  *     same decision `environmentSection.ts` made about `describeTopology`.
- *   - It prints `String(realtime.pushesDispatched ?? 0)`, so an absent counter
- *     reads as a measured zero. That is rule 3 of the contract inverted, and on
- *     the single row where it matters most: a count that stays at zero is the
- *     signature of a delivery path that never fires, and a server that reported
- *     nothing must not be made to look like one.
+ *
+ * A second reason used to stand beside it and no longer holds. It is corrected
+ * here rather than deleted, because a justification this specific gets
+ * re-derived from memory by the next reader: that helper printed
+ * `String(realtime.pushesDispatched ?? 0)`, so an absent counter read as a
+ * measured zero — rule 3 of the contract inverted, on the row where it mattered
+ * most. `bf6dafe0` fixed the helper itself; every field on the snapshot is now
+ * read with an explicit presence test and answers "not reported" when there is
+ * nothing there. So absent-is-not-a-reading is no longer an argument for
+ * re-deriving anything, and the brand cast above is carrying the decision alone.
  */
 function buildRealtimeBlock(realtime: NonNullable<SyncDiagnosticsPayload['live']>['realtime']): DiagnosticBlock {
   const notes = new Map<string, string>(describeRealtimeHealth(realtime).map((row) => [row.label, row.note]))

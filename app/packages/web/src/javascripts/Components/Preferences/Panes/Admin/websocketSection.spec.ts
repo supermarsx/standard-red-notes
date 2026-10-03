@@ -448,8 +448,25 @@ describe('the empty unmet-condition list', () => {
 
     expect(finding?.verdict).toBe('degraded')
     expect(finding?.remedy?.code).toBe('SYNC_ITEMS_WITHHELD')
-    expect(finding?.remedy?.steps.join(' ')).toContain('AUTH_JWT_SECRET')
-    expect(finding?.remedy?.steps.join(' ')).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+
+    const steps = finding?.remedy?.steps.join(' ') ?? ''
+
+    expect(steps).toContain('AUTH_JWT_SECRET')
+    expect(steps).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+
+    // And that step claims only what can actually happen. It used to say "an
+    // empty or disagreeing secret fails the readiness check"; the empty half
+    // cannot occur, because `api-gateway/src/Bootstrap/Container.ts` binds
+    // `env.get('AUTH_JWT_SECRET')` with no `optional` flag and
+    // `AbstractEnv.get` throws on a falsy value — measured live as a FATAL
+    // startup, a supervisord restart loop and readiness 502, i.e. no gateway
+    // left to serve the diagnostic that names it. The DISAGREEING half is real
+    // and is the one the step has to send the reader after.
+    expect(steps).toContain('same value the auth server uses')
+    expect(steps).toContain('DISAGREES')
+    expect(steps).toMatch(/empty[\s\S]*fatal startup/i)
+    expect(steps).not.toMatch(/empty or disagreeing/i)
+
     expect(EFFORT_LABEL[finding?.remedy?.effort ?? 'none']).toBe('Config + restart')
     // The section is not reported healthy over this payload, which is the whole point.
     expect(model.worstVerdict).toBe('degraded')
