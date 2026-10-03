@@ -48,6 +48,7 @@ import { syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAcce
 import { webSocketGatewayAccessService } from '../../Service/Sync/SyncWebSocketRuntime'
 import { SYNC_SERVER_OPERATIONS, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
 import { deploymentDiagnostics } from '../../Service/Diagnostics/DeploymentDiagnostics'
+import { grpcTransportFallbackDiagnostics } from '../../Service/gRPC/GrpcTransportFallbackDiagnostics'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -929,6 +930,15 @@ export class AdminController extends BaseHttpController {
       // must not recommend a variable this deployment never reads. Same secrecy
       // contract as the gate: booleans and closed enums only.
       deployment: deploymentDiagnostics.report(),
+      // Standard Red Notes: the RUNTIME counterpart to `deployment`. The
+      // service-proxy branch is recorded once at boot, so a gRPC listener that
+      // dies afterwards leaves `boundServiceProxy: 'grpc'` reading healthy
+      // forever while every call is actually served over HTTP. These counters
+      // are what separate "bound gRPC and healthy" from "bound gRPC, serving
+      // HTTP" — and `refusedCalls` keeps the calls the gateway correctly
+      // DECLINED to re-deliver visible beside them. Same secrecy contract:
+      // counts, durations and closed enums only.
+      transportFallback: grpcTransportFallbackDiagnostics.report(),
       live: {
         capabilities,
         unavailabilityReasons,

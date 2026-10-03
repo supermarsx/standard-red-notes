@@ -394,4 +394,102 @@ describe('GRPCSyncingServerServiceProxy', () => {
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('sentinel-encrypted-content')
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('sentinel-auth-hash')
   })
+
+  /**
+   * This predicate is what authorises re-delivering an item WRITE over a second
+   * transport, so every one of its "no" answers matters at least as much as its
+   * "yes": each corresponds to a shape the syncing server's HTTP hop would
+   * answer 4xx/409 to rather than deduplicate.
+   */
+  describe('durableCommandReplayKeyPresent', () => {
+    const mutatingBody = { api: '20200115', items: [{ uuid: 'i-1', content: 'c' }] }
+    const digestFor = (payload: Record<string, unknown>) => computeSyncCommandDigest(logicalSyncCommandPayload(payload))
+
+    const requestWith = (headers: Record<string, string | string[]> = {}): Request =>
+      ({ headers: { 'x-snjs-version': '3.0.0', ...headers } }) as unknown as Request
+
+    it('accepts header-carried metadata whose digest matches the logical body', () => {
+      const digest = digestFor(mutatingBody)
+
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'command-1', 'x-sync-command-digest': digest }),
+          mutatingBody,
+        ),
+      ).toBe(true)
+    })
+
+    it('accepts body-carried metadata, which the HTTP controller reads too', () => {
+      const body = { ...mutatingBody, command: { id: 'command-1', digest: digestFor(mutatingBody) } }
+
+      expect(createProxy().durableCommandReplayKeyPresent(requestWith(), body)).toBe(true)
+    })
+
+    it('refuses a call with no command metadata at all', () => {
+      expect(createProxy().durableCommandReplayKeyPresent(requestWith(), mutatingBody)).toBe(false)
+    })
+
+    it('refuses a digest that disagrees with the body, which the ledger would not match', () => {
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'b'.repeat(64) }),
+          mutatingBody,
+        ),
+      ).toBe(false)
+    })
+
+    it('refuses a malformed command id or digest', () => {
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'not valid!', 'x-sync-command-digest': digestFor(mutatingBody) }),
+          mutatingBody,
+        ),
+      ).toBe(false)
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'too-short' }),
+          mutatingBody,
+        ),
+      ).toBe(false)
+    })
+
+    it('refuses an id without a digest, and duplicated headers', () => {
+      expect(
+        createProxy().durableCommandReplayKeyPresent(requestWith({ 'x-sync-command-id': 'command-1' }), mutatingBody),
+      ).toBe(false)
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': ['command-1', 'command-2'], 'x-sync-command-digest': 'a'.repeat(64) }),
+          mutatingBody,
+        ),
+      ).toBe(false)
+    })
+
+    it('refuses headers and body metadata that disagree', () => {
+      const digest = digestFor(mutatingBody)
+      const body = { ...mutatingBody, command: { id: 'command-2', digest } }
+
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'command-1', 'x-sync-command-digest': digest }),
+          body,
+        ),
+      ).toBe(false)
+    })
+
+    it('refuses a raw string body and an absent body', () => {
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'a'.repeat(64) }),
+          'raw-body',
+        ),
+      ).toBe(false)
+      expect(
+        createProxy().durableCommandReplayKeyPresent(
+          requestWith({ 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'a'.repeat(64) }),
+          undefined,
+        ),
+      ).toBe(false)
+    })
+  })
 })

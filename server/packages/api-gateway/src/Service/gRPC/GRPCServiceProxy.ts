@@ -9,7 +9,6 @@ import { CrossServiceTokenCacheInterface } from '../Cache/CrossServiceTokenCache
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { GRPCSyncingServerServiceProxy } from './GRPCSyncingServerServiceProxy'
 import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
-import { Status } from '@grpc/grpc-js/build/src/constants'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
 import {
@@ -18,6 +17,41 @@ import {
   safeHttpErrorLogMetadata,
   sanitizeUrlForSafeLog,
 } from '../Logging/SafeLog'
+import {
+  classifyGrpcFailure,
+  mayFallBackToHttp,
+  syncPayloadWritesNothing,
+  type GrpcCallReplaySafety,
+  type GrpcFailureClass,
+} from './GrpcTransportFallback'
+import { grpcTransportFallbackDiagnostics } from './GrpcTransportFallbackDiagnostics'
+
+/** The shape `ServiceProxyInterface.validateSession` is declared with. */
+type SessionValidationRequest = {
+  headers: {
+    authorization: string
+    sharedVaultOwnerContext?: string
+  }
+  requestMetadata: {
+    url: string
+    method: string
+    snjs?: string
+    application?: string
+    userAgent?: string
+    secChUa?: string
+    ip?: string
+  }
+  cookies?: Map<string, string[]>
+  retryAttempt?: number
+}
+
+type SessionValidationResult = {
+  status: number
+  data: unknown
+  headers: {
+    contentType: string
+  }
+}
 
 export class GRPCServiceProxy implements ServiceProxyInterface {
   constructor(
@@ -37,29 +71,7 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
     private gRPCSyncingServerServiceProxy: GRPCSyncingServerServiceProxy,
   ) {}
 
-  async validateSession(dto: {
-    headers: {
-      authorization: string
-      sharedVaultOwnerContext?: string
-    }
-    requestMetadata: {
-      url: string
-      method: string
-      snjs?: string
-      application?: string
-      userAgent?: string
-      secChUa?: string
-      ip?: string
-    }
-    cookies?: Map<string, string[]>
-    retryAttempt?: number
-  }): Promise<{
-    status: number
-    data: unknown
-    headers: {
-      contentType: string
-    }
-  }> {
+  async validateSession(dto: SessionValidationRequest): Promise<SessionValidationResult> {
     const promise = new Promise((resolve, reject) => {
       try {
         const request = new RequestValidationOptions()
@@ -138,10 +150,10 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
         this.logger.info(`Request to Auth Server succeeded after ${dto.retryAttempt} retries`)
       }
 
-      return result as { status: number; data: unknown; headers: { contentType: string } }
+      return result as SessionValidationResult
     } catch (error) {
-      const requestDidNotMakeIt =
-        'code' in (error as Record<string, unknown>) && (error as Record<string, unknown>).code === Status.UNAVAILABLE
+      const failure = classifyGrpcFailure(error)
+      const requestDidNotMakeIt = failure === 'channel-unavailable'
 
       const tooManyRetryAttempts = dto.retryAttempt && dto.retryAttempt > 2
       if (!tooManyRetryAttempts && requestDidNotMakeIt) {
@@ -159,7 +171,133 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
         })
       }
 
+      // Standard Red Notes: the gRPC auth transport is exhausted — degrade to
+      // the HTTP transport this proxy already holds a client and a URL for,
+      // rather than failing EVERY authenticated request on this gateway.
+      //
+      // Session validation is classified `read-only` and that is a fact about
+      // the auth service, not an assumption: both transports terminate in the
+      // same `AuthenticateRequest` use case, which issues a cross-service token
+      // and writes nothing but last-write-wins session bookkeeping. A second
+      // delivery therefore cannot double-apply anything. The eligible failure
+      // CLASSES are still narrow — `GrpcTransportFallback` excludes
+      // `Status.UNKNOWN`, which is the auth server's own catch-all and so means
+      // the call arrived and the handler faulted, and excludes every deliberate
+      // application answer.
+      if (mayFallBackToHttp('read-only', failure)) {
+        return await this.validateSessionOverHttpFallback(dto, failure, error)
+      }
+
+      grpcTransportFallbackDiagnostics.recordRefusal('session-validation', failure)
+      this.logger.error('Session validation failed over gRPC and is not eligible for the HTTP transport.', {
+        action: 'service-proxy.grpc-fallback-refused',
+        lane: 'session-validation',
+        failureClass: failure,
+      })
+
       throw error
+    }
+  }
+
+  /**
+   * Serve one session validation over HTTP after the gRPC transport failed, and
+   * make the degradation impossible to miss: counted in
+   * `grpcTransportFallbackDiagnostics` (which the admin sync-diagnostics
+   * payload reports, so `boundServiceProxy: 'grpc'` with a non-zero count reads
+   * as "bound gRPC, serving HTTP") and logged at `error` on every occurrence.
+   *
+   * No sticky "gRPC is down" flag, deliberately: a latch would stop the gateway
+   * ever returning to gRPC on its own and would make the degradation a
+   * configuration state rather than a live symptom. The cost is that each
+   * request pays the failed gRPC attempt (and its retry budget) first.
+   *
+   * When HTTP fails too, the ORIGINAL gRPC error is re-thrown. The HTTP failure
+   * is logged separately — but the caller's contract and the primary
+   * transport's diagnosis are what the operator needs to see at the top.
+   */
+  private async validateSessionOverHttpFallback(
+    dto: SessionValidationRequest,
+    failure: GrpcFailureClass,
+    grpcError: unknown,
+  ): Promise<SessionValidationResult> {
+    grpcTransportFallbackDiagnostics.recordDegradation('session-validation', failure)
+    this.logger.error('Auth gRPC transport failed; serving this session validation over HTTP instead.', {
+      action: 'service-proxy.grpc-fallback',
+      lane: 'session-validation',
+      failureClass: failure,
+      degradedCalls: grpcTransportFallbackDiagnostics.degradedCallsOn('session-validation'),
+    })
+
+    try {
+      return await this.validateSessionOverHttp(dto)
+    } catch (fallbackError) {
+      this.logger.error('The HTTP fallback for session validation also failed; surfacing the gRPC failure.', {
+        ...safeHttpErrorLogMetadata(fallbackError, {
+          action: 'service-proxy.grpc-fallback-failed',
+          endpoint: `${this.authServerUrl}/sessions/validate`,
+          method: 'POST',
+        }),
+        lane: 'session-validation',
+        failureClass: failure,
+      })
+
+      throw grpcError
+    }
+  }
+
+  /**
+   * The HTTP session-validation request, byte-for-byte the one
+   * `HttpServiceProxy.validateSession` makes — same URL, headers, body shape and
+   * `validateStatus` window — because a fallback that validates sessions
+   * DIFFERENTLY from the deployment's own HTTP mode is not a fallback.
+   *
+   * It is a second copy rather than a shared helper because `HttpServiceProxy`
+   * is an `@injectable` whose constructor wants the whole container. The copy is
+   * guarded: `GRPCServiceProxy.spec.ts` drives both proxies against the same
+   * stubbed Axios instance and asserts the two request configurations are equal,
+   * so a change to either side fails that spec instead of drifting.
+   *
+   * Unlike `HttpServiceProxy` this makes exactly ONE attempt. The gRPC leg has
+   * already spent its retry budget, and a second budget here would multiply the
+   * latency of a request that is already late.
+   */
+  private async validateSessionOverHttp(dto: SessionValidationRequest): Promise<SessionValidationResult> {
+    let stringOfCookies = ''
+    for (const cookieName of dto.cookies?.keys() ?? []) {
+      for (const cookieValue of dto.cookies?.get(cookieName) as string[]) {
+        stringOfCookies += `${cookieName}=${cookieValue}; `
+      }
+    }
+
+    const authResponse = await this.httpClient.request({
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Cookie: stringOfCookies.trim(),
+        'x-snjs-version': dto.requestMetadata.snjs,
+        'x-application-version': dto.requestMetadata.application,
+        'x-origin-user-agent': dto.requestMetadata.userAgent,
+        'x-origin-sec-ch-ua': dto.requestMetadata.secChUa,
+        'x-origin-ip': dto.requestMetadata.ip,
+        'x-origin-url': dto.requestMetadata.url,
+        'x-origin-method': dto.requestMetadata.method,
+      },
+      data: {
+        authTokenFromHeaders: dto.headers.authorization,
+        sharedVaultOwnerContext: dto.headers.sharedVaultOwnerContext,
+      },
+      validateStatus: (status: number) => {
+        return status >= 200 && status < 500
+      },
+      url: `${this.authServerUrl}/sessions/validate`,
+    })
+
+    return {
+      status: authResponse.status,
+      data: authResponse.data,
+      headers: {
+        contentType: authResponse.headers['content-type'] as string,
+      },
     }
   }
 
@@ -173,7 +311,7 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
       payload !== undefined && typeof payload !== 'string' && 'api' in payload && payload.api === '20200115'
 
     if (requestIsUsingLatestApiVersions && endpoint === 'items/sync') {
-      await this.callSyncingServerGRPC(request, response, payload)
+      await this.callSyncingServerGRPC(request, response, endpoint, payload)
 
       return
     }
@@ -184,11 +322,27 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
   private async callSyncingServerGRPC(
     request: Request,
     response: Response,
+    endpoint: string,
     payload?: Record<string, unknown> | string,
   ): Promise<void> {
     const locals = response.locals as ResponseLocals
 
-    const result = await this.gRPCSyncingServerServiceProxy.sync(request, response, payload)
+    let result: Awaited<ReturnType<GRPCSyncingServerServiceProxy['sync']>>
+
+    // *** KEEP THIS try SCOPED TO THE gRPC CALL ALONE. ***
+    // `classifyGrpcFailure` reads an error with no gRPC status code as
+    // `never-dispatched`, which is only true of a throw from inside `sync()`'s
+    // own request-building. Widening this try to cover the response writing
+    // below would classify a send failure the same way — and a send failure
+    // happens AFTER the sync was applied, so it would authorise re-delivering a
+    // committed item write over HTTP.
+    try {
+      result = await this.gRPCSyncingServerServiceProxy.sync(request, response, payload)
+    } catch (error) {
+      await this.fallBackFromSyncGRPC(error, request, response, endpoint, payload)
+
+      return
+    }
 
     const command =
       result.data && typeof result.data === 'object' && 'command' in result.data
@@ -218,6 +372,80 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
       },
       data: result.data,
     })
+  }
+
+  /**
+   * Decide, for ONE failed `items/sync` gRPC attempt, whether the HTTP
+   * transport may carry it — and then either do that or surface the failure.
+   *
+   * The response is untouched at this point: `sync()` rejects before
+   * `callSyncingServerGRPC` sets a single header or sends a byte, so the HTTP
+   * leg owns a pristine response.
+   *
+   * Refusing is a normal, correct outcome here, not a bug to be engineered
+   * away. An un-deduplicated item write whose gRPC attempt failed AMBIGUOUSLY
+   * (and `UNAVAILABLE` is ambiguous — the connection can drop after the request
+   * bytes went out) must not be re-sent on a second transport: the save may
+   * already be committed, and re-sending the same item hashes with their now
+   * stale `updated_at` makes the syncing server answer with a sync conflict,
+   * which the client turns into a duplicate "conflicted copy" note. A 500 the
+   * client retries with fresh state is strictly better than silently
+   * duplicating a user's notes, so the failure goes back up.
+   */
+  private async fallBackFromSyncGRPC(
+    error: unknown,
+    request: Request,
+    response: Response,
+    endpoint: string,
+    payload?: Record<string, unknown> | string,
+  ): Promise<void> {
+    const failure = classifyGrpcFailure(error)
+    const replaySafety = this.syncReplaySafety(request, payload)
+    const userId = (response.locals as ResponseLocals).user?.uuid
+
+    if (!mayFallBackToHttp(replaySafety, failure)) {
+      grpcTransportFallbackDiagnostics.recordRefusal('items-sync', failure)
+      this.logger.error('Item sync failed over gRPC and must NOT be re-delivered over HTTP; surfacing the failure.', {
+        action: 'service-proxy.grpc-fallback-refused',
+        lane: 'items-sync',
+        failureClass: failure,
+        replaySafety,
+        userId,
+      })
+
+      throw error
+    }
+
+    grpcTransportFallbackDiagnostics.recordDegradation('items-sync', failure)
+    this.logger.error('Syncing gRPC transport failed; serving this item sync over HTTP instead.', {
+      action: 'service-proxy.grpc-fallback',
+      lane: 'items-sync',
+      failureClass: failure,
+      replaySafety,
+      degradedCalls: grpcTransportFallbackDiagnostics.degradedCallsOn('items-sync'),
+      userId,
+    })
+
+    await this.callServer(this.syncingServerJsUrl, request, response, endpoint, payload)
+  }
+
+  /**
+   * What a SECOND delivery of this `items/sync` would do. Order matters: a
+   * durable command key is checked first, because such a call writes but is
+   * deduplicated, and only a call with no key at all falls through to the
+   * payload inspection.
+   *
+   * A `command` that is present but NOT replay-safe (malformed, or a digest
+   * that disagrees with the body) lands on `non-idempotent-mutation`: the
+   * read-only allow-list in `syncPayloadWritesNothing` does not contain
+   * `command`, so a broken key can never be mistaken for a plain read.
+   */
+  private syncReplaySafety(request: Request, payload?: Record<string, unknown> | string): GrpcCallReplaySafety {
+    if (this.gRPCSyncingServerServiceProxy.durableCommandReplayKeyPresent(request, payload)) {
+      return 'idempotent-mutation'
+    }
+
+    return syncPayloadWritesNothing(payload) ? 'read-only' : 'non-idempotent-mutation'
   }
 
   async callRevisionsServer(

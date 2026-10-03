@@ -11,6 +11,9 @@ import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 import { CrossServiceTokenCacheInterface } from '../Cache/CrossServiceTokenCacheInterface'
 import { GRPCServiceProxy } from './GRPCServiceProxy'
 import { GRPCSyncingServerServiceProxy } from './GRPCSyncingServerServiceProxy'
+import { HttpServiceProxy } from '../Http/HttpServiceProxy'
+import { grpcTransportFallbackDiagnostics } from './GrpcTransportFallbackDiagnostics'
+import { computeSyncCommandDigest, logicalSyncCommandPayload } from '../Sync/SyncCommandDigest'
 
 describe('GRPCServiceProxy', () => {
   let httpClient: AxiosInstance
@@ -98,14 +101,31 @@ describe('GRPCServiceProxy', () => {
       }),
     } as unknown as IAuthClient
 
-    syncingServerProxy = {
-      sync: jest.fn().mockResolvedValue({ status: 200, data: { retrieved_items: [] } }),
-    } as unknown as GRPCSyncingServerServiceProxy
+    // A REAL syncing proxy with only `sync` stubbed. The replay-safety decision
+    // on the failure path asks it `durableCommandReplayKeyPresent`, and that
+    // answer is what authorises re-delivering an item write over HTTP — so it
+    // has to be the production predicate, not a fixture's opinion of it.
+    syncingServerProxy = new GRPCSyncingServerServiceProxy(
+      {} as never,
+      {} as never,
+      {} as never,
+      logger as never,
+      {} as never,
+      undefined,
+      'a'.repeat(64),
+    )
+    jest.spyOn(syncingServerProxy, 'sync').mockResolvedValue({ status: 200, data: { retrieved_items: [] } })
 
     send = jest.fn()
     status = jest.fn().mockReturnValue({ send })
     setHeader = jest.fn()
     redirect = jest.fn()
+
+    grpcTransportFallbackDiagnostics.clear()
+  })
+
+  afterEach(() => {
+    grpcTransportFallbackDiagnostics.clear()
   })
 
   describe('validateSession', () => {
@@ -200,20 +220,19 @@ describe('GRPCServiceProxy', () => {
       })
     })
 
-    it('rethrows an auth error with no response code metadata', async () => {
+    /**
+     * `Status.UNKNOWN` is the ONLY code the auth server's own catch-all answers
+     * with (`AuthServer.validate`), and it attaches no response-code metadata.
+     * So it means the call arrived and the handler faulted — HTTP terminates in
+     * the same `AuthenticateRequest` use case and must not be asked again.
+     */
+    it('rethrows an auth-server fault with no response code metadata, without trying HTTP', async () => {
       ;(authClient.validate as jest.Mock).mockImplementation((_r, _m, callback) => {
-        callback(grpcError({}, { message: 'internal' }), undefined)
+        callback(grpcError({}, { code: Status.UNKNOWN, message: 'internal' }), undefined)
       })
 
       await expect(buildProxy().validateSession(dto())).rejects.toMatchObject({ message: 'internal' })
-    })
-
-    it('rejects when the auth client throws synchronously', async () => {
-      ;(authClient.validate as jest.Mock).mockImplementation(() => {
-        throw new Error('channel closed')
-      })
-
-      await expect(buildProxy().validateSession(dto())).rejects.toThrow('channel closed')
+      expect(httpClient.request).not.toHaveBeenCalled()
     })
 
     it('retries an UNAVAILABLE auth service and succeeds on the retry', async () => {
@@ -232,14 +251,17 @@ describe('GRPCServiceProxy', () => {
       expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('after 1 retries'))
     })
 
-    it('gives up on a persistently UNAVAILABLE auth service after 3 retries', async () => {
+    it('spends exactly 3 retries on a persistently UNAVAILABLE auth service before degrading', async () => {
       ;(authClient.validate as jest.Mock).mockImplementation((_r, _m, callback) => {
         callback(grpcError({}, { code: Status.UNAVAILABLE }), undefined)
       })
 
-      await expect(buildProxy().validateSession(dto())).rejects.toMatchObject({ code: Status.UNAVAILABLE })
+      const result = await buildProxy().validateSession(dto())
+
       expect(authClient.validate).toHaveBeenCalledTimes(4)
       expect(timer.sleep).toHaveBeenCalledTimes(3)
+      expect(httpClient.request).toHaveBeenCalledTimes(1)
+      expect(result.status).toBe(200)
     })
 
     it('does NOT retry an error that is not UNAVAILABLE', async () => {
@@ -250,6 +272,452 @@ describe('GRPCServiceProxy', () => {
       await expect(buildProxy().validateSession(dto())).rejects.toBeDefined()
       expect(authClient.validate).toHaveBeenCalledTimes(1)
       expect(timer.sleep).not.toHaveBeenCalled()
+      expect(httpClient.request).not.toHaveBeenCalled()
+    })
+  })
+
+  /**
+   * Standard Red Notes: the degradation path. Before it, any gRPC failure other
+   * than `UNAVAILABLE` propagated out of `validateSession` — which runs on
+   * EVERY authenticated request — so one dead gRPC listener took the whole
+   * authenticated API down while the HTTP transport sat unused beside it.
+   *
+   * Each test below pins ONE half of the contract. The "falls back" tests are
+   * worth nothing without the "does not fall back" ones, so both appear for
+   * every class that matters.
+   */
+  describe('session validation degrading to HTTP', () => {
+    const dto = (overrides: Record<string, unknown> = {}) => ({
+      headers: { authorization: 'token' },
+      requestMetadata: { url: '/items/sync', method: 'POST', snjs: '2.1.0', application: '3.4.5', ip: '2.2.2.2' },
+      ...overrides,
+    })
+
+    const failValidateWith = (extra: Record<string, unknown>) => {
+      ;(authClient.validate as jest.Mock).mockImplementation((_r, _m, callback) => {
+        callback(grpcError({}, extra), undefined)
+      })
+    }
+
+    it.each([
+      ['UNAVAILABLE', Status.UNAVAILABLE, 'channel-unavailable'],
+      ['DEADLINE_EXCEEDED', Status.DEADLINE_EXCEEDED, 'deadline-exceeded'],
+      ['UNIMPLEMENTED', Status.UNIMPLEMENTED, 'method-unimplemented'],
+      ['INTERNAL', Status.INTERNAL, 'transport-internal'],
+      ['RESOURCE_EXHAUSTED', Status.RESOURCE_EXHAUSTED, 'message-limit'],
+    ])('serves the validation over HTTP after a %s gRPC failure', async (_name, code, failureClass) => {
+      failValidateWith({ code })
+
+      const result = await buildProxy().validateSession(dto())
+
+      expect(result).toEqual({
+        status: 200,
+        data: { ok: true },
+        headers: { contentType: 'application/json' },
+      })
+      expect(sentConfig().url).toBe('http://auth/sessions/validate')
+      expect(grpcTransportFallbackDiagnostics.report().lanes['session-validation']).toMatchObject({
+        degradedCalls: 1,
+        refusedCalls: 0,
+        lastFailureClass: failureClass,
+      })
+    })
+
+    it('serves the validation over HTTP when the auth client throws before dispatching', async () => {
+      ;(authClient.validate as jest.Mock).mockImplementation(() => {
+        throw new Error('channel closed')
+      })
+
+      const result = await buildProxy().validateSession(dto())
+
+      expect(result.status).toBe(200)
+      expect(grpcTransportFallbackDiagnostics.report().lanes['session-validation']).toMatchObject({
+        degradedCalls: 1,
+        lastFailureClass: 'never-dispatched',
+      })
+    })
+
+    it.each([
+      ['UNKNOWN, the auth server catch-all', Status.UNKNOWN, 'server-fault'],
+      ['CANCELLED', Status.CANCELLED, 'cancelled'],
+      ['PERMISSION_DENIED', Status.PERMISSION_DENIED, 'application'],
+      ['NOT_FOUND', Status.NOT_FOUND, 'application'],
+      ['FAILED_PRECONDITION', Status.FAILED_PRECONDITION, 'application'],
+    ])('surfaces a %s gRPC failure instead of trying HTTP', async (_name, code, failureClass) => {
+      failValidateWith({ code })
+
+      await expect(buildProxy().validateSession(dto())).rejects.toMatchObject({ code })
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(grpcTransportFallbackDiagnostics.report().lanes['session-validation']).toMatchObject({
+        degradedCalls: 0,
+        refusedCalls: 1,
+        lastFailureClass: failureClass,
+      })
+      expect(logger.error).toHaveBeenCalledWith(
+        'Session validation failed over gRPC and is not eligible for the HTTP transport.',
+        expect.objectContaining({ action: 'service-proxy.grpc-fallback-refused', failureClass }),
+      )
+    })
+
+    it('logs every degradation at error level with the running count', async () => {
+      failValidateWith({ code: Status.UNIMPLEMENTED })
+
+      const proxy = buildProxy()
+      await proxy.validateSession(dto())
+      await proxy.validateSession(dto())
+
+      expect(logger.error).toHaveBeenNthCalledWith(
+        1,
+        'Auth gRPC transport failed; serving this session validation over HTTP instead.',
+        {
+          action: 'service-proxy.grpc-fallback',
+          lane: 'session-validation',
+          failureClass: 'method-unimplemented',
+          degradedCalls: 1,
+        },
+      )
+      expect(logger.error).toHaveBeenNthCalledWith(
+        2,
+        'Auth gRPC transport failed; serving this session validation over HTTP instead.',
+        {
+          action: 'service-proxy.grpc-fallback',
+          lane: 'session-validation',
+          failureClass: 'method-unimplemented',
+          degradedCalls: 2,
+        },
+      )
+      expect(grpcTransportFallbackDiagnostics.report().everDegraded).toBe(true)
+    })
+
+    /**
+     * The ORIGINAL gRPC failure is what the caller sees, so the primary
+     * transport's diagnosis survives and the existing error contract does not
+     * change shape depending on which transport failed second.
+     */
+    it('rethrows the original gRPC failure when HTTP also fails, and logs the HTTP failure safely', async () => {
+      failValidateWith({ code: Status.UNAVAILABLE, message: 'grpc-said-this' })
+      ;(httpClient.request as jest.Mock).mockRejectedValue(
+        Object.assign(new Error('http-secret-sentinel'), { code: 'ECONNREFUSED' }),
+      )
+
+      await expect(buildProxy().validateSession(dto())).rejects.toMatchObject({
+        code: Status.UNAVAILABLE,
+        message: 'grpc-said-this',
+      })
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'The HTTP fallback for session validation also failed; surfacing the gRPC failure.',
+        expect.objectContaining({
+          action: 'service-proxy.grpc-fallback-failed',
+          endpoint: 'http://auth/sessions/validate',
+          failureClass: 'channel-unavailable',
+        }),
+      )
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain('http-secret-sentinel')
+    })
+
+    it('makes exactly ONE HTTP attempt, without a second retry budget', async () => {
+      failValidateWith({ code: Status.UNAVAILABLE })
+      ;(httpClient.request as jest.Mock).mockRejectedValue({ code: 'ETIMEDOUT' })
+
+      await expect(buildProxy().validateSession(dto())).rejects.toBeDefined()
+
+      expect(httpClient.request).toHaveBeenCalledTimes(1)
+    })
+
+    /**
+     * Drift guard for the duplicated request builder: a fallback that validates
+     * sessions DIFFERENTLY from the deployment's own HTTP mode is not a
+     * fallback. Both proxies are driven against the same stubbed Axios instance
+     * and their request configurations are compared.
+     */
+    it('issues exactly the request HttpServiceProxy.validateSession would issue', async () => {
+      const captured: Record<string, unknown>[] = []
+      httpClient = {
+        request: jest.fn((config: Record<string, unknown>) => {
+          captured.push(config)
+
+          return Promise.resolve(serviceResponse())
+        }),
+      } as unknown as AxiosInstance
+      failValidateWith({ code: Status.UNIMPLEMENTED })
+
+      const validationDto = dto({
+        headers: { authorization: 'token', sharedVaultOwnerContext: 'owner-1' },
+        cookies: new Map([
+          ['sid', ['s-1', 's-2']],
+          ['other', ['o-1']],
+        ]),
+        requestMetadata: {
+          url: '/v1/items',
+          method: 'POST',
+          snjs: '2.1.0',
+          application: '3.4.5',
+          userAgent: 'agent',
+          secChUa: 'ua',
+          ip: '2.2.2.2',
+        },
+      })
+
+      await buildProxy().validateSession(validationDto)
+      await new HttpServiceProxy(
+        httpClient,
+        urls.auth,
+        urls.syncing,
+        urls.payments,
+        urls.files,
+        urls.ws,
+        urls.revisions,
+        urls.email,
+        1000,
+        crossServiceTokenCache,
+        logger as never,
+        timer as never,
+        '',
+      ).validateSession(validationDto)
+
+      expect(captured).toHaveLength(2)
+      const [fromFallback, fromHttpProxy] = captured
+      expect({ ...fromFallback, validateStatus: null }).toEqual({ ...fromHttpProxy, validateStatus: null })
+
+      const fallbackWindow = fromFallback.validateStatus as (status: number) => boolean
+      const httpWindow = fromHttpProxy.validateStatus as (status: number) => boolean
+      for (const httpStatus of [199, 200, 299, 400, 404, 499, 500, 503]) {
+        expect(fallbackWindow(httpStatus)).toBe(httpWindow(httpStatus))
+      }
+    })
+  })
+
+  /**
+   * The dangerous half. `items/sync` carries ITEM MUTATIONS, and `UNAVAILABLE`
+   * does not prove the mutation was not applied — a connection that drops after
+   * the request bytes went out reports it too. Re-sending the same item hashes
+   * with their now-stale `updated_at` would make the syncing server answer with
+   * a sync conflict, which the client materialises as a duplicate "conflicted
+   * copy" note. So the mutation tests here are about what does NOT happen.
+   */
+  describe('item sync degrading to HTTP', () => {
+    const pollPayload = { api: '20200115', sync_token: 'token', limit: 150 }
+    const savePayload = { api: '20200115', items: [{ uuid: 'i-1', content: 'enc', updated_at: '2026-01-01' }] }
+
+    const failSyncWith = (extra: Record<string, unknown>) => {
+      ;(syncingServerProxy.sync as jest.Mock).mockRejectedValue(
+        Object.assign(new Error('sync failed'), { metadata: { get: () => [] }, ...extra }),
+      )
+    }
+
+    const commandHeadersFor = (payload: Record<string, unknown>) => ({
+      'x-sync-command-id': 'command-1',
+      'x-sync-command-digest': computeSyncCommandDigest(logicalSyncCommandPayload(payload)),
+    })
+
+    it('serves a READ-ONLY sync over HTTP when the gRPC transport fails', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        pollPayload,
+      )
+
+      expect(sentConfig().url).toBe('http://syncing/items/sync')
+      expect(sentConfig().data).toEqual(pollPayload)
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
+        degradedCalls: 1,
+        refusedCalls: 0,
+        lastFailureClass: 'channel-unavailable',
+      })
+      expect(logger.error).toHaveBeenCalledWith(
+        'Syncing gRPC transport failed; serving this item sync over HTTP instead.',
+        expect.objectContaining({ lane: 'items-sync', replaySafety: 'read-only', userId: 'u-1' }),
+      )
+    })
+
+    it.each([
+      ['UNAVAILABLE', Status.UNAVAILABLE],
+      ['DEADLINE_EXCEEDED', Status.DEADLINE_EXCEEDED],
+      ['UNIMPLEMENTED', Status.UNIMPLEMENTED],
+      ['INTERNAL', Status.INTERNAL],
+    ])('NEVER re-delivers an un-deduplicated item write after a %s failure', async (_name, code) => {
+      failSyncWith({ code })
+
+      await expect(
+        buildProxy().callSyncingServer(
+          buildRequest(),
+          buildResponse({ user: { uuid: 'u-1' } }),
+          'items/sync',
+          savePayload,
+        ),
+      ).rejects.toMatchObject({ code })
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(send).not.toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
+        degradedCalls: 0,
+        refusedCalls: 1,
+      })
+      expect(logger.error).toHaveBeenCalledWith(
+        'Item sync failed over gRPC and must NOT be re-delivered over HTTP; surfacing the failure.',
+        expect.objectContaining({ replaySafety: 'non-idempotent-mutation' }),
+      )
+    })
+
+    it('NEVER re-delivers an un-deduplicated item write even when nothing was dispatched', async () => {
+      ;(syncingServerProxy.sync as jest.Mock).mockRejectedValue(new Error('mapper exploded'))
+
+      await expect(
+        buildProxy().callSyncingServer(
+          buildRequest(),
+          buildResponse({ user: { uuid: 'u-1' } }),
+          'items/sync',
+          savePayload,
+        ),
+      ).rejects.toThrow('mapper exploded')
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
+        refusedCalls: 1,
+        lastFailureClass: 'never-dispatched',
+      })
+    })
+
+    /**
+     * The one shape in which an item write MAY cross transports: a durable
+     * command id + digest that the syncing server's shared ledger deduplicates.
+     * `callServer` must carry both headers and the body through, or the HTTP hop
+     * would apply the write a second time instead of replaying the stored result.
+     */
+    it('re-delivers a DURABLE-COMMAND item write over HTTP, carrying the ledger key', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+      const headers = commandHeadersFor(savePayload)
+
+      await buildProxy().callSyncingServer(
+        buildRequest({ headers: headers as never }),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        savePayload,
+      )
+
+      expect(sentConfig().url).toBe('http://syncing/items/sync')
+      expect(sentConfig().headers['x-sync-command-id']).toBe('command-1')
+      expect(sentConfig().headers['x-sync-command-digest']).toBe(headers['x-sync-command-digest'])
+      expect(sentConfig().data).toEqual(savePayload)
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
+        degradedCalls: 1,
+        refusedCalls: 0,
+      })
+      expect(logger.error).toHaveBeenCalledWith(
+        'Syncing gRPC transport failed; serving this item sync over HTTP instead.',
+        expect.objectContaining({ replaySafety: 'idempotent-mutation' }),
+      )
+    })
+
+    /**
+     * RESOURCE_EXHAUSTED is how the syncing server says "this user is over
+     * their content limit", and the gateway publishes a ContentSizesFixRequested
+     * event on it. Replaying it over HTTP would re-ask an answered question and
+     * risk firing that event twice — so even a ledger-keyed write stops here.
+     */
+    it('refuses to re-deliver a durable-command write on RESOURCE_EXHAUSTED', async () => {
+      failSyncWith({ code: Status.RESOURCE_EXHAUSTED })
+
+      await expect(
+        buildProxy().callSyncingServer(
+          buildRequest({ headers: commandHeadersFor(savePayload) as never }),
+          buildResponse({ user: { uuid: 'u-1' } }),
+          'items/sync',
+          savePayload,
+        ),
+      ).rejects.toMatchObject({ code: Status.RESOURCE_EXHAUSTED })
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
+        degradedCalls: 0,
+        refusedCalls: 1,
+        lastFailureClass: 'message-limit',
+      })
+    })
+
+    it('treats a command key whose digest disagrees with the body as un-deduplicated', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+
+      await expect(
+        buildProxy().callSyncingServer(
+          buildRequest({
+            headers: { 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'b'.repeat(64) } as never,
+          }),
+          buildResponse({ user: { uuid: 'u-1' } }),
+          'items/sync',
+          savePayload,
+        ),
+      ).rejects.toBeDefined()
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledWith(
+        'Item sync failed over gRPC and must NOT be re-delivered over HTTP; surfacing the failure.',
+        expect.objectContaining({ replaySafety: 'non-idempotent-mutation' }),
+      )
+    })
+
+    it.each([
+      ['UNKNOWN, the backend catch-all', Status.UNKNOWN],
+      ['CANCELLED', Status.CANCELLED],
+      ['PERMISSION_DENIED', Status.PERMISSION_DENIED],
+    ])('surfaces a %s failure even for a read-only sync', async (_name, code) => {
+      failSyncWith({ code })
+
+      await expect(
+        buildProxy().callSyncingServer(
+          buildRequest(),
+          buildResponse({ user: { uuid: 'u-1' } }),
+          'items/sync',
+          pollPayload,
+        ),
+      ).rejects.toMatchObject({ code })
+
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({ refusedCalls: 1 })
+    })
+
+    it('leaves the response untouched by the failed gRPC attempt before handing it to HTTP', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        pollPayload,
+      )
+
+      expect(setHeader).not.toHaveBeenCalledWith('X-Sync-Command-Status', expect.anything())
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send).toHaveBeenCalledWith({
+        meta: { auth: { userUuid: 'u-1', roles: undefined }, server: { filesServerUrl: 'http://files' } },
+        data: { ok: true },
+      })
+    })
+
+    it('keeps the two lanes counted apart', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+      ;(authClient.validate as jest.Mock).mockImplementation((_r, _m, callback) => {
+        callback(grpcError({}, { code: Status.UNIMPLEMENTED }), undefined)
+      })
+
+      const proxy = buildProxy()
+      await proxy.callSyncingServer(buildRequest(), buildResponse({ user: { uuid: 'u-1' } }), 'items/sync', pollPayload)
+      await proxy.validateSession({
+        headers: { authorization: 'token' },
+        requestMetadata: { url: '/items/sync', method: 'POST' },
+      })
+
+      const report = grpcTransportFallbackDiagnostics.report()
+      expect(report.lanes['items-sync'].lastFailureClass).toBe('channel-unavailable')
+      expect(report.lanes['session-validation'].lastFailureClass).toBe('method-unimplemented')
+      expect(report.lanes['items-sync'].degradedCalls).toBe(1)
+      expect(report.lanes['session-validation'].degradedCalls).toBe(1)
     })
   })
 

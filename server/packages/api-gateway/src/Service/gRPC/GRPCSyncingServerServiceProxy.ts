@@ -39,6 +39,48 @@ export class GRPCSyncingServerServiceProxy {
     return this.internalGrpcAuth.ready()
   }
 
+  /**
+   * Standard Red Notes: whether this call carries a durable sync command key
+   * that the syncing server's SHARED command ledger would deduplicate, so a
+   * failed gRPC attempt may be re-delivered over HTTP without applying the item
+   * mutations twice. Consulted only on the failure path, by
+   * `GRPCServiceProxy.callSyncingServer`.
+   *
+   * It answers the narrow question "would the OTHER transport recognise this as
+   * the same command", and so repeats all three checks the syncing server will
+   * make on the HTTP hop rather than just the presence of the headers:
+   *
+   *   - the id/digest pair resolves from headers and/or body WITHOUT a protocol
+   *     error (`BaseItemsController.resolveSyncCommandMetadata` reads both, and
+   *     `callServer` forwards both the headers and the body verbatim),
+   *   - the pair is well-formed, and
+   *   - the digest matches the canonical digest of the logical body, which is
+   *     what the ledger keys the stored result on.
+   *
+   * Any of those failing means the HTTP hop would answer 4xx/409 rather than
+   * replay — so the call is reported as NOT deduplicated, and the caller
+   * surfaces the original failure instead of guessing. The checks are
+   * deliberately redundant with `sync()`'s own (which RESOLVE 400/409 rather
+   * than reject, so they cannot reach the failure path): a predicate that
+   * authorises a cross-transport replay must not depend on an upstream
+   * validation staying in place.
+   */
+  durableCommandReplayKeyPresent(request: Request, payload?: Record<string, unknown> | string): boolean {
+    if (!payload || typeof payload === 'string') {
+      return false
+    }
+
+    const resolved = this.resolveCommandMetadata(request, payload)
+    if ('error' in resolved || !resolved.value) {
+      return false
+    }
+    if (this.validateCommandMetadata(resolved.value)) {
+      return false
+    }
+
+    return syncCommandDigestsEqual(resolved.value.digest, computeSyncCommandDigest(logicalSyncCommandPayload(payload)))
+  }
+
   async sync(
     request: Request,
     response: Response,
