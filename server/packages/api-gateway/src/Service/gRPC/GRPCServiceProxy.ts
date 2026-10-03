@@ -14,11 +14,14 @@ import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
 import {
   PublicServiceFailure,
   publicHttpErrorStatus,
+  safeErrorLogMetadata,
   safeHttpErrorLogMetadata,
   sanitizeUrlForSafeLog,
 } from '../Logging/SafeLog'
 import {
   classifyGrpcFailure,
+  GRPC_FALLBACK_REFUSAL_STATUS,
+  grpcFallbackRefusal,
   mayFallBackToHttp,
   syncPayloadWritesNothing,
   type GrpcCallReplaySafety,
@@ -388,9 +391,26 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
    * bytes went out) must not be re-sent on a second transport: the save may
    * already be committed, and re-sending the same item hashes with their now
    * stale `updated_at` makes the syncing server answer with a sync conflict,
-   * which the client turns into a duplicate "conflicted copy" note. A 500 the
-   * client retries with fresh state is strictly better than silently
-   * duplicating a user's notes, so the failure goes back up.
+   * which the client turns into a duplicate "conflicted copy" note. Failing the
+   * request is strictly better than silently duplicating a user's notes.
+   *
+   * HOW THE REFUSAL IS REPORTED, and why it is not a rethrow any more.
+   *
+   * Until now this method rethrew, and the thrown value reached Express's error
+   * handler as any other fault would: a bare `500` with a generic body. Measured
+   * live at `44c3c59b`, the refusal was therefore indistinguishable from every
+   * other `500` — so the client could not tell it was looking at the one failure
+   * this design expects it to recover from, and the safety argument for refusing
+   * rested on a signal that was not on the wire.
+   *
+   * It now answers the SAME status with a closed-enum refusal body from
+   * `grpcFallbackRefusal` — code, fixed copy, retryability, and nothing else. It
+   * is written here rather than thrown because the response is pristine at this
+   * point (see above) and because shaping it anywhere else would mean teaching a
+   * generic error handler about this one case. The operator detail that the
+   * error handler used to log is logged here instead, via
+   * `safeErrorLogMetadata`, so surfacing less to the client costs the operator
+   * nothing.
    */
   private async fallBackFromSyncGRPC(
     error: unknown,
@@ -404,16 +424,22 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
     const userId = (response.locals as ResponseLocals).user?.uuid
 
     if (!mayFallBackToHttp(replaySafety, failure)) {
+      const refusal = grpcFallbackRefusal(replaySafety)
+
       grpcTransportFallbackDiagnostics.recordRefusal('items-sync', failure)
       this.logger.error('Item sync failed over gRPC and must NOT be re-delivered over HTTP; surfacing the failure.', {
         action: 'service-proxy.grpc-fallback-refused',
         lane: 'items-sync',
         failureClass: failure,
         replaySafety,
+        refusalCode: refusal.error.code,
         userId,
+        ...safeErrorLogMetadata(error),
       })
 
-      throw error
+      response.status(GRPC_FALLBACK_REFUSAL_STATUS).send(refusal)
+
+      return
     }
 
     grpcTransportFallbackDiagnostics.recordDegradation('items-sync', failure)

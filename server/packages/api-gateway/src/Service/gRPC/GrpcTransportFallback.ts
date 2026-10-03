@@ -26,7 +26,10 @@ import { Status } from '@grpc/grpc-js/build/src/constants'
  *     be committed. Re-sending the same item hashes with their now-stale
  *     `updated_at` makes the syncing server emit a sync conflict, which the
  *     client materialises as a duplicate "conflicted copy" note. Silent user
- *     data duplication is worse than a 500 the client retries.
+ *     data duplication is worse than a failed request — but the failed request
+ *     has to SAY what it is, which is what the refusal contract at the bottom
+ *     of this file exists for. "The client will retry" was never a safe thing
+ *     to assume here, and is not what the client is now told.
  *  2. A blanket catch would turn a loud outage into a PERMANENT INVISIBLE
  *     misconfiguration: the operator would serve every request over HTTP while
  *     believing they were on gRPC. Every degradation is therefore counted in
@@ -209,6 +212,173 @@ export function classifyGrpcFailure(error: unknown): GrpcFailureClass {
  */
 export function mayFallBackToHttp(safety: GrpcCallReplaySafety, failure: GrpcFailureClass): boolean {
   return GRPC_FALLBACK_ELIGIBILITY[safety].includes(failure)
+}
+
+/**
+ * Standard Red Notes: HOW a refusal is reported to the client. Nothing below
+ * changes WHICH failures are refused — `GRPC_FALLBACK_ELIGIBILITY` above is the
+ * only authority on that and is untouched.
+ *
+ * WHY THIS EXISTS
+ *
+ * The refusal above was reported as a bare `500` with an empty body (measured
+ * live at `44c3c59b`: `POST /v1/items` with one item against a dead syncing
+ * gRPC target answered `500`, no code, no body, no `Retry-After`). That made the
+ * one failure the design expects the client to RECOVER from indistinguishable
+ * from every other `500`. The justification for refusing — "the failure goes
+ * back to the client, and the client retries with fresh state" — rested on a
+ * signal that was not on the wire.
+ *
+ * WHY IT IS NOT "RETRYABLE"
+ *
+ * This failure is AMBIGUOUS BY CONSTRUCTION. The entire reason the write is not
+ * replayed is that nobody knows whether it was applied: `UNAVAILABLE` is raised
+ * for a connection that dropped after the request bytes went out just as
+ * readily as for a listener that was never there. So the signal must NOT say
+ * "retry this". A blind re-delivery of the same item hashes with their now-stale
+ * `updated_at` is exactly the double-apply the refusal exists to prevent — the
+ * syncing server answers with a sync conflict and the client materialises a
+ * duplicate "conflicted copy" note.
+ *
+ * What the client needs to be told is therefore "the outcome of this write is
+ * UNKNOWN; reconcile your state rather than resending it", and that is what the
+ * code and the copy below say. `retryable` is `false` on every refusal code for
+ * the same reason, and the retryability answer is a property OF THE CODE (a
+ * frozen table, not a computation over the failure) so that no failure-class
+ * detail can leak out through the flag.
+ *
+ * *** SECRECY BOUNDARY ***
+ * `grpcFallbackRefusal` takes ONE argument, and it is the closed
+ * `GrpcCallReplaySafety` union. There is no parameter through which a request
+ * path, an item uuid, a user uuid, a service URL, a gRPC status, a failure
+ * class, an upstream error message or a stack could reach the wire even by
+ * mistake — the same argument `GrpcTransportFallbackDiagnostics` makes for its
+ * recorder, and the same one `357487cb` made for `RPC_PATH_FORBIDDEN`. The copy
+ * is a frozen constant per code, never built from an input. Do not add a
+ * free-form field here; add another closed code instead.
+ */
+export type GrpcFallbackRefusalCode =
+  /**
+   * A sync that writes nothing was refused. Only reachable when the backend's
+   * own handler answered — every transport-fault class a read is eligible for
+   * was already served over HTTP and so never arrives here, leaving
+   * `cancelled`, `server-fault` and `application`. Nothing was written, so
+   * there is no state to reconcile; and a second delivery reaches the same
+   * handler on either transport, so it is not reported as retryable.
+   */
+  | 'SYNC_TRANSPORT_READ_FAILED'
+  /**
+   * A LEDGER-DEDUPLICATED write was refused. The outcome is unknown, but unlike
+   * the code below it is DISCOVERABLE: the command carries an id the syncing
+   * server's shared ledger keys its stored result on, so the client can ask what
+   * became of that id instead of guessing. Still not retryable — the classes
+   * that reach this refusal are `message-limit` (how the syncing server says
+   * "over the content limit", on which the gateway publishes a
+   * ContentSizesFixRequested event that a blind retry would fire again),
+   * `cancelled`, `server-fault` and `application`.
+   */
+  | 'SYNC_COMMAND_OUTCOME_UNKNOWN'
+  /**
+   * An UN-DEDUPLICATED write was refused: the case with the empty eligibility
+   * set. The outcome is unknown and there is nothing to ask — no ledger key
+   * exists — so the only safe remedy is to reconcile against the server's state.
+   * This is the code whose absence made the live `500` unreadable.
+   */
+  | 'SYNC_WRITE_OUTCOME_UNKNOWN'
+
+/**
+ * The code a refusal reports, decided by WHAT THE CALL WAS and nothing else.
+ * Keyed on the replay-safety axis rather than the failure axis on purpose: the
+ * client already knows what it sent, so this adds no information about the
+ * deployment, while the failure class stays where it belongs — in the log and
+ * in the operator-only diagnostics payload.
+ */
+const REFUSAL_CODE_BY_REPLAY_SAFETY: Readonly<Record<GrpcCallReplaySafety, GrpcFallbackRefusalCode>> = Object.freeze({
+  'read-only': 'SYNC_TRANSPORT_READ_FAILED',
+  'idempotent-mutation': 'SYNC_COMMAND_OUTCOME_UNKNOWN',
+  'non-idempotent-mutation': 'SYNC_WRITE_OUTCOME_UNKNOWN',
+})
+
+/**
+ * The wire contract per code: fixed copy and a fixed retryability answer.
+ *
+ * The copy is written to say "unknown outcome, reconcile" and NEVER "retry" —
+ * `GrpcTransportFallback.spec.ts` asserts the two unknown-outcome messages
+ * contain neither "retry" nor "try again" nor "resend", because a client acting
+ * on the opposite reading is what costs a user a duplicated note.
+ *
+ * It is written as END-USER copy, not developer copy, because it reaches a
+ * person with no client change at all: SNJS's
+ * `ApiService.errorResponseWithFallbackMessage` only substitutes its generic
+ * sync message when `error.message` is ABSENT, and the web client's footer
+ * renders `getErrorMessageFromErrorResponseBody(data, …)` into
+ * `failedSyncError` on `ApplicationEvent.FailedSync`. So this string is the
+ * sentence the user sees when a save could not be confirmed, and it has to tell
+ * them to reload rather than keep hammering save.
+ *
+ * `retryable` is `false` throughout. For the two write codes that is the whole
+ * point. For the read code it is honest too: the transport faults a read MAY
+ * cross transports on never reach a refusal, so a refused read is one the
+ * backend itself answered, and asking the same handler again over either
+ * transport cannot change that answer. A future code added here must state its
+ * own answer — the table is exhaustive over the union, so the compiler asks.
+ */
+const GRPC_FALLBACK_REFUSAL_CONTRACT: Readonly<
+  Record<GrpcFallbackRefusalCode, Readonly<{ message: string; retryable: boolean }>>
+> = Object.freeze({
+  SYNC_TRANSPORT_READ_FAILED: Object.freeze({
+    message: 'Your notes could not be fetched from the server. Nothing was written, so no change was lost.',
+    retryable: false,
+  }),
+  SYNC_COMMAND_OUTCOME_UNKNOWN: Object.freeze({
+    message:
+      'This change could not be confirmed, so whether it was saved is unknown. ' +
+      'Ask for the status of the command id you supplied and reconcile from that answer, ' +
+      'rather than sending the same change twice.',
+    retryable: false,
+  }),
+  SYNC_WRITE_OUTCOME_UNKNOWN: Object.freeze({
+    message:
+      'This change could not be confirmed, so whether it was saved is unknown. ' +
+      'Reload the current server state and reconcile against it, rather than sending the same change twice.',
+    retryable: false,
+  }),
+})
+
+/** The closed set, exported so a spec — and any future producer — can pin it. */
+export const GRPC_FALLBACK_REFUSAL_CODES: ReadonlySet<string> = new Set<GrpcFallbackRefusalCode>(
+  Object.keys(GRPC_FALLBACK_REFUSAL_CONTRACT) as GrpcFallbackRefusalCode[],
+)
+
+/**
+ * The HTTP status a refusal keeps. Deliberately UNCHANGED from the bare `500`
+ * this replaces: HTTP has no status for "the outcome of your write is unknown",
+ * `503` and a `Retry-After` would both say the one thing that must not be said,
+ * and `409` is already spoken for on this route by
+ * `sync_command_digest_mismatch`. The defect being fixed is an unreadable BODY,
+ * not a wrong status, so the status stays where live measurement found it and
+ * the meaning travels in the code.
+ */
+export const GRPC_FALLBACK_REFUSAL_STATUS = 500
+
+/** Exactly the fields a refusal puts on the wire. Nothing may be added to this. */
+export type GrpcFallbackRefusalBody = {
+  error: {
+    code: GrpcFallbackRefusalCode
+    message: string
+    retryable: boolean
+  }
+}
+
+/**
+ * The refusal body for one refused call. A pure function of the closed
+ * replay-safety union — see the secrecy boundary above.
+ */
+export function grpcFallbackRefusal(safety: GrpcCallReplaySafety): GrpcFallbackRefusalBody {
+  const code = REFUSAL_CODE_BY_REPLAY_SAFETY[safety]
+  const contract = GRPC_FALLBACK_REFUSAL_CONTRACT[code]
+
+  return { error: { code, message: contract.message, retryable: contract.retryable } }
 }
 
 /**

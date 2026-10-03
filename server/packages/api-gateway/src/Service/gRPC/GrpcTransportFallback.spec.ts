@@ -3,6 +3,9 @@ import { Status } from '@grpc/grpc-js/build/src/constants'
 import {
   classifyGrpcFailure,
   GRPC_FALLBACK_ELIGIBILITY,
+  GRPC_FALLBACK_REFUSAL_CODES,
+  GRPC_FALLBACK_REFUSAL_STATUS,
+  grpcFallbackRefusal,
   mayFallBackToHttp,
   syncPayloadWritesNothing,
   type GrpcCallReplaySafety,
@@ -118,6 +121,116 @@ describe('GrpcTransportFallback', () => {
           expect(mayFallBackToHttp(safety, failure)).toBe(false)
         }
       }
+    })
+  })
+
+  describe('grpcFallbackRefusal', () => {
+    const safeties: GrpcCallReplaySafety[] = ['read-only', 'idempotent-mutation', 'non-idempotent-mutation']
+
+    it('gives each replay safety its own code, all of them from the closed set', () => {
+      const codes = safeties.map((safety) => grpcFallbackRefusal(safety).error.code)
+
+      expect(codes).toEqual([
+        'SYNC_TRANSPORT_READ_FAILED',
+        'SYNC_COMMAND_OUTCOME_UNKNOWN',
+        'SYNC_WRITE_OUTCOME_UNKNOWN',
+      ])
+      expect(new Set(codes).size).toBe(codes.length)
+      expect([...GRPC_FALLBACK_REFUSAL_CODES].sort()).toEqual([...codes].sort())
+    })
+
+    /**
+     * The payload contract: a code, a retryability flag, fixed copy, and NOTHING
+     * else. Asserted as exact key lists at both levels so a field added later
+     * fails here rather than reaching the wire.
+     */
+    it('puts exactly a code, a message and a retryability flag on the wire', () => {
+      for (const safety of safeties) {
+        const body = grpcFallbackRefusal(safety)
+
+        expect(Object.keys(body)).toEqual(['error'])
+        expect(Object.keys(body.error).sort()).toEqual(['code', 'message', 'retryable'])
+      }
+    })
+
+    /**
+     * The honesty property, and the one a mutation flipping a flag must break.
+     * `false` on the two write codes is the whole point: the outcome is unknown,
+     * so the response may not claim the request is safe to repeat. `false` on the
+     * read code is honest too — every transport-fault class a read may cross
+     * transports on is served over HTTP and so never reaches a refusal, leaving
+     * only answers the backend's own handler gave.
+     */
+    it('never reports a refusal as retryable', () => {
+      for (const safety of safeties) {
+        expect(grpcFallbackRefusal(safety).error.retryable).toBe(false)
+      }
+    })
+
+    /**
+     * The copy has to express "the outcome is unknown, reconcile" and must NEVER
+     * read as "retry": a client acting on the opposite reading re-delivers the
+     * same item hashes and earns the user a duplicated note, which is precisely
+     * what the refusal exists to prevent.
+     */
+    it.each([['idempotent-mutation'], ['non-idempotent-mutation']] as [GrpcCallReplaySafety][])(
+      'tells a refused %s that the outcome is unknown and to reconcile, never to retry',
+      (safety) => {
+        const message = grpcFallbackRefusal(safety).error.message
+
+        expect(message).toMatch(/\bunknown\b/iu)
+        expect(message).toMatch(/\breconcile\b/iu)
+        expect(message).not.toMatch(/retry|retried|retrying|try again|resend|send it again/iu)
+      },
+    )
+
+    it('tells a refused read there is nothing to reconcile, since nothing was written', () => {
+      const message = grpcFallbackRefusal('read-only').error.message
+
+      expect(message).toMatch(/\bnothing was written\b/iu)
+      expect(message).not.toMatch(/\bunknown\b/iu)
+      expect(message).not.toMatch(/retry|retried|retrying|try again|resend|send it again/iu)
+    })
+
+    /**
+     * The secrecy boundary, as a property of the SIGNATURE rather than of a scan:
+     * the only argument is a member of a closed three-value union, so the copy
+     * cannot vary with a path, a uuid, a URL, a gRPC status or an upstream
+     * message. Pinned by calling it twice and demanding byte-identical output.
+     */
+    it('derives the whole body from the replay safety alone, so no input can travel through it', () => {
+      for (const safety of safeties) {
+        expect(JSON.stringify(grpcFallbackRefusal(safety))).toBe(JSON.stringify(grpcFallbackRefusal(safety)))
+      }
+
+      const serialized = safeties.map((safety) => JSON.stringify(grpcFallbackRefusal(safety))).join('|')
+      for (const transportDetail of [
+        'channel-unavailable',
+        'deadline-exceeded',
+        'method-unimplemented',
+        'transport-internal',
+        'message-limit',
+        'cancelled',
+        'server-fault',
+        'never-dispatched',
+        'application',
+        'grpc',
+        'gRPC',
+        'http',
+        'HTTP',
+        'items/sync',
+      ]) {
+        expect(serialized).not.toContain(transportDetail)
+      }
+    })
+
+    /**
+     * The status is deliberately the one live measurement found. A refusal that
+     * started answering 503 — or that carried a Retry-After — would be saying
+     * "retry" in the HTTP envelope while the body said "reconcile".
+     */
+    it('keeps the status the bare 500 this replaces used', () => {
+      expect(GRPC_FALLBACK_REFUSAL_STATUS).toBe(500)
     })
   })
 

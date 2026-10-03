@@ -512,6 +512,23 @@ describe('GRPCServiceProxy', () => {
       'x-sync-command-digest': computeSyncCommandDigest(logicalSyncCommandPayload(payload)),
     })
 
+    /** Whatever was last written to the client, which on a refusal is the whole answer. */
+    const lastSentBody = () => send.mock.calls.at(-1)?.[0] as unknown
+
+    /**
+     * A refusal answers the status it always answered, with a closed-enum body
+     * and NOTHING else — no header (a `Retry-After` would say "retry" in the
+     * envelope while the body says "reconcile"), no second write, no HTTP leg.
+     */
+    const expectRefusedWith = (code: string) => {
+      expect(httpClient.request).not.toHaveBeenCalled()
+      expect(status).toHaveBeenCalledTimes(1)
+      expect(status).toHaveBeenCalledWith(500)
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(setHeader).not.toHaveBeenCalled()
+      expect(lastSentBody()).toEqual({ error: { code, message: expect.any(String), retryable: false } })
+    }
+
     it('serves a READ-ONLY sync over HTTP when the gRPC transport fails', async () => {
       failSyncWith({ code: Status.UNAVAILABLE })
 
@@ -535,53 +552,140 @@ describe('GRPCServiceProxy', () => {
       )
     })
 
-    it.each([
-      ['UNAVAILABLE', Status.UNAVAILABLE],
-      ['DEADLINE_EXCEEDED', Status.DEADLINE_EXCEEDED],
-      ['UNIMPLEMENTED', Status.UNIMPLEMENTED],
-      ['INTERNAL', Status.INTERNAL],
-    ])('NEVER re-delivers an un-deduplicated item write after a %s failure', async (_name, code) => {
+    /**
+     * EVERY gRPC status, not a sample. `GRPC_FALLBACK_ELIGIBILITY` for an
+     * un-deduplicated write is the empty set, and the cost of that set quietly
+     * growing an entry is a duplicated user note — so the taxonomy is pinned
+     * here at the proxy, by enumeration, as well as in the module's own spec.
+     * A widened set makes one of these rows take the HTTP leg, and both the
+     * "no HTTP attempt" and the refusal-body assertions fail.
+     */
+    it.each(
+      (Object.values(Status).filter((value) => typeof value === 'number') as number[]).map((code) => [
+        Status[code] ?? String(code),
+        code,
+      ]) as [string, number][],
+    )('NEVER re-delivers an un-deduplicated item write after a %s failure', async (_name, code) => {
       failSyncWith({ code })
 
-      await expect(
-        buildProxy().callSyncingServer(
-          buildRequest(),
-          buildResponse({ user: { uuid: 'u-1' } }),
-          'items/sync',
-          savePayload,
-        ),
-      ).rejects.toMatchObject({ code })
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        savePayload,
+      )
 
-      expect(httpClient.request).not.toHaveBeenCalled()
-      expect(send).not.toHaveBeenCalled()
-      expect(status).not.toHaveBeenCalled()
+      expectRefusedWith('SYNC_WRITE_OUTCOME_UNKNOWN')
       expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
         degradedCalls: 0,
         refusedCalls: 1,
       })
       expect(logger.error).toHaveBeenCalledWith(
         'Item sync failed over gRPC and must NOT be re-delivered over HTTP; surfacing the failure.',
-        expect.objectContaining({ replaySafety: 'non-idempotent-mutation' }),
+        expect.objectContaining({
+          replaySafety: 'non-idempotent-mutation',
+          refusalCode: 'SYNC_WRITE_OUTCOME_UNKNOWN',
+        }),
       )
     })
 
     it('NEVER re-delivers an un-deduplicated item write even when nothing was dispatched', async () => {
       ;(syncingServerProxy.sync as jest.Mock).mockRejectedValue(new Error('mapper exploded'))
 
-      await expect(
-        buildProxy().callSyncingServer(
-          buildRequest(),
-          buildResponse({ user: { uuid: 'u-1' } }),
-          'items/sync',
-          savePayload,
-        ),
-      ).rejects.toThrow('mapper exploded')
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        savePayload,
+      )
 
-      expect(httpClient.request).not.toHaveBeenCalled()
+      expectRefusedWith('SYNC_WRITE_OUTCOME_UNKNOWN')
       expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
         refusedCalls: 1,
         lastFailureClass: 'never-dispatched',
       })
+    })
+
+    /**
+     * The defect this answers (measured live at `44c3c59b`): the refusal was a
+     * bare `500` with an empty body, so the one failure the design expects the
+     * client to RECOVER from was indistinguishable from any other `500`.
+     *
+     * The body must carry the code and the retryability flag and nothing the
+     * caller sent or the gateway knows. Every sentinel below is planted in an
+     * input that reaches `fallBackFromSyncGRPC`: the request path and endpoint,
+     * the item uuid, the user uuid, the upstream gRPC error's own message,
+     * details and stack, and the gateway's syncing-server URL. The failure class
+     * and the lane are checked too — those are the gateway's, not the client's.
+     */
+    it('answers a coded refusal that leaks neither the request nor the transport', async () => {
+      failSyncWith({
+        code: Status.UNAVAILABLE,
+        message: 'grpc-message-sentinel',
+        details: 'grpc-details-sentinel',
+        stack: 'Error: grpc-stack-sentinel\n    at nowhere',
+      })
+
+      await buildProxy().callSyncingServer(
+        buildRequest({
+          url: '/v1/items?path-sentinel=1',
+          query: { 'query-sentinel': '1' } as never,
+          headers: { 'x-snjs-version': 'snjs-sentinel' } as never,
+        }),
+        buildResponse({ user: { uuid: 'user-uuid-sentinel' }, roles: ['role-sentinel'] }),
+        // The gRPC lane is only taken for this exact endpoint, so the endpoint
+        // cannot carry a sentinel; the literal is asserted absent below instead.
+        'items/sync',
+        { api: '20200115', items: [{ uuid: 'item-uuid-sentinel', content: 'content-sentinel' }] },
+      )
+
+      const serialized = JSON.stringify(lastSentBody())
+      expect(JSON.parse(serialized)).toEqual({
+        error: { code: 'SYNC_WRITE_OUTCOME_UNKNOWN', message: expect.any(String), retryable: false },
+      })
+      for (const sentinel of [
+        'path-sentinel',
+        'query-sentinel',
+        'snjs-sentinel',
+        'item-uuid-sentinel',
+        'content-sentinel',
+        'user-uuid-sentinel',
+        'role-sentinel',
+        'grpc-message-sentinel',
+        'grpc-details-sentinel',
+        'grpc-stack-sentinel',
+        'http://syncing',
+        'http://files',
+        'items/sync',
+        'channel-unavailable',
+        'items-sync',
+        String(Status.UNAVAILABLE),
+      ]) {
+        expect(serialized).not.toContain(sentinel)
+      }
+    })
+
+    /**
+     * The refusal must not read as "retry", and the one field a client would key
+     * a retry on has to say so. A mutation flipping this to `true` is the one
+     * that would cost a user a duplicated note.
+     */
+    it('never tells the client an un-deduplicated write is safe to repeat', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        savePayload,
+      )
+
+      const body = lastSentBody() as { error: { message: string; retryable: boolean } }
+      expect(body.error.retryable).toBe(false)
+      expect(body.error.message).toMatch(/\bunknown\b/iu)
+      expect(body.error.message).toMatch(/\breconcile\b/iu)
+      expect(body.error.message).not.toMatch(/retry|try again|resend|send it again/iu)
+      expect(setHeader).not.toHaveBeenCalledWith('Retry-After', expect.anything())
     })
 
     /**
@@ -620,20 +724,24 @@ describe('GRPCServiceProxy', () => {
      * their content limit", and the gateway publishes a ContentSizesFixRequested
      * event on it. Replaying it over HTTP would re-ask an answered question and
      * risk firing that event twice — so even a ledger-keyed write stops here.
+     *
+     * A refused ledger-keyed write gets its OWN code: the outcome is unknown,
+     * but unlike an un-deduplicated one it is discoverable, because the command
+     * id the client supplied is what the syncing server's ledger keys its stored
+     * result on. "Ask what became of that id" is a different remedy from
+     * "reconcile against server state", so it is a different code.
      */
     it('refuses to re-deliver a durable-command write on RESOURCE_EXHAUSTED', async () => {
       failSyncWith({ code: Status.RESOURCE_EXHAUSTED })
 
-      await expect(
-        buildProxy().callSyncingServer(
-          buildRequest({ headers: commandHeadersFor(savePayload) as never }),
-          buildResponse({ user: { uuid: 'u-1' } }),
-          'items/sync',
-          savePayload,
-        ),
-      ).rejects.toMatchObject({ code: Status.RESOURCE_EXHAUSTED })
+      await buildProxy().callSyncingServer(
+        buildRequest({ headers: commandHeadersFor(savePayload) as never }),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        savePayload,
+      )
 
-      expect(httpClient.request).not.toHaveBeenCalled()
+      expectRefusedWith('SYNC_COMMAND_OUTCOME_UNKNOWN')
       expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
         degradedCalls: 0,
         refusedCalls: 1,
@@ -644,24 +752,28 @@ describe('GRPCServiceProxy', () => {
     it('treats a command key whose digest disagrees with the body as un-deduplicated', async () => {
       failSyncWith({ code: Status.UNAVAILABLE })
 
-      await expect(
-        buildProxy().callSyncingServer(
-          buildRequest({
-            headers: { 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'b'.repeat(64) } as never,
-          }),
-          buildResponse({ user: { uuid: 'u-1' } }),
-          'items/sync',
-          savePayload,
-        ),
-      ).rejects.toBeDefined()
+      await buildProxy().callSyncingServer(
+        buildRequest({
+          headers: { 'x-sync-command-id': 'command-1', 'x-sync-command-digest': 'b'.repeat(64) } as never,
+        }),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        savePayload,
+      )
 
-      expect(httpClient.request).not.toHaveBeenCalled()
+      expectRefusedWith('SYNC_WRITE_OUTCOME_UNKNOWN')
       expect(logger.error).toHaveBeenCalledWith(
         'Item sync failed over gRPC and must NOT be re-delivered over HTTP; surfacing the failure.',
         expect.objectContaining({ replaySafety: 'non-idempotent-mutation' }),
       )
     })
 
+    /**
+     * A refused READ is a third case and says so. It is only reachable on the
+     * classes the backend's own handler answered with — every transport fault a
+     * read may cross transports on was already served over HTTP — so the copy
+     * reports that nothing was written rather than an unknown outcome.
+     */
     it.each([
       ['UNKNOWN, the backend catch-all', Status.UNKNOWN],
       ['CANCELLED', Status.CANCELLED],
@@ -669,17 +781,39 @@ describe('GRPCServiceProxy', () => {
     ])('surfaces a %s failure even for a read-only sync', async (_name, code) => {
       failSyncWith({ code })
 
-      await expect(
-        buildProxy().callSyncingServer(
-          buildRequest(),
-          buildResponse({ user: { uuid: 'u-1' } }),
-          'items/sync',
-          pollPayload,
-        ),
-      ).rejects.toMatchObject({ code })
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        pollPayload,
+      )
 
-      expect(httpClient.request).not.toHaveBeenCalled()
+      expectRefusedWith('SYNC_TRANSPORT_READ_FAILED')
       expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({ refusedCalls: 1 })
+    })
+
+    /**
+     * The other half of the contract: changing how a refusal is REPORTED must
+     * not change what is refused. An eligible read still takes the HTTP leg and
+     * the client gets the service's answer in the ordinary envelope — never a
+     * refusal body.
+     */
+    it('leaves an ELIGIBLE failure on the HTTP leg, with no refusal body in sight', async () => {
+      failSyncWith({ code: Status.UNAVAILABLE })
+
+      await buildProxy().callSyncingServer(
+        buildRequest(),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items/sync',
+        pollPayload,
+      )
+
+      expect(httpClient.request).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(lastSentBody())).not.toContain('SYNC_')
+      expect(grpcTransportFallbackDiagnostics.report().lanes['items-sync']).toMatchObject({
+        degradedCalls: 1,
+        refusedCalls: 0,
+      })
     })
 
     it('leaves the response untouched by the failed gRPC attempt before handing it to HTTP', async () => {
