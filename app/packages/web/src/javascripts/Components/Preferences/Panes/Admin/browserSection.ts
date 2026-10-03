@@ -750,18 +750,18 @@ export async function observeBrowserCapabilities(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Every remedy in this section is a change the person at the keyboard makes, not
- * a change to the deployment — with one exception, the insecure context, which is
- * genuinely a serving decision.
+ * Almost every remedy in this section is a change the person at the keyboard
+ * makes, not a change to the deployment — allow site data, leave the private
+ * window, update the browser, turn on network time, free some disk. That is what
+ * `device` means, and the chip reading "On this device" is the whole instruction
+ * before the operator has read a word of the steps.
  *
- * `RemedyEffort` has no member for "change something in your own browser", so
- * `client-update` is used for those and every summary says plainly that no server
- * change helps. That is the honest half of that label's own documentation
- * ("Needs a newer client build; no server change helps") and the mismatch is
- * recorded here rather than papered over: a `browser` effort belongs in
- * `diagnosticRemedies.ts`, which this change is not permitted to edit.
+ * Three findings are deliberately NOT device-side. `INSECURE_CONTEXT` and the
+ * insecure-context arm of `WEB_CRYPTO_UNAVAILABLE` are a serving decision, so they
+ * are `restart`; `BROWSER_OFFLINE` is `wait`. None of the ten is `client-update`:
+ * nothing here is waiting on a newer build of this app.
  */
-const BROWSER_SIDE: RemedyEffort = 'client-update'
+const BROWSER_SIDE: RemedyEffort = 'device'
 
 function remedyForInsecureContext(loopback: boolean | undefined): Remedy {
   return {
@@ -804,7 +804,7 @@ function remedyForMissingWebCrypto(secureContext: boolean | undefined): Remedy {
   return {
     code: 'WEB_CRYPTO_UNAVAILABLE',
     summary:
-      'This browser exposes no crypto.subtle in a context that should have it. The app cannot encrypt or decrypt anything without it, and no server setting changes that.',
+      'This browser exposes no crypto.subtle in a context that should have it. The app cannot encrypt or decrypt anything without it, so this browser cannot open a vault until it is updated or whatever replaced window.crypto is removed.',
     steps: [
       'Update the browser. Web Crypto has shipped everywhere for years, so an absence in a secure context usually means a browser or WebView old enough that other things will break too.',
       'Try a clean profile with extensions disabled. A content blocker or hardening extension that replaces window.crypto is the other common cause.',
@@ -841,7 +841,7 @@ function remedyForUnsupportedTransport(missing: readonly string[]): Remedy {
     code: 'TRANSPORT_UNSUPPORTED_BROWSER',
     summary: `The realtime sync lane needs Worker, WebSocket and IndexedDB, and this browser is missing ${missing.join(', ')}. The transport refuses to build the lane and syncs over HTTP instead.`,
     steps: [
-      'Expect the WebSocket section to report the lane as unavailable with the reason unsupported-browser. That is this row, not a server fault, and no deployment change will clear it.',
+      'Expect the WebSocket section to report the lane as unavailable with the reason unsupported-browser. That is this row restated, not a second fault, and the fix for both is here.',
       'Leave private browsing, or allow site data for this origin: a private window is the usual reason IndexedDB disappears from an otherwise capable browser.',
       'Update the browser if the Worker or WebSocket constructor is the missing one; both have been universal for a decade and their absence means something is stripping them.',
     ],
@@ -896,7 +896,7 @@ function remedyForClockSkew(): Remedy {
   return {
     code: 'CLIENT_CLOCK_SKEW',
     summary:
-      "This device's clock disagrees with the server's by enough to break token and ticket expiry. Fix the clock; nothing on the server can compensate for it.",
+      "This device's clock disagrees with the server's by enough to break token and ticket expiry. Fix the clock on this device and the symptom goes with it.",
     steps: [
       'Turn on automatic date and time (network time) on this device and let it resync.',
       'In a container or VM, check the host clock as well: a suspended host resumes with a clock that is behind by exactly the time it slept.',

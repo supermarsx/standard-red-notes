@@ -11,6 +11,7 @@ import {
   type SubtleCryptoLike,
   type WebStorageLike,
 } from './browserSection'
+import { EFFORT_LABEL } from './diagnosticRemedies'
 import type { DiagnosticFinding, DiagnosticRow, SectionModel } from './diagnosticsSections'
 
 /**
@@ -637,7 +638,7 @@ describe('buildBrowserSection when a capability is absent', () => {
     const model = await sectionFor(healthyRuntime({ crypto: undefined }))
     const crypto = findingOf(model, 'WEB_CRYPTO_UNAVAILABLE')
 
-    expect(crypto?.remedy?.effort).toBe('client-update')
+    expect(crypto?.remedy?.effort).toBe('device')
     expect(crypto?.remedy?.because.join(' ')).toContain('secure context')
     expect(codesOf(model)).not.toContain('INSECURE_CONTEXT')
   })
@@ -681,7 +682,7 @@ describe('buildBrowserSection when a capability is absent', () => {
     expect(write.value).toBe('mismatch')
     expect(write.verdict).toBe('broken')
     expect(write.evidence.kind).toBe('direct')
-    expect(findingOf(model, 'LOCAL_STORAGE_UNWRITABLE')?.remedy?.effort).toBe('client-update')
+    expect(findingOf(model, 'LOCAL_STORAGE_UNWRITABLE')?.remedy?.effort).toBe('device')
   })
 
   it('reports disabled cookies, a missing clipboard and an offline flag as findings', async () => {
@@ -781,6 +782,102 @@ describe('buildBrowserSection when a capability is absent', () => {
     expect(new Set(codes).size).toBe(codes.length)
     expect(model.worstVerdict).toBe('broken')
     expect(model.headline?.verdict).toBe('broken')
+  })
+
+  /**
+   * The effort chip is the first thing read on a remedy and for most of this
+   * section it is the whole instruction, so it has to be the right word.
+   *
+   * Nothing here waits on a newer build of this app: every finding is either a
+   * change on this device, a serving decision, or something to wait out. This
+   * asserts that over every finding at once rather than per remedy, because the
+   * way `client-update` got used for nine of them was one shared alias, and one
+   * shared alias is exactly what a per-remedy test leaves room for.
+   */
+  it('labels every finding by where its fix actually lives, and waits on no client release', async () => {
+    const model = await sectionFor(
+      healthyRuntime({
+        isSecureContext: false,
+        location: { protocol: 'http:', hostname: 'notes.example.test' },
+        crypto: undefined,
+        Worker: undefined,
+        indexedDB: undefined,
+        localStorage: { setItem: () => undefined, getItem: () => null, removeItem: () => undefined },
+        WebAssembly: undefined,
+        navigator: healthyNavigator({
+          cookieEnabled: false,
+          onLine: false,
+          clipboard: undefined,
+          storage: {
+            estimate: () => Promise.resolve({ usage: 99, quota: 100 }),
+            persisted: () => Promise.resolve(false),
+          },
+        }),
+      }),
+    )
+
+    const findings = allFindings(model)
+    expect(findings.length).toBeGreaterThanOrEqual(7)
+
+    for (const finding of findings) {
+      expect(finding.remedy).toBeDefined()
+      expect(finding.remedy?.effort).not.toBe('client-update')
+      expect(['device', 'restart', 'wait']).toContain(finding.remedy?.effort)
+    }
+
+    // The three that are deliberately not device-side, named so that moving one
+    // onto `device` has to be a deliberate edit here too.
+    expect(findingOf(model, 'INSECURE_CONTEXT')?.remedy?.effort).toBe('restart')
+    expect(findingOf(model, 'WEB_CRYPTO_UNAVAILABLE')?.remedy?.effort).toBe('restart')
+    expect(findingOf(model, 'BROWSER_OFFLINE')?.remedy?.effort).toBe('wait')
+
+    for (const code of [
+      'TRANSPORT_UNSUPPORTED_BROWSER',
+      'LOCAL_STORAGE_UNWRITABLE',
+      'ORIGIN_STORAGE_NEARLY_FULL',
+      'COOKIES_DISABLED',
+      'CLIPBOARD_WRITE_UNAVAILABLE',
+    ]) {
+      expect(findingOf(model, code)?.remedy?.effort).toBe('device')
+    }
+
+    // The chip text, not just the key: "Client update" beside "allow site data"
+    // was the mismatch this member exists to end.
+    expect(EFFORT_LABEL.device).toBe('On this device')
+    expect(EFFORT_LABEL.device).not.toBe(EFFORT_LABEL['client-update'])
+  })
+
+  /**
+   * The summaries no longer have to apologise for their own chip.
+   *
+   * Every device-side summary used to carry a sentence saying no server change
+   * helps, because the chip said "Client update" and the sentence was the only
+   * place the truth could go. The chip says it now, so a summary that still says
+   * it is saying it twice.
+   */
+  it('leaves the "no server change helps" disclaimer to the chip', async () => {
+    const model = await sectionFor(
+      healthyRuntime({
+        crypto: undefined,
+        navigator: healthyNavigator({ cookieEnabled: false, clipboard: undefined }),
+      }),
+    )
+    const clockModel = buildBrowserSection({
+      observations: await observeBrowserCapabilities(healthyRuntime()),
+      clock: { serverCapturedAtMs: 1_000_000, localReceivedAtMs: 1_000_000 + 600_000 },
+    })
+
+    for (const finding of [...allFindings(model), ...allFindings(clockModel)]) {
+      if (finding.remedy?.effort !== 'device') {
+        continue
+      }
+      expect(finding.remedy.summary).not.toContain('no server setting')
+      expect(finding.remedy.summary).not.toContain('nothing on the server')
+      expect(finding.remedy.summary).not.toContain('no server change')
+    }
+
+    expect(findingOf(clockModel, 'CLIENT_CLOCK_SKEW')?.remedy?.effort).toBe('device')
+    expect(findingOf(clockModel, 'CLIENT_CLOCK_SKEW')?.remedy?.summary).toContain('Fix the clock on this device')
   })
 })
 
@@ -955,7 +1052,7 @@ describe('buildBrowserSection clock block', () => {
     expect(rowOf(broken, 'Offset from the server clock').value).toBe('10m 0s behind the server')
     expect(rowOf(broken, 'Offset from the server clock').verdict).toBe('broken')
     expect(findingOf(broken, 'CLIENT_CLOCK_SKEW')?.verdict).toBe('broken')
-    expect(findingOf(broken, 'CLIENT_CLOCK_SKEW')?.remedy?.effort).toBe('client-update')
+    expect(findingOf(broken, 'CLIENT_CLOCK_SKEW')?.remedy?.effort).toBe('device')
   })
 
   it('invents no request when there is no server timestamp to compare against', () => {

@@ -14,6 +14,7 @@ import {
   LANE_REJECTION_STATUSES,
   outcomesForSection,
   PERCENT_BUCKETS,
+  PROXY_RELATIONS,
   reportLine,
   safeConstant,
   safeCount,
@@ -35,7 +36,9 @@ import {
   worstVerdictOf,
   type DiagnosticBlock,
   type DiagnosticRow,
+  type Evidence,
   type SectionTaggedOutcome,
+  type Verdict,
 } from './diagnosticsSections'
 import { TONES } from './syncDiagnostics'
 
@@ -288,6 +291,127 @@ describe('Evidence — a row may not claim more than its source establishes', ()
 
     expect(row.verdict).toBe('undetermined')
     expect(row.caveat).toContain('does not establish')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The caveat is a claim too                                                */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * The defect these pin, which shipped latent in the first version of the
+   * contract.
+   *
+   * Nothing caps an `informational` or an `undetermined` claim — there is nothing
+   * stronger for either to be reduced to — so `verdict === claimed`, so the
+   * UNCAPPED caveat branch ran, and that branch printed one sentence for every
+   * proxy: "a condition X requires. Its failure is conclusive." That is true of a
+   * necessary condition and false of a correlated one, so a row whose author had
+   * explicitly written `necessaryCondition: false` got a sentence asserting a
+   * logical relationship nobody declared. The verdict was right and the caveat
+   * beside it overstated, which is this module's own defect one level down.
+   *
+   * `browserSection.ts` happens to mark every one of its proxies
+   * `necessaryCondition: true`, so nothing on screen was wrong — these cases exist
+   * so that the next section to write the natural thing is not the one that finds
+   * out.
+   */
+  const CORRELATED = evidenceProxy({
+    observed: 'that a Redis push bridge is attached',
+    cannotConfirm: 'that this client receives pushes',
+    necessaryCondition: false,
+  })
+
+  it.each<Verdict>(['informational', 'undetermined'])(
+    'does not call a correlated signal conclusive on an uncapped %s claim',
+    (verdict) => {
+      const row = diagnosticRow({
+        label: safeConstant('Push bridge'),
+        value: safeState(true, 'attached', 'not attached'),
+        verdict,
+        evidence: CORRELATED,
+        note: 'note',
+      })
+
+      expect(row.claimed).toBe(verdict)
+      expect(row.verdict).toBe(verdict)
+      expect(row.caveat).toBeDefined()
+      expect(row.caveat).not.toContain('conclusive')
+      expect(row.caveat).toContain('without being required by it')
+      expect(row.caveat).toContain('Neither its success nor its failure establishes')
+    },
+  )
+
+  it('does call a NECESSARY condition conclusive, which is the one relation that is', () => {
+    const row = diagnosticRow({
+      label: safeConstant('Push bridge'),
+      value: safeState(true, 'attached', 'not attached'),
+      verdict: 'informational',
+      evidence: PROXY,
+      note: 'note',
+    })
+
+    expect(row.verdict).toBe('informational')
+    expect(row.caveat).toContain('Its failure is conclusive')
+  })
+
+  /**
+   * The invariant itself, over the whole matrix rather than over the cases
+   * somebody thought of. A caveat may assert conclusiveness only where the
+   * evidence declared a necessary condition — on any verdict, on a row or on a
+   * finding.
+   */
+  it.each<[string, Evidence, boolean]>([
+    ['direct evidence', EVIDENCE_DIRECT, false],
+    ['absent evidence', EVIDENCE_ABSENT, false],
+    ['a correlated proxy', CORRELATED, false],
+    ['a necessary-condition proxy', PROXY, true],
+  ])('only lets %s claim conclusiveness when it has it', (_name, evidence, mayClaimConclusive) => {
+    for (const verdict of VERDICTS) {
+      const row = diagnosticRow({
+        label: safeConstant('Push bridge'),
+        value: safeConstant('attached'),
+        verdict,
+        evidence,
+        note: 'note',
+      })
+      const finding = diagnosticFinding({
+        code: safeConstant('PUSH_BRIDGE_UNCONFIRMED'),
+        title: 'title',
+        detail: 'detail',
+        verdict,
+        evidence,
+      })
+
+      for (const caveat of [row.caveat ?? '', finding.caveat ?? '']) {
+        if (!mayClaimConclusive) {
+          expect(caveat).not.toContain('conclusive')
+        }
+      }
+
+      expect(row.caveat).toBe(finding.caveat)
+    }
+  })
+
+  it('writes one caveat sentence per declared proxy relation, and no two alike', () => {
+    const sentences = PROXY_RELATIONS.map(
+      (relation) =>
+        diagnosticRow({
+          label: safeConstant('Push bridge'),
+          value: safeConstant('attached'),
+          verdict: 'informational',
+          evidence: evidenceProxy({
+            observed: 'that a Redis push bridge is attached',
+            cannotConfirm: 'that this client receives pushes',
+            necessaryCondition: relation === 'necessary',
+          }),
+          note: 'note',
+        }).caveat,
+    )
+
+    for (const sentence of sentences) {
+      expect(sentence).toBeTruthy()
+    }
+    expect(new Set(sentences).size).toBe(PROXY_RELATIONS.length)
   })
 
   it.each([...VERDICTS])('collapses a %s verdict to undetermined when nothing was reported', (verdict) => {

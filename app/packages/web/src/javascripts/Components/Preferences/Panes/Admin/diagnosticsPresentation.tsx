@@ -45,10 +45,17 @@ export const Chip: FunctionComponent<{ tone: Tone; children: string }> = ({ tone
   </span>
 )
 
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The tone reads as "how reachable is this
+ * fix from here": `restart` and `device` are both something the reader can do now,
+ * `rebuild` and `client-update` need a build they may not control, `none` is a
+ * dead end and `wait` is not a fix at all.
+ */
 export const EFFORT_TONE: Record<RemedyEffort, Tone> = {
   restart: 'good',
   rebuild: 'warn',
   'client-update': 'warn',
+  device: 'good',
   none: 'bad',
   wait: 'neutral',
 }

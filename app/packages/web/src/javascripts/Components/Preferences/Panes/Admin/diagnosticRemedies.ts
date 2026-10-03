@@ -52,15 +52,25 @@ export type DeploymentTopology = {
 }
 
 /**
- * How expensive the fix is. This is the field the user asked for by name: an
- * operator staring at a broken deployment needs to know whether they are one
- * environment variable and a restart away, or whether nothing short of a rebuild
- * will do.
+ * How expensive the fix is, and WHERE it lives. This is the field the user asked
+ * for by name: an operator staring at a broken deployment needs to know whether
+ * they are one environment variable and a restart away, or whether nothing short
+ * of a rebuild will do.
+ *
+ * `device` is the member for a fix that is not on the deployment at all. The
+ * Browser section's findings are almost all of that kind — allow site data, leave
+ * the private window, update the browser, turn on network time — and before this
+ * member existed they had to borrow `client-update`, whose meaning is close ("no
+ * server change helps") and whose LABEL, "Client update", is wrong: it sends an
+ * operator looking for a release that does not exist instead of at the setting in
+ * front of them. The two are kept apart because one is a change the person at the
+ * keyboard can make right now and the other is one they cannot make at all.
  */
 export type RemedyEffort =
   | 'restart' /** Change configuration and restart the container. No image rebuild. */
   | 'rebuild' /** The image itself must be rebuilt; configuration cannot reach it. */
   | 'client-update' /** Needs a newer client build; no server change helps. */
+  | 'device' /** A setting, version or condition on the machine in front of the operator. */
   | 'none' /** Nothing configuration can do in this topology. */
   | 'wait' /** Transient or mid-boot; re-read rather than change anything. */
 
@@ -68,6 +78,7 @@ export const EFFORT_LABEL: Record<RemedyEffort, string> = {
   restart: 'Config + restart',
   rebuild: 'Rebuild required',
   'client-update': 'Client update',
+  device: 'On this device',
   none: 'Not fixable here',
   wait: 'Transient',
 }

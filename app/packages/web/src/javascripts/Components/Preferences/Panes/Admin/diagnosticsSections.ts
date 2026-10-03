@@ -87,6 +87,18 @@ import type { CapabilityTestOutcome, Tone } from './syncDiagnostics'
  * it does not establish, so the screen says why it is withholding the stronger
  * claim instead of silently downgrading.
  *
+ * The caveat is held to the same standard as the verdict, because the first
+ * version of this file was not. It printed "a condition X requires. Its failure
+ * is conclusive" for EVERY uncapped proxy row. That is true of a necessary
+ * condition and false of a merely correlated one — and an `informational` or
+ * `undetermined` claim is not capped on either, so `verdict === claimed` held and
+ * the sentence went out over a signal whose author had explicitly declared
+ * `necessaryCondition: false`. A caveat that overstates is this file's own defect
+ * one level down. So the proxy arm stores a CLOSED `ProxyRelation` instead of the
+ * boolean it is derived from, and BOTH the cap and the sentence are selected from
+ * it by exhaustive `Record`s: a relation nobody wrote a sentence for fails
+ * compilation rather than inheriting the other relation's.
+ *
  * -------------------------------------------------------------------------------
  * 3. "Could not determine" is a state, not a shade of "unavailable".
  * -------------------------------------------------------------------------------
@@ -356,34 +368,63 @@ export const TONE_FOR_VERDICT: Record<Verdict, Tone> = {
 }
 
 /**
- * What a verdict rests on.
+ * How a proxy signal relates, LOGICALLY, to the thing the row describes — as a
+ * VALUE as well as a type, so "exhaustive over the relations" is checkable by a
+ * test and not only by the compiler.
  *
- * `proxy` carries prose because the prose IS the mechanism: a capped row has to
- * be able to say "this reads that the gRPC proxy is bound, which does not
- * establish that the handshake advertises SYNC_ITEMS".
+ * It is a closed set rather than the boolean a section author supplies because
+ * TWO different things are derived from it — whether a `broken` claim survives,
+ * and which caveat sentence is printed — and the second of those was once derived
+ * by falling out of the bottom of an `if`, which is how the "its failure is
+ * conclusive" sentence came to be printed over a merely correlated signal.
+ *
+ * `necessary` — the thing described cannot work unless the observed signal holds.
+ * Its failure is conclusive; its success establishes nothing.
+ * `correlated` — the signal travels with the thing described but is not required
+ * by it. Neither its success nor its failure establishes anything.
  */
-export type Evidence =
-  | { readonly kind: 'direct' }
-  | {
-      readonly kind: 'proxy'
-      /** What was actually read, in this build's words. */
-      readonly observed: string
-      /** The thing the row is ABOUT, which the observation only implies. */
-      readonly cannotConfirm: string
-      /**
-       * True when the observed signal is a NECESSARY condition of the thing
-       * described. A necessary condition failing is conclusive, so a `broken`
-       * verdict survives; a merely correlated signal establishes nothing in
-       * either direction and caps to `undetermined`.
-       */
-      readonly necessaryCondition: boolean
-    }
-  | { readonly kind: 'absent' }
+export const PROXY_RELATIONS = ['necessary', 'correlated'] as const
+
+export type ProxyRelation = (typeof PROXY_RELATIONS)[number]
+
+/**
+ * A weaker signal standing in for the thing a row describes.
+ *
+ * It carries prose because the prose IS the mechanism: a capped row has to be
+ * able to say "this reads that the gRPC proxy is bound, which does not establish
+ * that the handshake advertises SYNC_ITEMS".
+ */
+export type ProxyEvidence = {
+  readonly kind: 'proxy'
+  /** What was actually read, in this build's words. */
+  readonly observed: string
+  /** The thing the row is ABOUT, which the observation only implies. */
+  readonly cannotConfirm: string
+  /**
+   * The logical relationship, closed. Stored instead of the boolean it is built
+   * from so that nothing downstream can branch on it with an `else`.
+   */
+  readonly relation: ProxyRelation
+}
+
+/** What a verdict rests on. */
+export type Evidence = { readonly kind: 'direct' } | ProxyEvidence | { readonly kind: 'absent' }
 
 export const EVIDENCE_DIRECT: Evidence = { kind: 'direct' }
 
 export const EVIDENCE_ABSENT: Evidence = { kind: 'absent' }
 
+/**
+ * `necessaryCondition` stays a boolean at this boundary deliberately: it is the
+ * one bit a section author actually decides, every section in the tree already
+ * states it that way, and this is the single expression in the codebase that
+ * turns it into the closed relation everything else reads.
+ *
+ * True when the observed signal is a NECESSARY condition of the thing described.
+ * A necessary condition failing is conclusive, so a `broken` verdict survives; a
+ * merely correlated signal establishes nothing in either direction and caps to
+ * `undetermined`.
+ */
 export function evidenceProxy(input: {
   observed: string
   cannotConfirm: string
@@ -393,7 +434,7 @@ export function evidenceProxy(input: {
     kind: 'proxy',
     observed: input.observed,
     cannotConfirm: input.cannotConfirm,
-    necessaryCondition: input.necessaryCondition,
+    relation: input.necessaryCondition ? 'necessary' : 'correlated',
   }
 }
 
@@ -404,6 +445,32 @@ const ASSERTS_FUNCTION: Record<Verdict, boolean> = {
   broken: false,
   undetermined: false,
   informational: false,
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** Whether a `broken` claim survives on
+ * each relation. A necessary condition failing is conclusive; a correlated signal
+ * failing establishes nothing, so the claim caps to `undetermined`.
+ */
+const BROKEN_SURVIVES: Record<ProxyRelation, boolean> = {
+  necessary: true,
+  correlated: false,
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE — the fall-through WAS the bug, twice. ***
+ *
+ * The sentence printed on an UNCAPPED proxy row, which is the row that keeps its
+ * claim and therefore has to describe the relationship it kept it on. There is one
+ * sentence per relation and no default, so the `necessary` sentence — the one that
+ * asserts "its failure is conclusive" — cannot reach a `correlated` signal, which
+ * is exactly what it used to do for any `informational` or `undetermined` claim.
+ */
+const PROXY_CAVEAT: Record<ProxyRelation, (evidence: ProxyEvidence) => string> = {
+  necessary: (evidence) =>
+    `Indirect: this reads ${evidence.observed}, a condition ${evidence.cannotConfirm} requires. Its failure is conclusive; its success would not have been.`,
+  correlated: (evidence) =>
+    `Indirect: this reads ${evidence.observed}, which travels with ${evidence.cannotConfirm} without being required by it. Neither its success nor its failure establishes ${evidence.cannotConfirm}, so no verdict is claimed from it.`,
 }
 
 /**
@@ -420,7 +487,7 @@ function capVerdict(claimed: Verdict, evidence: Evidence): Verdict {
   if (ASSERTS_FUNCTION[claimed]) {
     return 'undetermined'
   }
-  if (claimed === 'broken' && !evidence.necessaryCondition) {
+  if (claimed === 'broken' && !BROKEN_SURVIVES[evidence.relation]) {
     return 'undetermined'
   }
   return claimed
@@ -438,7 +505,7 @@ function caveatFor(claimed: Verdict, verdict: Verdict, evidence: Evidence): stri
   if (verdict !== claimed) {
     return `This reads ${evidence.observed}, which does not establish ${evidence.cannotConfirm}. Reported as undetermined rather than claiming it.`
   }
-  return `Indirect: this reads ${evidence.observed}, a condition ${evidence.cannotConfirm} requires. Its failure is conclusive; its success would not have been.`
+  return PROXY_CAVEAT[evidence.relation](evidence)
 }
 
 /* -------------------------------------------------------------------------- */
