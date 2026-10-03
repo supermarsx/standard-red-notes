@@ -35,6 +35,22 @@ const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_O
  */
 const PLANTED_ENV_SHAPED_KEY = `${PLANTED_HEAD}_WWWWWWWWW_${PLANTED_MIDDLE}_WWWWWWWWW_${PLANTED_TAIL}`
 
+/**
+ * The same two shapes for the BOOT GATE's own strings. `PLANTED_OPAQUE` carries
+ * no scheme, no dot and no colon, so there is nothing in `sanitizeServerCopy`
+ * for any pattern to match; `PLANTED_SHAPED` is the same marker alphabet in upper
+ * snake case, which is the shape of a legitimate condition code and therefore
+ * the class a shape floor would admit.
+ */
+const PLANTED_OPAQUE = 'zqx7v2-kkmr9pt4-jjdw3bn8-xxhf6cs1-vvqz5gy0-ttnb8dk2'
+const PLANTED_SHAPED = 'ZQX7V2_KKMR9PT4_JJDW3BN8_XXHF6CS1_VVQZ5GY0'
+
+/** Head, middle and tail, 20 characters each — see the note above. */
+const windowsOf = (value: string): readonly string[] => {
+  const middle = Math.max(0, Math.floor((value.length - 20) / 2))
+  return [value.slice(0, 20), value.slice(middle, middle + 20), value.slice(-20)]
+}
+
 const payload: SyncDiagnosticsPayload = {
   capturedAt: '2026-08-27T00:00:00.000Z',
   deployment: {
@@ -577,12 +593,87 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     expect(report).toContain('- REDIS_URL: set (required)')
   })
 
+  /**
+   * *** THE SAME DEFECT IN `## Boot gate`, MEASURED. ***
+   *
+   * Four strings reached this block through `sanitizeServerCopy` alone: an unmet
+   * precondition's CODE on its own line, the server's REMEDY for it through
+   * `remedyForPrecondition`'s generic branch, a live refusal REASON, and the
+   * FILES_V1 sub-gate's CONDITION. A probe over the live stack's own payload
+   * settled what the denylist bought: a marker-built value with no address shape
+   * printed intact in all four, and so did one shaped exactly like a legitimate
+   * upper snake case condition code — the class a shape floor admits.
+   *
+   * The sweep above this one could not see any of it: it plants only
+   * address-shaped values, which a denylist AND a correct allowlist both catch,
+   * so it cannot discriminate between the two mechanisms.
+   */
+  it('counts the gate conditions, reasons and sub-gate conditions it cannot name, and names none of them', () => {
+    const hostile: SyncDiagnosticsPayload = {
+      ...payload,
+      gate: {
+        ...payload.gate,
+        unmetPreconditions: [
+          { code: PLANTED_OPAQUE, remedy: PLANTED_OPAQUE },
+          { code: PLANTED_SHAPED, remedy: PLANTED_SHAPED },
+        ],
+        unmetCodes: [PLANTED_OPAQUE, PLANTED_SHAPED],
+        files: { advertised: false, unmetCondition: PLANTED_SHAPED, remedy: PLANTED_OPAQUE },
+        host: { unmetCondition: PLANTED_OPAQUE, remedy: PLANTED_SHAPED },
+      },
+      live: { capabilities: [], unavailabilityReasons: [PLANTED_OPAQUE, PLANTED_SHAPED], ticketAvailable: false },
+    }
+    const report = buildDiagnosticsReport(input({ payload: hostile, sections: sections() }))
+
+    for (const fragment of [...windowsOf(PLANTED_OPAQUE), ...windowsOf(PLANTED_SHAPED)]) {
+      expect(report).not.toContain(fragment)
+    }
+    // The denylist is NOT what is doing the work: its presence here would mean it
+    // had been reinstated as the defence.
+    expect(report).not.toContain('[address withheld]')
+    // Every fact survives as a count.
+    expect(report).toContain('- Conditions this build does not recognise: 2')
+    expect(report).toContain('- Reasons this build does not recognise: 2')
+    expect(report).toContain('2 unmet conditions outside the closed set this build knows')
+    expect(report).toContain('- FILES_V1 advertised: no (a condition this build does not recognise)')
+  })
+
+  it('still names a condition, a reason and a sub-gate condition inside their closed sets', () => {
+    const report = buildDiagnosticsReport(
+      input({
+        payload: {
+          ...payload,
+          gate: {
+            ...payload.gate,
+            unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: PLANTED_OPAQUE }],
+            unmetCodes: ['REDIS_UNBOUND'],
+            files: { advertised: false, unmetCondition: 'VALET_TOKEN_SECRET', remedy: PLANTED_OPAQUE },
+          },
+          live: { capabilities: [], unavailabilityReasons: ['no-allowed-origins'], ticketAvailable: false },
+        },
+      }),
+    )
+
+    expect(report).toContain('  - REDIS_UNBOUND')
+    expect(report).toContain('  - no-allowed-origins')
+    expect(report).toContain('- FILES_V1 advertised: no (VALET_TOKEN_SECRET)')
+    // The remedies beside them are this build's own copy, naming the variable and
+    // never the server's sentence.
+    expect(report).toContain('WEBSOCKET_SYNC_ALLOWED_ORIGINS')
+    for (const fragment of windowsOf(PLANTED_OPAQUE)) {
+      expect(report).not.toContain(fragment)
+    }
+  })
+
   it('reports a zero rather than omitting the line, because none is a reading', () => {
     const report = buildDiagnosticsReport(
       input({ payload: { ...payload, protocol: { version: 1, serverOperations: ['SYNC_ITEMS'] } } }),
     )
 
     expect(report).toContain('- Operations this build does not recognise: 0')
+    // The same rule for the gate's own count: the fixture's one unmet condition
+    // IS one this build knows, and saying so is a reading rather than silence.
+    expect(report).toContain('- Conditions this build does not recognise: 0')
   })
 
   it('prints the presence count at zero, and omits it entirely when no presence block was reported', () => {

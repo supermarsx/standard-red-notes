@@ -133,6 +133,182 @@ type UnclassifiedSyncOperation = Exclude<
 type AssertNever<T extends never> = T
 export type EverySyncOperationIsClassified = AssertNever<UnclassifiedSyncOperation>
 
+/* -------------------------------------------------------------------------- */
+/* The gate's own closed vocabularies, and the admission that counts the rest  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * *** NAME ONLY WHAT THIS BUILD'S OWN CLOSED SET CONTAINS; COUNT THE REST. ***
+ *
+ * The same rule `CLIENT_KNOWN_OPERATIONS` states for operation names, applied to
+ * the four remaining families of server-chosen string this pane reads: boot-gate
+ * condition codes, the host's own condition, the gateway's live refusal reasons
+ * and the FILES_V1 sub-gate's condition.
+ *
+ * It is here rather than inferred from the payload type for the reason that type
+ * gives: `unmetPreconditions[].code` is declared `string` on purpose, because this
+ * build cannot be recompiled against the server it is talking to. A newer server's
+ * code is therefore REPRESENTABLE, and until these lists existed it was printed —
+ * through `sanitizeServerCopy`, which is a denylist and says so in its own
+ * comment. Measured on the live `srn-nightcheck` stack over its real payload, not
+ * theorised: a marker-built value with no address shape in each of these fields
+ * printed intact into the Overview, into the WebSocket section's findings and into
+ * the copyable report, which exists to be pasted into an issue; an upper
+ * snake case value shaped exactly like a legitimate condition code did the same,
+ * which is the class a shape floor admits.
+ *
+ * What the operator loses is a string they have never seen. What they keep is that
+ * there IS an unmet condition, how many, and which side of the wire the gap is on
+ * — which is the more useful pair, because a code this build cannot explain means
+ * the client is older than the server rather than that the deployment is broken.
+ */
+export const KNOWN_PRECONDITION_CODES = [
+  'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
+  'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION',
+  'REDIS_UNBOUND',
+  'SYNCING_SERVER_GRPC_UNBOUND',
+  'WEBSOCKET_REDIS_NAMESPACE_INVALID',
+] as const
+
+export type KnownPreconditionCode = (typeof KNOWN_PRECONDITION_CODES)[number]
+
+export const isKnownPreconditionCode = (value: unknown): value is KnownPreconditionCode =>
+  typeof value === 'string' && (KNOWN_PRECONDITION_CODES as readonly string[]).includes(value)
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each condition MEANS, in this
+ * build's own words.
+ *
+ * This is what the Overview prints beside the code, and it replaces the server's
+ * remedy string that used to be printed there. Not a loss: the stock server copy
+ * for `SYNCING_SERVER_GRPC_UNBOUND` is "configure SYNCING_SERVER_GRPC_URL", which
+ * `diagnosticRemedies.ts` documents at length as wrong in two different ways on
+ * the deployments most likely to be reading it. The deployment-conditional fix
+ * lives in the WebSocket section's remedy; this is the one sentence that says what
+ * the condition costs.
+ *
+ * *** IT NAMES THE VARIABLE. *** Naming the specific configuration item rather
+ * than its category is a property this pane holds on purpose and has a test of
+ * its own for, and a variable NAME is explicitly inside the presence-only
+ * contract — the names are in the compose files, and it is the VALUE that may
+ * never be printed. What is withheld here is the server's prose, not its nouns.
+ */
+export const PRECONDITION_MEANING: Record<KnownPreconditionCode, string> = {
+  WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING:
+    'WEB_SOCKET_CONNECTION_TOKEN_SECRET was not set when the container was configured, so the gateway signs no socket tickets and the lane is closed outright — every request is an HTTP request. It must be the same value on every replica that shares ticket state.',
+  WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION:
+    'WEBSOCKET_SYNC_ENABLED reads the exact string "false", which is the only value that disables the lane. This is a kill switch somebody set rather than a misconfiguration.',
+  REDIS_UNBOUND:
+    'No shared Redis state was bound — REDIS_URL is what binds it on a multi-container deployment, and CACHE_TYPE=memory suppresses the binding whatever REDIS_URL says — so the ticket, lease and socket-budget state several gateway replicas would share has nowhere to live and the lane is closed. A single container needs none of it and reports an in-process plane instead.',
+  SYNCING_SERVER_GRPC_UNBOUND:
+    'No durable gRPC syncing backend is bound, which withholds SYNC_ITEMS only: the socket stays up and keeps carrying collaboration, API RPC, invite events and files while notes sync over HTTP. The switch is SERVICE_PROXY_TYPE rather than SYNCING_SERVER_GRPC_URL — the gateway reads that URL only inside the gRPC branch — and on a single container the condition does not apply at all. The WebSocket section carries the fix for this deployment.',
+  WEBSOCKET_REDIS_NAMESPACE_INVALID:
+    'WEBSOCKET_REDIS_NAMESPACE is set to a value the gateway will not use, so the host refused to attach rather than publish this stack’s events onto a sibling stack’s un-namespaced channels. Tickets can mint while nothing is ever delivered.',
+}
+
+/** The gateway's live refusal reasons, as the closed set this build can name. */
+export const KNOWN_LIVE_REFUSAL_REASONS = [
+  'sync-not-configured',
+  'gateway-stopping',
+  'disabled-by-configuration',
+  'no-allowed-origins',
+  'ticket-store-unavailable',
+  'command-lease-store-unavailable',
+  'socket-budget-store-unavailable',
+  'authorization-adapter-unavailable',
+  'durable-backend-unavailable',
+  'invite-event-store-unavailable',
+] as const
+
+export type KnownLiveRefusalReason = (typeof KNOWN_LIVE_REFUSAL_REASONS)[number]
+
+export const isKnownLiveRefusalReason = (value: unknown): value is KnownLiveRefusalReason =>
+  typeof value === 'string' && (KNOWN_LIVE_REFUSAL_REASONS as readonly string[]).includes(value)
+
+/** Which FILES_V1 precondition the composition found missing, closed. */
+export const KNOWN_FILES_UNMET_CONDITIONS = [
+  'FILES_INTERNAL_URL',
+  'AUTH_JWT_SECRET',
+  'VALET_TOKEN_SECRET',
+  'TRANSPORT_CONSTRUCTION',
+] as const
+
+export type KnownFilesUnmetCondition = (typeof KNOWN_FILES_UNMET_CONDITIONS)[number]
+
+export const isKnownFilesUnmetCondition = (value: unknown): value is KnownFilesUnmetCondition =>
+  typeof value === 'string' && (KNOWN_FILES_UNMET_CONDITIONS as readonly string[]).includes(value)
+
+/**
+ * What a FILES_V1 condition is called when it is not one of this build's own. A
+ * literal from this file, so the field that carries it is incapable of carrying
+ * server text however many unrecognised conditions arrive.
+ */
+export const UNRECOGNISED_FILES_CONDITION = 'a condition this build does not recognise'
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each FILES_V1 condition means, in
+ * this build's own words and naming the variable — the same rule, for the same
+ * reason, as `PRECONDITION_MEANING` above.
+ */
+export const FILES_CONDITION_MEANING: Record<KnownFilesUnmetCondition, string> = {
+  FILES_INTERNAL_URL:
+    'No internal files-service URL was configured. FILES_INTERNAL_URL covers that whole group of variables, because any one of them satisfies the requirement. File uploads and downloads use ordinary HTTP requests instead — slower, with no other symptom.',
+  AUTH_JWT_SECRET:
+    'AUTH_JWT_SECRET was absent when the file transport was composed, so the transport was waived and file transfers use ordinary HTTP requests. That same key gates every other socket capability as well, so read the lane conditions with this.',
+  VALET_TOKEN_SECRET:
+    'VALET_TOKEN_SECRET was absent, so the file transport had nothing to sign valet tokens with and was waived. File transfers use ordinary HTTP requests.',
+  TRANSPORT_CONSTRUCTION:
+    'Every value was present and the adapter still threw, so file transfers use ordinary HTTP requests. The thrown message stays in the boot log on purpose — it can embed the resolved files-service address — so the log is where that one is read.',
+}
+
+/**
+ * The outcome of admitting a list of server-chosen strings against one of this
+ * build's own closed sets: the members, and HOW MANY were not members.
+ *
+ * *** IT CARRIES THE COUNT BESIDE THE NAMES ON PURPOSE. *** The same shape, for
+ * the same reason, as `buildEnvironmentPresence`: a consumer cannot take the names
+ * and silently drop the count, because there is no list to take on its own. A
+ * count with nothing beside it is what makes "this build cannot name it" readable
+ * as a fact rather than as a condition the panel decided not to mention.
+ */
+export type AdmittedMembers<T extends string> = {
+  readonly named: readonly T[]
+  readonly unnameable: number
+}
+
+/**
+ * Admit each value only if it IS one of `allowed`, and count the rest.
+ *
+ * `allowed` is always a tuple this build declared — there is no expression in this
+ * pane that derives one from the payload — so an admitted value is a literal the
+ * reader's own bundle already contains. Duplicates among the named are collapsed:
+ * a correct server sends none, and two identical findings are a duplicate key in
+ * the renderer as well as a duplicate row on screen. Unnameable values are counted
+ * as they arrive, because the count is of CONDITIONS the gate reported and
+ * deduplicating by a string nobody may read would be a comparison made public.
+ */
+export function admitMembers<T extends string>(values: readonly unknown[], allowed: readonly T[]): AdmittedMembers<T> {
+  const named: T[] = []
+  let unnameable = 0
+
+  for (const value of values) {
+    const member =
+      typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined
+    if (member === undefined) {
+      unnameable += 1
+      continue
+    }
+    if (!named.includes(member)) {
+      named.push(member)
+    }
+  }
+
+  return { named, unnameable }
+}
+
+/** `1 condition` / `2 conditions`, for the counted half of an admission. */
+export const countOf = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`
+
 /**
  * One lane's per-call gRPC fallback counters, as `transportFallback` reports them.
  *
@@ -562,7 +738,16 @@ export type Diagnosis = {
   findings: { title: string; detail: string }[]
 }
 
-const LIVE_REASON_COPY: Record<string, string> = {
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each refusal reason means.
+ *
+ * Keyed by the closed union rather than by `string`: while it was `Record<string,
+ * string>` a reason off the wire could be looked up in it, which made the lookup
+ * itself look like an admission and left the `??` fallback as the only thing
+ * standing between a server-chosen string and the screen. A reason added
+ * server-side now fails this file to compile instead.
+ */
+const LIVE_REASON_COPY: Record<KnownLiveRefusalReason, string> = {
   'sync-not-configured': 'The sync lane was never composed at boot — see the gate conditions above.',
   'gateway-stopping': 'The gateway is shutting down and is refusing new tickets. Expected during a restart.',
   'disabled-by-configuration': 'WEBSOCKET_SYNC_ENABLED is set to the exact string "false".',
@@ -1042,31 +1227,43 @@ export function diagnose(
     })
   }
 
-  // Every string below arrives from the server, so every one of them goes through
-  // the redactor on the way in. Codes and reasons are closed enums in a correct
-  // server, but "in a correct server" is exactly the assumption a leak breaks.
+  // *** NAMED ONLY WHERE THIS BUILD OWNS THE NAME; COUNTED OTHERWISE. ***
+  //
+  // Both the code and the server's remedy for it used to be printed here through
+  // `sanitizeServerCopy`. That is a denylist, and a live probe over this
+  // deployment's own payload settled what it is worth: a marker-built value with
+  // no address shape in either field printed intact onto this Overview, and so did
+  // one shaped exactly like a legitimate condition code. The remedy is server
+  // prose and belongs to no closed set, so it has no channel into this module at
+  // all now; the code is admitted against the set this build declares and the
+  // remainder is counted. `PRECONDITION_MEANING` is what each named condition
+  // costs, in this build's own words.
   const unmet = gate.unmetPreconditions ?? []
-  for (const precondition of unmet) {
-    findings.push({
-      title: sanitizeServerCopy(precondition.code ?? 'Unknown unmet condition'),
-      detail: sanitizeServerCopy(precondition.remedy ?? 'No remedy was reported for this condition.'),
-    })
-  }
 
   // The HOST's own condition. A current server already merges it into
-  // `unmetPreconditions`, so this fires only when it did not — and it is
+  // `unmetPreconditions`, so it is added only when that did not happen — and it is
   // deduplicated by code rather than trusted to be absent, because printing a
   // condition twice is a cosmetic fault and dropping one is the fault this
-  // whole block exists to prevent.
+  // whole block exists to prevent. It goes through the SAME admission: a host
+  // condition is a precondition code, and the one the host actually reports
+  // (`WEBSOCKET_REDIS_NAMESPACE_INVALID`) is a member of that set.
   const hostCondition = gate.host?.unmetCondition
   const hostConditionUnlisted =
     typeof hostCondition === 'string' &&
     hostCondition.length > 0 &&
     !unmet.some((precondition) => precondition.code === hostCondition)
-  if (hostConditionUnlisted) {
+
+  const conditions = admitMembers(
+    [...unmet.map((precondition) => precondition.code), ...(hostConditionUnlisted ? [hostCondition] : [])],
+    KNOWN_PRECONDITION_CODES,
+  )
+  for (const code of conditions.named) {
+    findings.push({ title: code, detail: PRECONDITION_MEANING[code] })
+  }
+  if (conditions.unnameable > 0) {
     findings.push({
-      title: sanitizeServerCopy(hostCondition),
-      detail: sanitizeServerCopy(gate.host?.remedy ?? 'No remedy was reported for this condition.'),
+      title: `The gate reports ${countOf(conditions.unnameable, 'unmet condition')} this build cannot explain`,
+      detail: `The server named a condition outside the closed set this build knows, so it is counted and never echoed — neither the code nor the server's own advice for it, because both are text the server chose and this screen is written to be pasted into an issue. There IS something unmet, and it is this client that cannot explain it rather than the deployment that failed to say: a client update restores the explanation, and the server's boot log names the condition in the meantime. This build knows ${KNOWN_PRECONDITION_CODES.join(', ')}.`,
     })
   }
 
@@ -1099,10 +1296,19 @@ export function diagnose(
   const unmetCount = unmet.length + (hostConditionUnlisted ? 1 : 0)
   const laneDown = gate.syncLaneEnabled === false || (gate.syncLaneEnabled === undefined && unmetCount > 0)
   if (!laneDown) {
-    for (const reason of live.unavailabilityReasons ?? []) {
+    // Admitted against this build's own list, for the reason the codes above are:
+    // the reason was printed here through the redactor, and an opaque one printed
+    // intact. A reason outside the set had no copy of its own anyway — it fell
+    // through to "The gateway reported this refusal reason", which says nothing
+    // the title did not — so a count is strictly more than it used to carry.
+    const reasons = admitMembers(live.unavailabilityReasons ?? [], KNOWN_LIVE_REFUSAL_REASONS)
+    for (const reason of reasons.named) {
+      findings.push({ title: reason, detail: LIVE_REASON_COPY[reason] })
+    }
+    if (reasons.unnameable > 0) {
       findings.push({
-        title: sanitizeServerCopy(reason),
-        detail: LIVE_REASON_COPY[reason] ?? 'The gateway reported this refusal reason.',
+        title: `The gateway reports ${countOf(reasons.unnameable, 'refusal reason')} this build cannot explain`,
+        detail: `The gateway is refusing tickets for a reason outside the closed set this build knows, so it is counted and never echoed: the reason is text the server chose, and this screen is written to be pasted into an issue. A client update restores the explanation. This build knows ${KNOWN_LIVE_REFUSAL_REASONS.join(', ')}.`,
       })
     }
   }
@@ -1151,9 +1357,19 @@ export function diagnose(
   }
 
   if (gate.files?.advertised === false && gate.files.unmetCondition) {
+    // The sub-gate's condition and the server's advice for it were both printed
+    // through the redactor, and both leaked an opaque value on this path. The
+    // condition is now admitted against this build's four, and the sentence beside
+    // it is this build's own copy for the admitted member — the server's remedy
+    // has no channel here at all.
+    const condition = gate.files.unmetCondition
+    const named = isKnownFilesUnmetCondition(condition) ? condition : undefined
     findings.push({
-      title: `FILES_V1 not advertised (${sanitizeServerCopy(gate.files.unmetCondition)})`,
-      detail: sanitizeServerCopy(gate.files.remedy ?? 'The realtime file transport was waived at boot.'),
+      title: `FILES_V1 not advertised (${named ?? UNRECOGNISED_FILES_CONDITION})`,
+      detail:
+        named === undefined
+          ? `File transfers use ordinary HTTP requests. The condition the gate named is outside the closed set this build knows, so it is not echoed and neither is the server's advice for it: both are text the server chose, and this screen is written to be pasted into an issue. A client update restores the explanation. This build knows ${KNOWN_FILES_UNMET_CONDITIONS.join(', ')}.`
+          : FILES_CONDITION_MEANING[named],
     })
   }
 

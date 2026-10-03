@@ -68,7 +68,39 @@ const SECRETS = [
   // a presence KEY, which is a string the server chooses as much as any value,
   // and a sweep built only from the entries above passed over it.
   'PLANTED_VARIABLE_SHAPED_SENTINEL',
+  // [6] and [7], appended for the same reason, for the BOOT GATE's own strings.
+  //
+  // *** THE DIMENSION THIS SWEEP WAS BLIND TO. *** Until these existed the
+  // poisoned payload below carried a clean `REDIS_UNBOUND` in
+  // `unmetPreconditions[].code`, a clean `sync-not-configured` in
+  // `unavailabilityReasons`, a clean `FILES_INTERNAL_URL` in
+  // `files.unmetCondition`, no `host` block at all, and ADDRESS-SHAPED values in
+  // the two remedy fields — which a denylist and a correct allowlist both catch,
+  // so they could not discriminate between the two mechanisms. Seven fields were
+  // leaking through this sweep: a probe over the live stack's own payload printed
+  // a marker-built value intact out of every one of them.
+  //
+  // [6] is opaque: no scheme, no dot, no colon, nothing for any pattern in
+  // `sanitizeServerCopy` to match. [7] is the same marker alphabet in upper snake
+  // case, which is the shape of a legitimate condition code.
+  'zqx7v2-kkmr9pt4-jjdw3bn8-xxhf6cs1-vvqz5gy0-ttnb8dk2',
+  'ZQX7V2_KKMR9PT4_JJDW3BN8_XXHF6CS1_VVQZ5GY0',
 ]
+
+/**
+ * Head, middle and tail of a planted value, 20 characters each.
+ *
+ * The sweep asserts on these rather than on whole strings, because a whole-string
+ * assertion is the one that passes vacuously against a TRUNCATED leak: the bytes
+ * that escaped are then a substring nobody checked. The middle and tail windows
+ * of the two sentinels above sit past 30 and 45 characters.
+ */
+const windowsOf = (value: string): readonly string[] => {
+  const middle = Math.max(0, Math.floor((value.length - 20) / 2))
+  return [...new Set([value.slice(0, 20), value.slice(middle, middle + 20), value.slice(-20)])]
+}
+
+const SECRET_WINDOWS = SECRETS.flatMap((secret) => windowsOf(secret))
 
 /** The instant the fixture payload says the server captured itself. */
 const CAPTURED_AT = '2026-08-26T00:00:00.000Z'
@@ -1303,21 +1335,43 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
       },
       gate: {
         recorded: true,
-        gatewayAttached: true,
-        syncLaneEnabled: false,
+        gatewayAttached: false,
+        syncLaneEnabled: true,
         syncItemsAdvertised: false,
         syncItems: { state: 'WITHHELD', cause: SECRETS[2], remedy: `the backend at ${SECRETS[1]} refused` },
-        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: `configure REDIS_URL to ${SECRETS[0]}` }],
-        unmetCodes: ['REDIS_UNBOUND'],
+        // One condition this build KNOWS, carrying an opaque remedy — the case a
+        // count alone does not cover, because a recognised code was a channel for
+        // the server's prose too — and one it does not, carrying both. The second
+        // entry's code is variable-shaped, which is what a shape floor admits.
+        unmetPreconditions: [
+          { code: 'REDIS_UNBOUND', remedy: `configure REDIS_URL to ${SECRETS[0]} ${SECRETS[6]}` },
+          { code: SECRETS[7], remedy: SECRETS[6] },
+        ],
+        unmetCodes: ['REDIS_UNBOUND', SECRETS[7]],
+        // A RECOGNISED sub-gate condition with a poisoned remedy. One payload
+        // cannot exercise both branches of one field, and this is the branch a
+        // denylist hides: the condition is admitted, so the panel prints a
+        // sentence for it, and the server's prose used to be that sentence. The
+        // unrecognised-condition branch is swept by `syncDiagnostics.spec.ts` and
+        // `websocketSection.spec.ts`, which plant both shapes in it directly.
         files: {
           advertised: false,
           unmetCondition: 'FILES_INTERNAL_URL',
-          remedy: `no INTERNAL files service URL is configured (${SECRETS[1]}).`,
+          remedy: `no INTERNAL files service URL is configured (${SECRETS[1]}) ${SECRETS[6]}.`,
         },
+        // The host block, absent from this fixture until now, which is why the
+        // two fields on it were never swept. With no other unrecognised
+        // condition in the list they reach the WebSocket section's findings as
+        // well as the Overview.
+        host: { unmetCondition: SECRETS[6], remedy: SECRETS[7] },
       },
       live: {
         capabilities: [{ id: 'ws-sync', endpoint: '/sockets/sync' }],
-        unavailabilityReasons: ['sync-not-configured'],
+        // The lane is deliberately UP in this fixture (`syncLaneEnabled: true`),
+        // because the Overview suppresses live refusal reasons on a lane that
+        // never came up — and a reason the panel never prints cannot leak, so a
+        // sweep over a down lane is blind to this field by construction.
+        unavailabilityReasons: ['sync-not-configured', SECRETS[6], SECRETS[7]],
         ticketAvailable: false,
         realtime: { attached: true, pushBridge: SECRETS[1], syncLane: SECRETS[0] },
       },
@@ -1354,19 +1408,28 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
 
     for (const label of ALL_SUBTABS) {
       const text = await openSubtab(label)
-      for (const secret of SECRETS) {
-        expect(text).not.toContain(secret)
+      for (const fragment of SECRET_WINDOWS) {
+        expect(text).not.toContain(fragment)
       }
     }
 
     await openSubtab('Copyable report')
     const report = reportText()
-    for (const secret of SECRETS) {
-      expect(report).not.toContain(secret)
+    for (const fragment of SECRET_WINDOWS) {
+      expect(report).not.toContain(fragment)
     }
     expect(report).not.toMatch(/redis:\/\//)
     // The remedy still names the variable, without ever carrying its value.
     expect(report).toContain('REDIS_UNBOUND')
+    // And the conditions, reasons and sub-gate condition this build cannot name
+    // survive as counts rather than disappearing — which is what makes the
+    // assertions above something other than the panel having gone quiet.
+    expect(report).toContain('- Conditions this build does not recognise: 1')
+    expect(report).toContain('- Reasons this build does not recognise: 2')
+    // The recognised sub-gate condition is still NAMED — the admission is a
+    // closed set, not a blanket refusal — while the server's prose beside it is
+    // gone, which is what the window assertions above prove.
+    expect(report).toContain('- FILES_V1 advertised: no (FILES_INTERNAL_URL)')
   })
 
   /**

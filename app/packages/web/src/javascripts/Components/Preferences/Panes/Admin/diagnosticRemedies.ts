@@ -26,20 +26,37 @@
  *
  * So: every remedy here is conditional on the observed topology, and when the
  * topology has not been observed (`recorded: false`, or an older server build
- * that sends no `deployment` block) the panel falls back to the server's own
- * generic copy and SAYS that it is generic. `basis` carries that distinction to
- * the UI so the operator can see which advice was derived from their deployment
- * and which is a default.
+ * that sends no `deployment` block) it falls back to THIS BUILD'S own copy for
+ * that condition and SAYS that the advice is not conditional on the deployment.
+ * `basis` carries that distinction to the UI so the operator can see which advice
+ * was derived from their deployment and which is a default.
+ *
+ * It used to fall back to the SERVER's generic copy, printed through
+ * `sanitizeServerCopy`. That is corrected rather than deleted because the
+ * justification gets re-derived from memory by the next reader: the fallback was
+ * the only path by which text this build did not write reached the screen, the
+ * redactor behind it is a denylist, and a marker-built remedy with no address
+ * shape was measured printing intact into the copyable report. See
+ * `WITHOUT_TOPOLOGY_SUMMARY`.
  *
  * SECURITY: this module receives booleans and closed enums only. It must never
- * be given, and never print, a configured value.
+ * be given, and never print, a configured value — and that is now held by the
+ * SIGNATURES rather than by convention: `remedyForPrecondition`,
+ * `remedyForLiveReason` and `remedyForClientGap` each take a closed union of
+ * literals this build compiled in, so handing one a payload string is a type
+ * error, and each re-checks membership at runtime because a type is erased.
  */
 
 import {
   CLIENT_KNOWN_OPERATIONS,
+  countOf,
   isClientKnownOperation,
-  sanitizeServerCopy,
+  isKnownLiveRefusalReason,
+  isKnownPreconditionCode,
+  KNOWN_PRECONDITION_CODES,
   type CapabilityOperationName,
+  type KnownLiveRefusalReason,
+  type KnownPreconditionCode,
 } from './syncDiagnostics'
 
 /** The topology block from GET /v1/admin/sync-diagnostics. Presence and enums only. */
@@ -225,19 +242,90 @@ type UnlistedTopologyMember = Exclude<TopologyEnumMember, (typeof TOPOLOGY_ENUM_
 type AssertNever<T extends never> = T
 export type EveryTopologyMemberIsListed = AssertNever<UnlistedTopologyMember>
 
-const generic = (code: string, serverRemedy: string | undefined): Remedy => ({
-  code: sanitizeServerCopy(code),
-  // The one place server-authored prose is printed verbatim. It goes through the
-  // redactor because it is the only path by which text this build did not write
-  // reaches the screen and the copyable report.
-  summary: sanitizeServerCopy(serverRemedy ?? 'The server reported no remedy for this condition.'),
+/**
+ * *** THE ONE SENTENCE PER CONDITION THAT NEEDS NO TOPOLOGY. ***
+ *
+ * This replaces the server's own remedy string, which used to be printed verbatim
+ * through `sanitizeServerCopy` whenever the topology had not been reported — and
+ * on an unrecorded topology that is EVERY condition, recognised or not, so the
+ * denylist was the only thing between server prose and the copyable report. A
+ * live probe over this deployment's real payload settled what that was worth: a
+ * marker-built remedy with no address shape printed intact into the report.
+ *
+ * Replacing it costs nothing an operator wanted. The stock copy for
+ * `SYNCING_SERVER_GRPC_UNBOUND` is "configure SYNCING_SERVER_GRPC_URL", which the
+ * header of this file documents at length as wrong in two different ways at once
+ * on the deployments most likely to be reading it; the sentences below are this
+ * build's own, and they are careful about exactly that.
+ *
+ * `basis` stays `generic` because the advice is still not derived from THIS
+ * deployment — only from the condition's name. That distinction is the whole
+ * reason the field exists.
+ */
+const WITHOUT_TOPOLOGY_SUMMARY: Record<KnownPreconditionCode, string> = {
+  WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING:
+    'Set WEB_SOCKET_CONNECTION_TOKEN_SECRET to a strong random value — the same value on every gateway replica that shares ticket state — and restart. The gateway refuses to sign socket tickets with an empty key.',
+  WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION:
+    'Realtime sync is switched off by configuration. Unset WEBSOCKET_SYNC_ENABLED, or set it to exactly "true", and restart. Only the exact string "false" disables the lane.',
+  REDIS_UNBOUND:
+    'Bind the shared Redis state the realtime lane needs — REDIS_URL on a multi-container deployment — and check that CACHE_TYPE is not selecting the memory cache, which suppresses the binding entirely. A single container needs no Redis for realtime and reports an in-process plane instead.',
+  SYNCING_SERVER_GRPC_UNBOUND:
+    'Which setting fixes this depends on the deployment, and this server build did not report which one it is. On a single container the condition is not applicable at all — the durable backend is called in-process — and on a multi-container stack the switch is SERVICE_PROXY_TYPE rather than the URL, because the gateway reads the URL only inside the gRPC branch. Do not set SYNCING_SERVER_GRPC_URL on its own.',
+  WEBSOCKET_REDIS_NAMESPACE_INVALID:
+    'Fix WEBSOCKET_REDIS_NAMESPACE — lowercase letters, digits, colon, underscore or hyphen, 1 to 64 characters, with no leading or trailing colon — or unset it entirely, which is the default. Use the same value on every process in the stack, and restart.',
+}
+
+const withoutTopology = (code: KnownPreconditionCode): Remedy => ({
+  code,
+  summary: WITHOUT_TOPOLOGY_SUMMARY[code],
   steps: [],
   effort: 'restart',
   basis: 'generic',
   because: [
-    'This server build did not report its deployment topology, so the advice above is the generic default. It may not apply here — check it against your deployment before acting on it.',
+    'This server build did not report its deployment topology, so the advice above is derived from the condition alone and not from this deployment. It may not apply here — check it before acting on it.',
+    'The server sends a sentence of its own for this condition and it is deliberately not reproduced: it is prose the server chose, and this screen and the copyable report it generates are written to be pasted in public. What is printed instead is this build’s own copy for a condition this build recognises.',
   ],
 })
+
+/**
+ * *** COUNTED, NEVER NAMED. *** The conditions the gate reported and this build
+ * cannot explain.
+ *
+ * One remedy for all of them rather than one each, because the only honest thing
+ * to say is the same sentence however many there are, and the number is the fact
+ * they carry. It is the number that makes this readable as a client-side gap: a
+ * condition outside this build's closed set means the server is newer than the
+ * client, which is a different problem from the deployment being misconfigured and
+ * has a different fix.
+ *
+ * `client-update` is the effort on purpose, and it is narrow: it is the fix for the
+ * missing EXPLANATION, not for the condition. The summary says so, because a
+ * remedy that let an operator read "update the client" as "this clears the unmet
+ * condition" would be the confidently-wrong kind this file exists to prevent.
+ */
+export function remedyForUnrecognisedPreconditions(count: number): Remedy {
+  const conditions = Number.isInteger(count) && count > 0 ? count : 1
+
+  return {
+    code: 'UNRECOGNISED_PRECONDITION',
+    summary: `The gate reports ${countOf(
+      conditions,
+      'unmet condition',
+    )} outside the closed set this build knows. Updating the client is what restores the explanation — it does not itself clear the condition, and this build cannot say which setting does.`,
+    steps: [
+      'Update the client. A newer build carries the condition in its own closed set, and with it the deployment-conditional advice for it.',
+      'Until then, read the condition off the server’s own boot log, which names it. Nothing on this screen will.',
+    ],
+    effort: 'client-update',
+    basis: 'verified',
+    because: [
+      `This build knows ${KNOWN_PRECONDITION_CODES.join(
+        ', ',
+      )}. A condition outside that list is one a newer server added, so the two lists disagree in the direction only a client release closes.`,
+      'The code and the server’s advice for it are counted and never echoed: both are strings the server chose, and this screen is written to be pasted into an issue. A denylist was the previous defence on this exact path and a value with no address shape went straight through it.',
+    ],
+  }
+}
 
 /**
  * The gRPC durable-backend condition: the one whose stock advice is wrong on the
@@ -466,7 +554,7 @@ function killSwitchRemedy(topology: DeploymentTopology): Remedy {
  * gateway unattached and no condition at all, and an operator had nothing to
  * search for.
  */
-function redisNamespaceRemedy(serverRemedy: string | undefined): Remedy {
+function redisNamespaceRemedy(): Remedy {
   return {
     code: 'WEBSOCKET_REDIS_NAMESPACE_INVALID',
     summary:
@@ -482,55 +570,89 @@ function redisNamespaceRemedy(serverRemedy: string | undefined): Remedy {
     because: [
       'The host refused to attach rather than fall back to the un-namespaced names, because that fallback would publish this stack’s events onto a sibling stack’s channels.',
       'This is why the lane can read as configured while nothing is delivered: the gate’s four conditions were all met, and the host declined afterwards.',
-      // The SERVER's own sentence for this condition, printed verbatim beside
-      // the panel's. It is a frozen constant over there (SYNC_HOST_REMEDIES);
-      // reproducing it here instead would let the two drift silently, and the
-      // whole point of this condition is that it has no other symptom to check
-      // the wording against.
-      ...(serverRemedy ? [`The server states: ${sanitizeServerCopy(serverRemedy)}`] : []),
+      // *** THE SERVER'S OWN SENTENCE IS NO LONGER REPRINTED HERE. ***
+      //
+      // It used to be, verbatim through the redactor, with the argument that
+      // reproducing the wording instead would let the two copies drift silently.
+      // That argument was about drift and this is about a trust boundary: the
+      // string arrives over the wire, it is a frozen constant only "in a correct
+      // server", and it reached the copyable report on every path that carried a
+      // precondition remedy. A marker-built value with no address shape went
+      // through the redactor intact on this exact path when it was measured. The
+      // drift risk is accepted and stated rather than traded for that: the
+      // sentence above is this build's own, and it is the one the operator reads.
     ],
   }
 }
 
 /**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The topology-aware remedy per condition.
+ *
+ * A `Record` rather than the `switch` this replaces, for the reason every other
+ * exhaustive mapping in this pane is one: with `code` now a closed union, a member
+ * added to `KNOWN_PRECONDITION_CODES` without a remedy fails this file to compile
+ * instead of falling through a `default` into the generic branch — which is where
+ * server prose used to be printed.
+ */
+const TOPOLOGY_AWARE_REMEDY: Record<KnownPreconditionCode, (topology: DeploymentTopology) => Remedy> = {
+  SYNCING_SERVER_GRPC_UNBOUND: grpcRemedy,
+  REDIS_UNBOUND: redisRemedy,
+  WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING: connectionTokenRemedy,
+  WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION: killSwitchRemedy,
+  WEBSOCKET_REDIS_NAMESPACE_INVALID: redisNamespaceRemedy,
+}
+
+/**
  * The remedy for one unmet boot-gate precondition.
  *
- * `serverRemedy` is the constant copy the server sent. It is used ONLY when this
- * module has nothing topology-aware to say — either because the topology was not
- * reported, or because the code is one a newer server knows about and this client
- * does not. Silently dropping an unrecognised code would turn a newer server's
- * diagnosis into a blank space.
+ * *** IT TAKES A CODE THIS BUILD OWNS, AND NO SERVER PROSE AT ALL. ***
+ *
+ * It used to take `code: string` and the server's own remedy beside it, and to
+ * print both — through `sanitizeServerCopy` — whenever it had nothing
+ * topology-aware to say. That is backwards at a trust boundary, in exactly the way
+ * `remedyForClientGap` was: a function that CANNOT be given server text is worth
+ * more than one that scrubs it. So the parameter is gone, the code is a closed
+ * union of literals this build compiled in, and handing it
+ * `precondition.code` off the payload does not compile. An unrecognised code is
+ * admitted by `isKnownPreconditionCode` at the call site and counted by
+ * `remedyForUnrecognisedPreconditions`.
+ *
+ * The allowlist runs at runtime too, because a type is erased: one `as` at a
+ * future call site would otherwise reopen the hole invisibly, and the whole point
+ * of this function is that it is incapable of printing something it was not
+ * compiled with.
  */
-export function remedyForPrecondition(
-  code: string,
-  serverRemedy: string | undefined,
-  topology: DeploymentTopology | undefined,
-): Remedy {
+export function remedyForPrecondition(code: KnownPreconditionCode, topology: DeploymentTopology | undefined): Remedy {
+  if (!isKnownPreconditionCode(code)) {
+    return remedyForUnrecognisedPreconditions(1)
+  }
   if (!isRecorded(topology)) {
-    return generic(code, serverRemedy)
+    return withoutTopology(code)
   }
 
-  switch (code) {
-    case 'SYNCING_SERVER_GRPC_UNBOUND':
-      return grpcRemedy(topology)
-    case 'REDIS_UNBOUND':
-      return redisRemedy(topology)
-    case 'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING':
-      return connectionTokenRemedy(topology)
-    case 'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION':
-      return killSwitchRemedy(topology)
-    case 'WEBSOCKET_REDIS_NAMESPACE_INVALID':
-      return redisNamespaceRemedy(serverRemedy)
-    default:
-      return generic(code, serverRemedy)
-  }
+  return TOPOLOGY_AWARE_REMEDY[code](topology)
 }
 
 /**
  * Remedies for the gateway's LIVE refusal reasons — the ones it reports when the
  * boot gate passed but it is still refusing tickets.
+ *
+ * `reason` is the closed union for the same reason the precondition code is one.
+ * This function never printed the reason it was handed — it matched it and
+ * returned `undefined` otherwise — but it was typed `string`, so every caller had
+ * a reason off the wire in hand and two of them printed it beside the remedy. With
+ * the union, admitting the reason is the only way to reach this function, and a
+ * caller that has not admitted it does not compile. The runtime check is there
+ * because a type is erased.
  */
-export function remedyForLiveReason(reason: string, topology: DeploymentTopology | undefined): Remedy | undefined {
+export function remedyForLiveReason(
+  reason: KnownLiveRefusalReason,
+  topology: DeploymentTopology | undefined,
+): Remedy | undefined {
+  if (!isKnownLiveRefusalReason(reason)) {
+    return undefined
+  }
+
   switch (reason) {
     case 'no-allowed-origins':
       return {

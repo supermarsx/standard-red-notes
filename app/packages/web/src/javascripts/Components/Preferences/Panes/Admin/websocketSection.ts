@@ -9,6 +9,7 @@ import {
   remedyForClientGap,
   remedyForLiveReason,
   remedyForPrecondition,
+  remedyForUnrecognisedPreconditions,
   type DeploymentTopology,
   type Remedy,
   type RemedyEffort,
@@ -43,15 +44,23 @@ import {
   type Verdict,
 } from './diagnosticsSections'
 import {
+  admitMembers,
   buildCapabilityRows,
+  countOf,
   describeRealtimeHealth,
   describeSyncItems,
   describeTransport,
-  sanitizeServerCopy,
+  FILES_CONDITION_MEANING,
+  isKnownFilesUnmetCondition,
+  isKnownPreconditionCode,
+  KNOWN_FILES_UNMET_CONDITIONS,
+  KNOWN_LIVE_REFUSAL_REASONS,
+  KNOWN_PRECONDITION_CODES,
   SYNC_ITEMS_CAUSES,
   SYNC_ITEMS_STATES,
   type CapabilityRow,
   type CapabilityStatus,
+  type KnownPreconditionCode,
   type SyncDiagnosticsPayload,
   type SyncItemsState,
   type TransportStatusInput,
@@ -247,19 +256,19 @@ export type EveryCapabilityStatusIsListed = AssertNever<UnlistedCapabilityStatus
 /**
  * The gate's own precondition codes, plus the one condition a HOST adds.
  *
- * Typed against nothing: these are the SERVER's literals and this build cannot be
- * recompiled against a newer server, so an unrecognised code degrades to
- * `other (unrecognised)` through `safeEnum` rather than being echoed.
+ * These are the SERVER's literals and this build cannot be recompiled against a
+ * newer server, so an unrecognised code degrades to `other (unrecognised)` through
+ * `safeEnum` rather than being echoed.
+ *
+ * It is an ALIAS of the list in `syncDiagnostics.ts` rather than a second copy.
+ * The list is now what admits a code into a REMEDY as well as into a row, and two
+ * tuples spelled out in two files is how a row comes to name a condition whose
+ * remedy branch no longer exists — or the reverse, which is worse, because the
+ * remedy branch is where the server's own prose used to be printed.
  */
-export const PRECONDITION_CODES = [
-  'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
-  'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION',
-  'REDIS_UNBOUND',
-  'SYNCING_SERVER_GRPC_UNBOUND',
-  'WEBSOCKET_REDIS_NAMESPACE_INVALID',
-] as const
+export const PRECONDITION_CODES = KNOWN_PRECONDITION_CODES
 
-export type PreconditionCode = (typeof PRECONDITION_CODES)[number]
+export type PreconditionCode = KnownPreconditionCode
 
 /**
  * The subset that gates the socket LANE itself. `SYNCING_SERVER_GRPC_UNBOUND` is
@@ -274,27 +283,11 @@ export const LANE_GATING_PRECONDITIONS: readonly PreconditionCode[] = [
   'WEBSOCKET_REDIS_NAMESPACE_INVALID',
 ]
 
-/** The gateway's live refusal reasons. */
-export const LIVE_REFUSAL_REASONS = [
-  'sync-not-configured',
-  'gateway-stopping',
-  'disabled-by-configuration',
-  'no-allowed-origins',
-  'ticket-store-unavailable',
-  'command-lease-store-unavailable',
-  'socket-budget-store-unavailable',
-  'authorization-adapter-unavailable',
-  'durable-backend-unavailable',
-  'invite-event-store-unavailable',
-] as const
+/** The gateway's live refusal reasons. Aliased for the reason above. */
+export const LIVE_REFUSAL_REASONS = KNOWN_LIVE_REFUSAL_REASONS
 
-/** Which FILES_V1 precondition the composition found missing. */
-export const FILES_UNMET_CONDITIONS = [
-  'FILES_INTERNAL_URL',
-  'AUTH_JWT_SECRET',
-  'VALET_TOKEN_SECRET',
-  'TRANSPORT_CONSTRUCTION',
-] as const
+/** Which FILES_V1 precondition the composition found missing. Aliased likewise. */
+export const FILES_UNMET_CONDITIONS = KNOWN_FILES_UNMET_CONDITIONS
 
 /** The raw handshake-predicate reading the gate recorded. */
 export const SYNC_ITEMS_PROBES = ['NEVER_PROBED', 'READY', 'NOT_READY', 'NO_LANE', 'PROBE_FAILED'] as const
@@ -655,8 +648,6 @@ function buildTransportBlock(transport: TransportStatusInput | undefined): Diagn
 /* Block 2: the lane and the boot gate                                        */
 /* -------------------------------------------------------------------------- */
 
-type MergedCondition = { readonly code: string | undefined; readonly remedy: string | undefined }
-
 /**
  * The unmet conditions to report: the shared list, PLUS the host's own when the
  * server reported one and did not already merge it in.
@@ -666,43 +657,65 @@ type MergedCondition = { readonly code: string | undefined; readonly remedy: str
  * nothing — and a condition the panel silently drops is worse than no panel. A
  * duplicate is a cosmetic fault; a dropped condition is the fault this exists to
  * prevent.
+ *
+ * *** IT RETURNS CODES AND NOTHING ELSE. *** It used to carry
+ * `{ code, remedy }`, and the remedy — `entry.remedy`, or `gate.host.remedy` for
+ * the merged one — travelled from here into `remedyForPrecondition`'s generic
+ * branch and was printed. A measurement over the live payload caught both: an
+ * opaque `gate.host.remedy` reached this section's findings whenever the host
+ * condition was the only one this build could not name. There is no field for it
+ * to travel in now.
  */
-function mergedConditions(gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined): readonly MergedCondition[] {
-  const listed: MergedCondition[] = (gate?.unmetPreconditions ?? []).map((entry) => ({
-    code: entry.code,
-    remedy: entry.remedy,
-  }))
+function mergedConditions(
+  gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined,
+): readonly (string | undefined)[] {
+  const listed = (gate?.unmetPreconditions ?? []).map((entry) => entry.code)
 
   const hostCondition = gate?.host?.unmetCondition
   if (typeof hostCondition !== 'string' || hostCondition.length === 0) {
     return listed
   }
-  if (listed.some((entry) => entry.code === hostCondition)) {
+  if (listed.includes(hostCondition)) {
     return listed
   }
 
-  return [...listed, { code: hostCondition, remedy: gate?.host?.remedy ?? undefined }]
+  return [...listed, hostCondition]
 }
 
 const UNMET_COUNT_NOTE =
   'How many conditions the gate itself reports unmet — a fact about the LIST, never a verdict about the lane. A count of zero is reported as undetermined on purpose: the one cause an operator can fix, a durable command port that is bound and fails the handshake’s readiness check, leaves this list EMPTY because nothing is unmet. An empty list read as health is how this pane once reported a deployment fully available over a socket that refused note syncing.'
 
-function conditionFinding(condition: MergedCondition, topology: DeploymentTopology | undefined): DiagnosticFinding {
-  const raw = condition.code
-  const known = PRECONDITION_CODES.find((candidate) => candidate === raw)
+/**
+ * One finding for one condition — or, for the ones this build cannot name, one
+ * finding for all of them, carrying the count.
+ *
+ * `unnameable` is passed in rather than derived here because the loop below
+ * collapses every unrecognised condition onto a single finding (they all reduce to
+ * the same `safeEnum` constant, and two findings with one code is a duplicate key
+ * in the renderer). The count is what that single finding has to carry instead of
+ * the names, so it has to be the count of the whole list and not of this entry.
+ */
+function conditionFinding(
+  raw: string | undefined,
+  unnameable: number,
+  topology: DeploymentTopology | undefined,
+): DiagnosticFinding {
+  const known: KnownPreconditionCode | undefined = isKnownPreconditionCode(raw) ? raw : undefined
   const laneGating = known !== undefined && LANE_GATING_PRECONDITIONS.includes(known)
 
   return diagnosticFinding({
     code: safeEnum(raw, PRECONDITION_CODES),
     title:
       known === undefined
-        ? 'The gate reports an unmet condition this client build does not recognise'
+        ? `The gate reports ${countOf(unnameable, 'unmet condition')} this client build does not recognise`
         : laneGating
           ? 'A condition the socket lane itself requires is unmet'
           : 'A condition that withholds note syncing is unmet',
     detail:
       known === undefined
-        ? 'The server is newer than this client and named a condition outside the closed set this build knows, so the panel will not map it onto one it does know and claims no verdict from it. The server’s own advice for it is printed below, redacted; updating the client restores the explanation. The code itself is not echoed.'
+        ? `The server is newer than this client and named a condition outside the closed set this build knows, so the panel will not map it onto one it does know and claims no verdict from it. Neither the code nor the server’s own advice for it is echoed — both are strings the server chose, and the remedy was measured going through the redactor intact on this exact path — so they are counted instead. Updating the client restores the explanation; the server’s boot log names the condition meanwhile. This build knows ${KNOWN_PRECONDITION_CODES.join(
+            ', ',
+          )}.`
         : laneGating
           ? 'An unmet lane condition closes the socket outright: no ticket is redeemed, nothing is negotiated, and every request — sync, collaboration, API RPC, invites and files — is an HTTP request. The fix below is the one written for THIS deployment’s topology, which is not always the fix the condition’s own name suggests.'
           : 'This condition withholds SYNC_ITEMS only. The socket stays up and keeps carrying collaboration, API RPC, invite events and files while notes sync over HTTP, which is why the lane can be perfectly healthy with this condition unmet.',
@@ -720,7 +733,8 @@ function conditionFinding(condition: MergedCondition, topology: DeploymentTopolo
             'which part of the socket lane that condition closes',
           )
         : EVIDENCE_DIRECT,
-    remedy: remedyForPrecondition(raw ?? 'UNKNOWN', condition.remedy, topology),
+    remedy:
+      known === undefined ? remedyForUnrecognisedPreconditions(unnameable) : remedyForPrecondition(known, topology),
   })
 }
 
@@ -737,6 +751,8 @@ function buildGateBlock(
   // nothing in either direction, and a zero read off an unrecorded gate is the
   // same false green one row down.
   const unmetCount = recorded === true ? conditions.length : undefined
+  const admitted = admitMembers(conditions, KNOWN_PRECONDITION_CODES)
+  const unnameableCount = recorded === true ? admitted.unnameable : undefined
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -792,6 +808,18 @@ function buildGateBlock(
             : EVIDENCE_DIRECT,
       note: UNMET_COUNT_NOTE,
     }),
+    observedRow({
+      label: safeConstant('Unmet conditions this build cannot name'),
+      observed: unnameableCount,
+      value: safeCount(unnameableCount),
+      // A fact about this build's VOCABULARY, not about the lane — so zero is
+      // `informational` rather than healthy, and a non-zero reading is
+      // `undetermined` rather than degraded: there is a condition here whose
+      // effect this build cannot establish, which is precisely what that verdict
+      // means. The finding beside it carries the same count and says so.
+      verdict: unnameableCount === 0 ? 'informational' : 'undetermined',
+      note: 'How many of the conditions above the gate named outside the closed set this build knows. They are counted and never echoed, because a condition code is a string the server chose and this screen is written to be pasted into an issue — the row that used to print such a code did it through a denylist, and a value with no address shape was measured going straight through. A non-zero reading says the server is newer than this client: a client update restores the explanation, and the server’s boot log names the condition meanwhile.',
+    }),
   ]
 
   const findings: DiagnosticFinding[] = []
@@ -800,11 +828,13 @@ function buildGateBlock(
    * One finding per condition, deduplicated by the SAFE code rather than the raw
    * one: two unrecognised codes both reduce to the same constant, and a finding
    * list with two identical codes is a duplicate key in the renderer as well as a
-   * duplicate row on screen.
+   * duplicate row on screen. The single collapsed finding carries the COUNT of
+   * what was collapsed into it, which is why `admitted.unnameable` is passed down
+   * rather than recomputed per entry.
    */
   const seen = new Set<string>()
   for (const condition of conditions) {
-    const finding = conditionFinding(condition, topology)
+    const finding = conditionFinding(condition, admitted.unnameable, topology)
     const key = String(finding.code)
     if (seen.has(key)) {
       continue
@@ -822,7 +852,10 @@ function buildGateBlock(
           'The boot gate built the sync lane and the host recorded no successful attach. On a current server build that combination means the host declined to attach AFTER the gate passed — an invalid WEBSOCKET_REDIS_NAMESPACE does exactly this, closing the push bridge rather than publishing on a sibling stack’s channels — so tickets mint while nothing is ever delivered. On a server older than the attach-outcome record the field is simply never set, and then this says only that it was not reported.',
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
-        remedy: remedyForPrecondition('WEBSOCKET_REDIS_NAMESPACE_INVALID', gate?.host?.remedy ?? undefined, topology),
+        // The host's own remedy string used to be handed in beside this code and
+        // printed in the remedy's `because`. It is not: the condition is one this
+        // build owns, so the advice is this build's own copy for it.
+        remedy: remedyForPrecondition('WEBSOCKET_REDIS_NAMESPACE_INVALID', topology),
       }),
     )
   }
@@ -1231,7 +1264,7 @@ function buildRefusalBlock(
       }
       seen.add(key)
 
-      const known = LIVE_REFUSAL_REASONS.find((candidate) => candidate === reason)
+      const known = KNOWN_LIVE_REFUSAL_REASONS.find((candidate) => candidate === reason)
       const remedy = known === undefined ? undefined : remedyForLiveReason(known, topology)
 
       findings.push(
@@ -1446,19 +1479,28 @@ function buildFilesBlock(gate: NonNullable<SyncDiagnosticsPayload['gate']> | und
   const findings: DiagnosticFinding[] = []
 
   if (advertised === false) {
-    // Server-authored prose, redacted on the way in like every other string off
-    // this wire. Screen only: a finding's detail is not a path into the copyable
-    // report, which is what makes printing the server's own sentence affordable.
-    const sent = typeof files?.remedy === 'string' && files.remedy.trim().length > 0 ? files.remedy : undefined
+    // *** THE SERVER'S OWN SENTENCE IS NOT PRINTED HERE ANY MORE. ***
+    //
+    // It was, through `sanitizeServerCopy`, on the argument that a finding's
+    // detail is screen-only and therefore affordable. Both halves of that were
+    // wrong. The screen is the thing an operator photographs and pastes during an
+    // incident, and a denylist is the wrong mechanism either way: a marker-built
+    // `gate.files.remedy` with no address shape was measured printing intact into
+    // this section's findings. What replaces it is this build's own sentence for
+    // the ADMITTED condition, which is more specific than the server's generic
+    // copy was, and a counted placeholder for a condition outside the four.
+    const named = isKnownFilesUnmetCondition(condition) ? condition : undefined
 
     findings.push(
       diagnosticFinding({
         code: safeConstant('FILES_V1_WITHHELD'),
         title: 'The realtime file transport was waived at boot',
         detail:
-          sent === undefined
-            ? 'File transfers use ordinary HTTP requests. The condition row above names what was missing; the server sent no advice of its own for it.'
-            : `File transfers use ordinary HTTP requests. The server reports: ${sanitizeServerCopy(sent)}`,
+          named === undefined
+            ? `File transfers use ordinary HTTP requests. The gate named a condition outside the closed set this build knows, so neither it nor the server’s advice for it is echoed — both are strings the server chose. This build knows ${KNOWN_FILES_UNMET_CONDITIONS.join(
+                ', ',
+              )}; a client update restores the explanation.`
+            : FILES_CONDITION_MEANING[named],
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
       }),

@@ -3,12 +3,13 @@ import {
   remedyForClientGap,
   remedyForLiveReason,
   remedyForPrecondition,
+  remedyForUnrecognisedPreconditions,
   remedyForUnstampedDeployment,
   type DeploymentTopology,
   type RemedyEffort,
 } from './diagnosticRemedies'
 import { EFFORT_TONE } from './diagnosticsPresentation'
-import { CLIENT_KNOWN_OPERATIONS, UNRECOGNISED_OPERATION } from './syncDiagnostics'
+import { CLIENT_KNOWN_OPERATIONS, UNRECOGNISED_OPERATION, type KnownLiveRefusalReason } from './syncDiagnostics'
 
 /**
  * A planted value with NO structure for a denylist to match — the class of
@@ -51,16 +52,31 @@ const STOCK_GRPC_REMEDY =
   'the gRPC syncing-server proxy is not bound; configure SYNCING_SERVER_GRPC_URL so realtime commands have a durable backend'
 
 describe('remedyForPrecondition — no topology reported', () => {
-  it('falls back to the server copy and says it is generic', () => {
-    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', STOCK_GRPC_REMEDY, undefined)
+  /**
+   * *** THE SERVER'S COPY IS NO LONGER WHAT THIS BRANCH PRINTS. ***
+   *
+   * It used to be: `remedyForPrecondition` took the server's remedy beside the
+   * code and, with no topology to reason from, printed it through
+   * `sanitizeServerCopy` — which is a denylist. On an unrecorded topology that is
+   * EVERY condition, so the denylist was the only thing between server prose and
+   * the copyable report, and a marker-built remedy with no address shape was
+   * measured going through it intact. This branch now prints this build's own
+   * copy for the condition, still marked `generic` because it is not derived from
+   * this deployment.
+   */
+  it('prints this build’s own copy for the condition and marks it generic, never the server’s', () => {
+    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', undefined)
 
     expect(remedy.basis).toBe('generic')
-    expect(remedy.summary).toBe(STOCK_GRPC_REMEDY)
+    expect(remedy.summary).not.toBe(STOCK_GRPC_REMEDY)
+    expect(remedy.summary).toContain('SERVICE_PROXY_TYPE')
     expect(remedy.because.join(' ')).toContain('may not apply here')
+    // And it says WHY the server's sentence is not beside it.
+    expect(remedy.because.join(' ')).toContain('prose the server chose')
   })
 
   it('treats an unrecorded topology exactly like an absent one, rather than as a set of falses', () => {
-    const remedy = remedyForPrecondition('REDIS_UNBOUND', 'configure REDIS_URL', {
+    const remedy = remedyForPrecondition('REDIS_UNBOUND', {
       recorded: false,
       mode: 'home-server',
     })
@@ -68,11 +84,78 @@ describe('remedyForPrecondition — no topology reported', () => {
     expect(remedy.basis).toBe('generic')
   })
 
-  it('passes an unrecognised code straight through instead of dropping it', () => {
-    const remedy = remedyForPrecondition('SOME_FUTURE_CONDITION', 'do the future thing', topology())
+  /**
+   * *** THE TYPE IS THE GUARANTEE. ***
+   *
+   * `code` is a closed union of literals this build compiled in, so a code off
+   * the payload cannot be passed at all. If this line ever starts compiling, the
+   * `@ts-expect-error` becomes the failure — which is the point: the parameter
+   * widening back to `string` is exactly how the leak would come back.
+   */
+  it('does not compile when handed a code off the wire', () => {
+    const fromTheWire: string = 'SOME_FUTURE_CONDITION'
 
-    expect(remedy.summary).toBe('do the future thing')
-    expect(remedy.basis).toBe('generic')
+    // @ts-expect-error a server-supplied string is not a KnownPreconditionCode
+    const remedy = remedyForPrecondition(fromTheWire, topology())
+
+    // The allowlist runs at RUNTIME as well, because a type is erased and one
+    // `as` at a future call site would otherwise reopen the hole invisibly.
+    expect(remedy.summary).not.toContain('SOME_FUTURE_CONDITION')
+    expect(remedy.effort).toBe('client-update')
+    expect(remedy.summary).toContain('1 unmet condition')
+  })
+
+  it('does not compile when handed a live refusal reason off the wire either', () => {
+    const fromTheWire: string = 'some-future-reason'
+
+    // @ts-expect-error a server-supplied string is not a KnownLiveRefusalReason
+    expect(remedyForLiveReason(fromTheWire, topology())).toBeUndefined()
+  })
+})
+
+/**
+ * *** COUNTED, NEVER NAMED. *** The conditions this build cannot explain.
+ *
+ * The old behaviour was to pass the unrecognised code and the server's advice
+ * for it straight through "instead of dropping it", on the argument that
+ * silently dropping a newer server's diagnosis turns it into a blank space. The
+ * blank space was the right worry and the wrong fix: both strings are chosen by
+ * the server, and the count plus the list of what this build DOES know says
+ * which side of the wire the gap is on, which an echo of a code the reader has
+ * never seen does not.
+ */
+describe('remedyForUnrecognisedPreconditions', () => {
+  it('counts the conditions, names the ones this build knows, and echoes neither code nor server prose', () => {
+    const remedy = remedyForUnrecognisedPreconditions(3)
+
+    expect(remedy.summary).toContain('3 unmet conditions')
+    expect(remedy.effort).toBe('client-update')
+    expect(remedy.basis).toBe('verified')
+    expect(remedy.because.join(' ')).toContain('WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING')
+    expect(remedy.because.join(' ')).toContain('SYNCING_SERVER_GRPC_UNBOUND')
+  })
+
+  it('agrees singular and plural, so one condition does not read as a template', () => {
+    expect(remedyForUnrecognisedPreconditions(1).summary).toContain('1 unmet condition outside')
+    expect(remedyForUnrecognisedPreconditions(2).summary).toContain('2 unmet conditions outside')
+  })
+
+  /**
+   * The narrow claim, stated. A client update restores the EXPLANATION; it does
+   * not clear the condition. A remedy an operator could read the other way would
+   * be the confidently-wrong kind this module exists to prevent.
+   */
+  it('does not claim that updating the client clears the condition', () => {
+    const remedy = remedyForUnrecognisedPreconditions(1)
+
+    expect(remedy.summary).toContain('does not itself clear the condition')
+    expect(remedy.steps.join(' ')).toContain('boot log')
+  })
+
+  it('refuses a count that is not a positive integer rather than printing it', () => {
+    for (const count of [0, -1, 1.5, Number.NaN]) {
+      expect(remedyForUnrecognisedPreconditions(count).summary).toContain('1 unmet condition')
+    }
   })
 })
 
@@ -80,7 +163,6 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   it('refuses to recommend the variable in home-server mode, where nothing can bind the proxy', () => {
     const remedy = remedyForPrecondition(
       'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
       topology({ mode: 'home-server', boundServiceProxy: 'direct-call', grpcProxyBindableInThisMode: false }),
     )
 
@@ -94,7 +176,6 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   it('says plainly that the already-set URL is being ignored, rather than telling the operator to set it again', () => {
     const remedy = remedyForPrecondition(
       'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
       topology({ mode: 'self-hosted', presence: { SYNCING_SERVER_GRPC_URL: true } }),
     )
 
@@ -108,7 +189,6 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   it('warns that turning on the gRPC branch without AUTH_SERVER_GRPC_URL stops the gateway starting', () => {
     const remedy = remedyForPrecondition(
       'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
       topology({ mode: 'self-hosted', presence: { AUTH_SERVER_GRPC_URL: false } }),
     )
 
@@ -116,7 +196,7 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   })
 
   it('names the 32-byte floor on the internal auth secret, which silently closes the lane', () => {
-    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', STOCK_GRPC_REMEDY, topology())
+    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology())
 
     expect(remedy.steps.join(' ')).toContain('32 bytes')
   })
@@ -130,16 +210,8 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
    * not applicable at all.
    */
   it('gives the compose stack the .env switch, and never calls it a single container', () => {
-    const composeStack = remedyForPrecondition(
-      'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
-      topology({ mode: 'self-hosted' }),
-    )
-    const distributed = remedyForPrecondition(
-      'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
-      topology({ mode: 'unset' }),
-    )
+    const composeStack = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology({ mode: 'self-hosted' }))
+    const distributed = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology({ mode: 'unset' }))
 
     const steps = composeStack.steps.join(' ')
     expect(steps).toContain('SERVICE_PROXY_TYPE=grpc in your .env')
@@ -153,7 +225,6 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   it('tells the single container the condition is not applicable rather than naming a variable', () => {
     const remedy = remedyForPrecondition(
       'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
       topology({ mode: 'home-server', boundServiceProxy: 'direct-call', grpcProxyBindableInThisMode: false }),
     )
 
@@ -174,12 +245,8 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
     ['http', 'a deliberate pin', 'deliberate pin to the HTTP proxies'],
     ['auto', 'the resolver’s own decision', 'decided for itself'],
   ] as const)('tells an explicit %s setting apart from an unset one (%s)', (setting, _label, expected) => {
-    const explicit = remedyForPrecondition(
-      'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
-      topology({ serviceProxySetting: setting }),
-    )
-    const unset = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', STOCK_GRPC_REMEDY, topology())
+    const explicit = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology({ serviceProxySetting: setting }))
+    const unset = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology())
 
     // Both still get the same FIX — the branch only runs when the setting is
     // not "grpc" — and the reasoning is what differs.
@@ -191,21 +258,13 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   })
 
   it('warns an auto deployment that forcing grpc removes the fallback its resolver was protecting', () => {
-    const remedy = remedyForPrecondition(
-      'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
-      topology({ serviceProxySetting: 'auto' }),
-    )
+    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology({ serviceProxySetting: 'auto' }))
 
     expect(remedy.because.join(' ')).toContain('removes the HTTP fallback')
   })
 
   it('does not invent a fix when the branch is selected but the proxy is still unbound', () => {
-    const remedy = remedyForPrecondition(
-      'SYNCING_SERVER_GRPC_UNBOUND',
-      STOCK_GRPC_REMEDY,
-      topology({ serviceProxySetting: 'grpc' }),
-    )
+    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology({ serviceProxySetting: 'grpc' }))
 
     expect(remedy.effort).toBe('wait')
     expect(remedy.steps).toHaveLength(0)
@@ -217,7 +276,6 @@ describe('remedyForPrecondition — REDIS_UNBOUND', () => {
   it('names CACHE_TYPE, not REDIS_URL, when the memory cache is what suppresses the binding', () => {
     const remedy = remedyForPrecondition(
       'REDIS_UNBOUND',
-      'configure REDIS_URL',
       topology({ cacheSetting: 'memory', presence: { REDIS_URL: true } }),
     )
 
@@ -227,7 +285,7 @@ describe('remedyForPrecondition — REDIS_UNBOUND', () => {
   })
 
   it('sends a home-server deployment to REDIS_HOST and warns off CACHE_TYPE', () => {
-    const remedy = remedyForPrecondition('REDIS_UNBOUND', 'configure REDIS_URL', topology({ mode: 'home-server' }))
+    const remedy = remedyForPrecondition('REDIS_UNBOUND', topology({ mode: 'home-server' }))
 
     expect(remedy.summary).toContain('REDIS_HOST')
     expect(remedy.because.join(' ')).toContain('forces CACHE_TYPE=memory')
@@ -236,7 +294,6 @@ describe('remedyForPrecondition — REDIS_UNBOUND', () => {
   it('catches the REDIS_HOST-set-but-REDIS_URL-missing trap in a distributed deployment', () => {
     const remedy = remedyForPrecondition(
       'REDIS_UNBOUND',
-      'configure REDIS_URL',
       topology({ presence: { REDIS_HOST: true, REDIS_URL: false } }),
     )
 
@@ -249,7 +306,6 @@ describe('remedyForPrecondition — the remaining conditions', () => {
   it('explains a kill switch as deliberate rather than as a fault', () => {
     const remedy = remedyForPrecondition(
       'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION',
-      'unset it',
       topology({ syncSwitchSetting: 'false' }),
     )
 
@@ -258,7 +314,7 @@ describe('remedyForPrecondition — the remaining conditions', () => {
   })
 
   it('tells a multi-replica deployment the connection token must match across replicas', () => {
-    const remedy = remedyForPrecondition('WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING', 'set it', topology())
+    const remedy = remedyForPrecondition('WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING', topology())
 
     expect(remedy.steps.join(' ')).toContain('SAME value on every gateway replica')
   })
@@ -266,7 +322,6 @@ describe('remedyForPrecondition — the remaining conditions', () => {
   it('notices when the token secret is present now but was absent at boot', () => {
     const remedy = remedyForPrecondition(
       'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
-      'set it',
       topology({ presence: { WEB_SOCKET_CONNECTION_TOKEN_SECRET: true } }),
     )
 
@@ -280,14 +335,17 @@ describe('remedyForPrecondition — the remaining conditions', () => {
    * screen looks configured.
    */
   it('explains why an invalid Redis namespace attaches nothing at all', () => {
-    const remedy = remedyForPrecondition('WEBSOCKET_REDIS_NAMESPACE_INVALID', 'fix or unset it', topology())
+    const remedy = remedyForPrecondition('WEBSOCKET_REDIS_NAMESPACE_INVALID', topology())
 
     expect(remedy.basis).toBe('verified')
     expect(remedy.effort).toBe('restart')
-    // The server's own frozen sentence (SYNC_HOST_REMEDIES) is carried through
-    // rather than reproduced here, so the two cannot drift apart unnoticed —
-    // and this condition has no other symptom to catch the drift.
-    expect(remedy.because.join(' ')).toContain('The server states: fix or unset it')
+    // The server's own frozen sentence (SYNC_HOST_REMEDIES) used to be carried
+    // through here rather than reproduced, so the two could not drift apart
+    // unnoticed. That argument was about DRIFT and this is a trust boundary: the
+    // string arrives over the wire, it is a frozen constant only "in a correct
+    // server", and this was one of the paths that carried it into the copyable
+    // report. The drift risk is now accepted and stated in the source instead.
+    expect(remedy.because.join(' ')).not.toContain('The server states')
     expect(remedy.steps.join(' ')).toContain('unset it entirely')
     expect(remedy.steps.join(' ')).toContain('SAME value on every process')
     expect(remedy.because.join(' ')).toContain('declined afterwards')
@@ -352,8 +410,16 @@ describe('remedyForLiveReason', () => {
     expect(remedy?.steps.join(' ')).toContain('Do not restart on this alone')
   })
 
-  it('returns nothing for a reason it has no guidance for, so the UI can say so', () => {
-    expect(remedyForLiveReason('some-future-reason', topology())).toBeUndefined()
+  /**
+   * It used to take `reason: string` and this case passed one straight in. The
+   * function never printed what it was handed — it matched and returned
+   * `undefined` — but every CALLER then had a wire string in hand beside the
+   * remedy, and two of them printed it. The closed union moves the admission to
+   * the call site, where it can be counted; the runtime check stays because a
+   * type is erased. The compile-time half is pinned above.
+   */
+  it('returns nothing for a reason outside its closed set, so the UI can say so', () => {
+    expect(remedyForLiveReason('some-future-reason' as KnownLiveRefusalReason, topology())).toBeUndefined()
   })
 })
 
@@ -534,8 +600,8 @@ describe('secrecy', () => {
     })
 
     const text = [
-      ...['SYNCING_SERVER_GRPC_UNBOUND', 'REDIS_UNBOUND', 'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING'].map((code) =>
-        remedyForPrecondition(code, 'server copy', everything),
+      ...(['SYNCING_SERVER_GRPC_UNBOUND', 'REDIS_UNBOUND', 'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING'] as const).map(
+        (code) => remedyForPrecondition(code, everything),
       ),
       remedyForLiveReason('no-allowed-origins', everything),
       remedyForUnstampedDeployment(),
@@ -566,8 +632,8 @@ describe('secrecy', () => {
     }
 
     const text = [
-      remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', 'server copy', hostile),
-      remedyForPrecondition('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION', 'server copy', hostile),
+      remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', hostile),
+      remedyForPrecondition('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION', hostile),
     ]
       .map((remedy) => JSON.stringify(remedy))
       .join(' ')
@@ -592,8 +658,8 @@ describe('secrecy', () => {
     }
 
     const text = [
-      remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', 'server copy', hostile),
-      remedyForPrecondition('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION', 'server copy', hostile),
+      remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', hostile),
+      remedyForPrecondition('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION', hostile),
     ]
       .map((remedy) => JSON.stringify(remedy))
       .join(' ')
@@ -605,11 +671,7 @@ describe('secrecy', () => {
   })
 
   it('still prints a legal enum member, so the guard is not just a blanket redaction', () => {
-    const remedy = remedyForPrecondition(
-      'SYNCING_SERVER_GRPC_UNBOUND',
-      'server copy',
-      topology({ boundServiceProxy: 'direct-call' }),
-    )
+    const remedy = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', topology({ boundServiceProxy: 'direct-call' }))
 
     expect(remedy.because.join(' ')).toContain('"direct-call"')
     expect(remedy.because.join(' ')).not.toContain('unrecognised')

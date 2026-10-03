@@ -20,11 +20,16 @@ import type { Tone } from './syncDiagnostics'
  * originals and imports these, leaving exactly one copy. Until then, a change to
  * either must be made to both.
  *
- * SECURITY: both components render only what they are handed. `Remedy.summary`
- * is the one place server-authored prose reaches the screen and it is passed
- * through `sanitizeServerCopy` where the remedy is CONSTRUCTED
- * (`diagnosticRemedies.ts`), not here — a redaction applied at render time would
- * leave the copyable report unprotected.
+ * SECURITY: both components render only what they are handed, and `Remedy` no
+ * longer carries server-authored prose for them to render. This note used to say
+ * that `Remedy.summary` was the one place such prose reached the screen and that
+ * it was redacted where the remedy is CONSTRUCTED (`diagnosticRemedies.ts`)
+ * rather than here, because a render-time redaction would leave the copyable
+ * report unprotected. The second half of that reasoning still holds and the first
+ * half is gone: every `Remedy` constructor now takes a closed union of literals
+ * this build compiled in, so there is no server string in a remedy to redact. It
+ * is corrected rather than deleted because a justification this specific gets
+ * re-derived from memory by the next reader.
  *
  * NO ICONS, ON PURPOSE. An `Icon` whose `type` is not in
  * `Components/Icon/IconNameToSvgMapping.ts` renders its own name as literal text,

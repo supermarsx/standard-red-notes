@@ -43,6 +43,29 @@ const PLANTED_OPAQUE_OPERATION = `${PLANTED_HEAD}-wwwwwwwwwwwwwwwwwwwwwwww-${PLA
 const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_OPAQUE_OPERATION]
 
 /**
+ * The same discipline for the GATE's own strings, in the two shapes that
+ * discriminate between a denylist and a closed set.
+ *
+ * `PLANTED_OPAQUE` has no scheme, no dot and no colon, so nothing in
+ * `sanitizeServerCopy` can match any part of it — the class it says itself it
+ * cannot catch. `PLANTED_SHAPED` is the same marker alphabet in upper snake case,
+ * which is the shape of a legitimate condition code and therefore the class a
+ * SHAPE floor admits: that is what got past `safeEnvName` and onto the screen.
+ */
+const PLANTED_OPAQUE = 'zqx7v2-kkmr9pt4-jjdw3bn8-xxhf6cs1-vvqz5gy0-ttnb8dk2'
+const PLANTED_SHAPED = 'ZQX7V2_KKMR9PT4_JJDW3BN8_XXHF6CS1_VVQZ5GY0'
+
+/**
+ * Head, middle and tail, 20 characters each. A whole-string assertion is what
+ * passes vacuously against a TRUNCATED leak: the bytes that escaped are then a
+ * substring nobody checked.
+ */
+const windowsOf = (value: string): readonly string[] => {
+  const middle = Math.max(0, Math.floor((value.length - 20) / 2))
+  return [value.slice(0, 20), value.slice(middle, middle + 20), value.slice(-20)]
+}
+
+/**
  * The redactor is the second line behind the server's presence-only contract. It
  * is tested from both directions, because over-redaction is a real cost too: it
  * would quietly mangle the variable names and version tokens that are the whole
@@ -284,6 +307,163 @@ describe('sync diagnostics model', () => {
       )
 
       expect(diagnosis.findings.filter((finding) => finding.title === code)).toHaveLength(1)
+    })
+
+    /**
+     * *** THE GATE'S OWN STRINGS, COUNTED RATHER THAN ECHOED. ***
+     *
+     * Seven fields reached this Overview through `sanitizeServerCopy` alone —
+     * the precondition code and its remedy, the host's condition and its remedy,
+     * the live refusal reason, and the FILES_V1 condition and its remedy. A probe
+     * over the live stack's own payload measured all seven: a marker-built value
+     * with no address shape printed intact in every one of them, and so did an
+     * upper snake case value shaped exactly like a legitimate condition code,
+     * which is the class a shape floor admits.
+     *
+     * Each case below asserts head, middle and tail, because the whole-string
+     * assertion is the one that passes vacuously against a truncated leak. And
+     * each asserts that `[address withheld]` is ABSENT: its presence would mean
+     * the denylist had been put back as the defence.
+     */
+    describe('the gate’s own strings', () => {
+      const poisonedGate = (planted: string): SyncDiagnosticsPayload => ({
+        gate: {
+          recorded: true,
+          gatewayAttached: true,
+          syncLaneEnabled: true,
+          unmetPreconditions: [{ code: planted, remedy: planted }],
+          unmetCodes: [planted],
+          files: { advertised: false, unmetCondition: planted, remedy: planted },
+          host: { unmetCondition: planted, remedy: planted },
+        },
+        live: { capabilities: [], unavailabilityReasons: [planted], ticketAvailable: true },
+        protocol: { version: 1, serverOperations: [...CLIENT_SYNC_OPERATIONS] },
+      })
+
+      it.each([
+        ['an opaque value', PLANTED_OPAQUE],
+        ['a value shaped like a legitimate condition code', PLANTED_SHAPED],
+      ])('keeps %s out of every finding, in all seven fields at once', (_label, planted) => {
+        const serialised = JSON.stringify(diagnose(poisonedGate(planted), { state: 'HTTP_ONLY', operations: [] }))
+
+        for (const fragment of windowsOf(planted)) {
+          expect(serialised).not.toContain(fragment)
+        }
+        expect(serialised).not.toContain('[address withheld]')
+        // Not vacuous: the findings were produced, and they say how many. ONE
+        // condition rather than two because the host's condition here is the
+        // same string as the listed one and is deduplicated, which is the
+        // behaviour the two tests below this one check separately.
+        expect(serialised).toContain('1 unmet condition this build cannot explain')
+        expect(serialised).toContain('1 refusal reason this build cannot explain')
+        expect(serialised).toContain('FILES_V1 not advertised (a condition this build does not recognise)')
+      })
+
+      /**
+       * The case the count alone does not cover: a code this build DOES know,
+       * with server prose beside it. The old Overview printed that prose as the
+       * finding's detail, so a recognised condition was a channel too.
+       */
+      it('withholds the server’s remedy even for a condition it recognises', () => {
+        const diagnosis = diagnose(
+          {
+            gate: {
+              recorded: true,
+              unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: `bind redis at ${PLANTED_OPAQUE}` }],
+              unmetCodes: ['REDIS_UNBOUND'],
+            },
+            live: { unavailabilityReasons: [], ticketAvailable: false },
+            protocol: { serverOperations: [...CLIENT_SYNC_OPERATIONS] },
+          },
+          { state: 'HTTP_ONLY', operations: [] },
+        )
+
+        const finding = diagnosis.findings.find((entry) => entry.title === 'REDIS_UNBOUND')
+        expect(finding).toBeDefined()
+        for (const fragment of windowsOf(PLANTED_OPAQUE)) {
+          expect(JSON.stringify(diagnosis)).not.toContain(fragment)
+        }
+        // This build's own sentence, which still names the variable — a variable
+        // NAME is inside the presence-only contract; the server's prose is not.
+        expect(finding?.detail).toContain('REDIS_URL')
+      })
+
+      /**
+       * The host's two fields on their own. They are the pair the measurement
+       * table under-reported: with no other unrecognised condition in the list
+       * they reached the WebSocket section's findings as well as this Overview,
+       * because the section's deduplication was what had been hiding them.
+       */
+      it('counts an unrecognised host condition instead of naming it or its remedy', () => {
+        const diagnosis = diagnose(
+          {
+            gate: {
+              recorded: true,
+              gatewayAttached: false,
+              syncLaneEnabled: true,
+              unmetPreconditions: [],
+              unmetCodes: [],
+              host: { unmetCondition: PLANTED_SHAPED, remedy: PLANTED_OPAQUE },
+            },
+            live: { unavailabilityReasons: [], ticketAvailable: false },
+            protocol: { serverOperations: [...CLIENT_SYNC_OPERATIONS] },
+          },
+          { state: 'HTTP_ONLY', operations: [] },
+        )
+
+        const serialised = JSON.stringify(diagnosis)
+        for (const fragment of [...windowsOf(PLANTED_SHAPED), ...windowsOf(PLANTED_OPAQUE)]) {
+          expect(serialised).not.toContain(fragment)
+        }
+        expect(diagnosis.findings.map((finding) => finding.title)).toContain(
+          'The gate reports 1 unmet condition this build cannot explain',
+        )
+      })
+
+      it('still names a FILES_V1 condition inside its four, so the admission is not a blanket refusal', () => {
+        const diagnosis = diagnose(
+          {
+            gate: {
+              recorded: true,
+              syncLaneEnabled: true,
+              unmetPreconditions: [],
+              files: { advertised: false, unmetCondition: 'AUTH_JWT_SECRET', remedy: PLANTED_OPAQUE },
+            },
+            live: { unavailabilityReasons: [], ticketAvailable: true },
+            protocol: { serverOperations: [...CLIENT_SYNC_OPERATIONS] },
+          },
+          { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+        )
+
+        const finding = diagnosis.findings.find((entry) => entry.title.includes('FILES_V1'))
+        expect(finding?.title).toBe('FILES_V1 not advertised (AUTH_JWT_SECRET)')
+        expect(finding?.detail).toContain('AUTH_JWT_SECRET was absent')
+        for (const fragment of windowsOf(PLANTED_OPAQUE)) {
+          expect(JSON.stringify(diagnosis)).not.toContain(fragment)
+        }
+      })
+
+      it('still names a refusal reason inside its closed set, with its own copy', () => {
+        const diagnosis = diagnose(
+          {
+            ...gateSatisfied,
+            live: {
+              capabilities: [],
+              unavailabilityReasons: ['no-allowed-origins', PLANTED_OPAQUE],
+              ticketAvailable: false,
+            },
+          },
+          { state: 'HTTP_FALLBACK', operations: [] },
+        )
+
+        expect(diagnosis.findings.map((finding) => finding.title)).toEqual([
+          'no-allowed-origins',
+          'The gateway reports 1 refusal reason this build cannot explain',
+        ])
+        for (const fragment of windowsOf(PLANTED_OPAQUE)) {
+          expect(JSON.stringify(diagnosis)).not.toContain(fragment)
+        }
+      })
     })
 
     it('reports a lane called enabled over a gateway that never attached', () => {

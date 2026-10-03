@@ -6,20 +6,25 @@ import {
   remedyForClientGap,
   remedyForLiveReason,
   remedyForPrecondition,
+  remedyForUnrecognisedPreconditions,
   remedyForUnstampedDeployment,
   TOPOLOGY_ENUM_MEMBERS,
   type DeploymentTopology,
   type Remedy,
 } from './diagnosticRemedies'
 import {
+  admitMembers,
   buildCapabilityRows,
   describeDeployment,
   describeDiagnosticsReadFailure,
   describeSyncItems,
   describeTransport,
   diagnose,
-  sanitizeServerCopy,
+  isKnownFilesUnmetCondition,
+  KNOWN_LIVE_REFUSAL_REASONS,
+  KNOWN_PRECONDITION_CODES,
   SYNC_ITEMS_STATE_REPORT,
+  UNRECOGNISED_FILES_CONDITION,
   UNRECOGNISED_OPERATION,
   type CapabilityTestOutcome,
   type DiagnosticsReadFailure,
@@ -52,6 +57,16 @@ import {
  *     redactor, and a probe over the live payload measured it — address-shaped
  *     withheld, opaque printed intact. Only `KnownEnvKey` reaches a row now; the
  *     rest are a count.
+ *   - The same rule again for the BOOT GATE's own strings — a precondition code,
+ *     a live refusal reason, the FILES_V1 sub-gate's condition, and the remedy
+ *     sentence the server sends with each. Those are the server's enums and its
+ *     prose, and this block printed all four through that same redactor. Measured
+ *     on the live stack over its real payload: a marker-built value with no
+ *     address shape printed intact, and so did one shaped exactly like a
+ *     legitimate upper snake case condition code. Only a member of
+ *     `KNOWN_PRECONDITION_CODES`, `KNOWN_LIVE_REFUSAL_REASONS` or
+ *     `KNOWN_FILES_UNMET_CONDITIONS` reaches a line now; the rest are a count,
+ *     and the remedy is this build's own copy for the admitted member.
  *   - The deployment revision IS included. It is already public at
  *     /.well-known/srn-deployment.json, and "which commit is live" is the first
  *     question anyone reading the report will ask.
@@ -256,31 +271,60 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
   }
   lines.push(`- Gateway attached: ${yesNo(payload?.gate?.gatewayAttached)}`)
   lines.push(`- Ticket available: ${yesNo(payload?.live?.ticketAvailable)}`)
-  const unmet = payload?.gate?.unmetPreconditions ?? []
-  if (unmet.length === 0) {
+  // *** THE CONDITIONS NAME ONLY WHAT THIS BUILD DECLARES. ***
+  //
+  // Both halves of an unmet precondition were server-chosen strings printed here
+  // through `sanitizeServerCopy` — the code on its own line, the remedy through
+  // `remedyForPrecondition`'s generic branch — and a probe over the live payload
+  // measured the result: a marker-built value with no address shape in either
+  // field printed intact into this block, as did one shaped exactly like a
+  // legitimate condition code. `admitMembers` returns the members beside the
+  // count of what it refused, so the names and the number cannot be separated.
+  const unmet = admitMembers(
+    (payload?.gate?.unmetPreconditions ?? []).map((precondition) => precondition.code),
+    KNOWN_PRECONDITION_CODES,
+  )
+  if (unmet.named.length === 0 && unmet.unnameable === 0) {
     lines.push('- Unmet conditions: none')
   } else {
     lines.push('- Unmet conditions:')
-    for (const precondition of unmet) {
-      lines.push(`  - ${sanitizeServerCopy(precondition.code ?? 'UNKNOWN')}`)
-      lines.push(...remedyLines(remedyForPrecondition(precondition.code ?? 'UNKNOWN', precondition.remedy, topology)))
+    for (const code of unmet.named) {
+      lines.push(`  - ${code}`)
+      lines.push(...remedyLines(remedyForPrecondition(code, topology)))
+    }
+    // Printed at zero as well, exactly as the capability and presence counts
+    // below are: "every condition the gate named was one this build knows" is a
+    // reading, and an absent line is indistinguishable from a report that never
+    // asked.
+    lines.push(`  - Conditions this build does not recognise: ${unmet.unnameable}`)
+    if (unmet.unnameable > 0) {
+      lines.push(...remedyLines(remedyForUnrecognisedPreconditions(unmet.unnameable)))
     }
   }
-  const liveReasons = payload?.live?.unavailabilityReasons ?? []
-  if (liveReasons.length > 0) {
+  // The same rule for the refusal reasons, measured the same way.
+  const liveReasons = admitMembers(payload?.live?.unavailabilityReasons ?? [], KNOWN_LIVE_REFUSAL_REASONS)
+  if (liveReasons.named.length > 0 || liveReasons.unnameable > 0) {
     lines.push('- Live refusal reasons:')
-    for (const reason of liveReasons) {
-      lines.push(`  - ${sanitizeServerCopy(reason)}`)
+    for (const reason of liveReasons.named) {
+      lines.push(`  - ${reason}`)
       const remedy = remedyForLiveReason(reason, topology)
       if (remedy) {
         lines.push(...remedyLines(remedy))
       }
     }
+    lines.push(`  - Reasons this build does not recognise: ${liveReasons.unnameable}`)
   }
   if (payload?.gate?.files) {
+    // The sub-gate's condition is one of four literals this build declares, and
+    // it is admitted against them rather than redacted: `UNRECOGNISED_FILES_CONDITION`
+    // is a constant from `syncDiagnostics.ts`, so this line cannot carry a
+    // server-chosen string whatever the server sends.
+    const filesCondition = payload.gate.files.unmetCondition
     lines.push(
       `- FILES_V1 advertised: ${yesNo(payload.gate.files.advertised)}${
-        payload.gate.files.unmetCondition ? ` (${sanitizeServerCopy(payload.gate.files.unmetCondition)})` : ''
+        filesCondition
+          ? ` (${isKnownFilesUnmetCondition(filesCondition) ? filesCondition : UNRECOGNISED_FILES_CONDITION})`
+          : ''
       }`,
     )
   }

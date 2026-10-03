@@ -113,6 +113,44 @@ const ledger = (overrides: Partial<LaneDegradationLedgerView> = {}): LaneDegrada
 const counters = (overrides: SocketGatewayCountersView = {}): SocketGatewayCountersView => ({ ...overrides })
 
 /* -------------------------------------------------------------------------- */
+/* Sentinels, in the two shapes that discriminate                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * An OPAQUE value: no scheme, no dot, no colon, so nothing in
+ * `sanitizeServerCopy` can match any part of it. This is the class the redactor
+ * says itself it cannot catch, and the class a live probe measured printing
+ * intact out of every field this file now plants it in.
+ *
+ * Built from markers rather than from plausible prose on purpose: a fragment of
+ * real English collides with the build's own copy and fires on innocent text.
+ */
+const PLANTED_OPAQUE = 'zqx7v2-kkmr9pt4-jjdw3bn8-xxhf6cs1-vvqz5gy0-ttnb8dk2'
+
+/**
+ * The same marker alphabet in upper snake case — the shape of a legitimate
+ * condition code, a refusal reason or a variable name. It is the class a SHAPE
+ * floor ADMITS: it is what got past `safeEnvName` and printed on screen. A sweep
+ * built only from address-shaped values cannot see this one.
+ */
+const PLANTED_SHAPED = 'ZQX7V2_KKMR9PT4_JJDW3BN8_XXHF6CS1_VVQZ5GY0'
+
+/**
+ * Head, middle and tail of a planted value, 20 characters each.
+ *
+ * Asserting on the whole string is what makes a sweep pass vacuously against a
+ * TRUNCATED leak — the bytes that got out are then a substring nobody asserted
+ * on. The middle and tail windows of these sentinels sit past 30 and 45
+ * characters respectively, so a cut at any of the usual widths still fails.
+ */
+const windowsOf = (value: string): readonly string[] => {
+  const middle = Math.max(0, Math.floor((value.length - 20) / 2))
+  return [value.slice(0, 20), value.slice(middle, middle + 20), value.slice(-20)]
+}
+
+const PLANTED_WINDOWS = windowsOf(PLANTED_OPAQUE)
+
+/* -------------------------------------------------------------------------- */
 /* Lookups that fail loudly                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -169,6 +207,7 @@ const build = (input: WebsocketSectionInput = {}): SectionModel => buildWebsocke
 
 const SYNC_ITEMS_ROW = 'SYNC_ITEMS on the socket'
 const UNMET_ROW = 'Unmet boot conditions'
+const UNNAMEABLE_ROW = 'Unmet conditions this build cannot name'
 
 /* -------------------------------------------------------------------------- */
 /* Absent is not false                                                        */
@@ -178,7 +217,11 @@ describe('buildWebsocketSection with nothing reported', () => {
   it('claims absent evidence and no verdict for every single row', () => {
     const rows = allRows(build())
 
-    expect(rows).toHaveLength(39)
+    // 40 since the gate block gained "Unmet conditions this build cannot name",
+    // which is the count that replaced the condition codes this build cannot
+    // print. It reads "not reported" with no gate, like every row beside it — a
+    // zero read off an unrecorded gate would be the same false green.
+    expect(rows).toHaveLength(40)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -577,7 +620,17 @@ describe('the boot gate block', () => {
     expect(finding?.verdict).toBe('undetermined')
     expect(finding?.caveat).toContain('does not establish')
     expect(finding?.detail).not.toContain('A_NEWER_CONDITION')
-    expect(finding?.remedy?.basis).toBe('generic')
+    // `verified`, not `generic`. `generic` means "the server's own default copy,
+    // printed because the topology is unknown", and that is precisely what this
+    // branch no longer does: the remedy is this build's own counted one, derived
+    // from the DIRECT observation that the code is outside its closed set. A
+    // `generic` basis here would print ", generic advice" beside advice that is
+    // not a default at all.
+    expect(finding?.remedy?.basis).toBe('verified')
+    expect(finding?.remedy?.effort).toBe('client-update')
+    // Counted, and the server's advice for it is nowhere in the finding.
+    expect(finding?.remedy?.summary).toContain('1 unmet condition')
+    expect(JSON.stringify(finding)).not.toContain('do a thing')
   })
 
   it('merges the host condition rather than trusting it to arrive merged', () => {
@@ -592,6 +645,41 @@ describe('the boot gate block', () => {
 
     expect(String(rowOf(model, UNMET_ROW).value)).toBe('1')
     expect(findingOf(model, 'WEBSOCKET_REDIS_NAMESPACE_INVALID')?.verdict).toBe('broken')
+  })
+
+  /**
+   * *** THE FAMILY MEMBER THE MEASUREMENT TABLE UNDER-REPORTED. ***
+   *
+   * `gate.host.unmetCondition` and `gate.host.remedy` were recorded as reaching
+   * the Overview only. They reached THIS section too, and the reason they looked
+   * clean is the reason it is worth a test of its own: the dedup loop collapses
+   * every unrecognised condition onto one finding, so with any OTHER unrecognised
+   * code in the list the host's finding is the one dropped. Measured on the live
+   * payload with an empty `unmetPreconditions`, both fields printed.
+   *
+   * There is no channel for the remedy now — `mergedConditions` returns codes and
+   * nothing else — so this is the assertion over a structural fix rather than
+   * over a filter.
+   */
+  it('counts a host condition it cannot name and carries neither it nor its remedy', () => {
+    const model = build({
+      payload: payload({
+        gate: gate({
+          unmetPreconditions: [],
+          host: { unmetCondition: PLANTED_SHAPED, remedy: PLANTED_OPAQUE },
+        }),
+      }),
+    })
+
+    const serialised = JSON.stringify(model)
+    for (const fragment of [...windowsOf(PLANTED_SHAPED), ...windowsOf(PLANTED_OPAQUE)]) {
+      expect(serialised).not.toContain(fragment)
+    }
+    expect(serialised).not.toContain('[address withheld]')
+    // The condition is still REPORTED, as a count in two places.
+    expect(String(rowOf(model, UNMET_ROW).value)).toBe('1')
+    expect(String(rowOf(model, UNNAMEABLE_ROW).value)).toBe('1')
+    expect(findingOf(model, UNRECOGNISED)?.title).toContain('1 unmet condition')
   })
 
   it('does not print the host condition twice when the server already merged it', () => {
@@ -624,6 +712,11 @@ describe('the boot gate block', () => {
     // The COUNT still reports both: a dropped condition is the fault, a merged
     // finding is only a presentation choice.
     expect(String(rowOf(model, UNMET_ROW).value)).toBe('2')
+    // And the merged finding carries the count of what was merged into it, which
+    // is the only thing it has instead of the two names.
+    expect(String(rowOf(model, UNNAMEABLE_ROW).value)).toBe('2')
+    expect(findingOf(model, UNRECOGNISED)?.title).toContain('2 unmet conditions')
+    expect(findingOf(model, UNRECOGNISED)?.remedy?.summary).toContain('2 unmet conditions')
   })
 
   it('reports a lane built with no attached gateway as the lane being broken', () => {
@@ -1003,11 +1096,27 @@ describe('the FILES_V1 sub-gate', () => {
     })
     expect(rowOf(model, 'FILES_V1 at the boot gate').verdict).toBe('degraded')
     expect(String(rowOf(model, 'FILES_V1 unmet condition').value)).toBe('VALET_TOKEN_SECRET')
-    expect(findingOf(model, 'FILES_V1_WITHHELD')?.detail).toContain('VALET_TOKEN_SECRET is not set.')
+    // This build's own sentence for the ADMITTED condition, which still names the
+    // variable — a variable NAME is inside the presence-only contract, it is the
+    // server's prose around it that is not. The server's own sentence for this
+    // condition is nowhere in the finding.
+    expect(findingOf(model, 'FILES_V1_WITHHELD')?.detail).toContain('VALET_TOKEN_SECRET was absent')
+    expect(findingOf(model, 'FILES_V1_WITHHELD')?.detail).not.toContain('VALET_TOKEN_SECRET is not set.')
   })
 
-  it('redacts an address a misbehaving server put in the files remedy', () => {
-    const model = build({
+  /**
+   * *** WITHHELD BECAUSE IT IS NEVER PRINTED, NOT BECAUSE A DENYLIST MATCHED. ***
+   *
+   * This case used to assert that `[address withheld]` was PRESENT, which pinned
+   * the redactor as the defence on this path. It is the trap the three commits
+   * before this one each walked into from the other side: an address-shaped value
+   * is caught by a denylist AND by a correct allowlist, so asserting on it cannot
+   * tell the two apart. The opaque sibling below is the one that discriminates —
+   * it was measured printing intact — and `[address withheld]` must now be ABSENT,
+   * because its presence would mean `sanitizeServerCopy` had been put back here.
+   */
+  it('does not print the files remedy at all, address-shaped or opaque', () => {
+    const shaped = build({
       payload: payload({
         gate: gate({
           files: {
@@ -1019,8 +1128,42 @@ describe('the FILES_V1 sub-gate', () => {
       }),
     })
 
-    expect(findingOf(model, 'FILES_V1_WITHHELD')?.detail).not.toContain('files.internal.example')
-    expect(findingOf(model, 'FILES_V1_WITHHELD')?.detail).toContain('[address withheld]')
+    expect(findingOf(shaped, 'FILES_V1_WITHHELD')?.detail).not.toContain('files.internal.example')
+    expect(findingOf(shaped, 'FILES_V1_WITHHELD')?.detail).not.toContain('[address withheld]')
+
+    const opaque = build({
+      payload: payload({
+        gate: gate({
+          files: { advertised: false, unmetCondition: 'FILES_INTERNAL_URL', remedy: PLANTED_OPAQUE },
+        }),
+      }),
+    })
+
+    for (const fragment of PLANTED_WINDOWS) {
+      expect(JSON.stringify(opaque)).not.toContain(fragment)
+    }
+    expect(findingOf(opaque, 'FILES_V1_WITHHELD')?.detail).toContain('FILES_INTERNAL_URL')
+  })
+
+  /**
+   * The condition itself, in the two shapes that discriminate. An upper
+   * snake case value is the class a SHAPE floor admits — it is what defeated
+   * `safeEnvName` — and it is refused here by MEMBERSHIP instead.
+   */
+  it('refuses a sub-gate condition outside its four, by membership rather than by shape', () => {
+    for (const planted of [PLANTED_OPAQUE, PLANTED_SHAPED]) {
+      const model = build({
+        payload: payload({
+          gate: gate({ files: { advertised: false, unmetCondition: planted, remedy: planted } }),
+        }),
+      })
+
+      expect(String(rowOf(model, 'FILES_V1 unmet condition').value)).toBe(UNRECOGNISED)
+      expect(findingOf(model, 'FILES_V1_WITHHELD')?.detail).toContain('outside the closed set this build knows')
+      for (const fragment of windowsOf(planted)) {
+        expect(JSON.stringify(model)).not.toContain(fragment)
+      }
+    }
   })
 })
 
@@ -1157,6 +1300,11 @@ describe('the copyable report', () => {
     'syncing.internal.example:50051',
     'super-secret-jwt-signing-key',
     'hunter2',
+    // Appended, so every index above keeps its meaning. These two are the shapes
+    // the four above cannot discriminate: one with nothing for a denylist to
+    // match, one shaped exactly like a legitimate condition code.
+    PLANTED_OPAQUE,
+    PLANTED_SHAPED,
   ]
 
   const poisoned = (secret: string): WebsocketSectionInput => ({
@@ -1215,6 +1363,35 @@ describe('the copyable report', () => {
       for (const finding of allFindings(build(poisoned(secret)))) {
         expect(String(finding.code)).not.toContain(secret)
       }
+    }
+  })
+
+  /**
+   * *** THE WHOLE MODEL, NOT ONLY THE SAFE-VALUE FIELDS. ***
+   *
+   * The two sweeps above read `reportLines`, row labels and values, and finding
+   * CODES — every field that is a `SafeValue`. That is the set the type system
+   * already guarantees, and it left this file structurally blind to the fields
+   * that are plain `string`: a finding's `detail`, a row's `note`, a `caveat`,
+   * and every line of a `Remedy`. All four were leaking. `gate.files.remedy`
+   * reached a finding's detail, and `gate.host.remedy` reached a remedy's
+   * `because` whenever the host's condition was the only one this build could not
+   * name — measured on the live payload, not supposed.
+   *
+   * So this serialises the ENTIRE model and asserts head, middle and tail of each
+   * planted value. `[address withheld]` must be absent too: its presence would
+   * mean the denylist had been reinstated as the defence somewhere in here.
+   */
+  it('keeps a planted value out of every note, detail, caveat and remedy as well', () => {
+    for (const secret of [...SECRETS, PLANTED_OPAQUE, PLANTED_SHAPED]) {
+      const serialised = JSON.stringify(build(poisoned(secret)))
+
+      for (const fragment of windowsOf(secret)) {
+        expect(serialised).not.toContain(fragment)
+      }
+      expect(serialised).not.toContain('[address withheld]')
+      // Not vacuous: the model was built and does carry its findings.
+      expect(serialised).toContain('FILES_V1_WITHHELD')
     }
   })
 
