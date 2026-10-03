@@ -2,6 +2,7 @@ import { attachWebSocketGateway, type AttachedGateway, type AttachOptions } from
 import type { IncomingMessage, ServerResponse } from 'http'
 
 import type { RealtimeGatewayHealth } from '../Readiness/AggregateReadinessService'
+import { syncGateDiagnostics, type SyncGateDiagnosticsRecorder } from './SyncGateDiagnostics'
 import { SyncWebSocketAccessService, syncWebSocketAccessService } from './SyncWebSocketAccessService'
 
 export type WebSocketGatewayAttach = (options: AttachOptions) => AttachedGateway
@@ -92,6 +93,9 @@ export const webSocketGatewayAccessService = new WebSocketGatewayAccessService()
  * The HTTP controller only receives a provider after every gateway subsystem
  * attached successfully. During shutdown it withdraws capability/ticket access
  * before draining sockets, allowing the caller to close HTTP only afterwards.
+ *
+ * It is also where the admin gate's SYNC_ITEMS verdict is MEASURED, because it
+ * is the one seam every host's lane passes through — see `attach()`.
  */
 export class SyncWebSocketRuntime {
   private gateway: AttachedGateway | undefined
@@ -101,6 +105,12 @@ export class SyncWebSocketRuntime {
     private readonly accessService: SyncWebSocketAccessService = syncWebSocketAccessService,
     private readonly attachGateway: WebSocketGatewayAttach = attachWebSocketGateway,
     private readonly gatewayAccessService: WebSocketGatewayAccessService = webSocketGatewayAccessService,
+    /**
+     * The boot gate's recorder. Injectable for tests only; both composition
+     * roots construct this runtime with no arguments, so the process-global
+     * recorder the admin endpoint reads is the one that gets the reading.
+     */
+    private readonly diagnostics: SyncGateDiagnosticsRecorder = syncGateDiagnostics,
   ) {}
 
   attach(options: AttachOptions): AttachedGateway {
@@ -109,6 +119,30 @@ export class SyncWebSocketRuntime {
     }
 
     const gateway = this.attachGateway(options)
+    // The admin gate's SYNC_ITEMS verdict, read from the handshake's OWN
+    // predicate (`sync.backend.ready()`, the whole of what syncCommandHandler
+    // consults at AUTHENTICATED) on the very lane just handed to the gateway.
+    //
+    // Here, and not in a composition root, because:
+    //   - both hosts attach through this line, so the bundled home server gets
+    //     a MEASURED verdict with no HomeServer.ts edit. It used to record
+    //     `syncingServerGrpcBound: true` ("in-process, satisfied by
+    //     construction") and the pane showed green over a lane that withholds
+    //     SYNC_ITEMS whenever AUTH_JWT_SECRET is empty;
+    //   - a host that forgets the line cannot exist, so no future host can
+    //     regress to a self-asserted claim;
+    //   - it runs only AFTER the attach returned, so a lane whose gateway
+    //     failed to attach reports no claim at all rather than ADVERTISED over
+    //     a socket that never opened;
+    //   - and it is here under test (SyncWebSocketRuntime.spec.ts), where the
+    //     composition roots are not.
+    //
+    // Before the providers below are published, so the admin endpoint can
+    // never observe a lane serving tickets while the gate still reads
+    // "never probed". The call is total — `undefined` is recorded as "no lane"
+    // and a throwing predicate as "unknown" — so it cannot interpose a failure
+    // between a successful attach and this runtime owning the gateway.
+    this.diagnostics.observeSyncItems(options.sync)
     this.gateway = gateway
     this.accessService.setProvider(gateway.sync)
     this.gatewayAccessService.setProvider(gateway)

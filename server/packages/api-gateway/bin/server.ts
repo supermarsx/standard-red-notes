@@ -828,18 +828,25 @@ void container
               secretAccessKey: env.get('SQS_SECRET_ACCESS_KEY', true) || undefined,
             },
           },
-          // The SYNC_ITEMS verdict for the admin gate is READ OFF THIS LANE,
-          // here, in the call that hands it to the gateway: `observeSyncItems`
-          // evaluates `backend.ready()` -- the very predicate syncCommandHandler
-          // evaluates at AUTHENTICATED -- and returns `sync` unchanged. Before
-          // this, the gate recorded `isBound(ApiGateway_GRPCSyncingServerServiceProxy)`,
-          // i.e. that a proxy object had been CONSTRUCTED, and reported
+          // The SYNC_ITEMS verdict for the admin gate is READ OFF THIS LANE --
+          // but inside `SyncWebSocketRuntime.attach`, not here. It evaluates
+          // `sync.backend.ready()`, the very predicate syncCommandHandler
+          // evaluates at AUTHENTICATED, on this same object, because the gate
+          // used to record `isBound(ApiGateway_GRPCSyncingServerServiceProxy)`
+          // -- that a proxy object had been CONSTRUCTED -- and reported
           // SYNC_ITEMS available while the handshake withheld it: a bound proxy
           // with a missing or under-32-byte SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET
-          // (or an empty AUTH_JWT_SECRET) fails `ready()` and the admin pane said
-          // the opposite for days. `undefined` here means this deployment built
-          // no lane, which is an answer and is recorded as one.
-          sync: syncGateDiagnostics.observeSyncItems(sync),
+          // (or an empty AUTH_JWT_SECRET) fails `ready()` and the admin pane
+          // said the opposite for days.
+          //
+          // Deliberately NOT also called here. The probe belongs at the attach
+          // seam every host shares: wired per composition root it left the
+          // bundled home server unmeasured, it ran BEFORE the attach could fail
+          // (a lane whose gateway threw reported ADVERTISED over a socket that
+          // never opened), and this file has no spec, so dropping the call was
+          // invisible. One tested call site is louder than two untested ones.
+          // See the SYNC_ITEMS block in SyncGateDiagnostics.
+          sync,
           sqsEventDedupStore: container.isBound(TYPES.ApiGateway_Redis)
             ? createRedisSqsEventDedupStore(container.get(TYPES.ApiGateway_Redis) as RedisSqsEventDedupClient, {
                 // N17: dedup claims are namespaced with everything else.
@@ -869,10 +876,11 @@ void container
         recordGate({ gatewayAttached: true })
         logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
         // The one SYNC_ITEMS line the gate can stand behind, stated once after
-        // the attach: the PROBED state, from the same predicate the handshake
-        // evaluates, not an inference from a constructed proxy. `state` and
-        // `cause` are closed enums and `remedy` is a compile-time constant, so
-        // this names variables and never a value.
+        // the attach, which is where the reading was taken: the PROBED state,
+        // from the same predicate the handshake evaluates, not an inference
+        // from a constructed proxy. `state` and `cause` are closed enums and
+        // `remedy` is a compile-time constant, so this names variables and
+        // never a value.
         const syncItemsVerdict = syncGateDiagnostics.report().syncItems
         if (syncItemsVerdict.state === 'ADVERTISED') {
           logger.info('Realtime SYNC_ITEMS WILL be advertised: the durable command backend reports ready.')

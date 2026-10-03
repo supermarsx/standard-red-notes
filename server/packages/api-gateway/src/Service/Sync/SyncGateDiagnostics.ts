@@ -55,10 +55,12 @@ export const SYNC_SERVER_OPERATIONS = [
  *
  * `observeSyncItems()` is the one method that takes a rich object rather than
  * booleans, and it is not a hole in that boundary: the lane is READ and handed
- * straight back, never retained, and the only thing kept from it is one value
- * of the closed `SyncItemsProbeOutcome` set. Nothing derived from the lane —
- * not a thrown message, not a resolved address, not a length — may be stored
- * or reported.
+ * straight back, and the only thing kept from it is one value of the closed
+ * `SyncItemsProbeOutcome` set. Nothing derived from the lane — not a thrown
+ * message, not a resolved address, not a length — may be stored or reported.
+ * The lane's IDENTITY is kept, in a `WeakSet` that holds no strong reference
+ * and that nothing is ever read out of (see `observeSyncItems`); it is a
+ * membership token for "this lane has already been read", never a channel.
  */
 
 /**
@@ -159,6 +161,16 @@ export type SyncHostReport = {
  *      `AttachOptions['sync']`, so it is the gateway's own option shape: the
  *      object probed is the object that will answer the handshake, and
  *      renaming either the option or the predicate is a compile error here.
+ *   3. It is called from exactly ONE place: `SyncWebSocketRuntime.attach()`,
+ *      the seam every host's lane passes through to exist at all. It was
+ *      first wired in the api-gateway's own composition root, which left the
+ *      bundled home server self-asserting a green it had never measured; and a
+ *      per-host probe is one more line each new host can forget. The runtime
+ *      seam covers every host with no host code, is probed only AFTER the
+ *      gateway attached (a lane whose attach threw can no longer report
+ *      ADVERTISED), and -- unlike a composition root, which has no spec -- is
+ *      covered by `SyncWebSocketRuntime.spec.ts`, so deleting the probe fails
+ *      a test instead of silently restoring the original bug.
  *
  * The one signal admitted WITHOUT a probe is admitted only in the direction
  * that WITHHOLDS: an unbound durable port cannot be ready (`ready()` requires
@@ -342,23 +354,49 @@ export class SyncGateDiagnosticsRecorder {
    * be re-derived from the wrong signal. Only `observeSyncItems()` writes here.
    */
   private syncItemsProbe: SyncItemsProbeOutcome = 'NEVER_PROBED'
+  /**
+   * The lanes already read, by IDENTITY. Re-reading one cannot help -- every
+   * input to `ready()` is fixed at process start -- and it can HARM: a second
+   * call that happened to throw would replace a real reading with
+   * `'PROBE_FAILED'`, i.e. downgrade a definite answer to "unknown". So the
+   * first reading of a lane is final.
+   *
+   * Keyed per lane rather than "probed at all" on purpose. A blanket
+   * first-wins flag would make a reading survive the lane it was taken from:
+   * an in-process host that stops and restarts its gateway (HomeServer is a
+   * library, not only a process) would keep the PREVIOUS boot's verdict, and a
+   * boot that built no lane would still read `'READY'` -- a false ADVERTISED,
+   * the exact failure direction this module exists to rule out. A lane the
+   * recorder has not seen is therefore always read afresh.
+   *
+   * A `WeakSet` because the recorder is process-global and must not keep a
+   * stopped gateway's composition alive. Nothing is ever read out of it beyond
+   * membership, so it carries no information (see the security note above).
+   */
+  private syncItemsRead = new WeakSet<object>()
 
   record(observation: SyncGateObservation): void {
     this.observation = observation
   }
 
   /**
-   * Reads the handshake's own predicate off the sync lane the gateway is being
-   * given, and returns that same lane so this sits IN the call that hands it
-   * over:
+   * Reads the handshake's own predicate off the sync lane the gateway was just
+   * given, and returns that same lane so the call can sit in the handover
+   * itself. Its one caller is `SyncWebSocketRuntime.attach()`:
    *
-   *     webSocketRuntime.attach({ ..., sync: syncGateDiagnostics.observeSyncItems(sync) })
+   *     const gateway = this.attachGateway(options)
+   *     this.diagnostics.observeSyncItems(options.sync)
    *
    * The object probed is therefore the object that will answer the handshake --
-   * not a second one that could disagree -- and dropping the observation means
-   * editing the attach argument itself rather than silently deleting a line
-   * somewhere else. `undefined` (this deployment built no lane) is an answer,
-   * not a failure to answer.
+   * not a second one that could disagree -- for EVERY host, because that is
+   * the seam a lane must pass through to exist at all. `undefined` (this
+   * deployment built no lane) is an answer, not a failure to answer.
+   *
+   * IDEMPOTENT per lane: the first reading of a given lane is final, so a
+   * second call site (a host that also probes, a gateway re-attached to the
+   * same lane) can neither change the verdict nor weaken it. A lane the
+   * recorder has not read before is always read afresh -- see
+   * `syncItemsRead` for why that distinction is not an optimisation.
    *
    * A thrown predicate is recorded as `'PROBE_FAILED'` -- unknown, never
    * available -- and the thrown value is dropped here: it can embed a resolved
@@ -369,6 +407,10 @@ export class SyncGateDiagnosticsRecorder {
       this.syncItemsProbe = 'NO_LANE'
       return undefined
     }
+    if (this.syncItemsRead.has(lane)) {
+      return lane
+    }
+    this.syncItemsRead.add(lane)
     try {
       this.syncItemsProbe = lane.backend.ready() ? 'READY' : 'NOT_READY'
     } catch {
@@ -380,6 +422,9 @@ export class SyncGateDiagnosticsRecorder {
   clear(): void {
     this.observation = undefined
     this.syncItemsProbe = 'NEVER_PROBED'
+    // Forgets which lanes were read as well as what they said, so `clear()`
+    // leaves a recorder indistinguishable from a fresh one.
+    this.syncItemsRead = new WeakSet()
   }
 
   /**

@@ -264,6 +264,80 @@ describe('SyncGateDiagnosticsRecorder', () => {
       expect(recorder.observeSyncItems(lane)).toBe(lane)
     })
 
+    it('reads a given lane ONCE: a second observation cannot change or weaken the verdict', () => {
+      // The probe is called from the shared attach seam; a host (or a future
+      // one) that also probes must be harmless. Re-reading cannot help --
+      // every input to `ready()` is fixed at process start -- and it can harm:
+      // a second call that threw would replace a definite answer with
+      // "unknown", which the panel renders as no claim at all.
+      const recorder = new SyncGateDiagnosticsRecorder()
+      recorder.record({ ...MET, filesAdvertised: true, gatewayAttached: true })
+      let reads = 0
+      const lane = laneWhose(() => {
+        if (reads++ > 0) {
+          throw new Error('grpc://syncing.internal.example:50051 unreachable')
+        }
+        return true
+      })
+
+      expect(recorder.observeSyncItems(lane)).toBe(lane)
+      const first = recorder.report()
+      // Same lane, twice more, including the call that would throw.
+      expect(recorder.observeSyncItems(lane)).toBe(lane)
+      expect(recorder.observeSyncItems(lane)).toBe(lane)
+
+      expect(reads).toBe(1)
+      expect(recorder.report()).toEqual(first)
+      expect(recorder.report().syncItems).toEqual({
+        state: 'ADVERTISED',
+        cause: null,
+        remedy: null,
+        probe: 'READY',
+      })
+    })
+
+    it('reads a DIFFERENT lane afresh, so no verdict outlives the lane it was taken from', () => {
+      // Scoped per lane, not "already probed at all". A blanket first-wins
+      // flag would let a reading survive its lane: an in-process host that
+      // stops and restarts its gateway (HomeServer is a library, not only a
+      // process) would keep the previous boot's verdict, and a boot that built
+      // no lane would still read READY -- a false ADVERTISED, which is the one
+      // failure direction this whole block exists to rule out.
+      const recorder = new SyncGateDiagnosticsRecorder()
+      recorder.record({ ...MET, filesAdvertised: true, gatewayAttached: true })
+
+      recorder.observeSyncItems(laneWhose(() => true))
+      expect(recorder.report().syncItems.state).toBe('ADVERTISED')
+
+      recorder.observeSyncItems(laneWhose(() => false))
+      expect(recorder.report().syncItems).toMatchObject({
+        state: 'WITHHELD',
+        cause: 'DURABLE_BACKEND_NOT_READY',
+        probe: 'NOT_READY',
+      })
+
+      // ...and a restart that builds no lane at all withdraws the claim too.
+      recorder.observeSyncItems(undefined)
+      expect(recorder.report().syncItems).toMatchObject({ state: 'WITHHELD', cause: 'SYNC_LANE_NOT_BUILT' })
+    })
+
+    it('forgets which lanes it read on clear(), leaving a recorder indistinguishable from a fresh one', () => {
+      const recorder = new SyncGateDiagnosticsRecorder()
+      const lane = laneWhose(() => true)
+      recorder.record({ ...MET, filesAdvertised: true, gatewayAttached: true })
+
+      recorder.observeSyncItems(lane)
+      recorder.clear()
+      expect(recorder.report().syncItems.probe).toBe('NEVER_PROBED')
+
+      // The SAME lane is readable again: `clear()` resets the reading and the
+      // record of having read it, or a spec (and a restarted embedded host)
+      // could never take a second one.
+      recorder.record({ ...MET, filesAdvertised: true, gatewayAttached: true })
+      recorder.observeSyncItems(lane)
+      expect(recorder.report().syncItems.state).toBe('ADVERTISED')
+    })
+
     it('answers an unrecorded gate as unknown, and clear() forgets the probe', () => {
       const recorder = new SyncGateDiagnosticsRecorder()
 

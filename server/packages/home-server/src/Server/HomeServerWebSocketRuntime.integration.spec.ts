@@ -303,10 +303,87 @@ describe('HomeServer WebSocket sync lifecycle integration', () => {
       expect(report.recorded).toBe(true)
       expect(report.syncLaneEnabled).toBe(false)
       expect(report.unmetCodes).toEqual(['WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING'])
+      // A lane that was never built is an ANSWER, measured at the attach, not
+      // the "satisfied by construction" green this host used to assert.
+      expect(report.syncItems).toMatchObject({ cause: 'LANE_PRECONDITION_UNMET', probe: 'NO_LANE' })
     } finally {
       await webSocketRuntime.stop()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
+  }, 15_000)
+
+  // This host records `syncingServerGrpcBound: true` -- "the durable command
+  // backend is in-process, satisfied by construction" -- so every condition the
+  // shared gate can see is met and the unmet list is empty. That is exactly the
+  // state in which the pane used to show SYNC_ITEMS green without anything
+  // having measured it: the handshake offers the operation only when
+  // `backend.ready()` holds, which also needs AUTH_JWT_SECRET, and that is
+  // settable to empty on a single container. The reading now comes from the
+  // shared `SyncWebSocketRuntime.attach` seam, so this host gains it with NO
+  // line of its own -- which is what this test exists to prove.
+  it('measures the SYNC_ITEMS verdict through the shared attach seam, with no HomeServer composition line', async () => {
+    const gate = resolveHomeServerRealtimeGate({
+      connectionTokenSecret: 'a'.repeat(32),
+      redisHost: '127.0.0.1',
+      webSocketSyncEnabled: true,
+      redisNamespaceValid: true,
+    })
+    expect(gate.buildSyncLane).toBe(true)
+    expect(gate.observation.syncingServerGrpcBound).toBe(true)
+
+    // The composition HomeServer.start performs, down to constructing the
+    // runtime with no arguments (so the probe lands on the process-global
+    // recorder the admin endpoint reads).
+    const observeThroughAttach = async (laneBackend: SyncCommandBackendAdapter): Promise<void> => {
+      const server = http.createServer(buildApp().app)
+      const webSocketRuntime = new SyncWebSocketRuntime()
+      syncGateDiagnostics.record({ ...gate.observation, filesAdvertised: true, gatewayAttached: false })
+      try {
+        webSocketRuntime.attach({
+          httpServer: server,
+          logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+          config: {
+            connectionTokenSecret: 'a'.repeat(32),
+            connectionTokenTtl: '60s',
+            internalSecret: 'integration-internal-secret',
+            authJwtSecret: 'integration-auth-secret',
+            redisHost: '127.0.0.1',
+            redisPort: 1,
+          },
+          sync: {
+            isEnabled: () => true,
+            allowedOrigins: [],
+            allowSameOrigin: true,
+            authorization,
+            backend: laneBackend,
+          },
+        })
+        syncGateDiagnostics.record({ ...gate.observation, filesAdvertised: true, gatewayAttached: true })
+      } finally {
+        await webSocketRuntime.stop()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
+
+    await observeThroughAttach(backend)
+    const advertised = syncGateDiagnostics.report()
+    expect(advertised.unmetCodes).toEqual([])
+    expect(advertised.syncLaneEnabled).toBe(true)
+    expect(advertised.syncItemsAdvertised).toBe(true)
+    expect(advertised.syncItems).toEqual({ state: 'ADVERTISED', cause: null, remedy: null, probe: 'READY' })
+
+    // Same host, same satisfied gate, a backend the handshake would refuse: the
+    // verdict follows the lane rather than the host's self-assertion.
+    await observeThroughAttach({ ...backend, ready: () => false })
+    const withheld = syncGateDiagnostics.report()
+    expect(withheld.unmetCodes).toEqual([])
+    expect(withheld.syncLaneEnabled).toBe(true)
+    expect(withheld.syncItemsAdvertised).toBe(false)
+    expect(withheld.syncItems).toMatchObject({
+      state: 'WITHHELD',
+      cause: 'DURABLE_BACKEND_NOT_READY',
+      probe: 'NOT_READY',
+    })
   }, 15_000)
 })
 
