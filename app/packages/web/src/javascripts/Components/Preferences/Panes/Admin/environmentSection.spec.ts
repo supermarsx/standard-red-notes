@@ -1,4 +1,5 @@
 import { EFFORT_LABEL, type DeploymentTopology } from './diagnosticRemedies'
+import { EFFORT_TONE } from './diagnosticsPresentation'
 import {
   UNRECOGNISED,
   VERDICTS,
@@ -14,9 +15,11 @@ import {
   GRPC_FAILURE_CLASSES,
   PROXY_DECISIONS,
   type EnvironmentRuntimeView,
+  type EnvironmentSectionInput,
   type TransportFallbackView,
 } from './environmentSection'
 import { WITHHELD } from './reportAllowlist'
+import type { SyncDiagnosticsPayload } from './syncDiagnostics'
 
 /**
  * Standard Red Notes: the Environment & setup section's own tests.
@@ -34,8 +37,10 @@ import { WITHHELD } from './reportAllowlist'
  *     is asserted to SURVIVE as `broken`. Asserting only the second half would
  *     pass against a row with no evidence discipline at all.
  *  2. An absent field must not become a negative answer. The whole model is built
- *     with no input and all 21 rows are checked individually, not as a set: an
- *     assertion over a set is satisfied by any member of it.
+ *     with no input and all 22 rows are checked individually, not as a set: an
+ *     assertion over a set is satisfied by any member of it. A counter is the
+ *     sharpest case: an absent count must read "not reported", never `0` — the
+ *     first means "did not ask" and the second means "measured none".
  *  3. No configured VALUE and no secret LENGTH may reach a row, a finding, a
  *     remedy or the copyable report. The planted-value scan below serialises the
  *     whole model, because asserting on the report alone would miss a value
@@ -113,7 +118,7 @@ describe('buildEnvironmentSection with nothing reported', () => {
     const model = buildEnvironmentSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(21)
+    expect(rows).toHaveLength(22)
     for (const row of rows) {
       expect({
         label: String(row.label),
@@ -250,7 +255,7 @@ describe('buildEnvironmentSection shape', () => {
     expect(report).toContain('## Environment & setup')
     expect(report).toContain('- Configured values: never collected')
     expect(report).toContain('- Secret lengths: never reported; a secret appears as a threshold state only')
-    expect(report).toContain('- Build revision and version: reported under the Deployment heading of this report')
+    expect(report).toContain('- Build version: reported under the Deployment heading of this report')
   })
 })
 
@@ -518,10 +523,55 @@ describe('why this transport was chosen', () => {
     expect(rowOf(auth, 'Why this transport was chosen').verdict).toBe('degraded')
     expect(findingOf(auth, 'GRPC_LISTENER_UNREACHABLE')?.remedy?.steps?.[0]).toContain('auth server is up')
     expect(findingOf(syncing, 'GRPC_LISTENER_UNREACHABLE')?.remedy?.steps?.[0]).toContain('syncing server is up')
-    // The closest available effort, with the real location of the fix in the summary.
-    expect(findingOf(syncing, 'GRPC_LISTENER_UNREACHABLE')?.remedy?.effort).toBe('wait')
     expect(findingOf(syncing, 'GRPC_LISTENER_UNREACHABLE')?.remedy?.summary).toContain('Nothing on THIS container')
+  })
+
+  /**
+   * A dead gRPC listener is repaired on the service that should be listening, and
+   * the chip is the part of a remedy an operator reads first. It wore `wait` until
+   * `peer-service` existed, and `wait`'s label — "Transient" — advises doing
+   * nothing about a listener that may be permanently down.
+   *
+   * Both halves are asserted. A test that only pinned the new member would also
+   * pass if `wait` had simply been RELABELLED, which would have moved the defect
+   * into every genuinely transient remedy instead of fixing it.
+   */
+  it('sends an unreachable listener to the service that owns the fix, not to "Transient"', () => {
+    const syncing = buildEnvironmentSection({
+      topology: topology(),
+      runtime: runtime({ serviceProxyDecision: 'syncing-grpc-unreachable' }),
+    })
+    const serving = buildEnvironmentSection({
+      topology: topology({ boundServiceProxy: 'grpc' }),
+      fallback: {
+        observed: true,
+        everDegraded: true,
+        lanes: lanes({
+          'items-sync': {
+            degradedCalls: 1,
+            refusedCalls: 0,
+            lastFailureClass: 'channel-unavailable',
+            lastFailureAgeMs: 50,
+          },
+        }),
+      },
+    })
+
+    for (const finding of [
+      findingOf(syncing, 'GRPC_LISTENER_UNREACHABLE'),
+      findingOf(serving, 'GRPC_BOUND_SERVING_HTTP'),
+    ]) {
+      expect(finding?.remedy?.effort).toBe('peer-service')
+      expect(finding?.remedy?.effort).not.toBe('wait')
+      expect(EFFORT_LABEL[finding?.remedy?.effort ?? 'wait']).toBe('Another service')
+    }
+
+    // `wait` keeps its own meaning for the remedies that really are transient.
     expect(EFFORT_LABEL.wait).toBe('Transient')
+    expect(EFFORT_LABEL['peer-service']).not.toBe(EFFORT_LABEL.wait)
+    // And the chip is not neutral, because neutral is the tone of "nothing to do".
+    expect(EFFORT_TONE['peer-service']).toBe('warn')
+    expect(EFFORT_TONE['peer-service']).not.toBe(EFFORT_TONE.wait)
   })
 
   it('does not raise a listener finding for a decision that is not about a listener', () => {
@@ -707,6 +757,110 @@ describe('the three states the runtime ledger separates', () => {
 })
 
 /* -------------------------------------------------------------------------- */
+/* The payload field the server was already sending                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `transportFallback` has been on the admin response since the per-lane counters
+ * landed, and was missing from `SyncDiagnosticsPayload` — so every row above read
+ * "not reported" on a deployment that was reporting, and the section's own view
+ * type was local plumbing nothing could be wired to.
+ *
+ * These tests run the real payload type through the section input, which is the
+ * only thing that proves the two shapes agree: a wire type and a client type that
+ * drift are worse than no client type, because the drift is invisible until an
+ * operator reads a wrong row during an incident.
+ */
+describe('transportFallback, as the payload type declares it', () => {
+  const grpc = (): DeploymentTopology => topology({ boundServiceProxy: 'grpc' })
+
+  it('feeds payload.transportFallback into the section with no adaptation', () => {
+    const wire: SyncDiagnosticsPayload = {
+      deployment: grpc(),
+      transportFallback: {
+        observed: true,
+        everDegraded: true,
+        lanes: {
+          'items-sync': {
+            degradedCalls: 5,
+            refusedCalls: 2,
+            lastFailureClass: 'transport-internal',
+            lastFailureAgeMs: 2_000,
+          },
+        },
+      },
+    }
+    const model = buildEnvironmentSection({ topology: wire.deployment, fallback: wire.transportFallback })
+
+    expect(rowOf(model, 'Calls served over HTTP instead of gRPC').value).toBe('5')
+    expect(rowOf(model, 'Calls refused rather than retried').value).toBe('2')
+    expect(rowOf(model, 'Most recent gRPC failure').value).toBe('transport-internal')
+    expect(rowOf(model, 'gRPC transport health').value).toBe('gRPC bound, HTTP serving')
+    expect(codesOf(model)).toContain('GRPC_BOUND_SERVING_HTTP')
+  })
+
+  it('types the payload field as the section input, so neither can drift from the other', () => {
+    const fromWire: NonNullable<SyncDiagnosticsPayload['transportFallback']> = {
+      observed: true,
+      everDegraded: true,
+      lanes: {
+        'session-validation': {
+          degradedCalls: 1,
+          refusedCalls: 0,
+          lastFailureClass: 'cancelled',
+          lastFailureAgeMs: 1,
+        },
+      },
+    }
+    const asSectionInput: EnvironmentSectionInput['fallback'] = fromWire
+    const model = buildEnvironmentSection({ topology: grpc(), fallback: asSectionInput })
+
+    expect(rowOf(model, 'Calls served over HTTP instead of gRPC').value).toBe('1')
+    expect(rowOf(model, 'Lane of the most recent gRPC failure').value).toBe('session-validation')
+  })
+
+  /**
+   * *** ABSENT IS NOT ZERO ***
+   *
+   * A zero counter means "the gateway measured none". An absent one means "this
+   * build asked a server that does not answer the question". Both are asserted
+   * here against the SAME two rows, because the defect is not that either reading
+   * is wrong on its own — it is that they are indistinguishable once conflated,
+   * and a fabricated zero reads as a clean bill of health.
+   */
+  it('reads an absent transportFallback as "did not ask" and a reported zero as "measured none"', () => {
+    const older: SyncDiagnosticsPayload = { deployment: grpc() }
+    const answered: SyncDiagnosticsPayload = {
+      deployment: grpc(),
+      transportFallback: { observed: false, everDegraded: false, lanes: lanes() },
+    }
+
+    expect(older.transportFallback).toBeUndefined()
+
+    const silent = buildEnvironmentSection({ topology: older.deployment, fallback: older.transportFallback })
+    const measured = buildEnvironmentSection({ topology: answered.deployment, fallback: answered.transportFallback })
+
+    for (const label of ['Calls served over HTTP instead of gRPC', 'Calls refused rather than retried'] as const) {
+      expect(rowOf(silent, label).value).toBe('not reported')
+      expect(rowOf(silent, label).value).not.toBe('0')
+      expect(rowOf(silent, label).evidence.kind).toBe('absent')
+      expect(rowOf(silent, label).verdict).toBe('undetermined')
+
+      expect(rowOf(measured, label).value).toBe('0')
+      expect(rowOf(measured, label).evidence.kind).toBe('direct')
+      // Zero is INFORMATIONAL, not healthy: an idle gateway reads the same.
+      expect(rowOf(measured, label).verdict).toBe('informational')
+    }
+
+    // The same distinction one level up: a bound gRPC proxy with no ledger beside
+    // it claims nothing, rather than claiming a healthy lane.
+    expect(rowOf(silent, 'gRPC transport health').value).toBe('not reported')
+    expect(rowOf(silent, 'gRPC transport health').evidence.kind).toBe('absent')
+    expect(rowOf(measured, 'gRPC transport health').value).toBe('gRPC, no fallback recorded')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
 /* Sessions and cookies                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -858,12 +1012,87 @@ describe('deployment identity', () => {
     expect(row.evidence.kind).toBe('absent')
   })
 
-  it('does not repeat the revision as a row, and says where it is reported instead', () => {
+  /**
+   * The row this section could not have before `safeToken`: a 40-character git
+   * revision is none of the other permitted categories, so printing it would have
+   * taken the cast the contract bans, and the section sent the reader to the
+   * copyable report — which had been admitting the same literal, by the same
+   * shape, all along.
+   */
+  it('prints the revision itself, admitted by the shape the Dockerfile validates', () => {
     const model = buildEnvironmentSection({ topology: topology(), deploymentMarker: STAMPED })
+    const row = rowOf(model, 'Build revision')
 
-    expect(rowOf(model, 'Deployment identity').note).toContain('printed in the copyable report')
-    expect(allRows(model).map((row) => String(row.label))).not.toContain('Revision')
-    expect(JSON.stringify(model)).not.toContain('a'.repeat(40))
+    expect(row.value).toBe('a'.repeat(40))
+    expect(row.verdict).toBe('informational')
+    expect(row.evidence.kind).toBe('direct')
+    // It reaches the copyable report through the ordinary row path, with no
+    // hand-written line and no second admission rule.
+    expect(model.reportLines.join('\n')).toContain(`- Build revision: ${'a'.repeat(40)}`)
+    // The verdict still belongs to the state row; this one is context.
+    expect(rowOf(model, 'Deployment identity').verdict).toBe('healthy')
+  })
+
+  /**
+   * *** THE ROW'S WHOLE REASON FOR BEING SAFE ***
+   *
+   * The marker is served by whatever fronts the web bundle, so its revision is
+   * untrusted input — and this is not theoretical: the health report's
+   * planted-secret scan caught a revision reading `token-sk-live-…` printed
+   * verbatim, because an opaque secret has no address shape for a denylist to
+   * match. Shape admission refuses instead, and REFUSING MUST NOT ECHO: a
+   * partially scrubbed string is not safe, and a withheld value that quotes what
+   * it withheld has leaked it.
+   *
+   * Each candidate is asserted individually rather than over a set, because an
+   * assertion over a set is satisfied by any member of it.
+   */
+  it('withholds anything that is not a revision, without echoing a byte of it', () => {
+    const notRevisions = [
+      'syncing-server:50051',
+      'https://sync.internal.example.com/v1/items',
+      'postgres://srn:PLANTED-PASSWORD@db.internal:5432/srn',
+      'sk-live-0123456789abcdef0123456789abcdef',
+      'A'.repeat(40),
+      `${'a'.repeat(40)} `,
+      `prefix-${'a'.repeat(40)}`,
+      'a'.repeat(39),
+    ]
+
+    for (const revision of notRevisions) {
+      const model = buildEnvironmentSection({
+        topology: topology(),
+        deploymentMarker: { revision, version: '1.2.3' },
+      })
+
+      expect(rowOf(model, 'Build revision').value).toBe(WITHHELD)
+      expect(rowOf(model, 'Deployment identity').value).toBe('marker in an unrecognised format')
+      // Not in the row, not in a note, not in a finding, not in the report.
+      expect(JSON.stringify(model)).not.toContain(revision)
+      expect(model.reportLines.join('\n')).not.toContain(revision)
+    }
+  })
+
+  it('names the two sentinels rather than calling a build that stated its own unstamped-ness malformed', () => {
+    const sentinel = buildEnvironmentSection({
+      topology: topology(),
+      deploymentMarker: { revision: 'unstamped', version: 'unstamped' },
+    })
+    const blank = buildEnvironmentSection({ topology: topology(), deploymentMarker: { revision: '', version: '' } })
+
+    expect(rowOf(sentinel, 'Build revision').value).toBe('unstamped (stated by the build)')
+    expect(rowOf(blank, 'Build revision').value).toBe('none published')
+    for (const model of [sentinel, blank]) {
+      expect(rowOf(model, 'Build revision').value).not.toBe(WITHHELD)
+    }
+  })
+
+  it('reports no revision at all when the marker was not read', () => {
+    const row = rowOf(buildEnvironmentSection({ topology: topology() }), 'Build revision')
+
+    expect(row.value).toBe('not reported')
+    expect(row.verdict).toBe('undetermined')
+    expect(row.evidence.kind).toBe('absent')
   })
 })
 

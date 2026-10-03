@@ -83,6 +83,56 @@ type UnclassifiedSyncOperation = Exclude<
 type AssertNever<T extends never> = T
 export type EverySyncOperationIsClassified = AssertNever<UnclassifiedSyncOperation>
 
+/**
+ * One lane's per-call gRPC fallback counters, as `transportFallback` reports them.
+ *
+ * Mirrors `GrpcFallbackLaneReport` (api-gateway
+ * `Service/gRPC/GrpcTransportFallbackDiagnostics.ts`) field for field. Every
+ * member is a count, a closed code or a DURATION — the server's recorder is
+ * constrained to those, and there is deliberately no free-form string field on
+ * either side.
+ *
+ * TWO DIFFERENCES FROM THE WIRE TYPE, BOTH DELIBERATE:
+ *
+ *  - Every field is OPTIONAL here while the server declares them required. That
+ *    is the rule the whole payload type follows: this build cannot be recompiled
+ *    against the server it is talking to, and a field declared required would
+ *    make "a server that does not send it" unrepresentable in the type and
+ *    therefore unhandled in the code. `0` and `undefined` are different answers —
+ *    a zero counter means "measured none", an absent one means "did not ask" —
+ *    and every consumer must be able to tell them apart.
+ *  - `lastFailureClass` is a WIDE string, exactly as `gate.syncItems.state` is.
+ *    It is the SERVER's enum (`GrpcFailureClass`); a newer server's member is
+ *    parsed against this build's own list through `safeEnum` and degrades to
+ *    "other (unrecognised)" rather than being rendered as one of the members this
+ *    build does know.
+ *
+ * `null` is admitted beside `undefined` on the two "last failure" fields because
+ * the server sends a literal `null` for "no failure has ever been recorded on this
+ * lane", which is a reported fact rather than silence.
+ */
+export type TransportFallbackLaneView = {
+  degradedCalls?: number
+  refusedCalls?: number
+  lastFailureClass?: string | null
+  lastFailureAgeMs?: number | null
+}
+
+/**
+ * `payload.transportFallback` — the RUNTIME counterpart to `deployment`.
+ *
+ * Mirrors `GrpcTransportFallbackReport`. The lane map is keyed by a wide string
+ * for the same reason the failure class is one: the server's `GrpcFallbackLane`
+ * is the authority on which lanes exist, and a lane this build has never heard of
+ * must be ignorable rather than a type error.
+ */
+export type TransportFallbackView = {
+  /** False when nothing has ever been recorded — including on an idle gateway. */
+  observed?: boolean
+  everDegraded?: boolean
+  lanes?: Partial<Record<string, TransportFallbackLaneView>>
+}
+
 /** Shape of GET /v1/admin/sync-diagnostics. Every field is presence, never value. */
 export type SyncDiagnosticsPayload = {
   capturedAt?: string
@@ -92,6 +142,22 @@ export type SyncDiagnosticsPayload = {
    * "make no topology-conditional claim", rather than as a set of falses.
    */
   deployment?: DeploymentTopology
+  /**
+   * The per-call gRPC fallback ledger, served at `AdminController` alongside
+   * `deployment` since the per-lane counters landed. `deployment.boundServiceProxy`
+   * is recorded ONCE, when the container is configured, so a gRPC listener that
+   * dies afterwards leaves it reading `'grpc'` forever while every call is served
+   * over HTTP; these counters are the only place that state appears.
+   *
+   * Absent on a server build older than the ledger, and ABSENT IS NOT ZERO. A
+   * reported `0` means the gateway measured no degradations; nothing at all means
+   * this build asked a server that does not answer the question. The Environment
+   * section renders the first as "0, informational" and the second as "not
+   * reported" on absent evidence, and conflating them is the defect this pane
+   * exists to stop — a count of zero read off a server that never sent one is the
+   * panel inventing a healthy reading.
+   */
+  transportFallback?: TransportFallbackView
   gate?: {
     recorded?: boolean
     gatewayAttached?: boolean

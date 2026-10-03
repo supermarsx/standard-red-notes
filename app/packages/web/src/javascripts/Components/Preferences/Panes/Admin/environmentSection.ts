@@ -27,6 +27,7 @@ import {
   safeEnvName,
   safePresence,
   safeState,
+  safeToken,
   safeTokens,
   safeYesNo,
   type DiagnosticBlock,
@@ -39,7 +40,7 @@ import {
   type Verdict,
 } from './diagnosticsSections'
 import { DEPLOY_REVISION } from './reportAllowlist'
-import { describeDeployment } from './syncDiagnostics'
+import { describeDeployment, type DeploymentIdentityView, type TransportFallbackView } from './syncDiagnostics'
 
 /**
  * Standard Red Notes: the Environment & setup section of the admin diagnostics
@@ -110,12 +111,19 @@ import { describeDeployment } from './syncDiagnostics'
  * pasted in public. The threshold wording ("at least 32 bytes", "shorter than 32
  * bytes") is a constant of this build, derived from two closed enums.
  *
- * The deployment REVISION is not printed here at all, and that is a limit of the
- * contract rather than a secrecy decision: a 40-character git revision is not
- * one of `SafeValue`'s permitted categories, so it cannot be minted without the
- * banned cast. The literal revision and version are already admitted by shape in
- * `diagnosticsReport.ts` under its own Deployment heading; this section reports
- * the identity's STATE, which is the part that carries a verdict.
+ * The deployment REVISION is the one server-supplied value this section prints,
+ * and it is printed through `safeToken` against `DEPLOY_REVISION` — the same
+ * anchored shape `app/Dockerfile` validates and the same one `admitToken` already
+ * admitted it with in both copyable reports. It used to be absent from this
+ * section entirely, which was a limit of the contract rather than a secrecy
+ * decision: a 40-character git revision is none of the other permitted
+ * categories, so printing it would have taken the banned cast, and the row
+ * reported the identity's STATE while its note sent the reader to the report for
+ * the revision itself. One rule now serves both. A revision that does not match
+ * the shape is WITHHELD and never echoed, so a marker served by whatever fronts
+ * the web bundle cannot put arbitrary bytes on this screen. The VERSION stays
+ * report-only: `VERSION_TOKEN` admits a far broader shape, and it answers no
+ * question this section carries a verdict about.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -177,27 +185,19 @@ export const GRPC_FAILURE_CLASSES = [
 ] as const
 
 /**
- * One lane's runtime fallback counters, as the admin payload reports them.
+ * The runtime fallback ledger, re-exported from the module that owns the wire
+ * shape.
  *
- * Every member is a count, a closed code or a duration — the same shape the
- * server-side recorder is constrained to. Declared here, produced elsewhere, so
- * this section can be built and tested before this build's payload type catches
- * up with the server's; a field that does not arrive reads "not reported" and
- * claims nothing.
+ * It was declared HERE while `SyncDiagnosticsPayload` had no field for it: the
+ * server has been sending `transportFallback` since the per-lane counters landed,
+ * this build's payload type did not say so, and every row below therefore read
+ * "not reported" on a deployment that was reporting. The declaration now lives
+ * beside the rest of the payload in `syncDiagnostics.ts`, mirrored from the
+ * server's `GrpcTransportFallbackReport`, so the type this section reads and the
+ * type the fetch is cast to are the same type and cannot drift apart. The names
+ * stay exported from here because this section is their only consumer.
  */
-export type TransportFallbackLaneView = {
-  degradedCalls?: number
-  refusedCalls?: number
-  lastFailureClass?: string | null
-  lastFailureAgeMs?: number | null
-}
-
-export type TransportFallbackView = {
-  /** False when nothing has ever been recorded — including on an idle gateway. */
-  observed?: boolean
-  everDegraded?: boolean
-  lanes?: Partial<Record<string, TransportFallbackLaneView>>
-}
+export type { TransportFallbackLaneView, TransportFallbackView } from './syncDiagnostics'
 
 /**
  * The facts this section needs that the topology block cannot carry.
@@ -400,11 +400,14 @@ function presenceProxy(key: string): Evidence {
 /**
  * `restart` is the honest effort for almost everything in this section: these
  * are environment variables, and the container re-reads them on start.
- *
- * Two findings do not fit any member and take the closest one. See
- * `remedyForUnreachableGrpcListener`.
  */
 const CONFIG_AND_RESTART: RemedyEffort = 'restart'
+
+/**
+ * The two findings whose fix is on a different service in this deployment. See
+ * `remedyForUnreachableGrpcListener` for what this member replaced and why.
+ */
+const REPAIR_ANOTHER_SERVICE: RemedyEffort = 'peer-service'
 
 function remedyForShortInternalSecret(present: boolean): Remedy {
   return {
@@ -431,12 +434,12 @@ function remedyForShortInternalSecret(present: boolean): Remedy {
 /**
  * The findings in this section whose fix is not on this container.
  *
- * `RemedyEffort` has no member for "repair a different service in this
- * deployment". `wait` is the closest and is not a lie — the per-call fallback
- * retries gRPC on every call, so this genuinely clears with no change here the
- * moment the listener answers — but its chip reads "Transient", which understates
- * a listener that is permanently down. The summary says where the action is, so
- * the chip is not the only thing an operator reads.
+ * These two took `wait` until `peer-service` existed. `wait` was not a lie — the
+ * per-call fallback retries gRPC on every call, so the condition genuinely clears
+ * with no change here the moment the listener answers — but its chip read
+ * "Transient", which understates a permanently dead listener to the point of
+ * advising the operator to do nothing. "Another service" says where the action is
+ * in the one place an operator reads before the prose.
  */
 function remedyForUnreachableGrpcListener(decision: ProxyDecision): Remedy {
   return {
@@ -450,7 +453,7 @@ function remedyForUnreachableGrpcListener(decision: ProxyDecision): Remedy {
       'Do not set SERVICE_PROXY_TYPE=grpc by hand to force it. The resolver declined gRPC precisely because the listener did not answer, and forcing it removes the HTTP fallback that is currently carrying every call.',
       'Re-read this pane once the listener answers. The resolver runs again on the next container start, and the per-call fallback recovers without one.',
     ],
-    effort: 'wait',
+    effort: REPAIR_ANOTHER_SERVICE,
     basis: 'verified',
     because: [
       `The boot-time lane resolver recorded "${decision}", which it sets only after a dial target was configured and the port did not answer.`,
@@ -469,7 +472,7 @@ function remedyForGrpcServingHttp(): Remedy {
       'Read the refused-calls row beside this one. A degraded call was re-delivered over HTTP and then succeeded or failed on its own merits; a REFUSED call failed outright, because a second delivery would have risked duplicating a write.',
       'Nothing here needs a configuration change. If the listener is healthy and the count is historical, restart the gateway to clear the counters and confirm.',
     ],
-    effort: 'wait',
+    effort: REPAIR_ANOTHER_SERVICE,
     basis: 'verified',
     because: [
       'The topology reports a bound gRPC service proxy and the runtime ledger reports at least one call served over HTTP instead.',
@@ -1109,6 +1112,37 @@ const IDENTITY_VALUE: Record<IdentityState, SafeValue> = {
  * `DEPLOY_REVISION` pattern the copyable report admits the literal revision
  * with, so the two cannot disagree about what counts as published.
  */
+const REVISION_LABEL = safeConstant('Build revision')
+
+const REVISION_UNSTAMPED = safeConstant('unstamped (stated by the build)')
+
+const REVISION_NONE = safeConstant('none published')
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What the revision row prints in each
+ * marker state.
+ *
+ * `published` and `malformed-marker` go through the SAME call, and that is the
+ * point of the shape rule rather than a missed branch: a marker that matches
+ * `DEPLOY_REVISION` prints its revision, and one that does not becomes the
+ * withheld constant. The state is derived from that same pattern, so the two
+ * cannot disagree about which marker is publishable.
+ *
+ * The other two states never reach the pattern at all, because their revision is
+ * a SENTINEL rather than a malformed value — running `unstamped` or the blank
+ * marker's em dash through the shape check would report "withheld (unrecognised
+ * format)" over a build that stated its own unstamped-ness perfectly clearly.
+ */
+const REVISION_VALUE: Record<IdentityState, (identity: DeploymentIdentityView) => SafeValue> = {
+  published: (identity) => safeToken(identity.revision, DEPLOY_REVISION),
+  'malformed-marker': (identity) => safeToken(identity.revision, DEPLOY_REVISION),
+  'unstamped-marker': () => REVISION_UNSTAMPED,
+  'no-identity': () => REVISION_NONE,
+}
+
+const REVISION_NOTE =
+  'The commit this build was stamped with, admitted by SHAPE: exactly the 40 lowercase hex characters app/Dockerfile itself validates, through the same rule the copyable reports admit it with. Anything else is withheld rather than printed — the marker is served by whatever fronts the web bundle, so it is untrusted input, and it has already leaked a secret-shaped revision once. This row carries no verdict of its own; the row above it is where "can this deployment say which commit it is" is answered.'
+
 export function describeIdentityState(marker: unknown): IdentityState {
   const view = describeDeployment(marker)
   if (view.unstamped) {
@@ -1148,7 +1182,8 @@ export function describeIdentityState(marker: unknown): IdentityState {
  * observe.
  */
 function buildIdentityBlock(topology: DeploymentTopology | undefined, marker: unknown): DiagnosticBlock {
-  const state = marker === undefined ? undefined : describeIdentityState(marker)
+  const identity = marker === undefined ? undefined : describeDeployment(marker)
+  const state = identity === undefined ? undefined : describeIdentityState(marker)
   const revisionVariable = presenceOf(topology, 'SRN_DEPLOY_REVISION')
   const versionVariable = presenceOf(topology, 'SRN_DEPLOY_VERSION')
 
@@ -1157,7 +1192,13 @@ function buildIdentityBlock(topology: DeploymentTopology | undefined, marker: un
       label: safeConstant('Deployment identity'),
       value: state === undefined ? safePresence(undefined) : IDENTITY_VALUE[state],
       ...absentOr(state, state === 'published' ? 'healthy' : 'degraded'),
-      note: 'Whether the running build can say which commit it is. "Published" means the runtime values and the marker baked into the image agreed; anything else means "is the running build current?" cannot be answered from here, which is the first question of every incident. The revision and version themselves are printed in the copyable report under its own Deployment heading, admitted there by shape — they are not repeated as rows, because a git revision is not one of the categories a row value may hold.',
+      note: 'Whether the running build can say which commit it is. "Published" means the runtime values and the marker baked into the image agreed; anything else means "is the running build current?" cannot be answered from here, which is the first question of every incident. The revision itself is the row below; the VERSION is printed in the copyable report under its own Deployment heading, admitted there by shape.',
+    }),
+    diagnosticRow({
+      label: REVISION_LABEL,
+      value: state === undefined || identity === undefined ? safePresence(undefined) : REVISION_VALUE[state](identity),
+      ...absentOr(state, 'informational'),
+      note: REVISION_NOTE,
     }),
   ]
 
@@ -1313,8 +1354,10 @@ const REPORT_SECRET_LENGTHS = reportLine(
 )
 
 const REPORT_REVISION = reportLine(
-  safeConstant('Build revision and version'),
-  safeConstant('reported under the Deployment heading of this report, admitted by shape'),
+  safeConstant('Build version'),
+  safeConstant(
+    'reported under the Deployment heading of this report, admitted by shape; the revision is a row in this section, admitted by the same rule',
+  ),
 )
 
 /**
