@@ -1000,7 +1000,14 @@ describe('deployment identity', () => {
 
     expect(finding?.remedy?.code).toBe('DEPLOYMENT_UNSTAMPED')
     expect(finding?.remedy?.effort).toBe('rebuild')
-    expect(finding?.remedy?.steps?.[0]).toContain('--build-arg SRN_DEPLOY_REVISION')
+    // t108 reworded the shared step: a `--build-arg` alone bakes a correct
+    // marker and then starts a container with no runtime value to compare it
+    // against, which publishes {null, null} — so the instruction now sets the
+    // variable for the whole command, which compose feeds to BOTH halves.
+    expect(finding?.remedy?.steps?.[0]).toContain(
+      'SRN_DEPLOY_REVISION=$(git rev-parse HEAD) docker compose up -d --build',
+    )
+    expect(finding?.remedy?.steps?.join(' ')).not.toContain('--build-arg SRN_DEPLOY_REVISION')
     expect(finding?.detail).toContain('necessary rather than sufficient')
   })
 

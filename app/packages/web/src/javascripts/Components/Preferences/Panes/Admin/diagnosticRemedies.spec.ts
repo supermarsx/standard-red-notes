@@ -1,10 +1,13 @@
 import {
+  EFFORT_LABEL,
   remedyForClientGap,
   remedyForLiveReason,
   remedyForPrecondition,
   remedyForUnstampedDeployment,
   type DeploymentTopology,
+  type RemedyEffort,
 } from './diagnosticRemedies'
+import { EFFORT_TONE } from './diagnosticsPresentation'
 
 /**
  * The remedies are the part of the panel that can do damage. A wrong instruction
@@ -140,6 +143,44 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
     expect(remedy.summary).toContain('Not applicable')
     expect(remedy.summary).toContain('single-container')
     expect(remedy.effort).toBe('none')
+  })
+
+  /**
+   * t108. The server used to report both `http` and `auto` as
+   * `other (unrecognised)`, so this branch could only say "not set to grpc".
+   * Now that the two arrive distinctly, the reasoning says which one it is —
+   * and in the `auto` case it warns off the obvious override, because the
+   * container's resolver chose HTTP deliberately and `grpc` has no HTTP
+   * fallback.
+   */
+  it.each([
+    ['http', 'a deliberate pin', 'deliberate pin to the HTTP proxies'],
+    ['auto', 'the resolver’s own decision', 'decided for itself'],
+  ] as const)('tells an explicit %s setting apart from an unset one (%s)', (setting, _label, expected) => {
+    const explicit = remedyForPrecondition(
+      'SYNCING_SERVER_GRPC_UNBOUND',
+      STOCK_GRPC_REMEDY,
+      topology({ serviceProxySetting: setting }),
+    )
+    const unset = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', STOCK_GRPC_REMEDY, topology())
+
+    // Both still get the same FIX — the branch only runs when the setting is
+    // not "grpc" — and the reasoning is what differs.
+    expect(explicit.effort).toBe('restart')
+    expect(explicit.steps).toEqual(unset.steps)
+    expect(explicit.because.join(' ')).toContain(expected)
+    expect(explicit.because.join(' ')).not.toBe(unset.because.join(' '))
+    expect(unset.because.join(' ')).toContain('is not set to "grpc"')
+  })
+
+  it('warns an auto deployment that forcing grpc removes the fallback its resolver was protecting', () => {
+    const remedy = remedyForPrecondition(
+      'SYNCING_SERVER_GRPC_UNBOUND',
+      STOCK_GRPC_REMEDY,
+      topology({ serviceProxySetting: 'auto' }),
+    )
+
+    expect(remedy.because.join(' ')).toContain('removes the HTTP fallback')
   })
 
   it('does not invent a fix when the branch is selected but the proxy is still unbound', () => {
@@ -304,8 +345,31 @@ describe('the remedies that are not config changes', () => {
     const remedy = remedyForUnstampedDeployment()
 
     expect(remedy.effort).toBe('rebuild')
-    expect(remedy.steps.join(' ')).toContain('--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)')
     expect(remedy.steps.join(' ')).toContain('does NOT stamp it')
+  })
+
+  /**
+   * t108. The step used to say `--build-arg SRN_DEPLOY_REVISION=$(git rev-parse
+   * HEAD)`, which is sufficient at BUILD time and was measured insufficient end
+   * to end: that build followed by a bare `docker compose up -d` publishes
+   * `{revision: null, version: null}` — indistinguishable from the unstamped
+   * image the operator just rebuilt to fix. The identity is only published when
+   * the RUNTIME value equals the baked marker, and compose feeds the same shell
+   * variable to `build.args` AND to the service environment, so one assignment
+   * in front of the whole command satisfies both and a `--build-arg` satisfies
+   * only the first.
+   */
+  it('gives an instruction that actually publishes the identity, not one that only bakes the marker', () => {
+    const steps = remedyForUnstampedDeployment().steps.join(' ')
+
+    // The command as a whole, so a reader can paste it.
+    expect(steps).toContain('SRN_DEPLOY_REVISION=$(git rev-parse HEAD) docker compose up -d --build')
+    // And it must not be reduced to the build argument, which is the half that
+    // was measured not to work on its own.
+    expect(steps).not.toContain('--build-arg SRN_DEPLOY_REVISION')
+    expect(steps).toContain('not as a --build-arg')
+    expect(steps).toContain('needed in both')
+    expect(remedyForUnstampedDeployment().because.join(' ')).toContain('AGREEMENT of the baked marker')
   })
 
   it('states that a client gap has no server-side fix', () => {
@@ -313,6 +377,57 @@ describe('the remedies that are not config changes', () => {
 
     expect(remedy.effort).toBe('client-update')
     expect(remedy.summary).toContain('FILES_V1')
+  })
+})
+
+/**
+ * The effort vocabulary. Three members were added in one evening — `device`,
+ * `peer-service` and now `account-setting` — which is why these pin the thing
+ * that actually goes wrong with a vocabulary like this: a new member that reuses
+ * an existing LABEL, so two different kinds of fix render identically and the
+ * chip stops carrying information.
+ */
+describe('RemedyEffort', () => {
+  const EVERY_EFFORT = [
+    'account-setting',
+    'restart',
+    'rebuild',
+    'peer-service',
+    'device',
+    'client-update',
+    'none',
+    'wait',
+  ] as const satisfies readonly RemedyEffort[]
+
+  it('labels and tones every member, with no two members sharing a label', () => {
+    // `satisfies` above makes a MISSING member a compile error; this makes an
+    // EXTRA one a test failure, so the list cannot fall behind the union in
+    // either direction without something going red.
+    expect(Object.keys(EFFORT_LABEL).sort()).toEqual([...EVERY_EFFORT].sort())
+    expect(Object.keys(EFFORT_TONE).sort()).toEqual([...EVERY_EFFORT].sort())
+
+    const labels = EVERY_EFFORT.map((effort) => EFFORT_LABEL[effort])
+    expect(new Set(labels).size).toBe(labels.length)
+    for (const label of labels) {
+      expect(label.length).toBeGreaterThan(0)
+    }
+  })
+
+  /**
+   * t108. `ACCOUNT_LIVE_SYNC_DISABLED` — the per-user "Live sync" toggle in
+   * Admin → Users — shipped with NO remedy block because neither candidate
+   * member described it: `restart` renders "Config + restart", wrong for a
+   * setting that applies immediately, and `none` renders "Not fixable here",
+   * wrong for something fixable in two clicks on this screen.
+   */
+  it('gives an in-app account setting a label that is neither a restart nor a dead end', () => {
+    expect(EFFORT_LABEL['account-setting']).toBe('Admin setting')
+    expect(EFFORT_LABEL['account-setting']).not.toBe(EFFORT_LABEL.restart)
+    expect(EFFORT_LABEL['account-setting']).not.toBe(EFFORT_LABEL.none)
+    // It is the most reachable fix on the screen, so it takes the same tone as
+    // the other two the reader can act on without leaving the app.
+    expect(EFFORT_TONE['account-setting']).toBe('good')
+    expect(EFFORT_TONE['account-setting']).not.toBe(EFFORT_TONE.none)
   })
 })
 

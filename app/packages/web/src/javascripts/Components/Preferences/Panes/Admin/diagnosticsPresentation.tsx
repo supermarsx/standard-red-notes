@@ -47,15 +47,21 @@ export const Chip: FunctionComponent<{ tone: Tone; children: string }> = ({ tone
 
 /**
  * *** EXHAUSTIVE `Record` ON PURPOSE. *** The tone reads as "how reachable is this
- * fix from here": `restart` and `device` are both something the reader can do now,
- * `rebuild`, `client-update` and `peer-service` need a build or a service they may
- * not control from here, `none` is a dead end and `wait` is not a fix at all.
+ * fix from here": `account-setting`, `restart` and `device` are all something the
+ * reader can do now, `rebuild`, `client-update` and `peer-service` need a build or
+ * a service they may not control from here, `none` is a dead end and `wait` is not
+ * a fix at all.
  *
  * `peer-service` deliberately does NOT share `wait`'s neutral tone. Neutral is the
  * tone of "nothing to do", and these findings have something to do; it is simply
  * somewhere else.
+ *
+ * `account-setting` is the most reachable member of all — a toggle on this very
+ * screen's sibling tab, applying immediately with no restart — so it takes
+ * `good` alongside the other two the reader can act on without leaving the app.
  */
 export const EFFORT_TONE: Record<RemedyEffort, Tone> = {
+  'account-setting': 'good',
   restart: 'good',
   rebuild: 'warn',
   'client-update': 'warn',

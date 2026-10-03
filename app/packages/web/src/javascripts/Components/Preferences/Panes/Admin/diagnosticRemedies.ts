@@ -41,7 +41,15 @@ import { sanitizeServerCopy } from './syncDiagnostics'
 export type DeploymentTopology = {
   recorded?: boolean
   mode?: 'home-server' | 'self-hosted' | 'unset' | 'other'
-  serviceProxySetting?: 'grpc' | 'unset' | 'other'
+  /**
+   * `grpc` is the only token the gateway's binding branch tests for, but three
+   * are documented and the server now reports all three rather than collapsing
+   * two of them onto `other`: `http` (force the HTTP proxies) and `auto` (let
+   * the container decide at start — the value `scripts/setup.sh` writes by
+   * default, so the most common reading in the fleet). Reporting those as
+   * `other` told an operator who had configured the default that it was a typo.
+   */
+  serviceProxySetting?: 'grpc' | 'http' | 'auto' | 'unset' | 'other'
   boundServiceProxy?: 'direct-call' | 'grpc' | 'http'
   cacheSetting?: 'memory' | 'redis' | 'unset' | 'other'
   syncSwitchSetting?: 'true' | 'false' | 'unset' | 'other'
@@ -74,22 +82,47 @@ export type DeploymentTopology = {
  * of advising the operator to do nothing. WHERE the fix lives and WHETHER it
  * clears by itself are two different facts, and the chip can only carry one of
  * them, so it carries the one an operator has to act on.
+ *
+ * `account-setting` is a fix that is not configuration at all: a per-account
+ * switch an administrator changes IN THIS APP, which applies immediately. Its
+ * motivating finding is the Account section's `ACCOUNT_LIVE_SYNC_DISABLED` — the
+ * per-user "Live sync" toggle in Admin → Users — which shipped with NO remedy
+ * block at all because the two members it could have borrowed both misdescribe
+ * it: `restart` renders "Config + restart", wrong for a setting that needs
+ * neither, and `none` renders "Not fixable here", wrong for something fixable in
+ * two clicks on this screen. The location ended up in the finding's prose, which
+ * is precisely where a remedy should not have to live.
+ *
+ * *** THE SET IS AN AXIS, AND IT IS NOW STATED IN ONE ORDER. *** Three members
+ * were added in one evening, which says the vocabulary was undersized rather
+ * than that three authors each wanted a special case. What it actually encodes
+ * is WHO performs the fix, and the members below are listed from the reader
+ * outwards: this app → this deployment's config → this deployment's image →
+ * another service → the reader's own machine → a client release → nobody. The
+ * two residual members (`none`, `wait`) are not points on that axis — they say
+ * there is no actor, for two different reasons — which is the one thing a
+ * further refactor would have to keep. See the report for t108-A: a rename to
+ * an explicit `actor` field was considered and NOT done unilaterally, because
+ * every `Record<RemedyEffort, …>` is exhaustive and three section modules now
+ * key off these literals.
  */
 export type RemedyEffort =
+  | 'account-setting' /** A per-account switch an administrator changes in this app; applies at once. */
   | 'restart' /** Change configuration and restart the container. No image rebuild. */
   | 'rebuild' /** The image itself must be rebuilt; configuration cannot reach it. */
-  | 'client-update' /** Needs a newer client build; no server change helps. */
-  | 'device' /** A setting, version or condition on the machine in front of the operator. */
   | 'peer-service' /** Repair a DIFFERENT service in this deployment; nothing here helps. */
+  | 'device' /** A setting, version or condition on the machine in front of the operator. */
+  | 'client-update' /** Needs a newer client build; no server change helps. */
   | 'none' /** Nothing configuration can do in this topology. */
   | 'wait' /** Transient or mid-boot; re-read rather than change anything. */
 
 export const EFFORT_LABEL: Record<RemedyEffort, string> = {
+  'account-setting': 'Admin setting',
   restart: 'Config + restart',
   rebuild: 'Rebuild required',
-  'client-update': 'Client update',
-  device: 'On this device',
   'peer-service': 'Another service',
+  device: 'On this device',
+  'client-update': 'Client update',
   none: 'Not fixable here',
   wait: 'Transient',
 }
@@ -205,7 +238,17 @@ function grpcRemedy(topology: DeploymentTopology): Remedy {
       effort: 'restart',
       basis: 'verified',
       because: [
-        'SERVICE_PROXY_TYPE is not set to "grpc" on this deployment.',
+        // Which non-grpc setting it is changes what the operator is looking at:
+        // `auto` means the container's own resolver decided against gRPC and
+        // recorded a reason, `http` means someone pinned it deliberately, and
+        // `unset` means nobody chose. The server reports all three distinctly
+        // (it used to collapse `http` and `auto` onto "other (unrecognised)",
+        // which reads as a typo), so the panel may as well say which.
+        topology.serviceProxySetting === 'http'
+          ? 'SERVICE_PROXY_TYPE is set to "http" on this deployment — a deliberate pin to the HTTP proxies, not a typo. SYNC_ITEMS stays closed for exactly as long as it says that.'
+          : topology.serviceProxySetting === 'auto'
+            ? 'SERVICE_PROXY_TYPE is "auto" on this deployment, so the server container decided for itself and chose the HTTP proxies — it only chooses gRPC when both halves are co-located, the durable-command secret is usable and both gRPC listeners answer. Check the resolver decision on this screen before overriding it: forcing "grpc" removes the HTTP fallback that decision was protecting.'
+            : 'SERVICE_PROXY_TYPE is not set to "grpc" on this deployment.',
         `The bound service proxy is "${topology.boundServiceProxy ?? 'unknown'}".`,
         urlSet
           ? 'SYNCING_SERVER_GRPC_URL IS set — which is why the stock advice to "configure SYNCING_SERVER_GRPC_URL" would have led nowhere.'
@@ -551,6 +594,23 @@ export function remedyForLiveReason(reason: string, topology: DeploymentTopology
  * container leaves an unstamped image exactly as unstamped as before — it just
  * moves the mismatch. The build contexts exclude `.git`, so the revision cannot
  * be derived during the build and must be passed in.
+ *
+ * *** THE REVISION IS NEEDED TWICE, AND THE INSTRUCTION HAS TO PRODUCE BOTH. ***
+ * This step used to say `--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)`,
+ * which is sufficient at BUILD time and was measured insufficient end to end: a
+ * build passing only that, followed by a bare `docker compose up -d`, publishes
+ * `{revision: null, version: null}` — indistinguishable from the unstamped image
+ * the operator just rebuilt to fix. `verifiedDeploymentIdentity` compares the
+ * baked marker against the RUNTIME environment and discards the identity when
+ * they disagree, and an absent runtime value disagrees with everything.
+ *
+ * Compose already wires both halves from the SAME shell variable — build args at
+ * `docker-compose.yml:461-463` (app) and `:543-545` (server), the service
+ * environment through the shared `*server-env` anchor at `:60-61`, and
+ * `docker-compose.single.yml:27-29` / `:60-61` for the single container — so ONE
+ * environment assignment in front of the whole command satisfies both, and
+ * `--build-arg` on its own satisfies only the first. Hence the wording below:
+ * set the variable for the command, do not pass it as a build argument.
  */
 export function remedyForUnstampedDeployment(): Remedy {
   return {
@@ -558,7 +618,8 @@ export function remedyForUnstampedDeployment(): Remedy {
     summary:
       'The running image was built without a revision. This one genuinely cannot be fixed without rebuilding — setting the variable on the running container will not help.',
     steps: [
-      'Rebuild with the revision passed in: --build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD). It must be exactly 40 lowercase hexadecimal characters, and the build will fail loudly if it is not.',
+      'Rebuild AND restart with the revision in the environment for the whole command: SRN_DEPLOY_REVISION=$(git rev-parse HEAD) docker compose up -d --build. It must be exactly 40 lowercase hexadecimal characters, and the build will fail loudly if it is not.',
+      'Set it for the command, not as a --build-arg. Compose feeds the same variable to the build arguments AND to the service environment, and the revision is needed in both: a --build-arg alone bakes a correct marker and then starts a container with nothing to compare it against, which publishes no identity at all. Putting it in your .env works too, for the same reason.',
       'The build context excludes .git on purpose, so the build cannot work the revision out for itself — it has to be supplied.',
       'Setting SRN_DEPLOY_REVISION on the running container does NOT stamp it: the identity is only published when the runtime value matches the marker baked into the image, so on an unstamped image it stays unpublished.',
     ],
@@ -566,6 +627,7 @@ export function remedyForUnstampedDeployment(): Remedy {
     basis: 'verified',
     because: [
       'The marker reports the explicit "unstamped" sentinel, which is what a build with no revision argument records.',
+      'The published identity is the AGREEMENT of the baked marker and the runtime variable, so supplying either one alone leaves it unpublished.',
     ],
   }
 }
