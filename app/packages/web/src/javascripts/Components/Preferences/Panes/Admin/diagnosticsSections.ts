@@ -43,9 +43,13 @@ import type { CapabilityTestOutcome, Tone } from './syncDiagnostics'
  *     cannot be correlated against anyone else's logs.
  *   - `safePercentBucket` — a magnitude reduced to one of six closed buckets,
  *     for the user-space figures that are real user data.
- *   - `safeEnvName` — an environment variable NAME, admitted by SHAPE, for the
- *     one legitimate dynamic label: a key a newer server reports that this build
- *     has no guidance for. Names are public; they are in the compose files.
+ *   - `safeEnvName` — an environment variable NAME, admitted by SHAPE. A FLOOR,
+ *     not an admission: it is applied to names this build already owns (see
+ *     `KnownEnvKey`), because shape is not membership. It used to be the
+ *     admission for a key a newer server reports, and that was a hole — an
+ *     upper-snake-case key off the wire looks exactly like a variable name and
+ *     was printed as a row label, while differently-shaped ones were refused. A
+ *     key outside this build's own set is now counted and never named.
  *   - `safeToken` — a value admitted by SHAPE against a pattern this build
  *     declared, for the few server strings whose whole content is pinned by a
  *     format: a 40-hex git revision is the case it exists for. It is
@@ -286,8 +290,6 @@ export function safePercentBucket(fraction: number | undefined): SafeValue {
 
 /**
  * The shape an environment variable NAME has in this project: upper snake case.
- * Admitted by shape rather than by a list because the legitimate case is exactly
- * the name this build has never heard of — a key a newer server reports.
  */
 export const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/
 
@@ -295,6 +297,12 @@ export const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/
  * An environment variable name, admitted by shape and refused — not repaired —
  * otherwise. The same discipline as `admitToken`: a partially scrubbed string is
  * not safe, whereas a constant is.
+ *
+ * SHAPE IS NOT MEMBERSHIP, and this constructor is no longer asked to pretend
+ * otherwise. It sits under names that are already literals of this build, as a
+ * floor against a name that drifts out of the project's own convention; the
+ * question "did the server choose this string" is answered by a closed set
+ * before a value ever gets here.
  */
 export function safeEnvName(name: unknown): SafeValue {
   if (typeof name !== 'string') {

@@ -1,8 +1,10 @@
 import {
-  buildEnvironmentGroups,
+  buildEnvironmentPresence,
   type EnvironmentGroup,
+  type EnvironmentPresence,
   type EnvironmentRelevance,
   type EnvironmentRow,
+  type KnownEnvKey,
 } from './diagnosticEnvironment'
 import {
   remedyForLiveReason,
@@ -59,10 +61,17 @@ import { describeDeployment, type DeploymentIdentityView, type TransportFallback
  * expensive half of this subject: `classify()`, the per-variable judgement about
  * whether a key is read in the OBSERVED topology, which is the logic behind
  * "SYNCING_SERVER_GRPC_URL is set AND ignored". That is reused WHOLE —
- * `buildEnvironmentGroups` is called, its groups become blocks, its keys become
+ * `buildEnvironmentPresence` is called, its groups become blocks, its keys become
  * labels, its relevance becomes part of each value and its notes are printed
  * verbatim. Nothing in it is reimplemented here, and this module makes no
  * per-variable relevance judgement of its own.
+ *
+ * Its `unrecognised` count becomes a row of its own, for the same reason the
+ * Capabilities count exists: a key in the presence map is chosen by the SERVER,
+ * so it is server-controlled text, and this section used to label a row with one
+ * — admitted by SHAPE, which let an upper-snake-case key off the wire through
+ * while refusing the rest. Only a `KnownEnvKey` reaches a label now, and the
+ * ones this build has no name for are counted. Nothing is dropped silently.
  *
  * `describeTopology` from the same file is NOT reused, and the reason is
  * structural rather than stylistic. It returns `{ label, value, note }` as plain
@@ -104,7 +113,8 @@ import { describeDeployment, type DeploymentIdentityView, type TransportFallback
  * -------------------------------------------------------------------------------
  *
  * Variable NAMES are public: they are in the compose files, the `.env.sample`s
- * and the documentation, and `safeEnvName` admits them by shape. Nothing else
+ * and the documentation, and every one printed here is a literal of this build —
+ * `KnownEnvKey` — with `safeEnvName` left under it as a shape floor. Nothing else
  * from the configuration reaches a row. In particular the internal gRPC auth
  * secret is reported as one of four closed states and never as a length: a
  * length is a fact about a secret, and the report this feeds is written to be
@@ -390,7 +400,7 @@ const MODE_NOTE: Record<DeploymentModeToken, string> = {
  * module's own spec caught: a key MISSING from the map is a server that said
  * nothing about that variable, and collapsing it to `false` turns silence into
  * "not set" — a confident negative verdict and a finding with a remedy, over a
- * variable nobody reported. `buildEnvironmentGroups` already gets this right by
+ * variable nobody reported. `buildEnvironmentPresence` already gets this right by
  * filtering on `key in presence`; this is the same rule for the four keys this
  * module reads directly.
  *
@@ -580,7 +590,17 @@ function remedyForE2eTestMode(): Remedy {
   }
 }
 
-function remedyForAbsentRequiredConfig(keys: readonly string[]): Remedy {
+/**
+ * Both remedies below take `readonly KnownEnvKey[]`, not `readonly string[]`.
+ *
+ * They JOIN the names they are handed into a summary that reaches the screen and
+ * both copyable reports, so being unable to be given a server string is worth
+ * more than remembering to scrub one — the discipline `remedyForClientGap`
+ * arrived at. Nothing reachable passes them a wire key today (only `required`
+ * and `inert` rows get here, and a row's key is already a literal of this build),
+ * and that is precisely the kind of fact that stops being true quietly.
+ */
+function remedyForAbsentRequiredConfig(keys: readonly KnownEnvKey[]): Remedy {
   return {
     code: 'REQUIRED_CONFIG_ABSENT',
     summary: `${keys.length === 1 ? 'A variable this topology reads is' : `${keys.length} variables this topology reads are`} not set: ${keys.join(', ')}. Restart only — no rebuild.`,
@@ -598,7 +618,7 @@ function remedyForAbsentRequiredConfig(keys: readonly string[]): Remedy {
   }
 }
 
-function remedyForInertConfig(keys: readonly string[]): Remedy {
+function remedyForInertConfig(keys: readonly KnownEnvKey[]): Remedy {
   return {
     code: 'CONFIG_SET_BUT_NEVER_READ',
     summary: `${keys.length === 1 ? 'A variable is' : `${keys.length} variables are`} set and never read in this topology: ${keys.join(', ')}. Nothing is broken by it, and it is why a correct-looking configuration can have no effect.`,
@@ -1306,7 +1326,7 @@ function buildIdentityBlock(topology: DeploymentTopology | undefined, marker: un
 /* -------------------------------------------------------------------------- */
 
 /**
- * The block heading for each group `buildEnvironmentGroups` can produce.
+ * The block heading for each group `buildEnvironmentPresence` can produce.
  *
  * A lookup rather than a derivation, because a `SafeValue` heading must be a
  * literal of THIS build and `EnvironmentGroup.title` is a plain `string` — true
@@ -1318,6 +1338,10 @@ function buildIdentityBlock(topology: DeploymentTopology | undefined, marker: un
  * `Deployment identity` is renamed here: the block above already owns that
  * heading, and two blocks with one heading is how a report line stops naming
  * which block it came from.
+ *
+ * There is deliberately no `Reported by a newer server` entry any more. That
+ * group's rows were the ones whose keys came off the wire, and it is now a count
+ * in a block of this file's own making, below.
  */
 const GROUP_HEADING: Readonly<Partial<Record<string, SafeValue>>> = {
   'Realtime transport': safeConstant('Realtime transport'),
@@ -1326,13 +1350,12 @@ const GROUP_HEADING: Readonly<Partial<Record<string, SafeValue>>> = {
   'Files lane': safeConstant('Files lane'),
   'Event fan-out': safeConstant('Event fan-out'),
   'Deployment identity': safeConstant('Deployment identity variables'),
-  'Reported by a newer server': safeConstant('Reported by a newer server'),
 }
 
 const GROUP_HEADING_FALLBACK = safeConstant('Other configuration')
 
 /**
- * One row from `buildEnvironmentGroups`, as a contract row.
+ * One row from `buildEnvironmentPresence`, as a contract row.
  *
  * Nothing is re-judged here. The key, the presence boolean, the relevance and
  * the note all come from that module; this function's whole job is to turn a
@@ -1340,6 +1363,12 @@ const GROUP_HEADING_FALLBACK = safeConstant('Other configuration')
  * contract adds and the part `EnvironmentRow.tone` cannot express — a tone
  * cannot say that a positive reading rests on a necessary condition and is
  * therefore not a claim that the thing works.
+ *
+ * `row.key` is a `KnownEnvKey`, so the label is a literal of this build and
+ * `safeEnvName` is a floor under it rather than the admission. It was the
+ * admission, and that was the hole: shape is not membership, so a key off the
+ * wire in upper snake case was printed as a row label while differently-shaped
+ * ones were refused.
  */
 function configRow(row: EnvironmentRow): DiagnosticRow {
   const label = safeEnvName(row.key)
@@ -1399,6 +1428,38 @@ function configBlocks(groups: readonly EnvironmentGroup[]): DiagnosticBlock[] {
   }))
 }
 
+/**
+ * The variables this server reports that this build has no guidance for, as a
+ * COUNT.
+ *
+ * A row rather than nothing, and a count rather than names: the fact an operator
+ * needs is that the gap is on the client, which is what a number against "this
+ * build does not recognise" says. The names are the half that cannot be printed
+ * — a presence key is chosen by the server — and are also the half that tells a
+ * reader least, since they are strings this build has never heard of either.
+ *
+ * Present at zero as well, like the unrecognised-services row in the Database
+ * section: "none the rows above could not name" is a reading, and an absent row
+ * cannot be told apart from a build that never counted.
+ */
+function unrecognisedBlock(unrecognised: number): DiagnosticBlock {
+  return {
+    heading: safeConstant('Reported by a newer server'),
+    description:
+      'Configuration this server reports that this client build has no guidance for. Counted here, never named.',
+    rows: [
+      diagnosticRow({
+        label: safeConstant('Variables this build does not recognise'),
+        value: safeCount(unrecognised),
+        verdict: 'informational',
+        evidence: EVIDENCE_DIRECT,
+        note: 'Variables the server reported that this build has no row for. They are not dropped — an unknown-but-reported variable is still evidence — and they are not named, because the KEYS of a presence map are chosen by the server exactly as its values would be, and this pane feeds a report written to be pasted in public. A non-zero reading here is a statement about the CLIENT: this build is older than the server it is talking to, so it cannot say whether those variables matter in this topology, and a client update is what closes that.',
+      }),
+    ],
+    findings: [],
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* The section                                                                */
 /* -------------------------------------------------------------------------- */
@@ -1432,8 +1493,8 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
   const runtime = input.runtime ?? {}
   const outcomes = outcomesForSection(input.outcomes ?? [], 'environment')
 
-  const groups = buildEnvironmentGroups(input.topology)
-  const configured = configBlocks(groups)
+  const presence: EnvironmentPresence = buildEnvironmentPresence(input.topology)
+  const configured = configBlocks(presence.groups)
 
   const blocks: DiagnosticBlock[] = [
     buildShapeBlock(input.topology, runtime),
@@ -1442,7 +1503,11 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
     buildIdentityBlock(input.topology, input.deploymentMarker),
   ]
 
-  if (configured.length === 0) {
+  // Branched on whether a presence block was REPORTED, not on whether any of it
+  // could be named: a server that reports only variables this build has no name
+  // for has reported something, and saying "nothing was reported" there would be
+  // the one claim this section must never make.
+  if (!presence.reported) {
     blocks.push({
       heading: safeConstant('Configuration presence'),
       description:
@@ -1453,12 +1518,12 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
         'This server build reports no configuration presence at all, so no variable can be marked required, optional or inert. Upgrade to a build that reports its deployment block; until then the blocks above are all that is knowable.',
     })
   } else {
-    blocks.push(...configured)
+    blocks.push(...configured, unrecognisedBlock(presence.unrecognised))
 
-    const absentRequired = groups.flatMap((group) =>
+    const absentRequired = presence.groups.flatMap((group) =>
       group.rows.filter((row) => row.relevance === 'required' && !row.present).map((row) => row.key),
     )
-    const inertAndSet = groups.flatMap((group) =>
+    const inertAndSet = presence.groups.flatMap((group) =>
       group.rows.filter((row) => row.relevance === 'inert' && row.present).map((row) => row.key),
     )
 

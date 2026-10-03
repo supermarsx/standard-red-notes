@@ -1231,6 +1231,35 @@ describe('sync diagnostics model', () => {
     })
 
     /**
+     * *** THE PUSH-BRIDGE VALUE IS A MEMBER, NOT A REDACTED FIELD. ***
+     *
+     * This value was built as `sanitizeServerCopy(realtime.pushBridge ?? …)` —
+     * a denylist, in a value position. It happened to be unreachable, because
+     * the interpolation already sat behind a two-member equality test, and no
+     * consumer rendered this value either: `buildRealtimeBlock` takes only the
+     * NOTES and re-derives every value through `safeEnum`. So nothing in the
+     * tree failed if that guard were loosened, which is the state a latent leak
+     * sits in until someone renders it.
+     *
+     * It is now the matched MEMBER that is interpolated, so the raw field cannot
+     * be put there without a type error, and this pins the behaviour so that an
+     * edit reaching for the field again fails here rather than in a report.
+     */
+    it('never echoes a push-bridge token outside its own two bound planes', () => {
+      const opaque = 'srnbridgehead-9999999999-srnbridgemid-9999999999-srnbridgetail'
+      const rows = describeRealtimeHealth({ attached: true, pushBridge: opaque, pushBridgeReady: true })
+      const serialised = JSON.stringify(rows)
+
+      for (const fragment of [opaque.slice(0, 20), opaque.slice(22, 42), opaque.slice(-20), opaque]) {
+        expect(serialised).not.toContain(fragment)
+      }
+      // Refused because it is not a member, not because a pattern matched its
+      // shape: the redactor's sentinel would mean the denylist was back.
+      expect(serialised).not.toContain('[address withheld]')
+      expect(rows.find((row) => row.label === 'Push bridge')?.value).toBe('none')
+    })
+
+    /**
      * The row and the Overview finding are written separately and have drifted
      * apart once already. This pins the facts they must BOTH carry, so the next
      * edit to either one cannot silently leave the other behind.

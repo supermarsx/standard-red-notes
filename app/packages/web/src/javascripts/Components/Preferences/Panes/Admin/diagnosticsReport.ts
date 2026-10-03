@@ -1,4 +1,4 @@
-import { buildEnvironmentGroups, describeTopology } from './diagnosticEnvironment'
+import { buildEnvironmentPresence, describeTopology } from './diagnosticEnvironment'
 import { admitToken, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
 import { SECTION_IDS, type SectionId, type SectionModel } from './diagnosticsSections'
 import {
@@ -46,6 +46,12 @@ import {
  *     otherwise. They are server-chosen strings; the table used to print them
  *     through the redactor, which withheld an address-shaped one and printed
  *     an opaque one, with no address shape to match, verbatim.
+ *   - The same rule for configuration-presence KEYS, which are chosen by the
+ *     server for the same reason: an object's keys are as much its content as
+ *     its values. `## Configuration presence` printed them through that same
+ *     redactor, and a probe over the live payload measured it — address-shaped
+ *     withheld, opaque printed intact. Only `KnownEnvKey` reaches a row now; the
+ *     rest are a count.
  *   - The deployment revision IS included. It is already public at
  *     /.well-known/srn-deployment.json, and "which commit is live" is the first
  *     question anyone reading the report will ask.
@@ -313,16 +319,37 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
 
   lines.push('## Configuration presence')
   lines.push('')
-  const groups = buildEnvironmentGroups(topology)
-  if (groups.length === 0) {
+  // *** THE ROWS NAME ONLY WHAT THIS BUILD DECLARES. ***
+  //
+  // `row.key` is a `KnownEnvKey`, so every name below is a literal compiled into
+  // this build; a server-chosen key cannot reach this line. It could, and did: a
+  // key off the wire was put in that field through `sanitizeServerCopy` — a
+  // denylist — and a probe over the live payload measured the result. An
+  // address-SHAPED key was withheld and two opaque ones printed verbatim into
+  // this very block, in a document written to be pasted in public. They are
+  // counted below instead.
+  const presence = buildEnvironmentPresence(topology)
+  if (!presence.reported) {
     lines.push('Not reported by this server build.')
   }
-  for (const group of groups) {
+  for (const group of presence.groups) {
     lines.push(`### ${group.title}`)
     lines.push('')
     for (const row of group.rows) {
       lines.push(
         `- ${row.key}: ${row.present ? 'set' : 'not set'} (${row.relevance})${row.note ? ` — ${row.note}` : ''}`,
+      )
+    }
+    lines.push('')
+  }
+  // Printed at zero as well, exactly as the capability count above is: "none
+  // this build cannot name" is a reading, and an absent line is indistinguishable
+  // from a report that never asked.
+  if (presence.reported) {
+    lines.push(`- Variables reported by a newer server that this build does not recognise: ${presence.unrecognised}`)
+    if (presence.unrecognised > 0) {
+      lines.push(
+        '  - Counted and never named. A presence key is chosen by the server, so it is server-controlled text like any value, and this document is written to be pasted in public. The count is the diagnosis: variables this build has no guidance for put the gap on the client, and a client update is what closes it.',
       )
     }
     lines.push('')

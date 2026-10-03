@@ -27,6 +27,14 @@ const PLANTED_TAIL = 'SRNLEAKTAIL83'
 const PLANTED_OPAQUE_OPERATION = `${PLANTED_HEAD}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_MIDDLE}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_TAIL}`
 const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_OPAQUE_OPERATION]
 
+/**
+ * The same markers in the shape of an environment variable NAME, for the
+ * presence-key scan below. Upper snake case and inside the 64-character limit,
+ * so the shape floor ADMITS it: that is the point of this plant, and the reason
+ * a scan built only from the two above would pass against the defect.
+ */
+const PLANTED_ENV_SHAPED_KEY = `${PLANTED_HEAD}_WWWWWWWWW_${PLANTED_MIDDLE}_WWWWWWWWW_${PLANTED_TAIL}`
+
 const payload: SyncDiagnosticsPayload = {
   capturedAt: '2026-08-27T00:00:00.000Z',
   deployment: {
@@ -524,12 +532,69 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     expect(report).not.toContain('withheld (unrecognised)')
   })
 
+  /**
+   * *** THE SAME DEFECT IN `## Configuration presence`, MEASURED. ***
+   *
+   * `buildEnvironmentPresence` put a presence KEY it had never heard of into a
+   * row through `sanitizeServerCopy` — a denylist — and this block printed the
+   * result. A probe over the payload the live stack actually returns settled what
+   * that bought: the address-shaped key was withheld, and the two opaque ones
+   * printed into this very block verbatim, in a document whose single purpose is
+   * to be pasted into an issue.
+   *
+   * The keys of an object off the wire are as much its content as its values, so
+   * the rule is the one the rest of this report follows: name only what this
+   * build declares, count the rest. The third plant is shaped like a variable
+   * name on purpose — a shape floor admits that one, which is why shape was never
+   * the answer here either.
+   */
+  it('counts the presence keys it cannot name in Configuration presence, and names none of them', () => {
+    const report = buildDiagnosticsReport(
+      input({
+        payload: {
+          ...payload,
+          deployment: {
+            ...payload.deployment,
+            presence: {
+              ...payload.deployment?.presence,
+              [PLANTED_OPAQUE_OPERATION]: true,
+              [PLANTED_ENV_SHAPED_KEY]: false,
+              'syncing.internal.example:50051': true,
+            },
+          },
+        },
+      }),
+    )
+
+    for (const fragment of [...PLANTED_FRAGMENTS, PLANTED_ENV_SHAPED_KEY]) {
+      expect(report).not.toContain(fragment)
+    }
+    expect(report).not.toContain('syncing.internal.example')
+    expect(report).not.toContain('[address withheld]')
+    expect(report).toContain('- Variables reported by a newer server that this build does not recognise: 3')
+    // Not vacuous: the variables this build declares are still named, so the
+    // count is read against a list rather than on its own.
+    expect(report).toContain('- REDIS_URL: set (required)')
+  })
+
   it('reports a zero rather than omitting the line, because none is a reading', () => {
     const report = buildDiagnosticsReport(
       input({ payload: { ...payload, protocol: { version: 1, serverOperations: ['SYNC_ITEMS'] } } }),
     )
 
     expect(report).toContain('- Operations this build does not recognise: 0')
+  })
+
+  it('prints the presence count at zero, and omits it entirely when no presence block was reported', () => {
+    expect(buildDiagnosticsReport(input())).toContain(
+      '- Variables reported by a newer server that this build does not recognise: 0',
+    )
+
+    // A server that reported no presence block at all says so in words. A `0`
+    // there would be a measurement of something nobody sent.
+    const unreported = buildDiagnosticsReport(input({ payload: { ...payload, deployment: undefined } }))
+    expect(unreported).toContain('Not reported by this server build.')
+    expect(unreported).not.toContain('Variables reported by a newer server')
   })
 
   it('still prints a real revision, a real version and the unstamped sentinel', () => {

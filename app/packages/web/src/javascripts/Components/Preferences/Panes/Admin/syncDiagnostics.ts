@@ -1260,6 +1260,18 @@ export const REALTIME_UNATTACHED_NOTE =
 export const REALTIME_FIELD_NOT_REPORTED = 'not reported'
 
 /**
+ * The push-bridge planes that count as BOUND, as a closed tuple of this build's
+ * own literals.
+ *
+ * Declared here rather than imported from the WebSocket section's `PUSH_BRIDGES`
+ * (which adds this helper's own `none` for an unbound one) because that module
+ * imports this one, and a cycle between them would be a worse problem than two
+ * lists. The tie is cheap: anything outside this tuple reads `none`, which is the
+ * conservative answer in both files.
+ */
+const BOUND_PUSH_BRIDGES = ['redis', 'in-process'] as const
+
+/**
  * The sentence appended to a row the server said nothing about. It has to claim
  * NOTHING — the tone is `neutral` for the same reason — because every one of
  * these fields has a reading that looks like a fault, and printing that reading
@@ -1304,8 +1316,15 @@ export function describeRealtimeHealth(
 
   const attachedReported = typeof realtime.attached === 'boolean'
   const bridgeReported = typeof realtime.pushBridge === 'string' && realtime.pushBridge.length > 0
-  const bridge = realtime.pushBridge ?? 'unknown'
-  const bridgeBound = bridge === 'redis' || bridge === 'in-process'
+  // `boundBridge` is the MEMBER this build matched, not the field it matched it
+  // against, so the value interpolated below has the closed union as its TYPE and
+  // a server string in that position does not compile. It was
+  // `sanitizeServerCopy(realtime.pushBridge ?? 'unknown')` — a denylist, and the
+  // wrong mechanism even where it happens to be unreachable: the interpolation
+  // already sat behind this two-member equality check, so the redactor could
+  // never fire, while reading as though it were the thing keeping the value safe.
+  const boundBridge = BOUND_PUSH_BRIDGES.find((candidate) => candidate === realtime.pushBridge)
+  const bridgeBound = boundBridge !== undefined
   // Readiness is its own optional field. A bound bridge whose readiness was not
   // reported must not read as "not ready" — that is a reconnect window, which is
   // a thing an operator waits out, and waiting out a field nobody sent is just
@@ -1313,8 +1332,8 @@ export function describeRealtimeHealth(
   const bridgeReadyReported = typeof realtime.pushBridgeReady === 'boolean'
   const bridgeValue = !bridgeReported
     ? REALTIME_FIELD_NOT_REPORTED
-    : bridgeBound
-      ? `${sanitizeServerCopy(bridge)} (${bridgeReadyReported ? (realtime.pushBridgeReady ? 'ready' : 'not ready') : 'readiness not reported'})`
+    : boundBridge !== undefined
+      ? `${boundBridge} (${bridgeReadyReported ? (realtime.pushBridgeReady ? 'ready' : 'not ready') : 'readiness not reported'})`
       : 'none'
   const consumerReported = typeof realtime.sqsConsumerRunning === 'boolean'
   const relayReported = typeof realtime.collaborationRelayHealthy === 'boolean'
@@ -1343,7 +1362,7 @@ export function describeRealtimeHealth(
         ? `The bridge is bound, and its readiness was not reported. ${NOT_REPORTED_NOTE}`
         : !realtime.pushBridgeReady
           ? 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.'
-          : bridge === 'in-process'
+          : boundBridge === 'in-process'
             ? 'Pushes are delivered in-process, to the sockets this process holds, so no Redis is needed for them. Correct for a single process serving every socket; a second replica would need the Redis plane to reach sockets it does not hold itself.'
             : 'The push subscriber is connected, so changes committed elsewhere — including on another replica — are delivered to live sockets.'
 

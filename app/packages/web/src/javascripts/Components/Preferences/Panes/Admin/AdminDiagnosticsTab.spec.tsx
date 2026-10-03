@@ -62,6 +62,12 @@ const SECRETS = [
   'super-secret-jwt-signing-key',
   'hunter2',
   'internal.example',
+  // Appended, so every index above keeps its meaning. This one is shaped exactly
+  // like an environment variable NAME — upper snake case, inside the length
+  // limit — because that is the one class a shape floor ADMITS. It is planted as
+  // a presence KEY, which is a string the server chooses as much as any value,
+  // and a sweep built only from the entries above passed over it.
+  'PLANTED_VARIABLE_SHAPED_SENTINEL',
 ]
 
 /** The instant the fixture payload says the server captured itself. */
@@ -1278,8 +1284,17 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
       capturedAt: SECRETS[0],
       deployment: {
         ...unavailablePayload.deployment,
-        // A server that has started putting values where booleans belong.
-        presence: { REDIS_URL: SECRETS[0] as unknown as boolean, SYNCING_SERVER_GRPC_URL: true },
+        // A server that has started putting values where booleans belong — and,
+        // in the third entry, one whose KEY it chose itself. A key off the wire
+        // reached a row label and the report's configuration block through the
+        // redactor, which withheld the address-shaped ones and printed the
+        // variable-shaped one intact.
+        presence: {
+          REDIS_URL: SECRETS[0] as unknown as boolean,
+          SYNCING_SERVER_GRPC_URL: true,
+          [SECRETS[5]]: true,
+          [SECRETS[1]]: true,
+        },
       },
       transportFallback: {
         observed: true,

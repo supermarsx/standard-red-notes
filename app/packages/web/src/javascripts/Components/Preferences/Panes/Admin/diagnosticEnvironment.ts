@@ -1,5 +1,5 @@
 import type { DeploymentTopology } from './diagnosticRemedies'
-import { sanitizeServerCopy, type Tone } from './syncDiagnostics'
+import type { Tone } from './syncDiagnostics'
 
 /**
  * Standard Red Notes: the configuration-presence view.
@@ -21,6 +21,31 @@ import { sanitizeServerCopy, type Tone } from './syncDiagnostics'
  * so none can be rendered. Variable NAMES are public — they are in the compose
  * files and the documentation — and the report is designed to be pasted into an
  * issue, so nothing beyond a name may enter a row.
+ *
+ * *** AND THE KEY IS NOT A NAME THIS BUILD CHOSE. ***
+ *
+ * `presence` is an object off the wire, so its KEYS are server-controlled text
+ * exactly as much as any value would be. This module used to put a key it had
+ * never heard of straight into a row — through `sanitizeServerCopy`, a denylist
+ * that says in its own comment that it cannot catch an unstructured secret — and
+ * both consumers printed the result: the copyable report's `## Configuration
+ * presence`, and the Environment section's rows. A probe over the payload the
+ * live stack actually returns settled what that bought: an address-SHAPED key was
+ * withheld, and two opaque keys — nothing for a pattern to match — printed
+ * verbatim, one of them in a row an operator reads and in a document whose single
+ * purpose is to be pasted into an issue. Shape-admission is no answer either: a
+ * key in upper snake case LOOKS like a variable name and is still whatever the
+ * server put there.
+ *
+ * So the rule here is the rule the rest of this pane arrived at: NAME ONLY WHAT
+ * THIS BUILD'S OWN CLOSED SET CONTAINS, AND COUNT THE REST. `EnvironmentRow.key`
+ * is typed `KnownEnvKey` — the union of the literals in `GROUPS` — so a wire key
+ * in that field does not compile, and `isKnownEnvKey` runs the same check at
+ * runtime because a type is erased and one cast would otherwise reopen this
+ * silently. What the operator loses is a string they have never seen; what they
+ * keep is `unrecognised`, which says how many and therefore which side the gap is
+ * on. Nothing is dropped quietly, which is the failure mode this view exists to
+ * end.
  */
 
 export type EnvironmentRelevance =
@@ -30,7 +55,16 @@ export type EnvironmentRelevance =
   | 'unknown' /** Topology not reported; no claim is made. */
 
 export type EnvironmentRow = {
-  key: string
+  /**
+   * A variable name THIS BUILD declares, never one off the wire.
+   *
+   * Typed as the closed union rather than `string` so that the leak this view
+   * had is a compile error at the call site instead of something a redactor is
+   * asked to catch: `key: someServerKey` does not compile. A key the server
+   * reports and this build has no name for is counted in
+   * `EnvironmentPresence.unrecognised` and never becomes a row.
+   */
+  key: KnownEnvKey
   present: boolean
   relevance: EnvironmentRelevance
   tone: Tone
@@ -44,7 +78,33 @@ export type EnvironmentGroup = {
   rows: EnvironmentRow[]
 }
 
-const GROUPS: { title: string; description: string; keys: string[] }[] = [
+/**
+ * Everything this view can say about a presence block: the variables it can
+ * NAME, grouped, and how many it cannot.
+ *
+ * One object rather than a bare array of groups so that a consumer cannot take
+ * the rows and silently leave the count behind — adding it to the return type
+ * fails every existing call site to compile until it has been read, which is the
+ * only way this file can make a consumer report a fact it has no row for.
+ */
+export type EnvironmentPresence = {
+  groups: EnvironmentGroup[]
+  /**
+   * Variables the server reported that this build has no name for. COUNTED and
+   * never named: a presence key is server-chosen text. The count is the useful
+   * half anyway — it says the gap is on the client, where an echoed name says
+   * nothing a reader can act on.
+   */
+  unrecognised: number
+  /**
+   * Whether the server reported a presence block at all. Distinct from an empty
+   * one: "nothing was reported" and "nothing unrecognised was reported" are
+   * different readings, and this view must never let a consumer confuse them.
+   */
+  reported: boolean
+}
+
+const GROUPS = [
   {
     title: 'Realtime transport',
     description: 'What the socket handshake itself needs before a client can be let on.',
@@ -91,9 +151,47 @@ const GROUPS: { title: string; description: string; keys: string[] }[] = [
     description: 'Answers "which build is live". Baked at image build time; see the Deployment section.',
     keys: ['SRN_DEPLOY_REVISION', 'SRN_DEPLOY_VERSION'],
   },
-]
+] as const satisfies readonly { title: string; description: string; keys: readonly string[] }[]
 
-const OPTIONAL_KEYS = new Set([
+/**
+ * Every variable name this build declares, as a closed union of literals.
+ *
+ * Derived from `GROUPS` rather than written out beside it: a second list would
+ * be a second thing to keep in step, and the whole value of this union is that
+ * it cannot disagree with the rows.
+ */
+export type KnownEnvKey = (typeof GROUPS)[number]['keys'][number]
+
+/**
+ * Every declared name, flat. Exported so a test can hold the two rules that
+ * govern a label together: a key this build declares must also satisfy the name
+ * shape `safeEnvName` floors labels against, or a real variable would render as
+ * though it were a withheld secret.
+ */
+export const DECLARED_ENV_KEYS: readonly KnownEnvKey[] = GROUPS.flatMap((group) => group.keys)
+
+const KNOWN_ENV_KEYS: ReadonlySet<string> = new Set<string>(DECLARED_ENV_KEYS)
+
+/**
+ * The runtime half of the member check.
+ *
+ * The TYPE is the guarantee — a server-supplied key cannot be assigned to
+ * `EnvironmentRow.key` at all — and this is the same check at runtime, because a
+ * type is erased: one cast at a future call site would otherwise reopen the hole
+ * with nothing to see in the diff. An ALLOW-list, not a scrub: a key is either a
+ * literal this build compiled in or it is counted.
+ */
+export function isKnownEnvKey(key: string): key is KnownEnvKey {
+  return KNOWN_ENV_KEYS.has(key)
+}
+
+/**
+ * Typed as a set of MEMBERS rather than of strings so a typo here is a compile
+ * error. It used to be `Set<string>`, where a misspelled entry silently promoted
+ * a variable from optional to required — a row reading `bad` on a deployment
+ * that is configured correctly.
+ */
+const OPTIONAL_KEYS: ReadonlySet<KnownEnvKey> = new Set<KnownEnvKey>([
   'WEBSOCKET_SYNC_ALLOWED_ORIGINS',
   'PUBLIC_URL',
   'WEBSOCKET_GATEWAY_INTERNAL_SECRET',
@@ -113,7 +211,7 @@ const OPTIONAL_KEYS = new Set([
  * reported rather than assumed.
  */
 function classify(
-  key: string,
+  key: KnownEnvKey,
   present: boolean,
   topology: DeploymentTopology,
 ): { relevance: EnvironmentRelevance; note: string } {
@@ -208,16 +306,20 @@ const TONES: Record<EnvironmentRelevance, (present: boolean) => Tone> = {
   unknown: () => 'neutral',
 }
 
-export function buildEnvironmentGroups(topology: DeploymentTopology | undefined): EnvironmentGroup[] {
+export function buildEnvironmentPresence(topology: DeploymentTopology | undefined): EnvironmentPresence {
   const recorded = topology?.recorded === true
   const presence = topology?.presence ?? {}
-  const known = new Set(GROUPS.flatMap((group) => group.keys))
+  const reportedKeys = Object.keys(presence)
 
   const groups = GROUPS.map((group) => ({
     title: group.title,
     description: group.description,
     rows: group.keys
-      .filter((key) => key in presence)
+      // `isKnownEnvKey` cannot fail on a key read out of `GROUPS` — that is the
+      // point of it. It is here as the runtime floor under the type, so that a
+      // later edit feeding this map anything off the wire drops the row and
+      // counts it instead of printing it.
+      .filter((key) => isKnownEnvKey(key) && key in presence)
       .map((key) => {
         const present = presence[key] === true
         const { relevance, note } = recorded
@@ -229,29 +331,16 @@ export function buildEnvironmentGroups(topology: DeploymentTopology | undefined)
   })).filter((group) => group.rows.length > 0)
 
   // A newer server reporting a key this client build has never heard of must not
-  // vanish: an unknown-but-present variable is still evidence, and a silently
-  // dropped row is the failure mode this whole panel was built to end.
-  const extras = Object.keys(presence)
-    .filter((key) => !known.has(key))
-    .sort()
-  if (extras.length > 0) {
-    groups.push({
-      title: 'Reported by a newer server',
-      description: 'This server reports these; this client build has no guidance for them.',
-      rows: extras.map((key) => ({
-        // This is the only row whose KEY this build did not choose — it came off
-        // the wire from a newer server — so it is the only one that can carry
-        // something other than a variable name.
-        key: sanitizeServerCopy(key),
-        present: presence[key] === true,
-        relevance: 'unknown' as EnvironmentRelevance,
-        tone: 'neutral' as Tone,
-        note: '',
-      })),
-    })
+  // vanish — an unknown-but-reported variable is still evidence, and a silently
+  // dropped row is the failure mode this whole panel was built to end. It is
+  // reported as a COUNT: the key is server-chosen text, and "two variables this
+  // build does not recognise" tells the operator the gap is on the client, which
+  // two names they have never seen do not.
+  return {
+    groups,
+    unrecognised: reportedKeys.filter((key) => !isKnownEnvKey(key)).length,
+    reported: reportedKeys.length > 0,
   }
-
-  return groups
 }
 
 export type TopologyFact = { label: string; value: string; note: string }

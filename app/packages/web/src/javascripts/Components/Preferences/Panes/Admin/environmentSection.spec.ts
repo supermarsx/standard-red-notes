@@ -376,15 +376,49 @@ describe('configuration presence, from the reused classifier', () => {
     expect(ENVIRONMENT_RELEVANCES).toEqual(['required', 'optional', 'inert', 'unknown'])
   })
 
-  it('keeps a key a newer server reports, and withholds it when it is not shaped like a variable name', () => {
-    const known = buildEnvironmentSection({ topology: topology({ presence: { SOME_FUTURE_VARIABLE: true } }) })
-    const unshaped = buildEnvironmentSection({
-      topology: topology({ presence: { 'sk-live-PLANTED-SECRET-0123456789abcdef': true } }),
+  /**
+   * *** THE SECTION HALF OF THE PRESENCE-KEY LEAK. ***
+   *
+   * This test used to assert the defect as a feature. A key a newer server
+   * reports became a row LABEL, admitted by SHAPE — so a key off the wire in
+   * upper snake case was printed on screen and in the report, while a
+   * differently shaped one was refused. Shape is not membership, and the KEYS of
+   * a presence map are chosen by the server exactly as its values would be.
+   *
+   * The fact survives as a count, which is the more useful half: it says the gap
+   * is on the CLIENT. Both plants are asserted absent, including the
+   * variable-shaped one, and so is the redactor's sentinel — its appearance
+   * would mean a denylist had been put back in a row label.
+   */
+  it('counts a key a newer server reports and never labels a row with one', () => {
+    const planted = buildEnvironmentSection({
+      topology: topology({
+        presence: {
+          REDIS_URL: true,
+          SOME_FUTURE_VARIABLE: true,
+          'sk-live-PLANTED-SECRET-0123456789abcdef': true,
+        },
+      }),
     })
+    const serialised = JSON.stringify(planted)
 
-    expect(rowOf(known, 'SOME_FUTURE_VARIABLE').value).toBe('set (relevance not established)')
-    expect(rowOf(unshaped, WITHHELD).value).toBe('set (relevance not established)')
-    expect(JSON.stringify(unshaped)).not.toContain('sk-live-PLANTED')
+    expect(rowOf(planted, 'Variables this build does not recognise').value).toBe('2')
+    expect(rowOf(planted, 'Variables this build does not recognise').verdict).toBe('informational')
+    // Not vacuous: the variables this build DOES declare are still named beside
+    // the count, so the count is read against a list rather than on its own.
+    expect(rowOf(planted, 'REDIS_URL').value).toBe('set (required here)')
+    expect(serialised).not.toContain('SOME_FUTURE_VARIABLE')
+    expect(serialised).not.toContain('sk-live-PLANTED')
+    expect(serialised).not.toContain('[address withheld]')
+    // No refusal sentinel in a label position either: one would mean a wire key
+    // had reached a label and been scrubbed there instead of never arriving.
+    expect(allRows(planted).map((row) => String(row.label))).not.toContain(WITHHELD)
+  })
+
+  it('reports the count at zero, because none is a reading and an absent row is not', () => {
+    const model = buildEnvironmentSection({ topology: topology({ presence: { REDIS_URL: true } }) })
+
+    expect(rowOf(model, 'Variables this build does not recognise').value).toBe('0')
   })
 })
 
@@ -1122,6 +1156,13 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
    * is a boolean and the cookie flags are booleans — so these are planted where
    * a value COULD be smuggled: the decision enum, the deployment marker, an
    * unrecognised failure class, and a variable name a newer server reports.
+   *
+   * The LAST of those is planted three ways on purpose — address-shaped, opaque
+   * and shaped exactly like a variable name — because only the third tells the
+   * member check apart from the two mechanisms that resemble one. A denylist
+   * catches the first and misses the second; a shape floor admits the third and
+   * refuses the first two. Nothing but "is this a literal this build compiled
+   * in" refuses all three.
    */
   const SECRETS = [
     'sk-live-PLANTED-SECRET-0123456789abcdef',
@@ -1131,6 +1172,7 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     'PLANTED-FAILURE-CLASS-MARKER',
     'redis://user:PLANTED-PASSWORD@cache.internal:6379',
     'PLANTED-PASSWORD',
+    'PLANTED_VARIABLE_SHAPED_KEY',
   ]
 
   const planted = (): SectionModel =>
@@ -1139,6 +1181,7 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
         presence: {
           'sk-live-PLANTED-SECRET-0123456789abcdef': true,
           'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
+          PLANTED_VARIABLE_SHAPED_KEY: true,
           SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true,
           AUTH_JWT_SECRET: false,
           REDIS_URL: false,
@@ -1192,7 +1235,12 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     // And the scan is not vacuous: the report is real, and full.
     expect(report).toContain('## Environment & setup')
     expect(report).toContain('- Worst verdict: broken')
-    expect(report).toContain(`- ${WITHHELD}: set (relevance not established)`)
+    // The three unnameable keys survive as a count. A refusal sentinel in that
+    // position is asserted ABSENT: it would mean a wire key had reached a label
+    // and been scrubbed there rather than never arriving.
+    expect(report).toContain('- Variables this build does not recognise: 3')
+    expect(report).not.toContain(`- ${WITHHELD}: set`)
+    expect(report).not.toContain('[address withheld]')
   })
 
   it('still reports the facts beside the refusals, so the scan is not passing on an empty model', () => {
