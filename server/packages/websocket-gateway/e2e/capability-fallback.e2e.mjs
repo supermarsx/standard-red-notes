@@ -84,8 +84,11 @@ const DEVICE_ID = 'e2e-capfall-' + randomUUID()
 // GET paths the API_RPC lane may actually carry. `/v1/sessions`, `/v1/items`,
 // `/v1/users/*`, `/v1/login-params`, `/v1/sockets/*` and `/sockets` are on
 // `FORBIDDEN_RPC_ROUTE_FAMILIES` in LoopbackSyncApiRpcAdapter and are refused
-// by the ADAPTER, which surfaces as BACKEND_ERROR — indistinguishable from a
-// dead backend. Probing one of those measures the block list, not the lane.
+// by the ADAPTER. That refusal now answers its own non-retryable
+// `RPC_PATH_FORBIDDEN` code, so it is no longer indistinguishable from the
+// BACKEND_ERROR a dead backend reports — but it is still an ERROR frame rather
+// than a 200, so `isRpcOk` reads it as a broken lane either way. Probing one of
+// those measures the block list, not the lane.
 const RPC_PATH = process.env.RPC_PATH ?? '/v1/shared-vaults/invites'
 const INVITE_HTTP_PATH = process.env.INVITE_HTTP_PATH ?? '/v1/shared-vaults/invites'
 
