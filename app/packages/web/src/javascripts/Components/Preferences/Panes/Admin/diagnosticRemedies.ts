@@ -178,6 +178,53 @@ const knownToken = <T extends string>(value: unknown, allowed: readonly T[]): T 
 const BOUND_SERVICE_PROXIES = ['direct-call', 'grpc', 'http'] as const
 const SYNC_SWITCH_SETTINGS = ['true', 'false', 'unset', 'other'] as const
 
+/**
+ * Every member of every closed-union field on `DeploymentTopology`, as one list,
+ * for a reader that has a topology VALUE and no idea which field produced it.
+ *
+ * That reader is the copyable report's Topology block. `describeTopology`
+ * flattens four of these fields into `{ label, value, note }` and the field
+ * identity is gone by the time the report sees it, so the report admits against
+ * the pooled set. Cross-field confusion is not a cost: every member here is a
+ * public constant in this build, and the property being held is "only a literal
+ * this build owns is ever printed", not "this value belongs to that field".
+ *
+ * `satisfies` pins every entry to be a real member, so a typo does not compile.
+ */
+export const TOPOLOGY_ENUM_MEMBERS = [
+  'home-server',
+  'self-hosted',
+  'unset',
+  'other',
+  'grpc',
+  'http',
+  'auto',
+  'direct-call',
+  'memory',
+  'redis',
+  'true',
+  'false',
+] as const satisfies readonly TopologyEnumMember[]
+
+type TopologyEnumMember = NonNullable<
+  | DeploymentTopology['mode']
+  | DeploymentTopology['serviceProxySetting']
+  | DeploymentTopology['boundServiceProxy']
+  | DeploymentTopology['cacheSetting']
+  | DeploymentTopology['syncSwitchSetting']
+>
+
+/**
+ * A member added to one of those unions without being listed above makes
+ * `UnlistedTopologyMember` non-never and fails this file to compile — the same
+ * device as `EverySyncOperationIsClassified`. Without it the list could go stale
+ * and the report would start withholding a legal value, which looks exactly like
+ * a withheld secret and is the opposite of informative.
+ */
+type UnlistedTopologyMember = Exclude<TopologyEnumMember, (typeof TOPOLOGY_ENUM_MEMBERS)[number]>
+type AssertNever<T extends never> = T
+export type EveryTopologyMemberIsListed = AssertNever<UnlistedTopologyMember>
+
 const generic = (code: string, serverRemedy: string | undefined): Remedy => ({
   code: sanitizeServerCopy(code),
   // The one place server-authored prose is printed verbatim. It goes through the

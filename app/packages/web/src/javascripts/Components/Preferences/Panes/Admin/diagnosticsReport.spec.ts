@@ -476,6 +476,54 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     }
   })
 
+  /**
+   * *** THE SAME DEFECT IN THE TOPOLOGY BLOCK, MEASURED. ***
+   *
+   * `describeTopology` flattens four closed-union topology fields with
+   * `topology.mode ?? 'unknown'` — raw — and those unions are a compile-time
+   * claim about JSON cast at the boundary, exactly as `knownToken` says. Fed an
+   * opaque string in all four, this block printed all four verbatim, and
+   * `modeNote[topology.mode ?? 'unset']` printed the literal "undefined" as the
+   * note beside them.
+   *
+   * This report is the only consumer of that helper, so the admission lives here.
+   * `recorded: true` matters: the helper short-circuits to "not reported"
+   * otherwise and the fields are never read.
+   */
+  it('refuses a topology enum value that is not one of this build’s own members', () => {
+    const hostile = {
+      ...payload.deployment,
+      recorded: true,
+      mode: PLANTED_OPAQUE_OPERATION,
+      serviceProxySetting: PLANTED_OPAQUE_OPERATION,
+      boundServiceProxy: PLANTED_OPAQUE_OPERATION,
+      cacheSetting: PLANTED_OPAQUE_OPERATION,
+    } as unknown as SyncDiagnosticsPayload['deployment']
+    const report = buildDiagnosticsReport(input({ payload: { ...payload, deployment: hostile } }))
+
+    for (const fragment of PLANTED_FRAGMENTS) {
+      expect(report).not.toContain(fragment)
+    }
+    expect(report).toContain('- MODE: withheld (unrecognised)')
+    expect(report).toContain('- Service proxy in use: withheld (unrecognised)')
+    // The note for an unrecognised MODE is `undefined` at runtime, and printing
+    // that word is worse than omitting it: it reads as a bug in the server.
+    expect(report).not.toContain('— undefined')
+    // A denylist is not what is doing the work here either.
+    expect(report).not.toContain('[address withheld]')
+  })
+
+  it('still prints every legal topology member, so the guard is not a blanket refusal', () => {
+    const report = buildDiagnosticsReport(input())
+
+    expect(report).toContain('- MODE: self-hosted')
+    expect(report).toContain('- SERVICE_PROXY_TYPE: unset')
+    expect(report).toContain('- Service proxy in use: http')
+    expect(report).toContain('- CACHE_TYPE: redis')
+    expect(report).toContain('- Redis bound: yes')
+    expect(report).not.toContain('withheld (unrecognised)')
+  })
+
   it('reports a zero rather than omitting the line, because none is a reading', () => {
     const report = buildDiagnosticsReport(
       input({ payload: { ...payload, protocol: { version: 1, serverOperations: ['SYNC_ITEMS'] } } }),

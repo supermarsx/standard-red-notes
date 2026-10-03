@@ -7,6 +7,7 @@ import {
   remedyForLiveReason,
   remedyForPrecondition,
   remedyForUnstampedDeployment,
+  TOPOLOGY_ENUM_MEMBERS,
   type DeploymentTopology,
   type Remedy,
 } from './diagnosticRemedies'
@@ -110,6 +111,23 @@ const safeTimestamp = (value: string | undefined): string => {
   return ISO_INSTANT.test(value) ? value : 'reported in an unrecognised format, withheld'
 }
 
+/**
+ * Everything a `describeTopology` fact can legitimately say: the members of the
+ * closed-union topology fields, plus the four literals that helper writes itself
+ * (`'unknown'` for an absent field, `'yes'`/`'no'` for the two booleans, and
+ * `'not reported'` for an unrecorded topology).
+ */
+const TOPOLOGY_FACT_VALUES: readonly string[] = [...TOPOLOGY_ENUM_MEMBERS, 'unknown', 'yes', 'no', 'not reported']
+
+/**
+ * Refused rather than repaired, the same way an unrecognised deployment marker is
+ * — this document is written to be pasted in public, and a topology field is an
+ * enum with a known member list, so nothing outside it needs printing at all.
+ */
+const admitTopologyValue = (value: string): string => {
+  return TOPOLOGY_FACT_VALUES.includes(value) ? value : 'withheld (unrecognised)'
+}
+
 const remedyLines = (remedy: Remedy): string[] => {
   const lines = [
     `  - Fix (${EFFORT_LABEL[remedy.effort]}${remedy.basis === 'generic' ? ', generic advice' : ''}): ${remedy.summary}`,
@@ -190,7 +208,17 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
   lines.push('## Topology')
   lines.push('')
   for (const fact of describeTopology(topology)) {
-    lines.push(`- ${fact.label}: ${fact.value} — ${fact.note}`)
+    // The VALUE is admitted against this build's own member list, and the note is
+    // printed only when there is one. `describeTopology` flattens four closed-union
+    // topology fields with `topology.mode ?? 'unknown'` and friends — raw — and the
+    // whole point of `knownToken` is that those unions are a compile-time claim
+    // about JSON cast at the boundary. Measured, not theorised: a topology with an
+    // opaque string in all four fields printed all four verbatim into this block,
+    // and `modeNote[topology.mode ?? 'unset']` printed the literal "undefined" as
+    // the note. This block is the ONLY consumer of that helper, so admitting here
+    // closes it; the five sections re-derive their own values through `safeEnum`
+    // and never had the hole.
+    lines.push(`- ${fact.label}: ${admitTopologyValue(fact.value)}${fact.note ? ` — ${fact.note}` : ''}`)
   }
   lines.push('')
 
