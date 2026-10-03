@@ -168,7 +168,7 @@ export function classifyPresentedSessionCredential(
   if (!outcome.reached) {
     return { refreshed: false, code: 'SESSION_STALE' }
   }
-  if (outcome.status === 499) {
+  if (outcome.status === 401) {
     return { refreshed: false, code: 'SESSION_REVOKED' }
   }
   if (outcome.status !== 200 || outcome.identityMatches === undefined) {

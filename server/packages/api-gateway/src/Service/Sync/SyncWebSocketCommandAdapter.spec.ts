@@ -596,12 +596,16 @@ describe('SyncWebSocketCommandAdapter', () => {
       const collaboration = collaborationService()
       const { adapter, serviceProxy } = build({}, collaboration)
 
+      // Standard Red Notes: a missing credential is a CREDENTIAL problem, not a
+      // policy denial, and now says so (see `sessionCredentialRefresh.spec.ts`
+      // for the full split). The refusal itself is unchanged: nothing is minted
+      // and the session plane is never asked.
       await expect(
         adapter.authorizeCollaboration(
           { ...collaborationInput, identity: { ...identity, authorization: undefined } },
           new AbortController().signal,
         ),
-      ).resolves.toEqual({ authorized: false })
+      ).resolves.toEqual({ authorized: false, code: 'SESSION_STALE' })
       expect(collaboration.authorize).not.toHaveBeenCalled()
       expect(serviceProxy.validateSession).not.toHaveBeenCalled()
     })

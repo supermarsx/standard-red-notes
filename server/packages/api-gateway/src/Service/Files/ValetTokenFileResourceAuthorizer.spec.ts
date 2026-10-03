@@ -69,9 +69,12 @@ class FakeServiceProxy {
   mintStatus = 200
   mintBody: unknown = { data: { valetToken: 'minted.valet.token' } }
   throwOnMint?: Error
+  /** Fires after the call is recorded, so a test can abort mid-revalidation. */
+  onValidateSession?: () => void
 
   async validateSession(dto: unknown) {
     this.validateSessionCalls.push(dto)
+    this.onValidateSession?.()
     return { status: this.sessionStatus, data: this.sessionData, headers: { contentType: 'application/json' } }
   }
 
@@ -255,49 +258,20 @@ describe('ValetTokenFileResourceAuthorizer', () => {
   })
 
   describe('session revalidation', () => {
-    it('denies without the original session credential and never calls out', async () => {
-      const { serviceProxy, authorizer } = build()
+    it.each([['the session is no longer valid', (proxy: FakeServiceProxy) => (proxy.sessionStatus = 401)]])(
+      'denies and never mints when %s',
+      async (_label, mutate) => {
+        const { serviceProxy, authorizer } = build()
+        mutate(serviceProxy)
 
-      const result = await authorizer.authorize(
-        input({ identity: { ...IDENTITY, authorization: undefined } }),
-        signal(),
-      )
-
-      expect(result).toBeUndefined()
-      expect(serviceProxy.validateSessionCalls).toHaveLength(0)
-      expect(serviceProxy.mintCalls).toHaveLength(0)
-    })
-
-    it('denies an empty bearer credential', async () => {
-      const { serviceProxy, authorizer } = build()
-      expect(
-        await authorizer.authorize(input({ identity: { ...IDENTITY, authorization: 'Bearer ' } }), signal()),
-      ).toBeUndefined()
-      expect(serviceProxy.validateSessionCalls).toHaveLength(0)
-    })
-
-    it.each([
-      ['the session is no longer valid', (proxy: FakeServiceProxy) => (proxy.sessionStatus = 401)],
-      ['the session response carries no token', (proxy: FakeServiceProxy) => (proxy.sessionData = {})],
-      ['the session response is not an object', (proxy: FakeServiceProxy) => (proxy.sessionData = 'nope')],
-    ])('denies and never mints when %s', async (_label, mutate) => {
-      const { serviceProxy, authorizer } = build()
-      mutate(serviceProxy)
-
-      expect(await authorizer.authorize(input(), signal())).toBeUndefined()
-      expect(serviceProxy.mintCalls).toHaveLength(0)
-    })
-
-    it('denies when the cross-service token cannot be verified', async () => {
-      const { serviceProxy, authorizer } = build({ token: undefined })
-      expect(await authorizer.authorize(input(), signal())).toBeUndefined()
-      expect(serviceProxy.mintCalls).toHaveLength(0)
-    })
+        expect(await authorizer.authorize(input(), signal())).toBeUndefined()
+        expect(serviceProxy.mintCalls).toHaveLength(0)
+      },
+    )
 
     it.each([
       ['the user changed', { user: { uuid: 'user-9' } }],
       ['the session changed', { session: { uuid: 'session-9' } }],
-      ['the roles are missing', { roles: undefined as unknown as unknown[] }],
     ])('denies when %s', async (_label, patch) => {
       const { serviceProxy, authorizer } = build({ token: { ...BASE_TOKEN, ...patch } })
       expect(await authorizer.authorize(input(), signal())).toBeUndefined()
@@ -328,6 +302,130 @@ describe('ValetTokenFileResourceAuthorizer', () => {
         storageOwnerUuid: 'user-1',
         valetToken: 'minted.valet.token',
       })
+    })
+  })
+
+  /**
+   * Standard Red Notes: FILES_V1 used to answer FILE_ACCESS_DENIED for a stale
+   * credential AND for a policy denial, so a client could not tell "refresh your
+   * credential" from "you may not do this".
+   *
+   * The split is keyed on the SHARED classification
+   * (`classifyPresentedSessionCredential`), which reads auth's STATUS and never
+   * its error tag: a plain sign-out deletes the session row and writes no
+   * `revoked_session` record, so logout answers 401 `invalid-auth`, and keying on
+   * the tag would make every logout look refreshable.
+   */
+  describe('a stale credential is distinguishable from a policy denial', () => {
+    const staleCode = { name: 'HomeServerSyncFilesAdapterError', code: 'SESSION_STALE' }
+
+    it.each([
+      ['no credential was captured at ticket time', { identity: { ...IDENTITY, authorization: undefined } }],
+      ['the credential is an empty bearer', { identity: { ...IDENTITY, authorization: 'Bearer ' } }],
+    ])('reports a stale credential when %s, without calling auth', async (_label, patch) => {
+      const { serviceProxy, authorizer } = build()
+
+      await expect(authorizer.authorize(input(patch), signal())).rejects.toMatchObject(staleCode)
+      expect(serviceProxy.validateSessionCalls).toHaveLength(0)
+      expect(serviceProxy.mintCalls).toHaveLength(0)
+    })
+
+    it.each([
+      // 498 `expired-access-token`: the session is LIVE, this token is merely
+      // older than it (expired, or inside auth's refresh cooldown).
+      ['auth reports the token expired', (proxy: FakeServiceProxy) => (proxy.sessionStatus = 498)],
+      ['auth is unwell', (proxy: FakeServiceProxy) => (proxy.sessionStatus = 503)],
+      ['the answer carries no token', (proxy: FakeServiceProxy) => (proxy.sessionData = {})],
+      ['the answer is not an object', (proxy: FakeServiceProxy) => (proxy.sessionData = 'nope')],
+    ])('reports a stale credential when %s', async (_label, mutate) => {
+      const { serviceProxy, authorizer } = build()
+      mutate(serviceProxy)
+
+      await expect(authorizer.authorize(input(), signal())).rejects.toMatchObject(staleCode)
+      expect(serviceProxy.mintCalls).toHaveLength(0)
+    })
+
+    it.each([
+      ['the cross-service token cannot be verified', { token: undefined }],
+      ['the cross-service token is unreadable', { token: { ...BASE_TOKEN, roles: undefined as unknown as unknown[] } }],
+    ])('reports a stale credential when %s', async (_label, overrides) => {
+      const { serviceProxy, authorizer } = build(overrides)
+
+      await expect(authorizer.authorize(input(), signal())).rejects.toMatchObject(staleCode)
+      expect(serviceProxy.mintCalls).toHaveLength(0)
+    })
+
+    it('reports a revoked session as the ordinary denial, never as stale', async () => {
+      // 401 is where a session that is GONE lands -- signed out, deleted,
+      // revoked, banned. Nothing a newer token can repair, so it must not invite
+      // a refresh, and it must stay indistinguishable from a policy denial.
+      const { serviceProxy, authorizer } = build()
+      serviceProxy.sessionStatus = 401
+
+      expect(await authorizer.authorize(input(), signal())).toBeUndefined()
+    })
+
+    it('reports auth accepting the credential for ANOTHER identity as the ordinary denial', async () => {
+      const { authorizer } = build({ token: { ...BASE_TOKEN, session: { uuid: 'session-9' } } })
+
+      expect(await authorizer.authorize(input(), signal())).toBeUndefined()
+    })
+
+    it.each([
+      ['a read-only session', { session: { uuid: 'session-1', readonly_access: true } }],
+      ['an account at its content limit', { hasContentLimit: true }],
+      ['live sync disabled for the account', { live_sync_enabled: false }],
+    ])('leaves a policy denial exactly as it was for %s', async (_label, patch) => {
+      const { authorizer } = build({ token: { ...BASE_TOKEN, ...patch } })
+
+      expect(await authorizer.authorize(input({ operation: 'upload', decryptedSize: 10 }), signal())).toBeUndefined()
+    })
+
+    /**
+     * THE EXISTENCE ORACLE, and why one case is deliberately NOT split.
+     *
+     * A shared-vault resource makes `validateSession` send auth a
+     * `sharedVaultOwnerContext` taken from the client's own
+     * `sharedVaultOwnerUuid`; auth looks that user's subscription and upload
+     * limit up and fails the cross-service token when either is missing. So for
+     * a shared-vault resource auth's status depends on the requested OWNER, not
+     * only on the credential -- "stale" for an owner uuid that does not exist and
+     * "denied" for a real owner the caller is not a member of would hand an
+     * unauthorized caller an existence oracle. Every shared-vault refusal stays
+     * on the denial, whatever the credential verdict says.
+     */
+    it.each([
+      ['the answer carries no token', (proxy: FakeServiceProxy) => (proxy.sessionData = {})],
+      ['auth is unwell', (proxy: FakeServiceProxy) => (proxy.sessionStatus = 503)],
+      ['auth reports the token expired', (proxy: FakeServiceProxy) => (proxy.sessionStatus = 498)],
+    ])('keeps a shared-vault refusal on the denial when %s', async (_label, mutate) => {
+      const { serviceProxy, authorizer } = build({ claims: SHARED_CLAIMS })
+      mutate(serviceProxy)
+
+      expect(await authorizer.authorize(input({ resource: SHARED }), signal())).toBeUndefined()
+      expect(serviceProxy.mintCalls).toHaveLength(0)
+    })
+
+    it('keeps a shared-vault refusal on the denial even with no credential at all', async () => {
+      const { serviceProxy, authorizer } = build({ claims: SHARED_CLAIMS })
+
+      expect(
+        await authorizer.authorize(
+          input({ resource: SHARED, identity: { ...IDENTITY, authorization: undefined } }),
+          signal(),
+        ),
+      ).toBeUndefined()
+      expect(serviceProxy.validateSessionCalls).toHaveLength(0)
+    })
+
+    it('says nothing about the credential when the operation was aborted', async () => {
+      // The transfer deadline owns an abort; the session was never judged.
+      const { serviceProxy, authorizer } = build()
+      serviceProxy.sessionData = {}
+      const controller = new AbortController()
+      serviceProxy.onValidateSession = () => controller.abort()
+
+      expect(await authorizer.authorize(input(), controller.signal)).toBeUndefined()
     })
   })
 

@@ -554,6 +554,16 @@ export class SyncFilesError extends Error {
 
 const ADAPTER_ERROR_CODES = new Set([
   'OPERATION_UNAVAILABLE',
+  /**
+   * Standard Red Notes: "the session credential this socket presented can no
+   * longer authenticate", as distinct from FILE_ACCESS_DENIED, which stays the
+   * answer to every policy denial AND to a revoked session. Deliberately the
+   * same name the sync lane already uses for the same condition — one code, one
+   * meaning, and `isRetryableError` in the handler already marks it retryable.
+   * An authorizer raises it only where the refusal cannot reveal whether a
+   * resource exists.
+   */
+  'SESSION_STALE',
   'FILE_ACCESS_DENIED',
   'FILE_BACKEND_ERROR',
   'FILE_CHUNK_OUT_OF_ORDER',
@@ -572,7 +582,12 @@ const ADAPTER_ERROR_CODES = new Set([
   'FILE_TRUNCATED',
 ])
 
-const RETRYABLE_ADAPTER_ERROR_CODES = new Set(['OPERATION_UNAVAILABLE', 'FILE_BACKEND_ERROR', 'FILE_TRANSFER_CAPACITY'])
+const RETRYABLE_ADAPTER_ERROR_CODES = new Set([
+  'OPERATION_UNAVAILABLE',
+  'FILE_BACKEND_ERROR',
+  'FILE_TRANSFER_CAPACITY',
+  'SESSION_STALE',
+])
 
 function normalizeFilesError(error: unknown): SyncFilesError {
   if (error instanceof SyncFilesError) {

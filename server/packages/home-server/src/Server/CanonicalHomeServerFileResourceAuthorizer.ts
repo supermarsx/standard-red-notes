@@ -1,11 +1,17 @@
 import type { Request, Response } from 'express'
 
 import { ServiceIdentifier, type ServiceContainerInterface, type ServiceInterface } from '@standardnotes/domain-core'
+import {
+  classifyPresentedSessionCredential,
+  credentialCanAuthenticateSession,
+  type PresentedSessionCredentialOutcome,
+} from '@standard-red-notes/websocket-gateway'
 
-import type {
-  HomeServerFileAuthorization,
-  HomeServerFileOperation,
-  HomeServerFileResourceAuthorizer,
+import {
+  HomeServerSyncFilesAdapterError,
+  type HomeServerFileAuthorization,
+  type HomeServerFileOperation,
+  type HomeServerFileResourceAuthorizer,
 } from './HomeServerSyncFilesAdapter'
 
 type AuthorizationInput = Parameters<HomeServerFileResourceAuthorizer['authorize']>[0]
@@ -104,44 +110,104 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
         return await this.authorizePersonalResource(input, token, signal)
       }
       return await this.authorizeSharedVaultResource(input, token, signal)
-    } catch {
+    } catch (error) {
+      if (this.refusalIsAnUnusableCredential(error, input, signal)) {
+        // Standard Red Notes: the ONE files refusal whose cause is the credential
+        // rather than the policy. A coded adapter error so it survives
+        // `HomeServerSyncFilesAdapter` and reaches the wire as SESSION_STALE;
+        // `undefined` still means "denied, and the reason is none of your
+        // business", exactly as before.
+        throw new HomeServerSyncFilesAdapterError('SESSION_STALE')
+      }
       return undefined
     }
   }
 
+  /**
+   * True only for a refusal that is safe AND honest to report as a stale
+   * credential.
+   *
+   * PERSONAL RESOURCES ONLY, and this is the whole reason the test exists.
+   * `validateSession` sends auth a `sharedVaultOwnerContext` taken straight from
+   * the client's own `sharedVaultOwnerUuid`; auth then looks that user's
+   * subscription and file-upload-limit setting up and FAILS the cross-service
+   * token when either is missing. So for a shared-vault resource auth's status is
+   * a function of the requested OWNER, not only of the credential, and splitting
+   * stale from denied there would answer "stale" for an owner uuid that does not
+   * exist and "denied" for a real owner the caller is not a member of -- an
+   * existence oracle for other people's vault owners. Every shared-vault refusal
+   * therefore stays on FILE_ACCESS_DENIED. A personal resource sends nothing
+   * resource-derived at all, so its verdict reveals only the caller's own
+   * credential.
+   *
+   * An ABORT is not a verdict: the transfer deadline owns it, and the session was
+   * never judged.
+   */
+  private refusalIsAnUnusableCredential(error: unknown, input: AuthorizationInput, signal: AbortSignal): boolean {
+    return (
+      !signal.aborted &&
+      input.resource.ownershipType === 'user' &&
+      error instanceof FileSessionCredentialError &&
+      error.verdict === 'stale'
+    )
+  }
+
   private async validateSession(input: AuthorizationInput, signal: AbortSignal): Promise<HomeServerCrossServiceToken> {
     if (!input.identity.authorization) {
-      throw new Error('File authorization requires the original session credential.')
+      throw new FileSessionCredentialError('File authorization requires the original session credential.', {
+        reached: false,
+      })
     }
     const authorization = input.identity.authorization.replace(/^Bearer\s+/iu, '')
     if (!authorization) {
-      throw new Error('File authorization credential is empty.')
+      throw new FileSessionCredentialError('File authorization credential is empty.', { reached: false })
     }
     const ownerContext =
       input.resource.ownershipType === 'shared-vault' ? input.resource.sharedVaultOwnerUuid : undefined
-    const response = await abortable(
-      this.options.sessionValidator.validateSession({
-        headers: {
-          authorization,
-          ...(ownerContext ? { sharedVaultOwnerContext: ownerContext } : {}),
-        },
-        requestMetadata: { url: '/sockets/sync/files', method: 'POST' },
-      }),
-      signal,
-    )
+    let response: SessionValidationResult
+    try {
+      response = await abortable(
+        this.options.sessionValidator.validateSession({
+          headers: {
+            authorization,
+            ...(ownerContext ? { sharedVaultOwnerContext: ownerContext } : {}),
+          },
+          requestMetadata: { url: '/sockets/sync/files', method: 'POST' },
+        }),
+        signal,
+      )
+    } catch (error) {
+      throw new FileSessionCredentialError(error instanceof Error ? error.message : 'File session validation failed.', {
+        reached: false,
+      })
+    }
     if (response.status !== 200 || !isObject(response.data) || typeof response.data.authToken !== 'string') {
-      throw new Error('File session is no longer authorized.')
+      throw new FileSessionCredentialError(
+        'File session is no longer authorized.',
+        // `HomeServerSessionValidationPort` carries no cookie channel, so a
+        // cookie session's bearer reaches auth alone and is refused on its own
+        // merits -- but the shape test still runs, so the one credential that
+        // provably cannot authenticate is never read as a revocation. Identical
+        // to the sync lane's REAUTH pre-flight.
+        credentialCanAuthenticateSession(authorization, input.identity)
+          ? { reached: true, status: response.status }
+          : { reached: false },
+      )
     }
     const token = this.options.authTokenDecoder.decodeToken(response.data.authToken)
-    if (
-      !token ||
-      !isObject(token.user) ||
-      token.user.uuid !== input.identity.userUuid ||
-      !isObject(token.session) ||
-      token.session.uuid !== input.identity.sessionUuid ||
-      !Array.isArray(token.roles)
-    ) {
-      throw new Error('File session identity changed.')
+    if (!token || !isObject(token.user) || !isObject(token.session) || !Array.isArray(token.roles)) {
+      // Auth answered 200 but its answer could not be read (an unverifiable
+      // token, a rotated signing secret mid-deploy). An unknown verdict, which
+      // the shared classification always reads as stale.
+      throw new FileSessionCredentialError('File session token is unreadable.', { reached: true, status: 200 })
+    }
+    if (token.user.uuid !== input.identity.userUuid || token.session.uuid !== input.identity.sessionUuid) {
+      // Auth accepted the credential for ANOTHER identity: never a stale token.
+      throw new FileSessionCredentialError('File session identity changed.', {
+        reached: true,
+        status: 200,
+        identityMatches: false,
+      })
     }
     signal.throwIfAborted()
     return token
@@ -337,6 +403,23 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
       return true
     }
     return (uploadBytesLimit as number) - (uploadBytesUsed as number) - (input.decryptedSize as number) > 0
+  }
+}
+
+/**
+ * A session revalidation that refused, carrying the SHARED stale/revoked verdict
+ * (`classifyPresentedSessionCredential`) rather than a second opinion of its own.
+ * Every other failure inside `authorize` stays an ordinary Error, i.e. an
+ * unqualified denial.
+ */
+export class FileSessionCredentialError extends Error {
+  readonly verdict: 'stale' | 'revoked'
+
+  constructor(message: string, outcome: PresentedSessionCredentialOutcome) {
+    super(message)
+    this.name = 'FileSessionCredentialError'
+    const decision = classifyPresentedSessionCredential(outcome)
+    this.verdict = !decision.refreshed && decision.code === 'SESSION_REVOKED' ? 'revoked' : 'stale'
   }
 }
 

@@ -576,6 +576,10 @@ describe('SyncFilesSession', () => {
       metadata: vi
         .fn()
         .mockRejectedValueOnce(new HomeServerAdapterError('FILE_ACCESS_DENIED'))
+        // Standard Red Notes: "the session credential this socket presented can
+        // no longer authenticate", distinct from FILE_ACCESS_DENIED, which stays
+        // the answer to every policy denial AND to a revoked session.
+        .mockRejectedValueOnce(new HomeServerAdapterError('SESSION_STALE'))
         .mockRejectedValueOnce(new HomeServerAdapterError('PRIVATE_STORAGE_PATH_LEAK')),
     })
     const { session, errors } = harness(filesAdapter)
@@ -586,8 +590,9 @@ describe('SyncFilesSession', () => {
 
     await session.handleControl(metadata, identity)
     await session.handleControl(metadata, identity)
+    await session.handleControl(metadata, identity)
 
-    expect(errors.map(({ code }) => code)).toEqual(['FILE_ACCESS_DENIED', 'FILE_BACKEND_ERROR'])
+    expect(errors.map(({ code }) => code)).toEqual(['FILE_ACCESS_DENIED', 'SESSION_STALE', 'FILE_BACKEND_ERROR'])
   })
 })
 

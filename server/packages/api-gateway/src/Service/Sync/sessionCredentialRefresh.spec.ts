@@ -314,6 +314,113 @@ describe('SyncWebSocketCommandAdapter.refreshSession', () => {
     })
   })
 
+  /**
+   * Standard Red Notes: the COLLABORATION lane used to collapse a stale
+   * credential and a policy denial into the same `{ authorized: false }`, which
+   * the handler publishes as NOT_AUTHORIZED. On the wire the two were
+   * indistinguishable, so a client could not tell "refresh your credential" from
+   * "you are not allowed to do this" -- and a client that guessed would turn
+   * every legitimate denial into a pointless ticket mint plus a session-plane
+   * call.
+   *
+   * The split reuses `refreshSession`'s classification verbatim (the shared
+   * `classifyPresentedSessionCredential`, keyed on auth's STATUS and never on its
+   * error tag), so the two lanes cannot drift into disagreeing about whether a
+   * session is gone. The policy half is untouched: it is still the bare
+   * `{ authorized: false }`.
+   */
+  describe('the collaboration lane says WHICH refusal it is', () => {
+    const collaborationService = (authorized: boolean) => ({
+      ready: () => true,
+      authorize: jest.fn(async () => ({ authorized }) as never),
+    })
+
+    const collaborationInput = {
+      identity: cookieIdentity,
+      request: { noteUuid: 'note-1', collaborationProtocolVersion: 3 as const, epochDiscovery: true as const },
+    }
+
+    const adapterFor = (
+      proxy: ServiceProxyInterface,
+      collaboration: ReturnType<typeof collaborationService>,
+    ): SyncWebSocketCommandAdapter =>
+      new SyncWebSocketCommandAdapter(
+        proxy,
+        undefined,
+        JWT_SECRET,
+        collaboration as unknown as ConstructorParameters<typeof SyncWebSocketCommandAdapter>[3],
+      )
+
+    it.each([
+      ['auth reports the token merely expired', AUTH_REFUSALS.expiredAccessToken],
+      ['auth answered 500', { status: 500, data: { error: { message: 'boom' } } }],
+      ['auth answered 200 with no token', { status: 200, data: {} }],
+    ])('reports SESSION_STALE when %s', async (_name, refusal) => {
+      const { proxy } = proxyAnswering(refusal)
+      const collaboration = collaborationService(true)
+
+      await expect(
+        adapterFor(proxy, collaboration).authorizeCollaboration(collaborationInput, signal()),
+      ).resolves.toEqual({ authorized: false, code: 'SESSION_STALE' })
+      // The stale verdict is reached before the note is ever presented, which is
+      // what keeps it from revealing whether the note exists.
+      expect(collaboration.authorize).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['an explicitly revoked session', AUTH_REFUSALS.revokedSession],
+      ['a signed-out session, which auth reports as invalid-auth', AUTH_REFUSALS.invalidAuth],
+    ])('keeps %s on the unqualified denial', async (_name, refusal) => {
+      // A session that is GONE cannot be repaired by presenting a newer token, so
+      // it must not invite a refresh -- and it must stay indistinguishable from a
+      // policy denial on the wire.
+      const { proxy } = proxyAnswering(refusal)
+
+      await expect(
+        adapterFor(proxy, collaborationService(true)).authorizeCollaboration(collaborationInput, signal()),
+      ).resolves.toEqual({ authorized: false })
+    })
+
+    it('keeps a credential auth accepts for ANOTHER identity on the unqualified denial', async () => {
+      const { proxy } = proxyAnswering({
+        status: 200,
+        data: { authToken: crossServiceToken({ sessionUuid: 'someone-elses-session' }) },
+      })
+
+      await expect(
+        adapterFor(proxy, collaborationService(true)).authorizeCollaboration(collaborationInput, signal()),
+      ).resolves.toEqual({ authorized: false })
+    })
+
+    it('leaves a POLICY denial byte-identical to what it has always been', async () => {
+      // The note does not exist, or exists and the caller may not read it, or
+      // collaboration is off: one answer for all of them, with no `code` field at
+      // all, so nothing here can become an existence oracle.
+      const { proxy } = proxyAnswering({ status: 200, data: { authToken: crossServiceToken() } })
+      const collaboration = collaborationService(false)
+
+      const result = await adapterFor(proxy, collaboration).authorizeCollaboration(collaborationInput, signal())
+
+      expect(result).toEqual({ authorized: false })
+      expect(Object.hasOwn(result, 'code')).toBe(false)
+      expect(collaboration.authorize).toHaveBeenCalledTimes(1)
+    })
+
+    it('says nothing about the credential when the operation was aborted', async () => {
+      // The handler's own timeout owns an abort; the session was never judged, so
+      // the socket is told nothing about its credential.
+      const controller = new AbortController()
+      const { proxy } = proxyAnswering(() => {
+        controller.abort()
+        return AUTH_REFUSALS.expiredAccessToken
+      })
+
+      await expect(
+        adapterFor(proxy, collaborationService(true)).authorizeCollaboration(collaborationInput, controller.signal),
+      ).resolves.toEqual({ authorized: false })
+    })
+  })
+
   describe('the refreshed credential never crosses back to a client', () => {
     it('answers with a bare verdict carrying no credential material', async () => {
       const { proxy } = proxyAnswering({ status: 200, data: { authToken: crossServiceToken() } })

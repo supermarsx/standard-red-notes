@@ -216,7 +216,6 @@ describe('CanonicalHomeServerFileResourceAuthorizer', () => {
 
   it.each([
     ['revoked session', { sessionResult: { status: 401, data: {} } }],
-    ['invalid auth token', { authToken: undefined }],
     ['changed session', { authToken: baseAuthToken({ session: { uuid: 'other-session' } }) }],
     ['disabled live sync', { authToken: baseAuthToken({ live_sync_enabled: false }) }],
     ['read-only session', { authToken: baseAuthToken({ session: { uuid: SESSION_UUID, readonly_access: true } }) }],
@@ -303,5 +302,91 @@ describe('CanonicalHomeServerFileResourceAuthorizer', () => {
         new AbortController().signal,
       ),
     ).resolves.toBeUndefined()
+  })
+
+  /**
+   * Standard Red Notes: FILES_V1 answered FILE_ACCESS_DENIED for a stale
+   * credential AND for every policy denial, so a client could not tell "refresh
+   * your credential" from "you may not do this". The split reuses the SHARED
+   * classification (`classifyPresentedSessionCredential`, keyed on auth's STATUS,
+   * never its error tag) so this authorizer and the sync lane's REAUTH cannot
+   * drift.
+   */
+  describe('a stale credential is distinguishable from a policy denial', () => {
+    const staleCode = { name: 'HomeServerSyncFilesAdapterError', code: 'SESSION_STALE' }
+
+    it.each([
+      // 498 `expired-access-token`: the session is LIVE and this token is merely
+      // older than it.
+      ['auth reports the token expired', { sessionResult: { status: 498, data: {} } }],
+      ['auth is unwell', { sessionResult: { status: 503, data: {} } }],
+      ['the answer carries no token', { sessionResult: { status: 200, data: {} } }],
+      ['the cross-service token is unreadable', { authToken: undefined }],
+      ['the cross-service token carries no roles', { authToken: { ...baseAuthToken(), roles: undefined } }],
+    ])('reports a stale credential for a personal resource when %s', async (_label, options) => {
+      const context = setup(options as Parameters<typeof setup>[0])
+
+      await expect(
+        context.authorizer.authorize(
+          { identity, resource: personalResource, operation: 'download' },
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject(staleCode)
+      expect(context.authService.handleRequest).not.toHaveBeenCalled()
+    })
+
+    it('reports a stale credential when no credential was captured at ticket time', async () => {
+      const context = setup()
+
+      await expect(
+        context.authorizer.authorize(
+          { identity: { ...identity, authorization: undefined }, resource: personalResource, operation: 'download' },
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject(staleCode)
+      expect(context.sessionValidator.validateSession).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['a revoked or signed-out session', { sessionResult: { status: 401, data: {} } }],
+      [
+        'auth accepting the credential for ANOTHER identity',
+        { authToken: baseAuthToken({ user: { uuid: VAULT_UUID } }) },
+      ],
+    ])('keeps %s on the unqualified denial', async (_label, options) => {
+      const context = setup(options as Parameters<typeof setup>[0])
+
+      await expect(
+        context.authorizer.authorize(
+          { identity, resource: personalResource, operation: 'download' },
+          new AbortController().signal,
+        ),
+      ).resolves.toBeUndefined()
+    })
+
+    /**
+     * THE EXISTENCE ORACLE, and why one case is deliberately NOT split. A
+     * shared-vault resource makes `validateSession` send auth a
+     * `sharedVaultOwnerContext` taken from the client's own
+     * `sharedVaultOwnerUuid`; auth looks that user's subscription and upload
+     * limit up and fails the cross-service token when either is missing. So
+     * auth's status there depends on the requested OWNER, not only on the
+     * credential, and splitting stale from denied would tell an unauthorized
+     * caller whether a vault owner exists.
+     */
+    it.each([
+      ['the answer carries no token', { sessionResult: { status: 200, data: {} } }],
+      ['auth reports the token expired', { sessionResult: { status: 498, data: {} } }],
+      ['the cross-service token is unreadable', { authToken: undefined }],
+    ])('keeps a shared-vault refusal on the denial when %s', async (_label, options) => {
+      const context = setup({ ...(options as Parameters<typeof setup>[0]), valetToken: sharedValet() })
+
+      await expect(
+        context.authorizer.authorize(
+          { identity, resource: sharedResource, operation: 'download' },
+          new AbortController().signal,
+        ),
+      ).resolves.toBeUndefined()
+    })
   })
 })

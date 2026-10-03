@@ -1,12 +1,19 @@
 import type { Request, Response } from 'express'
 
+import {
+  classifyPresentedSessionCredential,
+  credentialCanAuthenticateSession,
+  type PresentedSessionCredentialOutcome,
+} from '@standard-red-notes/websocket-gateway'
+
 import type { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { sessionCookiesToMap } from '../Sync/sessionCookies'
 import type { EndpointResolverInterface } from '../Resolver/EndpointResolverInterface'
-import type {
-  MultiContainerFileAuthorization,
-  MultiContainerFileOperation,
-  MultiContainerFileResourceAuthorizer,
+import {
+  MultiContainerSyncFilesAdapterError,
+  type MultiContainerFileAuthorization,
+  type MultiContainerFileOperation,
+  type MultiContainerFileResourceAuthorizer,
 } from './MultiContainerSyncFilesAdapter'
 
 type AuthorizationInput = Parameters<MultiContainerFileResourceAuthorizer['authorize']>[0]
@@ -99,9 +106,48 @@ export class ValetTokenFileResourceAuthorizer implements MultiContainerFileResou
         return await this.authorizePersonalResource(input, token, signal)
       }
       return await this.authorizeSharedVaultResource(input, token, signal)
-    } catch {
+    } catch (error) {
+      if (this.refusalIsAnUnusableCredential(error, input, signal)) {
+        // Standard Red Notes: the ONE files refusal whose cause is the credential
+        // rather than the policy. Raised as a coded adapter error so it survives
+        // `MultiContainerSyncFilesAdapter` and reaches the wire as SESSION_STALE;
+        // `undefined` still means, exactly as before, "denied, and the reason is
+        // none of your business".
+        throw new MultiContainerSyncFilesAdapterError('SESSION_STALE')
+      }
       return undefined
     }
+  }
+
+  /**
+   * True only for a refusal that is safe AND honest to report as a stale
+   * credential.
+   *
+   * PERSONAL RESOURCES ONLY, and this is the whole reason the test exists.
+   * `validateSession` sends auth a `sharedVaultOwnerContext` header for a
+   * shared-vault resource, taken straight from the client's own
+   * `sharedVaultOwnerUuid`. Auth then looks that user's subscription and
+   * file-upload-limit setting up, and FAILS the cross-service token with a 400
+   * when either is missing -- so for a shared-vault resource auth's status is a
+   * function of the requested OWNER, not only of the credential. Splitting stale
+   * from denied there would answer "stale" for an owner uuid that does not exist
+   * or has no subscription and "denied" for a real owner the caller is not a
+   * member of: an existence oracle for other people's vault owners, handed to an
+   * unauthorized caller. So every shared-vault refusal stays on
+   * FILE_ACCESS_DENIED. For a personal resource nothing resource-derived is sent
+   * at all -- the bearer, its cookies and a fixed url -- so the verdict carries
+   * no information beyond the credential the caller already holds.
+   *
+   * An ABORT is not a verdict either: the transfer deadline owns it, and the
+   * session was never judged.
+   */
+  private refusalIsAnUnusableCredential(error: unknown, input: AuthorizationInput, signal: AbortSignal): boolean {
+    return (
+      !signal.aborted &&
+      input.resource.ownershipType === 'user' &&
+      error instanceof FileSessionCredentialError &&
+      error.verdict === 'stale'
+    )
   }
 
   /**
@@ -129,42 +175,64 @@ export class ValetTokenFileResourceAuthorizer implements MultiContainerFileResou
     signal: AbortSignal,
   ): Promise<FileAuthorizationCrossServiceToken & { authToken: string }> {
     if (!input.identity.authorization) {
-      throw new Error('File authorization requires the original session credential.')
+      throw new FileSessionCredentialError('File authorization requires the original session credential.', {
+        reached: false,
+      })
     }
     const authorization = input.identity.authorization.replace(/^Bearer\s+/iu, '')
     if (!authorization) {
-      throw new Error('File authorization credential is empty.')
+      throw new FileSessionCredentialError('File authorization credential is empty.', { reached: false })
     }
     const ownerContext =
       input.resource.ownershipType === 'shared-vault' ? input.resource.sharedVaultOwnerUuid : undefined
     // Same credential gap as the sync lane: a cookie-based session authenticates
     // ONLY through `access_token_<uuid>`, so the bearer alone can never validate it.
     const cookies = sessionCookiesToMap(input.identity.sessionCookies)
-    const response = await abortable(
-      this.options.serviceProxy.validateSession({
-        headers: {
-          authorization,
-          ...(ownerContext ? { sharedVaultOwnerContext: ownerContext } : {}),
-        },
-        requestMetadata: { url: '/sockets/sync/files', method: 'POST' },
-        ...(cookies ? { cookies } : {}),
-      }),
-      signal,
-    )
+    let response: Awaited<ReturnType<ServiceProxyInterface['validateSession']>>
+    try {
+      response = await abortable(
+        this.options.serviceProxy.validateSession({
+          headers: {
+            authorization,
+            ...(ownerContext ? { sharedVaultOwnerContext: ownerContext } : {}),
+          },
+          requestMetadata: { url: '/sockets/sync/files', method: 'POST' },
+          ...(cookies ? { cookies } : {}),
+        }),
+        signal,
+      )
+    } catch (error) {
+      throw new FileSessionCredentialError(error instanceof Error ? error.message : 'File session validation failed.', {
+        reached: false,
+      })
+    }
     if (response.status !== 200 || !isObject(response.data) || typeof response.data.authToken !== 'string') {
-      throw new Error('File session is no longer authorized.')
+      throw new FileSessionCredentialError(
+        'File session is no longer authorized.',
+        // A credential that cannot authenticate shape-wise (a cookie session
+        // whose `access_token_<uuid>` never reached this process) makes auth's
+        // inevitable 401 no evidence about the session, exactly as on the sync
+        // lane's REAUTH pre-flight.
+        credentialCanAuthenticateSession(authorization, input.identity)
+          ? { reached: true, status: response.status }
+          : { reached: false },
+      )
     }
     const authToken = response.data.authToken
     const token = this.options.authTokenDecoder.decodeToken(authToken)
-    if (
-      !token ||
-      !isObject(token.user) ||
-      token.user.uuid !== input.identity.userUuid ||
-      !isObject(token.session) ||
-      token.session.uuid !== input.identity.sessionUuid ||
-      !Array.isArray(token.roles)
-    ) {
-      throw new Error('File session identity changed.')
+    if (!token || !isObject(token.user) || !isObject(token.session) || !Array.isArray(token.roles)) {
+      // Auth answered 200 but its answer could not be read (an unverifiable
+      // token, a rotated AUTH_JWT_SECRET mid-deploy). An unknown verdict, which
+      // the shared classification always reads as stale.
+      throw new FileSessionCredentialError('File session token is unreadable.', { reached: true, status: 200 })
+    }
+    if (token.user.uuid !== input.identity.userUuid || token.session.uuid !== input.identity.sessionUuid) {
+      // Auth accepted the credential for ANOTHER identity: never a stale token.
+      throw new FileSessionCredentialError('File session identity changed.', {
+        reached: true,
+        status: 200,
+        identityMatches: false,
+      })
     }
     signal.throwIfAborted()
     return { ...token, authToken }
@@ -389,6 +457,24 @@ export class ValetTokenFileResourceAuthorizer implements MultiContainerFileResou
       return true
     }
     return (uploadBytesLimit as number) - (uploadBytesUsed as number) - (input.decryptedSize as number) > 0
+  }
+}
+
+/**
+ * A session revalidation that refused, carrying the SHARED stale/revoked verdict
+ * (`classifyPresentedSessionCredential`) rather than a second opinion of its own.
+ * The verdict is computed here, at the point the session plane's answer is still
+ * in hand, so no caller has to re-derive it -- and every other failure inside
+ * `authorize` stays an ordinary Error, i.e. an unqualified denial.
+ */
+export class FileSessionCredentialError extends Error {
+  readonly verdict: 'stale' | 'revoked'
+
+  constructor(message: string, outcome: PresentedSessionCredentialOutcome) {
+    super(message)
+    this.name = 'FileSessionCredentialError'
+    const decision = classifyPresentedSessionCredential(outcome)
+    this.verdict = !decision.refreshed && decision.code === 'SESSION_REVOKED' ? 'revoked' : 'stale'
   }
 }
 

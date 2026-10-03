@@ -3,8 +3,10 @@ import { verify } from 'jsonwebtoken'
 import { CrossServiceTokenData } from '@standardnotes/security'
 import { RoleName } from '@standardnotes/domain-core'
 import {
-  SESSION_ACCESS_TOKEN_COOKIE_PREFIX,
+  classifyPresentedSessionCredential,
+  credentialCanAuthenticateSession,
   type JsonObject,
+  type PresentedSessionCredentialOutcome,
   type SyncAuthorizationDecision,
   type SyncAuthorizationInput,
   type SyncBackendCommandInput,
@@ -62,17 +64,34 @@ type ValidatedSession = {
 export const SUPPLIED_SESSION_MAX_AGE_MS = 5_000
 
 /**
- * Why a session could not be validated. `stale` -- the auth service answered
- * and the bearer captured at ticket time no longer validates (rotated,
- * refreshed, or now bound to another identity) -- maps to the PUBLIC,
- * retryable SESSION_STALE so the client re-tickets once; everything else
- * (no bearer, plane unready, transport failure, unverifiable token) stays the
- * private SESSION_REVOKED (NOT_AUTHORIZED on the wire).
+ * Why a session could not be validated. Carries TWO independent answers, because
+ * the per-command lane and the per-credential lanes ask different questions of
+ * the same refusal.
+ *
+ * `kind` -- the SYNC lane's recovery hint, unchanged. `stale` means the auth
+ * service answered and the bearer captured at ticket time no longer validates
+ * (rotated, refreshed, or now bound to another identity) and maps to the PUBLIC,
+ * retryable SESSION_STALE so the client re-tickets once; everything else (no
+ * bearer, plane unready, transport failure, unverifiable token) stays the private
+ * SESSION_REVOKED (NOT_AUTHORIZED on the wire). It is deliberately lenient: a
+ * re-ticket goes through real authenticated HTTP, so a session that can no longer
+ * authenticate simply cannot obtain a new ticket, and collapsing a rotation past
+ * auth's cooldown (a flat 401) onto NOT_AUTHORIZED would delete that recovery.
+ *
+ * `credential` -- the SESSION verdict, the single classification shared with
+ * `refreshSession` and with the FILES_V1 authorizers
+ * (`classifyPresentedSessionCredential`, keyed on auth's STATUS, never its error
+ * tag). This is the one the collaboration lane reports, because there the
+ * question is "is this credential usable?", not "what should the client try
+ * next?". The two therefore disagree on purpose in exactly two places -- a 401
+ * (recovery hint: stale; session verdict: revoked) and an identity change (hint:
+ * stale; verdict: revoked) -- and each is right for its own lane.
  */
 class SessionValidationError extends Error {
   constructor(
     message: string,
     readonly kind: 'stale' | 'revoked',
+    readonly credential: 'stale' | 'revoked',
   ) {
     super(message)
     this.name = 'SessionValidationError'
@@ -252,23 +271,12 @@ export class SyncWebSocketCommandAdapter
    *     live authenticated socket is terminated, so the classification has to
    *     be about the SESSION, not about the client's next move.
    *
-   * CLASSIFICATION, from auth's own answer to this exact credential:
-   *   - 200 and the cross-service token verifies for this user and session
-   *     => refreshed. The ONLY adopting branch.
-   *   - 401 (`invalid-auth` or `revoked-session`) => SESSION_REVOKED. Auth
-   *     reaches this status for a session that is gone (logout deletes the row
-   *     and writes no revocation record, so sign-out lands on `invalid-auth`),
-   *     explicitly revoked, hard-banned or confirmation-blocked. None of those
-   *     can become authorized again by presenting a newer token, so the lane
-   *     ends.
-   *   - 498 `expired-access-token` => SESSION_STALE. The session is LIVE and
-   *     this token is merely older than it (expired, or inside the refresh
-   *     cooldown). A newer one exists; the socket keeps what it has.
-   *   - anything else — another status, an unreadable body, an unverifiable
-   *     token, a thrown transport error => SESSION_STALE. An unknown verdict
-   *     must never terminate: an auth blip would otherwise close every live
-   *     socket in the fleet, and leniency costs nothing because the socket is
-   *     left on the credential it already had.
+   * CLASSIFICATION lives in `classifyPresentedSessionCredential` and nowhere
+   * else. This method's only job is to present the credential and report what
+   * the session plane did with it; the stale/revoked table (keyed on auth's
+   * STATUS, never its error tag, with an unknown verdict always stale) is shared
+   * verbatim with the collaboration lane and with the FILES_V1 authorizers, so
+   * the four lanes cannot drift into disagreeing about whether a session is gone.
    */
   async refreshSession(
     input: { identity: SyncTicketIdentity },
@@ -276,10 +284,10 @@ export class SyncWebSocketCommandAdapter
   ): Promise<SyncSessionRefreshDecision> {
     const identity = input.identity
     if (!this.sessionAuthorizationReady() || !identity.authorization) {
-      return { refreshed: false, code: 'SESSION_STALE' }
+      return classifyPresentedSessionCredential({ reached: false })
     }
     const authorization = identity.authorization.replace(/^Bearer\s+/i, '')
-    if (authorization.length === 0 || !this.credentialCanAuthenticate(authorization, identity)) {
+    if (authorization.length === 0 || !credentialCanAuthenticateSession(authorization, identity)) {
       // A credential that cannot authenticate SHAPE-WISE says nothing about the
       // session, so it is refused without spending an auth call and without
       // closing the socket. The case that matters: a cookie-based session's
@@ -289,7 +297,7 @@ export class SyncWebSocketCommandAdapter
       // the browser withheld the cookie (a partitioned or cross-site context)
       // would otherwise have its working socket closed for presenting a ticket
       // it could not complete.
-      return { refreshed: false, code: 'SESSION_STALE' }
+      return classifyPresentedSessionCredential({ reached: false })
     }
     const cookies = sessionCookiesToMap(identity.sessionCookies)
 
@@ -304,18 +312,15 @@ export class SyncWebSocketCommandAdapter
         signal,
       )
     } catch {
-      return { refreshed: false, code: 'SESSION_STALE' }
+      return classifyPresentedSessionCredential({ reached: false })
     }
 
-    if (authResponse.status === 401) {
-      return { refreshed: false, code: 'SESSION_REVOKED' }
-    }
     if (authResponse.status !== 200 || !this.isJsonObject(authResponse.data)) {
-      return { refreshed: false, code: 'SESSION_STALE' }
+      return classifyPresentedSessionCredential({ reached: true, status: authResponse.status })
     }
     const authToken = authResponse.data.authToken
     if (typeof authToken !== 'string') {
-      return { refreshed: false, code: 'SESSION_STALE' }
+      return classifyPresentedSessionCredential({ reached: true, status: 200 })
     }
     let token: CrossServiceTokenData
     try {
@@ -323,31 +328,27 @@ export class SyncWebSocketCommandAdapter
     } catch {
       // Unreadable answer, not a refusal (a rolling deploy with a rotated
       // AUTH_JWT_SECRET lands here). Nothing is adopted and nothing is closed.
-      return { refreshed: false, code: 'SESSION_STALE' }
+      return classifyPresentedSessionCredential({ reached: true, status: 200 })
     }
-    if (token.user?.uuid !== identity.userUuid || token.session?.uuid !== identity.sessionUuid) {
-      // Auth accepted the credential but for a DIFFERENT identity. The socket
-      // would be replaying a credential that proves someone else, which no
-      // legitimate mint can produce, so it is terminated rather than refused.
-      return { refreshed: false, code: 'SESSION_REVOKED' }
-    }
-    return { refreshed: true }
+    // Auth accepting the credential for a DIFFERENT identity is the one 200 that
+    // must not adopt: the socket would be replaying a credential that proves
+    // someone else, which no legitimate mint can produce.
+    return classifyPresentedSessionCredential({
+      reached: true,
+      status: 200,
+      identityMatches: token.user?.uuid === identity.userUuid && token.session?.uuid === identity.sessionUuid,
+    })
   }
 
   /**
-   * False only when the credential is structurally unable to authenticate this
-   * session. A COOKIE-based session's token (`2:<privateIdentifier>`, auth's
-   * `SessionService.COOKIE_SESSION_TOKEN_VERSION`) is authenticated ONLY through
-   * its `access_token_<sessionUuid>` cookie, so the bearer alone can never do
-   * it; a header-based session (`1:<uuid>:<secret>`) needs no cookie.
+   * The session verdict for one refusal, from the single shared classification.
+   * `refreshed: true` cannot occur on a path that already failed, and is read as
+   * 'stale' rather than asserted away: a usable credential is never evidence
+   * that a session is gone.
    */
-  private credentialCanAuthenticate(authorization: string, identity: SyncTicketIdentity): boolean {
-    if (!authorization.startsWith('2:')) {
-      return true
-    }
-    const cookieName = `${SESSION_ACCESS_TOKEN_COOKIE_PREFIX}${identity.sessionUuid}`
-    const values = identity.sessionCookies?.[cookieName]
-    return Array.isArray(values) && values.length > 0
+  private credentialVerdict(outcome: PresentedSessionCredentialOutcome): 'stale' | 'revoked' {
+    const decision = classifyPresentedSessionCredential(outcome)
+    return !decision.refreshed && decision.code === 'SESSION_REVOKED' ? 'revoked' : 'stale'
   }
 
   collaborationAuthorizationReady(): boolean {
@@ -364,8 +365,24 @@ export class SyncWebSocketCommandAdapter
     let validated: ValidatedSession
     try {
       validated = await this.validate(input.identity, signal)
-    } catch {
-      return { authorized: false }
+    } catch (error) {
+      // Standard Red Notes: say WHICH refusal this is.
+      //
+      // This refusal happens BEFORE a single resource identifier is consulted:
+      // `validate` is handed the identity and nothing else, and the note only
+      // reaches the syncing-server access check further down. So distinguishing
+      // a dead credential here cannot reveal whether a note, room or vault
+      // exists -- the answer is a property of the credential alone. Every
+      // refusal the POLICY check produces (no membership, note absent,
+      // collaboration disabled, read-only) is left exactly as it was, which is
+      // what keeps "exists but you may not" and "does not exist" the same
+      // answer.
+      //
+      // An ABORT is not a verdict: the handler's own timeout owns it, and the
+      // socket was never told anything about the credential. It keeps the
+      // unqualified denial it has always produced here.
+      const stale = !signal.aborted && error instanceof SessionValidationError && error.credential === 'stale'
+      return stale ? { authorized: false, code: 'SESSION_STALE' } : { authorized: false }
     }
     const { request } = this.httpContext(validated.locals, {})
     return this.collaborationAuthorization.authorize(request, validated.locals, input.request, signal)
@@ -411,35 +428,81 @@ export class SyncWebSocketCommandAdapter
     // never the durable port -- gating it on `ready()` is what made an unbound
     // gRPC proxy look like a dead authorization plane.
     if (!identity.authorization || !this.sessionAuthorizationReady()) {
-      throw new SessionValidationError('Live sync authorization is unavailable.', 'revoked')
+      throw new SessionValidationError('Live sync authorization is unavailable.', 'revoked', 'stale')
     }
     const authorization = identity.authorization.replace(/^Bearer\s+/i, '')
     // A cookie-based session is authenticated by auth ONLY through the cookie
     // (`GetSessionFromToken` refuses its header-token branch outright), so omitting
     // this made every such session fail SESSION_STALE on every command.
     const cookies = sessionCookiesToMap(identity.sessionCookies)
-    const authResponse = await abortable(
-      this.serviceProxy.validateSession({
-        headers: { authorization },
-        requestMetadata: { url: '/sockets/sync', method: 'POST' },
-        ...(cookies ? { cookies } : {}),
-      }),
-      signal,
-    )
+    let authResponse: Awaited<ReturnType<ServiceProxyInterface['validateSession']>>
+    try {
+      authResponse = await abortable(
+        this.serviceProxy.validateSession({
+          headers: { authorization },
+          requestMetadata: { url: '/sockets/sync', method: 'POST' },
+          ...(cookies ? { cookies } : {}),
+        }),
+        signal,
+      )
+    } catch (error) {
+      // Transport failure or an aborted command: no verdict at all. `kind` stays
+      // 'revoked' so `authorize` reports the same collapsed NOT_AUTHORIZED a raw
+      // throw always produced here, while the session verdict is the stale an
+      // unknown answer must always be.
+      throw new SessionValidationError(
+        error instanceof Error ? error.message : 'Sync session validation failed.',
+        'revoked',
+        'stale',
+      )
+    }
     if (authResponse.status !== 200 || !this.isJsonObject(authResponse.data)) {
       // Auth answered and refused the bearer captured at ticket time: the
       // session token was rotated or refreshed mid-socket. Re-ticketing with
       // the current token fixes it, so this is the retryable SESSION_STALE.
-      throw new SessionValidationError('Sync session is no longer authorized.', 'stale')
+      throw new SessionValidationError(
+        'Sync session is no longer authorized.',
+        'stale',
+        this.credentialVerdict(
+          // Mirrors `refreshSession`'s pre-flight WITHOUT short-circuiting the
+          // auth call this lane has always made: a credential that cannot
+          // authenticate shape-wise (a cookie session whose `access_token_<uuid>`
+          // was never captured) makes auth's inevitable 401 no evidence at all
+          // about the session, so it must not read as a revocation.
+          credentialCanAuthenticateSession(authorization, identity)
+            ? { reached: true, status: authResponse.status }
+            : { reached: false },
+        ),
+      )
     }
     const authToken = authResponse.data.authToken
     if (typeof authToken !== 'string') {
-      throw new SessionValidationError('Sync session validation returned no token.', 'revoked')
+      throw new SessionValidationError(
+        'Sync session validation returned no token.',
+        'revoked',
+        this.credentialVerdict({ reached: true, status: 200 }),
+      )
     }
-    const token = verify(authToken, this.authJwtSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
+    let token: CrossServiceTokenData
+    try {
+      token = verify(authToken, this.authJwtSecret, { algorithms: ['HS256'] }) as CrossServiceTokenData
+    } catch (error) {
+      // An unreadable answer, not a refusal (a rolling deploy with a rotated
+      // AUTH_JWT_SECRET lands here). `kind` is 'revoked', which is exactly what
+      // `authorize` reported when this threw raw, so the sync lane is unchanged.
+      throw new SessionValidationError(
+        error instanceof Error ? error.message : 'Sync session token is unverifiable.',
+        'revoked',
+        this.credentialVerdict({ reached: true, status: 200 }),
+      )
+    }
     const session = token.session
     if (token.user.uuid !== identity.userUuid || session?.uuid !== identity.sessionUuid) {
-      throw new SessionValidationError('Sync session identity changed.', 'stale')
+      throw new SessionValidationError(
+        'Sync session identity changed.',
+        'stale',
+        this.credentialVerdict({ reached: true, status: 200, identityMatches: false }),
+      )
     }
     const readOnlyAccess = session.readonly_access || token.mcp_scope?.access === 'read'
     const locals = {

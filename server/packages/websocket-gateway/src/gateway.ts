@@ -1731,7 +1731,13 @@ export {
   type LogLevelName,
 } from './logger.js'
 export type { Logger } from './redisBridge.js'
+// Standard Red Notes: the ONE stale/revoked classification, exported so every
+// lane that revalidates a session credential (sync REAUTH, collaboration
+// authorization, FILES_V1 authorization) shares a single table instead of
+// growing its own.
+export { classifyPresentedSessionCredential, credentialCanAuthenticateSession } from './syncCommandHandler.js'
 export type {
+  PresentedSessionCredentialOutcome,
   SyncAuthorizationCode,
   SyncAuthorizationDecision,
   SyncAuthorizationInput,

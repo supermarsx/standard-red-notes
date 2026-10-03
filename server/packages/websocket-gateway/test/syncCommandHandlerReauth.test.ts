@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { InMemorySyncAuthTicketStore, type SyncAuthTicketStore, type SyncTicketIdentity } from '../src/auth.js'
 import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
 import {
+  classifyPresentedSessionCredential,
+  credentialCanAuthenticateSession,
   SyncCommandHandler,
   type SyncCommandMetrics,
   type SyncLiveAuthorizationAdapter,
@@ -557,5 +559,81 @@ describe('SyncCommandHandler credential refresh', () => {
     expect(payloadOf(lastFrame(socket))).toMatchObject({ code: 'AUTH_REQUIRED' })
     // The ticket was never consumed, so admission can still use it.
     expect(tickets.consumed).toHaveLength(0)
+  })
+})
+
+/**
+ * Standard Red Notes: the ONE stale/revoked table, now shared by every lane that
+ * revalidates a session credential (sync REAUTH, collaboration authorization,
+ * FILES_V1 authorization). Two disagreeing classifiers is the defect these pin:
+ * whichever lane asks, the same session-plane answer gets the same verdict.
+ */
+describe('classifyPresentedSessionCredential', () => {
+  it.each([
+    // A plain SIGN-OUT lands here: `DeleteSessionByToken` deletes the session row
+    // and writes NO `revoked_session` record, so logout answers 401 `invalid-auth`
+    // rather than 401 `revoked-session`. Keying on the TAG would have made every
+    // logout look like a refreshable stale token.
+    ['auth refused the session outright', { reached: true as const, status: 401 }],
+    [
+      'auth accepted the credential for ANOTHER identity',
+      { reached: true as const, status: 200, identityMatches: false },
+    ],
+  ])('classifies %s as revoked', (_label, outcome) => {
+    expect(classifyPresentedSessionCredential(outcome)).toEqual({ refreshed: false, code: 'SESSION_REVOKED' })
+  })
+
+  it.each([
+    // 498 `expired-access-token`: the session is LIVE and this token is merely
+    // older than it (expired, or inside auth's refresh cooldown).
+    ['auth reported the token expired', { reached: true as const, status: 498 }],
+    ['auth answered something else entirely', { reached: true as const, status: 403 }],
+    ['auth is unwell', { reached: true as const, status: 503 }],
+    ['auth answered 200 but its answer could not be read', { reached: true as const, status: 200 }],
+    ['the session plane was never reached at all', { reached: false as const }],
+  ])('classifies %s as stale, NEVER revoked', (_label, outcome) => {
+    // An unknown verdict must not look like a revocation: revoked terminates the
+    // sync lane, so an auth blip classified as revoked would close every live
+    // socket in the fleet. Leniency is free -- nothing is adopted either way.
+    expect(classifyPresentedSessionCredential(outcome)).toEqual({ refreshed: false, code: 'SESSION_STALE' })
+  })
+
+  it('is the only outcome that reports a usable credential', () => {
+    expect(classifyPresentedSessionCredential({ reached: true, status: 200, identityMatches: true })).toEqual({
+      refreshed: true,
+    })
+  })
+})
+
+describe('credentialCanAuthenticateSession', () => {
+  // A cookie-based session's token (`2:<privateIdentifier>`) carries no secret of
+  // its own and is authenticated ONLY through `access_token_<sessionUuid>`, so
+  // without that cookie auth can only answer 401 -- and a 401 is what terminates
+  // the sync lane. The shape test is what keeps a caller that cannot present the
+  // cookie from reading the inevitable refusal as a revocation.
+  it('refuses a cookie-session bearer presented without its own cookie', () => {
+    expect(credentialCanAuthenticateSession('2:private-identifier', { sessionUuid: SESSION })).toBe(false)
+    expect(
+      credentialCanAuthenticateSession('2:private-identifier', {
+        sessionUuid: SESSION,
+        sessionCookies: { [COOKIE_NAME]: [] },
+      }),
+    ).toBe(false)
+    expect(
+      credentialCanAuthenticateSession('2:private-identifier', {
+        sessionUuid: SESSION,
+        sessionCookies: { access_token_other_session: ['value'] },
+      }),
+    ).toBe(false)
+  })
+
+  it('accepts a cookie-session bearer with its cookie, and any header-session bearer', () => {
+    expect(
+      credentialCanAuthenticateSession('2:private-identifier', {
+        sessionUuid: SESSION,
+        sessionCookies: { [COOKIE_NAME]: ['cookie-value'] },
+      }),
+    ).toBe(true)
+    expect(credentialCanAuthenticateSession(`1:${SESSION}:secret`, { sessionUuid: SESSION })).toBe(true)
   })
 })
