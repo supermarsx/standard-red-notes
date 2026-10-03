@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import type { SyncAuthTicketStore, SyncTicketIdentity } from './auth.js'
+import { isValidSyncTicketIdentity, type SyncAuthTicketStore, type SyncTicketIdentity } from './auth.js'
 import type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
 import { SyncFilesSession, type SyncFilesAdapter } from './filesSession.js'
@@ -24,6 +24,7 @@ import {
   type SyncRpcCancelFrame,
   type SyncRpcCreditFrame,
   type SyncRpcMethod,
+  type SyncReauthFrame,
   type SyncRpcRequestFrame,
   type SyncServerFrameType,
   type SyncStatusRequestFrame,
@@ -83,6 +84,33 @@ export interface SyncAuthorizationInput {
 export type SyncAuthorizationDecision =
   { authorized: true; session?: unknown } | { authorized: false; code: SyncAuthorizationCode }
 
+/**
+ * Verdict on a credential a REAUTH frame asks a LIVE socket to adopt.
+ *
+ * The three outcomes are deliberately NOT the same three as `authorize`:
+ *
+ *   - `refreshed: true` — the session plane answered 200 for THIS credential.
+ *     Only this adopts; there is no branch that adopts on uncertainty.
+ *   - `SESSION_REVOKED` — the session plane says this session does not
+ *     authenticate, for any reason that is not "the token is merely old":
+ *     signed out, deleted, explicitly revoked, user banned. The socket is
+ *     TERMINATED. A refresh must never be the thing that keeps a signed-out
+ *     session on a live authenticated socket, which is the single worst outcome
+ *     this frame could have.
+ *   - `SESSION_STALE` — not adopted, and not fatal: the presented credential is
+ *     older than the live one (auth's 498 cooldown), is structurally incapable
+ *     of authenticating this session, or the verdict is simply unknown (auth
+ *     unreachable, timed out, answered something unparseable). The socket keeps
+ *     the credential it already had and the client may present another ticket.
+ *
+ * An unknown verdict MUST be `SESSION_STALE`, never `SESSION_REVOKED`: an auth
+ * blip would otherwise close every live socket in the fleet. It is safe to be
+ * lenient here precisely because leniency changes nothing — the old credential
+ * is unchanged and every lane revalidates it per operation.
+ */
+export type SyncSessionRefreshDecision =
+  { refreshed: true } | { refreshed: false; code: 'SESSION_STALE' | 'SESSION_REVOKED' }
+
 /** Called for every command/status request; no authorization claim is cached from the ticket. */
 export interface SyncLiveAuthorizationAdapter {
   ready(): boolean
@@ -95,6 +123,18 @@ export interface SyncLiveAuthorizationAdapter {
    */
   sessionAuthorizationReady?(): boolean
   authorize(input: SyncAuthorizationInput, signal: AbortSignal): Promise<SyncAuthorizationDecision>
+  /**
+   * Revalidate a credential BEFORE the socket adopts it (REAUTH).
+   *
+   * Optional, and absence is the fail-closed answer: a handler whose adapter
+   * cannot revalidate refuses REAUTH outright rather than adopting an
+   * unverified credential. It lives on THIS interface — rather than being a new
+   * handler option — so nothing has to be wired at a composition root for the
+   * capability to exist; the same adapter the socket already authorizes against
+   * is the one that revalidates. A forgotten registration would otherwise leave
+   * the frame silently dead while every build and type check stayed green.
+   */
+  refreshSession?(input: { identity: SyncTicketIdentity }, signal: AbortSignal): Promise<SyncSessionRefreshDecision>
 }
 
 /**
@@ -345,6 +385,14 @@ type CollaborationEpochDiscovery = {
 }
 
 const MAX_ACTIVE_RPC_REQUESTS = 8
+/**
+ * Credential refreshes one socket may ask for. Each one consumes a ticket that
+ * only an authenticated HTTP mint can produce and costs one call to the session
+ * plane, so an unbounded REAUTH would be a client-driven amplifier against auth.
+ * A real client needs one per token rotation; eight covers a very long-lived tab
+ * and anything past it is a loop, which is ended rather than served.
+ */
+const MAX_REAUTH_ATTEMPTS = 8
 const COLLABORATION_EPOCH_DISCOVERY_TTL_MS = 10_000
 const COLLABORATION_ROOM_EPOCH_RESOLVER_TIMEOUT_MS = 1_500
 const MAX_RPC_CHUNK_BYTES = 64 * 1024
@@ -418,6 +466,8 @@ export class SyncCommandHandler {
   private readonly collaborationRoomEpochResolverTimeoutMs: number
   /** Commands this socket has attempted; the FIRST one refused BUSY is the post-crash signature (R36). */
   private commandsAttempted = 0
+  /** Credential refreshes asked for on this socket, bounded by MAX_REAUTH_ATTEMPTS. */
+  private reauthAttempts = 0
 
   constructor(private readonly options: SyncCommandHandlerOptions) {
     this.authDeadlineMs = options.authDeadlineMs ?? SYNC_AUTH_DEADLINE_MS
@@ -682,6 +732,10 @@ export class SyncCommandHandler {
       this.send('PONG', frame.requestId, frame.commandId, {})
       return
     }
+    if (frame.type === 'REAUTH') {
+      await this.handleReauth(frame)
+      return
+    }
     if (frame.type === 'STATUS') {
       await this.handleStatus(frame)
       return
@@ -749,6 +803,145 @@ export class SyncCommandHandler {
       return
     }
     await this.filesSession.handleBinary(raw, this.identity)
+  }
+
+  /**
+   * Standard Red Notes: swap the session credential of a LIVE socket.
+   *
+   * WHY A FRAME AND NOT A SERVER-SIDE REFRESH. The credential cannot be
+   * refreshed without the client. Auth persists only `sha256(accessToken)`
+   * (`GetSessionFromToken.areTokensMatching`), so the plaintext bearer and the
+   * `access_token_<uuid>` cookie value exist nowhere on the server once the
+   * minting response has been written — there is no store to re-read them from.
+   * The only party holding a current credential is the client, and the only
+   * place it is captured is `POST /v1/sockets/sync/ticket`, server-side, off a
+   * real authenticated request. So the client re-mints a ticket and hands the
+   * socket the OPAQUE ticket; the gateway reads the credential out of its own
+   * ticket store. Nothing a client can write to reaches the credential.
+   *
+   * ORDER MATTERS, and every step is a refusal:
+   *   1. no revalidator, or no session plane => refuse (fail closed).
+   *   2. attempt budget exhausted => close.
+   *   3. ticket store not ready => refuse, retryable.
+   *   4. ticket unknown/expired/replayed => close.
+   *   5. ticket not bound to THIS user, session and device => close.
+   *   6. assembled identity not valid for the store's own rules => close.
+   *   7. session plane refuses it => SESSION_REVOKED closes, SESSION_STALE
+   *      refuses and keeps the socket on its EXISTING credential.
+   *   8. only a 200 adopts.
+   *
+   * Step 5 is the privilege-transfer guard. Without it a client holding any
+   * valid ticket could re-credential a socket admitted as someone else, and
+   * every lane would then act as the new identity while the socket's rooms,
+   * invite stream, command lease and per-user socket budget still belonged to
+   * the old one. A mismatch is not a recoverable condition, so it ends the
+   * socket exactly as a bad AUTH ticket does.
+   */
+  private async handleReauth(frame: SyncReauthFrame): Promise<void> {
+    const identity = this.identity as SyncTicketIdentity
+    const authorization = this.options.authorization
+    const revalidate = authorization.refreshSession?.bind(authorization)
+    if (!revalidate || !sessionAuthorizationReady(authorization)) {
+      this.options.metrics?.increment('reauth', 'unavailable')
+      this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
+      return
+    }
+
+    if (!this.options.tickets.ready()) {
+      // Store readiness is a per-operation dependency once AUTHENTICATED, never
+      // a reason to close an established socket (see `process`). Checked BEFORE
+      // the attempt is counted: a Redis flap costs the gateway nothing here, and
+      // spending the budget on it would let a flap close an established socket.
+      this.options.metrics?.increment('reauth', 'store_unavailable')
+      this.sendError(frame.requestId, frame.commandId, 'SESSION_STALE')
+      return
+    }
+
+    this.reauthAttempts += 1
+    if (this.reauthAttempts > MAX_REAUTH_ATTEMPTS) {
+      this.options.metrics?.increment('reauth', 'exhausted')
+      this.failAndClose('REAUTH_REJECTED', 'Too many credential refreshes.')
+      return
+    }
+
+    const consumed = await this.options.tickets.consume(frame.payload.ticket, this.lifecycleAbort.signal)
+    if (this.closed) {
+      return
+    }
+    if (
+      !consumed ||
+      !constantTimeTextMatches(consumed.deviceId, frame.payload.deviceId) ||
+      !constantTimeTextMatches(consumed.deviceId, identity.deviceId) ||
+      !constantTimeTextMatches(consumed.userUuid, identity.userUuid) ||
+      !constantTimeTextMatches(consumed.sessionUuid, identity.sessionUuid)
+    ) {
+      this.options.metrics?.increment('reauth', 'rejected')
+      this.failAndClose('REAUTH_REJECTED', 'Credential refresh was rejected.')
+      return
+    }
+
+    // The credential is ONE unit. Its routing half is taken from the identity
+    // this socket was ADMITTED with (verified equal above, so the new ticket can
+    // never move the socket), and its credential half comes wholly from the new
+    // ticket with nothing carried over: a new bearer beside a previously
+    // captured cookie is a pair no real request ever presented, and mixing them
+    // would mean validating one thing and replaying another.
+    const refreshed: SyncTicketIdentity = {
+      userUuid: identity.userUuid,
+      sessionUuid: identity.sessionUuid,
+      deviceId: identity.deviceId,
+      ...(consumed.authorization ? { authorization: consumed.authorization } : {}),
+      ...(consumed.sessionCookies ? { sessionCookies: consumed.sessionCookies } : {}),
+    }
+    if (!isValidSyncTicketIdentity(refreshed)) {
+      this.options.metrics?.increment('reauth', 'rejected')
+      this.failAndClose('REAUTH_REJECTED', 'Credential refresh was rejected.')
+      return
+    }
+
+    const controller = new AbortController()
+    this.activeAbort = controller
+    let decision: SyncSessionRefreshDecision
+    try {
+      decision = await this.withTimeout((signal) => revalidate({ identity: refreshed }, signal), controller)
+    } catch {
+      // Unknown outcome: adopt nothing, terminate nothing. The socket keeps the
+      // credential it already had, which is the only state that cannot be made
+      // worse by an auth blip.
+      this.options.metrics?.increment('reauth', 'error')
+      this.sendError(frame.requestId, frame.commandId, 'SESSION_STALE')
+      return
+    } finally {
+      controller.abort()
+    }
+    if (this.closed) {
+      return
+    }
+
+    if (!decision.refreshed) {
+      if (decision.code === 'SESSION_REVOKED') {
+        // The session plane says this session does not authenticate. Surrender
+        // the credential and end the lane: a sign-out or a revocation must not
+        // leave a live authenticated socket behind. The wire code stays the
+        // collapsed NOT_AUTHORIZED that `publicAuthorizationCode` already uses,
+        // so no new authorization topology is published.
+        this.options.metrics?.increment('reauth', 'revoked')
+        this.failAndClose('NOT_AUTHORIZED', 'Sync session is no longer authorized.')
+        this.identity = undefined
+        return
+      }
+      this.options.metrics?.increment('reauth', 'stale')
+      this.sendError(frame.requestId, frame.commandId, 'SESSION_STALE')
+      return
+    }
+
+    this.identity = refreshed
+    this.options.metrics?.increment('reauth', 'accepted')
+    // Nothing from the credential, and no re-negotiation: the operation set is a
+    // property of the deployment's adapters, not of the credential, and
+    // re-advertising it here would invite a client to treat a refresh as a
+    // second handshake.
+    this.send('REAUTHENTICATED', frame.requestId, frame.commandId, {})
   }
 
   private async handleCollaborationAuthorization(frame: SyncCollaborationAuthorizationFrame): Promise<void> {

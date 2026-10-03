@@ -41,6 +41,7 @@ const DIGEST_PATTERN = /^[a-f0-9]{64}$/u
 
 export type SyncClientFrameType =
   | 'AUTH'
+  | 'REAUTH'
   | 'COMMAND'
   | 'STATUS'
   | 'PING'
@@ -58,6 +59,7 @@ export type SyncClientFrameType =
   | 'FILES_CANCEL'
 export type SyncServerFrameType =
   | 'AUTHENTICATED'
+  | 'REAUTHENTICATED'
   | 'ACCEPTED'
   | 'COMMITTED'
   | 'STATUS'
@@ -114,6 +116,29 @@ export interface SyncAuthPayload extends JsonObject {
   ticket: string
   deviceId: string
   resumeSequence?: number
+}
+
+/**
+ * Standard Red Notes: in-place session-credential refresh.
+ *
+ * A socket authenticates once and then replays the credential captured at ticket
+ * mint for its whole life, so a token rotation strands every lane that
+ * revalidates (sync, collaboration, API_RPC, files) while HTTP keeps working.
+ * REAUTH lets a LIVE socket present a current credential without being torn
+ * down and without changing the worker's session-stable scope key.
+ *
+ * The payload is deliberately identical to AUTH minus `resumeSequence`: an
+ * OPAQUE one-use ticket and the device it was minted for. The credential itself
+ * is NOT in this frame and must never be — it is captured server-side from a
+ * real authenticated request at `POST /v1/sockets/sync/ticket` and read back out
+ * of the gateway's own ticket store, so a client cannot choose, forge or widen
+ * what the socket will replay. `resumeSequence` is absent because resuming is an
+ * admission concern; a REAUTH is an ordinary mid-stream frame and keeps the
+ * sequence it was sent with.
+ */
+export interface SyncReauthPayload extends JsonObject {
+  ticket: string
+  deviceId: string
 }
 
 export interface SyncCommandPayload extends JsonObject {
@@ -208,6 +233,7 @@ export interface SyncFilesCreditPayload extends SyncFilesTransferPayload {
 }
 
 export type SyncAuthFrame = SyncFrameBase<'AUTH', SyncAuthPayload>
+export type SyncReauthFrame = SyncFrameBase<'REAUTH', SyncReauthPayload>
 export type SyncCommandFrame = SyncFrameBase<'COMMAND', SyncCommandPayload> & { digest: string }
 export type SyncStatusRequestFrame = SyncFrameBase<'STATUS', JsonObject> & { digest: string }
 export type SyncPingFrame = SyncFrameBase<'PING', JsonObject>
@@ -228,6 +254,7 @@ export type SyncFilesCreditFrame = SyncFrameBase<'FILES_CREDIT', SyncFilesCredit
 export type SyncFilesCancelFrame = SyncFrameBase<'FILES_CANCEL', SyncFilesTransferPayload>
 export type SyncClientFrame =
   | SyncAuthFrame
+  | SyncReauthFrame
   | SyncCommandFrame
   | SyncStatusRequestFrame
   | SyncPingFrame
@@ -466,6 +493,27 @@ export function parseSyncClientFrame(raw: string, rawBytes = Buffer.byteLength(r
       throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid AUTH payload.')
     }
     return parsed as unknown as SyncAuthFrame
+  }
+
+  if (type === 'REAUTH') {
+    if (!hasExactKeys(parsed, commonKeys) || !hasExactKeys(parsed.payload as JsonObject, ['ticket', 'deviceId'])) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid REAUTH frame fields.')
+    }
+    const payload = parsed.payload as JsonObject
+    if (
+      typeof payload.ticket !== 'string' ||
+      payload.ticket.length < 32 ||
+      payload.ticket.length > 256 ||
+      !isSyncDeviceId(payload.deviceId) ||
+      // AUTH is pinned to sequence 0; a REAUTH is a mid-stream frame and can
+      // never be the first one, so sequence 0 is refused here rather than being
+      // left for the handler. The two frames are then structurally distinct and
+      // a REAUTH cannot stand in for admission.
+      Number(parsed.sequence) < 1
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid REAUTH payload.')
+    }
+    return parsed as unknown as SyncReauthFrame
   }
 
   if (type === 'COMMAND') {

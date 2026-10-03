@@ -1747,6 +1747,7 @@ export type {
   SyncInviteEventsAdapter,
   SyncInviteEventReplay,
   SyncLiveAuthorizationAdapter,
+  SyncSessionRefreshDecision,
 } from './syncCommandHandler.js'
 export type { SyncTicketIdentity } from './auth.js'
 export {
