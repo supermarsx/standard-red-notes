@@ -35,7 +35,12 @@
  * be given, and never print, a configured value.
  */
 
-import { sanitizeServerCopy } from './syncDiagnostics'
+import {
+  CLIENT_KNOWN_OPERATIONS,
+  isClientKnownOperation,
+  sanitizeServerCopy,
+  type CapabilityOperationName,
+} from './syncDiagnostics'
 
 /** The topology block from GET /v1/admin/sync-diagnostics. Presence and enums only. */
 export type DeploymentTopology = {
@@ -166,8 +171,9 @@ const present = (topology: DeploymentTopology, key: string): boolean => topology
  * catches address- and credential-SHAPED text, and an enum has a known member
  * list, so nothing outside it needs to be printed at all.
  */
-const knownToken = <T extends string>(value: unknown, allowed: readonly T[]): T | 'unrecognised' =>
-  typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : 'unrecognised'
+const knownToken = <T extends string>(value: unknown, allowed: readonly T[]): T | 'unrecognised' => {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : 'unrecognised'
+}
 
 const BOUND_SERVICE_PROXIES = ['direct-call', 'grpc', 'http'] as const
 const SYNC_SWITCH_SETTINGS = ['true', 'false', 'unset', 'other'] as const
@@ -655,30 +661,67 @@ export function remedyForUnstampedDeployment(): Remedy {
 }
 
 /**
+ * The phrase the Account section passes when the operations it is talking about
+ * are already counted in the row above its finding. A constant here rather than
+ * a literal at the call site so it is a MEMBER of `ClientGapSubject` — see below.
+ */
+export const CLIENT_GAP_COUNTED_ELSEWHERE = 'the operations counted in the row above'
+
+/**
+ * *** EVERYTHING `remedyForClientGap` CAN BE TOLD ABOUT, AS A CLOSED UNION. ***
+ *
+ * This parameter used to be `readonly string[]`, and the function sanitised what
+ * it was handed. That is backwards at a trust boundary: a function that CANNOT be
+ * given a secret is worth more than one that scrubs. Every member below is a
+ * literal compiled into this build — the operations it declares
+ * (`CLIENT_KNOWN_OPERATIONS`), the placeholder for one it does not
+ * (`UNRECOGNISED_OPERATION`), and the Account section's phrase — so a caller that
+ * tries to pass `protocol.serverOperations` straight in does not compile.
+ */
+export type ClientGapSubject = CapabilityOperationName | typeof CLIENT_GAP_COUNTED_ELSEWHERE
+
+/**
  * A capability the server can negotiate and this client build cannot consume.
  *
- * The operation names come off the wire (`protocol.serverOperations`), and this
- * is the one remedy that interpolates them, so they go through the redactor on
- * the way in. They used to be joined raw: a server advertising an operation
- * named after an internal address printed it on screen and into the copyable
- * report, and `websocketSection.ts`'s own finding already TOLD the reader they
- * were "redacted on the way in like every other string off this wire" — the
- * claim was true of every other path and not of this one.
+ * NAMES ONLY WHAT THIS BUILD DECLARES; COUNTS THE REST. An operation this client
+ * does not implement is by definition outside its closed set, so there is no name
+ * to admit — and `sanitizeServerCopy` was never an answer to that, only a
+ * denylist standing in for one. A live probe settled it: this remedy withheld an
+ * address-shaped operation name and printed an opaque one — no address shape, so
+ * nothing to match — verbatim, on
+ * the Overview, in the WebSocket capability block and in the copyable report that
+ * exists to be pasted into an issue.
  *
- * A denylist redaction rather than an allow-list, deliberately: an operation
- * this client does not implement is by definition not in its closed set, so
- * there is no member list to check against, and dropping the name entirely
- * would leave the one finding whose whole content is "which operation".
+ * What the operator loses is a string they have never seen; what they keep is how
+ * many, which side the gap is on, and the list of operations this build does
+ * declare, in `because`. That is the trade every other section of this pane made.
  */
-export function remedyForClientGap(operations: readonly string[]): Remedy {
+export function remedyForClientGap(subjects: readonly ClientGapSubject[]): Remedy {
+  // The TYPE is the guarantee. This is the same check at runtime, because a type
+  // is erased: one `as` at a future call site would otherwise reopen the hole
+  // invisibly, and the whole point of this remedy is that it is incapable of
+  // printing something it was not compiled with. An ALLOW-list, not a scrub —
+  // every name admitted here is a literal from this build.
+  const named = subjects.filter(
+    (subject) => subject === CLIENT_GAP_COUNTED_ELSEWHERE || isClientKnownOperation(subject),
+  )
+  const unnameable = subjects.length - named.length
+  const parts = [
+    ...(named.length > 0 ? [named.join(', ')] : []),
+    ...(unnameable > 0 ? [`${unnameable} operation${unnameable === 1 ? '' : 's'} this build does not recognise`] : []),
+  ]
+
   return {
     code: 'CLIENT_GAP',
-    summary: `No server configuration enables ${operations.map(sanitizeServerCopy).join(', ')} — this client build has no handler for it.`,
+    summary: `No server configuration enables ${
+      parts.length > 0 ? parts.join(' and ') : 'the operations this client build cannot consume'
+    } — this client build has no handler for it.`,
     steps: ['Update the client. Nothing on the server changes this.'],
     effort: 'client-update',
     basis: 'verified',
     because: [
       'The server advertises the operation and the client does not implement it, so the two lists disagree in the direction only a client release can close.',
+      `An operation outside this build's own set is counted and never named: the name arrives over the wire and this screen is written to be pasted in public. This build declares ${CLIENT_KNOWN_OPERATIONS.join(', ')}, so the gap is in the names outside that list.`,
     ],
   }
 }

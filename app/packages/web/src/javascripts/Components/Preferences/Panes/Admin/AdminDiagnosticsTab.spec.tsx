@@ -1307,20 +1307,19 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
         realtime: { attached: true, pushBridge: SECRETS[1], syncLane: SECRETS[0] },
       },
       /**
-       * NOT poisoned, and the reason is a REAL LEAK this change could not fix.
+       * POISONED, and it was not always. This field was left clean for a while,
+       * with a comment explaining that poisoning it would fail the sweep "as it
+       * should" — a test that documented its own hole and then declined to fail.
        *
-       * An operation name off the wire is echoed VERBATIM by `diagnose()` in
-       * `syncDiagnostics.ts` ("This client does not implement <name>"), by
-       * `remedyForClientGap` in `diagnosticRemedies.ts`, and by the legacy
-       * capability matrix in the copyable report — all three of which predate the
-       * section split and none of which this change owns. Putting a secret here
-       * fails this sweep on the Overview and in the report, as it should.
-       *
-       * The five SECTIONS do not have that hole: they count an unrecognised
-       * operation and never name it. That is proved by its own test below, which
-       * poisons this exact field and sweeps the five section tabs.
+       * The hole was real: an operation name off the wire was echoed verbatim by
+       * `diagnose()` ("This client does not implement <name>"), by
+       * `remedyForClientGap` and by the capability matrix in the copyable report,
+       * each of them behind `sanitizeServerCopy`. All three now name only the
+       * operations this build itself declares and COUNT the rest, so the opaque
+       * secret below is swept across all eight tabs and the report like every
+       * other field.
        */
-      protocol: { version: 1, serverOperations: ['SYNC_ITEMS', 'FILES_V1'] },
+      protocol: { version: 1, serverOperations: ['SYNC_ITEMS', SECRETS[3]] },
     }
     const application = makeApplication({
       serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 200, ok: true, data: poisoned }),
@@ -1356,21 +1355,26 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
   })
 
   /**
-   * *** A SERVER-SUPPLIED OPERATION NAME: WHAT IS SAFE AND WHAT IS NOT. ***
+   * *** A SERVER-SUPPLIED OPERATION NAME IS NEVER PRINTED — NOW IN EVERY PATH. ***
    *
-   * Every ROW that reads `protocol.serverOperations` counts an unrecognised
-   * operation and never names it — `safeEnum` admits only this build's own closed
-   * list — and this pins that for all five sections.
+   * The ROWS were always right: every row reading `protocol.serverOperations`
+   * counts an unrecognised operation and never names it, because `safeEnum`
+   * admits only this build's own closed list. The leak was everywhere else — the
+   * Overview diagnosis (`diagnose()`), the remedy (`remedyForClientGap`) and the
+   * capability matrix in the copyable report — and all three went through
+   * `sanitizeServerCopy`, which `Remedy` was exempted from `SafeValue` on the
+   * strength of.
    *
-   * It does NOT pin the whole pane, because `remedyForClientGap`
-   * (`diagnosticRemedies.ts`) interpolates the names into its remedy copy, which
-   * reaches the Overview diagnosis, the WebSocket capability block and the legacy
-   * capability matrix in the report. `Remedy` is the one type the section contract
-   * exempts from `SafeValue`, on the grounds that its constructor redacts the
-   * server prose it carries — and that redactor is a DENYLIST: it withholds an
-   * address-shaped name and prints anything else verbatim. Both halves are
-   * asserted here so the exposure is recorded rather than implied, and the fix
-   * belongs to `diagnosticRemedies.ts`, which this change does not own.
+   * A denylist is the wrong mechanism at a trust boundary, and a live probe said
+   * so precisely: `SECRETS[1]` was withheld as `[address withheld]` because it is
+   * address-shaped, and `SECRETS[3]` — opaque, nothing to match — printed intact
+   * on the Overview, in the WebSocket capability block's remedy and in the
+   * copyable report, which exists to be pasted into an issue.
+   *
+   * So the rule is now the rows' rule everywhere: name only an operation this
+   * build declares, count the rest. The assertion that `[address withheld]` is
+   * ABSENT is the one that matters — its presence would mean the redactor had
+   * been put back as the defence.
    */
   it('counts an unrecognised operation in its rows rather than naming it', async () => {
     const application = makeApplication({
@@ -1393,9 +1397,14 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
         expect(sectionRow(label)[1]).not.toContain(secret)
       }
     }
-    // The address-shaped name is withheld even on the remedy path.
+    // Withheld because it is never printed, not because a denylist matched its
+    // shape. `SECRETS[3]` has no shape to match and used to print verbatim on
+    // this exact path; `[address withheld]` must now be ABSENT, because its
+    // presence would mean the redactor had been reinstated as the defence.
     expect(activePanel().textContent).not.toContain(SECRETS[1])
-    expect(activePanel().textContent).toContain('[address withheld]')
+    expect(activePanel().textContent).not.toContain(SECRETS[3])
+    expect(activePanel().textContent).not.toContain('[address withheld]')
+    expect(activePanel().textContent).toContain('2 operations this build does not recognise')
 
     // The four sections that do not reach `remedyForClientGap` carry none of it.
     for (const id of ['environment', 'backend', 'account', 'browser'] as const) {

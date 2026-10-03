@@ -1,5 +1,5 @@
 import { buildDiagnosticsReport, type DiagnosticsReportInput } from './diagnosticsReport'
-import type { SyncDiagnosticsPayload } from './syncDiagnostics'
+import { CLIENT_KNOWN_OPERATIONS, type SyncDiagnosticsPayload } from './syncDiagnostics'
 import { SECTION_IDS, SECTION_TITLE, type SectionId, type SectionModel } from './diagnosticsSections'
 import { buildWebsocketSection } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
@@ -12,6 +12,20 @@ import { buildBrowserSection } from './browserSection'
  * split into two halves: it must SAY enough to be worth pasting, and it must
  * WITHHOLD everything that would make pasting it a mistake.
  */
+
+/**
+ * A planted value with NO structure for a denylist to match — the class of secret
+ * `sanitizeServerCopy` says in its own comment that it cannot catch. Built from
+ * markers rather than plausible prose so no fragment collides with the build's own
+ * copy, and asserted by head, middle AND tail: the tail sits past 60 characters,
+ * which is where a peer's planted fragments silently landed behind a truncation
+ * earlier tonight.
+ */
+const PLANTED_HEAD = 'SRNLEAKHEAD41'
+const PLANTED_MIDDLE = 'SRNLEAKMIDDLE62'
+const PLANTED_TAIL = 'SRNLEAKTAIL83'
+const PLANTED_OPAQUE_OPERATION = `${PLANTED_HEAD}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_MIDDLE}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_TAIL}`
+const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_OPAQUE_OPERATION]
 
 const payload: SyncDiagnosticsPayload = {
   capturedAt: '2026-08-27T00:00:00.000Z',
@@ -275,8 +289,12 @@ describe('buildDiagnosticsReport — what it says', () => {
 
     expect(report).toContain('| Operation | Server | Client | Negotiated | Status |')
     expect(report).toContain('| FILES_V1 |')
-    // An operation only the server knows about must still get a row and a fix.
-    expect(report).toContain('| FUTURE_LANE |')
+    // An operation only the SERVER knows about is still reported, and still gets
+    // a fix — as a count, because its name is a string the server chose and this
+    // document is written to be pasted in public. The row it used to get printed
+    // that name through a denylist.
+    expect(report).not.toContain('| FUTURE_LANE |')
+    expect(report).toContain('- Operations this build does not recognise: 1')
     expect(report).toContain('Client update')
   })
 
@@ -415,6 +433,55 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     expect(report).not.toContain('v1.2.3-build')
     expect(report).toContain('- Revision: withheld (unrecognised format)')
     expect(report).toContain('- Version: withheld (unrecognised format)')
+  })
+
+  /**
+   * *** THE REPORT HALF OF THE OPERATION-NAME LEAK. ***
+   *
+   * The Capabilities matrix printed `row.operation` through `sanitizeServerCopy`,
+   * and the client-gap remedy under it joined the same names. A live probe
+   * measured what that bought: an address-shaped operation name was withheld and
+   * the opaque `hunter2` printed intact, in this very table, in a document whose
+   * single purpose is to be pasted into an issue.
+   *
+   * The planted value has no shape to match, and `[address withheld]` is asserted
+   * ABSENT on this path: if the redactor is ever reinstated as the defence, the
+   * table starts printing that instead of nothing and this fails.
+   */
+  it('counts the operations it cannot name in the Capabilities matrix, and names none of them', () => {
+    const report = buildDiagnosticsReport(
+      input({
+        payload: {
+          ...payload,
+          protocol: {
+            version: 1,
+            serverOperations: ['SYNC_ITEMS', PLANTED_OPAQUE_OPERATION, 'syncing.internal.example:50051'],
+          },
+        },
+      }),
+    )
+
+    for (const fragment of PLANTED_FRAGMENTS) {
+      expect(report).not.toContain(fragment)
+    }
+    expect(report).not.toContain('syncing.internal.example')
+    expect(report).not.toContain('[address withheld]')
+    // The fact survives as a count, in the table's own section and in the remedy.
+    expect(report).toContain('- Operations this build does not recognise: 2')
+    expect(report).toContain('2 operations this build does not recognise')
+    // And the table still names every operation this build declares, so the
+    // count is read against a list rather than on its own.
+    for (const operation of CLIENT_KNOWN_OPERATIONS) {
+      expect(report).toContain(`| ${operation} |`)
+    }
+  })
+
+  it('reports a zero rather than omitting the line, because none is a reading', () => {
+    const report = buildDiagnosticsReport(
+      input({ payload: { ...payload, protocol: { version: 1, serverOperations: ['SYNC_ITEMS'] } } }),
+    )
+
+    expect(report).toContain('- Operations this build does not recognise: 0')
   })
 
   it('still prints a real revision, a real version and the unstamped sentinel', () => {

@@ -19,6 +19,7 @@ import {
   diagnose,
   sanitizeServerCopy,
   SYNC_ITEMS_STATE_REPORT,
+  UNRECOGNISED_OPERATION,
   type CapabilityTestOutcome,
   type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
@@ -40,6 +41,10 @@ import {
  *     A hashed host is still a host to anyone holding a candidate list.
  *   - Capability tests contribute `reportDetail`, which is constant copy, never
  *     `detail`, which may embed a thrown message carrying the URL that failed.
+ *   - Operation names are NAMED only where this build declares them and COUNTED
+ *     otherwise. They are server-chosen strings; the table used to print them
+ *     through the redactor, which withheld an address-shaped one and printed
+ *     an opaque one, with no address shape to match, verbatim.
  *   - The deployment revision IS included. It is already public at
  *     /.well-known/srn-deployment.json, and "which commit is live" is the first
  *     question anyone reading the report will ask.
@@ -249,13 +254,28 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
 
   lines.push('## Capabilities')
   lines.push('')
+  // *** THE TABLE NAMES ONLY WHAT THIS BUILD DECLARES. ***
+  //
+  // An operation name is a SERVER-chosen string, and this matrix printed it
+  // through `sanitizeServerCopy` — a denylist, which withheld
+  // an address-shaped name from this very table and printed an opaque one into it
+  // verbatim. Rows for operations this build cannot name are therefore
+  // counted below instead: `buildCapabilityRows` already reduces each of them to
+  // `UNRECOGNISED_OPERATION`, so what is dropped here is only N identical rows,
+  // and the count is the fact they carried.
+  const named = rows.filter((row) => row.operation !== UNRECOGNISED_OPERATION)
+  const unnameable = rows.length - named.length
   lines.push('| Operation | Server | Client | Negotiated | Status |')
   lines.push('| --- | --- | --- | --- | --- |')
-  for (const row of rows) {
+  for (const row of named) {
     lines.push(
       `| ${row.operation} | ${yesNo(row.serverSupported)} | ${yesNo(row.clientImplemented)} | ${yesNo(row.negotiated)} | ${row.status} |`,
     )
   }
+  lines.push('')
+  // Printed at zero as well: "none that this build cannot name" is a reading, and
+  // an absent line would be indistinguishable from a report that never asked.
+  lines.push(`- Operations this build does not recognise: ${unnameable}`)
   const clientGaps = rows.filter((row) => row.status === 'client-gap').map((row) => row.operation)
   if (clientGaps.length > 0) {
     lines.push('')

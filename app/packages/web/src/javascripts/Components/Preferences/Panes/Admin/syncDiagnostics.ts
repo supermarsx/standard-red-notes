@@ -71,6 +71,56 @@ export const CLIENT_SYNC_OPERATIONS = [
 export const CLIENT_RECOGNIZED_ONLY_OPERATIONS = [] as const
 
 /**
+ * *** THE ONLY OPERATION NAMES THIS PANEL MAY PRINT. ***
+ *
+ * Every name here is a constant compiled into this build, so echoing one tells a
+ * reader nothing the bundle they are already running does not contain.
+ *
+ * The rule exists because `protocol.serverOperations` is a list of SERVER-chosen
+ * strings and this screen is written to be pasted into an issue. Three paths used
+ * to echo such a string verbatim — `diagnose()` here, `remedyForClientGap` in
+ * `diagnosticRemedies.ts` and the capability matrix in `diagnosticsReport.ts` —
+ * each of them behind `sanitizeServerCopy`, and a live probe settled what that is
+ * worth: an address-shaped operation name (`syncing.internal.example:50051`) was
+ * withheld, and an opaque value with no address shape at all printed intact on
+ * the Overview, in the WebSocket block's remedy and in the copyable report. A
+ * denylist cannot catch a
+ * secret with no structure, which is not a tuning problem but the wrong mechanism
+ * at a trust boundary.
+ *
+ * So the panel counts what it cannot name. That is NOT less informative: "two
+ * operations this build does not recognise" beside the list of the ones it does
+ * tells the operator which SIDE the gap is on, which a raw echo does not.
+ */
+export const CLIENT_KNOWN_OPERATIONS = [...CLIENT_SYNC_OPERATIONS, ...CLIENT_RECOGNIZED_ONLY_OPERATIONS] as const
+
+export type ClientKnownOperation = (typeof CLIENT_KNOWN_OPERATIONS)[number]
+
+/**
+ * What a row is called when its operation is not one of this build's own.
+ *
+ * A literal from this file, so the field that carries it is incapable of
+ * carrying server text however many unrecognised operations arrive.
+ */
+export const UNRECOGNISED_OPERATION = 'an operation this build does not recognise'
+
+/**
+ * The closed set of names a capability row may report — this build's own
+ * operations plus the one placeholder above. Declaring the FIELD as this union
+ * is what makes the leak unrepresentable rather than merely absent: a future
+ * edit that assigns a wire string to it does not compile.
+ */
+export type CapabilityOperationName = ClientKnownOperation | typeof UNRECOGNISED_OPERATION
+
+export const isClientKnownOperation = (value: string): value is ClientKnownOperation =>
+  (CLIENT_KNOWN_OPERATIONS as readonly string[]).includes(value)
+
+/** An operation's printable name, which is a name only where this build owns it. */
+export const operationName = (value: string): CapabilityOperationName => {
+  return isClientKnownOperation(value) ? value : UNRECOGNISED_OPERATION
+}
+
+/**
  * Every protocol operation must be classified as consumed or recognized-only.
  * Adding one to `SyncNegotiatedOperation` without deciding which it is makes
  * `UnclassifiedSyncOperation` non-never and fails this file to compile — the
@@ -401,7 +451,12 @@ export function describeTransport(status: TransportStatusInput | undefined): Tra
 export type CapabilityStatus = 'active' | 'not-negotiated' | 'client-gap' | 'recognized-only' | 'unknown'
 
 export type CapabilityRow = {
-  operation: string
+  /**
+   * Named where this build declares the operation, `UNRECOGNISED_OPERATION`
+   * otherwise. Typed as the closed union, not `string`, so no wire value can
+   * reach it — see `CLIENT_KNOWN_OPERATIONS`.
+   */
+  operation: CapabilityOperationName
   /** The server build knows how to negotiate this operation. */
   serverSupported: boolean
   /** This client build CONSUMES it — not merely tolerates it at handshake. */
@@ -426,9 +481,15 @@ export function buildCapabilityRows(
   const clientImplemented = new Set<string>(CLIENT_SYNC_OPERATIONS)
   const recognizedOnly = new Set<string>(CLIENT_RECOGNIZED_ONLY_OPERATIONS)
   const negotiatedSet = new Set(negotiated)
+  const observed = [...new Set([...serverOperations, ...CLIENT_KNOWN_OPERATIONS, ...negotiated])]
+  // This build's own names alphabetically, then one row per operation it cannot
+  // name, in the order the wire listed them. Sorting the whole set would order
+  // the unnameable rows BY the strings this function exists not to reveal, which
+  // is a smaller leak of the same thing — a sort is a comparison made public.
   const operations = [
-    ...new Set([...serverOperations, ...CLIENT_SYNC_OPERATIONS, ...CLIENT_RECOGNIZED_ONLY_OPERATIONS, ...negotiated]),
-  ].sort()
+    ...observed.filter(isClientKnownOperation).sort(),
+    ...observed.filter((operation) => !isClientKnownOperation(operation)),
+  ]
 
   return operations.map((operation) => {
     const onServer = serverOperations.includes(operation)
@@ -478,10 +539,11 @@ export function buildCapabilityRows(
     }
 
     return {
-      // The operation name is a closed protocol token in a correct server, and
-      // this row is printed into the copyable report, so it is redacted like any
-      // other string that arrived over the wire.
-      operation: sanitizeServerCopy(operation),
+      // Named only where this build declares the operation. "A closed protocol
+      // token in a correct server" was the assumption behind redacting it
+      // instead, and the leak is exactly what happens when that assumption is
+      // wrong — so the row carries this build's own constant or nothing.
+      operation: operationName(operation),
       serverSupported: onServer,
       clientImplemented: onClient,
       negotiated: isNegotiated,
@@ -1096,23 +1158,28 @@ export function diagnose(
   }
 
   const serverOperations = payload.protocol?.serverOperations ?? []
-  const clientGaps = serverOperations.filter(
-    (operation) =>
-      !(CLIENT_SYNC_OPERATIONS as readonly string[]).includes(operation) &&
-      !(CLIENT_RECOGNIZED_ONLY_OPERATIONS as readonly string[]).includes(operation),
-  )
-  if (clientGaps.length > 0) {
+  // COUNTED, NEVER NAMED. This finding used to interpolate the names — the
+  // Overview half of the leak `CLIENT_KNOWN_OPERATIONS` describes. The count
+  // plus the list of what this build DOES declare is the more useful pair
+  // anyway: it says whether the gap is on the client or on the server, which a
+  // bare echo of a name the reader has never seen does not.
+  const unrecognised = serverOperations.filter((operation) => !isClientKnownOperation(operation)).length
+  if (unrecognised > 0) {
     findings.push({
-      title: `This client does not implement ${clientGaps.join(', ')}`,
-      detail:
-        'The server build can negotiate these operations but this client build has no handler for them, so they will never be used. Nothing on the server fixes this — it needs a client change.',
+      title: `This client does not implement ${unrecognised} of the ${serverOperations.length} operations this server advertises`,
+      detail: `The server build can negotiate them and this client build has no handler, so they will never be used however the server is configured. Nothing on the server fixes this — it needs a client change. They are counted rather than named on purpose: an operation name arrives over the wire and this screen is written to be pasted into an issue, so the only names printed anywhere on it are the ones this build itself declares — ${CLIENT_KNOWN_OPERATIONS.join(', ')}. Read the two together: an operation missing from that list and present in the count is a client gap, and the count is how many.`,
     })
   }
 
   // Reported separately from an outright gap: these DO appear in the handshake,
   // so they look healthy everywhere else, and they carry nothing.
-  const recognizedOnly = serverOperations.filter((operation) =>
-    (CLIENT_RECOGNIZED_ONLY_OPERATIONS as readonly string[]).includes(operation),
+  //
+  // Iterated over THIS build's list rather than filtered out of the wire's, so
+  // the string printed below is the constant from this file and not the equal
+  // string that happened to arrive — identical output, and one of them cannot
+  // carry anything else.
+  const recognizedOnly = (CLIENT_RECOGNIZED_ONLY_OPERATIONS as readonly string[]).filter((operation) =>
+    serverOperations.includes(operation),
   )
   if (recognizedOnly.length > 0) {
     findings.push({

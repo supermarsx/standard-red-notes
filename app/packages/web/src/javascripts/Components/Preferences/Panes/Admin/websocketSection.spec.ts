@@ -9,7 +9,12 @@ import {
   type SectionModel,
 } from './diagnosticsSections'
 import { NOT_REPORTED } from './reportAllowlist'
-import { describeRealtimeHealth, type SyncDiagnosticsPayload, type TransportStatusInput } from './syncDiagnostics'
+import {
+  CLIENT_KNOWN_OPERATIONS,
+  describeRealtimeHealth,
+  type SyncDiagnosticsPayload,
+  type TransportStatusInput,
+} from './syncDiagnostics'
 import {
   buildWebsocketSection,
   CAPABILITY_STATUSES,
@@ -698,6 +703,19 @@ describe('the transport block', () => {
 /* Capabilities, measured on this client's handshake                          */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A planted operation name with NO structure for a denylist to match. Built from
+ * markers rather than plausible prose so no fragment collides with the build's own
+ * copy, and asserted by head, middle AND tail — the tail sits past 60 characters,
+ * which is where a peer's planted fragments silently landed behind a truncation
+ * earlier tonight.
+ */
+const PLANTED_HEAD = 'SRNLEAKHEAD41'
+const PLANTED_MIDDLE = 'SRNLEAKMIDDLE62'
+const PLANTED_TAIL = 'SRNLEAKTAIL83'
+const PLANTED_OPAQUE_OPERATION = `${PLANTED_HEAD}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_MIDDLE}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_TAIL}`
+const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_OPAQUE_OPERATION]
+
 describe('the capability block', () => {
   it('reports an operation this socket negotiated as healthy on direct evidence', () => {
     const model = build({ payload: payload(), transport: transport() })
@@ -730,17 +748,44 @@ describe('the capability block', () => {
     expect(row.evidence.kind).toBe('absent')
   })
 
-  it('names a client gap in a remedy and counts it in a row', () => {
+  /**
+   * *** COUNTS A CLIENT GAP IN BOTH PLACES; NAMES IT IN NEITHER. ***
+   *
+   * This test asserted the opposite until tonight — `summary).toContain('FUTURE_LANE')`
+   * — on the row note's own justification that "a remedy is screen-only and
+   * already redacted". A live probe falsified both halves: `sanitizeServerCopy`
+   * is a denylist, so it withheld an address-shaped operation name and printed
+   * the opaque value `hunter2` intact, and the remedy is not screen-only either —
+   * it reaches the copyable report.
+   *
+   * Three things are pinned, and each fails on a different regression: the count
+   * going missing, the name coming back, and the redactor being reinstated as the
+   * defence (which would print `[address withheld]` rather than nothing).
+   */
+  it('counts a client gap in the row AND in the remedy, and names it in neither', () => {
     const model = build({
-      payload: payload({ protocol: { version: 1, serverOperations: [...SOCKET_OPERATIONS, 'FUTURE_LANE'] } }),
+      payload: payload({
+        protocol: { version: 1, serverOperations: [...SOCKET_OPERATIONS, 'FUTURE_LANE', PLANTED_OPAQUE_OPERATION] },
+      }),
       transport: transport(),
     })
 
-    expect(String(rowOf(model, 'Operations this build does not recognise').value)).toBe('1')
+    expect(String(rowOf(model, 'Operations this build does not recognise').value)).toBe('2')
     expect(rowOf(model, 'Operations this build does not recognise').verdict).toBe('degraded')
     const finding = findingOf(model, 'CLIENT_GAP')
     expect(finding?.verdict).toBe('degraded')
-    expect(finding?.remedy?.summary).toContain('FUTURE_LANE')
+    expect(finding?.remedy?.summary).toContain('2 operations this build does not recognise')
+    expect(finding?.remedy?.summary).not.toContain('FUTURE_LANE')
+    expect(finding?.remedy?.summary).not.toContain('[address withheld]')
+    for (const fragment of PLANTED_FRAGMENTS) {
+      expect(JSON.stringify(finding)).not.toContain(fragment)
+    }
+    // The count is only actionable beside the list it complements, so the remedy
+    // carries this build's own operations — all of which are already in the
+    // bundle the reader is running.
+    for (const operation of CLIENT_KNOWN_OPERATIONS) {
+      expect(finding?.remedy?.because.join(' ')).toContain(operation)
+    }
     expect(EFFORT_LABEL[finding?.remedy?.effort ?? 'none']).toBe('Client update')
   })
 

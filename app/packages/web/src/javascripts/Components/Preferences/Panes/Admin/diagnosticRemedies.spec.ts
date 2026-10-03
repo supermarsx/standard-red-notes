@@ -8,6 +8,23 @@ import {
   type RemedyEffort,
 } from './diagnosticRemedies'
 import { EFFORT_TONE } from './diagnosticsPresentation'
+import { CLIENT_KNOWN_OPERATIONS, UNRECOGNISED_OPERATION } from './syncDiagnostics'
+
+/**
+ * A planted value with NO structure for a denylist to match — the class of
+ * secret `sanitizeServerCopy` says itself it cannot catch, and the class the
+ * live probe proved printed verbatim.
+ *
+ * Built from markers rather than plausible prose so a fragment cannot collide
+ * with the build's own copy, and asserted by its head, middle and tail so a
+ * truncation at any width still fails: the tail sits past 60 characters, which
+ * is where a peer's planted fragments all quietly landed earlier tonight.
+ */
+const PLANTED_HEAD = 'SRNLEAKHEAD41'
+const PLANTED_MIDDLE = 'SRNLEAKMIDDLE62'
+const PLANTED_TAIL = 'SRNLEAKTAIL83'
+const PLANTED_OPAQUE_OPERATION = `${PLANTED_HEAD}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_MIDDLE}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_TAIL}`
+const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_OPAQUE_OPERATION]
 
 /**
  * The remedies are the part of the panel that can do damage. A wrong instruction
@@ -380,20 +397,66 @@ describe('the remedies that are not config changes', () => {
   })
 
   /**
-   * The operation names are the one thing this module interpolates from the
-   * wire, and they were joined raw. A server advertising an operation named
-   * after an internal address printed it on screen and into the copyable
-   * report — while `websocketSection.ts`'s finding told the reader they were
-   * "redacted on the way in like every other string off this wire".
+   * *** THE REDACTOR IS NOT THE MECHANISM HERE, AND MUST NOT BECOME ONE AGAIN. ***
+   *
+   * The operation names are the one thing this module interpolates from the wire.
+   * They were joined raw, then joined through `sanitizeServerCopy`, and a live
+   * probe measured what the second was worth: an address-shaped operation name
+   * was withheld and the opaque value `hunter2` printed intact — on the Overview,
+   * in the WebSocket capability block and in the copyable report.
+   *
+   * So the test asserts the ABSENCE of the redactor's own output on this path.
+   * Reinstating `sanitizeServerCopy` as the defence here fails it, which is the
+   * point: a denylist cannot catch a secret with no structure, and no amount of
+   * extra patterns changes that.
    */
-  it('redacts an address a server put in an operation name, without dropping the name', () => {
-    const remedy = remedyForClientGap(['syncing.internal.example:50051', 'FILES_V1'])
+  it('counts an operation it cannot name, and does not reach for the redactor to do it', () => {
+    const remedy = remedyForClientGap([UNRECOGNISED_OPERATION, UNRECOGNISED_OPERATION])
 
-    expect(remedy.summary).not.toContain('syncing.internal.example')
-    expect(remedy.summary).toContain('[address withheld]')
-    // A legitimate operation name is untouched, so the redaction does not cost
-    // the finding its only content.
-    expect(remedy.summary).toContain('FILES_V1')
+    expect(remedy.summary).toContain('2 operations this build does not recognise')
+    expect(remedy.summary).not.toContain('[address withheld]')
+    expect(remedy.effort).toBe('client-update')
+  })
+
+  it('counts one as one, and still names alongside the count where it has a name to use', () => {
+    expect(remedyForClientGap([UNRECOGNISED_OPERATION]).summary).toContain('1 operation this build does not recognise')
+    expect(remedyForClientGap(['FILES_V1', UNRECOGNISED_OPERATION]).summary).toContain(
+      'FILES_V1 and 1 operation this build does not recognise',
+    )
+  })
+
+  /**
+   * The count is only actionable beside the list it is a complement of, so the
+   * remedy carries that list — which costs nothing, because every name in it is
+   * already compiled into the bundle the reader is running.
+   */
+  it('names the operations this build does declare, so the count says which side the gap is on', () => {
+    const because = remedyForClientGap([UNRECOGNISED_OPERATION]).because.join(' ')
+
+    for (const operation of CLIENT_KNOWN_OPERATIONS) {
+      expect(because).toContain(operation)
+    }
+  })
+
+  /**
+   * *** THE CONTRACT, ASSERTED BY THE COMPILER. ***
+   *
+   * `ClientGapSubject` is a closed union of literals this build owns, so the
+   * `@ts-expect-error` below IS the assertion: handing this function
+   * `protocol.serverOperations` is a type error, and the test fails if it ever
+   * stops being one. The runtime check behind it is defence in depth for an `as`
+   * at some future call site — a type is erased, and that cast would be
+   * invisible — so a value that gets past the compiler is counted, not printed.
+   */
+  it('cannot be handed a wire string, and prints nothing if one is forced through', () => {
+    // @ts-expect-error a server-supplied operation name is not a ClientGapSubject
+    const remedy = remedyForClientGap([PLANTED_OPAQUE_OPERATION])
+    const everything = JSON.stringify(remedy)
+
+    for (const fragment of PLANTED_FRAGMENTS) {
+      expect(everything).not.toContain(fragment)
+    }
+    expect(remedy.summary).toContain('1 operation this build does not recognise')
   })
 })
 
@@ -513,6 +576,31 @@ describe('secrecy', () => {
     expect(text).not.toContain('nonsense')
     // Collapsed to a constant this build owns, rather than dropped — the row
     // still says that something unexpected was reported.
+    expect(text).toContain('unrecognised')
+  })
+
+  /**
+   * The case above plants an ADDRESS-shaped value, which `sanitizeServerCopy`
+   * would also have caught — so on its own it does not distinguish the member
+   * check from the redactor. This one plants a value with no structure at all, in
+   * both closed-enum fields, and asserts head, middle and tail.
+   */
+  it('withholds an OPAQUE value from an enum field, which no redactor could have caught', () => {
+    const hostile = {
+      ...topology({ syncSwitchSetting: PLANTED_OPAQUE_OPERATION as 'other' }),
+      boundServiceProxy: PLANTED_OPAQUE_OPERATION as 'http',
+    }
+
+    const text = [
+      remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', 'server copy', hostile),
+      remedyForPrecondition('WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION', 'server copy', hostile),
+    ]
+      .map((remedy) => JSON.stringify(remedy))
+      .join(' ')
+
+    for (const fragment of PLANTED_FRAGMENTS) {
+      expect(text).not.toContain(fragment)
+    }
     expect(text).toContain('unrecognised')
   })
 

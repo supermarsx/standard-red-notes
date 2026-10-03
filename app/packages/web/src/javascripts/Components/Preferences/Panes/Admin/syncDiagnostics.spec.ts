@@ -1,6 +1,7 @@
 import {
   BOOT_GATE_HEADER,
   buildCapabilityRows,
+  CLIENT_KNOWN_OPERATIONS,
   CLIENT_RECOGNIZED_ONLY_OPERATIONS,
   CLIENT_SYNC_OPERATIONS,
   describeDeployment,
@@ -18,10 +19,28 @@ import {
   SYNC_ITEMS_STATE_REPORT,
   SYNC_ITEMS_STATES,
   TONES,
+  UNRECOGNISED_OPERATION,
   type SyncDiagnosticsPayload,
   type SyncItemsCause,
   type TransportStatusInput,
 } from './syncDiagnostics'
+
+/**
+ * A planted operation name with NO structure for a denylist to match — the class
+ * of secret `sanitizeServerCopy` says in its own comment that it cannot catch,
+ * and the one a live probe watched print verbatim on the Overview, in the
+ * WebSocket capability block and in the copyable report.
+ *
+ * Built from markers rather than plausible prose, so no fragment can collide with
+ * the build's own copy, and asserted by head, middle AND tail: the tail sits past
+ * 60 characters, which is where a peer's planted fragments all silently landed
+ * earlier tonight behind a truncation.
+ */
+const PLANTED_HEAD = 'SRNLEAKHEAD41'
+const PLANTED_MIDDLE = 'SRNLEAKMIDDLE62'
+const PLANTED_TAIL = 'SRNLEAKTAIL83'
+const PLANTED_OPAQUE_OPERATION = `${PLANTED_HEAD}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_MIDDLE}-wwwwwwwwwwwwwwwwwwwwwwww-${PLANTED_TAIL}`
+const PLANTED_FRAGMENTS = [PLANTED_HEAD, PLANTED_MIDDLE, PLANTED_TAIL, PLANTED_OPAQUE_OPERATION]
 
 /**
  * The redactor is the second line behind the server's presence-only contract. It
@@ -384,9 +403,52 @@ describe('sync diagnostics model', () => {
         { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
       )
 
-      const finding = diagnosis.findings.find((entry) => entry.title.includes('FUTURE_LANE'))
+      const finding = diagnosis.findings.find((entry) => entry.title.includes('does not implement'))
       expect(finding).toBeDefined()
+      // Counted, with both halves of the comparison: how many, and out of how
+      // many advertised. The name itself is the server's string and is withheld.
+      expect(finding?.title).toContain(`1 of the ${CLIENT_SYNC_OPERATIONS.length + 1} operations`)
+      expect(finding?.title).not.toContain('FUTURE_LANE')
       expect(finding?.detail).toContain('needs a client change')
+    })
+
+    /**
+     * *** THE OVERVIEW HALF OF THE LEAK. ***
+     *
+     * `diagnose()` interpolated these names with no redaction at all, so the
+     * Overview printed whatever the server put in `protocol.serverOperations`.
+     * This plants a value with no shape for a denylist to match AND an
+     * address-shaped one, and asserts neither the names nor a redaction of them
+     * appears — the second half is what fails if `sanitizeServerCopy` is put back
+     * as the defence instead of the closed set.
+     */
+    it('counts the operations it cannot name in the Overview, and names none of them', () => {
+      const diagnosis = diagnose(
+        {
+          ...gateSatisfied,
+          protocol: {
+            version: 1,
+            serverOperations: [...CLIENT_SYNC_OPERATIONS, PLANTED_OPAQUE_OPERATION, 'syncing.internal.example:50051'],
+          },
+        },
+        { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
+      )
+      const everything = `${diagnosis.headline} ${diagnosis.findings
+        .map((finding) => `${finding.title} ${finding.detail}`)
+        .join(' ')}`
+
+      for (const fragment of PLANTED_FRAGMENTS) {
+        expect(everything).not.toContain(fragment)
+      }
+      expect(everything).not.toContain('syncing.internal.example')
+      expect(everything).not.toContain('[address withheld]')
+      // It still reports the fact, and both numbers the operator needs.
+      expect(everything).toContain(`2 of the ${CLIENT_SYNC_OPERATIONS.length + 2} operations`)
+      // And it names what this build DOES declare, which is what turns a count
+      // into a diagnosis: the gap is in the names outside this list.
+      for (const operation of CLIENT_KNOWN_OPERATIONS) {
+        expect(everything).toContain(operation)
+      }
     })
 
     it('no longer reports FILES_V1 as advertised-but-inert now that downloads consume it', () => {
@@ -984,14 +1046,66 @@ describe('sync diagnostics model', () => {
   describe('buildCapabilityRows', () => {
     const socketDown: TransportStatusInput = { state: 'HTTP_ONLY', operations: [] }
 
-    it('marks a genuinely unimplemented server operation as a client gap', () => {
+    it('marks a genuinely unimplemented server operation as a client gap, without naming it', () => {
       const rows = buildCapabilityRows([...CLIENT_SYNC_OPERATIONS, 'FUTURE_LANE'], [], false)
-      const future = rows.find((row) => row.operation === 'FUTURE_LANE')
+      const future = rows.find((row) => row.operation === UNRECOGNISED_OPERATION)
 
       expect(future?.status).toBe('client-gap')
       expect(future?.serverSupported).toBe(true)
       expect(future?.clientImplemented).toBe(false)
       expect(future?.explanation).toContain('not a misconfiguration')
+      // The row still EXISTS, which is what makes it countable. What it does not
+      // do is carry the server's chosen string.
+      expect(rows.map((row) => row.operation)).not.toContain('FUTURE_LANE')
+    })
+
+    /**
+     * *** A ROW NAMES ONLY WHAT THIS BUILD DECLARES. ***
+     *
+     * `row.operation` reached the Overview, the WebSocket capability block and
+     * the copyable report, through `sanitizeServerCopy` — a denylist. The probe
+     * that settled it withheld `syncing.internal.example:50051` and printed
+     * `hunter2` intact in all three places.
+     *
+     * The planted value here has no structure to match, and the assertion on
+     * `[address withheld]` is what fails if the redactor is ever put back as the
+     * defence: the correct output mentions neither the name nor a redaction of it.
+     */
+    it('will not name an operation off the wire, however little shape it has', () => {
+      const rows = buildCapabilityRows(
+        [...CLIENT_SYNC_OPERATIONS, PLANTED_OPAQUE_OPERATION, 'syncing.internal.example:50051'],
+        [PLANTED_OPAQUE_OPERATION],
+        true,
+      )
+      const printed = rows.map((row) => `${row.operation} ${row.explanation}`).join('\n')
+
+      for (const fragment of PLANTED_FRAGMENTS) {
+        expect(printed).not.toContain(fragment)
+      }
+      expect(printed).not.toContain('syncing.internal.example')
+      expect(printed).not.toContain('[address withheld]')
+      // Two rows arrived that this build cannot name, and both are still there to
+      // be counted — a vanishing row is the other failure mode this panel has.
+      expect(rows.filter((row) => row.operation === UNRECOGNISED_OPERATION)).toHaveLength(2)
+      // And every name that IS printed is one of this build's own constants.
+      for (const row of rows) {
+        expect([...CLIENT_KNOWN_OPERATIONS, UNRECOGNISED_OPERATION]).toContain(row.operation)
+      }
+    })
+
+    /**
+     * Sorting the whole set would order the unnameable rows BY the strings this
+     * change exists not to reveal — a comparison made public is a smaller leak of
+     * the same thing. So this build's own names sort, and the rest keep the order
+     * the wire listed them in.
+     */
+    it('does not sort the rows it cannot name, because a sort is a comparison made public', () => {
+      const rows = buildCapabilityRows(['ZZZ_LAST_ALPHABETICALLY', 'AAA_FIRST_ALPHABETICALLY'], [], false)
+      const named = rows.filter((row) => row.operation !== UNRECOGNISED_OPERATION).map((row) => row.operation)
+
+      expect(named).toEqual([...named].sort())
+      // The two unnameable rows are last, in neither alphabetical direction.
+      expect(rows.slice(-2).map((row) => row.operation)).toEqual([UNRECOGNISED_OPERATION, UNRECOGNISED_OPERATION])
     })
 
     it('reports a negotiated FILES_V1 as active now that the download lane consumes it', () => {

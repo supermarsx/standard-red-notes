@@ -1078,7 +1078,7 @@ function buildCapabilityBlock(
         observedEitherSide ? unrecognised.length : undefined,
         unrecognised.length > 0 ? 'degraded' : 'informational',
       ),
-      note: 'Operations either side named that this client build has no handler for. COUNTED here and NAMED in the finding below, which is the contract’s own split rather than a hedge: a row’s label and value are a path into the copyable report, and a remedy is screen-only and already redacted, so the report carries how many and the operator in front of the screen gets which. Recognising an operation at the handshake is what stops its advertisement dropping the WHOLE socket, so this count is worth watching even while each individual lane is merely absent.',
+      note: 'Operations either side named that this client build has no handler for. COUNTED here AND counted in the finding below — the names are never printed anywhere on this screen. This row used to say they were named below, on the grounds that a remedy is screen-only and already redacted, and a live probe falsified both halves: the redaction is a denylist, so it withheld an address-shaped operation name and printed an opaque one verbatim, and the remedy is not screen-only either — it reaches the copyable report, which exists to be pasted into an issue. An operation name is a string the SERVER chose; the only ones this pane prints are the ones this build itself declares, and the finding lists those beside the count so you can tell which side the gap is on. Recognising an operation at the handshake is what stops its advertisement dropping the WHOLE socket, so this count is worth watching even while each individual lane is merely absent.',
     }),
   )
 
@@ -1091,7 +1091,7 @@ function buildCapabilityBlock(
         code: safeConstant('CLIENT_GAP'),
         title: 'The server can negotiate operations this client build cannot consume',
         detail:
-          'The server advertises them and this client has no handler, so they will never be used however the server is configured. Nothing on the server fixes this — it needs a client release. The operation names are in the remedy below, redacted on the way in like every other string off this wire.',
+          'The server advertises them and this client has no handler, so they will never be used however the server is configured. Nothing on the server fixes this — it needs a client release. The remedy below COUNTS them rather than naming them, and lists the operations this build does declare instead: an operation name is a string the server chose, and this screen — remedy included — is written to be pasted into an issue. Read the two together and the count tells you which side the gap is on, which the bare name of a lane you have never heard of does not.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
         remedy: remedyForClientGap(gaps),
