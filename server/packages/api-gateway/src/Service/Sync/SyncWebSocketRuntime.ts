@@ -127,8 +127,14 @@ export class SyncWebSocketRuntime {
     //   - both hosts attach through this line, so the bundled home server gets
     //     a MEASURED verdict with no HomeServer.ts edit. It used to record
     //     `syncingServerGrpcBound: true` ("in-process, satisfied by
-    //     construction") and the pane showed green over a lane that withholds
-    //     SYNC_ITEMS whenever AUTH_JWT_SECRET is empty;
+    //     construction") and the pane read that self-assertion as the verdict,
+    //     so the one state it could not report was the lane it never built: a
+    //     home server that composes no `sync` option at all, or whose attach
+    //     throws, published the same green as a working one. (The AUTH_JWT_SECRET
+    //     term of `ready()` is NOT the example to use here, and this comment
+    //     named it until t108: an empty value is a fatal startup at
+    //     `Bootstrap/Container.ts`, so no host in that state is serving a pane
+    //     to be wrong on. See the AUTH_JWT_SECRET note in SyncGateDiagnostics.);
     //   - a host that forgets the line cannot exist, so no future host can
     //     regress to a self-asserted claim;
     //   - it runs only AFTER the attach returned, so a lane whose gateway

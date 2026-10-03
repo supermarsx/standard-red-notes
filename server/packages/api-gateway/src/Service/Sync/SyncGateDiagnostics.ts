@@ -177,6 +177,48 @@ export type SyncHostReport = {
  * `durableSync !== undefined`), so `syncingServerGrpcBound === false` is
  * sufficient for `'WITHHELD'`. Bound-ness is never sufficient for available.
  *
+ * That same signal is ALSO what names the cause, and conflating the two states
+ * it separates was a live, operator-visible defect: a deployment with no
+ * durable port bound at all was told "the durable command port IS BOUND but
+ * failed its readiness check" and sent after the internal gRPC secret, while
+ * the same response carried `boundServiceProxy: 'http'` and
+ * `unmetCodes: ['SYNCING_SERVER_GRPC_UNBOUND']`. One response contradicting
+ * itself, and the remedy pointing at the wrong variable. `ready()` is a
+ * CONJUNCTION (see `SyncWebSocketCommandAdapter.ready`) and a single `false`
+ * cannot say which term failed -- but the gate separately observed whether a
+ * port exists, so the two reachable shapes of that `false` are distinguishable
+ * without inventing anything:
+ *
+ *   - no port bound          -> `'DURABLE_BACKEND_UNBOUND'`, whose remedy is the
+ *                              shared `SYNCING_SERVER_GRPC_UNBOUND` one
+ *                              (SERVICE_PROXY_TYPE, the dial target), taken from
+ *                              `SyncWebSocketPreconditions` rather than copied;
+ *   - a port bound, refusing -> `'DURABLE_BACKEND_NOT_READY'`, whose remedy is
+ *                              the under-32-byte internal secret.
+ *
+ * Both are `'WITHHELD'`, so splitting them adds no route to `'ADVERTISED'`.
+ * The split keys off a POSITIVE observation of absence (`=== false`), never off
+ * a missing one: where the gate recorded nothing there is no bound-ness reading
+ * at all, and claiming `UNBOUND` from an absent gate would be fabricating a
+ * configuration fact in place of the one that was fabricated before.
+ *
+ * *** AUTH_JWT_SECRET is deliberately NOT named by either remedy. *** `ready()`
+ * does require it -- `sessionAuthorizationReady()` is `authJwtSecret.length > 0`
+ * -- and the remedy used to say so, but that term's FALSE branch is unreachable
+ * on every host that can serve this report: `Bootstrap/Container.ts` reads
+ * `env.get('AUTH_JWT_SECRET')` NON-optionally, and `AbstractEnv.get` throws on a
+ * falsy value, so an empty or unset secret is a fatal startup (measured live:
+ * `FATAL startup`, a supervisord restart loop, readiness `502`) and there is no
+ * gateway left to answer `/v1/admin/sync-diagnostics`. Both composition roots
+ * then pass `env.get('AUTH_JWT_SECRET', true) || ''` into the adapter, so the
+ * `''` the predicate tests for cannot arrive. The term is retained in `ready()`
+ * regardless, and must be: the adapter is a library class that any host may
+ * compose (its own spec drives the empty case directly), the non-optional read
+ * is one `Container.ts` edit away from becoming optional, and a predicate that
+ * stopped checking a key it signs with would fail OPEN. What was removed is the
+ * ADVICE, not the check -- an operator cannot act on a variable whose absence
+ * would have stopped their server.
+ *
  * `'NOT_OBSERVED'` is deliberately NOT folded into "withheld". A host that
  * never probed (or a probe that threw) leaves the gate unable to answer, and
  * saying "withheld" there would be the same class of error in the other
@@ -215,6 +257,13 @@ export type SyncItemsGateState = 'ADVERTISED' | 'WITHHELD' | 'NOT_OBSERVED'
  * `DURABLE_BACKEND_NOT_READY` -- never by length, never by content, never by
  * naming which of the readiness terms failed, because the probe is a single
  * boolean and inventing detail it does not carry would be a second lie.
+ *
+ * `DURABLE_BACKEND_UNBOUND` is the OTHER shape of the same `false` and has its
+ * own remedy: no durable port was bound at all, which is a SERVICE_PROXY_TYPE /
+ * dial-target problem and not a secret-length one. The two are separated by the
+ * gate's own `syncingServerGrpcBound` reading, which is recorded independently
+ * of the probe -- see the SYNC_ITEMS block above for why collapsing them onto
+ * the "bound but not ready" cause was a defect rather than a simplification.
  */
 export type SyncItemsGateCause =
   | 'LANE_PRECONDITION_UNMET'
@@ -234,7 +283,7 @@ export const SYNC_ITEMS_CAUSE_REMEDIES: Readonly<Record<SyncItemsGateCause, stri
   // Taken from SyncWebSocketPreconditions at report time, not copied here.
   DURABLE_BACKEND_UNBOUND: null,
   DURABLE_BACKEND_NOT_READY:
-    'the durable command port is bound but FAILED the readiness check the handshake itself makes, so the socket will not offer SYNC_ITEMS and notes sync over HTTP while every other capability stays realtime. That check needs AUTH_JWT_SECRET (the session behind each command is revalidated) and, for the gRPC port, SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes and identical on the syncing server. A bound proxy is not evidence of either',
+    'the durable command port FAILED the readiness check the handshake itself makes, so the socket will not offer SYNC_ITEMS and notes sync over HTTP while every other capability stays realtime. A deployment that binds NO durable command port is a DIFFERENT cause with a different fix (DURABLE_BACKEND_UNBOUND, which is about SERVICE_PROXY_TYPE and the dial target), so this one is about a port that exists and refuses: for the gRPC port the check needs SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes and identical on the syncing server. A bound proxy is not evidence of that',
   NEVER_PROBED:
     'this host recorded no reading of the handshake predicate, so the gate cannot say whether SYNC_ITEMS is offered. Treat it as unknown: it is neither a healthy lane nor a withheld operation. A host built before the gate took its own reading reports this',
   PROBE_FAILED:
@@ -434,7 +483,15 @@ export class SyncGateDiagnosticsRecorder {
   private resolveSyncItems(lane: {
     recorded: boolean
     enabled: boolean
-    durableBackendBound: boolean
+    /**
+     * Whether a durable command port was observed to exist. `undefined` is NOT
+     * `false`: it means the gate recorded no observation at all, so there is
+     * nothing to read bound-ness from. The distinction is load-bearing --
+     * `false` names `DURABLE_BACKEND_UNBOUND`, which is a claim about this
+     * deployment's configuration, and deriving that claim from an absent gate
+     * would be exactly the kind of fabrication this module exists to prevent.
+     */
+    durableBackendBound: boolean | undefined
     /** The shared module's own remedy for the unbound port, never a copy. */
     unboundRemedy: string | null
   }): SyncItemsReport {
@@ -446,12 +503,27 @@ export class SyncGateDiagnosticsRecorder {
       probe,
     })
 
+    /**
+     * The two shapes of a refusing durable backend, told apart by the gate's
+     * own independent reading rather than by the probe -- `ready()` is a
+     * conjunction and its single `false` cannot say which term failed.
+     *
+     * Keyed on `=== false`, a POSITIVE observation that no port exists. An
+     * absent reading (`undefined`, no gate recorded) keeps the bound-port cause
+     * rather than asserting the deployment binds nothing; both are `'WITHHELD'`
+     * either way, so the fail-safe direction is unaffected by which is chosen.
+     */
+    const refusedByDurableBackend = (): SyncItemsReport =>
+      lane.durableBackendBound === false
+        ? report('WITHHELD', 'DURABLE_BACKEND_UNBOUND', lane.unboundRemedy)
+        : report('WITHHELD', 'DURABLE_BACKEND_NOT_READY')
+
     if (!lane.recorded) {
       // No gate to read the lane from. A probe can still settle it NEGATIVELY
       // -- a backend that refuses, or a lane that was never built, offers
       // nothing whatever the gate would have said -- but never positively.
       if (probe === 'NOT_READY') {
-        return report('WITHHELD', 'DURABLE_BACKEND_NOT_READY')
+        return refusedByDurableBackend()
       }
       if (probe === 'NO_LANE') {
         return report('WITHHELD', 'SYNC_LANE_NOT_BUILT')
@@ -472,7 +544,12 @@ export class SyncGateDiagnosticsRecorder {
       case 'READY':
         return report('ADVERTISED', null)
       case 'NOT_READY':
-        return report('WITHHELD', 'DURABLE_BACKEND_NOT_READY')
+        // The probe said no. WHICH no it was comes from the gate's separate
+        // bound-ness reading, not from the probe -- see
+        // `refusedByDurableBackend`. This is the branch an attached gateway
+        // reaches on every negative reading, so collapsing it onto the
+        // bound-port cause mislabelled every unbound deployment in the fleet.
+        return refusedByDurableBackend()
       case 'NO_LANE':
         return report('WITHHELD', 'SYNC_LANE_NOT_BUILT')
       case 'PROBE_FAILED':
@@ -482,9 +559,16 @@ export class SyncGateDiagnosticsRecorder {
         // only withhold: `ready()` requires a durable port to exist, so an
         // unbound one cannot be ready. Bound-ness never implies the reverse --
         // that inference is the bug this whole block exists to prevent.
-        return lane.durableBackendBound
-          ? report('NOT_OBSERVED', 'NEVER_PROBED')
-          : report('WITHHELD', 'DURABLE_BACKEND_UNBOUND', lane.unboundRemedy)
+        //
+        // Still reachable, and not only by an older host: `observeSyncItems` is
+        // called AFTER `attachGateway` returns, so a composition whose attach
+        // THREW records the gate and leaves the probe unread (pinned by
+        // SyncWebSocketRuntime.spec.ts). It is no longer the only route to
+        // `DURABLE_BACKEND_UNBOUND`, though, which is what made that cause
+        // effectively dead for every successfully attached gateway.
+        return lane.durableBackendBound === false
+          ? report('WITHHELD', 'DURABLE_BACKEND_UNBOUND', lane.unboundRemedy)
+          : report('NOT_OBSERVED', 'NEVER_PROBED')
     }
   }
 
@@ -494,7 +578,12 @@ export class SyncGateDiagnosticsRecorder {
       const syncItems = this.resolveSyncItems({
         recorded: false,
         enabled: false,
-        durableBackendBound: false,
+        // `undefined`, not `false`: nothing was recorded, so bound-ness was
+        // never observed. Passing `false` here used to be harmless because
+        // every negative probe reported the same cause; now that the two are
+        // told apart it would make an unrecorded gate claim this deployment
+        // binds no durable port, which it has no evidence of.
+        durableBackendBound: undefined,
         unboundRemedy: null,
       })
       return {

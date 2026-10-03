@@ -197,6 +197,137 @@ describe('SyncGateDiagnosticsRecorder', () => {
       expect(report.syncItems.remedy).toContain('SERVICE_PROXY_TYPE=grpc')
     })
 
+    // -----------------------------------------------------------------------
+    // t108. The live defect: once the probe ran at every attach, EVERY negative
+    // reading became `DURABLE_BACKEND_NOT_READY`, so a deployment with no
+    // durable port bound was told "the durable command port IS BOUND but failed
+    // its readiness check" and sent after the internal gRPC secret — in the SAME
+    // response that carried `unmetCodes: ['SYNCING_SERVER_GRPC_UNBOUND']`.
+    // Reproduced live three ways, including with no plant at all (an unset
+    // SERVICE_PROXY_TYPE is enough). `DURABLE_BACKEND_UNBOUND` existed and was
+    // reachable only from `NEVER_PROBED`, i.e. never for an attached gateway.
+    // -----------------------------------------------------------------------
+    it('names an UNBOUND durable port as unbound, not as a bound port that failed its check', () => {
+      const recorder = new SyncGateDiagnosticsRecorder()
+      // Exactly the live configuration: the transport gate is satisfied, the
+      // lane is up and serving its other five operations, and no durable
+      // command port is bound — so the adapter's `ready()` is false because
+      // `durableSync === undefined`, not because a secret is short.
+      recorder.record({ ...MET, syncingServerGrpcBound: false, filesAdvertised: true, gatewayAttached: true })
+      recorder.observeSyncItems(laneWhose(() => false))
+
+      const report = recorder.report()
+      expect(report.syncLaneEnabled).toBe(true)
+      expect(report.syncItemsAdvertised).toBe(false)
+      expect(report.syncItems.state).toBe('WITHHELD')
+      expect(report.syncItems.probe).toBe('NOT_READY')
+      expect(report.syncItems.cause).toBe('DURABLE_BACKEND_UNBOUND')
+      // The remedy is the shared module's own SYNCING_SERVER_GRPC_UNBOUND copy,
+      // reused verbatim so the cause and the condition list cannot drift.
+      expect(report.syncItems.remedy).toBe(
+        report.unmetPreconditions.find(({ code }) => code === 'SYNCING_SERVER_GRPC_UNBOUND')?.remedy,
+      )
+      expect(report.syncItems.remedy).toContain('SERVICE_PROXY_TYPE=grpc')
+      // ...and it does NOT send the operator after the secret length, which is
+      // the wrong variable for this state.
+      expect(report.syncItems.remedy).not.toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      // The response no longer contradicts itself: the cause and the named
+      // condition describe the same fault.
+      expect(report.unmetCodes).toEqual(['SYNCING_SERVER_GRPC_UNBOUND'])
+    })
+
+    it('keeps the two durable causes apart on the SAME probe reading, differing only in bound-ness', () => {
+      // One assertion that the discriminator is the gate's own
+      // `syncingServerGrpcBound` and nothing else: same refusing backend, same
+      // NOT_READY probe, two causes and two different remedies.
+      const read = (syncingServerGrpcBound: boolean) => {
+        const recorder = new SyncGateDiagnosticsRecorder()
+        recorder.record({ ...MET, syncingServerGrpcBound, filesAdvertised: true, gatewayAttached: true })
+        recorder.observeSyncItems(laneWhose(() => false))
+
+        return recorder.report().syncItems
+      }
+
+      const bound = read(true)
+      const unbound = read(false)
+
+      expect(bound.probe).toBe(unbound.probe)
+      expect(bound.state).toBe('WITHHELD')
+      expect(unbound.state).toBe('WITHHELD')
+      expect(bound.cause).toBe('DURABLE_BACKEND_NOT_READY')
+      expect(unbound.cause).toBe('DURABLE_BACKEND_UNBOUND')
+      expect(bound.remedy).not.toBe(unbound.remedy)
+      // Each remedy names the variable that is actually its own fix.
+      expect(bound.remedy).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      expect(unbound.remedy).toContain('SERVICE_PROXY_TYPE=grpc')
+    })
+
+    /**
+     * t108 / defect 2. The remedy named TWO causes of an unready bound backend:
+     * an internal gRPC secret under 32 bytes, and an empty `AUTH_JWT_SECRET`.
+     * The second cannot occur on any host that could serve this report —
+     * `Bootstrap/Container.ts` reads `AUTH_JWT_SECRET` non-optionally and
+     * `AbstractEnv.get` throws on a falsy value, so an empty one is a fatal
+     * startup (measured live: FATAL startup, supervisord restart loop, readiness
+     * 502). Advice an operator cannot act on, for a state in which there is no
+     * gateway left to print it.
+     */
+    it('does not send the operator after AUTH_JWT_SECRET, whose absence would have stopped the server', () => {
+      const recorder = new SyncGateDiagnosticsRecorder()
+      recorder.record({ ...MET, filesAdvertised: true, gatewayAttached: true })
+      recorder.observeSyncItems(laneWhose(() => false))
+
+      const report = recorder.report()
+      expect(report.syncItems.cause).toBe('DURABLE_BACKEND_NOT_READY')
+      expect(report.syncItems.remedy).not.toContain('AUTH_JWT_SECRET')
+      // The actionable term is still named, so the clause was removed and not
+      // the whole remedy.
+      expect(report.syncItems.remedy).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      expect(report.syncItems.remedy).toContain('32 bytes')
+      // No remedy this module can emit mentions it, on any configuration.
+      for (const remedy of Object.values(SYNC_ITEMS_CAUSE_REMEDIES)) {
+        expect(remedy ?? '').not.toContain('AUTH_JWT_SECRET')
+      }
+    })
+
+    it('reaches DURABLE_BACKEND_UNBOUND from an unprobed gate too, so neither route is dead', () => {
+      // `NEVER_PROBED` is still reachable — `observeSyncItems` runs AFTER
+      // `attachGateway` returns, so a composition whose attach threw records the
+      // gate and leaves the probe unread — and an unbound port withholds there
+      // as well. What changed is that this is no longer the ONLY route to the
+      // cause, which is what made it dead for every attached gateway.
+      const recorder = new SyncGateDiagnosticsRecorder()
+      recorder.record({ ...MET, syncingServerGrpcBound: false, filesAdvertised: true, gatewayAttached: false })
+
+      expect(recorder.report().syncItems).toMatchObject({
+        state: 'WITHHELD',
+        cause: 'DURABLE_BACKEND_UNBOUND',
+        probe: 'NEVER_PROBED',
+      })
+
+      // ...and a BOUND port with no probe still claims nothing at all.
+      recorder.record({ ...MET, filesAdvertised: true, gatewayAttached: false })
+      expect(recorder.report().syncItems).toMatchObject({ state: 'NOT_OBSERVED', cause: 'NEVER_PROBED' })
+    })
+
+    it('will not claim a port is unbound from a gate that recorded nothing', () => {
+      // The unrecorded path used to pass `durableBackendBound: false`, which was
+      // a fabrication that cost nothing while every negative probe shared one
+      // cause. Now that `false` NAMES a configuration fault, an absent reading
+      // has to stay absent: `WITHHELD` is still correct (the backend refused),
+      // but "this deployment binds no durable port" is not something an
+      // unrecorded gate observed.
+      const recorder = new SyncGateDiagnosticsRecorder()
+      recorder.observeSyncItems(laneWhose(() => false))
+
+      const report = recorder.report()
+      expect(report.recorded).toBe(false)
+      expect(report.syncItemsAdvertised).toBe(false)
+      expect(report.syncItems.state).toBe('WITHHELD')
+      expect(report.syncItems.cause).toBe('DURABLE_BACKEND_NOT_READY')
+      expect(report.syncItems.cause).not.toBe('DURABLE_BACKEND_UNBOUND')
+    })
+
     it('records a lane that was never built as an answer, not as an unknown', () => {
       const recorder = new SyncGateDiagnosticsRecorder()
       recorder.record({ ...MET, filesAdvertised: false, gatewayAttached: true })

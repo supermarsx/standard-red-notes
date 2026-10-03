@@ -671,6 +671,19 @@ void container
           const syncAdapter = new SyncWebSocketCommandAdapter(
             container.get(TYPES.ApiGateway_ServiceProxy),
             durableSyncPort,
+            // The `|| ''` cannot actually produce `''` in THIS process:
+            // `ContainerConfigLoader.load()` already read AUTH_JWT_SECRET
+            // non-optionally, and `AbstractEnv.get` throws on a falsy value, so
+            // a missing or empty secret is a fatal startup long before this line
+            // (measured live: FATAL startup, supervisord restart loop, readiness
+            // 502). `sessionAuthorizationReady()` is therefore always true here
+            // and the admin diagnostics must NOT advise an operator to check this
+            // variable -- an absent one would have stopped their server. The
+            // optional read and the fallback are kept anyway: they make this file
+            // independent of whether Container.ts requires the variable, and the
+            // adapter's own predicate must keep failing CLOSED for any host that
+            // composes it without one. See the AUTH_JWT_SECRET note in
+            // SyncGateDiagnostics.ts.
             env.get('AUTH_JWT_SECRET', true) || '',
             new CollaborationAuthorizationService(
               container.get(TYPES.ApiGateway_ServiceProxy),
@@ -836,8 +849,9 @@ void container
           // -- that a proxy object had been CONSTRUCTED -- and reported
           // SYNC_ITEMS available while the handshake withheld it: a bound proxy
           // with a missing or under-32-byte SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET
-          // (or an empty AUTH_JWT_SECRET) fails `ready()` and the admin pane
-          // said the opposite for days.
+          // fails `ready()` and the admin pane said the opposite for days.
+          // (`ready()` also requires AUTH_JWT_SECRET, but an empty one is a
+          // fatal startup above, so it is never the reachable explanation.)
           //
           // Deliberately NOT also called here. The probe belongs at the attach
           // seam every host shares: wired per composition root it left the

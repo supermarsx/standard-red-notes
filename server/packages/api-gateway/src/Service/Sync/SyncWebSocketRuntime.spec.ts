@@ -174,6 +174,33 @@ describe('SyncWebSocketRuntime', () => {
       expect(report.syncItems.probe).toBe('NOT_READY')
     })
 
+    it('attributes the SAME refusal to the unbound port when the gate saw none bound', () => {
+      // t108. This is the state the live stack reaches with SERVICE_PROXY_TYPE
+      // unset, or with the gRPC listener unreachable: the adapter's `ready()`
+      // is false because `durableSync === undefined`, the probe reads NOT_READY,
+      // and the cause has to be the unbound port rather than "bound but failed
+      // its readiness check" — the pane was sending operators after the internal
+      // gRPC secret for a deployment that had no port for a secret to protect.
+      const recorder = new SyncGateDiagnosticsRecorder()
+      recorder.record({ ...GATE_MET, syncingServerGrpcBound: false })
+
+      runtimeWith(recorder).attach(attachOptions(laneWhose(() => false)))
+
+      const report = recorder.report()
+      // The lane is up — five other operations negotiate — and the condition
+      // list names the real fault, which the cause now agrees with.
+      expect(report.syncLaneEnabled).toBe(true)
+      expect(report.unmetCodes).toEqual(['SYNCING_SERVER_GRPC_UNBOUND'])
+      expect(report.syncItemsAdvertised).toBe(false)
+      expect(report.syncItems.probe).toBe('NOT_READY')
+      expect(report.syncItems.cause).toBe('DURABLE_BACKEND_UNBOUND')
+      expect(report.syncItems.remedy).toContain('SERVICE_PROXY_TYPE=grpc')
+      expect(report.syncItems.remedy).not.toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      // ...and the same attach with the port bound still reports the other
+      // cause, so the reading is attributable to bound-ness alone.
+      expect(SYNC_ITEMS_CAUSE_REMEDIES.DURABLE_BACKEND_NOT_READY).not.toBe(report.syncItems.remedy)
+    })
+
     it('records a lane-less attach as an answer, not as an unknown', () => {
       const recorder = new SyncGateDiagnosticsRecorder()
       recorder.record({ ...GATE_MET, filesAdvertised: false })
