@@ -64,6 +64,34 @@ describe('observeDeployment', () => {
     expect(other.syncSwitchSetting).toBe('other')
   })
 
+  /**
+   * t108. `['grpc']` was the whole allow-list, so the two OTHER documented
+   * values both read as `other (unrecognised)` — indistinguishable from a typo.
+   * One of them, `auto`, is what `scripts/setup.sh` and `.env.example` WRITE by
+   * default, so the most common deliberate setting in the fleet was reported as
+   * a mistake; the other, `http`, is an explicit pin the container's own
+   * resolver passes through verbatim.
+   */
+  it.each([
+    ['grpc', 'the one token the binding branch tests for'],
+    ['http', 'an explicit pin to the HTTP proxies'],
+    ['auto', 'the value the setup script writes by default'],
+  ])('reports SERVICE_PROXY_TYPE=%s as itself rather than as unrecognised (%s)', (value) => {
+    const report = observeDeployment(readerFor({ SERVICE_PROXY_TYPE: value }), bindings())
+
+    expect(report.serviceProxySetting).toBe(value)
+    expect(report.serviceProxySetting).not.toBe('other')
+  })
+
+  it('still collapses a genuinely unknown proxy token, and does not case-fold', () => {
+    // The allow-list widened; it did not become permissive. `Container.ts:121`
+    // is an exact `===` with no trim and no case folding, so `GRPC` really does
+    // select the HTTP proxies and must not be reported as if it had worked.
+    expect(observeDeployment(readerFor({ SERVICE_PROXY_TYPE: 'GRPC' }), bindings()).serviceProxySetting).toBe('other')
+    expect(observeDeployment(readerFor({ SERVICE_PROXY_TYPE: 'grpc ' }), bindings()).serviceProxySetting).toBe('other')
+    expect(observeDeployment(readerFor({ SERVICE_PROXY_TYPE: 'direct' }), bindings()).serviceProxySetting).toBe('other')
+  })
+
   it('treats only the exact strings as the kill switch and the memory cache', () => {
     const report = observeDeployment(readerFor({ WEBSOCKET_SYNC_ENABLED: 'false', CACHE_TYPE: 'memory' }), bindings())
 

@@ -49,8 +49,35 @@
  */
 export type DeploymentMode = 'home-server' | 'self-hosted' | 'unset' | 'other'
 
-/** `SERVICE_PROXY_TYPE`. Only the exact string `grpc` selects the gRPC branch. */
-export type ServiceProxySetting = 'grpc' | 'unset' | 'other'
+/**
+ * `SERVICE_PROXY_TYPE`. Only the exact string `grpc` selects the gRPC branch
+ * (`Container.ts:121`, an exact `===` with no trim and no case folding) -- but
+ * that is a statement about the BRANCH, not about which settings are deliberate.
+ * Three tokens are documented and supported, and all three are read here:
+ *
+ *   - `grpc`  force the gRPC proxies. The one value `Container.ts` tests for.
+ *   - `http`  force the HTTP proxies and leave SYNC_ITEMS closed
+ *             (`.env.example`, `scripts/setup.sh`, and the `operator` arm of
+ *             `srn_resolve_service_proxy_type`, which exports it verbatim).
+ *   - `auto`  let the server container decide at start. This is the value
+ *             `scripts/setup.sh` WRITES by default, so it is the single most
+ *             common reading in the fleet. The launcher consumes it and either
+ *             exports `grpc` or unsets the variable -- in which case the
+ *             entrypoint-generated dotenv still holds `auto` and that is what
+ *             this reader sees.
+ *
+ * Admitting only `grpc` reported both of the others as `other (unrecognised)`,
+ * i.e. told an operator who had configured the default, or deliberately pinned
+ * HTTP, that their value was a typo. `other` is still the answer for anything
+ * genuinely outside the set, and no value is ever echoed either way.
+ */
+export type ServiceProxySetting = 'grpc' | 'http' | 'auto' | 'unset' | 'other'
+
+/**
+ * The tokens `ServiceProxySetting` admits, as a value, so the read site and the
+ * union cannot drift: a member added to one and not the other is a type error.
+ */
+const SERVICE_PROXY_TOKENS = ['grpc', 'http', 'auto'] as const satisfies readonly ServiceProxySetting[]
 
 /**
  * Which service-proxy implementation the container ACTUALLY bound — the branch
@@ -168,7 +195,12 @@ export function observeDeployment(read: EnvReader, bindings: DeploymentBindings)
   return {
     recorded: true,
     mode,
-    serviceProxySetting: readToken<ServiceProxySetting>(read('SERVICE_PROXY_TYPE'), ['grpc'], 'unset', 'other'),
+    serviceProxySetting: readToken<ServiceProxySetting>(
+      read('SERVICE_PROXY_TYPE'),
+      SERVICE_PROXY_TOKENS,
+      'unset',
+      'other',
+    ),
     boundServiceProxy: bindings.boundServiceProxy,
     cacheSetting: readToken<CacheSetting>(read('CACHE_TYPE'), ['memory', 'redis'], 'unset', 'other'),
     syncSwitchSetting: readToken<SyncSwitchSetting>(
