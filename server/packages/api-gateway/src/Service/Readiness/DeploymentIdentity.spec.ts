@@ -1,8 +1,14 @@
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 
-import { readDeploymentMarker, verifiedDeploymentIdentity } from './DeploymentIdentity'
+import {
+  deriveDeploymentVersion,
+  normalizeDeploymentVersion,
+  readDeploymentMarker,
+  UNSTAMPED_DEPLOYMENT_SENTINEL,
+  verifiedDeploymentIdentity,
+} from './DeploymentIdentity'
 
 describe('DeploymentIdentity', () => {
   let directory: string
@@ -103,5 +109,245 @@ describe('DeploymentIdentity', () => {
       revision: null,
       version: null,
     })
+  })
+
+  /**
+   * The documented invocation is one argument:
+   * `--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)`. Measured live on
+   * compose before this was fixed, it published `{ revision: null, version: null }`
+   * — indistinguishable from an unstamped image, which sent the operator to a
+   * remedy that told them to rebuild with exactly the argument they had used.
+   */
+  describe('the documented revision-only invocation', () => {
+    const revision = '0123456789abcdef0123456789abcdef01234567'
+    const derived = 'src-0123456789ab'
+
+    it.each([
+      ['an absent SRN_DEPLOY_VERSION', undefined],
+      ['the empty compose default', ''],
+    ])('publishes identity with %s, deriving the version the build baked in', (_case, expectedVersion) => {
+      expect(verifiedDeploymentIdentity(revision, expectedVersion, { revision, version: derived })).toEqual({
+        revision,
+        version: derived,
+      })
+    })
+
+    it('still refuses a marker baked into a different image on the revision alone', () => {
+      // Both revisions share their first 12 characters, so the DERIVED version
+      // token is identical and cannot be what rejects this. Only the revision
+      // comparison can — which is the stale-image guard the derivation must not
+      // have weakened.
+      const sibling = '0123456789abffffffffffffffffffffffffffff'
+      expect(deriveDeploymentVersion(sibling)).toBe(deriveDeploymentVersion(revision))
+      expect(verifiedDeploymentIdentity(revision, undefined, { revision: sibling, version: derived })).toEqual({
+        revision: null,
+        version: null,
+      })
+      expect(verifiedDeploymentIdentity(sibling, undefined, { revision, version: derived })).toEqual({
+        revision: null,
+        version: null,
+      })
+    })
+
+    it('refuses a marker whose version is not the one this revision derives', () => {
+      expect(verifiedDeploymentIdentity(revision, undefined, { revision, version: 'src-ffffffffffff' })).toEqual({
+        revision: null,
+        version: null,
+      })
+      expect(verifiedDeploymentIdentity(revision, undefined, { revision, version: null })).toEqual({
+        revision: null,
+        version: null,
+      })
+    })
+
+    it('still prefers an explicitly supplied version and still rejects an invalid one', () => {
+      expect(verifiedDeploymentIdentity(revision, 'v26.8.11', { revision, version: 'v26.8.11' })).toEqual({
+        revision,
+        version: 'v26.8.11',
+      })
+      // An explicit version is never silently replaced by the derived one.
+      expect(verifiedDeploymentIdentity(revision, 'v26.8.11', { revision, version: derived })).toEqual({
+        revision: null,
+        version: null,
+      })
+      expect(verifiedDeploymentIdentity(revision, 'not a version', { revision, version: derived })).toEqual({
+        revision: null,
+        version: null,
+      })
+    })
+
+    it('never derives a version for a revision it would not publish', () => {
+      for (const invalid of ['', 'unstamped', 'ABCDEF6789abcdef0123456789abcdef01234567', '0123456789ab']) {
+        expect(verifiedDeploymentIdentity(invalid, undefined, { revision: invalid, version: derived })).toEqual({
+          revision: null,
+          version: null,
+        })
+      }
+    })
+  })
+})
+
+/**
+ * One rule, two languages. The build derives the version in busybox ash inside
+ * the `deployment-identity` stage; the runtime has to derive the same token or a
+ * revision-only build can never publish identity. No shared definition is
+ * reachable from both (three different build contexts, and `.dockerignore`
+ * keeps the scripts directory out of the server image), so the agreement is
+ * pinned here: the prefix, the character count, the sentinel and the version
+ * validation are parsed back OUT of each Dockerfile and compared to what this
+ * module actually does.
+ *
+ * Every pattern below is anchored on text that must exist. `parseDockerfile`
+ * throws when an anchor is missing, so a renamed variable or a rewritten stage
+ * fails this suite instead of passing vacuously — and the controls at the end
+ * prove the parse is really reading the prefix, the count and the sentinel
+ * rather than ignoring them.
+ */
+describe('build and runtime version derivation agree', () => {
+  const repositoryRoot = path.resolve(__dirname, '../../../../../..')
+  const dockerfiles = ['server/Dockerfile', 'Dockerfile.single', 'app/Dockerfile']
+  const sampleRevision = 'fedcba9876543210fedcba9876543210fedcba98'
+
+  type ParsedDerivation = {
+    sentinel: string
+    sentinelVersion: string
+    prefix: string
+    revisionCharacters: number
+    maximumLength: number
+    firstCharacterClass: string
+    characterClass: string
+  }
+
+  const readDockerfile = (relativePath: string): string => readFileSync(path.join(repositoryRoot, relativePath), 'utf8')
+
+  /** Joins `\`-continued shell lines so one RUN statement is one string. */
+  const flattenShell = (source: string): string => source.replace(/\\\r?\n\s*/gu, ' ').replace(/[ \t]+/gu, ' ')
+
+  const match = (source: string, pattern: RegExp, label: string): RegExpMatchArray => {
+    const found = flattenShell(source).match(pattern)
+    if (found === null) {
+      throw new Error(`${label} was not found; this check is anchored on text that no longer exists`)
+    }
+
+    return found
+  }
+
+  const parseDockerfile = (source: string): ParsedDerivation => {
+    const derivation = match(
+      source,
+      /if \[ -z "\$\{version\}" \]; then if \[ "\$\{revision\}" = '([^']+)' \]; then version='([^']+)'; else version="([0-9A-Za-z._+-]*)\$\(printf '%s' "\$\{revision\}" \| cut -c1-([0-9]+)\)"; fi; fi;/u,
+      'the version derivation',
+    )
+    const length = match(source, /\[ "\$\{#version\}" -le ([0-9]+) \]/u, 'the version length bound')
+    const firstCharacter = match(
+      source,
+      /case "\$\{version\}" in \[([^\]]+)\]\*\) true ;; \*\) false ;; esac/u,
+      'the version first-character class',
+    )
+    const characters = match(
+      source,
+      /case "\$\{version\}" in \*\[!([^\]]+)\]\*\) false ;; \*\) true ;; esac/u,
+      'the version character class',
+    )
+
+    return {
+      sentinel: derivation[1],
+      sentinelVersion: derivation[2],
+      prefix: derivation[3],
+      revisionCharacters: Number(derivation[4]),
+      maximumLength: Number(length[1]),
+      firstCharacterClass: firstCharacter[1],
+      characterClass: characters[1],
+    }
+  }
+
+  /** `0-9A-Za-z._+-` -> every character it admits. */
+  const expandCharacterClass = (specification: string): string[] => {
+    const characters: string[] = []
+    for (let index = 0; index < specification.length; index += 1) {
+      if (specification[index + 1] === '-' && index + 2 < specification.length) {
+        for (let code = specification.charCodeAt(index); code <= specification.charCodeAt(index + 2); code += 1) {
+          characters.push(String.fromCharCode(code))
+        }
+        index += 2
+        continue
+      }
+      characters.push(specification[index])
+    }
+
+    return characters
+  }
+
+  it('derives the same token the build does, in every Dockerfile that bakes a marker', () => {
+    for (const relativePath of dockerfiles) {
+      const parsed = parseDockerfile(readDockerfile(relativePath))
+      expect(deriveDeploymentVersion(sampleRevision)).toBe(
+        `${parsed.prefix}${sampleRevision.slice(0, parsed.revisionCharacters)}`,
+      )
+      expect(parsed.sentinel).toBe(UNSTAMPED_DEPLOYMENT_SENTINEL)
+      expect(deriveDeploymentVersion(parsed.sentinel)).toBe(parsed.sentinelVersion)
+    }
+  })
+
+  it('accepts and refuses exactly the version tokens the build validates', () => {
+    for (const relativePath of dockerfiles) {
+      const parsed = parseDockerfile(readDockerfile(relativePath))
+      const admitted = expandCharacterClass(parsed.characterClass)
+      const firstAdmitted = expandCharacterClass(parsed.firstCharacterClass)
+
+      expect(normalizeDeploymentVersion('v'.repeat(parsed.maximumLength))).not.toBeNull()
+      expect(normalizeDeploymentVersion('v'.repeat(parsed.maximumLength + 1))).toBeNull()
+      for (const character of admitted) {
+        expect(normalizeDeploymentVersion(`v${character}`)).toBe(`v${character}`)
+      }
+      for (const character of firstAdmitted) {
+        expect(normalizeDeploymentVersion(character)).toBe(character)
+      }
+      for (const character of admitted.filter((value) => !firstAdmitted.includes(value))) {
+        expect(normalizeDeploymentVersion(`${character}v`)).toBeNull()
+      }
+      for (const character of ['!', ' ', '/', '$', '"', ';', '\n', ' ']) {
+        expect(admitted).not.toContain(character)
+        expect(normalizeDeploymentVersion(`v${character}`)).toBeNull()
+      }
+    }
+  })
+
+  /**
+   * Controls. A check that reads a file has to be shown to FAIL on a planted
+   * divergence, or a pass means nothing. Each plant is asserted to occur exactly
+   * once before it is swapped — a single-occurrence `.replace` stops testing its
+   * own target the day the fragment appears twice — and nothing is written to
+   * disk: the divergence is planted in the string that was read.
+   */
+  const plant = (source: string, fragment: string, replacement: string): string => {
+    const occurrences = source.split(fragment).length - 1
+    expect(occurrences).toBe(1)
+
+    return source.split(fragment).join(replacement)
+  }
+
+  it.each([
+    ['a different character count', 'cut -c1-12', 'cut -c1-10'],
+    ['a different prefix', 'version="src-$(printf', 'version="rev-$(printf'],
+    ["a different unstamped sentinel's version", "version='unstamped'; \\", "version='unknown'; \\"],
+  ])('fails when the Dockerfile diverges by %s', (_case, fragment, replacement) => {
+    const planted = plant(readDockerfile('server/Dockerfile'), fragment, replacement)
+    const parsed = parseDockerfile(planted)
+
+    expect(
+      deriveDeploymentVersion(sampleRevision) ===
+        `${parsed.prefix}${sampleRevision.slice(0, parsed.revisionCharacters)}` &&
+        deriveDeploymentVersion(parsed.sentinel) === parsed.sentinelVersion,
+    ).toBe(false)
+  })
+
+  it('fails loudly rather than vacuously when an anchor is gone', () => {
+    const source = readDockerfile('server/Dockerfile')
+    expect(() => parseDockerfile(plant(source, 'cut -c1-12', 'head -c 12'))).toThrow(/the version derivation/u)
+    expect(() => parseDockerfile(plant(source, '-le 128', '-lt 129'))).toThrow(/the version length bound/u)
+    expect(() => parseDockerfile(plant(source, '*[!0-9A-Za-z._+-]*', '*[!0-9A-Za-z._+-]+'))).toThrow(
+      /the version character class/u,
+    )
   })
 })
