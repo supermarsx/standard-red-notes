@@ -28,7 +28,36 @@ container.
 | `collab-yjs.e2e.mjs` | encrypted two-editor Yjs convergence, protocol v3 epoch binding, and `room-denied` epoch adoption | inside the container |
 | `push-roundtrip.e2e.mjs` | the whole cross-device push chain: save → syncing-server → SNS/SQS → gateway worker → the other device's socket | host or container; `--self-test` runs offline |
 | `sync-items-oversized.e2e.mjs` | an oversized committed `SYNC_ITEMS` result answers `STATUS COMMITTED code RESULT_TOO_LARGE` with no `result`, and the HTTP replay returns the journaled items | host or container, `SERVICE_PROXY_TYPE=grpc` only |
+| `capability-fallback.e2e.mjs` | the socket capability census from `AUTHENTICATED`, each capability exercised over the lane, and each documented HTTP fallback exercised on the same account in the same run; `CONTROL=1` adds a planted break per probe | host or container, any proxy configuration |
 | `browser.e2e.mjs`, `feature-access.e2e.mjs`, `account-export-import.e2e.mjs` | browser-driven flows (`yarn e2e:browser`) | host |
+
+## Session kind matters, and it is chosen at registration
+
+`SessionService.shouldOperateOnCookieBasedSessions` issues a COOKIE session only
+when the registration `api` is exactly `20240226` **and** `forceLegacySessions`
+(`E2E_TESTING === 'true'`) is off. A script that registers at `20200115` — as
+`sync-items-oversized.e2e.mjs` does — gets a LEGACY header session even on a
+stack with no `E2E_TESTING` anywhere, so it cannot observe a cookie-session
+defect. `capability-fallback.e2e.mjs` registers at `20240226` by default,
+asserts the `2:` access-token prefix under `EXPECT_SESSION=cookie`, and under
+`CONTROL=1` proves the cookie half is load-bearing by showing the bearer ALONE
+is refused 401. Set `REGISTER_API=20200115` to re-take the same matrix on legacy
+sessions and diff the two.
+
+## Not every capability has a configuration lever
+
+Measured live on the multi-container image at `71e055f8`:
+
+- `SYNC_ITEMS` can be withheld (unbind the durable command port).
+- The whole lane can be withheld (`WEBSOCKET_SYNC_ENABLED=false`, or a
+  `WEB_SOCKET_CONNECTION_TOKEN_SECRET` under 32 bytes), which withholds all six
+  at once while the legacy `/sockets` push lane keeps working.
+- `API_RPC` and `STREAM_ASSISTANT` are hardcoded in `bin/server.ts` and have no
+  lever at all.
+- `FILES_V1` has no reachable lever either: compose restores
+  `WEBSOCKET_SYNC_FILES_URL` on an empty value and `docker-entrypoint.sh`
+  re-fills it when still empty, so the `FILES_INTERNAL_URL` waiver branch cannot
+  be reached from an operator env.
 
 `yarn e2e` runs `realtime` then `collab-yjs`. The push round trip and the
 oversized-result script have their own scripts because they register accounts
