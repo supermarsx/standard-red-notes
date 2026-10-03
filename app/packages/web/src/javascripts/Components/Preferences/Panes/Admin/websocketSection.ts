@@ -1,0 +1,1795 @@
+import {
+  isPermanentSyncFallbackReason,
+  SYNC_FALLBACK_REASON_EXPLANATIONS,
+  type SyncFallbackReason,
+  type SyncNegotiatedOperation,
+  type SyncTransportState,
+} from '@/Services/SyncTransport/syncTransportProtocol'
+import {
+  remedyForClientGap,
+  remedyForLiveReason,
+  remedyForPrecondition,
+  type DeploymentTopology,
+  type Remedy,
+  type RemedyEffort,
+} from './diagnosticRemedies'
+import {
+  buildSectionModel,
+  diagnosticFinding,
+  diagnosticRow,
+  EVIDENCE_ABSENT,
+  EVIDENCE_DIRECT,
+  evidenceProxy,
+  LANE_REJECTION_STATUSES,
+  outcomesForSection,
+  reportLine,
+  safeConstant,
+  safeCount,
+  safeDuration,
+  safeEnum,
+  safeState,
+  safeTokens,
+  safeYesNo,
+  UNRECOGNISED,
+  type DiagnosticBlock,
+  type DiagnosticFinding,
+  type DiagnosticRow,
+  type Evidence,
+  type LaneDegradationLedgerView,
+  type LaneRejectionStatus,
+  type SafeValue,
+  type SectionModel,
+  type SectionTaggedOutcome,
+  type Verdict,
+} from './diagnosticsSections'
+import {
+  buildCapabilityRows,
+  describeRealtimeHealth,
+  describeSyncItems,
+  describeTransport,
+  sanitizeServerCopy,
+  SYNC_ITEMS_CAUSES,
+  SYNC_ITEMS_STATES,
+  type CapabilityRow,
+  type CapabilityStatus,
+  type SyncDiagnosticsPayload,
+  type SyncItemsState,
+  type TransportStatusInput,
+} from './syncDiagnostics'
+
+/**
+ * Standard Red Notes: the WebSocket section of the admin diagnostics pane.
+ *
+ * This section absorbs the *Boot gate* and *Capabilities* sub-tabs, which were
+ * never two subjects: the gate decides whether the lane is built and which
+ * operations it may offer, and the capability table is which operations were in
+ * fact negotiated. Under the user's taxonomy they ARE "all the websocket stuff",
+ * and left as peers of a WebSocket tab they would have taken everything with
+ * them, leaving a tab holding one transport chip. They become headed blocks, so
+ * no copy and no spec assertion is lost — only its parent panel changes.
+ *
+ * It is also where tonight's headline bug lived, which is why the evidence
+ * discipline in `diagnosticsSections.ts` is applied here more aggressively than
+ * anywhere else in the pane.
+ *
+ * -------------------------------------------------------------------------------
+ * 1. The SYNC_ITEMS verdict is CONSUMED, never re-derived.
+ * -------------------------------------------------------------------------------
+ *
+ * `describeSyncItems(payload)` already reads `gate.syncItems` — three states, a
+ * closed cause, the raw probe outcome and the server's own remedy, redacted — and
+ * this module calls it and renders what it returns. It does NOT look at
+ * `gate.syncItemsAdvertised`, and that omission is the entire point:
+ *
+ *   - On the builds that sent it, that boolean was derived from
+ *     `container.isBound(ApiGateway_GRPCSyncingServerServiceProxy)` — whether a
+ *     proxy OBJECT had been constructed — while the handshake advertises
+ *     SYNC_ITEMS only if `backend.ready()`, which ADDITIONALLY requires a usable
+ *     internal gRPC auth secret and a session plane that can revalidate. A
+ *     deployment with the proxy bound and a short secret therefore produced a
+ *     green chip over a socket that withheld note syncing.
+ *   - In the `NOT_OBSERVED` case the server OMITS the boolean rather than sending
+ *     `false`, so a `!== true` read of it turns "the gate cannot say" into "no".
+ *
+ * So the row's value is the STATE, parsed against this build's own closed set, and
+ * a `NOT_OBSERVED` state can only ever render as `NOT_OBSERVED` / Unknown. There
+ * is no expression in this file that could make it read as advertised.
+ *
+ * -------------------------------------------------------------------------------
+ * 2. An empty unmet-condition list is not evidence of health.
+ * -------------------------------------------------------------------------------
+ *
+ * `DURABLE_BACKEND_NOT_READY` — the one cause an operator can actually fix —
+ * leaves `unmetPreconditions` and `unmetCodes` EMPTY, because the durable port IS
+ * bound and so nothing reads as unmet. `diagnose()` derived its headline from the
+ * length of that list and returned "fully configured and available" over a socket
+ * that refuses note syncing.
+ *
+ * The "Unmet boot conditions" row therefore claims `healthy` for a count of zero
+ * through `evidenceProxy(..., necessaryCondition: true)`, which caps it to
+ * `undetermined` and prints what the zero does not establish. A count of zero is
+ * reported as a fact about the LIST, never as a verdict about the lane — and the
+ * row immediately beneath it, the SYNC_ITEMS state, is where the withheld
+ * operation actually appears.
+ *
+ * -------------------------------------------------------------------------------
+ * 3. The one genuinely strong signal, and the many weak ones.
+ * -------------------------------------------------------------------------------
+ *
+ * `application.syncTransportStatus` is a DIRECT observation of this client's own
+ * socket: the state, the transport's own closed fallback code, and the operations
+ * this handshake actually negotiated. Nothing else in this section is that strong.
+ * Everything the server reports about the gate is a boot-time DECISION or a probe
+ * reading, and a positive one establishes that the gateway intended to offer an
+ * operation — not that this socket got it. Those rows are proxies and say so.
+ *
+ * The asymmetry is deliberate and is the same one `environmentSection.ts` applies
+ * to configuration presence: a positive proxy reading caps to `undetermined`, a
+ * negative one survives as `broken`, because a necessary condition FAILING is
+ * conclusive while its holding is not. Several rows on a healthy deployment
+ * therefore read `Unknown` — and the capability rows beside them, measured on this
+ * client's own handshake, are the ones reading `OK`.
+ *
+ * Not every proxy here is necessary, and over-claiming `necessary` to keep a
+ * verdict alive is this file's most available mistake. An unmet condition this
+ * build does not RECOGNISE is declared `correlated`: the gate reported something,
+ * and which part of the lane it closes is genuinely unknown, so no verdict is
+ * claimed from it in either direction.
+ *
+ * -------------------------------------------------------------------------------
+ * 4. `broken` means the lane; `degraded` means one operation on a live lane.
+ * -------------------------------------------------------------------------------
+ *
+ * One line, held consistently, because the pane has already contradicted itself
+ * about it. A withheld SYNC_ITEMS is `degraded`, not `broken`, and that is not a
+ * softening: sync TRANSPARENTLY FALLS BACK TO HTTP, verified live on a real stack
+ * rather than merely claimed, so notes keep saving while collaboration, API RPC,
+ * invite events and files stay realtime. An operator told their lane is down goes
+ * looking for a dead socket that is in fact up, and stops reading the one row that
+ * named the missing operation.
+ *
+ * `broken` is reserved for the lane itself: a lane-gating precondition unmet, a
+ * gateway that recorded no attach, a gateway that would refuse a client right now.
+ *
+ * -------------------------------------------------------------------------------
+ * 5. What this section does NOT say, so it is not said twice.
+ * -------------------------------------------------------------------------------
+ *
+ *   - The CAUSE of a withheld lane in configuration terms — a short internal gRPC
+ *     secret, an absent `AUTH_JWT_SECRET` — belongs to Environment & setup, which
+ *     owns `GRPC_SECRET_TOO_SHORT` and `SESSION_SIGNING_KEY_ABSENT`. This section
+ *     states the consequence and names the two variables to check once, inside the
+ *     one remedy it owns for the cause no condition list can show.
+ *   - `unsupported-browser` is the Browser section's row, with the remedy. Here it
+ *     is a reported fallback code and nothing more.
+ *   - `live-sync-disabled` is an ACCOUNT fact — an administrator turned the switch
+ *     off for this one account — and the Account section owns it. The fallback-code
+ *     row prints it, with the protocol's own sentence, and raises no finding.
+ *   - Whether the session credential a socket holds is current is observable here
+ *     only as a COUNT of refused control-plane reads. Nothing in the diagnostics
+ *     payload reports the socket's credential state, and no row is invented for it.
+ */
+
+/* -------------------------------------------------------------------------- */
+/* Closed vocabularies                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The transport's own states, as a tuple so `safeEnum` can admit them, with a
+ * compile-time assertion that the tuple still covers the protocol union. A state
+ * added to the transport without a verdict here would otherwise arrive as
+ * `other (unrecognised)` with no tone at all.
+ */
+export const SOCKET_TRANSPORT_STATES = [
+  'HTTP_ONLY',
+  'CONNECTING',
+  'AUTHENTICATING',
+  'READY',
+  'DEGRADED',
+  'HTTP_FALLBACK',
+  'HALF_OPEN',
+] as const satisfies readonly SyncTransportState[]
+
+type AssertNever<T extends never> = T
+
+type UnlistedTransportState = Exclude<SyncTransportState, (typeof SOCKET_TRANSPORT_STATES)[number]>
+export type EveryTransportStateIsListed = AssertNever<UnlistedTransportState>
+
+/** The transport's closed fallback codes. Never server text. */
+export const SOCKET_FALLBACK_REASONS = [
+  'http-only',
+  'unsupported-browser',
+  'capability-unavailable',
+  'ticket-unavailable',
+  'ticket-expired',
+  'auth-failed',
+  'proxy-failed',
+  'frame-too-large',
+  'result-too-large',
+  'ack-timeout',
+  'server-kill',
+  'reconnect-gap',
+  'backpressure',
+  'outbox-unavailable',
+  'multi-tab-not-owner',
+  'worker-error',
+  'operation-unavailable',
+  'live-sync-disabled',
+] as const satisfies readonly SyncFallbackReason[]
+
+type UnlistedFallbackReason = Exclude<SyncFallbackReason, (typeof SOCKET_FALLBACK_REASONS)[number]>
+export type EveryFallbackReasonIsListed = AssertNever<UnlistedFallbackReason>
+
+/** Every operation the protocol can negotiate. */
+export const SOCKET_OPERATIONS = [
+  'SYNC_ITEMS',
+  'AUTHORIZE_COLLABORATION',
+  'API_RPC',
+  'STREAM_ASSISTANT',
+  'INVITE_EVENTS',
+  'FILES_V1',
+] as const satisfies readonly SyncNegotiatedOperation[]
+
+type UnlistedOperation = Exclude<SyncNegotiatedOperation, (typeof SOCKET_OPERATIONS)[number]>
+export type EveryOperationIsListed = AssertNever<UnlistedOperation>
+
+export const CAPABILITY_STATUSES = [
+  'active',
+  'not-negotiated',
+  'client-gap',
+  'recognized-only',
+  'unknown',
+] as const satisfies readonly CapabilityStatus[]
+
+type UnlistedCapabilityStatus = Exclude<CapabilityStatus, (typeof CAPABILITY_STATUSES)[number]>
+export type EveryCapabilityStatusIsListed = AssertNever<UnlistedCapabilityStatus>
+
+/**
+ * The gate's own precondition codes, plus the one condition a HOST adds.
+ *
+ * Typed against nothing: these are the SERVER's literals and this build cannot be
+ * recompiled against a newer server, so an unrecognised code degrades to
+ * `other (unrecognised)` through `safeEnum` rather than being echoed.
+ */
+export const PRECONDITION_CODES = [
+  'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
+  'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION',
+  'REDIS_UNBOUND',
+  'SYNCING_SERVER_GRPC_UNBOUND',
+  'WEBSOCKET_REDIS_NAMESPACE_INVALID',
+] as const
+
+export type PreconditionCode = (typeof PRECONDITION_CODES)[number]
+
+/**
+ * The subset that gates the socket LANE itself. `SYNCING_SERVER_GRPC_UNBOUND` is
+ * deliberately absent: since the gate was split it withholds SYNC_ITEMS only, and
+ * treating it as a lane condition is how this pane came to describe a live socket
+ * as unavailable.
+ */
+export const LANE_GATING_PRECONDITIONS: readonly PreconditionCode[] = [
+  'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
+  'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION',
+  'REDIS_UNBOUND',
+  'WEBSOCKET_REDIS_NAMESPACE_INVALID',
+]
+
+/** The gateway's live refusal reasons. */
+export const LIVE_REFUSAL_REASONS = [
+  'sync-not-configured',
+  'gateway-stopping',
+  'disabled-by-configuration',
+  'no-allowed-origins',
+  'ticket-store-unavailable',
+  'command-lease-store-unavailable',
+  'socket-budget-store-unavailable',
+  'authorization-adapter-unavailable',
+  'durable-backend-unavailable',
+  'invite-event-store-unavailable',
+] as const
+
+/** Which FILES_V1 precondition the composition found missing. */
+export const FILES_UNMET_CONDITIONS = [
+  'FILES_INTERNAL_URL',
+  'AUTH_JWT_SECRET',
+  'VALET_TOKEN_SECRET',
+  'TRANSPORT_CONSTRUCTION',
+] as const
+
+/** The raw handshake-predicate reading the gate recorded. */
+export const SYNC_ITEMS_PROBES = ['NEVER_PROBED', 'READY', 'NOT_READY', 'NO_LANE', 'PROBE_FAILED'] as const
+
+/** Which push transport the attached gateway bound. */
+export const PUSH_BRIDGES = ['redis', 'in-process', 'none'] as const
+
+/** Whether the gateway would admit a client on the sync path right now. */
+export const SYNC_LANE_STATES = ['up', 'down'] as const
+
+/** The advertised socket capability descriptor, as this build knows it. */
+export const SOCKET_CAPABILITY_IDS = ['ws-sync'] as const
+
+export const SOCKET_ENDPOINTS = ['/sockets/sync'] as const
+
+/** The gateway's own closed reasons for turning a connection away. */
+export const SOCKET_REJECTION_CAUSES = ['originNotAllowed', 'queryStringNotPermitted', 'unavailable'] as const
+
+export type SocketRejectionCause = (typeof SOCKET_REJECTION_CAUSES)[number]
+
+/* -------------------------------------------------------------------------- */
+/* Inputs                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Gateway-side admission and traffic counters.
+ *
+ * DECLARED HERE AND OPTIONAL ON PURPOSE, and the cost of that is stated rather
+ * than hidden: nothing populates this today, so every row it feeds reads "not
+ * reported" until the gateway half lands. `environmentSection.ts` has the scar
+ * from the other arrangement — it declared a ledger the server was already
+ * sending, the payload type did not say so, and every row read "not reported" on
+ * a deployment that was reporting. So this shape is the one the gateway must
+ * mirror, it is supplied by the caller rather than read off a payload field this
+ * build cannot see, and an absent member is "did not ask" everywhere below.
+ *
+ * Every member is a boolean, a bounded count or a closed-key record. There is no
+ * member here that could carry an origin, a URL or a credential — which matters
+ * because the subject is an ALLOWLIST: the question "would my browser be let on"
+ * is answerable with one boolean about input the client already possesses, and the
+ * list's contents never leave the gateway.
+ */
+export type SocketGatewayCountersView = {
+  /** Whether the gateway would admit THIS client's origin. One boolean, never the origin. */
+  originAdmitted?: boolean
+  /** How many origins are permitted. A cardinality: zero and non-zero are different fixes. */
+  allowedOriginCount?: number
+  allowsSameOrigin?: boolean
+  rejections?: Readonly<Partial<Record<SocketRejectionCause, number>>>
+  /** Sockets the attached gateway is holding right now. */
+  liveSockets?: number
+  ticketsIssued?: number
+  ticketsRefused?: number
+  /** Handshakes refused AFTER a ticket was accepted at the HTTP leg. */
+  handshakeRejected?: number
+  /**
+   * Whether the gateway could advertise each operation, from the same predicates
+   * the handshake itself asks. Keyed by a WIDE string: the server's operation enum
+   * is the authority, and a lane this build has never heard of must be ignorable
+   * rather than a type error.
+   */
+  advertisable?: Readonly<Partial<Record<string, boolean>>>
+}
+
+export type WebsocketSectionInput = {
+  /** `GET /v1/admin/sync-diagnostics`. Absent until a read succeeds. */
+  payload?: SyncDiagnosticsPayload
+  /** `application.syncTransportStatus`. The one direct observation in this section. */
+  transport?: TransportStatusInput
+  /** The client-side lane-degradation ledger. Absent in a build that records none. */
+  ledger?: LaneDegradationLedgerView
+  counters?: SocketGatewayCountersView
+  outcomes?: readonly SectionTaggedOutcome[]
+}
+
+/* -------------------------------------------------------------------------- */
+/* Row helpers                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Absent is not false, held structurally rather than remembered.
+ *
+ * Every directly-observed row in this file routes through here, so a row cannot
+ * claim direct evidence for a field nobody reported. The failure this prevents is
+ * a row reading "not reported" with a confident tone behind it, which is the panel
+ * asserting it looked when it did not.
+ */
+function absentOr(observed: unknown, verdict: Verdict): { verdict: Verdict; evidence: Evidence } {
+  return observed === undefined || observed === null
+    ? { verdict: 'undetermined', evidence: EVIDENCE_ABSENT }
+    : { verdict, evidence: EVIDENCE_DIRECT }
+}
+
+function observedRow(input: {
+  label: SafeValue
+  observed: unknown
+  value: SafeValue
+  verdict: Verdict
+  note: string
+}): DiagnosticRow {
+  return diagnosticRow({
+    label: input.label,
+    value: input.value,
+    ...absentOr(input.observed, input.verdict),
+    note: input.note,
+  })
+}
+
+/**
+ * A signal the described thing cannot work without. Its failure is conclusive;
+ * its holding establishes nothing, so a positive claim caps to `undetermined`.
+ */
+function necessaryProxy(observed: string, cannotConfirm: string): Evidence {
+  return evidenceProxy({ observed, cannotConfirm, necessaryCondition: true })
+}
+
+/**
+ * A signal that merely travels with the described thing. Neither direction
+ * establishes anything, so NO verdict survives it — which is the honest answer
+ * for a condition code this build cannot interpret.
+ */
+function correlatedProxy(observed: string, cannotConfirm: string): Evidence {
+  return evidenceProxy({ observed, cannotConfirm, necessaryCondition: false })
+}
+
+/* -------------------------------------------------------------------------- */
+/* Remedies owned by this module                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Nobody edits `diagnosticRemedies.ts` — five executors appending to one switch
+ * is the collision the section contract avoids — so the three remedies this
+ * section needs and nobody else has live here. The ones that already exist are
+ * reused untouched: `remedyForPrecondition` for every unmet gate condition,
+ * `remedyForLiveReason` for every live refusal, `remedyForClientGap` for an
+ * operation the server can negotiate and this client cannot consume.
+ */
+const CONFIG_AND_RESTART: RemedyEffort = 'restart'
+
+/**
+ * The one remedy this section owns for the withheld lane, and ONLY for the cause
+ * no condition list can show.
+ *
+ * `LANE_PRECONDITION_UNMET` and `DURABLE_BACKEND_UNBOUND` both carry
+ * `deferToConditions` in `syncDiagnostics.ts`: their fix is already printed, with
+ * topology-conditional advice, beside the condition itself. Restating it here is
+ * how two copies drift, and on this very deployment the stock sentence sends the
+ * reader after a variable that is set and never read.
+ *
+ * `DURABLE_BACKEND_NOT_READY` is the opposite case. The port is bound, so no
+ * condition is unmet, so there is nothing for this to defer TO — which is exactly
+ * why the panel used to report the deployment healthy.
+ */
+function remedyForWithheldSyncItems(): Remedy {
+  return {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'The durable command port is bound and FAILED the readiness check the handshake makes, so the socket will not offer note syncing. Two variables decide that check. Restart only — no rebuild.',
+    steps: [
+      'Set AUTH_JWT_SECRET, to the same value the auth server uses. Every socket command revalidates the session behind it before it runs, so an empty or disagreeing secret fails the readiness check without any gRPC involvement at all.',
+      'For the gRPC durable port, set SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET to at least 32 bytes and to the IDENTICAL value on the syncing server. Below 32 bytes the adapter counts it as unconfigured; two valid secrets that disagree fail exactly like one short secret.',
+      'Do not read the empty condition list as a clean bill of health. This is the one cause that leaves it empty — the port IS bound, so nothing is unmet — and it is the reason this pane once reported the deployment fully available.',
+      'Restart, then re-read this pane. The Environment & setup section reports which of the two variables is set, and the readiness check itself reports a single boolean, so it cannot say which of them failed: check both.',
+    ],
+    effort: CONFIG_AND_RESTART,
+    basis: 'verified',
+    because: [
+      'The gate read the handshake’s own readiness predicate and it answered NOT ready, over a durable command port that is bound.',
+      'Notes sync over HTTP while this holds, and collaboration, API RPC, invite events and files stay realtime on the same socket — which is why every other panel on this screen looks healthy.',
+    ],
+  }
+}
+
+/**
+ * The origin allowlist, as two different faults with two different fixes.
+ *
+ * Today the only evidence of this is a `1008 origin-not-allowed` close that no UI
+ * reads, and "the list is empty" and "the list is non-empty and mine is not in it"
+ * produce identical screens while needing opposite actions.
+ */
+function remedyForRefusedOrigin(allowedOriginCount: number | undefined): Remedy {
+  const listEmpty = allowedOriginCount === 0
+
+  return {
+    code: 'SOCKET_ORIGIN_NOT_ADMITTED',
+    summary: listEmpty
+      ? 'No origin is permitted at all, so the handshake is refused before it starts. Restart only — no rebuild.'
+      : 'Origins ARE permitted and this client’s is not among them, so this browser is turned away while others connect. Restart only — no rebuild.',
+    steps: listEmpty
+      ? [
+          'Set WEBSOCKET_SYNC_ALLOWED_ORIGINS to the exact origins clients connect from, or set PUBLIC_URL and let the same-origin entry be derived from it.',
+          'An explicit list is strict: one unsafe member fails startup rather than being skipped, so an empty resolved list can also mean a list that was rejected whole.',
+          'Restart the container, then re-run the checks on this page.',
+        ]
+      : [
+          'Add the origin this app is served from to WEBSOCKET_SYNC_ALLOWED_ORIGINS. The scheme, host and port must all match — https://notes.example and https://notes.example:443 are the same origin, http:// and https:// are not.',
+          'If clients reach the app through a reverse proxy under a different name, the allowlist needs the name the BROWSER uses, not the one the container sees.',
+          'Set PUBLIC_URL as well, so the same-origin entry is derived rather than maintained by hand.',
+          'Restart the container, then re-run the checks on this page.',
+        ],
+    effort: CONFIG_AND_RESTART,
+    basis: 'verified',
+    because: [
+      listEmpty
+        ? 'The gateway reports that no origin is permitted, which is the same condition it reports as the live refusal reason no-allowed-origins.'
+        : 'The gateway was asked about this client’s own origin and answered that it would not admit it, while reporting a non-empty allowlist.',
+      'The origin itself is never carried into this panel or the copyable report — only the gateway’s yes or no about it, and how many entries the list holds.',
+    ],
+  }
+}
+
+/**
+ * Tickets mint and the handshake is then refused.
+ *
+ * The signature of two processes that disagree about
+ * `WEB_SOCKET_CONNECTION_TOKEN_SECRET`: the HTTP leg that mints a ticket and the
+ * socket leg that redeems it are different processes on a multi-replica
+ * deployment, and a ticket signed by one is unreadable to the other. From every
+ * other panel this looks like a healthy gateway, because it is one.
+ */
+function remedyForRejectedHandshakes(): Remedy {
+  return {
+    code: 'SOCKET_HANDSHAKE_REJECTED',
+    summary:
+      'Tickets are being issued and the handshakes that present them are being refused. The usual cause is two processes that do not share the ticket secret. Restart only — no rebuild.',
+    steps: [
+      'Set WEB_SOCKET_CONNECTION_TOKEN_SECRET to the SAME value on every process in the stack. A ticket minted by one replica and redeemed on another must verify against one key.',
+      'Check the clock on each process as well. A ticket is short-lived, so a replica whose clock is minutes out rejects tickets that are genuinely current — the Browser section reports this client’s own offset from the server.',
+      'A ticket is single-use. Refusals that match the number of reconnects rather than the number of mints are a client retrying a redeemed ticket, which is expected and not this fault.',
+      'Restart every process after changing the secret, then re-run the checks on this page.',
+    ],
+    effort: CONFIG_AND_RESTART,
+    basis: 'verified',
+    because: [
+      'The gateway reports tickets issued AND handshakes rejected. Either number alone is ordinary; together they mean clients are reaching the socket with a credential it will not accept.',
+      'No secret, length or value is read to establish this — only two counters.',
+    ],
+  }
+}
+
+/**
+ * The control-plane lane refusing reads.
+ *
+ * The socket's API_RPC credential is captured once, when the ticket is minted.
+ * The worker can now adopt a current credential in place through a REAUTH frame
+ * and replay the parked read where that is provably safe, so a refusal that
+ * reaches the ledger is one the in-place refresh did NOT repair — or one recorded
+ * before it could be attempted. The counter is the only way to tell a stranded
+ * socket from a healthy one, because note syncing stays healthy throughout.
+ */
+function remedyForRefusedControlPlaneReads(stranded: boolean): Remedy {
+  return {
+    code: 'SOCKET_LANE_CREDENTIAL_REFUSALS',
+    summary: stranded
+      ? 'The socket’s control-plane lane answered 401 for reads this client made, and they were served over HTTP instead. Reconnect the socket — a reload is enough — and the credential is re-minted.'
+      : 'The socket’s control-plane lane answered 498 for reads this client made. That is the recoverable half: the credential was stale rather than refused, and it clears on its own.',
+    steps: stranded
+      ? [
+          'Reload the page, or sign out and back in. Either re-mints the socket ticket, and the lane picks up the current session credential with it.',
+          'Expect nothing to look broken in the meantime. Note syncing, collaboration and invites are unaffected; what degrades is the admin and control-plane reads that rode the socket, and they are served over HTTP with no error reaching the screen.',
+          'If the count climbs again after a reconnect, the session itself is being refused rather than merely aged — the Account section reports whether this session is signed in and carries the admin role.',
+        ]
+      : [
+          'Nothing to do. A 498 is a stale credential inside the refresh window, the worker presents a fresh one on the socket it already holds, and the read is replayed where replaying it is safe.',
+          'Watch the 401 count beside this one. That is the stranded case, and it is the one worth acting on.',
+        ],
+    effort: stranded ? 'device' : 'wait',
+    basis: 'verified',
+    because: [
+      'This client recorded control-plane reads that the socket lane refused and that were then served over HTTP. The counter is kept precisely because that degradation leaves no other trace.',
+      stranded
+        ? 'At least one refusal was a 401, which is the lane answering that the credential it holds does not authenticate at all — after the refresh window, or after an in-place refresh could not repair it.'
+        : 'The refusals were 498 only, which is the lane answering that its credential is stale and refreshable.',
+    ],
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 1: this client's own transport                                       */
+/* -------------------------------------------------------------------------- */
+
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** What each transport state is worth. */
+const TRANSPORT_VERDICT: Record<SyncTransportState, Verdict> = {
+  HTTP_ONLY: 'degraded',
+  CONNECTING: 'undetermined',
+  AUTHENTICATING: 'undetermined',
+  READY: 'healthy',
+  DEGRADED: 'degraded',
+  HTTP_FALLBACK: 'degraded',
+  HALF_OPEN: 'degraded',
+}
+
+const TRANSPORT_NO_STATUS_NOTE =
+  'No transport status was read. That is NOT the same as "no socket": this build cannot tell a client with no realtime transport installed from a caller that did not supply the status, so neither is claimed. Every other row in this block reads "not reported" with it.'
+
+function buildTransportBlock(transport: TransportStatusInput | undefined): DiagnosticBlock {
+  const state = transport?.state
+  const reason = transport?.fallbackReason
+  const permanent = reason === undefined ? undefined : isPermanentSyncFallbackReason(reason)
+  const operations = transport === undefined ? undefined : transport.operations.length
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Transport in use right now'),
+      value: safeEnum(state, SOCKET_TRANSPORT_STATES),
+      ...absentOr(state, state === undefined ? 'undetermined' : TRANSPORT_VERDICT[state]),
+      note: state === undefined ? TRANSPORT_NO_STATUS_NOTE : describeTransport(transport).detail,
+    }),
+    observedRow({
+      label: safeConstant('Reported fallback reason'),
+      observed: reason,
+      value: safeEnum(reason, SOCKET_FALLBACK_REASONS),
+      verdict: 'informational',
+      note:
+        reason === undefined
+          ? 'The transport reported no fallback reason. On a READY socket that is correct and expected; with no transport status at all it means nothing was read.'
+          : SYNC_FALLBACK_REASON_EXPLANATIONS[reason],
+    }),
+    diagnosticRow({
+      label: safeConstant('Is that reason retryable'),
+      value: safeState(permanent, 'structural', 'retryable'),
+      ...absentOr(permanent, permanent === true ? 'degraded' : 'informational'),
+      note: 'A structural reason describes an absence rather than a fault — this deployment does not advertise the socket lane, or this client is built or configured never to use it — and no amount of retrying makes one succeed. A retryable reason clears on the next attempt, so a transport sitting on one is mid-recovery rather than broken.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Operations negotiated on this socket'),
+      value: safeCount(operations),
+      ...absentOr(operations, 'informational'),
+      note: 'How many operations THIS client negotiated, measured on its own handshake rather than reported by anyone. The count is context; which operations they are, and what each missing one costs, is the Negotiated capabilities block below.',
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  if (reason === 'capability-unavailable') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_CAPABILITY_REFUSED'),
+        title: 'The server ANSWERED that it does not advertise the socket lane',
+        detail:
+          'This is not a timeout or a guess: the capability descriptor was read and it offered no sync capability, so the client stood down rather than retrying forever. The boot gate block below is where the reason lives — a lane-gating condition unmet, or the kill switch set — and the fix is there, not here.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('This client’s transport'),
+    description:
+      'What this browser is actually on, read from its own transport rather than reported by the server. The only direct observation in this section, and the one row that still stands when the diagnostics endpoint cannot be read at all.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 2: the lane and the boot gate                                        */
+/* -------------------------------------------------------------------------- */
+
+type MergedCondition = { readonly code: string | undefined; readonly remedy: string | undefined }
+
+/**
+ * The unmet conditions to report: the shared list, PLUS the host's own when the
+ * server reported one and did not already merge it in.
+ *
+ * Merged here rather than trusted to arrive merged, because the whole point of the
+ * host condition is that a lane can read as configured while the host attached
+ * nothing — and a condition the panel silently drops is worse than no panel. A
+ * duplicate is a cosmetic fault; a dropped condition is the fault this exists to
+ * prevent.
+ */
+function mergedConditions(gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined): readonly MergedCondition[] {
+  const listed: MergedCondition[] = (gate?.unmetPreconditions ?? []).map((entry) => ({
+    code: entry.code,
+    remedy: entry.remedy,
+  }))
+
+  const hostCondition = gate?.host?.unmetCondition
+  if (typeof hostCondition !== 'string' || hostCondition.length === 0) {
+    return listed
+  }
+  if (listed.some((entry) => entry.code === hostCondition)) {
+    return listed
+  }
+
+  return [...listed, { code: hostCondition, remedy: gate?.host?.remedy ?? undefined }]
+}
+
+const UNMET_COUNT_NOTE =
+  'How many conditions the gate itself reports unmet — a fact about the LIST, never a verdict about the lane. A count of zero is reported as undetermined on purpose: the one cause an operator can fix, a durable command port that is bound and fails the handshake’s readiness check, leaves this list EMPTY because nothing is unmet. An empty list read as health is how this pane once reported a deployment fully available over a socket that refused note syncing.'
+
+function conditionFinding(condition: MergedCondition, topology: DeploymentTopology | undefined): DiagnosticFinding {
+  const raw = condition.code
+  const known = PRECONDITION_CODES.find((candidate) => candidate === raw)
+  const laneGating = known !== undefined && LANE_GATING_PRECONDITIONS.includes(known)
+
+  return diagnosticFinding({
+    code: safeEnum(raw, PRECONDITION_CODES),
+    title:
+      known === undefined
+        ? 'The gate reports an unmet condition this client build does not recognise'
+        : laneGating
+          ? 'A condition the socket lane itself requires is unmet'
+          : 'A condition that withholds note syncing is unmet',
+    detail:
+      known === undefined
+        ? 'The server is newer than this client and named a condition outside the closed set this build knows, so the panel will not map it onto one it does know and claims no verdict from it. The server’s own advice for it is printed below, redacted; updating the client restores the explanation. The code itself is not echoed.'
+        : laneGating
+          ? 'An unmet lane condition closes the socket outright: no ticket is redeemed, nothing is negotiated, and every request — sync, collaboration, API RPC, invites and files — is an HTTP request. The fix below is the one written for THIS deployment’s topology, which is not always the fix the condition’s own name suggests.'
+          : 'This condition withholds SYNC_ITEMS only. The socket stays up and keeps carrying collaboration, API RPC, invite events and files while notes sync over HTTP, which is why the lane can be perfectly healthy with this condition unmet.',
+    // An unrecognised code claims `broken` and is CAPPED, which is the point
+    // rather than a quirk: this build suspects an unmet condition closes the
+    // lane, its signal is only correlated, and a `broken` claim survives a proxy
+    // ONLY on a necessary condition. Claiming less would hide that the panel had
+    // a suspicion at all; claiming it on a necessary relation would assert a
+    // logical link nobody established.
+    verdict: known === undefined ? 'broken' : laneGating ? 'broken' : 'degraded',
+    evidence:
+      known === undefined
+        ? correlatedProxy(
+            'that the gate reported a condition code outside the closed set this build knows',
+            'which part of the socket lane that condition closes',
+          )
+        : EVIDENCE_DIRECT,
+    remedy: remedyForPrecondition(raw ?? 'UNKNOWN', condition.remedy, topology),
+  })
+}
+
+function buildGateBlock(
+  gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined,
+  ticketAvailable: boolean | undefined,
+  topology: DeploymentTopology | undefined,
+): DiagnosticBlock {
+  const recorded = gate?.recorded
+  const laneEnabled = recorded === true ? gate?.syncLaneEnabled : undefined
+  const attached = recorded === true ? gate?.gatewayAttached : undefined
+  const conditions = mergedConditions(gate)
+  // Counted only against a RECORDED gate. Without one the list establishes
+  // nothing in either direction, and a zero read off an unrecorded gate is the
+  // same false green one row down.
+  const unmetCount = recorded === true ? conditions.length : undefined
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Boot gate recorded'),
+      value: safeYesNo(recorded),
+      ...absentOr(recorded, recorded === true ? 'informational' : 'undetermined'),
+      note: 'Whether the gateway has written down its boot decision at all. Until it has, nothing else in this block can be read — a request that lands during startup, or a build whose recorder was never wired, reports exactly this. An unrecorded gate is reported as "could not determine", never as a gate that failed.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Socket lane built at boot'),
+      value: safeState(laneEnabled, 'built', 'not built'),
+      verdict: laneEnabled === true ? 'healthy' : laneEnabled === false ? 'broken' : 'undetermined',
+      evidence:
+        laneEnabled === undefined
+          ? EVIDENCE_ABSENT
+          : necessaryProxy(
+              'that the boot gate decided to build the socket lane',
+              'that a client is being admitted onto it now',
+            ),
+      note: 'The gate records a DECISION, taken once when the process started. Building the lane is necessary for a client to get onto it and is nowhere near sufficient — which is why a positive reading here is reported as undetermined and the transport row above, measured on this client’s own socket, is the one that can say the lane works. A negative reading is conclusive: an unbuilt lane admits nobody.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Gateway attached to this process'),
+      value: safeState(attached, 'attached', 'not attached'),
+      verdict: attached === true ? 'healthy' : attached === false ? 'broken' : 'undetermined',
+      evidence:
+        attached === undefined
+          ? EVIDENCE_ABSENT
+          : necessaryProxy(
+              'that the composition root recorded a successful gateway attach',
+              'that the gateway is still serving sockets now',
+            ),
+      note: 'The gate records a decision; the composition root records the attach OUTCOME. They come from different places and can disagree, and showing only the decision is how this pane came to report a working lane over a gateway that was never there.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Ticket minting right now'),
+      value: safeState(ticketAvailable, 'issuing', 'refusing'),
+      ...absentOr(ticketAvailable, ticketAvailable === true ? 'healthy' : 'broken'),
+      note: 'The gateway’s own answer, asked at the moment the diagnostics were captured rather than at boot: would it mint a socket ticket for a client right now. A refusal closes the lane for everybody and the live refusal reasons below say why.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Unmet boot conditions'),
+      value: safeCount(unmetCount),
+      verdict: unmetCount === undefined ? 'undetermined' : unmetCount === 0 ? 'healthy' : 'degraded',
+      evidence:
+        unmetCount === undefined
+          ? EVIDENCE_ABSENT
+          : unmetCount === 0
+            ? necessaryProxy(
+                'that the gate listed no unmet condition',
+                'that every socket operation is actually offered',
+              )
+            : EVIDENCE_DIRECT,
+      note: UNMET_COUNT_NOTE,
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  /**
+   * One finding per condition, deduplicated by the SAFE code rather than the raw
+   * one: two unrecognised codes both reduce to the same constant, and a finding
+   * list with two identical codes is a duplicate key in the renderer as well as a
+   * duplicate row on screen.
+   */
+  const seen = new Set<string>()
+  for (const condition of conditions) {
+    const finding = conditionFinding(condition, topology)
+    const key = String(finding.code)
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    findings.push(finding)
+  }
+
+  if (recorded === true && laneEnabled === true && attached === false) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('LANE_BUILT_WITHOUT_GATEWAY'),
+        title: 'The lane was built and no attached gateway was recorded',
+        detail:
+          'The boot gate built the sync lane and the host recorded no successful attach. On a current server build that combination means the host declined to attach AFTER the gate passed — an invalid WEBSOCKET_REDIS_NAMESPACE does exactly this, closing the push bridge rather than publishing on a sibling stack’s channels — so tickets mint while nothing is ever delivered. On a server older than the attach-outcome record the field is simply never set, and then this says only that it was not reported.',
+        verdict: 'broken',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForPrecondition('WEBSOCKET_REDIS_NAMESPACE_INVALID', gate?.host?.remedy ?? undefined, topology),
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('Socket lane and boot gate'),
+    description:
+      'The conditions the gateway checks at boot, and what it decided. THREE of them gate the socket lane itself — the connection-token secret, shared Redis state and the WEBSOCKET_SYNC_ENABLED kill switch — and an unmet one closes the lane outright. The fourth, the durable gRPC backend, withholds SYNC_ITEMS only: the socket stays up and keeps carrying collaboration, API RPC, invite events and files while note syncing falls back to HTTP.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 3: SYNC_ITEMS                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each SYNC_ITEMS state claims.
+ *
+ * `WITHHELD` is `degraded` rather than `broken` because sync transparently falls
+ * back to HTTP — verified live on a real stack, not inferred — so notes keep
+ * saving. `NOT_OBSERVED` is `undetermined` and must never be anything else: it is
+ * the gate saying it cannot tell, and the state the server omits the legacy
+ * boolean for entirely.
+ */
+const SYNC_ITEMS_VERDICT: Record<SyncItemsState, Verdict> = {
+  ADVERTISED: 'healthy',
+  WITHHELD: 'degraded',
+  NOT_OBSERVED: 'undetermined',
+}
+
+function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined): DiagnosticBlock {
+  // CONSUMED, not re-derived. `gate.syncItemsAdvertised` is never read in this
+  // file: on the builds that sent it, it was derived from whether a proxy OBJECT
+  // had been constructed rather than from the predicate the handshake asks.
+  const verdict = describeSyncItems(payload)
+  const probe = payload?.gate?.syncItems?.probe
+
+  /**
+   * `describeSyncItems` nulls a cause it does not recognise and raises
+   * `unrecognisedCause` instead, so the two are told apart HERE: a cause outside
+   * the closed set reads "other (unrecognised)" and a verdict that named none at
+   * all reads "not reported". Collapsing them would report a server that DID say
+   * something as a server that said nothing.
+   */
+  const causeKnown = verdict.cause !== null
+  const causeNamed = causeKnown || verdict.unrecognisedCause
+
+  /**
+   * Whether the server reports the structured verdict is only knowable once a
+   * payload has been READ. With none in hand, `reported` is `false` because
+   * nothing was there to read — and printing that as "no" would be a claim about
+   * a server this build never asked.
+   */
+  const reportsVerdict = payload === undefined ? undefined : verdict.reported
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('SYNC_ITEMS on the socket'),
+      value: safeEnum(verdict.state, SYNC_ITEMS_STATES),
+      verdict: SYNC_ITEMS_VERDICT[verdict.state],
+      evidence:
+        verdict.state === 'NOT_OBSERVED'
+          ? EVIDENCE_ABSENT
+          : verdict.state === 'ADVERTISED'
+            ? necessaryProxy(
+                'that the gate read the handshake’s own readiness predicate and it answered ready',
+                'that this client’s socket negotiated SYNC_ITEMS',
+              )
+            : EVIDENCE_DIRECT,
+      note: verdict.detail,
+    }),
+    diagnosticRow({
+      label: safeConstant('Why, as the gate names it'),
+      value: causeKnown
+        ? safeEnum(verdict.cause, SYNC_ITEMS_CAUSES)
+        : verdict.unrecognisedCause
+          ? safeConstant(UNRECOGNISED)
+          : safeEnum(undefined, SYNC_ITEMS_CAUSES),
+      ...absentOr(causeNamed || undefined, 'informational'),
+      note: verdict.unrecognisedCause
+        ? 'The server named a cause outside the closed set this build knows, so it is refused rather than paraphrased as one this build does know. The state above is the server’s own verdict and still stands.'
+        : verdict.title,
+    }),
+    observedRow({
+      label: safeConstant('Handshake predicate reading'),
+      observed: probe,
+      value: safeEnum(probe, SYNC_ITEMS_PROBES),
+      verdict: 'informational',
+      note: 'The raw reading the gate took of the predicate the handshake itself asks, which is what lets "unknown" be told apart from "no". NEVER_PROBED is a host that took no reading; PROBE_FAILED is the question itself throwing, and the thrown message is deliberately not sent here because it can embed a resolved service address. Neither is a withheld operation.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Server reports the structured verdict'),
+      value: safeYesNo(reportsVerdict),
+      ...absentOr(reportsVerdict, reportsVerdict === true ? 'informational' : 'undetermined'),
+      note: 'Whether the running server sends the three-state verdict at all. A server that does not sends only a single boolean, and this panel will NOT fall back to it: that boolean was derived from whether a proxy object had been constructed, not from the predicate the handshake asks, so it read green over sockets that withheld the operation. The capability rows below measure what this client actually negotiated and need no server call.',
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  // WITHHELD only. "The gate could not say" is not a gap in the lane, and
+  // inventing a finding for it would make every pre-verdict server build read as
+  // degraded on no evidence — the same error in the other direction.
+  if (verdict.state === 'WITHHELD') {
+    const remedy = verdict.cause === 'DURABLE_BACKEND_NOT_READY' ? remedyForWithheldSyncItems() : undefined
+
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SYNC_ITEMS_WITHHELD'),
+        title: verdict.title,
+        // The server's own sentence, already redacted by `describeSyncItems` and
+        // already null for the two causes whose advice is printed beside their
+        // condition instead. Prose for the screen: a finding's detail is not a
+        // path into the copyable report, which is what makes printing server copy
+        // here affordable at all.
+        detail: verdict.remedy === null ? verdict.detail : `${verdict.detail} The server reports: ${verdict.remedy}`,
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        ...(remedy === undefined ? {} : { remedy }),
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('SYNC_ITEMS — note syncing over the socket'),
+    description:
+      'Its own block because it is its own decision: the socket can be perfectly healthy and carrying collaboration, API RPC, invite events and files while note syncing falls back to HTTP. The verdict is read whole from the gate — three states, a closed cause and the raw predicate reading — and never derived from the older advertised boolean, which reported a constructed proxy object rather than a ready backend.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 4: negotiated capabilities                                           */
+/* -------------------------------------------------------------------------- */
+
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** The label for each operation. */
+const OPERATION_LABEL: Record<SyncNegotiatedOperation, SafeValue> = {
+  SYNC_ITEMS: safeConstant('SYNC_ITEMS — note syncing'),
+  AUTHORIZE_COLLABORATION: safeConstant('AUTHORIZE_COLLABORATION — live editing'),
+  API_RPC: safeConstant('API_RPC — control-plane reads'),
+  STREAM_ASSISTANT: safeConstant('STREAM_ASSISTANT — assistant streaming'),
+  INVITE_EVENTS: safeConstant('INVITE_EVENTS — pushed invitations'),
+  FILES_V1: safeConstant('FILES_V1 — file transfers'),
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each capability status is worth.
+ *
+ * `not-negotiated` is `degraded` and not `broken`, held consistently with the
+ * SYNC_ITEMS row: one operation missing from a live socket costs that operation's
+ * realtime lane, and its traffic is carried over HTTP. The pane has already
+ * contradicted itself on this exact point once, reporting the same withheld
+ * operation as a degradation in one tab and an outage in the next.
+ */
+const CAPABILITY_VERDICT: Record<CapabilityStatus, Verdict> = {
+  active: 'healthy',
+  'not-negotiated': 'degraded',
+  'client-gap': 'degraded',
+  'recognized-only': 'degraded',
+  unknown: 'undetermined',
+}
+
+function advertisableNote(status: CapabilityStatus, advertisable: boolean | undefined): string {
+  if (advertisable === undefined || status === 'active') {
+    return ''
+  }
+  return advertisable === false
+    ? ' The gateway reports that it could not advertise this operation at all, which is the server-side half of the same fact: the adapter behind it did not compose at boot, and the boot gate block says which condition declined it.'
+    : ' The gateway reports that it CAN advertise this operation, so the gap is in this socket’s own handshake rather than in the server’s composition — a client that connected before the adapter was ready keeps the handshake it was given until it reconnects.'
+}
+
+function buildCapabilityBlock(
+  payload: SyncDiagnosticsPayload | undefined,
+  transport: TransportStatusInput | undefined,
+  counters: SocketGatewayCountersView,
+): DiagnosticBlock {
+  const serverOperations = payload?.protocol?.serverOperations
+  const negotiated = transport?.operations
+  const socketIsLive = transport?.state === 'READY' || transport?.state === 'DEGRADED'
+  const capabilityRows: readonly CapabilityRow[] = buildCapabilityRows(
+    serverOperations ?? [],
+    negotiated ?? [],
+    socketIsLive,
+  )
+
+  const byOperation = new Map<string, CapabilityRow>(capabilityRows.map((row) => [row.operation, row]))
+  const unrecognised = capabilityRows.filter((row) => !(SOCKET_OPERATIONS as readonly string[]).includes(row.operation))
+
+  /**
+   * No row is built when NEITHER side was read. `buildCapabilityRows` always
+   * returns a row per operation this build knows about — correct for the panel it
+   * was written for, and here it would mean six confident "not negotiated" rows
+   * over a client whose transport was never read and a server that answered
+   * nothing. That is a negative verdict from absent evidence, which is the one
+   * thing the contract forbids outright.
+   */
+  const observedEitherSide = serverOperations !== undefined || negotiated !== undefined
+
+  const rows: DiagnosticRow[] = []
+
+  for (const operation of SOCKET_OPERATIONS) {
+    const row = byOperation.get(operation)
+    const advertisable = counters.advertisable?.[operation]
+
+    if (!observedEitherSide || row === undefined) {
+      rows.push(
+        diagnosticRow({
+          label: OPERATION_LABEL[operation],
+          value: safeEnum(undefined, CAPABILITY_STATUSES),
+          verdict: 'undetermined',
+          evidence: EVIDENCE_ABSENT,
+          note: 'Neither this client’s handshake nor the server’s operation list was read, so nothing is known about this operation. Not negotiated, and not reported, are different answers.',
+        }),
+      )
+      continue
+    }
+
+    rows.push(
+      diagnosticRow({
+        label: OPERATION_LABEL[operation],
+        value: safeEnum(row.status, CAPABILITY_STATUSES),
+        verdict: CAPABILITY_VERDICT[row.status],
+        // Direct for every status except `unknown`: an operation's presence in or
+        // absence from THIS client's handshake is observed, not reported. The
+        // `unknown` arm is the one where the socket was not live or one side was
+        // never advertised, and nothing was observed about it at all.
+        evidence: row.status === 'unknown' ? EVIDENCE_ABSENT : EVIDENCE_DIRECT,
+        note: `${row.explanation}${advertisableNote(row.status, advertisable)}`,
+      }),
+    )
+  }
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('Protocol version the server reports'),
+      value: safeCount(payload?.protocol?.version),
+      ...absentOr(payload?.protocol?.version, 'informational'),
+      note: 'The handshake protocol version this server build speaks. Context for a client and server that disagree about an operation; it is not a verdict on its own.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Operations this server advertises'),
+      value: safeCount(serverOperations?.length),
+      ...absentOr(serverOperations, 'informational'),
+      note: 'How many operations the server build knows how to negotiate, which is a property of the BUILD and not of its configuration. An operation missing from this list is never fixed by a setting.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Operations this build does not recognise'),
+      value: safeCount(observedEitherSide ? unrecognised.length : undefined),
+      ...absentOr(
+        observedEitherSide ? unrecognised.length : undefined,
+        unrecognised.length > 0 ? 'degraded' : 'informational',
+      ),
+      note: 'Operations either side named that this client build has no handler for. COUNTED here and NAMED in the finding below, which is the contract’s own split rather than a hedge: a row’s label and value are a path into the copyable report, and a remedy is screen-only and already redacted, so the report carries how many and the operator in front of the screen gets which. Recognising an operation at the handshake is what stops its advertisement dropping the WHOLE socket, so this count is worth watching even while each individual lane is merely absent.',
+    }),
+  )
+
+  const findings: DiagnosticFinding[] = []
+
+  const gaps = capabilityRows.filter((row) => row.status === 'client-gap').map((row) => row.operation)
+  if (gaps.length > 0) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('CLIENT_GAP'),
+        title: 'The server can negotiate operations this client build cannot consume',
+        detail:
+          'The server advertises them and this client has no handler, so they will never be used however the server is configured. Nothing on the server fixes this — it needs a client release. The operation names are in the remedy below, redacted on the way in like every other string off this wire.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForClientGap(gaps),
+      }),
+    )
+  }
+
+  const recognizedOnly = capabilityRows.filter((row) => row.status === 'recognized-only')
+  if (recognizedOnly.length > 0) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('RECOGNIZED_BUT_UNCONSUMED'),
+        title: 'An operation is negotiated and carries nothing',
+        detail:
+          'This client tolerates the operation at the handshake, which is what stops its advertisement costing the entire socket, but it has no handler for it — so the lane appears in a healthy handshake and its traffic stays on HTTP. It is the single row an operator is most likely to misread as working, and it needs a client change rather than configuration.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('Negotiated capabilities'),
+    description:
+      'Every operation either side knows about, and what happened to it on THIS client’s socket. The one direct measurement of the gate’s decisions: a server that intended to offer an operation and a socket that actually carries it are different facts, and this block holds the second.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 5: the advertised capability descriptor                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `live.capabilities` has been in the payload since the endpoint existed and was
+ * rendered NOWHERE. It is the descriptor the transport reads before it will even
+ * attempt a socket, so an empty list is the difference between "the socket failed"
+ * and "the client never tried", and its `endpoint` is a compile-time constant of
+ * the gateway rather than a configured address.
+ */
+function buildDescriptorBlock(
+  capabilities: NonNullable<SyncDiagnosticsPayload['live']>['capabilities'],
+): DiagnosticBlock {
+  const entries = capabilities
+  const count = entries?.length
+  const sync = entries?.find((entry) => entry.id === 'ws-sync') ?? entries?.[0]
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Capability entries advertised'),
+      value: safeCount(count),
+      verdict: count === undefined ? 'undetermined' : count === 0 ? 'broken' : 'healthy',
+      evidence:
+        count === undefined
+          ? EVIDENCE_ABSENT
+          : count === 0
+            ? EVIDENCE_DIRECT
+            : necessaryProxy(
+                'that the gateway advertises at least one capability entry',
+                'that a client can open and authenticate a socket',
+              ),
+      note: 'What the capability descriptor offers. An EMPTY list is conclusive in the bad direction: the transport reads this before it will attempt a socket at all, so an empty list means no client on this deployment ever tries, and the fallback reason above reads capability-unavailable. A non-empty list is necessary and not sufficient, which is why it is reported as undetermined.',
+    }),
+    observedRow({
+      label: safeConstant('Socket capability id'),
+      observed: sync?.id,
+      value: safeEnum(sync?.id, SOCKET_CAPABILITY_IDS),
+      verdict: 'informational',
+      note: 'The id the transport looks for. Admitted against the one value this build knows, so an entry a newer gateway adds is refused rather than printed.',
+    }),
+    observedRow({
+      label: safeConstant('Protocol version advertised'),
+      observed: sync?.version,
+      value: safeCount(sync?.version),
+      verdict: 'informational',
+      note: 'The version in the descriptor. Read against the protocol version the server reports in the block above: a disagreement between the two is a gateway and an api-gateway from different builds.',
+    }),
+    observedRow({
+      label: safeConstant('Socket endpoint advertised'),
+      observed: sync?.endpoint,
+      value: safeEnum(sync?.endpoint, SOCKET_ENDPOINTS),
+      verdict: 'informational',
+      note: 'A compile-time constant of the gateway, not a configured address, which is why it can be printed at all. Admitted against this build’s own value: an endpoint the descriptor reported that does not match is refused rather than echoed.',
+    }),
+  ]
+
+  return {
+    heading: safeConstant('Advertised socket capability'),
+    description:
+      'The descriptor a client reads before it attempts a socket. It is in the diagnostics payload and was rendered nowhere until now, which left "the client never tried" looking exactly like "the socket failed".',
+    rows,
+    findings: [],
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 6: live refusals                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The gateway's answer when asked for a ticket right now.
+ *
+ * Reported only when the LANE itself came up. Otherwise they merely restate the
+ * gate, and keyed on the lane rather than on "no unmet conditions at all",
+ * because since the gate was split an unmet `SYNCING_SERVER_GRPC_UNBOUND` no
+ * longer stops the lane — suppressing live reasons on its account would hide a
+ * real, independent refusal.
+ */
+function buildRefusalBlock(
+  payload: SyncDiagnosticsPayload | undefined,
+  topology: DeploymentTopology | undefined,
+): DiagnosticBlock {
+  const reasons = payload?.live?.unavailabilityReasons
+  const gate = payload?.gate
+  const conditions = mergedConditions(gate)
+  const laneDown = gate?.syncLaneEnabled === false || (gate?.syncLaneEnabled === undefined && conditions.length > 0)
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Live refusal reasons reported'),
+      value: safeCount(reasons?.length),
+      ...absentOr(reasons, reasons !== undefined && reasons.length > 0 ? 'degraded' : 'informational'),
+      note: 'How many reasons the gateway gives for refusing a ticket at the moment the diagnostics were captured. Zero is informational rather than healthy: a gateway with nothing to refuse and a gateway nobody asked look identical from here, and the ticket-minting row above is the one that carries that verdict.',
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  if (!laneDown) {
+    const seen = new Set<string>()
+    for (const reason of reasons ?? []) {
+      const code = safeEnum(reason, LIVE_REFUSAL_REASONS)
+      const key = String(code)
+      if (seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+
+      const known = LIVE_REFUSAL_REASONS.find((candidate) => candidate === reason)
+      const remedy = known === undefined ? undefined : remedyForLiveReason(known, topology)
+
+      findings.push(
+        diagnosticFinding({
+          code,
+          title:
+            known === undefined
+              ? 'The gateway reported a refusal reason this client build does not recognise'
+              : 'The gateway is refusing tickets, and named why',
+          detail:
+            known === undefined
+              ? 'The reason is outside the closed set this build knows, so it is refused rather than paraphrased and no verdict is claimed from it. The reason itself is not echoed; a client update restores the explanation.'
+              : 'The boot gate passed and the gateway is still refusing. That makes this an independent fault rather than a restatement of the gate, which is why it is reported at all — a live reason printed on top of an unmet gate is the same problem twice.',
+          // Capped for the same reason the unrecognised precondition is: the
+          // suspicion is stated, and a `broken` claim does not survive a merely
+          // correlated signal.
+          verdict: 'broken',
+          evidence:
+            known === undefined
+              ? correlatedProxy(
+                  'that the gateway named a refusal reason outside the closed set this build knows',
+                  'what that reason refuses, or for how long',
+                )
+              : EVIDENCE_DIRECT,
+          ...(remedy === undefined ? {} : { remedy }),
+        }),
+      )
+    }
+  }
+
+  return {
+    heading: safeConstant('Live refusals'),
+    description: laneDown
+      ? 'What the gateway says when asked for a ticket right now. The lane itself did not come up on this deployment, so any live reason restates the boot gate above rather than adding to it, and none is reported here.'
+      : 'What the gateway says when asked for a ticket right now. These are reported only because the lane DID come up, which makes each one an independent fault rather than an echo of a condition already named above.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 7: realtime health                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The attached gateway's own view of itself.
+ *
+ * `describeRealtimeHealth` is reused for its NOTES — the copy that distinguishes
+ * an in-process push bridge from a missing one, and a relay that only reaches one
+ * replica — and its VALUES are re-derived from the typed fields instead. Two
+ * reasons, both structural:
+ *
+ *   - Its values are plain strings with server text already interpolated into
+ *     them (`${sanitizeServerCopy(bridge)} (ready)`), so crossing the presence-only
+ *     boundary with one would need the brand cast that
+ *     `diagnosticsSections.spec.ts` greps every section module for. This is the
+ *     same decision `environmentSection.ts` made about `describeTopology`.
+ *   - It prints `String(realtime.pushesDispatched ?? 0)`, so an absent counter
+ *     reads as a measured zero. That is rule 3 of the contract inverted, and on
+ *     the single row where it matters most: a count that stays at zero is the
+ *     signature of a delivery path that never fires, and a server that reported
+ *     nothing must not be made to look like one.
+ */
+function buildRealtimeBlock(realtime: NonNullable<SyncDiagnosticsPayload['live']>['realtime']): DiagnosticBlock {
+  const notes = new Map<string, string>(describeRealtimeHealth(realtime).map((row) => [row.label, row.note]))
+  const noteFor = (label: string, fallback: string): string => notes.get(label) ?? fallback
+
+  if (realtime === undefined) {
+    return {
+      heading: safeConstant('Realtime health'),
+      description:
+        'What the attached gateway says about itself. Informational by design: readiness is deliberately not gated on any of it, because a container that restarts itself on a Redis blip turns ten seconds of degradation into an outage.',
+      rows: [],
+      findings: [],
+      emptyNote:
+        'This server reported no realtime health snapshot. Either no websocket gateway is attached to the process that answered — in which case nothing is delivered over the socket, whatever the boot gate says — or this build predates the snapshot. The boot gate block above distinguishes the two, and no verdict is claimed from the silence.',
+    }
+  }
+
+  const bridge = realtime.pushBridge
+  const bridgeBound = bridge === 'redis' || bridge === 'in-process'
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Attached gateway'),
+      value: safeState(realtime.attached, 'attached', 'not attached'),
+      ...absentOr(realtime.attached, realtime.attached === true ? 'healthy' : 'broken'),
+      note: noteFor(
+        'Gateway',
+        'Whether a websocket gateway is attached to the process that answered. Nothing reaches a client over a socket without one, regardless of what the boot gate decided.',
+      ),
+    }),
+    diagnosticRow({
+      label: safeConstant('Push bridge'),
+      value: safeTokens(safeEnum(bridge, PUSH_BRIDGES), safeState(realtime.pushBridgeReady, '(ready)', '(not ready)')),
+      verdict:
+        bridge === undefined
+          ? 'undetermined'
+          : !bridgeBound
+            ? 'broken'
+            : realtime.pushBridgeReady === true
+              ? 'healthy'
+              : 'degraded',
+      evidence: bridge === undefined ? EVIDENCE_ABSENT : EVIDENCE_DIRECT,
+      note: noteFor(
+        'Push bridge',
+        'What carries server-side change notifications to live sockets. Only "none" is a fault: a single process holding every socket reports an in-process bridge and is healthy, and a multi-container deployment reports redis.',
+      ),
+    }),
+    diagnosticRow({
+      label: safeConstant('Realtime queue consumer'),
+      value: safeState(realtime.sqsConsumerRunning, 'running', 'not running'),
+      ...absentOr(realtime.sqsConsumerRunning, realtime.sqsConsumerRunning === true ? 'healthy' : 'informational'),
+      note: noteFor(
+        'Queue consumer',
+        'The loop that drains websocket events from the queue. Expected to be absent where pushes are delivered through the bridge alone, which is why its absence carries no verdict.',
+      ),
+    }),
+    diagnosticRow({
+      label: safeConstant('Collaboration relay'),
+      value: safeState(realtime.collaborationRelayHealthy, 'healthy', 'unhealthy'),
+      ...absentOr(
+        realtime.collaborationRelayHealthy,
+        realtime.collaborationRelayHealthy === true ? 'healthy' : 'degraded',
+      ),
+      note: noteFor(
+        'Collaboration relay',
+        'The fleet-wide relay subscription. Collaboration still works between clients on the SAME replica without it, which is why it fails quietly on a multi-replica deployment.',
+      ),
+    }),
+    diagnosticRow({
+      label: safeConstant('Gateway would admit a client now'),
+      value: safeEnum(realtime.syncLane, SYNC_LANE_STATES),
+      verdict: realtime.syncLane === undefined ? 'undetermined' : realtime.syncLane === 'up' ? 'healthy' : 'broken',
+      evidence: realtime.syncLane === undefined ? EVIDENCE_ABSENT : EVIDENCE_DIRECT,
+      note: noteFor(
+        'Sync lane',
+        'Whether the gateway would accept a client on the sync path at this instant. The live refusal reasons above say why it would not.',
+      ),
+    }),
+    diagnosticRow({
+      label: safeConstant('Pushes dispatched since attach'),
+      value: safeCount(realtime.pushesDispatched),
+      ...absentOr(realtime.pushesDispatched, 'informational'),
+      note: `${noteFor('Pushes dispatched', 'Push messages handed to local sockets since this gateway attached. It resets on every restart.')} Reported as "not reported" when the server sent no counter at all, rather than as a zero: a count that stays at zero on a busy deployment is the signature of a delivery path that never fires, and that reading is only worth anything if a silent server cannot produce it.`,
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  if (realtime.attached === true && bridge === 'none') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('PUSH_BRIDGE_ABSENT'),
+        title: 'The socket is attached with no push bridge',
+        detail:
+          'The lane accepts clients, but nothing carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is a misconfiguration rather than a topology: a process that was asked for a Redis-backed plane without a reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy, and a multi-container one reports redis — only "none" is a fault. The other way to reach it is a server build older than the in-process plane, which an upgrade fixes rather than any setting.',
+        verdict: 'broken',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('Realtime health'),
+    description:
+      'What the attached gateway says about itself. Informational by design: readiness is deliberately not gated on any of it, because a container that restarts itself on a Redis blip turns ten seconds of degradation into an outage. This block makes the degradation visible; it does not act on it.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 8: the FILES_V1 sub-gate                                             */
+/* -------------------------------------------------------------------------- */
+
+function buildFilesBlock(gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined): DiagnosticBlock {
+  const files = gate?.files
+  const advertised = files?.advertised
+  const condition = files?.unmetCondition
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('FILES_V1 at the boot gate'),
+      value: safeState(advertised, 'advertised', 'withheld'),
+      verdict: advertised === true ? 'healthy' : advertised === false ? 'degraded' : 'undetermined',
+      evidence:
+        advertised === undefined
+          ? EVIDENCE_ABSENT
+          : advertised === true
+            ? necessaryProxy(
+                'that the boot gate advertised the realtime file transport',
+                'that this client’s socket negotiated FILES_V1',
+              )
+            : EVIDENCE_DIRECT,
+      note: 'A sub-gate of its own: the file transport can be waived at boot while every other operation is offered. Withheld, file uploads and downloads use ordinary HTTP requests — slower, and no other symptom — which is why this is a degradation rather than an outage. What this client actually negotiated is the FILES_V1 row in the capabilities block.',
+    }),
+    observedRow({
+      label: safeConstant('FILES_V1 unmet condition'),
+      observed: condition,
+      value: safeEnum(condition, FILES_UNMET_CONDITIONS),
+      verdict: 'informational',
+      note: 'Which precondition the composition found missing. FILES_INTERNAL_URL covers the whole internal-URL group, because any one of them satisfies the requirement; TRANSPORT_CONSTRUCTION is the residual case where every value was present and the adapter still threw, and its thrown message stays in the boot log because it can embed the resolved files-service address.',
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  if (advertised === false) {
+    // Server-authored prose, redacted on the way in like every other string off
+    // this wire. Screen only: a finding's detail is not a path into the copyable
+    // report, which is what makes printing the server's own sentence affordable.
+    const sent = typeof files?.remedy === 'string' && files.remedy.trim().length > 0 ? files.remedy : undefined
+
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('FILES_V1_WITHHELD'),
+        title: 'The realtime file transport was waived at boot',
+        detail:
+          sent === undefined
+            ? 'File transfers use ordinary HTTP requests. The condition row above names what was missing; the server sent no advice of its own for it.'
+            : `File transfers use ordinary HTTP requests. The server reports: ${sanitizeServerCopy(sent)}`,
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('FILES_V1 sub-gate'),
+    description:
+      'The file transport has its own boot condition, so it can be withheld while the rest of the socket is healthy. Kept as its own block because its causes are different variables from the lane’s and from note syncing’s.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 9: gateway admission and traffic                                     */
+/* -------------------------------------------------------------------------- */
+
+const REJECTION_ROW: Record<SocketRejectionCause, { label: SafeValue; note: string }> = {
+  originNotAllowed: {
+    label: safeConstant('Connections refused: origin not allowed'),
+    note: 'Clients that reached the socket and were turned away at the allowlist. Non-zero with a non-empty allowlist means some origin is connecting that nobody added — read it with the admission row above, which answers the same question for THIS browser.',
+  },
+  queryStringNotPermitted: {
+    label: safeConstant('Connections refused: query string not permitted'),
+    note: 'The ticket travels in a header, never in the URL, and a connection that carries a query string is refused rather than read. Non-zero means something between the client and the gateway is rewriting the URL — or an older client is still presenting its ticket the old way.',
+  },
+  unavailable: {
+    label: safeConstant('Connections refused: lane unavailable'),
+    note: 'Clients refused because the lane itself was not serving. A consequence of the boot gate and the live refusals above rather than an independent fault, and it is here so that "nobody connects" can be told apart from "everybody is turned away".',
+  },
+}
+
+function buildAdmissionBlock(counters: SocketGatewayCountersView): DiagnosticBlock {
+  const admitted = counters.originAdmitted
+  const originCount = counters.allowedOriginCount
+  const issued = counters.ticketsIssued
+  const rejected = counters.handshakeRejected
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('This client’s origin admitted'),
+      value: safeYesNo(admitted),
+      verdict: admitted === true ? 'healthy' : admitted === false ? 'broken' : 'undetermined',
+      evidence:
+        admitted === undefined
+          ? EVIDENCE_ABSENT
+          : necessaryProxy(
+              'that the gateway would admit the origin this admin request arrived from',
+              'that a socket from this origin then authenticates',
+            ),
+      note: 'Whether this browser would be let onto the socket at all — the question whose only other evidence is a 1008 close that no screen reads. Admission is necessary and nowhere near sufficient, so a yes is reported as undetermined; a no is conclusive, and it is a different fault from an empty allowlist. The origin itself is never carried into this panel or the copyable report.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Origins the gateway permits'),
+      value: safeCount(originCount),
+      ...absentOr(originCount, originCount === 0 ? 'broken' : 'informational'),
+      note: 'A cardinality, never the list. Zero and non-zero are two different fixes that currently produce identical screens: an empty list refuses every client, and a non-empty list that omits one origin refuses one browser while the rest connect.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Same-origin requests permitted'),
+      value: safeYesNo(counters.allowsSameOrigin),
+      ...absentOr(counters.allowsSameOrigin, 'informational'),
+      note: 'Whether the same-origin entry was derived, which is what PUBLIC_URL does when the explicit allowlist is not maintained by hand. Informational: a deployment can legitimately permit only named origins.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Sockets the gateway holds now'),
+      value: safeCount(counters.liveSockets),
+      ...absentOr(counters.liveSockets, 'informational'),
+      note: 'Live connections on this process at the moment of capture. Zero on a deployment with users is the signature of clients that never arrive, which the rejection counts below separate from clients that arrive and are turned away.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Tickets issued'),
+      value: safeCount(issued),
+      ...absentOr(issued, 'informational'),
+      note: 'Tickets minted over the HTTP leg since this gateway attached. Read against the two rows below: tickets issued with no sockets held, or with handshakes rejected, are three different faults that look identical from every other panel.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Tickets refused'),
+      value: safeCount(counters.ticketsRefused),
+      ...absentOr(
+        counters.ticketsRefused,
+        counters.ticketsRefused !== undefined && counters.ticketsRefused > 0 ? 'degraded' : 'informational',
+      ),
+      note: 'Mint requests the gateway declined. Non-zero with a healthy boot gate means the refusal is live rather than structural, and the live refusal reasons above name it.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Handshakes rejected'),
+      value: safeCount(rejected),
+      ...absentOr(rejected, rejected !== undefined && rejected > 0 ? 'degraded' : 'informational'),
+      note: 'Sockets that presented a ticket and were refused at the handshake. This is the counter that separates "nobody asks" from "asks and is refused" from "tickets mint and the socket will not take them" — the last being the signature of two replicas that do not share the ticket secret.',
+    }),
+  ]
+
+  for (const cause of SOCKET_REJECTION_CAUSES) {
+    const value = counters.rejections?.[cause]
+    rows.push(
+      diagnosticRow({
+        label: REJECTION_ROW[cause].label,
+        value: safeCount(value),
+        ...absentOr(value, value !== undefined && value > 0 ? 'degraded' : 'informational'),
+        note: REJECTION_ROW[cause].note,
+      }),
+    )
+  }
+
+  const findings: DiagnosticFinding[] = []
+
+  if (admitted === false) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_ORIGIN_NOT_ADMITTED'),
+        title: 'This browser’s origin would not be admitted onto the socket',
+        detail:
+          'The gateway was asked about the origin this admin request arrived from and answered no, so a socket from this page is closed before it authenticates. Every other row in this section can read perfectly healthy while this holds, because the deployment IS healthy — for clients served from an origin on its list.',
+        verdict: 'broken',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForRefusedOrigin(originCount),
+      }),
+    )
+  }
+
+  if (issued !== undefined && issued > 0 && rejected !== undefined && rejected > 0) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_HANDSHAKE_REJECTED'),
+        title: 'Tickets are minting and the handshakes presenting them are refused',
+        detail:
+          'Both counters are non-zero, which means clients are getting a credential over HTTP and the socket will not accept it. Either number alone is ordinary — a refused mint is a refused request, a rejected handshake is a replayed ticket — and together they are the signature of two processes that do not agree on the ticket secret.',
+        // CLAIMED `undetermined`, deliberately, so the correlated caveat prints
+        // in full rather than being swallowed by a cap. Two counters moving
+        // together are a hypothesis worth a remedy and not a verdict: a
+        // single-use ticket replayed on a reconnect produces the same pair.
+        verdict: 'undetermined',
+        evidence: correlatedProxy(
+          'that tickets are being issued and handshakes are being rejected at the same time',
+          'that the two processes disagree about the ticket secret',
+        ),
+        remedy: remedyForRejectedHandshakes(),
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('Gateway admission and traffic'),
+    description:
+      'Whether clients arrive, and whether they are being turned away. Counters and one boolean about this client’s own origin — never the allowlist, and never an address. Nothing populates these yet: the gateway half lands separately, and until it does every row here reads "not reported" rather than zero.',
+    rows,
+    findings,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Block 10: the lane-degradation ledger                                      */
+/* -------------------------------------------------------------------------- */
+
+const REJECTION_STATUS_ROW: Record<LaneRejectionStatus, { label: SafeValue; note: string }> = {
+  401: {
+    label: safeConstant('Control-plane reads refused with 401'),
+    note: 'The lane answering that the credential it holds does not authenticate at all. This is the STRANDED case: it survives the refresh window, and a read counted here was served over HTTP after an in-place credential refresh either failed or could not be attempted safely. A reconnect — a reload is enough — re-mints the ticket and clears it.',
+  },
+  498: {
+    label: safeConstant('Control-plane reads refused with 498'),
+    note: 'The lane answering that its credential is stale and refreshable. The recoverable half: the worker presents a fresh credential on the socket it already holds through a REAUTH frame and replays the parked read where replaying it is safe, so a count here is history rather than a fault to act on.',
+  },
+}
+
+function buildLedgerBlock(ledger: LaneDegradationLedgerView | undefined): DiagnosticBlock {
+  const heading = safeConstant('Lane degradation ledger')
+  const description =
+    'What this client has watched the socket lane do, recorded as it happened. The only place a refused control-plane read appears at all: the lane degrades those to HTTP silently, note syncing stays healthy throughout, and without these counters a stranded socket and a working one are the same screen.'
+
+  if (ledger === undefined) {
+    return {
+      heading,
+      description,
+      rows: [],
+      findings: [],
+      emptyNote:
+        'This client build records no lane-degradation ledger, so a control-plane read the socket refused leaves no trace anywhere. That is an absence of evidence, not evidence of none: the refusals this would count are invisible by construction, which is the whole reason the ledger exists.',
+    }
+  }
+
+  const latest = ledger.transitions.length > 0 ? ledger.transitions[ledger.transitions.length - 1] : undefined
+  const rejections = ledger.controlPlaneRejections
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Control-plane reads the lane refused'),
+      value: safeCount(rejections),
+      ...absentOr(rejections, rejections > 0 ? 'degraded' : 'informational'),
+      note: 'Reads this client made over the socket’s control-plane lane that came back refused and were then served over HTTP with no error reaching the screen. A count of zero is informational rather than healthy — a client that has made no control-plane read produces the same zero — and any non-zero count is the one signal that separates a stranded socket from a healthy one.',
+    }),
+  ]
+
+  for (const status of LANE_REJECTION_STATUSES) {
+    const value = ledger.controlPlaneRejectionsByStatus[status]
+    rows.push(
+      diagnosticRow({
+        label: REJECTION_STATUS_ROW[status].label,
+        value: safeCount(value),
+        ...absentOr(value, value !== undefined && value > 0 ? 'degraded' : 'informational'),
+        note: REJECTION_STATUS_ROW[status].note,
+      }),
+    )
+  }
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('Transport transitions recorded'),
+      value: safeCount(ledger.transitions.length),
+      verdict: 'informational',
+      evidence: EVIDENCE_DIRECT,
+      note: 'How many lane transitions this client has watched. The answer to "it was working a minute ago": a handful over a session is ordinary reconnection, and a ring that keeps filling is a lane that flaps.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Transitions dropped from the ring'),
+      value: safeCount(ledger.transitionsDropped),
+      ...absentOr(ledger.transitionsDropped, ledger.transitionsDropped > 0 ? 'degraded' : 'informational'),
+      note: 'Transitions that fell off the end of the bounded ring. Non-zero is itself a finding: the ring is sized for ordinary reconnection, so overflowing it means the lane changed state more often than a healthy session ever does.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Most recent transition'),
+      value:
+        latest === undefined
+          ? safeEnum(undefined, SOCKET_TRANSPORT_STATES)
+          : safeTokens(
+              safeEnum(latest.state, SOCKET_TRANSPORT_STATES),
+              safeEnum(latest.reason, SOCKET_FALLBACK_REASONS),
+            ),
+      ...absentOr(latest, 'informational'),
+      note: 'The state the lane moved to last, with the transport’s own closed reason where it gave one. Read with the transport row at the top of this section: that row is where the lane is now, this one is how it got there.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Socket survived that transition'),
+      value: safeState(latest?.socketPreserved, 'preserved', 'torn down'),
+      ...absentOr(latest?.socketPreserved, 'informational'),
+      note: 'Whether the socket itself outlived the transition. A preserved socket keeps its collaboration rooms, invite subscription, command lease and in-flight transfers; a torn-down one discards all of them and rebuilds, which is why an in-place credential refresh is worth the complexity it costs.',
+    }),
+    diagnosticRow({
+      label: safeConstant('That transition, after the ledger started'),
+      value: safeDuration(latest === undefined ? undefined : latest.msSinceLedgerStart / 1000),
+      ...absentOr(latest, 'informational'),
+      note: 'An offset from the start of this ledger, not a clock reading. It gives the ordering and the frequency this block is for, and a duration is a category the copyable report already permits while an absolute instant would let a reader line this deployment up against other logs.',
+    }),
+  )
+
+  const findings: DiagnosticFinding[] = []
+
+  const stranded = (ledger.controlPlaneRejectionsByStatus[401] ?? 0) > 0
+  const stale = (ledger.controlPlaneRejectionsByStatus[498] ?? 0) > 0
+
+  if (stranded || stale) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_LANE_CREDENTIAL_REFUSALS'),
+        title: stranded
+          ? 'The socket’s control-plane lane refused reads outright'
+          : 'The socket’s control-plane lane refused reads while its credential was stale',
+        detail: stranded
+          ? 'The credential a socket holds is captured once, when its ticket is minted. The worker can now adopt a current one in place and replay a parked read where that is provably safe, so a 401 counted here is a refusal that outlived the refresh — and every one of them was quietly served over HTTP instead. Note syncing is unaffected throughout, which is exactly what makes this invisible from every other screen.'
+          : 'These were stale-credential refusals inside the refresh window. The worker presents a fresh credential on the socket it already holds and replays the read where replaying it is safe, so the reads succeeded; the counter is here so that the recoverable case cannot be mistaken for the stranded one beside it.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForRefusedControlPlaneReads(stranded),
+      }),
+    )
+  }
+
+  return { heading, description, rows, findings }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The section                                                                */
+/* -------------------------------------------------------------------------- */
+
+const REPORT_NO_ORIGINS = reportLine(
+  safeConstant('Allowed origin list'),
+  safeConstant('never collected; only whether this client’s own origin is admitted, and how many entries exist'),
+)
+
+const REPORT_NO_CREDENTIAL = reportLine(
+  safeConstant('Socket session credential'),
+  safeConstant('never reported; a refusal appears only as a count against a closed status'),
+)
+
+const REPORT_SYNC_ITEMS_SOURCE = reportLine(
+  safeConstant('SYNC_ITEMS verdict source'),
+  safeConstant('the gate’s structured verdict; the older advertised boolean is never read'),
+)
+
+/**
+ * Build the WebSocket section.
+ *
+ * Pure and synchronous. Every input is optional and every absent input produces
+ * rows reading "not reported" on absent evidence rather than a negative verdict,
+ * which is the contract's third rule holding by construction rather than by
+ * remembering to write it. In particular a missing payload must not turn six
+ * capability rows into six confident gaps, and a missing ledger must not turn a
+ * refusal counter into a zero.
+ */
+export function buildWebsocketSection(input: WebsocketSectionInput = {}): SectionModel {
+  const payload = input.payload
+  const gate = payload?.gate
+  const topology = payload?.deployment
+  const counters = input.counters ?? {}
+  const outcomes = outcomesForSection(input.outcomes ?? [], 'websocket')
+
+  const blocks: DiagnosticBlock[] = [
+    buildTransportBlock(input.transport),
+    buildGateBlock(gate, payload?.live?.ticketAvailable, topology),
+    buildSyncItemsBlock(payload),
+    buildCapabilityBlock(payload, input.transport, counters),
+    buildDescriptorBlock(payload?.live?.capabilities),
+    buildRefusalBlock(payload, topology),
+    buildRealtimeBlock(payload?.live?.realtime),
+    buildFilesBlock(gate),
+    buildAdmissionBlock(counters),
+    buildLedgerBlock(input.ledger),
+  ]
+
+  if (outcomes.length > 0) {
+    blocks.push({
+      heading: safeConstant('Operator-triggered checks'),
+      description:
+        'Results from the last run on the Checks sub-tab. Read-only here: one of those probes mints a real server-side ticket for your own session, so the paragraph explaining what a run does appears in exactly one place.',
+      rows: [],
+      findings: [],
+      outcomes,
+    })
+  }
+
+  return buildSectionModel({
+    id: 'websocket',
+    blocks,
+    extraReportLines: [REPORT_NO_ORIGINS, REPORT_NO_CREDENTIAL, REPORT_SYNC_ITEMS_SOURCE],
+  })
+}
