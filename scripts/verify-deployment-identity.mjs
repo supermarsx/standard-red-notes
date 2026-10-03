@@ -11,6 +11,38 @@ const markerPath = "/.well-known/srn-deployment.json";
 const readinessPath = "/healthcheck/readiness";
 const maximumResponseBytes = 16_384;
 
+/**
+ * How a build with no `SRN_DEPLOY_VERSION` names its release. The
+ * `deployment-identity` stage of `server/Dockerfile`, `Dockerfile.single` and
+ * `app/Dockerfile` runs
+ *
+ *   version="src-$(printf '%s' "${revision}" | cut -c1-12)"
+ *
+ * and `deploy/lxc/install.sh` repeats it, so the documented single-argument
+ * build `--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)` bakes
+ * `src-<first 12 of the revision>` into the marker. `verifiedDeploymentIdentity`
+ * in api-gateway `Service/Readiness/DeploymentIdentity.ts` mirrors that at
+ * runtime, which is what lets a revision-only deployment publish identity at
+ * all.
+ *
+ * This is the fourth copy of that one rule, and it is here rather than imported
+ * so that a host-run operator script stays self-contained. The agreement is
+ * pinned by `verify-deployment-identity.test.mjs`, which asserts this function
+ * against the api-gateway implementation it has to mirror and against the
+ * prefix and character count parsed back out of all four build scripts.
+ *
+ * The build's `unstamped` sentinel has no counterpart here: `expectedRevision`
+ * is already required to be 40 lowercase hexadecimal characters, so the only
+ * reachable branch is the derivation, and its output (`src-` plus 12 hex
+ * characters) always satisfies `versionPattern`.
+ */
+const derivedVersionPrefix = "src-";
+const derivedVersionRevisionCharacters = 12;
+
+export function deriveDeploymentVersion(revision) {
+  return `${derivedVersionPrefix}${revision.slice(0, derivedVersionRevisionCharacters)}`;
+}
+
 function exactIdentity(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} is not an object`);
@@ -58,15 +90,20 @@ export function verifyServerDeploymentIdentity({
   expectedRevision,
   expectedVersion,
 }) {
+  if (!revisionPattern.test(expectedRevision ?? "")) {
+    throw new Error("expected deployment identity is invalid");
+  }
+  // An absent --expected-version means "whatever this revision derives", not
+  // "no version at all". Expecting null here could never pass: a stamped
+  // deployment publishes a revision AND a version, an unstamped one publishes
+  // neither (and is refused by `exactIdentity` on the null revision), so a
+  // revision-only run reported a mismatch against every live stack — including
+  // the revision-only build the unstamped remedy text tells an operator to make.
   const normalizedExpectedVersion =
     expectedVersion === "" || expectedVersion === undefined
-      ? null
+      ? deriveDeploymentVersion(expectedRevision)
       : expectedVersion;
-  if (
-    !revisionPattern.test(expectedRevision ?? "") ||
-    (normalizedExpectedVersion !== null &&
-      !versionPattern.test(normalizedExpectedVersion))
-  ) {
+  if (!versionPattern.test(normalizedExpectedVersion)) {
     throw new Error("expected deployment identity is invalid");
   }
   if (!readiness || readiness.status !== "ready") {
