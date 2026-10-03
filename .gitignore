@@ -29,6 +29,16 @@ release-impact.md
 app/packages/*/dist/
 app/packages/desktop/app/dist/
 server/packages/*/dist/
+# home-server is absent from server/tsconfig.json's `references`, so the
+# catch-all project compiles it with NO outDir and emits .js/.d.ts next to
+# its sources. Nothing under its src/ is tracked (verified: 0 files), and a
+# stray artifact there is otherwise committable. Ignoring the emission is the
+# safe half of the fix; adding the project reference is the real one, and is
+# deliberately NOT done here because several agents are running that build.
+server/packages/home-server/src/**/*.js
+server/packages/home-server/src/**/*.js.map
+server/packages/home-server/src/**/*.d.ts
+server/packages/home-server/src/**/*.d.ts.map
 
 server/data/*
 !server/data/.gitkeep
