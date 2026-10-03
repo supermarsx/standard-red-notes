@@ -45,8 +45,11 @@ import {
  *  3. Absent is not false, and absent is never zero. The model is built with no
  *     input at all and every row is checked individually, not as a set: an
  *     assertion over a set is satisfied by any member of it. The sharpest case is
- *     `pushesDispatched`, where the helper this section reuses prints
- *     `String(x ?? 0)` and this section deliberately does not.
+ *     `pushesDispatched`: the helper this section reuses printed
+ *     `String(x ?? 0)` and this section deliberately did not, which is how that
+ *     defect was found. t108 fixed the helper, so the assertion below now pins
+ *     the agreement instead of the divergence — this section keeps its own
+ *     reading, and neither side may drift back to a fabricated zero.
  *
  * And one that is not about the bug: no server-supplied string may reach a report
  * line. The planted-value scan serialises every `reportLines` entry, with both
@@ -874,10 +877,14 @@ describe('realtime health', () => {
   })
 
   /**
-   * The divergence from `describeRealtimeHealth`, and the reason for it. That
-   * helper prints `String(realtime.pushesDispatched ?? 0)`, so a server that sent
-   * no counter looks exactly like one that measured none — on the single row where
-   * a zero is the signature of a delivery path that never fires.
+   * This row's own absent-versus-zero reading. It was written as a DIVERGENCE
+   * from `describeRealtimeHealth`, which printed `String(pushesDispatched ?? 0)`
+   * and so made a server that sent no counter look exactly like one that
+   * measured none — on the single row where a zero is the signature of a
+   * delivery path that never fires. t108 fixed the helper, so the two now agree
+   * and the assertion below pins the AGREEMENT: this block must keep its own
+   * reading (it re-derives every value from the typed fields for the brand-cast
+   * reason in `buildRealtimeBlock`), and the helper must not drift back.
    */
   it('does not turn an absent push counter into a measured zero', () => {
     const model = build({ payload: realtime({ pushesDispatched: undefined }) })
@@ -885,7 +892,12 @@ describe('realtime health', () => {
 
     expect(String(row.value)).toBe(NOT_REPORTED)
     expect(row.evidence.kind).toBe('absent')
-    expect(describeRealtimeHealth(realtime({ pushesDispatched: undefined }).live?.realtime)[5].value).toBe('0')
+    expect(describeRealtimeHealth(realtime({ pushesDispatched: undefined }).live?.realtime)[5].value).not.toBe('0')
+    // ...and a REPORTED zero is still a measurement on both sides.
+    expect(
+      String(rowOf(build({ payload: realtime({ pushesDispatched: 0 }) }), 'Pushes dispatched since attach').value),
+    ).toBe('0')
+    expect(describeRealtimeHealth(realtime({ pushesDispatched: 0 }).live?.realtime)[5].value).toBe('0')
   })
 
   it('reports a bound-but-unready bridge as degraded and an absent one as broken', () => {

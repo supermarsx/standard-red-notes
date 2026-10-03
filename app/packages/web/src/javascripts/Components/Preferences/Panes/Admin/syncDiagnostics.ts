@@ -630,11 +630,17 @@ export function describeDiagnosticsReadFailure(failure: DiagnosticsReadFailure):
  *     has not finished loading.
  *   - `WITHHELD` printed the word "Withheld" and nothing else, while the one
  *     cause an operator can actually FIX — `DURABLE_BACKEND_NOT_READY`, a missing
- *     or under-length internal gRPC secret, or an empty `AUTH_JWT_SECRET` — is
- *     invisible in `unmetCodes`, because the port IS bound and so nothing is
- *     unmet. `diagnose()` derived its headline from that empty list and returned
- *     "fully configured and available" over a socket that refuses note syncing.
- *     That false green is what this block exists to make impossible.
+ *     or under-length internal gRPC secret — is invisible in `unmetCodes`,
+ *     because the port IS bound and so nothing is unmet. `diagnose()` derived
+ *     its headline from that empty list and returned "fully configured and
+ *     available" over a socket that refuses note syncing. That false green is
+ *     what this block exists to make impossible.
+ *
+ * `AUTH_JWT_SECRET` was named here as a second cause of that readiness failure
+ * and is not one: an empty value is a fatal startup on the gateway
+ * (`Bootstrap/Container.ts` requires it), so there is no server left to answer
+ * this request. The copy below names only the term an operator can actually be
+ * holding while reading this screen.
  *
  * Everything below is a closed set mapped by an exhaustive `Record`. The copy is
  * written HERE, in the client, for every member: a cause the panel cannot explain
@@ -737,19 +743,19 @@ export const SYNC_ITEMS_CAUSE_COPY = {
   DURABLE_BACKEND_UNBOUND: {
     title: 'SYNC_ITEMS is withheld because no durable command port is bound',
     detail:
-      'The handshake offers note syncing only when a durable backend exists to carry the commands, and this deployment bound none. The condition is named in the list on this screen, and the fix printed beside it there is the one written for THIS deployment’s topology — which is not always the fix the condition’s own name suggests. The socket stays up and keeps carrying everything else.',
+      'The handshake offers note syncing only when a durable backend exists to carry the commands, and this deployment bound none. This is NOT the under-length-secret case: nothing here is about SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET, because there is no bound port for a secret to authenticate. The condition is named in the list on this screen, and the fix printed beside it there is the one written for THIS deployment’s topology — which is not always the fix the condition’s own name suggests. The socket stays up and keeps carrying everything else.',
     deferToConditions: true,
   },
   DURABLE_BACKEND_NOT_READY: {
-    title: 'SYNC_ITEMS is withheld: the durable command port is bound but FAILED the handshake’s readiness check',
+    title: 'SYNC_ITEMS is withheld: the durable command port FAILED the handshake’s readiness check',
     detail:
-      'This is the state no condition list can show you. The port is bound, so nothing reads as unmet, and the socket still refuses to offer note syncing — notes sync over HTTP while collaboration, API RPC, invite events and files stay realtime, which is exactly why every other panel looks healthy. The check the handshake makes needs AUTH_JWT_SECRET set, because the session behind each command is revalidated, and for the gRPC port it needs SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET at least 32 bytes long and identical on the syncing server. A bound proxy is evidence of neither. The gate reports only the single boolean the handshake computes, so it cannot say which of the two failed: check both.',
+      'This is the state no condition list can show you. A port is bound, so nothing reads as unmet, and the socket still refuses to offer note syncing — notes sync over HTTP while collaboration, API RPC, invite events and files stay realtime, which is exactly why every other panel looks healthy. A deployment with no durable port at all reports a different cause with a different fix, so this one is about a port that exists and refuses: for the gRPC port the check needs SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET at least 32 bytes long and identical on the syncing server, and a bound proxy is not evidence of that. The gate reports only the single boolean the handshake computes, so it names the term you can act on rather than guessing which one failed.',
     deferToConditions: false,
   },
   NEVER_PROBED: {
     title: 'This server recorded no reading of the handshake predicate',
     detail:
-      'The gate cannot say whether SYNC_ITEMS is offered, so this screen does not guess: it is neither a healthy lane nor a withheld operation. A host built before the gate took its own reading reports exactly this. Until the server is upgraded, the Capabilities section is the measurement to use — what this client actually negotiated is observed here and needs no server call.',
+      'The gate cannot say whether SYNC_ITEMS is offered, so this screen does not guess: it is neither a healthy lane nor a withheld operation. Two things report exactly this: a host built before the gate took its own reading, and a current host whose realtime gateway FAILED TO ATTACH — the reading is taken after the attach returns, so a gateway that threw leaves it unread. Check the realtime rows on this screen for which of the two you are looking at. Either way the Capabilities section is the measurement to use: what this client actually negotiated is observed here and needs no server call.',
     deferToConditions: false,
   },
   PROBE_FAILED: {
@@ -1181,12 +1187,46 @@ export const REALTIME_UNATTACHED_NOTE =
   'This server reported no realtime health snapshot. Either no websocket gateway is attached to the process that answered — in which case nothing is delivered over the socket, whatever the boot gate says — or this build predates the snapshot. The Boot gate section distinguishes the two.'
 
 /**
+ * What a row says when the snapshot arrived without that particular field. One
+ * constant so every row spells it the same way and a test can look for it.
+ */
+export const REALTIME_FIELD_NOT_REPORTED = 'not reported'
+
+/**
+ * The sentence appended to a row the server said nothing about. It has to claim
+ * NOTHING — the tone is `neutral` for the same reason — because every one of
+ * these fields has a reading that looks like a fault, and printing that reading
+ * on no evidence is worse than leaving the row blank.
+ */
+const NOT_REPORTED_NOTE =
+  'This server did not report the field, so this row is not a reading — it is the absence of one, and nothing here should be acted on. An older server build omits fields a newer one sends; the Boot gate section and the Capabilities section are measurements that do not depend on this snapshot.'
+
+/**
  * The attached gateway's own view of itself (C9), as rows an operator can read.
  *
  * INFORMATIONAL BY DESIGN, and the rows say so where it matters. Readiness is
  * deliberately not gated on any of this, because a container that restarts
  * itself on a Redis blip converts a ten-second degradation into an outage. The
  * panel's job is to make the degradation VISIBLE, not to act on it.
+ *
+ * *** ABSENT IS NOT A READING. *** Every field on this snapshot is optional, and
+ * each of them used to be collapsed onto its negative arm by a truthiness test
+ * or a `?? 0`: an absent `pushesDispatched` printed `0`, an absent `syncLane`
+ * printed `down`, an absent `attached` printed `not attached` in the `bad` tone.
+ * That is backwards in the most expensive possible direction — "the server did
+ * not say" was rendered as the exact value that means "badly broken", and
+ * `0` dispatched pushes is the headline signature of a delivery path that never
+ * fires. So each row below reads its field with an EXPLICIT presence test and
+ * answers `REALTIME_FIELD_NOT_REPORTED` in the `neutral` tone when there is
+ * nothing there, which is the same rule `fc8b3cbc` applied to `transportFallback`.
+ *
+ * A REPORTED zero or `false` is untouched by that and still renders as the
+ * measurement it is — and still `neutral`, never `good`: an idle gateway and a
+ * healthy one produce the same counters, so a zero is not good news either.
+ *
+ * The one place a reported-but-unrecognised value is NOT treated as absent is
+ * `syncLane`: anything other than `'up'` that the server actually sent reads as
+ * `down`, because an unrecognised state is not evidence that the lane is up.
  */
 export function describeRealtimeHealth(
   realtime: NonNullable<SyncDiagnosticsPayload['live']>['realtime'],
@@ -1195,11 +1235,30 @@ export function describeRealtimeHealth(
     return []
   }
 
+  const attachedReported = typeof realtime.attached === 'boolean'
+  const bridgeReported = typeof realtime.pushBridge === 'string' && realtime.pushBridge.length > 0
   const bridge = realtime.pushBridge ?? 'unknown'
   const bridgeBound = bridge === 'redis' || bridge === 'in-process'
-  const bridgeValue = bridgeBound
-    ? `${sanitizeServerCopy(bridge)} (${realtime.pushBridgeReady ? 'ready' : 'not ready'})`
-    : 'none'
+  // Readiness is its own optional field. A bound bridge whose readiness was not
+  // reported must not read as "not ready" — that is a reconnect window, which is
+  // a thing an operator waits out, and waiting out a field nobody sent is just
+  // being misled quietly.
+  const bridgeReadyReported = typeof realtime.pushBridgeReady === 'boolean'
+  const bridgeValue = !bridgeReported
+    ? REALTIME_FIELD_NOT_REPORTED
+    : bridgeBound
+      ? `${sanitizeServerCopy(bridge)} (${bridgeReadyReported ? (realtime.pushBridgeReady ? 'ready' : 'not ready') : 'readiness not reported'})`
+      : 'none'
+  const consumerReported = typeof realtime.sqsConsumerRunning === 'boolean'
+  const relayReported = typeof realtime.collaborationRelayHealthy === 'boolean'
+  const laneReported = typeof realtime.syncLane === 'string' && realtime.syncLane.length > 0
+  // The same floor `safeEnum`/`safeCount` apply elsewhere: a counter that
+  // arrives as a non-integer, a negative or NaN is a fact about the server, not
+  // a number to render.
+  const pushesReported =
+    typeof realtime.pushesDispatched === 'number' &&
+    Number.isInteger(realtime.pushesDispatched) &&
+    realtime.pushesDispatched >= 0
 
   /**
    * `redis` and `in-process` are BOTH bound and both healthy — a single process
@@ -1209,60 +1268,90 @@ export function describeRealtimeHealth(
    * sentence: the in-process plane only reaches sockets THIS process holds, so
    * an operator about to add a second replica needs to know which one they have.
    */
-  const bridgeNote = !bridgeBound
-    ? 'Nothing carries server-side change notifications, so a change saved on one device is never pushed to another. This is a misconfiguration rather than a topology: a process asked for a Redis-backed plane with no reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy, and a multi-container one reports redis. A server build older than the in-process plane also lands here, and needs an upgrade rather than a setting.'
-    : !realtime.pushBridgeReady
-      ? 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.'
-      : bridge === 'in-process'
-        ? 'Pushes are delivered in-process, to the sockets this process holds, so no Redis is needed for them. Correct for a single process serving every socket; a second replica would need the Redis plane to reach sockets it does not hold itself.'
-        : 'The push subscriber is connected, so changes committed elsewhere — including on another replica — are delivered to live sockets.'
+  const bridgeNote = !bridgeReported
+    ? `${NOT_REPORTED_NOTE} Nothing here says there is no push bridge — "none" is a reading this row makes only when the server sends it.`
+    : !bridgeBound
+      ? 'Nothing carries server-side change notifications, so a change saved on one device is never pushed to another. This is a misconfiguration rather than a topology: a process asked for a Redis-backed plane with no reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy, and a multi-container one reports redis. A server build older than the in-process plane also lands here, and needs an upgrade rather than a setting.'
+      : !bridgeReadyReported
+        ? `The bridge is bound, and its readiness was not reported. ${NOT_REPORTED_NOTE}`
+        : !realtime.pushBridgeReady
+          ? 'The bridge is bound but its client is not ready — a reconnect window. It recovers on its own; nothing here needs a restart.'
+          : bridge === 'in-process'
+            ? 'Pushes are delivered in-process, to the sockets this process holds, so no Redis is needed for them. Correct for a single process serving every socket; a second replica would need the Redis plane to reach sockets it does not hold itself.'
+            : 'The push subscriber is connected, so changes committed elsewhere — including on another replica — are delivered to live sockets.'
 
   return [
     {
       label: 'Gateway',
-      value: realtime.attached === true ? 'attached' : 'not attached',
-      tone: realtime.attached === true ? 'good' : 'bad',
-      note:
-        realtime.attached === true
+      value: !attachedReported ? REALTIME_FIELD_NOT_REPORTED : realtime.attached === true ? 'attached' : 'not attached',
+      tone: !attachedReported ? 'neutral' : realtime.attached === true ? 'good' : 'bad',
+      note: !attachedReported
+        ? `${NOT_REPORTED_NOTE} In particular this is NOT the "no gateway is attached" reading — that one is reported, and it is the worst row on this screen to guess at.`
+        : realtime.attached === true
           ? 'A websocket gateway is attached to this process, so sockets can be accepted and tokens minted.'
           : 'No gateway is attached to the process that answered. Nothing reaches a client over a socket, regardless of what the boot gate decided.',
     },
     {
       label: 'Push bridge',
       value: bridgeValue,
-      tone: !bridgeBound ? 'bad' : realtime.pushBridgeReady ? 'good' : 'warn',
+      tone: !bridgeReported
+        ? 'neutral'
+        : !bridgeBound
+          ? 'bad'
+          : !bridgeReadyReported
+            ? 'neutral'
+            : realtime.pushBridgeReady
+              ? 'good'
+              : 'warn',
       note: bridgeNote,
     },
     {
       label: 'Queue consumer',
-      value: realtime.sqsConsumerRunning ? 'running' : 'not running',
-      tone: realtime.sqsConsumerRunning ? 'good' : 'neutral',
-      note: realtime.sqsConsumerRunning
-        ? 'The realtime queue consumer loop is running and draining websocket events.'
-        : 'No queue consumer is running. Expected where pushes are delivered through the bridge alone; on a stack that provisions the websocket queue this means those events are not being drained.',
+      value: !consumerReported ? REALTIME_FIELD_NOT_REPORTED : realtime.sqsConsumerRunning ? 'running' : 'not running',
+      tone: !consumerReported ? 'neutral' : realtime.sqsConsumerRunning ? 'good' : 'neutral',
+      note: !consumerReported
+        ? NOT_REPORTED_NOTE
+        : realtime.sqsConsumerRunning
+          ? 'The realtime queue consumer loop is running and draining websocket events.'
+          : 'No queue consumer is running. Expected where pushes are delivered through the bridge alone; on a stack that provisions the websocket queue this means those events are not being drained.',
     },
     {
       label: 'Collaboration relay',
-      value: realtime.collaborationRelayHealthy ? 'healthy' : 'unhealthy',
-      tone: realtime.collaborationRelayHealthy ? 'good' : 'warn',
-      note: realtime.collaborationRelayHealthy
-        ? 'Room traffic is relayed fleet-wide, so collaborators served by different replicas see each other.'
-        : 'The relay subscription is not established. Collaboration still works between clients on the SAME replica, which is why this fails quietly on a multi-replica deployment.',
+      value: !relayReported
+        ? REALTIME_FIELD_NOT_REPORTED
+        : realtime.collaborationRelayHealthy
+          ? 'healthy'
+          : 'unhealthy',
+      tone: !relayReported ? 'neutral' : realtime.collaborationRelayHealthy ? 'good' : 'warn',
+      note: !relayReported
+        ? NOT_REPORTED_NOTE
+        : realtime.collaborationRelayHealthy
+          ? 'Room traffic is relayed fleet-wide, so collaborators served by different replicas see each other.'
+          : 'The relay subscription is not established. Collaboration still works between clients on the SAME replica, which is why this fails quietly on a multi-replica deployment.',
     },
     {
       label: 'Sync lane',
-      value: realtime.syncLane === 'up' ? 'up' : 'down',
-      tone: realtime.syncLane === 'up' ? 'good' : 'bad',
-      note:
-        realtime.syncLane === 'up'
+      // The one field where a reported-but-unrecognised token still reads as
+      // `down`: a state this build does not know is not evidence that the lane
+      // would admit a client. Only an ABSENT field claims nothing.
+      value: !laneReported ? REALTIME_FIELD_NOT_REPORTED : realtime.syncLane === 'up' ? 'up' : 'down',
+      tone: !laneReported ? 'neutral' : realtime.syncLane === 'up' ? 'good' : 'bad',
+      note: !laneReported
+        ? NOT_REPORTED_NOTE
+        : realtime.syncLane === 'up'
           ? 'The gateway would admit a client on /sockets/sync right now.'
           : 'The gateway would refuse a client on /sockets/sync right now. The live refusal reasons above say why.',
     },
     {
       label: 'Pushes dispatched',
-      value: String(realtime.pushesDispatched ?? 0),
+      value: pushesReported ? String(realtime.pushesDispatched) : REALTIME_FIELD_NOT_REPORTED,
+      // Neutral in BOTH arms, and neutral for a reported zero on purpose: an
+      // idle gateway and a healthy one produce the same counter, so a number
+      // here is never good news on its own.
       tone: 'neutral',
-      note: 'Push messages handed to local sockets since this gateway attached. It resets on every restart; a count that stays at zero on a busy deployment is the signature of a delivery path that never fires.',
+      note: pushesReported
+        ? 'Push messages handed to local sockets since this gateway attached. It resets on every restart; a count that stays at zero on a busy deployment is the signature of a delivery path that never fires.'
+        : `${NOT_REPORTED_NOTE} This row used to print 0 in that case, which reads as the one value that means a delivery path never fires — the opposite of making no claim.`,
     },
   ]
 }

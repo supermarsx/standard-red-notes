@@ -8,6 +8,7 @@ import {
   describeSyncItems,
   describeTransport,
   diagnose,
+  REALTIME_FIELD_NOT_REPORTED,
   REALTIME_UNATTACHED_NOTE,
   sanitizeServerCopy,
   summarizeTestRun,
@@ -538,9 +539,16 @@ describe('sync diagnostics model', () => {
    * where the two agree passes whichever one the code picks.
    */
   describe('describeSyncItems', () => {
-    /** Copied verbatim from the server's frozen `SYNC_ITEMS_CAUSE_REMEDIES`. */
+    /**
+     * Copied verbatim from the server's frozen `SYNC_ITEMS_CAUSE_REMEDIES`.
+     *
+     * t108 rewrote it twice over: it no longer OPENS with "is bound", because an
+     * UNBOUND durable port now has its own cause and its own remedy, and it no
+     * longer names `AUTH_JWT_SECRET`, because an empty one is a fatal startup on
+     * the gateway and so can never be the answer an operator reads here.
+     */
     const NOT_READY_REMEDY =
-      'the durable command port is bound but FAILED the readiness check the handshake itself makes, so the socket will not offer SYNC_ITEMS and notes sync over HTTP while every other capability stays realtime. That check needs AUTH_JWT_SECRET (the session behind each command is revalidated) and, for the gRPC port, SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes and identical on the syncing server. A bound proxy is not evidence of either'
+      'the durable command port FAILED the readiness check the handshake itself makes, so the socket will not offer SYNC_ITEMS and notes sync over HTTP while every other capability stays realtime. A deployment that binds NO durable command port is a DIFFERENT cause with a different fix (DURABLE_BACKEND_UNBOUND, which is about SERVICE_PROXY_TYPE and the dial target), so this one is about a port that exists and refuses: for the gRPC port the check needs SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET set to AT LEAST 32 bytes and identical on the syncing server. A bound proxy is not evidence of that'
     /** The shared precondition remedy the panel deliberately overrides. */
     const UNBOUND_REMEDY =
       'the gRPC syncing-server proxy is not bound; configure SYNCING_SERVER_GRPC_URL so realtime commands have a durable backend'
@@ -595,24 +603,61 @@ describe('sync diagnostics model', () => {
     /**
      * The actionable half. This cause is INVISIBLE in `unmetCodes` — the durable
      * port is bound, so nothing reads as unmet — and it is the one an operator can
-     * fix, so the copy has to name both terms of the readiness check.
+     * fix, so the copy has to name the term of the readiness check they can hold.
+     *
+     * t108: it used to name TWO, and the second (`AUTH_JWT_SECRET`) cannot
+     * occur — `Bootstrap/Container.ts` requires that variable, so an empty one
+     * is a fatal startup and there is no server left to print the advice.
+     * Advice an operator can never act on costs them a restart and the panel its
+     * credibility, which is the one asset it has.
      */
-    it('explains DURABLE_BACKEND_NOT_READY in terms of the two things to check', () => {
+    it('explains DURABLE_BACKEND_NOT_READY in terms of the one thing to check', () => {
       const verdict = describeSyncItems(
         withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: NOT_READY_REMEDY }),
       )
 
       expect(verdict.cause).toBe('DURABLE_BACKEND_NOT_READY')
       expect(verdict.title).toContain('readiness check')
-      expect(verdict.detail).toContain('AUTH_JWT_SECRET')
       expect(verdict.detail).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
       expect(verdict.detail).toContain('32 bytes')
+      // The unreachable half is gone, from this build's copy AND from the
+      // server's own sentence beside it.
+      expect(verdict.detail).not.toContain('AUTH_JWT_SECRET set')
+      expect(verdict.remedy).not.toContain('AUTH_JWT_SECRET ')
+      // ...and it points at the OTHER cause rather than absorbing it, so an
+      // unbound deployment is not sent after a secret length.
+      expect(verdict.detail).toContain('no durable port at all reports a different cause')
       // And it says why no condition list can show this, which is the whole
       // reason the old derivation produced a false green.
       expect(verdict.detail).toContain('nothing reads as unmet')
       // The server's own remedy survives the redactor intact — over-redaction
       // would quietly mangle the variable names that are the point of it.
       expect(verdict.remedy).toBe(NOT_READY_REMEDY)
+    })
+
+    /**
+     * The other half of the t108 split, from the client's side. The server used
+     * to report an UNBOUND durable port as `DURABLE_BACKEND_NOT_READY`; it now
+     * reports `DURABLE_BACKEND_UNBOUND`, and this build's copy for that cause
+     * must not repeat the secret-length advice, because there is no bound port
+     * for a secret to protect.
+     */
+    it('keeps the unbound cause clear of the bound cause’s advice', () => {
+      const unbound = describeSyncItems(
+        withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_UNBOUND', remedy: UNBOUND_REMEDY }),
+      )
+      const notReady = describeSyncItems(
+        withVerdict({ state: 'WITHHELD', cause: 'DURABLE_BACKEND_NOT_READY', remedy: NOT_READY_REMEDY }),
+      )
+
+      expect(unbound.cause).toBe('DURABLE_BACKEND_UNBOUND')
+      expect(unbound.title).toContain('no durable command port is bound')
+      expect(unbound.detail).toContain('nothing here is about SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+      expect(unbound.detail).not.toBe(notReady.detail)
+      expect(unbound.title).not.toBe(notReady.title)
+      // It still defers to the condition list, where the topology-conditional
+      // SERVICE_PROXY_TYPE remedy lives — the one fix that actually applies.
+      expect(unbound.remedy).toBeNull()
     })
 
     it('gives NOT_OBSERVED the neutral tone and a label of its own, never "Unavailable"', () => {
@@ -826,7 +871,7 @@ describe('sync diagnostics model', () => {
       expect(diagnosis.headline).not.toContain('fully configured and available')
       expect(diagnosis.findings).toHaveLength(1)
       expect(diagnosis.findings[0].title).toContain('readiness check')
-      expect(diagnosis.findings[0].detail).toContain('AUTH_JWT_SECRET')
+      expect(diagnosis.findings[0].detail).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
       expect(diagnosis.findings[0].detail).toContain('The server reports:')
     })
 
@@ -1163,6 +1208,132 @@ describe('sync diagnostics model', () => {
 
       expect(lane?.value).toBe('down')
       expect(lane?.tone).toBe('bad')
+    })
+
+    // -----------------------------------------------------------------------
+    // t108. ABSENT IS NOT A READING. Every field on this snapshot is optional
+    // and each was collapsed onto its negative arm: `String(pushesDispatched ??
+    // 0)` printed a measured `0` for a server that never sent the counter —
+    // and zero dispatched pushes is the headline signature of a delivery path
+    // that never fires, so "did not ask" rendered as "badly broken". The same
+    // shape sat on every sibling (`syncLane` absent read `down`, `attached`
+    // absent read `not attached` in the `bad` tone). Mirrors the rule
+    // `fc8b3cbc` applied to `transportFallback`: both readings are driven
+    // through the SAME row, because a test that only exercises one arm cannot
+    // tell a fixed row from a row that always says the same thing.
+    // -----------------------------------------------------------------------
+    describe('absent fields versus reported zeroes and falses', () => {
+      /** The whole snapshot present, so each case below can remove ONE field. */
+      const full = {
+        attached: true,
+        pushBridge: 'redis',
+        pushBridgeReady: true,
+        sqsConsumerRunning: true,
+        collaborationRelayHealthy: true,
+        syncLane: 'up',
+        pushesDispatched: 12,
+      }
+      const rowOf = (realtime: Parameters<typeof describeRealtimeHealth>[0], label: string) =>
+        describeRealtimeHealth(realtime)?.find((row) => row.label === label)
+
+      it('reads an absent push counter as not reported, and a reported zero as a measurement', () => {
+        const absent = rowOf({ ...full, pushesDispatched: undefined }, 'Pushes dispatched')
+        const zero = rowOf({ ...full, pushesDispatched: 0 }, 'Pushes dispatched')
+
+        expect(absent?.value).toBe(REALTIME_FIELD_NOT_REPORTED)
+        expect(absent?.value).not.toBe('0')
+        expect(absent?.tone).toBe('neutral')
+        expect(absent?.note).toContain('did not report the field')
+        expect(absent?.note).not.toContain('signature of a delivery path that never fires')
+
+        // The reported zero keeps the reading AND the warning that makes it
+        // useful — and stays `neutral`, never `good`: an idle gateway and a
+        // healthy one produce the same counter, so a number is not good news.
+        expect(zero?.value).toBe('0')
+        expect(zero?.tone).toBe('neutral')
+        expect(zero?.note).toContain('signature of a delivery path that never fires')
+        expect(zero?.note).not.toContain('did not report the field')
+      })
+
+      it('refuses to render a malformed counter as a number', () => {
+        // The floor `safeCount` applies elsewhere: a counter that arrives as a
+        // non-integer, a negative or NaN is a fact about the server.
+        for (const pushesDispatched of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+          expect(rowOf({ ...full, pushesDispatched }, 'Pushes dispatched')?.value).toBe(REALTIME_FIELD_NOT_REPORTED)
+        }
+      })
+
+      it.each([
+        ['Gateway', 'attached', 'not attached'],
+        ['Queue consumer', 'sqsConsumerRunning', 'not running'],
+        ['Collaboration relay', 'collaborationRelayHealthy', 'unhealthy'],
+      ] as const)('tells an absent %s apart from a reported false', (label, field, negative) => {
+        const absent = rowOf({ ...full, [field]: undefined }, label)
+        const reported = rowOf({ ...full, [field]: false }, label)
+
+        expect(absent?.value).toBe(REALTIME_FIELD_NOT_REPORTED)
+        expect(absent?.tone).toBe('neutral')
+        expect(absent?.note).toContain('did not report the field')
+
+        // The reported negative still reads as the fault it is, with its own
+        // tone and its own copy — the fix removes a guess, not a verdict.
+        expect(reported?.value).toBe(negative)
+        expect(reported?.note).not.toContain('did not report the field')
+      })
+
+      it('does not call an absent push bridge "none", which is a reading of its own', () => {
+        const absent = rowOf({ ...full, pushBridge: undefined }, 'Push bridge')
+        const none = rowOf({ ...full, pushBridge: 'none' }, 'Push bridge')
+
+        expect(absent?.value).toBe(REALTIME_FIELD_NOT_REPORTED)
+        expect(absent?.tone).toBe('neutral')
+        expect(absent?.note).toContain('"none" is a reading this row makes only when the server sends it')
+
+        expect(none?.value).toBe('none')
+        expect(none?.tone).toBe('bad')
+        expect(none?.note).toContain('misconfiguration rather than a topology')
+      })
+
+      it('does not call a bound bridge with unreported readiness a reconnect window', () => {
+        // "Not ready" is a state an operator WAITS OUT. Waiting out a field
+        // nobody sent is being misled quietly, so this takes the neutral tone
+        // and says which half is missing.
+        const absent = rowOf({ ...full, pushBridgeReady: undefined }, 'Push bridge')
+        const reported = rowOf({ ...full, pushBridgeReady: false }, 'Push bridge')
+
+        expect(absent?.value).toBe('redis (readiness not reported)')
+        expect(absent?.tone).toBe('neutral')
+        expect(absent?.note).toContain('readiness was not reported')
+        expect(absent?.note).not.toContain('reconnect window')
+
+        expect(reported?.value).toBe('redis (not ready)')
+        expect(reported?.tone).toBe('warn')
+        expect(reported?.note).toContain('reconnect window')
+      })
+
+      it('keeps an absent sync lane silent while a reported unknown state still reads as down', () => {
+        // The one asymmetry, and it is deliberate: a state this build does not
+        // recognise is NOT evidence that the gateway would admit a client, so a
+        // reported-but-unknown token stays `down`. Only absence claims nothing.
+        const absent = rowOf({ ...full, syncLane: undefined }, 'Sync lane')
+        const unknown = rowOf({ ...full, syncLane: 'draining' }, 'Sync lane')
+
+        expect(absent?.value).toBe(REALTIME_FIELD_NOT_REPORTED)
+        expect(absent?.tone).toBe('neutral')
+        expect(unknown?.value).toBe('down')
+        expect(unknown?.tone).toBe('bad')
+      })
+
+      it('reports an entirely empty snapshot as six rows that claim nothing, rather than six faults', () => {
+        // The shape an older server sends: the block exists (so the pane does
+        // not fall back to REALTIME_UNATTACHED_NOTE) and carries no fields.
+        const rows = describeRealtimeHealth({})
+
+        expect(rows).toHaveLength(6)
+        expect(rows.map((row) => row.value)).toEqual(Array(6).fill(REALTIME_FIELD_NOT_REPORTED))
+        expect(rows.every((row) => row.tone === 'neutral')).toBe(true)
+        expect(rows.filter((row) => row.tone === 'bad')).toHaveLength(0)
+      })
     })
   })
 
