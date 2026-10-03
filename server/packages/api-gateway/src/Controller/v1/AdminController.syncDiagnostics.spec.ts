@@ -113,7 +113,74 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.unmetPreconditions).toHaveLength(1)
   })
 
-  it('reports the lane and SYNC_ITEMS as both healthy when the durable port is bound', () => {
+  it('reports the lane and SYNC_ITEMS as both healthy when the durable backend reports ready', () => {
+    syncGateDiagnostics.record({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: true,
+      syncingServerGrpcBound: true,
+      filesAdvertised: true,
+    })
+    // A BOUND proxy is no longer what makes this read as available: the gate
+    // reads the handshake's own `backend.ready()` off the lane it hands the
+    // gateway. Recording alone cannot claim SYNC_ITEMS at all.
+    syncGateDiagnostics.observeSyncItems({ backend: { ready: () => true, execute: jest.fn(), status: jest.fn() } })
+    const response = adminResponse()
+
+    makeController().getSyncDiagnostics({} as Request, response)
+
+    const { gate } = payload() as unknown as {
+      gate: { syncLaneEnabled: boolean; syncItemsAdvertised: boolean; unmetCodes: string[] }
+    }
+    expect(gate.syncLaneEnabled).toBe(true)
+    expect(gate.syncItemsAdvertised).toBe(true)
+    expect(gate.unmetCodes).toEqual([])
+  })
+
+  /**
+   * The state the operator was actually in, and the one this endpoint used to
+   * get exactly backwards: `SERVICE_PROXY_TYPE=grpc` binds the syncing proxy,
+   * so every boot condition is met and the lane comes up — but the proxy's
+   * `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET` is missing or under 32 bytes, so
+   * the handshake refuses SYNC_ITEMS. The pane reported "advertised" for days
+   * while every client synced items over HTTP.
+   */
+  it('reports SYNC_ITEMS as withheld when the bound durable backend refuses the handshake check', () => {
+    syncGateDiagnostics.record({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: true,
+      syncingServerGrpcBound: true,
+      filesAdvertised: true,
+    })
+    syncGateDiagnostics.observeSyncItems({ backend: { ready: () => false, execute: jest.fn(), status: jest.fn() } })
+    const response = adminResponse()
+
+    makeController().getSyncDiagnostics({} as Request, response)
+
+    const { gate } = payload() as unknown as {
+      gate: {
+        syncLaneEnabled: boolean
+        syncItemsAdvertised: boolean
+        syncItems: { state: string; cause: string; remedy: string }
+        unmetCodes: string[]
+      }
+    }
+    // The lane is genuinely up — collaboration, API RPC, invite events and
+    // files all negotiate — and the condition list is empty, which is exactly
+    // why the verdict cannot be derived from it.
+    expect(gate.syncLaneEnabled).toBe(true)
+    expect(gate.unmetCodes).toEqual([])
+    expect(gate.syncItemsAdvertised).toBe(false)
+    expect(gate.syncItems.state).toBe('WITHHELD')
+    expect(gate.syncItems.cause).toBe('DURABLE_BACKEND_NOT_READY')
+    expect(gate.syncItems.remedy).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+  })
+
+  it('makes no SYNC_ITEMS claim at all when no host probed the handshake predicate', () => {
+    // "Could not determine" is NOT "unavailable": the field is ABSENT rather
+    // than false, because the panel's guard is `!== undefined` and a `false`
+    // here would tell an operator their notes are on HTTP on no evidence.
     syncGateDiagnostics.record({
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
@@ -126,11 +193,11 @@ describe('AdminController sync-diagnostics', () => {
     makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
-      gate: { syncLaneEnabled: boolean; syncItemsAdvertised: boolean; unmetCodes: string[] }
+      gate: { syncItemsAdvertised?: boolean; syncItems: { state: string; cause: string } }
     }
-    expect(gate.syncLaneEnabled).toBe(true)
-    expect(gate.syncItemsAdvertised).toBe(true)
-    expect(gate.unmetCodes).toEqual([])
+    expect('syncItemsAdvertised' in gate).toBe(false)
+    expect(gate.syncItems.state).toBe('NOT_OBSERVED')
+    expect(gate.syncItems.cause).toBe('NEVER_PROBED')
   })
 
   it('reports SYNC_ITEMS as unadvertised whenever the lane itself is down', () => {
