@@ -24,6 +24,7 @@ import {
   safePercentBucket,
   safePresence,
   safeState,
+  safeToken,
   safeTokens,
   safeYesNo,
   SECTION_IDS,
@@ -40,6 +41,7 @@ import {
   type SectionTaggedOutcome,
   type Verdict,
 } from './diagnosticsSections'
+import { admitToken, declarePattern, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
 import { TONES } from './syncDiagnostics'
 
 /**
@@ -201,6 +203,113 @@ describe('SafeValue constructors — presence, never values', () => {
   it('joins already-safe parts and builds a report line', () => {
     expect(safeTokens(safeConstant('redis'), safeConstant('(ready)'))).toBe('redis (ready)')
     expect(reportLine(safeConstant('Gateway'), safeYesNo(true))).toBe('- Gateway: yes')
+  })
+})
+
+/**
+ * `safeToken` — the category a 40-character git revision belongs to.
+ *
+ * It is `reportAllowlist.ts`'s `admitToken` plus the brand, deliberately NOT a
+ * second admission rule: the two copyable reports have been admitting a revision
+ * by shape since before this contract existed, and a row that admitted it by its
+ * own slightly different rule is how a value comes to be printed in one place and
+ * withheld in another.
+ */
+describe('safeToken — admission by a shape this build declared', () => {
+  const REVISION = 'a9f3c0deadbeef0123456789abcdef0123456789'
+
+  it('is the same rule as the reports use, not a copy of it', () => {
+    expect(safeToken(REVISION, DEPLOY_REVISION)).toBe(REVISION)
+    expect(safeToken(REVISION, DEPLOY_REVISION)).toBe(admitToken(REVISION, DEPLOY_REVISION))
+    expect(safeToken('nope', DEPLOY_REVISION)).toBe(admitToken('nope', DEPLOY_REVISION))
+  })
+
+  it('reports a non-string as absent rather than as a rejected value', () => {
+    expect(safeToken(undefined, DEPLOY_REVISION)).toBe('not reported')
+    expect(safeToken(null, DEPLOY_REVISION)).toBe('not reported')
+    expect(safeToken(42, DEPLOY_REVISION)).toBe('not reported')
+    // A non-string that stringifies to a match is still not a string.
+    expect(safeToken({ toString: () => REVISION }, DEPLOY_REVISION)).toBe('not reported')
+  })
+
+  /**
+   * *** THE PROPERTY THE WHOLE CONSTRUCTOR EXISTS FOR ***
+   *
+   * A rejected token is replaced by a CONSTANT. It is not truncated, not partially
+   * scrubbed, and not quoted back in the withheld marker — the health report's own
+   * scan caught a revision reading `token-sk-live-…` printed verbatim, and a
+   * version printed as `v1.2.3-build@[address withheld]` with the host removed and
+   * the rest intact. Each candidate is asserted on its own, because an assertion
+   * over a set is satisfied by any member of it.
+   */
+  it.each([
+    'syncing-server:50051',
+    'https://sync.internal.example.com/v1/items',
+    'postgres://srn:hunter2@db.internal.example:5432/srn',
+    'sk-live-0123456789abcdef0123456789abcdef',
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c0ffee',
+    `prefix-${'a'.repeat(40)}`,
+    `${'a'.repeat(40)}-suffix`,
+    'A9F3C0DEADBEEF0123456789ABCDEF0123456789',
+  ])('withholds %s without echoing any of it', (unsafe) => {
+    const value = safeToken(unsafe, DEPLOY_REVISION)
+
+    expect(value).toBe('withheld (unrecognised format)')
+    expect(value).not.toContain(unsafe)
+    // Nor any recognisable fragment of it: the marker is a constant, so the only
+    // way a fragment could appear is a partial scrub.
+    for (const fragment of unsafe.split(/[^A-Za-z0-9]+/).filter((part) => part.length > 3)) {
+      expect(value).not.toContain(fragment)
+    }
+  })
+
+  it.each(SECRETS)('withholds the planted value %s', (secret) => {
+    expect(safeToken(secret, DEPLOY_REVISION)).toBe('withheld (unrecognised format)')
+    expect(safeToken(secret, DEPLOY_REVISION)).not.toContain(secret)
+  })
+
+  it('cannot be handed a pattern derived from the data it is admitting', () => {
+    const fromTheWire: string = `^${SECRETS[0]}$`
+
+    // @ts-expect-error a shape must be a literal of this build; a server string is not one
+    const circular = declarePattern(fromTheWire)
+
+    // The assertion above is the compile-time one, and ts-jest evaluates it. The
+    // value is kept used to show exactly what the type rule prevents: a shape
+    // derived from server data admits the very value that supplied it, so the
+    // allowlist would be an echo with extra steps.
+    expect(circular.test(SECRETS[0])).toBe(true)
+    expect(safeToken(SECRETS[0], circular)).toBe(SECRETS[0])
+  })
+
+  /**
+   * An unanchored shape matches a SUBSTRING, so `[0-9a-f]{40}` would admit a whole
+   * connection string with a hex blob inside it. That is the exact leak the
+   * allowlist exists to stop, so it is refused at declaration time rather than
+   * left to each caller to remember.
+   */
+  it('refuses an unanchored shape at declaration time', () => {
+    expect(() => declarePattern('[0-9a-f]{40}')).toThrow('anchored')
+    expect(() => declarePattern('^[0-9a-f]{40}')).toThrow('anchored')
+    expect(() => declarePattern('[0-9a-f]{40}$')).toThrow('anchored')
+    expect(() => declarePattern('^[0-9a-f]{40}$')).not.toThrow()
+
+    // And the refusal is not cosmetic: the unanchored shape really would have
+    // admitted a connection string whole.
+    expect(new RegExp('[0-9a-f]{40}').test(`redis://x:${'a'.repeat(40)}@cache:6379`)).toBe(true)
+    expect(DEPLOY_REVISION.test(`redis://x:${'a'.repeat(40)}@cache:6379`)).toBe(false)
+  })
+
+  it('carries no flags, so testing the same value twice cannot answer differently', () => {
+    expect(DEPLOY_REVISION.flags).toBe('')
+    expect(safeToken(REVISION, DEPLOY_REVISION)).toBe(REVISION)
+    expect(safeToken(REVISION, DEPLOY_REVISION)).toBe(REVISION)
+  })
+
+  it('still admits the shapes the reports already depended on', () => {
+    expect(DEPLOY_REVISION.test(REVISION)).toBe(true)
+    expect(VERSION_TOKEN.test('1.2.3-beta+build.4')).toBe(true)
+    expect(VERSION_TOKEN.test('-leading-dash')).toBe(false)
   })
 })
 
@@ -748,22 +857,35 @@ describe('buildSectionModel', () => {
  * deliberate bypass is a single greppable expression — and this is what collects
  * on the condition.
  *
- * It is VACUOUS until the first section module lands, and that is the honest
- * state of it rather than a hidden one: the assertion on this module's own
- * presence exists so that a renamed directory or a typo'd path fails loudly
- * instead of turning the scan into a gate nobody runs.
+ * It was VACUOUS while no section module existed, which was then the honest state
+ * of it. Section modules now exist, so the scan's CORPUS is asserted too: a scan
+ * over zero files passes for the same reason a scan over clean files does, and
+ * "every section module" is only a guarantee if the list is known to contain the
+ * sections. A renamed file, a moved directory or a `.tsx` section would otherwise
+ * drop silently out of the corpus and leave this reading green.
  */
 describe('no section module bypasses the SafeValue brand', () => {
   const directory = __dirname
+
+  const sectionModules = (): string[] =>
+    readdirSync(directory).filter((name) => /Section\.ts$/.test(name) && !name.includes('.spec.'))
 
   it('can see the module it is guarding', () => {
     expect(readFileSync(join(directory, 'diagnosticsSections.ts'), 'utf8')).toContain('export type SafeValue')
   })
 
-  it('finds no `as SafeValue` in any section module', () => {
-    const modules = readdirSync(directory).filter((name) => /Section\.ts$/.test(name) && !name.includes('.spec.'))
+  it('scans a corpus that actually contains the section modules', () => {
+    const modules = sectionModules()
 
-    for (const name of modules) {
+    // `arrayContaining` rather than an exact list: a section landing later must
+    // extend this corpus, not fail it. The point is that it cannot be EMPTY, and
+    // cannot silently lose one of the sections already in the tree.
+    expect(modules).toEqual(expect.arrayContaining(['browserSection.ts', 'environmentSection.ts']))
+    expect(modules.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('finds no `as SafeValue` in any section module', () => {
+    for (const name of sectionModules()) {
       // `as unknown as SafeValue` contains this substring too, so one check
       // covers both spellings of the bypass.
       expect(readFileSync(join(directory, name), 'utf8')).not.toContain('as SafeValue')

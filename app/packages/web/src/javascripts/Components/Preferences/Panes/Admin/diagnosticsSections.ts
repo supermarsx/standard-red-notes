@@ -1,6 +1,6 @@
 import type { SyncFallbackReason, SyncTransportState } from '@/Services/SyncTransport/syncTransportProtocol'
 import type { Remedy } from './diagnosticRemedies'
-import { NOT_REPORTED, WITHHELD } from './reportAllowlist'
+import { admitToken, NOT_REPORTED, WITHHELD, type DeclaredPattern } from './reportAllowlist'
 import type { CapabilityTestOutcome, Tone } from './syncDiagnostics'
 
 /**
@@ -46,6 +46,11 @@ import type { CapabilityTestOutcome, Tone } from './syncDiagnostics'
  *   - `safeEnvName` — an environment variable NAME, admitted by SHAPE, for the
  *     one legitimate dynamic label: a key a newer server reports that this build
  *     has no guidance for. Names are public; they are in the compose files.
+ *   - `safeToken` — a value admitted by SHAPE against a pattern this build
+ *     declared, for the few server strings whose whole content is pinned by a
+ *     format: a 40-hex git revision is the case it exists for. It is
+ *     `reportAllowlist.ts`'s `admitToken` plus the brand, so a row and the two
+ *     copyable reports admit a token by one rule rather than three.
  *
  * `note`, `detail` and `title` stay plain `string` because they are prose written
  * by this build, and prose is what makes a row useful. They are rendered on
@@ -296,6 +301,35 @@ export function safeEnvName(name: unknown): SafeValue {
     return mint(NOT_REPORTED)
   }
   return ENV_NAME.test(name) ? mint(name) : mint(WITHHELD)
+}
+
+/**
+ * A token admitted by SHAPE against a pattern this build declared, and refused —
+ * not repaired — otherwise.
+ *
+ * THE GAP THIS CLOSES. A 40-character git revision is not a constant of this
+ * build, not a boolean, not a member of a closed enum, not a count and not a
+ * duration, so before this constructor existed the Environment section could not
+ * print the deployment revision at all: it reported the identity's STATE and sent
+ * the reader to the copyable report for the revision itself, which had been
+ * admitting it by shape — under its own rule — all along.
+ *
+ * There is now ONE rule. This is `admitToken` with the brand applied, so a row,
+ * the capability report and the health report cannot disagree about what counts
+ * as a revision, and loosening the shape loosens all three at once.
+ *
+ * WHY THE PATTERN CANNOT COME OFF THE WIRE. `DeclaredPattern` is obtainable only
+ * from `declarePattern`, whose source must be a string LITERAL and must be
+ * anchored. So the shape is always one this build wrote, and admitting a value
+ * against a shape derived from that same server is not expressible — which it
+ * would need to be for the admission to be circular.
+ *
+ * A value that does not match becomes `WITHHELD`; the rejected value is NEVER
+ * echoed, not even in part, exactly as in `safeEnum` and `safeEnvName`. A
+ * partially scrubbed string is not safe; a constant is.
+ */
+export function safeToken(value: unknown, pattern: DeclaredPattern): SafeValue {
+  return mint(admitToken(value, pattern))
 }
 
 /** Join already-safe parts, for a value like `redis (ready)`. */

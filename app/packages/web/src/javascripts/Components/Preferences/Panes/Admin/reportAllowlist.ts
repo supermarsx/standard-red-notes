@@ -28,18 +28,65 @@ export const WITHHELD = 'withheld (unrecognised format)'
 export const NOT_REPORTED = 'not reported'
 
 /**
+ * A shape THIS BUILD declared, as a nominal type over `RegExp`.
+ *
+ * WHY THE BRAND. Admission by shape is only as good as the shape, and "the
+ * caller passes a RegExp" is not a constraint: `admitToken(payload.revision,
+ * new RegExp(payload.pattern))` and `admitToken(payload.revision, /./)` both
+ * typecheck, and either turns the allowlist back into an echo. So the pattern a
+ * `SafeValue` is admitted against is not any `RegExp` — it is one obtained from
+ * `declarePattern`, which accepts a string LITERAL only, exactly as
+ * `safeConstant` does. A value off the wire has type `string`, the parameter
+ * resolves to `never`, and the call does not compile.
+ *
+ * The brand is nominal, like `SafeValue`'s: `x as DeclaredPattern` still
+ * compiles. Same bargain — no bypass can happen by accident, and every
+ * deliberate one is a single greppable expression.
+ */
+export type DeclaredPattern = RegExp & { readonly __declaredShape: 'literal-of-this-build' }
+
+/**
+ * Declare a shape from a literal of this build.
+ *
+ * Two things are enforced here rather than remembered:
+ *
+ *  - The source must be a LITERAL. `declarePattern(payload.whatever)` does not
+ *    compile, so a shape cannot be derived from the data it is admitting, which
+ *    would make the admission circular.
+ *  - The source must be ANCHORED. An unanchored shape matches a substring, so
+ *    `[0-9a-f]{40}` would happily admit a whole connection string with a hex
+ *    blob somewhere inside it — the exact leak the allowlist exists to stop.
+ *
+ * Built with `new RegExp` rather than taking a literal `RegExp` so the result
+ * carries no flags: a `g`-flagged pattern makes `.test` stateful and would
+ * alternate between admitting and withholding the same value.
+ */
+export function declarePattern<T extends string>(source: T & (string extends T ? never : unknown)): DeclaredPattern {
+  if (!source.startsWith('^') || !source.endsWith('$')) {
+    throw new Error(`a declared shape must be anchored with ^ and $; "${source}" would admit a substring`)
+  }
+
+  return new RegExp(source) as DeclaredPattern
+}
+
+/**
  * A deployment revision: exactly the 40 lowercase hex characters `app/Dockerfile`
  * accepts, and nothing else. Keep this in step with that validation.
  */
-export const DEPLOY_REVISION = /^[0-9a-f]{40}$/
+export const DEPLOY_REVISION = declarePattern('^[0-9a-f]{40}$')
 
 /** A version token: the shape `SRN_DEPLOY_VERSION` is itself validated against. */
-export const VERSION_TOKEN = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
+export const VERSION_TOKEN = declarePattern('^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$')
 
 /**
  * Admit a server-supplied string only when it matches `pattern`; never repair it,
  * never print a partial. The caller gets a constant in every other case, so no
  * unmatched byte of server text can reach the output.
+ *
+ * This is the ONE admission rule in the pane. `safeToken` in
+ * `diagnosticsSections.ts` is this function plus the `SafeValue` brand, and it
+ * narrows the parameter to a `DeclaredPattern`: the two reports admit a token by
+ * exactly the rule a row does, so neither can be loosened without the other.
  */
 export function admitToken(value: unknown, pattern: RegExp): string {
   if (typeof value !== 'string') {
