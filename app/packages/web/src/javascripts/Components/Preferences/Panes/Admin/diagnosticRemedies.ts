@@ -65,12 +65,22 @@ export type DeploymentTopology = {
  * operator looking for a release that does not exist instead of at the setting in
  * front of them. The two are kept apart because one is a change the person at the
  * keyboard can make right now and the other is one they cannot make at all.
+ *
+ * `peer-service` is the same argument one step out. Its findings are fixed on
+ * ANOTHER service in this deployment — a gRPC listener that stopped answering —
+ * and they had to borrow `wait`, which is not a lie (the per-call fallback retries
+ * every call, so the condition clears with no action on this container) and whose
+ * LABEL, "Transient", understates a listener that is permanently down to the point
+ * of advising the operator to do nothing. WHERE the fix lives and WHETHER it
+ * clears by itself are two different facts, and the chip can only carry one of
+ * them, so it carries the one an operator has to act on.
  */
 export type RemedyEffort =
   | 'restart' /** Change configuration and restart the container. No image rebuild. */
   | 'rebuild' /** The image itself must be rebuilt; configuration cannot reach it. */
   | 'client-update' /** Needs a newer client build; no server change helps. */
   | 'device' /** A setting, version or condition on the machine in front of the operator. */
+  | 'peer-service' /** Repair a DIFFERENT service in this deployment; nothing here helps. */
   | 'none' /** Nothing configuration can do in this topology. */
   | 'wait' /** Transient or mid-boot; re-read rather than change anything. */
 
@@ -79,6 +89,7 @@ export const EFFORT_LABEL: Record<RemedyEffort, string> = {
   rebuild: 'Rebuild required',
   'client-update': 'Client update',
   device: 'On this device',
+  'peer-service': 'Another service',
   none: 'Not fixable here',
   wait: 'Transient',
 }
