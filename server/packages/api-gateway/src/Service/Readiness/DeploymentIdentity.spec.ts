@@ -306,7 +306,7 @@ describe('build and runtime version derivation agree', () => {
       for (const character of admitted.filter((value) => !firstAdmitted.includes(value))) {
         expect(normalizeDeploymentVersion(`${character}v`)).toBeNull()
       }
-      for (const character of ['!', ' ', '/', '$', '"', ';', '\n', ' ']) {
+      for (const character of ['!', ' ', '/', '$', '"', ';', '\n', '\0']) {
         expect(admitted).not.toContain(character)
         expect(normalizeDeploymentVersion(`v${character}`)).toBeNull()
       }
