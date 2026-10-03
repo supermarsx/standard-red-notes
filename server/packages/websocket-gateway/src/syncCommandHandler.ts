@@ -1,5 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { isValidSyncTicketIdentity, type SyncAuthTicketStore, type SyncTicketIdentity } from './auth.js'
+import {
+  isValidSyncTicketIdentity,
+  SESSION_ACCESS_TOKEN_COOKIE_PREFIX,
+  type SyncAuthTicketStore,
+  type SyncTicketIdentity,
+} from './auth.js'
 import type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
 import { SyncFilesSession, type SyncFilesAdapter } from './filesSession.js'
@@ -10,6 +15,8 @@ import {
   MAX_SYNC_QUEUED_FRAMES,
   MAX_SYNC_SEQUENCE,
   MAX_RPC_CREDIT_BYTES,
+  SYNC_API_RPC_REFUSAL_CODES,
+  SYNC_API_RPC_REFUSAL_ERROR_NAME,
   SYNC_AUTH_DEADLINE_MS,
   SYNC_BACKEND_TIMEOUT_MS,
   SYNC_RESULT_TOO_LARGE_STATUS_CODE,
@@ -111,6 +118,89 @@ export type SyncAuthorizationDecision =
 export type SyncSessionRefreshDecision =
   { refreshed: true } | { refreshed: false; code: 'SESSION_STALE' | 'SESSION_REVOKED' }
 
+/**
+ * What the session plane did with a credential a lane presented to it. The
+ * closed shape a lane reports so that ONE table — `classifyPresentedSessionCredential`
+ * below — decides stale vs revoked for every lane.
+ *
+ *   - `reached: false` — the session plane was never asked, or its answer is
+ *     unusable as evidence about the session: no revalidator, no credential, a
+ *     credential that cannot authenticate SHAPE-WISE (see
+ *     `credentialCanAuthenticateSession`), a transport failure.
+ *   - `reached: true` — it answered. `status` is its HTTP status; `identityMatches`
+ *     is set only once a 200's cross-service token has been verified and compared
+ *     against the presenting identity (`true` same user AND session, `false`
+ *     another identity, left undefined when the answer could not be read at all).
+ */
+export type PresentedSessionCredentialOutcome =
+  { reached: false } | { reached: true; status: number; identityMatches?: boolean }
+
+/**
+ * THE single stale/revoked classification. Every lane that revalidates a session
+ * credential — sync REAUTH, collaboration authorization, FILES_V1 authorization —
+ * routes its outcome through this one function, so there is exactly one answer to
+ * "is this credential merely old, or is this session gone?".
+ *
+ * Keyed on auth's STATUS, never on its error TAG. A plain sign-out deletes the
+ * session row and writes NO `revoked_session` record, so logout answers 401
+ * `invalid-auth` rather than 401 `revoked-session`; keying on the tag would make
+ * every logout look like a refreshable stale token, which is the inversion that
+ * turns a sign-out into a persistent authenticated socket.
+ *
+ *   - 401 => SESSION_REVOKED. Auth reaches that status for a session that is
+ *     gone, revoked, banned or confirmation-blocked. None of those become
+ *     authorized again by presenting a newer token.
+ *   - 200 with a token that verifies for THIS user and session => refreshed: the
+ *     credential is usable, and the lane may go on to its own policy checks.
+ *   - 200 with a token that verifies for ANOTHER identity => SESSION_REVOKED. No
+ *     legitimate mint produces that.
+ *   - anything else — 498 `expired-access-token`, another status, an unreadable
+ *     body, an unverifiable token, a credential that cannot authenticate
+ *     shape-wise, auth unreachable => SESSION_STALE.
+ *
+ * AN UNKNOWN VERDICT IS STALE, NEVER REVOKED. Revoked is the terminating answer
+ * on the sync lane, so an auth blip classified as revoked would close every live
+ * socket in the fleet. Leniency is free here: nothing is adopted either way.
+ */
+export function classifyPresentedSessionCredential(
+  outcome: PresentedSessionCredentialOutcome,
+): SyncSessionRefreshDecision {
+  if (!outcome.reached) {
+    return { refreshed: false, code: 'SESSION_STALE' }
+  }
+  if (outcome.status === 499) {
+    return { refreshed: false, code: 'SESSION_REVOKED' }
+  }
+  if (outcome.status !== 200 || outcome.identityMatches === undefined) {
+    return { refreshed: false, code: 'SESSION_STALE' }
+  }
+  return outcome.identityMatches ? { refreshed: true } : { refreshed: false, code: 'SESSION_REVOKED' }
+}
+
+/**
+ * False only when the credential is structurally unable to authenticate this
+ * session, so auth's refusal of it is no evidence about the session at all. A
+ * COOKIE-based session's token (`2:<privateIdentifier>`, auth's
+ * `SessionService.COOKIE_SESSION_TOKEN_VERSION`) is authenticated ONLY through
+ * its `access_token_<sessionUuid>` cookie, so the bearer alone can never do it;
+ * a header-based session (`1:<uuid>:<secret>`) needs no cookie.
+ *
+ * A caller that cannot present the cookie would otherwise read auth's inevitable
+ * 401 as a revocation and terminate a working lane, which is why this is part of
+ * the classification rather than a per-lane precaution.
+ */
+export function credentialCanAuthenticateSession(
+  authorization: string,
+  identity: Pick<SyncTicketIdentity, 'sessionUuid' | 'sessionCookies'>,
+): boolean {
+  if (!authorization.startsWith('2:')) {
+    return true
+  }
+  const cookieName = `${SESSION_ACCESS_TOKEN_COOKIE_PREFIX}${identity.sessionUuid}`
+  const values = identity.sessionCookies?.[cookieName]
+  return Array.isArray(values) && values.length > 0
+}
+
 /** Called for every command/status request; no authorization claim is cached from the ticket. */
 export interface SyncLiveAuthorizationAdapter {
   ready(): boolean
@@ -184,7 +274,21 @@ export interface SyncCommandBackendAdapter {
 }
 
 export type SyncCollaborationAuthorizationResult =
-  | { authorized: false }
+  | {
+      authorized: false
+      /**
+       * Set ONLY when the refusal is "the credential this socket presented can no
+       * longer authenticate", classified by `classifyPresentedSessionCredential`.
+       * A policy denial — including a revoked session — leaves it unset and stays
+       * byte-identical to the collapsed NOT_AUTHORIZED it has always been.
+       *
+       * The field is a one-member closed enum rather than a `SyncAuthorizationCode`
+       * on purpose: the collaboration lane must not gain the ability to publish
+       * authorization topology (read-only state, content limits, shadow bans)
+       * however the adapter grows.
+       */
+      code?: 'SESSION_STALE'
+    }
   | {
       authorized: true
       epochDiscovery: true
@@ -979,8 +1083,17 @@ export class SyncCommandHandler {
         controller,
       )
       if (!result.authorized) {
-        this.options.metrics?.increment('collaboration_authorization', 'denied')
-        this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
+        // Standard Red Notes: a stale credential and a policy denial used to be
+        // the SAME `NOT_AUTHORIZED` here, so a client could not tell "refresh
+        // your credential" from "you may not do this" — and guessing would turn
+        // every legitimate denial into a pointless ticket mint. The adapter now
+        // marks the one case where the cause is an unusable credential, and only
+        // that case says so. The code is re-derived from the closed literal
+        // rather than forwarded, so no adapter can widen what this lane
+        // publishes, and anything else is the exact byte-for-byte denial.
+        const stale = result.code === 'SESSION_STALE'
+        this.options.metrics?.increment('collaboration_authorization', stale ? 'session_stale' : 'denied')
+        this.sendError(frame.requestId, frame.commandId, stale ? 'SESSION_STALE' : 'NOT_AUTHORIZED')
         return
       }
       if (discoveryRequest) {
@@ -1501,9 +1614,15 @@ export class SyncCommandHandler {
 
       this.send('RPC_END', frame.requestId, frame.commandId, { status: 'COMPLETED' })
       this.options.metrics?.increment('rpc', 'completed')
-    } catch {
+    } catch (error) {
       if (!this.closed) {
-        const code = active.abortCode ?? (active.controller.signal.aborted ? 'CANCELLED' : 'BACKEND_ERROR')
+        // An adapter that REFUSED gets its own code. Reporting a policy refusal as
+        // BACKEND_ERROR makes it indistinguishable from a dead backend, which is
+        // how a blocked route once read as an outage. A cancellation or deadline
+        // still wins: those describe what happened to this request.
+        const code =
+          active.abortCode ??
+          (active.controller.signal.aborted ? 'CANCELLED' : (rpcAdapterRefusalCode(error) ?? 'BACKEND_ERROR'))
         this.options.metrics?.increment('rpc', code.toLowerCase())
         this.sendError(frame.requestId, frame.commandId, code)
       }
@@ -2221,6 +2340,31 @@ async function* singleRpcBody(body: unknown): AsyncGenerator<Uint8Array> {
   yield Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf8')
 }
 
+/**
+ * The code an RPC adapter asked for by throwing a refusal, or `undefined` for
+ * everything else — a thrown value that is not a recognized refusal is a fault
+ * and keeps reporting BACKEND_ERROR.
+ *
+ * Matched on `name` rather than `instanceof`: the adapters are in other packages
+ * and may carry their own copy of the protocol module, where `instanceof` would
+ * quietly fail and collapse every refusal back onto BACKEND_ERROR — the bug this
+ * exists to fix. The code is then checked against the closed set, so an adapter
+ * cannot put an arbitrary string on the wire.
+ */
+function rpcAdapterRefusalCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== SYNC_API_RPC_REFUSAL_ERROR_NAME) {
+    return undefined
+  }
+  const code = (error as { code?: unknown }).code
+
+  return typeof code === 'string' && SYNC_API_RPC_REFUSAL_CODES.has(code) ? code : undefined
+}
+
+/**
+ * RPC_PATH_FORBIDDEN is deliberately absent: the lane will never carry that route,
+ * so a retry cannot change the answer. It is the same reasoning that keeps
+ * LIVE_SYNC_DISABLED out.
+ */
 function isRetryableError(code: string): boolean {
   return (
     code === 'BUSY' ||

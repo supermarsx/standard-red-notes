@@ -1,3 +1,5 @@
+import { SYNC_API_RPC_REFUSAL_ERROR_NAME } from '@standard-red-notes/websocket-gateway'
+
 import { LoopbackSyncApiRpcAdapter } from './LoopbackSyncApiRpcAdapter'
 
 const identity = {
@@ -82,7 +84,7 @@ describe('LoopbackSyncApiRpcAdapter', () => {
           { identity, method: 'POST', path, headers: {}, idempotencyKey: 'attempt-1', stream: false },
           new AbortController().signal,
         ),
-      ).rejects.toThrow(/unavailable/i)
+      ).rejects.toMatchObject({ name: SYNC_API_RPC_REFUSAL_ERROR_NAME, code: 'RPC_PATH_FORBIDDEN' })
     }
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -186,11 +188,27 @@ describe('LoopbackSyncApiRpcAdapter forbidden route families', () => {
     }
   }
 
+  /**
+   * A refusal answers with its own closed-enum code. It used to throw a plain
+   * Error, which the gateway reported as BACKEND_ERROR — the same code a dead
+   * backend gets — so a blocked route and a broken service were indistinguishable
+   * on the wire. Asserting the CODE here is also what keeps that from regressing:
+   * a plain `toThrow(/unavailable/)` passed both before and after.
+   *
+   * The refused path is never echoed back. It arrives on a client frame, so every
+   * case below also asserts it appears nowhere in the error.
+   */
   const refusesGet = async (path: string): Promise<void> => {
     const { adapter, fetch } = adapterWithSpy()
-    await expect(
-      adapter.execute({ identity, method: 'GET', path, headers: {}, stream: false }, new AbortController().signal),
-    ).rejects.toThrow(/unavailable/i)
+    const error = await adapter
+      .execute({ identity, method: 'GET', path, headers: {}, stream: false }, new AbortController().signal)
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      )
+
+    expect(error).toMatchObject({ name: SYNC_API_RPC_REFUSAL_ERROR_NAME, code: 'RPC_PATH_FORBIDDEN' })
+    expect(`${String((error as Error).message)} ${String((error as Error).stack)}`).not.toContain(path)
     expect(fetch).not.toHaveBeenCalled()
   }
 
@@ -242,6 +260,49 @@ describe('LoopbackSyncApiRpcAdapter forbidden route families', () => {
 
   it('refuses a malformed percent-encoding rather than comparing it raw', async () => {
     await refusesGet('/v1/%ZZ')
+  })
+
+  // The other half of the contract: only a blocked ROUTE gets the refusal code.
+  // A lane that was never negotiated, and a method the lane does not carry on an
+  // otherwise permitted route, are not route-policy refusals and must not borrow
+  // the code — otherwise it stops meaning anything.
+  it.each([
+    [
+      'a lane that negotiated no API_RPC',
+      { operations: [] as const, method: 'GET' as const, path: '/v1/workflows/status' },
+    ],
+    [
+      'a method this lane does not carry',
+      { operations: ['API_RPC'] as const, method: 'PUT' as const, path: '/v1/workflows/status' },
+    ],
+  ])('does not report a route refusal for %s', async (_case, request) => {
+    const fetch = jest.fn()
+    const adapter = new LoopbackSyncApiRpcAdapter({
+      origin: 'http://127.0.0.1:3000',
+      operations: [...request.operations],
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    })
+    const error = await adapter
+      .execute(
+        {
+          identity,
+          method: request.method,
+          path: request.path,
+          headers: {},
+          idempotencyKey: 'attempt-1',
+          stream: false,
+        },
+        new AbortController().signal,
+      )
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      )
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as { name: string }).name).not.toBe(SYNC_API_RPC_REFUSAL_ERROR_NAME)
+    expect(error).not.toHaveProperty('code')
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   // The guard against over-blocking: the families must not swallow the control

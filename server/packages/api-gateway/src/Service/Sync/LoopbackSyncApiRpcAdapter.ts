@@ -1,8 +1,9 @@
-import type {
-  SyncApiRpcAdapter,
-  SyncApiRpcRequest,
-  SyncApiRpcResponse,
-  SyncNegotiatedOperation,
+import {
+  SyncApiRpcRefusalError,
+  type SyncApiRpcAdapter,
+  type SyncApiRpcRequest,
+  type SyncApiRpcResponse,
+  type SyncNegotiatedOperation,
 } from '@standard-red-notes/websocket-gateway'
 
 import { sessionCookiesToHeader } from './sessionCookies'
@@ -62,7 +63,21 @@ export class LoopbackSyncApiRpcAdapter implements SyncApiRpcAdapter {
   }
 
   async execute(input: SyncApiRpcRequest, signal: AbortSignal): Promise<SyncApiRpcResponse> {
-    if (!this.ready() || !isAllowedRpcRequest(input, this.negotiatedOperations) || isForbiddenRpcPath(input.path)) {
+    if (!this.ready()) {
+      throw new Error('Authenticated RPC operation is unavailable.')
+    }
+    // A blocked route is a POLICY refusal, and it answers with its own code.
+    // Thrown as a plain Error it reached the client as BACKEND_ERROR — the code a
+    // dead backend reports — so an operator probing a blocked route read it as an
+    // outage, and a diagnosis went the wrong way on exactly that ambiguity. The
+    // error carries the code alone, never the path: that came off a client frame.
+    //
+    // Checked before the method/route allow-list below so a forbidden path answers
+    // the same way whatever method asked for it.
+    if (isForbiddenRpcPath(input.path)) {
+      throw new SyncApiRpcRefusalError('RPC_PATH_FORBIDDEN')
+    }
+    if (!isAllowedRpcRequest(input, this.negotiatedOperations)) {
       throw new Error('Authenticated RPC operation is unavailable.')
     }
     if (!input.identity.authorization?.startsWith('Bearer ')) {

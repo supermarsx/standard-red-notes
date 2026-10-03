@@ -22,6 +22,8 @@ import {
   MAX_SYNC_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_RESUME_SEQUENCE,
+  SYNC_API_RPC_REFUSAL_ERROR_NAME,
+  SyncApiRpcRefusalError,
   createSyncServerFrame,
   digestSyncCommandBody,
   parseSyncClientFrame,
@@ -1165,6 +1167,51 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  // -------------------------------------------------------------------------
+  // Standard Red Notes: a stale credential and a policy denial used to leave
+  // this lane as the SAME `NOT_AUTHORIZED`, so a client could not tell "refresh
+  // your credential" from "you are not allowed to do this" -- and a client that
+  // guessed would turn every legitimate denial into a pointless ticket mint plus
+  // a session-plane call. The adapter now marks the one refusal whose cause is
+  // an unusable credential; everything else must stay byte-identical.
+  // -------------------------------------------------------------------------
+  it('publishes SESSION_STALE only when the adapter says the credential is unusable', async () => {
+    const authorizeCollaboration = vi.fn(async () => ({ authorized: false as const, code: 'SESSION_STALE' as const }))
+    const { handler, socket } = await authenticatedHandler({
+      collaborationAuthorization: { collaborationAuthorizationReady: () => true, authorizeCollaboration },
+    })
+    try {
+      enqueue(handler, collaborationAuthorizationFrame(1))
+      await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(1))
+
+      // Retryable, exactly as the sync lane's SESSION_STALE already is: one code,
+      // one meaning, so a client has one thing to learn.
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'SESSION_STALE', retryable: true })
+    } finally {
+      handler.disconnect()
+    }
+  })
+
+  it.each([
+    ['an unqualified policy denial', { authorized: false as const }],
+    // A revoked session is NOT refreshable, so it stays on the denial code and
+    // stays indistinguishable from "that note does not exist".
+    ['a refusal carrying no recognised code', { authorized: false, code: 'SESSION_REVOKED' } as unknown],
+  ])('keeps %s on the byte-identical NOT_AUTHORIZED', async (_label, result) => {
+    const authorizeCollaboration = vi.fn(async () => result as never)
+    const { handler, socket } = await authenticatedHandler({
+      collaborationAuthorization: { collaborationAuthorizationReady: () => true, authorizeCollaboration },
+    })
+    try {
+      enqueue(handler, collaborationAuthorizationFrame(1))
+      await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(1))
+
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false })
+    } finally {
+      handler.disconnect()
+    }
+  })
+
   it('consumes a discovery challenge even when the first exact grant attempt mismatches', async () => {
     const authorizeCollaboration = vi.fn(async () => ({
       authorized: true as const,
@@ -2273,6 +2320,66 @@ describe('SyncCommandHandler', () => {
       socket.frames.find((frame) => frame.type === 'RPC_RESPONSE' && frame.requestId === 'rpc-shape-5'),
     ).headers
     expect(safeHeaders).toEqual({ 'x-request-id': 'safe' })
+    handler.disconnect()
+  })
+
+  /**
+   * A deliberate policy refusal and a broken service must not share a code.
+   * Reported as BACKEND_ERROR, the adapter's route block-list was
+   * indistinguishable from a dead backend — which is exactly how one live
+   * diagnosis went the wrong way.
+   *
+   * Four cases, because the mapping has four ways to be wrong: a real refusal
+   * must get its own non-retryable code; an impostor error carrying the refusal
+   * name but a code outside the closed set must NOT put that string on the wire;
+   * a plain object wearing both the name and a valid code is not an Error and must
+   * not be honoured either; and an ordinary failure must still report a retryable
+   * BACKEND_ERROR.
+   */
+  it('separates an adapter refusal from a backend fault on the wire', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: async (input) => {
+        if (input.path === '/v1/refused') {
+          throw new SyncApiRpcRefusalError('RPC_PATH_FORBIDDEN')
+        }
+        if (input.path === '/v1/impostor') {
+          const impostor = new Error('refusal') as Error & { code: string }
+          impostor.name = SYNC_API_RPC_REFUSAL_ERROR_NAME
+          impostor.code = 'ARBITRARY_ADAPTER_STRING'
+          throw impostor
+        }
+        if (input.path === '/v1/not-an-error') {
+          return Promise.reject({
+            name: SYNC_API_RPC_REFUSAL_ERROR_NAME,
+            code: 'RPC_PATH_FORBIDDEN',
+          } as never)
+        }
+        throw new Error('the backend did not answer')
+      },
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+
+    for (const [index, expected] of [
+      ['/v1/refused', { code: 'RPC_PATH_FORBIDDEN', retryable: false }],
+      ['/v1/impostor', { code: 'BACKEND_ERROR', retryable: true }],
+      ['/v1/not-an-error', { code: 'BACKEND_ERROR', retryable: true }],
+      ['/v1/broken', { code: 'BACKEND_ERROR', retryable: true }],
+    ].entries()) {
+      const [path, payload] = expected as [string, JsonObject]
+      const requestId = `rpc-refusal-${index}`
+      enqueue(handler, rpcFrame(index + 1, { requestId, path }))
+      // Matched by requestId, never `frames.at(-1)`: three of these four answers
+      // are the same payload, so a last-frame assertion passes on the PREVIOUS
+      // request's frame and stops testing its own case.
+      await vi.waitFor(() =>
+        expect(
+          payloadOf(socket.frames.find((frame) => frame.type === 'ERROR' && frame.requestId === requestId)),
+        ).toEqual(payload),
+      )
+    }
     handler.disconnect()
   })
 

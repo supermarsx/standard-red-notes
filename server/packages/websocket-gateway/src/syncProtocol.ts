@@ -292,6 +292,44 @@ export class SyncProtocolError extends Error {
   }
 }
 
+/**
+ * Codes an RPC adapter may ask the gateway to report instead of `BACKEND_ERROR`,
+ * for the cases where the adapter DECIDED to refuse rather than failed to answer.
+ *
+ * Closed on purpose, and deliberately not a free string: a refusal code is public
+ * — it reaches the client in an ERROR frame — so it names a policy, never the
+ * request that tripped it. `RPC_PATH_FORBIDDEN` says "this lane does not carry
+ * that route"; it must never carry the route, which comes off a client frame.
+ *
+ * `RPC_PATH_FORBIDDEN` exists because the adapter's own route block-list used to
+ * surface as `BACKEND_ERROR`, which is what a dead backend reports. One code for
+ * "we will not do that" and "the service is broken" sent a live diagnosis in the
+ * wrong direction: an operator probing a blocked route read it as an outage.
+ */
+export type SyncApiRpcRefusalCode = 'RPC_PATH_FORBIDDEN'
+
+export const SYNC_API_RPC_REFUSAL_ERROR_NAME = 'SyncApiRpcRefusalError'
+
+export const SYNC_API_RPC_REFUSAL_CODES: ReadonlySet<string> = new Set<SyncApiRpcRefusalCode>(['RPC_PATH_FORBIDDEN'])
+
+/**
+ * Thrown by an RPC adapter to refuse a request as a matter of policy.
+ *
+ * The gateway recognizes it by `name` rather than `instanceof`, exactly as the
+ * files lane recognizes its adapter errors: the adapters live in other packages
+ * and may be bundled with their own copy of this module, where `instanceof` would
+ * silently fail and collapse the refusal back onto `BACKEND_ERROR`.
+ *
+ * The constructor takes the code and nothing else, so there is no parameter
+ * through which a request path could reach the wire or a log line.
+ */
+export class SyncApiRpcRefusalError extends Error {
+  constructor(readonly code: SyncApiRpcRefusalCode) {
+    super(code)
+    this.name = SYNC_API_RPC_REFUSAL_ERROR_NAME
+  }
+}
+
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
