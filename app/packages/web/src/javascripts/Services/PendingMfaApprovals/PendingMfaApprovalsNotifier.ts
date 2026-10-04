@@ -4,6 +4,10 @@ import { WebApplication } from '@/Application/WebApplication'
 import {
   describeRequestingDevice,
   describeRequestingIpAddress,
+  PENDING_MFA_APPROVALS_POLL_INTERVAL_MS,
+  PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS,
+  PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS,
+  pendingMfaApprovalsPollIntervalMs,
 } from '@/Components/Preferences/Panes/Security/TrustedDevices/pendingMfaApproval'
 
 /**
@@ -35,16 +39,22 @@ import {
  * De-duplication: one toast per challenge id for the lifetime of the approval
  * (ids are remembered until their expiry passes, then pruned), so the websocket
  * frame and a later poll of the same approval cannot double-toast.
+ *
+ * Retirement: an MFA_APPROVAL_RESOLVED frame (pushed by auth ResolvePendingMfaApproval
+ * once SOME trusted session answers) dismisses this session's toast for that
+ * challenge, so answering on one device clears the prompt on the others without any
+ * session re-reading the inbox over HTTP.
  */
 
-/** Safety-net cadence while the legacy socket is OPEN (lost-push recovery only). */
-export const PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS = 120_000
-
-/** Cadence when no socket is open: the poll is the only delivery path. Approvals live ~2 minutes. */
-export const PENDING_MFA_APPROVALS_POLL_INTERVAL_MS = 20_000
-
-/** Minimum spacing between a visibility-triggered poll and whatever poll ran before it. */
-export const PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS = 5_000
+/**
+ * Re-exported for the existing importers; the single definition now lives beside the
+ * inbox helpers so the Security pane can share it without importing this service.
+ */
+export {
+  PENDING_MFA_APPROVALS_POLL_INTERVAL_MS,
+  PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS,
+  PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS,
+}
 
 /** Timer granularity: every tick re-reads the socket state and polls once its cadence has elapsed. */
 const POLL_TICK_MS = PENDING_MFA_APPROVALS_POLL_INTERVAL_MS
@@ -75,6 +85,8 @@ export class PendingMfaApprovalsNotifier {
   private lastPollStartedAt: number
   /** challengeId -> epoch-ms after which the entry may be forgotten. */
   private notifiedChallengeIds = new Map<string, number>()
+  /** challengeId -> the id of the toast raised for it, so a resolution can retire it. */
+  private toastIdsByChallengeId = new Map<string, string>()
 
   constructor(private application: WebApplication) {
     this.lastPollStartedAt = Date.now()
@@ -82,6 +94,10 @@ export class PendingMfaApprovalsNotifier {
     this.socketObserverDisposer = this.application.sockets.addEventObserver(async (event, data) => {
       if (event === WebSocketsServiceEvent.MfaApprovalRequested) {
         this.maybeNotify(data as PendingApprovalLike)
+        return
+      }
+      if (event === WebSocketsServiceEvent.MfaApprovalResolved) {
+        this.retireResolved(data as PendingApprovalLike)
       }
     })
 
@@ -111,7 +127,27 @@ export class PendingMfaApprovalsNotifier {
     }
     this.visibilityListener = undefined
     this.notifiedChallengeIds.clear()
+    this.toastIdsByChallengeId.clear()
     ;(this.application as unknown) = undefined
+  }
+
+  /**
+   * A trusted session answered the request, so the "awaiting your approval" toast is
+   * now a lie — dismiss it. The challenge id STAYS remembered: forgetting it here
+   * would let the very next safety-net poll, if it still saw the row, raise the toast
+   * a second time for a request that is already settled.
+   */
+  private retireResolved(frame: PendingApprovalLike): void {
+    const challengeId = typeof frame?.challengeId === 'string' ? frame.challengeId : undefined
+    if (!challengeId) {
+      return
+    }
+    const toastId = this.toastIdsByChallengeId.get(challengeId)
+    if (toastId === undefined) {
+      return
+    }
+    this.toastIdsByChallengeId.delete(challengeId)
+    dismissToast(toastId)
   }
 
   /**
@@ -145,9 +181,7 @@ export class PendingMfaApprovalsNotifier {
     const minimumSpacing =
       trigger === 'visible'
         ? PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS
-        : socketOpen
-          ? PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS
-          : PENDING_MFA_APPROVALS_POLL_INTERVAL_MS
+        : pendingMfaApprovalsPollIntervalMs(socketOpen)
     if (now - this.lastPollStartedAt < minimumSpacing) {
       return
     }
@@ -201,7 +235,7 @@ export class PendingMfaApprovalsNotifier {
       typeof approval.requestingIpAddress === 'string' ? approval.requestingIpAddress : null,
     )
 
-    addToast({
+    const raisedToastId = addToast({
       type: ToastType.Regular,
       title: 'New sign-in awaiting your approval',
       message: `${device} (${ip}) is trying to sign in to your account and is waiting for your approval.`,
@@ -210,18 +244,21 @@ export class PendingMfaApprovalsNotifier {
         {
           label: 'Review',
           handler: (toastId) => {
+            this.toastIdsByChallengeId.delete(challengeId)
             dismissToast(toastId)
             this.application.openPreferences('security')
           },
         },
       ],
     })
+    this.toastIdsByChallengeId.set(challengeId, raisedToastId)
   }
 
   private pruneRememberedIds(now: number): void {
     for (const [id, forgetAfter] of this.notifiedChallengeIds) {
       if (forgetAfter <= now) {
         this.notifiedChallengeIds.delete(id)
+        this.toastIdsByChallengeId.delete(id)
       }
     }
   }

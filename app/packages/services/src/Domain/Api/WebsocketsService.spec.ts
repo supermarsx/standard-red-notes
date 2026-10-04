@@ -374,6 +374,45 @@ describe('webSocketsService', () => {
 
       expect(events).toContain(WebSocketsServiceEvent.WebSocketDidClose)
     })
+
+    /**
+     * Push-MFA approvals. The REQUESTED frame has always been dispatched; the
+     * RESOLVED frame is what lets an inbox that is already showing a request retire
+     * it when another trusted session answers, instead of re-GETting
+     * `/v1/pending-mfa-approvals` on a timer. An undispatched frame is invisible —
+     * the UI simply keeps polling — so the dispatch itself is worth pinning.
+     */
+    it('emits MfaApprovalRequested with the whole frame', () => {
+      const service = createService()
+      const events = emitMessage(service, {
+        type: 'MFA_APPROVAL_REQUESTED',
+        challengeId: 'challenge-1',
+        requestingIpAddress: '203.0.113.9',
+      })
+
+      expect(events).toContain(WebSocketsServiceEvent.MfaApprovalRequested)
+      const captured = (service as unknown as { lastCaptured: Record<string, unknown> }).lastCaptured
+      expect(captured[WebSocketsServiceEvent.MfaApprovalRequested]).toEqual(
+        expect.objectContaining({ challengeId: 'challenge-1' }),
+      )
+    })
+
+    it('emits MfaApprovalResolved carrying the challenge id and the decision', () => {
+      const service = createService()
+      const events = emitMessage(service, {
+        type: 'MFA_APPROVAL_RESOLVED',
+        challengeId: 'challenge-1',
+        status: 'approved',
+        resolvedAt: 1_700_000_000_000,
+      })
+
+      expect(events).toContain(WebSocketsServiceEvent.MfaApprovalResolved)
+      expect(events).not.toContain(WebSocketsServiceEvent.MfaApprovalRequested)
+      const captured = (service as unknown as { lastCaptured: Record<string, unknown> }).lastCaptured
+      expect(captured[WebSocketsServiceEvent.MfaApprovalResolved]).toEqual(
+        expect.objectContaining({ challengeId: 'challenge-1', status: 'approved' }),
+      )
+    })
   })
 
   describe('malformed inbound frame (unguarded JSON.parse)', () => {

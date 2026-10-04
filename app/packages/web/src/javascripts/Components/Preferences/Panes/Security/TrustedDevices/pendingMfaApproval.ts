@@ -8,6 +8,40 @@
  * `GET /v1/pending-mfa-approvals` (see snjs ApiService.listPendingMfaApprovals):
  * one entry per untrusted device currently waiting on a 2FA approval.
  */
+/**
+ * Safety-net poll cadences, shared by BOTH consumers of the inbox — the app-wide
+ * `PendingMfaApprovalsNotifier` and the Security pane's inbox — so there is a
+ * single answer to "how long may a lost push go unnoticed".
+ *
+ * They live in this dependency-free module rather than in the notifier because the
+ * pane importing the notifier would drag `WebApplication` into its module graph for
+ * the sake of two numbers.
+ *
+ * WHY A POLL REMAINS AT ALL. Both frames (`MFA_APPROVAL_REQUESTED` on creation,
+ * `MFA_APPROVAL_RESOLVED` on the decision) are best-effort: the server does not
+ * retry a frame the legacy push lane dropped, a half-open socket still reports
+ * OPEN, and desktop, mobile and any deployment without a gateway have no push lane
+ * at all — there the poll IS the delivery path. So the socket shortens the cadence's
+ * job to lost-push recovery; it never removes it.
+ */
+
+/** Cadence while the push lane is OPEN: lost-push recovery only. Approvals live ~2 min. */
+export const PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS = 120_000
+
+/** Cadence with no push lane: the poll is the only delivery path. */
+export const PENDING_MFA_APPROVALS_POLL_INTERVAL_MS = 20_000
+
+/** Minimum spacing between a visibility-triggered poll and whatever poll ran before it. */
+export const PENDING_MFA_APPROVALS_VISIBILITY_POLL_THROTTLE_MS = 5_000
+
+/**
+ * The cadence to use right now. A single function so the pane and the notifier
+ * cannot drift into disagreeing about what an open socket buys.
+ */
+export const pendingMfaApprovalsPollIntervalMs = (socketOpen: boolean): number => {
+  return socketOpen ? PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS : PENDING_MFA_APPROVALS_POLL_INTERVAL_MS
+}
+
 export type PendingMfaApproval = {
   uuid: string
   challengeId: string

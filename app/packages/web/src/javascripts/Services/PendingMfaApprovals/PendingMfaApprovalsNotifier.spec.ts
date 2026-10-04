@@ -1,5 +1,26 @@
+/**
+ * `@standardnotes/snjs` resolves to its PREBUILT `dist/snjs.js` here, not to the
+ * `@standardnotes/services` source the types come from. A member added to
+ * `WebSocketsServiceEvent` therefore typechecks while being `undefined` at test
+ * runtime until snjs is rebuilt — so a frame assertion written against the real enum
+ * can pass for the wrong reason (comparing `undefined === undefined`) or fail on a
+ * stale artifact. Mocking the two symbols this service uses makes the suite say what
+ * it means regardless of build order, exactly as the sibling TrustedDevices and
+ * PendingMfaApprovals specs already do.
+ *
+ * The literals below are the enum's own values; `isErrorResponse` keeps its real
+ * contract (an explicit error field is an error, a 200 payload is not).
+ */
+jest.mock('@standardnotes/snjs', () => ({
+  isErrorResponse: (response: unknown) => Boolean((response as { error?: unknown })?.error),
+  WebSocketsServiceEvent: {
+    MfaApprovalRequested: 'MfaApprovalRequested',
+    MfaApprovalResolved: 'MfaApprovalResolved',
+  },
+}))
+
 import { WebSocketsServiceEvent } from '@standardnotes/snjs'
-import { addToast } from '@standardnotes/toast'
+import { addToast, dismissToast } from '@standardnotes/toast'
 import type { WebApplication } from '@/Application/WebApplication'
 import {
   PENDING_MFA_APPROVALS_POLL_INTERVAL_MS,
@@ -186,6 +207,91 @@ describe('PendingMfaApprovalsNotifier safety-net poll', () => {
     expect(listPendingMfaApprovals).not.toHaveBeenCalled()
 
     notifier.deinit()
+  })
+
+  /**
+   * The other half of moving this off HTTP: once SOME trusted session answers the
+   * request, auth pushes MFA_APPROVAL_RESOLVED to the account's sockets, so the
+   * "awaiting your approval" toast this session raised can be retired without any
+   * session re-reading the inbox.
+   */
+  describe('retiring a toast on the resolved push', () => {
+    const approval = {
+      challengeId: 'challenge-1',
+      requestingUserAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/130.0',
+      requestingIpAddress: '203.0.113.9',
+      expiresAt: Date.now() + 120_000,
+    }
+
+    it('dismisses the toast the resolved frame names', async () => {
+      ;(addToast as jest.Mock).mockReturnValue('toast-for-challenge-1')
+      const { application, observers } = createApplication({ socketOpen: true })
+      const notifier = new PendingMfaApprovalsNotifier(application)
+
+      await observers[0](WebSocketsServiceEvent.MfaApprovalRequested, approval)
+      expect(addToast).toHaveBeenCalledTimes(1)
+      expect(dismissToast).not.toHaveBeenCalled()
+
+      await observers[0](WebSocketsServiceEvent.MfaApprovalResolved, {
+        challengeId: approval.challengeId,
+        status: 'approved',
+      })
+
+      expect(dismissToast).toHaveBeenCalledTimes(1)
+      expect(dismissToast).toHaveBeenCalledWith('toast-for-challenge-1')
+
+      notifier.deinit()
+    })
+
+    it('leaves a toast for a different challenge alone', async () => {
+      ;(addToast as jest.Mock).mockReturnValue('toast-for-challenge-1')
+      const { application, observers } = createApplication({ socketOpen: true })
+      const notifier = new PendingMfaApprovalsNotifier(application)
+
+      await observers[0](WebSocketsServiceEvent.MfaApprovalRequested, approval)
+      await observers[0](WebSocketsServiceEvent.MfaApprovalResolved, { challengeId: 'someone-elses' })
+
+      expect(dismissToast).not.toHaveBeenCalled()
+
+      notifier.deinit()
+    })
+
+    /**
+     * The id is matched only when it ARRIVES as a string. The numeric 42 below would
+     * stringify onto the '42' key the toast is held under, so a frame whose id is
+     * coerced rather than type-checked would dismiss a toast it does not name.
+     */
+    it('ignores a resolved frame whose challenge id is not a string', async () => {
+      ;(addToast as jest.Mock).mockReturnValue('toast-for-challenge-42')
+      const { application, observers } = createApplication({ socketOpen: true })
+      const notifier = new PendingMfaApprovalsNotifier(application)
+
+      await observers[0](WebSocketsServiceEvent.MfaApprovalRequested, { ...approval, challengeId: '42' })
+      expect(addToast).toHaveBeenCalledTimes(1)
+
+      await observers[0](WebSocketsServiceEvent.MfaApprovalResolved, { challengeId: 42 })
+
+      expect(dismissToast).not.toHaveBeenCalled()
+
+      notifier.deinit()
+    })
+
+    it('keeps the challenge remembered, so a stale poll cannot re-toast a settled request', async () => {
+      ;(addToast as jest.Mock).mockReturnValue('toast-for-challenge-1')
+      const { application, observers, listPendingMfaApprovals } = createApplication({ socketOpen: false })
+      const notifier = new PendingMfaApprovalsNotifier(application)
+
+      await observers[0](WebSocketsServiceEvent.MfaApprovalRequested, approval)
+      await observers[0](WebSocketsServiceEvent.MfaApprovalResolved, { challengeId: approval.challengeId })
+
+      listPendingMfaApprovals.mockResolvedValueOnce({ status: 200, data: { pendingApprovals: [approval] } })
+      await jest.advanceTimersByTimeAsync(CLOSED_INTERVAL)
+
+      expect(listPendingMfaApprovals).toHaveBeenCalledTimes(1)
+      expect(addToast).toHaveBeenCalledTimes(1)
+
+      notifier.deinit()
+    })
   })
 
   it('deinit stops the safety net, the visibility wake and the socket observer', async () => {

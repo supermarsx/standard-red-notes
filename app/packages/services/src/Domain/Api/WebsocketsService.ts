@@ -945,6 +945,12 @@ export class WebSocketsService extends AbstractService<
         // Standard Red Notes: push-MFA approval request from a new device.
         void this.notifyEvent(WebSocketsServiceEvent.MfaApprovalRequested, eventData)
         break
+      case 'MFA_APPROVAL_RESOLVED':
+        // Standard Red Notes: push-MFA decision taken by one of this account's
+        // trusted sessions. Announced so every other session can retire the request
+        // it is showing without an HTTP re-read.
+        void this.notifyEvent(WebSocketsServiceEvent.MfaApprovalResolved, eventData)
+        break
       default:
         break
     }

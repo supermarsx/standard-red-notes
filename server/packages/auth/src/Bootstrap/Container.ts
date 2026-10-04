@@ -2356,7 +2356,14 @@ export class ContainerConfigLoader {
       )
     container
       .bind<ResolvePendingMfaApproval>(TYPES.Auth_ResolvePendingMfaApproval)
-      .toConstantValue(new ResolvePendingMfaApproval(container.get(TYPES.Auth_PendingMfaApprovalRepository)))
+      .toConstantValue(
+        new ResolvePendingMfaApproval(
+          container.get(TYPES.Auth_PendingMfaApprovalRepository),
+          container.get(TYPES.Auth_DomainEventPublisher),
+          container.get(TYPES.Auth_DomainEventFactory),
+          container.get(TYPES.Auth_Logger),
+        ),
+      )
     container
       .bind<GetPendingMfaApprovalStatus>(TYPES.Auth_GetPendingMfaApprovalStatus)
       .toConstantValue(new GetPendingMfaApprovalStatus(container.get(TYPES.Auth_PendingMfaApprovalRepository)))

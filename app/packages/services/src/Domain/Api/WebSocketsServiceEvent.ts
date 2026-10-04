@@ -19,4 +19,9 @@ export enum WebSocketsServiceEvent {
   // device starts a sign-in that needs 2FA, so the UI can prompt the user to
   // approve or deny the sign-in.
   MfaApprovalRequested = 'MfaApprovalRequested',
+  // Standard Red Notes: push-MFA. The mirror of the above — emitted on every one of
+  // the account's sessions once SOME trusted session has approved or denied the
+  // request, so an inbox that is still showing it can drop the row (and a toast
+  // raised for it can be dismissed) without re-GETting the inbox over HTTP.
+  MfaApprovalResolved = 'MfaApprovalResolved',
 }
