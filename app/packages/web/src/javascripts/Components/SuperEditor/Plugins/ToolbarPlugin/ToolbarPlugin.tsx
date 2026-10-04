@@ -1852,10 +1852,9 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // own Lexical root. `document.getElementById` answered the first open note's editor, which
   // with two notes open is both the wrong box to clamp against and — in single-tile layout,
   // where the inactive tile carries `hidden` — a subtree nothing renders visibly in.
-  // `superEditorPortalTarget` already falls back to `document.body`, so no further fallback
-  // is reachable here; the `??` tail is kept only as a statement of intent.
-  const popoverDocumentElement =
-    superEditorPortalTarget(editor.getRootElement()) ?? editor.getRootElement()?.parentElement
+  // No fallback is chained on: `superEditorPortalTarget` returns a non-nullable element,
+  // ending in `document.body`, so anything after a `??` here would be unreachable.
+  const popoverDocumentElement = superEditorPortalTarget(editor.getRootElement())
 
   const openCustomizeDialog = useCallback(() => {
     showModal(t('customizeToolbar'), (onClose) => (

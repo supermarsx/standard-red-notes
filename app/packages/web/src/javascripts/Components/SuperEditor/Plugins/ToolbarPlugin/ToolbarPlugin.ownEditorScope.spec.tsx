@@ -37,17 +37,22 @@ import { SuperEditorContentId } from '../../Constants'
 import { MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 
 /**
- * `popoverDocumentElement` is a value handed to 29 `<Popover>`s, and none of them is open on
- * mount, so the only way to read it without driving 29 separate pieces of toolbar state is
- * to record what the real ToolbarPlugin actually passes. The stub renders nothing: a closed
- * popover renders nothing either, and the point here is the container it was given, not its
- * contents. Named `mock…` so the jest.mock factory may reference it after hoisting.
+ * The popover container is a value handed to every `<Popover>` the toolbar renders — 29 from
+ * ToolbarPlugin itself plus the AI selection tools and the assistant-changes toolbar — and
+ * none of them is open on mount, so the only way to read it without driving that many
+ * separate pieces of state is to record what the real components actually pass. The stub
+ * renders nothing: a closed popover renders nothing either, and the point here is the
+ * container it was given, not its contents. The `title` is recorded alongside so a popover
+ * can be named in a failure, and so "nobody was left on the document-wide default" is an
+ * assertion about ALL of them rather than about a filtered subset. Named `mock…` so the
+ * jest.mock factory may reference it after hoisting.
  */
-const mockPopoverDocumentElements: (HTMLElement | undefined)[] = []
+type PopoverRecording = { title?: string; documentElement?: HTMLElement }
+const mockPopoverRecordings: PopoverRecording[] = []
 jest.mock('@/Components/Popover/Popover', () => ({
   __esModule: true,
-  default: (props: { documentElement?: HTMLElement }) => {
-    mockPopoverDocumentElements.push(props.documentElement)
+  default: (props: { title?: string; documentElement?: HTMLElement }) => {
+    mockPopoverRecordings.push({ title: props.title, documentElement: props.documentElement })
     return null
   },
 }))
@@ -167,7 +172,7 @@ const blurEditorTowards = (tile: Tile, relatedTarget: Element) =>
 const isToolbarShowing = (tile: Tile) => !tile.toolbarContainer.classList.contains('hidden')
 
 beforeEach(() => {
-  mockPopoverDocumentElements.length = 0
+  mockPopoverRecordings.length = 0
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = MockResizeObserver
   // Mobile layout: it is the only layout in which the focus state the blur handler
   // maintains is observable at all (`isMobile && !canShowToolbarOnMobile` is what puts
@@ -242,12 +247,12 @@ describe('the root-blur handler with more than one note open', () => {
 })
 
 /**
- * `popoverDocumentElement` is computed during render, and on the very FIRST render the
- * Lexical root does not exist yet — `ContentEditable` attaches it from a ref callback, in
- * that same commit — so the first pass legitimately lands on the helper's `document.body`
- * last resort. Nothing reads it then: all 29 popovers are closed, and opening any of them is
- * a state change, which is another render. The value under test is therefore the one from a
- * render AFTER the editor exists, which is what this drives, discarding the first pass.
+ * The popover container is computed during render, and on the very FIRST render the Lexical
+ * root does not exist yet — `ContentEditable` attaches it from a ref callback, in that same
+ * commit — so the first pass legitimately lands on the helper's `document.body` last resort.
+ * Nothing reads it then: every popover is closed, and opening any of them is a state change,
+ * which is another render. The value under test is therefore the one from a render AFTER the
+ * editor exists, which is what this drives, discarding the first pass.
  */
 const popoverContainersAfterTheEditorExists = async (mounted: Tile[]) => {
   const outsideAnyEditor = document.createElement('div')
@@ -256,15 +261,37 @@ const popoverContainersAfterTheEditorExists = async (mounted: Tile[]) => {
   for (const tile of mounted) {
     await focusEditor(tile)
   }
-  mockPopoverDocumentElements.length = 0
+  mockPopoverRecordings.length = 0
   for (const tile of mounted) {
     // true -> false is a real state change, so each toolbar re-renders exactly once.
     await blurEditorTowards(tile, outsideAnyEditor)
   }
 
-  // Popovers that take no `documentElement` at all (SelectionTools, the assistant-changes
-  // toolbar) are not this contract's subject.
-  return mockPopoverDocumentElements.filter((element): element is HTMLElement => element !== undefined)
+  return [...mockPopoverRecordings]
+}
+
+/**
+ * Popovers knowingly left on the document-wide default, by title. `BlockStyleGallery.tsx`
+ * does not import lexical at all and its popover sits two component layers deep inside it, so
+ * scoping it means threading a new editor prop through a public component's API — a design
+ * call, not a swap. Carved out BY NAME, and asserted below, so the exclusion cannot silently
+ * grow to cover a popover that regressed.
+ */
+const POPOVERS_WITH_NO_EDITOR_IN_SCOPE = new Set<string | undefined>(['More block styles'])
+
+/** Names an element for a readable failure; two mounted editors are otherwise identical. */
+const describeContainer = (first: Tile, second: Tile) => (element: HTMLElement | undefined) => {
+  if (element === undefined) {
+    // What `<Popover>` falls back to on its own: `useDocumentRect()`, the whole document.
+    return 'the whole document (no documentElement given)'
+  }
+  if (element === first.superEditor) {
+    return 'first note’s editor'
+  }
+  if (element === second.superEditor) {
+    return 'second note’s editor'
+  }
+  return `${element.tagName}#${element.id || '(no id)'}`
 }
 
 describe('the container every toolbar popover is positioned against', () => {
@@ -273,38 +300,49 @@ describe('the container every toolbar popover is positioned against', () => {
     const second = await mountTile('note-2')
     expect(document.getElementById(ElementIds.SuperEditor)).toBe(first.superEditor)
 
-    const resolved = await popoverContainersAfterTheEditorExists([first, second])
-    expect(resolved.length).toBeGreaterThan(0)
+    const recordings = await popoverContainersAfterTheEditorExists([first, second])
+    expect(recordings.length).toBeGreaterThan(0)
 
     // The whole point, in one assertion: BOTH editors appear, and nothing else does.
     // Resolved document-wide, every popover in both toolbars is handed the FIRST note's
     // editor, so this set is `{first note’s editor}` — and the second note's popovers
-    // render into, and are clamped to, a box that is not theirs.
-    const label = (element: HTMLElement) => {
-      if (element === first.superEditor) {
-        return 'first note’s editor'
-      }
-      if (element === second.superEditor) {
-        return 'second note’s editor'
-      }
-      return `${element.tagName}#${element.id || '(no id)'}`
-    }
-    expect(new Set(resolved.map(label))).toEqual(new Set(['first note’s editor', 'second note’s editor']))
-    expect(resolved).toContain(second.superEditor)
+    // render into, and are clamped to, a box that is not theirs. A popover given no
+    // container at all shows up here too, as "the whole document".
+    const label = describeContainer(first, second)
+    const scoped = recordings.filter((recording) => !POPOVERS_WITH_NO_EDITOR_IN_SCOPE.has(recording.title))
+    expect(new Set(scoped.map((recording) => label(recording.documentElement)))).toEqual(
+      new Set(['first note’s editor', 'second note’s editor']),
+    )
+    expect(scoped.map((recording) => recording.documentElement)).toContain(second.superEditor)
+  })
+
+  it('is still missing from the overflow block-style gallery, which has no editor at all', async () => {
+    // The carve-out above, asserted rather than assumed: if BlockStyleGallery is ever given
+    // an editor, this fails and the exclusion must be deleted instead of quietly widening.
+    const first = await mountTile('note-1')
+    const second = await mountTile('note-2')
+
+    const recordings = await popoverContainersAfterTheEditorExists([first, second])
+    const carvedOut = recordings.filter((recording) => POPOVERS_WITH_NO_EDITOR_IN_SCOPE.has(recording.title))
+
+    expect(carvedOut.length).toBeGreaterThan(0)
+    expect(carvedOut.map((recording) => recording.documentElement)).toEqual(carvedOut.map(() => undefined))
   })
 
   it('is the `#super-editor` itself, not the contenteditable’s parent', async () => {
     const first = await mountTile('note-1')
     const second = await mountTile('note-2')
 
-    const resolved = await popoverContainersAfterTheEditorExists([first, second])
+    const containers = (await popoverContainersAfterTheEditorExists([first, second])).map(
+      (recording) => recording.documentElement,
+    )
 
     // `editor.getRootElement()?.parentElement` is the expression the old code fell back to
     // second. It is a real element, so a lookup that stopped there would look like it
     // worked while still not being the editor box the popover is clamped against.
     expect(first.rootElement.parentElement).not.toBe(first.superEditor)
-    expect(resolved).not.toContain(first.rootElement.parentElement)
-    expect(resolved).not.toContain(second.rootElement.parentElement)
-    expect(resolved).not.toContain(document.body)
+    expect(containers).not.toContain(first.rootElement.parentElement)
+    expect(containers).not.toContain(second.rootElement.parentElement)
+    expect(containers).not.toContain(document.body)
   })
 })

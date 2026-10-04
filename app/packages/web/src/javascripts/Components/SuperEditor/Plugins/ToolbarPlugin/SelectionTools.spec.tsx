@@ -35,7 +35,10 @@ describe('SelectionTools AI action subtabs', () => {
     jest.mocked(useApplication).mockReturnValue(application as never)
     jest.mocked(useResponsiveAppPane).mockReturnValue({ presentPane: jest.fn() } as never)
     act(() => {
-      root.render(<SelectionTools editor={{} as never} hasSelection noteUuid="note-1" />)
+      // The only thing this spec's subject reads off the editor is `getRootElement`, used to
+      // resolve the action popover's own `#super-editor`. Rendered outside any Super editor,
+      // null is the honest answer and the popover falls back to `document.body`.
+      root.render(<SelectionTools editor={{ getRootElement: () => null } as never} hasSelection noteUuid="note-1" />)
     })
   })
 

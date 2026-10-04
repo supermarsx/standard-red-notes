@@ -13,6 +13,7 @@ import { ToolbarItem } from '@ariakit/react'
 import { LexicalEditor } from 'lexical'
 import { useCallback, useRef, useState } from 'react'
 import { jumpToAssistantChange } from '../AssistantChangeDecorationsPlugin'
+import { superEditorPortalTarget } from '../../ownSuperEditorElements'
 
 type ActionName = 'accept' | 'dismiss' | 'undo'
 
@@ -171,6 +172,10 @@ export function AssistantChangesToolbar({ noteUuid, editor }: { noteUuid?: strin
         align="end"
         className="max-h-[70vh] overflow-y-auto p-3"
         containerClassName="md:!w-[40rem] md:!max-w-2xl"
+        // Clamp against THIS note's own Super editor, walked up from its own Lexical root.
+        // Left unset, the popover is positioned against the whole document instead, so with
+        // more than one note open it is sized and flipped against the wrong box.
+        documentElement={superEditorPortalTarget(editor.getRootElement())}
       >
         <div className="mb-2 flex items-center justify-between gap-2">
           <div>

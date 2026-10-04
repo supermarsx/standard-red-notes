@@ -19,6 +19,7 @@ import { publishAssistantDirective } from '@/Assistant/assistantDirectives'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { captureSelectionSnapshot, restoreAndReplaceSelection } from './SelectionReplacement'
+import { superEditorPortalTarget } from '../../ownSuperEditorElements'
 
 const BTN =
   'flex select-none items-center gap-1.5 rounded-md px-2 py-1.5 text-text transition-colors duration-75 hover:bg-passive-4 active:bg-passive-3 disabled:opacity-40'
@@ -37,7 +38,14 @@ const ActionButton: FunctionComponent<{
   unavailableReason?: string
   busy: string | null
   run: (action: SelectionAction, extra?: RunExtra) => Promise<void>
-}> = ({ action, disabledBase, unavailableReason, busy, run }) => {
+  /**
+   * The editor this toolbar belongs to. Needed only to resolve the popover's own Super
+   * editor: taken as a prop rather than from `useLexicalComposerContext` because this
+   * component is also rendered outside a composer (SelectionTools.spec.tsx), where the
+   * context hook throws.
+   */
+  editor: LexicalEditor
+}> = ({ action, disabledBase, unavailableReason, busy, run, editor }) => {
   const ref = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [askText, setAskText] = useState('')
@@ -79,6 +87,11 @@ const ActionButton: FunctionComponent<{
         side="bottom"
         align="end"
         className="w-64 p-2"
+        // Clamp against THIS note's own Super editor, walked up from its own Lexical root.
+        // Left unset, the popover is positioned against the whole document instead, so with
+        // more than one note open it is sized and flipped against the wrong box. Resolved
+        // here, on every render of this button, so the render that opens it is current.
+        documentElement={superEditorPortalTarget(editor.getRootElement())}
       >
         {action.freeform ? (
           <div className="flex flex-col gap-1">
@@ -314,6 +327,7 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
             unavailableReason={!availability.available ? availability.reason : undefined}
             busy={busy}
             run={run}
+            editor={editor}
           />
         ))}
       </div>
