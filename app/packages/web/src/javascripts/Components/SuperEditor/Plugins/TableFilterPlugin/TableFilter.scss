@@ -1,0 +1,211 @@
+/**
+ * Styles for per-column table filtering (TableFilterPlugin).
+ *
+ * TWO LOAD-BEARING RULES LIVE HERE, both pinned by TableFilterPlugin.spec.tsx:
+ *
+ * 1. HIDING IS PRESENTATION ONLY. A filtered-out row keeps its cells, its text
+ *    and its place in the document; the single `display: none` below is the
+ *    whole of "hiding". Nothing in the filter path deletes or moves a row.
+ *
+ * 2. PRINT SHOWS EVERY ROW. `PrintNote` prints a `cloneNode(true)` of the LIVE
+ *    editor DOM, so without the print override a filtered table would print as
+ *    a shorter table - silent data loss. Print therefore restores every row and
+ *    swaps the on-screen count for a notice saying the filter was NOT applied.
+ *    Standalone HTML, DOCX, ODT and PDF go through headless editors
+ *    (`HeadlessSuperConverter`, `DocModel`) that never see this DOM at all, so
+ *    they contain every row by construction.
+ *
+ * The filter affordance must stay discoverable even when headers carry no
+ * distinguishing styling at all (t115-A's differentiated-headers toggle can
+ * turn that off), so the chip paints its OWN background, border and glyph and
+ * is never hidden behind :hover.
+ */
+
+// 1. Hiding.
+tr[data-srn-table-filtered='true'] {
+  display: none;
+}
+
+// 2. Print restores every row, in the live editor and in the detached snapshot.
+@media print {
+  tr[data-srn-table-filtered='true'] {
+    display: table-row !important;
+  }
+
+  [data-srn-table-filter-status-screen] {
+    display: none !important;
+  }
+
+  [data-srn-table-filter-status-print] {
+    display: inline !important;
+  }
+}
+
+body.srn-printing {
+  tr[data-srn-table-filtered='true'] {
+    display: table-row !important;
+  }
+
+  [data-srn-table-filter-status-screen] {
+    display: none !important;
+  }
+
+  [data-srn-table-filter-status-print] {
+    display: inline !important;
+  }
+}
+
+// The print-only wording is hidden on screen.
+[data-srn-table-filter-status-print] {
+  display: none;
+}
+
+// The disclosure caption. `caption-side: top` keeps the row count above the
+// table, where it cannot be mistaken for a data row.
+caption.Lexical__tableFilterCaption {
+  caption-side: top;
+  text-align: left;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--sn-stylekit-foreground-color);
+  background-color: var(--sn-stylekit-contrast-background-color);
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-bottom: 0;
+  user-select: none;
+}
+
+.Lexical__tableFilterStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.Lexical__tableFilterClear {
+  cursor: pointer;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-radius: 0.25rem;
+  background-color: var(--sn-stylekit-background-color);
+  color: var(--sn-stylekit-info-color);
+  touch-action: manipulation;
+}
+
+// The per-header filter chip. It paints its own surface so it does not rely on
+// the header cell being visually differentiated, and its resting opacity is
+// deliberately non-zero: a control that only appears on hover is not an
+// affordance on a touch device and is not discoverable at all.
+.Lexical__tableFilterButton {
+  --sn-table-filter-chip-size: 1.125rem;
+  float: right;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sn-table-filter-chip-size);
+  height: var(--sn-table-filter-chip-size);
+  margin-left: 0.25rem;
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-radius: 0.25rem;
+  background-color: var(--sn-stylekit-background-color);
+  color: var(--sn-stylekit-passive-color-1);
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  opacity: 0.65;
+  transition:
+    opacity 0.1s ease-in-out,
+    color 0.1s ease-in-out;
+
+  &:hover,
+  &:focus-visible {
+    opacity: 1;
+    color: var(--sn-stylekit-info-color);
+  }
+}
+
+// An active filter is announced by the chip itself, at full strength, so a
+// column that is hiding rows is identifiable without reading the caption.
+.Lexical__tableFilterButton[data-srn-table-filter-active='true'] {
+  opacity: 1;
+  color: var(--sn-stylekit-info-color);
+  border-color: var(--sn-stylekit-info-color);
+}
+
+@media (pointer: coarse) {
+  .Lexical__tableFilterButton {
+    --sn-table-filter-chip-size: 1.5rem;
+    opacity: 1;
+  }
+}
+
+.Lexical__tableFilterButtonGlyph {
+  width: 0.625rem;
+  height: 0.625rem;
+  pointer-events: none;
+}
+
+// The in-place editing panel. It lives inside the same caption as the status
+// line, which means it needs no measurement of anything: there is no portaled
+// popover to position, and nothing here depends on a layout engine.
+.Lexical__tableFilterPanel {
+  margin-top: 0.375rem;
+  padding-top: 0.375rem;
+  border-top: 1px solid var(--sn-stylekit-border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.Lexical__tableFilterPanelRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.Lexical__tableFilterPanel input[type='text'] {
+  min-width: 6rem;
+  padding: 0.0625rem 0.25rem;
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-radius: 0.25rem;
+  background-color: var(--sn-stylekit-background-color);
+  color: var(--sn-stylekit-foreground-color);
+  font-size: 0.75rem;
+}
+
+.Lexical__tableFilterPanel button {
+  cursor: pointer;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-radius: 0.25rem;
+  background-color: var(--sn-stylekit-background-color);
+  color: var(--sn-stylekit-foreground-color);
+  font-size: 0.75rem;
+  touch-action: manipulation;
+}
+
+.Lexical__tableFilterPanel button[aria-pressed='true'] {
+  color: var(--sn-stylekit-info-color);
+  border-color: var(--sn-stylekit-info-color);
+}
+
+.Lexical__tableFilterUnreadable {
+  color: var(--sn-stylekit-warning-color);
+}
+
+// Filtering is an on-screen reading aid. Nothing it injects belongs in print.
+@media print {
+  caption.Lexical__tableFilterCaption {
+    background-color: transparent;
+    border: 0;
+    padding: 0 0 0.25rem 0;
+  }
+
+  .Lexical__tableFilterButton,
+  .Lexical__tableFilterClear,
+  .Lexical__tableFilterPanel {
+    display: none !important;
+  }
+}

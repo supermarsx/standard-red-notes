@@ -24,6 +24,7 @@ import { SuperEditorContentId } from './Constants'
 import { classNames } from '@standardnotes/utils'
 import { MarkdownTransformers } from './MarkdownTransformers'
 import { RemoveBrokenTablesPlugin, TableWidgetLayoutPlugin } from './Plugins/TablePlugin'
+import TableFilterPlugin from './Plugins/TableFilterPlugin/TableFilterPlugin'
 import TableActionMenuPlugin from './Plugins/TableCellActionMenuPlugin'
 import ToolbarPlugin from './Plugins/ToolbarPlugin/ToolbarPlugin'
 import ListStylePlugin from './Plugins/ListStylePlugin/ListStylePlugin'
@@ -393,6 +394,13 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <FoldablePlugin />
       <TabIndentationPlugin />
       <RemoveBrokenTablesPlugin />
+      {/*
+        Mounted unconditionally, read-only notes included: a persisted filter is
+        synced, so a reader who did not set it still has to be told that rows are
+        hidden. The plugin suppresses its own editing affordances when the editor
+        is not editable and keeps only the disclosure.
+      */}
+      <TableFilterPlugin />
       <RemoteImagePlugin />
       <CodeOptionsPlugin />
       <SearchPlugin />
