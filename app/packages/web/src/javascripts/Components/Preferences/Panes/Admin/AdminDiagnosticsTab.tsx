@@ -12,10 +12,13 @@ import Tab from '@/Components/Tabs/Tab'
 import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import {
+  CAPABILITY_OUTCOME_CHIP,
+  capabilityOutcomeState,
   describeDeployment,
   describeTransport,
   diagnose,
   summarizeTestRun,
+  type CapabilityOutcomeState,
   type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
   type Tone,
@@ -41,7 +44,7 @@ import {
   type Verdict,
 } from './diagnosticsSections'
 import DiagnosticsSection from './DiagnosticsSection'
-import { buildWebsocketSection } from './websocketSection'
+import { buildWebsocketSection, socketFallbackIsDeferred } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
 import { buildAccountSection, type AccountObservations } from './accountSection'
@@ -416,8 +419,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     setTesting(true)
     const results: SectionTaggedOutcome[] = []
 
-    const record = (section: SectionId, name: string, passed: boolean, detail: string, reportDetail: string) =>
-      results.push({ section, name, passed, detail, reportDetail })
+    const record = (
+      section: SectionId,
+      name: string,
+      passed: boolean,
+      detail: string,
+      reportDetail: string,
+      state?: CapabilityOutcomeState,
+    ) => results.push({ section, name, passed, detail, reportDetail, ...(state === undefined ? {} : { state }) })
 
     try {
       // 1. The public capability descriptor — the same call the transport makes
@@ -504,13 +513,37 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
       // 4. Live socket negotiation — no request at all, just what this client's
       //    own transport reports.
+      //
+      //    THREE ANSWERS, NOT TWO. A transport standing down because another tab
+      //    of this account owns the socket lane is a correct steady state — the
+      //    lane's own copy for that reason reads "Expected, and not a fault" —
+      //    and this check recorded `[FAIL]` for it, in a report whose top-level
+      //    Diagnosis said on the same screen that the lane is fully available.
+      //    The disposition comes from the transport's own classification
+      //    (`socketFallbackIsDeferred`, which consumes `syncFallbackDisposition`);
+      //    it is not re-derived here, because re-deriving it as the negation of
+      //    "permanent" is exactly the defect that produced the FAIL.
+      //
+      //    Every other way this check fails still fails: a reason the lane calls
+      //    retryable or permanent, a non-READY state with no reason at all, and
+      //    no transport installed are each still recorded as a failure.
       const live = application.syncTransportStatus
+      const deferred = live !== undefined && live.state !== 'READY' && socketFallbackIsDeferred(live.fallbackReason)
       const liveSummary = live
         ? live.state === 'READY'
           ? `Socket READY, negotiated: ${live.operations.join(', ') || 'nothing'}.`
-          : `Transport is ${live.state}${live.fallbackReason ? ` (${live.fallbackReason})` : ''} — no operations are negotiated.`
+          : deferred
+            ? 'Not negotiated here: another tab of this account owns the socket lane. Expected, and not a fault — this tab sends over HTTP by design while that one holds the lease.'
+            : `Transport is ${live.state}${live.fallbackReason ? ` (${live.fallbackReason})` : ''} — no operations are negotiated.`
         : 'No realtime transport is installed in this client.'
-      record('websocket', 'Live socket negotiation', live?.state === 'READY', liveSummary, liveSummary)
+      record(
+        'websocket',
+        'Live socket negotiation',
+        live?.state === 'READY',
+        liveSummary,
+        liveSummary,
+        deferred ? 'informational' : undefined,
+      )
 
       // 5. Deployment marker — "is the running build current" must be answerable.
       //    Tagged for Environment & setup, which is where the deployment identity
@@ -583,7 +616,28 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       ...(subscription === undefined
         ? {}
         : { subscriptionPlan: subscription.planName, subscriptionCancelled: subscription.cancelled }),
-      localSoftCapBytes: observed(() => application.getPreference(PrefKey.StorageMaxUsageBytes)),
+      // The default is supplied EXPLICITLY, and that is the whole fix for a row
+      // that read "not reported" on every deployment where nobody had set a cap.
+      // `getPreference` with one argument answers `undefined` for an unset
+      // preference, `observed` answers `undefined` for a read that threw, and the
+      // row cannot tell those apart — so "the user set no cap", which is both the
+      // commonest case and a perfectly good reading, arrived as "this pane did not
+      // look". `0` is this preference's own documented default (`PrefDefaults`)
+      // and is what the Storage pane means by unlimited; it is inlined rather than
+      // imported because the default is also the floor this row is interpreting,
+      // and a `?? 0` INSIDE the closure keeps a thrown read answering nothing.
+      localSoftCapBytes: observed(() => application.getPreference(PrefKey.StorageMaxUsageBytes) ?? 0),
+      /**
+       * SAID, NOT IMPLIED. Nothing in this build reads this account's own uploaded
+       * bytes or its allowance: the only surface that reports either is the admin
+       * Users tab, which reaches them by USER ID, and no identifier may enter this
+       * pane. So the Space rows are empty because nobody asked — stated here as a
+       * closed value so the section can tell that apart from a read that was
+       * attempted and failed. An all-empty Space block was once read as cosmetic
+       * noise and was the only trace in a whole report of a files subsystem that
+       * was completely broken.
+       */
+      spaceFigureSource: 'not-attempted',
       ...(payload?.protocol?.version === undefined ? {} : { protocolVersion: payload.protocol.version }),
       ...(payload?.protocol?.serverOperations === undefined
         ? {}
@@ -809,7 +863,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
               {outcomes.map((outcome) => (
                 <li key={outcome.name} className="border-border rounded border p-3">
                   <div className="flex items-center gap-2">
-                    <Chip tone={outcome.passed ? 'good' : 'bad'}>{outcome.passed ? 'Pass' : 'Fail'}</Chip>
+                    <Chip tone={CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].tone}>
+                      {CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].label}
+                    </Chip>
                     <span className="text-sm font-semibold">{outcome.name}</span>
                   </div>
                   <div className="text-passive-0 mt-1 text-sm">{outcome.detail}</div>

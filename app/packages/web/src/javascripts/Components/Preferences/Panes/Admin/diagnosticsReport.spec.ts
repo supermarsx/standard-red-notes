@@ -345,6 +345,35 @@ describe('buildDiagnosticsReport — what it says', () => {
     expect(report).toContain('[FAIL] Ticket issuance — Refused with 503.')
   })
 
+  /**
+   * The copyable report is the surface the operator pastes, so it is the surface
+   * that said `[FAIL]` over a correct steady state. The third tag is asserted
+   * ALONGSIDE the two that still mean what they meant: a tag that quietly turned
+   * every failure into a note would satisfy half of this on its own.
+   */
+  it('tags an informational outcome as a note, and keeps PASS and FAIL meaning what they mean', () => {
+    const report = buildDiagnosticsReport(
+      input({
+        outcomes: [
+          { name: 'Capability descriptor', passed: true, detail: 'ok', reportDetail: 'Advertises 1 entry.' },
+          { name: 'Ticket issuance', passed: false, detail: 'no', reportDetail: 'Refused with 503.' },
+          {
+            name: 'Live socket negotiation',
+            passed: false,
+            state: 'informational',
+            detail: 'another tab owns it',
+            reportDetail: 'Not negotiated here: another tab of this account owns the socket lane.',
+          },
+        ],
+      }),
+    )
+
+    expect(report).toContain('[NOTE] Live socket negotiation — Not negotiated here')
+    expect(report).toContain('[PASS] Capability descriptor —')
+    expect(report).toContain('[FAIL] Ticket issuance — Refused with 503.')
+    expect(report).not.toContain('[FAIL] Live socket negotiation')
+  })
+
   it('says so when the topology was not reported, instead of guessing one', () => {
     const report = buildDiagnosticsReport(input({ payload: { ...payload, deployment: undefined } }))
 

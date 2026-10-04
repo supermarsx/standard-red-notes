@@ -495,6 +495,74 @@ describe('the account file allowance', () => {
     expect(codesOf(model)).not.toContain('ACCOUNT_FILE_QUOTA_NEARLY_FULL')
   })
 
+  /* ------------------------------------------------------------------------ */
+  /* Two kinds of empty, and they must never render the same                  */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE MISREAD THIS PAIR EXISTS FOR. ***
+   *
+   * An all-"not reported" Space block was taken for cosmetic noise, and on the
+   * deployment it was taken from it was the only trace in a whole diagnostics
+   * report of a files subsystem that was completely broken — the operator's listing
+   * aborted, downloads hung, usage read zero. "Nobody asked" and "the read failed"
+   * are the same defect class as a collection answering `[]` for both "none" and
+   * "not read yet", and they are kept apart here by a closed value rather than by
+   * the reader's judgement.
+   */
+  const emptySpace = (source: AccountObservations['spaceFigureSource']): SectionModel =>
+    buildAccountSection({
+      observations: healthyObservations({
+        fileUploadBytesUsed: undefined,
+        fileUploadBytesLimit: undefined,
+        ...(source === undefined ? {} : { spaceFigureSource: source }),
+      }),
+    })
+
+  it('reports a FAILED space read as broken, because the emptiness is then the symptom', () => {
+    const model = emptySpace('read-and-failed')
+
+    // Precondition: the rows really are empty, so this is the case under test.
+    expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
+    expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.verdict).toBe('broken')
+    expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.detail).toContain('read FAILED')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOT_READ')
+    expect(model.worstVerdict).toBe('broken')
+  })
+
+  it('reports an unattempted space read as the panel gap it is, and names what is needed', () => {
+    const model = emptySpace('not-attempted')
+
+    expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
+    expect(findingOf(model, 'ACCOUNT_SPACE_NOT_READ')?.verdict).toBe('undetermined')
+    expect(findingOf(model, 'ACCOUNT_SPACE_NOT_READ')?.detail).toContain('SELF-scoped reading')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
+    // *** THE DISCRIMINATION. *** The two renderings must differ, and the one
+    // that is a symptom is the only one with a verdict.
+    expect(model.worstVerdict).not.toBe('broken')
+  })
+
+  it('claims neither kind of empty when the caller did not say which it is', () => {
+    // Absent is not "nobody asked" either. A caller that supplied no source has not
+    // told this block whether the read was attempted, and a block that guessed
+    // would be making the absent-is-false mistake it exists to flag.
+    const model = emptySpace(undefined)
+
+    expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOT_READ')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
+  })
+
+  it('says nothing about the space source when the figures DID arrive', () => {
+    for (const source of ['read-and-failed', 'not-attempted'] as const) {
+      const model = buildAccountSection({ observations: healthyObservations({ spaceFigureSource: source }) })
+
+      expect(rowOf(model, 'Server file allowance used').value).toBe('0-25%')
+      expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
+      expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOT_READ')
+    }
+  })
+
   it('does not read an unreported used figure as zero', () => {
     const model = buildAccountSection({
       observations: healthyObservations({ fileUploadBytesUsed: undefined }),

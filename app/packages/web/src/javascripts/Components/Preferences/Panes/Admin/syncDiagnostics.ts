@@ -1708,9 +1708,68 @@ export function describeDeployment(raw: unknown): DeploymentIdentityView {
   return { revision, version: version || '—', unstamped: false, tone: 'good', note: null }
 }
 
+/**
+ * What a probe RESULT is worth — three answers, because two were one too few.
+ *
+ * `pass` / `fail` are the two the runner has always recorded. `informational` is
+ * the third: a check that ran, established what it set out to establish, and found
+ * a state that is neither a success nor a failure. The motivating case is the live
+ * socket negotiation check against a second browser tab: the transport correctly
+ * stands down because another tab of the same account owns the lane, the lane's own
+ * user-facing copy calls that "expected, and not a fault", and this runner recorded
+ * `[FAIL]`. A report that calls a correct steady state a failure is a report an
+ * operator stops reading.
+ *
+ * It is NOT "skipped". A skipped check establishes nothing; one of these answered.
+ */
+export const CAPABILITY_OUTCOME_STATES = ['pass', 'fail', 'informational'] as const
+
+export type CapabilityOutcomeState = (typeof CAPABILITY_OUTCOME_STATES)[number]
+
+/**
+ * The state of one outcome, from whichever field carries it.
+ *
+ * EVERY consumer must read an outcome through this, and none may read `passed`
+ * directly: a renderer that reads the boolean paints `Fail` over an outcome whose
+ * author set `state: 'informational'`, which is the misreport this exists to end
+ * reappearing one call site down. `passed` stays for the two states it can express,
+ * so an existing caller that records a plain pass or fail needs no change.
+ */
+export function capabilityOutcomeState(outcome: CapabilityTestOutcome): CapabilityOutcomeState {
+  return outcome.state ?? (outcome.passed ? 'pass' : 'fail')
+}
+
+/**
+ * *** EXHAUSTIVE `Record`s ON PURPOSE, IN ONE PLACE. ***
+ *
+ * The chip and the report tag for each state. Two screens render the chip and the
+ * copyable report renders the tag, and three ternaries over one boolean is how the
+ * third surface comes to disagree with the other two. `Note` rather than `N/A`:
+ * the check ran, so its answer is a note and not an absence.
+ */
+export const CAPABILITY_OUTCOME_CHIP: Record<CapabilityOutcomeState, { label: string; tone: Tone }> = {
+  pass: { label: 'Pass', tone: 'good' },
+  fail: { label: 'Fail', tone: 'bad' },
+  informational: { label: 'Note', tone: 'neutral' },
+}
+
+export const CAPABILITY_OUTCOME_REPORT_TAG: Record<CapabilityOutcomeState, string> = {
+  pass: 'PASS',
+  fail: 'FAIL',
+  informational: 'NOTE',
+}
+
 export type CapabilityTestOutcome = {
   name: string
   passed: boolean
+  /**
+   * The outcome's state when `passed` cannot carry it. Absent means "derive it
+   * from `passed`", so this is additive to every existing recorder. An
+   * `informational` outcome should still set `passed: false` — it did not pass —
+   * and nothing may read that boolean without going through
+   * `capabilityOutcomeState`.
+   */
+  state?: CapabilityOutcomeState
   /**
    * Shown in the panel. MAY embed a thrown message — an exception from `fetch`
    * can carry the URL it was attempting, and that detail is worth having in
@@ -1727,11 +1786,24 @@ export type CapabilityTestOutcome = {
   reportDetail: string
 }
 
-/** Human summary of a completed test run, for the header line. */
+/**
+ * Human summary of a completed test run, for the header line.
+ *
+ * An `informational` outcome is counted in NEITHER half, and the denominator drops
+ * with it. Leaving it in the denominator would read "3 of 4 checks passed" over a
+ * run in which nothing failed — the same misreport as the `[FAIL]` line, moved into
+ * the one sentence an operator reads before anything else.
+ */
 export function summarizeTestRun(outcomes: readonly CapabilityTestOutcome[]): string {
   if (outcomes.length === 0) {
     return 'No tests have been run yet.'
   }
-  const passed = outcomes.filter((outcome) => outcome.passed).length
-  return `${passed} of ${outcomes.length} checks passed.`
+  const states = outcomes.map(capabilityOutcomeState)
+  const passed = states.filter((state) => state === 'pass').length
+  const judged = states.filter((state) => state !== 'informational').length
+  const noted = states.length - judged
+
+  return noted === 0
+    ? `${passed} of ${judged} checks passed.`
+    : `${passed} of ${judged} checks passed; ${noted} did not apply here.`
 }

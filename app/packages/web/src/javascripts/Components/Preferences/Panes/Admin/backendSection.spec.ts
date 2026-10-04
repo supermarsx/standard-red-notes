@@ -1,6 +1,7 @@
 import {
   buildBackendSection,
   describeCacheRequirement,
+  filesProbeTarget,
   KNOWN_SERVICES,
   type BackendSectionInput,
 } from './backendSection'
@@ -725,6 +726,139 @@ describe('internal service communication', () => {
     expect(codesOf(model)).not.toContain('INTERNAL_SERVICE_PROBE_FAILED')
   })
 
+  /* ------------------------------------------------------------------------ */
+  /* A green probe is not a working lane                                      */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE MEASURED FAILURE THIS GROUP EXISTS FOR. ***
+   *
+   * On a deployment where file listing aborted, downloads hung forever, previews
+   * failed and the account's usage read zero permanently, this pane showed: files
+   * probe "answering", FILES_V1 advertised, no unmet files condition, and all three
+   * files variables set. Every row defensible, the screen as a whole wrong.
+   *
+   * The probe is an UNAUTHENTICATED `GET /healthcheck/readiness`. It cannot see a
+   * credential the far end refuses, which is the exact failure the user had — so a
+   * positive reading keeps its fact and loses its claim.
+   */
+  it('caps a probe that answered, because an unauthenticated readiness route is not an authorized call', () => {
+    const row = rowOf(healthy(), 'Files service probe')
+
+    expect(row.value).toBe('answering')
+    expect(row.claimed).toBe('healthy')
+    expect(row.verdict).toBe('undetermined')
+    expect(row.evidence.kind).toBe('proxy')
+    expect(row.caveat).toContain('AUTHORIZED request')
+
+    // Every probed service, not only files: the mechanism is the same route and the
+    // same self-resolved address for all of them.
+    for (const label of ['Auth service probe', 'Syncing server probe', 'Revisions service probe']) {
+      expect(rowOf(healthy(), label).claimed).toBe('healthy')
+      expect(rowOf(healthy(), label).verdict).toBe('undetermined')
+    }
+  })
+
+  it('still reports a probe that FAILED as broken, on direct evidence', () => {
+    // *** THE CONTROL. *** Capping the positive reading must not cost the negative
+    // one: a probe that failed, failed, and that is conclusive.
+    const model = buildBackendSection({
+      topology: topology(),
+      serverStatus: serverStatus({
+        services: [
+          { name: 'api-gateway', reachable: true, status: 'ok' },
+          { name: 'files', reachable: false, status: 'down', detail: 'unreachable', responseTimeMs: 2500 },
+        ],
+      }),
+    })
+    const row = rowOf(model, 'Files service probe')
+
+    expect(row.value).toBe('did not connect')
+    expect(row.verdict).toBe('broken')
+    expect(row.evidence.kind).toBe('direct')
+    expect(codesOf(model)).toContain('INTERNAL_SERVICE_PROBE_FAILED')
+    expect(model.worstVerdict).toBe('broken')
+  })
+
+  it('states that nothing on this screen establishes a file transfer, especially when the probe is green', () => {
+    const finding = findingOf(healthy(), 'FILE_TRANSFER_UNVERIFIED')
+
+    // Precondition: the probe really did read green, so this is the "everything
+    // looks fine" case rather than one where something else already failed.
+    expect(rowOf(healthy(), 'Files service probe').value).toBe('answering')
+    expect(finding?.verdict).toBe('undetermined')
+    expect(finding?.detail).toContain('DISAGREE satisfy every row on this screen and refuse every transfer')
+    expect(finding?.detail).toContain('never as "file transfers work"')
+  })
+
+  it('does not raise the unverified-transfer finding when no files probe was reported at all', () => {
+    // Absent is not a green probe either: with nothing reported there is no claim
+    // to qualify, and the row already reads "not reported" on absent evidence.
+    const model = buildBackendSection({
+      topology: topology(),
+      serverStatus: serverStatus({ services: [{ name: 'api-gateway', reachable: true, status: 'ok' }] }),
+    })
+
+    expect(rowOf(model, 'Files service probe').value).toBe('not reported')
+    expect(codesOf(model)).not.toContain('FILE_TRANSFER_UNVERIFIED')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* What the files probe was pointed at                                      */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * `FILES_SERVER_PROBE_URL` unset does not disable the probe — it falls back to
+   * `http://localhost:<FILES_SERVER_PORT>`, loopback RELATIVE TO THE API-GATEWAY.
+   * On the single container that is the files service; on anything else it is not,
+   * and "answering" then describes something that is not the files service.
+   */
+  it('derives what the probe dialled from a presence boolean and the mode', () => {
+    expect(filesProbeTarget(topology({ presence: { FILES_SERVER_PROBE_URL: true } }))).toBe('configured')
+    expect(filesProbeTarget(topology({ mode: 'home-server', presence: { FILES_SERVER_PROBE_URL: false } }))).toBe(
+      'colocated-sibling',
+    )
+    for (const mode of ['self-hosted', 'unset', 'other'] as const) {
+      expect(filesProbeTarget(topology({ mode, presence: { FILES_SERVER_PROBE_URL: false } }))).toBe('gateway-loopback')
+    }
+    // Absent is not false: a key missing from the presence map is silence.
+    expect(filesProbeTarget(topology({ presence: {} }))).toBe('unknown')
+    expect(filesProbeTarget(undefined)).toBe('unknown')
+    expect(filesProbeTarget(topology({ mode: undefined, presence: { FILES_SERVER_PROBE_URL: false } }))).toBe('unknown')
+  })
+
+  it('withholds the probe result entirely when it dialled the gateway’s own loopback', () => {
+    const model = buildBackendSection({
+      topology: topology({ mode: 'self-hosted', presence: { FILES_SERVER_PROBE_URL: false } }),
+      serverStatus: serverStatus(),
+    })
+    const row = rowOf(model, 'Files service probe')
+
+    // The word an operator skims must not say the opposite of the sentence under it.
+    expect(row.value).toBe('did not probe the files service')
+    expect(row.verdict).toBe('undetermined')
+    expect(row.note).toContain('IS NOT SET AND THIS IS NOT A SINGLE CONTAINER')
+    expect(findingOf(model, 'FILES_PROBE_TARGET_WRONG')?.verdict).toBe('degraded')
+    expect(findingOf(model, 'FILES_PROBE_TARGET_WRONG')?.remedy?.summary).toContain('FILES_SERVER_PROBE_URL')
+    expect(findingOf(model, 'FILES_PROBE_TARGET_WRONG')?.remedy?.steps?.[1]).toContain('Do NOT use FILES_SERVER_URL')
+  })
+
+  it('leaves the probe result standing where the target IS the files service', () => {
+    for (const reported of [
+      topology({ presence: { FILES_SERVER_PROBE_URL: true } }),
+      topology({ mode: 'home-server', presence: { FILES_SERVER_PROBE_URL: false } }),
+    ]) {
+      const model = buildBackendSection({ topology: reported, serverStatus: serverStatus() })
+
+      expect(rowOf(model, 'Files service probe').value).toBe('answering')
+      expect(codesOf(model)).not.toContain('FILES_PROBE_TARGET_WRONG')
+      // ...and the claim is STILL capped, because the address being right says
+      // nothing about the credential.
+      expect(rowOf(model, 'Files service probe').verdict).toBe('undetermined')
+      expect(codesOf(model)).toContain('FILE_TRANSFER_UNVERIFIED')
+    }
+  })
+
   it('ignores a duplicate entry for a known service rather than letting the last one win', () => {
     const model = buildBackendSection({
       serverStatus: serverStatus({
@@ -896,15 +1030,22 @@ describe('a healthy deployment', () => {
    * not reported by any endpoint this section can read — and the gateway's own
    * self-report is capped. A green section here would be the panel claiming more
    * than it has.
+   *
+   * Every PROBE row is capped too, and that is the point of the change this
+   * assertion was rewritten for: the probes are unauthenticated readiness routes,
+   * and a screen of green probe rows is what this pane showed over a files
+   * subsystem that was entirely broken. The cache ping is NOT capped — that is a
+   * real round trip over the client the gateway actually holds — so the two are
+   * asserted apart rather than swept together.
    */
   it('reports undetermined overall, because several facts are not reported', () => {
     const model = healthy()
 
     expect(model.worstVerdict).toBe('undetermined')
-    expect(rowOf(model, 'Auth service probe').verdict).toBe('healthy')
+    expect(rowOf(model, 'Auth service probe').claimed).toBe('healthy')
+    expect(rowOf(model, 'Auth service probe').verdict).toBe('undetermined')
     expect(rowOf(model, 'Gateway cache ping').verdict).toBe('healthy')
-    expect(codesOf(model)).toEqual(['WEBSOCKET_GATEWAY_NOT_PROBED'])
-    expect(model.headline?.code).toBe('WEBSOCKET_GATEWAY_NOT_PROBED')
+    expect(codesOf(model).sort()).toEqual(['FILE_TRANSFER_UNVERIFIED', 'WEBSOCKET_GATEWAY_NOT_PROBED'])
   })
 
   it('emits only verdicts the contract declares', () => {
@@ -968,8 +1109,25 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
   const PLANTED_ERROR =
     'PLANTED-READ-FAILURE-MARKER unreachable https://db-PLANTED-HOST.internal:3306 redis://u:PLANTED-PASSWORD@cache.internal:6379'
 
+  /**
+   * *** AN OPAQUE SENTINEL, BECAUSE AN ADDRESS-SHAPED ONE CANNOT DISCRIMINATE. ***
+   *
+   * Almost every candidate below carries a scheme, a dot or a colon, so a denylist
+   * and a correct allowlist both refuse it and the scan cannot tell the two apart.
+   * This one has none of those: nothing in `sanitizeServerCopy` can match any part
+   * of it, so only an allowlist stops it. It is planted in the three topology fields
+   * this section now reads for the files-probe target — the presence KEY, the MODE
+   * and the proxy setting — which is the surface that change made reachable.
+   *
+   * Built from markers rather than plausible prose, and long enough that the derived
+   * middle and tail windows sit past the 30th and 45th characters, where a
+   * truncating leak leaves its surviving bytes.
+   */
+  const PLANTED_OPAQUE = 'qzv4m-PLANTEDOPAQUEHEAD-wwwwwwww-PLANTEDOPAQUEMID-wwwwwwww-PLANTEDOPAQUETAIL'
+
   const SECRETS = [
     PLANTED_ERROR,
+    PLANTED_OPAQUE,
     'redis://user:PLANTED-PASSWORD@cache.internal:6379',
     'mysql://root:PLANTED-DB-PASSWORD@db.internal:3306/standardnotes',
     'https://syncing-server.planted.internal:3000/healthcheck/readiness',
@@ -1056,11 +1214,17 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
         masterSwitches: { currentVersion: 'v9.9.9-PLANTED-VERSION' },
       },
       topology: topology({
-        mode: 'self-hosted',
+        // The three topology fields the files-probe target is derived from, each
+        // poisoned. `mode` and `serviceProxySetting` are the server's enums and go
+        // through `safeEnum`; the presence KEY is server-chosen text that this
+        // section only ever tests membership of.
+        mode: PLANTED_OPAQUE as 'other',
+        serviceProxySetting: PLANTED_OPAQUE as 'other',
         presence: {
           SQS_QUEUE_URL: true,
           SNS_TOPIC_ARN: true,
           'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
+          [PLANTED_OPAQUE]: true,
         },
       }),
       datastore: {
@@ -1130,6 +1294,7 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
       [
         'AUTH_DATABASE_NOT_ANSWERING',
         'DATABASE_MIGRATIONS_PENDING',
+        'FILE_TRANSFER_UNVERIFIED',
         'INTERNAL_PROBE_NEAR_DEADLINE',
         'INTERNAL_SERVICE_PROBE_FAILED',
         'WEBSOCKET_GATEWAY_NOT_PROBED',

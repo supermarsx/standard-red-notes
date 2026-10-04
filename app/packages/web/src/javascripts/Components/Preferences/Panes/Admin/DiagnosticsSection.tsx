@@ -4,6 +4,7 @@ import { Subtitle, Text } from '@/Components/Preferences/PreferencesComponents/C
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import { Chip, RemedyBlock } from './diagnosticsPresentation'
+import { CAPABILITY_OUTCOME_CHIP, capabilityOutcomeState } from './syncDiagnostics'
 import {
   blockWorstVerdict,
   isBlockEmpty,
@@ -114,7 +115,9 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
             {(block.outcomes ?? []).map((outcome) => (
               <li key={outcome.name} className="border-border rounded border p-3">
                 <div className="flex items-center gap-2">
-                  <Chip tone={outcome.passed ? 'good' : 'bad'}>{outcome.passed ? 'Pass' : 'Fail'}</Chip>
+                  <Chip tone={CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].tone}>
+                    {CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].label}
+                  </Chip>
                   <span className="text-sm font-semibold">{outcome.name}</span>
                 </div>
                 <div className="text-passive-0 mt-1 text-sm">{outcome.detail}</div>

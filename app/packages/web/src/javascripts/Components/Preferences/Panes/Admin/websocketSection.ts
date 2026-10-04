@@ -1,6 +1,7 @@
 import {
-  isPermanentSyncFallbackReason,
   SYNC_FALLBACK_REASON_EXPLANATIONS,
+  syncFallbackDisposition,
+  type SyncFallbackDisposition,
   type SyncFallbackReason,
   type SyncNegotiatedOperation,
   type SyncTransportState,
@@ -229,6 +230,49 @@ export const SOCKET_FALLBACK_REASONS = [
 type UnlistedFallbackReason = Exclude<SyncFallbackReason, (typeof SOCKET_FALLBACK_REASONS)[number]>
 export type EveryFallbackReasonIsListed = AssertNever<UnlistedFallbackReason>
 
+/**
+ * What a fallback reason is WORTH, as the lane's own three dispositions.
+ *
+ * CONSUMED, NEVER RE-DERIVED. `syncFallbackDisposition` is the transport's
+ * classification and this tuple exists only so `safeEnum` can admit its three
+ * literals, with the usual compile-time assertion that it still covers them. The
+ * panel used to answer this question for itself as `!isPermanentSyncFallbackReason`,
+ * and that negation is the defect rather than a shortcut: it answers `retryable`
+ * for a tab that is deliberately standing down because another tab of the same
+ * account holds the socket — a correct steady state, reported here as a transport
+ * mid-recovery. The lane's own doc comment on that predicate now says in terms
+ * that deriving retryability from its negation is wrong, and this module is one of
+ * the surfaces it is talking about.
+ */
+export const SOCKET_FALLBACK_DISPOSITIONS = [
+  'retryable',
+  'deferred',
+  'permanent',
+] as const satisfies readonly SyncFallbackDisposition[]
+
+type UnlistedFallbackDisposition = Exclude<SyncFallbackDisposition, (typeof SOCKET_FALLBACK_DISPOSITIONS)[number]>
+export type EveryFallbackDispositionIsListed = AssertNever<UnlistedFallbackDisposition>
+
+/**
+ * Whether this reason is an expected steady state rather than a fault.
+ *
+ * The one question three surfaces of this pane each used to answer for
+ * themselves: the transport row's verdict, the probe outcome on the Checks
+ * sub-tab, and the disposition row. A `deferred` reason is an expected steady
+ * state — the lane's own user-facing copy for `multi-tab-not-owner` says so in
+ * those words — so it is reported and carries no verdict.
+ *
+ * *** POSITIVE ON PURPOSE, AND AN `undefined` REASON IS NOT DEFERRED. *** This was
+ * written once as `isFault`, and `!isFault(undefined)` is `true`: a transport in a
+ * degraded state with NO reason at all came out deferred, which is the same shape
+ * of error as the `!isPermanent` negation this whole change exists to remove. Asked
+ * in the positive there is no arm for a caller to invert by accident, and a caller
+ * handed nothing is answered "not deferred" rather than "not a fault".
+ */
+export function socketFallbackIsDeferred(reason: SyncFallbackReason | undefined): boolean {
+  return reason !== undefined && syncFallbackDisposition(reason) === 'deferred'
+}
+
 /** Every operation the protocol can negotiate. */
 export const SOCKET_OPERATIONS = [
   'SYNC_ITEMS',
@@ -413,6 +457,30 @@ function correlatedProxy(observed: string, cannotConfirm: string): Evidence {
   return evidenceProxy({ observed, cannotConfirm, necessaryCondition: false })
 }
 
+/**
+ * One variable's presence, THREE-VALUED — the same rule, for the same reason, as
+ * the copy of this in `environmentSection.ts` and `backendSection.ts`.
+ *
+ * A key MISSING from the map is a server that said nothing about that variable,
+ * and collapsing that to `false` turns silence into "not set". Here that would be
+ * worse than a wrong row: `undefined` is what makes the queue-consumer row below
+ * keep its old, unjudged reading on a server that reports no presence block at
+ * all, instead of asserting that no queue is configured and calling an idle
+ * consumer correct.
+ */
+function presenceOf(topology: DeploymentTopology | undefined, key: string): boolean | undefined {
+  if (topology?.recorded !== true) {
+    return undefined
+  }
+
+  const presence = topology.presence
+  if (presence === undefined || !(key in presence)) {
+    return undefined
+  }
+
+  return presence[key] === true
+}
+
 /* -------------------------------------------------------------------------- */
 /* Remedies owned by this module                                              */
 /* -------------------------------------------------------------------------- */
@@ -583,18 +651,53 @@ const TRANSPORT_VERDICT: Record<SyncTransportState, Verdict> = {
 const TRANSPORT_NO_STATUS_NOTE =
   'No transport status was read. That is NOT the same as "no socket": this build cannot tell a client with no realtime transport installed from a caller that did not supply the status, so neither is claimed. Every other row in this block reads "not reported" with it.'
 
+const TRANSPORT_DEFERRED_NOTE =
+  'Not negotiated HERE, and not a fault: another tab of this account owns the socket lane, so this tab stands down and sends over HTTP by design. One socket per account is the intended arrangement — two tabs competing for the lane is the defect this replaced. Close or reload the other tab and this one takes the lease over within its TTL.'
+
+/**
+ * What the transport's state is worth, with the fallback reason taken into
+ * account.
+ *
+ * A `degraded` state over a DEFERRED reason is not a degradation: the lane is
+ * standing down because an external condition holds that is expected and clears
+ * on its own. Reported as `informational` so it is still on the screen, still in
+ * the copyable report, and no longer drags this section's worst verdict — which
+ * is what sent an operator looking for a transport fault over a second browser
+ * tab behaving exactly as designed.
+ *
+ * Every other reason keeps the state's own verdict, so a genuine fallback —
+ * `proxy-failed`, `auth-failed`, `worker-error` — still reads `degraded`.
+ */
+export function transportStateVerdict(
+  state: SyncTransportState | undefined,
+  reason: SyncFallbackReason | undefined,
+): Verdict {
+  if (state === undefined) {
+    return 'undetermined'
+  }
+
+  const verdict = TRANSPORT_VERDICT[state]
+
+  return verdict === 'degraded' && socketFallbackIsDeferred(reason) ? 'informational' : verdict
+}
+
 function buildTransportBlock(transport: TransportStatusInput | undefined): DiagnosticBlock {
   const state = transport?.state
   const reason = transport?.fallbackReason
-  const permanent = reason === undefined ? undefined : isPermanentSyncFallbackReason(reason)
+  const disposition = reason === undefined ? undefined : syncFallbackDisposition(reason)
   const operations = transport === undefined ? undefined : transport.operations.length
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
       label: safeConstant('Transport in use right now'),
       value: safeEnum(state, SOCKET_TRANSPORT_STATES),
-      ...absentOr(state, state === undefined ? 'undetermined' : TRANSPORT_VERDICT[state]),
-      note: state === undefined ? TRANSPORT_NO_STATUS_NOTE : describeTransport(transport).detail,
+      ...absentOr(state, transportStateVerdict(state, reason)),
+      note:
+        state === undefined
+          ? TRANSPORT_NO_STATUS_NOTE
+          : disposition === 'deferred'
+            ? `${TRANSPORT_DEFERRED_NOTE} ${describeTransport(transport).detail}`
+            : describeTransport(transport).detail,
     }),
     observedRow({
       label: safeConstant('Reported fallback reason'),
@@ -607,10 +710,10 @@ function buildTransportBlock(transport: TransportStatusInput | undefined): Diagn
           : SYNC_FALLBACK_REASON_EXPLANATIONS[reason],
     }),
     diagnosticRow({
-      label: safeConstant('Is that reason retryable'),
-      value: safeState(permanent, 'structural', 'retryable'),
-      ...absentOr(permanent, permanent === true ? 'degraded' : 'informational'),
-      note: 'A structural reason describes an absence rather than a fault — this deployment does not advertise the socket lane, or this client is built or configured never to use it — and no amount of retrying makes one succeed. A retryable reason clears on the next attempt, so a transport sitting on one is mid-recovery rather than broken.',
+      label: safeConstant('What that reason is worth'),
+      value: safeEnum(disposition, SOCKET_FALLBACK_DISPOSITIONS),
+      ...absentOr(disposition, disposition === 'permanent' ? 'degraded' : 'informational'),
+      note: 'Three answers, not two. "permanent" describes an absence rather than a fault — this deployment does not advertise the socket lane, or this client is built or configured never to use it — and no amount of retrying makes one succeed. "retryable" clears on the next attempt, so a transport sitting on one is mid-recovery rather than broken. "deferred" is neither: the lane is standing down because an external condition holds which is EXPECTED and clears by itself, and the only member today is another tab of this account holding the socket. This row read a boolean before, so "deferred" was answered "retryable" — a correct steady state described as a recovery in progress.',
     }),
     diagnosticRow({
       label: safeConstant('Operations negotiated on this socket'),
@@ -1333,7 +1436,39 @@ function buildRefusalBlock(
  * nothing there. So absent-is-not-a-reading is no longer an argument for
  * re-deriving anything, and the brand cast above is carrying the decision alone.
  */
-function buildRealtimeBlock(realtime: NonNullable<SyncDiagnosticsPayload['live']>['realtime']): DiagnosticBlock {
+const CONSUMER_NOT_APPLICABLE = safeConstant('not applicable (no queue configured)')
+
+const CONSUMER_TOPOLOGY_NOTE =
+  'Whether an idle loop is a fault depends on whether there is a queue at all, which is why this row reads the queue\'s presence boolean as well as the loop. With events fanned out in process there is nothing to drain and "not running" is the only correct reading, so it is reported as not applicable here rather than as an absence — true either way, and one of them reads as a defect. Where a queue IS configured the same idle loop means its events are not being drained, and that IS reported as a degradation. With no presence block to read, no claim is made in either direction.'
+
+/**
+ * The queue-consumer loop, judged against whether a queue exists.
+ *
+ * Split out of the row so each of the four readings can be pinned by a test. The
+ * `undefined` queue case keeps this build's previous unjudged reading on purpose:
+ * a server that reports no presence block has not said there is no queue.
+ */
+export function consumerVerdict(running: boolean | undefined, queueConfigured: boolean | undefined): Verdict {
+  if (running === true) {
+    return 'healthy'
+  }
+  if (running === false && queueConfigured === true) {
+    return 'degraded'
+  }
+  return 'informational'
+}
+
+function consumerValue(running: boolean | undefined, queueConfigured: boolean | undefined): SafeValue {
+  if (running === false && queueConfigured === false) {
+    return CONSUMER_NOT_APPLICABLE
+  }
+  return safeState(running, 'running', 'not running')
+}
+
+function buildRealtimeBlock(
+  realtime: NonNullable<SyncDiagnosticsPayload['live']>['realtime'],
+  topology: DeploymentTopology | undefined,
+): DiagnosticBlock {
   const notes = new Map<string, string>(describeRealtimeHealth(realtime).map((row) => [row.label, row.note]))
   const noteFor = (label: string, fallback: string): string => notes.get(label) ?? fallback
 
@@ -1351,6 +1486,7 @@ function buildRealtimeBlock(realtime: NonNullable<SyncDiagnosticsPayload['live']
 
   const bridge = realtime.pushBridge
   const bridgeBound = bridge === 'redis' || bridge === 'in-process'
+  const queueConfigured = presenceOf(topology, 'SQS_QUEUE_URL')
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -1381,12 +1517,12 @@ function buildRealtimeBlock(realtime: NonNullable<SyncDiagnosticsPayload['live']
     }),
     diagnosticRow({
       label: safeConstant('Realtime queue consumer'),
-      value: safeState(realtime.sqsConsumerRunning, 'running', 'not running'),
-      ...absentOr(realtime.sqsConsumerRunning, realtime.sqsConsumerRunning === true ? 'healthy' : 'informational'),
-      note: noteFor(
+      value: consumerValue(realtime.sqsConsumerRunning, queueConfigured),
+      ...absentOr(realtime.sqsConsumerRunning, consumerVerdict(realtime.sqsConsumerRunning, queueConfigured)),
+      note: `${noteFor(
         'Queue consumer',
-        'The loop that drains websocket events from the queue. Expected to be absent where pushes are delivered through the bridge alone, which is why its absence carries no verdict.',
-      ),
+        'The loop that drains websocket events from the queue.',
+      )} ${CONSUMER_TOPOLOGY_NOTE}`,
     }),
     diagnosticRow({
       label: safeConstant('Collaboration relay'),
@@ -1414,7 +1550,7 @@ function buildRealtimeBlock(realtime: NonNullable<SyncDiagnosticsPayload['live']
       label: safeConstant('Pushes dispatched since attach'),
       value: safeCount(realtime.pushesDispatched),
       ...absentOr(realtime.pushesDispatched, 'informational'),
-      note: `${noteFor('Pushes dispatched', 'Push messages handed to local sockets since this gateway attached. It resets on every restart.')} Reported as "not reported" when the server sent no counter at all, rather than as a zero: a count that stays at zero on a busy deployment is the signature of a delivery path that never fires, and that reading is only worth anything if a silent server cannot produce it.`,
+      note: `${noteFor('Pushes dispatched', 'Push messages handed to local sockets since this gateway attached. It resets on every restart.')} Reported as "not reported" when the server sent no counter at all, rather than as a zero: a count that stays at zero on a busy deployment is the signature of a delivery path that never fires, and that reading is only worth anything if a silent server cannot produce it. A zero is NOT that signature on its own and carries no verdict here: a quiet account, a gateway restarted a moment ago, and an account whose only live socket is in another tab of this browser all dispatch nothing and are all correct. It is the counter staying at zero WHILE two devices are visibly saving that means something.`,
     }),
   ]
 
@@ -1535,7 +1671,59 @@ const REJECTION_ROW: Record<SocketRejectionCause, { label: SafeValue; note: stri
   },
 }
 
+const ADMISSION_HEADING = safeConstant('Gateway admission and traffic')
+
+const ADMISSION_DESCRIPTION =
+  'Whether clients arrive, and whether they are being turned away. Counters and one boolean about this client’s own origin — never the allowlist, and never an address.'
+
+/**
+ * Whether the caller reported ANY admission counter.
+ *
+ * Read member by member rather than from the object's presence, because
+ * `buildWebsocketSection` substitutes `{}` for an absent `counters` — so "the
+ * caller passed nothing" and "the caller passed an empty object" arrive here
+ * identically, and both mean the same thing: nothing was reported.
+ */
+function admissionReported(counters: SocketGatewayCountersView): boolean {
+  return (
+    counters.originAdmitted !== undefined ||
+    counters.allowedOriginCount !== undefined ||
+    counters.allowsSameOrigin !== undefined ||
+    counters.liveSockets !== undefined ||
+    counters.ticketsIssued !== undefined ||
+    counters.ticketsRefused !== undefined ||
+    counters.handshakeRejected !== undefined ||
+    counters.rejections !== undefined
+  )
+}
+
 function buildAdmissionBlock(counters: SocketGatewayCountersView): DiagnosticBlock {
+  /**
+   * ONE SENTENCE RATHER THAN ELEVEN EMPTY ROWS.
+   *
+   * No endpoint publishes these counters — the gateway half of this block lands
+   * separately — so on every deployment today each row rendered "not reported",
+   * and eleven of them in a row is a panel that looks broken while saying nothing.
+   * The information content of the eleven is identical to the information content
+   * of the sentence, and the sentence is the half an operator reads. The rows
+   * return the moment anything populates them, member by member.
+   *
+   * It also stops eleven `undetermined` rows contributing to this section's worst
+   * verdict, which is correct for the same reason: a block with no producer
+   * established nothing, and the Lane degradation ledger block below has reported
+   * its own absence this way since it was written.
+   */
+  if (!admissionReported(counters)) {
+    return {
+      heading: ADMISSION_HEADING,
+      description: ADMISSION_DESCRIPTION,
+      rows: [],
+      findings: [],
+      emptyNote:
+        'Nothing populates these counters on any deployment yet: the gateway half — origins admitted and permitted, same-origin admission, sockets held, tickets issued and refused, handshakes rejected, and the three connection-refusal counts — lands separately, and no endpoint this pane can reach reports one of them today. Every row here appears the moment one is reported. Until then this block claims nothing rather than rendering ten rows that each say "not reported".',
+    }
+  }
+
   const admitted = counters.originAdmitted
   const originCount = counters.allowedOriginCount
   const issued = counters.ticketsIssued
@@ -1646,9 +1834,8 @@ function buildAdmissionBlock(counters: SocketGatewayCountersView): DiagnosticBlo
   }
 
   return {
-    heading: safeConstant('Gateway admission and traffic'),
-    description:
-      'Whether clients arrive, and whether they are being turned away. Counters and one boolean about this client’s own origin — never the allowlist, and never an address. Nothing populates these yet: the gateway half lands separately, and until it does every row here reads "not reported" rather than zero.',
+    heading: ADMISSION_HEADING,
+    description: `${ADMISSION_DESCRIPTION} A row reads "not reported" rather than zero for any counter this server did not send.`,
     rows,
     findings,
   }
@@ -1817,7 +2004,7 @@ export function buildWebsocketSection(input: WebsocketSectionInput = {}): Sectio
     buildCapabilityBlock(payload, input.transport, counters),
     buildDescriptorBlock(payload?.live?.capabilities),
     buildRefusalBlock(payload, topology),
-    buildRealtimeBlock(payload?.live?.realtime),
+    buildRealtimeBlock(payload?.live?.realtime, topology),
     buildFilesBlock(gate),
     buildAdmissionBlock(counters),
     buildLedgerBlock(input.ledger),

@@ -377,6 +377,22 @@ const SESSION_READING: Record<AdminReading, ReadingVerdict> = {
  * The two wide `string` members are destined for `safeEnum` against the tuples
  * above, which admits a declared literal and never echoes anything else.
  */
+/**
+ * Why the server-side space figures are absent, as a closed set.
+ *
+ * `not-attempted` — nothing in this build reads them. The emptiness is a gap in the
+ * PANEL and says nothing about the deployment.
+ * `read-and-failed` — they were asked for and the read did not produce them. The
+ * emptiness is then a SYMPTOM, and the thing it is a symptom of is the subject.
+ *
+ * Two values rather than a boolean because a third is already foreseeable — a read
+ * that succeeded and returned nothing — and because a boolean named `failed` reads
+ * as `false` for "never tried", which is the conflation this set exists to end.
+ */
+export const SPACE_FIGURE_SOURCES = ['not-attempted', 'read-and-failed'] as const
+
+export type SpaceFigureSource = (typeof SPACE_FIGURE_SOURCES)[number]
+
 export type AccountObservations = {
   /** A local session object exists. A LOCAL fact: it says nothing about the server accepting it. */
   signedIn?: boolean
@@ -409,6 +425,20 @@ export type AccountObservations = {
   localUsageBytes?: number
   /** `PrefKey.StorageMaxUsageBytes`. `0` means the user set no cap. ADVISORY: never blocks a write. */
   localSoftCapBytes?: number
+  /**
+   * WHY the server space figures are absent, when they are — which is a different
+   * fact from their being absent and must never render the same way.
+   *
+   * An all-"not reported" Space block was read here as cosmetic noise and then
+   * measured as the only trace in a whole report of a completely broken files
+   * subsystem: the operator's attachments were failing and their usage read zero,
+   * and this block's silence was the symptom rather than a gap in the panel. Those
+   * two are the same defect class as a collection answering `[]` for both "none"
+   * and "not read yet", and this field is what keeps them apart.
+   *
+   * Absent means not even this is known.
+   */
+  spaceFigureSource?: SpaceFigureSource
   /** `payload.protocol.version`, for context beside the consumability row. */
   protocolVersion?: number
   /** `payload.protocol.serverOperations`. Compared against this build's own two lists. */
@@ -868,12 +898,59 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
     }),
   ]
 
+  /**
+   * *** AN EMPTY SPACE BLOCK IS A FACT, AND THERE ARE TWO OF THEM. ***
+   *
+   * Every row here reading "not reported" was treated as cosmetic noise and was in
+   * fact the only trace, anywhere in a full diagnostics report, of a files
+   * subsystem that was completely broken: the operator's listing aborted, their
+   * downloads hung, and their usage read zero. So the two kinds of empty are
+   * separated, and the one that is a symptom carries a verdict.
+   *
+   * Emitted only when no server figure arrived at all. One figure present means the
+   * read worked and the rows above carry it.
+   */
+  const serverFiguresAbsent = observed.fileUploadBytesUsed === undefined && observed.fileUploadBytesLimit === undefined
+
+  const findings: DiagnosticFinding[] = []
+
+  if (serverFiguresAbsent && observed.spaceFigureSource === 'read-and-failed') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_SPACE_READ_FAILED'),
+        title: 'This account’s space figures were asked for and did not arrive',
+        detail:
+          'The rows above are empty because the read FAILED, not because this build does not look. That makes the emptiness a symptom rather than a gap: the same subsystem that reports an account’s uploaded bytes is the one that serves its files, so a usage figure that will not arrive — or arrives as zero and stays there — belongs with failing attachments rather than beside them. Read this with the files rows in the Database & internal comms section, and with the finding there saying that nothing on this screen establishes an authorized file transfer.',
+        verdict: 'broken',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  }
+
+  // `not-attempted` EXPLICITLY, never an absent field. Absent means the caller did
+  // not say which kind of empty this is, and inventing "nobody asked" from silence
+  // would be this block making the same absent-is-false mistake it exists to flag —
+  // on a model where nothing at all was observed, which is the one case that must
+  // claim nothing.
+  if (serverFiguresAbsent && observed.spaceFigureSource === 'not-attempted') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_SPACE_NOT_READ'),
+        title: 'This build does not read this account’s own space figures',
+        detail:
+          'The rows above are empty because nothing asked, and that is said here rather than left to look like a quiet deployment: an empty Space block has already been mistaken for cosmetic noise over a files subsystem that was entirely broken. What is missing is this account’s own uploaded-bytes figure and allowance — the same two numbers the admin Users tab already shows for any OTHER account, which it reaches by user id. Nothing on this screen may carry an account identifier, so the field this pane needs is a SELF-scoped reading of those two numbers: a used count and a limit count, for the requesting session, with no identifier in either direction. Until one exists, treat the Space rows as unread rather than as zero.',
+        verdict: 'undetermined',
+        evidence: EVIDENCE_ABSENT,
+      }),
+    )
+  }
+
   return {
     heading: safeConstant('Space'),
     description:
       'What room this ACCOUNT has, which is a different number with a different failure from the browser’s own quota: this one refuses uploads at the server, that one evicts the local database. Every row here is a measurement; the verdict about whether an upload will succeed is one row, in the requirements block below.',
     rows,
-    findings: [],
+    findings,
   }
 }
 

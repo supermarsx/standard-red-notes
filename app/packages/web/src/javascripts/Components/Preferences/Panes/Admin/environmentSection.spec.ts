@@ -303,7 +303,7 @@ describe('configuration presence, from the reused classifier', () => {
     expect(findingOf(model, 'REQUIRED_CONFIG_ABSENT')?.remedy?.effort).toBe('restart')
   })
 
-  it('warns about a variable that is set and never read, and stays quiet when it is unset', () => {
+  it('names a variable that is set and never read, and stays quiet when it is unset', () => {
     const set = buildEnvironmentSection({
       topology: topology({ cacheSetting: 'memory', presence: { REDIS_URL: true } }),
     })
@@ -312,16 +312,65 @@ describe('configuration presence, from the reused classifier', () => {
     })
 
     expect(rowOf(set, 'REDIS_URL').value).toBe('set (never read here)')
-    expect(rowOf(set, 'REDIS_URL').verdict).toBe('degraded')
+    // UNTIDY, NOT IMPAIRED. The row is still here, still says "never read here",
+    // and no longer claims a degradation: nothing is impaired by a variable that
+    // is merely unread. The test that this cannot hide a real fault is the next
+    // one — the variable this topology DOES read, absent, is still `broken`.
+    expect(rowOf(set, 'REDIS_URL').verdict).toBe('informational')
     expect(rowOf(set, 'REDIS_URL').evidence.kind).toBe('direct')
     // The note is the classifier's own prose, printed verbatim rather than restated.
     expect(rowOf(set, 'REDIS_URL').note).toContain('CACHE_TYPE=memory suppresses the Redis binding')
     expect(codesOf(set)).toContain('CONFIG_SET_BUT_NEVER_READ')
+    expect(findingOf(set, 'CONFIG_SET_BUT_NEVER_READ')?.verdict).toBe('informational')
     expect(findingOf(set, 'CONFIG_SET_BUT_NEVER_READ')?.remedy?.summary).toContain('REDIS_URL')
 
     expect(rowOf(unset, 'REDIS_URL').value).toBe('not set (never read here)')
     expect(rowOf(unset, 'REDIS_URL').verdict).toBe('informational')
     expect(codesOf(unset)).not.toContain('CONFIG_SET_BUT_NEVER_READ')
+  })
+
+  /**
+   * *** THE CONTROL FOR THAT DOWNGRADE. ***
+   *
+   * The reading that prompted it is this deployment's own: `REDIS_HOST` and
+   * `REDIS_PORT` set on a topology that binds Redis from `REDIS_URL`, where the
+   * rows were right, nothing was impaired, and the section's chip said Degraded.
+   *
+   * The case where being unread MATTERS is the asymmetric one: the operator set
+   * the inert half of the pair and not the half this topology reads. That has its
+   * own row and its own finding, computed from the same presence rows in the same
+   * pass, and it is `broken` — so the pane did not lose the ability to report it.
+   */
+  it('still reports the pair where the variable this topology reads is the absent one', () => {
+    const inertOnly = buildEnvironmentSection({
+      topology: topology({ presence: { REDIS_HOST: true, REDIS_PORT: true, REDIS_URL: false } }),
+    })
+
+    // Precondition: the inert half really is inert and really is reported, or the
+    // rest of this test would be asserting over rows that are not there.
+    expect(rowOf(inertOnly, 'REDIS_HOST').value).toBe('set (never read here)')
+    expect(rowOf(inertOnly, 'REDIS_PORT').value).toBe('set (never read here)')
+    expect(codesOf(inertOnly)).toContain('CONFIG_SET_BUT_NEVER_READ')
+
+    // The half with a consequence, undowngraded.
+    expect(rowOf(inertOnly, 'REDIS_URL').value).toBe('not set (required here)')
+    expect(rowOf(inertOnly, 'REDIS_URL').verdict).toBe('broken')
+    expect(findingOf(inertOnly, 'REQUIRED_CONFIG_ABSENT')?.verdict).toBe('broken')
+    expect(findingOf(inertOnly, 'REQUIRED_CONFIG_ABSENT')?.remedy?.summary).toContain('REDIS_URL')
+    expect(inertOnly.worstVerdict).toBe('broken')
+  })
+
+  it('does not rate a correctly configured deployment degraded over inert variables alone', () => {
+    // The live reading, reproduced: the pair is set, the variable this topology
+    // reads is set too, and nothing is impaired.
+    const tidyEnough = buildEnvironmentSection({
+      topology: topology({ presence: { REDIS_HOST: true, REDIS_PORT: true, REDIS_URL: true } }),
+    })
+
+    expect(codesOf(tidyEnough)).toContain('CONFIG_SET_BUT_NEVER_READ')
+    expect(codesOf(tidyEnough)).not.toContain('REQUIRED_CONFIG_ABSENT')
+    expect(tidyEnough.worstVerdict).not.toBe('degraded')
+    expect(tidyEnough.worstVerdict).not.toBe('broken')
   })
 
   it('never recommends a gRPC variable on a single container', () => {
@@ -493,6 +542,84 @@ describe('the internal gRPC auth secret', () => {
     expect(describeInternalGrpcSecret('grpc-default', false)).toBe('sufficient')
     expect(describeInternalGrpcSecret('operator', true)).toBe('unmeasured')
     expect(describeInternalGrpcSecret(undefined, undefined)).toBeUndefined()
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The threshold check that did not run                                     */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * NO DECISION REPORTED IS NOT A RESOLVER THAT RETURNED EARLY.
+   *
+   * This is the state every deployment is actually in: nothing reports the lane
+   * DECISION, which is the only thing that carries the resolver's measurement of
+   * this secret against the 32-byte minimum, so the threshold check cannot run.
+   * The row said `set (length not established)` and explained it with the
+   * `unmeasured` sentence — "the boot-time lane resolver returned before it
+   * reached the length test on this deployment" — over a deployment whose
+   * resolver was never read at all. A confident statement about an observation
+   * that was never made.
+   */
+  it('says the threshold check did not run, rather than why a resolver stopped', () => {
+    const row = rowOf(
+      buildEnvironmentSection({
+        topology: topology({ presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true } }),
+      }),
+      'Internal gRPC auth secret',
+    )
+
+    expect(describeInternalGrpcSecret(undefined, true)).toBe('unreported')
+    expect(String(row.value)).toBe('set (threshold not established: no lane decision reported)')
+    expect(row.note).toContain('The threshold check did not run here')
+    // The sentence that was wrong here, and is still right where it belongs.
+    expect(row.note).not.toContain('returned before it reached the length test')
+    expect(rowOf(sectionFor('not-colocated', true), 'Internal gRPC auth secret').note).toContain(
+      'returned before it reached the length test',
+    )
+  })
+
+  it('still reports a short or absent secret as broken, with no decision needed for either', () => {
+    // *** THE CONTROL. *** The two readings that matter are reached from the
+    // DECISION, not from the row's wording, so splitting the honest states apart
+    // must not touch them.
+    const short = rowOf(sectionFor('no-secret', true), 'Internal gRPC auth secret')
+    const absent = rowOf(sectionFor('no-secret', false), 'Internal gRPC auth secret')
+
+    expect(String(short.value)).toBe('set, shorter than 32 bytes')
+    expect(short.verdict).toBe('broken')
+    expect(String(absent.value)).toBe('not set')
+    expect(absent.verdict).toBe('broken')
+
+    // And an unreported threshold over an UNSET variable is still broken on
+    // presence alone — the row that could not run its check has not gone quiet.
+    const unsetRow = rowOf(
+      buildEnvironmentSection({
+        topology: topology({ presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: false } }),
+      }),
+      'Internal gRPC auth secret',
+    )
+    expect(String(unsetRow.value)).toBe('not set (threshold not established: no lane decision reported)')
+    expect(unsetRow.verdict).toBe('broken')
+  })
+
+  it('reports a threshold state and never a length, in either honest state', () => {
+    const values = [true, false].map((present) =>
+      String(
+        rowOf(
+          buildEnvironmentSection({
+            topology: topology({ presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: present } }),
+          }),
+          'Internal gRPC auth secret',
+        ).value,
+      ),
+    )
+
+    expect(values).toHaveLength(2)
+    for (const value of values) {
+      // The only digits a secret row may carry are the threshold itself, and this
+      // state does not even carry that.
+      expect(value.replace('32', '')).not.toMatch(/\d/)
+    }
   })
 
   it('emits only threshold wording, never a length', () => {

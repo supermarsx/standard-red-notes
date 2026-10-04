@@ -652,17 +652,25 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
    * so both must render their own empty notes. A `{}` or a zeroed object passed
    * from the tab would turn "nobody asked" into "the gateway reported none",
    * which is the precise defect this pane spent the night removing.
+   *
+   * Both now say it in ONE SENTENCE. The admission block used to render ten rows
+   * each reading "not reported", which is the same information and reads as a
+   * panel that is broken; the rows are asserted ABSENT here rather than absent of
+   * value, and the block's own spec pins their return the moment a counter is
+   * reported.
    */
   it('renders the unproduced counter and ledger blocks as empty notes, never as zeros', async () => {
     const text = await openWebsocket()
 
     expect(text).toContain('Gateway admission and traffic')
-    expect(text).toContain('Nothing populates these yet')
+    expect(text).toContain('Nothing populates these counters on any deployment yet')
+    expect(text).toContain('Every row here appears the moment one is reported')
     expect(text).toContain('Lane degradation ledger')
     expect(text).toContain('This client build records no lane-degradation ledger')
     expect(text).toContain('absence of evidence, not evidence of none')
-    expect(sectionRow('Sockets the gateway holds now')[1]).toBe('not reported')
-    expect(sectionRow('This client’s origin admitted')[1]).toBe('not reported')
+    // The rows are gone, not merely empty — and a zero is still nowhere near them.
+    expect(text).not.toContain('Sockets the gateway holds now')
+    expect(text).not.toContain('This client’s origin admitted')
   })
 
   it('renders every realtime health row the gateway reported', async () => {
@@ -1125,6 +1133,70 @@ describe('AdminDiagnosticsTab — Checks', () => {
     for (const [path] of application.serverJsonRequest.mock.calls) {
       expect(path.startsWith('/v1/sockets')).toBe(false)
     }
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* A second tab is not a failed check                                       */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE MISREPORT THIS PAIR EXISTS TO PIN. ***
+   *
+   * Run from a second browser tab, where the first tab owns the socket, this check
+   * recorded `[FAIL] Live socket negotiation` — on a report whose own top-level
+   * Diagnosis said the realtime lane was fully available, and over a condition the
+   * transport's own copy calls "Expected, and not a fault". Three surfaces
+   * describing one state, one of them calling it broken.
+   *
+   * The second test is the one that keeps this honest: the SAME non-READY state
+   * over a reason that is a genuine fault must still read as a failure. A quieter
+   * pane that cannot report a real fault is a worse pane.
+   */
+  it('reports a tab that does not own the socket as a note rather than a failure', async () => {
+    const application = makeApplication({
+      syncTransportStatus: { state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'multi-tab-not-owner' },
+    })
+    await renderTab(application)
+
+    await clickButton('Test all capabilities')
+    const text = await openSubtab('Checks')
+
+    expect(text).toContain('Live socket negotiation')
+    expect(text).toContain('Not negotiated here: another tab of this account owns the socket lane')
+    expect(text).toContain('Expected, and not a fault')
+    // The summary line stops counting it against the run, in either direction.
+    expect(text).toContain('did not apply here')
+    expect(text).not.toContain('no operations are negotiated')
+  })
+
+  it('still fails the negotiation check for every fallback that IS a fault', async () => {
+    for (const fallbackReason of ['proxy-failed', 'auth-failed', 'worker-error', 'capability-unavailable'] as const) {
+      const application = makeApplication({
+        syncTransportStatus: { state: 'HTTP_FALLBACK', operations: [], fallbackReason },
+      })
+      await renderTab(application)
+
+      await clickButton('Test all capabilities')
+      const text = await openSubtab('Checks')
+
+      expect(text).toContain(`Transport is HTTP_FALLBACK (${fallbackReason}) — no operations are negotiated.`)
+      expect(text).not.toContain('did not apply here')
+      expect(text).not.toContain('another tab of this account')
+    }
+  })
+
+  it('still fails the negotiation check with no reason at all, and with no transport at all', async () => {
+    const noReason = makeApplication({ syncTransportStatus: { state: 'HTTP_FALLBACK', operations: [] } })
+    await renderTab(noReason)
+    await clickButton('Test all capabilities')
+    expect(await openSubtab('Checks')).toContain('Transport is HTTP_FALLBACK — no operations are negotiated.')
+
+    const noTransport = makeApplication({ syncTransportStatus: undefined })
+    await renderTab(noTransport)
+    await clickButton('Test all capabilities')
+    const text = await openSubtab('Checks')
+    expect(text).toContain('No realtime transport is installed in this client.')
+    expect(text).not.toContain('did not apply here')
   })
 
   it('does not write, invite or delete anything while testing', async () => {

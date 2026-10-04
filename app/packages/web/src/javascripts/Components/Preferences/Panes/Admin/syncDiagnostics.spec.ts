@@ -1,6 +1,10 @@
 import {
   BOOT_GATE_HEADER,
   buildCapabilityRows,
+  CAPABILITY_OUTCOME_CHIP,
+  CAPABILITY_OUTCOME_REPORT_TAG,
+  CAPABILITY_OUTCOME_STATES,
+  capabilityOutcomeState,
   CLIENT_KNOWN_OPERATIONS,
   CLIENT_RECOGNIZED_ONLY_OPERATIONS,
   CLIENT_SYNC_OPERATIONS,
@@ -20,6 +24,7 @@ import {
   SYNC_ITEMS_STATES,
   TONES,
   UNRECOGNISED_OPERATION,
+  type CapabilityTestOutcome,
   type SyncDiagnosticsPayload,
   type SyncItemsCause,
   type TransportStatusInput,
@@ -1699,5 +1704,57 @@ describe('sync diagnostics model', () => {
         { name: 'b', passed: false, detail: '', reportDetail: '' },
       ]),
     ).toBe('1 of 2 checks passed.')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* Three outcome states, and the two that still count against a run         */
+  /* ------------------------------------------------------------------------ */
+
+  describe('capabilityOutcomeState', () => {
+    const outcome = (overrides: Partial<CapabilityTestOutcome>): CapabilityTestOutcome => ({
+      name: 'probe',
+      passed: false,
+      detail: '',
+      reportDetail: '',
+      ...overrides,
+    })
+
+    it('derives pass and fail from the boolean when no state is recorded', () => {
+      expect(capabilityOutcomeState(outcome({ passed: true }))).toBe('pass')
+      expect(capabilityOutcomeState(outcome({ passed: false }))).toBe('fail')
+    })
+
+    it('lets a recorded state win over the boolean, which is the whole point', () => {
+      // An informational outcome did not pass, so `passed` is false and a consumer
+      // reading that boolean directly would paint it Fail. This is the assertion
+      // that stops the next renderer doing so.
+      expect(capabilityOutcomeState(outcome({ passed: false, state: 'informational' }))).toBe('informational')
+      expect(CAPABILITY_OUTCOME_CHIP.informational.tone).toBe('neutral')
+      expect(CAPABILITY_OUTCOME_CHIP.informational.label).toBe('Note')
+      expect(CAPABILITY_OUTCOME_REPORT_TAG.informational).toBe('NOTE')
+    })
+
+    it('counts an informational outcome in neither half of the summary', () => {
+      const run = [
+        outcome({ name: 'a', passed: true }),
+        outcome({ name: 'b', passed: false }),
+        outcome({ name: 'c', passed: false, state: 'informational' }),
+      ]
+
+      expect(summarizeTestRun(run)).toBe('1 of 2 checks passed; 1 did not apply here.')
+      // *** THE CONTROL. *** A genuine failure is still counted against the run,
+      // and the denominator still includes it.
+      expect(summarizeTestRun(run.filter((entry) => entry.name !== 'c'))).toBe('1 of 2 checks passed.')
+      expect(summarizeTestRun([outcome({ passed: false })])).toBe('0 of 1 checks passed.')
+    })
+
+    it('admits only the three states, each with a chip and a report tag', () => {
+      expect(CAPABILITY_OUTCOME_STATES).toHaveLength(3)
+      for (const state of CAPABILITY_OUTCOME_STATES) {
+        expect(TONES).toContain(CAPABILITY_OUTCOME_CHIP[state].tone)
+        expect(CAPABILITY_OUTCOME_CHIP[state].label.length).toBeGreaterThan(0)
+        expect(CAPABILITY_OUTCOME_REPORT_TAG[state].length).toBeGreaterThan(0)
+      }
+    })
   })
 })

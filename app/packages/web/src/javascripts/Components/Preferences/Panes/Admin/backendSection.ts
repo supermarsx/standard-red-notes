@@ -1203,6 +1203,8 @@ const SERVICE_LABEL: Record<KnownService, SafeValue> = {
   'websocket-gateway': safeConstant('WebSocket gateway probe'),
 }
 
+const FILES_PROBE_NOT_THE_FILES_SERVICE = safeConstant('did not probe the files service')
+
 const SERVICE_OUTCOME_VALUE: Record<ServiceOutcome, SafeValue> = {
   answering: safeConstant('answering'),
   degraded: safeConstant('answering, not ready'),
@@ -1301,8 +1303,96 @@ function slowestProbe(services: ServicesReading): SlowestProbe {
   return found
 }
 
-function buildCommunicationBlock(services: ServicesReading): DiagnosticBlock {
+/**
+ * What a service probe's POSITIVE answer establishes, which is much less than the
+ * word "answering" suggests.
+ *
+ * Every one of these probes is an UNAUTHENTICATED `GET /healthcheck/readiness` —
+ * falling back to plain `/healthcheck` liveness on a 404 — against a base address
+ * the gateway resolves for itself. So a 200 establishes that something answered an
+ * unauthenticated route at an address the gateway chose. It does not establish
+ * that the service does the work the lane behind it needs, and it establishes
+ * nothing whatever about an AUTHORIZED request: no probe presents a credential, so
+ * no probe can see a credential the far end refuses.
+ *
+ * That gap is not hypothetical. It is the state this pane was measured in: every
+ * files row green — probe "answering", FILES_V1 advertised, all three files
+ * variables set — on a deployment where file listing aborted, downloads hung and
+ * usage read zero. The verdict is capped so the row keeps its fact and loses the
+ * claim, which is this contract's own mechanism applied to the row that needed it.
+ */
+const PROBE_CANNOT_CONFIRM =
+  'that an AUTHORIZED request to this service succeeds — the probe is unauthenticated, so a credential the far end refuses is invisible to it'
+
+function probeEvidence(service: KnownService, outcome: ServiceOutcome): Evidence {
+  // A probe that failed, failed. Negative readings keep direct evidence: the
+  // point of capping is that a green probe over-claims, not that a red one does.
+  if (SERVICE_FAILED[outcome] || outcome === 'not-configured') {
+    return EVIDENCE_DIRECT
+  }
+
+  return evidenceProxy({
+    observed: `that ${service} answered an unauthenticated readiness route at the address this gateway probes it on`,
+    cannotConfirm: PROBE_CANNOT_CONFIRM,
+    necessaryCondition: true,
+  })
+}
+
+/**
+ * What the files probe was actually POINTED AT, from two closed inputs.
+ *
+ * `FILES_SERVER_PROBE_URL` unset does not disable the files probe — it falls back
+ * to `http://localhost:<FILES_SERVER_PORT>`, which is loopback RELATIVE TO THE
+ * API-GATEWAY PROCESS. On the single container that is right: the files service is
+ * a supervisord sibling on that same loopback. On anything multi-container it is
+ * not the files service at all, and whatever did answer there is not the service
+ * that stores the files.
+ *
+ * Both facts are already on the wire as closed values — a presence boolean and the
+ * deployment mode — so this needs no new endpoint and reads no address. A row that
+ * cannot establish what it probed must not report that the files service answered.
+ */
+export const FILES_PROBE_TARGETS = ['configured', 'colocated-sibling', 'gateway-loopback', 'unknown'] as const
+
+export type FilesProbeTarget = (typeof FILES_PROBE_TARGETS)[number]
+
+export function filesProbeTarget(topology: DeploymentTopology | undefined): FilesProbeTarget {
+  const configured = presenceOf(topology, 'FILES_SERVER_PROBE_URL')
+  if (configured === undefined) {
+    return 'unknown'
+  }
+  if (configured) {
+    return 'configured'
+  }
+
+  const mode = topology?.mode
+  if (mode === undefined) {
+    return 'unknown'
+  }
+
+  return mode === 'home-server' ? 'colocated-sibling' : 'gateway-loopback'
+}
+
+const FILES_PROBE_TARGET_NOTE: Record<FilesProbeTarget, string> = {
+  configured:
+    ' FILES_SERVER_PROBE_URL is set, so the probe dialled the internal address this deployment configured for the files service.',
+  'colocated-sibling':
+    ' FILES_SERVER_PROBE_URL is not set, so the probe fell back to this container’s own loopback — which on the single container IS the files service, running as a sibling process under supervisord. The address is right here; the credential is still untested.',
+  'gateway-loopback':
+    ' *** FILES_SERVER_PROBE_URL IS NOT SET AND THIS IS NOT A SINGLE CONTAINER. *** The probe therefore fell back to loopback inside the API-GATEWAY container, where the files service does not run. Whatever answered is not the service that stores this account’s files, so this row establishes nothing about the files service and is reported as undetermined whatever it read. Set FILES_SERVER_PROBE_URL to the internal address the gateway reaches the files service on, and this row starts meaning something.',
+  unknown:
+    ' Which address the probe dialled could not be established: that needs the deployment’s presence block and its MODE, and one of them was not reported. No claim is made about what answered.',
+}
+
+function buildCommunicationBlock(services: ServicesReading, topology: DeploymentTopology | undefined): DiagnosticBlock {
   const rows: DiagnosticRow[] = []
+  const filesTarget = filesProbeTarget(topology)
+  // A probe pointed at the WRONG container's loopback cannot report on the files
+  // service in either direction, so the value is withheld as well as the verdict.
+  // Printing "answering" with a caveat underneath it would leave the word an
+  // operator skims saying the opposite of the sentence that qualifies it — which is
+  // how every files row on this screen came to read green over a dead lane.
+  const filesProbeBlind = filesTarget === 'gateway-loopback'
 
   for (const service of KNOWN_SERVICES) {
     const outcome = services.byName[service]?.outcome
@@ -1331,12 +1421,39 @@ function buildCommunicationBlock(services: ServicesReading): DiagnosticBlock {
       continue
     }
 
+    if (service === 'files') {
+      rows.push(
+        diagnosticRow({
+          label: SERVICE_LABEL[service],
+          value:
+            outcome === undefined
+              ? safePresence(undefined)
+              : filesProbeBlind
+                ? FILES_PROBE_NOT_THE_FILES_SERVICE
+                : SERVICE_OUTCOME_VALUE[outcome],
+          verdict: outcome === undefined || filesProbeBlind ? 'undetermined' : SERVICE_VERDICT[outcome],
+          evidence:
+            outcome === undefined
+              ? EVIDENCE_ABSENT
+              : filesProbeBlind
+                ? evidenceProxy({
+                    observed: 'that something answered a readiness route on the api-gateway container’s own loopback',
+                    cannotConfirm: 'that the files service was probed at all, let alone that it answered',
+                    necessaryCondition: false,
+                  })
+                : probeEvidence(service, outcome),
+          note: `${SERVICE_NOTE[service]}${FILES_PROBE_TARGET_NOTE[filesTarget]}`,
+        }),
+      )
+      continue
+    }
+
     rows.push(
-      observedRow({
+      diagnosticRow({
         label: SERVICE_LABEL[service],
-        observed: outcome,
         value: outcome === undefined ? safePresence(undefined) : SERVICE_OUTCOME_VALUE[outcome],
         verdict: outcome === undefined ? 'undetermined' : SERVICE_VERDICT[outcome],
+        evidence: outcome === undefined ? EVIDENCE_ABSENT : probeEvidence(service, outcome),
         note: SERVICE_NOTE[service],
       }),
     )
@@ -1380,6 +1497,70 @@ function buildCommunicationBlock(services: ServicesReading): DiagnosticBlock {
   )
 
   const findings: DiagnosticFinding[] = []
+
+  /**
+   * *** THE READING THIS WHOLE BLOCK GOT WRONG, STATED AS A FINDING. ***
+   *
+   * On the deployment that produced the report behind this change, file listing
+   * aborted, downloads hung forever, previews failed and the account's usage read
+   * zero — while this screen showed FILES_V1 advertised, no unmet files condition,
+   * all three files variables set, and this probe "answering". Every row was
+   * individually defensible and the screen as a whole was wrong, because NOTHING on
+   * it tests an authorized file transfer: the probe carries no credential, the boot
+   * gate reports a composition decision, and a presence boolean reports that a
+   * variable is non-empty and not that two services agree about its contents.
+   *
+   * So the absence is stated rather than left to be inferred from a screen of green.
+   * `undetermined` and not `broken`: this is the pane saying it cannot answer, which
+   * is the honest verdict and the one the Overview router should send a reader to
+   * look at. It is emitted whenever the files probe is reported at all, including —
+   * especially — when that probe reads perfectly.
+   */
+  if (services.byName.files?.outcome !== undefined) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('FILE_TRANSFER_UNVERIFIED'),
+        title: 'Nothing on this screen establishes that a file transfer works',
+        detail:
+          'Every files row on this pane reports a readiness probe, a boot-time composition decision or a variable being non-empty. None of them exercises the authorized path a real upload or download takes: mint a valet token at auth, present it to the files service, and have the files service accept it. Two services each holding a non-empty VALET_TOKEN_SECRET or AUTH_JWT_SECRET that DISAGREE satisfy every row on this screen and refuse every transfer — the same shape as the internal gRPC secret, where exactly this happened. Read the files rows as "nothing is obviously misconfigured", never as "file transfers work". If attachments are failing, this screen has not cleared the files lane, and the fields that would are named in this section’s header.',
+        verdict: 'undetermined',
+        evidence: evidenceProxy({
+          observed: 'that the files service answered an unauthenticated readiness route',
+          cannotConfirm: PROBE_CANNOT_CONFIRM,
+          necessaryCondition: true,
+        }),
+      }),
+    )
+  }
+
+  if (filesProbeBlind && services.byName.files?.outcome !== undefined) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('FILES_PROBE_TARGET_WRONG'),
+        title: 'The files probe is pointed at the gateway’s own loopback',
+        detail:
+          'FILES_SERVER_PROBE_URL is not set, so the files probe falls back to loopback — and this deployment is not the single container, where loopback is where the files service runs. The probe therefore dialled the api-gateway container, and its answer says nothing about the files service in either direction. This is the one files row on the screen that an operator can repair into meaning something, which is why it is reported separately from the lane itself.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        remedy: {
+          code: 'FILES_PROBE_TARGET_WRONG',
+          summary:
+            'Set FILES_SERVER_PROBE_URL to the internal address this gateway reaches the files service on, so the probe tests the files service instead of itself. Restart only — no rebuild.',
+          steps: [
+            'Set FILES_SERVER_PROBE_URL to the address the api-gateway can reach the files service on from inside the deployment network. WEBSOCKET_SYNC_FILES_URL is usually already that address.',
+            'Do NOT use FILES_SERVER_URL. In this fork’s entrypoint that is the PUBLIC files URL — the app front door’s /files prefix — and it is not reachable from inside the container.',
+            'Restart the gateway, then re-read this pane. The row will begin reporting the files service, and it still will not establish that an authorized transfer succeeds: no probe on this screen does.',
+          ],
+          effort: CONFIG_AND_RESTART,
+          basis: 'verified',
+          because: [
+            'The deployment reported that FILES_SERVER_PROBE_URL is not set, and reported a MODE that is not the single container.',
+            'With no probe URL the gateway falls back to its own loopback on a fixed internal port, which on a multi-container deployment is not the files service.',
+          ],
+        },
+      }),
+    )
+  }
 
   const failed = KNOWN_SERVICES.filter((service) => {
     const outcome = services.byName[service]?.outcome
@@ -1584,7 +1765,7 @@ export function buildBackendSection(input: BackendSectionInput = {}): SectionMod
     buildReadBlock(status, input.statusError),
     buildDatabaseBlock(status, datastore, services),
     buildCacheBlock(status, input.topology),
-    buildCommunicationBlock(services),
+    buildCommunicationBlock(services, input.topology),
     buildQueueBlock(input.topology, queues),
   ]
 

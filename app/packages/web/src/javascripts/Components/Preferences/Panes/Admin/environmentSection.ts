@@ -724,8 +724,24 @@ function buildShapeBlock(topology: DeploymentTopology | undefined, runtime: Envi
 /* Block 2: the durable backend transport, and what it is really doing        */
 /* -------------------------------------------------------------------------- */
 
-/** The three states the internal gRPC auth secret is reported as, plus honesty. */
-export const GRPC_SECRET_STATES = ['sufficient', 'too-short', 'absent', 'unmeasured'] as const
+/**
+ * The three states the internal gRPC auth secret is reported as, plus TWO kinds of
+ * honesty that are not the same kind.
+ *
+ * `unmeasured` — a lane decision WAS reported, and it is one the resolver reaches
+ * before its length test, so the threshold was genuinely not measured on this
+ * deployment.
+ *
+ * `unreported` — no lane decision was reported at all, so the threshold check did
+ * not run here. Split out because collapsing it onto `unmeasured` made the row
+ * print "the boot-time lane resolver returned before it reached the length test on
+ * this deployment" over a deployment whose resolver was never read — a confident
+ * statement about an observation that was never made, which is the one thing this
+ * pane's contract forbids outright. And it is the state every deployment is in
+ * today: nothing reports `serviceProxyDecision`, so the threshold check cannot run
+ * at all, and saying so is the whole content of the row.
+ */
+export const GRPC_SECRET_STATES = ['sufficient', 'too-short', 'absent', 'unmeasured', 'unreported'] as const
 
 export type GrpcSecretState = (typeof GRPC_SECRET_STATES)[number]
 
@@ -756,6 +772,13 @@ const DECISIONS_PAST_SECRET_CHECK: readonly ProxyDecision[] = [
  * test, so on those the length was never measured and `unmeasured` is the only
  * honest answer: presence is then all there is, and it is reported as the proxy
  * it is.
+ *
+ * NO DECISION AT ALL IS A DIFFERENT ANSWER AND IS NOW REPORTED AS ONE. It used to
+ * collapse onto `unmeasured`, whose copy asserts that the resolver ran and
+ * returned early — so a deployment that never reported a decision was told why its
+ * resolver stopped. Two states that produce the same verdict and different
+ * sentences, which is the point: one says the check ran and could not measure, the
+ * other says the check did not run.
  */
 export function describeInternalGrpcSecret(
   decision: ProxyDecision | undefined,
@@ -767,7 +790,10 @@ export function describeInternalGrpcSecret(
   if (decision !== undefined && DECISIONS_PAST_SECRET_CHECK.includes(decision)) {
     return 'sufficient'
   }
-  return present === undefined ? undefined : 'unmeasured'
+  if (present === undefined) {
+    return undefined
+  }
+  return decision === undefined ? 'unreported' : 'unmeasured'
 }
 
 const SECRET_LABEL = safeConstant('Internal gRPC auth secret')
@@ -779,6 +805,11 @@ const SECRET_TOO_SHORT = safeConstant('set, shorter than 32 bytes')
 const SECRET_ABSENT = safeConstant('not set')
 
 const SECRET_UNMEASURED = safeConstant('(length not established)')
+
+const SECRET_THRESHOLD_UNREPORTED = safeConstant('(threshold not established: no lane decision reported)')
+
+const SECRET_UNREPORTED_NOTE =
+  ' The threshold check did not run here, and this row says so rather than leaving a blank where its answer belongs. What measures this secret against the minimum is the boot-time lane resolver, and the only way its answer reaches this pane is the lane DECISION — a closed enum, one of whose members is the resolver declining because the secret fell short. No endpoint reports that decision today, so there is nothing for this row to read. The missing fact is a four-letter enum member, not a measurement: this pane never reads the secret, never receives it, and could not measure it if it did. Until a server sends the decision, presence is all that is observed, and it is reported as the proxy it is.'
 
 const SECRET_NOTE =
   'Three states, never a length and never the value. A secret below 32 bytes counts as UNCONFIGURED to the durable adapter, which then never reports ready — so a short secret and an absent one have the same consequence and completely different fixes. "At least 32 bytes" is reported as undetermined on purpose: the length passing is necessary and not sufficient, because the gateway and the syncing server must also hold the SAME secret, and two valid secrets that disagree fail exactly like one short one.'
@@ -805,6 +836,16 @@ function secretRow(state: GrpcSecretState | undefined, present: boolean | undefi
         necessaryCondition: true,
       }),
       note: SECRET_NOTE,
+    })
+  }
+
+  if (state === 'unreported') {
+    return diagnosticRow({
+      label: SECRET_LABEL,
+      value: safeTokens(safePresence(present), SECRET_THRESHOLD_UNREPORTED),
+      verdict: present === true ? 'healthy' : 'broken',
+      evidence: presenceProxy('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET'),
+      note: `${SECRET_NOTE}${SECRET_UNREPORTED_NOTE}`,
     })
   }
 
@@ -1387,14 +1428,33 @@ function configRow(row: EnvironmentRow): DiagnosticRow {
   }
 
   if (row.relevance === 'inert') {
+    /**
+     * SET AND INERT IS UNTIDY, NOT IMPAIRED.
+     *
+     * This arm answered `degraded` for a variable that is set and never read,
+     * which dragged this whole section's worst verdict — and the Overview router
+     * with it — over two variables that impair nothing. `REDIS_HOST` and
+     * `REDIS_PORT` set on a topology that binds Redis from `REDIS_URL` is the
+     * live reading that made the point: the deployment is correct, the rows say
+     * so in words, and the chip said Degraded.
+     *
+     * What makes the downgrade safe rather than quieter is that the impairing
+     * case has its OWN row and its own finding, and they are not this one. A
+     * variable whose being unread MATTERS is a variable the topology needs and
+     * does not have — the operator set `REDIS_HOST` where this topology reads
+     * `REDIS_URL` — and that is the `required`-and-absent arm above, which
+     * answers `broken` and raises `REQUIRED_CONFIG_ABSENT`. Both are computed
+     * from the same presence rows in the same pass, so the pair arrives together
+     * and the severity comes from the half that has a consequence.
+     */
     return diagnosticRow({
       label,
       value,
-      verdict: row.present ? 'degraded' : 'informational',
+      verdict: 'informational',
       evidence: EVIDENCE_DIRECT,
       note:
         row.note ||
-        'Not read in this topology. Set and inert is the state worth flagging — the operator believes it is doing something. Unset and inert is simply correct.',
+        'Not read in this topology. Set and inert is the state worth NAMING — the operator believes it is doing something — and it impairs nothing on its own, so it carries no verdict. The variable this topology does read is a row of its own, and it is the one with a verdict.',
     })
   }
 
@@ -1553,8 +1613,17 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
           code: safeConstant('CONFIG_SET_BUT_NEVER_READ'),
           title: 'Variables are set that this topology never reads',
           detail:
-            'Dead configuration. Nothing is broken by it directly, and it is the reason a deployment can look correctly configured and behave as if it were not: the switch that decides whether the branch runs at all is a different variable from the one that was set.',
-          verdict: 'degraded',
+            'Dead configuration, and worth naming for one reason: it is why a deployment can look correctly configured and behave as if it were not — the switch that decides whether the branch runs at all is a different variable from the one that was set. On its own it impairs NOTHING, which is why it is reported as a notice and not as a degradation. When being unread actually matters, the variable this topology DOES read is unset, and that is reported separately as REQUIRED_CONFIG_ABSENT from the same presence rows — read the two together: this finding alone is untidiness, the pair is a misconfiguration.',
+          /**
+           * `informational`, not `degraded`. Set-and-unread configuration impairs
+           * nothing by itself, and rating it a degradation took this section's
+           * worst verdict — and the Overview router — to Degraded over two inert
+           * Redis variables on a correctly configured deployment. The impairing
+           * case keeps its own `broken` finding directly above, derived from the
+           * same rows in the same pass, so nothing that has a consequence is
+           * downgraded with it.
+           */
+          verdict: 'informational',
           evidence: EVIDENCE_DIRECT,
           remedy: remedyForInertConfig(inertAndSet),
         }),

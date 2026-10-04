@@ -1,6 +1,7 @@
 import { SYNC_FALLBACK_REASON_EXPLANATIONS } from '@/Services/SyncTransport/syncTransportProtocol'
 import { EFFORT_LABEL } from './diagnosticRemedies'
 import {
+  blockWorstVerdict,
   UNRECOGNISED,
   VERDICTS,
   type DiagnosticFinding,
@@ -20,6 +21,9 @@ import {
   CAPABILITY_STATUSES,
   LANE_GATING_PRECONDITIONS,
   PRECONDITION_CODES,
+  consumerVerdict,
+  socketFallbackIsDeferred,
+  SOCKET_FALLBACK_DISPOSITIONS,
   SOCKET_FALLBACK_REASONS,
   SOCKET_OPERATIONS,
   SOCKET_TRANSPORT_STATES,
@@ -217,11 +221,12 @@ describe('buildWebsocketSection with nothing reported', () => {
   it('claims absent evidence and no verdict for every single row', () => {
     const rows = allRows(build())
 
-    // 40 since the gate block gained "Unmet conditions this build cannot name",
-    // which is the count that replaced the condition codes this build cannot
-    // print. It reads "not reported" with no gate, like every row beside it — a
-    // zero read off an unrecorded gate would be the same false green.
-    expect(rows).toHaveLength(40)
+    // 30 since the admission block stopped rendering its ten rows when NOTHING
+    // reports one of them. It says that in one sentence instead, which is the same
+    // information and is the half an operator reads; the rows return member by
+    // member the moment a counter is reported, which the block's own tests below
+    // pin. The count was 40 while those ten each read "not reported".
+    expect(rows).toHaveLength(30)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -771,15 +776,92 @@ describe('the transport block', () => {
     }
   })
 
+  const DISPOSITION_ROW = 'What that reason is worth'
+
   it('separates a structural fallback reason from a retryable one', () => {
     const structural = build({ transport: transport({ state: 'HTTP_ONLY', fallbackReason: 'capability-unavailable' }) })
-    expect(String(rowOf(structural, 'Is that reason retryable').value)).toBe('structural')
-    expect(rowOf(structural, 'Is that reason retryable').verdict).toBe('degraded')
+    expect(String(rowOf(structural, DISPOSITION_ROW).value)).toBe('permanent')
+    expect(rowOf(structural, DISPOSITION_ROW).verdict).toBe('degraded')
     expect(findingOf(structural, 'SOCKET_CAPABILITY_REFUSED')?.verdict).toBe('degraded')
 
     const retryable = build({ transport: transport({ state: 'HALF_OPEN', fallbackReason: 'ack-timeout' }) })
-    expect(String(rowOf(retryable, 'Is that reason retryable').value)).toBe('retryable')
-    expect(rowOf(retryable, 'Is that reason retryable').verdict).toBe('informational')
+    expect(String(rowOf(retryable, DISPOSITION_ROW).value)).toBe('retryable')
+    expect(rowOf(retryable, DISPOSITION_ROW).verdict).toBe('informational')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* A deferred reason is not a fault, and every other reason still is        */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * The condition the pane reported as a failure: a second tab of the same
+   * account, where the transport correctly stands down. Three assertions, and the
+   * third is the one that matters — the control case must still be degraded, or
+   * this reclassification has bought quiet rather than accuracy.
+   */
+  it('reports a deferred reason as informational and keeps every other fallback degraded', () => {
+    const deferred = build({ transport: transport({ state: 'HTTP_FALLBACK', fallbackReason: 'multi-tab-not-owner' }) })
+    const transportRow = rowOf(deferred, 'Transport in use right now')
+
+    // The reason is reported, not swallowed: it is still on the screen and in the
+    // copyable report, and the state is still named.
+    expect(String(transportRow.value)).toBe('HTTP_FALLBACK')
+    expect(transportRow.verdict).toBe('informational')
+    expect(transportRow.evidence.kind).toBe('direct')
+    expect(transportRow.note).toContain('another tab of this account owns the socket lane')
+    expect(String(rowOf(deferred, DISPOSITION_ROW).value)).toBe('deferred')
+    expect(rowOf(deferred, DISPOSITION_ROW).verdict).toBe('informational')
+
+    // *** THE CONTROL. *** The same state over a reason that IS a fault.
+    const fault = build({ transport: transport({ state: 'HTTP_FALLBACK', fallbackReason: 'proxy-failed' }) })
+    expect(rowOf(fault, 'Transport in use right now').verdict).toBe('degraded')
+    expect(rowOf(fault, 'Transport in use right now').note).not.toContain('another tab')
+
+    // And the section's own worst verdict, which is what the sub-tab chip and the
+    // Overview router read. Asserted on a model whose transport is the only thing
+    // reported, so nothing else can be supplying the tone.
+    expect(deferred.worstVerdict).not.toBe('degraded')
+    expect(fault.worstVerdict).toBe('degraded')
+  })
+
+  it('leaves every state that is degraded for a non-fallback reason alone', () => {
+    // No reason at all is not a deferred reason. A transport sitting in a degraded
+    // state with nothing to explain it keeps the state's own verdict, which is the
+    // arm a negated `isFault(undefined)` reading inverts — the first draft of this
+    // change asked the question that way round and this is where it showed.
+    expect(socketFallbackIsDeferred(undefined)).toBe(false)
+    expect(socketFallbackIsDeferred('multi-tab-not-owner')).toBe(true)
+    expect(socketFallbackIsDeferred('proxy-failed')).toBe(false)
+
+    for (const state of ['HTTP_ONLY', 'DEGRADED', 'HTTP_FALLBACK', 'HALF_OPEN'] as const) {
+      expect(rowOf(build({ transport: transport({ state }) }), 'Transport in use right now').verdict).toBe('degraded')
+    }
+
+    // A deferred reason does not make a READY socket anything other than healthy.
+    const ready = build({ transport: transport({ state: 'READY', fallbackReason: 'multi-tab-not-owner' }) })
+    expect(rowOf(ready, 'Transport in use right now').verdict).toBe('healthy')
+  })
+
+  it('answers every fallback reason with one of the lane’s three dispositions', () => {
+    // A precondition on the reason list itself: an empty tuple would make the loop
+    // vacuous and every assertion in it unreachable.
+    expect(SOCKET_FALLBACK_REASONS.length).toBeGreaterThan(10)
+
+    const dispositionFor = (reason: (typeof SOCKET_FALLBACK_REASONS)[number]): string =>
+      String(rowOf(build({ transport: transport({ fallbackReason: reason }) }), DISPOSITION_ROW).value)
+
+    for (const reason of SOCKET_FALLBACK_REASONS) {
+      // Never `other (unrecognised)`: the row parses the lane's answer against the
+      // closed tuple, so a fourth disposition would have to be admitted here first.
+      expect(SOCKET_FALLBACK_DISPOSITIONS as readonly string[]).toContain(dispositionFor(reason))
+    }
+
+    // The membership this pane depends on, pinned on its own. The rest of the set
+    // is the LANE's to decide and is deliberately not restated here — but the
+    // predicate must DISCRIMINATE, or "deferred" would be a constant and every
+    // reclassification above would be unconditional.
+    expect(dispositionFor('multi-tab-not-owner')).toBe('deferred')
+    expect(SOCKET_FALLBACK_REASONS.filter((reason) => dispositionFor(reason) !== 'deferred').length).toBeGreaterThan(10)
   })
 
   it('leaves the two reasons other sections own without a finding of its own', () => {
@@ -1076,6 +1158,94 @@ describe('realtime health', () => {
     expect(String(rowOf(model, 'Push bridge').value)).toContain(UNRECOGNISED)
     expect(rowOf(model, 'Push bridge').verdict).toBe('broken')
   })
+
+  /* ------------------------------------------------------------------------ */
+  /* An idle queue consumer, judged against whether there is a queue          */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * "Not running" was TRUE and read as a defect: with events fanned out in
+   * process there is no queue to drain. It now reports not-applicable there and a
+   * DEGRADATION where a queue is configured and the loop is idle — which is the
+   * reading that has a consequence and the one the row could not previously make.
+   */
+  const withQueue = (queueUrlSet: boolean, overrides: Partial<RealtimeView> = {}): SyncDiagnosticsPayload => ({
+    ...realtime(overrides),
+    deployment: { recorded: true, presence: { SQS_QUEUE_URL: queueUrlSet } },
+  })
+
+  const CONSUMER_ROW = 'Realtime queue consumer'
+
+  it('reports an idle consumer as not applicable where no queue is configured', () => {
+    const model = build({ payload: withQueue(false, { sqsConsumerRunning: false }) })
+    const row = rowOf(model, CONSUMER_ROW)
+
+    expect(String(row.value)).toBe('not applicable (no queue configured)')
+    expect(row.verdict).toBe('informational')
+    expect(row.evidence.kind).toBe('direct')
+    expect(row.note).toContain('nothing to drain')
+  })
+
+  it('reports an idle consumer as degraded where a queue IS configured', () => {
+    const model = build({ payload: withQueue(true, { sqsConsumerRunning: false }) })
+    const row = rowOf(model, CONSUMER_ROW)
+
+    // *** THE CONTROL FOR THE RECLASSIFICATION. *** The same idle loop, the same
+    // row, and a verdict, because here its events are genuinely not being drained.
+    expect(String(row.value)).toBe('not running')
+    expect(row.verdict).toBe('degraded')
+    expect(row.evidence.kind).toBe('direct')
+
+    // And it reaches the block's own worst verdict, which is what the block chip
+    // reads. Asserted against the not-applicable case on the same fixture, so the
+    // only difference between the two readings is the queue's presence boolean.
+    expect(
+      blockWorstVerdict(blockOf(build({ payload: withQueue(true, { sqsConsumerRunning: false }) }), 'Realtime health')),
+    ).toBe('degraded')
+    expect(
+      blockWorstVerdict(
+        blockOf(build({ payload: withQueue(false, { sqsConsumerRunning: false }) }), 'Realtime health'),
+      ),
+    ).not.toBe('degraded')
+  })
+
+  it('claims nothing in either direction when no presence block was reported', () => {
+    // The previous reading, kept for the deployment that reports no presence at
+    // all: a server that said nothing about SQS_QUEUE_URL has not said there is no
+    // queue, so the row must not call an idle loop correct OR broken.
+    const row = rowOf(build({ payload: realtime({ sqsConsumerRunning: false }) }), CONSUMER_ROW)
+
+    expect(String(row.value)).toBe('not running')
+    expect(row.verdict).toBe('informational')
+  })
+
+  it('keeps a running consumer healthy and an unreported one absent, whatever the queue', () => {
+    for (const queueUrlSet of [true, false]) {
+      expect(rowOf(build({ payload: withQueue(queueUrlSet) }), CONSUMER_ROW).verdict).toBe('healthy')
+      expect(String(rowOf(build({ payload: withQueue(queueUrlSet) }), CONSUMER_ROW).value)).toBe('running')
+
+      const silent = rowOf(build({ payload: withQueue(queueUrlSet, { sqsConsumerRunning: undefined }) }), CONSUMER_ROW)
+      expect(String(silent.value)).toBe(NOT_REPORTED)
+      expect(silent.evidence.kind).toBe('absent')
+      expect(silent.verdict).toBe('undetermined')
+    }
+  })
+
+  it('exposes the four readings of the consumer verdict directly', () => {
+    expect(consumerVerdict(true, false)).toBe('healthy')
+    expect(consumerVerdict(true, true)).toBe('healthy')
+    expect(consumerVerdict(false, true)).toBe('degraded')
+    expect(consumerVerdict(false, false)).toBe('informational')
+    expect(consumerVerdict(false, undefined)).toBe('informational')
+    expect(consumerVerdict(undefined, true)).toBe('informational')
+  })
+
+  it('does not read a zero push counter as a fault, and says why', () => {
+    const row = rowOf(build({ payload: realtime({ pushesDispatched: 0 }) }), 'Pushes dispatched since attach')
+
+    expect(row.verdict).toBe('informational')
+    expect(row.note).toContain('another tab of this browser')
+  })
 })
 
 describe('the FILES_V1 sub-gate', () => {
@@ -1225,6 +1395,55 @@ describe('gateway admission and traffic', () => {
     expect(rowOf(model, 'Connections refused: lane unavailable').evidence.kind).toBe('direct')
     expect(rowOf(model, 'Sockets the gateway holds now').verdict).toBe('informational')
   })
+
+  /* ------------------------------------------------------------------------ */
+  /* One sentence when nothing reports a counter                             */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * No endpoint publishes any of these, so on every deployment today this block
+   * rendered ten rows each reading "not reported" — a panel that looks broken
+   * while saying nothing. It says it in one line instead, and the rows come back
+   * the moment ONE counter is reported, which the second half pins.
+   */
+  const ADMISSION = 'Gateway admission and traffic'
+
+  it('says so in one line when no counter is reported at all', () => {
+    for (const input of [build(), build({ counters: counters() }), build({ payload: payload() })]) {
+      const block = blockOf(input, ADMISSION)
+
+      expect(block.rows).toEqual([])
+      expect(block.findings).toEqual([])
+      expect(block.emptyNote).toContain('Nothing populates these counters on any deployment yet')
+      expect(block.emptyNote).toContain('appears the moment one is reported')
+    }
+  })
+
+  it('renders its rows again the moment any single counter is reported', () => {
+    // Every member, one at a time: a block that returned only for `liveSockets`
+    // would pass a test that planted the one the author happened to pick.
+    const members: readonly SocketGatewayCountersView[] = [
+      { originAdmitted: true },
+      { allowedOriginCount: 1 },
+      { allowsSameOrigin: true },
+      { liveSockets: 0 },
+      { ticketsIssued: 0 },
+      { ticketsRefused: 0 },
+      { handshakeRejected: 0 },
+      { rejections: {} },
+    ]
+
+    for (const member of members) {
+      const block = blockOf(build({ counters: counters(member) }), ADMISSION)
+
+      expect(block.rows).toHaveLength(10)
+      expect(block.emptyNote).toBeUndefined()
+    }
+
+    // `advertisable` is NOT one of them: it feeds the capability block's notes and
+    // reports nothing about admission, so it must not resurrect ten empty rows.
+    expect(blockOf(build({ counters: counters({ advertisable: { FILES_V1: true } }) }), ADMISSION).rows).toEqual([])
+  })
 })
 
 /* -------------------------------------------------------------------------- */
@@ -1310,6 +1529,28 @@ describe('the copyable report', () => {
   const poisoned = (secret: string): WebsocketSectionInput => ({
     payload: {
       capturedAt: secret,
+      /**
+       * *** NEWLY REACHABLE, SO NEWLY POISONED. ***
+       *
+       * This section reads `deployment.presence` for the first time: the realtime
+       * queue-consumer row asks whether a queue is configured at all, because "not
+       * running" is a defect where one is and the only correct reading where there
+       * is none. `presence` is an object off the wire, so its KEYS are
+       * server-controlled text exactly as much as a value would be — the mistake
+       * `diagnosticEnvironment.ts` carries the scar from, where a key the build had
+       * never heard of was printed in a row and in the pasted report.
+       *
+       * The read is `key in presence` against a literal of this build, and the
+       * answer is a boolean, so no key can reach a row here. That is the claim, and
+       * the sweeps below are what make it a measured one rather than an argument:
+       * the key, the mode and the two enum fields are all planted.
+       */
+      deployment: {
+        recorded: true,
+        mode: secret as 'other',
+        serviceProxySetting: secret as 'other',
+        presence: { SQS_QUEUE_URL: true, [secret]: true },
+      },
       gate: {
         recorded: true,
         gatewayAttached: true,

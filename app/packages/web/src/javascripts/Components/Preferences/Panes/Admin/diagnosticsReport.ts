@@ -15,6 +15,8 @@ import {
 import {
   admitMembers,
   buildCapabilityRows,
+  CAPABILITY_OUTCOME_REPORT_TAG,
+  capabilityOutcomeState,
   describeDeployment,
   describeDiagnosticsReadFailure,
   describeSyncItems,
@@ -405,7 +407,9 @@ export function buildDiagnosticsReport(input: DiagnosticsReportInput): string {
     lines.push('Not run.')
   }
   for (const outcome of outcomes) {
-    lines.push(`- [${outcome.passed ? 'PASS' : 'FAIL'}] ${outcome.name} — ${outcome.reportDetail}`)
+    lines.push(
+      `- [${CAPABILITY_OUTCOME_REPORT_TAG[capabilityOutcomeState(outcome)]}] ${outcome.name} — ${outcome.reportDetail}`,
+    )
   }
   lines.push('')
 
