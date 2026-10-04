@@ -207,46 +207,65 @@ fi
 # <script> occurring inside an HTML comment. $2 selects which one (1-based,
 # default 1); exiting non-zero when there is no Nth inline script is how the
 # caller discovers how many the document actually has.
+#
+# This is ONE forward scan over the ORIGINAL bytes, in the order a browser
+# tokenizes them, because every byte it emits has to be a byte nginx serves.
+# The three rules that earlier shapes of this function got wrong:
+#
+#   1. `<!--` is a comment opener ONLY outside a script. Inside a <script> the
+#      content is raw text, so `var t = "<!-- x -->"` is script source, not a
+#      comment. Pre-stripping comments from the whole document deleted that
+#      substring from the body before hashing, so the pin described bytes nginx
+#      never served -- a wrong hash that still started nginx and white-screened
+#      the app, which is precisely the silent failure this mechanism exists to
+#      prevent. Comments are therefore skipped only while outside a script.
+#   2. `src` has to be matched as a real attribute, not as a substring of the
+#      opening tag. `tag ~ /src/` treated an inline `<script data-srcless>` as
+#      external and skipped it, leaving a served inline script unpinned.
+#   3. Tag names are case-insensitive and `</script >` closes an element. A
+#      lowercase mirror of the buffer drives the matching while the bytes are
+#      always cut from the untouched original, so `<SCRIPT>` is found without
+#      changing what gets hashed. tolower() is a 1:1 character map, which is why
+#      offsets into the mirror are valid offsets into the original.
 extract_inline_script() {
   awk -v want="${2:-1}" '
     { buf = buf $0 "\n" }
     END {
       L = length(buf)
-      clean = ""
+      lbuf = tolower(buf)   # position-aligned mirror used only for matching
       i = 1
-      # Strip HTML comments so a <script> mentioned inside one is not matched.
-      while (i <= L) {
-        if (substr(buf, i, 4) == "<!--") {
-          rest = substr(buf, i + 4)
-          j = index(rest, "-->")
-          if (j == 0) { break }
-          i = i + 4 + j + 2
-        } else {
-          clean = clean substr(buf, i, 1)
-          i = i + 1
-        }
-      }
-      CL = length(clean)
-      sp = 1
       seen = 0
-      while (sp <= CL) {
-        seg = substr(clean, sp)
-        p = index(seg, "<script")
-        if (p == 0) { exit 1 }
-        abs = sp + p - 1
-        gt = index(substr(clean, abs), ">")
-        if (gt == 0) { exit 1 }
-        tag = substr(clean, abs, gt)      # the whole <script ...> opening tag
-        if (tag ~ /src/) { sp = abs + gt; continue }   # skip external scripts
-        bodystart = abs + gt              # first byte after the opening `>`
-        ce = index(substr(clean, bodystart), "</script>")
-        if (ce == 0) { exit 1 }
-        seen = seen + 1
-        if (seen == want) {
-          printf "%s", substr(clean, bodystart, ce - 1)
-          exit 0
+      while (i <= L) {
+        if (substr(lbuf, i, 4) == "<!--") {
+          j = index(substr(lbuf, i + 4), "-->")
+          if (j == 0) { exit 1 }   # unterminated comment: refuse to guess
+          i = i + 4 + j + 2
+          continue
         }
-        sp = bodystart + ce - 1 + 9       # resume just past this `</script>`
+        if (substr(lbuf, i, 7) == "<script") {
+          d = substr(lbuf, i + 7, 1)   # the tag name must end here
+          if (d == " " || d == "\t" || d == "\r" || d == "\n" || d == "/" || d == ">") {
+            gt = index(substr(lbuf, i), ">")
+            if (gt == 0) { exit 1 }
+            ltag = substr(lbuf, i, gt)        # the whole <script ...> opening tag
+            bodystart = i + gt                # first byte after the opening `>`
+            ce = index(substr(lbuf, bodystart), "</script")
+            if (ce == 0) { exit 1 }
+            after = bodystart + ce - 1 + 8    # first byte after `</script`
+            gt2 = index(substr(lbuf, after), ">")
+            if (gt2 == 0) { exit 1 }
+            if (ltag !~ /[ \t\r\n\/]src[ \t\r\n]*=/) {   # inline, not external
+              seen = seen + 1
+              if (seen == want) {
+                printf "%s", substr(buf, bodystart, ce - 1)
+                exit 0
+              }
+            }
+            i = after + gt2                   # resume past the closing tag
+            continue
+          }
+        }
+        i = i + 1
       }
       exit 1
     }

@@ -932,6 +932,99 @@ test("docker CSP hashing pins EVERY inline script in the served index.html", () 
   }
 });
 
+// The pin is only worth anything if the bytes the entrypoint hashes are the bytes
+// nginx serves. The fixture above proves the entrypoint finds the right NUMBER of
+// scripts; it cannot prove byte-exactness, because its script bodies are plain
+// one-liners. Two shapes used to break that equality while the entrypoint still
+// exited 0 and started nginx with a pin describing bytes nobody serves -- the
+// mechanism's whole purpose, defeated silently, visible only as a
+// script-src-elem violation in a user's console:
+//
+//   * a body containing `<!--` (any JS string that builds markup): a
+//     document-wide comment strip deleted that run of bytes before hashing.
+//   * `<script data-srcless>`: `src` matched as a bare substring of the opening
+//     tag, so a served INLINE script was skipped as external and left unpinned.
+//
+// Each case asserts the pinned hash equals the sha256 of the exact bytes between
+// the opening `>` and `</script>` -- the definition a browser applies.
+test("docker CSP hashing pins the exact served bytes, not an approximation of them", () => {
+  const cases = [
+    {
+      label:
+        "a body containing an HTML comment opener is script source, not a comment",
+      body: '\n  var tpl = "<!-- placeholder -->"\n  window.a = tpl\n',
+      openingTag: "<script>",
+    },
+    {
+      label:
+        "`src` must be a real attribute, not a substring of the opening tag",
+      body: "\n  window.a = 1\n",
+      openingTag: '<script data-srcless="1">',
+    },
+  ];
+
+  for (const { label, body, openingTag } of cases) {
+    const temporaryDirectory = mkdtempSync(path.join(root, ".tmp-csp-bytes-"));
+    const relative = (filePath) =>
+      path.relative(root, filePath).split(path.sep).join("/");
+    const indexPath = path.join(temporaryDirectory, "index.html");
+    const configPath = path.join(temporaryDirectory, "nginx.conf");
+
+    try {
+      writeFileSync(
+        indexPath,
+        [
+          "<!doctype html><html><head>",
+          `${openingTag}${body}</script>`,
+          '<script src="./app.js"></script>',
+          "</head><body></body></html>",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(configPath, read("app/docker/nginx.conf"));
+
+      const result = spawnSync("sh", ["app/docker/docker-entrypoint.sh"], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          SRN_ENTRYPOINT_INDEX_HTML: relative(indexPath),
+          SRN_ENTRYPOINT_NGINX_CONF: relative(configPath),
+        },
+      });
+      assert.equal(result.status, 0, `${label}: ${result.stderr}`);
+
+      // Re-read the served document and hash the body the way a browser does,
+      // rather than trusting the literal above, so the assertion keeps holding
+      // if the runtime templating ever rewrites these bytes.
+      const served = readFileSync(indexPath, "utf8");
+      const start = served.indexOf(">", served.indexOf(openingTag)) + 1;
+      const servedBody = served.slice(
+        start,
+        served.indexOf("</script>", start),
+      );
+      assert.equal(
+        servedBody,
+        body,
+        `${label}: fixture body is not served verbatim`,
+      );
+
+      const expected = `sha256-${createHash("sha256")
+        .update(servedBody, "utf8")
+        .digest("base64")}`;
+      assert.equal(
+        readFileSync(configPath, "utf8").match(
+          /script-src 'self' 'wasm-unsafe-eval'([^;]*);/,
+        )?.[1],
+        ` '${expected}'`,
+        `${label}: the pin must be the sha256 of the exact served bytes`,
+      );
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+});
+
 test("single-container startup requires successful CSP runtime configuration before supervisord", () => {
   const temporaryDirectory = mkdtempSync(
     path.join(root, ".tmp-single-csp-gate-"),
