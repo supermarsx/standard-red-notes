@@ -44,10 +44,14 @@ import { $computeTableMapSkipCellCheck, $isTableNode, TableCellNode, TableNode }
  *
  * - `content` — shrink-wrap the table to its content (`table-layout: auto`,
  *   `inline-size: max-content`). The historical default, so it stays the
- *   default and serializes to nothing.
+ *   default and serializes to nothing. It is the only method that keeps the
+ *   64rem readable cap a data widget gets by default; the other three are
+ *   explicit instructions about width, so they fill the content column.
  * - `full`   — fill the available measure (`table-layout: auto`,
  *   `inline-size: 100%`); columns still sized from content.
  * - `fixed`  — honour the per-column widths EXACTLY (`table-layout: fixed`).
+ *   When EVERY column carries a px width the table shrink-wraps to their sum
+ *   rather than stretching them to fill the measure — see `columnsFitWidth`.
  * - `equal`  — ignore per-column widths and give every column the same share
  *   (`table-layout: fixed`, no `<col>` widths).
  *
@@ -389,6 +393,8 @@ export const makeColumnWidthPolicy = (mode: TableColumnWidthMode, value?: number
  *
  *   content / full  → `table-layout: auto`. A column width is a HINT; the
  *                     browser may still grow a column its content overflows.
+ *                     A PERCENTAGE under `content` is the one case where
+ *                     nothing at all happens — see `columnWidthHonouring`.
  *   fixed           → `table-layout: fixed`. Column widths are honoured exactly.
  *   equal           → `table-layout: fixed`, no column widths emitted. Every
  *                     per-column policy is SUSPENDED, not erased, so switching
@@ -396,7 +402,39 @@ export const makeColumnWidthPolicy = (mode: TableColumnWidthMode, value?: number
  *                     rather than appearing to apply a width that is ignored.
  */
 
-export type TableColumnWidthHonouring = 'exact' | 'hint' | 'suspended'
+export type TableColumnWidthHonouring = 'exact' | 'hint' | 'suspended' | 'ignored'
+
+/**
+ * What the active width method actually DOES with one column's width. This is a
+ * readout the controls show the user, so it has to describe the rendering rather
+ * than the intent.
+ *
+ * `ignored` exists because of one measured case: a PERCENTAGE under `content`.
+ * `content` sizes the table with `inline-size: max-content`, so a percentage has
+ * no definite base to resolve against and the browser discards it — measured in
+ * headless Chrome at a 700px content column, a 50% first column renders 75px,
+ * byte-identical to the same table with no policy at all. Calling that a `hint`
+ * overstates it: nothing is applied. A PX width under `content` is a real hint
+ * (300px measured 300px, growing the table from 226 to 451), so it stays `hint`.
+ */
+export const columnWidthHonouring = (
+  method: TableWidthMethod,
+  policy: TableColumnWidthPolicy,
+): TableColumnWidthHonouring => {
+  if (method === 'equal') {
+    return 'suspended'
+  }
+  if (method === 'fixed') {
+    return 'exact'
+  }
+  if (method === 'content' && policy.mode === 'percent') {
+    return 'ignored'
+  }
+  return 'hint'
+}
+
+/** Least honoured first. The table-level summary reports the weakest reading. */
+const HONOURING_WEAKEST_FIRST: readonly TableColumnWidthHonouring[] = ['suspended', 'ignored', 'hint', 'exact']
 
 export type ResolvedTableLayout = {
   readonly method: TableWidthMethod
@@ -404,13 +442,55 @@ export type ResolvedTableLayout = {
   readonly widthAttribute: TableWidthMethod
   /** `data-super-table-headers` value, or null when the attribute is absent. */
   readonly headerAttribute: 'plain' | null
+  /**
+   * The exact width the table's own box must take, or null to leave it to the
+   * stylesheet.
+   *
+   * CSS `table-layout: fixed` on a table held at `inline-size: 100%` hands the
+   * leftover measure back to the columns, so 200/200/200 in a 700px content
+   * column rendered 233/233/233 — not honoured exactly, even though the API said
+   * `exact`. When every column is sized in px the table can instead be exactly as
+   * wide as its columns (601px for 200/200/200, the extra 1px being the collapsed
+   * outer border), which is exact in all three regimes: under-fill leaves the
+   * remainder unoccupied, sum == measure fits, sum > measure overflows into the
+   * wrapper's scroll. Null when any column is automatic or a percentage — a
+   * percentage needs the definite table width this would take away.
+   */
+  readonly columnsFitWidth: string | null
   /** Per column: the CSS length for its `<col>`, or null to leave it alone. */
   readonly columnWidths: readonly (string | null)[]
-  /** How faithfully the active method honours a per-column width. */
+  /**
+   * The weakest honouring among the columns that declare a width, or the
+   * method's own reading when none does. A summary: a mixed table can honour one
+   * column and ignore another, and `columnHonourings` is the per-column truth.
+   */
   readonly columnHonouring: TableColumnWidthHonouring
+  /** How the active method treats EACH column's width, left to right. */
+  readonly columnHonourings: readonly TableColumnWidthHonouring[]
   /** True when policies exist that the active method suspends. */
   readonly suspendedColumnPolicies: boolean
   readonly differentiatedHeaders: boolean
+}
+
+/**
+ * The width a `fixed` table must take so that EVERY declared column width is
+ * rendered exactly: the sum of them. Null unless every column is sized in px,
+ * because that is the only case in which the sum is known — a percentage column
+ * resolves against the table's width, so fixing the table's width to the columns
+ * would be circular, and an automatic column is asking for the leftover measure.
+ */
+const declaredColumnsWidth = (columns: readonly TableColumnWidthPolicy[]): string | null => {
+  if (columns.length === 0) {
+    return null
+  }
+  let total = 0
+  for (const policy of columns) {
+    if (policy.mode !== 'fixed' || policy.value === undefined) {
+      return null
+    }
+    total += policy.value
+  }
+  return `${total}px`
 }
 
 const columnWidthCss = (policy: TableColumnWidthPolicy): string | null => {
@@ -426,16 +506,23 @@ export const resolveTableLayout = (input: {
   columns: readonly TableColumnWidthPolicy[]
 }): ResolvedTableLayout => {
   const method = input.width.method
-  const columnHonouring: TableColumnWidthHonouring =
-    method === 'equal' ? 'suspended' : method === 'fixed' ? 'exact' : 'hint'
+  const columnHonourings = input.columns.map((policy) => columnWidthHonouring(method, policy))
   const declared = input.columns.map(columnWidthCss)
-  const suspendedColumnPolicies = columnHonouring === 'suspended' && declared.some((width) => width !== null)
+  // The summary reports the weakest reading among the columns that actually
+  // declare a width; with nothing declared it reports what the method would do.
+  const declaredHonourings = columnHonourings.filter((_, index) => declared[index] !== null)
+  const columnHonouring: TableColumnWidthHonouring =
+    HONOURING_WEAKEST_FIRST.find((candidate) => declaredHonourings.includes(candidate)) ??
+    columnWidthHonouring(method, DEFAULT_COLUMN_WIDTH_POLICY)
+  const suspendedColumnPolicies = method === 'equal' && declared.some((width) => width !== null)
   return {
     method,
     widthAttribute: method,
     headerAttribute: input.headers.differentiated ? null : 'plain',
-    columnWidths: columnHonouring === 'suspended' ? declared.map(() => null) : declared,
+    columnsFitWidth: method === 'fixed' ? declaredColumnsWidth(input.columns) : null,
+    columnWidths: method === 'equal' ? declared.map(() => null) : declared,
     columnHonouring,
+    columnHonourings,
     suspendedColumnPolicies,
     differentiatedHeaders: input.headers.differentiated,
   }
@@ -453,6 +540,16 @@ export const $resolveTableLayout = (table: TableNode): ResolvedTableLayout =>
 
 export const TABLE_WIDTH_ATTRIBUTE = 'data-super-table-width'
 export const TABLE_HEADERS_ATTRIBUTE = 'data-super-table-headers'
+/** Selector hook for "this table is exactly as wide as its declared columns". */
+export const TABLE_FIT_ATTRIBUTE = 'data-super-table-fit'
+/**
+ * How the measure itself reaches the stylesheet. A custom property rather than
+ * an inline `inline-size`, so the rule that consumes it stays in editor.scss
+ * where the rest of the table geometry lives, and so the DOCUMENT export paths —
+ * which deliberately make every table fill the page — are unaffected: nothing
+ * there reads this property, and an inline width would have overridden them.
+ */
+export const TABLE_FIT_WIDTH_PROPERTY = '--super-table-fit-width'
 
 /**
  * Apply a resolved layout to an already-rendered table.
@@ -461,6 +558,11 @@ export const TABLE_HEADERS_ATTRIBUTE = 'data-super-table-headers'
  * horizontal-scroll wrapper when scrollable tables are active, otherwise the
  * `<table>` itself. The width attribute is written to BOTH, because the wrapper
  * owns its own measure and the table owns `table-layout`.
+ *
+ * The FIT attribute goes on the table only: it shrinks the table to its declared
+ * column widths, while the wrapper keeps filling the measure so the leftover
+ * space stays part of the block (and so the wrapper is still the scroll port when
+ * the declared widths overflow it).
  *
  * Per-column widths are written to the `<col>` elements of Lexical's own
  * (DOM-unmanaged) `<colgroup>` — the correct HTML mechanism, honoured under both
@@ -486,6 +588,13 @@ export const applyResolvedTableLayoutToDom = (element: HTMLElement | null, layou
   }
   if (tableElement === null) {
     return
+  }
+  if (layout.columnsFitWidth === null) {
+    tableElement.removeAttribute(TABLE_FIT_ATTRIBUTE)
+    tableElement.style.removeProperty(TABLE_FIT_WIDTH_PROPERTY)
+  } else {
+    tableElement.setAttribute(TABLE_FIT_ATTRIBUTE, 'columns')
+    tableElement.style.setProperty(TABLE_FIT_WIDTH_PROPERTY, layout.columnsFitWidth)
   }
   const cols = tableElement.querySelectorAll(':scope > colgroup > col')
   for (let index = 0; index < cols.length; index++) {

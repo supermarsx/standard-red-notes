@@ -28,6 +28,7 @@ import {
   $setTableColumnWidthPolicy,
   $setTableHeadersDifferentiated,
   $setTableWidthMethod,
+  columnWidthHonouring,
   makeColumnWidthPolicy,
   MAX_COLUMN_WIDTH_PERCENT,
   MAX_COLUMN_WIDTH_PX,
@@ -42,11 +43,19 @@ import {
   TableWidthMethod,
 } from '../../Lexical/Nodes/TableLayoutPolicy'
 
-/** What each width method actually does, in the tooltip beside it. */
+/**
+ * What each width method actually does, in the tooltip beside it. These are
+ * measured descriptions, not intentions: `fixed` does NOT also fill the width
+ * when every column is sized (the table is then exactly as wide as the columns),
+ * and a percentage under `content` has no definite width to resolve against, so
+ * it is not applied at all.
+ */
 const WIDTH_METHOD_INFO: Record<TableWidthMethod, string> = {
-  content: 'The table is only as wide as its content needs. Column widths act as a minimum.',
-  full: 'The table fills the available width. Column widths act as a minimum.',
-  fixed: 'The table fills the available width and uses your column widths exactly.',
+  content:
+    'The table is only as wide as its content needs, up to a readable maximum. A fixed column width acts as a minimum; a percentage has nothing to measure against here.',
+  full: 'The table fills the width of the note. Column widths act as a minimum.',
+  fixed:
+    'Your column widths are used exactly. Size every column and the table is exactly as wide as they are; leave a column automatic and it takes the remaining width.',
   equal: 'Every column gets the same share of the width. Per-column widths are kept but not used.',
 }
 
@@ -178,7 +187,11 @@ export function TableLayoutMenuSection({
     applyColumnPolicy(mode, parsed)
   }, [applyColumnPolicy, draft, reading])
 
-  const suspended = reading !== null && reading.method === 'equal'
+  // Read the honouring through the SAME function the renderer resolves with, so
+  // the notice below cannot drift from what the table actually does.
+  const honouring = reading === null ? null : columnWidthHonouring(reading.method, reading.columnPolicy)
+  const suspended = honouring === 'suspended'
+  const ignored = honouring === 'ignored'
   const bounds = useMemo(
     () => (reading === null || reading.columnPolicy.mode === 'auto' ? null : MODE_BOUNDS[reading.columnPolicy.mode]),
     [reading],
@@ -248,6 +261,12 @@ export function TableLayoutMenuSection({
         {suspended && (
           <div className="text-passive-1 px-3 py-1 text-xs" role="status">
             “Equal columns” is on, so per-column widths are kept but not applied.
+          </div>
+        )}
+        {ignored && (
+          <div className="text-passive-1 px-3 py-1 text-xs" role="status">
+            “Fit content” sizes the table to its content, so a percentage has nothing to measure against and is not
+            applied. Use a fixed width, or choose “Full width” or “Fixed columns”.
           </div>
         )}
       </MenuSection>

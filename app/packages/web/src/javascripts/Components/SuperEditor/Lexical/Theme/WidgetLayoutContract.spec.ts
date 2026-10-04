@@ -70,6 +70,25 @@ describe('Super widget layout contract', () => {
     )
     expect(editorScss).toMatch(/\.Lexical__table\s*\{[^}]*inline-size:\s*max-content/s)
     expect(editorScss).toMatch(/\.Lexical__table\s*\{[^}]*table-layout:\s*auto/s)
+    // The 64rem default measure is a cap on the CONTENT-fit default only. The
+    // three explicit width methods are the user stating the table's width, so
+    // they fill the content column: measured in headless Chrome, `full` in a
+    // 1200px column rendered 1024 before this and 1200 after it.
+    expect(editorScss).toMatch(
+      /\.Lexical__tableScrollableWrapper\[data-super-table-width='equal'\]\s*\{[^}]*inline-size:\s*100%[^}]*max-inline-size:\s*100%/s,
+    )
+    // ...and a `fixed` table whose every column is sized in px takes exactly the
+    // width the resolver measured for it, instead of stretching those columns to
+    // fill the measure (200/200/200 in a 700px column rendered 233/233/233).
+    expect(editorScss).toMatch(
+      /\[data-super-table-fit='columns'\]\s*\{[^}]*inline-size:\s*var\(--super-table-fit-width,\s*max-content\)[^}]*max-inline-size:\s*none/s,
+    )
+    // The attribute and the custom property are a contract between the resolver
+    // and the stylesheet above: renaming either on one side only would silently
+    // stop the fit from applying, with every unit test still green.
+    const tableLayoutPolicy = read('src/javascripts/Components/SuperEditor/Lexical/Nodes/TableLayoutPolicy.ts')
+    expect(tableLayoutPolicy).toContain("TABLE_FIT_ATTRIBUTE = 'data-super-table-fit'")
+    expect(tableLayoutPolicy).toContain("TABLE_FIT_WIDTH_PROPERTY = '--super-table-fit-width'")
     expect(editorScss).not.toContain('width: calc(100% - 25px)')
     expect(dataTable).not.toContain('<table className="w-full')
     expect(sql).not.toContain('<table className="w-full')

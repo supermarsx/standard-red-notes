@@ -41,6 +41,8 @@ import {
   $setTableHeadersDifferentiated,
   $setTableWidthMethod,
   makeColumnWidthPolicy,
+  TABLE_FIT_ATTRIBUTE,
+  TABLE_FIT_WIDTH_PROPERTY,
   TABLE_HEADERS_ATTRIBUTE,
   TABLE_WIDTH_ATTRIBUTE,
 } from '../../Lexical/Nodes/TableLayoutPolicy'
@@ -217,6 +219,16 @@ describe('the Layout group renders in the table controls', () => {
 
   const sectionText = () => container.textContent ?? ''
 
+  /**
+   * Only the live-region notices. Scoped deliberately: the method tooltips carry
+   * similar wording, so a whole-container search could pass on a tooltip instead
+   * of on the notice under test.
+   */
+  const statusText = () =>
+    Array.from(container.querySelectorAll('[role="status"]'))
+      .map((element) => element.textContent ?? '')
+      .join(' | ')
+
   it('renders the table-width, column and header sections', async () => {
     await mountSection()
     expect(sectionText()).toContain('Table width')
@@ -298,6 +310,42 @@ describe('the Layout group renders in the table controls', () => {
     expect(sectionText()).toContain('per-column widths are kept but not applied')
     // Suspended, not erased.
     expect(inspectTable(editor, (table) => $getTableColumnWidthPolicy(table, 0).mode)).toBe('fixed')
+  })
+
+  it('says so when a percentage does nothing under the fit-content method', async () => {
+    await mountSection(0)
+    // `content` is the default method. Measured in headless Chrome: a 50% column
+    // under it renders 75px, byte-identical to no policy at all — so the control
+    // must not present the number as a width that is being applied.
+    await act(async () => {
+      itemNamed('Percentage').click()
+    })
+    expect(statusText()).toContain('has nothing to measure against')
+    // Choosing a method that CAN resolve a percentage takes the notice away.
+    await act(async () => {
+      itemNamed('Full width').click()
+    })
+    expect(statusText()).not.toContain('has nothing to measure against')
+    // ...and switching back brings it back, with the percentage still stored.
+    await act(async () => {
+      itemNamed('Fit content').click()
+    })
+    expect(statusText()).toContain('has nothing to measure against')
+    expect(inspectTable(editor, (table) => $getTableColumnWidthPolicy(table, 0))).toMatchObject({
+      mode: 'percent',
+      value: 25,
+    })
+  })
+
+  it('does not claim a px width is ignored under fit content, because it is not', async () => {
+    await mountSection(0)
+    // Measured @700: a 300px column under `content` renders exactly 300 and grows
+    // the table from 226 to 451. That is a hint being honoured, not an ignored
+    // width, and the notice must stay away.
+    await act(async () => {
+      itemNamed('Fixed width').click()
+    })
+    expect(statusText()).not.toContain('has nothing to measure against')
   })
 
   it('reads a malformed stored setting as unrecognised instead of as a measured one', async () => {
@@ -427,6 +475,52 @@ describe('TableWidgetLayoutPlugin projects the policy onto the real table elemen
     expect(cols).toHaveLength(3)
     expect((cols[1] as HTMLElement).style.width).toBe('40%')
     expect((cols[0] as HTMLElement).style.width).toBe('')
+  })
+
+  it('hands the table its exact fit width once every column is sized, and takes it back', async () => {
+    await mountEditor()
+    await act(async () => {
+      seedTable(editor)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      mutateTable(editor, (table) => {
+        $setTableWidthMethod(table, 'fixed')
+        for (const column of [0, 1, 2]) {
+          $setTableColumnWidthPolicy(table, column, makeColumnWidthPolicy('fixed', 200))
+        }
+      })
+      await Promise.resolve()
+    })
+    // jsdom cannot lay this out; what is asserted is that the browser is handed
+    // the measure. In headless Chrome it renders 200/200/200 in a 601px table,
+    // where without it the three columns came out 233/233/233.
+    expect(tableElement().getAttribute(TABLE_FIT_ATTRIBUTE)).toBe('columns')
+    expect(tableElement().style.getPropertyValue(TABLE_FIT_WIDTH_PROPERTY)).toBe('600px')
+    await act(async () => {
+      mutateTable(editor, (table) => $setTableColumnWidthPolicy(table, 1, makeColumnWidthPolicy('auto')))
+      await Promise.resolve()
+    })
+    expect(tableElement().hasAttribute(TABLE_FIT_ATTRIBUTE)).toBe(false)
+    expect(tableElement().style.getPropertyValue(TABLE_FIT_WIDTH_PROPERTY)).toBe('')
+  })
+
+  it('never fits a table whose columns it cannot account for in px', async () => {
+    await mountEditor()
+    await act(async () => {
+      seedTable(editor)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      mutateTable(editor, (table) => {
+        $setTableWidthMethod(table, 'fixed')
+        $setTableColumnWidthPolicy(table, 0, makeColumnWidthPolicy('percent', 50))
+        $setTableColumnWidthPolicy(table, 1, makeColumnWidthPolicy('fixed', 200))
+        $setTableColumnWidthPolicy(table, 2, makeColumnWidthPolicy('fixed', 200))
+      })
+      await Promise.resolve()
+    })
+    expect(tableElement().hasAttribute(TABLE_FIT_ATTRIBUTE)).toBe(false)
   })
 
   it('emits no column width at all while equal columns is active', async () => {

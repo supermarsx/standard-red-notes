@@ -246,6 +246,13 @@
 .Lexical__tableScrollableWrapper[data-super-table-width='fixed'],
 .Lexical__tableScrollableWrapper[data-super-table-width='equal'] {
   inline-size: 100%;
+  /* The 64rem above is the DEFAULT measure for a data widget, not a wall. These
+   * three methods are the user saying what the table's width should be, so they
+   * fill the editor's content column however wide it is: at a 1200px column
+   * `full` measured 1024 and `equal` columns 341 instead of 400, and a `fixed`
+   * table of 400+400+400 scrolled inside a 1024px port with 176px to spare.
+   * `content` (the default) keeps the cap — it is the readable default. */
+  max-inline-size: 100%;
 }
 table.Lexical__table[data-super-table-width='full'],
 table.Lexical__table[data-super-table-width='fixed'],
@@ -262,6 +269,26 @@ table.Lexical__table[data-super-table-width='full'] {
 table.Lexical__table[data-super-table-width='fixed'],
 table.Lexical__table[data-super-table-width='equal'] {
   table-layout: fixed;
+}
+/* ...and when EVERY column of a `fixed` table carries a px width, the table is
+ * exactly as wide as those columns instead of filling the measure. Without this,
+ * `table-layout: fixed` on a table held at 100% hands the leftover measure back
+ * to the columns — 200/200/200 in a 700px column rendered 233/233/233, which is
+ * not "honoured exactly". The sum is supplied per table by the resolver as
+ * --super-table-fit-width (`columnsFitWidth` in
+ * Lexical/Nodes/TableLayoutPolicy.ts), which writes it together with the
+ * attribute in this selector, and only when every column is accounted for in px —
+ * a percentage column needs the definite table width this replaces. All three
+ * regimes then come out exact: under-fill leaves the remainder unoccupied,
+ * sum == measure fits, and sum > measure overflows into the wrapper's scroll,
+ * because a fixed table is never narrower than its declared columns.
+ * `max-content` is the fallback should the property ever be missing: never a
+ * stretch, but not exact either — a fixed-layout table's max-content is the sum
+ * of the declared widths EXCEPT where a column is narrower than its own content's
+ * minimum, which measured 25.91px for a 24px column of four-character words. */
+table.Lexical__table[data-super-table-width='fixed'][data-super-table-fit='columns'] {
+  inline-size: var(--super-table-fit-width, max-content);
+  max-inline-size: none;
 }
 
 /* Undifferentiated headers. This changes STYLING ONLY — the cells stay `th` with
