@@ -187,6 +187,13 @@ export type InviteRealtimeSubscriptionOptions = {
   }): Promise<void>
   onReady?: (cursor: string) => void
   onError?: (error: AuthenticatedRpcError) => void
+  /**
+   * The lane is not open because a `deferred` fallback reason holds — another tab of
+   * this account owns the socket. Separate from `onError` because nothing failed: the
+   * subscription stays registered here and in the worker, and is re-sent on the next
+   * authenticated socket, so the owner must park rather than dispose and re-dial.
+   */
+  onDeferred?: (deferral: { reason: SyncFallbackReason; resumeAfterMilliseconds: number }) => void
 }
 
 type PendingInviteSubscription = {
@@ -383,6 +390,12 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    * logged once per genuine change rather than once per save.
    */
   private lastLoggedTransition?: string
+  /**
+   * Kept apart from `lastLoggedTransition` on purpose: a parked invite lane and the
+   * transport state move independently, and sharing one slot would let a state line
+   * in between re-announce a deferral nothing has changed about.
+   */
+  private lastLoggedInviteDeferral?: string
   private pageHideListener?: () => void
   private shutdownBarrier?: () => void
 
@@ -1014,23 +1027,63 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    * reason for each save, so the signature is deduplicated.
    */
   private announceTransition(state: SyncTransportState, reason: SyncFallbackReason | undefined): void {
-    const signature = `${state}:${reason ?? 'none'}`
+    // DEGRADED and HTTP_FALLBACK are ONE announcement for the reader — saves are on
+    // HTTP — and the worker posts both of them for a single unchanged cause, because
+    // each lane classifies its own refusal: the invite lane posted DEGRADED while the
+    // sync and collaboration lanes posted HTTP_FALLBACK for the same
+    // `multi-tab-not-owner`. Keyed per state, the signature flipped on every lane and
+    // the identical status line was re-logged forever. Keyed per cause, it settles.
+    // HTTP_ONLY keeps its own key: it is a different statement ("never the socket").
+    const fallbackState = state === 'DEGRADED' || state === 'HTTP_FALLBACK'
+    const signature = fallbackState ? `ON_HTTP:${reason ?? 'none'}` : `${state}:${reason ?? 'none'}`
     if (this.lastLoggedTransition === signature) {
       return
     }
     this.lastLoggedTransition = signature
 
-    const usesHttp = state === 'HTTP_ONLY' || state === 'HTTP_FALLBACK' || state === 'DEGRADED'
+    const usesHttp = state === 'HTTP_ONLY' || fallbackState
     if (!usesHttp) {
       // CONNECTING/AUTHENTICATING/HALF_OPEN are steps on the way to READY, and
       // READY itself is announced by announceNegotiation with the operation list.
       return
     }
 
-    const explanation = reason ? SYNC_FALLBACK_REASON_EXPLANATIONS[reason] : undefined
+    if (!reason) {
+      // A socket closed below code 4000 carries no verdict, so the worker has none to
+      // report. Saying "is using HTTP" and stopping asserted a settled state with a
+      // cause it did not have; the honest line names the gap and what happens next.
+      console.warn(
+        `[sync-transport] Account sync left the websocket (state ${state}) and NO cause was reported with` +
+          ' the transition. Every save is one POST /v1/items meanwhile.' +
+          (fallbackState ? ' The next transition names a cause if the transport determines one.' : ''),
+      )
+      return
+    }
+
     console.warn(
-      `[sync-transport] Account sync is using HTTP (state ${state}${reason ? `, reason ${reason}` : ''}).` +
-        ` Every save is one POST /v1/items.${explanation ? ` ${explanation}` : ''}`,
+      `[sync-transport] Account sync is using HTTP (state ${state}, reason ${reason}).` +
+        ` Every save is one POST /v1/items. ${SYNC_FALLBACK_REASON_EXPLANATIONS[reason]}`,
+    )
+  }
+
+  /**
+   * The durable invite stream is parked, not broken. Said once per cause, as
+   * `console.info`, because the condition is expected: `console.error` here was most
+   * of a production console flood for a state the transport's own copy calls "not a
+   * fault".
+   */
+  private announceInviteDeferral(reason: SyncFallbackReason): void {
+    const signature = `INVITE_DEFERRED:${reason}`
+    if (this.lastLoggedInviteDeferral === signature) {
+      return
+    }
+    this.lastLoggedInviteDeferral = signature
+    // eslint-disable-next-line no-console
+    console.info(
+      `[sync-transport] Durable invite events are waiting for the socket (reason ${reason}).` +
+        ` ${SYNC_FALLBACK_REASON_EXPLANATIONS[reason]}` +
+        ' The subscription stays registered and resumes by itself when this tab takes the lane;' +
+        ' nothing is retrying and nothing failed.',
     )
   }
 
@@ -1179,7 +1232,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       message.type === 'INVITE_READY' ||
       message.type === 'INVITE_BATCH' ||
       message.type === 'INVITE_RECONCILE' ||
-      message.type === 'INVITE_ERROR'
+      message.type === 'INVITE_ERROR' ||
+      message.type === 'INVITE_DEFERRED'
     ) {
       if (invitePending) {
         this.handleInviteWorkerMessage(message, invitePending)
@@ -1353,12 +1407,26 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private handleInviteWorkerMessage(
     message: Extract<
       SyncWorkerToMainMessage,
-      { type: 'INVITE_READY' | 'INVITE_BATCH' | 'INVITE_RECONCILE' | 'INVITE_ERROR' }
+      { type: 'INVITE_READY' | 'INVITE_BATCH' | 'INVITE_RECONCILE' | 'INVITE_ERROR' | 'INVITE_DEFERRED' }
     >,
     pending: PendingInviteSubscription,
   ): void {
     if (message.type === 'INVITE_READY') {
+      // The lane is live, so a later deferral is a new fact and must be said again.
+      this.lastLoggedInviteDeferral = undefined
       pending.options.onReady?.(message.cursor)
+      return
+    }
+    if (message.type === 'INVITE_DEFERRED') {
+      // Deliberately NOT routed to `onError`: nothing failed, the subscription is
+      // still registered in the worker, and the owner tells its lifecycle to park.
+      // Routed through onError this read as a failure in the console and drove one
+      // reconnect per coordinator backoff tick for the life of the tab.
+      this.announceInviteDeferral(message.reason)
+      pending.options.onDeferred?.({
+        reason: message.reason,
+        resumeAfterMilliseconds: message.resumeAfterMilliseconds,
+      })
       return
     }
     if (message.type === 'INVITE_ERROR') {

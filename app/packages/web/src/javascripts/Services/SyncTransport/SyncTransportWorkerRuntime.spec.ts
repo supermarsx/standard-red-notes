@@ -3318,8 +3318,12 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
       await flush()
 
+      // HTTP_FALLBACK, not DEGRADED: there is no socket and nothing is recovering —
+      // another tab owns the lane. DEGRADED here claimed a live socket to the
+      // diagnostics pane and made the announced state alternate against the
+      // HTTP_FALLBACK the other lanes post for the identical cause (t103).
       expect(harness.messages.slice(before)).toEqual([
-        { type: 'STATE', state: 'DEGRADED', reason: 'multi-tab-not-owner' },
+        { type: 'STATE', state: 'HTTP_FALLBACK', reason: 'multi-tab-not-owner' },
       ])
       expect(socket.readyState).toBe(3)
 
@@ -3431,6 +3435,251 @@ describe('SyncTransportWorkerRuntime', () => {
         clientRequestId: 'invite-2',
         code: 'OPERATION_UNAVAILABLE',
         retryable: false,
+      })
+    })
+
+    /**
+     * Standard Red Notes (t103). A second tab of the same account logged
+     * `MULTI_TAB_NOT_OWNER` as a failed, retryable invite subscription — six times in
+     * one page session with no user action — and flipped the announced transport state
+     * between DEGRADED (invite lane) and HTTP_FALLBACK (sync/collaboration lanes) for
+     * that one unchanged cause. Neither is a fault: the condition is correct, stable,
+     * and clears when the owning tab closes.
+     */
+    describe('an invite subscription behind another tab is deferred, not failed', () => {
+      const holdLease = (harness: ReturnType<typeof setup>) =>
+        harness.outbox.owners.set(TRANSPORT_SCOPE, {
+          sessionScope: SESSION_A,
+          ownerId: 'other-tab',
+          expiresAt: Date.now() + 15_000,
+        })
+
+      const subscribe = (harness: ReturnType<typeof setup>, clientRequestId: string) =>
+        harness.runtime.handle({
+          type: 'SUBSCRIBE_INVITE_EVENTS',
+          clientRequestId,
+          sessionScope: SESSION_A,
+          cursor: 'cursor-0',
+          limit: 50,
+        })
+
+      const inviteMessages = (harness: ReturnType<typeof setup>, type: 'INVITE_ERROR' | 'INVITE_DEFERRED') =>
+        harness.messages.filter((message) => message.type === type)
+
+      const states = (harness: ReturnType<typeof setup>) =>
+        harness.messages.filter(
+          (message): message is Extract<SyncWorkerToMainMessage, { type: 'STATE' }> => message.type === 'STATE',
+        )
+
+      it('reports INVITE_DEFERRED, keeps the subscription, and never calls it an error', async () => {
+        const harness = setup()
+        holdLease(harness)
+
+        await subscribe(harness, 'invite-1')
+
+        // Precondition: the lease really refused this attempt, locally, without
+        // buying a ticket to be told so.
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(0)
+        expect(harness.sockets).toHaveLength(0)
+
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toEqual([
+          {
+            type: 'INVITE_DEFERRED',
+            clientRequestId: 'invite-1',
+            reason: 'multi-tab-not-owner',
+            resumeAfterMilliseconds: 15_000,
+          },
+        ])
+        // The defect: this condition used to arrive as a retryable failure, which is
+        // the instruction the durable coordinator loops on.
+        expect(inviteMessages(harness, 'INVITE_ERROR')).toEqual([])
+      })
+
+      /**
+       * Measured, because the live capture showed five `POST /v1/collaboration/authorize`
+       * alongside the loop and the two looked related. `NEED_TICKET` is the worker's
+       * ONLY network-touching output, so zero of it across a loop's worth of attempts
+       * is proof the invite retries cost no request. What does send an authorization to
+       * HTTP is `COLLABORATION_FALLBACK`, from the collaboration lane, per authorize —
+       * a different lane with a different trigger.
+       */
+      it('costs no request however many times the loop re-opened it, and does not drive authorize', async () => {
+        const harness = setup()
+        holdLease(harness)
+
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          await subscribe(harness, `invite-${attempt}`)
+        }
+
+        // Precondition: all six attempts really reached the worker and were answered.
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toHaveLength(6)
+        expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(0)
+        expect(harness.sockets).toHaveLength(0)
+        expect(harness.messages.filter((message) => message.type === 'COLLABORATION_FALLBACK')).toHaveLength(0)
+
+        // One collaboration authorization, refused by the same lease, is what hands an
+        // authorize to HTTP — one fallback per attempt, from this lane alone.
+        await harness.runtime.handle({
+          type: 'AUTHORIZE_COLLABORATION',
+          clientRequestId: 'collab-1',
+          sessionScope: SESSION_A,
+          request: {
+            noteUuid: 'note-1',
+            collaborationProtocolVersion: 3,
+            expectedRoomEpoch: ROOM_EPOCH,
+            leaseRequestId: 'lease-1',
+            bootstrapChallenge: 'bootstrap-challenge-1',
+          },
+        })
+
+        expect(harness.messages.filter((message) => message.type === 'COLLABORATION_FALLBACK')).toEqual([
+          { type: 'COLLABORATION_FALLBACK', clientRequestId: 'collab-1', reason: 'multi-tab-not-owner' },
+        ])
+      })
+
+      it('settles on one announced state for the cause instead of alternating with the other lanes', async () => {
+        const harness = setup()
+        holdLease(harness)
+
+        // The invite lane and an ordinary sync, interleaved exactly as the live log
+        // showed them, on one unchanged cause.
+        await subscribe(harness, 'invite-1')
+        await harness.runtime.handle({
+          type: 'EXECUTE',
+          clientRequestId: 'sync-1',
+          body: body('one'),
+          sessionScope: SESSION_A,
+        })
+        await harness.runtime.handle({
+          type: 'AUTHORIZE_COLLABORATION',
+          clientRequestId: 'collab-1',
+          sessionScope: SESSION_A,
+          request: {
+            noteUuid: 'note-1',
+            collaborationProtocolVersion: 3,
+            expectedRoomEpoch: ROOM_EPOCH,
+            leaseRequestId: 'lease-1',
+            bootstrapChallenge: 'bootstrap-challenge-1',
+          },
+        })
+
+        const reported = states(harness).filter((message) => message.reason === 'multi-tab-not-owner')
+        // Precondition: more than one lane really reported, so a single value below
+        // is a settled state and not an empty log.
+        expect(reported.length).toBeGreaterThan(2)
+        expect([...new Set(reported.map((message) => message.state))]).toEqual(['HTTP_FALLBACK'])
+      })
+
+      it('takes the lane when ownership transfers, from the lease watch alone', async () => {
+        const harness = setup()
+        holdLease(harness)
+        await subscribe(harness, 'invite-1')
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toHaveLength(1)
+
+        // Still held — the owner renewing on its own 5 s interval. The watch looks
+        // across the whole lease window and dials nothing.
+        for (let tick = 0; tick < 3; tick += 1) {
+          holdLease(harness)
+          jest.advanceTimersByTime(5_000)
+          await flush()
+          await flush()
+        }
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(0)
+        expect(harness.sockets).toHaveLength(0)
+
+        // The owning tab closes and hands the lease back.
+        harness.outbox.owners.delete(TRANSPORT_SCOPE)
+        jest.advanceTimersByTime(15_100)
+        await flush()
+        await flush()
+
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(1)
+        const socket = await dial(harness, 'invite-1')
+        socket.open()
+        handshake(socket, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+        await flush()
+
+        const subscribeFrames = socket.sent
+          .map((entry) => JSON.parse(entry) as { type: string; payload?: { cursor?: string; limit?: number } })
+          .filter((frame) => frame.type === 'INVITE_SUBSCRIBE')
+        expect(subscribeFrames).toHaveLength(1)
+        expect(subscribeFrames[0].payload).toEqual({ cursor: 'cursor-0', limit: 50 })
+
+        // The watch is done: nothing keeps looking once the lane is live.
+        const settled = harness.messages.length
+        jest.advanceTimersByTime(60_000)
+        await flush()
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(1)
+        expect(harness.messages.length).toBeGreaterThanOrEqual(settled)
+      })
+
+      it('resumes the parked subscription when another lane wins the socket back', async () => {
+        const harness = setup()
+        holdLease(harness)
+        await subscribe(harness, 'invite-1')
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toHaveLength(1)
+
+        // An ordinary sync takes the socket after the lease frees — the invite lane
+        // asked for nothing and is carried along, because the worker kept it.
+        harness.outbox.owners.delete(TRANSPORT_SCOPE)
+        await harness.runtime.handle({
+          type: 'EXECUTE',
+          clientRequestId: 'sync-1',
+          body: body('one'),
+          sessionScope: SESSION_A,
+        })
+        expect(ticketRequests(harness, 'sync-1')).toHaveLength(1)
+        const socket = await dial(harness, 'sync-1')
+        socket.open()
+        handshake(socket, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+        await flush()
+        await flush()
+
+        expect(socket.sent.filter((entry) => JSON.parse(entry).type === 'INVITE_SUBSCRIBE')).toHaveLength(1)
+      })
+
+      it('still fails the subscription non-retryably for a structurally absent capability', async () => {
+        const harness = setup()
+        await subscribe(harness, 'invite-1')
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(1)
+
+        await harness.runtime.handle({
+          type: 'TICKET_UNAVAILABLE',
+          clientRequestId: 'invite-1',
+          reason: 'capability-unavailable',
+        })
+        await flush()
+
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toEqual([])
+        expect(inviteMessages(harness, 'INVITE_ERROR')).toEqual([
+          {
+            type: 'INVITE_ERROR',
+            clientRequestId: 'invite-1',
+            code: 'CAPABILITY_UNAVAILABLE',
+            retryable: false,
+          },
+        ])
+        // A permanent reason keeps DEGRADED: the deferred classification must not
+        // leak into the other two.
+        expect(states(harness).filter((message) => message.reason === 'capability-unavailable')).toEqual([
+          { type: 'STATE', state: 'DEGRADED', reason: 'capability-unavailable' },
+        ])
+      })
+
+      it('stops watching the lease once the subscription is cancelled', async () => {
+        const harness = setup()
+        holdLease(harness)
+        await subscribe(harness, 'invite-1')
+        expect(inviteMessages(harness, 'INVITE_DEFERRED')).toHaveLength(1)
+
+        await harness.runtime.handle({ type: 'UNSUBSCRIBE_INVITE_EVENTS', clientRequestId: 'invite-1' })
+        harness.outbox.owners.delete(TRANSPORT_SCOPE)
+        jest.advanceTimersByTime(60_000)
+        await flush()
+        await flush()
+
+        expect(ticketRequests(harness, 'invite-1')).toHaveLength(0)
+        expect(harness.sockets).toHaveLength(0)
       })
     })
 

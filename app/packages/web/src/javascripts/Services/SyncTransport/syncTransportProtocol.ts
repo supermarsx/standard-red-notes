@@ -734,8 +734,47 @@ const PERMANENT_SYNC_FALLBACK_REASONS = new Set<SyncFallbackReason>([
   'capability-unavailable',
 ])
 
+/**
+ * Strictly "never": only a relaunch or sign-in can change the answer. Deliberately
+ * NOT widened to cover `deferred` reasons — several callers mean exactly "never" by
+ * it. A caller that wants "should I retry?" must ask `syncFallbackDisposition`,
+ * because deriving retryability as the negation of this predicate answers
+ * "retry forever" for a condition that retrying cannot resolve.
+ */
 export function isPermanentSyncFallbackReason(reason: SyncFallbackReason): boolean {
   return PERMANENT_SYNC_FALLBACK_REASONS.has(reason)
+}
+
+/**
+ * How a long-lived consumer must treat a fallback reason over time.
+ *
+ * The taxonomy used to be a boolean: permanent, or — by negation — retryable. That
+ * gave `multi-tab-not-owner` the answer "retryable", and the durable invite stream
+ * believed it: it reconnected from its checkpoint for the life of the tab against a
+ * condition no reconnect can clear, logging a failure every time. Standing down
+ * permanently instead is equally wrong, because the tab holding the lane will close.
+ *
+ * - `retryable` — retry now; the same attempt may succeed.
+ * - `deferred` — do NOT retry: an external condition holds, and it will clear on its
+ *   own. Resume then. Not a fault, and must not be reported as one (see the wording
+ *   in `SYNC_FALLBACK_REASON_EXPLANATIONS`).
+ * - `permanent` — never, until a relaunch or sign-in.
+ */
+export type SyncFallbackDisposition = 'retryable' | 'deferred' | 'permanent'
+
+/**
+ * Reasons that describe an external condition holding right now which clears by
+ * itself. Another tab of this account owning the socket is the whole set: that tab
+ * hands the lease back when it closes (and it lapses within one lease TTL if it
+ * crashes), after which this tab's next dial takes the lane.
+ */
+const DEFERRED_SYNC_FALLBACK_REASONS = new Set<SyncFallbackReason>(['multi-tab-not-owner'])
+
+export function syncFallbackDisposition(reason: SyncFallbackReason): SyncFallbackDisposition {
+  if (PERMANENT_SYNC_FALLBACK_REASONS.has(reason)) {
+    return 'permanent'
+  }
+  return DEFERRED_SYNC_FALLBACK_REASONS.has(reason) ? 'deferred' : 'retryable'
 }
 
 export type SyncWorkerToMainMessage =
@@ -808,6 +847,23 @@ export type SyncWorkerToMainMessage =
       cursor: string
     }
   | { type: 'INVITE_ERROR'; clientRequestId: string; code: string; retryable: boolean }
+  /**
+   * The invite lane is not open because a `deferred` fallback reason holds — today
+   * only another tab of this account owning the socket. Deliberately NOT an
+   * `INVITE_ERROR`: nothing failed, and reporting it as a retryable error is what
+   * made the durable coordinator reconnect from its checkpoint forever.
+   *
+   * The subscription stays registered in the worker and is re-sent on the next
+   * authenticated socket, so the lifecycle owner must park on this and wait rather
+   * than dispose and re-dial. `resumeAfterMilliseconds` is the owner-lease TTL: the
+   * longest the condition can outlive the tab that holds it.
+   */
+  | {
+      type: 'INVITE_DEFERRED'
+      clientRequestId: string
+      reason: SyncFallbackReason
+      resumeAfterMilliseconds: number
+    }
   | { type: 'FILE_DOWNLOAD_ACCEPTED'; clientRequestId: string; declaredSize: number }
   | { type: 'FILE_DOWNLOAD_CHUNK'; clientRequestId: string; bytes: Uint8Array; offset: number }
   | { type: 'FILE_DOWNLOAD_COMPLETE'; clientRequestId: string; sha256: string; declaredSize: number }

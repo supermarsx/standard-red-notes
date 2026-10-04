@@ -302,6 +302,152 @@ describe('InviteRealtimeSubscriptionCoordinator', () => {
     expect(scheduler.delays).toEqual([250])
   })
 
+  /**
+   * Standard Red Notes (t103): `multi-tab-not-owner` reached here as a RETRYABLE
+   * transport error, because retryability was derived as "not permanent" and the
+   * taxonomy had no third answer. The coordinator did exactly what it was told —
+   * dispose, back off, re-dial — against a condition no re-dial can clear, so a
+   * second tab of the same account logged "Durable invite stream failed;
+   * reconnecting from its checkpoint" for as long as it stayed open.
+   */
+  describe('a deferred condition (another tab owns the lane)', () => {
+    const deferral = { reason: 'multi-tab-not-owner', resumeAfterMilliseconds: 15_000 }
+
+    it('parks without retrying, without disposing and without reporting a failure', async () => {
+      const store = new MemoryCheckpointStore()
+      store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })
+      const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+      const port = new FakeSubscriptionPort()
+      const scheduler = new ManualScheduler()
+      const onError = jest.fn()
+      const onDeferred = jest.fn()
+      const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+        scheduler,
+        reconcileSnapshot: jest.fn(),
+        onError,
+        onDeferred,
+      })
+
+      await coordinator.startSession(sessionA)
+      // Precondition: the subscription this test defers really exists, so the
+      // assertions below cannot pass over an empty port.
+      expect(port.subscriptions).toHaveLength(1)
+      const subscription = port.subscriptions[0]
+      expect(subscription.options.onDeferred).toBeDefined()
+
+      // Ten transport answers for ONE unchanged condition. Reported as a retryable
+      // error each of these scheduled a backoff and opened a replacement subscription.
+      for (let answer = 0; answer < 10; answer += 1) {
+        subscription.options.onDeferred?.(deferral)
+      }
+
+      expect(onDeferred).toHaveBeenCalledTimes(10)
+      expect(onDeferred).toHaveBeenCalledWith(deferral)
+      // Nothing failed, so nothing may be reported as a failure...
+      expect(onError).not.toHaveBeenCalled()
+      // ...nothing may be retried...
+      expect(scheduler.delays).toEqual([])
+      // ...and the subscription must stay registered, because the transport resumes
+      // this exact one when the condition clears.
+      expect(subscription.disposed).toBe(false)
+      expect(port.subscriptions).toHaveLength(1)
+      expect(coordinator.isDeferred()).toBe(true)
+      // The durable cursor is untouched: a park loses no position.
+      expect(store.values.get(sessionA)?.cursor).toBe(cursor0)
+    })
+
+    it('resumes the parked subscription when ownership transfers, with no re-dial', async () => {
+      const store = new MemoryCheckpointStore()
+      store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })
+      const handler = jest.fn()
+      const consumer = new InviteRealtimeEventConsumer(store, handler)
+      const port = new FakeSubscriptionPort()
+      const scheduler = new ManualScheduler()
+      const onReady = jest.fn()
+      const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+        scheduler,
+        reconcileSnapshot: jest.fn(),
+        onReady,
+      })
+
+      await coordinator.startSession(sessionA)
+      const subscription = port.subscriptions[0]
+      subscription.options.onDeferred?.(deferral)
+      expect(coordinator.isDeferred()).toBe(true)
+      // While parked a wake signal must not churn the registration the transport is
+      // about to resume.
+      expect(coordinator.reconnectIfStopped()).toBe(false)
+
+      // The owning tab closes; the transport wins the lease and re-sends THIS
+      // subscription on the new socket. Its first frame must be accepted.
+      subscription.options.onReady?.(cursor0)
+      expect(onReady).toHaveBeenCalledWith(cursor0)
+      expect(coordinator.isDeferred()).toBe(false)
+
+      await expect(subscription.options.applyBatch(batch())).resolves.toBe(cursor1)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(store.values.get(sessionA)?.cursor).toBe(cursor1)
+      // The lane came back on the registration that was already open: no reconnect
+      // was needed and none was made.
+      expect(port.subscriptions).toHaveLength(1)
+      expect(scheduler.delays).toEqual([])
+    })
+
+    it('still backs off and retries when a genuine failure follows the park', async () => {
+      const store = new MemoryCheckpointStore()
+      store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })
+      const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+      const port = new FakeSubscriptionPort()
+      const scheduler = new ManualScheduler()
+      const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+        scheduler,
+        retryBaseDelayMilliseconds: 10,
+        reconcileSnapshot: jest.fn(),
+      })
+
+      await coordinator.startSession(sessionA)
+      const subscription = port.subscriptions[0]
+      subscription.options.onDeferred?.(deferral)
+      expect(scheduler.delays).toEqual([])
+
+      // Parking must not disable recovery: a real transport error on the same
+      // connection still ends the park and schedules the ordinary retry.
+      subscription.options.onError?.({ code: 'SOCKET_CLOSED', retryable: true })
+      expect(coordinator.isDeferred()).toBe(false)
+      expect(subscription.disposed).toBe(true)
+      expect(scheduler.delays).toEqual([10])
+
+      scheduler.runNext()
+      await Promise.resolve()
+      expect(port.subscriptions).toHaveLength(2)
+      expect(port.subscriptions[1].options.cursor).toBe(cursor0)
+    })
+
+    it('ignores a deferral addressed to a connection that is no longer current', async () => {
+      const store = new MemoryCheckpointStore()
+      store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })
+      const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+      const port = new FakeSubscriptionPort()
+      const scheduler = new ManualScheduler()
+      const onDeferred = jest.fn()
+      const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+        scheduler,
+        reconcileSnapshot: jest.fn(),
+        onDeferred,
+      })
+
+      await coordinator.startSession(sessionA)
+      const stale = port.subscriptions[0]
+      await coordinator.startSession(sessionB)
+      expect(port.subscriptions).toHaveLength(2)
+
+      stale.options.onDeferred?.(deferral)
+
+      expect(onDeferred).not.toHaveBeenCalled()
+      expect(coordinator.isDeferred()).toBe(false)
+    })
+  })
+
   it('aborts and isolates late callbacks when the authenticated session changes', async () => {
     const store = new MemoryCheckpointStore()
     store.values.set(sessionA, { cursor: cursor0, seenEventIds: [] })

@@ -8,7 +8,10 @@ import {
   isPermanentSyncFallbackReason,
   MAX_FILE_CHUNK_BYTES,
   normalizeSyncRequestForWire,
+  SYNC_FALLBACK_REASON_EXPLANATIONS,
+  syncFallbackDisposition,
   type SocketFileBinaryHeader,
+  type SyncFallbackReason,
 } from './syncTransportProtocol'
 import { webcrypto } from 'crypto'
 
@@ -25,6 +28,60 @@ describe('permanent sync fallback reasons', () => {
     expect(isPermanentSyncFallbackReason('reconnect-gap')).toBe(false)
     expect(isPermanentSyncFallbackReason('server-kill')).toBe(false)
     expect(isPermanentSyncFallbackReason('worker-error')).toBe(false)
+  })
+})
+
+/**
+ * Standard Red Notes (t103): the boolean taxonomy had exactly two answers, and every
+ * consumer derived "should I retry?" as the negation of "is it permanent?". That gave
+ * `multi-tab-not-owner` the answer "retry now", which no retry can satisfy while
+ * another tab holds the lane — and the durable invite stream retried on it forever.
+ */
+describe('sync fallback disposition', () => {
+  it('answers deferred — not retryable — for a condition another tab holds', () => {
+    expect(syncFallbackDisposition('multi-tab-not-owner')).toBe('deferred')
+    // The negation of "permanent" is the answer that caused the loop, so it must
+    // still be false here: the whole point is that the two are no longer the same
+    // question.
+    expect(isPermanentSyncFallbackReason('multi-tab-not-owner')).toBe(false)
+  })
+
+  it('keeps structural absence permanent and ordinary faults retryable', () => {
+    expect(syncFallbackDisposition('capability-unavailable')).toBe('permanent')
+    expect(syncFallbackDisposition('http-only')).toBe('permanent')
+    expect(syncFallbackDisposition('unsupported-browser')).toBe('permanent')
+    expect(syncFallbackDisposition('ticket-unavailable')).toBe('retryable')
+    expect(syncFallbackDisposition('ticket-expired')).toBe('retryable')
+    expect(syncFallbackDisposition('reconnect-gap')).toBe('retryable')
+    expect(syncFallbackDisposition('server-kill')).toBe('retryable')
+    expect(syncFallbackDisposition('worker-error')).toBe('retryable')
+    expect(syncFallbackDisposition('outbox-unavailable')).toBe('retryable')
+    expect(syncFallbackDisposition('live-sync-disabled')).toBe('retryable')
+  })
+
+  it('answers every reason in the union, and agrees with isPermanentSyncFallbackReason', () => {
+    const reasons = Object.keys(SYNC_FALLBACK_REASON_EXPLANATIONS) as SyncFallbackReason[]
+    // Precondition: the explanation map is keyed by the full union (it is a
+    // `Record<SyncFallbackReason, string>`), so this really is an exhaustive sweep
+    // rather than a sweep of nothing.
+    expect(reasons).toContain('multi-tab-not-owner')
+    expect(reasons.length).toBeGreaterThan(10)
+
+    for (const reason of reasons) {
+      const disposition = syncFallbackDisposition(reason)
+      expect(['retryable', 'deferred', 'permanent']).toContain(disposition)
+      expect(disposition === 'permanent').toBe(isPermanentSyncFallbackReason(reason))
+    }
+
+    // Exactly one reason is deferred today. Stated so that adding another forces a
+    // deliberate look at every consumer of the taxonomy rather than a silent widening.
+    expect(reasons.filter((reason) => syncFallbackDisposition(reason) === 'deferred')).toEqual(['multi-tab-not-owner'])
+  })
+
+  it('reads the deferred reason as expected rather than as a fault', () => {
+    // The copy and the classification have to agree: a reason whose own explanation
+    // says it is not a fault must not be handed to consumers as one.
+    expect(SYNC_FALLBACK_REASON_EXPLANATIONS['multi-tab-not-owner']).toContain('not a fault')
   })
 })
 

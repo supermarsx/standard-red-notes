@@ -1215,6 +1215,132 @@ describe('WebSocketSyncTransport', () => {
     expect(worker.posts.filter((message) => message.type === 'UNSUBSCRIBE_INVITE_EVENTS')).toHaveLength(1)
   })
 
+  /**
+   * Standard Red Notes (t103): the worker reports a `deferred` condition — another
+   * tab of this account owns the socket — and it must reach the lifecycle owner as a
+   * park, not as a retryable error. Routed to `onError` it produced "Durable invite
+   * stream failed; reconnecting from its checkpoint" once per coordinator backoff tick
+   * for the life of the tab.
+   */
+  describe('a deferred invite lane', () => {
+    let info: jest.SpyInstance
+    let error: jest.SpyInstance
+
+    beforeEach(() => {
+      info = jest.spyOn(console, 'info').mockImplementation(() => undefined)
+      error = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    })
+
+    afterEach(() => {
+      info.mockRestore()
+      error.mockRestore()
+    })
+
+    const startInviteSubscription = async () => {
+      const transport = createTransport()
+      const onError = jest.fn()
+      const onDeferred = jest.fn()
+      const applyBatch = jest.fn().mockResolvedValue('cursor-1')
+      await transport.subscribeInviteEvents({
+        cursor: 'cursor-0',
+        limit: 50,
+        applyBatch,
+        reconcile: jest.fn(),
+        onError,
+        onDeferred,
+      })
+      const subscribe = worker.posts.find((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'SUBSCRIBE_INVITE_EVENTS' }
+      >
+      return { transport, subscribe, onError, onDeferred, applyBatch }
+    }
+
+    it('is reported as a deferral, not an error, and leaves the subscription registered', async () => {
+      const { subscribe, onError, onDeferred } = await startInviteSubscription()
+      // Precondition: there really is a registered subscription for the worker to
+      // address, so the assertions below cannot pass over a dropped message.
+      expect(subscribe).toBeDefined()
+
+      worker.emit({
+        type: 'INVITE_DEFERRED',
+        clientRequestId: subscribe.clientRequestId,
+        reason: 'multi-tab-not-owner',
+        resumeAfterMilliseconds: 15_000,
+      })
+      await flush()
+
+      expect(onDeferred).toHaveBeenCalledTimes(1)
+      expect(onDeferred).toHaveBeenCalledWith({ reason: 'multi-tab-not-owner', resumeAfterMilliseconds: 15_000 })
+      expect(onError).not.toHaveBeenCalled()
+      // Nothing is torn down: the worker resumes this exact registration.
+      expect(worker.posts.filter((message) => message.type === 'UNSUBSCRIBE_INVITE_EVENTS')).toHaveLength(0)
+      expect(worker.posts.filter((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS')).toHaveLength(1)
+    })
+
+    it('says it once, as information, and never as a failure', async () => {
+      const { subscribe } = await startInviteSubscription()
+
+      for (let answer = 0; answer < 6; answer += 1) {
+        worker.emit({
+          type: 'INVITE_DEFERRED',
+          clientRequestId: subscribe.clientRequestId,
+          reason: 'multi-tab-not-owner',
+          resumeAfterMilliseconds: 15_000,
+        })
+      }
+      await flush()
+
+      expect(error).not.toHaveBeenCalled()
+      expect(info).toHaveBeenCalledTimes(1)
+      const line = String(info.mock.calls[0][0])
+      expect(line).toContain('Durable invite events are waiting for the socket')
+      expect(line).toContain('multi-tab-not-owner')
+      expect(line).toContain('not a fault')
+    })
+
+    it('delivers the resumed stream on the same registration after ownership transfers', async () => {
+      const { subscribe, onDeferred, applyBatch } = await startInviteSubscription()
+      worker.emit({
+        type: 'INVITE_DEFERRED',
+        clientRequestId: subscribe.clientRequestId,
+        reason: 'multi-tab-not-owner',
+        resumeAfterMilliseconds: 15_000,
+      })
+      await flush()
+      expect(onDeferred).toHaveBeenCalledTimes(1)
+
+      // The worker won the lease and re-sent this subscription on a fresh socket.
+      worker.emit({ type: 'INVITE_READY', clientRequestId: subscribe.clientRequestId, cursor: 'cursor-0' })
+      worker.emit({
+        type: 'INVITE_BATCH',
+        clientRequestId: subscribe.clientRequestId,
+        batch: {
+          previousCursor: 'cursor-0',
+          events: [
+            {
+              version: 1 as const,
+              eventId: '11111111-1111-4111-8111-111111111111',
+              streamPosition: 'cursor-1',
+              kind: 'subscription-invite' as const,
+              action: 'created' as const,
+              inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              occurredAt: 1,
+            },
+          ],
+          nextCursor: 'cursor-1',
+          hasMore: false,
+        },
+      })
+      await flush()
+
+      expect(applyBatch).toHaveBeenCalledTimes(1)
+      expect(worker.posts.filter((message) => message.type === 'ACK_INVITE_EVENTS')).toEqual([
+        { type: 'ACK_INVITE_EVENTS', clientRequestId: subscribe.clientRequestId, cursor: 'cursor-1' },
+      ])
+    })
+  })
+
   // `expectedRoomEpoch` is the fourth parameter of authorizeCollaborationRoom. No
   // production caller reaches it yet (the WebsocketsService transport seam still
   // declares three), so without this the argument would be silently droppable.
@@ -1660,6 +1786,63 @@ describe('WebSocketSyncTransport', () => {
 
       expect(warn).toHaveBeenCalledTimes(2)
       expect(String(warn.mock.calls[1][0])).toContain('frame-too-large')
+    })
+
+    /**
+     * Standard Red Notes (t103): captured live from a second tab of one account. The
+     * announced state alternated DEGRADED / HTTP_FALLBACK eight times over an
+     * unchanged `multi-tab-not-owner`, because each lane classifies its own refusal
+     * and the log signature was keyed per state. That alternation was most of the
+     * console flood.
+     */
+    it('says it once for an unchanged cause, however many states the lanes report', async () => {
+      await connectWorker()
+
+      // The exact sequence from the live log, in order.
+      const observed = [
+        { state: 'DEGRADED' as const, reason: undefined },
+        { state: 'DEGRADED' as const, reason: 'multi-tab-not-owner' as const },
+        { state: 'HTTP_FALLBACK' as const, reason: 'multi-tab-not-owner' as const },
+        { state: 'DEGRADED' as const, reason: 'multi-tab-not-owner' as const },
+        { state: 'HTTP_FALLBACK' as const, reason: 'multi-tab-not-owner' as const },
+        { state: 'DEGRADED' as const, reason: 'multi-tab-not-owner' as const },
+        { state: 'HTTP_FALLBACK' as const, reason: 'multi-tab-not-owner' as const },
+        { state: 'DEGRADED' as const, reason: 'multi-tab-not-owner' as const },
+      ]
+      // Precondition: the sequence really does carry more than one state for the one
+      // cause, so "logged once" below is a settling and not an empty replay.
+      const causedStates = new Set(observed.filter((entry) => entry.reason !== undefined).map((entry) => entry.state))
+      expect(causedStates.size).toBe(2)
+      expect(observed).toHaveLength(8)
+
+      for (const entry of observed) {
+        worker.emit({
+          type: 'STATE',
+          state: entry.state,
+          ...(entry.reason ? { reason: entry.reason } : {}),
+        })
+      }
+      await flush()
+
+      // Two lines: the reasonless close, then the one cause. Not eight.
+      expect(warn).toHaveBeenCalledTimes(2)
+      expect(String(warn.mock.calls[1][0])).toContain('multi-tab-not-owner')
+      expect(String(warn.mock.calls[1][0])).toContain('Another tab of this account holds the socket')
+    })
+
+    it('does not assert a cause for a state that arrived without one', async () => {
+      await connectWorker()
+
+      worker.emit({ type: 'STATE', state: 'DEGRADED' })
+      await flush()
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0][0])
+      expect(line).toContain('NO cause was reported')
+      // It must not read as a settled, explained HTTP state, which is what
+      // "Account sync is using HTTP (state DEGRADED)." claimed with nothing after it.
+      expect(line).not.toContain('is using HTTP (state DEGRADED)')
+      expect(line).toContain('POST /v1/items')
     })
 
     it('says so, with the operation list, when the socket does carry sync', async () => {

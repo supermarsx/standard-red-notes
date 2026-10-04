@@ -38,6 +38,7 @@ import {
   SyncClientFrame,
   SyncFallbackReason,
   isPermanentSyncFallbackReason,
+  syncFallbackDisposition,
   SyncServerFrame,
   SyncNegotiatedOperation,
   SyncTicket,
@@ -440,6 +441,8 @@ export class SyncTransportWorkerRuntime {
   private reconnectTimeout?: ReturnType<typeof setTimeout>
   private heartbeatInterval?: ReturnType<typeof setInterval>
   private ownerRenewInterval?: ReturnType<typeof setInterval>
+  /** Live only while an invite subscription is parked on a `deferred` fallback reason. */
+  private deferredInviteWatch?: ReturnType<typeof setInterval>
   /**
    * The last scope this tab dialled, kept after the lease is released so the
    * next request can read the lease before paying for a ticket to discover the
@@ -1005,6 +1008,7 @@ export class SyncTransportWorkerRuntime {
   private unsubscribeInviteEvents(clientRequestId: string): void {
     if (this.inviteSubscription?.clientRequestId === clientRequestId) {
       this.inviteSubscription = undefined
+      this.cancelDeferredInviteWatch()
       if (this.active?.mode === 'invite-bootstrap' && this.active.clientRequestId === clientRequestId) {
         this.active = undefined
       }
@@ -2551,6 +2555,9 @@ export class SyncTransportWorkerRuntime {
       await this.sendWithBackpressure(JSON.stringify(frame))
       if (this.inviteSubscription === subscription) {
         subscription.sent = true
+        // The lane is open again: whatever ownership the watch was waiting for has
+        // transferred, so stop looking.
+        this.cancelDeferredInviteWatch()
       }
     } catch {
       this.dependencies.postMessage({
@@ -2640,6 +2647,7 @@ export class SyncTransportWorkerRuntime {
     })
     if (!retryable && this.inviteSubscription === subscription) {
       this.inviteSubscription = undefined
+      this.cancelDeferredInviteWatch()
     }
   }
 
@@ -3277,8 +3285,71 @@ export class SyncTransportWorkerRuntime {
       await this.fallback(reason, this.outboxRecord)
       return
     }
-    this.transition('DEGRADED', reason)
+    this.transition(this.nonRecoveringState(reason), reason)
     await this.closeSocketAndReleaseOwner()
+  }
+
+  /**
+   * The connection state to report for a fallback reason on a lane that is NOT
+   * going to recover by itself.
+   *
+   * `DEGRADED` means "no usable socket and this transport is working on getting one
+   * back" — the diagnostics pane reads it as the socket being live. A `deferred`
+   * reason is not being worked on: another tab holds the lane and this tab is
+   * waiting. Reporting DEGRADED for it both overstated recovery and made the
+   * announced state flap, because the sync and collaboration lanes post
+   * HTTP_FALLBACK for the identical cause — so one unchanged condition produced an
+   * endless DEGRADED/HTTP_FALLBACK alternation in the console.
+   */
+  private nonRecoveringState(reason: SyncFallbackReason): SyncTransportState {
+    return syncFallbackDisposition(reason) === 'deferred' ? 'HTTP_FALLBACK' : 'DEGRADED'
+  }
+
+  /**
+   * Watch for the owner lease to become free while an invite subscription is parked
+   * on a `deferred` reason.
+   *
+   * This is a watch, not a retry: each tick is a single read of this worker's own
+   * lease store and it dials nothing until the lease is actually free, so a tab
+   * waiting behind a long-lived sibling costs no ticket, no request and no log line.
+   * Something has to look, because the lease lives in shared storage and no tab is
+   * notified when another hands it back; without this the invite lane would wait for
+   * whatever unrelated work dialled next (an auto-sync tick, up to five minutes
+   * while the legacy socket is open — and never at all under manual-sync mode).
+   */
+  private beginDeferredInviteWatch(): void {
+    if (this.deferredInviteWatch !== undefined || this.shuttingDown) {
+      return
+    }
+    this.deferredInviteWatch = this.scheduleInterval(() => {
+      const subscription = this.inviteSubscription
+      if (!subscription || this.shuttingDown || this.socket || this.active) {
+        if (!subscription || this.shuttingDown) {
+          this.cancelDeferredInviteWatch()
+        }
+        return
+      }
+      void this.socketOwnedByAnotherTab(subscription.sessionScope).then(async (owned) => {
+        if (owned || this.inviteSubscription !== subscription || this.socket || this.active || this.shuttingDown) {
+          return
+        }
+        this.cancelDeferredInviteWatch()
+        this.active = {
+          clientRequestId: subscription.clientRequestId,
+          sessionScope: subscription.sessionScope,
+          mode: 'invite-bootstrap',
+        }
+        await this.requestTicket(subscription.clientRequestId, subscription.sessionScope, false)
+      })
+    }, OWNER_LEASE_TTL_MS)
+  }
+
+  private cancelDeferredInviteWatch(): void {
+    if (this.deferredInviteWatch === undefined) {
+      return
+    }
+    this.cancelInterval(this.deferredInviteWatch)
+    this.deferredInviteWatch = undefined
   }
 
   /**
@@ -3327,23 +3398,41 @@ export class SyncTransportWorkerRuntime {
     }
     if (active.mode === 'invite-bootstrap') {
       const subscription = this.inviteSubscription
+      const disposition = syncFallbackDisposition(reason)
       if (subscription?.clientRequestId === active.clientRequestId) {
-        // A structurally absent capability is not a transient fault. Reporting it as retryable
-        // makes the durable invite coordinator reconnect against it for the life of the tab.
-        const retryable = !isPermanentSyncFallbackReason(reason)
-        this.dependencies.postMessage({
-          type: 'INVITE_ERROR',
-          clientRequestId: active.clientRequestId,
-          code: reason.toUpperCase().replaceAll('-', '_'),
-          retryable,
-        })
-        subscription.sent = false
-        if (!retryable) {
-          this.inviteSubscription = undefined
+        if (disposition === 'deferred') {
+          // Nothing failed: another tab of this account holds the lane. The
+          // subscription stays registered so the AUTHENTICATED handler re-sends it
+          // the moment any lane wins the lease back, and the main thread is told to
+          // park instead of reconnecting — reported as a retryable INVITE_ERROR this
+          // drove one reconnect, one console failure line and one DEGRADED
+          // transition per coordinator backoff tick, forever.
+          subscription.sent = false
+          this.dependencies.postMessage({
+            type: 'INVITE_DEFERRED',
+            clientRequestId: active.clientRequestId,
+            reason,
+            resumeAfterMilliseconds: OWNER_LEASE_TTL_MS,
+          })
+          this.beginDeferredInviteWatch()
+        } else {
+          // A structurally absent capability is not a transient fault. Reporting it as retryable
+          // makes the durable invite coordinator reconnect against it for the life of the tab.
+          const retryable = disposition === 'retryable'
+          this.dependencies.postMessage({
+            type: 'INVITE_ERROR',
+            clientRequestId: active.clientRequestId,
+            code: reason.toUpperCase().replaceAll('-', '_'),
+            retryable,
+          })
+          subscription.sent = false
+          if (!retryable) {
+            this.inviteSubscription = undefined
+          }
         }
       }
       this.active = undefined
-      this.transition('DEGRADED', reason, preserveHealthySocket)
+      this.transition(this.nonRecoveringState(reason), reason, preserveHealthySocket)
       if (!preserveHealthySocket) {
         await this.closeSocketAndReleaseOwner()
       }
@@ -3357,6 +3446,13 @@ export class SyncTransportWorkerRuntime {
     // A permanent reason answered to a recovery can never be resolved by STATUS
     // (no socket will ever exist for it), so the only exit is the identity-bearing
     // HTTP replay, which the server journal makes idempotent.
+    //
+    // Deliberately `isPermanentSyncFallbackReason` and NOT `syncFallbackDisposition`:
+    // a `deferred` reason is the opposite case. A socket WILL exist for it once the
+    // owning tab hands the lane back, so a command that may already have crossed the
+    // wire must keep its STATUS round trip rather than be replayed on the strength of
+    // the journal. Widening this to "not retryable" would trade a decided command for
+    // an idempotent-replay assumption every time a second tab was open.
     const journalIdempotentReplay =
       confirmedNoSideEffect || (active.mode === 'recover' && isPermanentSyncFallbackReason(reason))
     if (recordBelongsToActive && this.commandSent && !journalIdempotentReplay) {
@@ -3505,6 +3601,7 @@ export class SyncTransportWorkerRuntime {
     this.authorization = undefined
     this.active = undefined
     this.inviteSubscription = undefined
+    this.cancelDeferredInviteWatch()
     this.outboxRecord = undefined
     this.liveSyncDisabled = false
     this.inviteEventsUnavailable = false
@@ -3529,6 +3626,7 @@ export class SyncTransportWorkerRuntime {
     this.authorization = undefined
     this.active = undefined
     this.inviteSubscription = undefined
+    this.cancelDeferredInviteWatch()
     this.outboxRecord = undefined
     this.outbox.close()
     this.transition('HTTP_ONLY')

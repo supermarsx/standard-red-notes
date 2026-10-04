@@ -11,6 +11,23 @@ export type InviteRealtimeServerReconcileReason = 'BOOTSTRAP_REQUIRED' | 'CURSOR
 export type InviteRealtimeSnapshotReason =
   InviteRealtimeServerReconcileReason | Extract<InviteRealtimeConsumeResult, { status: 'reconcile' }>['reason']
 
+/**
+ * The transport could not open the lane because an external condition holds that
+ * will clear by itself — another tab of this account owning the socket is the only
+ * one today. NOT a failure: the transport keeps the subscription registered and
+ * resumes it when the condition clears, so the coordinator must park rather than
+ * reconnect (an unbounded loop against a condition no reconnect can resolve) or
+ * stand down (which would never recover when the other tab closes).
+ *
+ * `resumeAfterMilliseconds` is how long the condition can outlive the thing holding
+ * it, for a consumer that wants to report an expectation. The coordinator does not
+ * schedule anything from it: resumption is the transport's, not a timer's.
+ */
+export type InviteRealtimeDeferral = {
+  readonly reason: string
+  readonly resumeAfterMilliseconds: number
+}
+
 export type InviteRealtimeSubscriptionOptions = {
   cursor?: string
   limit?: number
@@ -18,6 +35,7 @@ export type InviteRealtimeSubscriptionOptions = {
   reconcile(input: { reason: InviteRealtimeServerReconcileReason; cursor: string }): Promise<void>
   onReady?: (cursor: string) => void
   onError?: (error: unknown) => void
+  onDeferred?: (deferral: InviteRealtimeDeferral) => void
 }
 
 /** Structural port implemented by the web socket transport without coupling this domain service to the web package. */
@@ -48,6 +66,8 @@ export type InviteRealtimeSubscriptionCoordinatorOptions = {
   }): Promise<InviteRealtimeSnapshotResult | void>
   onReady?: (cursor: string) => void
   onError?: (error: unknown) => void
+  /** Observability only. Must not be used to report a fault: a deferral is not one. */
+  onDeferred?: (deferral: InviteRealtimeDeferral) => void
 }
 
 type ActiveInviteRealtimeSession = {
@@ -60,6 +80,8 @@ type ActiveInviteRealtimeSession = {
   disposeSubscription?: () => void
   retryHandle?: unknown
   retryAttempt: number
+  /** Set while the transport reported a `deferred` condition on `connection`. */
+  deferral?: { connection: symbol; reason: string }
   applyFailure?: {
     connection: symbol
     reason: Extract<InviteRealtimeConsumeResult, { status: 'reconcile' }>['reason']
@@ -170,6 +192,7 @@ export class InviteRealtimeSubscriptionCoordinator {
     const connection = Symbol('invite-realtime-connection')
     session.connection = connection
     session.applyFailure = undefined
+    session.deferral = undefined
 
     try {
       const dispose = await this.port.subscribeInviteEvents({
@@ -183,9 +206,11 @@ export class InviteRealtimeSubscriptionCoordinator {
             return
           }
           session.retryAttempt = 0
+          session.deferral = undefined
           this.options.onReady?.(readyCursor)
         },
         onError: (error) => this.handleTransportError(session, connection, error),
+        onDeferred: (deferral) => this.handleDeferral(session, connection, deferral),
       })
       if (!this.isConnectionCurrent(session, connection)) {
         safeDispose(dispose)
@@ -258,6 +283,44 @@ export class InviteRealtimeSubscriptionCoordinator {
     )
   }
 
+  /**
+   * Park the stream on a condition that will clear by itself.
+   *
+   * The subscription is deliberately left registered and `connection` left current:
+   * the transport re-sends it the moment the condition clears, and its first frame
+   * must land on this same connection or the resumed stream would be dropped as
+   * stale. Nothing is scheduled and nothing is disposed, which is the whole point —
+   * classified as a retryable error this condition drove one dispose, one re-dial and
+   * one logged failure per backoff tick for as long as the tab stayed open.
+   */
+  private handleDeferral(
+    session: ActiveInviteRealtimeSession,
+    connection: symbol,
+    deferral: InviteRealtimeDeferral,
+  ): void {
+    if (!this.isConnectionCurrent(session, connection)) {
+      return
+    }
+    this.cancelRetry(session)
+    session.deferral = { connection, reason: deferral.reason }
+    try {
+      this.options.onDeferred?.(deferral)
+    } catch {
+      // Diagnostic observers cannot change the parked state.
+    }
+  }
+
+  /** True while the active session is parked waiting for an external condition to clear. */
+  isDeferred(): boolean {
+    const session = this.active
+    return (
+      session !== undefined &&
+      this.isCurrent(session) &&
+      session.deferral !== undefined &&
+      session.deferral.connection === session.connection
+    )
+  }
+
   private handleTransportError(session: ActiveInviteRealtimeSession, connection: symbol, error: unknown): void {
     if (!this.isConnectionCurrent(session, connection)) {
       return
@@ -265,6 +328,9 @@ export class InviteRealtimeSubscriptionCoordinator {
     const applyFailure = session.applyFailure?.connection === connection ? session.applyFailure.reason : undefined
     session.connection = undefined
     session.applyFailure = undefined
+    // A genuine failure ends the park: the condition is no longer the thing holding
+    // the lane, and the ordinary retry/stand-down rules decide what happens next.
+    session.deferral = undefined
     this.disposeSubscription(session)
     try {
       this.options.onError?.(error)
