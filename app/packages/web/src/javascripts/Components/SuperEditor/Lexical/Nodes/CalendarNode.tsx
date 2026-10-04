@@ -11,6 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import Icon from '@/Components/Icon/Icon'
 import {
   PrintableCalendarSnapshot,
   registerPrintableCalendar,
@@ -65,7 +66,8 @@ export function applyLiveCalendarEdit(
   return snapshot
 }
 
-function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: NodeKey }): React.JSX.Element {
+/** Exported only so render specs can mount the real widget (cf. GanttChartComponent). */
+export function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const now = new Date()
   const [view, setView] = useState({ year: now.getFullYear(), month: now.getMonth() })
@@ -144,14 +146,32 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
       data-super-widget-layout="data"
     >
       <div className="border-border flex items-center justify-between border-b px-2 py-1 text-sm">
-        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => shiftMonth(-1)} type="button">
-          ‹
+        {/*
+         * Both month steppers carried NO accessible name before: their entire
+         * content was one angle-quote character, which is all a screen reader
+         * had to read out. The glyph is decorative and the name lives on the
+         * button, where a control's name belongs.
+         */}
+        <button
+          aria-label="Previous month"
+          className="hover:bg-contrast flex items-center rounded px-2 py-0.5"
+          onClick={() => shiftMonth(-1)}
+          title="Previous month"
+          type="button"
+        >
+          <Icon type="chevron-left" size="small" />
         </button>
         <span className="font-semibold">
           {MONTHS[view.month]} {view.year}
         </span>
-        <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => shiftMonth(1)} type="button">
-          ›
+        <button
+          aria-label="Next month"
+          className="hover:bg-contrast flex items-center rounded px-2 py-0.5"
+          onClick={() => shiftMonth(1)}
+          title="Next month"
+          type="button"
+        >
+          <Icon type="chevron-right" size="small" />
         </button>
       </div>
       <div className="text-passive-1 grid grid-cols-7 gap-px p-1 text-center text-[0.65rem]">
@@ -192,12 +212,20 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
             {(data.events[selected] ?? []).map((event, index) => (
               <li key={index} className="bg-contrast flex items-center justify-between gap-2 rounded px-2 py-1">
                 <span className="text-foreground min-w-0 break-words">{event}</span>
+                {/*
+                 * Also nameless before — one multiplication sign was the whole
+                 * content. The name carries the event text because a day can
+                 * hold several events and every delete button would otherwise
+                 * announce identically, leaving no way to tell them apart.
+                 */}
                 <button
-                  className="text-passive-1 hover:text-danger flex-shrink-0"
+                  aria-label={`Delete event: ${event}`}
+                  className="text-passive-1 hover:text-danger flex flex-shrink-0 items-center"
                   onClick={() => removeEvent(selected, index)}
+                  title="Delete event"
                   type="button"
                 >
-                  ×
+                  <Icon type="close" size="small" />
                 </button>
               </li>
             ))}

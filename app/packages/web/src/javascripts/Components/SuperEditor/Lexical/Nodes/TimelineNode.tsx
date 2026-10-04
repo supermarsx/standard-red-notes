@@ -11,6 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import Icon from '@/Components/Icon/Icon'
 
 /**
  * A single timeline item. `start`/`end` are either ISO date strings (e.g.
@@ -206,7 +207,8 @@ function clone(data: TimelineData): TimelineData {
   }
 }
 
-function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: NodeKey }): React.JSX.Element {
+/** Exported only so render specs can mount the real widget (cf. GanttChartComponent). */
+export function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
 
   const mutate = useCallback(
@@ -392,13 +394,18 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
               >
                 Clear
               </button>
+              {/*
+               * Had a name only through `title`; it is a real aria-label now.
+               * The glyph carries no state, so it stays decorative.
+               */}
               <button
-                className="text-passive-1 hover:bg-default hover:text-danger rounded px-1"
+                aria-label="Delete item"
+                className="text-passive-1 hover:bg-default hover:text-danger flex items-center rounded px-1"
                 onClick={() => removeItem(item.id)}
                 title="Delete item"
                 type="button"
               >
-                ×
+                <Icon type="close" size="small" />
               </button>
             </div>
           </div>

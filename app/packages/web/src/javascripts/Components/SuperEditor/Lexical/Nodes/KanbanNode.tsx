@@ -11,6 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import Icon from '@/Components/Icon/Icon'
 
 type KanbanCard = { id: string; text: string }
 /** `color` is an optional hex string (e.g. `#3b82f6`) used as a column accent. */
@@ -68,7 +69,8 @@ function clone(data: KanbanData): KanbanData {
   }
 }
 
-function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey }): React.JSX.Element {
+/** Exported only so render specs can mount the real widget (cf. GanttChartComponent). */
+export function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
 
   const mutate = useCallback(
@@ -184,13 +186,19 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
                   defaultValue={col.title}
                   onBlur={(e) => renameColumn(col.id, e.target.value)}
                 />
+                {/*
+                 * This one already had a name, but only through `title`, which
+                 * is a hover-only fallback some assistive tech skips; it is now
+                 * a real aria-label. The glyph is decorative.
+                 */}
                 <button
-                  className="text-passive-1 hover:bg-default hover:text-danger rounded px-1"
+                  aria-label="Delete column"
+                  className="text-passive-1 hover:bg-default hover:text-danger flex items-center rounded px-1"
                   onClick={() => removeColumn(col.id)}
                   title="Delete column"
                   type="button"
                 >
-                  ×
+                  <Icon type="close" size="small" />
                 </button>
               </div>
               <div className="flex flex-wrap items-center gap-1">
@@ -244,31 +252,41 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
                       onBlur={(e) => editCard(col.id, card.id, e.target.value)}
                     />
                     <div className="text-passive-1 mt-1 flex items-center justify-end gap-1 text-xs">
+                      {/*
+                       * All three had a name only through `title`. The glyphs
+                       * are decorative: none of them carries state. The only
+                       * state here is "there is no column that way", and the
+                       * native disabled attribute already says that — which is
+                       * why the names below are fixed strings.
+                       */}
                       <button
-                        className="hover:bg-contrast rounded px-1 disabled:opacity-40"
+                        aria-label="Move left"
+                        className="hover:bg-contrast flex items-center rounded px-1 disabled:opacity-40"
                         disabled={colIndex === 0}
                         onClick={() => moveCard(col.id, card.id, -1)}
                         title="Move left"
                         type="button"
                       >
-                        ‹
+                        <Icon type="chevron-left" size="small" />
                       </button>
                       <button
-                        className="hover:bg-contrast rounded px-1 disabled:opacity-40"
+                        aria-label="Move right"
+                        className="hover:bg-contrast flex items-center rounded px-1 disabled:opacity-40"
                         disabled={colIndex === data.columns.length - 1}
                         onClick={() => moveCard(col.id, card.id, 1)}
                         title="Move right"
                         type="button"
                       >
-                        ›
+                        <Icon type="chevron-right" size="small" />
                       </button>
                       <button
-                        className="hover:bg-contrast hover:text-danger rounded px-1"
+                        aria-label="Delete card"
+                        className="hover:bg-contrast hover:text-danger flex items-center rounded px-1"
                         onClick={() => removeCard(col.id, card.id)}
                         title="Delete card"
                         type="button"
                       >
-                        ×
+                        <Icon type="close" size="small" />
                       </button>
                     </div>
                   </div>
