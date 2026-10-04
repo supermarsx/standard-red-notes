@@ -17,6 +17,8 @@ export const PRINT_ROOT_ID = 'srn-print-root'
 export const PRINT_TITLE_ID = 'srn-print-title'
 export const PRINTING_BODY_CLASS = 'srn-printing'
 export const PRINT_NOTE_UUID_ATTRIBUTE = 'data-srn-note-uuid'
+/** Marks one mounted NoteView (one tile) and names the note it is showing. */
+export const PRINT_NOTE_VIEW_ATTRIBUTE = 'data-srn-note-view'
 export const PRINT_EMPTY_ATTRIBUTE = 'data-srn-print-empty'
 
 const PRINT_FALLBACK_CLEANUP_MS = 60_000
@@ -498,9 +500,46 @@ export function sanitizePrintBody(body: HTMLElement, sourceBody?: HTMLElement): 
   return body
 }
 
+/**
+ * The title input of one specific open note, or of the first open note when none is
+ * named.
+ *
+ * Standard Red Notes (t112): the tiled editor mounts one NoteView per open note and
+ * every one renders `ElementIds.NoteTitleEditor`, so that id is duplicated and
+ * `getElementById` answers "whichever note is first in the document" — which is not
+ * necessarily the note being printed, nor the note the user is looking at. A named
+ * note is therefore matched on `PRINT_NOTE_UUID_ATTRIBUTE`, so it resolves to its OWN
+ * tile instead of being refused as "not the active note" (which previously demoted a
+ * perfectly printable open note to its persisted copy, or to an outright refusal).
+ */
+function findLiveTitleInput(targetDocument: Document, noteUuid?: string): HTMLInputElement | undefined {
+  const inputs = Array.from(targetDocument.querySelectorAll<HTMLElement>(`#${ElementIds.NoteTitleEditor}`)).filter(
+    (element): element is HTMLInputElement => element instanceof HTMLInputElement,
+  )
+
+  if (!noteUuid) {
+    return inputs[0]
+  }
+
+  return inputs.find((input) => input.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) === noteUuid)
+}
+
+/**
+ * The one tile `titleInput` belongs to, so a printed title and body can never be taken
+ * from two different notes: every editor id inside a tile is duplicated across tiles
+ * exactly as the title's is, so narrowing the title alone would be worse than not
+ * narrowing at all.
+ *
+ * Falls back to the whole document when there is no tile wrapper (any DOM built before
+ * tiling existed, and every hand-built fixture), where the lookups then behave exactly
+ * as they always did.
+ */
+function tileScopeFor(titleInput: HTMLElement, targetDocument: Document): Document | HTMLElement {
+  return titleInput.closest<HTMLElement>(`[${PRINT_NOTE_VIEW_ATTRIBUTE}]`) ?? targetDocument
+}
+
 function resolvePrintSource(targetDocument: Document, options: PrintNoteOptions): ResolvedPrintSource | undefined {
-  const title = targetDocument.getElementById(ElementIds.NoteTitleEditor)
-  const liveTitle = title instanceof HTMLInputElement ? title : undefined
+  const liveTitle = findLiveTitleInput(targetDocument, options.noteUuid)
 
   // A view tab takes over the content area instead of the note editor, so when
   // one is on screen there is no note to print and printing must show what the
@@ -529,17 +568,20 @@ function resolvePrintSource(targetDocument: Document, options: PrintNoteOptions)
     return undefined
   }
 
-  const superEditor = targetDocument.getElementById(SuperEditorContentId)
+  // The body must come from the SAME tile as the title that was just resolved.
+  const tile = tileScopeFor(liveTitle, targetDocument)
+
+  const superEditor = tile.querySelector<HTMLElement>(`#${SuperEditorContentId}`)
   if (superEditor instanceof HTMLElement) {
     return { titleText: liveTitle.value, body: { kind: 'super', element: superEditor } }
   }
 
-  const plainEditor = targetDocument.getElementById(ElementIds.NoteTextEditor)
+  const plainEditor = tile.querySelector<HTMLElement>(`#${ElementIds.NoteTextEditor}`)
   if (plainEditor instanceof HTMLTextAreaElement || plainEditor instanceof HTMLInputElement) {
     return { titleText: liveTitle.value, body: { kind: 'plain', element: plainEditor } }
   }
 
-  const markdownPreview = targetDocument.querySelector<HTMLElement>(`#${ElementIds.EditorContent} .markdown-preview`)
+  const markdownPreview = tile.querySelector<HTMLElement>(`#${ElementIds.EditorContent} .markdown-preview`)
   if (markdownPreview) {
     return { titleText: liveTitle.value, body: { kind: 'markdown-preview', element: markdownPreview } }
   }
@@ -565,11 +607,12 @@ export function getActiveNotePrintSupport(
     return { supported: true, source: source.body.kind }
   }
 
-  const title = targetDocument.getElementById(ElementIds.NoteTitleEditor)
-  if (!(title instanceof HTMLInputElement)) {
+  // Two separate questions, and with tiles open they have different answers: is ANY
+  // note editor on screen, and is the note we were asked for one of the open ones?
+  if (!findLiveTitleInput(targetDocument)) {
     return { supported: false, reason: 'Open a note or a printable view before printing.' }
   }
-  if (options.noteUuid && title.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) !== options.noteUuid) {
+  if (options.noteUuid && !findLiveTitleInput(targetDocument, options.noteUuid)) {
     return { supported: false, reason: 'This note needs a complete persisted title and body before it can print.' }
   }
   return { supported: false, reason: unsupportedPrintReason }
@@ -728,12 +771,16 @@ type NativePrintOptionsProvider = () => PrintNoteOptions | null | undefined
  * their shortcut is blocked and the caller can surface the predicate's reason.
  */
 export function installNativeNotePrinting(
+  /**
+   * Fallback provider only: it can see the DOM and nothing else, so with several tiles
+   * open it names the FIRST open note rather than the active one — the DOM carries no
+   * "active tile" marker to read. It is at least self-consistent (the title and body
+   * both come from that same tile). The application installs its own provider, which
+   * has the authoritative active controller available and should prefer it.
+   */
   getOptions: NativePrintOptionsProvider = () => {
-    const title = document.getElementById(ElementIds.NoteTitleEditor)
-    return {
-      noteUuid:
-        title instanceof HTMLInputElement ? (title.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) ?? undefined) : undefined,
-    }
+    const title = findLiveTitleInput(document)
+    return { noteUuid: title?.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) ?? undefined }
   },
   onUnsupported?: (reason: string) => void,
 ): () => void {
@@ -794,6 +841,10 @@ export function installNativeNotePrinting(
       event.key.toLowerCase() === 'p' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
     // A printable view tab is a valid print target too, and while one is on
     // screen there is no note title element to recognize the app by.
+    //
+    // This lookup is deliberately NOT narrowed to a note: the only question is
+    // whether a note editor is on screen at all, so with tiles open any one of the
+    // duplicated ids is as good an answer as another.
     if (!isPrintShortcut || !(document.getElementById(ElementIds.NoteTitleEditor) || hasPrintableView())) {
       return
     }

@@ -34,6 +34,7 @@ import {
   installNativeNotePrinting,
   PRINT_EMPTY_ATTRIBUTE,
   PRINT_NOTE_UUID_ATTRIBUTE,
+  PRINT_NOTE_VIEW_ATTRIBUTE,
   PRINTING_BODY_CLASS,
   PRINT_ROOT_ID,
   PRINT_TITLE_ID,
@@ -464,6 +465,67 @@ describe('isolated note printing', () => {
     expect(document.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('Second body')
 
     window.dispatchEvent(new Event('afterprint'))
+  })
+
+  /**
+   * Standard Red Notes (t112): the tiled editor mounts one NoteView per open note, so
+   * `#note-title-editor` (and every other editor id) exists once per open note.
+   * `getElementById` answers the FIRST tile, which is not necessarily the note being
+   * printed — so a named note printed from a second tile used to be refused as "not the
+   * active note" and demoted to its persisted copy. Both halves matter: the right tile's
+   * title AND that same tile's body, since narrowing only the title would print one
+   * note's heading above another note's text.
+   */
+  describe('printing a named note while several notes are open', () => {
+    const twoOpenTiles = () => {
+      document.body.innerHTML = `
+        <div ${PRINT_NOTE_VIEW_ATTRIBUTE}="note-1">
+          <input id="${ElementIds.NoteTitleEditor}" ${PRINT_NOTE_UUID_ATTRIBUTE}="note-1" value="First title" />
+          <textarea id="${ElementIds.NoteTextEditor}">First body</textarea>
+        </div>
+        <div ${PRINT_NOTE_VIEW_ATTRIBUTE}="note-2">
+          <input id="${ElementIds.NoteTitleEditor}" ${PRINT_NOTE_UUID_ATTRIBUTE}="note-2" value="Second title" />
+          <textarea id="${ElementIds.NoteTextEditor}">Second body</textarea>
+        </div>
+      `
+    }
+
+    it('prints the second tile’s own live title and body', () => {
+      twoOpenTiles()
+      // The premise: an id lookup cannot tell the two tiles apart, and answers the first.
+      expect(document.getElementById(ElementIds.NoteTitleEditor)?.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE)).toBe(
+        'note-1',
+      )
+
+      expect(getActiveNotePrintSupport({ noteUuid: 'note-2' })).toEqual({ supported: true, source: 'plain' })
+      const snapshot = createPrintSnapshot({ noteUuid: 'note-2' })
+
+      expect(snapshot?.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Second title')
+      expect(snapshot?.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('Second body')
+      expect(snapshot?.textContent).not.toContain('First title')
+      expect(snapshot?.textContent).not.toContain('First body')
+    })
+
+    it('prints the first tile’s own live title and body', () => {
+      twoOpenTiles()
+
+      const snapshot = createPrintSnapshot({ noteUuid: 'note-1' })
+
+      expect(snapshot?.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('First title')
+      expect(snapshot?.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('First body')
+      expect(snapshot?.textContent).not.toContain('Second title')
+      expect(snapshot?.textContent).not.toContain('Second body')
+    })
+
+    it('still refuses a note that is not open in any tile', () => {
+      twoOpenTiles()
+
+      expect(getActiveNotePrintSupport({ noteUuid: 'note-3' })).toEqual({
+        supported: false,
+        reason: 'This note needs a complete persisted title and body before it can print.',
+      })
+      expect(createPrintSnapshot({ noteUuid: 'note-3' })).toBeUndefined()
+    })
   })
 
   it('replaces a paginated Super DataTable with its complete semantic all-row projection', () => {
