@@ -199,6 +199,7 @@ describe('agreement with the files this state is shared with', () => {
   const sourceOf = (...segments: string[]) => readFileSync(join(__dirname, '..', '..', ...segments), 'utf8')
   const panesSystem = sourceOf('Components', 'Panes', 'PanesSystemComponent.tsx')
   const collapsed = panesSystem.replace(/\s+/g, ' ')
+  const occurrences = (needle: string) => collapsed.split(needle).length - 1
 
   it('reads the mini preference under the same stored key the sidebar writes', () => {
     // The controller types its read off the `LocalPrefKey` enum; the sidebar pins
@@ -235,8 +236,55 @@ describe('agreement with the files this state is shared with', () => {
     // A counted gate, so a NEWLY added read cannot be clamped by accident of the
     // four strings above still being present. If either count moves, the new site
     // belongs in the assertion above — or it is unclamped.
-    const occurrences = (needle: string) => collapsed.split(needle).length - 1
     expect(occurrences('getPreference(PrefKey.TagsPanelWidth')).toBe(2)
     expect(occurrences('getPreference(PrefKey.NotesPanelWidth')).toBe(1)
+  })
+
+  it('renders the Navigation column at the RAIL width in mini, at every site that describes it', () => {
+    // The rail shipped fully built and fully inert: `NAVIGATION_MINI_RAIL_WIDTH`
+    // reached this file only as the resizer's MINIMUM, so turning mini on drew
+    // centred glyphs inside the stored 220px column. Both halves are asserted —
+    // that ONE value is derived from the state, and that no site still
+    // interpolates the stored width — because either one alone is satisfiable
+    // while the column still renders at the wrong width.
+    expect(collapsed).toContain('const isNavigationMini = navigationPaneState === SidebarPaneState.Mini')
+    expect(collapsed).toContain(
+      'const renderedNavigationPanelWidth = isNavigationMini ? NAVIGATION_MINI_RAIL_WIDTH : navigationPanelWidth',
+    )
+    // The three grid-track sites: `columnFor`, the two-pane case and the
+    // three-pane case. A counted gate for the same reason as the one above — a
+    // NEWLY added track that interpolated the stored width would otherwise sit
+    // beside three correct ones and pass.
+    expect(occurrences('${renderedNavigationPanelWidth}px')).toBe(3)
+    expect(occurrences('${navigationPanelWidth}px')).toBe(0)
+    // ...and the fourth site, which is not a track: the space the assistant pane
+    // has to share with the sidebars.
+    expect(collapsed).toContain(
+      'paneController.panes.includes(AppPaneId.Navigation) ? renderedNavigationPanelWidth : 0',
+    )
+  })
+
+  it('derives that state with the one shared function, from inputs a React render re-reads', () => {
+    // `PaneController.navigationPaneMini` is a plain preference mirror rather than
+    // an observable, so an `observer` reading `paneController.navigationPaneState`
+    // would not re-render when the switch is flipped. The RULE is shared with the
+    // controller — this asserts there is exactly one call of it here and no second
+    // hand-rolled "am I mini" — and the inputs are read the same way
+    // `Navigation.tsx` reads them to decide what to draw inside the column.
+    expect(collapsed).toContain(
+      'const navigationPaneState = navigationPaneStateFrom({ collapsedPreference: navigationPaneCollapsedPreference, miniPreference: navigationPaneMiniPreference, isTabletOrMobile, })',
+    )
+    expect(occurrences('navigationPaneStateFrom(')).toBe(1)
+    expect(collapsed).toContain('useLocalPreference(NAVIGATION_PANE_MINI_PREF_KEY)')
+    expect(collapsed).toContain('useLocalPreference(LocalPrefKey.NavigationPaneCollapsed)')
+  })
+
+  it('offers no drag handle on a column that has exactly one width', () => {
+    // A resizer mounted over the rail could not change the rendered column, and
+    // its `resizeFinishCallback` would persist 48 over the user's stored expanded
+    // width. The notes list resizer must NOT pick up the same gate.
+    expect(collapsed).toContain('const showNavigationPanelResizer = showPanelResizers && !isNavigationMini')
+    expect(collapsed).toContain('{showNavigationPanelResizer && navigationRef && (')
+    expect(collapsed).toContain('{showPanelResizers && listRef && (')
   })
 })

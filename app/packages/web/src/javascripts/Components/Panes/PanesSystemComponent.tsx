@@ -4,7 +4,7 @@ import useIsTabletOrMobileScreen from '@/Hooks/useIsTabletOrMobileScreen'
 import { ErrorBoundary } from '@/Utils/ErrorBoundary'
 import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 import { addToast, ToastType } from '@standardnotes/toast'
-import { ApplicationEvent, classNames, PrefKey } from '@standardnotes/snjs'
+import { ApplicationEvent, classNames, LocalPrefKey, PrefKey } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePrevious } from '../ContentListView/Calendar/usePrevious'
@@ -15,7 +15,8 @@ import PanelResizer, {
   PanelSide,
   ResizeFinishCallback,
 } from '../PanelResizer/PanelResizer'
-import { NAVIGATION_MINI_RAIL_WIDTH } from '../Tags/navigationMini'
+import { NAVIGATION_MINI_RAIL_WIDTH, NAVIGATION_PANE_MINI_PREF_KEY } from '../Tags/navigationMini'
+import { navigationPaneStateFrom, SidebarPaneState } from '@/Controllers/PaneController/sidebarPaneState'
 import { AppPaneId, AppPaneIdToDivId } from './AppPaneMetadata'
 import { useResponsiveAppPane } from './ResponsivePaneProvider'
 import Navigation from '../Tags/Navigation'
@@ -38,7 +39,7 @@ import TodoView from '../TodoAggregate/TodoView'
 import { TodoChecklistEditorOwnerHost } from '../TodoAggregate/TodoChecklistEditorOwner'
 import ResearchView from '../Research/ResearchView'
 import BookmarksView from '../Bookmarks/BookmarksView'
-import usePreference from '@/Hooks/usePreference'
+import usePreference, { useLocalPreference } from '@/Hooks/usePreference'
 import {
   ASSISTANT_PANEL_DEFAULT_WIDTH,
   ASSISTANT_PANEL_MIN_WIDTH,
@@ -88,13 +89,52 @@ const PanesSystemComponent = () => {
   )
   const [navigationRef, setNavigationRef] = useState<HTMLDivElement | null>(null)
 
+  /**
+   * Standard Red Notes: which of collapsed / mini / expanded the Navigation
+   * sidebar is in. Derived HERE because this is the component that sizes its grid
+   * column, and derived with the SAME pure function the pane controller derives
+   * `PaneController.navigationPaneState` with — one rule, not two. So the
+   * established invariants hold at the width too: collapsed wins over mini, mini
+   * is suppressed below the desktop breakpoint, and only a literal `true` is mini.
+   *
+   * Why not read `paneController.navigationPaneState` directly. That getter reads
+   * `PaneController.navigationPaneMini`, which is a plain preference MIRROR and
+   * deliberately not a mobx observable — its own comment says so, and points React
+   * consumers at `useLocalPreference` instead. An `observer` reading the getter
+   * would therefore NOT re-render when the switch is flipped, and the column would
+   * keep whatever width it already had: a 220px column of centred glyphs, which is
+   * precisely the defect being fixed. `useLocalPreference` re-renders on the same
+   * `LocalPreferencesChanged` event that refreshes that mirror, and it is what
+   * `Navigation.tsx` — the thing that actually draws the rail — already reads, so
+   * the column and its contents cannot disagree about which mode is on.
+   */
+  const [navigationPaneCollapsedPreference] = useLocalPreference(LocalPrefKey.NavigationPaneCollapsed)
+  const [navigationPaneMiniPreference] = useLocalPreference(NAVIGATION_PANE_MINI_PREF_KEY)
+  const navigationPaneState = navigationPaneStateFrom({
+    collapsedPreference: navigationPaneCollapsedPreference,
+    miniPreference: navigationPaneMiniPreference,
+    isTabletOrMobile,
+  })
+  const isNavigationMini = navigationPaneState === SidebarPaneState.Mini
+
+  /**
+   * The width the Navigation column is ACTUALLY rendered at, and the only value
+   * any site describing that column may read — so nothing can report 48 while the
+   * grid renders 220, or the reverse.
+   *
+   * `navigationPanelWidth` stays the user's stored EXPANDED width and is left
+   * untouched by mini: turning mini off gives back exactly the column they had,
+   * and `PrefKey.TagsPanelWidth` is never overwritten with 48.
+   */
+  const renderedNavigationPanelWidth = isNavigationMini ? NAVIGATION_MINI_RAIL_WIDTH : navigationPanelWidth
+
   const [itemsPanelWidth, setItemsPanelWidth] = useState<number>(
     restoredItemsPanelWidth(application.getPreference(PrefKey.NotesPanelWidth, ITEMS_PANEL_DEFAULT_WIDTH)),
   )
   const [listRef, setListRef] = useState<HTMLDivElement | null>(null)
 
   const occupiedAssistantSidePaneWidth =
-    (paneController.panes.includes(AppPaneId.Navigation) ? navigationPanelWidth : 0) +
+    (paneController.panes.includes(AppPaneId.Navigation) ? renderedNavigationPanelWidth : 0) +
     (paneController.panes.includes(AppPaneId.Items) ? itemsPanelWidth : 0)
 
   const [assistantPanelWidth, setAssistantPanelWidth] = useState<number>(
@@ -220,6 +260,34 @@ const PanesSystemComponent = () => {
   )
 
   const showPanelResizers = !isTabletOrMobile
+
+  /**
+   * The Navigation resizer is NOT rendered while the sidebar is a rail.
+   *
+   * The rail has exactly ONE width — 48px is what the mode is — so a drag handle
+   * on it cannot change the rendered column. Left mounted it would be worse than
+   * merely useless: `widthEventCallback` would move `navigationPanelWidth` while
+   * the column stayed at 48 (a control that visibly does nothing), and the
+   * `mouseup` would publish a panel-resize event that `Navigation.tsx` persists to
+   * `PrefKey.TagsPanelWidth` — silently destroying the expanded width the user
+   * gets back when they turn mini off. Its double-click collapse and "Expand
+   * panel" chevron would be inert for the same reason: `expandPanel` sets a width
+   * that mini then overrides.
+   *
+   * The two alternatives were considered and rejected. Clamping the drag minimum
+   * to the rail width is today's behaviour and is exactly the inert-handle case
+   * above. Letting a drag EXIT mini cannot be hooked honestly: the only per-move
+   * signal `PanelResizer` offers is `widthEventCallback`, which also fires with no
+   * user gesture at all — the deferred initial clamp on `window.load`, and every
+   * `props.width` change — so mini would switch itself off during a page load.
+   *
+   * Nothing is stranded by this. Mini is turned on from the "Mini Tags Panel"
+   * switch in the Quick Settings menu and from Preferences → Appearance, both
+   * outside the sidebar and unaffected by its width, so it is turned off from
+   * exactly where it was turned on; and "Show Tags Panel" plus its keyboard
+   * shortcut still collapse the pane entirely.
+   */
+  const showNavigationPanelResizer = showPanelResizers && !isNavigationMini
 
   const constellationPosition = usePreference(PrefKey.ConstellationPosition)
 
@@ -387,7 +455,7 @@ const PanesSystemComponent = () => {
         return `${assistantPanelWidth}px`
       }
       if (pane === AppPaneId.Navigation) {
-        return `${navigationPanelWidth}px`
+        return `${renderedNavigationPanelWidth}px`
       }
       if (pane === AppPaneId.Items) {
         return `${itemsPanelWidth}px`
@@ -430,7 +498,7 @@ const PanesSystemComponent = () => {
         } else {
           if (panes[0] === AppPaneId.Navigation) {
             return {
-              gridTemplateColumns: `${navigationPanelWidth}px auto`,
+              gridTemplateColumns: `${renderedNavigationPanelWidth}px auto`,
             }
           } else {
             return {
@@ -446,7 +514,7 @@ const PanesSystemComponent = () => {
           }
         }
         return {
-          gridTemplateColumns: `${navigationPanelWidth}px ${itemsPanelWidth}px 2fr`,
+          gridTemplateColumns: `${renderedNavigationPanelWidth}px ${itemsPanelWidth}px 2fr`,
         }
       }
       default:
@@ -518,7 +586,7 @@ const PanesSystemComponent = () => {
                 className={classNames(className, isTabletOrMobile ? 'w-full' : '')}
                 application={application}
               >
-                {showPanelResizers && navigationRef && (
+                {showNavigationPanelResizer && navigationRef && (
                   <PanelResizer
                     collapsable={true}
                     defaultWidth={navigationPanelWidth}
