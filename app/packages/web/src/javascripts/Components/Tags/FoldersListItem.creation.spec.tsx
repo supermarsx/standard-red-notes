@@ -64,6 +64,8 @@ describe('FoldersListItem folder submission guard', () => {
       createFolder,
       editingFolder: folder,
       getFolderChildren: jest.fn(() => []),
+      // The row reads this to decide whether to mark itself as hidden from the sidebar list.
+      isFolderHidden: jest.fn(() => false),
       renameFolder: jest.fn(async () => undefined),
       selectedFolder: undefined,
       selectedLocation: 'folders',

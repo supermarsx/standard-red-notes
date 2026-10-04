@@ -44,6 +44,19 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
     navigationController.removeFolder(selectedFolder, true).catch(console.error)
   }, [navigationController, selectedFolder])
 
+  /**
+   * Standard Red Notes: hiding keeps this folder's row — and the rows of every subfolder
+   * under it — out of the sidebar. It is housekeeping for a long sidebar, NOT protection:
+   * the notes stay in All Notes, in search and in sync, which is what the copy below says
+   * plainly so nobody reads a hidden folder as a private one. Vaults are the feature for
+   * that.
+   */
+  const isFolderHidden = navigationController.isFolderHidden(selectedFolder)
+  const onClickToggleHidden = useCallback(() => {
+    navigationController.setFolderHidden(selectedFolder, !isFolderHidden).catch(console.error)
+    navigationController.setContextMenuOpen(false)
+  }, [navigationController, selectedFolder, isFolderHidden])
+
   const folderHasLocalOnlyNotes = navigationController.tagOrFolderHasAnyLocalOnlyNotes(selectedFolder)
   const canEnableLocalOnly = navigationController.canEnableLocalOnlyForTagOrFolder(selectedFolder)
   const onClickToggleLocalOnly = useCallback(() => {
@@ -153,6 +166,17 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
               Add subfolder
             </div>
             {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
+          </MenuItem>
+          <MenuItem className={'py-1.5'} onClick={onClickToggleHidden}>
+            <Icon type={isFolderHidden ? 'eye' : 'eye-off'} className="text-neutral mr-2" />
+            <div className="flex flex-col">
+              <div>{isFolderHidden ? 'Show in sidebar' : 'Hide from sidebar'}</div>
+              <div className="text-passive-0 mt-0.5 text-xs">
+                {isFolderHidden
+                  ? 'Puts this folder and its subfolders back in the sidebar list.'
+                  : 'Keeps this folder and its subfolders out of the sidebar list. Notes inside stay in All Notes and in search, and everything still syncs — hiding tidies the sidebar, it does not protect anything.'}
+              </div>
+            </div>
           </MenuItem>
           <MenuItem
             className={'py-1.5'}

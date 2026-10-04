@@ -18,6 +18,19 @@ export interface TagContentSpecialized {
    * compatibility; this flag only changes how the client groups and renders them.
    */
   isFolder?: boolean
+  /**
+   * When true the client keeps this tag's row out of the navigation sidebar, along with
+   * the rows of everything nested under it. Presentation only, and deliberately NOT a
+   * protection mechanism: the tag and its notes stay in the database, keep syncing, and
+   * remain reachable through All Notes, search, a note's own tag list and the
+   * organize-everything surface. Vaults are the feature that actually restricts access.
+   *
+   * Stored as a top-level content field rather than in `preferences` because `preferences`
+   * describes how a tag's NOTE LIST is displayed (sort order, panel width, which notes to
+   * include), whereas this — like `expanded`, `color` and `iconString` beside it —
+   * describes the tag's own row. Absent means shown.
+   */
+  hidden?: boolean
   preferences?: TagPreferences
 }
 

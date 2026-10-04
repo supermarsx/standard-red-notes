@@ -17,6 +17,8 @@ export class SNFolder extends DecryptedItem<FolderContent> implements FolderCont
   public readonly iconString: VectorIconNameOrEmoji
   public readonly expanded: boolean
   public readonly color?: string
+  /** See `FolderContent.hidden`: keeps this folder's row (and its subtree's rows) out of the sidebar. */
+  public readonly hidden: boolean
 
   constructor(payload: DecryptedPayloadInterface<FolderContent>) {
     super(payload)
@@ -24,6 +26,7 @@ export class SNFolder extends DecryptedItem<FolderContent> implements FolderCont
     this.expanded = this.payload.content.expanded != undefined ? this.payload.content.expanded : true
     this.iconString = this.payload.content.iconString || DefaultFolderIconName
     this.color = this.payload.content.color || undefined
+    this.hidden = this.payload.content.hidden === true
   }
 
   get noteReferences(): ContentReference[] {

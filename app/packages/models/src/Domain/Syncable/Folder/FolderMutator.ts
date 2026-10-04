@@ -28,6 +28,18 @@ export class FolderMutator<Content extends FolderContent = FolderContent> extend
     }
   }
 
+  /**
+   * See `FolderContent.hidden`. Unhiding deletes the key rather than writing `false`, so
+   * "shown" has exactly one representation (absent) the way `color` does.
+   */
+  set hidden(hidden: boolean) {
+    if (hidden) {
+      this.mutableContent.hidden = true
+    } else {
+      delete this.mutableContent.hidden
+    }
+  }
+
   public makeChildOf(folder: SNFolder): void {
     const references = this.immutableItem.references.filter((ref) => !isFolderToParentFolderReference(ref))
 

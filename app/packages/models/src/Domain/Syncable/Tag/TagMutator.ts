@@ -48,6 +48,18 @@ export class TagMutator<Content extends TagContent = TagContent> extends Decrypt
     }
   }
 
+  /**
+   * See `TagContent.hidden`. Unhiding deletes the key rather than writing `false`, so
+   * "shown" has exactly one representation (absent) the way `isFolder` and `color` do.
+   */
+  set hidden(hidden: boolean) {
+    if (hidden) {
+      this.mutableContent.hidden = true
+    } else {
+      delete this.mutableContent.hidden
+    }
+  }
+
   get preferences(): TagPreferences {
     if (!this.mutablePreferences) {
       this.mutableContent.preferences = {}

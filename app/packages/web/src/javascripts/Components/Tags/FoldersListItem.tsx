@@ -88,6 +88,15 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
 
     const isTemplate = application.items.isTemplateItem(folder)
 
+    /**
+     * Standard Red Notes: a hidden folder only reaches this component while the sidebar's
+     * reveal toggle is on, so the row has to say why it is here — otherwise the user has no
+     * way to tell which of the rows in front of them are the hidden ones they came to
+     * unhide. The marker states what hiding does (keeps the row out of this list) and
+     * nothing more; it must not read as a lock.
+     */
+    const isFolderHidden = navigationController.isFolderHidden(folder)
+
     useEffect(() => {
       if (!hadChildren && hasChildren) {
         setShowChildren(true)
@@ -298,6 +307,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
             (isSelected || isContextMenuOpenForFolder) && 'selected',
             isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
             isReorderBefore && '!border-t-info border-t-2',
+            isFolderHidden && 'opacity-60',
           )}
           onClick={selectCurrentFolder}
           onKeyDown={(event) => {
@@ -370,6 +380,16 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
             )}
 
             <div className="flex items-center">
+              {isFolderHidden && (
+                <span
+                  className="text-neutral mr-2 flex items-center"
+                  title="Hidden from the sidebar list. Its notes are still in All Notes and in search."
+                  aria-label="Hidden from the sidebar list"
+                >
+                  <Icon type="eye-off" />
+                </span>
+              )}
+
               {isSelected && (
                 <a
                   role="button"

@@ -23,7 +23,10 @@ function getAllTagsForType(controller: NavigationController, type: TagListSectio
   if (type === 'tags') {
     return controller.allLocalRootTags
   }
-  return controller.starredTags
+  // Favorites is a flat list, so it applies the hidden rule itself rather than relying on an
+  // unrendered parent: a favorited tag inside a hidden subtree would otherwise still be one
+  // click away here.
+  return controller.visibleStarredTags
 }
 
 const TagsList: FunctionComponent<Props> = ({ type }: Props) => {

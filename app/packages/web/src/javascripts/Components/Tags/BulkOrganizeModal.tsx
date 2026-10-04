@@ -45,8 +45,21 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
     parentUuid: string | undefined
     parentTitle: string
     noteCount: number
+    /** The row's own hidden flag — what its toggle writes. */
+    hidden: boolean
+    /** Hidden only because something above it is: the row's own flag is still "shown". */
+    hiddenByAncestor: boolean
   }
 
+  /**
+   * Standard Red Notes: this modal is the PERMANENT reveal path for hidden folders and tags.
+   *
+   * It reads `navigationController.folders` / `.tags`, which are the complete sets — the
+   * hidden rule is applied by the sidebar's own getters, never by trimming these. That is
+   * deliberate and load-bearing: hiding a row is only a safe thing to offer if there is a
+   * place that always lists it, whatever the sidebar's reveal toggle happens to be set to.
+   * Nothing a user hides can become unreachable from here.
+   */
   const rows: Row[] = useMemo(() => {
     if (tab === 'folders') {
       return folders.map((folder) => ({
@@ -55,6 +68,9 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
         parentUuid: folder.parentId,
         parentTitle: folder.parentId ? (folderTitleByUuid.get(folder.parentId) ?? '') : '',
         noteCount: folder.noteReferences.length,
+        hidden: navigationController.isFolderHidden(folder),
+        hiddenByAncestor:
+          navigationController.isFolderInHiddenSubtree(folder) && !navigationController.isFolderHidden(folder),
       }))
     }
     return tags.map((tag) => {
@@ -65,9 +81,31 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
         parentUuid: parent?.uuid,
         parentTitle: parent?.title ?? '',
         noteCount: navigationController.getNotesCount(tag),
+        hidden: navigationController.isTagHidden(tag),
+        hiddenByAncestor: navigationController.isTagInHiddenSubtree(tag) && !navigationController.isTagHidden(tag),
       }
     })
   }, [tab, folders, tags, folderTitleByUuid, navigationController])
+
+  const setRowsHidden = useCallback(
+    async (uuids: string[], hidden: boolean) => {
+      if (uuids.length === 0) {
+        return
+      }
+      if (tab === 'folders') {
+        await navigationController.bulkSetFoldersHidden(
+          folders.filter((folder) => uuids.includes(folder.uuid)),
+          hidden,
+        )
+      } else {
+        await navigationController.bulkSetTagsHidden(
+          tags.filter((tag) => uuids.includes(tag.uuid)),
+          hidden,
+        )
+      }
+    },
+    [tab, folders, tags, navigationController],
+  )
 
   const visibleRows = useMemo(() => {
     const query = filter.trim().toLowerCase()
@@ -276,6 +314,12 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
             </button>
           </div>
 
+          <p className="text-passive-0 mb-3 text-xs">
+            Hiding keeps a row out of the sidebar list, and takes its subfolders and subtopics with it. Hidden folders
+            and tags still sync, and their notes still appear in All Notes and in search. Put notes in a vault if they
+            need to be protected.
+          </p>
+
           {selectedCount > 0 && (
             <div className="bg-contrast mb-3 flex flex-wrap items-center gap-3 rounded px-3 py-2">
               <span className="text-sm font-semibold">{selectedCount} selected</span>
@@ -303,6 +347,20 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
               </label>
               <button
                 type="button"
+                className="border-border bg-default text-text hover:bg-contrast rounded border px-3 py-1 text-sm whitespace-nowrap"
+                onClick={() => void setRowsHidden(Array.from(selected), true)}
+              >
+                Hide from sidebar
+              </button>
+              <button
+                type="button"
+                className="border-border bg-default text-text hover:bg-contrast rounded border px-3 py-1 text-sm whitespace-nowrap"
+                onClick={() => void setRowsHidden(Array.from(selected), false)}
+              >
+                Show in sidebar
+              </button>
+              <button
+                type="button"
                 className="bg-danger text-danger-contrast rounded px-3 py-1 text-sm font-semibold"
                 onClick={() => void deleteSelected()}
               >
@@ -322,6 +380,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
                 <th className="py-2">Title</th>
                 <th className="py-2">Parent</th>
                 <th className="w-16 py-2 text-right">Notes</th>
+                <th className="w-32 py-2">Sidebar</th>
                 <th className="w-10 py-2"></th>
               </tr>
             </thead>
@@ -362,6 +421,22 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
                   <td className="py-2">
                     <button
                       type="button"
+                      className="border-border bg-default text-text hover:bg-contrast rounded border px-2 py-1 text-xs whitespace-nowrap"
+                      aria-pressed={row.hidden}
+                      title={
+                        row.hidden
+                          ? 'Hidden from the sidebar list. Click to show it there again.'
+                          : 'Shown in the sidebar list. Click to keep it out of that list.'
+                      }
+                      onClick={() => void setRowsHidden([row.uuid], !row.hidden)}
+                    >
+                      {row.hidden ? 'Hidden' : 'Shown'}
+                    </button>
+                    {row.hiddenByAncestor && <div className="text-passive-0 mt-1 text-xs">parent hidden</div>}
+                  </td>
+                  <td className="py-2">
+                    <button
+                      type="button"
                       title="Delete"
                       className="text-danger flex items-center"
                       onClick={() => void deleteSingle(row.uuid)}
@@ -373,7 +448,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
               ))}
               {visibleRows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="text-passive-0 py-6 text-center">
+                  <td colSpan={6} className="text-passive-0 py-6 text-center">
                     No {tab} to show.
                   </td>
                 </tr>

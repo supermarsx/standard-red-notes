@@ -6,6 +6,7 @@ import { FillItemContent } from '../../Abstract/Content/ItemContent'
 import { ContentReference } from '../../Abstract/Reference/ContentReference'
 import { PayloadTimestampDefaults } from '../../Abstract/Payload'
 import { TagContent } from './TagContent'
+import { createTagWithContent } from '../../Utilities/Test/SpecUtils'
 
 const randUuid = () => String(Math.random())
 
@@ -43,5 +44,34 @@ describe('SNTag Tests', () => {
     const tag = create('helloworld', [])
 
     expect(tag.preferences).toBeFalsy()
+  })
+
+  /**
+   * `hidden` keeps a tag's row out of the client's navigation sidebar. It is presentation
+   * only — nothing here changes what the tag references or whether it syncs — so the model's
+   * only job is to report the flag faithfully, with absent meaning shown.
+   */
+  describe('hidden', () => {
+    it('is false when the content carries no flag', () => {
+      expect(create('helloworld', []).hidden).toBe(false)
+    })
+
+    it('is true when the content says so', () => {
+      expect(createTagWithContent({ title: 'helloworld', hidden: true }).hidden).toBe(true)
+    })
+
+    it('is false for an explicit false rather than merely truthy-checking it', () => {
+      expect(createTagWithContent({ title: 'helloworld', hidden: false }).hidden).toBe(false)
+    })
+
+    it('does not touch what the tag references', () => {
+      const tag = createTagWithContent({
+        title: 'helloworld',
+        hidden: true,
+        references: [{ uuid: randUuid(), content_type: ContentType.TYPES.Note }],
+      })
+
+      expect(tag.noteCount).toEqual(1)
+    })
   })
 })

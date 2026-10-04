@@ -71,6 +71,7 @@ import {
   folderCreationScope,
   normalizeFolderName,
 } from './FolderCreationCoordinator'
+import { applyHiddenToMutator, isMarkedHidden, isWithinHiddenSubtree } from './NavigationVisibility'
 
 const folderCreationCoordinators = new WeakMap<ItemManagerInterface, FolderCreationCoordinator<SNFolder>>()
 const folderMigrationCoordinator = new FolderMigrationCoordinator<ItemManagerInterface>()
@@ -111,6 +112,19 @@ export class NavigationController
   contextMenuTagSection: TagListSectionType | undefined = undefined
 
   searchQuery = ''
+
+  /**
+   * Standard Red Notes: while true the sidebar also renders the folders and tags the user
+   * has marked hidden, so a hidden row can be found again and unhidden.
+   *
+   * Deliberately NOT persisted. Hiding is housekeeping, so the useful default on every
+   * launch is the tidy sidebar the user asked for; a reveal that outlived the session would
+   * quietly undo the feature and the user would have no idea which rows were supposed to be
+   * hidden. Losing the reveal costs nothing, because "Organize folders & tags" lists every
+   * folder and tag unconditionally — hidden ones included — so a hidden row is never
+   * unreachable even with this off.
+   */
+  showHiddenNavigationItems = false
 
   // Standard Red Notes: cached custom (manual drag) orderings for the navigation
   // sidebar, mirrored from preferences as observable state so reorders re-render.
@@ -193,6 +207,12 @@ export class NavigationController
       allLocalRootTags: computed,
       allLocalFlatTags: computed,
       tagsCount: computed,
+
+      showHiddenNavigationItems: observable,
+      setShowHiddenNavigationItems: action,
+      visibleStarredTags: computed,
+      hiddenTagsCount: computed,
+      hiddenFoldersCount: computed,
 
       customFoldersOrder_: observable.ref,
       customTagsOrder_: observable.ref,
@@ -358,11 +378,30 @@ export class NavigationController
     }
   }
 
-  private findAndSetTag = (uuid: UuidString) => {
+  /**
+   * An ordinary prototype method rather than an arrow field so the hidden-selection rule
+   * below can be exercised off `Object.create(NavigationController.prototype)`, the way
+   * `NavigationController.filesRedirect.spec.ts` builds this controller. Only ever called as
+   * `this.findAndSetTag(...)`, so nothing depends on it being bound.
+   */
+  private findAndSetTag(uuid: UuidString) {
     const tagToSelect = [...this.tags, ...this.smartViews].find((tag) => tag.uuid === uuid)
-    if (tagToSelect) {
-      void this.setSelectedTag(tagToSelect, isTag(tagToSelect) ? (tagToSelect.starred ? 'favorites' : 'all') : 'views')
+    if (!tagToSelect) {
+      return
     }
+
+    /**
+     * Standard Red Notes: a hidden tag has no row in the sidebar, so restoring it as the
+     * selection would open the app on a list with nothing marked selected and no way to
+     * tell what is being shown. Reopening the app counts as ordinary navigation, which is
+     * exactly what hidden excludes, so fall back to the home view instead.
+     */
+    if (isTag(tagToSelect) && !this.showHiddenNavigationItems && this.isTagInHiddenSubtree(tagToSelect)) {
+      void this.selectHomeNavigationView()
+      return
+    }
+
+    void this.setSelectedTag(tagToSelect, isTag(tagToSelect) ? (tagToSelect.starred ? 'favorites' : 'all') : 'views')
   }
 
   private selectHydratedTagOrDefault = () => {
@@ -551,8 +590,112 @@ export class NavigationController
     })
   }
 
+  /**
+   * Standard Red Notes: hidden folders & tags.
+   *
+   * `NavigationVisibility.ts` states what hidden does and does not mean; the rules this
+   * controller enforces are:
+   *
+   *  - A hidden folder/tag's ROW is left out of every sidebar list (roots, children and the
+   *    flat favorites section), and so are the rows of everything beneath it.
+   *  - Nothing about the NOTES changes. `this.tags` and `this.folders` stay complete, note
+   *    counts stay correct, and every note remains reachable through All Notes, search, the
+   *    note's own tag list and any smart view that matches it. Hiding takes away a shortcut,
+   *    not access, which is why it is safe to hide a folder that still holds notes.
+   *  - The reveal path is never gated on remembering what was hidden: `showHiddenNavigationItems`
+   *    puts the rows back temporarily, and "Organize folders & tags" lists every folder and
+   *    tag unconditionally, hidden ones included.
+   */
+  public setShowHiddenNavigationItems(show: boolean): void {
+    this.showHiddenNavigationItems = show
+  }
+
+  /**
+   * The tag's parent as the sidebar resolves it, preferring the loaded (observable) instance
+   * so that hiding a parent re-renders its children. Falls back to the store's instance when
+   * the parent is not in the displayable set (a vault scope or an active search can exclude
+   * it) — a subtree must stay hidden in those views too.
+   *
+   * Declared as ordinary prototype methods rather than arrow fields so the class can be
+   * exercised off `Object.create(NavigationController.prototype)` the way
+   * `NavigationController.filesRedirect.spec.ts` already does; instance fields would be
+   * absent there and the sidebar getters below would call undefined.
+   */
+  private tagParentOf(tag: SNTag): SNTag | undefined {
+    const parent = this.items.getDisplayableTagParent(tag)
+    if (!parent) {
+      return undefined
+    }
+    return this.tags.find((candidate) => candidate.uuid === parent.uuid) ?? parent
+  }
+
+  private folderParentOf(folder: SNFolder): SNFolder | undefined {
+    if (!folder.parentId) {
+      return undefined
+    }
+    return this.folders.find((candidate) => candidate.uuid === folder.parentId)
+  }
+
+  /** True when the user marked this exact tag hidden (says nothing about its ancestors). */
+  public isTagHidden(tag: SNTag): boolean {
+    return isMarkedHidden(tag)
+  }
+
+  public isFolderHidden(folder: SNFolder): boolean {
+    return isMarkedHidden(folder)
+  }
+
+  /** True when this tag is hidden itself or sits anywhere under a hidden tag. */
+  public isTagInHiddenSubtree(tag: SNTag): boolean {
+    return isWithinHiddenSubtree(tag, (candidate) => this.tagParentOf(candidate))
+  }
+
+  public isFolderInHiddenSubtree(folder: SNFolder): boolean {
+    return isWithinHiddenSubtree(folder, (candidate) => this.folderParentOf(candidate))
+  }
+
+  private shouldRenderTagRow(tag: SNTag): boolean {
+    return this.showHiddenNavigationItems || !this.isTagInHiddenSubtree(tag)
+  }
+
+  private shouldRenderFolderRow(folder: SNFolder): boolean {
+    return this.showHiddenNavigationItems || !this.isFolderInHiddenSubtree(folder)
+  }
+
+  /** How many tags/folders carry the flag — used to say so on the reveal toggle. */
+  public get hiddenTagsCount(): number {
+    return this.tags.filter((tag) => isMarkedHidden(tag)).length
+  }
+
+  public get hiddenFoldersCount(): number {
+    return this.folders.filter((folder) => isMarkedHidden(folder)).length
+  }
+
+  /**
+   * The favorites section is flat, so it cannot rely on an unrendered parent to keep a
+   * hidden subtree off screen — it has to apply the same rule itself.
+   */
+  public get visibleStarredTags(): SNTag[] {
+    return this.starredTags.filter((tag) => this.shouldRenderTagRow(tag))
+  }
+
+  public async setTagHidden(tag: SNTag, hidden: boolean): Promise<void> {
+    await this._changeAndSaveItem.execute<TagMutator>(tag, (mutator) => {
+      applyHiddenToMutator(mutator, hidden)
+    })
+  }
+
+  public async setFolderHidden(folder: SNFolder, hidden: boolean): Promise<void> {
+    await this._changeAndSaveItem.execute<FolderMutator>(folder, (mutator) => {
+      applyHiddenToMutator(mutator, hidden)
+    })
+  }
+
   public get allLocalRootTags(): SNTag[] {
-    const ordered = this.applyCustomOrder(this.rootTags, this.customTagsOrder)
+    const ordered = this.applyCustomOrder(
+      this.rootTags.filter((tag) => this.shouldRenderTagRow(tag)),
+      this.customTagsOrder,
+    )
     if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_)) {
       return [this.editing_, ...ordered]
     }
@@ -562,7 +705,7 @@ export class NavigationController
   /** Root-level folders (no parent folder) for the hierarchical Folders section. */
   public get allLocalRootFolders(): SNFolder[] {
     const roots = this.applyCustomOrder(
-      this.folders.filter((folder) => !folder.parentId),
+      this.folders.filter((folder) => !folder.parentId && this.shouldRenderFolderRow(folder)),
       this.customFoldersOrder,
     )
     if (this.editingFolder_ && this.items.isTemplateItem(this.editingFolder_) && !this.editingFolder_.parentId) {
@@ -625,20 +768,30 @@ export class NavigationController
 
   /** All tags (labels), shown flat. Tags are never folders anymore. */
   public get allLocalFlatTags(): SNTag[] {
-    const flat = this.tags
+    const flat = this.tags.filter((tag) => this.shouldRenderTagRow(tag))
     if (this.editing_ instanceof SNTag && this.items.isTemplateItem(this.editing_)) {
       return [this.editing_, ...flat]
     }
     return flat
   }
 
-  /** Subfolders of a folder. The Folders tree shows folders only; a folder's notes appear in the note list. */
+  /**
+   * Subfolders of a folder. The Folders tree shows folders only; a folder's notes appear in
+   * the note list.
+   *
+   * Hidden subfolders are left out here, as they are from `allLocalRootFolders`. Both
+   * getters are also what the "move to folder" pickers and the files folder bar enumerate,
+   * which is intended: a hidden folder is not offered anywhere the user browses or chooses
+   * a folder. The consequence — a hidden folder cannot be picked as a move destination
+   * until it is revealed — is the honest reading of "not directly accessed", and the reveal
+   * is one toggle away.
+   */
   public getFolderChildren(folder: SNFolder): SNFolder[] {
     if (this.items.isTemplateItem(folder) || this.isSearching) {
       return []
     }
     return this.applyCustomOrder(
-      this.folders.filter((candidate) => candidate.parentId === folder.uuid),
+      this.folders.filter((candidate) => candidate.parentId === folder.uuid && this.shouldRenderFolderRow(candidate)),
       this.customFoldersOrder,
     )
   }
@@ -1422,6 +1575,41 @@ export class NavigationController
     await this.sync.sync()
   }
 
+  /**
+   * Standard Red Notes: hide/show many folders or tags in one batch + one sync, mirroring
+   * how `bulkMoveFolders`/`bulkMoveTags` defer syncing to the end. Lives alongside them
+   * because "Organize folders & tags" is the surface that always lists hidden rows, and so
+   * is where a sidebar that has grown too long actually gets tidied.
+   */
+  public async bulkSetFoldersHidden(folders: SNFolder[], hidden: boolean): Promise<void> {
+    if (folders.length === 0) {
+      return
+    }
+
+    for (const folder of folders) {
+      await this.mutator.changeItem<FolderMutator>(folder, (mutator) => {
+        applyHiddenToMutator(mutator, hidden)
+      })
+    }
+
+    await this.sync.sync()
+    this.reloadFolders()
+  }
+
+  public async bulkSetTagsHidden(tags: SNTag[], hidden: boolean): Promise<void> {
+    if (tags.length === 0) {
+      return
+    }
+
+    for (const tag of tags) {
+      await this.mutator.changeItem<TagMutator>(tag, (mutator) => {
+        applyHiddenToMutator(mutator, hidden)
+      })
+    }
+
+    await this.sync.sync()
+  }
+
   getChildren(tag: SNTag): SNTag[] {
     if (this.items.isTemplateItem(tag)) {
       return []
@@ -1434,7 +1622,9 @@ export class NavigationController
     const children = this.items.getTagChildren(tag)
 
     const childrenUuids = children.map((childTag) => childTag.uuid)
-    const childrenTags = this.tags.filter((tag) => childrenUuids.includes(tag.uuid))
+    const childrenTags = this.tags.filter(
+      (candidate) => childrenUuids.includes(candidate.uuid) && this.shouldRenderTagRow(candidate),
+    )
     return this.applyCustomOrder(childrenTags, this.customTagsOrder)
   }
 

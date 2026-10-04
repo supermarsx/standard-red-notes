@@ -67,4 +67,34 @@ describe('tag mutator', () => {
 
     expect(result.content.preferences).toBeFalsy()
   })
+
+  /**
+   * `hidden` keeps a tag's row out of the client's navigation sidebar. Showing a tag again
+   * deletes the key rather than writing `false`, so "shown" has exactly one representation —
+   * the same contract `isFolder` and `color` keep.
+   */
+  describe('hidden', () => {
+    it('writes the flag when hiding', () => {
+      const tag = createTagWithTitle()
+      const mutator = new TagMutator(tag, MutationType.UpdateUserTimestamps)
+      mutator.hidden = true
+
+      expect(mutator.getResult().content.hidden).toBe(true)
+    })
+
+    it('removes the key when showing again', () => {
+      const tag = createTagWithContent({ title: 'foo', hidden: true })
+      const mutator = new TagMutator(tag, MutationType.UpdateUserTimestamps)
+      mutator.hidden = false
+
+      expect('hidden' in mutator.getResult().content).toBe(false)
+    })
+
+    it('leaves the tag shown when it was never hidden', () => {
+      const tag = createTagWithTitle()
+      const mutator = new TagMutator(tag, MutationType.UpdateUserTimestamps)
+
+      expect(new SNTag(mutator.getResult()).hidden).toBe(false)
+    })
+  })
 })

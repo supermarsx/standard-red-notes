@@ -53,6 +53,18 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
     navigationController.setContextMenuOpen(false)
   }, [navigationController, selectedTag])
 
+  /**
+   * Standard Red Notes: hiding keeps this topic's row — and the rows of its subtopics —
+   * out of the sidebar. It is housekeeping for a long sidebar, NOT protection: the notes
+   * stay in All Notes, in search and in sync, which is what the copy below says plainly so
+   * nobody reads a hidden topic as a private one. Vaults are the feature for that.
+   */
+  const isTagHidden = navigationController.isTagHidden(selectedTag)
+  const onClickToggleHidden = useCallback(() => {
+    navigationController.setTagHidden(selectedTag, !isTagHidden).catch(console.error)
+    navigationController.setContextMenuOpen(false)
+  }, [navigationController, selectedTag, isTagHidden])
+
   const tagHasLocalOnlyNotes = navigationController.tagOrFolderHasAnyLocalOnlyNotes(selectedTag)
   const canEnableLocalOnly = navigationController.canEnableLocalOnlyForTagOrFolder(selectedTag)
   const onClickToggleLocalOnly = useCallback(() => {
@@ -153,6 +165,17 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
             <div className="flex items-center">
               <Icon type="add" className="text-neutral mr-2" />
               Add subtopic
+            </div>
+          </MenuItem>
+          <MenuItem className={'py-1.5'} onClick={onClickToggleHidden}>
+            <Icon type={isTagHidden ? 'eye' : 'eye-off'} className="text-neutral mr-2" />
+            <div className="flex flex-col">
+              <div>{isTagHidden ? 'Show in sidebar' : 'Hide from sidebar'}</div>
+              <div className="text-passive-0 mt-0.5 text-xs">
+                {isTagHidden
+                  ? 'Puts this topic and its subtopics back in the sidebar list.'
+                  : 'Keeps this topic and its subtopics out of the sidebar list. Its notes stay in All Notes and in search, and everything still syncs — hiding tidies the sidebar, it does not protect anything.'}
+              </div>
             </div>
           </MenuItem>
           <MenuItem
