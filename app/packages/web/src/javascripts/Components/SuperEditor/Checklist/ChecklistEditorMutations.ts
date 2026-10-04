@@ -3,6 +3,7 @@ import { $getRoot, $isElementNode, LexicalNode } from 'lexical'
 import type { SuperChecklistTodoPatch, SuperChecklistTodoTarget } from '../../TodoAggregate/superChecklistDocument'
 import {
   $isChecklistItemNode,
+  $isChecklistOccurrenceSummaryItem,
   $getChecklistItemText,
   $getChecklistDueAt,
   $getChecklistRecurrence,
@@ -130,6 +131,25 @@ export type ChecklistCompletionOutcome = {
   advanced: boolean
 }
 
+export type ChecklistCompletionOptions = {
+  /**
+   * Let an occurrence-summary row be ticked.
+   *
+   * A summary row is a RECORD of occurrences a generation pass did not write
+   * down, not work, and a blanket action must not tick it: "mark everything in
+   * this checklist complete" would silently dismiss a record the user has not
+   * read, and the record is the only place those occurrences are named. A single
+   * row the user acted on directly is the opposite case — ticking it by hand is
+   * the natural "I have seen this", and it is safe because there is no schedule
+   * to advance — so the two single-row mutations below opt in.
+   *
+   * The default is therefore the refusing one: a future caller that has not
+   * thought about summary rows gets the conservative behaviour rather than
+   * sweeping them up.
+   */
+  allowOccurrenceSummary?: boolean
+}
+
 /**
  * Apply a checkbox state without cloning recurring rows. Completing a recurring
  * item advances the same row to its next due occurrence and leaves it open;
@@ -143,7 +163,14 @@ export function $applyChecklistItemChecked(
   item: ListItemNode,
   checked: boolean,
   now = Date.now(),
+  options: ChecklistCompletionOptions = {},
 ): ChecklistCompletionOutcome {
+  if (!options.allowOccurrenceSummary && $isChecklistOccurrenceSummaryItem(item)) {
+    // Identified by its node state, never by its wording: the copy is prose that
+    // changes with locale and with editing, and a text match would start letting
+    // records through silently the first time either moved.
+    return { changed: false, advanced: false }
+  }
   const wasChecked = Boolean(item.getChecked())
   if (!checked) {
     if (wasChecked) {
@@ -180,8 +207,14 @@ export function $applyChecklistItemChecked(
   return { changed: recurrence !== undefined && dueAt !== undefined, advanced: false }
 }
 
+/**
+ * One row, acted on directly — a clicked checkbox, the keyboard shortcut, or a
+ * single todo completed from the Todos view. Summary rows are tickable here
+ * because the user picked this row; the batch entry point
+ * ({@link $applyChecklistItemChecked} with no options) refuses them.
+ */
 export function $setChecklistItemChecked(item: ListItemNode, checked: boolean, now = Date.now()): boolean {
-  return $applyChecklistItemChecked(item, checked, now).changed
+  return $applyChecklistItemChecked(item, checked, now, { allowOccurrenceSummary: true }).changed
 }
 
 export function $toggleChecklistItemChecked(item: ListItemNode, now = Date.now()): boolean {

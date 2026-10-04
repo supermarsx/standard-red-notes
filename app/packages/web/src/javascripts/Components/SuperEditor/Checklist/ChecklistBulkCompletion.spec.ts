@@ -29,8 +29,12 @@ import {
   $setChecklistRecurrence,
   $setChecklistSchedule,
   $getChecklistDueAt,
+  $getChecklistOccurrenceSummary,
   $getChecklistRecurrence,
+  $setChecklistOccurrenceSummary,
+  CHECKLIST_OCCURRENCE_SUMMARY_VERSION,
 } from '../Lexical/Nodes/ChecklistItemNode'
+import { $setChecklistItemChecked } from './ChecklistEditorMutations'
 import { advanceChecklistDueAt, createChecklistRecurrence } from './checklistRecurrence'
 import {
   $getSelectedCheckLists,
@@ -751,5 +755,148 @@ describe('checklist bulk completion — undo granularity', () => {
     unregisterHistory()
 
     expect(historyState.undoStack.length - before).toBe(1)
+  })
+})
+
+/**
+ * A generation pass that hit its cap leaves one row behind recording the
+ * occurrences it did NOT write down. That row is a RECORD, not work, and the
+ * blanket actions must not tick it: dismissing it is the only way the record
+ * stops being shown, and "mark everything in this checklist complete" is not a
+ * user saying they have read it.
+ *
+ * The exclusion lives in `$applyChecklistItemChecked` — the batch entry point
+ * this module calls — rather than in the walk, so it holds for every row the
+ * batch reaches however the batch found it, and so a future bulk action gets the
+ * conservative behaviour by default.
+ */
+const SUMMARY_RECORD = {
+  version: CHECKLIST_OCCURRENCE_SUMMARY_VERSION,
+  missedCount: 34,
+  oldestMissedAt: '2025-02-16T09:00:00.000Z',
+  newestMissedAt: '2025-11-14T09:00:00.000Z',
+  sourceTodoId: 'todo-0bd1cbb7-f0cb-4a2e-9a1d-7a5a0a4d1f21',
+} as const
+
+/** The wording a real summary row carries, used to prove text is never the test. */
+const SUMMARY_TEXT = '34 earlier occurrences were not generated — oldest 16 Feb 2025, newest 14 Nov 2025.'
+
+describe('checklist bulk completion — the occurrence-summary record is not work', () => {
+  it('completes every real task in the list but never the summary row', () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        $appendCheckList([false, false, false])
+        const summary = $rows(0)[1]
+        summary.getFirstChild()!.remove()
+        summary.append($createTextNode(SUMMARY_TEXT))
+        expect($setChecklistOccurrenceSummary(summary, SUMMARY_RECORD)).toMatchObject({ missedCount: 34 })
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        // Three rows are open; only the two real tasks may change.
+        expect($setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true)).toBe(2)
+        expect(checkedStates($block(0) as ListNode)).toEqual([true, false, true])
+        // Still a record afterwards, with its count intact.
+        expect($getChecklistOccurrenceSummary($rows(0)[1])).toMatchObject({ missedCount: 34 })
+      },
+      { discrete: true },
+    )
+  })
+
+  it('skips the summary row for a selection-scoped completion too', () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        $appendCheckList([false, false])
+        $setChecklistOccurrenceSummary($rows(0)[1], SUMMARY_RECORD)
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        const selection = $selectText($rows(0)[0], $rows(0)[1])
+        expect($setCheckedForSelection(selection, true)).toBe(1)
+        expect(checkedStates($block(0) as ListNode)).toEqual([true, false])
+      },
+      { discrete: true },
+    )
+  })
+
+  it('still lets the user tick the record by hand — the "I have seen this" dismissal', () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        $appendCheckList([false])
+        $setChecklistOccurrenceSummary($rows(0)[0], SUMMARY_RECORD)
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        // Safe precisely because there is no schedule to advance.
+        expect($setChecklistItemChecked($rows(0)[0], true)).toBe(true)
+        expect(checkedStates($block(0) as ListNode)).toEqual([true])
+        expect($getChecklistOccurrenceSummary($rows(0)[0])).toMatchObject({ missedCount: 34 })
+      },
+      { discrete: true },
+    )
+  })
+
+  it('identifies the record by its node state, never by its wording', () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        // Byte-identical text, no record. An ordinary task that happens to quote
+        // the copy must be completed like any other, or a text match would be
+        // deciding this and would rot the moment the copy or locale changed.
+        $appendCheckList([false])
+        const row = $rows(0)[0]
+        row.getFirstChild()!.remove()
+        row.append($createTextNode(SUMMARY_TEXT))
+        expect($getChecklistOccurrenceSummary(row)).toBeUndefined()
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        expect($setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true)).toBe(1)
+        expect(checkedStates($block(0) as ListNode)).toEqual([true])
+      },
+      { discrete: true },
+    )
+  })
+
+  it('cannot be advanced by a batch even if a schedule was written onto it first', () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        $appendCheckList([false])
+        const row = $rows(0)[0]
+        $setChecklistSchedule(row, DAILY_DUE_AT, dailyRule())
+        expect($getChecklistDueAt(row)).toBe(DAILY_DUE_AT)
+        // Writing the marker clears the schedule: a record must not be able to
+        // read as an occurrence, and that is enforced at the write seam.
+        $setChecklistOccurrenceSummary(row, SUMMARY_RECORD)
+        expect($getChecklistDueAt(row)).toBeUndefined()
+        expect($getChecklistRecurrence(row)).toBeUndefined()
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        expect($setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, COMPLETED_AT)).toBe(0)
+        expect($getChecklistDueAt($rows(0)[0])).toBeUndefined()
+        expect(checkedStates($block(0) as ListNode)).toEqual([false])
+      },
+      { discrete: true },
+    )
   })
 })
