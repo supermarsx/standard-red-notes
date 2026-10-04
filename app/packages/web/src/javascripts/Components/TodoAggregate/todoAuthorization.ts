@@ -1,6 +1,7 @@
 import { FeatureStatus, isLitePayload, NativeFeatureIdentifier, NoteType, SNNote } from '@standardnotes/snjs'
 import type { WebApplication } from '@/Application/WebApplication'
 import { collectAllTodos, NoteTodos } from './allTodos'
+import type { TodoHierarchyOptions } from './todoHierarchy'
 
 const SuperEditorFeatureId = NativeFeatureIdentifier.create(NativeFeatureIdentifier.TYPES.SuperEditor).getValue()
 
@@ -34,6 +35,13 @@ export function canMutateSuperChecklistNote(application: WebApplication, note: S
 }
 
 /** Authorization happens before collectAllTodos can inspect plaintext or title. */
-export function collectAuthorizedTodoGroups(application: WebApplication, notes: SNNote[]): NoteTodos[] {
-  return collectAllTodos(notes.filter((note) => canDisplayTodoNote(application, note)))
+export function collectAuthorizedTodoGroups(
+  application: WebApplication,
+  notes: SNNote[],
+  options?: TodoHierarchyOptions,
+): NoteTodos[] {
+  return collectAllTodos(
+    notes.filter((note) => canDisplayTodoNote(application, note)),
+    options,
+  )
 }

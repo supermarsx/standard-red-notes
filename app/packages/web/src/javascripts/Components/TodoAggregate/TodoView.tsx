@@ -15,6 +15,7 @@ import {
   collectTodoGroupOptions,
   collectTodoTagOptions,
   countTodoMatches,
+  countTodoRows,
   DEFAULT_TODO_FILTERS,
   normalizeTodoFilters,
   TODO_FILTERS_PREF_KEY,
@@ -27,6 +28,18 @@ import {
   type TodoRow,
   type TodoTag,
 } from './todoFilters'
+import {
+  DEFAULT_TODO_HEADING_DESCRIPTIONS,
+  DEFAULT_TODO_HEADING_LEVELS,
+  DEFAULT_TODO_HIERARCHY_OPTIONS,
+  isCountableTodoItem,
+  isTodoHeadingItem,
+  normalizeTodoHierarchyOptions,
+  TODO_HEADING_DESCRIPTIONS_PREF_KEY,
+  TODO_HEADING_LEVELS_PREF_KEY,
+  todoHierarchyOptionsEqual,
+  type TodoHierarchyOptions,
+} from './todoHierarchy'
 import { applyTodoPatch, TodoActionResult } from './todoActions'
 import { type SuperChecklistTodoPatch, type SuperChecklistTodoTarget } from './superChecklistDocument'
 import { pruneTodoSelection, selectableTodoKey, todoSelectionKey } from './todoSelection'
@@ -42,11 +55,12 @@ import {
   CHECKLIST_RECURRENCE_MAX_INTERVAL,
   checklistRecurrenceChoice,
   checklistRecurrenceSummary,
-  createChecklistRecurrence,
+  resolveChecklistRecurrenceForSave,
   type ChecklistRecurrence,
   type ChecklistRecurrenceChoice,
   type ChecklistRecurrenceUnit,
 } from '../SuperEditor/Checklist/checklistRecurrence'
+import { checklistOccurrenceSummaryText } from '../SuperEditor/Checklist/checklistBackfill'
 import { canDisplayTodoNote, canMutateSuperChecklistNote, collectAuthorizedTodoGroups } from './todoAuthorization'
 import { buildTodoPrintBody, TODO_PRINT_TITLE } from './todoPrintProjection'
 import { registerPrintableView, unregisterPrintableView } from '../NoteView/Print/PrintableViewRegistry'
@@ -214,9 +228,16 @@ export function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoS
       setError(`Enter an interval from 1 to ${CHECKLIST_RECURRENCE_MAX_INTERVAL}.`)
       return
     }
-    const recurrence = choice
-      ? createChecklistRecurrence(choice, dueAt, expected.recurrence?.anchor.timeZone)
-      : undefined
+    // The persisted ANCHOR survives a Save that did not move the date.
+    // `resolveChecklistDueAtLocalInput` deliberately preserves the exact instant
+    // when the draft is unchanged, and re-deriving the rule from that instant
+    // destroyed the anchor: a monthly task anchored on the 31st, rolled to a
+    // clamped Feb 28, pinned itself to day 28 permanently the moment the user
+    // pressed Save — the chained-from-previous-date drift the anchored grid exists
+    // to prevent, reachable by pressing a button. One shared helper with the inline
+    // editor on purpose: two implementations of this would diverge and bring the
+    // bug back a third time.
+    const recurrence = resolveChecklistRecurrenceForSave(choice, dueAt, expected)
     if (choice && !recurrence) {
       setError('This recurrence could not be created in the current time zone.')
       return
@@ -435,9 +456,52 @@ function canManageGroup(application: WebApplication, group: NoteTodos): boolean 
   return group.source === 'super' && canMutateSuperChecklistNote(application, group.note)
 }
 
+/**
+ * Row text. One wording for the occurrence-summary record, taken from the record
+ * itself rather than from the row's stored label, so the view can never state a
+ * different count or date range from the one the document holds — and never has to
+ * recognise the row by its words.
+ */
+function todoRowLabel(item: TodoItem): string {
+  return (item.occurrenceSummary && checklistOccurrenceSummaryText(item.occurrenceSummary)) || item.text
+}
+
 const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
+  /**
+   * How headings are read out of a note. Both default ON, with the defaults as
+   * literals: `PrefDefaults[PrefKey.TodoHeadingLevels]` is `undefined` at runtime
+   * until the generated snjs bundle is rebuilt, and `undefined` is falsy, so
+   * reading the default from that table would ship both features permanently off.
+   */
+  const readHierarchyOptions = useCallback((): TodoHierarchyOptions => {
+    try {
+      return normalizeTodoHierarchyOptions({
+        headingLevels: application.getPreference(TODO_HEADING_LEVELS_PREF_KEY, DEFAULT_TODO_HEADING_LEVELS),
+        headingDescriptions: application.getPreference(
+          TODO_HEADING_DESCRIPTIONS_PREF_KEY,
+          DEFAULT_TODO_HEADING_DESCRIPTIONS,
+        ),
+      })
+    } catch {
+      return DEFAULT_TODO_HIERARCHY_OPTIONS
+    }
+  }, [application])
+
+  // Held in a ref as well as in state on purpose, and written only through
+  // `applyHierarchyOptions`: the ref keeps `readGroups` stable, so changing a
+  // setting re-parses without re-running the account-reset effect (which would
+  // clear the selection and re-read the filters from storage mid-edit), while the
+  // state drives the two switches in the bar.
+  const hierarchyRef = useRef<TodoHierarchyOptions>(readHierarchyOptions())
+  const [hierarchy, setHierarchyState] = useState<TodoHierarchyOptions>(hierarchyRef.current)
+
   const readGroups = useCallback(
-    () => collectAuthorizedTodoGroups(application, application.items.getItems<SNNote>(ContentType.TYPES.Note)),
+    () =>
+      collectAuthorizedTodoGroups(
+        application,
+        application.items.getItems<SNNote>(ContentType.TYPES.Note),
+        hierarchyRef.current,
+      ),
     [application],
   )
   const [storedGroups, setStoredGroups] = useState<{
@@ -773,6 +837,39 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     }
   }, [application, readGroups])
 
+  /**
+   * Adopt a hierarchy setting and re-parse. The settings change what a row IS, so
+   * nothing cached from the previous reading can be kept: the whole aggregate is
+   * rebuilt rather than patched.
+   */
+  const applyHierarchyOptions = useCallback(
+    (next: TodoHierarchyOptions) => {
+      if (todoHierarchyOptionsEqual(hierarchyRef.current, next)) {
+        return
+      }
+      hierarchyRef.current = next
+      setHierarchyState(next)
+      recompute()
+    },
+    [recompute],
+  )
+
+  const setHierarchyOptions = useCallback(
+    (next: TodoHierarchyOptions) => {
+      applyHierarchyOptions(next)
+      // Fire-and-forget, exactly like the filters: the view already reflects the
+      // change, and a rejected write leaves the previous persisted value for the
+      // next mount to read back.
+      void Promise.resolve(application.setPreference(TODO_HEADING_LEVELS_PREF_KEY, next.headingLevels)).catch(
+        () => undefined,
+      )
+      void Promise.resolve(
+        application.setPreference(TODO_HEADING_DESCRIPTIONS_PREF_KEY, next.headingDescriptions),
+      ).catch(() => undefined)
+    },
+    [application, applyHierarchyOptions],
+  )
+
   // Reset all application-bound state immediately if the signed-in application
   // instance changes; selections must never bleed into another account/session.
   useEffect(() => {
@@ -782,15 +879,17 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     ownerWaits.current.clear()
     actionQueue.current = Promise.resolve()
     lifetimeRef.current.dataReady = true
-    // A different signed-in account has different stored filters.
+    // A different signed-in account has different stored filters — and different
+    // stored hierarchy settings, which are synced too.
     filtersDirtyRef.current = false
     setFiltersState(readPersistedFilters())
+    applyHierarchyOptions(readHierarchyOptions())
     setSelectedKeys(new Set())
     setBusyKeys(new Set())
     setBulkBusy(false)
     setActionError(undefined)
     recompute()
-  }, [application, readPersistedFilters, recompute])
+  }, [application, applyHierarchyOptions, readHierarchyOptions, readPersistedFilters, recompute])
 
   // Throttled recompute from local item state — no server polling.
   useEffect(() => {
@@ -865,6 +964,11 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         if (!filtersDirtyRef.current) {
           setFiltersState(readPersistedFilters())
         }
+        // The hierarchy settings are synced too, and unconditionally adopted:
+        // unlike a search query there is nothing here a user can be mid-way
+        // through typing, and a stale reading would keep showing a structure the
+        // settings no longer describe.
+        applyHierarchyOptions(readHierarchyOptions())
         return
       }
       if (
@@ -885,7 +989,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         clearTimeout(throttleTimeout)
       }
     }
-  }, [application, closeOwnerImmediately, readPersistedFilters, recompute])
+  }, [application, applyHierarchyOptions, closeOwnerImmediately, readHierarchyOptions, readPersistedFilters, recompute])
 
   useEffect(() => {
     setSelectedKeys((selected) =>
@@ -972,6 +1076,9 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
   // bulk actions stay bound to the UNFILTERED groups, so narrowing the view
   // never silently drops what the user already selected.
   const visibleRows = useMemo(() => visibleTodoRows(rows, filters, now), [filters, now, rows])
+
+  /** Rows that are actually todos — heading sections and records are neither. */
+  const totalTodoRowCount = useMemo(() => countTodoRows(rows), [rows])
 
   const selectedTodos = useMemo(() => {
     const selected: ManagedTodo[] = []
@@ -1248,15 +1355,60 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           const selectionKey = selectableTodoKey(group, item)
           const busy = busyFor(row)
           const indentLevel = todoRowIndentLevel(row.depth)
+          // The indent step shrinks past level 4 so ten levels still leave room
+          // for the label instead of pushing it off the edge.
+          const paddingInlineStart = `${Math.min(indentLevel, 4) * 0.85 + Math.max(indentLevel - 4, 0) * 0.4}rem`
+          const levelBadge =
+            row.depth > TODO_MAX_INDENT_LEVEL ? (
+              // Past the indent ceiling the row stops moving right, so the real
+              // level has to be stated or it would be lost.
+              <span
+                className="border-border text-passive-2 flex-shrink-0 rounded border px-1 text-[0.625rem]"
+                title={`Nesting level ${row.depth}`}
+              >
+                L{row.depth}
+              </span>
+            ) : null
+
+          if (isTodoHeadingItem(item)) {
+            // A heading section is the document's own structure: no checkbox, no
+            // completion control, no schedule. It is not work, so offering any
+            // action on it would be offering to do something to a title.
+            return (
+              <div
+                className="flex min-w-0 flex-col gap-0.5"
+                style={{ paddingInlineStart }}
+                data-todo-depth={row.depth}
+                data-todo-heading-level={item.headingLevel}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="text-text truncate text-sm font-semibold"
+                    title={`Section · heading level ${item.headingLevel}`}
+                  >
+                    {item.text}
+                  </span>
+                  {levelBadge}
+                </span>
+                {/* Nothing at all when the section has no description: an em dash
+                    or a blank line would claim the user wrote one. */}
+                {item.description && (
+                  <span className="text-passive-1 truncate text-xs" title={item.description}>
+                    {item.description}
+                  </span>
+                )}
+              </div>
+            )
+          }
+
+          const isRecord = !isCountableTodoItem(item)
+          const label = todoRowLabel(item)
           return (
             <div
               className="flex min-w-0 items-center gap-2"
-              // The indent step shrinks past level 4 so ten levels still leave
-              // room for the label instead of pushing it off the edge.
-              style={{
-                paddingInlineStart: `${Math.min(indentLevel, 4) * 0.85 + Math.max(indentLevel - 4, 0) * 0.4}rem`,
-              }}
+              style={{ paddingInlineStart }}
               data-todo-depth={row.depth}
+              {...(isRecord ? { 'data-todo-record': 'occurrence-summary' } : {})}
             >
               {row.depth > 0 && (
                 <span
@@ -1267,13 +1419,19 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                   &#8226;
                 </span>
               )}
-              {manageable ? (
+              {/* An occurrence-summary record is not selectable — `selectableTodoKey`
+                  refuses it — so it gets no checkbox either, rather than one that
+                  silently does nothing or, worse, writes an identity into the
+                  document to make itself selectable. It stays tickable below: that
+                  is the "I have seen this" dismissal, and it is safe because the
+                  record carries no schedule to advance. */}
+              {manageable && !isRecord ? (
                 <input
                   type="checkbox"
                   className="flex-shrink-0"
                   checked={selectionKey ? selectedKeys.has(selectionKey) : false}
                   disabled={busy}
-                  aria-label={`Select ${item.text}`}
+                  aria-label={`Select ${label}`}
                   onChange={(event) => {
                     const checked = event.currentTarget.checked
                     void toggleSelection(group, item, checked)
@@ -1287,7 +1445,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                   type="button"
                   className="flex-shrink-0 rounded focus-visible:outline focus-visible:outline-2"
                   disabled={busy}
-                  aria-label={item.checked ? `Reopen ${item.text}` : `Mark ${item.text} complete`}
+                  aria-label={item.checked ? `Reopen ${label}` : `Mark ${label} complete`}
                   onClick={() => void applyOne(group, item, { checked: !item.checked })}
                 >
                   <Icon
@@ -1311,20 +1469,11 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                   // not a result; muting it keeps the two readable apart.
                   row.isMatch ? '' : 'text-passive-2 opacity-70',
                 )}
-                title={row.isMatch ? item.text : `${item.text} — shown as the parent of a match`}
+                title={row.isMatch ? label : `${label} — shown as the parent of a match`}
               >
-                {item.text}
+                {label}
               </span>
-              {row.depth > TODO_MAX_INDENT_LEVEL && (
-                // Past the indent ceiling the row stops moving right, so the
-                // real level has to be stated or it would be lost.
-                <span
-                  className="border-border text-passive-2 flex-shrink-0 rounded border px-1 text-[0.625rem]"
-                  title={`Nesting level ${row.depth}`}
-                >
-                  L{row.depth}
-                </span>
-              )}
+              {levelBadge}
             </div>
           )
         },
@@ -1334,6 +1483,14 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         cell: (row) => {
           const { group, item } = row
           const manageable = canManageGroup(application, group)
+          if (!isCountableTodoItem(item)) {
+            // A heading section has no deadline to have, and an occurrence-summary
+            // record has none BY CONSTRUCTION — that absence is what stops it
+            // reading as an occurrence. Printing "No due date" would answer a
+            // question neither row was asked, and offering "Add schedule" on the
+            // record would turn it into the very thing it is a record of.
+            return null
+          }
           const due = item.dueAt ? formatChecklistDue(item.dueAt, item.checked, now) : undefined
           const recurrence = item.recurrence ? checklistRecurrenceSummary(item.recurrence, true) : undefined
           const scheduleTarget = manageable ? todoTarget(item) : undefined
@@ -1432,10 +1589,10 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     }
     registerPrintableView(root, () => ({
       title: TODO_PRINT_TITLE,
-      body: buildTodoPrintBody({ rows: visibleRows, filters, tagOptions, totalCount: rows.length, now }),
+      body: buildTodoPrintBody({ rows: visibleRows, filters, tagOptions, totalCount: totalTodoRowCount, now }),
     }))
     return () => unregisterPrintableView(root)
-  }, [filters, now, rows.length, tagOptions, visibleRows])
+  }, [filters, now, tagOptions, totalTodoRowCount, visibleRows])
 
   return (
     <div
@@ -1463,8 +1620,11 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         tagOptions={tagOptions}
         groupOptions={groupOptions}
         visibleCount={countTodoMatches(visibleRows)}
-        totalCount={rows.length}
+        // Both numbers count WORK, so "showing N of M" cannot be read as a claim
+        // that a section header or an occurrence record is a todo.
+        totalCount={totalTodoRowCount}
         onChange={setFilters}
+        hierarchy={{ options: hierarchy, onChange: setHierarchyOptions }}
       />
 
       {selectedTodos.length > 0 && (
@@ -1520,7 +1680,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           <div className="text-passive-1 flex flex-col items-center gap-2 px-4 py-10 text-center text-sm">
             <span>No todos match your filters.</span>
             <span className="text-passive-2 text-xs">
-              {rows.length} {rows.length === 1 ? 'todo is' : 'todos are'} hidden by the filter bar above.
+              {totalTodoRowCount} {totalTodoRowCount === 1 ? 'todo is' : 'todos are'} hidden by the filter bar above.
             </span>
             <button
               type="button"

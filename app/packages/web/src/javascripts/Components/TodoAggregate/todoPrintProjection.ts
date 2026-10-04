@@ -10,6 +10,8 @@ import {
   type TodoTag,
 } from './todoFilters'
 import { formatChecklistDue } from '../SuperEditor/Checklist/checklistDueDate'
+import { checklistOccurrenceSummaryText } from '../SuperEditor/Checklist/checklistBackfill'
+import { isTodoHeadingItem, isTodoOccurrenceSummaryItem } from './todoHierarchy'
 
 /**
  * Standard Red Notes: the Todos view's printable projection.
@@ -44,6 +46,10 @@ export const TODO_PRINT_TITLE = 'Todos'
 export const TODO_PRINT_LIST_CLASS = 'srn-print-todo-list'
 export const TODO_PRINT_ROW_CLASS = 'srn-print-todo'
 export const TODO_PRINT_SUMMARY_CLASS = 'srn-print-todo-summary'
+/** A heading section row: the document's own structure, printed as structure. */
+export const TODO_PRINT_HEADING_CLASS = 'srn-print-todo--heading'
+/** The section description line, when the section has one. */
+export const TODO_PRINT_DESCRIPTION_CLASS = 'srn-print-todo-description'
 
 /**
  * Screen and paper must indent identically, so this is the row cell's own
@@ -168,32 +174,47 @@ export function buildTodoPrintBody({
   list.className = TODO_PRINT_LIST_CLASS
 
   for (const row of rows) {
+    const heading = isTodoHeadingItem(row.item)
     const entry = targetDocument.createElement('li')
     entry.className = TODO_PRINT_ROW_CLASS
     if (row.item.checked) {
       entry.classList.add('srn-print-todo--done')
     }
-    if (!row.isMatch) {
+    if (heading) {
+      entry.classList.add(TODO_PRINT_HEADING_CLASS)
+      entry.setAttribute('data-todo-heading-level', String(row.item.headingLevel))
+    } else if (!row.isMatch) {
+      // A section is context by construction, so saying so would be noise on
+      // every one of them; a TASK kept as context is the exceptional case.
       entry.classList.add('srn-print-todo--context')
     }
     // Depth survives as data as well as as indentation: past the indent ceiling
     // the row stops moving right, exactly as it does on screen.
     entry.setAttribute('data-todo-depth', String(row.depth))
-    entry.setAttribute('data-todo-checked', row.item.checked ? 'true' : 'false')
+    if (!heading) {
+      entry.setAttribute('data-todo-checked', row.item.checked ? 'true' : 'false')
+    }
     entry.style.marginInlineStart = `${todoPrintIndentRem(row.depth)}rem`
 
     // The note print path's own checklist marker, so a printed checkbox is never
-    // an empty box that reads the same whether or not the task is done.
-    const marker = targetDocument.createElement('span')
-    marker.className = 'srn-print-checkbox'
-    marker.setAttribute('role', 'img')
-    marker.setAttribute('aria-label', row.item.checked ? 'Checked' : 'Unchecked')
-    marker.textContent = row.item.checked ? '☒' : '☐'
-    entry.appendChild(marker)
+    // an empty box that reads the same whether or not the task is done. A heading
+    // section gets NO marker: a ☐ beside it would print the claim that the
+    // section is a task somebody can tick.
+    if (!heading) {
+      const marker = targetDocument.createElement('span')
+      marker.className = 'srn-print-checkbox'
+      marker.setAttribute('role', 'img')
+      marker.setAttribute('aria-label', row.item.checked ? 'Checked' : 'Unchecked')
+      marker.textContent = row.item.checked ? '☒' : '☐'
+      entry.appendChild(marker)
+    }
 
     const text = targetDocument.createElement('span')
     text.className = 'srn-print-todo-text'
-    text.textContent = row.item.text
+    // One wording for the occurrence-summary record, shared with the screen, so
+    // paper can never state a different count or a different date range.
+    text.textContent =
+      (row.item.occurrenceSummary && checklistOccurrenceSummaryText(row.item.occurrenceSummary)) || row.item.text
     entry.appendChild(text)
 
     if (row.depth > TODO_MAX_INDENT_LEVEL) {
@@ -203,12 +224,31 @@ export function buildTodoPrintBody({
       entry.appendChild(level)
     }
 
+    // Nothing at all when the section has no description: an em dash or a blank
+    // line would claim the user wrote something under the heading.
+    if (row.item.description) {
+      const description = targetDocument.createElement('span')
+      description.className = TODO_PRINT_DESCRIPTION_CLASS
+      description.textContent = row.item.description
+      entry.appendChild(description)
+    }
+
+    if (heading) {
+      // No note title, no source, no due: a section's own row carries structure
+      // only, and the tasks printed under it already say where they came from.
+      list.appendChild(entry)
+      continue
+    }
+
     const due = row.item.dueAt ? formatChecklistDue(row.item.dueAt, row.item.checked, now) : undefined
     appendMeta(entry, [
       row.noteTitle,
       SOURCE_ROW_LABEL[row.group.source],
       ...(row.item.groupName ? [row.item.groupName] : []),
       ...(due ? [`due ${due.dateLabel}`] : []),
+      // A record of occurrences that were not generated is not an outstanding
+      // task, and on paper nothing else would say so.
+      ...(isTodoOccurrenceSummaryItem(row.item) ? ['a record, not a todo'] : []),
       // Stated in words: on paper a muted color is not a reliable distinction.
       ...(row.isMatch ? [] : ['shown as the parent of a match']),
     ])

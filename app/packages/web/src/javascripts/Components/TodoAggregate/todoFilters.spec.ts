@@ -5,6 +5,7 @@ import {
   collectTodoGroupOptions,
   collectTodoTagOptions,
   countTodoMatches,
+  countTodoRows,
   DEFAULT_TODO_FILTERS,
   filterTodoRows,
   MAX_TODO_FILTER_GROUPS,
@@ -542,5 +543,168 @@ describe('todo hierarchy', () => {
     const rows = todoRowsFromGroups([cyclic], () => [])
     expect(sortTodoRows(rows, DEFAULT_TODO_FILTERS)).toHaveLength(2)
     expect(visibleTodoRows(rows, DEFAULT_TODO_FILTERS, NOW)).toHaveLength(2)
+  })
+})
+
+describe('heading sections as rows', () => {
+  /**
+   * `# Project` → `Task A`, and `## Phase 1` → `Task B`, shaped exactly as the
+   * parser emits them: the section carries `headingLevel` and `sectionDepth`, and
+   * the tasks carry their section as `parentLocator` plus the section base.
+   */
+  const sectioned = (): NoteTodos =>
+    group('n-sections', 'Project', [
+      todo('s0', 'Project', { locator: '0', depth: 0, sectionDepth: 0, headingLevel: 1, description: 'Why this list' }),
+      todo('t0', 'Task A', { locator: '1.0', depth: 1, sectionDepth: 1, parentLocator: '0' }),
+      todo('s1', 'Phase 1', { locator: '2', depth: 1, sectionDepth: 1, headingLevel: 2, parentLocator: '0' }),
+      todo('t1', 'Task B', {
+        locator: '3.0',
+        depth: 2,
+        sectionDepth: 2,
+        parentLocator: '2',
+        dueAt: new Date(NOW + HOUR).toISOString(),
+      }),
+    ])
+
+  const sectionRows = () => todoRowsFromGroups([sectioned()], () => [])
+
+  it('indents the tasks of a section under it, derived from the chain', () => {
+    expect(sectionRows().map((row) => [row.item.text, row.depth])).toEqual([
+      ['Project', 0],
+      ['Task A', 1],
+      ['Phase 1', 1],
+      ['Task B', 2],
+    ])
+  })
+
+  it('keeps a task inside its section even when its own parent row is absent', () => {
+    // A blank checklist item never becomes a row; its child must stay in the
+    // section it was authored in rather than jumping to the top of the list.
+    const orphanInSection = group('n-orphan-section', 'Project', [
+      todo('s0', 'Project', { locator: '0', depth: 0, sectionDepth: 0, headingLevel: 1 }),
+      todo('t', 'Child of a blank task', { locator: '1.0.0.0', depth: 2, sectionDepth: 1, parentLocator: 'gone' }),
+    ])
+    const rows = todoRowsFromGroups([orphanInSection], () => [])
+    expect(rows[1]).toMatchObject({ depth: 1, parentId: undefined })
+  })
+
+  it('never counts a section as a match, so it reaches the screen only as context', () => {
+    const all = filterTodoRows(sectionRows(), DEFAULT_TODO_FILTERS, NOW)
+    expect(all.map((row) => [row.item.text, row.isMatch])).toEqual([
+      ['Project', false],
+      ['Task A', true],
+      ['Phase 1', false],
+      ['Task B', true],
+    ])
+    // Two todos, four rows: a section is structure, not a result.
+    expect(countTodoMatches(all)).toBe(2)
+    expect(countTodoRows(sectionRows())).toBe(2)
+  })
+
+  it('shows a matching task with its sections, and hides a section whose tasks all go', () => {
+    const filtered = filterTodoRows(sectionRows(), withFilters({ query: 'Task B' }), NOW)
+    expect(filtered.map((row) => row.item.text)).toEqual(['Project', 'Phase 1', 'Task B'])
+    expect(countTodoMatches(filtered)).toBe(1)
+
+    const narrower = filterTodoRows(sectionRows(), withFilters({ query: 'Task A' }), NOW)
+    expect(narrower.map((row) => row.item.text)).toEqual(['Project', 'Task A'])
+  })
+
+  it('finds a row by words in a section description, which are on screen too', () => {
+    const filtered = filterTodoRows(sectionRows(), withFilters({ query: 'why this' }), NOW)
+    // The section itself still never counts as a match; it is pulled in as the
+    // ancestor of nothing, so a description-only query admits no rows at all.
+    expect(countTodoMatches(filtered)).toBe(0)
+    expect(
+      filterTodoRows(
+        todoRowsFromGroups(
+          [
+            group('n-desc', 'Project', [
+              todo('s', 'Project', { locator: '0', headingLevel: 1, description: 'quarterly goals' }),
+              todo('t', 'Task', { locator: '1.0', sectionDepth: 1, parentLocator: '0', description: 'quarterly' }),
+            ]),
+          ],
+          () => [],
+        ),
+        withFilters({ query: 'quarterly' }),
+        NOW,
+      ).map((row) => [row.item.text, row.isMatch]),
+    ).toEqual([
+      ['Project', false],
+      ['Task', true],
+    ])
+  })
+
+  it('keeps a section below its sibling tasks instead of sorting it by its title', () => {
+    // `Phase 1` sorts alphabetically before `Task A`, so a comparator that treats
+    // a section as a task would hoist the whole `Phase 1` subtree above `Task A`.
+    const ordered = sortTodoRows(sectionRows(), DEFAULT_TODO_FILTERS)
+    expect(ordered.map((row) => row.item.text)).toEqual(['Project', 'Task A', 'Phase 1', 'Task B'])
+    // Reversing a sort of TASKS must not float the section back to the top.
+    expect(sortTodoRows(sectionRows(), withFilters({ sortReverse: true })).map((row) => row.item.text)).toEqual([
+      'Project',
+      'Task A',
+      'Phase 1',
+      'Task B',
+    ])
+  })
+
+  it('orders sections by the document, not by the sort key chosen for tasks', () => {
+    // Every section is undated, so a due sort would tie them and fall through to
+    // an alphabetical comparison — silently reordering the user's own outline.
+    const outline = group('n-outline', 'Project', [
+      todo('s-b', 'Zebra section', { locator: '0', headingLevel: 1 }),
+      todo('t-b', 'Task in Zebra', { locator: '1.0', sectionDepth: 1, parentLocator: '0' }),
+      todo('s-a', 'Apple section', { locator: '2', headingLevel: 1 }),
+      todo('t-a', 'Task in Apple', { locator: '3.0', sectionDepth: 1, parentLocator: '2' }),
+    ])
+    const rows = todoRowsFromGroups([outline], () => [])
+    expect(sortTodoRows(rows, DEFAULT_TODO_FILTERS).map((row) => row.item.text)).toEqual([
+      'Zebra section',
+      'Task in Zebra',
+      'Apple section',
+      'Task in Apple',
+    ])
+    // Reversing a sort of TASKS must not reverse the document either.
+    expect(sortTodoRows(rows, withFilters({ sortBy: 'todo', sortReverse: true })).map((row) => row.item.text)).toEqual([
+      'Zebra section',
+      'Task in Zebra',
+      'Apple section',
+      'Task in Apple',
+    ])
+  })
+})
+
+describe('the occurrence-summary record as a row', () => {
+  const summary = {
+    version: 1 as const,
+    missedCount: 4,
+    oldestMissedAt: '2025-02-16T09:00:00.000Z',
+    newestMissedAt: '2025-11-14T09:00:00.000Z',
+    sourceTodoId: 'todo-recurring',
+  }
+
+  const recorded = (): NoteTodos =>
+    group('n-record', 'Plants', [
+      todo('live', 'Water the plants', { todoId: 'todo-recurring', dueAt: new Date(NOW + HOUR).toISOString() }),
+      todo('record', '4 earlier occurrences were not generated.', {
+        locator: '0.1',
+        todoId: 'todo-record',
+        occurrenceSummary: summary,
+      }),
+    ])
+
+  it('is excluded from the match count even though it is shown', () => {
+    const rows = todoRowsFromGroups([recorded()], () => [])
+    const all = filterTodoRows(rows, DEFAULT_TODO_FILTERS, NOW)
+    expect(all).toHaveLength(2)
+    // A record is not outstanding work; counting it would overstate the list.
+    expect(countTodoMatches(all)).toBe(1)
+    expect(countTodoRows(rows)).toBe(1)
+  })
+
+  it('reads as unscheduled, because it carries no deadline by construction', () => {
+    const [, record] = recorded().items
+    expect(todoDueBucket(record, NOW)).toBe('unscheduled')
   })
 })

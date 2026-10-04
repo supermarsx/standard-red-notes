@@ -13,6 +13,7 @@ import {
   type TodoSourceFilter,
   type TodoTag,
 } from './todoFilters'
+import type { TodoHierarchyOptions } from './todoHierarchy'
 
 type Props = {
   filters: TodoFilters
@@ -27,6 +28,19 @@ type Props = {
   visibleCount: number
   totalCount: number
   onChange: (next: TodoFilters) => void
+  /**
+   * How headings are read out of a note, and how to change it. Optional so the
+   * bar stays usable without the pref plumbing; the two switches appear only when
+   * an owner supplies them.
+   *
+   * These are SETTINGS, not filters: they change what the rows ARE, not which of
+   * them are shown, which is why they do not join `activeTodoFilterCount` and why
+   * the "N filters active" line never counts them.
+   */
+  hierarchy?: {
+    options: TodoHierarchyOptions
+    onChange: (next: TodoHierarchyOptions) => void
+  }
 }
 
 const SELECT_CLASS =
@@ -185,6 +199,7 @@ export default function TodoFilterBar({
   visibleCount,
   totalCount,
   onChange,
+  hierarchy,
 }: Props) {
   const activeCount = activeTodoFilterCount(filters)
   const patch = (changes: Partial<TodoFilters>) => onChange({ ...filters, ...changes })
@@ -304,6 +319,46 @@ export default function TodoFilterBar({
           <Icon type={filters.sortReverse ? 'arrows-sort-down' : 'arrows-sort-up'} size="small" />
         </button>
       </div>
+
+      {hierarchy && (
+        <div className="text-passive-1 flex flex-wrap items-center gap-4 text-xs" data-todo-hierarchy-settings="">
+          <label className="flex items-center gap-1.5" title="Headings in a note become sublevels, up to six deep.">
+            <input
+              type="checkbox"
+              checked={hierarchy.options.headingLevels}
+              aria-label="Headings create todo sublevels"
+              onChange={(event) => {
+                const headingLevels = event.currentTarget.checked
+                hierarchy.onChange({ ...hierarchy.options, headingLevels })
+              }}
+            />
+            Heading sublevels
+          </label>
+          <label
+            className="flex items-center gap-1.5"
+            // A description belongs to a heading section, so with sublevels off
+            // there is nothing for one to belong to. Disabled and SAID, rather
+            // than a switch that silently does nothing.
+            title={
+              hierarchy.options.headingLevels
+                ? 'Text written under a heading is shown as that section’s description.'
+                : 'Turn Heading sublevels on first — a description belongs to a heading section.'
+            }
+          >
+            <input
+              type="checkbox"
+              checked={hierarchy.options.headingDescriptions}
+              disabled={!hierarchy.options.headingLevels}
+              aria-label="Text after a heading is its description"
+              onChange={(event) => {
+                const headingDescriptions = event.currentTarget.checked
+                hierarchy.onChange({ ...hierarchy.options, headingDescriptions })
+              }}
+            />
+            Heading descriptions
+          </label>
+        </div>
+      )}
 
       {activeCount > 0 && (
         <div className="text-passive-1 flex flex-wrap items-center gap-2 text-xs" role="status">

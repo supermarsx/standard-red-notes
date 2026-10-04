@@ -1,6 +1,8 @@
 import { NoteType, SNNote } from '@standardnotes/snjs'
 import { parseSuperChecklistDocument } from './superChecklistDocument'
 import type { ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
+import type { ChecklistOccurrenceSummaryState } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
+import { DEFAULT_TODO_HIERARCHY_OPTIONS, isCountableTodoItem, type TodoHierarchyOptions } from './todoHierarchy'
 
 /**
  * Standard Red Notes: cross-note Todo / checklist aggregate collector.
@@ -46,13 +48,37 @@ export type TodoItem = {
   /** Canonical recurrence rule and wall-time anchor for Super checklist items. */
   recurrence?: ChecklistRecurrence
   /**
-   * Checklist nesting level: 0 at the top, 1 for a subtask, and so on. Super
-   * checklists nest arbitrarily (bounded by the parser); Advanced Checklist
-   * payloads are flat, so every one of their tasks is level 0.
+   * Structural level: the depth contributed by enclosing heading sections plus
+   * the task's own checklist nesting. 0 at the top, 1 for a subtask or for a task
+   * under an `h1`, and so on. Super checklists nest arbitrarily (bounded by the
+   * parser); Advanced Checklist payloads are flat and have no headings, so every
+   * one of their tasks is level 0.
    */
   depth: number
-  /** Locator of the task this one is nested under, absent at the top level. */
+  /**
+   * The depth contributed by enclosing heading sections alone — the floor a row
+   * keeps when its own parent row is absent. Super rows only.
+   */
+  sectionDepth?: number
+  /** Locator of the task or heading section this one sits under, absent at the top. */
   parentLocator?: string
+  /**
+   * 1..6 on a heading section row, absent on every task. Super rows only: the
+   * advanced-checklist payload has no headings, and its `groups[]` name sections
+   * rather than nest them.
+   */
+  headingLevel?: number
+  /**
+   * A heading section's description — the text the user wrote under it. ABSENT
+   * rather than empty when there is none, so a row with no description renders no
+   * description line at all.
+   */
+  description?: string
+  /**
+   * The occurrence-summary record a capped generation pass left behind. A RECORD,
+   * not work: excluded from {@link NoteTodos.total}/`completed` and from selection.
+   */
+  occurrenceSummary?: ChecklistOccurrenceSummaryState
   /**
    * Name of the Advanced Checklist section this task was authored under
    * (`groups[].name`). Present ONLY for advanced-checklist notes, and only when
@@ -62,7 +88,15 @@ export type TodoItem = {
   groupName?: string
 }
 
-/** All todos from one source note, plus progress, for grouped rendering. */
+/**
+ * All todos from one source note, plus progress, for grouped rendering.
+ *
+ * `completed`/`total` count WORK ONLY: a heading section row is context the user
+ * authored to organise the list, and an occurrence-summary row is a record of what
+ * a capped generation pass did not write down. Counting either would corrupt the
+ * progress bar — a document could read 3/9 with six of those nine being headings.
+ * `items` still holds every row, because they all have to be rendered.
+ */
 export type NoteTodos = {
   note: SNNote
   source: 'super' | 'advanced-checklist'
@@ -76,8 +110,11 @@ export type NoteTodos = {
 // ---------------------------------------------------------------------------
 
 /** Parse Super check-list items from a note's serialized Lexical text. */
-export function parseSuperChecklist(noteText: string): TodoItem[] {
-  return parseSuperChecklistDocument(noteText)
+export function parseSuperChecklist(
+  noteText: string,
+  options: TodoHierarchyOptions = DEFAULT_TODO_HIERARCHY_OPTIONS,
+): TodoItem[] {
+  return parseSuperChecklistDocument(noteText, options)
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +251,10 @@ export function isSuperNote(note: SNNote): boolean {
 }
 
 /** Build the per-note todo summary, or null if the note has no parseable todos. */
-export function todosForNote(note: SNNote): NoteTodos | null {
+export function todosForNote(
+  note: SNNote,
+  options: TodoHierarchyOptions = DEFAULT_TODO_HIERARCHY_OPTIONS,
+): NoteTodos | null {
   let source: NoteTodos['source']
   let items: TodoItem[]
 
@@ -223,7 +263,7 @@ export function todosForNote(note: SNNote): NoteTodos | null {
     items = parseAdvancedChecklist(note.text)
   } else if (isSuperNote(note)) {
     source = 'super'
-    items = parseSuperChecklist(note.text)
+    items = parseSuperChecklist(note.text, options)
   } else {
     return null
   }
@@ -232,8 +272,10 @@ export function todosForNote(note: SNNote): NoteTodos | null {
     return null
   }
 
-  const completed = items.reduce((count, item) => count + (item.checked ? 1 : 0), 0)
-  return { note, source, items, completed, total: items.length }
+  // Context rows and records are rendered but never counted; see NoteTodos.
+  const countable = items.filter((item) => isCountableTodoItem(item))
+  const completed = countable.reduce((count, item) => count + (item.checked ? 1 : 0), 0)
+  return { note, source, items, completed, total: countable.length }
 }
 
 /**
@@ -241,13 +283,16 @@ export function todosForNote(note: SNNote): NoteTodos | null {
  * without parseable todos are omitted. Ordered with notes that have outstanding
  * (incomplete) items first, then by title, so the most actionable lists surface.
  */
-export function collectAllTodos(notes: SNNote[]): NoteTodos[] {
+export function collectAllTodos(
+  notes: SNNote[],
+  options: TodoHierarchyOptions = DEFAULT_TODO_HIERARCHY_OPTIONS,
+): NoteTodos[] {
   const result: NoteTodos[] = []
   for (const note of notes) {
     if (note.trashed) {
       continue
     }
-    const todos = todosForNote(note)
+    const todos = todosForNote(note, options)
     if (todos) {
       result.push(todos)
     }

@@ -114,21 +114,45 @@ const noteTags: Record<string, SNTag[]> = {
   work: [{ uuid: 'tag-work', title: 'Work' } as unknown as SNTag],
 }
 
+const textNode = (value: string) => ({ type: 'text', text: value })
+const headingNode = (tag: string, label: string, type = 'heading') => ({ type, tag, children: [textNode(label)] })
+const paragraphNode = (label: string, type = 'paragraph') => ({ type, children: [textNode(label)] })
+
+/** `# Project` + prose → `Task A` → `Sub A1`, then a styled `## Phase 1` → `Task B`. */
+const sectionsNote = (): SNNote =>
+  makeNote(
+    'sections',
+    'Quarter plan',
+    JSON.stringify({
+      root: {
+        type: 'root',
+        children: [
+          headingNode('h1', 'Project'),
+          paragraphNode('Everything the quarter needs.'),
+          checkList([{ text: 'Task A', children: [{ text: 'Sub A1' }] }]),
+          headingNode('h2', 'Phase 1', 'heading-styled'),
+          checkList([{ text: 'Task B' }]),
+        ],
+      },
+    }),
+    NoteType.Super,
+  )
+
 let container: HTMLElement
 let root: Root
 let storage: Map<string, unknown>
 let originalResizeObserver: typeof ResizeObserver
 let originalAnimate: typeof HTMLElement.prototype.animate
 
-const mount = () => {
+const mount = (list: SNNote[] = notes) => {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   const application = {
     items: {
-      getItems: () => notes,
+      getItems: () => list,
       streamItems: () => () => undefined,
-      findItem: (uuid: string) => notes.find((note) => note.uuid === uuid),
+      findItem: (uuid: string) => list.find((note) => note.uuid === uuid),
       getSortedTagsForItem: (note: SNNote) => noteTags[note.uuid] ?? [],
       getTagLongTitle: (tag: SNTag) => tag.title,
     },
@@ -404,5 +428,66 @@ describe('The browser print event on the Todos view', () => {
     })
     expect(snapshot?.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Errands')
     expect(snapshot?.querySelectorAll('.srn-print-todo')).toHaveLength(0)
+  })
+})
+
+describe('Printing heading sections from the Todos view', () => {
+  beforeEach(() => {
+    removePrintSnapshot()
+    unmount()
+    mount([sectionsNote()])
+  })
+
+  it('carries the heading-derived depth all the way onto paper', () => {
+    // A depth change only the screen honours is a half-fix: print, filters and
+    // selection all read `TodoRow.depth`, and this is the print half, driven
+    // through the REAL print entry point rather than the projection directly.
+    const printed = printedTodos(buildSnapshot())
+    expect(printed.map((todo) => [todo.text, todo.depth])).toEqual([
+      ['Project', 0],
+      ['Task A', 1],
+      ['Sub A1', 2],
+      ['Phase 1', 1],
+      ['Task B', 2],
+    ])
+    // Indentation actually grows with it, by the row cell's own formula.
+    expect(printed[1].indent).toBeGreaterThan(printed[0].indent)
+    expect(printed[2].indent).toBeGreaterThan(printed[1].indent)
+  })
+
+  it('prints a section as structure: no checkbox, its level as data, its description below', () => {
+    const snapshot = buildSnapshot()
+    const sections = Array.from(snapshot.querySelectorAll<HTMLElement>('.srn-print-todo--heading'))
+    expect(sections.map((entry) => entry.getAttribute('data-todo-heading-level'))).toEqual(['1', '2'])
+    expect(sections[0].querySelector('.srn-print-checkbox')).toBeNull()
+    expect(sections[0].querySelector('.srn-print-todo-description')?.textContent).toBe('Everything the quarter needs.')
+    // `## Phase 1` has no prose under it, so it prints no description line at all.
+    expect(sections[1].querySelector('.srn-print-todo-description')).toBeNull()
+    // …and the tasks under them still print their own checkbox.
+    expect(
+      printedTodos(snapshot)
+        .filter((todo) => todo.marker === '☐')
+        .map((todo) => todo.text),
+    ).toEqual(['Task A', 'Sub A1', 'Task B'])
+  })
+
+  it('counts only the todos in the printed summary line', () => {
+    // Five printed rows, three todos: a section is structure, not an item.
+    expect(buildSnapshot().querySelector('.srn-print-todo-summary')?.textContent).toBe('3 todos.')
+  })
+
+  it('prints flat rows with no sections when the sublevels setting is off', () => {
+    storage.set('todoHeadingLevels', false)
+    removePrintSnapshot()
+    unmount()
+    mount([sectionsNote()])
+
+    const printed = printedTodos(buildSnapshot())
+    expect(printed.map((todo) => [todo.text, todo.depth])).toEqual([
+      ['Task A', 0],
+      ['Sub A1', 1],
+      ['Task B', 0],
+    ])
+    expect(buildSnapshot().querySelectorAll('.srn-print-todo--heading')).toHaveLength(0)
   })
 })

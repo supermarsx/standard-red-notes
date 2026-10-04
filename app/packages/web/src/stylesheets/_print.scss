@@ -132,6 +132,24 @@
     font-style: italic;
   }
 
+  // A heading section from the source document: the structure the tasks under it
+  // are grouped by. Printed as a heading rather than as an item — it carries no
+  // checkbox, so weight and spacing are what say it is not a task.
+  #srn-print-body .srn-print-todo--heading {
+    color: #000 !important;
+    font-weight: 700;
+    margin-block: 0.5rem 0.15rem;
+  }
+
+  // The text the user wrote under a heading. Present only when there is some —
+  // an empty description line would claim the section was described.
+  #srn-print-body .srn-print-todo-description {
+    color: #333 !important;
+    display: block;
+    font-size: 0.85em;
+    font-weight: 400;
+  }
+
   #srn-print-body .srn-print-todo-meta,
   #srn-print-body .srn-print-todo-level {
     color: #555 !important;

@@ -6,13 +6,81 @@ import {
   parseSuperChecklist,
   todosForNote,
   totalTodoProgress,
+  type NoteTodos,
 } from './allTodos'
 import {
   CHECKLIST_DUE_AT_STATE_KEY,
+  CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY,
+  CHECKLIST_OCCURRENCE_SUMMARY_VERSION,
   CHECKLIST_RECURRENCE_STATE_KEY,
   CHECKLIST_TODO_ID_STATE_KEY,
 } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
 import { createChecklistRecurrence, type ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
+
+/** `# One` → Task A (done), `## Two` → Task B, `# Three` → Task C. */
+const sectionedSuperJson = (): string =>
+  JSON.stringify({
+    root: {
+      type: 'root',
+      children: [
+        { type: 'heading', tag: 'h1', children: [{ type: 'text', text: 'One' }] },
+        {
+          type: 'list',
+          listType: 'check',
+          children: [{ type: 'listitem', checked: true, children: [{ type: 'text', text: 'Task A' }] }],
+        },
+        // The styled spelling, which is what most real headings serialize as.
+        { type: 'heading-styled', tag: 'h2', children: [{ type: 'text', text: 'Two' }] },
+        {
+          type: 'list',
+          listType: 'check',
+          children: [{ type: 'listitem', checked: false, children: [{ type: 'text', text: 'Task B' }] }],
+        },
+        { type: 'heading', tag: 'h1', children: [{ type: 'text', text: 'Three' }] },
+        {
+          type: 'list',
+          listType: 'check',
+          children: [{ type: 'listitem', checked: false, children: [{ type: 'text', text: 'Task C' }] }],
+        },
+      ],
+    },
+  })
+
+/** One live recurring task plus the record of what a capped pass did not write. */
+const recordedSuperJson = (recordChecked = false): string =>
+  JSON.stringify({
+    root: {
+      type: 'root',
+      children: [
+        {
+          type: 'list',
+          listType: 'check',
+          children: [
+            {
+              type: 'listitem',
+              checked: false,
+              $: { [CHECKLIST_TODO_ID_STATE_KEY]: 'todo-recurring' },
+              children: [{ type: 'text', text: 'Water the plants' }],
+            },
+            {
+              type: 'listitem',
+              checked: recordChecked,
+              $: {
+                [CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY]: {
+                  version: CHECKLIST_OCCURRENCE_SUMMARY_VERSION,
+                  missedCount: 4,
+                  oldestMissedAt: '2025-02-16T09:00:00.000Z',
+                  newestMissedAt: '2025-11-14T09:00:00.000Z',
+                  sourceTodoId: 'todo-recurring',
+                },
+              },
+              children: [{ type: 'text', text: '4 earlier occurrences were not generated.' }],
+            },
+          ],
+        },
+      ],
+    },
+  })
 
 const superChecklistJson = (
   items: { text: string; checked: boolean; todoId?: string; dueAt?: string; recurrence?: ChecklistRecurrence }[],
@@ -198,6 +266,43 @@ describe('todosForNote', () => {
 
   it('returns null for a note with no parseable todos', () => {
     expect(todosForNote(makeNote(NoteType.Plain, 'just prose'))).toBeNull()
+  })
+
+  it('counts WORK only — a heading section is context, not a todo', () => {
+    // A document that organises three tasks under three headings has six rows and
+    // three todos. Counting the headings would report 1/6 where the truth is 1/3,
+    // and the progress bar would be wrong for every structured note.
+    const note = makeNote(NoteType.Super, sectionedSuperJson())
+    const todos = todosForNote(note)
+    expect(todos?.items).toHaveLength(6)
+    expect(todos?.completed).toBe(1)
+    expect(todos?.total).toBe(3)
+    expect(totalTodoProgress([todos as NoteTodos])).toEqual({ completed: 1, total: 3 })
+  })
+
+  it('counts an occurrence-summary record as neither done nor outstanding', () => {
+    const note = makeNote(NoteType.Super, recordedSuperJson())
+    const todos = todosForNote(note)
+    // Two rows, one todo: the record states what a capped pass did not write down,
+    // and ticking it must not move the progress bar either way.
+    expect(todos?.items).toHaveLength(2)
+    expect(todos?.total).toBe(1)
+    expect(todos?.completed).toBe(0)
+
+    const ticked = todosForNote(makeNote(NoteType.Super, recordedSuperJson(true)))
+    expect(ticked?.total).toBe(1)
+    expect(ticked?.completed).toBe(0)
+  })
+
+  it('behaves exactly as before heading sections existed when the setting is off', () => {
+    const note = makeNote(NoteType.Super, sectionedSuperJson())
+    const flat = todosForNote(note, { headingLevels: false, headingDescriptions: true })
+    expect(flat?.items.map((item) => [item.text, item.depth])).toEqual([
+      ['Task A', 0],
+      ['Task B', 0],
+      ['Task C', 0],
+    ])
+    expect(flat?.total).toBe(3)
   })
 })
 

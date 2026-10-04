@@ -11,6 +11,7 @@ import {
   todoPrintIndentRem,
   todoPrintSummaryText,
 } from './todoPrintProjection'
+import { checklistOccurrenceSummaryText } from '../SuperEditor/Checklist/checklistBackfill'
 
 /**
  * Unit coverage for the Todos view's printable projection. `TodoView.print`
@@ -143,6 +144,103 @@ describe('buildTodoPrintBody', () => {
     expect(meta).toContain('Groceries')
     expect(meta).toContain('due ')
   })
+
+  describe('heading sections on paper', () => {
+    const sectioned = () => [
+      row({ item: { text: 'Project', headingLevel: 1, description: 'Why this list exists' }, isMatch: false }),
+      row({ item: { text: 'Task A' }, depth: 1 }),
+      row({ item: { text: 'Phase 1', headingLevel: 2 }, depth: 1, isMatch: false }),
+      row({ item: { text: 'Task B' }, depth: 2 }),
+    ]
+
+    it('carries the heading-derived depth onto paper, not only onto the screen', () => {
+      // A depth change the print path does not honour is a half-fix: the printed
+      // list would read as flat while the view reads as a tree.
+      const entries = Array.from(build(sectioned()).querySelectorAll<HTMLElement>('.srn-print-todo'))
+      expect(
+        entries.map((entry) => [
+          entry.querySelector('.srn-print-todo-text')?.textContent,
+          entry.getAttribute('data-todo-depth'),
+          parseFloat(entry.style.marginInlineStart),
+        ]),
+      ).toEqual([
+        ['Project', '0', 0],
+        ['Task A', '1', todoPrintIndentRem(1)],
+        ['Phase 1', '1', todoPrintIndentRem(1)],
+        ['Task B', '2', todoPrintIndentRem(2)],
+      ])
+    })
+
+    it('prints no checkbox beside a section, and states its level as data', () => {
+      const entries = Array.from(build(sectioned()).querySelectorAll<HTMLElement>('.srn-print-todo'))
+      const [project, taskA, phase] = entries
+      // A ☐ beside a heading would print the claim that the section is a task
+      // somebody can tick.
+      expect(project.querySelector('.srn-print-checkbox')).toBeNull()
+      expect(project.hasAttribute('data-todo-checked')).toBe(false)
+      expect(project.classList.contains('srn-print-todo--heading')).toBe(true)
+      expect(project.getAttribute('data-todo-heading-level')).toBe('1')
+      expect(phase.getAttribute('data-todo-heading-level')).toBe('2')
+      // …and an ordinary task still gets one.
+      expect(taskA.querySelector('.srn-print-checkbox')?.textContent).toBe('☐')
+    })
+
+    it('prints a section description, and nothing at all when there is none', () => {
+      const entries = Array.from(build(sectioned()).querySelectorAll<HTMLElement>('.srn-print-todo'))
+      expect(entries[0].querySelector('.srn-print-todo-description')?.textContent).toBe('Why this list exists')
+      // No em dash, no empty line: a section with no description claims nothing.
+      expect(entries[2].querySelector('.srn-print-todo-description')).toBeNull()
+      expect(entries[1].querySelector('.srn-print-todo-description')).toBeNull()
+    })
+
+    it('does not print "shown as the parent of a match" on a section', () => {
+      // Every section is context by construction, so saying it on all of them is
+      // noise; the words exist for the exceptional case of a TASK kept as context.
+      const body = build(sectioned())
+      const project = body.querySelector<HTMLElement>('.srn-print-todo--heading')
+      expect(project?.textContent).not.toContain('shown as the parent of a match')
+      expect(project?.classList.contains('srn-print-todo--context')).toBe(false)
+      expect(project?.querySelector('.srn-print-todo-meta')).toBeNull()
+    })
+  })
+
+  describe('the occurrence-summary record on paper', () => {
+    const summary = {
+      version: 1 as const,
+      missedCount: 34,
+      oldestMissedAt: '2025-02-16T09:00:00.000Z',
+      newestMissedAt: '2025-11-14T09:00:00.000Z',
+    }
+
+    it('prints the record’s own wording, not the row’s stored label', () => {
+      const body = build([row({ item: { text: 'stale label from the document', occurrenceSummary: summary } })])
+      const text = body.querySelector('.srn-print-todo-text')?.textContent ?? ''
+      // The shared helper's words, so paper can never state a different count or
+      // date range from the screen.
+      expect(text).toBe(checklistOccurrenceSummaryText(summary))
+      expect(text).toContain('34 earlier occurrences were not generated')
+      expect(text).not.toContain('stale label')
+    })
+
+    it('says in words that it is a record rather than an outstanding todo', () => {
+      const body = build([row({ item: { text: 'record', occurrenceSummary: summary } })])
+      expect(body.querySelector('.srn-print-todo-meta')?.textContent).toContain('a record, not a todo')
+    })
+
+    it('is not counted in the printed summary line', () => {
+      const body = buildTodoPrintBody({
+        rows: [
+          row({ item: { text: 'Water the plants' } }),
+          row({ item: { text: 'record', occurrenceSummary: summary } }),
+        ],
+        filters: filters({ hideCompleted: true }),
+        tagOptions: [],
+        totalCount: 1,
+        now: Date.now(),
+      })
+      expect(body.querySelector('.srn-print-todo-summary')?.textContent).toContain('Showing 1 of 1 todos')
+    })
+  })
 })
 
 describe('the print stylesheet', () => {
@@ -154,6 +252,11 @@ describe('the print stylesheet', () => {
       '.srn-print-todo-list',
       '.srn-print-todo-meta',
       '.srn-print-todo-empty',
+      // Heading sections print as structure, which needs a rule of its own: they
+      // carry no checkbox, so weight and spacing are all that say they are not
+      // tasks.
+      '.srn-print-todo--heading',
+      '.srn-print-todo-description',
     ]) {
       expect(stylesheet).toContain(`#srn-print-body ${rule}`)
     }

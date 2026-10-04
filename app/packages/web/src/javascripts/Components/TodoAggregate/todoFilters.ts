@@ -1,5 +1,6 @@
 import type { PrefKey, SNNote, TodoFiltersPreference } from '@standardnotes/snjs'
 import { MAX_ADVANCED_GROUP_NAME_LENGTH, type NoteTodos, type TodoItem } from './allTodos'
+import { isCountableTodoItem, isTodoHeadingItem, todoRowDepth } from './todoHierarchy'
 
 /**
  * Standard Red Notes: the Todos general view's filter model.
@@ -244,6 +245,15 @@ export function activeTodoFilterCount(filters: TodoFilters): number {
   return count
 }
 
+/**
+ * How many rows represent WORK. Heading sections and occurrence-summary records
+ * are rendered but never counted — the view's "showing N of M" and the printed
+ * page's own summary both have to mean todos, not structure.
+ */
+export function countTodoRows(rows: TodoRow[]): number {
+  return rows.reduce((count, row) => count + (isCountableTodoItem(row.item) ? 1 : 0), 0)
+}
+
 /** Flatten note-grouped todos into rows, attaching each note's tags. */
 export function todoRowsFromGroups(groups: NoteTodos[], tagsForNote: (note: SNNote) => TodoTag[]): TodoRow[] {
   const rows: TodoRow[] = []
@@ -258,17 +268,18 @@ export function todoRowsFromGroups(groups: NoteTodos[], tagsForNote: (note: SNNo
     const noteTitle = group.note.title?.trim() || 'Untitled'
     const rowIdFor = (locator: string) => `${group.note.uuid}:${locator}`
     const present = new Set(group.items.map((item) => item.locator ?? item.id))
-    // Depth is derived from the parent chain rather than read off the item, so
-    // it always agrees with the links the tree is actually built from. Items
-    // arrive in document order, so a parent is always seen before its children.
+    // Depth comes from the parent chain, so it always agrees with the links the
+    // tree is actually drawn from, with the enclosing heading section as a FLOOR —
+    // see {@link todoRowDepth} for why a floor and not an override. Items arrive in
+    // document order, so a parent is always seen before its children.
     const depthById = new Map<string, number>()
     for (const item of group.items) {
-      // A parent whose own text was empty never became a row; such a task is
-      // treated as top level rather than pointing at a row that does not exist.
+      // A parent whose own text was empty never became a row; such a task falls
+      // back to its section rather than pointing at a row that does not exist.
       const parentLocator = item.parentLocator && present.has(item.parentLocator) ? item.parentLocator : undefined
       const parentId = parentLocator === undefined ? undefined : rowIdFor(parentLocator)
       const id = rowIdFor(item.locator ?? item.id)
-      const depth = parentId === undefined ? 0 : (depthById.get(parentId) ?? 0) + 1
+      const depth = todoRowDepth(parentId === undefined ? undefined : (depthById.get(parentId) ?? 0), item.sectionDepth)
       depthById.set(id, depth)
       rows.push({ id, group, item, noteTitle, tags, depth, parentId, isMatch: true })
     }
@@ -340,6 +351,9 @@ function matchesQuery(row: TodoRow, trimmedLowerQuery: string): boolean {
   return (
     row.item.text.toLowerCase().includes(trimmedLowerQuery) ||
     row.noteTitle.toLowerCase().includes(trimmedLowerQuery) ||
+    // A section's description is text the user can see on the row, so a search
+    // for words in it has to find the row that shows them.
+    (row.item.description?.toLowerCase().includes(trimmedLowerQuery) ?? false) ||
     (row.item.groupName?.toLowerCase().includes(trimmedLowerQuery) ?? false) ||
     // The full path, not just the leaf: searching a parent folder's name finds
     // the todos filed under its children, which is what nesting means.
@@ -373,6 +387,13 @@ function rowMatchesFilters(
   groupNames: Set<string> | undefined,
   now: number,
 ): boolean {
+  // A heading section is NEVER a match in its own right. It is context: it reaches
+  // the screen only as the ancestor of a row that did match, which is what keeps
+  // it out of every count and out of "showing N of M" — a section shown alone,
+  // with the tasks it exists to introduce filtered away, says nothing.
+  if (isTodoHeadingItem(row.item)) {
+    return false
+  }
   if (filters.hideCompleted && row.item.checked) {
     return false
   }
@@ -439,9 +460,18 @@ export function filterTodoRows(rows: TodoRow[], filters: TodoFilters, now: numbe
     .map((row) => (matched.has(row.id) ? row : { ...row, isMatch: false }))
 }
 
-/** How many rows match in their own right, ignoring ancestors kept as context. */
+/**
+ * How many rows match in their own right, ignoring ancestors kept as context.
+ *
+ * Rows that are not WORK are excluded even when they match: an occurrence-summary
+ * record states what a capped generation pass did not write down, and counting it
+ * as a todo would overstate what is outstanding (a heading section is already
+ * excluded upstream, because it never matches in its own right). This count drives
+ * the "showing N of M" line and the printed page's summary, so it has to mean the
+ * same thing in both — and `M` comes from {@link countTodoRows} for that reason.
+ */
 export function countTodoMatches(rows: TodoRow[]): number {
-  return rows.reduce((count, row) => count + (row.isMatch ? 1 : 0), 0)
+  return rows.reduce((count, row) => count + (row.isMatch && isCountableTodoItem(row.item) ? 1 : 0), 0)
 }
 
 function compareDue(a: TodoRow, b: TodoRow): number {
@@ -511,6 +541,24 @@ export function sortTodoRows(rows: TodoRow[], filters: TodoFilters): TodoRow[] {
 }
 
 /**
+ * Document position of a row, for the one comparison that must not be sorted.
+ * Rows compared this way are siblings, hence in the same note, so their locators
+ * are comparable paths.
+ */
+function compareDocumentPosition(a: TodoRow, b: TodoRow): number {
+  const first = (a.item.locator ?? '').split('.').map(Number)
+  const second = (b.item.locator ?? '').split('.').map(Number)
+  for (let index = 0; index < Math.min(first.length, second.length); index += 1) {
+    const left = Number.isFinite(first[index]) ? first[index] : 0
+    const right = Number.isFinite(second[index]) ? second[index] : 0
+    if (left !== right) {
+      return left - right
+    }
+  }
+  return first.length - second.length
+}
+
+/**
  * Sibling comparator. Undated rows always sink below dated ones in a due sort;
  * every other comparison is reversible. Ties fall back to note title then text
  * so the order is total and stable across renders.
@@ -518,6 +566,24 @@ export function sortTodoRows(rows: TodoRow[], filters: TodoFilters): TodoRow[] {
 function todoRowComparator(filters: TodoFilters): (a: TodoRow, b: TodoRow) => number {
   const direction = filters.sortReverse ? -1 : 1
   return (a, b) => {
+    // A heading section is STRUCTURE, and structure is not sorted by a key chosen
+    // for tasks. Two rules, both deliberately un-reversed, because reversing a
+    // sort of tasks must not reverse the user's document:
+    //
+    //  - Sections sink below their sibling TASKS. Those siblings are the todos
+    //    that sit in no section at all, so the ungrouped work comes first and the
+    //    outline follows. Ordering a section as if its title were a task would
+    //    drag its whole subtree to an alphabetical position.
+    //  - Two sections keep their document order. Under the default due sort every
+    //    section is undated, so they would otherwise tie and come out alphabetical.
+    const aHeading = isTodoHeadingItem(a.item)
+    const bHeading = isTodoHeadingItem(b.item)
+    if (aHeading !== bHeading) {
+      return aHeading ? 1 : -1
+    }
+    if (aHeading) {
+      return compareDocumentPosition(a, b)
+    }
     let primary = 0
     switch (filters.sortBy) {
       case 'due':

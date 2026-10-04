@@ -7,6 +7,7 @@ import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import { TodoScheduleEditor } from './TodoView'
 import { checklistDueAtToLocalInput } from '../SuperEditor/Checklist/checklistDueDate'
+import { createChecklistRecurrence, type ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
 import type { SuperChecklistTodoPatch, SuperChecklistTodoTarget } from './superChecklistDocument'
 import type { TodoItem } from './allTodos'
 
@@ -79,11 +80,16 @@ const item: TodoItem = {
 }
 const target: SuperChecklistTodoTarget = { todoId: 'todo-milk', locator: '0.0', text: 'Buy milk', checked: false }
 
-const mountEditor = async (onSave: (patch: SuperChecklistTodoPatch) => Promise<boolean>) => {
+const mountEditor = async (
+  onSave: (patch: SuperChecklistTodoPatch) => Promise<boolean>,
+  schedule?: { item: TodoItem; target: SuperChecklistTodoTarget },
+) => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   const application = stubApplication()
+  const editedItem = schedule?.item ?? item
+  const editedTarget = schedule?.target ?? target
   act(() => {
     root.render(
       createElement(ApplicationProvider, {
@@ -91,10 +97,10 @@ const mountEditor = async (onSave: (patch: SuperChecklistTodoPatch) => Promise<b
         children: createElement(AndroidBackHandlerProvider, {
           application,
           children: createElement(TodoScheduleEditor, {
-            item,
-            target,
+            item: editedItem,
+            target: editedTarget,
             busy: false,
-            onOpen: () => Promise.resolve(target),
+            onOpen: () => Promise.resolve(editedTarget),
             onSave: (patch: SuperChecklistTodoPatch) => onSave(patch),
           }),
         }),
@@ -188,6 +194,62 @@ describe('Todo schedule editor date without a time', () => {
 
     expect(saved).toHaveLength(0)
     expect(editor.panelText()).toContain('Choose a valid due date. Leave the time blank for 00:00.')
+    editor.unmount()
+  })
+})
+
+describe('Todo schedule editor recurrence anchor', () => {
+  /**
+   * A monthly task anchored on the 31st, already rolled to a CLAMPED Feb 28. The
+   * anchor is what the occurrence grid computes every candidate from, so losing it
+   * is permanent downward drift: the task would never see a 31st again.
+   */
+  const monthlyRule = createChecklistRecurrence('monthly', '2027-01-31T09:00:00.000Z', 'UTC') as ChecklistRecurrence
+  const clampedDueAt = '2027-02-28T09:00:00.000Z'
+  const clamped = {
+    item: { ...item, dueAt: clampedDueAt, recurrence: monthlyRule },
+    target: { ...target, dueAt: clampedDueAt, recurrence: monthlyRule },
+  }
+
+  it('keeps the persisted anchor when Save is pressed without changing the date', async () => {
+    // This was the bug: the due input deliberately preserves the exact instant
+    // when the draft is unchanged, and rebuilding the rule from that instant
+    // rewrote anchor.day to 28 permanently — reachable by pressing a button.
+    expect(monthlyRule.anchor.day).toBe(31)
+    const saved: SuperChecklistTodoPatch[] = []
+    const editor = await mountEditor((patch) => {
+      saved.push(patch)
+      return Promise.resolve(true)
+    }, clamped)
+
+    await act(async () => {
+      editor.save.click()
+    })
+
+    expect(saved).toHaveLength(1)
+    expect(saved[0].dueAt).toBe(clampedDueAt)
+    expect((saved[0].recurrence as ChecklistRecurrence).anchor.day).toBe(31)
+    // The whole rule is handed back unchanged, not a look-alike rebuilt from it.
+    expect(saved[0].recurrence).toEqual(monthlyRule)
+    editor.unmount()
+  })
+
+  it('still re-anchors when the user actually moves the due date', async () => {
+    // The guard must be "the instant did not move", not "never re-anchor": an
+    // explicit date edit is how a user changes which day a rule falls on.
+    const saved: SuperChecklistTodoPatch[] = []
+    const editor = await mountEditor((patch) => {
+      saved.push(patch)
+      return Promise.resolve(true)
+    }, clamped)
+
+    setValue(editor.date, '2027-03-15')
+    await act(async () => {
+      editor.save.click()
+    })
+
+    expect(saved).toHaveLength(1)
+    expect((saved[0].recurrence as ChecklistRecurrence).anchor.day).toBe(15)
     editor.unmount()
   })
 })
