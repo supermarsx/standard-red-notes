@@ -238,6 +238,41 @@
   border-color: var(--sn-stylekit-contrast-border-color);
   text-align: start;
 }
+
+/* Table width methods (see Lexical/Nodes/TableLayoutPolicy.ts). `content` is the
+ * default and is exactly the base rules above, so it needs no override. Written
+ * by TableWidgetLayoutPlugin onto both the scroll wrapper and the table. */
+.Lexical__tableScrollableWrapper[data-super-table-width='full'],
+.Lexical__tableScrollableWrapper[data-super-table-width='fixed'],
+.Lexical__tableScrollableWrapper[data-super-table-width='equal'] {
+  inline-size: 100%;
+}
+table.Lexical__table[data-super-table-width='full'],
+table.Lexical__table[data-super-table-width='fixed'],
+table.Lexical__table[data-super-table-width='equal'] {
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+table.Lexical__table[data-super-table-width='full'] {
+  table-layout: auto;
+}
+/* `fixed` honours the per-column `<col>` widths exactly; `equal` emits no column
+ * widths at all, so the same algorithm gives every column an equal share. */
+table.Lexical__table[data-super-table-width='fixed'],
+table.Lexical__table[data-super-table-width='equal'] {
+  table-layout: fixed;
+}
+
+/* Undifferentiated headers. This changes STYLING ONLY — the cells stay `th` with
+ * their Lexical header state intact, so header semantics survive for export,
+ * Markdown's `|---|` divider and assistive technology. */
+table.Lexical__table[data-super-table-headers='plain'] th,
+table.Lexical__table[data-super-table-headers='plain'] .Lexical__tableCellHeader {
+  background-color: transparent;
+  border-color: var(--sn-stylekit-border-color);
+  font-weight: normal;
+}
 .Lexical__tableCellSelected {
   background-color: #c9dbf0;
 }

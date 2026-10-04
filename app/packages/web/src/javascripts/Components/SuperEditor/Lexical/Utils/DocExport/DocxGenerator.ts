@@ -8,7 +8,7 @@
  * `docx` is loaded with a dynamic `import()` so it stays code-split (matching the
  * spreadsheet / PDF / zip.js precedent — heavy export libs load on demand).
  */
-import { DocBlock, Inline, ListModel } from './DocModel'
+import { DocBlock, DocTableColumnWidth, Inline, ListModel } from './DocModel'
 import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
 import {
   PAGE_TOKEN,
@@ -223,6 +223,22 @@ const emitList = (ctx: Ctx, list: ListModel, level: number, inheritedOrderedRef?
   return paragraphs
 }
 
+/** Shading for a differentiated header cell — the same grey the PDF export uses. */
+const DOCX_HEADER_SHADING = { fill: 'F4F5F7' } as const
+
+/**
+ * One CSS px at 96dpi is 0.75pt, and OOXML `dxa` is a twentieth of a point, so a
+ * px width is 15 dxa. Percentages pass straight through as OOXML `pct`.
+ */
+const docxColumnWidth = (ctx: Ctx, width: DocTableColumnWidth) => {
+  if (width === null) {
+    return undefined
+  }
+  return width.kind === 'percent'
+    ? { size: width.value, type: ctx.docx.WidthType.PERCENTAGE }
+    : { size: Math.round(width.value * 15), type: ctx.docx.WidthType.DXA }
+}
+
 const blockToDocx = (ctx: Ctx, block: DocBlock): (DocxParagraph | DocxTable)[] => {
   const {
     Paragraph,
@@ -317,18 +333,27 @@ const blockToDocx = (ctx: Ctx, block: DocBlock): (DocxParagraph | DocxTable)[] =
     }
     case 'table': {
       const singleBorder = { style: BorderStyle.SINGLE, size: 1, color: '999999' }
+      const layout = block.layout
+      const headerRowCount = layout?.headerRowCount ?? 0
+      const headerColumnCount = layout?.headerColumnCount ?? 0
+      // Shading expresses "differentiated headers". When it is off the rows are
+      // still marked `tableHeader`, so the header STRUCTURE survives either way.
+      const headerShading = layout?.differentiatedHeaders === false ? undefined : DOCX_HEADER_SHADING
       const rows = block.rows.map(
-        (cells) =>
+        (cells, rowIndex) =>
           new TableRow({
-            children: cells.map(
-              (cellBlocks) =>
-                new TableCell({
-                  children: (() => {
-                    const cellChildren = cellBlocks.flatMap((b) => blockToDocx(ctx, b))
-                    return cellChildren.length > 0 ? cellChildren : [new Paragraph({ children: [] })]
-                  })(),
-                }),
-            ),
+            tableHeader: rowIndex < headerRowCount ? true : undefined,
+            children: cells.map((cellBlocks, columnIndex) => {
+              const isHeaderCell = rowIndex < headerRowCount || columnIndex < headerColumnCount
+              return new TableCell({
+                shading: isHeaderCell ? headerShading : undefined,
+                width: docxColumnWidth(ctx, layout?.columnWidths?.[columnIndex] ?? null),
+                children: (() => {
+                  const cellChildren = cellBlocks.flatMap((b) => blockToDocx(ctx, b))
+                  return cellChildren.length > 0 ? cellChildren : [new Paragraph({ children: [] })]
+                })(),
+              })
+            }),
           }),
       )
       if (rows.length === 0) {
@@ -336,7 +361,17 @@ const blockToDocx = (ctx: Ctx, block: DocBlock): (DocxParagraph | DocxTable)[] =
       }
       return [
         new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
+          // `content` shrink-wraps, every other method fills the measure — the
+          // same distinction the editor makes.
+          width:
+            layout?.widthMethod === 'content'
+              ? { size: 0, type: WidthType.AUTO }
+              : { size: 100, type: WidthType.PERCENTAGE },
+          // Word's fixed layout is what honours the per-column widths exactly.
+          layout:
+            layout?.widthMethod === 'fixed' || layout?.widthMethod === 'equal'
+              ? ctx.docx.TableLayoutType.FIXED
+              : ctx.docx.TableLayoutType.AUTOFIT,
           borders: {
             top: singleBorder,
             bottom: singleBorder,

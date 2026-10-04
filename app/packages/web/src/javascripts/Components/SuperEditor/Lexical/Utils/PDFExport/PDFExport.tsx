@@ -15,7 +15,14 @@ import { $isLinkNode } from '@lexical/link'
 import { $isHeadingNode, type HeadingNode, $isQuoteNode } from '@lexical/rich-text'
 import { $isListNode, $isListItemNode, ListType } from '@lexical/list'
 import { $isHorizontalRuleNode } from '@lexical/react/LexicalHorizontalRuleNode'
-import { $isTableNode, $isTableRowNode, $isTableCellNode } from '@lexical/table'
+import {
+  $getTableColumnIndexFromTableCellNode,
+  $isTableNode,
+  $isTableRowNode,
+  $isTableCellNode,
+  TableNode,
+} from '@lexical/table'
+import { $resolveTableLayout, type ResolvedTableLayout } from '../../Nodes/TableLayoutPolicy'
 import { $isCodeHighlightNode, $isCodeNode } from '@lexical/code'
 import { $isInlineFileNode } from '../../../Plugins/InlineFilePlugin/InlineFileNode'
 import { $isRemoteImageNode } from '../../../Plugins/RemoteImagePlugin/RemoteImageNode'
@@ -243,6 +250,57 @@ const isInsideTableHeaderCell = (node: LexicalNode): boolean => {
   })
 }
 
+/**
+ * Resolved table layouts, memoized per TableNode VERSION. Lexical hands out a new
+ * node object for every version, so a WeakMap keyed on the instance is both
+ * correct across edits and self-clearing — and it keeps the per-cell lookup from
+ * re-walking the whole table map once per cell.
+ */
+const resolvedTableLayouts = new WeakMap<TableNode, ResolvedTableLayout>()
+
+const $layoutForTable = (table: TableNode): ResolvedTableLayout => {
+  const cached = resolvedTableLayouts.get(table)
+  if (cached !== undefined) {
+    return cached
+  }
+  const resolved = $resolveTableLayout(table)
+  resolvedTableLayouts.set(table, resolved)
+  return resolved
+}
+
+const $enclosingTableLayout = (node: LexicalNode): ResolvedTableLayout | null => {
+  for (const parent of node.getParents()) {
+    if ($isTableNode(parent)) {
+      return $layoutForTable(parent)
+    }
+  }
+  return null
+}
+
+/**
+ * Whether a header cell should be STYLED as one. A table with differentiation
+ * turned off still has header cells — `hasHeader()` is untouched — they are just
+ * not shaded or bolded, exactly as on screen.
+ */
+const $isInsideDifferentiatedHeaderCell = (node: LexicalNode): boolean => {
+  if (!isInsideTableHeaderCell(node)) {
+    return false
+  }
+  return $enclosingTableLayout(node)?.differentiatedHeaders ?? true
+}
+
+/** CSS px are 1/96in and PDF points 1/72in, so a px width is 0.75pt. */
+const pdfColumnWidth = (width: string | null | undefined): string | number | undefined => {
+  if (width == null) {
+    return undefined
+  }
+  if (width.endsWith('%')) {
+    return width
+  }
+  const px = Number.parseFloat(width)
+  return Number.isFinite(px) ? px * 0.75 : undefined
+}
+
 const getPDFTextDataNodeFromLexicalTextNode = (
   node: TextNode,
   parent: LexicalNode | null,
@@ -261,7 +319,7 @@ const getPDFTextDataNodeFromLexicalTextNode = (
     children: getPDFTextContent(node, isCodeNodeText),
     style: {
       fontFamily: getPDFTextFontFamily(node, fontFamilies, useCustomFonts, isInlineCode, isCodeNodeText),
-      fontWeight: node.hasFormat('bold') || isHeading || isInsideTableHeaderCell(node) ? 'bold' : 'normal',
+      fontWeight: node.hasFormat('bold') || isHeading || $isInsideDifferentiatedHeaderCell(node) ? 'bold' : 'normal',
       fontStyle: node.hasFormat('italic') ? 'italic' : 'normal',
       textDecoration: getPDFTextDecoration(node),
       backgroundColor: isInlineCode ? '#f1f1f1' : node.hasFormat('highlight') ? 'rgb(255,255,0)' : undefined,
@@ -510,13 +568,18 @@ export const getPDFDataNodeFromLexicalNode = (
   }
 
   if ($isTableCellNode(node)) {
+    const layout = $enclosingTableLayout(node)
+    const differentiated = layout?.differentiatedHeaders ?? true
+    // `columnWidths` is already null for every column under the `equal` method, so
+    // the PDF falls back to the flex:1 equal share there, matching the screen.
+    const columnWidth = pdfColumnWidth(layout?.columnWidths[$getTableColumnIndexFromTableCellNode(node)])
     return {
       type: 'View',
       style: {
-        backgroundColor: node.hasHeader() ? '#f4f5f7' : undefined,
+        backgroundColor: node.hasHeader() && differentiated ? '#f4f5f7' : undefined,
         borderColor: '#e3e3e3',
         borderWidth: 1,
-        flex: 1,
+        ...(columnWidth === undefined ? { flex: 1 } : { width: columnWidth, flexGrow: 0, flexShrink: 0 }),
         paddingHorizontal: 8,
         paddingVertical: 6,
       },

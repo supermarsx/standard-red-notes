@@ -33,7 +33,13 @@ import { $isHeadingNode, $isQuoteNode } from '@lexical/rich-text'
 import { $isListNode, $isListItemNode, ListNode, ListItemNode } from '@lexical/list'
 import { $isCodeNode } from '@lexical/code'
 import { $isLinkNode } from '@lexical/link'
-import { $isTableNode, $isTableRowNode, $isTableCellNode } from '@lexical/table'
+import { $isTableNode, $isTableRowNode, $isTableCellNode, TableCellHeaderStates, TableNode } from '@lexical/table'
+import {
+  $getTableColumnWidthPolicies,
+  $getTableHeaderSetting,
+  $getTableWidthSetting,
+  TableWidthMethod,
+} from '../../Nodes/TableLayoutPolicy'
 import { $isHorizontalRuleNode } from '@lexical/react/LexicalHorizontalRuleNode'
 import { $dfs } from '@lexical/utils'
 import BlocksEditorTheme from '../../Theme/Theme'
@@ -94,13 +100,37 @@ export interface ListModel {
   items: ListItemModel[]
 }
 
+/** One column's width as a word-processor can express it, or null for automatic. */
+export type DocTableColumnWidth = { kind: 'percent'; value: number } | { kind: 'px'; value: number } | null
+
+/**
+ * Table layout carried into DOCX / ODT.
+ *
+ * Header information is carried SEPARATELY from whether headers are styled
+ * distinctly, because they are different things: `headerRowCount` /
+ * `headerColumnCount` are structure (which the formats express as repeating
+ * header rows, and which assistive technology depends on) while
+ * `differentiatedHeaders` is only shading. Turning differentiation off must not
+ * drop the structure.
+ *
+ * Only LEADING header rows/columns are expressed: that is what
+ * `<table:table-header-rows>` and Word's repeat-header-row can represent.
+ */
+export type DocTableLayout = {
+  readonly headerRowCount: number
+  readonly headerColumnCount: number
+  readonly differentiatedHeaders: boolean
+  readonly widthMethod: TableWidthMethod
+  readonly columnWidths: readonly DocTableColumnWidth[]
+}
+
 export type DocBlock =
   | { kind: 'paragraph'; style?: BlockStyle; align?: Align; indent?: number; inlines: Inline[] }
   | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; align?: Align; style?: BlockStyle; inlines: Inline[] }
   | { kind: 'quote'; inlines: Inline[] }
   | { kind: 'list'; list: ListModel }
   | { kind: 'code'; language?: string; text: string }
-  | { kind: 'table'; rows: DocBlock[][][] }
+  | { kind: 'table'; rows: DocBlock[][][]; layout?: DocTableLayout }
   | { kind: 'image'; dataB64?: string; mime?: string; src?: string; alt?: string }
   | { kind: 'hr' }
   | { kind: 'pageBreak' }
@@ -539,7 +569,7 @@ const nodeToBlocks = (node: LexicalNode, now: number, depth = 0): DocBlock[] => 
       }
       rows.push(row)
     }
-    return [{ kind: 'table', rows }]
+    return [{ kind: 'table', rows, layout: $tableLayoutForExport(node) }]
   }
   if ($isHorizontalRuleNode(node)) {
     return [{ kind: 'hr' }]
@@ -602,6 +632,65 @@ const nodeToBlocks = (node: LexicalNode, now: number, depth = 0): DocBlock[] => 
   // Final fallback — never drop: emit the node's text as a paragraph.
   const text = node.getTextContent()
   return [{ kind: 'paragraph', inlines: [{ kind: 'text', text }] }]
+}
+
+/**
+ * Project a table's structure and layout policy for the word-processor exports.
+ *
+ * Before this existed the table block carried neither widths NOR `th` information,
+ * so DOCX emitted a 100%-wide table with no header row and ODT a 17cm one, and a
+ * table whose first row was a header exported as a table with no header at all —
+ * silently. Header structure is read from Lexical's own cell header states, which
+ * the "differentiated headers" setting deliberately does not touch.
+ */
+const $tableLayoutForExport = (table: TableNode): DocTableLayout => {
+  const rowNodes = table.getChildren().filter($isTableRowNode)
+  const rowCells = rowNodes.map((rowNode) => (rowNode as ElementNode).getChildren().filter($isTableCellNode))
+
+  let headerRowCount = 0
+  for (const cells of rowCells) {
+    if (cells.length === 0 || !cells.every((cell) => cell.hasHeaderState(TableCellHeaderStates.ROW))) {
+      break
+    }
+    headerRowCount++
+  }
+
+  const columnCount = rowCells.reduce((widest, cells) => Math.max(widest, cells.length), 0)
+  let headerColumnCount = 0
+  for (let column = 0; column < columnCount; column++) {
+    const every = rowCells.every((cells) => {
+      const cell = cells[column]
+      return cell !== undefined && cell.hasHeaderState(TableCellHeaderStates.COLUMN)
+    })
+    if (!every) {
+      break
+    }
+    headerColumnCount++
+  }
+
+  const widthMethod = $getTableWidthSetting(table).method
+  const policies = $getTableColumnWidthPolicies(table)
+  // `equal` deliberately suspends per-column widths, exactly as it does on screen,
+  // so the export cannot claim a width the layout is not using.
+  const columnWidths: DocTableColumnWidth[] =
+    widthMethod === 'equal'
+      ? policies.map(() => null)
+      : policies.map((policy) => {
+          if (policy.unrecognised || policy.mode === 'auto' || policy.value === undefined) {
+            return null
+          }
+          return policy.mode === 'percent'
+            ? { kind: 'percent' as const, value: policy.value }
+            : { kind: 'px' as const, value: policy.value }
+        })
+
+  return {
+    headerRowCount,
+    headerColumnCount,
+    differentiatedHeaders: $getTableHeaderSetting(table).differentiated,
+    widthMethod,
+    columnWidths,
+  }
 }
 
 const buildBlocksFromChildren = (children: LexicalNode[], now: number, depth = 0): DocBlock[] => {

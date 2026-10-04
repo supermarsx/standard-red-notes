@@ -13,6 +13,8 @@ import BlocksEditorTheme from '../Lexical/Theme/Theme'
 import { BlockEditorNodes, SuperExportNodes } from '../Lexical/Nodes/AllNodes'
 import { MarkdownTransformers } from '../MarkdownTransformers'
 import { $generateHtmlFromNodes, $generateNodesFromDOM } from '@lexical/html'
+import { TableNode } from '@lexical/table'
+import { $exportTableDomWithLayout } from '../Lexical/Nodes/TableLayoutPolicy'
 import { $createFileExportNode } from '../Lexical/Nodes/FileExportNode'
 import { $createInlineFileNode } from '../Plugins/InlineFilePlugin/InlineFileNode'
 import { $convertFromMarkdownString } from '@lexical/markdown'
@@ -71,6 +73,13 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       editable: false,
       onError: (error: Error) => console.error(error),
       nodes: SuperExportNodes,
+      // `TableNode` is a stock Lexical node, so its table layout policy (width
+      // method / undifferentiated headers) cannot be added to its own exportDOM.
+      // Register the decorator here so standalone-HTML export carries the policy
+      // attributes that editor.scss — which NoteExportUtils inlines into the
+      // exported document — styles against. Per-column widths need no help: they
+      // ride the `<colgroup>` Lexical's own table exportDOM already emits.
+      html: { export: new Map([[TableNode, $exportTableDomWithLayout]]) },
     })
   }
 

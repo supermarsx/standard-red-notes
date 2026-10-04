@@ -6,14 +6,15 @@
  *
  */
 
-import { INSERT_TABLE_COMMAND, TableNode, TableRowNode } from '@lexical/table'
-import { $createParagraphNode, LexicalEditor } from 'lexical'
+import { $isTableNode, INSERT_TABLE_COMMAND, TableNode, TableRowNode } from '@lexical/table'
+import { $createParagraphNode, $getNodeByKey, LexicalEditor } from 'lexical'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { mergeRegister } from '@lexical/utils'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import Button from '@/Components/Button/Button'
 import { isMobileScreen } from '../../../Utils'
+import { $resolveTableLayout, applyResolvedTableLayoutToDom } from '../Lexical/Nodes/TableLayoutPolicy'
 
 /**
  * Table sizing limits, modeled after Microsoft Word's "Insert Table" dialog
@@ -36,20 +37,38 @@ export function markTableWidgetLayout(element: HTMLElement | null): void {
 }
 
 /**
- * Marks Lexical's horizontal-scroll table wrapper as a data widget. The
- * mutation listener is node-scoped, so ordinary editor updates never walk the
- * document, and its default initialization callback covers restored tables.
+ * Marks Lexical's horizontal-scroll table wrapper as a data widget, and projects
+ * the table's own layout policy (width method, per-column widths, whether the
+ * header row is styled distinctly) onto the rendered DOM.
+ *
+ * The mutation listener is node-scoped, so ordinary editor updates never walk the
+ * document, and its default initialization callback covers restored tables. It
+ * runs after reconciliation, which is deliberate: it means a per-column width
+ * re-asserts itself over Lexical's own `<colgroup>` regeneration, while a column
+ * left on `auto` keeps whatever the column resizer wrote.
+ *
+ * This is also the only place the policy needs to reach for printing: the print
+ * path clones the live editor DOM, so the attributes and `<col>` widths written
+ * here are already present in the printed clone.
  */
 export function TableWidgetLayoutPlugin(): null {
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {
     return editor.registerMutationListener(TableNode, (mutations) => {
-      for (const [nodeKey, mutation] of mutations) {
-        if (mutation !== 'destroyed') {
-          markTableWidgetLayout(editor.getElementByKey(nodeKey))
+      editor.getEditorState().read(() => {
+        for (const [nodeKey, mutation] of mutations) {
+          if (mutation === 'destroyed') {
+            continue
+          }
+          const element = editor.getElementByKey(nodeKey)
+          markTableWidgetLayout(element)
+          const node = $getNodeByKey(nodeKey)
+          if ($isTableNode(node)) {
+            applyResolvedTableLayoutToDom(element, $resolveTableLayout(node))
+          }
         }
-      }
+      })
     })
   }, [editor])
 

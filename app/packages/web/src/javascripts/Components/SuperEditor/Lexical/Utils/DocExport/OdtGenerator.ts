@@ -10,7 +10,7 @@
  * already-present `@zip.js/zip.js` (dynamic import; the mimetype-first/stored
  * requirement is met via the low-level `ZipWriter` with `{ level: 0 }`).
  */
-import { DocBlock, Inline, ListModel } from './DocModel'
+import { DocBlock, DocTableLayout, Inline, ListModel } from './DocModel'
 import type { HeaderFooterAlign, PageNumberFormat } from '../../../Layout/layoutSettings'
 import {
   PAGE_TOKEN,
@@ -83,6 +83,10 @@ class OdtBuilder {
   private readonly paraStyles = new Map<string, string>()
   private textStyleXml: string[] = []
   private paraStyleXml: string[] = []
+  /** Per-column width styles, one per column that declares a width. */
+  private colStyleXml: string[] = []
+  /** The single shaded cell style used by differentiated headers, if needed. */
+  private cellStyleXml: string[] = []
   pictures: Picture[] = []
   private textCounter = 0
   private paraCounter = 0
@@ -259,7 +263,7 @@ class OdtBuilder {
           .map((line) => `<text:p text:style-name="Preformatted_20_Text">${xmlEscape(line)}</text:p>`)
           .join('')
       case 'table':
-        return this.tableToXml(block.rows)
+        return this.tableToXml(block.rows, block.layout)
       case 'image':
         return `<text:p>${this.imageXml(block)}</text:p>`
       case 'hr':
@@ -271,21 +275,79 @@ class OdtBuilder {
     }
   }
 
-  private tableToXml(rows: DocBlock[][][]): string {
+  private tableToXml(rows: DocBlock[][][], layout?: DocTableLayout): string {
     const colCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
-    const columns = `<table:table-column table:number-columns-repeated="${Math.max(1, colCount)}"/>`
-    const rowsXml = rows
-      .map((cells) => {
-        const cellsXml = cells
-          .map((cellBlocks) => {
-            const inner = cellBlocks.map((b) => this.blockToXml(b)).join('') || '<text:p/>'
-            return `<table:table-cell office:value-type="string">${inner}</table:table-cell>`
-          })
-          .join('')
-        return `<table:table-row>${cellsXml}</table:table-row>`
-      })
+    const columns = this.tableColumnsXml(Math.max(1, colCount), layout)
+    const headerRowCount = layout?.headerRowCount ?? 0
+    const headerColumnCount = layout?.headerColumnCount ?? 0
+    // Shading is the only thing "differentiated headers" controls; the
+    // `<table:table-header-rows>` structure below is emitted either way.
+    const headerCellStyle = layout?.differentiatedHeaders === false ? undefined : this.headerCellStyleName()
+    const rowXml = (cells: DocBlock[][], rowIndex: number): string => {
+      const cellsXml = cells
+        .map((cellBlocks, columnIndex) => {
+          const inner = cellBlocks.map((b) => this.blockToXml(b)).join('') || '<text:p/>'
+          const isHeaderCell = rowIndex < headerRowCount || columnIndex < headerColumnCount
+          const styleAttr = isHeaderCell && headerCellStyle ? ` table:style-name="${headerCellStyle}"` : ''
+          return `<table:table-cell${styleAttr} office:value-type="string">${inner}</table:table-cell>`
+        })
+        .join('')
+      return `<table:table-row>${cellsXml}</table:table-row>`
+    }
+    const headerRowsXml = rows
+      .slice(0, headerRowCount)
+      .map((cells, index) => rowXml(cells, index))
       .join('')
-    return `<table:table table:style-name="Tbl">${columns}${rowsXml}</table:table>`
+    const bodyRowsXml = rows
+      .slice(headerRowCount)
+      .map((cells, index) => rowXml(cells, index + headerRowCount))
+      .join('')
+    const wrappedHeaderRows =
+      headerRowsXml === '' ? '' : `<table:table-header-rows>${headerRowsXml}</table:table-header-rows>`
+    return `<table:table table:style-name="Tbl">${columns}${wrappedHeaderRows}${bodyRowsXml}</table:table>`
+  }
+
+  /**
+   * `<table:table-column>` per column. A column with no width of its own collapses
+   * back into the repeated no-style form, so an all-automatic table emits exactly
+   * what it always did. Percentages become ODF relative widths (`N*`), pixels
+   * become an absolute `style:column-width` in cm (1 px at 96dpi = 2.54/96 cm).
+   */
+  private tableColumnsXml(colCount: number, layout?: DocTableLayout): string {
+    const widths = layout?.columnWidths ?? []
+    if (!widths.some((width) => width !== null)) {
+      return `<table:table-column table:number-columns-repeated="${colCount}"/>`
+    }
+    const parts: string[] = []
+    for (let column = 0; column < colCount; column++) {
+      const width = widths[column] ?? null
+      if (width === null) {
+        parts.push('<table:table-column/>')
+        continue
+      }
+      const name = `TblCol${this.colStyleXml.length + 1}`
+      const property =
+        width.kind === 'percent'
+          ? `style:rel-column-width="${Math.round(width.value)}*"`
+          : `style:column-width="${((width.value * 2.54) / 96).toFixed(3)}cm"`
+      this.colStyleXml.push(
+        `<style:style style:name="${name}" style:family="table-column">` +
+          `<style:table-column-properties ${property}/></style:style>`,
+      )
+      parts.push(`<table:table-column table:style-name="${name}"/>`)
+    }
+    return parts.join('')
+  }
+
+  /** Register (once) and name the shaded cell style used for differentiated headers. */
+  private headerCellStyleName(): string {
+    if (this.cellStyleXml.length === 0) {
+      this.cellStyleXml.push(
+        '<style:style style:name="TblHdrCell" style:family="table-cell">' +
+          '<style:table-cell-properties fo:background-color="#f4f5f7"/></style:style>',
+      )
+    }
+    return 'TblHdrCell'
   }
 
   /** Automatic styles block for content.xml (text/paragraph styles + list styles). */
@@ -293,7 +355,7 @@ class OdtBuilder {
     const listStyles = this.needsLists ? this.listStyleDefinitions() : ''
     const tableStyle =
       '<style:style style:name="Tbl" style:family="table"><style:table-properties table:border-model="collapsing" style:width="17cm" fo:margin-top="0.1cm" fo:margin-bottom="0.1cm"/></style:style>'
-    return `<office:automatic-styles>${this.textStyleXml.join('')}${this.paraStyleXml.join('')}${tableStyle}${listStyles}</office:automatic-styles>`
+    return `<office:automatic-styles>${this.textStyleXml.join('')}${this.paraStyleXml.join('')}${tableStyle}${this.colStyleXml.join('')}${this.cellStyleXml.join('')}${listStyles}</office:automatic-styles>`
   }
 
   private listStyleDefinitions(): string {
