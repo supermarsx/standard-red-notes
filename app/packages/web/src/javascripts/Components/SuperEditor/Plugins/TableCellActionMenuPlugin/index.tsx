@@ -48,6 +48,9 @@ import Menu from '@/Components/Menu/Menu'
 import MenuItem from '@/Components/Menu/MenuItem'
 import MenuItemSeparator from '@/Components/Menu/MenuItemSeparator'
 import { registerRafCoalescedScrollListener } from './registerRafCoalescedScrollListener'
+import { TableActionSubmenu } from './TableActionSubmenu'
+import { TableLayoutMenuSection } from './TableLayoutMenuSection'
+import TableFilterMenuSection from '../TableFilterPlugin/TableFilterMenuSection'
 
 function computeSelectionCount(selection: TableSelection): {
   columns: number
@@ -408,24 +411,53 @@ function TableActionMenu({ onClose, tableCellNode: _tableCellNode, cellMerge }: 
       <MenuItemSeparator />
       <MenuItem onClick={deleteTableColumnAtSelection}>Delete column</MenuItem>
       <MenuItem onClick={deleteTableRowAtSelection}>Delete row</MenuItem>
-      <MenuItem onClick={deleteTableAtSelection}>Delete table</MenuItem>
       <MenuItemSeparator />
-      <MenuItem
-        onClick={() => {
-          toggleTableRowIsHeader(isCurrentCellRowHeader ? TableCellHeaderStates.NO_STATUS : TableCellHeaderStates.ROW)
-        }}
-      >
-        {isCurrentCellRowHeader ? 'Remove' : 'Add'} row header
-      </MenuItem>
-      <MenuItem
-        onClick={() => {
-          toggleTableColumnIsHeader(
-            isCurrentCellColumnHeader ? TableCellHeaderStates.NO_STATUS : TableCellHeaderStates.COLUMN,
-          )
-        }}
-      >
-        {isCurrentCellColumnHeader ? 'Remove' : 'Add'} column header
-      </MenuItem>
+      {/*
+        The frequent actions — insert and delete a row or column — stay one click
+        away above. Only the rarer ones are nested, because a submenu costs a step
+        on every use: marking a header row or column, and deleting the whole table,
+        which also benefits from not sitting next to "Delete row".
+
+        The submenu is an IN-PLACE disclosure, not a floating one. The menu's
+        keyboard navigation collects its items from inside this <menu> with a
+        subtree MutationObserver, so revealed items join Up/Down navigation
+        immediately, whereas a portaled submenu would be unreachable by keyboard.
+      */}
+      <TableActionSubmenu label="Headers and whole table">
+        <MenuItem
+          onClick={() => {
+            toggleTableRowIsHeader(isCurrentCellRowHeader ? TableCellHeaderStates.NO_STATUS : TableCellHeaderStates.ROW)
+          }}
+        >
+          {isCurrentCellRowHeader ? 'Remove' : 'Add'} row header
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            toggleTableColumnIsHeader(
+              isCurrentCellColumnHeader ? TableCellHeaderStates.NO_STATUS : TableCellHeaderStates.COLUMN,
+            )
+          }}
+        >
+          {isCurrentCellColumnHeader ? 'Remove' : 'Add'} column header
+        </MenuItem>
+        <MenuItem onClick={deleteTableAtSelection}>Delete table</MenuItem>
+      </TableActionSubmenu>
+      {/*
+        Layout (t115-A). Table width method, the selected column's width policy and
+        whether headers are styled distinctly. One element; the policy model, node
+        state and DOM projection live in `Lexical/Nodes/TableLayoutPolicy.ts`. It
+        brings its own separator and sections, so it needs no coordination with the
+        action items above or the filtering group below.
+      */}
+      <MenuItemSeparator />
+      <TableLayoutMenuSection editor={editor} tableCellNode={tableCellNode} />
+      {/*
+        Filtering (t115-B). One element, placed LAST so it sits after whatever
+        else this menu grows; everything it needs lives in
+        `Plugins/TableFilterPlugin/`. It brings its own separator, so a section
+        inserted above it needs no coordination with it.
+      */}
+      <TableFilterMenuSection tableCellNode={tableCellNode} />
     </Menu>
   )
 }

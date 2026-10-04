@@ -88,11 +88,14 @@ const buildTableSuperString = (policy: Policy = {}): string => {
       let cellCounter = 0
       for (const row of table.getChildren()) {
         for (const cell of (
-          row as unknown as { getChildren: () => { append: (n: unknown) => void }[] }
+          row as unknown as { getChildren: () => { clear: () => { append: (n: unknown) => void } }[] }
         ).getChildren()) {
           const paragraph = $createParagraphNode()
           paragraph.append($createTextNode(`Cell${++cellCounter}`))
-          cell.append(paragraph)
+          // Replace the empty paragraph Lexical seeds the cell with rather than
+          // appending beside it, so each cell holds exactly one paragraph the way a
+          // real authored table does.
+          cell.clear().append(paragraph)
         }
       }
       if (policy.method !== undefined) {
@@ -279,6 +282,12 @@ describe('surfaces that cannot express the policy say nothing about it', () => {
 
   it('expresses the header row in Markdown but has no syntax for widths at all', () => {
     const plain = markdownFor({})
+    // Pin the content independently FIRST. The invariance assertion below compares
+    // two outputs of the thing under test, so on its own it would also pass if the
+    // exporter returned nothing at all for both.
+    const squashed = plain.replace(/\s+/g, ' ')
+    expect(squashed).toContain('| Cell1 | Cell2 | Cell3 |')
+    expect(squashed).toContain('| Cell4 | Cell5 | Cell6 |')
     // The header divider is Markdown's entire vocabulary for "this row is a header".
     expect(plain).toMatch(/\|\s*---/)
     // A width policy and a plain-header flag change nothing, because Markdown

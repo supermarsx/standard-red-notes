@@ -272,6 +272,11 @@ describe('the Layout group renders in the table controls', () => {
   it('toggles differentiated headers without touching header semantics', async () => {
     await mountSection()
     const headerStatesBefore = inspectTable(editor, (table) => $allCells(table).map((cell) => cell.getHeaderStyles()))
+    // Pin the BEFORE values against hard-coded truth, so the equality below cannot
+    // pass by comparing one empty reading against another. A 3x3 table created with
+    // headers has ROW(1) on the whole first row and COLUMN(2) down the first column,
+    // which makes the top-left cell BOTH(3).
+    expect(headerStatesBefore).toEqual([3, 1, 1, 2, 0, 0, 2, 0, 0])
     await act(async () => {
       itemNamed('Differentiated headers').click()
     })
