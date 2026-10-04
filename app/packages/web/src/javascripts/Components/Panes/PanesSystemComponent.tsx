@@ -9,7 +9,13 @@ import { observer } from 'mobx-react-lite'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePrevious } from '../ContentListView/Calendar/usePrevious'
 import ContentListView from '../ContentListView/ContentListView'
-import PanelResizer, { PanelResizeType, PanelSide, ResizeFinishCallback } from '../PanelResizer/PanelResizer'
+import PanelResizer, {
+  clampPanelWidth,
+  PanelResizeType,
+  PanelSide,
+  ResizeFinishCallback,
+} from '../PanelResizer/PanelResizer'
+import { NAVIGATION_MINI_RAIL_WIDTH } from '../Tags/navigationMini'
 import { AppPaneId, AppPaneIdToDivId } from './AppPaneMetadata'
 import { useResponsiveAppPane } from './ResponsivePaneProvider'
 import Navigation from '../Tags/Navigation'
@@ -41,12 +47,29 @@ import {
   maximumAssistantPanelWidth,
 } from '@/Controllers/PaneController/assistantPaneLayout'
 
-const NAVIGATION_PANEL_MIN_WIDTH = 48
+// The navigation pane's minimum IS the mini icon rail's width — the minimum
+// already permitted a 48px column, the rail is what finally renders at it. One
+// source for the number (owned by `navigationMini`) instead of two literals that
+// can drift apart.
+const NAVIGATION_PANEL_MIN_WIDTH = NAVIGATION_MINI_RAIL_WIDTH
 const ITEMS_PANEL_MIN_WIDTH = 200
 const NAVIGATION_PANEL_DEFAULT_WIDTH = 220
 const ITEMS_PANEL_DEFAULT_WIDTH = 400
 const ASSISTANT_RESIZE_KEYBOARD_STEP = 24
 const ASSISTANT_RESIZE_KEYBOARD_LARGE_STEP = 64
+
+/**
+ * A navigation width read back out of storage, re-validated against the pane's
+ * own minimum. See `clampPanelWidth`: nothing re-clamped a RESTORED width, so a
+ * sub-minimum one (focus mode drives these columns to a literal `0`) could be
+ * persisted and then handed straight back to the resizer on the next launch.
+ */
+const restoredNavigationPanelWidth = (width: number | undefined | null) =>
+  clampPanelWidth(width, NAVIGATION_PANEL_MIN_WIDTH, NAVIGATION_PANEL_DEFAULT_WIDTH)
+
+/** As above, for the items (notes list) pane. */
+const restoredItemsPanelWidth = (width: number | undefined | null) =>
+  clampPanelWidth(width, ITEMS_PANEL_MIN_WIDTH, ITEMS_PANEL_DEFAULT_WIDTH)
 
 const PanesSystemComponent = () => {
   const application = useApplication()
@@ -61,12 +84,12 @@ const PanesSystemComponent = () => {
   const [panesPendingExit, setPanesPendingExit] = useState<AppPaneId[]>([])
 
   const [navigationPanelWidth, setNavigationPanelWidth] = useState<number>(
-    application.getPreference(PrefKey.TagsPanelWidth, NAVIGATION_PANEL_DEFAULT_WIDTH),
+    restoredNavigationPanelWidth(application.getPreference(PrefKey.TagsPanelWidth, NAVIGATION_PANEL_DEFAULT_WIDTH)),
   )
   const [navigationRef, setNavigationRef] = useState<HTMLDivElement | null>(null)
 
   const [itemsPanelWidth, setItemsPanelWidth] = useState<number>(
-    application.getPreference(PrefKey.NotesPanelWidth, ITEMS_PANEL_DEFAULT_WIDTH),
+    restoredItemsPanelWidth(application.getPreference(PrefKey.NotesPanelWidth, ITEMS_PANEL_DEFAULT_WIDTH)),
   )
   const [listRef, setListRef] = useState<HTMLDivElement | null>(null)
 
@@ -288,7 +311,7 @@ const PanesSystemComponent = () => {
   useEffect(() => {
     const removeObserver = application.addEventObserver(async () => {
       const width = application.getPreference(PrefKey.TagsPanelWidth, NAVIGATION_PANEL_DEFAULT_WIDTH)
-      setNavigationPanelWidth(width)
+      setNavigationPanelWidth(restoredNavigationPanelWidth(width))
     }, ApplicationEvent.PreferencesChanged)
 
     return () => {
@@ -304,8 +327,14 @@ const PanesSystemComponent = () => {
     setItemsPanelWidth(width)
   }, [])
 
+  // The ONLY read-side entry point for a persisted items width (the per-tag
+  // override, else PrefKey.NotesPanelWidth) — so it is where a restored width is
+  // re-clamped. The live resize callbacks above deliberately are NOT clamped:
+  // `setWidth` has already applied the floor appropriate to the current state,
+  // and re-flooring at the minimum here would make an explicit collapse to the
+  // sliver impossible.
   const handleInitialItemsListPanelWidthLoad = useCallback((width: number) => {
-    setItemsPanelWidth(width)
+    setItemsPanelWidth(restoredItemsPanelWidth(width))
   }, [])
 
   const navigationPanelResizeFinishCallback: ResizeFinishCallback = useCallback(

@@ -5,6 +5,44 @@ import Icon from '@/Components/Icon/Icon'
 
 const DEFAULT_EXPAND_WIDTH = 250
 
+/**
+ * A panel at or below this width is COLLAPSED — a sliver, not a narrow column.
+ *
+ * `minWidth` is a different quantity: the narrowest width a DRAG may produce.
+ * The notes list passes 200 and the navigation pane 48, both perfectly usable.
+ * `isCollapsed()` used to be `lastWidth <= minWidth`, i.e. true at the narrowest
+ * draggable width, so dragging the notes list to its 200px minimum put an
+ * "Expand panel" chevron over a list that was not collapsed at all.
+ *
+ * `collapsedWidth` takes the MINIMUM of the two, so a resizer that passes no
+ * `minWidth` keeps the historical 5px default as both its drag floor and its
+ * collapsed threshold and nothing changes for that case.
+ */
+const COLLAPSED_PANEL_WIDTH = 8
+
+/**
+ * The width a panel should actually be rendered at, given a width read back out
+ * of storage.
+ *
+ * Nothing re-validated a persisted width on READ. `resizeFinishCallback`
+ * persists whatever `lastWidth` happens to be, and focus mode drives a pane's
+ * grid column to a literal `0`, so a width below the pane's own minimum — or a
+ * `0`/negative/NaN left by a corrupted or legacy preference — could be stored
+ * and then restored verbatim on the next launch, handing the resizer a width its
+ * own clamps are supposed to make unreachable.
+ *
+ * A width that is not a usable number falls back to the pane DEFAULT rather than
+ * to the minimum: "never configured" and "the user dragged it as narrow as it
+ * goes" are different facts and must not render identically.
+ */
+export function clampPanelWidth(width: number | undefined | null, minWidth: number, fallbackWidth: number): number {
+  if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) {
+    return fallbackWidth
+  }
+
+  return Math.max(width, minWidth)
+}
+
 export type ResizeFinishCallback = (
   lastWidth: number,
   lastLeft: number,
@@ -54,6 +92,18 @@ class PanelResizer extends Component<Props, State> {
   private lastWidth: number
   private widthBeforeLastDblClick: number
   private minWidth: number
+  /**
+   * Whether the panel is in the explicitly-collapsed state.
+   *
+   * A drag can never reach it — drags floor at `minWidth` — so the only ways in
+   * are the resizer's double-click collapse and the only ways out are the expand
+   * affordances and starting a new drag. It exists because `setWidth` has to floor
+   * at the SLIVER while collapsed and at `minWidth` otherwise: without a sticky
+   * intent, `componentDidUpdate`'s `setWidth(this.props.width)` re-floors the
+   * collapsed width straight back up to `minWidth` on the very next prop
+   * round-trip and the collapse silently undoes itself.
+   */
+  private collapseIntent = false
 
   constructor(props: Props) {
     super(props)
@@ -116,12 +166,12 @@ class PanelResizer extends Component<Props, State> {
   }
 
   override componentDidUpdate(prevProps: Props) {
-    // Reading scrollWidth forces layout. Before the page has fully loaded no
-    // user interaction can have resized the panel, so lastWidth still tracks
-    // the prop/grid-driven width exactly — skip the sync read until load to
-    // keep boot free of forced layout flushes.
+    // Reading layout forces a flush. Before the page has fully loaded no user
+    // interaction can have resized the panel, so lastWidth still tracks the
+    // prop/grid-driven width exactly — skip the sync read until load to keep
+    // boot free of forced layout flushes.
     if (document.readyState === 'complete') {
-      this.lastWidth = this.props.panel.scrollWidth
+      this.lastWidth = this.panelWidth()
     }
 
     if (this.props.width != prevProps.width) {
@@ -147,8 +197,47 @@ class PanelResizer extends Component<Props, State> {
     window.removeEventListener('load', this.clampInitialWidthOnLoad)
   }
 
-  get appFrame() {
-    return document.getElementById('app')?.getBoundingClientRect() as DOMRect
+  /**
+   * The app frame's rect, or `null` when `#app` is not in the document.
+   *
+   * This was `document.getElementById('app')?.getBoundingClientRect() as DOMRect`.
+   * The cast asserted away exactly the case the optional chain exists for, so
+   * `setWidth`'s `this.appFrame.width` was a TypeError waiting for any render in
+   * which `#app` is absent — a portal/unit mount, or an unmount racing a debounced
+   * window-resize. Returning `null` and skipping that one clamp is the safe
+   * failure: the floor and parent-rect clamps around it still apply.
+   */
+  get appFrame(): DOMRect | null {
+    return document.getElementById('app')?.getBoundingClientRect() ?? null
+  }
+
+  /**
+   * The panel's own on-screen width.
+   *
+   * MUST NOT be `panel.scrollWidth`. scrollWidth is the panel's CONTENT extent,
+   * so it counts any child that overflows the panel — and this component renders
+   * exactly such a child INTO the panel: the collapsed "Expand panel" chevron is
+   * absolutely positioned to straddle the panel edge (`right-0 translate-x-1/2`
+   * on a 16px box), which adds ~8px. Measured in Chrome on the live notes
+   * column: a 400px panel reports scrollWidth 399, and 407 with the chevron
+   * mounted, while `getBoundingClientRect().width` reports 400 either way.
+   *
+   * Feeding scrollWidth into `isCollapsed()` therefore made the collapse
+   * predicate a function of its own render output. Dragging the notes list to its
+   * clamped 200px minimum put scrollWidth at 199 against a minWidth of 200:
+   * collapsed flipped true, the chevron mounted, scrollWidth became 207, collapsed
+   * flipped false, the chevron unmounted, scrollWidth returned to 199 — 50 nested
+   * setStates inside componentDidUpdate, and React threw "Maximum update depth
+   * exceeded" (minified #185). The Note list error boundary caught it and rendered
+   * "List unavailable", which is the whole of the reported bug.
+   *
+   * The border-box width is immune to what the panel's children do, and is the
+   * same quantity the clamps in `setWidth` are expressed in, so `lastWidth` now
+   * agrees with `props.width` instead of trailing it by the 1px of border that
+   * scrollWidth excludes.
+   */
+  private panelWidth(): number {
+    return this.props.panel.getBoundingClientRect().width
   }
 
   getParentRect() {
@@ -165,8 +254,31 @@ class PanelResizer extends Component<Props, State> {
     return difference < marginOfError
   }
 
+  /** The width at which this panel counts as collapsed. See COLLAPSED_PANEL_WIDTH. */
+  get collapsedWidth(): number {
+    return Math.min(this.minWidth, COLLAPSED_PANEL_WIDTH)
+  }
+
+  /**
+   * The narrowest width `setWidth` may produce right now: the sliver while the
+   * panel is explicitly collapsed, the drag minimum otherwise.
+   */
+  private get widthFloor(): number {
+    return this.collapseIntent ? this.collapsedWidth : this.minWidth
+  }
+
+  /**
+   * Whether THIS RESIZER has collapsed the panel to a sliver, which is precisely
+   * the condition its "Expand panel" affordance can undo.
+   *
+   * Deliberately not "the panel currently measures zero": focus mode drives these
+   * panes' grid columns to a literal `0` and has its own way back out, so offering
+   * a chevron there would be an affordance for a state this resizer does not own.
+   * Requiring the intent also keeps the predicate independent of live layout in
+   * every state the resizer did not ask for.
+   */
   isCollapsed() {
-    return this.lastWidth <= this.minWidth
+    return this.collapseIntent && this.lastWidth <= this.collapsedWidth
   }
 
   finishSettingWidth = () => {
@@ -180,11 +292,13 @@ class PanelResizer extends Component<Props, State> {
   }
 
   setWidth = (width: number, finish = false): number => {
+    const floor = this.widthFloor
+
     if (width === 0) {
       width = this.computeMaxWidth()
     }
-    if (width < this.minWidth) {
-      width = this.minWidth
+    if (width < floor) {
+      width = floor
     }
 
     const parentRect = this.getParentRect()
@@ -192,9 +306,23 @@ class PanelResizer extends Component<Props, State> {
       width = parentRect.width
     }
 
-    const maxWidth = this.appFrame.width - this.props.panel.getBoundingClientRect().x
-    if (width > maxWidth) {
-      width = maxWidth
+    const appFrame = this.appFrame
+    if (appFrame) {
+      const maxWidth = appFrame.width - this.props.panel.getBoundingClientRect().x
+      if (width > maxWidth) {
+        width = maxWidth
+      }
+    }
+
+    // Re-apply the floor LAST. The two max clamps above are computed from live
+    // layout and can land below it: on a viewport narrower than the fixed side
+    // panes, `appFrame.width - panel.x` is smaller than the floor, and once those
+    // columns overflow the app frame it goes NEGATIVE. A negative width is not a
+    // width — it reaches the parent as an invalid `grid-template-columns` track,
+    // which the browser drops wholesale, which moves the panel, which re-clamps.
+    // Overflowing a pathologically narrow viewport is the better failure.
+    if (width < floor) {
+      width = floor
     }
 
     const isFullWidth = Math.round(width + this.lastLeft) === Math.round(parentRect.width)
@@ -233,6 +361,9 @@ class PanelResizer extends Component<Props, State> {
   }
 
   expandPanel = () => {
+    // Leave the collapsed state FIRST so setWidth floors at the drag minimum
+    // again rather than at the sliver.
+    this.collapseIntent = false
     this.setWidth(this.widthBeforeLastDblClick || this.props.defaultWidth || DEFAULT_EXPAND_WIDTH)
     this.finishSettingWidth()
 
@@ -254,7 +385,12 @@ class PanelResizer extends Component<Props, State> {
       this.expandPanel()
     } else {
       this.widthBeforeLastDblClick = this.lastWidth
-      this.setWidth(this.minWidth)
+      // Collapse to the SLIVER, not to the drag minimum. Collapsing to `minWidth`
+      // is what made `isCollapsed()` true at a 200px notes list that was not
+      // collapsed at all; the intent flag is what keeps the sliver from being
+      // re-floored back up to `minWidth` on the next prop round-trip.
+      this.collapseIntent = true
+      this.setWidth(this.collapsedWidth)
       this.finishSettingWidth()
 
       this.props.resizeFinishCallback?.(this.lastWidth, this.lastLeft, this.isAtMaxWidth(), this.isCollapsed())
@@ -290,8 +426,8 @@ class PanelResizer extends Component<Props, State> {
     }
     const parentRect = this.getParentRect()
     let newWidth = this.startWidth - deltaX
-    if (newWidth < this.minWidth) {
-      newWidth = this.minWidth
+    if (newWidth < this.widthFloor) {
+      newWidth = this.widthFloor
     }
     if (newWidth > parentRect.width) {
       newWidth = parentRect.width
@@ -313,7 +449,7 @@ class PanelResizer extends Component<Props, State> {
   }
 
   handleResize = () => {
-    const startWidth = this.isAtMaxWidth() ? this.computeMaxWidth() : this.props.panel.scrollWidth
+    const startWidth = this.isAtMaxWidth() ? this.computeMaxWidth() : this.panelWidth()
 
     this.startWidth = startWidth
     this.lastWidth = startWidth
@@ -324,8 +460,11 @@ class PanelResizer extends Component<Props, State> {
 
   onMouseDown: MouseEventHandler = (event) => {
     this.addInvisibleOverlay()
+    // Dragging the resizer is an instruction to SIZE the panel, so it leaves the
+    // collapsed state and the drag floors at `minWidth` again.
+    this.collapseIntent = false
     this.lastDownX = event.clientX
-    this.startWidth = this.props.panel.scrollWidth
+    this.startWidth = this.panelWidth()
     this.startLeft = this.props.panel.offsetLeft
     this.setState({
       pressed: true,
