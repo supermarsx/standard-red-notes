@@ -211,14 +211,25 @@ import { errorKind } from './healthReport'
  *      FILES_V1 advertised, no unmet condition, all three files variables set —
  *      because not one of them exercises the path a transfer takes: mint a valet
  *      token at auth, present it to the files service, have the files service
- *      accept it. Two services each holding a non-empty VALET_TOKEN_SECRET or
- *      AUTH_JWT_SECRET whose CONTENTS disagree satisfy every row above and refuse
- *      every transfer, exactly as two disagreeing internal gRPC secrets did. A
- *      presence boolean cannot express it and a readiness probe cannot see it; a
- *      three-state result of one real authorized round trip, made server-side
- *      between the two services, can. Until it exists `FILE_TRANSFER_UNVERIFIED`
- *      states the gap on every deployment rather than letting a screen of green
- *      imply the opposite.
+ *      accept it, and complete a ranged read. A presence boolean cannot express
+ *      that and a readiness probe cannot see it; a three-state result of one real
+ *      authorized round trip, made server-side between the two services, can.
+ *      Until it exists `FILE_TRANSFER_UNVERIFIED` states the gap on every
+ *      deployment rather than letting a screen of green imply the opposite.
+ *
+ *      *** AND THE OBVIOUS MECHANISM IS SCOPED, BECAUSE IT CANNOT HOLD HERE. ***
+ *      Two services holding non-empty VALET_TOKEN_SECRET or AUTH_JWT_SECRET values
+ *      whose CONTENTS disagree would satisfy every row above and refuse every
+ *      transfer, exactly as two disagreeing internal gRPC secrets did. On the
+ *      images this repo ships that is structurally impossible, and provable without
+ *      reading a value: `server/docker/docker-entrypoint.sh` exports both keys
+ *      ONCE, UNPREFIXED, before supervisord starts (and exits if either is empty);
+ *      `supervisord.conf` gives no program an `environment=` of its own; auth
+ *      (`Container.ts`) and files (`Container.ts`) each read that same unprefixed
+ *      key through `AbstractEnv.get()`, which reads `process.env`. Byte-identical
+ *      by construction. The hypothesis stays live only where the two services are
+ *      configured separately — and a reader of this pane must not be sent after it
+ *      on a shape where it cannot apply.
  *
  * None of these is edited into a server file by this section's author. The client
  * half reads them all as optional, so a server that grows them later needs no
@@ -407,6 +418,18 @@ export type BackendSectionInput = {
   datastore?: DatastoreView
   /** Not reported by any endpoint today. See header item (f). */
   queues?: QueueView
+  /**
+   * Whether the running build recorded a revision at all — ONE boolean, derived by
+   * the caller from the deployment marker Environment & setup already reads. Never
+   * the revision itself: this section neither needs nor receives it.
+   *
+   * It is here for exactly one inference, and only because two unknowns compound:
+   * a probe reports no depth, so an image predating the readiness route reports
+   * "answering" having verified only liveness — and on an unstamped build nothing
+   * can establish whether the image is new enough for that to be impossible.
+   * Absent means the caller did not say, and then no claim is made.
+   */
+  buildIdentified?: boolean
   outcomes?: readonly SectionTaggedOutcome[]
 }
 
@@ -1219,8 +1242,6 @@ const SERVICE_LABEL: Record<KnownService, SafeValue> = {
   'websocket-gateway': safeConstant('WebSocket gateway probe'),
 }
 
-const FILES_PROBE_NOT_THE_FILES_SERVICE = safeConstant('did not probe the files service')
-
 const SERVICE_OUTCOME_VALUE: Record<ServiceOutcome, SafeValue> = {
   answering: safeConstant('answering'),
   degraded: safeConstant('answering, not ready'),
@@ -1320,25 +1341,33 @@ function slowestProbe(services: ServicesReading): SlowestProbe {
 }
 
 /**
- * What a service probe's POSITIVE answer establishes, which is much less than the
- * word "answering" suggests.
+ * What a service probe's POSITIVE answer establishes — which is a good deal, and
+ * still not what the lane behind it needs.
  *
  * Every one of these probes is an UNAUTHENTICATED `GET /healthcheck/readiness` —
  * falling back to plain `/healthcheck` liveness on a 404 — against a base address
- * the gateway resolves for itself. So a 200 establishes that something answered an
- * unauthenticated route at an address the gateway chose. It does not establish
- * that the service does the work the lane behind it needs, and it establishes
- * nothing whatever about an AUTHORIZED request: no probe presents a credential, so
- * no probe can see a credential the far end refuses.
+ * the gateway resolves for itself.
  *
- * That gap is not hypothetical. It is the state this pane was measured in: every
- * files row green — probe "answering", FILES_V1 advertised, all three files
- * variables set — on a deployment where file listing aborted, downloads hung and
- * usage read zero. The verdict is capped so the row keeps its fact and loses the
- * claim, which is this contract's own mechanism applied to the row that needed it.
+ * WHAT IT DOES ESTABLISH, for files, is stronger than the first version of this
+ * comment credited: `files`' readiness route returns 200 only when its storage
+ * capability check passed inside two seconds AND, where Redis is configured for
+ * that service, Redis answered a PING inside two seconds; otherwise it answers
+ * 503, which this module already reads as `degraded` and not as `answering`. So
+ * "answering" rules out three real faults: the files process being down, its
+ * uploads storage being unreachable, and its Redis being unreachable. That is
+ * worth saying, because understating a signal sends an operator to re-check
+ * something this screen has already cleared.
+ *
+ * WHAT IT CANNOT ESTABLISH is anything about an AUTHORIZED request: no probe
+ * presents a credential, so no probe can see a credential the far end refuses, and
+ * none of them completes a ranged read. That gap is not hypothetical — it is the
+ * state this pane was measured in: every files row green on a deployment where file
+ * listing aborted and downloads hung. So the verdict is capped: the row keeps its
+ * fact and loses the claim, which is this contract's own mechanism applied to the
+ * row that needed it.
  */
 const PROBE_CANNOT_CONFIRM =
-  'that an AUTHORIZED request to this service succeeds — the probe is unauthenticated, so a credential the far end refuses is invisible to it'
+  'that an AUTHORIZED request to this service succeeds — the probe is unauthenticated, so a credential the far end refuses is invisible to it, and no probe completes a ranged read'
 
 function probeEvidence(service: KnownService, outcome: ServiceOutcome): Evidence {
   // A probe that failed, failed. Negative readings keep direct evidence: the
@@ -1355,20 +1384,39 @@ function probeEvidence(service: KnownService, outcome: ServiceOutcome): Evidence
 }
 
 /**
- * What the files probe was actually POINTED AT, from two closed inputs.
+ * What the files probe was POINTED AT — two answers, and deliberately not three.
  *
- * `FILES_SERVER_PROBE_URL` unset does not disable the files probe — it falls back
- * to `http://localhost:<FILES_SERVER_PORT>`, which is loopback RELATIVE TO THE
- * API-GATEWAY PROCESS. On the single container that is right: the files service is
- * a supervisord sibling on that same loopback. On anything multi-container it is
- * not the files service at all, and whatever did answer there is not the service
- * that stores the files.
+ * `FILES_SERVER_PROBE_URL` unset does not disable the files probe: it falls back to
+ * `http://localhost:<FILES_SERVER_PORT>`, loopback relative to the api-gateway
+ * PROCESS. The question that matters is therefore not compose-versus-single, it is
+ * whether the files process is CO-RESIDENT with the gateway — and in this repo it
+ * always is:
  *
- * Both facts are already on the wire as closed values — a presence boolean and the
- * deployment mode — so this needs no new endpoint and reads no address. A row that
- * cannot establish what it probed must not report that the files service answered.
+ *   - `docker-compose.yml` declares NO files service. Its one `server` container
+ *     runs every backend process under one supervisord, which declares
+ *     `[program:files]` and `[program:api-gateway]` as siblings with no per-program
+ *     `environment=`, and the compose file's own comment names `server:3104 for
+ *     files`. The entrypoint exports `FILES_SERVER_PORT=3104` unconditionally and
+ *     then sets `API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http://localhost:$FILES_SERVER_PORT`
+ *     itself; `files/bin/server.ts` listens with no host, so loopback reaches it.
+ *   - The single-container image is the same arrangement, more so: `home-server`
+ *     holds every service in ONE process.
+ *
+ * *** SO THERE IS NO SHIPPED TOPOLOGY ON WHICH THE LOOPBACK FALLBACK IS WRONG, AND
+ * THIS FUNCTION HAD A THIRD STATE THAT SAID THERE WAS. *** It returned
+ * `gateway-loopback` for every mode but `home-server`, which is the bundled compose
+ * stack — the commonest deployment this repo produces, and the one that produced
+ * the report this whole change came from. It withheld a correct probe result and
+ * raised a `degraded` finding over a correctly configured deployment: the precise
+ * cry-wolf failure this pass exists to remove, introduced by the pass itself.
+ *
+ * The only shape the fallback misses is a HAND-ROLLED split, where someone runs the
+ * files service in a container of its own and does not set the probe URL. That is
+ * indistinguishable from a shipped shape through the presence rows — the inputs this
+ * module has — so it is not guessed at. It is named in the note instead, with the
+ * variable that removes the ambiguity, and `mode` is no longer read here at all.
  */
-export const FILES_PROBE_TARGETS = ['configured', 'colocated-sibling', 'gateway-loopback', 'unknown'] as const
+export const FILES_PROBE_TARGETS = ['configured', 'colocated-by-default', 'unknown'] as const
 
 export type FilesProbeTarget = (typeof FILES_PROBE_TARGETS)[number]
 
@@ -1377,38 +1425,26 @@ export function filesProbeTarget(topology: DeploymentTopology | undefined): File
   if (configured === undefined) {
     return 'unknown'
   }
-  if (configured) {
-    return 'configured'
-  }
 
-  const mode = topology?.mode
-  if (mode === undefined) {
-    return 'unknown'
-  }
-
-  return mode === 'home-server' ? 'colocated-sibling' : 'gateway-loopback'
+  return configured ? 'configured' : 'colocated-by-default'
 }
 
 const FILES_PROBE_TARGET_NOTE: Record<FilesProbeTarget, string> = {
   configured:
     ' FILES_SERVER_PROBE_URL is set, so the probe dialled the internal address this deployment configured for the files service.',
-  'colocated-sibling':
-    ' FILES_SERVER_PROBE_URL is not set, so the probe fell back to this container’s own loopback — which on the single container IS the files service, running as a sibling process under supervisord. The address is right here; the credential is still untested.',
-  'gateway-loopback':
-    ' *** FILES_SERVER_PROBE_URL IS NOT SET AND THIS IS NOT A SINGLE CONTAINER. *** The probe therefore fell back to loopback inside the API-GATEWAY container, where the files service does not run. Whatever answered is not the service that stores this account’s files, so this row establishes nothing about the files service and is reported as undetermined whatever it read. Set FILES_SERVER_PROBE_URL to the internal address the gateway reaches the files service on, and this row starts meaning something.',
+  'colocated-by-default':
+    ' FILES_SERVER_PROBE_URL is not set, so the probe fell back to loopback on the files port — and on every topology this repo ships that IS the files process: both the bundled compose stack and the single container run it beside the gateway, so no address needed configuring. The one arrangement that would defeat it is a files service running in a container of its own without this variable set, and that cannot be told apart from here; set FILES_SERVER_PROBE_URL if that is your deployment. Either way the address is not the open question — the credential is.',
   unknown:
-    ' Which address the probe dialled could not be established: that needs the deployment’s presence block and its MODE, and one of them was not reported. No claim is made about what answered.',
+    ' Whether a probe address was configured could not be established: this deployment reported no presence entry for FILES_SERVER_PROBE_URL. On the shipped topologies the fallback reaches the files process anyway, so nothing is claimed either way.',
 }
 
-function buildCommunicationBlock(services: ServicesReading, topology: DeploymentTopology | undefined): DiagnosticBlock {
+function buildCommunicationBlock(
+  services: ServicesReading,
+  topology: DeploymentTopology | undefined,
+  buildIdentified: boolean | undefined,
+): DiagnosticBlock {
   const rows: DiagnosticRow[] = []
   const filesTarget = filesProbeTarget(topology)
-  // A probe pointed at the WRONG container's loopback cannot report on the files
-  // service in either direction, so the value is withheld as well as the verdict.
-  // Printing "answering" with a caveat underneath it would leave the word an
-  // operator skims saying the opposite of the sentence that qualifies it — which is
-  // how every files row on this screen came to read green over a dead lane.
-  const filesProbeBlind = filesTarget === 'gateway-loopback'
 
   for (const service of KNOWN_SERVICES) {
     const outcome = services.byName[service]?.outcome
@@ -1441,23 +1477,9 @@ function buildCommunicationBlock(services: ServicesReading, topology: Deployment
       rows.push(
         diagnosticRow({
           label: SERVICE_LABEL[service],
-          value:
-            outcome === undefined
-              ? safePresence(undefined)
-              : filesProbeBlind
-                ? FILES_PROBE_NOT_THE_FILES_SERVICE
-                : SERVICE_OUTCOME_VALUE[outcome],
-          verdict: outcome === undefined || filesProbeBlind ? 'undetermined' : SERVICE_VERDICT[outcome],
-          evidence:
-            outcome === undefined
-              ? EVIDENCE_ABSENT
-              : filesProbeBlind
-                ? evidenceProxy({
-                    observed: 'that something answered a readiness route on the api-gateway container’s own loopback',
-                    cannotConfirm: 'that the files service was probed at all, let alone that it answered',
-                    necessaryCondition: false,
-                  })
-                : probeEvidence(service, outcome),
+          value: outcome === undefined ? safePresence(undefined) : SERVICE_OUTCOME_VALUE[outcome],
+          verdict: outcome === undefined ? 'undetermined' : SERVICE_VERDICT[outcome],
+          evidence: outcome === undefined ? EVIDENCE_ABSENT : probeEvidence(service, outcome),
           note: `${SERVICE_NOTE[service]}${FILES_PROBE_TARGET_NOTE[filesTarget]}`,
         }),
       )
@@ -1538,7 +1560,7 @@ function buildCommunicationBlock(services: ServicesReading, topology: Deployment
         code: safeConstant('FILE_TRANSFER_UNVERIFIED'),
         title: 'Nothing on this screen establishes that a file transfer works',
         detail:
-          'Every files row on this pane reports a readiness probe, a boot-time composition decision or a variable being non-empty. None of them exercises the authorized path a real upload or download takes: mint a valet token at auth, present it to the files service, and have the files service accept it. Two services each holding a non-empty VALET_TOKEN_SECRET or AUTH_JWT_SECRET that DISAGREE satisfy every row on this screen and refuse every transfer — the same shape as the internal gRPC secret, where exactly this happened. Read the files rows as "nothing is obviously misconfigured", never as "file transfers work". If attachments are failing, this screen has not cleared the files lane, and the fields that would are named in this section’s header.',
+          'The files probe is worth more than nothing: its readiness route answers 200 only when the files service\'s storage check passed and, where Redis is configured for it, Redis answered — so a green probe rules out the process being down and its storage or Redis being unreachable. What no row here does is exercise the authorized path a real transfer takes: mint a valet token at auth, present it to the files service, have the files service accept it, and complete a ranged read. A credential the far end refuses is invisible to an unauthenticated probe, and so is a stalled range request. One topology note, so this does not send you after a mechanism that cannot apply: two services holding non-empty VALET_TOKEN_SECRET or AUTH_JWT_SECRET values that DISAGREE would satisfy every row here and refuse every transfer — but on the images this repo ships that cannot happen, because the entrypoint exports both keys once, unprefixed, before supervisord starts, with no per-program environment, and auth and files read that same key from that same process environment. It is a live hypothesis only where the services are configured separately. Read the files rows as "nothing visible is misconfigured", never as "file transfers work": if attachments are failing, this screen has not cleared the files lane, and the field that would is named in this section’s header.',
         verdict: 'undetermined',
         evidence: evidenceProxy({
           observed: 'that the files service answered an unauthenticated readiness route',
@@ -1549,31 +1571,35 @@ function buildCommunicationBlock(services: ServicesReading, topology: Deployment
     )
   }
 
-  if (filesProbeBlind && services.byName.files?.outcome !== undefined) {
+  /**
+   * TWO UNKNOWNS THAT ONLY MATTER TOGETHER.
+   *
+   * A service whose readiness route 404s is re-probed for LIVENESS and reports `ok`
+   * with that fact buried in a free-form `detail` this module refuses to read — so
+   * an older image reports fully healthy here while only its process liveness was
+   * ever verified. For `files` that route has no middleware and answers 200 or 503,
+   * never 404, so on a CURRENT image the shallow path cannot fire at all.
+   *
+   * Which leaves exactly one question: is the running image current? On a build that
+   * recorded no revision, nothing can answer it — so the depth of every probe on
+   * this screen is unverifiable, and that is a statement neither the probe rows nor
+   * the deployment-identity row can make alone. `undetermined`, because this is the
+   * pane saying it cannot tell; it cannot fire on a stamped build, and it cannot
+   * fire where no probe was reported.
+   */
+  if (buildIdentified === false && services.reported !== undefined) {
     findings.push(
       diagnosticFinding({
-        code: safeConstant('FILES_PROBE_TARGET_WRONG'),
-        title: 'The files probe is pointed at the gateway’s own loopback',
+        code: safeConstant('PROBE_DEPTH_UNVERIFIABLE'),
+        title: 'How deep these probes went cannot be established on an unidentified build',
         detail:
-          'FILES_SERVER_PROBE_URL is not set, so the files probe falls back to loopback — and this deployment is not the single container, where loopback is where the files service runs. The probe therefore dialled the api-gateway container, and its answer says nothing about the files service in either direction. This is the one files row on the screen that an operator can repair into meaning something, which is why it is reported separately from the lane itself.',
-        verdict: 'degraded',
-        evidence: EVIDENCE_DIRECT,
-        remedy: {
-          code: 'FILES_PROBE_TARGET_WRONG',
-          summary:
-            'Set FILES_SERVER_PROBE_URL to the internal address this gateway reaches the files service on, so the probe tests the files service instead of itself. Restart only — no rebuild.',
-          steps: [
-            'Set FILES_SERVER_PROBE_URL to the address the api-gateway can reach the files service on from inside the deployment network. WEBSOCKET_SYNC_FILES_URL is usually already that address.',
-            'Do NOT use FILES_SERVER_URL. In this fork’s entrypoint that is the PUBLIC files URL — the app front door’s /files prefix — and it is not reachable from inside the container.',
-            'Restart the gateway, then re-read this pane. The row will begin reporting the files service, and it still will not establish that an authorized transfer succeeds: no probe on this screen does.',
-          ],
-          effort: CONFIG_AND_RESTART,
-          basis: 'verified',
-          because: [
-            'The deployment reported that FILES_SERVER_PROBE_URL is not set, and reported a MODE that is not the single container.',
-            'With no probe URL the gateway falls back to its own loopback on a fixed internal port, which on a multi-container deployment is not the files service.',
-          ],
-        },
+          'Each probe asks a readiness route first and falls back to a plain liveness route when that answers 404 — and it reports the shallow result as "ok", with the distinction in a free-form field this pane does not read because it can carry an address. On a current image that fallback cannot fire for the files service: its readiness route has no middleware and answers only 200 or 503. But this build recorded no revision, so nothing here establishes that the running image is current, and the two unknowns compound: an unverifiable probe depth on an unidentifiable build. Stamp the build (SRN_DEPLOY_REVISION at image build time) and this resolves itself — the Environment & setup section carries that row. Until then, read every "answering" on this screen as "answered something", and see this section’s header for the one field that would report probe depth directly.',
+        verdict: 'undetermined',
+        evidence: evidenceProxy({
+          observed: 'that this build recorded no revision, and that the probe reports no depth',
+          cannotConfirm: 'whether any given probe verified readiness or only liveness',
+          necessaryCondition: false,
+        }),
       }),
     )
   }
@@ -1781,7 +1807,7 @@ export function buildBackendSection(input: BackendSectionInput = {}): SectionMod
     buildReadBlock(status, input.statusError),
     buildDatabaseBlock(status, datastore, services),
     buildCacheBlock(status, input.topology),
-    buildCommunicationBlock(services, input.topology),
+    buildCommunicationBlock(services, input.topology, input.buildIdentified),
     buildQueueBlock(input.topology, queues),
   ]
 

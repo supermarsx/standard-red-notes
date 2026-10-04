@@ -1,6 +1,7 @@
 import {
   buildBackendSection,
   describeCacheRequirement,
+  FILES_PROBE_TARGETS,
   filesProbeTarget,
   KNOWN_SERVICES,
   type BackendSectionInput,
@@ -787,8 +788,16 @@ describe('internal service communication', () => {
     // looks fine" case rather than one where something else already failed.
     expect(rowOf(healthy(), 'Files service probe').value).toBe('answering')
     expect(finding?.verdict).toBe('undetermined')
-    expect(finding?.detail).toContain('DISAGREE satisfy every row on this screen and refuse every transfer')
     expect(finding?.detail).toContain('never as "file transfers work"')
+    // It credits the probe with what the readiness route really proves, rather than
+    // understating it and sending an operator to re-check cleared ground.
+    expect(finding?.detail).toContain('storage check passed')
+    // *** AND IT SCOPES THE MECHANISM IT NAMES. *** Secret disagreement cannot hold
+    // on the images this repo ships — the entrypoint exports both keys once,
+    // unprefixed, and supervisord gives no program an environment of its own — so
+    // the finding must not imply it for the deployment reading the report.
+    expect(finding?.detail).toContain('on the images this repo ships that cannot happen')
+    expect(finding?.detail).toContain('only where the services are configured separately')
   })
 
   it('does not raise the unverified-transfer finding when no files probe was reported at all', () => {
@@ -808,55 +817,112 @@ describe('internal service communication', () => {
   /* ------------------------------------------------------------------------ */
 
   /**
-   * `FILES_SERVER_PROBE_URL` unset does not disable the probe — it falls back to
-   * `http://localhost:<FILES_SERVER_PORT>`, loopback RELATIVE TO THE API-GATEWAY.
-   * On the single container that is the files service; on anything else it is not,
-   * and "answering" then describes something that is not the files service.
+   * *** A FINDING THAT WOULD HAVE FIRED ON EVERY SHIPPED TOPOLOGY. ***
+   *
+   * `FILES_SERVER_PROBE_URL` unset falls back to `http://localhost:<FILES_SERVER_PORT>`,
+   * loopback relative to the api-gateway PROCESS — and the first version of this
+   * derivation called that wrong for every mode but `home-server`, raising a
+   * `degraded` finding and withholding a correct probe result. It is wrong about the
+   * repo: `docker-compose.yml` declares NO files service, its one `server` container
+   * runs `[program:files]` and `[program:api-gateway]` as supervisord siblings, the
+   * entrypoint exports `FILES_SERVER_PORT=3104` and points the gateway's own
+   * internal files URL at that same loopback, and `files/bin/server.ts` listens with
+   * no host. So the bundled compose stack — the commonest deployment this repo
+   * produces, and the one that produced the report this change came from — would
+   * have been told its correct configuration was a misconfiguration.
+   *
+   * The axis is co-residency, not compose-versus-single, and BOTH shipped shapes are
+   * co-resident. A hand-rolled split is indistinguishable from the presence rows, so
+   * it is named in the note rather than guessed at, and the finding is gone.
    */
-  it('derives what the probe dialled from a presence boolean and the mode', () => {
+  it('derives what the probe dialled from the presence boolean alone, and never from the mode', () => {
     expect(filesProbeTarget(topology({ presence: { FILES_SERVER_PROBE_URL: true } }))).toBe('configured')
-    expect(filesProbeTarget(topology({ mode: 'home-server', presence: { FILES_SERVER_PROBE_URL: false } }))).toBe(
-      'colocated-sibling',
-    )
-    for (const mode of ['self-hosted', 'unset', 'other'] as const) {
-      expect(filesProbeTarget(topology({ mode, presence: { FILES_SERVER_PROBE_URL: false } }))).toBe('gateway-loopback')
+
+    // EVERY mode, including the two shipped ones, answers the same: an unset probe
+    // URL reaches the co-resident files process on every topology this repo ships.
+    for (const mode of ['home-server', 'self-hosted', 'unset', 'other', undefined] as const) {
+      expect(filesProbeTarget(topology({ mode, presence: { FILES_SERVER_PROBE_URL: false } }))).toBe(
+        'colocated-by-default',
+      )
+      expect(filesProbeTarget(topology({ mode, presence: { FILES_SERVER_PROBE_URL: true } }))).toBe('configured')
     }
+
     // Absent is not false: a key missing from the presence map is silence.
     expect(filesProbeTarget(topology({ presence: {} }))).toBe('unknown')
     expect(filesProbeTarget(undefined)).toBe('unknown')
-    expect(filesProbeTarget(topology({ mode: undefined, presence: { FILES_SERVER_PROBE_URL: false } }))).toBe('unknown')
+    expect(FILES_PROBE_TARGETS).toHaveLength(3)
   })
 
-  it('withholds the probe result entirely when it dialled the gateway’s own loopback', () => {
-    const model = buildBackendSection({
-      topology: topology({ mode: 'self-hosted', presence: { FILES_SERVER_PROBE_URL: false } }),
-      serverStatus: serverStatus(),
-    })
-    const row = rowOf(model, 'Files service probe')
+  it('never raises a target finding, and never withholds the probe result, on any shape', () => {
+    for (const mode of ['home-server', 'self-hosted', 'unset', 'other'] as const) {
+      for (const probeUrlSet of [true, false]) {
+        const model = buildBackendSection({
+          topology: topology({ mode, presence: { FILES_SERVER_PROBE_URL: probeUrlSet } }),
+          serverStatus: serverStatus(),
+        })
+        const row = rowOf(model, 'Files service probe')
 
-    // The word an operator skims must not say the opposite of the sentence under it.
-    expect(row.value).toBe('did not probe the files service')
-    expect(row.verdict).toBe('undetermined')
-    expect(row.note).toContain('IS NOT SET AND THIS IS NOT A SINGLE CONTAINER')
-    expect(findingOf(model, 'FILES_PROBE_TARGET_WRONG')?.verdict).toBe('degraded')
-    expect(findingOf(model, 'FILES_PROBE_TARGET_WRONG')?.remedy?.summary).toContain('FILES_SERVER_PROBE_URL')
-    expect(findingOf(model, 'FILES_PROBE_TARGET_WRONG')?.remedy?.steps?.[1]).toContain('Do NOT use FILES_SERVER_URL')
-  })
-
-  it('leaves the probe result standing where the target IS the files service', () => {
-    for (const reported of [
-      topology({ presence: { FILES_SERVER_PROBE_URL: true } }),
-      topology({ mode: 'home-server', presence: { FILES_SERVER_PROBE_URL: false } }),
-    ]) {
-      const model = buildBackendSection({ topology: reported, serverStatus: serverStatus() })
-
-      expect(rowOf(model, 'Files service probe').value).toBe('answering')
-      expect(codesOf(model)).not.toContain('FILES_PROBE_TARGET_WRONG')
-      // ...and the claim is STILL capped, because the address being right says
-      // nothing about the credential.
-      expect(rowOf(model, 'Files service probe').verdict).toBe('undetermined')
-      expect(codesOf(model)).toContain('FILE_TRANSFER_UNVERIFIED')
+        // The result stands — no shape makes this pane unable to report the probe.
+        expect(row.value).toBe('answering')
+        expect(codesOf(model)).not.toContain('FILES_PROBE_TARGET_WRONG')
+        // ...and the claim is STILL capped, because the address being right says
+        // nothing about the credential. That is the part that must survive.
+        expect(row.claimed).toBe('healthy')
+        expect(row.verdict).toBe('undetermined')
+        expect(codesOf(model)).toContain('FILE_TRANSFER_UNVERIFIED')
+        expect(model.worstVerdict).not.toBe('degraded')
+      }
     }
+  })
+
+  it('names the one arrangement the fallback would miss, without claiming it', () => {
+    const row = rowOf(
+      buildBackendSection({
+        topology: topology({ mode: 'self-hosted', presence: { FILES_SERVER_PROBE_URL: false } }),
+        serverStatus: serverStatus(),
+      }),
+      'Files service probe',
+    )
+
+    expect(row.note).toContain('on every topology this repo ships that IS the files process')
+    expect(row.note).toContain('cannot be told apart from here')
+    expect(row.note).not.toContain('IS NOT SET AND THIS IS NOT A SINGLE CONTAINER')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* An unverifiable probe depth on an unidentifiable build                    */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * Two unknowns that only matter together. A readiness route that 404s is re-probed
+   * for liveness and reported as `ok`, with the distinction in a `detail` string this
+   * module refuses to read — and for `files` that cannot happen on a CURRENT image,
+   * whose readiness route has no middleware and answers only 200 or 503. Whether the
+   * image IS current is unanswerable on a build that recorded no revision, which is
+   * this user's. Neither row can say that alone.
+   */
+  it('ties an unverifiable probe depth to an unstamped build, and only when both hold', () => {
+    const unstamped = buildBackendSection({
+      topology: topology(),
+      serverStatus: serverStatus(),
+      buildIdentified: false,
+    })
+    const finding = findingOf(unstamped, 'PROBE_DEPTH_UNVERIFIABLE')
+
+    expect(finding?.verdict).toBe('undetermined')
+    expect(finding?.detail).toContain('recorded no revision')
+    expect(finding?.detail).toContain('readiness route has no middleware')
+    expect(unstamped.worstVerdict).not.toBe('degraded')
+
+    // *** THE TWO CONTROLS. *** A stamped build resolves it, and a payload with no
+    // services at all has no probe depth to be unsure about.
+    expect(
+      codesOf(buildBackendSection({ topology: topology(), serverStatus: serverStatus(), buildIdentified: true })),
+    ).not.toContain('PROBE_DEPTH_UNVERIFIABLE')
+    expect(codesOf(buildBackendSection({ topology: topology(), serverStatus: serverStatus() }))).not.toContain(
+      'PROBE_DEPTH_UNVERIFIABLE',
+    )
+    expect(codesOf(buildBackendSection({ buildIdentified: false }))).not.toContain('PROBE_DEPTH_UNVERIFIABLE')
   })
 
   it('ignores a duplicate entry for a known service rather than letting the last one win', () => {

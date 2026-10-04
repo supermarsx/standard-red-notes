@@ -34,6 +34,14 @@ jest.mock('@standardnotes/snjs', () => ({
   isErrorResponse: (response: unknown) => Boolean((response as { error?: unknown })?.error),
   classNames: (...values: unknown[]) => values.filter(Boolean).join(' '),
   PrefKey: { StorageMaxUsageBytes: 'storageMaxUsageBytes' },
+  // `SettingName.create(name)` returns a RESULT, and `.getValue()` unwraps it to a
+  // SettingName OBJECT — not to the string. Both levels are modelled, because a
+  // one-level double resolves the string straight through and then every space row
+  // reads "not reported" for a reason that does not exist in production.
+  SettingName: {
+    NAMES: { FileUploadBytesUsed: 'FILE_UPLOAD_BYTES_USED', FileUploadBytesLimit: 'FILE_UPLOAD_BYTES_LIMIT' },
+    create: (name: string) => ({ getValue: () => ({ name }) }),
+  },
 }))
 
 jest.mock('@standardnotes/ui-services', () => ({
@@ -206,6 +214,14 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   featuresController: { isAdminUser: () => true, isEntitledToSharedVaults: () => true },
   subscriptionController: { onlineSubscription: { planName: 'PRO_PLAN', cancelled: false, endsAt: 0 } },
   getPreference: jest.fn().mockReturnValue(0),
+  // The account's OWN space figures, scoped to the requesting session — no user id
+  // in either direction. This is the surface the Space block went empty for want
+  // of, and the surface this pane wrongly recorded as not existing.
+  settings: {
+    getSubscriptionSetting: jest.fn().mockImplementation(async (name: { name: string }) => {
+      return name.name === 'FILE_UPLOAD_BYTES_USED' ? '1048576' : '10485760'
+    }),
+  },
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
   ...overrides,
 })
@@ -931,6 +947,76 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     expect(sectionRow('Admin role, as this client sees it')[1]).toBe('believed held')
     expect(text).toContain('Account and access')
     expect(text).toContain('Space')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The Space block can finally report                                       */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE BLOCK WAS EMPTY BECAUSE THIS TAB PASSED NOTHING. ***
+   *
+   * Every Space row read "not reported" on every deployment, and the reason
+   * recorded for it was that the only reader of these two numbers was the admin
+   * Users tab, which reaches them BY USER ID — so a self-scoped reading was said not
+   * to exist. It does: `settings.getSubscriptionSetting` answers for the requesting
+   * session and carries no identifier either way, which is how the account's own
+   * Files preferences pane has always read them. The block now reports.
+   */
+  it('reports the account’s own space figures, read self-scoped with no identifier', async () => {
+    const application = makeApplication()
+    await openAccount(application)
+
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('1')
+    expect(sectionRow('Server file allowance, whole MB')[1]).toBe('10')
+    expect(sectionRow('Server file allowance used')[1]).toBe('0-25%')
+    expect(sectionRow('Room for a file upload')[1]).toBe('room available')
+
+    // Precondition on the surface itself: it is asked for exactly the two settings,
+    // and nothing it was handed could carry an account identifier.
+    const asked = application.settings.getSubscriptionSetting.mock.calls.map(([name]: [{ name: string }]) => name.name)
+    expect(asked).toEqual(['FILE_UPLOAD_BYTES_USED', 'FILE_UPLOAD_BYTES_LIMIT'])
+  })
+
+  it('reports a read that threw as a FAILED read, not as a figure nobody asked for', async () => {
+    // *** THE DISCRIMINATION, END TO END. *** The two kinds of empty had to be
+    // distinguishable, and until this wiring landed only one of them was reachable.
+    const text = await openAccount(
+      makeApplication({
+        settings: { getSubscriptionSetting: jest.fn().mockRejectedValue(new Error('refused')) },
+      }),
+    )
+
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
+    expect(text).toContain('asked for and did not arrive')
+    expect(text).not.toContain('does not read this account’s own space figures')
+  })
+
+  it('reports a read that answered nothing as a failed read too, and never as a zero', async () => {
+    const text = await openAccount(
+      makeApplication({ settings: { getSubscriptionSetting: jest.fn().mockResolvedValue(undefined) } }),
+    )
+
+    // A request that succeeded carrying no usage figure is still a read that did not
+    // produce one. What it must never be is a measured zero.
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
+    expect(sectionRow('Server file bytes used, whole MB')[1]).not.toBe('0')
+    expect(sectionRow('Room for a file upload')[1]).toBe('not reported')
+    expect(text).toContain('asked for and did not arrive')
+  })
+
+  it('does not let an unparseable setting become a byte count', async () => {
+    const text = await openAccount(
+      makeApplication({ settings: { getSubscriptionSetting: jest.fn().mockResolvedValue('not a number') } }),
+    )
+
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
+    expect(text).not.toContain('not a number')
+    // Asserted on the FINDING rather than on the row alone: `safeCount` would refuse
+    // a NaN at the row anyway, so a row-only assertion passes even when the parse
+    // guard is gone — and then an unparseable setting silently counts as a figure
+    // that arrived, and the block stops reporting that the read produced nothing.
+    expect(text).toContain('asked for and did not arrive')
   })
 
   /**

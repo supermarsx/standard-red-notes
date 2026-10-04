@@ -901,11 +901,23 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
   /**
    * *** AN EMPTY SPACE BLOCK IS A FACT, AND THERE ARE TWO OF THEM. ***
    *
-   * Every row here reading "not reported" was treated as cosmetic noise and was in
-   * fact the only trace, anywhere in a full diagnostics report, of a files
-   * subsystem that was completely broken: the operator's listing aborted, their
-   * downloads hung, and their usage read zero. So the two kinds of empty are
-   * separated, and the one that is a symptom carries a verdict.
+   * Every row here read "not reported" on every deployment, and the cause was a
+   * WIRING GAP: the tab supplied no space fields at all. That is now fixed, so the
+   * emptiness has become informative rather than constant — which is the only
+   * condition under which distinguishing its two kinds is worth anything.
+   *
+   * A CORRECTION IS RECORDED HERE RATHER THAN QUIETLY DROPPED, because it is the
+   * kind of attribution that gets re-derived from memory by the next reader. This
+   * emptiness was briefly believed to be the visible trace of a broken files
+   * subsystem — an operator whose listing aborted, whose downloads hung and whose
+   * usage read 0 B. It was not. Their 0 B came from an unrelated defect in the
+   * account's own quota pane, where an unread server reading fell through to a
+   * `useState(0)` initial value; this block was empty on every deployment, working
+   * or not, and so could not have been evidence about any of them. The DISTINCTION
+   * below still earns its place — a read that failed and a read nobody attempted
+   * must not render alike, for the same reason a collection must not answer `[]` to
+   * both "none" and "not read yet" — but it is not a files-lane signal and must not
+   * be read as one.
    *
    * Emitted only when no server figure arrived at all. One figure present means the
    * read worked and the rows above carry it.
@@ -920,7 +932,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
         code: safeConstant('ACCOUNT_SPACE_READ_FAILED'),
         title: 'This account’s space figures were asked for and did not arrive',
         detail:
-          'The rows above are empty because the read FAILED, not because this build does not look. That makes the emptiness a symptom rather than a gap: the same subsystem that reports an account’s uploaded bytes is the one that serves its files, so a usage figure that will not arrive — or arrives as zero and stays there — belongs with failing attachments rather than beside them. Read this with the files rows in the Database & internal comms section, and with the finding there saying that nothing on this screen establishes an authorized file transfer.',
+          'The rows above are empty because the read FAILED, not because this build does not look. These two numbers are per-account SETTINGS served by the auth service, so a read that will not produce them points at the session or at auth — not at the files service, which neither stores nor serves them. Do not read this as evidence about attachments: a deployment whose file transfers are completely broken reports these figures perfectly, and a deployment that cannot report them may transfer files without trouble. If attachments are the symptom, the files rows in the Database & internal comms section are the place, together with the finding there saying that nothing on that screen establishes an authorized transfer.',
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
       }),
@@ -936,9 +948,9 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
     findings.push(
       diagnosticFinding({
         code: safeConstant('ACCOUNT_SPACE_NOT_READ'),
-        title: 'This build does not read this account’s own space figures',
+        title: 'This caller did not ask for this account’s own space figures',
         detail:
-          'The rows above are empty because nothing asked, and that is said here rather than left to look like a quiet deployment: an empty Space block has already been mistaken for cosmetic noise over a files subsystem that was entirely broken. What is missing is this account’s own uploaded-bytes figure and allowance — the same two numbers the admin Users tab already shows for any OTHER account, which it reaches by user id. Nothing on this screen may carry an account identifier, so the field this pane needs is a SELF-scoped reading of those two numbers: a used count and a limit count, for the requesting session, with no identifier in either direction. Until one exists, treat the Space rows as unread rather than as zero.',
+          'The rows above are empty because nothing asked, and that is said here rather than left to look like a quiet deployment with nothing stored. It is a gap in the CALLER, not in the deployment, and it is no longer the state the diagnostics tab is in: it reads both figures from the requesting session’s own subscription settings, which carry no account identifier in either direction. A model built without them — a test, or a future caller — reports this instead of a figure it never looked for. Treat the Space rows as unread, never as zero.',
         verdict: 'undetermined',
         evidence: EVIDENCE_ABSENT,
       }),

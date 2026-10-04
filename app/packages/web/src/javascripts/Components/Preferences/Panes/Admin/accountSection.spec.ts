@@ -526,16 +526,25 @@ describe('the account file allowance', () => {
     expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
     expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.verdict).toBe('broken')
     expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.detail).toContain('read FAILED')
+    // *** AND IT DOES NOT ATTRIBUTE ITSELF TO THE FILES LANE. *** These figures are
+    // per-account settings served by auth; a deployment whose transfers are entirely
+    // broken reports them perfectly. The first draft of this finding said the
+    // opposite, which would have pointed an operator at the wrong subsystem.
+    expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.detail).toContain('not at the files service')
+    expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.detail).toContain(
+      'Do not read this as evidence about attachments',
+    )
     expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOT_READ')
     expect(model.worstVerdict).toBe('broken')
   })
 
-  it('reports an unattempted space read as the panel gap it is, and names what is needed', () => {
+  it('reports an unattempted space read as the caller gap it is, not as a quiet deployment', () => {
     const model = emptySpace('not-attempted')
 
     expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
     expect(findingOf(model, 'ACCOUNT_SPACE_NOT_READ')?.verdict).toBe('undetermined')
-    expect(findingOf(model, 'ACCOUNT_SPACE_NOT_READ')?.detail).toContain('SELF-scoped reading')
+    expect(findingOf(model, 'ACCOUNT_SPACE_NOT_READ')?.detail).toContain('a gap in the CALLER')
+    expect(findingOf(model, 'ACCOUNT_SPACE_NOT_READ')?.detail).toContain('never as zero')
     expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
     // *** THE DISCRIMINATION. *** The two renderings must differ, and the one
     // that is a symptom is the only one with a verdict.

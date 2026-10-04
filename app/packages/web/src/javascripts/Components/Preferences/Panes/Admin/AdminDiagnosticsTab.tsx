@@ -1,5 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useState } from 'react'
-import { isErrorResponse, PrefKey } from '@standardnotes/snjs'
+import { isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -47,7 +47,7 @@ import DiagnosticsSection from './DiagnosticsSection'
 import { buildWebsocketSection, socketFallbackIsDeferred } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
-import { buildAccountSection, type AccountObservations } from './accountSection'
+import { buildAccountSection, type AccountObservations, type SpaceFigureSource } from './accountSection'
 import {
   buildBrowserSection,
   observeBrowserCapabilities,
@@ -60,6 +60,20 @@ import { buildDiagnosticsReport } from './diagnosticsReport'
 type Props = {
   application: WebApplication
   noteIfForbidden: (response: { status?: number }) => void
+}
+
+/**
+ * One reading of this account's server-side space figures.
+ *
+ * `source` is the closed value the Account section needs in order to tell a read
+ * that failed from one nobody attempted; the two byte counts are present only when
+ * the server carried them. Both figures absent with `read-and-failed` is the honest
+ * description of a request that was made and produced nothing.
+ */
+type AccountSpaceReading = {
+  source: SpaceFigureSource
+  used?: number
+  limit?: number
 }
 
 /**
@@ -266,6 +280,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const [statusError, setStatusError] = useState<string | null>(null)
   /** Absent until the first collection run resolves; every Browser row then reads "not reported". */
   const [browserObservations, setBrowserObservations] = useState<BrowserObservations | undefined>(undefined)
+  /**
+   * This account's space figures, and WHY they are absent when they are.
+   *
+   * `undefined` while the read is in flight, so the Space block says neither kind of
+   * empty before it knows which — an in-flight read reported as "nobody asked" would
+   * be the same conflation the block's finding exists to end, one frame early.
+   */
+  const [spaceReading, setSpaceReading] = useState<AccountSpaceReading | undefined>(undefined)
 
   const tabState = useTabState({ defaultTab: 'diag-overview' })
   const { setActiveTab } = tabState
@@ -375,6 +397,68 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     void loadDeployment()
     void loadServerStatus()
   }, [loadDiagnostics, loadDeployment, loadServerStatus])
+
+  /**
+   * This account's own server-side space figures, read on mount.
+   *
+   * *** A SELF-SCOPED SURFACE DOES EXIST, AND THIS PANE WRONGLY CONCLUDED IT DID
+   * NOT. *** The Space block read "not reported" on every deployment because the
+   * tab supplied no space fields at all, and the reason recorded for that was that
+   * the only reader of these two numbers was the admin Users tab, which reaches
+   * them by USER ID — and no identifier may enter this pane. That was wrong about
+   * the surface: `settings.getSubscriptionSetting` answers for the REQUESTING
+   * SESSION, carries no identifier in either direction, and the account's own
+   * Files preferences pane has always used it. So the block can report, and does.
+   *
+   * THREE OUTCOMES, kept apart, because the whole point of the Space block's
+   * finding is that two kinds of empty must not render alike:
+   *   - figures arrive          -> the rows carry them, no finding
+   *   - the read THREW          -> `read-and-failed`, and the emptiness is a symptom
+   *   - the read answered none  -> `read-and-failed` as well: the request succeeded
+   *     and the server carried no usage figure, which is still a read that did not
+   *     produce one, and is emphatically not "nobody asked".
+   *
+   * Only bytes cross this boundary: each setting is parsed to a finite
+   * non-negative number and the string is discarded, so no server text can reach a
+   * row even though these settings are free-form on the wire. The rows reduce the
+   * numbers to buckets and whole megabytes, as they already did.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    const readBytes = async (name: string): Promise<number | undefined> => {
+      const raw = await application.settings.getSubscriptionSetting(SettingName.create(name).getValue())
+      const parsed = typeof raw === 'string' ? Number.parseFloat(raw) : Number.NaN
+
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+    }
+
+    void (async (): Promise<AccountSpaceReading> => {
+      const used = await readBytes(SettingName.NAMES.FileUploadBytesUsed)
+      const limit = await readBytes(SettingName.NAMES.FileUploadBytesLimit)
+
+      return {
+        source: 'read-and-failed',
+        ...(used === undefined ? {} : { used }),
+        ...(limit === undefined ? {} : { limit }),
+      }
+    })().then(
+      (reading) => {
+        if (!cancelled) {
+          setSpaceReading(reading)
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setSpaceReading({ source: 'read-and-failed' })
+        }
+      },
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [application])
 
   /**
    * One browser collection run, on mount.
@@ -628,23 +712,26 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       // and a `?? 0` INSIDE the closure keeps a thrown read answering nothing.
       localSoftCapBytes: observed(() => application.getPreference(PrefKey.StorageMaxUsageBytes) ?? 0),
       /**
-       * SAID, NOT IMPLIED. Nothing in this build reads this account's own uploaded
-       * bytes or its allowance: the only surface that reports either is the admin
-       * Users tab, which reaches them by USER ID, and no identifier may enter this
-       * pane. So the Space rows are empty because nobody asked — stated here as a
-       * closed value so the section can tell that apart from a read that was
-       * attempted and failed. An all-empty Space block was once read as cosmetic
-       * noise and was the only trace in a whole report of a files subsystem that
-       * was completely broken.
+       * The account's own space figures, from the self-scoped subscription settings
+       * read above. Spread rather than assigned, so an absent figure stays absent
+       * instead of arriving as a zero, and `spaceFigureSource` is carried only once
+       * the read has resolved: while it is in flight the block says neither kind of
+       * empty, which is the honest answer for one frame.
        */
-      spaceFigureSource: 'not-attempted',
+      ...(spaceReading === undefined
+        ? {}
+        : {
+            spaceFigureSource: spaceReading.source,
+            ...(spaceReading.used === undefined ? {} : { fileUploadBytesUsed: spaceReading.used }),
+            ...(spaceReading.limit === undefined ? {} : { fileUploadBytesLimit: spaceReading.limit }),
+          }),
       ...(payload?.protocol?.version === undefined ? {} : { protocolVersion: payload.protocol.version }),
       ...(payload?.protocol?.serverOperations === undefined
         ? {}
         : { serverOperations: payload.protocol.serverOperations }),
       ...(transport?.fallbackReason === undefined ? {} : { fallbackReason: transport.fallbackReason }),
     }
-  }, [application, payload, transport])
+  }, [application, payload, transport, spaceReading])
 
   const websocketModel = useMemo(
     // `counters` and `ledger` are NOT passed: nothing in this build produces
@@ -672,8 +759,20 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     // `datastore` and `queues` are NOT passed: no endpoint reports a connection
     // state, a migration count, a pool figure or a queue identity yet, and those
     // rows say which field they are waiting for.
-    () => buildBackendSection({ serverStatus, statusError, topology, outcomes }),
-    [serverStatus, statusError, topology, outcomes],
+    // `buildIdentified` IS passed, and it is one boolean rather than the revision:
+    // the section needs only "did this build record one", for the single inference
+    // that a probe reporting no depth cannot be read on an image nobody can place.
+    // Threaded from the same marker Environment & setup reads, so the two sections
+    // cannot disagree about whether the build is stamped.
+    () =>
+      buildBackendSection({
+        serverStatus,
+        statusError,
+        topology,
+        buildIdentified: !describeDeployment(deployment).unstamped,
+        outcomes,
+      }),
+    [serverStatus, statusError, topology, deployment, outcomes],
   )
   const accountModel = useMemo(
     () =>
