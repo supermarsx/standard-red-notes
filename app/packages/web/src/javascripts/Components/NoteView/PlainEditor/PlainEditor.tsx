@@ -68,6 +68,13 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
     const tabObserverDisposer = useRef<Disposer | undefined>(undefined)
     const mutationObserver = useRef<MutationObserver | null>(null)
+    /**
+     * THIS editor's own textarea. The tiled editor mounts one NoteView — and so one
+     * PlainEditor — per open note, and every one renders `ElementIds.NoteTextEditor`,
+     * so `document.getElementById` resolves to whichever note is first in the document.
+     * See `focusEditor`.
+     */
+    const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
     useImperativeHandle(ref, () => ({
       focus() {
@@ -219,8 +226,24 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
       return disposer
     }, [application, scrollMobileCursorIntoViewAfterWebviewResize])
 
+    /**
+     * Focus THIS note's body, and never a sibling tile's.
+     *
+     * Standard Red Notes (t112): this used to be
+     * `document.getElementById(ElementIds.NoteTextEditor)?.focus()`, which with two or
+     * more notes open focused whichever note was FIRST in the document. Both routes in
+     * reach it per instance already — `useImperativeHandle` (NoteView's `plainEditorRef`,
+     * which is how pressing Enter in the title moves into the body) and the template-note
+     * autofocus effect — so the global lookup was the only thing making them land on the
+     * wrong note. Pressing Enter after renaming a title therefore dropped the cursor into
+     * a different note's text.
+     *
+     * A null ref (preview mode, or the textarea remounting for a spellcheck change) now
+     * means "nothing of mine to focus", which is the honest answer; before, it meant
+     * "focus someone else's".
+     */
     const focusEditor = useCallback(() => {
-      const element = document.getElementById(ElementIds.NoteTextEditor)
+      const element = textareaRef.current
       if (element) {
         lastEditorFocusEventSource.current = EditorEventSource.Script
         element.focus()
@@ -275,6 +298,11 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
     const onRef = useCallback(
       (ref: HTMLTextAreaElement | null) => {
+        // Recorded before the early return below, so this instance keeps a handle on its
+        // own textarea even once the tab observer is installed, and drops it (null) when
+        // the textarea unmounts.
+        textareaRef.current = ref
+
         if (tabObserverDisposer.current || !ref) {
           return
         }
@@ -284,13 +312,12 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
         /**
          * Insert 4 spaces when a tab key is pressed, only used when inside of the text editor.
          * If the shift key is pressed first, this event is not fired.
+         *
+         * The element comes from the ref, not from `getElementById(NoteTextEditor)`: with
+         * several tiles open that id is duplicated, so the handler and the mutation
+         * observer below would have been attached to another note's textarea.
          */
-        const editor = document.getElementById(ElementIds.NoteTextEditor) as HTMLInputElement
-
-        if (!editor) {
-          console.error('Editor is not yet mounted; unable to add tab observer.')
-          return
-        }
+        const editor = ref
 
         tabObserverDisposer.current = application.keyboardService.addCommandHandler({
           element: editor,
