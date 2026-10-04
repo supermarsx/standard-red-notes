@@ -6,9 +6,6 @@ import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import IconPicker from '@/Components/Icon/IconPicker'
 import TagColorPicker from '@/Components/Tags/TagColorPicker'
-import { ElementIds } from '@/Constants/ElementIDs'
-import { SuperEditorContentId } from '../SuperEditor/Constants'
-import { bookmarkAnchorDomId } from '../SuperEditor/Lexical/Nodes/BookmarkAnchorNode'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import {
@@ -17,8 +14,8 @@ import {
   DEFAULT_BOOKMARK_ICON,
   collectAllBookmarks,
   filterBookmarks,
-  relocateBySnippet,
 } from '@/Bookmarks/bookmarks'
+import { jumpToBookmarkSpot } from '@/Bookmarks/jumpToBookmarkSpot'
 
 type Props = {
   application: WebApplication
@@ -99,13 +96,10 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
   /**
    * Open a bookmark's note and jump to the marked spot.
    *
-   *  - Super: find the inline anchor element by its stable DOM id and scroll it
-   *    into view. The editor mounts asynchronously after the pane is presented, so
-   *    we retry over a few animation frames; if the anchor can't be found (e.g. the
-   *    note was edited to remove the anchor), we no-op gracefully (no throw) after
-   *    falling back to the coarse scroll position.
-   *  - Plain: re-locate the offset via the stored snippet (offsets DRIFT on edit;
-   *    the snippet mitigates), then set the textarea selection + scroll.
+   * The jump itself is {@link jumpToBookmarkSpot}, which resolves the editor inside the
+   * ONE mounted NoteView showing this note — every editor id is duplicated across open
+   * tabs, so a document-wide lookup would scroll (and, for a plaintext note, move the
+   * caret in) whichever note happens to be first.
    */
   const openAndJump = useCallback(
     (entry: AggregatedBookmark) => {
@@ -117,54 +111,7 @@ const BookmarksView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       void application.itemListController.selectItemUsingInstance(note, true)
       presentPane(AppPaneId.Editor)
 
-      const anchor = entry.bookmark.anchor
-      let attempts = 0
-      const MAX_ATTEMPTS = 40 // ~40 frames (<1s) for the editor to mount.
-
-      const tryJump = () => {
-        attempts += 1
-
-        if (anchor.kind === 'super') {
-          const el = document.getElementById(bookmarkAnchorDomId(anchor.bookmarkId))
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-            return
-          }
-          // Fall back to the coarse scroll position once we give up finding the anchor.
-          if (attempts >= MAX_ATTEMPTS) {
-            if (anchor.scrollTop !== undefined) {
-              const content = document.getElementById(SuperEditorContentId)
-              if (content) {
-                content.scrollTop = anchor.scrollTop
-              }
-            }
-            return
-          }
-        } else {
-          const textarea = document.getElementById(ElementIds.NoteTextEditor) as HTMLTextAreaElement | null
-          if (textarea) {
-            const text = textarea.value ?? note.text ?? ''
-            const offset = relocateBySnippet(text, anchor.offset, anchor.snippet)
-            textarea.focus()
-            try {
-              textarea.setSelectionRange(offset, offset)
-            } catch {
-              /* ignore selection errors on unusual inputs */
-            }
-            if (anchor.scrollTop !== undefined) {
-              textarea.scrollTop = anchor.scrollTop
-            }
-            return
-          }
-          if (attempts >= MAX_ATTEMPTS) {
-            return
-          }
-        }
-
-        requestAnimationFrame(tryJump)
-      }
-
-      requestAnimationFrame(tryJump)
+      jumpToBookmarkSpot(note.uuid, entry.bookmark.anchor, note.text ?? '')
     },
     [application, presentPane],
   )
