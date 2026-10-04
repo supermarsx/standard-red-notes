@@ -12,12 +12,40 @@ export const CHECKLIST_TODO_ID_STATE_KEY = 'srnChecklistTodoId'
 export const CHECKLIST_SCHEDULE_STATE_KEY = 'srnChecklistSchedule'
 export const CHECKLIST_DUE_AT_STATE_KEY = 'srnChecklistDueAt'
 export const CHECKLIST_RECURRENCE_STATE_KEY = 'srnChecklistRecurrence'
+export const CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY = 'srnChecklistOccurrenceSummary'
 export const CHECKLIST_SCHEDULE_VERSION = 1
+export const CHECKLIST_OCCURRENCE_SUMMARY_VERSION = 1
 
 export type ChecklistSchedule = {
   version: typeof CHECKLIST_SCHEDULE_VERSION
   dueAt: string
   recurrence?: ChecklistRecurrence
+}
+
+/**
+ * Standard Red Notes: the record a generation pass leaves behind for the
+ * occurrences its cap could NOT write down.
+ *
+ * It is a checklist row so the user sees it where the work is, but it is a
+ * RECORD, not work: it carries no `dueAt` and no recurrence, which is what makes
+ * it structurally incapable of being mistaken for an occurrence —
+ * `todoDueBucket` reads `'unscheduled'`, `formatChecklistDue` returns nothing,
+ * and `$applyChecklistItemChecked` cannot advance it because advancing requires
+ * both a deadline and a rule.
+ *
+ * The row is identified by THIS STATE KEY and never by its wording: a pass must
+ * be able to find and update its own summary rather than appending a second one,
+ * and matching on text would break the moment the copy or the locale changes.
+ * `sourceTodoId` ties the record to the recurring row it describes, so a document
+ * with several recurring tasks gets one summary each rather than one shared.
+ */
+export type ChecklistOccurrenceSummaryState = {
+  version: typeof CHECKLIST_OCCURRENCE_SUMMARY_VERSION
+  /** How many occurrences were NOT generated. Always at least 1. */
+  missedCount: number
+  oldestMissedAt: string
+  newestMissedAt: string
+  sourceTodoId?: string
 }
 
 type ClearedChecklistSchedule = {
@@ -133,6 +161,53 @@ const legacyChecklistRecurrenceState = createState(CHECKLIST_RECURRENCE_STATE_KE
 })
 
 /**
+ * Coerce a stored occurrence-summary record. Every field must be present and
+ * resolvable: a half-readable record would claim a count or a date range it
+ * cannot support, so anything unresolvable reads as "this row is not a summary"
+ * rather than as a summary with holes in it.
+ */
+export function normalizeChecklistOccurrenceSummary(value: unknown): ChecklistOccurrenceSummaryState | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const summary = value as Record<string, unknown>
+  if (summary.version !== CHECKLIST_OCCURRENCE_SUMMARY_VERSION) {
+    return undefined
+  }
+  const missedCount = summary.missedCount
+  if (typeof missedCount !== 'number' || !Number.isSafeInteger(missedCount) || missedCount < 1) {
+    return undefined
+  }
+  const oldestMissedAt = normalizeChecklistDueAt(summary.oldestMissedAt)
+  const newestMissedAt = normalizeChecklistDueAt(summary.newestMissedAt)
+  if (!oldestMissedAt || !newestMissedAt || Date.parse(oldestMissedAt) > Date.parse(newestMissedAt)) {
+    return undefined
+  }
+  const sourceTodoId = normalizeChecklistTodoId(summary.sourceTodoId)
+  if (summary.sourceTodoId !== undefined && !sourceTodoId) {
+    return undefined
+  }
+  return {
+    version: CHECKLIST_OCCURRENCE_SUMMARY_VERSION,
+    missedCount,
+    oldestMissedAt,
+    newestMissedAt,
+    ...(sourceTodoId ? { sourceTodoId } : {}),
+  }
+}
+
+/**
+ * Deliberately NOT `resetOnCopyNode`, unlike the identity and schedule states.
+ * Those reset so a copied row becomes a distinct TASK; a copied record is not a
+ * new task to be done, and dropping the marker would turn the copy into a
+ * plain-looking row that then counts towards the progress bar and is swept up by
+ * bulk completion. A duplicated record is the safer of the two failures.
+ */
+const checklistOccurrenceSummaryState = createState(CHECKLIST_OCCURRENCE_SUMMARY_STATE_KEY, {
+  parse: normalizeChecklistOccurrenceSummary,
+})
+
+/**
  * Checklist metadata uses Lexical NodeState on the ordinary ListItemNode. The
  * serialized node therefore remains `type: "listitem"`. NodeState-capable
  * clients preserve the metadata and Yjs syncs it natively; older clients keep
@@ -242,6 +317,86 @@ export function $getChecklistRecurrence(item: ListItemNode): ChecklistRecurrence
 export function $setChecklistRecurrence(item: ListItemNode, value: unknown): ChecklistRecurrence | undefined {
   const dueAt = $getChecklistDueAt(item)
   return $setChecklistSchedule(item, dueAt, dueAt ? value : undefined)?.recurrence
+}
+
+export function $getChecklistOccurrenceSummary(item: ListItemNode): ChecklistOccurrenceSummaryState | undefined {
+  return $getState(item, checklistOccurrenceSummaryState)
+}
+
+/**
+ * Mark (or re-mark) a row as the occurrence-summary record for a recurring task.
+ *
+ * Writing the marker CLEARS any schedule the row carries, because "no `dueAt`,
+ * no recurrence" is the property that stops a record from reading as an
+ * occurrence. Enforcing it here rather than at each call site means no caller can
+ * produce a summary row that looks due.
+ *
+ * Returns the record actually stored, or `undefined` when the value could not be
+ * resolved — in which case nothing is written and the row is left alone, so a
+ * failed update can never silently blank an existing record.
+ */
+export function $setChecklistOccurrenceSummary(
+  item: ListItemNode,
+  value: unknown,
+): ChecklistOccurrenceSummaryState | undefined {
+  const summary = normalizeChecklistOccurrenceSummary(value)
+  if (!summary) {
+    return undefined
+  }
+  $setState(item, checklistOccurrenceSummaryState, summary)
+  if ($getChecklistSchedule(item)) {
+    $setChecklistSchedule(item, undefined, undefined)
+  }
+  return summary
+}
+
+/** Stop a row being a summary record, leaving it an ordinary task. */
+export function $clearChecklistOccurrenceSummary(item: ListItemNode): boolean {
+  if (!$getChecklistOccurrenceSummary(item)) {
+    return false
+  }
+  $setState(item, checklistOccurrenceSummaryState, undefined)
+  return true
+}
+
+/**
+ * True for a row that is an occurrence-summary record.
+ *
+ * The state key is the ONLY test. Nothing may identify a summary row by its
+ * wording: the copy is user-visible prose that changes with locale and with
+ * editing, and a text match would start failing silently the first time either
+ * moves.
+ */
+export function $isChecklistOccurrenceSummaryItem(node: LexicalNode | null | undefined): node is ListItemNode {
+  return $isListItemNode(node) && $getChecklistOccurrenceSummary(node) !== undefined
+}
+
+/**
+ * The summary record describing `sourceTodoId`, in document order, so a pass
+ * updates the row it already wrote instead of appending a second one.
+ *
+ * Several matches mean the user duplicated the row; the first is updated and the
+ * rest are left exactly as they are. Deleting a row the user created is not this
+ * function's call to make.
+ */
+export function $findChecklistOccurrenceSummaryItem(sourceTodoId: string): ListItemNode | undefined {
+  const stack = [...$getRoot().getChildren()].reverse()
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if ($isListItemNode(node) && $getChecklistOccurrenceSummary(node)?.sourceTodoId === sourceTodoId) {
+      return node
+    }
+    if ($isElementNode(node)) {
+      const children = node.getChildren()
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push(children[index])
+      }
+    }
+  }
+  return undefined
 }
 
 /** A recurring schedule always represents its next active (unchecked) occurrence. */
