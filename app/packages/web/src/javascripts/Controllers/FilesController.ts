@@ -52,6 +52,30 @@ import { BulkFileProgress, BulkFileResult, runBulkFileOperation } from '@/Compon
 const UnprotectedFileActions = [FileItemActionType.ToggleFileProtection]
 const NonMutatingFileActions = [FileItemActionType.DownloadFile, FileItemActionType.PreviewFile]
 
+/**
+ * Standard Red Notes: how long the explicit "download/save this file" flow waits
+ * with NO decrypted bytes arriving before it tears the transfer down and says so.
+ *
+ * It needs one because nothing else on this path has a reachable bound. The
+ * per-request fetch deadline for a file transfer is `FILE_TRANSFER_REQUEST_TIMEOUT_MS`
+ * (ONE HOUR, because a legitimate large chunk may genuinely take that long), and
+ * the `/files/` reverse-proxy route is configured with a matching `proxy_read_timeout
+ * 3600s`. So a `/files/v1/files` range request that stalls left this method awaiting
+ * `files.downloadFile` for an hour with a "Downloading file … (0%)" progress toast on
+ * screen, no error, and no way for the user to tell a stalled transfer from a slow
+ * one. <FilePreview> already bounds its own attempts this way
+ * (`PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS`); the save path did not, which is why the same
+ * underlying stall showed up as "this file can't be previewed" in one place and as a
+ * permanent spinner in the other.
+ *
+ * This bounds the CLIENT's wait so the failure becomes visible. It does not and
+ * cannot fix whatever makes the request stall.
+ */
+export const FILE_DOWNLOAD_IDLE_TIMEOUT_MS = 45_000
+export const FILE_DOWNLOAD_STALLED_MESSAGE = `The file server sent no data for ${Math.round(
+  FILE_DOWNLOAD_IDLE_TIMEOUT_MS / 1000,
+)} seconds, so the download was stopped.`
+
 type FileContextMenuLocation = { x: number; y: number }
 
 export enum FilesControllerEvent {
@@ -403,6 +427,27 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       canShowProgressNotification = await this.mobileDevice.canDisplayNotifications()
     }
 
+    // Bound the transfer on IDLENESS, not on total duration: a legitimately huge
+    // file may take far longer than the window below, but it keeps delivering
+    // chunks, and every chunk re-arms the timer. Only a transfer that delivers
+    // nothing at all for the whole window is declared stalled.
+    const abortController = new AbortController()
+    let stalledWithoutBytes = false
+    let idleTimeout: ReturnType<typeof setTimeout> | undefined
+    const clearIdleTimeout = () => {
+      if (idleTimeout !== undefined) {
+        clearTimeout(idleTimeout)
+        idleTimeout = undefined
+      }
+    }
+    const armIdleTimeout = () => {
+      clearIdleTimeout()
+      idleTimeout = setTimeout(() => {
+        stalledWithoutBytes = true
+        abortController.abort()
+      }, FILE_DOWNLOAD_IDLE_TIMEOUT_MS)
+    }
+
     try {
       let saver = this.shouldUseStreamingAPI ? new StreamingFileSaver(file.name) : new ClassicFileSaver()
       let didSelectFileToStreamTo = false
@@ -438,35 +483,51 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
 
       let lastProgress: FileDownloadProgress | undefined
 
-      const result = await this.files.downloadFile(file, async (decryptedBytes, progress) => {
-        if (isUsingStreamingSaver(saver)) {
-          await saver.pushBytes(decryptedBytes)
-        } else {
-          decryptedBytesArray.push(decryptedBytes)
-        }
+      armIdleTimeout()
+      const result = await this.files.downloadFile(
+        file,
+        async (decryptedBytes, progress) => {
+          armIdleTimeout()
 
-        const progressPercent = Math.floor(progress.percentComplete)
+          if (isUsingStreamingSaver(saver)) {
+            await saver.pushBytes(decryptedBytes)
+          } else {
+            decryptedBytesArray.push(decryptedBytes)
+          }
 
-        if (this.mobileDevice && canShowProgressNotification) {
-          this.mobileDevice
-            .displayNotification({
-              id: downloadingToastId,
-              title: `Downloading file "${file.name}"`,
-              android: {
-                progress: { max: 100, current: progressPercent, indeterminate: false },
-                onlyAlertOnce: true,
-              },
+          const progressPercent = Math.floor(progress.percentComplete)
+
+          if (this.mobileDevice && canShowProgressNotification) {
+            this.mobileDevice
+              .displayNotification({
+                id: downloadingToastId,
+                title: `Downloading file "${file.name}"`,
+                android: {
+                  progress: { max: 100, current: progressPercent, indeterminate: false },
+                  onlyAlertOnce: true,
+                },
+              })
+              .catch(console.error)
+          } else {
+            updateToast(downloadingToastId, {
+              message: fileProgressToHumanReadableString(progress, file.name, { showPercent: true }),
+              progress: progressPercent,
             })
-            .catch(console.error)
-        } else {
-          updateToast(downloadingToastId, {
-            message: fileProgressToHumanReadableString(progress, file.name, { showPercent: true }),
-            progress: progressPercent,
-          })
-        }
+          }
 
-        lastProgress = progress
-      })
+          lastProgress = progress
+        },
+        { signal: abortController.signal },
+      )
+      clearIdleTimeout()
+
+      // An aborted transfer resolves WITHOUT an error (the download operation
+      // treats its own cancellation as control flow), so a stalled download
+      // would otherwise fall through to "Successfully downloaded file" having
+      // written a truncated file. Name the stall instead.
+      if (stalledWithoutBytes) {
+        throw new Error(FILE_DOWNLOAD_STALLED_MESSAGE)
+      }
 
       if (result instanceof ClientDisplayableError) {
         throw new Error(result.text)
@@ -503,14 +564,31 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
         })
       }
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        console.error(error)
+      // Our OWN idle abort surfaces as a DOMException AbortError on some paths
+      // (the request handler rethrows the caller's cancellation), and that branch
+      // below is reserved for a cancellation the USER asked for. Resolve the stall
+      // to its stated failure first so it can never be silently swallowed.
+      const failure = stalledWithoutBytes ? new Error(FILE_DOWNLOAD_STALLED_MESSAGE) : error
+
+      if (!(failure instanceof DOMException && failure.name === 'AbortError')) {
+        console.error(failure)
 
         addToast({
           type: ToastType.Error,
-          message: formatFileDownloadError(error),
+          message: formatFileDownloadError(failure),
+          actions: [
+            {
+              label: 'Retry',
+              handler: (retryToastId: string) => {
+                dismissToast(retryToastId)
+                void this.downloadFile(file, directoryHandle)
+              },
+            },
+          ],
         })
       }
+    } finally {
+      clearIdleTimeout()
     }
 
     if (downloadingToastId) {
