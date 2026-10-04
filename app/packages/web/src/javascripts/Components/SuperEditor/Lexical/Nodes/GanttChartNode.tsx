@@ -11,6 +11,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import Icon from '@/Components/Icon/Icon'
 import MermaidSvgViewport from './MermaidSvgViewport'
 
 /**
@@ -290,13 +291,20 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
                   value={task.duration}
                   onChange={(e) => setTaskField(index, 'duration', e.target.value)}
                 />
+                {/* The mark is decorative: it closes nothing and reports no
+                    state, so the button carries the name and the glyph carries
+                    nothing. Before this it had NO aria-label and its entire
+                    content was one multiplication-sign character, which is what
+                    the accessible name resolved to — so naming the button here is
+                    a gain, not a swap. */}
                 <button
                   type="button"
-                  className="text-danger hover:bg-contrast rounded px-2"
+                  className="text-danger hover:bg-contrast flex rounded px-2 py-1"
                   title="Remove task"
+                  aria-label={`Remove task ${index + 1}`}
                   onClick={() => removeTask(index)}
                 >
-                  ×
+                  <Icon type="close" size="small" />
                 </button>
               </div>
             ))}

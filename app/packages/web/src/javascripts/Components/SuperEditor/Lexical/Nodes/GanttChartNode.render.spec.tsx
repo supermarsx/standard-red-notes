@@ -180,3 +180,54 @@ describe('GanttChartNode preview — routes through MermaidSvgViewport, not a ra
     expect(container.textContent).toContain('boom')
   })
 })
+
+/**
+ * The task editor's "remove task" control. It used to be a bare multiplication
+ * sign with no aria-label at all, so its accessible name WAS that character;
+ * naming the button and drawing a real glyph is therefore an accessibility gain
+ * rather than a swap.
+ *
+ * The assertions are shaped for the mapping-miss trap: an unmapped icon name is
+ * rendered by `Icon` as its own text inside a <label>, which typechecks cleanly
+ * and is invisible to an Icon-mocking spec.
+ */
+describe('GanttChartNode task editor — the remove control is a glyph, not a character', () => {
+  const removeButtons = () =>
+    Array.from(container.querySelectorAll('button')).filter((button) =>
+      (button.getAttribute('aria-label') ?? '').startsWith('Remove task'),
+    )
+
+  /** Open the task editor on a chart that already has a task. */
+  const openEditor = async () => {
+    await renderGantt(TASK_DATA)
+    // With a task present the editor starts closed, so the control is behind Edit.
+    expect(removeButtons()).toHaveLength(0)
+    const edit = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Edit',
+    ) as HTMLButtonElement
+    expect(edit).toBeDefined()
+    await act(async () => {
+      edit.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+
+  it('names the button, so the glyph itself carries nothing', async () => {
+    await openEditor()
+    const buttons = removeButtons()
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].getAttribute('aria-label')).toBe('Remove task 1')
+    expect(buttons[0].getAttribute('title')).toBe('Remove task')
+  })
+
+  it('renders a real svg and no icon-name text', async () => {
+    await openEditor()
+    const button = removeButtons()[0]
+    expect(button).toBeDefined()
+    expect(button.querySelector('svg')).not.toBeNull()
+    expect(button.querySelector('label')).toBeNull()
+    // Empty text: no character glyph left, and no icon name leaking out.
+    expect(button.textContent).toBe('')
+    expect(button.textContent ?? '').not.toContain('close')
+  })
+})
