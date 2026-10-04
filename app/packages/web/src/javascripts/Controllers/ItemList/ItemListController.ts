@@ -776,6 +776,97 @@ export class ItemListController
     await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
   }
 
+  /**
+   * Standard Red Notes: the notes-list DOUBLE-CLICK gesture — "open this note in
+   * a NEW tab instead of the current one".
+   *
+   * A double click is two clicks, and the first one has ALREADY run the ordinary
+   * single-click open, which took the active tab over with `uuid`. Only two other
+   * shapes were available and both are worse:
+   *
+   *  - Delay every single click by a double-click threshold so the first click
+   *    can be withheld. That taxes the app's most frequent interaction (clicking
+   *    a note) with ~250ms of dead time to pay for a rare gesture.
+   *  - Close `uuid` again and re-open it additively. That tears down and rebuilds
+   *    an editor that is already mounted, running a Super note back through the
+   *    checklist-ownership handover for no reason.
+   *
+   * So REPAIR the takeover instead: the note the tab held before the burst
+   * (`displaced`, captured by the row on the first click of the burst, together
+   * with that tab's index) is re-opened in its own tile AT THAT INDEX, and the
+   * double-clicked note is left active. The end state — both notes open, the
+   * displaced one in its original slot, the double-clicked one in a tab of its
+   * own and focused — is indistinguishable in the tab bar from having opened
+   * `uuid` additively in the first place, and costs exactly one extra controller
+   * with nothing closed.
+   *
+   * Interaction with the earlier editor-duplication fix (t99's
+   * `openingControllersByUuid` in ItemGroupController, which exists BECAUSE a
+   * second click on an already-selected row reaches `openNote` while the first
+   * open is still awaiting `initialize()`): this method never opens `uuid` a
+   * second time when it is already open, so it cannot reintroduce a duplicate
+   * tab for one note. The only note it opens is the displaced one, and only after
+   * confirming that note is NOT currently open.
+   */
+  openListItemInNewTabFromDoubleClick = async (
+    uuid: UuidString,
+    displaced: { uuid: UuidString; index: number } | undefined,
+  ): Promise<void> => {
+    const group = this.itemControllerGroup
+
+    const isOpen = (candidate: UuidString) =>
+      group.itemControllers.some((controller) => controller.item?.uuid === candidate)
+
+    if (!isOpen(uuid)) {
+      /**
+       * The first click did not actually open it — a protections prompt was
+       * declined, or a vault/account boundary cancelled the open. There is no
+       * takeover to repair, and the gesture still has to honour what it promises,
+       * so open it additively. (`openNoteInNewTile` is itself a no-op if the note
+       * cannot be resolved, which is the right answer here too.)
+       */
+      await this.openNoteInNewTile(uuid)
+      return
+    }
+
+    if (!displaced || displaced.uuid === uuid) {
+      // Nothing was open before the burst, or the same note already was: the note
+      // has its own tab and nothing was displaced.
+      return
+    }
+
+    if (isOpen(displaced.uuid)) {
+      // The displaced note is still open, so the single click never took its tab
+      // over — its tab was locked, and `uuid` was already given one of its own.
+      return
+    }
+
+    const previousItem = this.itemManager.findItem(displaced.uuid)
+    if (!previousItem) {
+      // No longer resolvable: an unsaved template that was never inserted, or a
+      // delete that landed in between. Nothing to restore.
+      return
+    }
+
+    try {
+      await this.itemControllerGroup.createItemController({
+        ...(previousItem.content_type === ContentType.TYPES.File
+          ? { file: previousItem as FileItem }
+          : { note: previousItem as SNNote }),
+        openInNewTile: true,
+        insertAtIndex: displaced.index,
+        keepActiveController: true,
+      })
+    } catch (error) {
+      if (error instanceof ChecklistEditorOpeningCanceledError) {
+        return
+      }
+      throw error
+    }
+
+    await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
+  }
+
   async openFile(fileUuid: string): Promise<void> {
     if (this.getActiveItemController()?.item.uuid === fileUuid) {
       return

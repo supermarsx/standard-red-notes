@@ -76,8 +76,26 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
     }
   }
 
+  /**
+   * Standard Red Notes: what the editor's active tab held when the current click
+   * burst began, captured on the FIRST click of the burst so `onDoubleClick`
+   * below can tell what the single-click open displaced. Held in a per-row ref
+   * because that is exactly the scope a burst has: a `dblclick` only fires when
+   * both clicks land on the same element.
+   */
+  const displacedByClickRef = useRef<{ uuid: string; index: number } | undefined>(undefined)
+
   const onClick = useCallback(
     (event: MouseEvent) => {
+      if (event.detail <= 1) {
+        // First click of a (possible) burst. Record the tab about to be taken
+        // over before anything opens, while it is still the truth.
+        const group = application.itemControllerGroup
+        const active = group.activeItemViewController
+        const activeUuid = active?.item?.uuid
+        displacedByClickRef.current =
+          active && activeUuid ? { uuid: activeUuid, index: group.itemControllers.indexOf(active) } : undefined
+      }
       const hasMultiSelectionModifierKey = !isMobileScreen && (event.ctrlKey || event.metaKey)
       if (hasMultiSelectionModifierKey && !application.itemListController.isMultipleSelectionMode) {
         application.itemListController.enableMultipleSelectionMode()
@@ -88,8 +106,26 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
       }
       onSelect(item, true).catch(console.error)
     },
-    [application.itemListController, isMobileScreen, item, onSelect, selected],
+    [application.itemControllerGroup, application.itemListController, isMobileScreen, item, onSelect, selected],
   )
+
+  /**
+   * Standard Red Notes: double-clicking a row opens the note in a NEW editor tab
+   * instead of taking the current one over. See
+   * `ItemListController.openListItemInNewTabFromDoubleClick` for why this repairs
+   * the first click's takeover rather than withholding it.
+   *
+   * Skipped in multiple-selection mode, where a click is a checkbox toggle and a
+   * second one just unticks it — there is no "current tab" story to repair.
+   */
+  const onDoubleClick = useCallback(() => {
+    if (application.itemListController.isMultipleSelectionMode) {
+      return
+    }
+    const displaced = displacedByClickRef.current
+    displacedByClickRef.current = undefined
+    application.itemListController.openListItemInNewTabFromDoubleClick(item.uuid, displaced).catch(console.error)
+  }, [application.itemListController, item.uuid])
 
   useContextMenuEvent(listItemRef, handleContextMenuEvent)
 
@@ -182,6 +218,7 @@ const NoteListItem: FunctionComponent<DisplayableListItemProps<SNNote>> = ({
       )}
       id={item.uuid}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       draggable={!isMobileScreen && !application.itemListController.isMultipleSelectionMode}
       onDragStart={(event) => {
         if (!listItemRef.current) {

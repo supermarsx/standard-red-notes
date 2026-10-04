@@ -21,6 +21,7 @@ import {
   ChecklistSessionPrincipal,
   checklistSessionPrincipalMatches,
 } from '../../SuperEditor/Checklist/checklistSessionPrincipal'
+import { readLockedTabUuids, takeoverTabIndex, writeLockedTabUuids } from '@/Tabs/lockedTabs'
 
 type ItemControllerGroupChangeCallback = (activeController: NoteViewController | FileViewController | undefined) => void
 
@@ -57,6 +58,20 @@ export type CreateItemControllerContext = {
    * tiled multi-note editor. Defaults to false (legacy single-note behavior).
    */
   openInNewTile?: boolean
+  /**
+   * Standard Red Notes: where to place the new controller in the tab strip.
+   * Defaults to the index the controller it replaced occupied, or the end of the
+   * strip when it replaced nothing. Used by the notes-list double-click gesture,
+   * which has to restore a displaced note to the slot it was taken out of.
+   */
+  insertAtIndex?: number
+  /**
+   * Standard Red Notes: leave the currently active tab active instead of
+   * activating the new one. Also for the double-click gesture: the note the user
+   * double-clicked must keep focus while the note it displaced is restored
+   * behind it.
+   */
+  keepActiveController?: boolean
 }
 
 export class ItemGroupController {
@@ -176,6 +191,61 @@ export class ItemGroupController {
    */
   private readonly openingControllersByUuid = new Map<string, Promise<NoteViewController | FileViewController>>()
 
+  /**
+   * Standard Red Notes: the uuids of tabs the user has LOCKED against takeover,
+   * read live from device-local preferences (see `@/Tabs/lockedTabs`). Keyed by
+   * the item uuid rather than the controller `runtimeId`, which is regenerated
+   * every session and so could not survive a reload.
+   */
+  public get lockedTabUuids(): ReadonlySet<string> {
+    return readLockedTabUuids(this.preferences)
+  }
+
+  public isTabLocked(uuid: string | undefined): boolean {
+    return uuid !== undefined && this.lockedTabUuids.has(uuid)
+  }
+
+  /**
+   * Locks or unlocks the tab showing `uuid`. Persisted immediately so the lock
+   * survives a reload, and observers are notified so the tab bar re-renders.
+   */
+  public setTabLocked(uuid: string, locked: boolean): void {
+    const current = this.lockedTabUuids
+    if (current.has(uuid) === locked) {
+      return
+    }
+
+    const next = new Set(current)
+    if (locked) {
+      next.add(uuid)
+    } else {
+      next.delete(uuid)
+    }
+
+    writeLockedTabUuids(this.preferences, next)
+    this.notifyObservers()
+  }
+
+  /**
+   * Standard Red Notes: which open tab a newly opened item should take over, or
+   * `undefined` when it must be given a tab of its own. The rule itself lives in
+   * `takeoverTabIndex`; this only projects the controller set onto it.
+   */
+  private takeoverControllerForIncomingItem(): NoteViewController | FileViewController | undefined {
+    const active = this.activeItemViewController
+    if (!active) {
+      return undefined
+    }
+
+    const index = takeoverTabIndex(
+      this.itemControllers.map((controller) => controller.item?.uuid),
+      this.itemControllers.indexOf(active),
+      this.lockedTabUuids,
+    )
+
+    return index === undefined ? undefined : this.itemControllers[index]
+  }
+
   async createItemController(context: CreateItemControllerContext): Promise<NoteViewController | FileViewController> {
     const targetUuid = context.note?.uuid ?? context.file?.uuid
 
@@ -252,7 +322,7 @@ export class ItemGroupController {
      * one of those answers truthful: the outgoing note IS still what the user is looking
      * at until React re-renders.
      */
-    const outgoing = context.openInNewTile ? undefined : this.activeItemViewController
+    const outgoing = context.openInNewTile ? undefined : this.takeoverControllerForIncomingItem()
 
     if (outgoing) {
       /**
@@ -343,11 +413,36 @@ export class ItemGroupController {
      * have been closed by something else while the incoming one initialized (a vault lock, a
      * remote delete recovery), and closing it twice must not be an error.
      */
+    /**
+     * Standard Red Notes: the incoming controller takes the OUTGOING one's place in
+     * the strip rather than being appended. With a single tab open the two are the
+     * same thing; with several, appending moved the tab the user was working in to
+     * the far right on every note they opened. It also matters for the locked-tab
+     * rule above, where the tab handed over is not necessarily the last one.
+     * `insertAtIndex` lets a caller name the slot explicitly (see its doc on
+     * CreateItemControllerContext). Precedent: recoverRemovedItemController's
+     * position-preserving splice.
+     */
+    const outgoingIndex = outgoing ? this.itemControllers.indexOf(outgoing) : -1
+
     if (outgoing && this.itemControllers.includes(outgoing)) {
       this.closeItemController(outgoing, { notify: false })
     }
-    this.itemControllers.push(controller)
-    this.activeControllerRef = controller
+
+    const requestedIndex = context.insertAtIndex ?? (outgoingIndex >= 0 ? outgoingIndex : undefined)
+    if (requestedIndex !== undefined && requestedIndex >= 0 && requestedIndex <= this.itemControllers.length) {
+      this.itemControllers.splice(requestedIndex, 0, controller)
+    } else {
+      this.itemControllers.push(controller)
+    }
+
+    const keepActive =
+      context.keepActiveController === true &&
+      this.activeControllerRef !== undefined &&
+      this.itemControllers.includes(this.activeControllerRef)
+    if (!keepActive) {
+      this.activeControllerRef = controller
+    }
 
     this.notifyObservers()
 

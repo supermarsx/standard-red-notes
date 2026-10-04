@@ -82,6 +82,13 @@ type State = {
    * custom name reverts a tab label to the note title.
    */
   tabCustomNames: TabCustomNames
+  /**
+   * Standard Red Notes: `item.uuid`s of the tabs the user has LOCKED against
+   * takeover. Mirrored from `application.itemControllerGroup`, which owns the set
+   * and persists it device-locally (see `@/Tabs/lockedTabs`), so the bar and the
+   * open logic can never disagree about what is locked.
+   */
+  lockedTabUuids: ReadonlySet<string>
 }
 
 type Props = {
@@ -111,7 +118,26 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       tileLayout: loadPersistedTileLayout(),
       isNarrowTilingViewport: !lgMatches,
       tabCustomNames: loadTabCustomNames(),
+      lockedTabUuids: new Set<string>(),
     }
+  }
+
+  /**
+   * Standard Red Notes: locks/unlocks a note/file tab, so that opening another
+   * note cannot replace what is in it. Keyed by `item.uuid` (stable across
+   * sessions, unlike the controller `runtimeId`) and persisted by the controller
+   * group, which is also what consults it when deciding which tab an incoming
+   * note takes over. No-ops for a template controller that has no item yet —
+   * there would be nothing stable to remember the lock under.
+   */
+  private toggleTabLock = (controller: NoteViewController | FileViewController) => {
+    const uuid = controller.item?.uuid
+    if (!uuid) {
+      return
+    }
+    const group = this.application.itemControllerGroup
+    group.setTabLocked(uuid, !group.isTabLocked(uuid))
+    this.setState({ lockedTabUuids: group.lockedTabUuids })
   }
 
   /**
@@ -147,6 +173,9 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       this.setState({
         controllers: controllers,
         activeControllerRuntimeId: controllerGroup.activeItemViewController?.runtimeId,
+        // Picks the persisted locks up on first registration (i.e. after a
+        // reload) as well as after any later lock change, which notifies here.
+        lockedTabUuids: controllerGroup.lockedTabUuids,
       })
     })
 
@@ -482,6 +511,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
               onCloseAllTabs={this.closeAllTabs}
               customNames={this.state.tabCustomNames}
               onRenameTab={this.renameTab}
+              lockedTabUuids={this.state.lockedTabUuids}
+              onToggleTabLock={this.toggleTabLock}
             />
 
             {activeViewTab && this.renderActiveViewTab(activeViewTab)}

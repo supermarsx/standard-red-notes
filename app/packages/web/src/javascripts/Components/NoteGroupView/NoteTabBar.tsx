@@ -83,6 +83,20 @@ type Props = {
    * affordances (double-click-to-edit and the "Rename" menu item) are hidden.
    */
   onRenameTab?: (controller: Controller, name: string) => void
+  /**
+   * Standard Red Notes: `item.uuid`s of the note/file tabs the user has LOCKED.
+   * A locked tab is exempt from takeover — opening another note cannot replace
+   * what is in it; the note lands in the nearest unlocked tab, or in a brand new
+   * tab when every open tab is locked. Closing a locked tab still works: the
+   * lock protects it from being overwritten behind the user's back, not from
+   * being closed deliberately.
+   */
+  lockedTabUuids?: ReadonlySet<string>
+  /**
+   * Standard Red Notes: toggles `controller`'s tab lock. When omitted the lock
+   * affordances (the per-tab padlock and the menu item) are hidden.
+   */
+  onToggleTabLock?: (controller: Controller) => void
 }
 
 const titleForController = (controller: Controller): string => {
@@ -129,6 +143,8 @@ const NoteTabBar: FunctionComponent<Props> = ({
   onCloseAllTabs,
   customNames,
   onRenameTab,
+  lockedTabUuids,
+  onToggleTabLock,
 }) => {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
@@ -140,6 +156,11 @@ const NoteTabBar: FunctionComponent<Props> = ({
 
   const labelForController = (controller: Controller): string =>
     resolveTabLabel(customNames ?? {}, controller.item?.uuid, titleForController(controller))
+
+  const isControllerLocked = (controller: Controller): boolean => {
+    const uuid = controller.item?.uuid
+    return uuid !== undefined && (lockedTabUuids?.has(uuid) ?? false)
+  }
 
   const beginRename = (controller: Controller) => {
     if (!onRenameTab) {
@@ -190,6 +211,18 @@ const NoteTabBar: FunctionComponent<Props> = ({
   const renameTargetController =
     onRenameTab && target?.kind === 'controller'
       ? controllers.find((controller) => controller.runtimeId === target.runtimeId)
+      : undefined
+
+  /**
+   * The note/file tab the lock toggle in the context menu applies to. This is the
+   * only route to the toggle on a touch device, where the per-tab padlock's
+   * hover-reveal is unreachable.
+   */
+  const lockTargetController =
+    onToggleTabLock && target?.kind === 'controller'
+      ? controllers.find(
+          (controller) => controller.runtimeId === target.runtimeId && controller.item?.uuid !== undefined,
+        )
       : undefined
 
   const splitLabel = isSplit ? 'Return to single note view' : 'Split: show notes side by side'
@@ -266,6 +299,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
         const isActive = controller.runtimeId === activeControllerRuntimeId
         const title = labelForController(controller)
         const isRenaming = renamingRuntimeId === controller.runtimeId
+        const isLocked = isControllerLocked(controller)
+        // Lockable only once the controller has a saved item to key the lock by.
+        const canToggleLock = onToggleTabLock !== undefined && controller.item?.uuid !== undefined
         return (
           <div
             key={controller.runtimeId}
@@ -301,12 +337,12 @@ const NoteTabBar: FunctionComponent<Props> = ({
               }
             }}
             className={classNames(
-              'flex min-h-[2.25rem] flex-shrink-0 cursor-pointer touch-manipulation items-center gap-1 rounded border px-2.5 py-1.5 text-sm md:min-h-0 md:py-1 md:text-xs',
+              'group flex min-h-[2.25rem] flex-shrink-0 cursor-pointer touch-manipulation items-center gap-1 rounded border px-2.5 py-1.5 text-sm md:min-h-0 md:py-1 md:text-xs',
               isActive
                 ? 'border-info bg-default text-text font-semibold'
                 : 'border-border bg-contrast text-passive-0 hover:text-text',
             )}
-            title={title}
+            title={isLocked ? `${title} — locked: another note will not replace this tab` : title}
           >
             {isRenaming ? (
               <input
@@ -332,6 +368,34 @@ const NoteTabBar: FunctionComponent<Props> = ({
               />
             ) : (
               <span className="max-w-[8rem] truncate md:max-w-[10rem]">{title}</span>
+            )}
+            {canToggleLock && (
+              <button
+                type="button"
+                className={classNames(
+                  'hover:bg-contrast flex h-6 w-6 flex-shrink-0 items-center justify-center rounded md:h-auto md:w-auto md:p-0.5',
+                  // A lock is state the user must be able to SEE without hovering,
+                  // so a locked padlock is always shown; the unlocked one is an
+                  // affordance and only appears on hover/focus, where it cannot
+                  // be mistaken for "this tab is locked". Touch devices, which
+                  // have no hover, reach the same toggle from the tab's
+                  // right-click/long-press menu below.
+                  isLocked ? 'text-info' : 'opacity-0 group-hover:opacity-100 focus:opacity-100',
+                )}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onToggleTabLock?.(controller)
+                }}
+                aria-pressed={isLocked}
+                aria-label={isLocked ? `Unlock ${title}` : `Lock ${title}`}
+                title={
+                  isLocked
+                    ? 'Unlock this tab so another note can replace it'
+                    : 'Lock this tab so another note cannot replace it'
+                }
+              >
+                <Icon type={isLocked ? 'lock-filled' : 'lock'} size="small" />
+              </button>
             )}
             <button
               type="button"
@@ -399,6 +463,19 @@ const NoteTabBar: FunctionComponent<Props> = ({
                 }}
               >
                 Rename
+              </MenuItem>
+              <MenuItemSeparator />
+            </>
+          )}
+          {lockTargetController && (
+            <>
+              <MenuItem
+                icon={isControllerLocked(lockTargetController) ? 'lock-filled' : 'lock'}
+                onClick={() => {
+                  runAndClose(() => onToggleTabLock?.(lockTargetController))
+                }}
+              >
+                {isControllerLocked(lockTargetController) ? 'Unlock tab' : 'Lock tab'}
               </MenuItem>
               <MenuItemSeparator />
             </>
