@@ -26,6 +26,12 @@
  * built stylesheet (px-2 py-1 around a 0.875rem icon and text-xs). Used only as
  * a fallback when the banner's own `offsetHeight` is not available yet — the
  * first frame after mount, and any environment without layout.
+ *
+ * Standard Red Notes (t111): the hidden-cover notice rendered when covers are
+ * switched off is the same shape — one line of `text-xs` with `py-1` padding —
+ * so it shares this fallback. That is why `NoteView.heroBannerHeight()` returns
+ * this value, and NOT the preserved `heroHeader.height`, whenever covers are
+ * off: the stored height describes a banner that is not on screen.
  */
 export const HERO_AFFORDANCE_HEIGHT = 26
 

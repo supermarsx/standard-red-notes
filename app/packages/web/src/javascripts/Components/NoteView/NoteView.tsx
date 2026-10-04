@@ -89,6 +89,7 @@ import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPad
 import { getNoteCustomBackgroundColor, getNoteCustomTextColor } from '@/Utils/NoteAppearance'
 import HeroHeaderBanner from '../../HeroHeader/HeroHeaderBanner'
 import { getNoteHeroHeader, HeroHeader } from '../../HeroHeader/heroHeader'
+import { readNoteCoversEnabled, writeNoteCoversEnabled } from '../../HeroHeader/noteCoversPreference'
 import { addToast, ToastType } from '@standardnotes/toast'
 import {
   Bookmark,
@@ -135,6 +136,13 @@ type State = {
   customTextColor?: string
   heroHeader: HeroHeader | null
   /**
+   * Standard Red Notes (t111): whether the cover-banner FEATURE is switched on
+   * (`PrefKey.NoteCoversEnabled`, default false). Kept in state — not read at
+   * render time — so flipping the setting repaints the banner slot immediately
+   * via the normal PreferencesChanged -> reloadPreferences path.
+   */
+  coversEnabled: boolean
+  /**
    * Whether the cover banner may occupy space. True only while the note's scroll
    * container is at the absolute top — see ./heroBannerScroll.
    */
@@ -154,6 +162,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
   private noteViewElementRef: RefObject<HTMLDivElement | null>
   private editorContentRef: RefObject<HTMLDivElement | null>
   private heroBannerRef: RefObject<HTMLDivElement | null>
+  /**
+   * THIS view's own title input. The tiled editor mounts one NoteView per open note
+   * and every one renders `ElementIds.NoteTitleEditor`, so a `getElementById` lookup
+   * resolves to whichever note is first in the document — see `focusTitle`.
+   */
+  private titleInputRef: RefObject<HTMLInputElement | null>
   /** The element the scroll listener is attached to, kept so it can be detached. */
   private scrollListenerTarget: HTMLElement | null = null
   private plainEditorRef?: PlainEditorInterface
@@ -193,12 +207,14 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       customBackgroundColor: getNoteCustomBackgroundColor(this.controller.item),
       customTextColor: getNoteCustomTextColor(this.controller.item),
       heroHeader: getNoteHeroHeader(this.controller.item),
+      coversEnabled: readNoteCoversEnabled(this.application),
       heroBannerVisible: true,
     }
 
     this.noteViewElementRef = createRef<HTMLDivElement>()
     this.editorContentRef = createRef<HTMLDivElement>()
     this.heroBannerRef = createRef<HTMLDivElement>()
+    this.titleInputRef = createRef<HTMLInputElement>()
   }
 
   override deinit() {
@@ -463,11 +479,24 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
    * (and in any environment without one), so fall back to what the banner is
    * configured to be rather than to 0 — a 0 here would switch off the
    * anti-flicker guard in ./heroBannerScroll exactly when it is needed.
+   *
+   * Standard Red Notes (t111): the stored `heroHeader.height` is only a legal
+   * fallback while covers are ENABLED. Turning the feature off preserves the
+   * stored cover byte-for-byte (by requirement — there is no migration), so
+   * `state.heroHeader` is still non-null and still carries its 100..480px
+   * height, but what actually renders in the slot is the one-line hidden-cover
+   * notice. Claiming up to 480px for a ~26px strip would arm the anti-flicker
+   * guard with the wrong magnitude and keep the notice pinned on notes that
+   * ought to scroll it away. A measurement must not claim more than its source
+   * establishes.
    */
   private heroBannerHeight(): number {
     const measured = this.heroBannerRef?.current?.offsetHeight ?? 0
     if (measured > 0) {
       return measured
+    }
+    if (!this.state.coversEnabled) {
+      return HERO_AFFORDANCE_HEIGHT
     }
     return this.state.heroHeader?.height ?? HERO_AFFORDANCE_HEIGHT
   }
@@ -765,8 +794,24 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       .catch(console.error)
   }
 
+  /**
+   * Focus THIS note's title input, and never a sibling tile's.
+   *
+   * Standard Red Notes (t112): this used to be
+   * `document.getElementById(ElementIds.NoteTitleEditor)?.focus()`. The tiled editor
+   * mounts one NoteView per open note (NoteGroupView keeps every open tab mounted and
+   * merely hides the inactive ones), so with two or more notes open that id is
+   * duplicated and `getElementById` returns the FIRST one in document order. A new
+   * note autofocusing its title, or a protected note being revealed, therefore yanked
+   * focus into the first tab's title field — and `onTitleFocus` selects its text, so
+   * the next keystroke overwrote a title belonging to a note the user was not even
+   * looking at. The read side of the same hazard is handled by `isTitleInputFocused`.
+   *
+   * A ref is the fix because it is per instance by construction: no DOM query here can
+   * be made safe while the id is shared.
+   */
   focusTitle() {
-    document.getElementById(ElementIds.NoteTitleEditor)?.focus()
+    this.titleInputRef.current?.focus()
   }
 
   /**
@@ -956,6 +1001,15 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     addToast({ type: ToastType.Error, message })
   }
 
+  /**
+   * Standard Red Notes (t111): the hidden-cover notice's one-click route out.
+   * Writes the synced preference; the resulting PreferencesChanged event flows
+   * back through `reloadPreferences` and repaints the slot as a real banner.
+   */
+  enableNoteCovers = () => {
+    writeNoteCoversEnabled(this.application, true).catch(console.error)
+  }
+
   async reloadPreferences() {
     if (!isViewActive(this.controller)) {
       return
@@ -998,6 +1052,11 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       PrefDefaults[PrefKey.PaneGesturesEnabled],
     )
 
+    // Standard Red Notes (t111): the covers feature gate. Read here so that
+    // toggling it anywhere — Preferences, or the hidden-cover notice's
+    // [Show covers] — repaints this note's banner slot straight away.
+    const coversEnabled = readNoteCoversEnabled(this.application)
+
     await this.reloadSpellcheck()
 
     this.reloadLineWidth()
@@ -1008,6 +1067,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       customEditorFont,
       updateSavingIndicator,
       paneGestureEnabled,
+      coversEnabled,
     })
 
     reloadFont(monospaceFont, customEditorFont, ligaturesEnabled)
@@ -1243,7 +1303,18 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     const shouldShowConflictsButton = this.state.conflictedNotes.length > 0 && !this.state.readonly
 
     return (
-      <div aria-label="Note" className="section editor sn-component h-full md:max-h-full" ref={this.noteViewElementRef}>
+      <div
+        aria-label="Note"
+        className="section editor sn-component h-full md:max-h-full"
+        ref={this.noteViewElementRef}
+        // Standard Red Notes (t112): marks this tile's whole subtree as belonging to one
+        // open note. The tiled editor mounts one of these per open note, so the editor
+        // ids inside it (#note-title-editor, #note-text-editor, #super-editor-content,
+        // #editor-content) are duplicated across tiles: a DOM consumer that needs a
+        // specific note must narrow to one tile first or it will mix two notes together.
+        // ./Print/PrintNote.ts does exactly that.
+        data-srn-note-view={this.note.uuid}
+      >
         {this.note && (
           <NoteViewFileDropTarget
             note={this.note}
@@ -1271,18 +1342,31 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
             writing area while the reader is at the absolute top of the document,
             and is unmounted (so the space is genuinely returned) the moment they
             scroll. The locked / readonly warnings above are deliberately NOT
-            treated this way — a warning must not scroll out of existence. */}
+            treated this way — a warning must not scroll out of existence. The
+            hidden-cover notice (t111) IS treated this way, because it too is a
+            disclosure about a decoration rather than a warning.
+
+            The slot exists at all only when there is something to put in it:
+            with covers ON, a cover or an editable note that could be given one;
+            with covers OFF, only a note that already HAS a cover, which must say
+            so rather than lose it silently. Covers off + no cover renders
+            nothing at all — no wrapper, no empty box, no trace of a feature the
+            user has not enabled. */}
         {this.note &&
           this.state.heroBannerVisible &&
-          (this.state.heroHeader || !(this.state.noteLocked || this.state.readonly)) && (
+          (this.state.coversEnabled
+            ? this.state.heroHeader || !(this.state.noteLocked || this.state.readonly)
+            : !!this.state.heroHeader) && (
             <div ref={this.heroBannerRef} data-note-hero-banner="">
               <HeroHeaderBanner
                 note={this.note}
                 hero={this.state.heroHeader}
                 notesController={this.application.notesController}
                 filesController={this.application.filesController}
+                coversEnabled={this.state.coversEnabled}
                 disabled={this.state.noteLocked || !!this.state.readonly}
                 onError={this.showHeroError}
+                onShowCovers={this.enableNoteCovers}
               />
             </div>
           )}
@@ -1307,7 +1391,14 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               <div className={classNames(this.state.noteLocked && 'locked', 'flex flex-grow items-center')}>
                 <MobileItemsListButton />
                 <div className="title flex-grow overflow-auto">
+                  {/**
+                   * `id` is shared by every mounted tile's title input (see ElementIDs.ts);
+                   * `data-srn-note-uuid` is what identifies THIS note's field, and
+                   * `titleInputRef` is what reaches it from this instance. Nothing may go
+                   * back to resolving this input by its id.
+                   */}
                   <input
+                    ref={this.titleInputRef}
                     className="input text-lg"
                     data-srn-note-uuid={this.note.uuid}
                     disabled={this.state.noteLocked || this.state.readonly}

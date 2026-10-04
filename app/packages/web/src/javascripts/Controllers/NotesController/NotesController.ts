@@ -50,6 +50,7 @@ import {
   clampHeroFocalY,
   normalizeHeroImageDataUrl,
 } from '../../HeroHeader/heroHeader'
+import { readNoteCoversEnabled } from '../../HeroHeader/noteCoversPreference'
 import {
   NoteRemindersKey,
   Reminder,
@@ -795,8 +796,29 @@ export class NotesController
     })
   }
 
+  /**
+   * Standard Red Notes (t111 §C): the note-covers feature gate, applied to the
+   * ADDITIVE cover writers ONLY.
+   *
+   * Covers are opt-in and default off. While the gate is off nothing may CREATE
+   * or GROW a cover — otherwise a feature the user has not enabled could still
+   * add bytes to their synced, end-to-end-encrypted note payloads. But removal
+   * is deliberately NOT gated (see `removeNoteHeroHeader`): a user must be able
+   * to delete a cover that is currently hidden without first enabling a feature
+   * they do not want.
+   *
+   * Read through the pinned literal key, never off the `PrefKey` enum object —
+   * see ./../../HeroHeader/noteCoversPreference.ts for why.
+   */
+  private get noteCoversEnabled(): boolean {
+    return readNoteCoversEnabled(this.application)
+  }
+
   /** Set (or replace) the note's cover image from an already-bounded data URL. */
   async setNoteHeroImage(note: SNNote, imageDataUrl: string) {
+    if (!this.noteCoversEnabled) {
+      return
+    }
     const normalized = normalizeHeroImageDataUrl(imageDataUrl)
     if (!normalized) {
       return
@@ -811,6 +833,9 @@ export class NotesController
 
   /** Adjust the cover banner height (no-op when there is no cover). */
   async setNoteHeroHeight(note: SNNote, height: number) {
+    if (!this.noteCoversEnabled) {
+      return
+    }
     const current = getNoteHeroHeader(note)
     if (!current) {
       return
@@ -820,6 +845,9 @@ export class NotesController
 
   /** Reposition the cover's vertical focal point, 0..1 (no-op without a cover). */
   async setNoteHeroFocalY(note: SNNote, focalY: number) {
+    if (!this.noteCoversEnabled) {
+      return
+    }
     const current = getNoteHeroHeader(note)
     if (!current) {
       return
@@ -827,7 +855,15 @@ export class NotesController
     await this.writeNoteHeroHeader(note, { ...current, focalY: clampHeroFocalY(focalY) })
   }
 
-  /** Remove the note's cover image (reverts to no-banner behavior). */
+  /**
+   * Remove the note's cover image (reverts to no-banner behavior).
+   *
+   * NEVER gated on the covers preference (t111 §C). Deleting a hidden cover is
+   * exactly what the hidden-cover notice offers, and requiring the user to turn
+   * the feature ON in order to get rid of one of its artifacts would be absurd.
+   * The locked-note guard inside `writeNoteHeroHeader` still applies, which is
+   * why the notice hides [Remove cover] on a locked / read-only note.
+   */
   async removeNoteHeroHeader(note: SNNote) {
     await this.writeNoteHeroHeader(note, undefined)
   }

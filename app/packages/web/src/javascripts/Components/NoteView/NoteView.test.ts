@@ -48,6 +48,13 @@ describe('NoteView', () => {
       notesController,
       noteViewController,
       vaults,
+      /**
+       * NoteView's constructor reads the covers feature gate
+       * (`PrefKey.NoteCoversEnabled`, t111), so the fake must answer preference
+       * reads. Returning the caller's own default keeps every pref at its
+       * shipped value, which is what these tests assume.
+       */
+      getPreference: jest.fn((_key: unknown, defaultValue: unknown) => defaultValue),
       items: {
         isTemplateItem: jest.fn().mockReturnValue(false),
         findItem: jest.fn((uuid: string) => {

@@ -16,6 +16,24 @@ import CoverImageSelectorModal from './CoverImageSelectorModal'
  * shows a subtle "Add cover" affordance near the title (only on hover, only when
  * the note is editable). All edits route through the NotesController, which
  * refuses to write while the note is locked.
+ *
+ * ## The feature gate (t111 §C) — four states, not two
+ * Covers are opt-in and default OFF (`PrefKey.NoteCoversEnabled`, pinned in
+ * ./noteCoversPreference.ts). `coversEnabled` arrives as an explicit PROP rather
+ * than being read from preferences here, so this component stays a pure function
+ * of its props and every state below is renderable in jsdom with no application,
+ * no controller wiring and no preference service.
+ *
+ * | coversEnabled | stored cover | renders                           |
+ * |---------------|--------------|-----------------------------------|
+ * | on            | none         | the "Add cover" affordance        |
+ * | on            | present      | the cover banner                  |
+ * | off           | none         | `null` — the feature is invisible |
+ * | off           | present      | the hidden-cover notice           |
+ *
+ * The last row is the whole reason the gate is not a one-line `if`: turning the
+ * setting off makes something the user MADE stop appearing, so the note says so
+ * in one line and offers both routes out.
  */
 
 type Props = {
@@ -23,10 +41,22 @@ type Props = {
   hero: HeroHeader | null
   notesController: NotesController
   filesController: FilesController
+  /**
+   * Whether the note-covers feature is switched on for this account
+   * (`PrefKey.NoteCoversEnabled`, default false). Explicit prop, never read from
+   * preferences in here — see the four-state table above.
+   */
+  coversEnabled: boolean
   /** Editing is disabled for locked / readonly / protected-overlay states. */
   disabled?: boolean
   /** Surface a user-facing error message (e.g. oversized / invalid image). */
   onError?: (message: string) => void
+  /**
+   * Turn the covers feature back on, from the hidden-cover notice. Writing the
+   * preference is the host's job (this component takes no application), which is
+   * also what keeps the notice testable.
+   */
+  onShowCovers?: () => void
 }
 
 const HeroHeaderBanner: FunctionComponent<Props> = ({
@@ -34,8 +64,10 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
   hero,
   notesController,
   filesController,
+  coversEnabled,
   disabled,
   onError,
+  onShowCovers,
 }) => {
   const [busy, setBusy] = useState(false)
   const [adjusting, setAdjusting] = useState(false)
@@ -130,6 +162,47 @@ const HeroHeaderBanner: FunctionComponent<Props> = ({
     },
     [note, notesController],
   )
+
+  // ── Covers switched OFF ────────────────────────────────────────────────────
+  // With no stored cover the feature is simply absent: no affordance, nothing in
+  // the tree, nothing to discover. With a stored cover we must NOT silently eat
+  // something the user made, so the banner's slot carries a one-line disclosure
+  // naming what is hidden and offering both routes out: turn covers back on, or
+  // delete the cover for good.
+  //
+  // DELIBERATE ASYMMETRY with the locked / read-only banners rendered just above
+  // this slot (NoteView.tsx): those are WARNINGS and must never scroll out of
+  // existence. This is a DISCLOSURE, so it correctly inherits the
+  // top-of-document scroll gate introduced by 8a773618 and scrolls away with the
+  // banner it stands in for — it is a statement about a decoration, not about
+  // what the user is allowed to do.
+  //
+  // [Remove cover] is omitted on a locked / read-only note (t111 §C, Q-E):
+  // `writeNoteHeroHeader` refuses to write while the note is locked, and a
+  // disabled button with no route forward is worse than no button. [Show covers]
+  // is always offered because it writes a PREFERENCE, not the note.
+  if (!coversEnabled) {
+    if (!hero) {
+      return null
+    }
+    return (
+      <div
+        data-note-hero-hidden-notice=""
+        className="border-border text-passive-0 flex w-full items-center gap-2 border-b px-3.5 py-1 text-xs"
+      >
+        <Icon type="file-image" size="small" className="text-passive-1 flex-shrink-0" />
+        <span className="flex-grow truncate">This note has a cover image, hidden because covers are off.</span>
+        <button type="button" onClick={onShowCovers} className="text-info flex-shrink-0 text-xs hover:underline">
+          Show covers
+        </button>
+        {!disabled && (
+          <button type="button" onClick={removeCover} className="text-danger flex-shrink-0 text-xs hover:underline">
+            Remove cover
+          </button>
+        )}
+      </div>
+    )
+  }
 
   // No cover: a subtle "Add cover" affordance, shown only when editable. The
   // affordance is itself a drop target so the user can drop an image without
