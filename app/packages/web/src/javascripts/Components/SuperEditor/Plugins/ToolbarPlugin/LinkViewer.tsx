@@ -10,7 +10,7 @@ import { addToast, ToastType } from '@standardnotes/toast'
 import { COMMAND_PRIORITY_LOW, LexicalEditor, SELECTION_CHANGE_COMMAND } from 'lexical'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { getDOMRangeRect } from '../../Lexical/Utils/getDOMRangeRect'
-import { ElementIds } from '@/Constants/ElementIDs'
+import { superEditorPortalTarget } from '../../ownSuperEditorElements'
 import { createPortal } from 'react-dom'
 
 type Props = {
@@ -183,7 +183,10 @@ const LinkViewer = ({ isMobile, editor, linkNode, setIsEditingLink }: Props) => 
         )}
       </div>
     </div>,
-    document.getElementById(ElementIds.SuperEditor) ?? document.body,
+    // This viewer belongs to ONE editor, and its own editor's root says which: every open
+    // note renders `#super-editor`, so a document-wide lookup could portal this popover
+    // into another note's editor — possibly a hidden one, where it renders invisibly.
+    superEditorPortalTarget(editor.getRootElement()),
   )
 }
 

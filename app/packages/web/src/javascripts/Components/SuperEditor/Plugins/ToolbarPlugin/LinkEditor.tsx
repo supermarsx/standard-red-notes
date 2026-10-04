@@ -20,7 +20,7 @@ import { sanitizeUrl } from '../../Lexical/Utils/sanitizeUrl'
 import { getSelectedNode } from '../../Lexical/Utils/getSelectedNode'
 import { useElementResize } from '@/Hooks/useElementRect'
 import { createPortal } from 'react-dom'
-import { ElementIds } from '@/Constants/ElementIDs'
+import { superEditorPortalTarget } from '../../ownSuperEditorElements'
 import { getAdjustedStylesForNonPortalPopover } from '@/Components/Popover/Utils/getAdjustedStylesForNonPortal'
 
 export const $isLinkTextNode = (
@@ -254,7 +254,10 @@ const LinkEditor = ({
         </div>
       </div>
     </div>,
-    document.getElementById(ElementIds.SuperEditor) ?? document.body,
+    // This editor popover belongs to ONE Super editor, and its own editor's root says
+    // which: every open note renders `#super-editor`, so a document-wide lookup could
+    // portal it into another note's editor — possibly a hidden one, rendering it invisible.
+    superEditorPortalTarget(editor.getRootElement()),
   )
 }
 

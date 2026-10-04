@@ -3,7 +3,6 @@ import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'rea
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
 import usePreference from '@/Hooks/usePreference'
 import { getCSSValueFromAlignment } from './ImageAlignmentOptions'
-import { ElementIds } from '../../Constants/ElementIDs'
 import ImageResizer from '@/Components/SuperEditor/Plugins/ImageTools/ImageResizer'
 import ImageToolbar from '@/Components/SuperEditor/Plugins/ImageTools/ImageToolbar'
 import ImageCaption from '@/Components/SuperEditor/Plugins/ImageTools/ImageCaption'
@@ -165,6 +164,12 @@ const ImagePreview: FunctionComponent<Props> = ({
                 : 'invisible group-hover:visible focus-within:visible [.embedBlockFocused_&]:visible'
             }
           >
+            {/**
+             * No `boundaryElement`: the toolbar resolves its own Super editor from its own
+             * DOM node. Naming one here by id meant `#super-editor-content`, which every
+             * open note renders — so with more than one tab open this toolbar was clamped
+             * to a DIFFERENT note's editor box (t112).
+             */}
             <ImageToolbar
               visible={true}
               alignment={finalAlignment}
@@ -174,7 +179,6 @@ const ImagePreview: FunctionComponent<Props> = ({
               onFloatChange={(next) => setFloat?.(next)}
               captionEnabled={captionEnabled}
               onToggleCaption={handleToggleCaption}
-              boundaryElement={document.getElementById(ElementIds.SuperEditorContent)}
             />
           </div>
         )}

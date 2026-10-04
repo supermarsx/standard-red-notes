@@ -3,7 +3,6 @@ import { ElementFormatType } from 'lexical'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import usePreference from '@/Hooks/usePreference'
 import { getCSSValueFromAlignment } from '@/Components/FilePreview/ImageAlignmentOptions'
-import { ElementIds } from '@/Constants/ElementIDs'
 import ImageResizer from './ImageResizer'
 import ImageToolbar from './ImageToolbar'
 import ImageCaption from './ImageCaption'
@@ -130,6 +129,12 @@ export default function SuperEmbeddedImage({
             isSelected ? 'visible' : 'invisible group-hover:visible focus-within:visible [.embedBlockFocused_&]:visible'
           }
         >
+          {/**
+           * No `boundaryElement`: the toolbar resolves its own Super editor from its own
+           * DOM node. Naming one here by id meant `#super-editor-content`, which every open
+           * note renders — so with more than one tab open this toolbar was clamped to a
+           * DIFFERENT note's editor box (t112).
+           */}
           <ImageToolbar
             visible={true}
             alignment={finalAlignment}
@@ -139,7 +144,6 @@ export default function SuperEmbeddedImage({
             onFloatChange={onFloatChange}
             captionEnabled={captionEnabled}
             onToggleCaption={handleToggleCaption}
-            boundaryElement={document.getElementById(ElementIds.SuperEditorContent)}
           />
         </div>
         <ImageCaption caption={caption ?? ''} enabled={captionEnabled} onChange={onCaptionChange} />

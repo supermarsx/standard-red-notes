@@ -5,6 +5,7 @@ import IconButton from '@/Components/Button/IconButton'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import { ImageAlignmentOptions } from '@/Components/FilePreview/ImageAlignmentOptions'
 import { getOverflows } from '@/Components/Popover/Utils/Collisions'
+import { ownSuperEditorContentElement } from '../../ownSuperEditorElements'
 import { ImageFloat, ImageSizePreset, ImageSizePresetLabels } from './ImageToolsTypes'
 
 export type ImageToolbarProps = {
@@ -17,7 +18,12 @@ export type ImageToolbarProps = {
   onFloatChange: (float: ImageFloat) => void
   captionEnabled: boolean
   onToggleCaption: () => void
-  /** The element the toolbar should be kept within (defaults to editor root). */
+  /**
+   * The element the toolbar should be kept within. Defaults to the Super editor content
+   * element this toolbar is rendered inside — resolved from the toolbar's own node, never
+   * by id: every open note renders `#super-editor-content`, so an id lookup would clamp
+   * this toolbar to a DIFFERENT note's editor box (t112).
+   */
   boundaryElement?: HTMLElement | null
 }
 
@@ -69,7 +75,7 @@ export default function ImageToolbar({
       }}
       onMouseDown={(e) => e.preventDefault()}
       ref={(popover) => {
-        const editorRoot = boundaryElement ?? document.getElementById('super-editor-content')
+        const editorRoot = boundaryElement ?? ownSuperEditorContentElement(popover)
         if (!popover || !editorRoot) {
           return
         }
