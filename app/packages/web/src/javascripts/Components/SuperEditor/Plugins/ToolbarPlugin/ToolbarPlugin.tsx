@@ -3188,15 +3188,49 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
         <div className="border-border flex w-full flex-shrink-0 flex-col border-t md:border-0">
           {/* Standard Red Notes: the clipboard/history utility actions and the
               Office-ribbon tab strip share ONE bar — actions on the left, the
-              formatting tabs pushed to the right — instead of stacking two
-              full-width bands above the ribbon. Nothing moved into an overflow:
-              both halves are still always rendered, and if the pane gets too
-              narrow it is the utility half that scrolls, so the tabs (the only
-              way to reach the other formatting groups) can never be pushed out
-              of reach. */}
+              formatting tabs centred — instead of stacking two full-width bands
+              above the ribbon. Nothing moved into an overflow: both halves are
+              still always rendered, and if the pane gets too narrow it is the
+              utility half that scrolls, so the tabs (the only way to reach the
+              other formatting groups) can never be pushed out of reach.
+
+              The tab strip is CENTRED rather than right-aligned, because the tabs
+              are a frequent target and the right edge of a wide editor is a long
+              mouse trip from the text. Centring is done with two symmetric
+              flexible siblings — the utility Toolbar (flex-1, basis 0) on the
+              left and an empty spacer (flex-1, basis 0) on the right — so the
+              strip sits on the bar's true centre line, not merely centred in the
+              space the utility actions leave over. Auto margins cannot do this
+              (they consume free space BEFORE flex-grow, which is exactly how the
+              strip used to end up hard right).
+
+              When the bar is narrow there is no room to spend on a centring
+              spacer, so a container query hides it below 56rem and the strip goes
+              back to flush right with the whole bar left for the utility half —
+              i.e. precisely the previous behaviour, which is what a cramped bar
+              wants. Container query, not a measured width: jsdom has no layout
+              engine (every width reads 0) so a JS breakpoint would be
+              unverifiable in jest, and a width-measuring effect in this file is
+              the shape of bug that turns into "Maximum update depth exceeded".
+
+              NOTE for anyone moving the container class on the bar below, or the
+              narrow-bar fallback class on the spacer further down:
+              tailwind.config.js's `content` glob covers .tsx files under
+              src/javascripts ONLY, and Tailwind v4 generates a utility only when
+              it occurs LITERALLY in a scanned file. Moving either into a .ts
+              module, or assembling it by interpolation, silently produces no CSS
+              at all — the spacer then never hides and the strip never
+              right-aligns, with nothing in tsc and nothing in the DOM (the class
+              is still on the element!) to say so. Proven: with the fallback class
+              interpolated, `@container utility-bar (width < 56rem)` disappears
+              from the compiled stylesheet. Those two class names are deliberately
+              not repeated anywhere in this comment, so each className attribute
+              is the single occurrence the stylesheet depends on and the static
+              guard in ToolbarPlugin.tabStripAlignment.spec.tsx is really
+              guarding it. */}
           {canShowAllItems && (
             <div
-              className="super-toolbar-utility-bar border-border flex w-full flex-nowrap items-center gap-2 border-b px-2 py-1"
+              className="super-toolbar-utility-bar border-border @container/utility-bar flex w-full flex-nowrap items-center gap-2 border-b px-2 py-1"
               data-super-toolbar-utility-bar=""
             >
               <Toolbar
@@ -3204,7 +3238,13 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 // tight. Its scrollbar is deliberately left visible: on a narrow
                 // pane Print or Redo can end up past the edge, and a silent
                 // scroller would make them unfindable — worth ~15px of bar.
-                className="super-toolbar flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto"
+                //
+                // flex-1 (basis 0) makes it the left half of the pair that centres
+                // the tab strip: it and the trailing spacer grow equally, so the
+                // strip lands on the bar's centre line. Its own content stays
+                // left-aligned inside, and when the spacer is hidden on a narrow
+                // bar this simply takes all the slack, pushing the strip right.
+                className="super-toolbar flex min-w-0 flex-1 flex-nowrap items-center gap-0.5 overflow-x-auto"
                 store={utilityToolbarStore}
                 aria-label="Clipboard and history tools"
               >
@@ -3229,41 +3269,61 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
               </Toolbar>
               {ribbonTabs.length > 1 && (
-                <div
-                  // flex-shrink-0 so the tabs keep their width and it is the
-                  // clipboard half that scrolls when the pane is tight; max-w-full
-                  // + overflow-x-auto is the last resort for a pane narrower than
-                  // the tab strip itself, so a tab can still never be unreachable.
-                  className="super-toolbar-tabs ml-auto flex max-w-full flex-shrink-0 items-center gap-1 overflow-x-auto"
-                  role="tablist"
-                  aria-label="Formatting groups"
-                >
-                  {ribbonTabs.map((tab) => {
-                    const isActive = tab.id === effectiveTabId
-                    const isContextualTab = tab.id === CONTEXTUAL_TAB_ID
-                    return (
-                      <button
-                        key={tab.id}
-                        role="tab"
-                        aria-selected={isActive}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => setActiveTabId(tab.id)}
-                        className={classNames(
-                          'rounded-md border-b-2 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap transition-colors',
-                          isContextualTab
-                            ? isActive
-                              ? 'border-info bg-info text-info-contrast'
-                              : 'border-info/40 text-info hover:bg-contrast'
-                            : isActive
-                              ? 'border-info bg-contrast text-info'
-                              : 'text-passive-1 hover:text-text border-transparent',
-                        )}
-                      >
-                        {tab.label}
-                      </button>
-                    )
-                  })}
-                </div>
+                <>
+                  <div
+                    // flex-shrink-0 so the tabs keep their width and it is the
+                    // clipboard half that scrolls when the pane is tight; max-w-full
+                    // + overflow-x-auto is the last resort for a pane narrower than
+                    // the tab strip itself, so a tab can still never be unreachable.
+                    //
+                    // Deliberately NO ml-auto: an auto margin consumes all the free
+                    // space before flex-grow runs, which would starve the trailing
+                    // spacer and pin the strip to the right again. Position is the
+                    // two flexible siblings' job.
+                    className="super-toolbar-tabs flex max-w-full flex-shrink-0 items-center gap-1 overflow-x-auto"
+                    role="tablist"
+                    aria-label="Formatting groups"
+                  >
+                    {ribbonTabs.map((tab) => {
+                      const isActive = tab.id === effectiveTabId
+                      const isContextualTab = tab.id === CONTEXTUAL_TAB_ID
+                      return (
+                        <button
+                          key={tab.id}
+                          role="tab"
+                          aria-selected={isActive}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setActiveTabId(tab.id)}
+                          className={classNames(
+                            'rounded-md border-b-2 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap transition-colors',
+                            isContextualTab
+                              ? isActive
+                                ? 'border-info bg-info text-info-contrast'
+                                : 'border-info/40 text-info hover:bg-contrast'
+                              : isActive
+                                ? 'border-info bg-contrast text-info'
+                                : 'text-passive-1 hover:text-text border-transparent',
+                          )}
+                        >
+                          {tab.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {/* The right half of the centring pair: an empty, purely
+                    presentational flexible box that mirrors the utility
+                    Toolbar's flex-1 so the tab strip above sits on the bar's
+                    centre line. Hidden below a 56rem bar (container query, see
+                    the bar comment), which hands all the slack back to the
+                    utility half and returns the strip to flush right. It is
+                    rendered inside the same condition as the strip, so a
+                    single-tab toolbar grows no stray box. */}
+                  <div
+                    aria-hidden
+                    data-super-toolbar-tabs-spacer=""
+                    className="super-toolbar-tabs-spacer min-w-0 flex-1 @max-4xl/utility-bar:hidden"
+                  />
+                </>
               )}
             </div>
           )}

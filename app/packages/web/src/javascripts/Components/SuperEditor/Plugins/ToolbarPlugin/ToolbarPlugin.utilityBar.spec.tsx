@@ -5,7 +5,11 @@
  *
  * The clipboard/history actions and the Office-ribbon tab strip used to be two
  * stacked full-width bands; they are now one bar, actions on the left and the
- * formatting tabs pushed to the right. Merging two rendered regions into one is
+ * formatting tabs after them. (The strip was originally pushed hard right by an
+ * auto margin; t111 centres it instead, for mouse travel, and falls back to flush
+ * right on a narrow bar. Where the strip SITS is the subject of
+ * ToolbarPlugin.tabStripAlignment.spec.tsx; this file only cares that both halves
+ * share one bar and stay reachable.) Merging two rendered regions into one is
  * exactly the shape of change that has twice made a toolbar group silently
  * disappear from this file while `tsc` and the whole suite stayed green — the
  * tab strip in particular is the ONLY way to reach the Insert / Layout / AI /
@@ -139,11 +143,14 @@ describe('the merged clipboard + formatting-tabs bar', () => {
     expect(strip).not.toBeNull()
     expect(utilityBar()!.contains(strip!)).toBe(true)
 
-    // "on the right side": the tabs follow the actions in DOM order and are
-    // pushed over by auto margin rather than being a separate row.
+    // One bar, not a separate row: the tabs follow the actions in DOM order.
     const position = clipboardTools()!.compareDocumentPosition(strip!)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(strip!.className).toContain('ml-auto')
+    // They are no longer pushed over by an auto margin — t111 centres the strip
+    // using flexible siblings instead, and an auto margin would eat the free space
+    // those siblings need. ToolbarPlugin.tabStripAlignment.spec.tsx owns that
+    // contract; asserted here only so this file cannot quietly re-pin the strip.
+    expect(strip!.className).not.toContain('ml-auto')
   })
 
   it('still renders every formatting tab', async () => {
