@@ -18,6 +18,8 @@ import FileUploadPrivacy from './FileUploadPrivacy'
 import Updates from './Updates'
 import ReloadApp from './ReloadApp'
 import SyncConnection from './SyncConnection'
+import TodoHeadings from './TodoHeadings'
+import ChecklistRecurrence from './ChecklistRecurrence'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useTabState } from '@/Components/Tabs/useTabState'
 
@@ -49,6 +51,15 @@ const General: FunctionComponent = () => {
         <>
           <Defaults application={application} />
           <NewNoteDefaults />
+          {/*
+            Standard Red Notes (t111 §3): the two heading-derived Todos settings
+            and the two recurring-checklist settings. Each also has a surface next
+            to the thing it controls (the Todos filter bar, the editor's Checklists
+            panel); these are the findable copies, and they share one stored value
+            with their counterpart rather than forking it.
+          */}
+          <TodoHeadings application={application} />
+          <ChecklistRecurrence application={application} />
           <Spellcheck application={application} />
           <SmartViews application={application} featuresController={application.featuresController} />
         </>

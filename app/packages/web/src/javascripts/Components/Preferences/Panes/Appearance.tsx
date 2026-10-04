@@ -16,6 +16,8 @@ import ColorSchemeModeControl from './Appearance/ColorSchemeModeControl'
 import BaseThemePalette from './Appearance/BaseThemePalette'
 import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
 import StyleProfiles from './Appearance/StyleProfiles/StyleProfiles'
+import NoteCovers from './Appearance/NoteCovers'
+import SidebarMini from './Appearance/SidebarMini'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import { loadNewTabBehavior, NewTabBehavior, saveNewTabBehavior } from '@/Tabs/newTabSettings'
@@ -86,6 +88,14 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
           </div>
         </PreferencesSegment>
       </PreferencesGroup>
+      {/*
+        Standard Red Notes (t111 §3): two settings whose only findable home is
+        here. Covers sit directly after "Editor tabs" as the plan specifies, and
+        the tags-panel rail follows — both are "what the interface looks like",
+        which is what this subtab is.
+      */}
+      <NoteCovers application={application} />
+      <SidebarMini />
       <EditorAppearance application={application} />
     </>
   )

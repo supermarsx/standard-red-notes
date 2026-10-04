@@ -90,6 +90,78 @@ describe('searchPreferences', () => {
     expect(searchPreferences('theme', limited)).toEqual([])
   })
 
+  /**
+   * Standard Red Notes (t111): the six settings added by that task are only as
+   * real as they are findable. Each control below exists on exactly one
+   * Preferences pane, and a user who remembers the feature but not the pane has
+   * the search box and nothing else — so a missing keyword is a missing setting.
+   *
+   * These cases are deliberately written as the words a person would TYPE, not as
+   * the setting's own title: the title is already matched through the pane label
+   * and the section copy, so testing the title would prove nothing about the
+   * index.
+   */
+  describe('t111 settings are findable by the words a user would type', () => {
+    const findsAppearance = (query: string) => {
+      const results = searchPreferences(query, PANES)
+      expect(results.length).toBeGreaterThan(0)
+      expect(results[0].id).toBe('appearance')
+    }
+
+    const findsGeneral = (query: string) => {
+      const results = searchPreferences(query, PANES)
+      expect(results.length).toBeGreaterThan(0)
+      expect(results[0].id).toBe('general')
+    }
+
+    it('routes note-cover terms to Appearance (its only home)', () => {
+      // Covers have no surface outside Preferences at all while the gate is off,
+      // so these are the ONLY route to the setting.
+      findsAppearance('cover')
+      findsAppearance('covers')
+      findsAppearance('banner')
+      findsAppearance('cover image')
+      findsAppearance('header image')
+      findsAppearance('hidden cover')
+    })
+
+    it('routes mini-sidebar terms to Appearance', () => {
+      findsAppearance('sidebar')
+      findsAppearance('mini')
+      findsAppearance('icon rail')
+      findsAppearance('narrow')
+      findsAppearance('compact')
+      findsAppearance('tags panel')
+    })
+
+    it('routes heading/todo-outline terms to General', () => {
+      findsGeneral('todo')
+      findsGeneral('heading')
+      findsGeneral('heading sublevels')
+      findsGeneral('outline')
+      findsGeneral('indent')
+      findsGeneral('heading descriptions')
+    })
+
+    it('routes recurring-checklist terms to General', () => {
+      findsGeneral('recurring')
+      findsGeneral('recurrence')
+      findsGeneral('repeat')
+      findsGeneral('monthly')
+      findsGeneral('backfill')
+      findsGeneral('missed occurrences')
+      findsGeneral('checklist')
+      findsGeneral('occurrence cap')
+    })
+
+    it('surfaces the matched keyword so the result can say which section to open', () => {
+      // Without this the result row would read just "Appearance", which is the
+      // same thing the unfiltered menu already said.
+      expect(searchPreferences('banner', PANES)[0].matchedKeyword).toBe('banner')
+      expect(searchPreferences('backfill', PANES)[0].matchedKeyword).toBe('backfill')
+    })
+  })
+
   it('routes invite/referral terms to the self-serve Invite pane', () => {
     // The Invite pane is only registered when self-serve is enabled, so it is
     // only searchable when it is in the provided (visible) menu.
