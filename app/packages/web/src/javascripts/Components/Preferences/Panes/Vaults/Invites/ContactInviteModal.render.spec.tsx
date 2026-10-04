@@ -52,6 +52,14 @@ const vault = {
 
 const alice = { uuid: 'a', name: 'Alice', contactUuid: 'user-a' } as unknown as TrustedContactInterface
 
+/**
+ * Mirrors `InviteFailure.NoSelfContact` in
+ * services/.../VaultInvite/UseCase/InviteToVault.ts, the single source of truth. Copied rather than
+ * imported because `@standardnotes/snjs` resolves to its built bundle here.
+ */
+const NoSelfContactFailure =
+  'Your own contact record could not be created, so the invitee would have no way to verify who invited them. Make sure you are signed in and that syncing has completed, then try again.'
+
 const makeApplication = (inviteResult: Result<unknown> | Promise<Result<unknown>>) => {
   const alert = jest.fn().mockResolvedValue(undefined)
   const inviteContactToSharedVault = jest.fn().mockResolvedValue(inviteResult)
@@ -133,9 +141,7 @@ describe('ContactInviteModal surfaces invites that never leave the client', () =
 
   it('(b) alerts the reason and keeps the modal open when the invite fails before any request', async () => {
     const onCloseDialog = jest.fn()
-    const { application, alert, inviteContactToSharedVault } = makeApplication(
-      Result.fail('Cannot invite contact; me contact not found'),
-    )
+    const { application, alert, inviteContactToSharedVault } = makeApplication(Result.fail(NoSelfContactFailure))
 
     await render(application, onCloseDialog)
 
@@ -144,7 +150,7 @@ describe('ContactInviteModal surfaces invites that never leave the client', () =
 
     expect(inviteContactToSharedVault).toHaveBeenCalledWith(vault, alice, 'read')
     expect(alert).toHaveBeenCalledTimes(1)
-    expect(alert.mock.calls[0][0]).toContain('Alice: Cannot invite contact; me contact not found')
+    expect(alert.mock.calls[0][0]).toContain(`Alice: ${NoSelfContactFailure}`)
     expect(onCloseDialog).not.toHaveBeenCalled()
     // Still open and still actionable, not stuck behind the in-flight spinner.
     expect(findButton('Invite Selected Contacts')?.disabled).toBe(false)

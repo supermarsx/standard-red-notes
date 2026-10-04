@@ -6,6 +6,43 @@ import Button from '@/Components/Button/Button'
 import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import DesignateSurvivorModal from './DesignateSurvivorModal'
 
+/**
+ * A member row only ever knows whether this device could resolve the member to a local
+ * TrustedContact. That establishes "we have a trusted record for them" or "we do not" — it does NOT
+ * establish that the member is *untrusted*, which is a claim about them rather than about what we
+ * could look up. The row used to label every unresolved member "Untrusted", which read as an
+ * accusation even for the signed-in user's own admin membership (rendered as a bare uuid labelled
+ * Untrusted whenever the account had no self-contact). Unresolvable and untrusted are now distinct.
+ */
+const resolutionBadge = (params: { hasContact: boolean; isCurrentUser: boolean }) => {
+  if (params.hasContact) {
+    return {
+      label: 'Trusted',
+      title: 'You hold a trusted contact record for this member, so their keys can be verified.',
+      icon: 'check-circle' as const,
+      className: 'bg-success text-success-contrast',
+    }
+  }
+
+  if (params.isCurrentUser) {
+    return {
+      label: 'Not yet identified',
+      title:
+        "This is your own membership, but your account's contact record is not available on this device yet. It is created once syncing completes.",
+      icon: 'warning' as const,
+      className: 'bg-warning text-warning-contrast',
+    }
+  }
+
+  return {
+    label: 'Not in your contacts',
+    title:
+      'This member is not one of your trusted contacts, so their keys cannot be verified on this device. Add them as a contact to verify them.',
+    icon: 'warning' as const,
+    className: 'bg-warning text-warning-contrast',
+  }
+}
+
 export const VaultModalMembers = ({
   members,
   isCurrentUserAdmin,
@@ -18,6 +55,7 @@ export const VaultModalMembers = ({
   onChange: () => void
 }) => {
   const application = useApplication()
+  const currentUserUuid = application.sessions.getUser()?.uuid
 
   const removeMemberFromVault = useCallback(
     async (memberItem: SharedVaultUserServerHash) => {
@@ -58,6 +96,11 @@ export const VaultModalMembers = ({
           const isMemberVaultOwner = application.vaultUsers.isVaultUserOwner(member)
           const contact = application.contacts.findContactForServerUser(member)
           const permission = application.vaultUsers.getFormattedMemberPermission(member.permission)
+          const isCurrentUser = currentUserUuid !== undefined && member.user_uuid === currentUserUuid
+          const badge = resolutionBadge({ hasContact: contact !== undefined, isCurrentUser })
+          // Never fall back to the raw uuid for the signed-in user: it identifies nobody to them and
+          // was the whole of symptom "Vault Members / <uuid> / Untrusted / Admin".
+          const displayName = isCurrentUser ? 'You' : contact?.name || member.user_uuid
 
           return (
             <div
@@ -66,18 +109,14 @@ export const VaultModalMembers = ({
             >
               <Icon type="user" className="col-start-1 col-end-2 place-self-center" />
               <div className="flex items-center gap-2 overflow-hidden text-base font-bold text-ellipsis">
-                <span>{contact?.name || member.user_uuid}</span>
-                {contact ? (
-                  <div className="bg-success text-success-contrast flex items-center gap-1 rounded px-1 py-0.5 text-xs">
-                    <Icon type="check-circle" size="small" />
-                    Trusted
-                  </div>
-                ) : (
-                  <div className="bg-danger text-danger-contrast flex items-center gap-1 rounded px-1 py-0.5 pr-1.5 text-xs">
-                    <Icon type="clear-circle-filled" size="small" />
-                    Untrusted
-                  </div>
-                )}
+                <span>{displayName}</span>
+                <div
+                  className={`${badge.className} flex items-center gap-1 rounded px-1 py-0.5 pr-1.5 text-xs`}
+                  title={badge.title}
+                >
+                  <Icon type={badge.icon} size="small" />
+                  {badge.label}
+                </div>
                 {member.is_designated_survivor && (
                   <div className="bg-info text-success-contrast flex items-center gap-1 rounded px-1 py-0.5 text-xs">
                     <Icon type="security" size="small" />

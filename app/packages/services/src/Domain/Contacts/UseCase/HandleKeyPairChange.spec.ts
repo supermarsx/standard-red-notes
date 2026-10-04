@@ -40,7 +40,7 @@ describe('HandleKeyPairChange', () => {
 
   beforeEach(() => {
     mockSelfContactManager = {
-      updateWithNewPublicKeySet: jest.fn().mockReturnValue({}),
+      getOrCreateSelfContact: jest.fn().mockResolvedValue({ contactUuid: 'own-user-uuid' }),
     }
 
     mockInvitesServer = {
@@ -98,6 +98,32 @@ describe('HandleKeyPairChange', () => {
     expect(mockMessageServer.deleteAllInboundMessages).toHaveBeenCalled()
     expect(mockInvitesServer.deleteAllInboundInvites).toHaveBeenCalled()
 
+    expect(result.isFailed()).toBe(false)
+  })
+
+  // The rotation used to be skipped entirely behind `InternalFeature.Vaults`, which only DevMode
+  // sets — so in a shipped build the account's own contact kept advertising the PREVIOUS public
+  // keys, which is exactly what an invite delegates to the invitee.
+  it('rewrites the self contact with the new public key set', async () => {
+    mockGetAllContacts.execute.mockReturnValue(Result.ok([]))
+
+    await useCase.execute(dto)
+
+    expect(mockSelfContactManager.getOrCreateSelfContact).toHaveBeenCalled()
+    expect(mockCreateOrEditContact.execute).toHaveBeenCalledWith({
+      contactUuid: 'own-user-uuid',
+      publicKey: dto.newKeys.encryption.publicKey,
+      signingPublicKey: dto.newKeys.signing.publicKey,
+    })
+  })
+
+  it('does not write a contact when no self contact can be resolved', async () => {
+    mockSelfContactManager.getOrCreateSelfContact.mockResolvedValue(undefined)
+    mockGetAllContacts.execute.mockReturnValue(Result.ok([]))
+
+    const result = await useCase.execute(dto)
+
+    expect(mockCreateOrEditContact.execute).not.toHaveBeenCalled()
     expect(result.isFailed()).toBe(false)
   })
 

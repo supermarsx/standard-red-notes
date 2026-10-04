@@ -1,4 +1,3 @@
-import { InternalFeatureService } from './../../InternalFeatures/InternalFeatureService'
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { PkcKeyPair } from '@standardnotes/sncrypto-common'
 import { ReuploadAllInvites } from '../../VaultInvite/UseCase/ReuploadAllInvites'
@@ -8,7 +7,6 @@ import { GetAllContacts } from './GetAllContacts'
 import { SendOwnContactChangeMessage } from './SendOwnContactChangeMessage'
 import { AsymmetricMessageServer, SharedVaultInvitesServer } from '@standardnotes/api'
 import { PortablePublicKeySet } from '@standardnotes/models'
-import { InternalFeature } from '../../InternalFeatures/InternalFeature'
 import { CreateOrEditContact } from './CreateOrEditContact'
 import { isErrorResponse } from '@standardnotes/responses'
 import { LoggerInterface } from '@standardnotes/utils'
@@ -78,11 +76,11 @@ export class HandleKeyPairChange implements UseCaseInterface<void> {
   }
 
   private async updateSelfContact(publicKeySet: PortablePublicKeySet) {
-    if (!InternalFeatureService.get().isFeatureEnabled(InternalFeature.Vaults)) {
-      return
-    }
-
-    const selfContact = this.selfContactManager.selfContact
+    // Deliberately NOT gated on `InternalFeature.Vaults`: that flag is only ever set by DevMode, so
+    // a shipped build could never satisfy it. Skipping this in production would leave the account's
+    // own `isMe` contact advertising the PREVIOUS public key set after a password change, and an
+    // invite delegates exactly that key set to the invitee — so the rotation must always be applied.
+    const selfContact = await this.selfContactManager.getOrCreateSelfContact()
     if (!selfContact) {
       return
     }

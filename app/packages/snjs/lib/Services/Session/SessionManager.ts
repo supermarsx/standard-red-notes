@@ -28,8 +28,6 @@ import {
   SessionRefreshedData,
   SessionEvent,
   UserKeyPairChangedEventData,
-  InternalFeatureService,
-  InternalFeature,
   ProofOfWorkSolverInterface,
   ApplicationEvent,
   ApplicationStageChangedEventPayload,
@@ -1119,22 +1117,26 @@ export class SessionManager
     )
 
     if (!isErrorResponse(rawResponse)) {
-      if (InternalFeatureService.get().isFeatureEnabled(InternalFeature.Vaults)) {
-        const eventData: UserKeyPairChangedEventData = {
-          previous: !oldKeys.isFailed()
-            ? {
-                encryption: oldKeys.getValue().encryption,
-                signing: oldKeys.getValue().signing,
-              }
-            : undefined,
-          current: {
-            encryption: parameters.newRootKey.encryptionKeyPair,
-            signing: parameters.newRootKey.signingKeyPair,
-          },
-        }
-
-        void this.notifyEvent(SessionEvent.UserKeyPairChanged, eventData)
+      // Deliberately NOT gated on `InternalFeature.Vaults`: only DevMode ever enables that flag, so
+      // a shipped build never emitted this event and a password change therefore never rotated the
+      // account's own `isMe` contact, never re-uploaded its pending invites and never told existing
+      // contacts about the new keys. Collaboration is reachable in shipped builds (admins and
+      // SharedVaults-entitled accounts), so the rotation handling has to run there too. For an
+      // account with no contacts, invites or messages every branch of the handler is a no-op.
+      const eventData: UserKeyPairChangedEventData = {
+        previous: !oldKeys.isFailed()
+          ? {
+              encryption: oldKeys.getValue().encryption,
+              signing: oldKeys.getValue().signing,
+            }
+          : undefined,
+        current: {
+          encryption: parameters.newRootKey.encryptionKeyPair,
+          signing: parameters.newRootKey.signingKeyPair,
+        },
       }
+
+      void this.notifyEvent(SessionEvent.UserKeyPairChanged, eventData)
     }
 
     return processedResponse

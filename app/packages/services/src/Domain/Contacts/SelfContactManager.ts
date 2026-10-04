@@ -2,8 +2,6 @@ import { ApplicationStageChangedEventPayload } from './../Event/ApplicationStage
 import { ApplicationEvent } from './../Event/ApplicationEvent'
 import { InternalEventInterface } from './../Internal/InternalEventInterface'
 import { InternalEventHandlerInterface } from './../Internal/InternalEventHandlerInterface'
-import { InternalFeature } from '../InternalFeatures/InternalFeature'
-import { InternalFeatureService } from '../InternalFeatures/InternalFeatureService'
 import { ApplicationStage } from '../Application/ApplicationStage'
 import { SingletonManagerInterface } from '../Singleton/SingletonManagerInterface'
 import { SyncEvent } from '../Event/SyncEvent'
@@ -25,7 +23,7 @@ const SelfContactName = 'Me'
 export class SelfContactManager implements InternalEventHandlerInterface {
   public selfContact?: TrustedContactInterface
 
-  private isReloadingSelfContact = false
+  private pendingCreation?: Promise<TrustedContactInterface | undefined>
   private eventDisposers: (() => void)[] = []
 
   constructor(
@@ -41,7 +39,7 @@ export class SelfContactManager implements InternalEventHandlerInterface {
         }
 
         if (event === SyncEvent.SyncCompletedWithAllItemsUploaded) {
-          void this.reloadSelfContactAndCreateIfNecessary()
+          void this.getOrCreateSelfContact()
         }
       }),
     )
@@ -79,29 +77,54 @@ export class SelfContactManager implements InternalEventHandlerInterface {
     )
   }
 
-  private async reloadSelfContactAndCreateIfNecessary() {
-    if (!InternalFeatureService.get().isFeatureEnabled(InternalFeature.Vaults)) {
-      return
-    }
+  /**
+   * Resolves the account's own `isMe` TrustedContact, creating it if the account does not have one
+   * yet. Every collaboration path depends on it: an invite delegates it to the invitee, and the
+   * Vault Members list resolves the current user's own membership through it.
+   *
+   * This used to be gated behind `InternalFeature.Vaults`, which ONLY `DevMode` ever enables and
+   * which a shipped build can therefore never satisfy (the web image builds with webpack
+   * `mode: 'production'`, so `isDev` folds to false and `DevMode` is never constructed). The client
+   * meanwhile offers the whole vaults UI to admins and to SharedVaults-entitled accounts
+   * (`FeaturesController.isVaultsEnabled`), so a shipped build could create a shared vault and then
+   * fail every invite with "me contact not found" while rendering the owner's OWN membership as a
+   * bare uuid labelled "Untrusted". Collaboration capability — signed in, with an account key pair
+   * — is the only precondition that actually matters, and it is checked below.
+   *
+   * Creating the contact late is safe: `contactUuid` is the server-side user uuid, so it matches any
+   * membership already recorded for this account by construction, and `publicKeySet` is read from
+   * the account's CURRENT key pair, which is exactly what an invite must delegate. The contact is a
+   * singleton (`TrustedContact.singletonPredicate`), so an existing one synced from another client
+   * is adopted rather than duplicated.
+   */
+  async getOrCreateSelfContact(): Promise<TrustedContactInterface | undefined> {
+    this.loadSelfContactFromDatabase()
 
     if (this.selfContact) {
-      return
+      return this.selfContact
     }
 
-    if (this.isReloadingSelfContact) {
-      return
-    }
-
-    if (!this.session.isSignedIn()) {
-      return
+    if (!this.session || !this.session.isSignedIn()) {
+      return undefined
     }
 
     if (this.session.isUserMissingKeyPair()) {
-      return
+      return undefined
     }
 
-    this.isReloadingSelfContact = true
+    if (!this.pendingCreation) {
+      // Hold the in-flight promise rather than a boolean so concurrent callers await the same
+      // creation instead of racing it or giving up, and so a throw cannot wedge creation for the
+      // rest of the session the way the previous `isReloadingSelfContact` flag could.
+      this.pendingCreation = this.createSelfContact().finally(() => {
+        this.pendingCreation = undefined
+      })
+    }
 
+    return this.pendingCreation
+  }
+
+  private async createSelfContact(): Promise<TrustedContactInterface | undefined> {
     const content: TrustedContactContentSpecialized = {
       name: SelfContactName,
       isMe: true,
@@ -119,7 +142,7 @@ export class SelfContactManager implements InternalEventHandlerInterface {
       FillItemContent<TrustedContactContent>(content),
     )
 
-    this.isReloadingSelfContact = false
+    return this.selfContact
   }
 
   deinit() {

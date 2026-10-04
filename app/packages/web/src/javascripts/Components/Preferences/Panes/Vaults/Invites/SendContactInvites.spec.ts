@@ -3,6 +3,16 @@ import { describeContactInviteFailures, sendContactInvites } from './SendContact
 
 const vault = { systemIdentifier: 'vault-1' } as unknown as SharedVaultListingInterface
 
+/**
+ * Mirrors `InviteFailure` in services/.../VaultInvite/UseCase/InviteToVault.ts, which is the single
+ * source of truth. Copied rather than imported because `@standardnotes/snjs` resolves to its built
+ * bundle here, so an import would make this suite depend on a package rebuild.
+ */
+const NoSelfContactFailure =
+  'Your own contact record could not be created, so the invitee would have no way to verify who invited them. Make sure you are signed in and that syncing has completed, then try again.'
+const NoKeySystemRootKeyFailure =
+  "This vault's key is not available on this device, so there is nothing to share with the invitee. Unlock the vault in Preferences → Vaults and try again."
+
 function contact(uuid: string, name: string): TrustedContactInterface {
   return { uuid, name, contactUuid: `user-${uuid}` } as unknown as TrustedContactInterface
 }
@@ -10,7 +20,7 @@ function contact(uuid: string, name: string): TrustedContactInterface {
 describe('sendContactInvites', () => {
   it('reports a use case failure that aborted before any request instead of swallowing it', async () => {
     const alice = contact('a', 'Alice')
-    const invite = jest.fn().mockResolvedValue(Result.fail('Cannot invite contact; me contact not found'))
+    const invite = jest.fn().mockResolvedValue(Result.fail(NoSelfContactFailure))
 
     const result = await sendContactInvites({
       vault,
@@ -20,7 +30,7 @@ describe('sendContactInvites', () => {
     })
 
     expect(result.sentContactUuids).toEqual([])
-    expect(result.failures).toEqual([{ contactName: 'Alice', message: 'Cannot invite contact; me contact not found' }])
+    expect(result.failures).toEqual([{ contactName: 'Alice', message: NoSelfContactFailure }])
   })
 
   it('keeps inviting the remaining contacts after one rejects', async () => {
@@ -99,20 +109,22 @@ describe('describeContactInviteFailures', () => {
     const message = describeContactInviteFailures({
       sentContactUuids: [],
       failures: [
-        { contactName: 'Alice', message: 'Cannot invite contact; key system root key not found' },
-        { contactName: 'Bob', message: 'Account keypair not found' },
+        { contactName: 'Alice', message: NoKeySystemRootKeyFailure },
+        { contactName: 'Bob', message: NoSelfContactFailure },
       ],
     })
 
     expect(message).toContain('None of the invites could be sent:')
-    expect(message).toContain('Alice: Cannot invite contact; key system root key not found')
-    expect(message).toContain('Bob: Account keypair not found')
+    expect(message).toContain(`Alice: ${NoKeySystemRootKeyFailure}`)
+    expect(message).toContain(`Bob: ${NoSelfContactFailure}`)
+    // Distinguishable: the two contacts failed for different reasons and the user can see which.
+    expect(NoKeySystemRootKeyFailure).not.toEqual(NoSelfContactFailure)
   })
 
   it('counts the partial failure against the whole selection', () => {
     const message = describeContactInviteFailures({
       sentContactUuids: ['a', 'b'],
-      failures: [{ contactName: 'Carol', message: 'Cannot invite contact; me contact not found' }],
+      failures: [{ contactName: 'Carol', message: NoSelfContactFailure }],
     })
 
     expect(message).toContain('1 of 3 invites could not be sent:')

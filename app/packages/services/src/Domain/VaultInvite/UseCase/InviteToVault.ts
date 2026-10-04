@@ -12,6 +12,25 @@ import { Result, SharedVaultUserPermission, UseCaseInterface } from '@standardno
 import { ShareContactWithVault } from '../../SharedVaults/UseCase/ShareContactWithVault'
 import { KeySystemKeyManagerInterface } from '../../KeySystem/KeySystemKeyManagerInterface'
 import { GetKeyPairs } from '../../Encryption/UseCase/GetKeyPairs'
+import { SelfContactManager } from '../../Contacts/SelfContactManager'
+
+/**
+ * Every precondition below used to collapse into one of three interchangeable strings ("keys not
+ * found", "key system root key not found", "me contact not found") that named an internal object
+ * and told the user nothing about which step failed or what to do next. The modal surfaces these
+ * verbatim, so each one now names the missing precondition AND the action that fixes it.
+ *
+ * These strings are read by a human and may be pasted into a bug report, so they deliberately carry
+ * no key material, no contact uuid and no vault identifier.
+ */
+export const InviteFailure = {
+  NoAccountKeyPair:
+    'Your account does not have collaboration keys yet, so this invite cannot be encrypted. Open Preferences → Vaults and enable collaboration for this account, then try again.',
+  NoKeySystemRootKey:
+    "This vault's key is not available on this device, so there is nothing to share with the invitee. Unlock the vault in Preferences → Vaults and try again.",
+  NoSelfContact:
+    'Your own contact record could not be created, so the invitee would have no way to verify who invited them. Make sure you are signed in and that syncing has completed, then try again.',
+} as const
 
 export class InviteToVault implements UseCaseInterface<SharedVaultInviteServerHash> {
   constructor(
@@ -20,6 +39,7 @@ export class InviteToVault implements UseCaseInterface<SharedVaultInviteServerHa
     private _sendInvite: SendVaultInvite,
     private _shareContact: ShareContactWithVault,
     private _getKeyPairs: GetKeyPairs,
+    private selfContactManager: SelfContactManager,
   ) {}
 
   async execute(params: {
@@ -30,7 +50,7 @@ export class InviteToVault implements UseCaseInterface<SharedVaultInviteServerHa
   }): Promise<Result<SharedVaultInviteServerHash>> {
     const keys = this._getKeyPairs.execute()
     if (keys.isFailed()) {
-      return Result.fail('Cannot invite contact; keys not found')
+      return Result.fail(InviteFailure.NoAccountKeyPair)
     }
 
     const createInviteResult = await this.inviteContact({
@@ -88,12 +108,17 @@ export class InviteToVault implements UseCaseInterface<SharedVaultInviteServerHa
 
     const keySystemRootKey = this.keyManager.getPrimaryKeySystemRootKey(params.sharedVault.systemIdentifier)
     if (!keySystemRootKey) {
-      return Result.fail('Cannot invite contact; key system root key not found')
+      return Result.fail(InviteFailure.NoKeySystemRootKey)
     }
 
-    const meContact = params.sharedVaultContacts.find((contact) => contact.isMe)
+    // Resolved from the account's own self-contact rather than searched for in `sharedVaultContacts`.
+    // That list is built by resolving each SERVER-reported vault user back to a local TrustedContact
+    // (GetVaultContacts), so the owner's own entry silently disappeared from it whenever the account
+    // had no self-contact — the exact failure that made every invite impossible for shipped builds.
+    // Identity is not something to look up in a server-provided list.
+    const meContact = await this.selfContactManager.getOrCreateSelfContact()
     if (!meContact) {
-      return Result.fail('Cannot invite contact; me contact not found')
+      return Result.fail(InviteFailure.NoSelfContact)
     }
 
     const meContactContent: VaultInviteDelegatedContact = {

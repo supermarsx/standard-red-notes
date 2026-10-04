@@ -641,6 +641,7 @@ export class Dependencies {
         this.get<SendVaultInvite>(TYPES.SendVaultInvite),
         this.get<ShareContactWithVault>(TYPES.ShareContactWithVault),
         this.get<GetKeyPairs>(TYPES.GetKeyPairs),
+        this.get<SelfContactManager>(TYPES.SelfContactManager),
       )
     })
 
