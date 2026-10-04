@@ -32,6 +32,15 @@ jest.mock('@/Hooks/useMediaQuery', () => ({
 }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+/**
+ * Mounting the real 5000-line ToolbarPlugin in jsdom costs several seconds per
+ * test, and under a full parallel `yarn test` run it crossed jest's 5s default and
+ * failed as a TIMEOUT rather than an assertion — a flake that reads exactly like a
+ * broken toolbar. Six specs in this directory mount it, so the cause is shared and
+ * the timeout is raised in all of them (precedent: the Collaboration integration
+ * specs). This is headroom for a slow mount, not a wait for anything async.
+ */
+jest.setTimeout(30000)
 
 class MockResizeObserver {
   observe(): void {}
