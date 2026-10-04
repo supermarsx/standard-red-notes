@@ -44,6 +44,12 @@ import {
   type ChecklistRecurrence,
 } from '../Checklist/checklistRecurrence'
 import {
+  $generateMissedChecklistOccurrences,
+  checklistGenerationChangedDocument,
+  readChecklistBackfillSettings,
+  EMPTY_CHECKLIST_GENERATION_RESULT,
+} from '../Checklist/checklistGeneration'
+import {
   $applyChecklistEditorMutation,
   $getChecklistScheduleSnapshot,
   $getChecklistItems,
@@ -75,6 +81,16 @@ import {
   checklistEncryptionIdentityMatches,
   checklistSessionPrincipalMatches,
 } from '../Checklist/checklistSessionPrincipal'
+
+/**
+ * How many times one mount will look for a document to generate against.
+ *
+ * Small and bounded on purpose: this exists so a collaborative note whose content
+ * arrives after mount still gets its one pass, not so the pass can keep retrying.
+ * Once a checklist row is visible the budget stops mattering — the pass settles on
+ * that, not on this number.
+ */
+const CHECKLIST_GENERATION_ATTEMPT_BUDGET = 20
 
 type CheckListPluginProps = {
   noteUuid?: string
@@ -204,6 +220,89 @@ export function CheckListPlugin({
       }),
     )
   }, [application, editor, flushChanges])
+
+  /**
+   * Standard Red Notes: write down the occurrences a recurring task owed, once,
+   * when the note is opened.
+   *
+   * LAZY-ON-OPEN by decision: no sweep across every note at launch. A sweep would
+   * rewrite documents the user never looked at, which is both surprising and a
+   * large unexplained sync.
+   *
+   * Gated three ways, all of them fail-closed. `ownerRole === 'interactive'` means
+   * only the editor the user is actually looking at generates — the detached
+   * background owner exists to serve Todos-view mutations and must not mutate a
+   * note on its own. `editor.isEditable()` and `canMutateSuperChecklistNote`
+   * together mean a trashed, locked, lite, read-only-session or
+   * read-only-shared-vault note is never written to; without a `noteUuid` there is
+   * no note whose authorization could be checked, so nothing runs.
+   *
+   * "Settled" is deliberately keyed on the DOCUMENT having loaded rather than on
+   * the pass having generated something. A collaborative note is still empty on
+   * the first editable tick, and a pass over an empty document that counted as
+   * done would mean a synced document never gets one. The retry budget bounds the
+   * cost: a note with no checklist rows at all walks its tree a few times and then
+   * stops, rather than on every keystroke forever.
+   */
+  useEffect(() => {
+    if (ownerRole !== 'interactive' || !noteUuid) {
+      return
+    }
+    let disposed = false
+    let settled = false
+    let queued = false
+    let attemptsLeft = CHECKLIST_GENERATION_ATTEMPT_BUDGET
+
+    const attemptGenerationPass = () => {
+      queued = false
+      if (disposed || settled || attemptsLeft <= 0 || !editor.isEditable()) {
+        return
+      }
+      attemptsLeft -= 1
+      if (!canMutateSuperChecklistNote(application, application.items.findItem<SNNote>(noteUuid))) {
+        return
+      }
+      const settings = readChecklistBackfillSettings(application)
+      let documentLoaded = false
+      let result = EMPTY_CHECKLIST_GENERATION_RESULT
+      editor.update(
+        () => {
+          documentLoaded = $getChecklistItems().length > 0
+          result = $generateMissedChecklistOccurrences(settings)
+        },
+        { discrete: true },
+      )
+      if (documentLoaded || attemptsLeft <= 0) {
+        settled = true
+      }
+      if (checklistGenerationChangedDocument(result)) {
+        flushChanges?.()
+      }
+    }
+
+    const queueGenerationPass = () => {
+      if (disposed || settled || queued || attemptsLeft <= 0) {
+        return
+      }
+      queued = true
+      // Never re-enter Lexical from inside an update listener: the pass runs in
+      // its own update, after this one has committed.
+      queueMicrotask(attemptGenerationPass)
+    }
+
+    attemptGenerationPass()
+    return mergeRegister(
+      () => {
+        disposed = true
+      },
+      editor.registerEditableListener((editable) => {
+        if (editable) {
+          queueGenerationPass()
+        }
+      }),
+      editor.registerUpdateListener(() => queueGenerationPass()),
+    )
+  }, [application, editor, flushChanges, noteUuid, ownerRole])
 
   useEffect(() => {
     if (!noteUuid || !ownerLeaseId) {

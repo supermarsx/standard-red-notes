@@ -366,8 +366,13 @@ export function $clearChecklistOccurrenceSummary(item: ListItemNode): boolean {
  * wording: the copy is user-visible prose that changes with locale and with
  * editing, and a text match would start failing silently the first time either
  * moves.
+ *
+ * Deliberately a plain boolean rather than a `node is ListItemNode` predicate:
+ * being a summary is a PROPERTY of a row, not a kind of node, and a type
+ * predicate here would narrow a `ListItemNode` to `never` in the negative branch
+ * — which is where every caller does its real work.
  */
-export function $isChecklistOccurrenceSummaryItem(node: LexicalNode | null | undefined): node is ListItemNode {
+export function $isChecklistOccurrenceSummaryItem(node: LexicalNode | null | undefined): boolean {
   return $isListItemNode(node) && $getChecklistOccurrenceSummary(node) !== undefined
 }
 

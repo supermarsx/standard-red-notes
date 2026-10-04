@@ -16,6 +16,7 @@ import {
 } from './checklistRecurrence'
 import { $setCheckedForItems } from './ChecklistBulkCompletion'
 import { $toggleChecklistItemChecked } from './ChecklistEditorMutations'
+import { $generateMissedChecklistOccurrences } from './checklistGeneration'
 
 const PARENT_DUE_AT = '2026-08-16T09:00:00.000Z'
 const COMPLETED_AT = Date.parse('2026-08-16T10:00:00.000Z')
@@ -366,6 +367,113 @@ describe('recurring checklist parents reproduce their subtasks', () => {
         expect($propagateChecklistRecurrenceToDescendants(parent, NEXT_DUE_AT, daily, COMPLETED_AT)).toBe(
           CHECKLIST_MAX_NESTING_DEPTH,
         )
+      },
+      { discrete: true },
+    )
+  })
+})
+
+/**
+ * The generation pass rolls a live row forward, and that roll carries the row's
+ * subtree with it — the same propagation the completion path uses. Two routes into
+ * one mechanism is exactly where a subtask could advance twice for one parent
+ * occurrence, so this is the guard for it: generation must be worth exactly one
+ * occurrence to a subtree, and must not leave the subtree somewhere a later
+ * completion then advances from again.
+ */
+const MONTHLY_DUE_AT = '2027-01-15T09:00:00.000Z'
+const GENERATION_NOW = Date.parse('2027-03-20T12:00:00.000Z')
+const monthly = createChecklistRecurrence('monthly', MONTHLY_DUE_AT, 'UTC')!
+const GENERATION_SETTINGS = { autoGenerate: true, cap: 12 }
+
+describe('generation and completion do not compound on a subtree', () => {
+  const seed = () => {
+    const editor = createEditor()
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('quarterly review'))
+        list.append(parent)
+        $getRoot().append(list)
+        $setChecklistSchedule(parent, MONTHLY_DUE_AT, monthly)
+        appendChild(parent, 'collect the numbers')
+      },
+      { discrete: true },
+    )
+    return editor
+  }
+
+  const $parent = (): ListItemNode => ($getRoot().getFirstChild() as ListNode).getChildren()[0] as ListItemNode
+  const $subtask = (): ListItemNode =>
+    (
+      (
+        $parent()
+          .getChildren()
+          .find((child) => child.getType() === 'list') as ListNode
+      ).getChildren() as ListItemNode[]
+    )[0]
+
+  it('advances a subtask exactly one occurrence for one generation pass', () => {
+    const editor = seed()
+    editor.update(
+      () => {
+        $generateMissedChecklistOccurrences(GENERATION_SETTINGS, GENERATION_NOW)
+        // One occurrence forward — not one per occurrence the pass wrote out.
+        expect($getChecklistDueAt($parent())).toBe('2027-04-15T09:00:00.000Z')
+        expect($getChecklistDueAt($subtask())).toBe('2027-04-15T09:00:00.000Z')
+        // The subtree gained exactly one row — the one it already had. A pass
+        // that treated the just-propagated subtask as its own overdue candidate
+        // would have written a second set of occurrences inside it.
+        expect($getChecklistDescendantItems($parent())).toHaveLength(1)
+        expect(($getRoot().getFirstChild() as ListNode).getChildren()).toHaveLength(4)
+      },
+      { discrete: true },
+    )
+  })
+
+  it('does not move the subtask again on a second pass', () => {
+    const editor = seed()
+    editor.update(() => $generateMissedChecklistOccurrences(GENERATION_SETTINGS, GENERATION_NOW), { discrete: true })
+    editor.update(
+      () => {
+        // The live row is in the future now, so there is nothing to enumerate and
+        // nothing to propagate. The propagation itself is also idempotent against
+        // the same occurrence, so even reaching it would be a no-op.
+        expect($generateMissedChecklistOccurrences(GENERATION_SETTINGS, GENERATION_NOW)).toMatchObject({ tasks: 0 })
+        expect($getChecklistDueAt($subtask())).toBe('2027-04-15T09:00:00.000Z')
+      },
+      { discrete: true },
+    )
+  })
+
+  it('leaves the subtree where exactly one later completion advances it once', () => {
+    const editor = seed()
+    editor.update(() => $generateMissedChecklistOccurrences(GENERATION_SETTINGS, GENERATION_NOW), { discrete: true })
+    editor.update(
+      () => {
+        // The user ticks the rolled-forward row on its new due date.
+        $toggleChecklistItemChecked($parent(), Date.parse('2027-04-15T10:00:00.000Z'))
+        expect($getChecklistDueAt($parent())).toBe('2027-05-15T09:00:00.000Z')
+        expect($getChecklistDueAt($subtask())).toBe('2027-05-15T09:00:00.000Z')
+      },
+      { discrete: true },
+    )
+  })
+
+  it('gives a generated occurrence no subtree to propagate into', () => {
+    const editor = seed()
+    editor.update(
+      () => {
+        $generateMissedChecklistOccurrences(GENERATION_SETTINGS, GENERATION_NOW)
+        const generated = (($getRoot().getFirstChild() as ListNode).getChildren() as ListItemNode[]).slice(1)
+        expect(generated).toHaveLength(3)
+        for (const row of generated) {
+          // No rule and no children: propagation can never be reached from here,
+          // which is what keeps exactly one rule in play for the whole subtree.
+          expect($getChecklistRecurrence(row)).toBeUndefined()
+          expect(row.getChildren().filter((child) => child.getType() === 'list')).toHaveLength(0)
+        }
       },
       { discrete: true },
     )
