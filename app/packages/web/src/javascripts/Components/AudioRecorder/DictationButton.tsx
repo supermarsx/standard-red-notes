@@ -24,6 +24,14 @@ const DictationButton = () => {
   const [supported] = useState(() => getSpeechRecognitionCtor() !== undefined)
   const [state, setState] = useState<DictationState>('idle')
   const handleRef = useRef<DictationHandle | null>(null)
+  /**
+   * Standard Red Notes (t112): this button is rendered once per open note (it sits in
+   * the editor toolbar inside a NoteView tile, and from the second open tab onward every
+   * tile is mounted). Its own DOM node is what identifies which note's editor the
+   * dictated text belongs to — a `getElementById` for the editor would find the first
+   * open note's, and speech would be typed into a note the user is not editing.
+   */
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     const refresh = () => setEnabled(loadDictationSettings().dictationEnabled)
@@ -54,7 +62,7 @@ const DictationButton = () => {
     handleRef.current = startDictation({
       language,
       onFinalText: (text) => {
-        const inserted = insertTextIntoActiveEditor(text)
+        const inserted = insertTextIntoActiveEditor(text, { within: buttonRef.current })
         if (!inserted) {
           addToast({
             type: ToastType.Error,
@@ -79,6 +87,7 @@ const DictationButton = () => {
   return (
     <StyledTooltip label={listening ? 'Stop dictation' : 'Dictate (type by speaking)'}>
       <button
+        ref={buttonRef}
         className={classNames(
           'hover:bg-contrast flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-solid border-transparent',
           listening ? 'bg-danger text-danger-contrast' : 'text-neutral',

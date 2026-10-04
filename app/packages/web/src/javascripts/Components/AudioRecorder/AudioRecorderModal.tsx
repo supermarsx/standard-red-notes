@@ -188,7 +188,9 @@ const AudioRecorderContent = observer(({ application, filesController, note, clo
     if (!transcript.trim()) {
       return
     }
-    const ok = insertTextIntoActiveEditor(transcript.trim() + ' ')
+    // Name the note this recorder was opened for: with more than one tab open every
+    // tile renders the same editor ids, and an unscoped insert lands in the first one.
+    const ok = insertTextIntoActiveEditor(transcript.trim() + ' ', { noteUuid: note.uuid })
     if (ok) {
       addToast({ type: ToastType.Success, message: 'Transcript inserted into the note.' })
       close()
@@ -198,7 +200,7 @@ const AudioRecorderContent = observer(({ application, filesController, note, clo
         message: 'Could not find a focused editor. Click in the note, then insert.',
       })
     }
-  }, [transcript, close])
+  }, [transcript, note, close])
 
   const copyTranscript = useCallback(async () => {
     try {
