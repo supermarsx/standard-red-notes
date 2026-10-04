@@ -240,6 +240,31 @@ export enum PrefKey {
   // matching how the notes list persists its own display filters
   // (NotesShowArchived / NotesHidePinned / SortNotesBy).
   TodoFilters = 'todoFilters',
+  // Standard Red Notes: whether a heading in a note's body opens a todo
+  // sublevel (its tasks inherit the heading's depth as a base), and whether the
+  // run of paragraphs immediately after a heading becomes that section's
+  // description. Both default ON; each turned OFF reproduces the pre-hierarchy
+  // behaviour exactly, so they are independently switchable escape hatches
+  // rather than a single "new parser" flag.
+  TodoHeadingLevels = 'todoHeadingLevels',
+  TodoHeadingDescriptions = 'todoHeadingDescriptions',
+  // Standard Red Notes: gates note cover images (the hero header). Default OFF
+  // because the cover's bytes live INLINE in the note's appData and are
+  // therefore re-encrypted and re-uploaded with every note revision. Turning it
+  // off HIDES an existing cover rather than deleting it: the bytes are preserved
+  // untouched, toggling must not dirty a note, and the remove path stays
+  // reachable while off.
+  NoteCoversEnabled = 'noteCoversEnabled',
+  // Standard Red Notes: when a recurring checklist task is completed late, the
+  // occurrences it owed are generated as plain dated siblings rather than
+  // silently skipped. ChecklistAutoGenerateRecurrences gates that generation
+  // (lazily, when a note is opened, plus an explicit "Generate now"), and
+  // ChecklistGenerateCap bounds how many are written before the remainder is
+  // collapsed into one summary task. The cap is a synced, user-supplied number:
+  // consumers must clamp it to a sane positive bound before looping on it
+  // instead of trusting the stored value.
+  ChecklistAutoGenerateRecurrences = 'checklistAutoGenerateRecurrences',
+  ChecklistGenerateCap = 'checklistGenerateCap',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -442,4 +467,18 @@ export type PrefValue = {
   [PrefKey.BlockStyleGalleryOrder]: BlockTypeKey[]
   /** The Todos general view's filter bar state. See {@link TodoFiltersPreference}. */
   [PrefKey.TodoFilters]: TodoFiltersPreference
+  /** Headings in a note body open todo sublevels. ON = hierarchy, OFF = flat. */
+  [PrefKey.TodoHeadingLevels]: boolean
+  /** Paragraphs following a heading become that section's description. */
+  [PrefKey.TodoHeadingDescriptions]: boolean
+  /** Note cover images (hero header) are allowed. OFF hides, never deletes. */
+  [PrefKey.NoteCoversEnabled]: boolean
+  /** Missed recurring-checklist occurrences are generated instead of skipped. */
+  [PrefKey.ChecklistAutoGenerateRecurrences]: boolean
+  /**
+   * How many missed occurrences may be generated in one pass before the rest
+   * are collapsed into a single summary task. Clamp before use — the stored
+   * value is user-supplied and syncs, so it can be absent, zero or absurd.
+   */
+  [PrefKey.ChecklistGenerateCap]: number
 }

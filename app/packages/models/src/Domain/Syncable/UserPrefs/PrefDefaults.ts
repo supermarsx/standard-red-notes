@@ -131,6 +131,21 @@ export const PrefDefaults = {
   // Standard Red Notes: the Todos view opens showing everything; see
   // DefaultTodoFiltersPreference.
   [PrefKey.TodoFilters]: DefaultTodoFiltersPreference,
+  // Standard Red Notes: todo hierarchy and heading descriptions are both ON by
+  // default — a note that uses headings reads as the outline it already looks
+  // like. Either turned OFF reproduces the flat, description-less behaviour.
+  [PrefKey.TodoHeadingLevels]: true,
+  [PrefKey.TodoHeadingDescriptions]: true,
+  // Standard Red Notes: note covers are OFF by default. Their bytes are stored
+  // inline in the note's appData, so every cover is re-encrypted and re-uploaded
+  // with every revision of its note — an opt-in cost, not a default one.
+  [PrefKey.NoteCoversEnabled]: false,
+  // Standard Red Notes: generating the occurrences a late completion owed is ON
+  // by default (silently skipping them is the defect being fixed), bounded at 12
+  // per pass so one very overdue yearly task cannot flood a note; the remainder
+  // is collapsed into a single summary task instead.
+  [PrefKey.ChecklistAutoGenerateRecurrences]: true,
+  [PrefKey.ChecklistGenerateCap]: 12,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }

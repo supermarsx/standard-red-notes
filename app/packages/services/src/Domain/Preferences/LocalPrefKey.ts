@@ -61,6 +61,12 @@ export type CustomThemesPreference = {
 export enum LocalPrefKey {
   ListPaneCollapsed = 'listPaneCollapsed',
   NavigationPaneCollapsed = 'navigationPaneCollapsed',
+  // Standard Red Notes: renders the navigation pane as a narrow icon-only rail
+  // ("mini mode") instead of hiding it. A third pane state beside collapsed and
+  // expanded, not a replacement for either: collapsed still means absent. Kept
+  // device/workspace-local and encrypted with the two collapse keys, because it
+  // is a layout choice about THIS screen, not account data.
+  NavigationPaneMini = 'navigationPaneMini',
   // Standard Red Notes: remembers whether the docked assistant should be
   // restored after a full application reload. This remains encrypted and
   // device/workspace-local with the rest of LocalPreferences.
@@ -94,6 +100,7 @@ export enum LocalPrefKey {
 export type LocalPrefValue = {
   [LocalPrefKey.ListPaneCollapsed]: boolean
   [LocalPrefKey.NavigationPaneCollapsed]: boolean
+  [LocalPrefKey.NavigationPaneMini]: boolean
   [LocalPrefKey.AssistantPaneOpen]: boolean
   [LocalPrefKey.ActiveThemes]: string[]
   [LocalPrefKey.UseSystemColorScheme]: boolean
@@ -115,6 +122,9 @@ export type LocalPrefValue = {
 export const LocalPrefDefaults = {
   [LocalPrefKey.ListPaneCollapsed]: false,
   [LocalPrefKey.NavigationPaneCollapsed]: false,
+  // Default OFF: the full labelled sidebar is the shipped layout; the icon rail
+  // is an explicit user choice.
+  [LocalPrefKey.NavigationPaneMini]: false,
   [LocalPrefKey.AssistantPaneOpen]: false,
   [LocalPrefKey.ActiveThemes]: [],
   [LocalPrefKey.UseSystemColorScheme]: false,
