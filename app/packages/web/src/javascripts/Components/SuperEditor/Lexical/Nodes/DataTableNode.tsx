@@ -13,6 +13,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import Icon from '@/Components/Icon/Icon'
 import {
   ColumnType,
   ColumnTypeSetting,
@@ -193,6 +194,42 @@ export function applyLiveDataTableEdits(
 }
 
 /**
+ * The column-sort affordance, previously the bare characters U+25B2 / U+25BC /
+ * U+21C5. It carries three distinct states (ascending, descending, unsorted),
+ * so the state is named on the owning <button>'s aria-label (see the header
+ * markup) and the glyph itself stays decorative — a control's accessible name
+ * belongs on the control, and labelling the <svg> too would duplicate it into
+ * the computed name.
+ *
+ * Deliberately three separate branches with *literal* `type` props rather than
+ * one computed `type={expression}`: IconNameCoverage.spec.ts only sweeps Icon
+ * tags whose type is a string literal, and a name it cannot see is a name that
+ * ships as visible text on a mapping miss. (That sweep parses this file with a
+ * regex, so do not write a sample Icon tag in a comment here — it would be
+ * collected as a real usage.)
+ */
+function SortIndicatorIcon({ direction }: { direction: 'asc' | 'desc' | null }): React.JSX.Element {
+  if (direction === 'asc') {
+    return <Icon type="arrows-sort-up" size="small" />
+  }
+  if (direction === 'desc') {
+    return <Icon type="arrows-sort-down" size="small" />
+  }
+  return <Icon type="arrows-vertical" size="small" />
+}
+
+/** Human-readable sort state for the header button's accessible name. */
+function sortStateLabel(direction: 'asc' | 'desc' | null): string {
+  if (direction === 'asc') {
+    return 'sorted ascending'
+  }
+  if (direction === 'desc') {
+    return 'sorted descending'
+  }
+  return 'not sorted'
+}
+
+/**
  * Cell renderer for a "link" (foreign-key) column. Resolves the stored key
  * against the target table: shows the resolved label as a clickable chip when
  * matched (scrolls to the target), or the raw text when unmatched
@@ -286,7 +323,12 @@ function LinkCell({
     >
       {resolution.matched ? (
         <span className="bg-info-backdrop text-info inline-flex items-center gap-1 rounded px-1.5 py-px">
-          <span aria-hidden>🔗</span>
+          {/*
+           * Decorative: the resolved row label sits immediately after it and the
+           * enclosing button's title already says "Linked row", so naming the
+           * glyph as well would only repeat them.
+           */}
+          <Icon type="link" size="small" className="flex-shrink-0" />
           {resolution.display}
         </span>
       ) : (
@@ -296,7 +338,8 @@ function LinkCell({
   )
 }
 
-function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: NodeKey }): React.JSX.Element {
+/** Exported only so render specs can mount the real widget (cf. GanttChartComponent). */
+export function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
 
   const mutate = useCallback(
@@ -539,7 +582,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
       return null
     })
 
-  const sortIndicator = (col: number) => (sort?.col === col ? (sort.dir === 'asc' ? '▲' : '▼') : '⇅')
+  const sortDirectionFor = (col: number): 'asc' | 'desc' | null => (sort?.col === col ? sort.dir : null)
 
   // ----- chart config -----
   const chart = data.chart ?? null
@@ -593,7 +636,11 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
         </button>
         {linkedIds.length > 0 && (
           <span className="text-info ml-auto flex items-center gap-1" title="Tables this base links to">
-            <span aria-hidden>🔗</span>
+            {/*
+             * Decorative: the linked table names are rendered as buttons right
+             * beside it and the span's own title names the group.
+             */}
+            <Icon type="link" size="small" className="flex-shrink-0" />
             {linkedIds.map((id, i) => (
               <button
                 key={id}
@@ -624,38 +671,53 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                         onBlur={(e) => setHeader(c, e.target.value)}
                       />
                       <button
-                        className="text-passive-1 hover:text-info px-1"
+                        aria-label={`Sort by this column (${sortStateLabel(sortDirectionFor(c))})`}
+                        className="text-passive-1 hover:text-info flex items-center px-1"
                         onClick={() => toggleSort(c)}
                         title="Sort by this column"
                         type="button"
                       >
-                        {sortIndicator(c)}
+                        <SortIndicatorIcon direction={sortDirectionFor(c)} />
                       </button>
                       <button
-                        className={`hover:text-info px-1 ${keyColumn === c ? 'text-info' : 'text-passive-2'}`}
+                        aria-label={keyColumn === c ? 'Primary/label column' : 'Set as primary/label column'}
+                        aria-pressed={keyColumn === c}
+                        className={`hover:text-info flex items-center px-1 ${
+                          keyColumn === c ? 'text-info' : 'text-passive-2'
+                        }`}
                         onClick={() => setKeyColumn(c)}
                         title={keyColumn === c ? 'Primary/label column' : 'Set as primary/label column'}
                         type="button"
                       >
-                        {keyColumn === c ? '★' : '☆'}
+                        {/*
+                         * Filled vs. outlined says whether this is the primary
+                         * column. That state is announced through the button's
+                         * aria-label and aria-pressed above, so the glyph is
+                         * decorative; two literal `type` props keep the names
+                         * inside IconNameCoverage.spec.ts's sweep.
+                         */}
+                        {keyColumn === c ? <Icon type="star-filled" size="small" /> : <Icon type="star" size="small" />}
                       </button>
                       <button
-                        className={`hover:text-info px-1 ${
+                        aria-label="Configure link to another table"
+                        aria-expanded={linkConfigCol === c}
+                        className={`hover:text-info flex items-center px-1 ${
                           isLinkColumn(c) ? 'text-info' : linkConfigCol === c ? 'text-info' : 'text-passive-2'
                         }`}
                         onClick={() => setLinkConfigCol((v) => (v === c ? null : c))}
                         title="Configure link (foreign key) to another table"
                         type="button"
                       >
-                        🔗
+                        <Icon type="link" size="small" />
                       </button>
                       <button
-                        className="text-passive-1 hover:text-danger px-1"
+                        aria-label="Delete column"
+                        className="text-passive-1 hover:text-danger flex items-center px-1"
                         onClick={() => removeColumn(c)}
                         title="Delete column"
                         type="button"
                       >
-                        ×
+                        <Icon type="close" size="small" />
                       </button>
                     </div>
                     <div className="flex items-center gap-1 px-2 pb-1">
@@ -830,12 +892,13 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                 })}
                 <td className="border-border border text-center align-middle">
                   <button
-                    className="text-passive-1 hover:text-danger px-1"
+                    aria-label="Delete row"
+                    className="text-passive-1 hover:text-danger flex w-full items-center justify-center px-1"
                     onClick={() => removeRow(idx)}
                     title="Delete row"
                     type="button"
                   >
-                    ×
+                    <Icon type="close" size="small" />
                   </button>
                 </td>
               </tr>
@@ -873,24 +936,30 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
           </label>
           {rowsPerPage !== 0 && totalPages > 1 && (
             <div className="flex items-center gap-1">
+              {/*
+               * These two carried no accessible name at all while their only
+               * content was a single-glyph character, so the names below are new.
+               */}
               <button
-                className="hover:bg-contrast rounded px-2 py-0.5 disabled:opacity-40"
+                aria-label="Previous page"
+                className="hover:bg-contrast flex items-center rounded px-2 py-0.5 disabled:opacity-40"
                 onClick={() => setPage(Math.max(0, currentPage - 1))}
                 disabled={currentPage === 0}
                 type="button"
               >
-                ‹
+                <Icon type="chevron-left" size="small" />
               </button>
               <span>
                 {currentPage + 1} / {totalPages}
               </span>
               <button
-                className="hover:bg-contrast rounded px-2 py-0.5 disabled:opacity-40"
+                aria-label="Next page"
+                className="hover:bg-contrast flex items-center rounded px-2 py-0.5 disabled:opacity-40"
                 onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
                 disabled={currentPage >= totalPages - 1}
                 type="button"
               >
-                ›
+                <Icon type="chevron-right" size="small" />
               </button>
             </div>
           )}
