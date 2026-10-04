@@ -5,6 +5,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
+import { navigationEntryProjection, useNavigationMini } from '../Tags/navigationMini'
 
 /**
  * Standard Red Notes: first-class sidebar entries for the three aggregate apps
@@ -28,18 +29,13 @@ const AggregateViewSectionButton: FunctionComponent<SingleButtonProps> = observe
       application.paneController.openPaneTab(paneId)
     }, [application, paneId])
 
+    const isMini = useNavigationMini()
+    const entry = navigationEntryProjection({ mini: isMini, isActive: isOpen, label })
+
     return (
-      <button
-        className={classNames(
-          'flex w-full items-center gap-3 px-3.5 py-2 text-left text-base lg:text-sm',
-          'hover:bg-contrast focus:bg-contrast focus:shadow-none focus:outline-none',
-          isOpen && 'bg-contrast',
-        )}
-        onClick={handleClick}
-        aria-pressed={isOpen}
-      >
+      <button className={entry.className} {...entry.labelProps} onClick={handleClick} aria-pressed={isOpen}>
         <Icon type={icon} className={classNames('flex-shrink-0', isOpen ? 'text-info' : 'text-neutral')} />
-        <span className={classNames('flex-grow truncate font-semibold', isOpen && 'text-info')}>{label}</span>
+        {entry.showLabel && <span className={entry.labelClassName}>{label}</span>}
       </button>
     )
   },

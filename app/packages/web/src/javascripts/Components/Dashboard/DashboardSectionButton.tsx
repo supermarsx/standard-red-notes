@@ -4,10 +4,13 @@ import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
+import { navigationEntryProjection, useNavigationMini } from '../Tags/navigationMini'
 
 type Props = {
   application: WebApplication
 }
+
+const LABEL = 'Dashboard'
 
 /**
  * Sidebar entry that opens the Dashboard pane. Placed near the smart views so it
@@ -22,18 +25,13 @@ const DashboardSectionButton: FunctionComponent<Props> = ({ application }) => {
     application.paneController.openPaneTab(AppPaneId.Dashboard)
   }, [application])
 
+  const isMini = useNavigationMini()
+  const entry = navigationEntryProjection({ mini: isMini, isActive: isOpen, label: LABEL })
+
   return (
-    <button
-      className={classNames(
-        'flex w-full items-center gap-3 px-3.5 py-2 text-left text-base lg:text-sm',
-        'hover:bg-contrast focus:bg-contrast focus:shadow-none focus:outline-none',
-        isOpen && 'bg-contrast',
-      )}
-      onClick={handleClick}
-      aria-pressed={isOpen}
-    >
+    <button className={entry.className} {...entry.labelProps} onClick={handleClick} aria-pressed={isOpen}>
       <Icon type="dashboard" className={classNames('flex-shrink-0', isOpen ? 'text-info' : 'text-neutral')} />
-      <span className={classNames('flex-grow truncate font-semibold', isOpen && 'text-info')}>Dashboard</span>
+      {entry.showLabel && <span className={entry.labelClassName}>{LABEL}</span>}
     </button>
   )
 }

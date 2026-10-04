@@ -52,6 +52,45 @@ $content-horizontal-padding: 16px;
     }
   }
 
+  // Standard Red Notes: mini ("icon rail") mode, driven by the
+  // `navigation-mini` class the Navigation root carries while the
+  // NavigationPaneMini preference is on (see `Components/Tags/navigationMini.ts`).
+  //
+  // Everything that *carries meaning* about mini lives in the components, not
+  // here: the entries move their labels into `title` + `aria-label`, and the
+  // note counts / context-menu affordances stop rendering. Those are the parts a
+  // jest spec can assert, because jsdom has no layout engine and no stylesheet.
+  // What is left below is purely cosmetic alignment for a 48px column, which is
+  // why it is CSS and not markup.
+  &.navigation-mini {
+    .section-title-bar {
+      // Keep the section's action button (add smart view, organize folders) —
+      // dropping it would make those unreachable without leaving mini — but the
+      // section's prose title has nowhere to go at rail width.
+      padding-left: 0;
+      padding-right: 0;
+
+      .section-title-bar-header {
+        justify-content: center;
+
+        > .title {
+          display: none;
+        }
+      }
+    }
+
+    .root-drop {
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    .tag > .tag-info {
+      // With the title and the count both gone, a lone glyph would otherwise sit
+      // flush against the left edge of the rail.
+      justify-content: center;
+    }
+  }
+
   .tag,
   .root-drop {
     font-size: 0.875rem;

@@ -28,6 +28,7 @@ import { usePremiumModal } from '@/Hooks/usePremiumModal'
 import { useApplication } from '../ApplicationProvider'
 import { mergeRefs } from '../../Hooks/mergeRefs'
 import { getTitleForLinkedTag } from '../../Utils/Items/Display/getTitleForLinkedTag'
+import { navigationTagRowProjection, useNavigationMini } from './navigationMini'
 
 type Props = {
   tag: SNTag
@@ -249,6 +250,9 @@ export const TagsListItem: FunctionComponent<Props> = observer(
       }
     }, [addDragTarget, linkingController, removeDragTarget, tag])
 
+    const isMini = useNavigationMini()
+    const row = navigationTagRowProjection({ mini: isMini, level, indentPx: indentPx(level), label: title })
+
     log(LoggingDomain.NavigationList, 'Rendering TagsListItem')
 
     const onDragStart: DragEventHandler<HTMLDivElement> = useCallback(
@@ -354,11 +358,13 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           role="button"
           tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
           className={classNames(
-            'tag group relative px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
+            'tag group relative py-0.5 focus-visible:!shadow-inner md:py-0',
+            row.paddingClassName,
             (isSelected || isContextMenuOpenForTag) && 'selected',
             isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
             isReorderBefore && '!border-t-info border-t-2',
           )}
+          {...row.labelProps}
           onClick={selectCurrentTag}
           onDoubleClick={clearSearchAndSelectCurrentTag}
           onKeyDown={(event) => {
@@ -382,9 +388,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
               navigationController.tagToScrollIntoView = undefined
             },
           ])}
-          style={{
-            paddingLeft: `${indentPx(level)}px`,
-          }}
+          style={row.style}
           onContextMenu={(e) => {
             e.preventDefault()
             onContextMenu(tag, type, e.clientX, e.clientY)
@@ -407,7 +411,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           <div className="tag-info" title={title}>
             <div
               onClick={selectCurrentTag}
-              className={'tag-icon draggable mr-2'}
+              className={classNames('tag-icon draggable', !isMini && 'mr-2')}
               style={tag.color ? { color: tag.color } : undefined}
             >
               <Icon
@@ -419,7 +423,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
               />
             </div>
 
-            {isEditing && (
+            {row.showTitle && isEditing && (
               <input
                 className="title editing text-mobile-navigation-list-item lg:text-navigation-list-item min-w-0 overflow-hidden focus:shadow-none focus:outline-none"
                 id={`react-tag-${tag.uuid}-${type}`}
@@ -432,7 +436,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
               />
             )}
 
-            {!isEditing && (
+            {row.showTitle && !isEditing && (
               <>
                 <div
                   className="title text-mobile-navigation-list-item lg:text-navigation-list-item overflow-hidden text-left focus:shadow-none focus:outline-none"
@@ -445,7 +449,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             )}
 
             <div className="flex items-center">
-              {isSelected && (
+              {row.showMenu && isSelected && (
                 <a
                   role="button"
                   className={
@@ -477,14 +481,16 @@ export const TagsListItem: FunctionComponent<Props> = observer(
                   />
                 </a>
               )}
-              <div
-                onClick={hasChildren ? toggleChildren : undefined}
-                className={`count text-base lg:text-sm ${
-                  hasChildren ? (showChildren ? 'cursor-n-resize' : 'cursor-s-resize') : ''
-                }`}
-              >
-                {noteCounts.get()}
-              </div>
+              {row.showCount && (
+                <div
+                  onClick={hasChildren ? toggleChildren : undefined}
+                  className={`count text-base lg:text-sm ${
+                    hasChildren ? (showChildren ? 'cursor-n-resize' : 'cursor-s-resize') : ''
+                  }`}
+                >
+                  {noteCounts.get()}
+                </div>
+              )}
             </div>
           </div>
 

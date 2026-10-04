@@ -15,6 +15,7 @@ import {
 import { classNames } from '@standardnotes/utils'
 import { FOCUSABLE_BUT_NOT_TABBABLE } from '@/Constants/Constants'
 import { useApplication } from '../ApplicationProvider'
+import { navigationTagRowProjection, useNavigationMini } from './navigationMini'
 
 type Props = {
   view: SmartView
@@ -106,6 +107,15 @@ const SmartViewsListItem: FunctionComponent<Props> = ({ view, tagsState, setEdit
     })
   }, [application, view])
 
+  // Read before the early return below: hooks must run unconditionally.
+  const isMini = useNavigationMini()
+  const row = navigationTagRowProjection({
+    mini: isMini,
+    level,
+    indentPx: level * PADDING_PER_LEVEL_PX + PADDING_BASE_PX,
+    label: title,
+  })
+
   if (view.uuid === SystemViewId.Conflicts && !conflictsCount) {
     return null
   }
@@ -114,10 +124,12 @@ const SmartViewsListItem: FunctionComponent<Props> = ({ view, tagsState, setEdit
     <button
       tabIndex={FOCUSABLE_BUT_NOT_TABBABLE}
       className={classNames(
-        'tag group px-3.5 py-0.5 focus-visible:!shadow-inner md:py-0',
+        'tag group py-0.5 focus-visible:!shadow-inner md:py-0',
+        row.paddingClassName,
         isSelected && 'selected',
         isFaded && 'opacity-50',
       )}
+      {...row.labelProps}
       onClick={selectCurrentTag}
       onContextMenu={(event) => {
         event.preventDefault()
@@ -127,40 +139,43 @@ const SmartViewsListItem: FunctionComponent<Props> = ({ view, tagsState, setEdit
         }
         onClickEdit()
       }}
-      style={{
-        paddingLeft: `${level * PADDING_PER_LEVEL_PX + PADDING_BASE_PX}px`,
-      }}
+      style={row.style}
     >
       <div className="tag-info">
-        <div className={'tag-icon mr-2'}>
+        <div className={classNames('tag-icon', !isMini && 'mr-2')}>
           <Icon type={view.iconString} className={classNames(iconClass, 'group-hover:text-text')} />
         </div>
-        {isEditing ? (
-          <input
-            className={'title editing text-mobile-navigation-list-item lg:text-navigation-list-item'}
-            id={`react-tag-${view.uuid}`}
-            onBlur={onBlur}
-            onInput={onInput}
-            value={title}
-            onKeyUp={onKeyUp}
-            spellCheck={false}
-            ref={inputRef}
-          />
-        ) : (
-          <div
-            className={'title text-mobile-navigation-list-item lg:text-navigation-list-item overflow-hidden text-left'}
-            id={`react-tag-${view.uuid}`}
-          >
-            {title}
+        {row.showTitle &&
+          (isEditing ? (
+            <input
+              className={'title editing text-mobile-navigation-list-item lg:text-navigation-list-item'}
+              id={`react-tag-${view.uuid}`}
+              onBlur={onBlur}
+              onInput={onInput}
+              value={title}
+              onKeyUp={onKeyUp}
+              spellCheck={false}
+              ref={inputRef}
+            />
+          ) : (
+            <div
+              className={
+                'title text-mobile-navigation-list-item lg:text-navigation-list-item overflow-hidden text-left'
+              }
+              id={`react-tag-${view.uuid}`}
+            >
+              {title}
+            </div>
+          ))}
+        {row.showCount && (
+          <div className={'count text-base lg:text-sm'}>
+            {view.uuid === SystemViewId.AllNotes && tagsState.allNotesCount}
+            {view.uuid === SystemViewId.Conflicts && conflictsCount}
           </div>
         )}
-        <div className={'count text-base lg:text-sm'}>
-          {view.uuid === SystemViewId.AllNotes && tagsState.allNotesCount}
-          {view.uuid === SystemViewId.Conflicts && conflictsCount}
-        </div>
       </div>
 
-      {!isSystemView(view) && (
+      {row.showMenu && !isSystemView(view) && (
         <div className="meta">
           {view.conflictOf && <div className="text-danger -mt-1 text-[0.625rem] font-bold">Conflicted Copy</div>}
 

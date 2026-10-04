@@ -6,10 +6,13 @@ import Icon from '@/Components/Icon/Icon'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { useWorkflowsStatus } from './useWorkflowsStatus'
 import { shouldShowWorkflowsSection } from './workflowsStatus'
+import { navigationEntryProjection, useNavigationMini } from '../Tags/navigationMini'
 
 type Props = {
   application: WebApplication
 }
+
+const LABEL = 'Workflows'
 
 /**
  * Standard Red Notes: sidebar entry that opens the Workflows pane as a tab in
@@ -28,22 +31,18 @@ const WorkflowsSectionButton: FunctionComponent<Props> = ({ application }) => {
     application.paneController.openPaneTab(AppPaneId.Workflows)
   }, [application])
 
+  // Read before the early return below: hooks must run unconditionally.
+  const isMini = useNavigationMini()
+  const entry = navigationEntryProjection({ mini: isMini, isActive: isOpen, label: LABEL })
+
   if (!shouldShowWorkflowsSection(signedIn, state)) {
     return null
   }
 
   return (
-    <button
-      className={classNames(
-        'flex w-full items-center gap-3 px-3.5 py-2 text-left text-base lg:text-sm',
-        'hover:bg-contrast focus:bg-contrast focus:shadow-none focus:outline-none',
-        isOpen && 'bg-contrast',
-      )}
-      onClick={handleClick}
-      aria-pressed={isOpen}
-    >
+    <button className={entry.className} {...entry.labelProps} onClick={handleClick} aria-pressed={isOpen}>
       <Icon type="tune" className={classNames('flex-shrink-0', isOpen ? 'text-info' : 'text-neutral')} />
-      <span className={classNames('flex-grow truncate font-semibold', isOpen && 'text-info')}>Workflows</span>
+      {entry.showLabel && <span className={entry.labelClassName}>{LABEL}</span>}
     </button>
   )
 }

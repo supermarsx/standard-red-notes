@@ -28,6 +28,14 @@ import BookmarksSectionButton from '../Bookmarks/BookmarksSectionButton'
 import TemplatesSectionButton from '../Templates/TemplatesSectionButton'
 import FilesSectionButton from '../FilesView/FilesSectionButton'
 import WorkflowsSectionButton from '../Workflows/WorkflowsSectionButton'
+import { useLocalPreference } from '@/Hooks/usePreference'
+import useIsTabletOrMobileScreen from '@/Hooks/useIsTabletOrMobileScreen'
+import {
+  NAVIGATION_MINI_CONTAINER_CLASS,
+  NAVIGATION_MINI_DATA_ATTR,
+  NAVIGATION_PANE_MINI_PREF_KEY,
+  NavigationMiniContext,
+} from './navigationMini'
 
 type Props = {
   application: WebApplication
@@ -73,6 +81,28 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
 
   const { hasBottomInset } = useAvailableSafeAreaPadding()
 
+  /**
+   * Standard Red Notes: mini ("icon rail") mode. A device-local preference,
+   * default OFF — see `navigationMini.ts` for why this is a preference and not a
+   * role gate.
+   *
+   * Suppressed below the desktop breakpoint: on tablet and mobile the Navigation
+   * pane is presented full-width (and on tablet it is removed from the pane stack
+   * altogether), so a 48px icon rail there would be a strip of glyphs floating in
+   * a 100%-wide column. The toggle that sets this preference is itself desktop-only
+   * for the same reason.
+   */
+  const [miniPreference] = useLocalPreference(NAVIGATION_PANE_MINI_PREF_KEY)
+  const { isTabletOrMobile } = useIsTabletOrMobileScreen()
+  const isMini = miniPreference === true && !isTabletOrMobile
+
+  /**
+   * A text input is unusable at rail width, so the search bar is not rendered in
+   * mini — except while a search is actually running, because hiding it then
+   * would strand the user with a filtered tag list and no way to clear it.
+   */
+  const isSearchingTags = application.navigationController.isSearching
+
   return (
     <div
       id={id}
@@ -80,32 +110,36 @@ const Navigation = forwardRef<HTMLDivElement, Props>(({ application, className, 
         className,
         'sn-component section pb-[50px] md:pb-0',
         'pt-safe-top h-full max-h-full overflow-hidden md:h-full md:max-h-full md:min-h-0',
+        isMini && NAVIGATION_MINI_CONTAINER_CLASS,
       )}
+      {...{ [NAVIGATION_MINI_DATA_ATTR]: isMini ? 'true' : 'false' }}
       ref={mergeRefs([ref, setElement])}
     >
-      <div id="navigation-content" className="flex-grow overflow-x-hidden overflow-y-auto">
-        <TagSearchBar navigationController={application.navigationController} />
-        <HomeSectionButton application={application} />
-        <NotificationsSectionButton application={application} />
-        <DashboardSectionButton application={application} />
-        <AggregateViewSectionButtons
-          application={application}
-          remindersLabel="Reminders"
-          calendarLabel="Calendar"
-          todosLabel="Todos"
-        />
-        <ResearchSectionButton application={application} />
-        <BookmarksSectionButton application={application} />
-        <TemplatesSectionButton application={application} />
-        <FilesSectionButton application={application} />
-        <WorkflowsSectionButton application={application} />
-        <SmartViewsSection
-          application={application}
-          featuresController={application.featuresController}
-          navigationController={application.navigationController}
-        />
-        <TagsSection />
-      </div>
+      <NavigationMiniContext.Provider value={isMini}>
+        <div id="navigation-content" className="flex-grow overflow-x-hidden overflow-y-auto">
+          {(!isMini || isSearchingTags) && <TagSearchBar navigationController={application.navigationController} />}
+          <HomeSectionButton application={application} />
+          <NotificationsSectionButton application={application} />
+          <DashboardSectionButton application={application} />
+          <AggregateViewSectionButtons
+            application={application}
+            remindersLabel="Reminders"
+            calendarLabel="Calendar"
+            todosLabel="Todos"
+          />
+          <ResearchSectionButton application={application} />
+          <BookmarksSectionButton application={application} />
+          <TemplatesSectionButton application={application} />
+          <FilesSectionButton application={application} />
+          <WorkflowsSectionButton application={application} />
+          <SmartViewsSection
+            application={application}
+            featuresController={application.featuresController}
+            navigationController={application.navigationController}
+          />
+          <TagsSection />
+        </div>
+      </NavigationMiniContext.Provider>
       <div
         className={classNames(
           'border-border bg-contrast fixed bottom-0 flex min-h-[50px] w-full items-center border-t',

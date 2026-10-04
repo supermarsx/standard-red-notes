@@ -4,10 +4,15 @@ import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import NotificationsPanel from './NotificationsPanel'
+import { navigationEntryProjection, useNavigationMini } from '../Tags/navigationMini'
 
 type Props = {
   application: WebApplication
 }
+
+const LABEL = 'Notifications'
+
+const describeCount = (count: number): string => `${count} notification${count === 1 ? '' : 's'}`
 
 /**
  * Standard Red Notes: sidebar entry placed directly below "Home" that opens the
@@ -23,24 +28,43 @@ const NotificationsSectionButton: FunctionComponent<Props> = ({ application }) =
 
   const toggle = () => setOpen((value) => !value)
 
+  const isMini = useNavigationMini()
+  /**
+   * In mini mode the button's own `aria-label` replaces its contents as the
+   * accessible name, which would swallow the count bubble's label. So the count
+   * is folded into the name instead of being dropped: the rail must not report
+   * fewer notifications than the full column does.
+   */
+  const entry = navigationEntryProjection({
+    mini: isMini,
+    isActive: open,
+    label: LABEL,
+    accessibleLabel: count > 0 ? `${LABEL}, ${describeCount(count)}` : undefined,
+  })
+
   return (
     <>
       <button
         ref={buttonRef}
-        className={classNames(
-          'flex w-full items-center gap-3 px-3.5 py-2 text-left text-base lg:text-sm',
-          'hover:bg-contrast focus:bg-contrast focus:shadow-none focus:outline-none',
-          open && 'bg-contrast',
-        )}
+        className={classNames(entry.className, isMini && 'relative')}
+        {...entry.labelProps}
         onClick={toggle}
         aria-pressed={open}
       >
         <Icon type="info" className={classNames('flex-shrink-0', open ? 'text-info' : 'text-neutral')} />
-        <span className={classNames('flex-grow truncate font-semibold', open && 'text-info')}>Notifications</span>
+        {entry.showLabel && <span className={entry.labelClassName}>{LABEL}</span>}
         {count > 0 && (
           <span
-            className="bg-info text-info-contrast flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-xs font-bold"
-            aria-label={`${count} notification${count === 1 ? '' : 's'}`}
+            className={classNames(
+              'bg-info text-info-contrast flex items-center justify-center rounded-full font-bold',
+              // At rail width there is no room beside the glyph, so the bubble
+              // becomes a corner badge over it rather than a sibling of it.
+              isMini
+                ? 'absolute top-0.5 right-0.5 h-3.5 min-w-[0.875rem] px-1 text-[0.5rem]'
+                : 'h-5 min-w-[1.25rem] px-1.5 text-xs',
+            )}
+            aria-hidden={isMini || undefined}
+            aria-label={isMini ? undefined : describeCount(count)}
           >
             {count > 99 ? '99+' : count}
           </span>
