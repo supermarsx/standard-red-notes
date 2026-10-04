@@ -57,6 +57,23 @@ const ResponsivePaneProvider = ({ paneController, children }: ProviderProps) => 
     [paneController],
   )
 
+  /**
+   * The floor under the launch restore. `PaneController` restores the persisted
+   * sidebar layout on the first `LocalPreferencesChanged`, which is a one-shot
+   * application-stage notification: a controller built after that stage has
+   * passed never receives it and its pane stack stays empty, which renders no
+   * columns at all and reports nothing.
+   *
+   * This is the point where the UI actually asks for panes, so it is where that
+   * is caught. `initializePanesIfEmpty` is a no-op unless the stack is empty AND
+   * the authoritative restore has not run, so in the normal case — event first,
+   * provider mounts after — it does nothing, and it never overrides either the
+   * stored state or a layout the user is already looking at.
+   */
+  useEffect(() => {
+    paneController.initializePanesIfEmpty()
+  }, [paneController])
+
   const addAndroidBackHandler = useAndroidBackHandler()
 
   useEffect(() => {

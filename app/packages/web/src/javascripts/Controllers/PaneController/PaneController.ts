@@ -35,9 +35,24 @@ import {
   insertPaneBeforeDockedAssistant,
   presentPaneBeforeDockedAssistant,
 } from './assistantPaneLayout'
+import {
+  launchPanes,
+  listPaneStateFrom,
+  navigationPaneStateFrom,
+  restoredItemsPanelWidth,
+  restoredNavigationPanelWidth,
+  SidebarPaneState,
+} from './sidebarPaneState'
 
-const MinimumNavPanelWidth = PrefDefaults[PrefKey.TagsPanelWidth]
-const MinimumNotesPanelWidth = PrefDefaults[PrefKey.NotesPanelWidth]
+/**
+ * The pane DEFAULT widths — the width a pane gets when nothing is stored for it.
+ * They were called `Minimum*` while being read out of `PrefDefaults`, which is
+ * how a restored width ended up never being compared against a real minimum at
+ * all: there was no minimum in this file to compare it to. The actual minimums
+ * live in `sidebarPaneState`, with the clamps that apply them.
+ */
+const DefaultNavPanelWidth = PrefDefaults[PrefKey.TagsPanelWidth]
+const DefaultNotesPanelWidth = PrefDefaults[PrefKey.NotesPanelWidth]
 const FOCUS_MODE_CLASS_NAME = 'focus-mode'
 const DISABLING_FOCUS_MODE_CLASS_NAME = 'disable-focus-mode'
 const FOCUS_MODE_ANIMATION_DURATION = 1255
@@ -75,6 +90,42 @@ export class PaneController extends AbstractViewController implements InternalEv
     LocalPrefKey.NavigationPaneCollapsed,
     LocalPrefDefaults[LocalPrefKey.NavigationPaneCollapsed],
   )
+  /**
+   * Standard Red Notes: the navigation sidebar's third state — the icon rail.
+   *
+   * Mirrored here beside the two collapse flags, and re-read with them on
+   * `LocalPreferencesChanged`, so the launch restore reads ONE state per sidebar
+   * instead of two independent facts it has to reconcile. Mini used to be read
+   * only where it renders (`Components/Tags/Navigation.tsx`), which left the
+   * launch decision unable to tell a rail from a full column — and unable to
+   * refuse one on a screen that cannot show it.
+   *
+   * Like its two siblings this is a plain field rather than a mobx observable:
+   * it is a preference mirror, and a React consumer reads the preference itself
+   * through `useLocalPreference`, which re-renders on the same event that
+   * refreshes this. `navigationPaneState` below is the single derived answer.
+   */
+  navigationPaneMini = this.preferences.getLocalValue(
+    LocalPrefKey.NavigationPaneMini,
+    LocalPrefDefaults[LocalPrefKey.NavigationPaneMini],
+  )
+
+  /**
+   * Which of collapsed / mini / expanded each sidebar is in — the remembered
+   * STATE, already vetoed by what this screen can actually show. See
+   * `sidebarPaneState.ts` for why the two are separate questions.
+   */
+  get navigationPaneState(): SidebarPaneState {
+    return navigationPaneStateFrom({
+      collapsedPreference: this.navigationPaneExplicitelyCollapsed,
+      miniPreference: this.navigationPaneMini,
+      isTabletOrMobile: this._isTabletOrMobileScreen.execute().getValue().isTabletOrMobile,
+    })
+  }
+
+  get listPaneState(): SidebarPaneState {
+    return listPaneStateFrom({ collapsedPreference: this.listPaneExplicitelyCollapsed })
+  }
 
   private isAssistantPanePersistedOpen(): boolean {
     return (
@@ -137,10 +188,10 @@ export class PaneController extends AbstractViewController implements InternalEv
       insertPaneAtIndex: action,
       setPaneLayout: action,
       setFocusModeEnabled: action,
+      initializePanesIfEmpty: action,
     })
 
-    this.setCurrentNavPanelWidth(preferences.getValue(PrefKey.TagsPanelWidth, MinimumNavPanelWidth))
-    this.setCurrentItemsPanelWidth(preferences.getValue(PrefKey.NotesPanelWidth, MinimumNotesPanelWidth))
+    this.restorePanelWidths()
 
     const mediaQuery = window.matchMedia(MediaQueryBreakpoints.md)
     if (mediaQuery?.addEventListener != undefined) {
@@ -170,8 +221,13 @@ export class PaneController extends AbstractViewController implements InternalEv
 
   async handleEvent(event: InternalEventInterface): Promise<void> {
     if (event.type === ApplicationEvent.PreferencesChanged) {
-      this.setCurrentNavPanelWidth(this.preferences.getValue(PrefKey.TagsPanelWidth, MinimumNavPanelWidth))
-      this.setCurrentItemsPanelWidth(this.preferences.getValue(PrefKey.NotesPanelWidth, MinimumNotesPanelWidth))
+      this.restorePanelWidths()
+
+      // Second chance at the launch restore, for the case below where the local
+      // preferences event never reaches this controller. By the time any
+      // preference event fires, storage has been decrypted, so the local values
+      // read here are the real ones.
+      this.initializePanesIfEmpty()
     }
     if (event.type === ApplicationEvent.LocalPreferencesChanged) {
       this.listPaneExplicitelyCollapsed = this.preferences.getLocalValue(
@@ -182,32 +238,83 @@ export class PaneController extends AbstractViewController implements InternalEv
         LocalPrefKey.NavigationPaneCollapsed,
         LocalPrefDefaults[LocalPrefKey.NavigationPaneCollapsed],
       )
+      this.navigationPaneMini = this.preferences.getLocalValue(
+        LocalPrefKey.NavigationPaneMini,
+        LocalPrefDefaults[LocalPrefKey.NavigationPaneMini],
+      )
 
       if (!this.hasPaneInitializationLogicRun) {
-        const screen = this._isTabletOrMobileScreen.execute().getValue()
-        const restoreAssistant = this.isAssistantPanePersistedOpen()
-        if (screen.isTabletOrMobile) {
-          this.panes = [AppPaneId.Navigation, AppPaneId.Items]
-        } else {
-          if (!this.listPaneExplicitelyCollapsed && !this.navigationPaneExplicitelyCollapsed) {
-            this.panes = [AppPaneId.Navigation, AppPaneId.Items, AppPaneId.Editor]
-          } else if (this.listPaneExplicitelyCollapsed && this.navigationPaneExplicitelyCollapsed) {
-            this.panes = [AppPaneId.Editor]
-          } else if (this.listPaneExplicitelyCollapsed) {
-            this.panes = [AppPaneId.Navigation, AppPaneId.Editor]
-          } else {
-            this.panes = [AppPaneId.Items, AppPaneId.Editor]
-          }
-        }
-
-        if (restoreAssistant) {
-          this.panes = screen.isTabletOrMobile
-            ? [...this.panes.filter((pane) => pane !== AppPaneId.Assistant), AppPaneId.Assistant]
-            : dockAssistantPaneToRight(this.panes, true)
-        }
+        this.restorePaneLayout()
         this.hasPaneInitializationLogicRun = true
       }
     }
+  }
+
+  /**
+   * Rebuild the pane stack from the persisted sidebar state. Pure decision in
+   * `launchPanes`; this only supplies the inputs and assigns the result.
+   */
+  private restorePaneLayout(): void {
+    this.panes = launchPanes({
+      isTabletOrMobile: this._isTabletOrMobileScreen.execute().getValue().isTabletOrMobile,
+      navigationPaneState: this.navigationPaneState,
+      listPaneState: this.listPaneState,
+      restoreAssistant: this.isAssistantPanePersistedOpen(),
+    })
+  }
+
+  /**
+   * The restore above runs on the FIRST `LocalPreferencesChanged`, because that
+   * is the earliest point at which the stored layout can be read: local
+   * preferences are encrypted, and `PreferencesService` only publishes them once
+   * `ApplicationStage.StorageDecrypted_09` is reached — a read in this
+   * constructor sees `{}` and would restore defaults over the user's choice.
+   *
+   * But that event is a one-shot stage notification. A controller built after
+   * the stage has already passed never sees it, and `panes` then stays `[]`
+   * forever: no columns, nothing on screen, no error anywhere.
+   *
+   * So this is the floor. It is guarded by TWO conditions, and the pair is what
+   * keeps it from being a second, competing restore:
+   *
+   *  - `panes.length === 0` — it can only ever act when there is nothing on
+   *    screen at all, so it cannot clobber a layout the user is using, cannot
+   *    fight focus mode (which keeps both sidebars in the stack), and cannot run
+   *    twice, since one run leaves the stack non-empty.
+   *  - `!hasPaneInitializationLogicRun` — and it deliberately does NOT set that
+   *    flag. If this ran first with preferences that were not decrypted yet, the
+   *    authoritative restore is still allowed to correct the layout when the real
+   *    event arrives.
+   */
+  initializePanesIfEmpty = (): void => {
+    if (this.hasPaneInitializationLogicRun || this.panes.length > 0) {
+      return
+    }
+
+    log(LoggingDomain.Panes, 'Initializing empty pane stack from persisted sidebar state')
+
+    this.restorePaneLayout()
+  }
+
+  /**
+   * Re-read both persisted sidebar widths, each re-clamped against its pane's
+   * own minimum — see `restoredNavigationPanelWidth`. Nothing validated these on
+   * read, so a width below the minimum (focus mode drives these columns to `0`)
+   * could be stored and handed straight back.
+   */
+  private restorePanelWidths(): void {
+    this.setCurrentNavPanelWidth(
+      restoredNavigationPanelWidth(
+        this.preferences.getValue(PrefKey.TagsPanelWidth, DefaultNavPanelWidth),
+        DefaultNavPanelWidth,
+      ),
+    )
+    this.setCurrentItemsPanelWidth(
+      restoredItemsPanelWidth(
+        this.preferences.getValue(PrefKey.NotesPanelWidth, DefaultNotesPanelWidth),
+        DefaultNotesPanelWidth,
+      ),
+    )
   }
 
   setCurrentNavPanelWidth(width: number) {
@@ -448,6 +555,13 @@ export class PaneController extends AbstractViewController implements InternalEv
     }
   }
 
+  /**
+   * Collapse or restore the navigation sidebar. It writes only the collapse
+   * state, never the mini one, which is what makes mini a third STATE rather
+   * than a mode that competes with these two: collapsing a rail and expanding it
+   * again gives the rail back, because the stored "render as a rail" answer was
+   * never part of "is this pane on screen".
+   */
   toggleNavigationPane = () => {
     if (this.panes.includes(AppPaneId.Navigation)) {
       this.removePane(AppPaneId.Navigation)

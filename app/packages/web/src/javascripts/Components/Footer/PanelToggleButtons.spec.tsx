@@ -27,7 +27,7 @@ import en from '@/Internationalization/Resources/en'
 // re-render path the app uses — a plain object would be swallowed by the memo
 // that mobx-react-lite's observer() puts around the component.
 // ---------------------------------------------------------------------------
-const paneCollapse = observable({ navigation: false, list: false })
+const paneCollapse = observable({ navigation: false, list: false, focusMode: false })
 const paneState = {
   toggleNavigationPane: jest.fn(),
   toggleListPane: jest.fn(),
@@ -43,6 +43,9 @@ jest.mock('../Panes/ResponsivePaneProvider', () => ({
     get isListPaneCollapsed() {
       return paneCollapse.list
     },
+    get focusModeEnabled() {
+      return paneCollapse.focusMode
+    },
     toggleNavigationPane: paneState.toggleNavigationPane,
     toggleListPane: paneState.toggleListPane,
     setPaneLayout: paneState.setPaneLayout,
@@ -55,6 +58,14 @@ const setCollapsed = (navigation: boolean, list: boolean) => {
     runInAction(() => {
       paneCollapse.navigation = navigation
       paneCollapse.list = list
+    })
+  })
+}
+
+const setFocusMode = (enabled: boolean) => {
+  act(() => {
+    runInAction(() => {
+      paneCollapse.focusMode = enabled
     })
   })
 }
@@ -117,6 +128,7 @@ describe('panel toggles in the footer bar', () => {
     runInAction(() => {
       paneCollapse.navigation = false
       paneCollapse.list = false
+      paneCollapse.focusMode = false
     })
     paneState.toggleNavigationPane = jest.fn()
     paneState.toggleListPane = jest.fn()
@@ -239,6 +251,79 @@ describe('panel toggles in the footer bar', () => {
       act(() => element.focus())
       expect(document.activeElement).toBe(element)
     }
+  })
+
+  /**
+   * Focus mode leaves both sidebars in the pane stack and zeroes their grid
+   * columns (`_focused.scss` then forces `width: 0 !important`), while the footer
+   * stays on screen — dimmed to 8%, full opacity on hover. So these toggles sat
+   * over panes the user could not see, claiming them expanded, and a click
+   * rewrote the remembered collapse state with nothing to show for it: the
+   * sidebar the user never collapsed was missing the next time they left focus
+   * mode. jsdom applies no CSS, so what is asserted here is the status the
+   * buttons REPORT and the state they refuse to write, not a measured width.
+   */
+  describe('while focus mode is hiding both sidebars', () => {
+    it('reports them as hidden, and says that focus mode is why', () => {
+      const footerBar = renderFooter()
+
+      setFocusMode(true)
+
+      expect(toggleButtonsIn(footerBar).map((b) => [b.label, b.expanded])).toEqual([
+        ['Topics panel is hidden in focus mode', 'false'],
+        ['Notes panel is hidden in focus mode', 'false'],
+      ])
+      for (const { element } of toggleButtonsIn(footerBar)) {
+        expect(element.getAttribute('aria-disabled')).toBe('true')
+      }
+    })
+
+    it('leaves the remembered sidebar state alone when clicked', () => {
+      const footerBar = renderFooter()
+
+      setFocusMode(true)
+      act(() => {
+        for (const { element } of toggleButtonsIn(footerBar)) {
+          element.click()
+        }
+      })
+
+      expect(paneState.toggleNavigationPane).not.toHaveBeenCalled()
+      expect(paneState.toggleListPane).not.toHaveBeenCalled()
+    })
+
+    it('keeps them focusable so the reason is reachable, rather than disabling them out of the tab order', () => {
+      const footerBar = renderFooter()
+
+      setFocusMode(true)
+
+      for (const { element } of toggleButtonsIn(footerBar)) {
+        expect(element.getAttribute('disabled')).toBeNull()
+        expect(element.getAttribute('tabindex')).not.toBe('-1')
+        act(() => element.focus())
+        expect(document.activeElement).toBe(element)
+      }
+    })
+
+    it('hands both panes back, with their remembered state, when focus mode ends', () => {
+      const footerBar = renderFooter()
+      setCollapsed(true, false)
+
+      setFocusMode(true)
+      setFocusMode(false)
+
+      expect(
+        toggleButtonsIn(footerBar).map((b) => [b.label, b.expanded, b.element.getAttribute('aria-disabled')]),
+      ).toEqual([
+        ['Expand topics panel', 'false', null],
+        ['Collapse notes panel', 'true', null],
+      ])
+
+      act(() => {
+        toggleButtonsIn(footerBar)[1].element.click()
+      })
+      expect(paneState.toggleListPane).toHaveBeenCalledTimes(1)
+    })
   })
 
   /**
