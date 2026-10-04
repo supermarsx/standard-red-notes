@@ -13,6 +13,8 @@ import {
   AdminUsersFilterState,
   adminUsersFiltersAreEmpty,
   buildAdminListUsersParams,
+  describeAdminStorageLimit,
+  describeAdminStorageUsed,
   emptyAdminUsersFilterState,
   formatAdminUserDate,
   formatAdminUserRoles,
@@ -51,7 +53,6 @@ import Icon from '@/Components/Icon/Icon'
 import Spinner from '@/Components/Spinner/Spinner'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
-import { formatSizeToReadableString } from '@standardnotes/filepicker'
 
 export type LookedUpUser = {
   uuid: string
@@ -86,8 +87,8 @@ const NEXTCLOUD_BACKUP_FREQUENCY = 'NEXTCLOUD_BACKUP_FREQUENCY'
 // files server treats as unlimited. Managed via the same feature-flags endpoints.
 const FILE_UPLOAD_BYTES_LIMIT = 'FILE_UPLOAD_BYTES_LIMIT'
 
-// Match @standardnotes/filepicker's binary units so the displayed current value
-// (formatSizeToReadableString) round-trips with what the admin enters here.
+// Binary units, matching adminHelpers' formatBytes, so the displayed current
+// value round-trips with what the admin enters here.
 const BYTES_IN_ONE_MEGABYTE = 1_048_576
 const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
 
@@ -124,14 +125,126 @@ type EffectivePermissions = {
   effectivePermissionNames: string[]
 }
 
-const describeStorageLimit = (storage: AdminUserStorageUsage | null): string => {
-  if (!storage || !storage.hasSubscription || storage.uploadBytesLimit === -1) {
-    return 'Unlimited'
+/**
+ * The per-user SERVER storage reading, as a closed set of ANSWERS rather than one
+ * nullable figure.
+ *
+ * `adminGetUserFeatureFlags` can answer five different ways for one user and this
+ * pane used to render four of them identically:
+ *   - nothing has been asked yet for this user (`not-attempted`);
+ *   - a read is in flight (`loading`);
+ *   - the read FAILED — a network error, a 403, a 5xx — so nothing is known
+ *     (`failed`); this used to be swallowed into `console.error` alone;
+ *   - it succeeded carrying `storage: null`, meaning this server build cannot
+ *     report per-user storage at all because its subscription use cases are not
+ *     wired up (`unsupported`);
+ *   - it succeeded carrying figures, each of which may still be absent
+ *     (`reported`).
+ *
+ * The old code read all of "no read yet", "read failed" and "server cannot
+ * report" as the single value `null`, and `null` printed the LIMIT as the
+ * definite allowance 'Unlimited'. Four unknowns rendered as one measurement.
+ */
+type AdminStorageReading =
+  | { state: 'not-attempted' }
+  | { state: 'loading' }
+  | { state: 'failed'; message: string | null }
+  | { state: 'unsupported' }
+  | { state: 'reported'; storage: AdminUserStorageUsage }
+
+/** True only while the pane holds figures it actually read for this user. */
+const storageWasRead = (reading: AdminStorageReading): boolean => reading.state === 'reported'
+
+/**
+ * The usage half of the readout. Only a figure the server actually sent prints as
+ * a size; every other answer says what happened instead of naming a quantity.
+ */
+const describeStorageUsage = (reading: AdminStorageReading): string => {
+  if (reading.state === 'not-attempted') {
+    return 'not read yet'
   }
-  if (storage.uploadBytesLimit === null) {
-    return 'Not set (server default)'
+  if (reading.state === 'loading') {
+    return 'reading…'
   }
-  return formatSizeToReadableString(storage.uploadBytesLimit)
+  if (reading.state === 'failed') {
+    return 'could not be read'
+  }
+  if (reading.state === 'unsupported') {
+    return 'not reported by this server'
+  }
+  if (!reading.storage.hasSubscription) {
+    return 'not tracked (no subscription record)'
+  }
+  return describeAdminStorageUsed(reading.storage.uploadBytesUsed).label
+}
+
+/** The limit half of the readout, under the same rule. */
+const describeStorageLimit = (reading: AdminStorageReading): string => {
+  if (reading.state === 'not-attempted') {
+    return 'not read yet'
+  }
+  if (reading.state === 'loading') {
+    return 'reading…'
+  }
+  if (reading.state === 'failed') {
+    return 'could not be read'
+  }
+  if (reading.state === 'unsupported') {
+    return 'not reported by this server'
+  }
+  if (!reading.storage.hasSubscription) {
+    return 'Unlimited (no subscription record)'
+  }
+  return describeAdminStorageLimit(reading.storage.uploadBytesLimit).label
+}
+
+/**
+ * The evidence behind the two labels above — what was read, or why nothing was.
+ * This is the line that stops an unread figure from passing for a measurement,
+ * and it is also where a measured zero says it is one.
+ */
+const describeStorageEvidence = (reading: AdminStorageReading): string | null => {
+  if (reading.state === 'not-attempted') {
+    return 'These figures have not been read for this user yet.'
+  }
+  if (reading.state === 'loading') {
+    return 'Reading this user’s storage figures from the server…'
+  }
+  if (reading.state === 'failed') {
+    return `The read failed${reading.message ? ` (${reading.message})` : ''}, so neither figure above is a measurement.`
+  }
+  if (reading.state === 'unsupported') {
+    return 'This server answered without any storage figures for this user, so neither figure above is a measurement.'
+  }
+  if (!reading.storage.hasSubscription) {
+    return 'This account has no subscription record, so there is nowhere for the server to record its usage and upload tokens are issued with an unlimited allowance.'
+  }
+
+  const used = describeAdminStorageUsed(reading.storage.uploadBytesUsed)
+  const limit = describeAdminStorageLimit(reading.storage.uploadBytesLimit)
+  const notes: string[] = []
+
+  if (used.state === 'not-reported') {
+    notes.push(
+      'The server holds no FILE_UPLOAD_BYTES_USED figure for this user, so the usage above is NOT a measured zero. That counter is written only when an upload succeeds, and upload tokens are issued with zero bytes used until it exists — so an account whose uploads have never worked looks exactly like an account with no files. Recalculate storage quota below measures it from the files actually stored.',
+    )
+  } else if (used.state === 'invalid') {
+    notes.push('The server sent a usage figure that cannot be a size. Recalculate storage quota below replaces it.')
+  } else if (reading.storage.uploadBytesUsed === 0) {
+    notes.push('The server reports zero stored file bytes for this user — a measured zero, not a missing figure.')
+  }
+
+  if (limit.state === 'not-set') {
+    notes.push(
+      'No per-user limit is stored, so the subscription plan’s own default applies. That default is 0 bytes — every upload refused — for a plan whose role grants no file-storage permission, so this is not the same as an unlimited allowance. Set an explicit limit, or Unlimited, to settle it.',
+    )
+  } else if (limit.state === 'no-allowance') {
+    notes.push('A stored limit of 0 bytes refuses every upload. That is an allowance of nothing, not an absent limit.')
+  } else if (limit.state === 'invalid') {
+    notes.push('The stored limit cannot be a size; -1 is the only value the files server reads as unlimited.')
+  }
+
+  return notes.length === 0 ? null : notes.join(' ')
 }
 
 const formatLimitAmount = (amount: number): string => (Number.isInteger(amount) ? String(amount) : amount.toFixed(2))
@@ -205,7 +318,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [nextcloudAppPasswordConfigured, setNextcloudAppPasswordConfigured] = useState(false)
   // Per-user SERVER storage limit (bytes; -1 = unlimited). Read from and written
   // to the user's subscription settings via the admin feature-flags endpoints.
-  const [storageInfo, setStorageInfo] = useState<AdminUserStorageUsage | null>(null)
+  // Held as a READING, not a nullable figure, so "not read yet", "the read
+  // failed", "this server cannot report it" and "the server reported nothing for
+  // this user" stay four different facts rather than collapsing into one value
+  // that then printed as a measurement.
+  const [storageReading, setStorageReading] = useState<AdminStorageReading>({ state: 'not-attempted' })
   const [storageLimitValue, setStorageLimitValue] = useState('')
   const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
   const [savingStorageLimit, setSavingStorageLimit] = useState(false)
@@ -258,6 +375,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     async (userUuid: string) => {
       const generation = ++flagsLoadGeneration.current
       setFlagsLoading(true)
+      setStorageReading({ state: 'loading' })
       try {
         const response = await application.legacyApi.adminGetUserFeatureFlags(userUuid)
         if (generation !== flagsLoadGeneration.current) {
@@ -265,6 +383,16 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         }
         if (isErrorResponse(response)) {
           addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
+          // A refused or failed response leaves the storage figures UNKNOWN. It
+          // must not leave the previous reading (or a previous user's figures)
+          // standing as though they described this user. The status, not the
+          // server's message, is reported: this pane never echoes server text
+          // that could carry an identifier.
+          const status = (response as { status?: number }).status
+          setStorageReading({
+            state: 'failed',
+            message: typeof status === 'number' ? `HTTP ${status}` : null,
+          })
           return
         }
         const data = (response as { data?: AdminUserFeatureFlagsResponse }).data
@@ -285,10 +413,14 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         setNextcloudBackupFrequency(flags[NEXTCLOUD_BACKUP_FREQUENCY] ?? null)
         setNextcloudAppPasswordConfigured(Boolean(data?.nextcloudAppPasswordConfigured))
 
+        // A successful response that carries no `storage` object at all is a
+        // server that cannot report per-user storage, NOT a user with none.
         const storage = data?.storage ?? null
-        setStorageInfo(storage)
+        setStorageReading(storage === null ? { state: 'unsupported' } : { state: 'reported', storage })
         // Seed the editor with the user's current limit so "Save" without edits
-        // is a no-op. No explicit setting and -1 both surface as Unlimited.
+        // is a no-op. -1 seeds Unlimited; an ABSENT limit seeds nothing, because
+        // seeding Unlimited would turn one unedited Save into a grant the admin
+        // never chose. The editor stays disabled until a limit has been read.
         const currentLimit = storage?.uploadBytesLimit ?? null
         if (currentLimit === null || currentLimit === -1) {
           setStorageLimitUnit('unlimited')
@@ -303,6 +435,10 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       } catch (error) {
         if (generation === flagsLoadGeneration.current) {
           console.error(error)
+          setStorageReading({
+            state: 'failed',
+            message: error instanceof Error && error.message ? error.message : null,
+          })
         }
       } finally {
         if (generation === flagsLoadGeneration.current) {
@@ -462,6 +598,13 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     setPermissionsVisible(false)
     setUserUsage(null)
     setUsageError(null)
+    // The comment above promised this for the quota and did not deliver it: the
+    // storage reading and its editor survived a user switch, so the PREVIOUS
+    // user's figures stayed on screen attributed to the new one whenever the new
+    // read was slow or failed.
+    setStorageReading({ state: 'not-attempted' })
+    setStorageLimitUnit('unlimited')
+    setStorageLimitValue('')
     void Promise.all([
       loadFlags(user.uuid),
       loadUserUsage(user.uuid),
@@ -951,6 +1094,16 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     if (!user) {
       return
     }
+    // Never write a limit derived from an editor that was never seeded with the
+    // user's actual one: an unread limit seeds 'unlimited', so an unedited Save
+    // against a failed read would silently grant unlimited storage.
+    if (!storageWasRead(storageReading)) {
+      addToast({
+        type: ToastType.Error,
+        message: 'This user’s current storage limit has not been read, so a new one cannot be saved yet.',
+      })
+      return
+    }
 
     let bytesValue: string
     if (storageLimitUnit === 'unlimited') {
@@ -987,7 +1140,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     } finally {
       setSavingStorageLimit(false)
     }
-  }, [application, user, storageLimitUnit, storageLimitValue, loadFlags])
+  }, [application, user, storageLimitUnit, storageLimitValue, storageReading, loadFlags])
 
   const applyBan = useCallback(async () => {
     if (!user) {
@@ -2042,16 +2195,36 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               <div className="flex flex-col gap-2">
                 <Subtitle>Server storage limit</Subtitle>
                 <Text>
-                  Maximum total size of this user's files stored on the server. Current usage:{' '}
-                  <strong>
-                    {storageInfo?.uploadBytesUsed != null
-                      ? formatSizeToReadableString(storageInfo.uploadBytesUsed)
-                      : 'unknown'}
-                  </strong>
-                  , limit: <strong>{describeStorageLimit(storageInfo)}</strong>. A new limit applies to new uploads;
+                  Maximum total size of this user's files stored on the server. A new limit applies to new uploads;
                   upload tokens issued before the change keep the previous limit until they expire.
                 </Text>
-                {storageInfo && !storageInfo.hasSubscription ? (
+                <div data-test-id="admin-storage-readout">
+                  <Text>
+                    Current usage: <strong>{describeStorageUsage(storageReading)}</strong>, limit:{' '}
+                    <strong>{describeStorageLimit(storageReading)}</strong>.
+                  </Text>
+                </div>
+                {/* The evidence behind those two labels. Without it a figure the
+                    server never sent reads exactly like one it measured. */}
+                {describeStorageEvidence(storageReading) !== null && (
+                  <div data-test-id="admin-storage-evidence">
+                    <Text className="text-passive-1">{describeStorageEvidence(storageReading)}</Text>
+                  </div>
+                )}
+                {storageReading.state === 'failed' && (
+                  <div>
+                    <Button
+                      label="Retry storage read"
+                      onClick={() => {
+                        if (user) {
+                          void loadFlags(user.uuid)
+                        }
+                      }}
+                      disabled={flagsLoading}
+                    />
+                  </div>
+                )}
+                {storageReading.state === 'reported' && !storageReading.storage.hasSubscription ? (
                   <Text>
                     This account has no subscription record, so the server treats its storage as unlimited and the limit
                     cannot be changed here.
@@ -2064,7 +2237,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                       value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
                       onChange={setStorageLimitValue}
                       type="number"
-                      disabled={storageLimitUnit === 'unlimited'}
+                      disabled={storageLimitUnit === 'unlimited' || !storageWasRead(storageReading)}
                     />
                     <Dropdown
                       label="Storage limit unit"
@@ -2076,10 +2249,12 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                       value={storageLimitUnit}
                       onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
                     />
+                    {/* Named apart from the AI request limit's own "Save limit"
+                        above: two identically labelled buttons on one screen. */}
                     <Button
-                      label="Save limit"
+                      label="Save storage limit"
                       onClick={() => void saveStorageLimit()}
-                      disabled={savingStorageLimit || flagsLoading}
+                      disabled={savingStorageLimit || flagsLoading || !storageWasRead(storageReading)}
                     />
                   </div>
                 )}

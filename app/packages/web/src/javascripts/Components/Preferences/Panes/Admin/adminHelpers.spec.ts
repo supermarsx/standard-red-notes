@@ -1,4 +1,6 @@
 import {
+  ADMIN_STORAGE_LIMIT_STATES,
+  ADMIN_STORAGE_USED_STATES,
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
   ADMIN_USERS_MAX_LIMIT,
   adminUsersFiltersAreEmpty,
@@ -7,8 +9,11 @@ import {
   buildDailyLimitSettingUpdate,
   buildUrlSettingUpdate,
   dateBoundToISO,
+  describeAdminStorageLimit,
+  describeAdminStorageUsed,
   emptyAdminUsersFilterState,
   formatAdminUserDate,
+  NOT_A_SIZE_LABEL,
   formatAdminUserRoles,
   formatAdminUserStorage,
   formatAdminUserSubscription,
@@ -143,11 +148,67 @@ describe('formatBytes / formatAdminUserStorage', () => {
     expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe('1.5 GB')
   })
 
-  it('treats -1 or null limit as Unlimited and null used as Unknown', () => {
+  /**
+   * `formatBytes` used to answer '0 B' for every input it could not format —
+   * NaN, Infinity, a negative counter — which handed its caller a measurement
+   * for an input that carried none. A real 0 is the ONLY thing that may print
+   * as '0 B'; the pair of expectations below is the whole point.
+   */
+  it('never answers 0 B for an input that is not a size, and still does for a real zero', () => {
+    expect(formatBytes(Number.NaN)).toBe(NOT_A_SIZE_LABEL)
+    expect(formatBytes(Number.POSITIVE_INFINITY)).toBe(NOT_A_SIZE_LABEL)
+    expect(formatBytes(-512)).toBe(NOT_A_SIZE_LABEL)
+    expect(NOT_A_SIZE_LABEL).not.toBe('0 B')
+    expect(formatBytes(0)).toBe('0 B')
+  })
+
+  it('separates a measured used figure from an absent one', () => {
+    expect(describeAdminStorageUsed(2048)).toEqual({ state: 'measured', label: '2 KB' })
+    // A genuine zero IS a measurement and must read as one.
+    expect(describeAdminStorageUsed(0)).toEqual({ state: 'measured', label: '0 B' })
+    // ...and an absent figure must NOT read as that same zero.
+    expect(describeAdminStorageUsed(null)).toEqual({ state: 'not-reported', label: 'Not reported' })
+    expect(describeAdminStorageUsed(undefined).state).toBe('not-reported')
+    expect(describeAdminStorageUsed(null).label).not.toBe(describeAdminStorageUsed(0).label)
+    expect(describeAdminStorageUsed(-5).state).toBe('invalid')
+    expect(describeAdminStorageUsed(-5).label).not.toContain('0 B')
+  })
+
+  it('separates unlimited, a figure, an allowance of nothing and an unset limit', () => {
+    expect(describeAdminStorageLimit(-1)).toEqual({ state: 'unlimited', label: 'Unlimited' })
+    expect(describeAdminStorageLimit(4096)).toEqual({ state: 'measured', label: '4 KB' })
+    // 0 refuses every upload; it is not "no limit" and never merged with it.
+    expect(describeAdminStorageLimit(0).state).toBe('no-allowance')
+    expect(describeAdminStorageLimit(0).label).not.toBe('Unlimited')
+    // An absent limit is not a granted allowance of any size.
+    expect(describeAdminStorageLimit(null)).toEqual({ state: 'not-set', label: 'Not set' })
+    expect(describeAdminStorageLimit(undefined).state).toBe('not-set')
+    expect(describeAdminStorageLimit(null).label).not.toBe('Unlimited')
+    expect(describeAdminStorageLimit(-7).state).toBe('invalid')
+  })
+
+  it('labels the list column with what the server said, not with a stand-in figure', () => {
     expect(formatAdminUserStorage(1024, -1)).toBe('1 KB / Unlimited')
-    expect(formatAdminUserStorage(1024, null)).toBe('1 KB / Unlimited')
-    expect(formatAdminUserStorage(null, 1024)).toBe('Unknown / 1 KB')
     expect(formatAdminUserStorage(2048, 4096)).toBe('2 KB / 4 KB')
+    // The regression this column carried: an unwritten limit read as Unlimited
+    // and an unreported usage read as the vague 'Unknown'.
+    expect(formatAdminUserStorage(1024, null)).toBe('1 KB / Not set')
+    expect(formatAdminUserStorage(null, 1024)).toBe('Not reported / 1 KB')
+    // Absent and a measured zero are different cells.
+    expect(formatAdminUserStorage(null, null)).toBe('Not reported / Not set')
+    expect(formatAdminUserStorage(0, -1)).toBe('0 B / Unlimited')
+    expect(formatAdminUserStorage(null, null)).not.toBe(formatAdminUserStorage(0, -1))
+  })
+
+  it('keeps both state lists closed and in sync with the describe helpers', () => {
+    expect([...ADMIN_STORAGE_USED_STATES]).toEqual(['measured', 'not-reported', 'invalid'])
+    expect([...ADMIN_STORAGE_LIMIT_STATES]).toEqual(['unlimited', 'measured', 'no-allowance', 'not-set', 'invalid'])
+    for (const used of [0, 1024, -5, Number.NaN, null, undefined]) {
+      expect(ADMIN_STORAGE_USED_STATES).toContain(describeAdminStorageUsed(used).state)
+    }
+    for (const limit of [-1, 0, 1024, -7, Number.NaN, null, undefined]) {
+      expect(ADMIN_STORAGE_LIMIT_STATES).toContain(describeAdminStorageLimit(limit).state)
+    }
   })
 })
 

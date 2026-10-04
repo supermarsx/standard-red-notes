@@ -82,6 +82,22 @@ let container: HTMLElement
 let root: Root
 
 beforeEach(() => {
+  // jsdom has no matchMedia, and a rendered list row pulls in StyledTooltip ->
+  // useMediaQuery. Without this the table render throws rather than failing an
+  // assertion, which is how a column defect hides from a render test.
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -119,6 +135,28 @@ const renderTab = async (application: ReturnType<typeof makeApplication>) => {
 const buttonWithText = (text: string): HTMLButtonElement | undefined =>
   Array.from(container.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes(text)) as
     HTMLButtonElement | undefined
+
+// The storage readout and its evidence line, scoped so "contains 0 B" cannot be
+// satisfied by some other figure elsewhere on the pane.
+const storageReadoutElement = (): Element | null => container.querySelector('[data-test-id="admin-storage-readout"]')
+const storageReadout = (): string => storageReadoutElement()?.textContent ?? ''
+const storageEvidence = (): string =>
+  container.querySelector('[data-test-id="admin-storage-evidence"]')?.textContent ?? ''
+
+/** The storage-limit amount box of the per-user editor. */
+const storageLimitInput = (): HTMLInputElement | null => container.querySelector('input[placeholder="e.g. 5"]')
+
+/** The Storage cell (last column) of the list row whose Email cell is `email`. */
+const storageCellForRow = (email: string): string => {
+  const row = Array.from(container.querySelectorAll('tbody tr')).find((candidate) =>
+    Array.from(candidate.querySelectorAll('td')).some((cell) => cell.textContent === email),
+  )
+  if (!row) {
+    throw new Error(`No list row rendered for ${email}`)
+  }
+  const cells = Array.from(row.querySelectorAll('td'))
+  return cells[cells.length - 1].textContent ?? ''
+}
 
 const setInputValue = async (input: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
@@ -361,7 +399,240 @@ describe('AdminUsersTab — authoritative per-user usage', () => {
     expect(container.textContent).toContain('420 tokens of 900 tokens')
     expect(container.textContent).toContain('42 tokens')
     expect(container.textContent).toContain('Only rolling seven-day events are retained')
-    expect(container.textContent).toContain('2048 B')
-    expect(container.textContent).toContain('4096 B')
+    // Both storage figures now go through adminHelpers' binary formatter.
+    expect(storageReadout()).toContain('2 KB')
+    expect(storageReadout()).toContain('4 KB')
+  })
+})
+
+/**
+ * Per-user SERVER storage reporting: absent, zero and failed-to-read must be
+ * three visibly different things.
+ *
+ * FILE_UPLOAD_BYTES_USED is a SUBSCRIPTION setting the auth worker writes only
+ * when a FILE_UPLOADED event arrives, so an account whose uploads have never
+ * succeeded has no row at all and the admin endpoint answers `null` for it. The
+ * limit half has the same shape: `null` means no per-user row, and the plan
+ * default that then applies is itself 0 bytes for a plan whose role grants no
+ * file-storage permission.
+ *
+ * The old pane turned four unknowns into one measurement: `storage: null`, a
+ * failed read and a never-attempted read were all the value `null`, and `null`
+ * printed the limit as the definite allowance 'Unlimited'.
+ *
+ * The pair that carries the whole point is "absent does NOT render a zero" plus
+ * "a genuine zero DOES": either alone passes against a fix that merely relabelled
+ * every zero, or against one that merely kept printing zeroes.
+ */
+describe('AdminUsersTab — per-user storage reporting states', () => {
+  it('renders a measured zero AS a zero, and says it was measured', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: true, uploadBytesUsed: 0, uploadBytesLimit: 4_096 } },
+    })
+
+    await renderTab(application)
+
+    // Precondition: the read really was attempted for this user.
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledWith(TARGET_UUID)
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('0 B')
+    expect(storageReadout()).not.toContain('Not reported')
+    expect(storageEvidence()).toContain('a measured zero, not a missing figure')
+  })
+
+  it('does NOT render an unreported usage as a zero', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: true, uploadBytesUsed: null, uploadBytesLimit: 4_096 } },
+    })
+
+    await renderTab(application)
+
+    // Preconditions: the read happened, and it is the ABSENT case that rendered
+    // (a reported storage object whose usage figure is null), not a failed one.
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledWith(TARGET_UUID)
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('4 KB')
+    expect(storageReadout()).not.toContain('could not be read')
+
+    // The defect: this used to be reported as the measurement '0 B'.
+    expect(storageReadout()).toContain('Not reported')
+    expect(storageReadout()).not.toContain('0 B')
+    expect(storageEvidence()).toContain('The server holds no FILE_UPLOAD_BYTES_USED figure for this user')
+    expect(storageEvidence()).toContain('NOT a measured zero')
+  })
+
+  it('does NOT render an unset limit as an unlimited allowance', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: true, uploadBytesUsed: 2_048, uploadBytesLimit: null } },
+    })
+
+    await renderTab(application)
+
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('2 KB')
+    expect(storageReadout()).toContain('Not set')
+    expect(storageReadout()).not.toContain('Unlimited')
+    expect(storageEvidence()).toContain('No per-user limit is stored')
+  })
+
+  it('reports a FAILED read as a failure with a retry, never as a figure', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags
+      .mockRejectedValueOnce(new Error('Network request failed'))
+      .mockResolvedValueOnce({
+        data: { flags: {}, storage: { hasSubscription: true, uploadBytesUsed: 1_024, uploadBytesLimit: -1 } },
+      })
+
+    await renderTab(application)
+
+    // Precondition: a read was attempted and it is the failed state that rendered.
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledTimes(1)
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('could not be read')
+    // A failure is not a measurement of any size, and not an allowance either.
+    expect(storageReadout()).not.toContain('0 B')
+    expect(storageReadout()).not.toContain('Unlimited')
+    expect(storageEvidence()).toContain('neither figure above is a measurement')
+    expect(consoleError).toHaveBeenCalled()
+    // Nothing may be written from an editor that never read the current value.
+    expect(buttonWithText('Save storage limit')?.disabled).toBe(true)
+
+    const retry = buttonWithText('Retry storage read')
+    expect(retry).toBeDefined()
+    await act(async () => {
+      retry?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledTimes(2)
+    expect(storageReadout()).toContain('1 KB')
+    expect(storageReadout()).toContain('Unlimited')
+    expect(buttonWithText('Retry storage read')).toBeUndefined()
+    expect(buttonWithText('Save storage limit')?.disabled).toBe(false)
+    consoleError.mockRestore()
+  })
+
+  it('reports a server that sent no storage object as reporting nothing, not as unlimited', async () => {
+    const application = makeApplication()
+    // This is the default stub shape: a 200 whose payload carries storage: null.
+    await renderTab(application)
+
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledWith(TARGET_UUID)
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('not reported by this server')
+    expect(storageReadout()).not.toContain('Unlimited')
+    expect(storageReadout()).not.toContain('0 B')
+    expect(storageEvidence()).toContain('This server answered without any storage figures for this user')
+    expect(buttonWithText('Save storage limit')?.disabled).toBe(true)
+  })
+
+  it('separates a stored limit of zero from an absent one', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: true, uploadBytesUsed: null, uploadBytesLimit: 0 } },
+    })
+
+    await renderTab(application)
+
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('Not reported')
+    expect(storageReadout()).toContain('No allowance (0 B)')
+    expect(storageReadout()).not.toContain('Not set')
+    expect(storageEvidence()).toContain('refuses every upload')
+  })
+
+  it('does not leave one user’s storage figures standing for the next user', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags
+      .mockResolvedValueOnce({
+        data: {
+          flags: {},
+          storage: { hasSubscription: true, uploadBytesUsed: 5_242_880, uploadBytesLimit: 2_097_152 },
+        },
+      })
+      .mockRejectedValueOnce(new Error('Network request failed'))
+
+    const renderUser = async (uuid: string, userEmail: string) => {
+      await act(async () => {
+        root.render(
+          createElement(AdminUsersTab, {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            application: application as any,
+            noteIfForbidden: jest.fn(),
+            email: userEmail,
+            setEmail: jest.fn(),
+            user: { uuid, email: userEmail },
+            setUser: jest.fn(),
+          }),
+        )
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+    }
+
+    await renderUser('first-user-uuid', 'first@example.com')
+    // Preconditions: the first user's measured figure rendered, and its limit
+    // seeded the editor.
+    expect(storageReadout()).toContain('5 MB')
+    expect(storageLimitInput()?.value).toBe('2')
+
+    // The second user's read FAILS. The old pane kept the previous reading, so
+    // one user's measured 5 MB stood as the next user's usage.
+    await renderUser('second-user-uuid', 'second@example.com')
+
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledTimes(2)
+    expect(storageReadoutElement()).not.toBeNull()
+    expect(storageReadout()).toContain('could not be read')
+    expect(container.textContent).not.toContain('5 MB')
+    // Nor may the first user's limit sit in the second user's editor.
+    expect(storageLimitInput()?.value).toBe('')
+    consoleError.mockRestore()
+  })
+
+  it('distinguishes the two in the users LIST column, in one render', async () => {
+    const application = makeApplication()
+    const baseRow = {
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      roles: [],
+      subscription: null,
+      banned: false,
+      suspended: false,
+      mfaEnabled: false,
+    }
+    application.legacyApi.adminListUsers.mockResolvedValue({
+      data: {
+        users: [
+          {
+            ...baseRow,
+            uuid: 'row-absent',
+            email: 'absent@example.com',
+            storageUsedBytes: null,
+            storageLimitBytes: null,
+          },
+          { ...baseRow, uuid: 'row-zero', email: 'zero@example.com', storageUsedBytes: 0, storageLimitBytes: -1 },
+        ],
+        total: 2,
+      },
+    })
+
+    await renderTab(application)
+
+    // Precondition: both rows actually rendered.
+    expect(application.legacyApi.adminListUsers).toHaveBeenCalled()
+    const absentCell = storageCellForRow('absent@example.com')
+    const zeroCell = storageCellForRow('zero@example.com')
+    expect(absentCell).toBe('Not reported / Not set')
+    expect(zeroCell).toBe('0 B / Unlimited')
+    // The complaint this column produced: a whole column of 0 B measurements.
+    expect(absentCell).not.toContain('0 B')
+    expect(absentCell).not.toContain('Unlimited')
+    expect(absentCell).not.toBe(zeroCell)
   })
 })

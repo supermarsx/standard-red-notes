@@ -167,13 +167,21 @@ export const formatAdminUserRoles = (roles: string[] | null | undefined): string
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
 
+/** What a byte figure that is not a measurable size prints as. Never '0 B'. */
+export const NOT_A_SIZE_LABEL = 'Not a size'
+
 /**
  * Compact binary byte formatter (self-contained so the helper stays pure and
- * unit-testable). -1 and null are handled by the callers below.
+ * unit-testable).
+ *
+ * A non-finite input used to return '0 B', which handed a caller a fabricated
+ * MEASUREMENT for an input that carried no measurement at all. Only a real
+ * non-negative number formats as a size here; the describe* helpers below decide
+ * what to say about everything else.
  */
 export const formatBytes = (bytes: number): string => {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return '0 B'
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return NOT_A_SIZE_LABEL
   }
   let value = bytes
   let unitIndex = 0
@@ -185,14 +193,92 @@ export const formatBytes = (bytes: number): string => {
   return `${rounded} ${BYTE_UNITS[unitIndex]}`
 }
 
-/** "used / limit" label for the storage column. -1 or null limit = Unlimited. */
+// ---------------------------------------------------------------------------
+// Per-user SERVER storage figures — three answers, never one
+// ---------------------------------------------------------------------------
+
+/**
+ * What the server said about a user's stored-file byte count, as a closed set.
+ *
+ * `not-reported` is the one that matters: FILE_UPLOAD_BYTES_USED is a SUBSCRIPTION
+ * setting the auth worker writes only when a FILE_UPLOADED event arrives, so an
+ * account whose uploads have never succeeded has NO row and the admin endpoints
+ * answer `null` — legitimately absent, not zero. Rendering that as '0 B' reported
+ * a measurement nobody took, and made a working empty account and a broken files
+ * subsystem byte-identical on screen.
+ *
+ * `invalid` keeps a figure the server did send but that cannot be a size (a
+ * negative counter, a non-finite number) away from both of the above.
+ */
+export const ADMIN_STORAGE_USED_STATES = ['measured', 'not-reported', 'invalid'] as const
+
+export type AdminStorageUsedState = (typeof ADMIN_STORAGE_USED_STATES)[number]
+
+/**
+ * What the server said about a user's upload allowance, as a closed set.
+ *
+ * `-1` is the ONLY value the files server treats as unlimited. `0` is an
+ * allowance of nothing that refuses every upload — a different answer from "no
+ * limit" and never merged with it. `not-set` means no per-user row exists, so the
+ * subscription plan's own default applies; that default is itself 0 for a plan
+ * whose role grants no file-storage permission, so an absent limit must never
+ * render as an unlimited allowance.
+ */
+export const ADMIN_STORAGE_LIMIT_STATES = ['unlimited', 'measured', 'no-allowance', 'not-set', 'invalid'] as const
+
+export type AdminStorageLimitState = (typeof ADMIN_STORAGE_LIMIT_STATES)[number]
+
+export type AdminStorageFigure<State> = {
+  state: State
+  /** Short label for a table cell. Carries the state, never a stand-in figure. */
+  label: string
+}
+
+/** Classify + label a reported `uploadBytesUsed` / `storageUsedBytes`. */
+export const describeAdminStorageUsed = (
+  usedBytes: number | null | undefined,
+): AdminStorageFigure<AdminStorageUsedState> => {
+  if (usedBytes == null) {
+    return { state: 'not-reported', label: 'Not reported' }
+  }
+  if (!Number.isFinite(usedBytes) || usedBytes < 0) {
+    return { state: 'invalid', label: `Invalid (${String(usedBytes)})` }
+  }
+  return { state: 'measured', label: formatBytes(usedBytes) }
+}
+
+/** Classify + label a reported `uploadBytesLimit` / `storageLimitBytes`. */
+export const describeAdminStorageLimit = (
+  limitBytes: number | null | undefined,
+): AdminStorageFigure<AdminStorageLimitState> => {
+  if (limitBytes == null) {
+    return { state: 'not-set', label: 'Not set' }
+  }
+  if (limitBytes === -1) {
+    return { state: 'unlimited', label: 'Unlimited' }
+  }
+  if (!Number.isFinite(limitBytes) || limitBytes < 0) {
+    return { state: 'invalid', label: `Invalid (${String(limitBytes)})` }
+  }
+  if (limitBytes === 0) {
+    return { state: 'no-allowance', label: 'No allowance (0 B)' }
+  }
+  return { state: 'measured', label: formatBytes(limitBytes) }
+}
+
+/**
+ * "used / limit" label for the storage column.
+ *
+ * Both halves state which of their answers this is, so a column of accounts the
+ * server has never measured reads 'Not reported' rather than a column of '0 B'
+ * measurements, and a user with no stored limit reads 'Not set' rather than an
+ * allowance of 'Unlimited' nobody granted.
+ */
 export const formatAdminUserStorage = (
   usedBytes: number | null | undefined,
   limitBytes: number | null | undefined,
 ): string => {
-  const usedLabel = usedBytes == null ? 'Unknown' : formatBytes(usedBytes)
-  const limitLabel = limitBytes == null || limitBytes === -1 ? 'Unlimited' : formatBytes(limitBytes)
-  return `${usedLabel} / ${limitLabel}`
+  return `${describeAdminStorageUsed(usedBytes).label} / ${describeAdminStorageLimit(limitBytes).label}`
 }
 
 // ---------------------------------------------------------------------------

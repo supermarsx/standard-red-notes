@@ -5,6 +5,7 @@ import { Repository, SelectQueryBuilder } from 'typeorm'
 import TYPES from '../../Bootstrap/Types'
 
 import { User } from '../../Domain/User/User'
+import { UserSubscriptionType } from '../../Domain/Subscription/UserSubscriptionType'
 import { TypeORMSetting } from './TypeORMSetting'
 import { runAuthTypeORMTransaction } from './AuthTypeORMTransactionCoordinator'
 import {
@@ -205,6 +206,15 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
       .from('subscription_settings', 'ss')
       .innerJoin('user_subscriptions', 'us', 'us.uuid = ss.user_subscription_uuid')
       .where('us.user_uuid IN (:...uuids)', { uuids })
+      // Standard Red Notes: REGULAR subscriptions only. Both the per-user detail
+      // endpoint (GetRegularSubscriptionForUser) and enforcement itself
+      // (CreateValetToken, which embeds the figures into the valet token) read a
+      // regular subscription's settings and never a shared one's. Without this
+      // filter a user who also belongs to a SHARED subscription created more
+      // recently had the shared row's figures reported in the admin list, so the
+      // list and the detail panel could show two different numbers for the same
+      // user and neither matched what the files server enforces.
+      .andWhere('us.subscription_type = :subscriptionType', { subscriptionType: UserSubscriptionType.Regular })
       .andWhere('ss.name IN (:...names)', {
         names: [SettingName.NAMES.FileUploadBytesLimit, SettingName.NAMES.FileUploadBytesUsed],
       })
