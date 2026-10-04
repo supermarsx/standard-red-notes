@@ -39,8 +39,8 @@ import {
 } from '../Checklist/ChecklistDueControls'
 import { CHECKLIST_DUE_TICK_MS, normalizeChecklistDueAt } from '../Checklist/checklistDueDate'
 import {
-  createChecklistRecurrence,
   normalizeChecklistRecurrence,
+  resolveChecklistRecurrenceForSave,
   type ChecklistRecurrence,
 } from '../Checklist/checklistRecurrence'
 import {
@@ -524,9 +524,16 @@ export function CheckListPlugin({
           setChecklistScheduleStatus(shell, schedule.reason)
           return
         }
-        const recurrence = schedule.recurrenceChoice
-          ? createChecklistRecurrence(schedule.recurrenceChoice, schedule.dueAt, expected.recurrence?.anchor.timeZone)
-          : undefined
+        // NOT createChecklistRecurrence: that derives a FRESH anchor from
+        // whatever dueAt it is handed, which is right for a deliberate due-date
+        // edit and wrong for every other save. A monthly task anchored on the
+        // 31st legitimately rolls to a clamped Feb 28, and
+        // resolveChecklistDueAtLocalInput deliberately returns that exact instant
+        // when the draft is unchanged — so rebuilding the rule here rewrote
+        // anchor.day to 28 permanently, with no user action beyond pressing Save.
+        // That is the chained-from-the-previous-computed-date drift the anchored
+        // grid exists to prevent, reinstated at the save seam.
+        const recurrence = resolveChecklistRecurrenceForSave(schedule.recurrenceChoice, schedule.dueAt, expected)
         if (schedule.recurrenceChoice && !recurrence) {
           setChecklistScheduleStatus(shell, 'This recurrence could not be created in the current time zone.')
           return
