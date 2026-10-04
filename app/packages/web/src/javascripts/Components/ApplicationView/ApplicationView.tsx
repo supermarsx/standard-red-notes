@@ -11,7 +11,6 @@ import {
   LocalPrefKey,
   LocalPrefDefaults,
   ContentType,
-  SNNote,
 } from '@standardnotes/snjs'
 import { applyEditorFont } from '@/Utils/editorFont'
 import { achievements, METRICS } from '@/Achievements'
@@ -74,12 +73,8 @@ import FloatingNarrationPlayer from '../Narration/FloatingNarrationPlayer'
 import AppLockPasskeyScreen from './AppLockPasskeyScreen'
 import { isAppLockPasskeyRegistered } from '@/AppLockPasskey/appLockPasskeyService'
 import { addChallengeToList, removeChallengeFromList } from './challengeList'
-import {
-  createPersistedPrintOptions,
-  installNativeNotePrinting,
-  PRINT_NOTE_UUID_ATTRIBUTE,
-} from '../NoteView/Print/PrintNote'
-import { hasPrintableView } from '../NoteView/Print/PrintableViewRegistry'
+import { installNativeNotePrinting } from '../NoteView/Print/PrintNote'
+import { resolveNativePrintOptions } from './nativePrintOptions'
 
 type Props = {
   application: WebApplication
@@ -246,22 +241,7 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
   useEffect(
     () =>
       installNativeNotePrinting(
-        () => {
-          const title = document.querySelector<HTMLInputElement>(`[${PRINT_NOTE_UUID_ATTRIBUTE}]`)
-          // A view tab (Todos, …) takes the content area over from the editor,
-          // so the note still held by the controller is NOT what is on screen.
-          // Naming it here would print it instead of the view being looked at.
-          if (!title && hasPrintableView()) {
-            return {}
-          }
-          const noteUuid =
-            title?.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) ??
-            application.itemListController.activeControllerItem?.uuid ??
-            undefined
-          const note = noteUuid ? application.items.findItem<SNNote>(noteUuid) : undefined
-          const editor = note ? application.componentManager.editorForNote(note) : undefined
-          return (note ? createPersistedPrintOptions(note, editor) : undefined) ?? { noteUuid }
-        },
+        () => resolveNativePrintOptions(application),
         (reason) => {
           addToast({ type: ToastType.Error, message: reason })
         },
