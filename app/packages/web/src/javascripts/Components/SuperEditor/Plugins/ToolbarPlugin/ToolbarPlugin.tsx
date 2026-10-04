@@ -99,7 +99,7 @@ import { useStateRef } from '@/Hooks/useStateRef'
 import { getDOMRangeRect } from '../../Lexical/Utils/getDOMRangeRect'
 import { getPositionedPopoverStyles } from '@/Components/Popover/GetPositionedPopoverStyles'
 import usePreference, { useLocalPreference } from '@/Hooks/usePreference'
-import { ElementIds } from '@/Constants/ElementIDs'
+import { ownSuperEditorElement, superEditorPortalTarget } from '../../ownSuperEditorElements'
 import { $isDecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
 import LinkViewer from './LinkViewer'
 import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
@@ -1776,9 +1776,12 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     const handleRootBlur = (event: FocusEvent) => {
       const elementToBeFocused = event.relatedTarget as Node
       const containerContainsElementToFocus = container?.contains(elementToBeFocused)
-      const linkEditorContainsElementToFocus = document
-        .getElementById(ElementIds.SuperEditor)
-        ?.contains(elementToBeFocused)
+      // The Super editor THIS toolbar belongs to, walked up from its own Lexical root —
+      // never `document.getElementById`, which from the second open note onward answers
+      // the first open note's editor and would judge this editor's focus against it.
+      const linkEditorContainsElementToFocus = ownSuperEditorElement(editor.getRootElement())?.contains(
+        elementToBeFocused,
+      )
       const willFocusDismissButton = dismissButtonRef.current === elementToBeFocused
       if ((containerContainsElementToFocus || linkEditorContainsElementToFocus) && !willFocusDismissButton) {
         return
@@ -1844,8 +1847,15 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     toolbarStore,
   ])
 
+  // The container every toolbar popover is positioned against (and, where `portal` is left
+  // on, portalled into): THIS toolbar's own Super editor, resolved by walking up from its
+  // own Lexical root. `document.getElementById` answered the first open note's editor, which
+  // with two notes open is both the wrong box to clamp against and — in single-tile layout,
+  // where the inactive tile carries `hidden` — a subtree nothing renders visibly in.
+  // `superEditorPortalTarget` already falls back to `document.body`, so no further fallback
+  // is reachable here; the `??` tail is kept only as a statement of intent.
   const popoverDocumentElement =
-    document.getElementById(ElementIds.SuperEditor) ?? editor.getRootElement()?.parentElement ?? document.body
+    superEditorPortalTarget(editor.getRootElement()) ?? editor.getRootElement()?.parentElement
 
   const openCustomizeDialog = useCallback(() => {
     showModal(t('customizeToolbar'), (onClose) => (
