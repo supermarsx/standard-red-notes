@@ -26,6 +26,7 @@ import {
   $createNodeSelection,
   $createParagraphNode,
   $createTextNode,
+  $getNodeByKey,
   $getRoot,
   $setSelection,
   CLICK_COMMAND,
@@ -33,7 +34,7 @@ import {
 } from 'lexical'
 import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { $createMermaidNode, MermaidNode } from './MermaidNode'
+import { $createMermaidNode, $isMermaidNode, MermaidNode } from './MermaidNode'
 
 // Shaped like mermaid@11.16.1's real output: width="100%" + a max-width style +
 // a viewBox.
@@ -370,5 +371,88 @@ describe('a width typed into the section reaches the node and the DOM', () => {
     await commitWidth('4000px')
     expect(block().style.width).toBe('4000px')
     expect(block().style.maxWidth).toBe('100%')
+  })
+})
+
+/**
+ * THE CHART'S OWN TOP BAR (t118). The user asked for every mermaid configuration
+ * to be on it, and for the editor toolbar's Mermaid section to show the same
+ * controls from the same state. Both surfaces mount the one
+ * `MermaidSettingsPanel`, so this asserts the bar really carries the whole control
+ * set — and, unlike the width strip, carries it whether the block is selected or
+ * not, because the bar IS the block's header.
+ *
+ * The toolbar half is asserted in
+ * Plugins/ToolbarPlugin/ToolbarPlugin.mermaidSection.spec.tsx; the two files
+ * together are what makes "mirrored, never forked" checkable.
+ */
+describe('the chart’s own top bar carries the whole mermaid configuration', () => {
+  const settingsBar = () => container.querySelector('[data-mermaid-settings="bar"]')
+  const group = (label: string) => container.querySelector(`[role="group"][aria-label="${label}"]`)
+  const byLabel = (label: string) => container.querySelector(`[aria-label="${label}"]`)
+
+  it('renders the shared settings bar on an unselected block', () => {
+    expect(settingsBar()).not.toBeNull()
+    expect(group('View mode')).not.toBeNull()
+    expect(group('Fit mode')).not.toBeNull()
+    expect(group('Diagram alignment')).not.toBeNull()
+    expect(byLabel('Maximum diagram height')).not.toBeNull()
+    expect(byLabel('Diagram theme')).not.toBeNull()
+    expect(byLabel('Themed diagram background')).not.toBeNull()
+    expect(byLabel('Pan and zoom over the diagram')).not.toBeNull()
+  })
+
+  it('keeps the width strip selection-gated inside that bar, as it already was', async () => {
+    expect(settingsBar()).not.toBeNull()
+    expect(widthSection()).toBeNull()
+    await selectDiagram()
+    expect(widthSection()).not.toBeNull()
+    // And the strip is inside the shared bar, not a second control elsewhere.
+    expect(settingsBar()!.querySelector('[data-mermaid-width-section="true"]')).not.toBeNull()
+  })
+
+  it('starts on the defaults the shared module declares', () => {
+    const pressedFit = Array.from(group('Fit mode')!.querySelectorAll('button')).filter(
+      (button) => button.getAttribute('aria-pressed') === 'true',
+    )
+    expect(pressedFit).toHaveLength(1)
+    expect(pressedFit[0].textContent).toBe('Fit width')
+    expect((byLabel('Diagram theme') as HTMLSelectElement).value).toBe('app')
+    expect((byLabel('Maximum diagram height') as HTMLSelectElement).value).toBe('window')
+  })
+
+  it('a change made on the bar reaches the node', async () => {
+    const actual = Array.from(group('Fit mode')!.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Actual size',
+    ) as HTMLButtonElement
+    await act(async () => {
+      actual.click()
+      await Promise.resolve()
+    })
+    let stored = ''
+    editor?.getEditorState().read(() => {
+      const node = $getNodeByKey(mermaidKey)
+      stored = $isMermaidNode(node) ? node.getSettings().fitMode : 'unread'
+    })
+    expect(stored).toBe('actual')
+    // ...and the viewport the bar configures reports the applied mode.
+    await settlePreview()
+    const viewport = container.querySelector('[data-mermaid-viewport="true"]')
+    expect(viewport).not.toBeNull()
+    expect(viewport!.getAttribute('data-mermaid-fit-mode')).toBe('actual')
+  })
+
+  it('turning pan/zoom off removes the zoom cluster from the chart', async () => {
+    await settlePreview()
+    expect(container.querySelector('[data-mermaid-viewport-controls="true"]')).not.toBeNull()
+    await act(async () => {
+      ;(byLabel('Pan and zoom over the diagram') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    await settlePreview()
+    expect(container.querySelector('[data-mermaid-viewport-controls="true"]')).toBeNull()
+    expect(container.querySelector('[data-mermaid-viewport="true"]')!.getAttribute('data-mermaid-zoom-pan')).toBe(
+      'false',
+    )
   })
 })

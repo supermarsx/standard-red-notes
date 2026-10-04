@@ -15,6 +15,7 @@ import {
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
+import Icon from '@/Components/Icon/Icon'
 import {
   buildFlowchartSource,
   createEmptyGraphModel,
@@ -28,24 +29,34 @@ import {
   parseFlowchartSource,
 } from './MermaidGraphBuilder'
 import MermaidSvgViewport from './MermaidSvgViewport'
-import { MermaidResizeHandle, MermaidWidthSection } from './MermaidBlockControls'
+import { MermaidResizeHandle } from './MermaidBlockControls'
 import { MermaidWidthUnit, normalizeMermaidHeight, normalizeMermaidWidth, parseMermaidWidth } from './MermaidWidth'
+import { MermaidSettingsPanel } from './MermaidSettingsPanel'
+import {
+  DEFAULT_MERMAID_THEME_MODE,
+  DEFAULT_MERMAID_VIEW_MODE,
+  mermaidAlignmentStyle,
+  mermaidAppThemeIsDark,
+  MermaidBuiltinTheme,
+  MermaidMaxHeight,
+  MermaidSettings,
+  MermaidThemeMode,
+  MermaidViewMode,
+  normalizeMermaidViewMode,
+  resolveMermaidMaxHeightPx,
+  resolveMermaidSettings,
+  resolveMermaidTheme,
+} from './MermaidSettings'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
-/** Mermaid built-in themes that can be selected per-diagram. */
-export const MERMAID_THEMES = ['default', 'dark', 'forest', 'neutral', 'base'] as const
-export type MermaidTheme = (typeof MERMAID_THEMES)[number]
-export const DEFAULT_MERMAID_THEME: MermaidTheme = 'default'
-
-/** Split-pane view modes for the interactive editor. `graphical` shows the
- * form-based flowchart builder instead of the raw code textarea. */
-export const MERMAID_VIEW_MODES = ['split', 'code', 'preview', 'graphical'] as const
-export type MermaidViewMode = (typeof MERMAID_VIEW_MODES)[number]
-export const DEFAULT_MERMAID_VIEW_MODE: MermaidViewMode = 'split'
-
-/** 1: code only. 2: + theme/viewMode. 3: + width/height (t113). */
-export const MERMAID_VERSION = 3
+/**
+ * 1: code only. 2: + theme/viewMode. 3: + width/height (t113). 4: + the shared
+ * settings set — fit mode, maximum height, alignment, background, pan/zoom — and
+ * `theme` widened to accept `app` (follow the application's own light/dark
+ * theme). See MermaidSettings.ts, which owns every one of those.
+ */
+export const MERMAID_VERSION = 4
 
 /** Debounce delay (ms) before re-rendering the preview while typing. */
 const RENDER_DEBOUNCE_MS = 400
@@ -55,14 +66,26 @@ const RENDER_DEBOUNCE_MS = 400
  * must not be turned into a block selection, or the focus the user just asked
  * for would be taken away again.
  */
-const INTERACTIVE_IN_BLOCK = 'input, textarea, select, button, a, label, [data-mermaid-width-section="true"]'
+const INTERACTIVE_IN_BLOCK =
+  'input, textarea, select, button, a, label, [data-mermaid-width-section="true"], [data-mermaid-settings]'
 
-function isMermaidTheme(value: unknown): value is MermaidTheme {
-  return typeof value === 'string' && (MERMAID_THEMES as readonly string[]).includes(value)
-}
-
-function isMermaidViewMode(value: unknown): value is MermaidViewMode {
-  return typeof value === 'string' && (MERMAID_VIEW_MODES as readonly string[]).includes(value)
+/**
+ * Is the application showing a dark theme? Read from the live computed style, so
+ * it follows whatever theme is installed rather than a hardcoded list. The
+ * decision itself is the pure `mermaidAppThemeIsDark`; this only gathers its
+ * inputs, and tolerates an environment with no layout engine (jsdom returns empty
+ * strings, which falls through to the OS preference).
+ */
+function readAppThemeIsDark(): boolean {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return false
+  }
+  const styles = window.getComputedStyle(document.documentElement)
+  return mermaidAppThemeIsDark({
+    themeType: styles.getPropertyValue('--sn-stylekit-theme-type'),
+    backgroundColor: styles.getPropertyValue('--sn-stylekit-background-color'),
+    prefersDark: window.matchMedia?.('(prefers-color-scheme: dark)')?.matches === true,
+  })
 }
 
 // Lazily loaded mermaid singleton so the heavy library is code-split and only
@@ -243,12 +266,15 @@ function GraphicalBuilder({
               />
               <button
                 type="button"
-                className="text-danger hover:bg-contrast rounded px-1.5 py-0.5"
+                className="text-danger hover:bg-contrast flex rounded px-1.5 py-1"
                 onClick={() => removeNode(index)}
                 aria-label={`Remove node ${index + 1}`}
                 title="Remove node"
               >
-                ✕
+                {/* A real glyph rather than the bare cross character this used to
+                    print. The accessible name is the aria-label above either way,
+                    so the mark itself is decorative and belongs in the icon set. */}
+                <Icon type="close" size="small" />
               </button>
             </div>
           ))}
@@ -287,7 +313,12 @@ function GraphicalBuilder({
                   </option>
                 ))}
               </select>
-              <span aria-hidden="true">→</span>
+              {/* Purely decorative — the two selects it sits between are both
+                  labelled "from"/"to", so this conveys no state and stays hidden
+                  from assistive technology, as the character it replaces was. */}
+              <span aria-hidden="true" className="flex">
+                <Icon type="arrow-right" size="small" />
+              </span>
               <select
                 className={selectClass}
                 value={edge.to}
@@ -309,12 +340,12 @@ function GraphicalBuilder({
               />
               <button
                 type="button"
-                className="text-danger hover:bg-contrast rounded px-1.5 py-0.5"
+                className="text-danger hover:bg-contrast flex rounded px-1.5 py-1"
                 onClick={() => removeEdge(index)}
                 aria-label={`Remove edge ${index + 1}`}
                 title="Remove edge"
               >
-                ✕
+                <Icon type="close" size="small" />
               </button>
             </div>
           ))}
@@ -326,14 +357,14 @@ function GraphicalBuilder({
 
 function MermaidComponent({
   code,
-  theme,
+  settings,
   viewMode,
   width,
   height,
   nodeKey,
 }: {
   code: string
-  theme: MermaidTheme
+  settings: MermaidSettings
   viewMode: MermaidViewMode
   width: string | undefined
   height: number | undefined
@@ -358,7 +389,7 @@ function MermaidComponent({
   }, [code])
 
   const render = useCallback(
-    async (source: string, activeTheme: MermaidTheme) => {
+    async (source: string, activeTheme: MermaidBuiltinTheme) => {
       const token = ++renderTokenRef.current
       const trimmed = source.trim()
       if (!trimmed) {
@@ -394,13 +425,34 @@ function MermaidComponent({
     [nodeKey],
   )
 
-  // Debounced render whenever the draft, theme, or reload token changes.
+  // Whether the APPLICATION is showing a dark theme, which is what the default
+  // `app` theme mode follows. Re-read when the OS preference flips and when the
+  // document element's own styling changes (how a theme is installed here), so a
+  // theme switch re-renders the diagram instead of leaving a light chart in a
+  // dark editor until the next keystroke.
+  const [appIsDark, setAppIsDark] = useState(readAppThemeIsDark)
+  useEffect(() => {
+    const refresh = () => setAppIsDark(readAppThemeIsDark())
+    refresh()
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+    media?.addEventListener?.('change', refresh)
+    const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(refresh)
+    observer?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] })
+    return () => {
+      media?.removeEventListener?.('change', refresh)
+      observer?.disconnect()
+    }
+  }, [])
+
+  const activeTheme = resolveMermaidTheme(settings.themeMode, appIsDark)
+
+  // Debounced render whenever the draft, resolved theme, or reload token changes.
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      void render(draft, theme)
+      void render(draft, activeTheme)
     }, RENDER_DEBOUNCE_MS)
     return () => window.clearTimeout(handle)
-  }, [draft, theme, reloadToken, render])
+  }, [draft, activeTheme, reloadToken, render])
 
   // Invalidate any in-flight render when the component unmounts.
   useEffect(() => {
@@ -429,12 +481,18 @@ function MermaidComponent({
     [persistCode],
   )
 
-  const setTheme = useCallback(
-    (next: MermaidTheme) => {
+  /**
+   * The ONE write path for every setting, shared by this block's own top bar and
+   * by the editor toolbar's Mermaid section (which calls the identical node
+   * setters). A patch, not a whole object, so a control only ever states the
+   * field it owns.
+   */
+  const setSettings = useCallback(
+    (patch: Partial<MermaidSettings>) => {
       editor.update(() => {
         const node = $getNodeByKey(nodeKey)
         if ($isMermaidNode(node)) {
-          node.setTheme(next)
+          node.setSettings(patch)
         }
       })
     },
@@ -565,27 +623,21 @@ function MermaidComponent({
       data-super-widget-layout="canvas"
       // `width` is undefined unless the user set one — fitting is the DEFAULT,
       // not a stored number — and `maxWidth` means a stored pixel width can
-      // never make the note scroll horizontally.
-      style={{ width, maxWidth: '100%' }}
+      // never make the note scroll horizontally. The alignment margins only bite
+      // on a block narrower than the column, which is the only case with slack.
+      style={{ width, maxWidth: '100%', ...mermaidAlignmentStyle(settings.alignment) }}
     >
-      <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
+      {/* THE CHART'S OWN TOP BAR. Every mermaid configuration lives here, in the
+          shared MermaidSettingsPanel — the identical component the editor
+          toolbar's Mermaid section mounts in its popover, driving the identical
+          node setters. Templates and Reload stay beside it because they are
+          actions on the source, not configuration. */}
+      <div
+        className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs"
+        data-mermaid-top-bar="true"
+      >
         <span className="font-semibold">Mermaid diagram</span>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="border-border flex overflow-hidden rounded border" role="group" aria-label="View mode">
-            {MERMAID_VIEW_MODES.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={
-                  'px-2 py-0.5 capitalize ' + (viewMode === mode ? 'bg-info text-info-contrast' : 'hover:bg-contrast')
-                }
-                aria-pressed={viewMode === mode}
-                onClick={() => setViewMode(mode)}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
           <label className="flex items-center gap-1">
             Templates
             <select
@@ -608,21 +660,6 @@ function MermaidComponent({
               ))}
             </select>
           </label>
-          <label className="flex items-center gap-1">
-            Theme
-            <select
-              className="border-border bg-default text-foreground focus:border-info rounded border px-1 py-0.5 outline-none"
-              value={theme}
-              onChange={(e) => setTheme(e.target.value as MermaidTheme)}
-              aria-label="Diagram theme"
-            >
-              {MERMAID_THEMES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
           <button
             type="button"
             className="hover:bg-contrast rounded px-2 py-0.5"
@@ -632,6 +669,23 @@ function MermaidComponent({
             Reload
           </button>
         </div>
+      </div>
+
+      <div className="border-border border-b px-2 py-1">
+        <MermaidSettingsPanel
+          variant="bar"
+          settings={settings}
+          onSettingsChange={setSettings}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          width={width}
+          onWidthChange={setWidth}
+          height={height}
+          onHeightChange={setHeight}
+          // The width strip stays selection-gated, as it already was: it carries
+          // the resize affordance's units and belongs with a selected block.
+          showWidth={isSelected}
+        />
       </div>
 
       <div className={'flex ' + (viewMode === 'split' ? 'flex-col md:flex-row' : 'flex-col')}>
@@ -664,7 +718,20 @@ function MermaidComponent({
               // height; the resize handle's live feedback and the persisted
               // `height` then refer to the same box.
               <div ref={previewRef}>
-                <MermaidSvgViewport svg={svg} heightOverride={height}>
+                <MermaidSvgViewport
+                  svg={svg}
+                  heightOverride={height}
+                  fitMode={settings.fitMode}
+                  // THE configurable maximum that replaced the hardcoded 480:
+                  // resolved from the node's own setting, `null` when the user
+                  // chose "No limit", and otherwise a share of the window.
+                  maxHeightPx={resolveMermaidMaxHeightPx(
+                    settings.maxHeight,
+                    typeof window === 'undefined' ? undefined : window.innerHeight,
+                  )}
+                  zoomPan={settings.zoomPan}
+                  background={settings.background}
+                >
                   <MermaidResizeHandle
                     active={isSelected}
                     widthTargetRef={blockRef}
@@ -689,14 +756,6 @@ function MermaidComponent({
           </div>
         ) : null}
       </div>
-
-      <MermaidWidthSection
-        visible={isSelected}
-        width={width}
-        onWidthChange={setWidth}
-        height={height}
-        onHeightChange={setHeight}
-      />
     </div>
   )
 }
@@ -704,20 +763,42 @@ function MermaidComponent({
 export type SerializedMermaidNode = Spread<
   {
     code: string
-    theme: MermaidTheme
+    /**
+     * The theme MODE. Versions 2-3 stored one of mermaid's own theme names here;
+     * version 4 widened it to include `app` (follow the application's theme) and
+     * kept the field name, so an older note's stored theme is still exactly the
+     * theme it gets — see `resolveMermaidThemeMode`.
+     */
+    theme: MermaidThemeMode
     viewMode: MermaidViewMode
     /** Normalized CSS width (`"50%"`, `"420px"`); absent means "fit". */
     width?: string
     /** Preview-box height in px; absent means "auto-fit". */
     height?: number
+    /** Version 4 — see MermaidSettings.ts. Absent fields take their defaults. */
+    fitMode?: MermaidSettings['fitMode']
+    /** A px number, or `"none"`. Absent means "follow the window". */
+    maxHeight?: MermaidMaxHeight
+    alignment?: MermaidSettings['alignment']
+    background?: MermaidSettings['background']
+    zoomPan?: boolean
   },
   SerializedLexicalNode
 >
 
+/** The version-4 settings a caller may seed, other than the theme mode. */
+export type MermaidExtraSettings = Partial<Omit<MermaidSettings, 'themeMode'>>
+
 export class MermaidNode extends DecoratorNode<React.JSX.Element> {
   __code: string
-  __theme: MermaidTheme
   __viewMode: MermaidViewMode
+  /**
+   * Every configurable setting, already resolved: the ONE place the block's own
+   * top bar and the editor toolbar's Mermaid section both read and write. The
+   * theme mode lives in here too (it is a setting like any other); the SERIALIZED
+   * field keeps its historical name `theme`.
+   */
+  __settings: MermaidSettings
   /** Normalized CSS width, or undefined for "fit the container". */
   __width: string | undefined
   /** Preview-box height in px, or undefined for "auto-fit". */
@@ -728,21 +809,35 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
   }
 
   static clone(node: MermaidNode): MermaidNode {
-    return new MermaidNode(node.__code, node.__theme, node.__viewMode, node.__width, node.__height, node.__key)
+    return new MermaidNode(
+      node.__code,
+      node.__settings.themeMode,
+      node.__viewMode,
+      node.__width,
+      node.__height,
+      node.__settings,
+      node.__key,
+    )
   }
 
   constructor(
     code: string,
-    theme: MermaidTheme = DEFAULT_MERMAID_THEME,
+    themeMode: MermaidThemeMode = DEFAULT_MERMAID_THEME_MODE,
     viewMode: MermaidViewMode = DEFAULT_MERMAID_VIEW_MODE,
     width?: string,
     height?: number,
+    settings?: MermaidExtraSettings,
     key?: NodeKey,
   ) {
     super(key)
     this.__code = code
-    this.__theme = theme
     this.__viewMode = viewMode
+    // THE single validation point for the settings, for exactly the reason the
+    // size has one: every creation path funnels through here, and each field is a
+    // SYNCED value an older build or a hand edit may have written. Anything
+    // unparseable becomes its default rather than reaching a style attribute or
+    // mermaid's own config.
+    this.__settings = resolveMermaidSettings({ ...settings, themeMode })
     // THE single validation point for an incoming size, deliberately not
     // duplicated in importJSON: every creation path — $createMermaidNode,
     // clone(), importJSON — funnels through here, and a stored size is a SYNCED
@@ -764,13 +859,28 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
       return $createMermaidNode(raw)
     }
     const code = typeof serializedNode.code === 'string' ? serializedNode.code : DEFAULT_MERMAID
-    const theme = isMermaidTheme(serializedNode.theme) ? serializedNode.theme : DEFAULT_MERMAID_THEME
-    const viewMode = isMermaidViewMode(serializedNode.viewMode) ? serializedNode.viewMode : DEFAULT_MERMAID_VIEW_MODE
-    // The stored size is handed straight to the constructor, which is the one
-    // place that parses and clamps it (see the comment there). Normalizing here
-    // as well would be dead code that makes the real guard untestable: with two
-    // layers, removing either one changes nothing observable.
-    return $createMermaidNode(code, theme, viewMode, serializedNode.width, serializedNode.height)
+    const viewMode = normalizeMermaidViewMode(serializedNode.viewMode) ?? DEFAULT_MERMAID_VIEW_MODE
+    // The stored size and settings are handed straight to the constructor, which
+    // is the one place that parses and clamps them (see the comment there).
+    // Normalizing here as well would be dead code that makes the real guard
+    // untestable: with two layers, removing either one changes nothing
+    // observable. The theme is passed through unvalidated for the same reason —
+    // `resolveMermaidSettings` is what decides whether a stored theme is one it
+    // recognizes, and what an unrecognized one falls back to.
+    return $createMermaidNode(
+      code,
+      serializedNode.theme as MermaidThemeMode,
+      viewMode,
+      serializedNode.width,
+      serializedNode.height,
+      {
+        fitMode: serializedNode.fitMode,
+        maxHeight: serializedNode.maxHeight,
+        alignment: serializedNode.alignment,
+        background: serializedNode.background,
+        zoomPan: serializedNode.zoomPan,
+      },
+    )
   }
 
   exportJSON(): SerializedMermaidNode {
@@ -778,10 +888,18 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
       type: 'mermaid',
       version: MERMAID_VERSION,
       code: this.__code,
-      theme: this.__theme,
+      theme: this.__settings.themeMode,
       viewMode: this.__viewMode,
       width: this.__width,
       height: this.__height,
+      fitMode: this.__settings.fitMode,
+      // Written only when the user actually chose one: absent means "follow the
+      // window", and writing the resolved pixel number would freeze today's
+      // window height into the note.
+      maxHeight: this.__settings.maxHeight,
+      alignment: this.__settings.alignment,
+      background: this.__settings.background,
+      zoomPan: this.__settings.zoomPan,
     }
   }
 
@@ -813,12 +931,29 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     this.getWritable().__code = code
   }
 
-  getTheme(): MermaidTheme {
-    return this.getLatest().__theme
+  /** The theme MODE (`app`, or one of mermaid's own theme names). */
+  getTheme(): MermaidThemeMode {
+    return this.getLatest().__settings.themeMode
   }
 
-  setTheme(theme: MermaidTheme): void {
-    this.getWritable().__theme = theme
+  setTheme(themeMode: MermaidThemeMode): void {
+    this.setSettings({ themeMode })
+  }
+
+  /** Every setting, resolved. The shape both surfaces render from. */
+  getSettings(): MermaidSettings {
+    return this.getLatest().__settings
+  }
+
+  /**
+   * Apply a partial settings change. Re-resolves the whole object, so a setter is
+   * no more trusted than an import: this is the only other way `__settings` can
+   * change, and it normalizes the same way the constructor does.
+   */
+  setSettings(patch: Partial<MermaidSettings>): void {
+    const writable = this.getWritable()
+    const merged = { ...writable.__settings, ...patch }
+    writable.__settings = resolveMermaidSettings(merged)
   }
 
   getViewMode(): MermaidViewMode {
@@ -858,7 +993,7 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     return (
       <MermaidComponent
         code={this.__code}
-        theme={this.__theme}
+        settings={this.__settings}
         viewMode={this.__viewMode}
         width={this.__width}
         height={this.__height}
@@ -870,12 +1005,13 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
 
 export function $createMermaidNode(
   code = DEFAULT_MERMAID,
-  theme: MermaidTheme = DEFAULT_MERMAID_THEME,
+  themeMode: MermaidThemeMode = DEFAULT_MERMAID_THEME_MODE,
   viewMode: MermaidViewMode = DEFAULT_MERMAID_VIEW_MODE,
   width?: string,
   height?: number,
+  settings?: MermaidExtraSettings,
 ): MermaidNode {
-  return new MermaidNode(code, theme, viewMode, width, height)
+  return new MermaidNode(code, themeMode, viewMode, width, height, settings)
 }
 
 export function $isMermaidNode(node: LexicalNode | null | undefined): node is MermaidNode {

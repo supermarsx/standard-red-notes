@@ -21,6 +21,7 @@ import {
   MIN_MERMAID_WIDTH_PERCENT,
   MIN_MERMAID_WIDTH_PX,
 } from './MermaidWidth'
+import { DEFAULT_MERMAID_THEME_MODE, MAX_MERMAID_MAX_HEIGHT_PX, MIN_MERMAID_MAX_HEIGHT_PX } from './MermaidSettings'
 
 const editor = createHeadlessEditor({
   namespace: 'MermaidNodeSerializationTest',
@@ -107,7 +108,88 @@ describe('MermaidNode — the size round-trips', () => {
       viewMode: 'preview',
       width: '60%',
       height: 240,
+      // Version 4 (t118): the shared settings set. Written explicitly so a note
+      // keeps the behaviour it was authored with even if a default later moves;
+      // `maxHeight` is the one exception — absent means "follow the window", and
+      // writing today's resolved pixel number would freeze this window's height
+      // into the note.
+      fitMode: 'fitWidth',
+      maxHeight: undefined,
+      alignment: 'left',
+      background: 'transparent',
+      zoomPan: true,
     })
+  })
+
+  it('round-trips every version-4 setting', () => {
+    const roundTripped = inEditor(() => {
+      const first = $createMermaidNode(CODE, 'app', 'split', undefined, undefined, {
+        fitMode: 'actual',
+        maxHeight: 'none',
+        alignment: 'center',
+        background: 'themed',
+        zoomPan: false,
+      })
+      return MermaidNode.importJSON(first.exportJSON()).exportJSON()
+    })
+    expect(roundTripped.fitMode).toBe('actual')
+    expect(roundTripped.maxHeight).toBe('none')
+    expect(roundTripped.alignment).toBe('center')
+    expect(roundTripped.background).toBe('themed')
+    expect(roundTripped.zoomPan).toBe(false)
+    expect(roundTripped.theme).toBe('app')
+  })
+
+  it.each([
+    ['fitMode', 'sideways'],
+    ['alignment', 'middle'],
+    ['background', 'rainbow'],
+    ['zoomPan', 'yes'],
+    ['maxHeight', 'tall'],
+  ])('falls back to the default for the unparseable stored %s %p', (field, stored) => {
+    const json = inEditor(() =>
+      MermaidNode.importJSON({
+        type: 'mermaid',
+        version: 4,
+        code: CODE,
+        theme: 'default',
+        viewMode: 'split',
+        [field]: stored,
+      } as unknown as SerializedMermaidNode).exportJSON(),
+    )
+    const defaults: Record<string, unknown> = {
+      fitMode: 'fitWidth',
+      alignment: 'left',
+      background: 'transparent',
+      zoomPan: true,
+      maxHeight: undefined,
+    }
+    expect((json as unknown as Record<string, unknown>)[field]).toBe(defaults[field])
+  })
+
+  it('clamps a stored maximum height into range instead of trusting it', () => {
+    const tooSmall = inEditor(() =>
+      MermaidNode.importJSON({
+        type: 'mermaid',
+        version: 4,
+        code: CODE,
+        theme: 'default',
+        viewMode: 'split',
+        maxHeight: 1,
+      } as unknown as SerializedMermaidNode).exportJSON(),
+    )
+    const tooLarge = inEditor(() =>
+      MermaidNode.importJSON({
+        type: 'mermaid',
+        version: 4,
+        code: CODE,
+        theme: 'default',
+        viewMode: 'split',
+        maxHeight: 999999,
+      } as unknown as SerializedMermaidNode).exportJSON(),
+    )
+    expect(tooSmall.maxHeight).toBe(MIN_MERMAID_MAX_HEIGHT_PX)
+    expect(tooLarge.maxHeight).toBe(MAX_MERMAID_MAX_HEIGHT_PX)
   })
 })
 
@@ -209,7 +291,60 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
       MermaidNode.importJSON({ type: 'mermaid', version: 1, code: CODE } as SerializedMermaidNode).exportJSON(),
     )
     expect(node.version).toBe(MERMAID_VERSION)
-    expect(MERMAID_VERSION).toBe(3)
+    expect(MERMAID_VERSION).toBe(4)
+  })
+
+  /**
+   * The rule that keeps an existing note looking the way it was authored: the
+   * default theme MODE moved to `app` (follow the application's light/dark theme)
+   * in version 4, but versions 2 and 3 always WROTE a `theme`, so every existing
+   * diagram carries an explicit one and keeps it. Only a diagram with no theme at
+   * all — a version-1 node — picks up the new default.
+   */
+  it('keeps a version-2/3 stored theme rather than adopting the new default', () => {
+    for (const stored of ['default', 'dark', 'forest', 'neutral', 'base']) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version: 3,
+          code: CODE,
+          theme: stored,
+          viewMode: 'split',
+        } as unknown as SerializedMermaidNode).exportJSON(),
+      )
+      expect(json.theme).toBe(stored)
+    }
+  })
+
+  it('gives a version-1 node (no theme at all) the new app-following default', () => {
+    const json = inEditor(() =>
+      MermaidNode.importJSON({ type: 'mermaid', version: 1, code: CODE } as SerializedMermaidNode).exportJSON(),
+    )
+    expect(json.theme).toBe(DEFAULT_MERMAID_THEME_MODE)
+    expect(json.theme).toBe('app')
+  })
+
+  it('keeps rendering a version-3 node: every version-4 field resolves to a default', () => {
+    const json = inEditor(() =>
+      MermaidNode.importJSON({
+        type: 'mermaid',
+        version: 3,
+        code: CODE,
+        theme: 'default',
+        viewMode: 'split',
+        width: '50%',
+        height: 300,
+      } as SerializedMermaidNode).exportJSON(),
+    )
+    expect(json.fitMode).toBe('fitWidth')
+    expect(json.maxHeight).toBeUndefined()
+    expect(json.alignment).toBe('left')
+    expect(json.background).toBe('transparent')
+    expect(json.zoomPan).toBe(true)
+    // And nothing it DID store was lost.
+    expect(json.width).toBe('50%')
+    expect(json.height).toBe(300)
+    expect(json.theme).toBe('default')
   })
 })
 
