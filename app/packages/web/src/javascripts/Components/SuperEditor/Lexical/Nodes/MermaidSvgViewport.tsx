@@ -58,6 +58,15 @@ import {
  *     collapsed to the 300px CSS default for replaced elements. Every diagram
  *     wider than 300px was therefore drawn at 300px while the transform scale
  *     assumed the viewBox width. See `pinSvgToNaturalSize`.
+ *
+ * ---
+ * Standard Red Notes — follow-up fix (t111/M1): the fit was correct only by
+ * luck. It is measured from the viewport's `clientWidth`, which excludes a
+ * classic scrollbar, and the measurement happened while the box still carried
+ * the pre-measurement `overflow: auto` with the just-pinned SVG overflowing it —
+ * so the first fit read 685 of a 700px column (and 319 of 334) in 10 of 10
+ * headless-Chrome runs, and only a later, frame-dependent ResizeObserver
+ * delivery ever corrected it. See `resolveViewportOverflowBeforeMeasuring`.
  */
 
 type Props = {
@@ -194,6 +203,62 @@ export function pinSvgToNaturalSize(host: HTMLElement, naturalWidth: number, nat
   svg.style.display = 'block'
 }
 
+/**
+ * The viewport box's own `overflow`, as a function of whether the diagram's
+ * natural size is known.
+ *
+ *  - known: `hidden`. The diagram is transformed to fit, so there is nothing to
+ *    scroll, and a scrollbar would only eat into the box.
+ *  - unknown: `auto`. The graceful fallback — show the diagram at its intrinsic
+ *    size and let the user scroll to the rest rather than clip it.
+ *
+ * Exists as one function so the rendered style and
+ * `resolveViewportOverflowBeforeMeasuring` below cannot drift apart: if they
+ * did, the measurement would again be taken against an overflow the imminent
+ * render does not commit, which is exactly the bug that function fixes.
+ */
+export function viewportOverflowFor(hasSize: boolean): 'hidden' | 'auto' {
+  return hasSize ? 'hidden' : 'auto'
+}
+
+/**
+ * Put the viewport into the `overflow` state this render will commit, BEFORE the
+ * fit is measured from it.
+ *
+ * Standard Red Notes — bug fix (t111/M1), the measurement that was never
+ * revised. The fit is computed from the viewport's `clientWidth`, and
+ * `clientWidth` EXCLUDES a classic scrollbar's gutter. On mount — and on every
+ * new diagram — the box is still carrying the previous render's `overflow:
+ * auto` (`hasSize` has only just been set, and React has not committed yet)
+ * while the freshly injected `<svg>` has already been pinned to its natural
+ * size inside it. The content therefore overflows a box that is allowed to
+ * scroll, Chrome puts a scrollbar up, and the `clientWidth` read inside
+ * `fitToViewport` — which forces layout, so the scrollbar is real and resolved,
+ * not a timing accident — reports 15px LESS than the box actually offers. The
+ * diagram is then fitted to 685px of a 700px column and nothing recomputes it.
+ *
+ * Measured in headless Chrome (10 runs per case, fresh browser per run,
+ * freshly compiled CSS): the first fit read 685 of an offsetWidth of 700 — and
+ * 319 of 334 — in 10 of 10 runs, with the inline overflow still `auto`. The
+ * only thing that ever corrected it was a later ResizeObserver delivery, which
+ * needs a rendering frame and so is not guaranteed: it arrived in 6-7 runs of
+ * 10. In the runs where it did not, the diagram stayed exactly one scrollbar
+ * width short of its box (0.979 and 0.955 of the width) and, where the fit was
+ * height-bound instead, 7.5px off centre.
+ *
+ * Resolving the overflow first is what makes the ONE synchronous,
+ * before-paint measurement correct. The alternatives were worse: re-measuring
+ * in a second pass can paint a visibly wrong size and then jump, and
+ * subtracting `offsetWidth - clientWidth` would silently mis-measure the moment
+ * this box ever gains a border or padding.
+ */
+export function resolveViewportOverflowBeforeMeasuring(viewport: HTMLElement | null, hasSize: boolean): void {
+  if (!viewport) {
+    return
+  }
+  viewport.style.overflow = viewportOverflowFor(hasSize)
+}
+
 const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, children }) => {
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentHostRef = useRef<HTMLDivElement>(null)
@@ -255,6 +320,11 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
     }
     setHasSize(parsed != null)
     hasInteracted.current = false
+    // The box must be in its final overflow state before anything measures its
+    // clientWidth, or the fit is computed against a scrollbar gutter that this
+    // very render is about to remove. See
+    // resolveViewportOverflowBeforeMeasuring.
+    resolveViewportOverflowBeforeMeasuring(viewportRef.current, parsed != null)
     fitToViewport()
     // Re-running only on `svg` / `heightOverride` is intentional: a new fit is
     // owed when the markup or the box size changes, not on every render.
@@ -424,7 +494,7 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
         className="relative touch-none overflow-hidden select-none"
         style={{
           height: `${boxHeight}px`,
-          overflow: hasSize ? 'hidden' : 'auto',
+          overflow: viewportOverflowFor(hasSize),
           cursor: hasSize ? (isPanning ? 'grabbing' : 'grab') : 'default',
         }}
         onDoubleClick={onDoubleClick}

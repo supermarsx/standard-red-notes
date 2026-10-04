@@ -28,6 +28,8 @@ import MermaidSvgViewport, {
   MIN_PREVIEW_HEIGHT,
   parseSvgNaturalSize,
   pinSvgToNaturalSize,
+  resolveViewportOverflowBeforeMeasuring,
+  viewportOverflowFor,
 } from './MermaidSvgViewport'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -447,6 +449,129 @@ describe('MermaidSvgViewport — an explicit height overrides the auto-fit box',
     expect(child).not.toBeNull()
     // A sibling of the overflow:hidden box, not a descendant of it.
     expect(viewportBox().contains(child)).toBe(false)
+  })
+})
+
+/**
+ * t111/M1: the fit was measured one scrollbar short of the box.
+ *
+ * jsdom has no layout engine and no scrollbars, so the scrollbar here is
+ * DECLARED, never measured: `clientWidth` is stubbed to subtract a 15px gutter
+ * exactly when the element it is read from is currently scrollable
+ * (`overflow: auto`), which is what Chrome really reports for a classic
+ * scrollbar. That models the one fact the bug turned on — the component read
+ * `clientWidth` while the box still carried the pre-measurement `overflow:
+ * auto` and the just-pinned SVG was overflowing it.
+ *
+ * The real numbers are in headless Chrome: over 10 fresh-browser runs per case,
+ * the first fit read 685 of a 700px column (and 319 of 334) in 10 of 10 runs
+ * before this fix, and a frame-dependent ResizeObserver delivery corrected it in
+ * only 5-8 of them; afterwards every run of every case agreed. See the header of
+ * MermaidSvgViewport.tsx.
+ */
+describe('viewportOverflowFor (pure)', () => {
+  it('clips once the diagram can be fitted, and scrolls while it cannot', () => {
+    expect(viewportOverflowFor(true)).toBe('hidden')
+    expect(viewportOverflowFor(false)).toBe('auto')
+  })
+})
+
+describe('resolveViewportOverflowBeforeMeasuring', () => {
+  it('writes the clipping overflow onto the box so a later clientWidth read has no gutter in it', () => {
+    const box = document.createElement('div')
+    box.style.overflow = 'auto'
+    resolveViewportOverflowBeforeMeasuring(box, true)
+    expect(box.style.overflow).toBe('hidden')
+  })
+
+  it('leaves the scrollable fallback in place when the diagram cannot be sized', () => {
+    const box = document.createElement('div')
+    box.style.overflow = 'hidden'
+    resolveViewportOverflowBeforeMeasuring(box, false)
+    expect(box.style.overflow).toBe('auto')
+  })
+
+  it('does nothing — and does not throw — before the box exists', () => {
+    expect(() => resolveViewportOverflowBeforeMeasuring(null, true)).not.toThrow()
+  })
+})
+
+describe('MermaidSvgViewport — the fit does not lose a scrollbar’s width', () => {
+  const SCROLLBAR_WIDTH = 15
+  // Every clientWidth read taken from the viewport box, with the box's own
+  // inline overflow AT THAT MOMENT. A read taken at `auto` is a read taken
+  // through a scrollbar gutter.
+  let overflowAtRead: string[]
+
+  beforeEach(() => {
+    overflowAtRead = []
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        // The box itself, identified by the SVG host it wraps — not the
+        // controls pill, which is its sibling under the same wrapper.
+        const isViewportBox = this.firstElementChild?.getAttribute('data-mermaid-svg-host') === 'true'
+        const scrollable = this.style.overflow === 'auto' || this.style.overflow === 'scroll'
+        if (isViewportBox) {
+          overflowAtRead.push(this.style.overflow || 'none')
+        }
+        return scrollable ? STUB_VIEWPORT_WIDTH - SCROLLBAR_WIDTH : STUB_VIEWPORT_WIDTH
+      },
+    })
+  })
+
+  const fitScale = () => {
+    const match = /scale\(([\d.]+)\)/.exec(svgHost().style.transform)
+    expect(match).not.toBeNull()
+    return parseFloat((match as RegExpExecArray)[1])
+  }
+
+  it('measures the box only after its overflow is the one this render commits', () => {
+    render(WIDE_MERMAID_SVG)
+    // Non-vacuous by construction: an empty log fails on the first read, and
+    // `auto` anywhere in it is the defect.
+    expect(overflowAtRead[0]).toBe('hidden')
+    expect(overflowAtRead).not.toContain('auto')
+  })
+
+  it('fits the 800px diagram to the FULL 400px box, not to 385px of it', () => {
+    render(WIDE_MERMAID_SVG)
+    // 400/800 exactly. Through a 15px gutter this would be 385/800 = 0.48125,
+    // and the diagram would be drawn 385px wide in a 400px box.
+    expect(fitScale()).toBe(0.5)
+    expect(fitScale() * 800).toBe(STUB_VIEWPORT_WIDTH)
+    expect(percentButton().textContent).toBe('50%')
+  })
+
+  it('sizes the box from the full width too (400/800 * 400 = 200px, not 192.5px)', () => {
+    render(WIDE_MERMAID_SVG)
+    const viewport = container.querySelector('[data-mermaid-viewport="true"]')?.firstElementChild as HTMLElement
+    expect(viewport.style.height).toBe('200px')
+  })
+
+  it('centres the diagram in the full box rather than in the box minus a scrollbar', () => {
+    // 400 wide box, diagram fitted to 200px wide: a 100px left offset. Measured
+    // through a gutter it would be (385 - 192.5) / 2 = 96.25.
+    render(DEFAULT_DIAGRAM_SVG)
+    const scale = fitScale()
+    const drawnWidth = 263.375 * scale
+    const expectedOffsetX = (STUB_VIEWPORT_WIDTH - drawnWidth) / 2
+    expect(svgHost().style.transform).toContain(`translate(${expectedOffsetX}px`)
+  })
+
+  it('still leaves the box scrollable when the diagram’s size is unknown', () => {
+    render(UNSIZED_SVG)
+    const viewport = container.querySelector('[data-mermaid-viewport="true"]')?.firstElementChild as HTMLElement
+    expect(viewport.style.overflow).toBe('auto')
+  })
+
+  it('re-resolves the overflow for a new diagram, so a re-fit is not measured through a gutter either', () => {
+    render(UNSIZED_SVG)
+    overflowAtRead = []
+    render(WIDE_MERMAID_SVG)
+    expect(overflowAtRead[0]).toBe('hidden')
+    expect(overflowAtRead).not.toContain('auto')
+    expect(fitScale()).toBe(0.5)
   })
 })
 
