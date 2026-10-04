@@ -203,6 +203,22 @@ import { errorKind } from './healthReport'
  *      liveness and reports `ok` with the fact buried in `detail`, which this
  *      module refuses to read. So an older image reports fully healthy here
  *      while only its process liveness was ever verified.
+ *   i. `files.authorizedTransfer` — `accepted` / `refused` / `not-attempted`. One
+ *      closed enum, no address and no credential, and the single highest-value
+ *      field this pane is missing. MEASURED, not hypothetical: on a deployment
+ *      where file listing aborted, downloads hung forever and usage read zero
+ *      permanently, every files row on this screen read green — probe answering,
+ *      FILES_V1 advertised, no unmet condition, all three files variables set —
+ *      because not one of them exercises the path a transfer takes: mint a valet
+ *      token at auth, present it to the files service, have the files service
+ *      accept it. Two services each holding a non-empty VALET_TOKEN_SECRET or
+ *      AUTH_JWT_SECRET whose CONTENTS disagree satisfy every row above and refuse
+ *      every transfer, exactly as two disagreeing internal gRPC secrets did. A
+ *      presence boolean cannot express it and a readiness probe cannot see it; a
+ *      three-state result of one real authorized round trip, made server-side
+ *      between the two services, can. Until it exists `FILE_TRANSFER_UNVERIFIED`
+ *      states the gap on every deployment rather than letting a screen of green
+ *      imply the opposite.
  *
  * None of these is edited into a server file by this section's author. The client
  * half reads them all as optional, so a server that grows them later needs no
