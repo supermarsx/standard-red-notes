@@ -2,6 +2,8 @@ import * as React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   $getNodeByKey,
+  CLICK_COMMAND,
+  COMMAND_PRIORITY_LOW,
   DecoratorNode,
   DOMExportOutput,
   EditorConfig,
@@ -12,6 +14,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import {
   buildFlowchartSource,
   createEmptyGraphModel,
@@ -25,6 +28,8 @@ import {
   parseFlowchartSource,
 } from './MermaidGraphBuilder'
 import MermaidSvgViewport from './MermaidSvgViewport'
+import { MermaidResizeHandle, MermaidWidthSection } from './MermaidBlockControls'
+import { MermaidWidthUnit, normalizeMermaidHeight, normalizeMermaidWidth, parseMermaidWidth } from './MermaidWidth'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
@@ -39,10 +44,18 @@ export const MERMAID_VIEW_MODES = ['split', 'code', 'preview', 'graphical'] as c
 export type MermaidViewMode = (typeof MERMAID_VIEW_MODES)[number]
 export const DEFAULT_MERMAID_VIEW_MODE: MermaidViewMode = 'split'
 
-export const MERMAID_VERSION = 2
+/** 1: code only. 2: + theme/viewMode. 3: + width/height (t113). */
+export const MERMAID_VERSION = 3
 
 /** Debounce delay (ms) before re-rendering the preview while typing. */
 const RENDER_DEBOUNCE_MS = 400
+
+/**
+ * Elements inside the block that own their own clicks. A click on one of these
+ * must not be turned into a block selection, or the focus the user just asked
+ * for would be taken away again.
+ */
+const INTERACTIVE_IN_BLOCK = 'input, textarea, select, button, a, label, [data-mermaid-width-section="true"]'
 
 function isMermaidTheme(value: unknown): value is MermaidTheme {
   return typeof value === 'string' && (MERMAID_THEMES as readonly string[]).includes(value)
@@ -315,11 +328,15 @@ function MermaidComponent({
   code,
   theme,
   viewMode,
+  width,
+  height,
   nodeKey,
 }: {
   code: string
   theme: MermaidTheme
   viewMode: MermaidViewMode
+  width: string | undefined
+  height: number | undefined
   nodeKey: NodeKey
 }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
@@ -440,6 +457,89 @@ function MermaidComponent({
     setReloadToken((t) => t + 1)
   }, [])
 
+  // --- Selection gating for the size controls -------------------------------
+  // The table's own selected-only control (TableCellActionMenuPlugin) renders
+  // nothing until the Lexical selection resolves to a table cell. This is the
+  // decorator-node spelling of that rule, as RemoteImageComponent does it
+  // (RemoteImageComponent.tsx:109-130), with two deliberate differences — see
+  // the handler below.
+  const blockRef = useRef<HTMLDivElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const [isSelected, setSelected] = useLexicalNodeSelection(nodeKey)
+
+  useEffect(() => {
+    return editor.registerCommand<MouseEvent>(
+      CLICK_COMMAND,
+      (event) => {
+        const target = event.target as Element | null
+        if (!target || !blockRef.current?.contains(target)) {
+          return false
+        }
+        // (1) A click on one of the block's OWN controls changes no selection.
+        // Unlike an image block, this one is full of real form fields — the
+        // mermaid source textarea, the theme/template/view selects, the width
+        // field — and moving the editor's selection on those clicks would pull
+        // focus straight back out of whatever the user just clicked into. That
+        // is also why nothing here calls `event.preventDefault()` or
+        // `node.selectEnd()`: both would fight the focused field.
+        const onOwnControl = typeof target.closest === 'function' && target.closest(INTERACTIVE_IN_BLOCK) !== null
+        if (!onOwnControl) {
+          // (2) Select, never toggle. The image block toggles, which would make
+          // the controls vanish on a second click — exactly while being used.
+          // Deferred to a macrotask so this nested update does not run inside
+          // the command dispatch that is already updating the editor.
+          setTimeout(() => setSelected(true))
+        }
+        // (3) Consume the click EITHER WAY. Handing it back to Lexical would let
+        // its own click handling put a range selection in the editor, which both
+        // dismisses these controls while they are being used and moves the caret
+        // out of the field just clicked. Because `preventDefault` is never
+        // called, the browser still focuses that field natively.
+        return true
+      },
+      COMMAND_PRIORITY_LOW,
+    )
+  }, [editor, setSelected])
+
+  const setWidth = useCallback(
+    (next: string | undefined) => {
+      editor.update(() => {
+        const node = $getNodeByKey(nodeKey)
+        if ($isMermaidNode(node)) {
+          node.setWidth(next)
+        }
+      })
+    },
+    [editor, nodeKey],
+  )
+
+  const setHeight = useCallback(
+    (next: number | undefined) => {
+      editor.update(() => {
+        const node = $getNodeByKey(nodeKey)
+        if ($isMermaidNode(node)) {
+          node.setHeight(next)
+        }
+      })
+    },
+    [editor, nodeKey],
+  )
+
+  const onResizeEnd = useCallback(
+    (nextWidth: string | undefined, nextHeight: number | undefined) => {
+      editor.update(() => {
+        const node = $getNodeByKey(nodeKey)
+        if ($isMermaidNode(node)) {
+          node.setWidth(nextWidth)
+          node.setHeight(nextHeight)
+        }
+      })
+    },
+    [editor, nodeKey],
+  )
+
+  const widthUnit: MermaidWidthUnit = parseMermaidWidth(width)?.unit ?? '%'
+
   // Replace the entire source from the Templates dropdown.
   const applyTemplate = useCallback(
     (templateId: string) => {
@@ -459,9 +559,14 @@ function MermaidComponent({
 
   return (
     <div
+      ref={blockRef}
       className="border-border bg-default my-2 rounded border"
       data-mermaid-block="true"
       data-super-widget-layout="canvas"
+      // `width` is undefined unless the user set one — fitting is the DEFAULT,
+      // not a stored number — and `maxWidth` means a stored pixel width can
+      // never make the note scroll horizontally.
+      style={{ width, maxWidth: '100%' }}
     >
       <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Mermaid diagram</span>
@@ -555,7 +660,20 @@ function MermaidComponent({
         {showPreview ? (
           <div className={'p-2 ' + (viewMode === 'split' ? 'md:w-1/2' : 'w-full')}>
             {svg ? (
-              <MermaidSvgViewport svg={svg} />
+              // An unpadded wrapper so its measured height IS the preview box's
+              // height; the resize handle's live feedback and the persisted
+              // `height` then refer to the same box.
+              <div ref={previewRef}>
+                <MermaidSvgViewport svg={svg} heightOverride={height}>
+                  <MermaidResizeHandle
+                    active={isSelected}
+                    widthTargetRef={blockRef}
+                    heightTargetRef={previewRef}
+                    unit={widthUnit}
+                    onResizeEnd={onResizeEnd}
+                  />
+                </MermaidSvgViewport>
+              </div>
             ) : (
               !error && (
                 <div className="text-passive-1 text-sm" data-srn-print-exclude="true">
@@ -571,12 +689,28 @@ function MermaidComponent({
           </div>
         ) : null}
       </div>
+
+      <MermaidWidthSection
+        visible={isSelected}
+        width={width}
+        onWidthChange={setWidth}
+        height={height}
+        onHeightChange={setHeight}
+      />
     </div>
   )
 }
 
 export type SerializedMermaidNode = Spread<
-  { code: string; theme: MermaidTheme; viewMode: MermaidViewMode },
+  {
+    code: string
+    theme: MermaidTheme
+    viewMode: MermaidViewMode
+    /** Normalized CSS width (`"50%"`, `"420px"`); absent means "fit". */
+    width?: string
+    /** Preview-box height in px; absent means "auto-fit". */
+    height?: number
+  },
   SerializedLexicalNode
 >
 
@@ -584,25 +718,41 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
   __code: string
   __theme: MermaidTheme
   __viewMode: MermaidViewMode
+  /** Normalized CSS width, or undefined for "fit the container". */
+  __width: string | undefined
+  /** Preview-box height in px, or undefined for "auto-fit". */
+  __height: number | undefined
 
   static getType(): string {
     return 'mermaid'
   }
 
   static clone(node: MermaidNode): MermaidNode {
-    return new MermaidNode(node.__code, node.__theme, node.__viewMode, node.__key)
+    return new MermaidNode(node.__code, node.__theme, node.__viewMode, node.__width, node.__height, node.__key)
   }
 
   constructor(
     code: string,
     theme: MermaidTheme = DEFAULT_MERMAID_THEME,
     viewMode: MermaidViewMode = DEFAULT_MERMAID_VIEW_MODE,
+    width?: string,
+    height?: number,
     key?: NodeKey,
   ) {
     super(key)
     this.__code = code
     this.__theme = theme
     this.__viewMode = viewMode
+    // THE single validation point for an incoming size, deliberately not
+    // duplicated in importJSON: every creation path — $createMermaidNode,
+    // clone(), importJSON — funnels through here, and a stored size is a SYNCED
+    // value another client, an older build or a hand edit may have written. It
+    // is re-parsed and re-clamped, and anything unparseable becomes `undefined`
+    // (fit the container) rather than reaching a style attribute. The only other
+    // way `__width`/`__height` can change is setWidth/setHeight, which normalize
+    // the same way.
+    this.__width = normalizeMermaidWidth(width)
+    this.__height = normalizeMermaidHeight(height)
   }
 
   static importJSON(serializedNode: SerializedMermaidNode): MermaidNode {
@@ -616,7 +766,11 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     const code = typeof serializedNode.code === 'string' ? serializedNode.code : DEFAULT_MERMAID
     const theme = isMermaidTheme(serializedNode.theme) ? serializedNode.theme : DEFAULT_MERMAID_THEME
     const viewMode = isMermaidViewMode(serializedNode.viewMode) ? serializedNode.viewMode : DEFAULT_MERMAID_VIEW_MODE
-    return $createMermaidNode(code, theme, viewMode)
+    // The stored size is handed straight to the constructor, which is the one
+    // place that parses and clamps it (see the comment there). Normalizing here
+    // as well would be dead code that makes the real guard untestable: with two
+    // layers, removing either one changes nothing observable.
+    return $createMermaidNode(code, theme, viewMode, serializedNode.width, serializedNode.height)
   }
 
   exportJSON(): SerializedMermaidNode {
@@ -626,6 +780,8 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
       code: this.__code,
       theme: this.__theme,
       viewMode: this.__viewMode,
+      width: this.__width,
+      height: this.__height,
     }
   }
 
@@ -673,6 +829,23 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     this.getWritable().__viewMode = viewMode
   }
 
+  getWidth(): string | undefined {
+    return this.getLatest().__width
+  }
+
+  /** Normalizes on write, so `__width` is never a value nothing validated. */
+  setWidth(width: string | undefined): void {
+    this.getWritable().__width = normalizeMermaidWidth(width)
+  }
+
+  getHeight(): number | undefined {
+    return this.getLatest().__height
+  }
+
+  setHeight(height: number | undefined): void {
+    this.getWritable().__height = normalizeMermaidHeight(height)
+  }
+
   getTextContent(): string {
     return '```mermaid\n' + this.__code + '\n```'
   }
@@ -683,7 +856,14 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): React.JSX.Element {
     return (
-      <MermaidComponent code={this.__code} theme={this.__theme} viewMode={this.__viewMode} nodeKey={this.getKey()} />
+      <MermaidComponent
+        code={this.__code}
+        theme={this.__theme}
+        viewMode={this.__viewMode}
+        width={this.__width}
+        height={this.__height}
+        nodeKey={this.getKey()}
+      />
     )
   }
 }
@@ -692,8 +872,10 @@ export function $createMermaidNode(
   code = DEFAULT_MERMAID,
   theme: MermaidTheme = DEFAULT_MERMAID_THEME,
   viewMode: MermaidViewMode = DEFAULT_MERMAID_VIEW_MODE,
+  width?: string,
+  height?: number,
 ): MermaidNode {
-  return new MermaidNode(code, theme, viewMode)
+  return new MermaidNode(code, theme, viewMode, width, height)
 }
 
 export function $isMermaidNode(node: LexicalNode | null | undefined): node is MermaidNode {

@@ -2,7 +2,8 @@ import { FunctionComponent, useCallback, useLayoutEffect, useRef, useState } fro
 import Icon from '@/Components/Icon/Icon'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 import {
-  fitTransform,
+  centerTransform,
+  clampScale,
   MAX_IMAGE_SCALE,
   MIN_IMAGE_SCALE,
   panBy,
@@ -32,11 +33,43 @@ import {
  * width and sizes itself to the diagram's fitted height, capped at
  * MAX_PREVIEW_HEIGHT so one huge diagram can't push the rest of the note off
  * screen — see `computeFitBoxHeight`.
+ *
+ * ---
+ * Standard Red Notes — follow-up fix (t113): the diagram still did not fill its
+ * box. Measured in headless Chrome against a real `mermaid.render()` of the
+ * editor's own default flowchart, in a 700px column:
+ *
+ *   natural 263x363 -> box 700x480, drawn 263x363 at scale(1): 37.6% of the
+ *   box width, 28.5% of its area.
+ *   natural 1339x94 -> box 700x80,  drawn 157x11  at scale(0.52): 22.4% of the
+ *   box width, 3.1% of its area.
+ *
+ * Two independent causes, both now fixed:
+ *
+ *  1. `fitTransform`'s `Math.min(..., 1)` — correct for photos (upscaling
+ *     blurs), wrong for vector SVG — refused to scale a diagram UP, so any
+ *     diagram narrower than its column sat at mermaid's intrinsic size. Replaced
+ *     here by `diagramFitTransform` / `computeFitScale`, which upscale up to
+ *     MAX_FIT_UPSCALE. `imageZoomTransform.fitTransform` is left alone: the
+ *     image lightbox still wants the 1:1 ceiling.
+ *  2. mermaid stamps `width="100%"` + `style="max-width:<natural>px"` on the
+ *     root `<svg>`, and this host was absolutely positioned with no width —
+ *     shrink-to-fit — so that `100%` had no definite containing block and
+ *     collapsed to the 300px CSS default for replaced elements. Every diagram
+ *     wider than 300px was therefore drawn at 300px while the transform scale
+ *     assumed the viewBox width. See `pinSvgToNaturalSize`.
  */
 
 type Props = {
   /** Raw SVG markup produced by `mermaid.render()`. */
   svg: string
+  /**
+   * An explicit preview-box height (px) that overrides the auto-fit height —
+   * what the block's resize handle persists. Omit for auto-fit.
+   */
+  heightOverride?: number
+  /** Extra controls (e.g. a resize handle) rendered over the viewport. */
+  children?: React.ReactNode
 }
 
 const ZOOM_BUTTON_FACTOR = 1.25
@@ -83,6 +116,46 @@ export function parseSvgNaturalSize(svgMarkup: string): { width: number; height:
 }
 
 /**
+ * How far a diagram is allowed to be scaled UP to fill its container.
+ *
+ * Unlike the image lightbox this math came from, a mermaid diagram is vector
+ * art, so upscaling costs no sharpness and `fitTransform`'s "never exceed 1:1"
+ * rule is wrong here — it is why the default 4-node flowchart (natural
+ * 263x363) sat at 263px inside a 700px column instead of filling it. There is
+ * still a ceiling, because mermaid bakes its label font sizes into the SVG:
+ * past roughly 3x the labels dwarf the note's body text. So: fit, but don't
+ * balloon a two-box diagram to fill a whole screen.
+ */
+export const MAX_FIT_UPSCALE = 3
+
+/** The scale at which the diagram fits the box in BOTH dimensions. */
+export function computeFitScale(
+  viewportWidth: number,
+  viewportHeight: number,
+  naturalWidth: number,
+  naturalHeight: number,
+): number {
+  if (viewportWidth <= 0 || viewportHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
+    return 1
+  }
+  return clampScale(Math.min(viewportWidth / naturalWidth, viewportHeight / naturalHeight, MAX_FIT_UPSCALE))
+}
+
+/** Centred transform at the fitting scale — upscaling included. */
+export function diagramFitTransform(
+  viewportWidth: number,
+  viewportHeight: number,
+  naturalWidth: number,
+  naturalHeight: number,
+): ZoomTransform {
+  if (viewportWidth <= 0 || viewportHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
+    return { scale: 1, offsetX: 0, offsetY: 0 }
+  }
+  const scale = computeFitScale(viewportWidth, viewportHeight, naturalWidth, naturalHeight)
+  return centerTransform(viewportWidth, viewportHeight, naturalWidth, naturalHeight, scale)
+}
+
+/**
  * The inline preview box's height: as tall as the diagram needs to be once
  * scaled to fit the viewport's width, capped at MAX_PREVIEW_HEIGHT.
  */
@@ -90,11 +163,38 @@ export function computeFitBoxHeight(viewportWidth: number, naturalWidth: number,
   if (viewportWidth <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
     return MIN_PREVIEW_HEIGHT
   }
-  const candidate = naturalHeight * (viewportWidth / naturalWidth)
+  const candidate = naturalHeight * Math.min(viewportWidth / naturalWidth, MAX_FIT_UPSCALE)
   return Math.max(MIN_PREVIEW_HEIGHT, Math.min(candidate, MAX_PREVIEW_HEIGHT))
 }
 
-const MermaidSvgViewport: FunctionComponent<Props> = ({ svg }) => {
+/**
+ * Give the injected `<svg>` a definite pixel size.
+ *
+ * mermaid's `configureSvgSize` stamps `width="100%"` plus `style="max-width:
+ * <natural>px"` on the root `<svg>`. Our SVG host is absolutely positioned with
+ * no width, i.e. shrink-to-fit, so that `100%` has no definite containing-block
+ * width to resolve against and Chrome falls back to the CSS default width for a
+ * replaced element — 300px — then applies mermaid's own max-width. The diagram
+ * therefore laid out at `min(300, naturalWidth)` px while the transform scale
+ * was computed from the viewBox's true natural width: a 1339px-wide flowchart
+ * "fitted" to a 700px column was drawn 157px wide. Pinning the element to its
+ * natural size (and clearing the max-width) makes the laid-out size the size
+ * the fit math assumes.
+ */
+export function pinSvgToNaturalSize(host: HTMLElement, naturalWidth: number, naturalHeight: number): void {
+  const svg = host.firstElementChild
+  if (!(svg instanceof SVGElement) || naturalWidth <= 0 || naturalHeight <= 0) {
+    return
+  }
+  svg.setAttribute('width', `${naturalWidth}`)
+  svg.setAttribute('height', `${naturalHeight}`)
+  svg.style.width = `${naturalWidth}px`
+  svg.style.height = `${naturalHeight}px`
+  svg.style.maxWidth = 'none'
+  svg.style.display = 'block'
+}
+
+const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, children }) => {
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentHostRef = useRef<HTMLDivElement>(null)
   const naturalSize = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
@@ -121,14 +221,16 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg }) => {
     const vw = viewportWidth()
     const { width: nw, height: nh } = naturalSize.current
     if (nw <= 0 || nh <= 0 || vw <= 0) {
-      setBoxHeight(MIN_PREVIEW_HEIGHT)
+      setBoxHeight(heightOverride ?? MIN_PREVIEW_HEIGHT)
       setTransform({ scale: 1, offsetX: 0, offsetY: 0 })
       return
     }
-    const vh = computeFitBoxHeight(vw, nw, nh)
+    // An explicitly resized box wins over the auto-fit height; the diagram then
+    // fits that box instead of dictating it.
+    const vh = heightOverride ?? computeFitBoxHeight(vw, nw, nh)
     setBoxHeight(vh)
-    setTransform(fitTransform(vw, vh, nw, nh))
-  }, [viewportWidth])
+    setTransform(diagramFitTransform(vw, vh, nw, nh))
+  }, [viewportWidth, heightOverride])
 
   // Explicit "Fit" button: refit and resume auto-fit-on-resize.
   const fitAndResume = useCallback(() => {
@@ -148,13 +250,16 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg }) => {
     host.innerHTML = svg
     const parsed = parseSvgNaturalSize(svg)
     naturalSize.current = parsed ?? { width: 0, height: 0 }
+    if (parsed) {
+      pinSvgToNaturalSize(host, parsed.width, parsed.height)
+    }
     setHasSize(parsed != null)
     hasInteracted.current = false
     fitToViewport()
-    // fitToViewport is stable (memoized on viewportWidth, which never changes
-    // identity); re-running only on `svg` is intentional.
+    // Re-running only on `svg` / `heightOverride` is intentional: a new fit is
+    // owed when the markup or the box size changes, not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [svg])
+  }, [svg, heightOverride])
 
   // Re-fit on viewport resize while the user hasn't taken over the view. jsdom
   // (and older browsers) have no ResizeObserver — degrade to "no auto-refit on
@@ -230,7 +335,7 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg }) => {
         const vw = viewportWidth()
         const vh = viewportHeight()
         const { width: nw, height: nh } = naturalSize.current
-        const fit = fitTransform(vw, vh, nw, nh)
+        const fit = diagramFitTransform(vw, vh, nw, nh)
         const isZoomed = current.scale > fit.scale + 0.01
         return isZoomed ? fit : zoomToPoint(current, DOUBLE_CLICK_ZOOM, x, y)
       })
@@ -337,6 +442,12 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg }) => {
           data-mermaid-svg-host="true"
           className="absolute top-0 left-0 origin-top-left"
           style={{
+            // A DEFINITE size, not shrink-to-fit: mermaid's root <svg> carries
+            // `width="100%"`, which silently collapsed to the 300px CSS default
+            // for replaced elements while this host had no width. See
+            // pinSvgToNaturalSize.
+            width: hasSize ? `${naturalSize.current.width}px` : undefined,
+            height: hasSize ? `${naturalSize.current.height}px` : undefined,
             transform: hasSize
               ? `translate(${transform.offsetX}px, ${transform.offsetY}px) scale(${transform.scale})`
               : 'none',
@@ -393,6 +504,10 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg }) => {
           </StyledTooltip>
         </div>
       ) : null}
+
+      {/* Rendered OUTSIDE the clipping viewport so a handle sitting on the
+          box's edge is not cut in half by `overflow: hidden`. */}
+      {children}
     </div>
   )
 }

@@ -51,7 +51,7 @@ const KEYS: Record<string, ReadonlySet<string>> = Object.fromEntries(
     'code-highlight': [...BASE, 'detail', 'format', 'highlightType', 'mode', 'style', 'text'],
     linebreak: BASE,
     'unencrypted-image': [...BASE, 'alt', 'float', 'format', 'src'],
-    mermaid: [...BASE, 'code', 'theme', 'viewMode'],
+    mermaid: [...BASE, 'code', 'theme', 'viewMode', 'width', 'height'],
   }).map(([type, keys]) => [type, new Set(keys)]),
 )
 
@@ -101,7 +101,7 @@ function validatePortableProperties(node: JsonNode, path: string): SuperNoteMark
   if (
     node.version !== undefined &&
     (!Number.isInteger(node.version) ||
-      (type === 'mermaid' ? node.version !== 1 && node.version !== 2 : node.version !== 1))
+      (type === 'mermaid' ? ![1, 2, 3].includes(node.version as number) : node.version !== 1))
   ) {
     return reject('property-not-portable', `${path}.version`, `This ${type} node version is not supported safely.`)
   }
@@ -155,6 +155,14 @@ function validatePortableProperties(node: JsonNode, path: string): SuperNoteMark
   }
   if (type === 'mermaid' && ![undefined, 'split'].includes(node.viewMode as undefined | string)) {
     return reject('property-not-portable', `${path}.viewMode`, 'The Mermaid view mode would be lost in Markdown.')
+  }
+  // A diagram sized by the user carries layout a ```mermaid fence cannot hold —
+  // the same reason a sized table cell is refused above.
+  if (type === 'mermaid' && ![undefined, null].includes(node.width as undefined | null)) {
+    return reject('property-not-portable', `${path}.width`, 'The Mermaid diagram width would be lost in Markdown.')
+  }
+  if (type === 'mermaid' && ![undefined, null].includes(node.height as undefined | null)) {
+    return reject('property-not-portable', `${path}.height`, 'The Mermaid diagram height would be lost in Markdown.')
   }
   if (type === 'code' && ![undefined, null].includes(node.theme as undefined | null)) {
     return reject('property-not-portable', `${path}.theme`, 'The code theme would be lost in Markdown.')

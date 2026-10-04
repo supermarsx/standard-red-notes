@@ -21,9 +21,13 @@ import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import MermaidSvgViewport, {
   computeFitBoxHeight,
+  computeFitScale,
+  diagramFitTransform,
+  MAX_FIT_UPSCALE,
   MAX_PREVIEW_HEIGHT,
   MIN_PREVIEW_HEIGHT,
   parseSvgNaturalSize,
+  pinSvgToNaturalSize,
 } from './MermaidSvgViewport'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -39,6 +43,12 @@ const PIXEL_ATTR_SVG = '<svg width="300" height="150" xmlns="http://www.w3.org/2
 
 // What a "can't determine size" SVG looks like: percentage width, no viewBox.
 const UNSIZED_SVG = '<svg width="100%" xmlns="http://www.w3.org/2000/svg"><rect/></svg>'
+
+// The editor's own DEFAULT diagram, at the size mermaid@11.16.1 really renders
+// it (measured in headless Chrome): narrower than any note column, which is why
+// it used to sit in the middle of its box as a speck.
+const DEFAULT_DIAGRAM_SVG =
+  '<svg id="mermaid-default" width="100%" style="max-width: 263.375px;" viewBox="0 0 263.375 363.359375" xmlns="http://www.w3.org/2000/svg"><g><rect width="40" height="20"/></g></svg>'
 
 class MockResizeObserver {
   constructor(_cb: ResizeObserverCallback) {}
@@ -251,6 +261,192 @@ describe('MermaidSvgViewport — graceful fallback when the diagram size cannot 
   it('still inserts the SVG markup so the diagram is not lost', () => {
     render(UNSIZED_SVG)
     expect(svgHost().querySelector('svg')).not.toBeNull()
+  })
+})
+
+/**
+ * t113: the two measured reasons a diagram did not fill its box. Neither is a
+ * geometry claim — jsdom reports 0 for every rect — they are claims about the
+ * arithmetic and about the attributes written onto the <svg>. The on-screen
+ * numbers were taken in headless Chrome; see the header of MermaidSvgViewport.tsx.
+ */
+describe('computeFitScale (pure) — a vector diagram is allowed to scale UP', () => {
+  it('scales a narrow diagram up to fill its box, instead of stopping at 1:1', () => {
+    // The default diagram's real size in a 700x480 box: 480/363.36 = 1.321.
+    expect(computeFitScale(700, 480, 263.375, 363.359375)).toBeCloseTo(1.321, 3)
+  })
+
+  it('is the behaviour the shared image fit refuses: that one would return exactly 1', () => {
+    // fitTransform(..., 1) is right for photos and wrong for SVG; this is the
+    // difference that fixed the bug.
+    expect(computeFitScale(700, 480, 263.375, 363.359375)).toBeGreaterThan(1)
+  })
+
+  it('still scales a too-wide diagram DOWN, exactly as before', () => {
+    expect(computeFitScale(400, 200, 800, 400)).toBe(0.5)
+  })
+
+  it('is bounded by MAX_FIT_UPSCALE so a two-box diagram cannot fill a screen', () => {
+    expect(computeFitScale(700, 480, 10, 10)).toBe(MAX_FIT_UPSCALE)
+  })
+
+  it('fits the more constrained axis', () => {
+    // Width-bound: 400/800 = 0.5 is smaller than 600/400 = 1.5.
+    expect(computeFitScale(400, 600, 800, 400)).toBe(0.5)
+    // Height-bound: 300/400 = 0.75 is smaller than 900/800 = 1.125.
+    expect(computeFitScale(900, 300, 800, 400)).toBe(0.75)
+  })
+
+  it('returns 1 for degenerate inputs rather than NaN or Infinity', () => {
+    expect(computeFitScale(0, 480, 263, 363)).toBe(1)
+    expect(computeFitScale(700, 0, 263, 363)).toBe(1)
+    expect(computeFitScale(700, 480, 0, 363)).toBe(1)
+    expect(computeFitScale(700, 480, 263, 0)).toBe(1)
+  })
+})
+
+describe('diagramFitTransform (pure)', () => {
+  it('centres the fitted diagram in the box', () => {
+    const { scale, offsetX, offsetY } = diagramFitTransform(400, 200, 800, 400)
+    expect(scale).toBe(0.5)
+    expect(offsetX).toBe(0)
+    expect(offsetY).toBe(0)
+  })
+
+  it('centres an upscaled diagram too', () => {
+    const { scale, offsetX, offsetY } = diagramFitTransform(400, 400, 100, 200)
+    expect(scale).toBe(2)
+    expect(offsetX).toBe(100)
+    expect(offsetY).toBe(0)
+  })
+
+  it('degrades to the identity transform rather than dividing by zero', () => {
+    expect(diagramFitTransform(0, 0, 0, 0)).toEqual({ scale: 1, offsetX: 0, offsetY: 0 })
+  })
+})
+
+describe('computeFitBoxHeight — the box is allowed to grow for an upscaled diagram', () => {
+  it('sizes the box for the upscaled width-fit of a narrow diagram', () => {
+    // 200 wide in a 400 box doubles; 100 tall therefore needs 200.
+    expect(computeFitBoxHeight(400, 200, 100)).toBe(200)
+  })
+
+  it('does not let the upscale cap be exceeded when sizing the box', () => {
+    // 10 wide in a 700 box would be 70x, capped at MAX_FIT_UPSCALE.
+    expect(computeFitBoxHeight(700, 10, 10)).toBe(MIN_PREVIEW_HEIGHT)
+    expect(computeFitBoxHeight(700, 10, 100)).toBe(100 * MAX_FIT_UPSCALE)
+  })
+})
+
+describe('pinSvgToNaturalSize — mermaid’s width="100%" is replaced by a definite size', () => {
+  let host: HTMLElement
+
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+  })
+
+  afterEach(() => host.remove())
+
+  it('replaces the percentage width and clears mermaid’s max-width', () => {
+    host.innerHTML = WIDE_MERMAID_SVG
+    const before = host.firstElementChild as SVGElement
+    expect(before.getAttribute('width')).toBe('100%')
+    expect(before.getAttribute('style')).toContain('max-width: 800px')
+
+    pinSvgToNaturalSize(host, 800, 400)
+
+    const svg = host.firstElementChild as SVGElement
+    expect(svg.getAttribute('width')).toBe('800')
+    expect(svg.getAttribute('height')).toBe('400')
+    expect(svg.style.width).toBe('800px')
+    expect(svg.style.height).toBe('400px')
+    // Without this, mermaid's own max-width would still cap the element.
+    expect(svg.style.maxWidth).toBe('none')
+  })
+
+  it('does nothing — and does not throw — when there is no svg to pin', () => {
+    host.innerHTML = '<p>not a diagram</p>'
+    expect(() => pinSvgToNaturalSize(host, 800, 400)).not.toThrow()
+    expect(host.innerHTML).toBe('<p>not a diagram</p>')
+  })
+
+  it('does nothing for a degenerate natural size', () => {
+    host.innerHTML = WIDE_MERMAID_SVG
+    pinSvgToNaturalSize(host, 0, 400)
+    expect((host.firstElementChild as SVGElement).getAttribute('width')).toBe('100%')
+  })
+})
+
+describe('MermaidSvgViewport — the mounted component applies both fixes', () => {
+  it('upscales the default diagram to fill the box instead of leaving it at 100%', () => {
+    render(DEFAULT_DIAGRAM_SVG)
+    // Stub viewport is 400x300; box height = 363.36 * (400/263.375) = 551.8,
+    // capped at MAX_PREVIEW_HEIGHT (480). Fit scale = min(400/263.375 = 1.519,
+    // 480/363.36 = 1.321) = 1.321.
+    expect(percentButton().textContent).toBe('132%')
+    expect(svgHost().style.transform).toContain('scale(1.32')
+  })
+
+  it('pins the rendered svg to its natural size, so the fit scale means what it says', () => {
+    render(DEFAULT_DIAGRAM_SVG)
+    const svg = svgHost().querySelector('svg') as SVGElement
+    expect(svg.getAttribute('width')).toBe('263.375')
+    expect(svg.style.maxWidth).toBe('none')
+  })
+
+  it('gives the svg host a definite size rather than leaving it shrink-to-fit', () => {
+    render(DEFAULT_DIAGRAM_SVG)
+    expect(svgHost().style.width).toBe('263.375px')
+    expect(svgHost().style.height).toBe('363.359375px')
+  })
+
+  it('leaves the host unsized when the diagram’s size is unknown', () => {
+    render(UNSIZED_SVG)
+    expect(svgHost().style.width).toBe('')
+  })
+})
+
+describe('MermaidSvgViewport — an explicit height overrides the auto-fit box', () => {
+  const renderWithHeight = (svg: string, heightOverride?: number) => {
+    act(() => {
+      root.render(createElement(MermaidSvgViewport, { svg, heightOverride }))
+    })
+  }
+  const viewportBox = () => container.querySelector('[data-mermaid-viewport="true"]')?.firstElementChild as HTMLElement
+
+  it('uses the stored height instead of the computed one', () => {
+    renderWithHeight(WIDE_MERMAID_SVG, 150)
+    expect(viewportBox().style.height).toBe('150px')
+  })
+
+  it('re-fits the diagram inside that resized box', () => {
+    renderWithHeight(WIDE_MERMAID_SVG, 150)
+    // min(400/800 = 0.5, 150/400 = 0.375) = 0.375.
+    expect(percentButton().textContent).toBe('38%')
+  })
+
+  it('returns to the auto-fit height when the override is cleared', () => {
+    renderWithHeight(WIDE_MERMAID_SVG, 150)
+    expect(viewportBox().style.height).toBe('150px')
+    renderWithHeight(WIDE_MERMAID_SVG, undefined)
+    expect(viewportBox().style.height).toBe('200px')
+  })
+
+  it('renders controls passed as children, outside the clipping box', () => {
+    act(() => {
+      root.render(
+        createElement(
+          MermaidSvgViewport,
+          { svg: WIDE_MERMAID_SVG },
+          createElement('span', { 'data-test-child': 'true' }),
+        ),
+      )
+    })
+    const child = container.querySelector('[data-test-child="true"]')
+    expect(child).not.toBeNull()
+    // A sibling of the overflow:hidden box, not a descendant of it.
+    expect(viewportBox().contains(child)).toBe(false)
   })
 })
 

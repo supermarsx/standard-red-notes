@@ -277,4 +277,77 @@ describe('Super note Markdown rewrite guard', () => {
       path: 'root.children[0].viewMode',
     })
   })
+
+  /**
+   * t113 gave the Mermaid node a persisted width/height. Without teaching this
+   * guard about them, the generic "unknown key" check would have rejected every
+   * sized diagram with a misleading path — and with an unhelpful message — so
+   * the keys are allowed and then refused for the same reason a sized table cell
+   * is: the size itself cannot survive a ```mermaid fence.
+   */
+  describe('Mermaid diagram size (t113)', () => {
+    const mermaidNote = (node: Record<string, unknown>) =>
+      JSON.stringify({
+        root: {
+          ...elementDefaults,
+          type: 'root',
+          children: [{ type: 'mermaid', version: 3, code: 'graph TD\n  A --> B', ...node }],
+        },
+      })
+
+    it('accepts a diagram that was never resized', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({}))).toEqual({ ok: true })
+    })
+
+    it('accepts the current node version', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ version: 3 }))).toEqual({ ok: true })
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ version: 2 }))).toEqual({ ok: true })
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ version: 1 }))).toEqual({ ok: true })
+    })
+
+    it('still refuses a version it does not know', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ version: 4 }))).toMatchObject({
+        ok: false,
+        code: 'property-not-portable',
+        path: 'root.children[0].version',
+      })
+    })
+
+    it('reports the WIDTH, not an unknown property, for a diagram sized in percent', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ width: '50%' }))).toMatchObject({
+        ok: false,
+        code: 'property-not-portable',
+        path: 'root.children[0].width',
+        reason: 'The Mermaid diagram width would be lost in Markdown.',
+      })
+    })
+
+    it('reports the width for a diagram sized in pixels', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ width: '420px' }))).toMatchObject({
+        ok: false,
+        path: 'root.children[0].width',
+      })
+    })
+
+    it('reports the HEIGHT for a diagram whose preview box was resized', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ height: 300 }))).toMatchObject({
+        ok: false,
+        code: 'property-not-portable',
+        path: 'root.children[0].height',
+        reason: 'The Mermaid diagram height would be lost in Markdown.',
+      })
+    })
+
+    it('treats an explicit null size as "not set", the shape a cleared size serializes to', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ width: null, height: null }))).toEqual({ ok: true })
+    })
+
+    it('rejects a key it has never heard of, so a future field cannot slip through silently', () => {
+      expect(validateSuperNoteMarkdownRewrite(mermaidNote({ rotation: 90 }))).toMatchObject({
+        ok: false,
+        code: 'property-not-portable',
+        path: 'root.children[0].rotation',
+      })
+    })
+  })
 })
