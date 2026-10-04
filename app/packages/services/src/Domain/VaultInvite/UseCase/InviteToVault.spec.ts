@@ -132,9 +132,12 @@ describe('InviteToVault', () => {
   it('gives each precondition its own message, so the user can tell which step failed', () => {
     const messages = Object.values(InviteFailure)
 
+    expect(messages.length).toBeGreaterThanOrEqual(4)
     expect(new Set(messages).size).toBe(messages.length)
     for (const message of messages) {
-      expect(message).toMatch(/Preferences|signed in/)
+      // Every one of them names an action the user can take, not just an internal object.
+      expect(message).toMatch(/Preferences|signed in|connection/)
+      expect(message).toContain('try again')
     }
   })
 

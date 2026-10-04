@@ -30,6 +30,8 @@ export const InviteFailure = {
     "This vault's key is not available on this device, so there is nothing to share with the invitee. Unlock the vault in Preferences → Vaults and try again.",
   NoSelfContact:
     'Your own contact record could not be created, so the invitee would have no way to verify who invited them. Make sure you are signed in and that syncing has completed, then try again.',
+  CouldNotListVaultMembers:
+    "This vault's current member list could not be loaded, so the invitee could not be told who else is in the vault. Check your connection and try again.",
 } as const
 
 export class InviteToVault implements UseCaseInterface<SharedVaultInviteServerHash> {

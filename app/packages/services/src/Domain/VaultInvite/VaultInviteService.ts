@@ -26,7 +26,7 @@ import { GetTrustedPayload } from './../AsymmetricMessage/UseCase/GetTrustedPayl
 import { InviteRecord } from './InviteRecord'
 import { VaultUserServiceInterface } from './../VaultUser/VaultUserServiceInterface'
 import { GetVault } from '../Vault/UseCase/GetVault'
-import { InviteToVault } from './UseCase/InviteToVault'
+import { InviteFailure, InviteToVault } from './UseCase/InviteToVault'
 import { GetVaultContacts } from '../VaultUser/UseCase/GetVaultContacts'
 import { SyncServiceInterface } from './../Sync/SyncServiceInterface'
 import { InternalEventBusInterface } from './../Internal/InternalEventBusInterface'
@@ -320,7 +320,11 @@ export class VaultInviteService
       readFromCache: false,
     })
     if (contactsResult.isFailed()) {
-      return Result.fail(contactsResult.getError())
+      // The underlying reason is a server message, so it is logged rather than surfaced: the alert
+      // text can be pasted into a bug report and must stay free of identifiers. The user gets the
+      // precondition and the action, matching the other InviteFailure cases.
+      console.error('Cannot invite contact;', contactsResult.getError())
+      return Result.fail(InviteFailure.CouldNotListVaultMembers)
     }
 
     const contacts = contactsResult.getValue()

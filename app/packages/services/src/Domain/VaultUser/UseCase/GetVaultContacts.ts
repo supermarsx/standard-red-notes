@@ -16,7 +16,10 @@ export class GetVaultContacts implements UseCaseInterface<TrustedContactInterfac
       readFromCache: dto.readFromCache,
     })
     if (users.isFailed()) {
-      return Result.fail('Failed to get vault users')
+      // GetVaultUsers already carries the server's own reason for the refusal. Flattening it into a
+      // fixed 'Failed to get vault users' threw that away, and the string then travelled verbatim
+      // into the invite alert as a fourth message the user could not act on or tell apart.
+      return Result.fail(users.getError())
     }
 
     const contacts = users
