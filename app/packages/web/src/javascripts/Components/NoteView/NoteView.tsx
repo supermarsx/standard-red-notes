@@ -1195,9 +1195,28 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     const defaultLabel = (this.note.title?.trim() || 'Untitled') + ' — bookmark'
     let anchor: BookmarkAnchor | undefined
 
+    /**
+     * Standard Red Notes (t112): every lookup below is scoped to THIS tile.
+     *
+     * The tiled editor mounts one NoteView per open note, so `#super-editor`,
+     * `#super-editor-content` and `#note-text-editor` each exist once per open note and
+     * `document.getElementById` answers whichever is first in the document. This is a
+     * WRITE path, which makes that far worse than the focus theft of the same shape: the
+     * insertion event below was dispatched at the FIRST tile's Super editor, putting an
+     * inline anchor node into a document belonging to a note the user was not editing,
+     * while the anchor stored against THIS note was measured from that other note's
+     * scroll position and caret. Silent corruption at one end and a wrong anchor at the
+     * other, from a shortcut (Ctrl/Cmd+M) the user pressed deliberately.
+     *
+     * The `document` fallback is unreachable from the UI (every route into this method
+     * comes from the rendered tree, so the root ref is set) and only preserves the old
+     * behaviour for a caller that has not rendered yet.
+     */
+    const tile: ParentNode = this.noteViewElementRef.current ?? document
+
     if (this.note.noteType === NoteType.Super) {
-      const superEl = document.getElementById(ElementIds.SuperEditor)
-      const contentEl = document.getElementById(SuperEditorContentId)
+      const superEl = tile.querySelector<HTMLElement>(`#${ElementIds.SuperEditor}`)
+      const contentEl = tile.querySelector<HTMLElement>(`#${SuperEditorContentId}`)
       anchor = {
         kind: 'super',
         bookmarkId,
@@ -1206,7 +1225,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       // Drive the inline-anchor insertion through the Super plugin.
       superEl?.dispatchEvent(new CustomEvent(BOOKMARK_INSERT_DOM_EVENT, { detail: { bookmarkId }, bubbles: false }))
     } else {
-      const textarea = document.getElementById(ElementIds.NoteTextEditor) as HTMLTextAreaElement | null
+      const textarea = tile.querySelector<HTMLTextAreaElement>(`#${ElementIds.NoteTextEditor}`)
       const text = this.note.text ?? ''
       const offset = textarea?.selectionStart ?? 0
       anchor = capturePlainAnchor(text, offset, textarea?.scrollTop)
