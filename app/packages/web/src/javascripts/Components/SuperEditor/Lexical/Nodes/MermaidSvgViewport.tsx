@@ -13,6 +13,12 @@ import {
   zoomToPoint,
   ZoomTransform,
 } from '@/Components/FilePreview/imageZoomTransform'
+import {
+  DEFAULT_MERMAID_ZOOM_PAN,
+  MermaidBackground,
+  MermaidFitMode,
+  DEFAULT_MERMAID_BACKGROUND,
+} from './MermaidSettings'
 
 /**
  * Standard Red Notes — bug fix: rendered mermaid/gantt/timing diagrams did not
@@ -67,6 +73,26 @@ import {
  * so the first fit read 685 of a 700px column (and 319 of 334) in 10 of 10
  * headless-Chrome runs, and only a later, frame-dependent ResizeObserver
  * delivery ever corrected it. See `resolveViewportOverflowBeforeMeasuring`.
+ *
+ * ---
+ * Standard Red Notes — follow-up (t118): the fit is now PARAMETERISED instead of
+ * hardcoded. `MAX_PREVIEW_HEIGHT` used to be the thing that bound the fit — a
+ * tall diagram in a 700px-wide column filled 480px of height and only 49.7% of
+ * the width — so the cap became a configurable maximum (`maxHeightPx`, resolved
+ * from the node's own setting by `MermaidSettings.resolveMermaidMaxHeightPx`) and
+ * the fit became a mode (`fitMode`). 480 survives only as these functions'
+ * SIGNATURE default, for the callers that never configured one (the gantt-chart
+ * preview) and for the pure-arithmetic tests; nothing in the mermaid block reads
+ * it any more.
+ *
+ * The `overflow` rule is deliberately UNCHANGED — still a function of `hasSize`
+ * alone — because making it depend on whether the fitted diagram overflows its
+ * box would reintroduce exactly the measurement the fix above removes: a
+ * scrollbar whose presence depends on the fit, and a fit measured from a
+ * `clientWidth` that the scrollbar has already narrowed. `fitWidth` therefore
+ * reaches content past the box's bottom through pan/zoom, and degrades to
+ * `fitBoth` when pan/zoom is switched off (see `effectiveFitMode`), rather than
+ * ever growing a scrollbar.
  */
 
 type Props = {
@@ -77,6 +103,18 @@ type Props = {
    * what the block's resize handle persists. Omit for auto-fit.
    */
   heightOverride?: number
+  /** How the diagram is fitted into the box. See MermaidSettings. */
+  fitMode?: MermaidFitMode
+  /**
+   * The ceiling on the auto-fit box height, in px, or `null` for "no ceiling".
+   * Resolved by the caller from the node's own setting; the default here is the
+   * legacy constant, for callers that have no setting of their own.
+   */
+  maxHeightPx?: number | null
+  /** Whether wheel-zoom / drag-pan / pinch and the zoom controls are available. */
+  zoomPan?: boolean
+  /** Whether the preview box paints the editor's surface colour behind the diagram. */
+  background?: MermaidBackground
   /** Extra controls (e.g. a resize handle) rendered over the viewport. */
   children?: React.ReactNode
 }
@@ -84,9 +122,15 @@ type Props = {
 const ZOOM_BUTTON_FACTOR = 1.25
 const DOUBLE_CLICK_ZOOM = 2
 
-/** Ceiling on the inline preview's height; taller diagrams are fit to BOTH
- * dimensions instead (via fitTransform) so they stay fully visible and the
- * user can zoom in via the controls for detail. */
+/**
+ * The LEGACY ceiling on the inline preview's height.
+ *
+ * This was the hardcoded cap that bound the fit. It is now only the default
+ * argument of the pure functions below, for a caller that configures nothing
+ * (the gantt-chart preview, whose geometry therefore stays exactly as shipped).
+ * The mermaid block always passes a resolved `maxHeightPx` instead — see
+ * MermaidSettings.resolveMermaidMaxHeightPx.
+ */
 export const MAX_PREVIEW_HEIGHT = 480
 export const MIN_PREVIEW_HEIGHT = 80
 
@@ -137,43 +181,95 @@ export function parseSvgNaturalSize(svgMarkup: string): { width: number; height:
  */
 export const MAX_FIT_UPSCALE = 3
 
-/** The scale at which the diagram fits the box in BOTH dimensions. */
+/**
+ * The scale the diagram is drawn at.
+ *
+ *  - `fitBoth`  (the default, and what every caller got before fit modes existed)
+ *    — the largest scale at which the WHOLE diagram is inside the box. A diagram
+ *    taller than it is wide therefore leaves the box's width partly empty.
+ *  - `fitWidth` — spans the box's full WIDTH, whatever that costs in height. This
+ *    is "fit the parent container", and it is what the default now is.
+ *  - `actual`   — mermaid's own intrinsic size, 1:1.
+ */
 export function computeFitScale(
   viewportWidth: number,
   viewportHeight: number,
   naturalWidth: number,
   naturalHeight: number,
+  fitMode: MermaidFitMode = 'fitBoth',
 ): number {
   if (viewportWidth <= 0 || viewportHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
     return 1
   }
+  if (fitMode === 'actual') {
+    return 1
+  }
+  if (fitMode === 'fitWidth') {
+    return clampScale(Math.min(viewportWidth / naturalWidth, MAX_FIT_UPSCALE))
+  }
   return clampScale(Math.min(viewportWidth / naturalWidth, viewportHeight / naturalHeight, MAX_FIT_UPSCALE))
 }
 
-/** Centred transform at the fitting scale — upscaling included. */
+/**
+ * Centred transform at the fitting scale — upscaling included.
+ *
+ * The offsets are clamped at zero so a diagram LARGER than its box is anchored
+ * top-left (its beginning visible, the rest reachable by panning) instead of
+ * being centred with its top and left edges pushed outside the box. For a
+ * diagram that fits, both clamps are inert — the centring arithmetic is already
+ * non-negative — which is why every pre-existing expectation is unchanged.
+ */
 export function diagramFitTransform(
   viewportWidth: number,
   viewportHeight: number,
   naturalWidth: number,
   naturalHeight: number,
+  fitMode: MermaidFitMode = 'fitBoth',
 ): ZoomTransform {
   if (viewportWidth <= 0 || viewportHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
     return { scale: 1, offsetX: 0, offsetY: 0 }
   }
-  const scale = computeFitScale(viewportWidth, viewportHeight, naturalWidth, naturalHeight)
-  return centerTransform(viewportWidth, viewportHeight, naturalWidth, naturalHeight, scale)
+  const scale = computeFitScale(viewportWidth, viewportHeight, naturalWidth, naturalHeight, fitMode)
+  const centered = centerTransform(viewportWidth, viewportHeight, naturalWidth, naturalHeight, scale)
+  return { scale, offsetX: Math.max(0, centered.offsetX), offsetY: Math.max(0, centered.offsetY) }
 }
 
 /**
  * The inline preview box's height: as tall as the diagram needs to be once
- * scaled to fit the viewport's width, capped at MAX_PREVIEW_HEIGHT.
+ * scaled to fit the viewport's width, capped at `maxHeight` (`null` = uncapped).
+ *
+ * `fitWidth` and `fitBoth` share this height — the box is always as tall as a
+ * width-fit asks for — which is precisely what makes the two modes differ: at
+ * that height `fitWidth` spans the width and may overflow, while `fitBoth`
+ * shrinks until it does not.
  */
-export function computeFitBoxHeight(viewportWidth: number, naturalWidth: number, naturalHeight: number): number {
+export function computeFitBoxHeight(
+  viewportWidth: number,
+  naturalWidth: number,
+  naturalHeight: number,
+  maxHeight: number | null = MAX_PREVIEW_HEIGHT,
+  fitMode: MermaidFitMode = 'fitBoth',
+): number {
   if (viewportWidth <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
     return MIN_PREVIEW_HEIGHT
   }
-  const candidate = naturalHeight * Math.min(viewportWidth / naturalWidth, MAX_FIT_UPSCALE)
-  return Math.max(MIN_PREVIEW_HEIGHT, Math.min(candidate, MAX_PREVIEW_HEIGHT))
+  const candidate =
+    fitMode === 'actual' ? naturalHeight : naturalHeight * Math.min(viewportWidth / naturalWidth, MAX_FIT_UPSCALE)
+  const capped = maxHeight === null ? candidate : Math.min(candidate, maxHeight)
+  return Math.max(MIN_PREVIEW_HEIGHT, capped)
+}
+
+/**
+ * The fit mode actually applied.
+ *
+ * `fitWidth` spans the box's width and reaches anything past the box's bottom
+ * through pan/zoom (never through a scrollbar — see the header). With pan/zoom
+ * switched off there is no way to reach it, so the mode degrades to `fitBoth`,
+ * which keeps the whole diagram inside the box. Exported so the one rule is
+ * asserted once rather than restated by each caller.
+ */
+export function effectiveFitMode(fitMode: MermaidFitMode, zoomPan: boolean): MermaidFitMode {
+  return fitMode === 'fitWidth' && !zoomPan ? 'fitBoth' : fitMode
 }
 
 /**
@@ -259,7 +355,16 @@ export function resolveViewportOverflowBeforeMeasuring(viewport: HTMLElement | n
   viewport.style.overflow = viewportOverflowFor(hasSize)
 }
 
-const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, children }) => {
+const MermaidSvgViewport: FunctionComponent<Props> = ({
+  svg,
+  heightOverride,
+  fitMode = 'fitBoth',
+  maxHeightPx = MAX_PREVIEW_HEIGHT,
+  zoomPan = DEFAULT_MERMAID_ZOOM_PAN,
+  background = DEFAULT_MERMAID_BACKGROUND,
+  children,
+}) => {
+  const appliedFitMode = effectiveFitMode(fitMode, zoomPan)
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentHostRef = useRef<HTMLDivElement>(null)
   const naturalSize = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
@@ -292,10 +397,10 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
     }
     // An explicitly resized box wins over the auto-fit height; the diagram then
     // fits that box instead of dictating it.
-    const vh = heightOverride ?? computeFitBoxHeight(vw, nw, nh)
+    const vh = heightOverride ?? computeFitBoxHeight(vw, nw, nh, maxHeightPx, appliedFitMode)
     setBoxHeight(vh)
-    setTransform(diagramFitTransform(vw, vh, nw, nh))
-  }, [viewportWidth, heightOverride])
+    setTransform(diagramFitTransform(vw, vh, nw, nh, appliedFitMode))
+  }, [viewportWidth, heightOverride, maxHeightPx, appliedFitMode])
 
   // Explicit "Fit" button: refit and resume auto-fit-on-resize.
   const fitAndResume = useCallback(() => {
@@ -326,10 +431,11 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
     // resolveViewportOverflowBeforeMeasuring.
     resolveViewportOverflowBeforeMeasuring(viewportRef.current, parsed != null)
     fitToViewport()
-    // Re-running only on `svg` / `heightOverride` is intentional: a new fit is
-    // owed when the markup or the box size changes, not on every render.
+    // Re-running only on `svg` / `heightOverride` / the fit policy is
+    // intentional: a new fit is owed when the markup, the box size or the policy
+    // changes, not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [svg, heightOverride])
+  }, [svg, heightOverride, maxHeightPx, appliedFitMode])
 
   // Re-fit on viewport resize while the user hasn't taken over the view. jsdom
   // (and older browsers) have no ResizeObserver — degrade to "no auto-refit on
@@ -359,7 +465,9 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
   // while zooming.
   useLayoutEffect(() => {
     const el = viewportRef.current
-    if (!el) {
+    // Pan/zoom switched off: the listener is never registered at all, so a wheel
+    // over the diagram scrolls the note exactly as it does over plain text.
+    if (!el || !zoomPan) {
       return
     }
     const onWheel = (event: WheelEvent) => {
@@ -374,7 +482,7 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [localPoint])
+  }, [localPoint, zoomPan])
 
   const zoomAtCenter = useCallback(
     (factor: number) => {
@@ -405,12 +513,12 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
         const vw = viewportWidth()
         const vh = viewportHeight()
         const { width: nw, height: nh } = naturalSize.current
-        const fit = diagramFitTransform(vw, vh, nw, nh)
+        const fit = diagramFitTransform(vw, vh, nw, nh, appliedFitMode)
         const isZoomed = current.scale > fit.scale + 0.01
         return isZoomed ? fit : zoomToPoint(current, DOUBLE_CLICK_ZOOM, x, y)
       })
     },
-    [localPoint, viewportWidth, viewportHeight],
+    [localPoint, viewportWidth, viewportHeight, appliedFitMode],
   )
 
   // --- Pointer-based panning (unifies mouse/touch/pen; the editor also runs on
@@ -488,24 +596,33 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
   const percent = Math.round(transform.scale * 100)
 
   return (
-    <div className="group/mermaid-viewport relative" data-mermaid-viewport="true">
+    <div
+      className="group/mermaid-viewport relative"
+      data-mermaid-viewport="true"
+      data-mermaid-fit-mode={appliedFitMode}
+      data-mermaid-zoom-pan={zoomPan ? 'true' : 'false'}
+      data-mermaid-background={background}
+    >
       <div
         ref={viewportRef}
-        className="relative touch-none overflow-hidden select-none"
+        className={(zoomPan ? 'touch-none ' : '') + 'relative overflow-hidden select-none'}
         style={{
           height: `${boxHeight}px`,
           overflow: viewportOverflowFor(hasSize),
-          cursor: hasSize ? (isPanning ? 'grabbing' : 'grab') : 'default',
+          cursor: hasSize && zoomPan ? (isPanning ? 'grabbing' : 'grab') : 'default',
+          // `themed` paints the editor's own surface behind the diagram, which is
+          // what makes a light mermaid theme legible inside a dark app theme.
+          background: background === 'themed' ? 'var(--sn-stylekit-background-color)' : undefined,
         }}
-        onDoubleClick={onDoubleClick}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endPan}
-        onPointerCancel={endPan}
-        onPointerLeave={endPan}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
+        onDoubleClick={zoomPan ? onDoubleClick : undefined}
+        onPointerDown={zoomPan ? onPointerDown : undefined}
+        onPointerMove={zoomPan ? onPointerMove : undefined}
+        onPointerUp={zoomPan ? endPan : undefined}
+        onPointerCancel={zoomPan ? endPan : undefined}
+        onPointerLeave={zoomPan ? endPan : undefined}
+        onTouchStart={zoomPan ? onTouchStart : undefined}
+        onTouchMove={zoomPan ? onTouchMove : undefined}
+        onTouchEnd={zoomPan ? onTouchEnd : undefined}
       >
         <div
           ref={contentHostRef}
@@ -525,7 +642,7 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({ svg, heightOverride, chi
         />
       </div>
 
-      {hasSize ? (
+      {hasSize && zoomPan ? (
         <div
           className="border-border bg-default shadow-main invisible absolute right-2 bottom-2 flex items-center gap-1 rounded border border-solid px-1.5 py-1 group-focus-within/mermaid-viewport:visible group-hover/mermaid-viewport:visible"
           data-mermaid-viewport-controls="true"
