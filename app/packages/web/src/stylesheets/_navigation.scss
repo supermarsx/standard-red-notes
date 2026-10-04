@@ -72,6 +72,10 @@ $content-horizontal-padding: 16px;
 
       .section-title-bar-header {
         justify-content: center;
+        // A section can carry three action buttons (reveal hidden, organize,
+        // add). Side by side they exceed the rail, and `.section` clips its
+        // overflow, so without wrapping the last one would be unreachable.
+        flex-wrap: wrap;
 
         > .title {
           display: none;

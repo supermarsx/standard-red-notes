@@ -49,6 +49,17 @@ const PADDING_PER_LEVEL_PX = 21
 const MAX_INDENT_LEVELS = 8
 const indentPx = (lvl: number): number => Math.min(lvl, MAX_INDENT_LEVELS) * PADDING_PER_LEVEL_PX + PADDING_BASE_PX
 
+/**
+ * Standard Red Notes: a revealed hidden tag must be distinguishable from an
+ * ordinary one, mirroring the folder row's marker.
+ *
+ * The wording is deliberate and must not be shortened: hiding keeps a row out of
+ * this list and nothing more. It is tidiness, not protection, and the copy must
+ * never imply that the notes are private, protected, secured or locked.
+ */
+const HIDDEN_TAG_NAME = 'Hidden from the sidebar list'
+const HIDDEN_TAG_EXPLANATION = 'Hidden from the sidebar list. Its notes are still in All Notes and in search.'
+
 export const TagsListItem: FunctionComponent<Props> = observer(
   ({ tag, type, features, navigationController, level, onContextMenu, linkingController }) => {
     const application = useApplication()
@@ -251,7 +262,17 @@ export const TagsListItem: FunctionComponent<Props> = observer(
     }, [addDragTarget, linkingController, removeDragTarget, tag])
 
     const isMini = useNavigationMini()
-    const row = navigationTagRowProjection({ mini: isMini, level, indentPx: indentPx(level), label: title })
+    const isTagHidden = navigationController.isTagHidden(tag)
+    const row = navigationTagRowProjection({
+      mini: isMini,
+      level,
+      indentPx: indentPx(level),
+      label: title,
+      // The rail has no room for a second glyph beside the tag's own, so the
+      // hidden state reaches the reader through the accessible name and the
+      // row's dimming instead of being dropped.
+      accessibleLabel: isTagHidden ? [title.trim(), HIDDEN_TAG_NAME].filter(Boolean).join(', ') : undefined,
+    })
 
     log(LoggingDomain.NavigationList, 'Rendering TagsListItem')
 
@@ -360,6 +381,7 @@ export const TagsListItem: FunctionComponent<Props> = observer(
           className={classNames(
             'tag group relative py-0.5 focus-visible:!shadow-inner md:py-0',
             row.paddingClassName,
+            isTagHidden && 'opacity-60',
             (isSelected || isContextMenuOpenForTag) && 'selected',
             isBeingDraggedOver && !isReorderBefore && 'is-drag-over',
             isReorderBefore && '!border-t-info border-t-2',
@@ -449,6 +471,16 @@ export const TagsListItem: FunctionComponent<Props> = observer(
             )}
 
             <div className="flex items-center">
+              {row.showHiddenMarker && isTagHidden && (
+                <span
+                  className="text-neutral mr-2 flex items-center"
+                  title={HIDDEN_TAG_EXPLANATION}
+                  aria-label={HIDDEN_TAG_NAME}
+                >
+                  <Icon type="eye-off" />
+                </span>
+              )}
+
               {row.showMenu && isSelected && (
                 <a
                   role="button"

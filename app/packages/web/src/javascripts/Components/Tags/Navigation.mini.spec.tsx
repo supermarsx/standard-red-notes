@@ -392,12 +392,13 @@ describe('Navigation mini mode — smart view and tag rows', () => {
   const tag = { uuid: 'tag-work', title: 'Work', expanded: true, color: undefined }
   const childTag = { uuid: 'tag-child', title: 'Invoices', expanded: false, color: undefined }
 
-  const tagElement = () =>
+  const tagElement = (hidden = false) =>
     createElement(TagsListItem, {
       tag: tag as never,
       type: 'tags' as never,
       navigationController: {
         isSearching: false,
+        isTagHidden: (candidate: { uuid: string }) => hidden && candidate.uuid === tag.uuid,
         selected: tag,
         selectedLocation: 'tags',
         editingTag: undefined,
@@ -453,5 +454,47 @@ describe('Navigation mini mode — smart view and tag rows', () => {
     const parent = container.querySelector('.tag') as HTMLElement
 
     expect(parent.querySelector('.opened, .closed')).not.toBeNull()
+  })
+
+  it('marks a revealed hidden tag in the full column, with copy that promises no protection', async () => {
+    await renderInMode(false, tagElement(true))
+
+    const parent = container.querySelector('.tag') as HTMLElement
+    const marker = parent.querySelector('[aria-label="Hidden from the sidebar list"]') as HTMLElement
+
+    expect(parent.className).toContain('opacity-60')
+    expect(marker).not.toBeNull()
+    expect(marker.getAttribute('title')).toBe(
+      'Hidden from the sidebar list. Its notes are still in All Notes and in search.',
+    )
+    // Hiding is tidiness, not protection. Nothing on the row may imply otherwise.
+    expect(parent.outerHTML).not.toMatch(/private|protected|secure|locked/i)
+    expect(marker.querySelector('svg')).not.toBeNull()
+    expect(marker.querySelector('label')).toBeNull()
+  })
+
+  it('moves a hidden tag’s state into the rail entry name rather than dropping it', async () => {
+    await renderInMode(true, tagElement(true))
+
+    const parent = container.querySelector('.tag') as HTMLElement
+
+    // No room for a second glyph at rail width, so the marker element is gone…
+    expect(parent.querySelector('[aria-label="Hidden from the sidebar list"]')).toBeNull()
+    // …but the state is still both visible (dimmed) and readable (the name).
+    expect(parent.className).toContain('opacity-60')
+    expect(parent.getAttribute('aria-label')).toBe('Work, Hidden from the sidebar list')
+    expect(parent.getAttribute('title')).toBe('Work, Hidden from the sidebar list')
+    expect(parent.outerHTML).not.toMatch(/private|protected|secure|locked/i)
+  })
+
+  it('leaves an unhidden tag unmarked and undimmed in both modes', async () => {
+    for (const mini of [false, true]) {
+      await renderInMode(mini, tagElement(false))
+
+      const parent = container.querySelector('.tag') as HTMLElement
+
+      expect(parent.className).not.toContain('opacity-60')
+      expect(parent.querySelector('[aria-label="Hidden from the sidebar list"]')).toBeNull()
+    }
   })
 })

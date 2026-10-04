@@ -207,6 +207,7 @@ describe('navigationMini — smart view and tag rows', () => {
     expect(row.showTitle).toBe(true)
     expect(row.showCount).toBe(true)
     expect(row.showMenu).toBe(true)
+    expect(row.showHiddenMarker).toBe(true)
     expect(row.labelProps).toEqual({})
   })
 
@@ -220,7 +221,37 @@ describe('navigationMini — smart view and tag rows', () => {
     // wrong number, which is worse than a missing one.
     expect(row.showCount).toBe(false)
     expect(row.showMenu).toBe(false)
+    // A second glyph will not fit beside the row's own at rail width.
+    expect(row.showHiddenMarker).toBe(false)
     expect(row.labelProps).toEqual({ title: 'Work', 'aria-label': 'Work' })
+  })
+
+  it('carries a row’s marker state into its rail name, and only there', () => {
+    const mini = navigationTagRowProjection({
+      mini: true,
+      level: 0,
+      indentPx: 14,
+      label: 'Work',
+      accessibleLabel: 'Work, Hidden from the sidebar list',
+    })
+
+    expect(mini.labelProps).toEqual({
+      title: 'Work, Hidden from the sidebar list',
+      'aria-label': 'Work, Hidden from the sidebar list',
+    })
+
+    // In the full column the marker element is right there to be read, so the
+    // row keeps the plain rendered title as its accessible name.
+    const full = navigationTagRowProjection({
+      mini: false,
+      level: 0,
+      indentPx: 14,
+      label: 'Work',
+      accessibleLabel: 'Work, Hidden from the sidebar list',
+    })
+
+    expect(full.labelProps).toEqual({})
+    expect(full.showHiddenMarker).toBe(true)
   })
 
   it('names an untitled row nothing rather than naming it the empty string', () => {

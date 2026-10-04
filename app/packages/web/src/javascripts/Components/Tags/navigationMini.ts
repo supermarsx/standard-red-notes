@@ -186,6 +186,13 @@ export type NavigationTagRowProjection = {
   showCount: boolean
   /** Whether the row's context-menu affordance renders. */
   showMenu: boolean
+  /**
+   * Whether a state marker (the hidden-row glyph) renders beside the row's own
+   * icon. On the rail there is no room for a second glyph, so the state has to
+   * reach the reader through the accessible name and the row's dimming instead
+   * — see `accessibleLabel`.
+   */
+  showHiddenMarker: boolean
 }
 
 /**
@@ -199,19 +206,25 @@ export type NavigationTagRowProjection = {
  *
  * @param indentPx the row's full-column indent, already computed by the caller
  *   (each list owns its own base padding and per-level step).
+ * @param accessibleLabel a richer accessible name for a row carrying state that
+ *   the rail cannot show as a second glyph (a hidden row, for instance). Used
+ *   only where the visible title is gone, since otherwise the marker is right
+ *   there to be read.
  */
 export const navigationTagRowProjection = ({
   mini,
   level,
   indentPx,
   label,
+  accessibleLabel,
 }: {
   mini: boolean
   level: number
   indentPx: number
   label: string
+  accessibleLabel?: string
 }): NavigationTagRowProjection => {
-  const accessibleName = label.trim()
+  const accessibleName = accessibleNameFor(label, accessibleLabel)
 
   return {
     paddingClassName: mini ? 'px-0' : 'px-3.5',
@@ -220,5 +233,6 @@ export const navigationTagRowProjection = ({
     showTitle: !mini,
     showCount: !mini,
     showMenu: !mini,
+    showHiddenMarker: !mini,
   }
 }
