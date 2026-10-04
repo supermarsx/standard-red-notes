@@ -5,6 +5,21 @@ export const CHECKLIST_RECURRENCE_VERSION = 1
 export const CHECKLIST_RECURRENCE_MAX_CACHED_FORMATTERS = 64
 export const CHECKLIST_RECURRENCE_MAX_FALLBACK_TIME_ZONES = 128
 
+/**
+ * How many occurrences one generation pass may materialize, and the bounds a
+ * persisted cap is corrected into. The numbers live here, at the layer that
+ * actually walks the occurrence grid, so the enumerator and the preference
+ * normalizer cannot drift apart; `checklistBackfill.ts` re-exports them.
+ *
+ * {@link checklistMissedOccurrencePlan} does NOT clamp a cap it is handed — it
+ * refuses one outside these bounds and generates nothing. Correcting a stray
+ * value is `normalizeChecklistGenerateCap`'s single job, and two independent
+ * clamps would mean neither could be tested.
+ */
+export const CHECKLIST_GENERATE_CAP_MIN = 1
+export const CHECKLIST_GENERATE_CAP_MAX = 200
+export const CHECKLIST_GENERATE_CAP_DEFAULT = 12
+
 export type ChecklistRecurrenceUnit = 'day' | 'week' | 'month' | 'year'
 export type ChecklistRecurrenceFrequency = 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'yearly' | 'custom'
 
@@ -330,6 +345,86 @@ export function createChecklistRecurrence(
   return normalizeChecklistRecurrence({ ...choice, anchor })
 }
 
+/**
+ * True when two choices describe the SAME cadence. Compared structurally, not by
+ * identity or JSON order, because a choice is rebuilt from form controls on
+ * every save and would never be reference-equal.
+ */
+export function checklistRecurrenceChoicesEqual(
+  first: ChecklistRecurrenceChoice | undefined,
+  second: ChecklistRecurrenceChoice | undefined,
+): boolean {
+  if (first === undefined || second === undefined) {
+    return first === second
+  }
+  if (typeof first === 'string' || typeof second === 'string') {
+    return first === second
+  }
+  return first.interval === second.interval && first.unit === second.unit
+}
+
+/**
+ * Resolve the recurrence a schedule editor should SAVE, preserving the rule's
+ * persisted anchor when the save does not actually move the deadline.
+ *
+ * ## Why this exists
+ * {@link createChecklistRecurrence} derives a fresh anchor from whatever
+ * `dueAt` it is handed. That is correct for an explicit due-date edit and wrong
+ * for everything else: a monthly task anchored on the 31st legitimately rolls to
+ * a clamped Feb 28, and {@link resolveChecklistDueAtLocalInput} deliberately
+ * returns that exact instant when the editor draft is unchanged. Rebuilding the
+ * rule from it rewrites `anchor.day` to 28 — permanently, and with no user
+ * action beyond pressing Save. The occurrence grid is anchored precisely so a
+ * clamp cannot ratchet the day downwards; a save seam that re-derives the anchor
+ * reintroduces the drift the grid was built to prevent.
+ *
+ * ## What "unchanged" means here
+ * **The instant.** Both sides are reduced by {@link normalizeChecklistDueAt} to
+ * their canonical UTC representation and compared as strings, so the test is
+ * independent of zone, of spelling, and of which editor produced the value.
+ * Normalized LOCAL parts are deliberately NOT used: the schedule form is
+ * minute-resolution, so a repeated autumn wall time maps two genuinely different
+ * instants onto one local string, and sub-minute precision in a stored deadline
+ * would compare equal to a value that discarded it. Comparing instants is the
+ * strictest available test, and anything it cannot prove unchanged re-anchors —
+ * failing towards today's behaviour rather than towards a stale anchor.
+ *
+ * The cadence must match too: switching monthly to yearly is an explicit act of
+ * rescheduling, and the only anchor it can honestly claim is the deadline now on
+ * screen.
+ *
+ * ## Degenerate inputs
+ * No `choice` means the user asked for no recurrence: the result is `undefined`,
+ * exactly as an unguarded caller already behaves. When `expected` carries no
+ * recurrence (or one that no longer normalizes, or no `dueAt` to compare
+ * against) there is no anchor to preserve, so the rule is built from
+ * `resolvedDueAt` in the previously persisted zone when there was one and the
+ * host zone otherwise — again today's behaviour, unchanged.
+ */
+export function resolveChecklistRecurrenceForSave(
+  choice: ChecklistRecurrenceChoice | undefined,
+  resolvedDueAt: string,
+  expected: { dueAt?: string; recurrence?: ChecklistRecurrence },
+): ChecklistRecurrence | undefined {
+  if (choice === undefined) {
+    return undefined
+  }
+  const expectedRule = normalizeChecklistRecurrence(expected.recurrence)
+  if (expectedRule) {
+    const resolved = normalizeChecklistDueAt(resolvedDueAt)
+    const previous = normalizeChecklistDueAt(expected.dueAt)
+    if (
+      resolved !== undefined &&
+      previous !== undefined &&
+      resolved === previous &&
+      checklistRecurrenceChoicesEqual(choice, checklistRecurrenceChoice(expectedRule))
+    ) {
+      return expectedRule
+    }
+  }
+  return createChecklistRecurrence(choice, resolvedDueAt, expectedRule?.anchor.timeZone)
+}
+
 function addDays(parts: LocalDateTime, days: number): LocalDateTime | undefined {
   if (!Number.isSafeInteger(days)) {
     return undefined
@@ -514,6 +609,196 @@ export function advanceChecklistDueAt(
   }
   const result = new Date(next)
   return result.getUTCFullYear() >= 1970 && result.getUTCFullYear() <= MAX_YEAR ? result.toISOString() : undefined
+}
+
+/**
+ * What one generation pass owes for a single overdue recurring task.
+ *
+ * `generate` holds the occurrences a pass should materialize, OLDEST FIRST, and
+ * never more than `cap` of them. When the cap cannot hold the whole window the
+ * MOST RECENT ones are kept and the earlier remainder is reported as
+ * `truncated` with its two bounds, because the recent ones are the work a user
+ * can still plausibly act on.
+ */
+export type ChecklistMissedOccurrencePlan = {
+  /**
+   * Every occurrence owed in the window, the stored `dueAt` included. This is a
+   * count, not a materialized list: the window is measured by searching the
+   * occurrence grid, so a decade-stale daily task costs the same as a fresh one.
+   */
+  total: number
+  /** The occurrences to materialize, oldest first; at most `cap` entries. */
+  generate: string[]
+  /** How many older occurrences the cap left out. `0` when nothing was cut. */
+  truncated: number
+  /** Oldest occurrence left out; absent when `truncated` is 0. */
+  oldestTruncatedAt?: string
+  /** Newest occurrence left out; absent when `truncated` is 0. */
+  newestTruncatedAt?: string
+  /**
+   * Where the live row must be moved for the pass to be idempotent: the first
+   * occurrence strictly after `now`. A plan is only ever produced when this
+   * exists, so a caller can always complete the pass it was handed.
+   */
+  nextDueAt: string
+}
+
+/**
+ * Enumerate the occurrences an overdue recurring task owes, bounded by `cap`.
+ *
+ * ## Why an enumerator is needed at all
+ * {@link advanceChecklistDueAt} answers only "where does this task go next",
+ * against a threshold of `max(dueAt, completedAt)`. Ticking a monthly task three
+ * months late therefore yields ONE next occurrence and the three that were owed
+ * vanish without a record; a task that is never ticked sits overdue forever and
+ * produces nothing at all. The occurrence grid itself was private to
+ * `advanceChecklistDueAt`'s closure, so nothing could ask what was skipped.
+ *
+ * ## The window, exactly
+ * `[dueAt, now]` — **inclusive of the stored `dueAt`**, which IS the first owed
+ * occurrence rather than a boundary to step past, and inclusive of `now`, where
+ * an occurrence falling on this instant is due right now and so is owed (the
+ * same `delta <= 0` reading `formatChecklistDue` uses). A monthly task three
+ * months overdue therefore owes three occurrences, which is what a user means
+ * by it.
+ *
+ * ## Why a second pass enumerates nothing
+ * A plan is produced only when `nextDueAt` exists, and `nextDueAt` is strictly
+ * after `now`. Once a caller has moved the live row there, `dueAt > now`, the
+ * window is empty, and this function returns `undefined` without materializing
+ * anything — so the cap bounds one pass without the remainder quietly becoming
+ * pending again on the next one. The remainder is a RECORD, not a backlog.
+ *
+ * ## Bounds and failure
+ * Never throws: an unparseable date, a rule that does not normalize, a
+ * non-finite `now`, a `cap` outside
+ * {@link CHECKLIST_GENERATE_CAP_MIN}..{@link CHECKLIST_GENERATE_CAP_MAX}, a
+ * schedule with no future occurrence left, or any occurrence that cannot be
+ * resolved to an instant all return `undefined`, meaning "generate nothing".
+ * At most `cap` instants are ever materialized, however wide the window.
+ */
+export function checklistMissedOccurrencePlan(
+  dueAt: string,
+  value: ChecklistRecurrence,
+  now = Date.now(),
+  cap: number = CHECKLIST_GENERATE_CAP_DEFAULT,
+): ChecklistMissedOccurrencePlan | undefined {
+  const rule = normalizeChecklistRecurrence(value)
+  const normalizedDueAt = normalizeChecklistDueAt(dueAt)
+  const dueTimestamp = normalizedDueAt ? Date.parse(normalizedDueAt) : Number.NaN
+  if (!rule || !normalizedDueAt || !Number.isFinite(dueTimestamp) || !Number.isFinite(now)) {
+    return undefined
+  }
+  if (
+    !Number.isInteger(cap) ||
+    cap < CHECKLIST_GENERATE_CAP_MIN ||
+    cap > CHECKLIST_GENERATE_CAP_MAX ||
+    dueTimestamp > now
+  ) {
+    return undefined
+  }
+
+  try {
+    const { timeZone: _timeZone, ...anchorLocal } = rule.anchor
+    const occurrence = (steps: number): number | undefined => {
+      const parts = occurrenceLocalParts(anchorLocal, rule, steps)
+      return parts ? instantForLocal(parts, rule.anchor.timeZone) : undefined
+    }
+
+    // Largest grid step (counting from 1) whose occurrence lands at or before
+    // `limit`, or 0 when none does. Galloping then bisecting bounds a stale task
+    // without replaying its occurrences, exactly as advanceChecklistDueAt does.
+    const lastStepAtOrBefore = (limit: number): number => {
+      let lower = 0
+      let upper = 1
+      while (upper < MAX_OCCURRENCE_STEPS) {
+        const candidate = occurrence(upper)
+        if (candidate === undefined || candidate > limit) {
+          break
+        }
+        lower = upper
+        upper = Math.min(MAX_OCCURRENCE_STEPS, upper * 2)
+      }
+      const bound = occurrence(upper)
+      if (bound !== undefined && bound <= limit) {
+        return upper
+      }
+      let left = lower
+      let right = upper - 1
+      while (left < right) {
+        const middle = left + Math.ceil((right - left) / 2)
+        const candidate = occurrence(middle)
+        if (candidate === undefined || candidate > limit) {
+          right = middle - 1
+        } else {
+          left = middle
+        }
+      }
+      return left
+    }
+
+    const nextDueAt = advanceChecklistDueAt(normalizedDueAt, rule, now)
+    if (!nextDueAt) {
+      // Without a future occurrence the live row cannot be moved, so a pass
+      // could not be made idempotent. Refuse rather than generate a backlog
+      // that would be enumerated again on every subsequent pass.
+      return undefined
+    }
+
+    const stepsAtDue = lastStepAtOrBefore(dueTimestamp)
+    const stepsAtNow = lastStepAtOrBefore(now)
+    // The stored deadline is index 0; grid occurrences strictly after it follow.
+    const total = 1 + Math.max(0, stepsAtNow - stepsAtDue)
+    const occurrenceAtIndex = (index: number): string | undefined => {
+      if (index === 0) {
+        return normalizedDueAt
+      }
+      const instant = occurrence(stepsAtDue + index)
+      if (instant === undefined) {
+        return undefined
+      }
+      const date = new Date(instant)
+      return date.getUTCFullYear() >= 1970 && date.getUTCFullYear() <= MAX_YEAR ? date.toISOString() : undefined
+    }
+
+    const truncated = Math.max(0, total - cap)
+    const generate: string[] = []
+    for (let index = truncated; index < total; index += 1) {
+      const occurrenceAt = occurrenceAtIndex(index)
+      if (!occurrenceAt) {
+        return undefined
+      }
+      generate.push(occurrenceAt)
+    }
+    if (truncated === 0) {
+      return { total, generate, truncated, nextDueAt }
+    }
+    const oldestTruncatedAt = occurrenceAtIndex(0)
+    const newestTruncatedAt = occurrenceAtIndex(truncated - 1)
+    if (!oldestTruncatedAt || !newestTruncatedAt) {
+      return undefined
+    }
+    return { total, generate, truncated, oldestTruncatedAt, newestTruncatedAt, nextDueAt }
+  } catch {
+    // The grid walk resolves zones through Intl, which can throw on a host with
+    // a partial implementation. "Generate nothing" is the only safe answer.
+    return undefined
+  }
+}
+
+/**
+ * The occurrences one generation pass should materialize, oldest first, or `[]`
+ * when nothing is owed or the inputs cannot be resolved. A thin reading of
+ * {@link checklistMissedOccurrencePlan}, which also reports what the cap left
+ * out and where the live row must move.
+ */
+export function checklistMissedOccurrences(
+  dueAt: string,
+  value: ChecklistRecurrence,
+  now = Date.now(),
+  cap: number = CHECKLIST_GENERATE_CAP_DEFAULT,
+): string[] {
+  return checklistMissedOccurrencePlan(dueAt, value, now, cap)?.generate ?? []
 }
 
 export type ChecklistPropagatedSchedule = {
