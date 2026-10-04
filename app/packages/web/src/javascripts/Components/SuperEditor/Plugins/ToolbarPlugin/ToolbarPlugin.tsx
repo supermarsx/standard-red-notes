@@ -151,6 +151,16 @@ import { $selectAllText } from './selectAllText'
 import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fontCatalog'
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
+import { ChecklistSubsection } from './ChecklistSubsection'
+import { resolveChecklistBackfillSettings } from '../../Checklist/checklistBackfill'
+import {
+  $generateMissedChecklistOccurrences,
+  readChecklistBackfillSettings,
+  CHECKLIST_AUTO_GENERATE_RECURRENCES_PREF,
+  CHECKLIST_GENERATE_CAP_PREF,
+  EMPTY_CHECKLIST_GENERATION_RESULT,
+  type ChecklistGenerationResult,
+} from '../../Checklist/checklistGeneration'
 import { BlockCatalogContext, buildInsertSections, getFullBlockCatalog, InsertSectionId } from '../Blocks/blockCatalog'
 // Standard Red Notes: the Diagram group's Mermaid button runs the SAME insertion
 // path as the Insert-tab catalog entry and the slash picker, rather than a second
@@ -999,6 +1009,66 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     () => runChecklistBulkAction((selection) => $setCheckedForSelection(selection, false)),
     [runChecklistBulkAction],
   )
+
+  // Standard Red Notes — the Checklists subsection (see ChecklistSubsection.tsx).
+  const [isChecklistSettingsMenuOpen, setIsChecklistSettingsMenuOpen] = useState(false)
+  const checklistSettingsAnchorRef = useRef<HTMLButtonElement>(null)
+
+  // The two SYNCED recurrence-generation preferences. They are read through the
+  // literal-pinned keys rather than `PrefKey.ChecklistAutoGenerateRecurrences` /
+  // `PrefKey.ChecklistGenerateCap`, because web consumes PrefKey's RUNTIME value
+  // from the generated models bundle, where both members (and both defaults) are
+  // absent until it is rebuilt: the enum member reads `undefined`, the preference
+  // falls to its default forever and the control looks like it does nothing. For
+  // the same reason the defaults do NOT come from `PrefDefaults` — `usePreference`
+  // hands us whatever is stored (or undefined), and
+  // `resolveChecklistBackfillSettings` applies the hardcoded defaults (on, 12) and
+  // clamps the cap to 1..200 on READ, because a synced value may have been written
+  // by another device running different code.
+  const storedChecklistAutoGenerate = usePreference(CHECKLIST_AUTO_GENERATE_RECURRENCES_PREF)
+  const storedChecklistGenerateCap = usePreference(CHECKLIST_GENERATE_CAP_PREF)
+  const checklistBackfillSettings = useMemo(
+    () =>
+      resolveChecklistBackfillSettings({
+        autoGenerate: storedChecklistAutoGenerate,
+        cap: storedChecklistGenerateCap,
+      }),
+    [storedChecklistAutoGenerate, storedChecklistGenerateCap],
+  )
+
+  const setChecklistAutoGenerate = useCallback(
+    (next: boolean) => {
+      void application.setPreference(CHECKLIST_AUTO_GENERATE_RECURRENCES_PREF, next as never)
+    },
+    [application],
+  )
+
+  const setChecklistGenerateCap = useCallback(
+    (next: number) => {
+      void application.setPreference(CHECKLIST_GENERATE_CAP_PREF, next as never)
+    },
+    [application],
+  )
+
+  /**
+   * What the last explicit "Generate now" did. Null until one has run, so the
+   * subsection renders NO result line rather than a zero that would read as "it
+   * ran and found nothing".
+   */
+  const [lastChecklistGeneration, setLastChecklistGeneration] = useState<ChecklistGenerationResult | null>(null)
+
+  const generateChecklistOccurrencesNow = useCallback(() => {
+    // `forceGenerate` — an explicit instruction is not an automatic pass, so it
+    // runs even with the toggle off. It deliberately does not override the cap.
+    const settings = readChecklistBackfillSettings(application, true)
+    let result = EMPTY_CHECKLIST_GENERATION_RESULT
+    // One update for the whole pass, so a user who did not want it undoes it once
+    // (the generator documents this requirement).
+    editor.update(() => {
+      result = $generateMissedChecklistOccurrences(settings)
+    })
+    setLastChecklistGeneration(result)
+  }, [application, editor])
 
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -2545,6 +2615,25 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
         iconName="check-circle"
         disabled={!hasChecklistSelection}
         onSelect={uncompleteSelectedChecklistItems}
+      />
+    ),
+    // Standard Red Notes — opens the Checklists subsection. Never disabled: most
+    // of what it hosts (the two recurrence settings, Generate now, move-completed)
+    // is note- or account-wide and does not need a checklist under the caret.
+    [ToolbarButtonId.ChecklistSettings]: (
+      <ToolbarButton
+        name={
+          <>
+            <div className="mb-1 font-semibold">Checklist settings</div>
+            <div className="max-w-[35ch] text-xs">
+              Completion behaviour, restore, and the recurring-task settings with &quot;Generate now&quot;.
+            </div>
+          </>
+        }
+        iconName="tune"
+        onSelect={() => setIsChecklistSettingsMenuOpen(!isChecklistSettingsMenuOpen)}
+        ref={checklistSettingsAnchorRef}
+        className={isChecklistSettingsMenuOpen ? 'md:bg-default' : ''}
       />
     ),
     // Standard Red Notes — one-click Mermaid diagram insert on the Home tab. The
@@ -4467,6 +4556,42 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           <p className="text-passive-1 mt-3 text-xs">
             Tip: put {'{page}'} and {'{total}'} in header/footer text to insert the current page and page count.
           </p>
+        </div>
+      </Popover>
+      {/* Standard Red Notes — the Checklists subsection, opened from the Checklist
+          group's settings button. The card itself is ChecklistSubsection.tsx (small
+          and pure, so its render path is exercised directly in jsdom); everything
+          here is wiring. */}
+      <Popover
+        title="Checklist settings"
+        anchorElement={checklistSettingsAnchorRef}
+        open={isChecklistSettingsMenuOpen}
+        togglePopover={() => setIsChecklistSettingsMenuOpen(!isChecklistSettingsMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="w-80 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
+          <ChecklistSubsection
+            autoMoveCompleted={autoMoveCompleted}
+            onToggleAutoMoveCompleted={toggleAutoMoveCompleted}
+            onRestoreCompleted={restoreCompletedTasks}
+            hasChecklistSelection={hasChecklistSelection}
+            onCompleteAll={completeAllChecklistItems}
+            onCompleteSelected={completeSelectedChecklistItems}
+            onUncompleteSelected={uncompleteSelectedChecklistItems}
+            autoGenerate={checklistBackfillSettings.autoGenerate}
+            onAutoGenerateChange={setChecklistAutoGenerate}
+            generateCap={checklistBackfillSettings.cap}
+            onGenerateCapChange={setChecklistGenerateCap}
+            onGenerateNow={generateChecklistOccurrencesNow}
+            lastGeneration={lastChecklistGeneration}
+          />
         </div>
       </Popover>
       <Popover

@@ -104,6 +104,13 @@ export enum ToolbarButtonId {
   CompleteSelectedChecklistItems = 'completeSelectedChecklistItems',
   UncompleteSelectedChecklistItems = 'uncompleteSelectedChecklistItems',
   /**
+   * Standard Red Notes: opens the Checklists subsection — the three bulk actions
+   * above plus the controls that had no home in the toolbar at all (move-completed,
+   * restore, and the two synced recurrence-generation settings with "Generate
+   * now"). See ChecklistSubsection.tsx.
+   */
+  ChecklistSettings = 'checklistSettings',
+  /**
    * Standard Red Notes: insert a Mermaid diagram block. Runs the SAME insertion
    * path as the Insert-tab catalog entry and the slash picker
    * (`MermaidBlock.onSelect` in Plugins/Blocks/Mermaid.tsx) — there is exactly
@@ -370,15 +377,26 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
         label: 'Mark selected checklist items not completed',
         group: ToolbarGroupId.Checklist,
       },
+      {
+        id: ToolbarButtonId.ChecklistSettings,
+        label: 'Checklist settings & recurring tasks',
+        group: ToolbarGroupId.Checklist,
+      },
     ],
     // One explicit row: without a `layout` the generic group renderer packs into
-    // three rows of one button each, which would read as a thin column.
+    // three rows of one button each, which would read as a thin column. Every
+    // button declared above MUST appear here — a button in `buttons` but not in
+    // `layout` renders nowhere while Customize Toolbar still offers to hide it
+    // (the layout-coverage guard in ToolbarConfig.spec.ts holds this for every
+    // group; it is the half of the vanish bug that tsc and logic tests miss).
     layout: [
       [
         ToolbarButtonId.CompleteAllChecklistItems,
         ToolbarButtonId.Divider,
         ToolbarButtonId.CompleteSelectedChecklistItems,
         ToolbarButtonId.UncompleteSelectedChecklistItems,
+        ToolbarButtonId.Divider,
+        ToolbarButtonId.ChecklistSettings,
       ],
     ],
   },

@@ -101,13 +101,14 @@ describe('checklist bulk-completion toolbar group renders', () => {
     expect(checklistGroup()).not.toBeNull()
   })
 
-  it('renders all three bulk-completion buttons inside that group', async () => {
+  it('renders all three bulk-completion buttons plus the settings button inside that group', async () => {
     await mount()
     const group = checklistGroup()
     expect(group).not.toBeNull()
-    // Three real buttons (the divider is an aria-hidden separator, not a button).
+    // Four real buttons — the three bulk actions and the Checklists-subsection
+    // opener (t111); dividers are aria-hidden separators, not buttons.
     const buttons = group!.querySelectorAll('button')
-    expect(buttons).toHaveLength(3)
+    expect(buttons).toHaveLength(4)
     expect(group!.querySelector('[role="separator"]')).not.toBeNull()
   })
 
@@ -120,13 +121,19 @@ describe('checklist bulk-completion toolbar group renders', () => {
     await mount()
     const buttons = Array.from(checklistGroup()!.querySelectorAll('button'))
     // Every button must be a real, clickable toolbar item. With no checklist
-    // under the (empty) initial document they are aria-disabled — but they use
-    // aria-disabled, NOT the native attribute, so they stay focusable and their
-    // tooltip still explains them.
-    for (const button of buttons) {
+    // under the (empty) initial document the three bulk actions are aria-disabled
+    // — but they use aria-disabled, NOT the native attribute, so they stay
+    // focusable and their tooltip still explains them.
+    for (const button of buttons.slice(0, 3)) {
       expect(button.getAttribute('aria-disabled')).toBe('true')
       expect(button.hasAttribute('disabled')).toBe(false)
     }
+    // The settings button is NOT one of them: most of what the subsection hosts
+    // (the recurrence settings, Generate now) is note- or account-wide, so gating
+    // it on a checklist under the caret would hide the controls that need none.
+    const settingsButton = buttons[3]
+    expect(settingsButton.getAttribute('aria-disabled')).not.toBe('true')
+    expect(settingsButton.hasAttribute('disabled')).toBe(false)
   })
 
   // The second half of the failure mode — a button listed in `buttons` but
