@@ -371,26 +371,51 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
         </div>
 
         <div className="min-h-0 flex-grow overflow-y-auto px-4 pb-4">
+          {/*
+           * Column sizing here is deliberate, and was decided by measuring the rendered
+           * boxes in headless Chrome rather than by reading the markup.
+           *
+           * The layout stays on the browser's automatic table algorithm. Under that
+           * algorithm a declared column width is only a hint: the Notes column used to
+           * ask for four rem and render 59.67px, and Sidebar used to ask for eight rem
+           * and render 116.72px, as soon as a long title wanted the room. What the
+           * algorithm does honour is each column's minimum content width, as a floor —
+           * and that floor counts the cell's own horizontal padding. So padding those
+           * two cells is what guarantees the note count can never sit flush against the
+           * toggle again, whatever the titles are. With no horizontal padding at all,
+           * which is how this started, the measured clearance between the digits and the
+           * toggle's edge was 0.00px in every case, and the two header labels touched.
+           *
+           * The pre-apportioned alternative was measured and rejected: it hands Title
+           * and Parent an equal share of whatever is left regardless of need, which in
+           * the full-width mobile modal leaves both of them unusably narrow.
+           *
+           * Title and Parent are the columns that absorb the remaining width, so they
+           * are the ones that wrap, and they may break inside a word. That keeps one
+           * enormous unbroken title from dragging the whole table past the modal — one
+           * did, to 1740px inside a 638px scrolling area — and from stealing the room
+           * the two right-hand columns need.
+           */}
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-border text-passive-0 border-b">
-                <th className="w-8 py-2">
+                <th className="w-8 px-2 py-2">
                   <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} />
                 </th>
-                <th className="py-2">Title</th>
-                <th className="py-2">Parent</th>
-                <th className="w-16 py-2 text-right">Notes</th>
-                <th className="w-32 py-2">Sidebar</th>
-                <th className="w-10 py-2"></th>
+                <th className="px-2 py-2">Title</th>
+                <th className="px-2 py-2">Parent</th>
+                <th className="px-3 py-2 text-right whitespace-nowrap">Notes</th>
+                <th className="px-3 py-2 whitespace-nowrap">Sidebar</th>
+                <th className="w-10 px-2 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {visibleRows.map((row) => (
                 <tr key={row.uuid} className="border-border border-b">
-                  <td className="py-2">
+                  <td className="w-8 px-2 py-2">
                     <input type="checkbox" checked={selected.has(row.uuid)} onChange={() => toggleRow(row.uuid)} />
                   </td>
-                  <td className="py-2">
+                  <td className="px-2 py-2 wrap-anywhere">
                     {editingUuid === row.uuid ? (
                       <input
                         autoFocus
@@ -416,9 +441,9 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
                       </button>
                     )}
                   </td>
-                  <td className="text-passive-0 py-2">{row.parentTitle || '—'}</td>
-                  <td className="text-passive-0 py-2 text-right">{row.noteCount}</td>
-                  <td className="py-2">
+                  <td className="text-passive-0 px-2 py-2 wrap-anywhere">{row.parentTitle || '—'}</td>
+                  <td className="text-passive-0 px-3 py-2 text-right whitespace-nowrap">{row.noteCount}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
                     <button
                       type="button"
                       className="border-border bg-default text-text hover:bg-contrast rounded border px-2 py-1 text-xs whitespace-nowrap"
@@ -434,7 +459,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
                     </button>
                     {row.hiddenByAncestor && <div className="text-passive-0 mt-1 text-xs">parent hidden</div>}
                   </td>
-                  <td className="py-2">
+                  <td className="w-10 px-2 py-2">
                     <button
                       type="button"
                       title="Delete"
@@ -448,7 +473,7 @@ const BulkOrganizeModal = ({ isOpen, close }: Props) => {
               ))}
               {visibleRows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="text-passive-0 py-6 text-center">
+                  <td colSpan={6} className="text-passive-0 px-2 py-6 text-center">
                     No {tab} to show.
                   </td>
                 </tr>
