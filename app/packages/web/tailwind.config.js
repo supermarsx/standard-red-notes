@@ -3,7 +3,34 @@
 const plugin = require('tailwindcss/plugin')
 
 module.exports = {
-  content: ['./src/javascripts/**/*.tsx', '../toast/src/**/*.tsx'],
+  // WARNING: every string in THIS FILE is scanned too (that is the only reason
+  // the safelist below works), so never spell a utility class out in a comment
+  // here — it becomes a real CSS rule. See the note in
+  // scripts/CheckCssVarBrackets.mjs for the two shapes that must not be written.
+  //
+  // Tailwind v4's automatic source detection — its base is this package, via
+  // @tailwindcss/postcss — scans every non-gitignored file in the package, not
+  // just the globs below, and any text shaped like a utility is compiled into a
+  // real CSS rule. Three such rules were shipping declarations that every
+  // browser rejects outright, so the class did nothing and Firefox logged a
+  // parse error for each:
+  //   - scripts/CheckCssVarBrackets.mjs explains the malformed Tailwind v3
+  //     custom-property syntax it exists to forbid, and its own two examples
+  //     were compiled into live rules whose declarations the parser drops;
+  //   - Components/Table/useTable.spec.tsx and Table.spec.tsx use row ids that
+  //     collide with the grid-row utility, and one of them asks for grid line
+  //     zero, which is not a legal grid line.
+  // Negated entries here are the exclusion that works: `@source not` in the CSS
+  // entry was measured to take effect only for whole-directory patterns, never
+  // for a file-extension pattern.
+  // Keep ./src/javascripts/**/*.tsx even though detection already covers it:
+  // it documents what is meant to be scanned, and removing it changes nothing.
+  content: [
+    './src/javascripts/**/*.tsx',
+    '../toast/src/**/*.tsx',
+    '!./scripts/**/*',
+    '!./src/javascripts/**/*.spec.tsx',
+  ],
   theme: {
     extend: {
       spacing: {
