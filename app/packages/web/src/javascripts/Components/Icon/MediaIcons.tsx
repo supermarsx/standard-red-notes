@@ -159,6 +159,34 @@ export const InlineCodeIcon = (props: SVGProps<SVGSVGElement>) => (
 )
 
 /**
+ * Node-graph glyph for the Super-editor "Mermaid Diagram" toolbar button. The
+ * shared @standardnotes/icons set has no diagram/flowchart glyph (the Insert
+ * catalog entry falls back to the generic `code` icon), so it lives here with the
+ * other locally-drawn editor glyphs.
+ *
+ * Reads as the canonical flowchart: one parent box, a trunk down to a horizontal
+ * connector, and two child boxes — i.e. a *graph*, not a block of source text.
+ * Deliberately distinct from `code` / `inline-code` (which both read as source)
+ * and from `table` (a grid), because the Diagram group sits beside them.
+ */
+export const MermaidDiagramIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" {...props}>
+    {/* Parent node */}
+    <rect x="8.5" y="3" width="7" height="5" rx="1.2" />
+    {/* Trunk down from the parent to the connector bar */}
+    <rect x="11.25" y="8" width="1.5" height="3.25" />
+    {/* Horizontal connector spanning both children */}
+    <rect x="4.25" y="11.25" width="15.5" height="1.5" />
+    {/* Drops from the connector into each child */}
+    <rect x="4.25" y="12.75" width="1.5" height="2.25" />
+    <rect x="18.25" y="12.75" width="1.5" height="2.25" />
+    {/* Child nodes */}
+    <rect x="1.5" y="15" width="7" height="5" rx="1.2" />
+    <rect x="15.5" y="15" width="7" height="5" rx="1.2" />
+  </svg>
+)
+
+/**
  * Outline / text-stroke glyph for the Super-editor "Outline (text stroke)" toolbar
  * button. A HOLLOW (stroked, not filled) letter "A" — conveying outlined / stroked
  * text. Drawn with an explicit `fill="none"` + `stroke="currentColor"` so it stays

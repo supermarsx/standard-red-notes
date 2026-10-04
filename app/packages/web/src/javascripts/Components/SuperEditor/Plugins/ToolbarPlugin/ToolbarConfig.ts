@@ -18,6 +18,8 @@ export enum ToolbarGroupId {
   ParagraphList = 'paragraphList',
   /** Standard Red Notes: bulk completion actions for checklists. */
   Checklist = 'checklist',
+  /** Standard Red Notes: one-click insert for diagram blocks (Mermaid). */
+  Diagram = 'diagram',
   Insert = 'insert',
   AI = 'ai',
   Find = 'find',
@@ -101,6 +103,13 @@ export enum ToolbarButtonId {
   CompleteAllChecklistItems = 'completeAllChecklistItems',
   CompleteSelectedChecklistItems = 'completeSelectedChecklistItems',
   UncompleteSelectedChecklistItems = 'uncompleteSelectedChecklistItems',
+  /**
+   * Standard Red Notes: insert a Mermaid diagram block. Runs the SAME insertion
+   * path as the Insert-tab catalog entry and the slash picker
+   * (`MermaidBlock.onSelect` in Plugins/Blocks/Mermaid.tsx) — there is exactly
+   * one way a Mermaid node is created.
+   */
+  InsertMermaid = 'insertMermaid',
   // Insert
   // @deprecated The general Insert dropdown and its quick-insert siblings were
   // replaced by always-visible catalog sections (see the Insert group config +
@@ -374,6 +383,23 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     ],
   },
   {
+    // Standard Red Notes: diagram blocks reachable in one click from the default
+    // (Home) tab instead of only via the Insert tab's catalog section or the
+    // slash picker. Its single button is renderer-backed (it has an entry in
+    // `buttonRenderers`), so it survives the "drop groups with nothing
+    // renderable" filter in ToolbarPlugin on its own — the exact shape that has
+    // made special-cased-only groups silently vanish from this toolbar before.
+    id: ToolbarGroupId.Diagram,
+    label: 'Diagram',
+    caption: 'Diagram',
+    buttons: [{ id: ToolbarButtonId.InsertMermaid, label: 'Mermaid diagram', group: ToolbarGroupId.Diagram }],
+    // Explicit single row: a `layout`-less one-button group packs identically
+    // today, but stating the row keeps this group inside the layout-coverage
+    // guard in ToolbarConfig.spec.ts, so a second diagram button added later
+    // cannot be declared in `buttons` and forgotten here.
+    layout: [[ToolbarButtonId.InsertMermaid]],
+  },
+  {
     id: ToolbarGroupId.Insert,
     label: 'Insert',
     caption: 'Insert',
@@ -489,6 +515,7 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
       ToolbarGroupId.ColorFont,
       ToolbarGroupId.ParagraphList,
       ToolbarGroupId.Checklist,
+      ToolbarGroupId.Diagram,
     ],
   },
   { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },

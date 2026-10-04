@@ -152,6 +152,10 @@ import { findFontByCss, filterFonts, groupFontsByCategory } from '../../fonts/fo
 import CustomizeToolbarDialog from './CustomizeToolbarDialog'
 import { NavigationLayoutSubsection, applyNavigationPatch } from './NavigationLayoutSubsection'
 import { BlockCatalogContext, buildInsertSections, getFullBlockCatalog, InsertSectionId } from '../Blocks/blockCatalog'
+// Standard Red Notes: the Diagram group's Mermaid button runs the SAME insertion
+// path as the Insert-tab catalog entry and the slash picker, rather than a second
+// mechanism — `MermaidBlock.onSelect` is the one way a Mermaid node is created.
+import { MermaidBlock } from '../Blocks/Mermaid'
 import DictationButton from '@/Components/AudioRecorder/DictationButton'
 import {
   $deleteTableColumnAtSelection,
@@ -2541,6 +2545,17 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
         iconName="check-circle"
         disabled={!hasChecklistSelection}
         onSelect={uncompleteSelectedChecklistItems}
+      />
+    ),
+    // Standard Red Notes — one-click Mermaid diagram insert on the Home tab. The
+    // label comes from the shared block catalog (same string, same 'editor'
+    // translation key as the Insert-tab entry and the slash picker), and the
+    // action is MermaidBlock.onSelect itself: no second insertion mechanism.
+    [ToolbarButtonId.InsertMermaid]: (
+      <ToolbarButton
+        name={translateBlockName(MermaidBlock.name, t)}
+        iconName="diagram"
+        onSelect={() => MermaidBlock.onSelect(editor)}
       />
     ),
     // Standard Red Notes: the former general Insert dropdown (InsertMenu) and its
