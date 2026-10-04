@@ -23,6 +23,12 @@
 /** Stable kinds of contextual widget we render a tailored group for. */
 export enum ContextualWidgetKind {
   Table = 'table',
+  /**
+   * Standard Red Notes: a Mermaid diagram block. Its own tailored section — the
+   * dedicated "Mermaid" tab the user asked for — built on the same captioned
+   * segment idiom as Table rather than the generic decorator-block bucket.
+   */
+  Mermaid = 'mermaid',
   Image = 'image',
   Link = 'link',
   Code = 'code',
@@ -45,6 +51,9 @@ export const CODE_NODE_TYPE = 'code'
 export const LINK_NODE_TYPES = new Set<string>(['link', 'autolink'])
 
 export const TABLE_NODE_TYPE = 'table'
+
+/** Standard Red Notes: the Mermaid decorator node's own `getType()` string. */
+export const MERMAID_NODE_TYPE = 'mermaid'
 
 /**
  * Decorator / embedded block type -> friendly label. Anything in here gets the
@@ -81,6 +90,7 @@ export type ContextualWidget = {
 
 const KIND_LABELS: Record<ContextualWidgetKind, string> = {
   [ContextualWidgetKind.Table]: 'Table',
+  [ContextualWidgetKind.Mermaid]: 'Mermaid',
   [ContextualWidgetKind.Image]: 'Image',
   [ContextualWidgetKind.Link]: 'Link',
   [ContextualWidgetKind.Code]: 'Code Block',
@@ -101,15 +111,28 @@ const KIND_LABELS: Record<ContextualWidgetKind, string> = {
  */
 export function resolveContextualWidget(input: {
   isTable: boolean
+  /**
+   * Standard Red Notes: a Mermaid diagram is the active widget. Passed explicitly
+   * rather than inferred from `activeBlockType` alone, because a decorator node is
+   * usually selected as a NODE selection, which the toolbar detects on its own
+   * path — see the mermaid selection listener in ToolbarPlugin.
+   */
+  isMermaid?: boolean
   isImage: boolean
   isLink: boolean
   isCode: boolean
   activeBlockType: string | null
 }): ContextualWidget | null {
-  const { isTable, isImage, isLink, isCode, activeBlockType } = input
+  const { isTable, isMermaid, isImage, isLink, isCode, activeBlockType } = input
 
   if (isTable) {
     return { kind: ContextualWidgetKind.Table, label: KIND_LABELS[ContextualWidgetKind.Table] }
+  }
+  // Ahead of the generic decorator-block bucket (which would otherwise claim a
+  // mermaid block and give it only the move/delete/zoom actions), and behind
+  // Table so a diagram inside a table cell still edits the table.
+  if (isMermaid === true || activeBlockType === MERMAID_NODE_TYPE) {
+    return { kind: ContextualWidgetKind.Mermaid, label: KIND_LABELS[ContextualWidgetKind.Mermaid] }
   }
   if (isImage) {
     return { kind: ContextualWidgetKind.Image, label: KIND_LABELS[ContextualWidgetKind.Image] }

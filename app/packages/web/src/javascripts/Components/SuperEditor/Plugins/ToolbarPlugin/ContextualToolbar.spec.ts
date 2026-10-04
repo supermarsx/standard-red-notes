@@ -75,6 +75,38 @@ describe('resolveContextualWidget', () => {
       ContextualWidgetKind.Code,
     )
   })
+
+  /**
+   * Standard Red Notes (t118) — a mermaid diagram gets its OWN section rather than
+   * the generic decorator-block bucket, which offered only move/delete/zoom.
+   */
+  it('detects a mermaid diagram as its own kind, not the generic block bucket', () => {
+    const byType = resolveContextualWidget({ ...base, activeBlockType: 'mermaid' })
+    expect(byType?.kind).toBe(ContextualWidgetKind.Mermaid)
+    expect(byType?.label).toBe('Mermaid')
+
+    // And by the explicit flag, which is how a NODE selection reaches it (a
+    // decorator block is normally selected as a node selection, where the
+    // toolbar's own block-type detection never runs).
+    const byFlag = resolveContextualWidget({ ...base, isMermaid: true })
+    expect(byFlag?.kind).toBe(ContextualWidgetKind.Mermaid)
+  })
+
+  it('puts the mermaid section behind Table, so a diagram in a cell still edits the table', () => {
+    expect(resolveContextualWidget({ ...base, isTable: true, isMermaid: true })?.kind).toBe(ContextualWidgetKind.Table)
+  })
+
+  it('puts the mermaid section ahead of image, link, code and the block bucket', () => {
+    for (const other of [{ isImage: true }, { isLink: true }, { isCode: true }, { activeBlockType: 'math' }]) {
+      expect(resolveContextualWidget({ ...base, ...other, isMermaid: true })?.kind).toBe(ContextualWidgetKind.Mermaid)
+    }
+  })
+
+  it('still labels mermaid in the decorator-block table, for the active-block label', () => {
+    // The generic label map keeps its mermaid entry: it no longer decides the
+    // contextual kind, but ToolbarPlugin still reads it for "zoom into <label>".
+    expect(isDecoratorBlockType('mermaid')).toBe(true)
+  })
 })
 
 describe('node-type predicates', () => {

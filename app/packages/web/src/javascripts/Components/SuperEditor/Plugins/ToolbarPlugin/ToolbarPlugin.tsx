@@ -30,6 +30,7 @@ import {
   TextNode,
   BaseSelection,
   RangeSelection,
+  $isNodeSelection,
 } from 'lexical'
 import {
   mergeRegister,
@@ -166,6 +167,21 @@ import { BlockCatalogContext, buildInsertSections, getFullBlockCatalog, InsertSe
 // path as the Insert-tab catalog entry and the slash picker, rather than a second
 // mechanism — `MermaidBlock.onSelect` is the one way a Mermaid node is created.
 import { MermaidBlock } from '../Blocks/Mermaid'
+// Standard Red Notes: the dedicated "Mermaid" contextual section. It drives the
+// node's own setters and mounts the SAME MermaidSettingsPanel the diagram block's
+// top bar does, so the two surfaces cannot disagree — see MermaidSettings.ts.
+import { $isMermaidNode, type MermaidNode } from '../../Lexical/Nodes/MermaidNode'
+import {
+  MermaidSettingsPanel,
+  type MermaidSettingsPanelProps,
+  mermaidSettingsControls,
+} from '../../Lexical/Nodes/MermaidSettingsPanel'
+import {
+  DEFAULT_MERMAID_SETTINGS,
+  DEFAULT_MERMAID_VIEW_MODE,
+  MermaidSettings,
+  MermaidViewMode,
+} from '../../Lexical/Nodes/MermaidSettings'
 import DictationButton from '@/Components/AudioRecorder/DictationButton'
 import {
   $deleteTableColumnAtSelection,
@@ -629,6 +645,26 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // driving the dynamic contextual toolbar group. Feature #287: the key + label
   // of the active top-level block, used to zoom into it.
   const [contextualWidget, setContextualWidget] = useState<ContextualWidget | null>(null)
+  /**
+   * Standard Red Notes — the selected Mermaid diagram, which gates the dedicated
+   * "Mermaid" section.
+   *
+   * Detected on its own listener rather than inside `$updateToolbar`, because
+   * `$updateToolbar` returns early unless the selection is a RANGE selection and a
+   * decorator block like this one is normally selected as a NODE selection (that
+   * is what `useLexicalNodeSelection` inside the block produces). Both shapes are
+   * handled here, so clicking the chart and putting the caret beside it both
+   * surface the section.
+   */
+  const [mermaidSelection, setMermaidSelection] = useState<{
+    nodeKey: string
+    settings: MermaidSettings
+    viewMode: MermaidViewMode
+    width: string | undefined
+    height: number | undefined
+  } | null>(null)
+  const [isMermaidSettingsMenuOpen, setIsMermaidSettingsMenuOpen] = useState(false)
+  const mermaidSettingsAnchorRef = useRef<HTMLButtonElement>(null)
   const [activeBlockKey, setActiveBlockKey] = useState<string | null>(null)
   const [activeBlockLabel, setActiveBlockLabel] = useState<string>('Block')
   const [zoomBlockKey, setZoomBlockKey] = useState<string | null>(null)
@@ -1281,6 +1317,70 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
 
     updateToolbarFloatingPosition()
   }, [activeEditor, updateToolbarFloatingPosition, blockType])
+
+  /**
+   * Standard Red Notes — keep `mermaidSelection` in step with the editor.
+   *
+   * A fresh object every update would re-render the whole toolbar on every
+   * keystroke, so the read is compared against a signature of what it last
+   * published and only a real change is committed.
+   */
+  const mermaidSignatureRef = useRef<string | null>(null)
+  useEffect(() => {
+    const readMermaidSelection = () => {
+      activeEditor.getEditorState().read(() => {
+        const selection = $getSelection()
+        let node: MermaidNode | null = null
+        if ($isNodeSelection(selection)) {
+          // What clicking the chart produces (the block's own
+          // useLexicalNodeSelection). Exactly one, so two selected diagrams do
+          // not silently configure the first.
+          const found = selection.getNodes().filter($isMermaidNode)
+          node = found.length === 1 ? found[0] : null
+        } else if ($isRangeSelection(selection)) {
+          // The caret resolving onto the block itself. Deliberately NOT "the
+          // selection contains a mermaid node", which would make Select-all
+          // surface a diagram section for an arbitrary chart.
+          const top = selection.anchor.getNode().getTopLevelElement()
+          node = $isMermaidNode(top) ? top : null
+        }
+        const next = node
+          ? {
+              nodeKey: node.getKey(),
+              settings: node.getSettings(),
+              viewMode: node.getViewMode(),
+              width: node.getWidth(),
+              height: node.getHeight(),
+            }
+          : null
+        const signature = next === null ? null : JSON.stringify(next)
+        if (signature === mermaidSignatureRef.current) {
+          return
+        }
+        mermaidSignatureRef.current = signature
+        setMermaidSelection(next)
+      })
+    }
+    readMermaidSelection()
+    return activeEditor.registerUpdateListener(readMermaidSelection)
+  }, [activeEditor])
+
+  /** The one write path the Mermaid section uses — the node's own setters. */
+  const updateMermaidNode = useCallback(
+    (mutate: (node: MermaidNode) => void) => {
+      const nodeKey = mermaidSelection?.nodeKey
+      if (!nodeKey) {
+        return
+      }
+      activeEditor.update(() => {
+        const node = $getNodeByKey(nodeKey)
+        if ($isMermaidNode(node)) {
+          mutate(node)
+        }
+      })
+    },
+    [activeEditor, mermaidSelection?.nodeKey],
+  )
 
   const clearContainerFloatingStyles = useCallback(() => {
     const containerElement = containerRef.current
@@ -2832,11 +2932,46 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // a table) instead of one flat row. `contextualSegments` carries that grouping;
   // `contextualButtons` keeps the legacy flat list used by the non-ribbon
   // floating selection toolbar (which has no room for captioned blocks).
+  /**
+   * Standard Red Notes — the ONE props object the Mermaid section renders from:
+   * its inline captioned clusters and its settings popover both read this, so the
+   * two cannot be handed different state or different write paths. Every callback
+   * goes through `updateMermaidNode`, i.e. the node's own normalizing setters.
+   *
+   * The fallbacks are unreachable in practice (the section only renders while
+   * `mermaidSelection` is set) and exist so the object is well-typed at the point
+   * of definition rather than rebuilt per branch.
+   */
+  const mermaidSettingsPanelProps: MermaidSettingsPanelProps = {
+    variant: 'panel',
+    settings: mermaidSelection?.settings ?? DEFAULT_MERMAID_SETTINGS,
+    onSettingsChange: (patch) => updateMermaidNode((node) => node.setSettings(patch)),
+    viewMode: mermaidSelection?.viewMode ?? DEFAULT_MERMAID_VIEW_MODE,
+    onViewModeChange: (next) => updateMermaidNode((node) => node.setViewMode(next)),
+    width: mermaidSelection?.width,
+    onWidthChange: (next) => updateMermaidNode((node) => node.setWidth(next)),
+    height: mermaidSelection?.height,
+    onHeightChange: (next) => updateMermaidNode((node) => node.setHeight(next)),
+    // Reaching this section already required a selected diagram, so the width
+    // strip's own selection gate is already satisfied.
+    showWidth: true,
+  }
+
   type ContextualSegment = { key: string; caption: string; buttons: ReactNode[] }
   const contextualSegments: ContextualSegment[] = []
   const contextualButtons: ReactNode[] = []
-  if (contextualWidget) {
-    switch (contextualWidget.kind) {
+  /**
+   * Standard Red Notes: a selected Mermaid diagram wins, whatever the last RANGE
+   * selection left in `contextualWidget`. Derived rather than written into that
+   * state because `$updateToolbar` — which owns it — never runs for a node
+   * selection at all (see the mermaid selection listener above), so the two
+   * detections are independent and this is where they meet.
+   */
+  const effectiveContextualWidget: ContextualWidget | null = mermaidSelection
+    ? { kind: ContextualWidgetKind.Mermaid, label: 'Mermaid' }
+    : contextualWidget
+  if (effectiveContextualWidget) {
+    switch (effectiveContextualWidget.kind) {
       case ContextualWidgetKind.Table:
         contextualSegments.push(
           {
@@ -2970,6 +3105,65 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           <ToolbarButton key="ctx-del-table" name={t('deleteTable')} iconName="trash-filled" onSelect={deleteTable} />,
         )
         break
+      // Standard Red Notes — THE dedicated "Mermaid" section, built on exactly the
+      // Table idiom above: captioned segments, selection-gated (it exists only
+      // while `mermaidSelection` is set), with the rest condensed behind one
+      // settings button.
+      //
+      // Its contents are not a second copy of the diagram block's controls: they
+      // ARE the block's controls. `mermaidSettingsControls` is the single ordered
+      // list MermaidSettingsPanel renders from, and the three inline segments pick
+      // their clusters out of it by key, so a control cannot behave differently
+      // here than it does in the chart's own top bar. The button opens that same
+      // panel, holding every setting including these three.
+      case ContextualWidgetKind.Mermaid: {
+        const mermaidControls = mermaidSettingsControls(mermaidSettingsPanelProps)
+        for (const key of ['source', 'fit', 'alignment']) {
+          const control = mermaidControls.find((candidate) => candidate.key === key)
+          if (control) {
+            contextualSegments.push({
+              key: `ctx-mermaid-${control.key}`,
+              caption: control.caption,
+              buttons: [<Fragment key={control.key}>{control.node}</Fragment>],
+            })
+          }
+        }
+        contextualSegments.push({
+          key: 'ctx-mermaid-settings',
+          caption: 'Diagram',
+          buttons: [
+            <ToolbarButton
+              key="ctx-mermaid-settings"
+              name={
+                <>
+                  <div className="mb-1 font-semibold">Mermaid settings</div>
+                  <div className="max-w-[35ch] text-xs">
+                    Fit, maximum height, alignment, theme, background, pan &amp; zoom, source and width — the same
+                    controls as the diagram&apos;s own bar.
+                  </div>
+                </>
+              }
+              iconName="tune"
+              onSelect={() => setIsMermaidSettingsMenuOpen(!isMermaidSettingsMenuOpen)}
+              ref={mermaidSettingsAnchorRef}
+              className={isMermaidSettingsMenuOpen ? 'md:bg-default' : ''}
+            />,
+          ],
+        })
+        // The flat list the non-ribbon floating toolbar uses has no room for
+        // captioned clusters, so it gets the settings button only. It is also what
+        // `hasContextualTab` counts, so this must be non-empty for the tab to
+        // exist at all.
+        contextualButtons.push(
+          <ToolbarButton
+            key="ctx-mermaid-settings-flat"
+            name="Mermaid settings"
+            iconName="tune"
+            onSelect={() => setIsMermaidSettingsMenuOpen(!isMermaidSettingsMenuOpen)}
+          />,
+        )
+        break
+      }
       case ContextualWidgetKind.Image:
         contextualButtons.push(
           <ToolbarButton
@@ -3034,7 +3228,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     if (contextualSegments.length === 0 && contextualButtons.length > 1) {
       contextualSegments.push({
         key: 'ctx-actions',
-        caption: contextualWidget.label,
+        caption: effectiveContextualWidget.label,
         // All buttons gathered before the zoom button was appended.
         buttons: contextualButtons.slice(0, -1),
       })
@@ -3048,10 +3242,10 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // is NOT auto-activated — the user stays on whatever tab they were on and may
   // click into it themselves. (The separate line is kept only for the non-ribbon
   // floating selection toolbar, further below.)
-  const hasContextualTab = canShowAllItems && !!contextualWidget && contextualButtons.length > 0
+  const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
     ...superGroupTabs.map((tab) => ({ id: tab.id as string, label: tab.label })),
-    ...(hasContextualTab ? [{ id: CONTEXTUAL_TAB_ID, label: contextualWidget!.label }] : []),
+    ...(hasContextualTab ? [{ id: CONTEXTUAL_TAB_ID, label: effectiveContextualWidget!.label }] : []),
   ]
   const effectiveTabId =
     activeTabId && ribbonTabs.some((tab) => tab.id === activeTabId) ? activeTabId : (ribbonTabs[0]?.id ?? null)
@@ -3432,7 +3626,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 // blocks instead of one flat run of buttons.
                 className="super-toolbar flex flex-grow flex-wrap items-center gap-1.5 gap-y-1 px-1 pt-1 pb-1"
                 store={contextualToolbarStore}
-                aria-label={`${contextualWidget?.label ?? ''} tools`}
+                aria-label={`${effectiveContextualWidget?.label ?? ''} tools`}
               >
                 {contextualSegments.map((segment) => (
                   // Reuse the exact segment container + caption treatment used by
@@ -3658,15 +3852,15 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
             is active, its tailored actions get a dedicated row labelled with the
             element type. In ribbon mode this surfaces as a ribbon tab instead, so
             this separate line is kept only for the floating selection toolbar. */}
-        {!canShowAllItems && contextualWidget && contextualButtons.length > 0 && (
+        {!canShowAllItems && effectiveContextualWidget && contextualButtons.length > 0 && (
           <div className="border-border flex w-full flex-shrink-0 items-start gap-1.5 border-t px-1 py-0.5">
             <span className="bg-info/10 text-info mt-0.5 flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap uppercase select-none">
-              {contextualWidget.label}
+              {effectiveContextualWidget.label}
             </span>
             <Toolbar
               className="super-toolbar flex flex-1 flex-wrap items-center gap-0.5 gap-y-1"
               store={contextualToolbarStore}
-              aria-label={`${contextualWidget.label} tools`}
+              aria-label={`${effectiveContextualWidget.label} tools`}
             >
               {contextualButtons}
             </Toolbar>
@@ -4603,6 +4797,28 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           />
         </div>
       </Popover>
+      {/* Standard Red Notes — the Mermaid section's settings popover. Its content
+          is the SAME MermaidSettingsPanel the diagram block's own top bar mounts,
+          handed the same props object the section's inline clusters use, so the
+          chart's bar and the toolbar cannot disagree about a single setting. */}
+      <Popover
+        title="Mermaid settings"
+        anchorElement={mermaidSettingsAnchorRef}
+        open={isMermaidSettingsMenuOpen && mermaidSelection !== null}
+        togglePopover={() => setIsMermaidSettingsMenuOpen(!isMermaidSettingsMenuOpen)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="py-1"
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="w-80 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
+          <MermaidSettingsPanel {...mermaidSettingsPanelProps} />
+        </div>
+      </Popover>
       <Popover
         title={t('changeCase')}
         anchorElement={caseAnchorRef}
@@ -5413,7 +5629,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
       {zoomBlockKey && (
         <BlockZoomOverlay
           blockKey={zoomBlockKey}
-          label={contextualWidget?.label ?? activeBlockLabel}
+          label={effectiveContextualWidget?.label ?? activeBlockLabel}
           onClose={() => setZoomBlockKey(null)}
           portalElement={popoverDocumentElement}
         />
