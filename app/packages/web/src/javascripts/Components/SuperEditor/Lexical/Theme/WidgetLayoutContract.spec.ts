@@ -122,5 +122,17 @@ describe('Super widget layout contract', () => {
     expect(exportScss).toMatch(
       /@media print[\s\S]*\.Lexical__tableScrollableWrapper[\s\S]*overflow:\s*visible !important/,
     )
+    // PAPER OVERRIDES THE COLUMN FIT. editor.scss is part of the exported file's
+    // <style> (NoteExportUtils.ts), and the fit rule's two attribute selectors
+    // outrank export-overrides' bare `.Lexical__table` — measured in Chrome, the
+    // exported table is 601px with 200/200/200 columns rather than filling a 900px
+    // page. On paper it must still fill, and only `!important` can say so, since
+    // no amount of specificity in the print block would outrank the fit rule.
+    // Both anchors below are load-bearing, and both were put there by deleting the
+    // `!important` and watching this assertion stay GREEN: `.Lexical__table[^{]*\{`
+    // also matches `.Lexical__tableScrollableWrapper {`, whose own
+    // `inline-size: 100% !important` satisfied it; and a bare `inline-size:` is a
+    // substring of the `max-inline-size: 100% !important` two lines below it.
+    expect(editorScss).toMatch(/@media print[\s\S]*\.Lexical__table\s*\{[^}]*(?<![-\w])inline-size:\s*100% !important/s)
   })
 })

@@ -543,11 +543,24 @@ export const TABLE_HEADERS_ATTRIBUTE = 'data-super-table-headers'
 /** Selector hook for "this table is exactly as wide as its declared columns". */
 export const TABLE_FIT_ATTRIBUTE = 'data-super-table-fit'
 /**
- * How the measure itself reaches the stylesheet. A custom property rather than
- * an inline `inline-size`, so the rule that consumes it stays in editor.scss
- * where the rest of the table geometry lives, and so the DOCUMENT export paths —
- * which deliberately make every table fill the page — are unaffected: nothing
- * there reads this property, and an inline width would have overridden them.
+ * How the measure itself reaches the stylesheet: a custom property rather than an
+ * inline `inline-size`, so the rule that consumes it stays in editor.scss with
+ * the rest of the table geometry instead of becoming an inline width on an
+ * element Lexical manages.
+ *
+ * It DOES travel into the standalone HTML export, whose `<style>` is
+ * `_colors.scss` + `editor.scss` + `export-overrides.scss` (NoteExportUtils.ts),
+ * and the fit rule's `table.Lexical__table[…][…]` outranks that sheet's
+ * `.Lexical__table { inline-size: 100% }`. Measured in Chrome on a 900px page: the
+ * exported table is 601px with 200/200/200 columns — the same as on screen —
+ * while the same table without the attribute fills the page at 900px with
+ * 299.66px columns. That is deliberate: exact columns should be exact in both
+ * places. PAPER still fills, because editor.scss's `@media print` block claims
+ * `.Lexical__table { inline-size: 100% !important }`, and importance outranks the
+ * fit rule's specificity (asserted as CSS text in WidgetLayoutContract.spec.ts;
+ * emulating print media over CDP was tried and does not discriminate, so it is
+ * NOT offered as evidence). The DOCX / ODT / PDF generators read `columnWidths`
+ * and never CSS at all.
  */
 export const TABLE_FIT_WIDTH_PROPERTY = '--super-table-fit-width'
 
