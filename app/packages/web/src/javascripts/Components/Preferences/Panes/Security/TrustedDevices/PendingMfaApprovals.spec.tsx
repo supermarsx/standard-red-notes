@@ -182,6 +182,35 @@ describe('PendingMfaApprovals poll cadence', () => {
     expect(listPendingMfaApprovals).toHaveBeenCalledTimes(2)
   })
 
+  /**
+   * Standard Red Notes (t103): the missing direction of (c). The pane normally mounts
+   * while the push socket is still CONNECTING — the 101 takes tens of milliseconds and
+   * the first tick is 20 s later — so `isWebSocketConnectionOpen()` is false at mount
+   * in the ordinary case. Were the cadence captured once (at mount, or in an effect
+   * whose dependencies omit the socket) the pane would re-read the inbox every 20 s for
+   * as long as it stayed open, against a socket that opened milliseconds in.
+   */
+  it('(c) converges onto the long cadence when the push lane lands after mount', async () => {
+    const { application, state, listPendingMfaApprovals } = makeApplication({ socketOpen: false })
+    await render(application)
+
+    // Precondition: it starts on the short cadence, so the long one proved below is a
+    // change rather than the state it mounted in.
+    await advance(CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(2)
+
+    state.socketOpen = true
+
+    // Five further short ticks. A cadence frozen at mount would re-read on each.
+    const frozenCadenceReads = 5
+    expect(frozenCadenceReads).toBeGreaterThan(1)
+    await advance(frozenCadenceReads * CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(2)
+
+    await advance(CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(3)
+  })
+
   it('re-reads immediately when a new approval request is pushed', async () => {
     const { application, observers, listPendingMfaApprovals } = makeApplication({ socketOpen: true })
     await render(application)

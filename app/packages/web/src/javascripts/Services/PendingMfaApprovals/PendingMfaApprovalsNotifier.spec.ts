@@ -146,6 +146,48 @@ describe('PendingMfaApprovalsNotifier safety-net poll', () => {
     notifier.deinit()
   })
 
+  /**
+   * Standard Red Notes (t103): the other direction of the same property, and the one
+   * that was never pinned. A tab mounts while its push socket is still CONNECTING —
+   * the 101 takes tens of milliseconds and the first tick is 20 s later, so this is
+   * the ordinary case, not a corner — and `isWebSocketConnectionOpen()` is false at
+   * that moment. If the cadence were sampled once (at construction, or in an effect
+   * whose dependencies omit the socket) the tab would poll every 20 s for the life of
+   * the page against a socket that opened milliseconds in. It is re-read per tick, and
+   * this is what says so.
+   */
+  it('converges onto the open-socket cadence when the connection lands after it mounted', async () => {
+    const { application, state, listPendingMfaApprovals } = createApplication({ socketOpen: false })
+    const notifier = new PendingMfaApprovalsNotifier(application)
+
+    // Precondition: it really is on the fast cadence to begin with, so the slow
+    // cadence proved below is a change and not the starting state.
+    await jest.advanceTimersByTimeAsync(CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(1)
+
+    // The socket finishes connecting.
+    state.socketOpen = true
+
+    // Five further ticks of the FAST interval. A cadence frozen at mount would have
+    // polled on every one of them, so the count here is 1 or 6 — never ambiguous.
+    const frozenCadencePolls = 5
+    await jest.advanceTimersByTimeAsync(frozenCadencePolls * CLOSED_INTERVAL)
+    expect(frozenCadencePolls).toBeGreaterThan(1)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(1)
+
+    // ...and it polls once the OPEN cadence has elapsed since the last poll.
+    await jest.advanceTimersByTimeAsync(CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(2)
+
+    // Settled, not a one-off: the next poll is another full open interval away.
+    await jest.advanceTimersByTimeAsync(OPEN_INTERVAL - CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(2)
+    await jest.advanceTimersByTimeAsync(CLOSED_INTERVAL)
+    expect(listPendingMfaApprovals).toHaveBeenCalledTimes(3)
+
+    notifier.deinit()
+  })
+
   it('skips ticks while hidden and polls at once on becoming visible, throttled to 5 s', async () => {
     const { application, listPendingMfaApprovals } = createApplication({ socketOpen: true })
     const notifier = new PendingMfaApprovalsNotifier(application)
