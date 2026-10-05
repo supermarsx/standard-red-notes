@@ -142,6 +142,68 @@ export const REALTIME_TOKEN_PATHS: readonly string[] = [
 export const SECOND_FACTOR_PATHS: readonly string[] = ['/v1/login-params', '/v2/login-params']
 
 /**
+ * Standard Red Notes: SESSION REFRESH, which the `auth-session-refresh` bucket
+ * covers.
+ *
+ * `POST /v1/sessions/refresh` (SessionsController, `@httpPost('/refresh')` — the
+ * one route on that controller with no `RequiredCrossServiceTokenMiddleware`)
+ * accepts a refresh token and returns a rotated session pair. It is a CREDENTIAL
+ * ENDPOINT reachable without a live access-token session, and it sat in no bucket
+ * at all, so it had no per-address ceiling of any kind.
+ *
+ * Only `/v1` exists today and it declares POST; both verbs are listed on both
+ * version prefixes anyway, for exactly the reason the second-factor bucket was
+ * written that way — a verb change or a `/v2` sibling (there is already a `/v2`
+ * for actions, payments and revisions) must not be able to drop the route out of
+ * its bucket again. The AUTHENTICATED session-management routes on the same
+ * controller (`GET /v1/sessions`, `DELETE /v1/sessions`, `DELETE
+ * /v1/sessions/:uuid`) are deliberately not here: they sit behind the
+ * cross-service token middleware and check no credential of their own.
+ *
+ * Not reachable over the socket RPC lane either: `/v1/sessions` is already a
+ * member of LoopbackSyncApiRpcAdapter's FORBIDDEN_RPC_ROUTE_FAMILIES, so this
+ * gateway bucket is the only entrance there is.
+ */
+export const SESSION_REFRESH_PATHS: readonly string[] = ['/v1/sessions/refresh', '/v2/sessions/refresh']
+
+/**
+ * Standard Red Notes: THE REFRESH CEILING, and why it is this generous.
+ *
+ * A limit that strands a real user is worse than no limit: a throttled refresh
+ * means the access token expires, the client cannot sync, and the person is
+ * effectively signed out by their own rate limiter. Two things make a legitimate
+ * burst larger than intuition suggests:
+ *
+ *   - SEVERAL TABS OR DEVICES SHARE ONE ADDRESS. Refresh is keyed on the client
+ *     IP (see below), and each browser tab is its own app instance with its own
+ *     in-flight-refresh deduplication, so N tabs behind one NAT legitimately
+ *     issue N refreshes within the same second.
+ *   - A SUPERSEDED REFRESH TOKEN STAYS REPLAYABLE FOR 120 SECONDS BY DESIGN — a
+ *     cooldown that exists so a client whose response was dropped can retry the
+ *     same token instead of losing its session. Those retries are legitimate
+ *     traffic and have to fit inside the allowance.
+ *
+ * Against that, the legitimate STEADY-STATE rate is almost nothing. The client
+ * refreshes reactively — only after a 498 on some other request — and
+ * ACCESS_TOKEN_AGE defaults to 5 184 000 seconds, sixty days, so one session
+ * refreshes about six times a year. Nothing refreshes on a timer.
+ *
+ * So: six times the login tier, with a FLOOR of 30 per window. At stock settings
+ * (loginMax 10) that is 60 per 60 seconds per address — enough for sixty distinct
+ * sessions behind one address to refresh in the same minute, something that could
+ * only happen once every sixty days even if they were all created at the same
+ * instant, and enough for a mass reconnect after a network blip with cooldown
+ * replays on top. The floor matters because an operator who HARDENS the login
+ * tier (loginMax 3, say) must not accidentally break session refresh for a
+ * household behind one address; the multiplier matters because an operator who
+ * raises the login tier has a busy server and should get headroom here too.
+ */
+export const SESSION_REFRESH_LIMIT_MULTIPLIER = 6
+export const SESSION_REFRESH_MIN_LIMIT = 30
+export const sessionRefreshLimit = (loginMax: number): number =>
+  Math.max(SESSION_REFRESH_MIN_LIMIT, loginMax * SESSION_REFRESH_LIMIT_MULTIPLIER)
+
+/**
  * Per-session subject for the realtime-token bucket: a digest of the presented
  * bearer credential (never the credential itself — it is a Redis key). A rotated
  * bogus bearer only buys 401s from the cross-service token middleware, never a
@@ -213,6 +275,42 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
         const verb = method.toUpperCase()
 
         return (verb === 'GET' || verb === 'POST') && SECOND_FACTOR_PATHS.includes(normalizedPath)
+      },
+    },
+    {
+      /**
+       * Standard Red Notes: session refresh (see SESSION_REFRESH_PATHS and
+       * sessionRefreshLimit for the paths and the ceiling).
+       *
+       * Its own bucket, so a refresh storm after a network blip cannot consume the
+       * sign-in allowance and a sign-in attempt cannot consume the refresh
+       * allowance — the second property is the one that matters, because being
+       * unable to refresh is being signed out.
+       *
+       * KEYED ON THE CLIENT IP, with no `subject` override, like every other auth
+       * bucket here. The realtime-token bucket keys on a digest of the presented
+       * bearer because a rotated bogus bearer buys nothing there; that reasoning
+       * does NOT carry over to this endpoint. A rotated credential here would buy
+       * the full session lookup on every request, so keying on it would hand an
+       * attacker an unlimited allowance — and a cookie-based session presents no
+       * Authorization header at all, so half the callers would silently fall back
+       * to the IP anyway. Shared-NAT callers therefore share this ceiling, which
+       * is exactly why it is set six times higher than the login tier.
+       *
+       * WHAT IT IS AND IS NOT FOR. A refresh token is long and random, so this is
+       * not a guessing brake; it caps the unmetered session lookup, token rotation
+       * and session write that any unauthenticated caller could previously drive
+       * at line rate, and it puts the endpoint inside the throttle telemetry and
+       * the adaptive-escalation signal that every other credential endpoint is
+       * already inside.
+       */
+      bucket: 'auth-session-refresh',
+      limit: sessionRefreshLimit(limits.loginMax),
+      windowSeconds: limits.windowSeconds,
+      match: (method: string, normalizedPath: string): boolean => {
+        const verb = method.toUpperCase()
+
+        return (verb === 'GET' || verb === 'POST') && SESSION_REFRESH_PATHS.includes(normalizedPath)
       },
     },
     {

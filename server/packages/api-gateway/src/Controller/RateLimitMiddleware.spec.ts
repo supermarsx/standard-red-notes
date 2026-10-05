@@ -6,6 +6,7 @@ import {
   normalizeRateLimitPath,
   RateLimitRedis,
   SECOND_FACTOR_PATHS,
+  SESSION_REFRESH_PATHS,
 } from './RateLimitMiddleware'
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
@@ -136,6 +137,13 @@ describe('RateLimitMiddleware', () => {
       ['POST', '/v1/login-params', 'auth-second-factor'],
       ['GET', '/v2/login-params', 'auth-second-factor'],
       ['POST', '/v2/login-params', 'auth-second-factor'],
+      // Session refresh. It accepts a refresh token, so it is a credential
+      // endpoint; only v1 exists today and it declares POST, so both verbs are
+      // covered on both version prefixes for the same reason as the MFA gate.
+      ['POST', '/v1/sessions/refresh', 'auth-session-refresh'],
+      ['GET', '/v1/sessions/refresh', 'auth-session-refresh'],
+      ['POST', '/v2/sessions/refresh', 'auth-session-refresh'],
+      ['GET', '/v2/sessions/refresh', 'auth-session-refresh'],
       ['POST', '/v1/users', 'auth-sensitive'],
       ['POST', '/v1/mcp-tokens/authenticate', 'auth-sensitive'],
       ['POST', '/v1/mfa/magic-link/request', 'auth-sensitive'],
@@ -174,6 +182,77 @@ describe('RateLimitMiddleware', () => {
       expect(bucketFor('GET', '/v1/login')).toBeUndefined()
       // Recovery key params is a different endpoint and keeps its login-tier place.
       expect(bucketFor('POST', '/v1/recovery/login-params')).toEqual('auth-login')
+    })
+
+    /**
+     * Standard Red Notes: SESSION REFRESH IS A CREDENTIAL ENDPOINT.
+     *
+     * `POST /v1/sessions/refresh` takes a refresh token and hands back a rotated
+     * session pair, with no access-token session in front of it — and it sat in no
+     * bucket at all, so it had no per-address ceiling of any kind. The membership
+     * table above is what makes that kind of omission visible, which is why these
+     * rows live in it rather than in a spec of their own.
+     *
+     * THE CEILING IS THE WHOLE DESIGN HERE, because a limit that strands a real
+     * user is worse than no limit: a throttled refresh means the access token
+     * expires and the client cannot sync. Two things make a legitimate burst
+     * bigger than you would guess:
+     *
+     *   - SEVERAL TABS OR DEVICES SHARE ONE ADDRESS. Each browser tab is its own
+     *     app instance with its own in-flight-refresh deduplication, so N tabs
+     *     behind one NAT can issue N refreshes within the same second.
+     *   - A SUPERSEDED REFRESH TOKEN STAYS REPLAYABLE FOR 120s BY DESIGN, so a
+     *     client whose response was dropped legitimately retries the same token.
+     *     That cooldown replay must stay inside the allowance.
+     *
+     * Against that, the legitimate STEADY-STATE rate is almost nothing: refresh is
+     * reactive (the client refreshes only after a 498 on some other request) and
+     * ACCESS_TOKEN_AGE defaults to 5 184 000 seconds — sixty days. So the ceiling
+     * is set at six times the login tier with a floor of 30 per window, which is
+     * unreachable by legitimate traffic and still caps an unauthenticated flood.
+     */
+    it('meters session refresh well above the login ceiling, in its own bucket', () => {
+      const refresh = rules.find((rule) => rule.bucket === 'auth-session-refresh')
+
+      expect(refresh).toBeDefined()
+      expect(refresh?.windowSeconds).toEqual(limits.windowSeconds)
+      // Keyed on the client IP like every other auth bucket here: keying on the
+      // presented credential would let a caller rotate the header for a fresh
+      // allowance, and a cookie-session refresh presents no bearer at all.
+      expect(refresh?.subject).toBeUndefined()
+      // Strictly more generous than the login tier, which is the property that
+      // keeps several tabs behind one address out of a 429.
+      expect(refresh?.limit).toBeGreaterThan(limits.loginMax)
+    })
+
+    it.each([
+      [2, 30],
+      [5, 30],
+      [10, 60],
+      [100, 600],
+    ])('derives a refresh ceiling of %i -> %i per window, never below the floor', (loginMax, expected) => {
+      const scaled = buildDefaultRateLimitRules({ windowSeconds: 60, loginMax, registrationMax: 5 })
+      const refresh = scaled.find((rule) => rule.bucket === 'auth-session-refresh')
+
+      expect(refresh?.limit).toEqual(expected)
+    })
+
+    it('covers every path that reaches session refresh', () => {
+      expect([...SESSION_REFRESH_PATHS]).toEqual(['/v1/sessions/refresh', '/v2/sessions/refresh'])
+      for (const path of SESSION_REFRESH_PATHS) {
+        expect(bucketFor('GET', path)).toEqual('auth-session-refresh')
+        expect(bucketFor('POST', path)).toEqual('auth-session-refresh')
+      }
+    })
+
+    it('leaves the authenticated session-management routes alone', () => {
+      // Listing and revoking sessions sit behind the cross-service token
+      // middleware and are not credential checks; they must not be dragged in.
+      expect(bucketFor('GET', '/v1/sessions')).toBeUndefined()
+      expect(bucketFor('DELETE', '/v1/sessions')).toBeUndefined()
+      expect(bucketFor('DELETE', '/v1/sessions/0ff0a1ce-0000-4000-8000-000000000000')).toBeUndefined()
+      expect(bucketFor('DELETE', '/v1/sessions/refresh')).toBeUndefined()
+      expect(bucketFor('POST', '/v1/sessions/refresh/extra')).toBeUndefined()
     })
   })
 
@@ -234,6 +313,43 @@ describe('RateLimitMiddleware', () => {
       expect(res.status).toHaveBeenCalledWith(429)
       expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '42')
       expect(next).toHaveBeenCalledTimes(2)
+    })
+
+    /**
+     * Standard Red Notes: the membership table above asserts which bucket the rule
+     * set PUTS this path in; this asserts that a real refresh request actually
+     * REACHES that bucket through the middleware — that the normalized path, the
+     * verb and the Redis key all line up — and that the generous ceiling leaves
+     * room for the legitimate bursts the endpoint has to tolerate (several tabs
+     * behind one address, plus the by-design 120-second cooldown replay of a
+     * superseded refresh token).
+     */
+    it('meters a real session-refresh request in the refresh bucket, with room for a burst', async () => {
+      const next: NextFunction = jest.fn()
+      const redis = buildRedis()
+      const middleware = createRateLimitMiddleware({ redis, config, logger: { warn: jest.fn() } })
+      const refreshRequest = (): Request => buildRequest({ method: 'POST', path: '/v1/sessions/refresh' })
+      // The ceiling in play: loginMax is 2 here, so the floor (30) applies.
+      const ceiling = buildDefaultRateLimitRules(limits).find((rule) => rule.bucket === 'auth-session-refresh')?.limit
+      expect(ceiling).toEqual(30)
+
+      for (let attempt = 0; attempt < (ceiling as number); attempt++) {
+        middleware(refreshRequest(), buildResponse().response, next)
+        await flush()
+      }
+
+      // It landed in the refresh bucket and nowhere else — a 31st login request
+      // would have been throttled long ago at loginMax 2.
+      expect(redis.expire).toHaveBeenCalledWith('rl:auth-session-refresh:1.2.3.4', 60)
+      expect(redis.incr).toHaveBeenCalledWith('rl:auth-session-refresh:1.2.3.4')
+      expect(next).toHaveBeenCalledTimes(ceiling as number)
+
+      const overTheTop = buildResponse()
+      middleware(refreshRequest(), overTheTop.response, next)
+      await flush()
+
+      expect(overTheTop.status).toHaveBeenCalledWith(429)
+      expect(next).toHaveBeenCalledTimes(ceiling as number)
     })
 
     it('sets the TTL only on the first request of a window', async () => {
