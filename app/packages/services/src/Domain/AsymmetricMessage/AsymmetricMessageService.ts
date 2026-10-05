@@ -295,9 +295,14 @@ export class AsymmetricMessageService
   }
 
   async handleTrustedSharedVaultRootKeyChangedMessage(
-    _message: AsymmetricMessageServerHash,
+    message: AsymmetricMessageServerHash,
     trustedPayload: AsymmetricMessageSharedVaultRootKeyChanged,
   ): Promise<void> {
-    await this._handleRootKeyChangedMessage.execute(trustedPayload)
+    // `sender_uuid` is stamped by the server from the authenticated sender's session, never from the
+    // request body, so it is the right identity to authorize against. The use case rejects the
+    // message unless that sender owns the vault the key system belongs to — decrypting and
+    // signature-verifying a message only proves it came from SOME trusted contact, which is not the
+    // same thing as the owner of this vault.
+    await this._handleRootKeyChangedMessage.execute(trustedPayload, message.sender_uuid)
   }
 }
