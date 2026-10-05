@@ -22,6 +22,18 @@ type SessionValidationResult = {
   data: unknown
 }
 
+/**
+ * The single-container seam onto `ServiceProxyInterface.validateSession`, which
+ * `DirectCallServiceProxy` implements.
+ *
+ * `cookies` is NOT optional decoration: a cookie-based session (auth's
+ * `SessionService.COOKIE_SESSION_TOKEN_VERSION`) is authenticated by
+ * `GetSessionFromToken` ONLY through its `access_token_<sessionUuid>` cookie --
+ * the header-token branch explicitly refuses it -- so a port that cannot carry
+ * cookies can never authorize a cookie session on this lane. Declared here in
+ * exactly the shape `ServiceProxyInterface` already accepts, so the single- and
+ * multi-container authorizers hand the session plane the same thing.
+ */
 export interface HomeServerSessionValidationPort {
   validateSession(input: {
     headers: {
@@ -32,6 +44,7 @@ export interface HomeServerSessionValidationPort {
       url: string
       method: string
     }
+    cookies?: Map<string, string[]>
   }): Promise<SessionValidationResult>
 }
 
@@ -137,8 +150,8 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
    * exist and "denied" for a real owner the caller is not a member of -- an
    * existence oracle for other people's vault owners. Every shared-vault refusal
    * therefore stays on FILE_ACCESS_DENIED. A personal resource sends nothing
-   * resource-derived at all, so its verdict reveals only the caller's own
-   * credential.
+   * resource-derived at all -- the bearer, its cookies and a fixed url -- so its
+   * verdict reveals only the caller's own credential.
    *
    * An ABORT is not a verdict: the transfer deadline owns it, and the session was
    * never judged.
@@ -164,6 +177,9 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
     }
     const ownerContext =
       input.resource.ownershipType === 'shared-vault' ? input.resource.sharedVaultOwnerUuid : undefined
+    // Same credential gap as the sync lane: a cookie-based session authenticates
+    // ONLY through `access_token_<uuid>`, so the bearer alone can never validate it.
+    const cookies = sessionCookiesToMap(input.identity.sessionCookies)
     let response: SessionValidationResult
     try {
       response = await abortable(
@@ -173,6 +189,7 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
             ...(ownerContext ? { sharedVaultOwnerContext: ownerContext } : {}),
           },
           requestMetadata: { url: '/sockets/sync/files', method: 'POST' },
+          ...(cookies ? { cookies } : {}),
         }),
         signal,
       )
@@ -184,11 +201,13 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
     if (response.status !== 200 || !isObject(response.data) || typeof response.data.authToken !== 'string') {
       throw new FileSessionCredentialError(
         'File session is no longer authorized.',
-        // `HomeServerSessionValidationPort` carries no cookie channel, so a
-        // cookie session's bearer reaches auth alone and is refused on its own
-        // merits -- but the shape test still runs, so the one credential that
-        // provably cannot authenticate is never read as a revocation. Identical
-        // to the sync lane's REAUTH pre-flight.
+        // A credential that cannot authenticate shape-wise (a cookie session
+        // whose `access_token_<uuid>` was never captured at ticket time) makes
+        // auth's inevitable 401 no evidence about the session, exactly as on the
+        // sync lane's REAUTH pre-flight. The shape test is only sound because
+        // the cookies it inspects are the same ones the call above actually
+        // sent: were the port to drop them again, a live cookie session would
+        // pass the shape test, collect auth's 401 and be classified REVOKED.
         credentialCanAuthenticateSession(authorization, input.identity)
           ? { reached: true, status: response.status }
           : { reached: false },
@@ -448,6 +467,32 @@ function isSharedVaultValetToken(value: unknown): value is HomeServerSharedVault
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The ticket's captured session cookies in the shape
+ * `HomeServerSessionValidationPort.validateSession` (i.e.
+ * `ServiceProxyInterface.validateSession`) takes, which is also the shape
+ * `AuthMiddleware` builds -- so this lane and an ordinary HTTP request hand auth
+ * the same thing.
+ *
+ * Deliberately a local twin of api-gateway's `sessionCookiesToMap` rather than
+ * an import: that module is not part of `@standardnotes/api-gateway`'s public
+ * entry point, and the shape both sides must agree on is the port type above,
+ * which this file owns. Returns undefined for an empty capture so the `cookies`
+ * key is omitted entirely rather than sent empty.
+ */
+function sessionCookiesToMap(
+  cookies: AuthorizationInput['identity']['sessionCookies'],
+): Map<string, string[]> | undefined {
+  if (!cookies) {
+    return undefined
+  }
+  const map = new Map<string, string[]>()
+  for (const [name, values] of Object.entries(cookies)) {
+    map.set(name, [...values])
+  }
+  return map.size > 0 ? map : undefined
 }
 
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
