@@ -1638,6 +1638,184 @@ describe('EncryptedYjsProvider convergence', () => {
     }
   })
 
+  it('names the cause a spent reconnect ladder died on and never mints its own capability', async () => {
+    jest.useFakeTimers()
+    const random = jest.spyOn(Math, 'random').mockReturnValue(1)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const release = jest.fn()
+    const onBootstrapRetry = jest.fn()
+    const onFatal = jest.fn()
+    const authorize = jest.fn()
+    const sent: CollabFrame[] = []
+    let status: ((connected: boolean) => void) | undefined
+    let connected = true
+    let connectedChecks = 0
+    const denialReason = 'This connection has reached its limit of live collaboration rooms.'
+    const channel: CollabChannel = {
+      isConnected: () => {
+        connectedChecks += 1
+        return connected
+      },
+      authorize,
+      subscribe: () => jest.fn(),
+      subscribeStatus: (handler) => {
+        status = handler
+        return () => {
+          status = undefined
+        }
+      },
+      send: (frame) => {
+        sent.push(frame)
+      },
+    }
+    const reactivate = jest.fn().mockResolvedValue({ reason: denialReason })
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'ladder-cause-room',
+      channel,
+      createTestTransportCipher(),
+      undefined,
+      'ladder-cause-lease',
+      {
+        activeLease: {
+          requestId: 'ladder-cause-lease',
+          shouldBootstrap: true,
+          protocolVersion: 3,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          release,
+        },
+        shouldBootstrap: true,
+        validateAttachment: jest.fn(() => true),
+        reactivate,
+        onFatal,
+        onBootstrapRetry,
+      },
+    )
+
+    try {
+      provider.connect()
+      await Promise.resolve()
+      // Precondition: the hook-activated lease really attached, so what follows is
+      // a REactivation ladder and not a first join that never got off the ground.
+      expect(provider.isRoomJoined()).toBe(true)
+      expect(reactivate).not.toHaveBeenCalled()
+      expect(provider.getLastLeaseFailure()).toBeUndefined()
+
+      connected = false
+      status?.(false)
+      connected = true
+      status?.(true)
+      await Promise.resolve()
+      // Precondition: the socket came back and drove exactly one reactivation
+      // before any retry timer existed.
+      expect(reactivate).toHaveBeenCalledTimes(1)
+      const checksAfterReconnect = connectedChecks
+
+      await jest.advanceTimersByTimeAsync(31_000)
+      await provider.flush()
+
+      // One reconnect reactivation plus the bounded ladder's five retries.
+      expect(reactivate).toHaveBeenCalledTimes(6)
+      // Precondition: the ladder really re-examined a socket it believed open at
+      // each retry, so these are live attempts and not a drained timer queue.
+      expect(connectedChecks).toBeGreaterThan(checksAfterReconnect)
+      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(onFatal).not.toHaveBeenCalled()
+      // The production ladder must never mint a capability itself nor replay a
+      // room-join: the hook owns the reserve/activate handshake.
+      expect(authorize).not.toHaveBeenCalled()
+      expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(0)
+      // Every attempt states its cause, and the cap names the cause it died on.
+      expect(provider.getLastLeaseFailure()).toBe(denialReason)
+      const messages = consoleError.mock.calls.map((call) => String(call[0]))
+      expect(messages.filter((message) => message.includes('encrypted-yjs-lease-reactivation-failed'))).toHaveLength(6)
+      expect(messages).toContain(`[collab] encrypted-yjs-join-retries-exhausted attempts=5 reason=${denialReason}`)
+    } finally {
+      provider.destroy()
+      consoleError.mockRestore()
+      random.mockRestore()
+      jest.useRealTimers()
+    }
+  })
+
+  it('remounts without spending the retry ladder when reactivation requires a remount', async () => {
+    jest.useFakeTimers()
+    const random = jest.spyOn(Math, 'random').mockReturnValue(1)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const onBootstrapRetry = jest.fn()
+    let status: ((connected: boolean) => void) | undefined
+    let connected = true
+    const channel: CollabChannel = {
+      isConnected: () => connected,
+      authorize: jest.fn(),
+      subscribe: () => jest.fn(),
+      subscribeStatus: (handler) => {
+        status = handler
+        return () => {
+          status = undefined
+        }
+      },
+      send: jest.fn(),
+    }
+    const reactivate = jest.fn().mockResolvedValue({
+      reason: 'The collaboration room epoch changed while collaboration was reconnecting.',
+      requiresRemount: true as const,
+    })
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'ladder-remount-room',
+      channel,
+      createTestTransportCipher(),
+      undefined,
+      'ladder-remount-lease',
+      {
+        activeLease: {
+          requestId: 'ladder-remount-lease',
+          shouldBootstrap: true,
+          protocolVersion: 3,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          release: jest.fn(),
+        },
+        shouldBootstrap: true,
+        validateAttachment: jest.fn(() => true),
+        reactivate,
+        onFatal: jest.fn(),
+        onBootstrapRetry,
+      },
+    )
+
+    try {
+      provider.connect()
+      await Promise.resolve()
+      expect(provider.isRoomJoined()).toBe(true)
+
+      connected = false
+      status?.(false)
+      connected = true
+      status?.(true)
+      await Promise.resolve()
+      await jest.advanceTimersByTimeAsync(31_000)
+      await provider.flush()
+
+      // An epoch/security remount is NOT a retryable denial: one reactivation, one
+      // remount request, and no ladder at all.
+      expect(reactivate).toHaveBeenCalledTimes(1)
+      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      expect(provider.getLastLeaseFailure()).toBe(
+        'The collaboration room epoch changed while collaboration was reconnecting.',
+      )
+      const messages = consoleError.mock.calls.map((call) => String(call[0]))
+      expect(messages.filter((message) => message.includes('encrypted-yjs-join-retries-exhausted'))).toHaveLength(0)
+    } finally {
+      provider.destroy()
+      consoleError.mockRestore()
+      random.mockRestore()
+      jest.useRealTimers()
+    }
+  })
+
   it('survives a StrictMode connect-disconnect-connect replay without destroying awareness or using legacy join', async () => {
     const sent: CollabFrame[] = []
     let inbound: ((frame: CollabFrame) => void) | undefined

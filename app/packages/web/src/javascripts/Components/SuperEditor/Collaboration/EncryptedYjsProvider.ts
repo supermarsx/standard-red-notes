@@ -184,6 +184,15 @@ export class EncryptedYjsProvider implements Provider {
   private pendingStateResponseRequestId: string | undefined
   private stateResponseTimeout: ReturnType<typeof setTimeout> | undefined
   private lastSyncFailure: string | undefined
+  /**
+   * Why the most recent lease reactivation failed. The bounded join-retry ladder
+   * treats EVERY non-remount lease failure identically, so without this the only
+   * observable trace of a room that refuses a reconnecting editor five times is
+   * five authorize round trips with no stated cause. Deliberately NOT folded into
+   * `lastSyncFailure`: that value gates canonical readiness in CollaborationPlugin,
+   * and a transient reactivation failure must not flip that gate.
+   */
+  private lastLeaseFailure: string | undefined
   private currentLease: ActiveEditorCollaborationLease | undefined
   private transportGeneration = 0
   private reactivatingGeneration: number | undefined
@@ -484,6 +493,7 @@ export class EncryptedYjsProvider implements Provider {
     this.joined = true
     this.startPresenceHeartbeat()
     this.joinRetryAttempts = 0
+    this.lastLeaseFailure = undefined
     this.clearJoinRetry()
     this.clearStateRequest()
     this.correlatedStateAttempts = 0
@@ -576,6 +586,7 @@ export class EncryptedYjsProvider implements Provider {
     try {
       const lease = await this.options.reactivate()
       if ('reason' in lease) {
+        this.recordLeaseFailure(lease.reason)
         if (lease.requiresRemount) {
           this.options.onBootstrapRetry?.()
         } else if (this.connected && this.channel.isConnected()) {
@@ -593,6 +604,7 @@ export class EncryptedYjsProvider implements Provider {
       }
       await this.attachActiveLease(lease)
     } catch {
+      this.recordLeaseFailure('lease-reactivation-threw')
       if (this.connected && this.channel.isConnected()) {
         this.scheduleJoinRetry()
       }
@@ -2751,6 +2763,25 @@ export class EncryptedYjsProvider implements Provider {
     console.error(`[collab] ${reason}`)
   }
 
+  /**
+   * Name why a lease reactivation failed, once per attempt, with the attempt
+   * number the ladder is on. Every reason the hook produces is a static literal
+   * authored in this repository, so nothing user-derived reaches the console; the
+   * bound is belt and braces against a future dynamic reason.
+   */
+  private recordLeaseFailure(reason: string): void {
+    const bounded = reason.slice(0, 200)
+    this.lastLeaseFailure = bounded
+    console.error(
+      `[collab] encrypted-yjs-lease-reactivation-failed attempt=${this.joinRetryAttempts} reason=${bounded}`,
+    )
+  }
+
+  /** The most recent lease reactivation failure, for diagnosing a spent retry ladder. */
+  getLastLeaseFailure(): string | undefined {
+    return this.lastLeaseFailure
+  }
+
   private scheduleJoinRetry(): void {
     if (this.joinRetryTimeout !== undefined || !this.connected || !this.channel.isConnected()) {
       return
@@ -2758,7 +2789,13 @@ export class EncryptedYjsProvider implements Provider {
     if (this.joinRetryAttempts >= MAX_JOIN_RETRIES) {
       // Never leave a mounted editor permanently waiting on an open socket.
       // Production remounts through the bootstrap preparation barrier; direct
-      // consumers receive an explicit fatal fallback.
+      // consumers receive an explicit fatal fallback. Name the cause the ladder
+      // died on: five identical retries with no stated reason is undiagnosable.
+      console.error(
+        `[collab] encrypted-yjs-join-retries-exhausted attempts=${MAX_JOIN_RETRIES} reason=${
+          this.lastLeaseFailure ?? 'unknown'
+        }`,
+      )
       if (this.options) {
         this.requestBootstrapFailover()
       } else {
