@@ -285,4 +285,35 @@ describe('referencesToCSV', () => {
     expect(row).toContain('Article')
     expect(row).toContain('t1; t2')
   })
+
+  it('neutralises a formula-triggering cell in every third-party field', () => {
+    const out = referencesToCSV([
+      makeItem('=cmd|calc', {
+        kind: 'article',
+        authors: ['+1234'],
+        publisher: '-7',
+        url: '@example',
+        tags: ['\tlead'],
+        notes: 'safe',
+      }),
+    ])
+    const row = out.split('\n')[1]
+    // Every attacker-influenceable cell is prefixed with the spreadsheet
+    // literal-text marker, so no cell still BEGINS with a trigger character.
+    const cells = row.split(',')
+    for (const cell of cells) {
+      expect(/^[=+\-@\t\r]/.test(cell)).toBe(false)
+    }
+    expect(row).toContain("'=cmd|calc")
+    expect(row).toContain("'+1234")
+    expect(row).toContain("'-7")
+    expect(row).toContain("'@example")
+    // A cell that merely CONTAINS a trigger is untouched.
+    expect(row).toContain('safe')
+  })
+
+  it('quotes a cell carrying a lone CR so one field cannot split the row', () => {
+    const out = referencesToCSV([makeItem('before\rafter', { kind: 'article' })])
+    expect(out.split('\n')[1]).toContain('"before\rafter"')
+  })
 })

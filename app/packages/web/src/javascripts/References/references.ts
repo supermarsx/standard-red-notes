@@ -430,11 +430,26 @@ export function referencesToBibTeX(items: ReferenceItem[]): string {
 
 const CSV_COLUMNS = ['Title', 'Authors', 'Year', 'Type', 'Publisher', 'URL', 'Tags', 'Notes'] as const
 
+/**
+ * Escape one CSV field per RFC 4180: quote the value when it contains a comma,
+ * a double quote, a CR or an LF, doubling any embedded quote. A lone CR was
+ * previously unquoted, which let a single field split the row.
+ *
+ * Also neutralises SPREADSHEET FORMULA INJECTION. Reference metadata is
+ * third-party text — citation lookups, web search results, imported BibTeX — so
+ * a title, publisher, URL, tag or note may begin with a formula trigger (`=`,
+ * `+`, `-`, `@`) or a control character (tab/CR) that some parsers treat as
+ * one, and Excel/Sheets would evaluate the cell as a formula on open. Such a
+ * value is prefixed with a single quote (the spreadsheet "treat as literal
+ * characters" marker) BEFORE the RFC-4180 quoting is applied. Mirrors the
+ * hardened `csvEscape` in the Admin pane's export helpers.
+ */
 const csvEscape = (value: string): string => {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`
+  const neutralised = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
+  if (/[",\r\n]/.test(neutralised)) {
+    return `"${neutralised.replace(/"/g, '""')}"`
   }
-  return value
+  return neutralised
 }
 
 /** Export the library as CSV. Pure. */
