@@ -7,7 +7,6 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceProxy,
-  NOT_PUBLISHED,
   outcomesForSection,
   reportLine,
   safeConstant,
@@ -121,21 +120,40 @@ import { CLIENT_RECOGNIZED_ONLY_OPERATIONS, CLIENT_SYNC_OPERATIONS } from './syn
  *   - The database and internal transport are **Database & internal comms**'.
  *
  * -------------------------------------------------------------------------------
- * 4. Two fields this build asks for and no server sends.
+ * 4. Two fields this build said no server sends, and one of them was never true.
  * -------------------------------------------------------------------------------
  *
- * The per-account feature flags — `LIVE_SYNC_ENABLED` and
- * `COLLABORATION_ENABLED` — are written by the admin Users tab and read by the
- * server. There is NO endpoint through which a client can read its OWN effective
- * flags, so the only client-side evidence that live sync is off for this account
- * is the transport's `live-sync-disabled` refusal code, and there is no evidence
- * at all for collaboration.
+ * *** THE ENDPOINT EXISTED ALL ALONG. *** The per-account feature flags —
+ * `LIVE_SYNC_ENABLED` and `COLLABORATION_ENABLED` — are written by the admin
+ * Users tab, and this module recorded that "there is NO endpoint through which a
+ * client can read its OWN effective flags", so both rows printed the structural
+ * constant reserved for a field with no producer at all. There is one:
+ * `GET /v1/admin/users/:userUuid/feature-flags` answers both, and the admin Users
+ * tab has always read it. The gap was CLIENT WIRING, and a row that says "nothing
+ * publishes this" about a surface that does publish it is worse than an empty row:
+ * it closes the question.
  *
- * Both are declared here as optional inputs anyway, following the
- * `TransportFallbackView` precedent: the row exists, reads "not reported", and
- * states what it is waiting for. A row that is absent is a question nobody asks
- * again; a row that says "not reported" is a request. No row is fabricated and no
- * server file is edited to fill one.
+ * Three things follow from how that endpoint behaves, and each is a state here
+ * rather than a branch:
+ *
+ *   - It is ADMIN-GATED, and answers 403 to everyone else. A non-admin session
+ *     cannot read its own flags, and that is not a fault in the deployment, the
+ *     account or the pane — so it has its own reading and its own wording, and
+ *     claims no verdict.
+ *   - An UNSET flag is reported as `null` and the server reads that as ENABLED
+ *     (`CreateCrossServiceToken.readGatingFlag`: absent is `true`, only the
+ *     literal string `'false'` disables). So the caller resolves the effective
+ *     boolean and this module never sees a null; "absent" here means the READ did
+ *     not happen or did not land, never "the flag is unset".
+ *   - The `live-sync-disabled` refusal on the transport is still read, and is
+ *     still the only evidence available to a non-admin session. It is conclusive
+ *     when it happens and silent when it does not, so it is a fallback beneath the
+ *     flag rather than a substitute for it.
+ *
+ * NO IDENTIFIER ENTERS THIS MODULE TO MAKE THAT WORK. The endpoint is addressed by
+ * user uuid, exactly like the subscription-setting reads the Space block uses, and
+ * exactly like those the uuid lives in the CALLER's request path. What crosses this
+ * boundary is two booleans and one closed reading.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -447,6 +465,40 @@ export const SPACE_FIGURE_SOURCES = ['not-attempted', 'read-threw', 'read-carrie
 export type SpaceFigureSource = (typeof SPACE_FIGURE_SOURCES)[number]
 
 /**
+ * What happened to the per-account feature-flag read, as a closed set.
+ *
+ * *** THE SECOND MEMBER IS THE ONE THAT MATTERS. *** The endpoint is admin-gated,
+ * so a perfectly healthy non-admin session simply cannot read its own flags. That
+ * emptiness is a property of the SURFACE, not of the account or the deployment,
+ * and rendering it the same way as a failed read would send an ordinary user
+ * looking for a fault that does not exist.
+ *
+ * `read-carried-no-flags` is kept apart from `read-threw` for the same reason the
+ * Space block keeps them apart: an answer that arrived carrying nothing is a
+ * server that does not publish the field, and a request that never completed is a
+ * symptom. Only the second is a failure.
+ */
+export const ACCOUNT_FLAG_READINGS = ['not-attempted', 'admin-required', 'read-threw', 'read-carried-no-flags'] as const
+
+export type AccountFlagReading = (typeof ACCOUNT_FLAG_READINGS)[number]
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What a flag row prints when no flag
+ * arrived, and whether that is a claim about anything.
+ *
+ * Every member reads `undetermined` with absent evidence: not one of these states
+ * establishes whether the flag is on, and the difference between them is WHY the
+ * row is empty — which is what the operator needs in order to know whether to do
+ * anything about it.
+ */
+const ACCOUNT_FLAG_ABSENCE: Record<AccountFlagReading, SafeValue> = {
+  'not-attempted': safeConstant('not read by this caller'),
+  'admin-required': safeConstant('readable only by an admin session'),
+  'read-threw': safeConstant('the read did not arrive'),
+  'read-carried-no-flags': safeConstant('not reported'),
+}
+
+/**
  * Whether this ACCOUNT has any uploaded file, as a closed set — the signal that
  * turns "no usage figure" from an alarm into a statement of fact.
  *
@@ -549,14 +601,27 @@ export type AccountObservations = {
    */
   fallbackReason?: SyncFallbackReason
   /**
-   * OPTIONAL PLUMBING, ASKED FOR AND NOT YET SENT. The effective per-account
-   * `LIVE_SYNC_ENABLED`. No endpoint lets a client read its own flags, so this is
-   * absent on every server today and the row reads "not reported" and says what it
-   * is waiting for.
+   * The EFFECTIVE per-account `LIVE_SYNC_ENABLED`, resolved by the caller from
+   * `GET /v1/admin/users/:userUuid/feature-flags`.
+   *
+   * EFFECTIVE, not raw: the endpoint reports an unset flag as `null` and the
+   * server reads that as enabled, so the caller applies the server's own rule
+   * (`absent or anything but 'false'` is on) and hands over a boolean. Absent here
+   * therefore means the READ did not happen or did not land — never that the flag
+   * is unset — and `flagReading` says which.
    */
   liveSyncEnabledForAccount?: boolean
-  /** OPTIONAL PLUMBING, ASKED FOR AND NOT YET SENT. The effective `COLLABORATION_ENABLED`. */
+  /** The effective `COLLABORATION_ENABLED`, resolved the same way. */
   collaborationEnabledForAccount?: boolean
+  /**
+   * WHY the two flags are absent, when they are, as one of `ACCOUNT_FLAG_READINGS`.
+   *
+   * The admin-gated 403 is the member that earns this field: a non-admin session
+   * cannot read its own flags, and that must not render as a failed read. Typed as
+   * the closed union rather than a wide string because the CALLER produces it from
+   * its own request — there is no server enum here to be lenient about.
+   */
+  flagReading?: AccountFlagReading
 }
 
 export type AccountSectionInput = {
@@ -1250,7 +1315,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
 /* -------------------------------------------------------------------------- */
 
 const LIVE_SYNC_NOTE =
-  'The per-account Live sync switch (LIVE_SYNC_ENABLED), which an administrator can turn off for ONE account on a deployment that is otherwise perfect. No endpoint lets a client read its own flags, so this build asks for the effective value and, until a server sends one, the only evidence available is the transport being refused with the LIVE_SYNC_DISABLED code — which is conclusive when it happens and silent when it does not. What breaks while it is off: note syncing for this account stays on HTTP. Invites, API RPC, collaboration and files are unaffected, which is what makes it so easy to misread as a broken deployment.'
+  'The per-account Live sync switch (LIVE_SYNC_ENABLED), which an administrator can turn off for ONE account on a deployment that is otherwise perfect. Read from the admin feature-flags endpoint for the requesting session, as the EFFECTIVE value: the endpoint reports an unset flag as null and the server treats that as enabled, so an unset flag reads "enabled" here because that is what the server will do. The endpoint is admin-gated, so a non-admin session cannot read it and the row says so rather than claiming a fault; the fallback evidence then is the transport being refused with the LIVE_SYNC_DISABLED code, which is conclusive when it happens and silent when it does not. What breaks while it is off: note syncing for this account stays on HTTP. Invites, API RPC, collaboration and files are unaffected, which is what makes it so easy to misread as a broken deployment.'
 
 function buildRequirementsBlock(observed: AccountObservations, reading: AdminReading): DiagnosticBlock {
   const state = describeFileQuota(observed.fileUploadBytesUsed, observed.fileUploadBytesLimit)
@@ -1259,6 +1324,10 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
 
   const liveSyncFlag = observed.liveSyncEnabledForAccount
   const liveSyncRefused = observed.fallbackReason === 'live-sync-disabled'
+  // `not-attempted` EXPLICITLY for an absent field, exactly as the Space block
+  // does: inventing "nobody asked" from silence would be a claim, and this is the
+  // one place that must claim nothing.
+  const flagReading: AccountFlagReading = observed.flagReading ?? 'not-attempted'
   const unconsumable = unconsumableOperationCount(observed.serverOperations)
 
   const rows: DiagnosticRow[] = [
@@ -1280,7 +1349,7 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
           ? safeState(liveSyncFlag, 'enabled', 'disabled')
           : liveSyncRefused
             ? safeConstant('disabled (refused on the sync lane)')
-            : NOT_PUBLISHED,
+            : ACCOUNT_FLAG_ABSENCE[flagReading],
       verdict:
         liveSyncFlag === true ? 'healthy' : liveSyncFlag === false || liveSyncRefused ? 'broken' : 'undetermined',
       evidence: liveSyncFlag !== undefined || liveSyncRefused ? EVIDENCE_DIRECT : EVIDENCE_ABSENT,
@@ -1290,13 +1359,13 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
       label: safeConstant('Collaboration permitted for this account'),
       value:
         observed.collaborationEnabledForAccount === undefined
-          ? NOT_PUBLISHED
+          ? ACCOUNT_FLAG_ABSENCE[flagReading]
           : safeState(observed.collaborationEnabledForAccount, 'enabled', 'disabled'),
       ...absentOr(
         observed.collaborationEnabledForAccount,
         observed.collaborationEnabledForAccount === true ? 'healthy' : 'broken',
       ),
-      note: 'The per-account COLLABORATION_ENABLED switch, asked for and not yet sent by any server, so this reads "not reported" rather than being left out. What breaks while it is off: shared vaults and collaborative editing are refused for this account alone. It is a DIFFERENT fact from the client-side entitlement row below — one is the server permitting it, the other is this client offering it — and either alone is enough to make collaboration not work.',
+      note: 'The per-account COLLABORATION_ENABLED switch, read from the admin feature-flags endpoint for the requesting session. What breaks while it is off: shared vaults and collaborative editing are refused for this account alone. It is a DIFFERENT fact from the client-side entitlement row below — one is the server permitting it, the other is this client offering it — and either alone is enough to make collaboration not work. The value is EFFECTIVE rather than raw: the endpoint reports an unset flag as null and the server treats that as enabled, so an unset flag reads "enabled" here because that is what the server will do. Empty means the read did not happen or did not land, and the wording says which — most often that the endpoint is admin-gated and this session is not an admin, which is not a fault.',
     }),
     diagnosticRow({
       label: safeConstant('Shared vaults offered by this client'),

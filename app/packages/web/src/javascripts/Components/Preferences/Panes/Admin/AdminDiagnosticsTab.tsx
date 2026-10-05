@@ -48,7 +48,12 @@ import DiagnosticsSection from './DiagnosticsSection'
 import { buildWebsocketSection, socketFallbackIsDeferred } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
-import { buildAccountSection, type AccountObservations, type SpaceFigureSource } from './accountSection'
+import {
+  buildAccountSection,
+  type AccountFlagReading,
+  type AccountObservations,
+  type SpaceFigureSource,
+} from './accountSection'
 import {
   buildBrowserSection,
   observeBrowserCapabilities,
@@ -72,6 +77,34 @@ type Props = {
  * absent with `read-carried-no-figure` is the ordinary description of an account
  * that has never uploaded a file, and is not a fault.
  */
+/**
+ * One reading of this account's own per-account feature flags.
+ *
+ * *** THE ENDPOINT WAS ALWAYS THERE AND THIS TAB NEVER ASKED. ***
+ * `LIVE_SYNC_ENABLED` and `COLLABORATION_ENABLED` are answered by
+ * `GET /v1/admin/users/:userUuid/feature-flags` — the route the admin Users tab
+ * has always read — and the Account section printed "no endpoint publishes this"
+ * over both because nothing here fetched it. That constant is reserved for a
+ * field with NO producer, and using it for one with a producer closes a question
+ * that should have stayed open.
+ *
+ * The booleans are EFFECTIVE, resolved here rather than in the section: the
+ * endpoint reports an unset flag as `null`, and the server reads that as enabled
+ * (`CreateCrossServiceToken.readGatingFlag` returns `true` for an absent setting
+ * and `false` only for the literal string `'false'`). Applying that rule at the
+ * boundary is what lets the section treat "absent" as "the read did not land",
+ * which is the only thing it can honestly say about an empty row.
+ *
+ * `reading` carries WHY a flag is absent, and the member that earns the field is
+ * `admin-required`: the endpoint answers 403 to a non-admin session, which is a
+ * property of the surface and not a fault in the deployment or the account.
+ */
+type AccountFlagsReading = {
+  reading: AccountFlagReading
+  liveSync?: boolean
+  collaboration?: boolean
+}
+
 type AccountSpaceReading = {
   source: SpaceFigureSource
   used?: number
@@ -297,6 +330,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * be the same conflation the block's finding exists to end, one frame early.
    */
   const [spaceReading, setSpaceReading] = useState<AccountSpaceReading | undefined>(undefined)
+  /**
+   * This account's per-account feature flags, and WHY they are absent when they
+   * are. `undefined` while the read is in flight, for the same reason as
+   * `spaceReading`: an in-flight read reported as "nobody asked" is a claim.
+   */
+  const [flagsReading, setFlagsReading] = useState<AccountFlagsReading | undefined>(undefined)
 
   const tabState = useTabState({ defaultTab: 'diag-overview' })
   const { setActiveTab } = tabState
@@ -522,6 +561,76 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         ...(allowance.origin === undefined ? {} : { limitOrigin: allowance.origin }),
       })
     })
+
+    return () => {
+      cancelled = true
+    }
+  }, [application])
+
+  /**
+   * This account's own per-account feature flags, read on mount.
+   *
+   * ADMIN-GATED, and that is handled as a state rather than as an error: a 403
+   * means this session may not read its own flags, which is the ordinary condition
+   * for every non-admin user and says nothing about whether the flags are on. It
+   * is reported as `admin-required` so the rows can word it, and no verdict is
+   * claimed from it.
+   *
+   * The user uuid goes in the REQUEST PATH, exactly as the subscription-setting
+   * reads above put it there, and nothing carrying it crosses into the Account
+   * section — two booleans and one closed reading do. A session with no user at
+   * all cannot form the request, which is `not-attempted` rather than a failure.
+   *
+   * Only `'false'` disables, because that is the server's own rule; every other
+   * value, `null` included, is enabled. Reading it the other way round would
+   * report a perfectly healthy default-on account as switched off.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    const readFlags = async (): Promise<AccountFlagsReading> => {
+      const userUuid = observed(() => application.sessions.getUser()?.uuid)
+      if (userUuid === undefined) {
+        return { reading: 'not-attempted' }
+      }
+
+      const response = await application.serverGetJsonRequest<{ flags?: Record<string, string | null> }>(
+        `/v1/admin/users/${encodeURIComponent(userUuid)}/feature-flags`,
+      )
+      if (!response.ok) {
+        return { reading: response.status === 403 ? 'admin-required' : 'read-threw' }
+      }
+
+      const flags = response.data?.flags
+      if (flags === undefined || flags === null || typeof flags !== 'object') {
+        return { reading: 'read-carried-no-flags' }
+      }
+
+      const effective = (name: string): boolean | undefined => (name in flags ? flags[name] !== 'false' : undefined)
+
+      const liveSync = effective('LIVE_SYNC_ENABLED')
+      const collaboration = effective('COLLABORATION_ENABLED')
+
+      return {
+        reading: 'read-carried-no-flags',
+        ...(liveSync === undefined ? {} : { liveSync }),
+        ...(collaboration === undefined ? {} : { collaboration }),
+      }
+    }
+
+    readFlags().then(
+      (result) => {
+        if (!cancelled) {
+          setFlagsReading(result)
+        }
+      },
+      (error: unknown) => {
+        console.error(error)
+        if (!cancelled) {
+          setFlagsReading({ reading: 'read-threw' })
+        }
+      },
+    )
 
     return () => {
       cancelled = true
@@ -761,9 +870,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    *     thing that row is for.
    *   - `offlineSubscription`: `hasFirstPartyOfflineSubscription()` is on the snjs
    *     features client and is not exposed through `featuresController`.
-   *   - `liveSyncEnabledForAccount` / `collaborationEnabledForAccount`: no
-   *     endpoint lets a client read its own per-account flags. The section's own
-   *     header says so and its rows name what they are waiting for.
+   * `liveSyncEnabledForAccount` and `collaborationEnabledForAccount` USED TO BE
+   * on that list, on the recorded ground that "no endpoint lets a client read its
+   * own per-account flags". One does — `GET /v1/admin/users/:userUuid/feature-flags`,
+   * the route the admin Users tab has always read — so they are supplied, with a
+   * closed reading beside them for the admin-gated 403 that a non-admin session
+   * gets.
    */
   const accountObservations = useMemo((): AccountObservations => {
     const subscription = observed(() => application.subscriptionController.onlineSubscription)
@@ -842,13 +954,29 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             ...(spaceReading.limit === undefined ? {} : { fileUploadBytesLimit: spaceReading.limit }),
             ...(spaceReading.limitOrigin === undefined ? {} : { fileAllowanceOrigin: spaceReading.limitOrigin }),
           }),
+      /**
+       * The per-account flags, from the admin feature-flags read above. Spread
+       * rather than assigned so an unreadable flag stays ABSENT instead of
+       * arriving as a `false` — the flattering direction here is the dangerous
+       * one, because a fabricated `false` renders as "an administrator switched
+       * this account off" and is a verdict rather than a gap.
+       */
+      ...(flagsReading === undefined
+        ? {}
+        : {
+            flagReading: flagsReading.reading,
+            ...(flagsReading.liveSync === undefined ? {} : { liveSyncEnabledForAccount: flagsReading.liveSync }),
+            ...(flagsReading.collaboration === undefined
+              ? {}
+              : { collaborationEnabledForAccount: flagsReading.collaboration }),
+          }),
       ...(payload?.protocol?.version === undefined ? {} : { protocolVersion: payload.protocol.version }),
       ...(payload?.protocol?.serverOperations === undefined
         ? {}
         : { serverOperations: payload.protocol.serverOperations }),
       ...(transport?.fallbackReason === undefined ? {} : { fallbackReason: transport.fallbackReason }),
     }
-  }, [application, payload, transport, spaceReading])
+  }, [application, payload, transport, spaceReading, flagsReading])
 
   const websocketModel = useMemo(
     // `counters` and `ledger` are NOT passed: nothing in this build produces

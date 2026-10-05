@@ -858,15 +858,24 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
   it('says plainly that nothing publishes the runtime facts, rather than "not reported"', async () => {
     await openEnvironment()
 
-    // The lane decision is NOT in this list any more: it has a producer on the
-    // deployment block now, so this fixture — whose payload does not carry it —
-    // reads "not reported", which is the honest wording for a field that could
-    // have been reported and was not. The rows below have no producer at all.
-    expect(sectionRow('Why this transport was chosen')[1]).toBe('not reported')
-    expect(sectionRow('Why this transport was chosen')[1]).not.toBe('no endpoint publishes this')
-    expect(sectionRow('Time since this process started')[1]).toBe('no endpoint publishes this')
-    // Three cookie/session-mode rows became one line rather than three blanks.
-    expect(sectionRow('Effective cookie and session-mode flags')[1]).toBe('no endpoint publishes this')
+    // *** THE LIST THIS TEST GUARDS KEEPS SHRINKING, AND THAT IS THE POINT. ***
+    // The lane decision, the process uptime and the cookie/session-mode flags all
+    // have producers on the deployment block now, so this fixture — whose payload
+    // carries none of them — reads "not reported": the honest wording for a field
+    // that COULD have been reported and was not. "no endpoint publishes this" is
+    // reserved for a field with no producer at all, and printing it over a surface
+    // that does publish closes a question that should stay open. What is still
+    // asserted here is the VERDICT side: none of these rows claims anything from
+    // an empty value, and the three cookie flags remain one line rather than three
+    // blanks.
+    for (const label of [
+      'Why this transport was chosen',
+      'Time since this process started',
+      'Effective cookie and session-mode flags',
+    ]) {
+      expect({ label, value: sectionRow(label)[1] }).toEqual({ label, value: 'not reported' })
+      expect(sectionRow(label)[1]).not.toBe('no endpoint publishes this')
+    }
     expect(activePanel().textContent).not.toContain('Cookie Secure flag')
   })
 
@@ -1177,6 +1186,82 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
 
     expect(sectionRow('Server file allowance, whole MB')[1]).toBe('10')
     expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The per-account feature flags, which this tab never asked for             */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE ENDPOINT EXISTED AND THIS TAB PRINTED "NO ENDPOINT PUBLISHES THIS". ***
+   *
+   * `LIVE_SYNC_ENABLED` and `COLLABORATION_ENABLED` are answered by
+   * `GET /v1/admin/users/:userUuid/feature-flags`, the route the admin Users tab
+   * has always read. Both rows carried the structural constant reserved for a
+   * field with NO producer, which is not an empty row but a closed question.
+   *
+   * The user uuid goes in the REQUEST PATH and nothing carrying it reaches the
+   * section — asserted below on the path actually requested, because that is the
+   * one place an identifier legitimately appears and the one place a regression
+   * would move it somewhere it does not.
+   */
+  const FLAG_READ_USER_UUID = 'd9f0a1b2-4444-4ccc-9eee-7a8b9c0d1e2f'
+
+  const flagsApplication = (flags: unknown, status = 200) =>
+    makeApplication({
+      sessions: {
+        isSignedIn: () => true,
+        isSignedIntoFirstPartyServer: () => true,
+        // The ONE identifier this tab legitimately holds, and it exists only to
+        // address the request. It is planted with a marker so the assertions below
+        // can require it absent from everything rendered.
+        getUser: () => ({ uuid: FLAG_READ_USER_UUID }),
+      },
+      serverGetJsonRequest: jest.fn().mockImplementation(async (path: string) => {
+        if (path.includes('/feature-flags')) {
+          return { status, ok: status === 200, data: { flags } }
+        }
+        return { status: 200, ok: true, data: unavailablePayload }
+      }),
+    })
+
+  it('reads this account’s own feature flags and renders both switches', async () => {
+    const application = flagsApplication({ LIVE_SYNC_ENABLED: null, COLLABORATION_ENABLED: 'false' })
+    await openAccount(application)
+
+    // An UNSET flag is `null` and the server reads that as ENABLED, so reporting it
+    // as anything else would accuse an administrator of a switch nobody flipped.
+    expect(sectionRow('Live sync for this account')[1]).toBe('enabled')
+    expect(sectionRow('Collaboration permitted for this account')[1]).toBe('disabled')
+
+    const paths = application.serverGetJsonRequest.mock.calls.map(([path]: [string]) => path)
+    expect(paths).toContain(`/v1/admin/users/${FLAG_READ_USER_UUID}/feature-flags`)
+    // *** AND THE UUID GOES NOWHERE ELSE. *** It is in the request path and in
+    // nothing the operator can paste: not a row, not a note, not the report.
+    expect(activePanel().textContent).not.toContain(FLAG_READ_USER_UUID)
+    expect(activePanel().textContent).not.toContain('d9f0a1b2')
+  })
+
+  /**
+   * *** THE ADMIN GATE MUST NOT RENDER AS A FAULT. *** The endpoint answers 403 to
+   * every non-admin session, which is most of them. A `false` invented from that
+   * refusal would tell an ordinary user their administrator had switched their
+   * account off.
+   */
+  it('words an admin-refused flag read as a gated surface, claiming nothing', async () => {
+    const text = await openAccount(flagsApplication(undefined, 403))
+
+    expect(sectionRow('Live sync for this account')[1]).toBe('readable only by an admin session')
+    expect(sectionRow('Collaboration permitted for this account')[1]).toBe('readable only by an admin session')
+    expect(text).not.toContain('Live sync is turned off for this account')
+    expect(text).not.toContain('no endpoint publishes this')
+  })
+
+  it('reports a flag payload that carries no flags as unreported, not as disabled', async () => {
+    await openAccount(flagsApplication(undefined))
+
+    expect(sectionRow('Live sync for this account')[1]).toBe('not reported')
+    expect(sectionRow('Collaboration permitted for this account')[1]).toBe('not reported')
   })
 
   /**

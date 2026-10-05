@@ -1,4 +1,5 @@
 import {
+  ACCOUNT_FLAG_READINGS,
   ACCOUNT_ROLES,
   ADMIN_READINGS,
   buildAccountSection,
@@ -1216,9 +1217,13 @@ describe('the general requirements block', () => {
       const model = buildAccountSection({ observations: healthyObservations({ fallbackReason: reason }) })
       const row = rowOf(model, 'Live sync for this account')
 
+      // The WORDING now describes the read rather than the surface: the
+      // feature-flags endpoint exists, so "nothing publishes this" would be false.
+      // The verdict and the evidence are unchanged — the row still claims nothing
+      // from an unrelated fallback reason, which is what this test is about.
       expect({ reason, value: String(row.value), verdict: row.verdict, kind: row.evidence.kind }).toEqual({
         reason,
-        value: 'no endpoint publishes this',
+        value: 'not read by this caller',
         verdict: 'undetermined',
         kind: 'absent',
       })
@@ -1236,23 +1241,112 @@ describe('the general requirements block', () => {
     expect(codesOf(disabled)).toContain('ACCOUNT_LIVE_SYNC_DISABLED')
   })
 
-  it('asks for the collaboration flag and reads "not reported" until a server sends it', () => {
+  /**
+   * *** "NO ENDPOINT PUBLISHES THIS" WAS FALSE ABOUT THIS ROW. ***
+   *
+   * This test used to assert the structural constant reserved for a field with no
+   * producer at all. `GET /v1/admin/users/:userUuid/feature-flags` has always
+   * answered both per-account flags, so the gap was client wiring and the constant
+   * was closing a question that should have stayed open. The row now words WHY it
+   * is empty, which for a caller that did not ask is "not read by this caller" —
+   * and the verdict and the evidence are asserted unchanged, because a wording
+   * change must not become the row starting to claim something.
+   */
+  it('words an unread collaboration flag by the reason, not as a missing surface', () => {
     const asked = rowOf(healthySection(), 'Collaboration permitted for this account')
 
-    // The VALUE says plainly that nothing produces it, rather than "not reported",
-    // which reads as a check that failed. The verdict and the evidence are
-    // unchanged — the row still claims nothing — and both are asserted here so the
-    // wording change cannot be mistaken for the row having started to claim.
-    expect(asked.value).toBe('no endpoint publishes this')
-    expect(asked.value).not.toBe('not reported')
+    expect(asked.value).toBe('not read by this caller')
+    expect(asked.value).not.toBe('no endpoint publishes this')
     expect(asked.verdict).toBe('undetermined')
     expect(asked.evidence.kind).toBe('absent')
-    expect(asked.note).toContain('asked for and not yet sent')
+    expect(asked.note).toContain('admin feature-flags endpoint')
 
     const off = buildAccountSection({
       observations: healthyObservations({ collaborationEnabledForAccount: false }),
     })
     expect(rowOf(off, 'Collaboration permitted for this account').verdict).toBe('broken')
+  })
+
+  /**
+   * *** THE ADMIN GATE IS A STATE, NOT A FAULT. ***
+   *
+   * The endpoint answers 403 to every non-admin session, which is most of them.
+   * If that rendered as a failed read — or worse, as a `false` flag — every
+   * ordinary user's diagnostics would accuse their administrator of switching
+   * their account off. Each reading gets its own wording and NONE of them claims a
+   * verdict, asserted over the whole closed set so a member added later cannot
+   * arrive unmapped or arrive claiming.
+   */
+  it.each(ACCOUNT_FLAG_READINGS)('claims nothing from the %s flag reading, and words it', (reading) => {
+    const model = buildAccountSection({ observations: healthyObservations({ flagReading: reading }) })
+
+    for (const label of ['Live sync for this account', 'Collaboration permitted for this account']) {
+      const row = rowOf(model, label)
+
+      expect({ label, verdict: row.verdict, kind: row.evidence.kind }).toEqual({
+        label,
+        verdict: 'undetermined',
+        kind: 'absent',
+      })
+      expect(String(row.value)).not.toBe('no endpoint publishes this')
+      expect(String(row.value).length).toBeGreaterThan(0)
+    }
+    expect(codesOf(model)).not.toContain('ACCOUNT_LIVE_SYNC_DISABLED')
+  })
+
+  it('says readable only by an admin session when the endpoint refused the read', () => {
+    const model = buildAccountSection({ observations: healthyObservations({ flagReading: 'admin-required' }) })
+
+    expect(String(rowOf(model, 'Live sync for this account').value)).toBe('readable only by an admin session')
+    expect(String(rowOf(model, 'Collaboration permitted for this account').value)).toBe(
+      'readable only by an admin session',
+    )
+  })
+
+  it('covers every declared flag reading in the loop above', () => {
+    expect([...ACCOUNT_FLAG_READINGS].sort()).toEqual([
+      'admin-required',
+      'not-attempted',
+      'read-carried-no-flags',
+      'read-threw',
+    ])
+  })
+
+  /**
+   * A FLAG THAT ARRIVED BEATS THE READING, in both directions: the reading only
+   * explains an EMPTY row, and a flag present with an unrelated reading must still
+   * render as the flag.
+   */
+  it('prints the flag whenever one arrived, whatever the reading says', () => {
+    const on = buildAccountSection({
+      observations: healthyObservations({
+        flagReading: 'admin-required',
+        liveSyncEnabledForAccount: true,
+        collaborationEnabledForAccount: true,
+      }),
+    })
+
+    expect(rowOf(on, 'Live sync for this account').value).toBe('enabled')
+    expect(rowOf(on, 'Live sync for this account').verdict).toBe('healthy')
+    expect(rowOf(on, 'Collaboration permitted for this account').value).toBe('enabled')
+    expect(rowOf(on, 'Collaboration permitted for this account').verdict).toBe('healthy')
+  })
+
+  /**
+   * The transport refusal is still the FALLBACK beneath an unread flag, which is
+   * the only evidence a non-admin session can have — and it is conclusive when it
+   * happens, so it must survive the rewording above.
+   */
+  it('still reads a sync-lane refusal as the switch being off when the flag could not be read', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ flagReading: 'admin-required', fallbackReason: 'live-sync-disabled' }),
+    })
+    const row = rowOf(model, 'Live sync for this account')
+
+    expect(row.value).toBe('disabled (refused on the sync lane)')
+    expect(row.verdict).toBe('broken')
+    expect(row.evidence.kind).toBe('direct')
+    expect(codesOf(model)).toContain('ACCOUNT_LIVE_SYNC_DISABLED')
   })
 
   it('keeps the client-side shared-vault gate informational, so a healthy account is not alarmed', () => {
@@ -1437,17 +1531,26 @@ describe('buildAccountSection with nothing observed', () => {
   it('says plainly where no producer exists, rather than reusing "not reported"', () => {
     const model = buildAccountSection()
 
-    for (const label of [
-      'Roles held by this account',
-      'Live sync for this account',
-      'Collaboration permitted for this account',
-    ]) {
+    for (const label of ['Roles held by this account', 'Live sync for this account']) {
       expect({ label, value: String(rowOf(model, label).value) }).not.toEqual({ label, value: 'not reported' })
     }
 
-    expect(String(rowOf(model, 'Live sync for this account').value)).toBe('no endpoint publishes this')
-    expect(String(rowOf(model, 'Collaboration permitted for this account').value)).toBe('no endpoint publishes this')
+    // The role LIST is the one row left in this section with no producer at all:
+    // the client exposes only `hasRole()` for one name at a time, so a list built
+    // here could never report a name this build does not know — which is the only
+    // thing the list is for.
     expect(String(rowOf(model, 'Roles held by this account').value)).toBe('not exposed by any client surface')
+
+    // *** AND THE TWO ACCOUNT FLAGS ARE NO LONGER AMONG THEM. ***
+    // `GET /v1/admin/users/:userUuid/feature-flags` publishes both. They word the
+    // reason the read did not land instead, and the structural constant is
+    // asserted ABSENT so it cannot creep back onto a row that has a producer.
+    for (const label of ['Live sync for this account', 'Collaboration permitted for this account']) {
+      expect({ label, value: String(rowOf(model, label).value) }).toEqual({
+        label,
+        value: 'not read by this caller',
+      })
+    }
   })
 
   it('builds the three blocks it always builds, in order, and names itself once', () => {
