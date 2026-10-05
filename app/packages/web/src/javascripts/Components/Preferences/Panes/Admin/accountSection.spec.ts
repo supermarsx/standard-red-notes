@@ -5,6 +5,7 @@ import {
   describeAdminReading,
   describeFileQuota,
   describeSubscription,
+  FILE_ALLOWANCE_ORIGINS,
   FILE_QUOTA_NEAR_FRACTION,
   fileQuotaFraction,
   SPACE_FIGURE_SOURCES,
@@ -176,11 +177,16 @@ describe('buildAccountSection never discloses an account identifier', () => {
         roles: ['ADMIN_USER', PLANTED_EMAIL, PLANTED_UUID, PLANTED_IP],
         subscriptionPlan: PLANTED_UUID,
         serverOperations: ['SYNC_ITEMS', PLANTED_EMAIL, PLANTED_DEVICE_ID],
-        // The newest wide `string` member, added to the sweep in the same change
-        // that added the field: a closed-set member that is not planted here is a
+        // The newest wide `string` members, added to the sweep in the same change
+        // that added each field: a closed-set member that is not planted here is a
         // path the privacy suite does not cover, and every one of this pane's four
         // leaks got in through a field nobody had swept.
         fileCensus: PLANTED_SESSION_UUID,
+        // The allowance provenance is a SERVER enum, and the server that sends it
+        // is the same one that holds this account's subscription uuid — exactly the
+        // adjacency that puts an identifier in the wrong field. Planted with the
+        // uuid for that reason rather than with an arbitrary marker.
+        fileAllowanceOrigin: PLANTED_UUID,
       }),
       ...extras,
     } as unknown as AccountObservations
@@ -188,6 +194,42 @@ describe('buildAccountSection never discloses an account identifier', () => {
 
   const plantedSection = (): SectionModel =>
     buildAccountSection({ observations: plantedObservations(), adminAccess: { payloadRead: true } })
+
+  /**
+   * *** THE SWEEP'S OWN NON-VACUITY, FIELD BY FIELD. ***
+   *
+   * Asserted BEFORE the refusals, and per field rather than per identifier: an
+   * identifier that is no longer anywhere in the INPUT cannot be kept out of the
+   * output by anything, so a fixture that quietly stopped carrying one — a field
+   * renamed, a plant dropped in a merge — would leave its half of this scan
+   * reading green forever. A passing secrecy test over an unpoisoned field is the
+   * worst shape a gate can take, because it is indistinguishable from protection.
+   *
+   * Every WIDE `string` member the module reads is named here explicitly, so
+   * adding such a member without adding its plant fails this test rather than
+   * silently widening the surface. `fileAllowanceOrigin` is the newest, and it is
+   * planted with the account UUID on purpose: it is a SERVER enum sent by the same
+   * service that holds this account's subscription uuid, which is precisely the
+   * adjacency that puts an identifier into the wrong field.
+   */
+  it('actually feeds every planted identifier into the section, through every field it reads', () => {
+    const observations = plantedObservations() as unknown as Record<string, unknown>
+    const serialisedInput = JSON.stringify(observations)
+
+    for (const planted of PLANTED_IDENTIFIERS) {
+      expect(serialisedInput).toContain(planted)
+    }
+
+    for (const field of ['roles', 'subscriptionPlan', 'serverOperations', 'fileCensus', 'fileAllowanceOrigin']) {
+      expect({
+        field,
+        poisoned: PLANTED_IDENTIFIERS.some((planted) => JSON.stringify(observations[field]).includes(planted)),
+      }).toEqual({
+        field,
+        poisoned: true,
+      })
+    }
+  })
 
   it.each(PLANTED_IDENTIFIERS)('keeps %s out of every row value', (planted) => {
     const model = plantedSection()
@@ -827,17 +869,260 @@ describe('the account file allowance', () => {
     expect(rowOf(model, 'Local usage against the soft cap').evidence.kind).toBe('absent')
   })
 
+  /* ------------------------------------------------------------------------ */
+  /* The EFFECTIVE allowance, and the arm it must not silence                 */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE REGRESSION THIS WHOLE GROUP EXISTS TO PREVENT. ***
+   *
+   * The server now derives the EFFECTIVE file allowance when no per-account limit
+   * row exists, because an absent limit was never an absent allowance — the
+   * upload-token minter falls back to the plan default, and to unlimited where
+   * there is no live subscription. That change publishes a figure on deployments
+   * that previously published none, and the Space block's findings used to be
+   * gated on BOTH figures being absent.
+   *
+   * So the one new number would have silenced every arm below, including
+   * `ACCOUNT_SPACE_USAGE_UNRECORDED` — whose entire subject is a USAGE total
+   * nobody is keeping. A finding that is present, wired and incapable of firing is
+   * worse than one that was never written, because the screen then reads as proof
+   * that nothing is wrong.
+   *
+   * This test is the proof the arm survived: the allowance ARRIVED, the usage did
+   * not, the account holds files, and the degradation is still reported.
+   */
+  it('still reports the lost usage bookkeeping when the effective allowance DID arrive', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({
+        fileUploadBytesUsed: undefined,
+        fileUploadBytesLimit: -1,
+        fileAllowanceOrigin: 'no-active-subscription',
+        spaceFigureSource: 'read-carried-no-figure',
+        fileCensus: 'present',
+      }),
+    })
+
+    // Preconditions, so this cannot pass vacuously: one figure really did arrive
+    // and the other really did not.
+    expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('no limit set')
+    expect(rowOf(model, 'Server file bytes used, whole MB').value).toBe('not reported')
+
+    expect(findingOf(model, 'ACCOUNT_SPACE_USAGE_UNRECORDED')?.verdict).toBe('degraded')
+    expect(model.worstVerdict).toBe('degraded')
+    // And the allowance arm does NOT also fire: one defect, one finding.
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_ALLOWANCE_UNREPORTED')
+  })
+
+  /**
+   * The same guard for the two quieter arms, because silencing those would hide a
+   * brand-new account's explanation rather than a degradation — still a row of
+   * "not reported" with nothing on the screen saying why.
+   */
+  it.each([
+    ['none', 'ACCOUNT_SPACE_NOTHING_TO_REPORT'],
+    ['not-loaded', 'ACCOUNT_SPACE_FIGURE_UNEXPLAINED'],
+  ] as const)('keeps the %s arm reachable once the allowance is published', (census, code) => {
+    const model = buildAccountSection({
+      observations: healthyObservations({
+        fileUploadBytesUsed: undefined,
+        fileUploadBytesLimit: 1000 * MB,
+        fileAllowanceOrigin: 'plan-default',
+        spaceFigureSource: 'read-carried-no-figure',
+        fileCensus: census,
+      }),
+    })
+
+    expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('1000')
+    expect(codesOf(model)).toContain(code)
+  })
+
+  /**
+   * *** AND A THROWN READ IS STILL BROKEN WHEN ONLY ONE FIGURE SURVIVED IT. ***
+   *
+   * The two settings are read independently, so one can reject while the other
+   * answers. Keyed on both figures being absent, that state reported NOTHING at
+   * all — a failed read with no finding, which is the quietest possible way to
+   * lose a real failure.
+   */
+  it('reports a thrown read as broken even when the other figure arrived', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({
+        fileUploadBytesUsed: undefined,
+        fileUploadBytesLimit: -1,
+        spaceFigureSource: 'read-threw',
+        fileCensus: 'present',
+      }),
+    })
+
+    expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('no limit set')
+    expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.verdict).toBe('broken')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_USAGE_UNRECORDED')
+  })
+
+  /**
+   * THE HEADROOM ROW IS NOW DERIVABLE, which is the operator-visible point of the
+   * server change: "Room for a file upload" read "not reported" on every
+   * deployment that had never written a limit setting, which was every default
+   * one. An unlimited effective allowance resolves it with no usage figure at all,
+   * because nothing is refused at an unlimited ceiling whatever the total is.
+   */
+  it('resolves the upload-headroom verdict from an effective unlimited allowance alone', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({
+        fileUploadBytesUsed: undefined,
+        fileUploadBytesLimit: -1,
+        fileAllowanceOrigin: 'no-active-subscription',
+        spaceFigureSource: 'read-carried-no-figure',
+        fileCensus: 'present',
+      }),
+    })
+    const headroom = rowOf(model, 'Room for a file upload')
+
+    expect({ value: String(headroom.value), verdict: headroom.verdict, kind: headroom.evidence.kind }).toEqual({
+      value: 'no limit set',
+      verdict: 'healthy',
+      kind: 'direct',
+    })
+  })
+
+  it('reports where the allowance came from, as a closed server enum', () => {
+    for (const origin of FILE_ALLOWANCE_ORIGINS) {
+      const model = buildAccountSection({
+        observations: healthyObservations({ fileUploadBytesLimit: 1000 * MB, fileAllowanceOrigin: origin }),
+      })
+      const row = rowOf(model, 'Where the file allowance comes from')
+
+      expect({ origin, value: String(row.value), verdict: row.verdict, kind: row.evidence.kind }).toEqual({
+        origin,
+        value: origin,
+        verdict: 'informational',
+        kind: 'direct',
+      })
+    }
+  })
+
+  it('covers every declared allowance origin in the loop above', () => {
+    expect([...FILE_ALLOWANCE_ORIGINS].sort()).toEqual(['account-setting', 'no-active-subscription', 'plan-default'])
+  })
+
+  it('refuses an allowance origin outside its closed set rather than echoing it', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ fileAllowanceOrigin: 'because-someone@somewhere.test' }),
+    })
+
+    expect(rowOf(model, 'Where the file allowance comes from').value).toBe('other (unrecognised)')
+  })
+
+  /**
+   * *** AN UNREPORTED PROVENANCE IS NOT "THE PLAN DEFAULT". ***
+   *
+   * Every server built before the effective-allowance answer sends a value with no
+   * origin, and the flattering reading — "no origin means nothing was set, so it
+   * must be the default" — would invent a fact about a deployment nobody asked.
+   */
+  it('does not read a missing allowance origin as any particular origin', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ fileUploadBytesLimit: 1000 * MB }),
+    })
+    const row = rowOf(model, 'Where the file allowance comes from')
+
+    expect({ value: String(row.value), verdict: row.verdict, kind: row.evidence.kind }).toEqual({
+      value: 'not reported',
+      verdict: 'undetermined',
+      kind: 'absent',
+    })
+    expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('1000')
+  })
+
+  /**
+   * THE SERVER THAT IS TOO OLD TO DERIVE AN ALLOWANCE gets its own arm, and it is
+   * `undetermined` rather than a fault: nothing is refused by it, and what is lost
+   * is only the headroom verdict.
+   */
+  it('reports a usage total with no allowance as an unanswered allowance, not as a fault', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({
+        fileUploadBytesUsed: 100 * MB,
+        fileUploadBytesLimit: undefined,
+        spaceFigureSource: 'read-carried-no-figure',
+        fileCensus: 'present',
+      }),
+    })
+
+    expect(rowOf(model, 'Server file bytes used, whole MB').value).toBe('100')
+    expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('not reported')
+    expect(findingOf(model, 'ACCOUNT_SPACE_ALLOWANCE_UNREPORTED')?.verdict).toBe('undetermined')
+    expect(findingOf(model, 'ACCOUNT_SPACE_ALLOWANCE_UNREPORTED')?.evidence.kind).toBe('absent')
+    expect(findingOf(model, 'ACCOUNT_SPACE_ALLOWANCE_UNREPORTED')?.detail).toContain('plan default')
+    // Mutually exclusive with every usage arm, so a reader still counts one
+    // problem per problem.
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_USAGE_UNRECORDED')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOTHING_TO_REPORT')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_FIGURE_UNEXPLAINED')
+    expect(rowOf(model, 'Room for a file upload').verdict).toBe('undetermined')
+  })
+
+  /**
+   * *** ONE DEFECT, ONE FINDING, OVER THE WHOLE CROSS PRODUCT. ***
+   *
+   * Five arms now key on three different conditions, and the cheap way to get that
+   * wrong is to have two of them fire at once — which reads on the screen as two
+   * problems and sends an operator chasing the second one. Swept rather than
+   * spot-checked: every space-figure source, every census, both usage states and
+   * all three allowance states.
+   */
+  it('emits at most one Space finding whatever the two figures and the census say', () => {
+    const spaceCodes = [
+      'ACCOUNT_SPACE_READ_FAILED',
+      'ACCOUNT_SPACE_USAGE_UNRECORDED',
+      'ACCOUNT_SPACE_NOTHING_TO_REPORT',
+      'ACCOUNT_SPACE_FIGURE_UNEXPLAINED',
+      'ACCOUNT_SPACE_ALLOWANCE_UNREPORTED',
+      'ACCOUNT_SPACE_NOT_READ',
+    ]
+
+    for (const source of SPACE_FIGURE_SOURCES) {
+      for (const census of ['present', 'none', 'not-loaded', undefined] as const) {
+        for (const used of [undefined, 100 * MB] as const) {
+          for (const limit of [undefined, -1, 1000 * MB] as const) {
+            const model = buildAccountSection({
+              observations: healthyObservations({
+                fileUploadBytesUsed: used,
+                fileUploadBytesLimit: limit,
+                spaceFigureSource: source,
+                ...(census === undefined ? {} : { fileCensus: census }),
+              }),
+            })
+            const fired = codesOf(model).filter((code) => spaceCodes.includes(code))
+
+            expect({ source, census, used, limit, count: fired.length }).toEqual({
+              source,
+              census,
+              used,
+              limit,
+              count: Math.min(fired.length, 1),
+            })
+          }
+        }
+      }
+    }
+  })
+
   it('carries no verdict anywhere in the Space block, because the verdict is a requirement row', () => {
     const space = healthySection().blocks.find((block) => String(block.heading) === 'Space')
 
-    expect(space?.rows.length).toBe(6)
+    expect(space?.rows.length).toBe(7)
     for (const row of space?.rows ?? []) {
-      // The census row is the one Space row that can be absent on a healthy
-      // model — `healthyObservations` supplies no `fileCensus` — and `absentOr`
+      // Two Space rows can be absent on a healthy model — `healthyObservations`
+      // supplies neither `fileCensus` nor `fileAllowanceOrigin` — and `absentOr`
       // claims nothing at all for an absent field rather than claiming the tone
       // it would carry if present. Still no row here claims a verdict, which is
-      // what this test is about; the census row claims less, not more.
-      if (String(row.label) === 'Uploaded files in this account') {
+      // what this test is about; those two claim less, not more.
+      if (
+        String(row.label) === 'Uploaded files in this account' ||
+        String(row.label) === 'Where the file allowance comes from'
+      ) {
         expect({ label: String(row.label), claimed: row.claimed, verdict: row.verdict }).toEqual({
           label: String(row.label),
           claimed: 'undetermined',
@@ -1108,7 +1393,7 @@ describe('buildAccountSection with nothing observed', () => {
     const model = buildAccountSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(21)
+    expect(rows).toHaveLength(22)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),

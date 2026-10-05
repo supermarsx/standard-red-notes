@@ -493,23 +493,26 @@ export class BaseAdminController extends BaseHttpController {
     if (this.doGetRegularSubscription !== undefined && this.doGetSubscriptionSetting !== undefined) {
       storage = { hasSubscription: false, uploadBytesLimit: null, uploadBytesUsed: null }
       const regularSubscriptionOrError = await this.doGetRegularSubscription.execute({ userUuid })
-      if (!regularSubscriptionOrError.isFailed()) {
-        const regularSubscription = regularSubscriptionOrError.getValue()
-        storage.hasSubscription = true
-        for (const [key, settingName] of [
-          ['uploadBytesLimit', SettingName.NAMES.FileUploadBytesLimit],
-          ['uploadBytesUsed', SettingName.NAMES.FileUploadBytesUsed],
-        ] as const) {
-          const settingOrError = await this.doGetSubscriptionSetting.execute({
-            userSubscriptionUuid: regularSubscription.uuid,
-            settingName,
-            allowSensitiveRetrieval: false,
-          })
-          if (!settingOrError.isFailed()) {
-            const rawValue = settingOrError.getValue().setting.props.value
-            const parsedValue = rawValue === null ? Number.NaN : Number(rawValue)
-            storage[key] = Number.isFinite(parsedValue) ? parsedValue : null
-          }
+      storage.hasSubscription = !regularSubscriptionOrError.isFailed()
+      // The scope the figures actually live under, which for an account with no
+      // subscription row is the user's own uuid — see
+      // UpdateStorageQuotaUsedForUser. The loop used to run only when a row
+      // existed, so on the default entitlement mode it reported null/null for
+      // every user however many files they held.
+      const quotaScopeUuid = storage.hasSubscription ? regularSubscriptionOrError.getValue().uuid : userUuid
+      for (const [key, settingName] of [
+        ['uploadBytesLimit', SettingName.NAMES.FileUploadBytesLimit],
+        ['uploadBytesUsed', SettingName.NAMES.FileUploadBytesUsed],
+      ] as const) {
+        const settingOrError = await this.doGetSubscriptionSetting.execute({
+          userSubscriptionUuid: quotaScopeUuid,
+          settingName,
+          allowSensitiveRetrieval: false,
+        })
+        if (!settingOrError.isFailed()) {
+          const rawValue = settingOrError.getValue().setting.props.value
+          const parsedValue = rawValue === null ? Number.NaN : Number(rawValue)
+          storage[key] = Number.isFinite(parsedValue) ? parsedValue : null
         }
       }
     }
@@ -653,22 +656,23 @@ export class BaseAdminController extends BaseHttpController {
     }
     const normalizedValue = `${Number(trimmedValue)}`
 
+    /**
+     * *** THIS REFUSAL WAS TRUE WHEN IT WAS WRITTEN AND IS NO LONGER. ***
+     *
+     * It rejected every account with no `user_subscriptions` row on the grounds
+     * that the files server already treats them as unlimited — which it did,
+     * because `CreateValetToken`'s free branch hard-coded `uploadBytesLimit: -1`.
+     * That branch now reads the limit setting from the user's own uuid, the same
+     * scope `UpdateStorageQuotaUsedForUser` writes the usage total to and the
+     * self-scoped settings endpoint reports from, so a limit written here binds.
+     * On the default `included` entitlement mode NO account has a subscription
+     * row, which made this the refusal every operator met.
+     */
     const regularSubscriptionOrError = await this.doGetRegularSubscription.execute({ userUuid })
-    if (regularSubscriptionOrError.isFailed()) {
-      return this.json(
-        {
-          error: {
-            message:
-              'User has no regular subscription record. Accounts without one are already treated as unlimited by the files server.',
-          },
-        },
-        400,
-      )
-    }
-    const regularSubscription = regularSubscriptionOrError.getValue()
+    const quotaScopeUuid = regularSubscriptionOrError.isFailed() ? userUuid : regularSubscriptionOrError.getValue().uuid
 
     const result = await this.doSetSubscriptionSettingValue.execute({
-      userSubscriptionUuid: regularSubscription.uuid,
+      userSubscriptionUuid: quotaScopeUuid,
       settingName: SettingName.NAMES.FileUploadBytesLimit,
       value: normalizedValue,
     })

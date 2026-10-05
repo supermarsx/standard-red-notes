@@ -44,13 +44,29 @@ export class CreateValetToken implements UseCaseInterface {
     // is granted UNLIMITED file storage (uploadBytesLimit = -1) instead of being
     // blocked. The valet token is HMAC-signed and self-contained, so the
     // files-server trusts the limit without a backing subscription record.
+    //
+    // *** THE TWO BYTE FIGURES ARE NO LONGER HARD-CODED, SO THE ENFORCED
+    // ALLOWANCE AND THE REPORTED ALLOWANCE ARE THE SAME NUMBER. ***
+    //
+    // They were `0` and `-1` unconditionally, which made this branch the sole
+    // authority on a row-less account's allowance and made any figure anyone
+    // reported about it a guess. They are now read from the SAME scope the
+    // self-scoped settings controller reports from and the SAME scope
+    // `UpdateStorageQuotaUsedForUser` writes to — the subscription row's uuid when
+    // one exists (expired included, which is the other way into this branch), the
+    // user's own uuid when none does. Absent settings keep the previous values
+    // exactly: usage 0, allowance -1 (unlimited). What changes is that an explicit
+    // per-account FILE_UPLOAD_BYTES_LIMIT now actually binds here, so the admin
+    // Users tab's storage limit stops being decorative for these accounts.
     if (mostRecentSubscription === undefined || mostRecentSubscription.endsAt < currentTimestamp) {
+      const freeScopeUuid = mostRecentSubscription?.uuid ?? dto.userUuid
+
       const freeTokenData: ValetTokenData = {
         userUuid: dto.userUuid,
         permittedOperation: dto.operation,
         permittedResources: dto.resources,
-        uploadBytesUsed: 0,
-        uploadBytesLimit: -1,
+        uploadBytesUsed: (await this.readByteSetting(freeScopeUuid, SettingName.NAMES.FileUploadBytesUsed)) ?? 0,
+        uploadBytesLimit: (await this.readByteSetting(freeScopeUuid, SettingName.NAMES.FileUploadBytesLimit)) ?? -1,
         sharedSubscriptionUuid: undefined,
         regularSubscriptionUuid: `free-${dto.userUuid}`,
       }
@@ -102,6 +118,29 @@ export class CreateValetToken implements UseCaseInterface {
     const valetToken = this.tokenEncoder.encodeExpirableToken(tokenData, this.valetTokenTTL)
 
     return { success: true, valetToken }
+  }
+
+  /**
+   * One FILE_UPLOAD_BYTES_* setting as a finite number, or `undefined` when there
+   * is no row and when the row's value is not a number.
+   *
+   * A non-numeric stored value answers `undefined` rather than `NaN`: `NaN` in a
+   * valet token's `uploadBytesLimit` compares false against every bound, which
+   * would turn a corrupt setting into a silently unenforceable one.
+   */
+  private async readByteSetting(userSubscriptionUuid: string, settingName: string): Promise<number | undefined> {
+    const settingOrError = await this.getSubscriptionSetting.execute({
+      userSubscriptionUuid,
+      settingName,
+      allowSensitiveRetrieval: false,
+    })
+    if (settingOrError.isFailed()) {
+      return undefined
+    }
+
+    const value = +(settingOrError.getValue().setting.props.value as string)
+
+    return Number.isFinite(value) ? value : undefined
   }
 
   private async getEligibleSharedSubscription(userUuid: string): Promise<UserSubscription | undefined> {

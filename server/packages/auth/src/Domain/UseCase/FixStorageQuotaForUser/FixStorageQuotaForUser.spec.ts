@@ -2,10 +2,8 @@ import { DomainEventPublisherInterface, FileQuotaRecalculationRequestedEvent } f
 import { Logger } from 'winston'
 import { DomainEventFactoryInterface } from '../../Event/DomainEventFactoryInterface'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
-import { GetRegularSubscriptionForUser } from '../GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetSharedSubscriptionForUser } from '../GetSharedSubscriptionForUser/GetSharedSubscriptionForUser'
 import { ListSharedSubscriptionInvitations } from '../ListSharedSubscriptionInvitations/ListSharedSubscriptionInvitations'
-import { SetSubscriptionSettingValue } from '../SetSubscriptionSettingValue/SetSubscriptionSettingValue'
 import { FixStorageQuotaForUser } from './FixStorageQuotaForUser'
 import { User } from '../../User/User'
 import { Result } from '@standardnotes/domain-core'
@@ -15,9 +13,7 @@ import { SharedSubscriptionInvitation } from '../../SharedSubscription/SharedSub
 
 describe('FixStorageQuotaForUser', () => {
   let userRepository: UserRepositoryInterface
-  let getRegularSubscription: GetRegularSubscriptionForUser
   let getSharedSubscriptionForUser: GetSharedSubscriptionForUser
-  let setSubscriptonSettingValue: SetSubscriptionSettingValue
   let listSharedSubscriptionInvitations: ListSharedSubscriptionInvitations
   let domainEventFactory: DomainEventFactoryInterface
   let domainEventPublisher: DomainEventPublisherInterface
@@ -26,9 +22,7 @@ describe('FixStorageQuotaForUser', () => {
   const createUseCase = () =>
     new FixStorageQuotaForUser(
       userRepository,
-      getRegularSubscription,
       getSharedSubscriptionForUser,
-      setSubscriptonSettingValue,
       listSharedSubscriptionInvitations,
       domainEventFactory,
       domainEventPublisher,
@@ -41,22 +35,12 @@ describe('FixStorageQuotaForUser', () => {
       uuid: '00000000-0000-0000-0000-000000000000',
     } as jest.Mocked<User>)
 
-    getRegularSubscription = {} as jest.Mocked<GetRegularSubscriptionForUser>
-    getRegularSubscription.execute = jest.fn().mockReturnValue(
-      Result.ok({
-        uuid: '00000000-0000-0000-0000-000000000000',
-      } as jest.Mocked<UserSubscription>),
-    )
-
     getSharedSubscriptionForUser = {} as jest.Mocked<GetSharedSubscriptionForUser>
     getSharedSubscriptionForUser.execute = jest.fn().mockReturnValue(
       Result.ok({
         uuid: '00000000-0000-0000-0000-000000000000',
       } as jest.Mocked<UserSubscription>),
     )
-
-    setSubscriptonSettingValue = {} as jest.Mocked<SetSubscriptionSettingValue>
-    setSubscriptonSettingValue.execute = jest.fn().mockReturnValue(Result.ok(Result.ok()))
 
     listSharedSubscriptionInvitations = {} as jest.Mocked<ListSharedSubscriptionInvitations>
     listSharedSubscriptionInvitations.execute = jest.fn().mockReturnValue({
@@ -93,8 +77,27 @@ describe('FixStorageQuotaForUser', () => {
     expect(result.isFailed()).toBeTruthy()
   })
 
-  it('should return error result if regular subscription cannot be found', async () => {
-    getRegularSubscription.execute = jest.fn().mockReturnValue(Result.fail('test'))
+  /**
+   * *** THE HEAL PATH REFUSED TO RUN EXACTLY WHERE IT WAS NEEDED. ***
+   *
+   * This test asserted that "fix quota" fails for an account with no
+   * `user_subscriptions` row. On the default `included` entitlement mode that is
+   * EVERY account, so the one command that re-derives a usage total from the files
+   * actually on disk was unreachable on every default deployment — and a total
+   * that cannot be re-derived is a total that drifts permanently once anything
+   * misses an event.
+   *
+   * There is no subscription lookup left to refuse: the request is addressed to
+   * the USER, the files service sums that owner's bytes on disk, and the
+   * recalculated figure is written as the whole total under whatever scope the
+   * write path resolves.
+   */
+  it('requests the recalculation for an account with no subscription row', async () => {
+    userRepository.findOneByUsernameOrEmail = jest.fn().mockReturnValue({
+      uuid: '11111111-1111-4111-8111-111111111111',
+      email: 'test@test.te',
+    } as jest.Mocked<User>)
+    listSharedSubscriptionInvitations.execute = jest.fn().mockReturnValue({ invitations: [] })
 
     const useCase = createUseCase()
 
@@ -102,10 +105,39 @@ describe('FixStorageQuotaForUser', () => {
       userEmail: 'test@test.te',
     })
 
-    expect(result.isFailed()).toBeTruthy()
+    expect(result.isFailed()).toBeFalsy()
+    expect(domainEventFactory.createFileQuotaRecalculationRequestedEvent).toHaveBeenCalledWith({
+      userUuid: '11111111-1111-4111-8111-111111111111',
+    })
+    expect(domainEventPublisher.publish).toHaveBeenCalledTimes(1)
   })
 
-  it('should return error result if shared subscription cannot be found', async () => {
+  /**
+   * *** NO PROVISIONAL ZERO, AND THIS IS THE TEST THAT HOLDS THAT LINE. ***
+   *
+   * The command used to write `FILE_UPLOAD_BYTES_USED = 0` before publishing,
+   * because the recalculated total was ADDED. When the publish failed — which it
+   * always does from the `srn-admin` CLI on a single container, a boot with no
+   * event transport — the zero was the whole result: an account holding megabytes
+   * reporting a confident 0. A fabricated zero reads as a measurement, so it is
+   * worse than the absent figure it replaced, and the only safe outcome for a
+   * correction that did not run is the previous figure, untouched.
+   */
+  it('writes nothing at all when the recalculation cannot be published', async () => {
+    listSharedSubscriptionInvitations.execute = jest.fn().mockReturnValue({ invitations: [] })
+    domainEventPublisher.publish = jest.fn().mockRejectedValue(new Error('Region is missing'))
+
+    const useCase = createUseCase()
+
+    await expect(useCase.execute({ userEmail: 'test@test.te' })).rejects.toThrow('Region is missing')
+    // Nothing in this use case can write a setting any more — the dependency is
+    // gone — and the assertion is on the PUBLISH having been the only side effect
+    // attempted, so a reinstated zero would need a new dependency and would fail
+    // the construction above rather than slipping past this test.
+    expect(logger.info).not.toHaveBeenCalledWith('Requested storage quota recalculation for user', expect.anything())
+  })
+
+  it('should return error result if the invitee has no shared subscription', async () => {
     getSharedSubscriptionForUser.execute = jest.fn().mockReturnValue(Result.fail('test'))
 
     const useCase = createUseCase()
@@ -117,19 +149,7 @@ describe('FixStorageQuotaForUser', () => {
     expect(result.isFailed()).toBeTruthy()
   })
 
-  it('should return error result if setting value cannot be set', async () => {
-    setSubscriptonSettingValue.execute = jest.fn().mockReturnValue(Result.fail('test'))
-
-    const useCase = createUseCase()
-
-    const result = await useCase.execute({
-      userEmail: 'test@test.te',
-    })
-
-    expect(result.isFailed()).toBeTruthy()
-  })
-
-  it('should reset storage quota and ask for recalculation for user and all its shared subscriptions', async () => {
+  it('should ask for recalculation for the user and all its shared subscriptions', async () => {
     const useCase = createUseCase()
 
     const result = await useCase.execute({
@@ -187,11 +207,8 @@ describe('FixStorageQuotaForUser', () => {
     expect(result.isFailed()).toBeTruthy()
   })
 
-  it('should return error if fails to reset storage quota for the invitee', async () => {
-    setSubscriptonSettingValue.execute = jest
-      .fn()
-      .mockReturnValueOnce(Result.ok())
-      .mockReturnValueOnce(Result.fail('test'))
+  it('should return error if the invitee is no longer a shared subscriber', async () => {
+    getSharedSubscriptionForUser.execute = jest.fn().mockReturnValueOnce(Result.fail('test'))
 
     const useCase = createUseCase()
 

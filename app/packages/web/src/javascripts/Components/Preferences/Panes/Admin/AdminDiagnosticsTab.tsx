@@ -76,6 +76,13 @@ type AccountSpaceReading = {
   source: SpaceFigureSource
   used?: number
   limit?: number
+  /**
+   * Standard Red Notes: where the ALLOWANCE came from, as the server's own closed
+   * enum. Carried raw and admitted by the Account section rather than narrowed
+   * here, so an unrecognised origin reaches one place that knows how to collapse
+   * it instead of being silently dropped on the way in.
+   */
+  limitOrigin?: string
 }
 
 /**
@@ -435,6 +442,16 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * Both of those are an ANSWER. Only a rejected promise is not, and only that is
    * reported as a failed read now.
    *
+   * *** AND THE SERVER NOW ANSWERS THE ALLOWANCE EVEN WITH NO ROW TO READ IT
+   * FROM. *** An absent FILE_UPLOAD_BYTES_LIMIT was never an absent allowance —
+   * `CreateValetToken` falls back to the plan default, and to unlimited where there
+   * is no live subscription — so auth derives that EFFECTIVE figure and sends its
+   * provenance alongside it. The USAGE total is still never derived: a fabricated
+   * zero would make a lost bookkeeping write unobservable, which is the one thing
+   * the Space block's degraded finding exists to see. So "the allowance arrived and
+   * the usage did not" is now an ordinary reading, and the Account section keys its
+   * findings on the figure each one is about rather than on both being absent.
+   *
    * The two settings are also read INDEPENDENTLY rather than in sequence. They
    * were awaited one after the other in a single `try`, so a throw on the usage
    * read discarded the allowance read that had not happened yet — one failure
@@ -459,31 +476,50 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
      * of defect this pane least affords: the screen that explains a broken
      * deployment must not be the screen that cannot render on one.
      */
-    const readBytes = async (pick: 'FileUploadBytesUsed' | 'FileUploadBytesLimit'): Promise<number | undefined> => {
+    /**
+     * *** `>= 0` DISCARDED THE ONE VALUE THAT MEANS UNLIMITED. ***
+     *
+     * This predicate was `Number.isFinite(parsed) && parsed >= 0`, and `-1` is the
+     * ONLY value the files server treats as unlimited — so the commonest allowance
+     * on this fork was parsed, recognised as a number, and then thrown away as if
+     * the server had said nothing. The Account section already handles `-1` as its
+     * own state and its own printed value; what it could not do was handle a figure
+     * it was never given. The floor is now `-1`: anything below it is not a
+     * sentinel this build knows and is still refused rather than rendered.
+     */
+    const readFigure = async (
+      pick: 'FileUploadBytesUsed' | 'FileUploadBytesLimit',
+    ): Promise<{ value?: number; origin?: string }> => {
       const name = SettingName.create(SettingName.NAMES[pick]).getValue()
-      const raw = await application.settings.getSubscriptionSetting(name)
-      const parsed = typeof raw === 'string' ? Number.parseFloat(raw) : Number.NaN
+      const detail = await application.settings.getSubscriptionSettingDetail(name)
+      const parsed = typeof detail.value === 'string' ? Number.parseFloat(detail.value) : Number.NaN
 
-      return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+      return {
+        ...(Number.isFinite(parsed) && parsed >= -1 ? { value: parsed } : {}),
+        ...(detail.origin === undefined ? {} : { origin: detail.origin }),
+      }
     }
 
-    const figureOf = (settled: PromiseSettledResult<number | undefined>): number | undefined => {
-      return settled.status === 'fulfilled' ? settled.value : undefined
+    const figureOf = (
+      settled: PromiseSettledResult<{ value?: number; origin?: string }>,
+    ): { value?: number; origin?: string } => {
+      return settled.status === 'fulfilled' ? settled.value : {}
     }
 
-    void Promise.allSettled([readBytes('FileUploadBytesUsed'), readBytes('FileUploadBytesLimit')]).then((settled) => {
+    void Promise.allSettled([readFigure('FileUploadBytesUsed'), readFigure('FileUploadBytesLimit')]).then((settled) => {
       if (cancelled) {
         return
       }
 
-      const used = figureOf(settled[0])
-      const limit = figureOf(settled[1])
+      const used = figureOf(settled[0]).value
+      const allowance = figureOf(settled[1])
       const threw = settled.some((result) => result.status === 'rejected')
 
       setSpaceReading({
         source: threw ? 'read-threw' : 'read-carried-no-figure',
         ...(used === undefined ? {} : { used }),
-        ...(limit === undefined ? {} : { limit }),
+        ...(allowance.value === undefined ? {} : { limit: allowance.value }),
+        ...(allowance.origin === undefined ? {} : { limitOrigin: allowance.origin }),
       })
     })
 
@@ -804,6 +840,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             spaceFigureSource: spaceReading.source,
             ...(spaceReading.used === undefined ? {} : { fileUploadBytesUsed: spaceReading.used }),
             ...(spaceReading.limit === undefined ? {} : { fileUploadBytesLimit: spaceReading.limit }),
+            ...(spaceReading.limitOrigin === undefined ? {} : { fileAllowanceOrigin: spaceReading.limitOrigin }),
           }),
       ...(payload?.protocol?.version === undefined ? {} : { protocolVersion: payload.protocol.version }),
       ...(payload?.protocol?.serverOperations === undefined

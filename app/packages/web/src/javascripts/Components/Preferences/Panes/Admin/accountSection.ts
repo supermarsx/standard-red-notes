@@ -222,6 +222,30 @@ const FILE_QUOTA_VALUE: Record<FileQuotaState, SafeValue> = {
   'no-allowance': safeConstant('no allowance granted'),
 }
 
+/**
+ * WHERE the reported file allowance came from, as a closed set.
+ *
+ * *** AN ALLOWANCE AND A DECISION ARE NOT THE SAME THING. ***
+ *
+ * `FILE_UPLOAD_BYTES_LIMIT` legitimately has no row on most accounts, and the
+ * absence never meant "no allowance": `CreateValetToken` falls back to the plan
+ * default when it mints an upload token, and to unlimited (`-1`) when there is no
+ * live subscription at all. The server now answers that EFFECTIVE figure rather
+ * than nothing, which is the only reason the headroom row can resolve — and the
+ * figure alone would then be unreadable, because "100 GB because somebody chose
+ * 100 GB" and "100 GB because that is what the plan happens to default to" are
+ * the same number and different facts. One is a decision an operator can audit;
+ * the other is a default nobody has looked at.
+ *
+ * So the value and its provenance are reported as two rows. The provenance is the
+ * SERVER's enum and is admitted against this tuple rather than printed, exactly
+ * like the role and plan names: an unrecognised origin — or an identifier arriving
+ * in the wrong field — collapses to a constant without echoing a byte.
+ */
+export const FILE_ALLOWANCE_ORIGINS = ['account-setting', 'plan-default', 'no-active-subscription'] as const
+
+export type FileAllowanceOrigin = (typeof FILE_ALLOWANCE_ORIGINS)[number]
+
 /** The share of a file allowance at which this build reports it as nearly full. */
 export const FILE_QUOTA_NEAR_FRACTION = 0.9
 
@@ -408,6 +432,11 @@ const SESSION_READING: Record<AdminReading, ReadingVerdict> = {
  *     This pane then rated that deliberate design as a broken deployment.
  *   - An absent LIMIT is not an absent allowance either: `CreateValetToken` falls
  *     back to the plan default when the setting is missing, so nothing is refused.
+ *     That one is no longer a reason for an empty row — the server derives the
+ *     EFFECTIVE allowance and the rows report it with its provenance — but it is
+ *     recorded here because it is why the row must never have been read as "no
+ *     allowance", and because a server that predates the derivation still answers
+ *     nothing and gets its own finding rather than an alarm.
  *
  * A thrown read is still a real failure and still reads `broken`. What separates
  * them is whether an answer arrived, which is a fact the caller has and this module
@@ -471,6 +500,15 @@ export type AccountObservations = {
   fileUploadBytesUsed?: number
   /** `FileUploadBytesLimit`. `-1` is the only unlimited sentinel; `0` refuses every upload. */
   fileUploadBytesLimit?: number
+  /**
+   * WHERE `fileUploadBytesLimit` came from, as one of `FILE_ALLOWANCE_ORIGINS`.
+   *
+   * Typed wide so an unrecognised value collapses through `safeEnum` rather than
+   * printing, exactly like the role, plan and census fields. Absent means the
+   * server did not say — which every server before the effective-allowance answer
+   * does, and which is reported as such rather than guessed at.
+   */
+  fileAllowanceOrigin?: string
   /** Local origin bytes in use, read ONLY to compare against the user's own cap below. */
   localUsageBytes?: number
   /** `PrefKey.StorageMaxUsageBytes`. `0` means the user set no cap. ADVISORY: never blocks a write. */
@@ -961,6 +999,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
   const limitMb = wholeMegabytes(observed.fileUploadBytesLimit)
 
   const census = ACCOUNT_FILE_CENSUS.find((candidate) => candidate === observed.fileCensus)
+  const allowanceOrigin = FILE_ALLOWANCE_ORIGINS.find((candidate) => candidate === observed.fileAllowanceOrigin)
 
   const cap = observed.localSoftCapBytes
   const capSet = cap === undefined ? undefined : cap > 0
@@ -983,7 +1022,13 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
       label: safeConstant('Server file allowance, whole MB'),
       value: observed.fileUploadBytesLimit === -1 ? FILE_QUOTA_VALUE.unlimited : safeCount(limitMb),
       ...absentOr(observed.fileUploadBytesLimit, 'informational'),
-      note: 'Rounded down, so 0 means under one megabyte rather than unset. -1 is the ONLY value the files server treats as unlimited and is printed as such; 0 is an allowance of nothing and refuses every upload, which is a different answer from no limit and is never merged with it.',
+      note: 'The EFFECTIVE allowance — what the files server would actually enforce on the next upload, which is not the same thing as what is stored. An absent FILE_UPLOAD_BYTES_LIMIT row was never an absent allowance: the token minter falls back to the plan default, and to unlimited where there is no live subscription, so a server that reported nothing here was withholding a figure it was about to apply. Rounded down, so 0 means under one megabyte rather than unset. -1 is the ONLY value the files server treats as unlimited and is printed as such; 0 is an allowance of nothing and refuses every upload, which is a different answer from no limit and is never merged with it. Where the figure came from is the next row, and it matters: the same number can be a decision somebody made or a default nobody has looked at.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Where the file allowance comes from'),
+      value: safeEnum(observed.fileAllowanceOrigin, FILE_ALLOWANCE_ORIGINS),
+      ...absentOr(allowanceOrigin, 'informational'),
+      note: 'Whether the allowance above is a per-account setting, the subscription plan’s default, or the unlimited fallback for an account with no live subscription. A closed server enum, admitted rather than printed. It is reported because the figure alone cannot be audited: "set for this account" is a decision with an author, "the plan default" is a ceiling nobody chose, and only the first can be raised from Admin → Users without changing the plan. "not reported" here means the server does not send provenance — every build before the effective-allowance answer — and not that the allowance is unset.',
     }),
     diagnosticRow({
       label: safeConstant('Server file bytes used, whole MB'),
@@ -1051,17 +1096,42 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
    * both "none" and "not read yet" — but it is not a files-lane signal and must not
    * be read as one.
    *
-   * Emitted only when no server figure arrived at all. One figure present means the
-   * read worked and the rows above carry it.
+   * *** AND THE SECOND SPLIT WAS KEYED ON THE WRONG FIGURE, WHICH WOULD HAVE MADE
+   * THE DEGRADED ARM UNREACHABLE. ***
+   *
+   * These arms were gated on `fileUploadBytesUsed === undefined && fileUploadBytesLimit
+   * === undefined` — BOTH figures missing. That held only while the server answered
+   * nothing for either, and it no longer does: an absent limit ROW is not an absent
+   * allowance, so the server now answers the EFFECTIVE allowance (plan default, or
+   * unlimited with no live subscription) whenever no row exists. Under the old
+   * condition that one new figure would have silenced every arm below, including
+   * `ACCOUNT_SPACE_USAGE_UNRECORDED` — the arm whose entire subject is a USAGE
+   * total nobody is keeping. Publishing one derivable number would have deleted the
+   * finding about the other one, permanently and silently, which is the worst shape
+   * a gate can take: present, passing, and incapable of firing.
+   *
+   * So each arm is keyed on the figure it is actually about. The usage arms ask
+   * only whether the USAGE total is missing; the thrown-read arm asks whether ANY
+   * figure is missing, because a throw anywhere is a failed read. The allowance has
+   * an arm of its own for the one case the new answer cannot cover — a server too
+   * old to send it.
+   *
+   * NOTHING IS SYNTHESISED ON THE USAGE SIDE, server or client, and that is what
+   * keeps the degraded arm real: the server derives an allowance (a fact about
+   * policy) and refuses to derive a total (a fact about bytes). A zero is a figure;
+   * unknown is not, and this block must be able to tell an operator which one it
+   * was handed.
    */
-  const serverFiguresAbsent = observed.fileUploadBytesUsed === undefined && observed.fileUploadBytesLimit === undefined
+  const usageFigureAbsent = observed.fileUploadBytesUsed === undefined
+  const allowanceFigureAbsent = observed.fileUploadBytesLimit === undefined
+  const anyFigureAbsent = usageFigureAbsent || allowanceFigureAbsent
 
   const findings: DiagnosticFinding[] = []
 
   // A READ THAT THREW. Still `broken`, and narrowed rather than weakened: this arm
   // now fires only where an answer never arrived, which is what the finding always
   // claimed in its own text and never actually tested.
-  if (serverFiguresAbsent && observed.spaceFigureSource === 'read-threw') {
+  if (anyFigureAbsent && observed.spaceFigureSource === 'read-threw') {
     findings.push(
       diagnosticFinding({
         code: safeConstant('ACCOUNT_SPACE_READ_FAILED'),
@@ -1077,7 +1147,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
   // AN ANSWER ARRIVED CARRYING NO FIGURE. Three outcomes, decided by whether the
   // account has a file — never merged, because the whole defect being fixed here
   // was one state standing in for three.
-  if (serverFiguresAbsent && observed.spaceFigureSource === 'read-carried-no-figure') {
+  if (usageFigureAbsent && observed.spaceFigureSource === 'read-carried-no-figure') {
     if (census === 'present') {
       findings.push(
         diagnosticFinding({
@@ -1120,12 +1190,40 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
     }
   }
 
+  /**
+   * AN ALLOWANCE THE SERVER DID NOT ANSWER, with a usage total that it did.
+   *
+   * Mutually exclusive with the usage arms above by construction — it requires the
+   * usage figure to be PRESENT — so this block still emits at most one finding and
+   * an operator still counts one problem per problem.
+   *
+   * The state it describes is a SERVER too old to derive the effective allowance,
+   * not a fault: the account's uploads are not refused by it, and the figure the
+   * token minter applies is the plan default or unlimited exactly as it always
+   * was. What is lost is the headroom verdict in the requirements block, which
+   * cannot be computed from a usage total with no ceiling to measure it against,
+   * and which would otherwise read "not reported" with nothing on the screen
+   * explaining why.
+   */
+  if (!usageFigureAbsent && allowanceFigureAbsent && observed.spaceFigureSource === 'read-carried-no-figure') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_SPACE_ALLOWANCE_UNREPORTED'),
+        title: 'This account’s usage is reported and its allowance is not',
+        detail:
+          'The read completed, carried a usage total and carried no allowance. That is a SERVER that does not derive the effective allowance — the per-account FILE_UPLOAD_BYTES_LIMIT row is legitimately absent on most accounts, and a server that reports only the row reports nothing. It is not a fault and nothing is refused by it: the upload-token minter still falls back to the plan default, and to unlimited where there is no live subscription, so uploads go through at a ceiling this client is simply not told. What it costs is the headroom verdict in the requirements block below, which has a usage total and nothing to measure it against and therefore stays undetermined. Nothing short of attempting an upload establishes the headroom in this state.',
+        verdict: 'undetermined',
+        evidence: EVIDENCE_ABSENT,
+      }),
+    )
+  }
+
   // `not-attempted` EXPLICITLY, never an absent field. Absent means the caller did
   // not say which kind of empty this is, and inventing "nobody asked" from silence
   // would be this block making the same absent-is-false mistake it exists to flag —
   // on a model where nothing at all was observed, which is the one case that must
   // claim nothing.
-  if (serverFiguresAbsent && observed.spaceFigureSource === 'not-attempted') {
+  if (anyFigureAbsent && observed.spaceFigureSource === 'not-attempted') {
     findings.push(
       diagnosticFinding({
         code: safeConstant('ACCOUNT_SPACE_NOT_READ'),
@@ -1173,7 +1271,7 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
       label: safeConstant('Room for a file upload'),
       value: state === undefined ? safePresence(undefined) : FILE_QUOTA_VALUE[state],
       ...absentOr(state, exhausted ? 'broken' : state === 'nearly-full' ? 'degraded' : 'healthy'),
-      note: 'The one verdict about the figures in the Space block above. What breaks when this fails: the files server refuses new uploads for this account, with existing files still readable and note syncing entirely unaffected — so the symptom is attachments failing and nothing else, which is why it is so often chased on the transport first. An allowance of nothing ("no allowance granted") refuses every upload and is reported as broken rather than as an absent limit. AN UNREPORTED LIMIT IS NOT AN ABSENT ALLOWANCE, and this row stays undetermined rather than alarming because of it: when the per-account limit setting is missing the server falls back to the plan default when it mints the upload token, so uploads still go through at a figure this client is never told. Nothing short of attempting an upload establishes the headroom in that state, and this row does not pretend otherwise.',
+      note: 'The one verdict about the figures in the Space block above. What breaks when this fails: the files server refuses new uploads for this account, with existing files still readable and note syncing entirely unaffected — so the symptom is attachments failing and nothing else, which is why it is so often chased on the transport first. An allowance of nothing ("no allowance granted") refuses every upload and is reported as broken rather than as an absent limit. AN UNREPORTED LIMIT IS STILL NOT AN ABSENT ALLOWANCE, and that is now answered rather than merely warned about: the server derives the EFFECTIVE allowance the token minter would apply — the plan default, or unlimited where there is no live subscription — so this row resolves on a deployment that has never written a limit setting, which used to be every one of them. It stays undetermined where the USAGE total is missing, because headroom cannot be derived from a ceiling alone, and where the server is too old to send an allowance at all; the Space block above says which of those it was. Nothing short of attempting an upload establishes the headroom in either state, and this row does not pretend otherwise.',
     }),
     diagnosticRow({
       label: safeConstant('Live sync for this account'),

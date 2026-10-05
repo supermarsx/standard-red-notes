@@ -50,6 +50,25 @@ export class SettingsGateway {
   }
 
   async getSubscriptionSetting(name: SettingName): Promise<string | undefined> {
+    return (await this.getSubscriptionSettingDetail(name)).value
+  }
+
+  /**
+   * Standard Red Notes: the same read as `getSubscriptionSetting`, keeping the
+   * server's `origin` alongside the value.
+   *
+   * It exists as a SEPARATE method rather than a widened return type so no
+   * existing caller changes shape. `origin` says whether a value is a stored
+   * per-account row or an EFFECTIVE one the server derived — which for
+   * `FILE_UPLOAD_BYTES_LIMIT` is the difference between a limit somebody set and
+   * the default the upload-token minter happens to apply. Both are true answers
+   * and only one of them is a decision anybody made.
+   *
+   * An absent value and an absent origin are returned as an object with both
+   * absent, never as `undefined`: a caller that needs to tell "no figure" from "no
+   * answer" gets that from the thrown/not-thrown distinction, exactly as before.
+   */
+  async getSubscriptionSettingDetail(name: SettingName): Promise<{ value?: string; origin?: string }> {
     if (!name.isASubscriptionSetting()) {
       throw new Error(`Setting ${name.value} is not a subscription setting`)
     }
@@ -57,14 +76,19 @@ export class SettingsGateway {
     const response = await this.settingsApi.getSubscriptionSetting(this.userUuid, name.value)
 
     if (response.status === HttpStatusCode.BadRequest) {
-      return undefined
+      return {}
     }
 
     if (isErrorResponse(response)) {
       throw new Error(getErrorFromErrorResponse(response).message)
     }
 
-    return response?.data?.setting?.value ?? undefined
+    const setting = response?.data?.setting
+
+    return {
+      ...(setting?.value == undefined ? {} : { value: setting.value }),
+      ...(setting?.origin == undefined ? {} : { origin: setting.origin }),
+    }
   }
 
   async updateSubscriptionSetting(name: SettingName, payload: string, sensitive: boolean): Promise<void> {

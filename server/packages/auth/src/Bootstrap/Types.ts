@@ -326,6 +326,7 @@ const TYPES = {
   Auth_RemoveSharedVaultUser: Symbol.for('Auth_RemoveSharedVaultUser'),
   Auth_DesignateSurvivor: Symbol.for('Auth_DesignateSurvivor'),
   Auth_GetSharedOrRegularSubscriptionForUser: Symbol.for('Auth_GetSharedOrRegularSubscriptionForUser'),
+  Auth_ResolveFileQuotaScope: Symbol.for('Auth_ResolveFileQuotaScope'),
   Auth_DisableEmailSettingBasedOnEmailSubscription: Symbol.for('Auth_DisableEmailSettingBasedOnEmailSubscription'),
   Auth_TriggerPostSettingUpdateActions: Symbol.for('Auth_TriggerPostSettingUpdateActions'),
   Auth_TriggerEmailBackupForUser: Symbol.for('Auth_TriggerEmailBackupForUser'),

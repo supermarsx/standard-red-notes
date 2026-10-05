@@ -45,6 +45,15 @@ export class SettingsService extends AbstractService implements SettingsClientIn
     return this.provider.getSubscriptionSetting(name)
   }
 
+  /**
+   * Standard Red Notes: the subscription-setting read WITH the server's `origin`,
+   * which says whether the value is a stored per-account row or an effective one
+   * the server derived. See `SettingsGateway.getSubscriptionSettingDetail`.
+   */
+  async getSubscriptionSettingDetail(name: SettingName) {
+    return this.provider.getSubscriptionSettingDetail(name)
+  }
+
   async updateSubscriptionSetting(name: SettingName, payload: string, sensitive = false) {
     return this.provider.updateSubscriptionSetting(name, payload, sensitive)
   }

@@ -477,6 +477,7 @@ import { GetAllSettingsForUser } from '../Domain/UseCase/GetAllSettingsForUser/G
 import { GetRegularSubscriptionForUser } from '../Domain/UseCase/GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetSharedSubscriptionForUser } from '../Domain/UseCase/GetSharedSubscriptionForUser/GetSharedSubscriptionForUser'
 import { GetSharedOrRegularSubscriptionForUser } from '../Domain/UseCase/GetSharedOrRegularSubscriptionForUser/GetSharedOrRegularSubscriptionForUser'
+import { ResolveFileQuotaScope } from '../Domain/UseCase/ResolveFileQuotaScope/ResolveFileQuotaScope'
 import { ProjectorInterface } from '../Projection/ProjectorInterface'
 import { SettingHttpRepresentation } from '../Mapping/Http/SettingHttpRepresentation'
 import { SubscriptionSetting } from '../Domain/Setting/SubscriptionSetting'
@@ -2805,6 +2806,15 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<ResolveFileQuotaScope>(TYPES.Auth_ResolveFileQuotaScope)
+      .toConstantValue(
+        new ResolveFileQuotaScope(
+          container.get<GetSharedSubscriptionForUser>(TYPES.Auth_GetSharedSubscriptionForUser),
+          container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+        ),
+      )
+    container
       .bind<GetAllSettingsForUser>(TYPES.Auth_GetAllSettingsForUser)
       .toConstantValue(
         new GetAllSettingsForUser(
@@ -3171,9 +3181,7 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new FixStorageQuotaForUser(
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
-          container.get<GetRegularSubscriptionForUser>(TYPES.Auth_GetRegularSubscriptionForUser),
           container.get<GetSharedSubscriptionForUser>(TYPES.Auth_GetSharedSubscriptionForUser),
-          container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
           container.get<ListSharedSubscriptionInvitations>(TYPES.Auth_ListSharedSubscriptionInvitations),
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
           container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
@@ -3923,6 +3931,10 @@ export class ContainerConfigLoader {
             ),
             container.get<winston.Logger>(TYPES.Auth_Logger),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
+            container.get<ResolveFileQuotaScope>(TYPES.Auth_ResolveFileQuotaScope),
+            container.get<SubscriptionSettingsAssociationServiceInterface>(
+              TYPES.Auth_SubscriptionSettingsAssociationService,
+            ),
           ),
         )
       container

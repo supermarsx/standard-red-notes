@@ -27,10 +27,19 @@ describe('FileQuotaRecalculatedEventHandler', () => {
     logger.error = jest.fn()
   })
 
+  /**
+   * *** THE NAME OF THIS TEST WAS ALREADY TRUE AND ITS ASSERTION WAS NOT. ***
+   *
+   * It said "absolute total" and asserted a call with no `absolute` flag — i.e. an
+   * ADD, which only produced the right answer because `FixStorageQuotaForUser`
+   * zeroed the counter in a separate write first. That two-step left a confident
+   * `0` on an account holding megabytes whenever the recalculation did not arrive,
+   * which from the `srn-admin` CLI on a single container it never can.
+   */
   it('should set the quota to the recalculated absolute total', async () => {
     await createHandler().handle(event)
 
-    expect(updateStorageQuota.execute).toHaveBeenCalledWith({ userUuid, bytesUsed: 4096 })
+    expect(updateStorageQuota.execute).toHaveBeenCalledWith({ userUuid, bytesUsed: 4096, absolute: true })
     expect(logger.error).not.toHaveBeenCalled()
     expect(logger.info).toHaveBeenCalledWith('Storage quota updated', {
       userId: userUuid,

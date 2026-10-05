@@ -11,6 +11,8 @@ import { SubscriptionSettingHttpRepresentation } from '../../Mapping/Http/Subscr
 import { SetSubscriptionSettingValue } from '../../Domain/UseCase/SetSubscriptionSettingValue/SetSubscriptionSettingValue'
 import { TriggerPostSettingUpdateActions } from '../../Domain/UseCase/TriggerPostSettingUpdateActions/TriggerPostSettingUpdateActions'
 import { Logger } from 'winston'
+import { ResolveFileQuotaScope } from '../../Domain/UseCase/ResolveFileQuotaScope/ResolveFileQuotaScope'
+import { SubscriptionSettingsAssociationServiceInterface } from '../../Domain/Setting/SubscriptionSettingsAssociationServiceInterface'
 
 @controller('/users/:userUuid')
 export class AnnotatedSubscriptionSettingsController extends BaseSubscriptionSettingsController {
@@ -24,6 +26,13 @@ export class AnnotatedSubscriptionSettingsController extends BaseSubscriptionSet
     @inject(TYPES.Auth_SubscriptionSettingHttpMapper)
     override subscriptionSettingMapper: MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>,
     @inject(TYPES.Auth_Logger) override logger: Logger,
+    // Standard Red Notes: the file-quota scope resolver + the plan-default
+    // allowance source, so this (multi-container) route answers the same
+    // effective allowance the single-container one does. See
+    // BaseSubscriptionSettingsController.getSubscriptionSetting.
+    @inject(TYPES.Auth_ResolveFileQuotaScope) override resolveFileQuotaScope: ResolveFileQuotaScope,
+    @inject(TYPES.Auth_SubscriptionSettingsAssociationService)
+    override subscriptionSettingsAssociationService: SubscriptionSettingsAssociationServiceInterface,
   ) {
     super(
       doGetSetting,
@@ -32,6 +41,9 @@ export class AnnotatedSubscriptionSettingsController extends BaseSubscriptionSet
       triggerPostSettingUpdateActions,
       subscriptionSettingMapper,
       logger,
+      undefined,
+      resolveFileQuotaScope,
+      subscriptionSettingsAssociationService,
     )
   }
 

@@ -223,8 +223,15 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   // in either direction. This is the surface the Space block went empty for want
   // of, and the surface this pane wrongly recorded as not existing.
   settings: {
-    getSubscriptionSetting: jest.fn().mockImplementation(async (name: { name: string }) => {
-      return name.name === 'FILE_UPLOAD_BYTES_USED' ? '1048576' : '10485760'
+    // The read carries the server's `origin` alongside the value, because an
+    // absent FILE_UPLOAD_BYTES_LIMIT row is not an absent allowance: auth answers
+    // the EFFECTIVE allowance the upload-token minter would apply and says whether
+    // that came from a per-account setting, a plan default, or the unlimited
+    // fallback for an account with no live subscription.
+    getSubscriptionSettingDetail: jest.fn().mockImplementation(async (name: { name: string }) => {
+      return name.name === 'FILE_UPLOAD_BYTES_USED'
+        ? { value: '1048576' }
+        : { value: '10485760', origin: 'account-setting' }
     }),
   },
   // The file census the Space block reads to decide whether an absent usage
@@ -851,8 +858,12 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
   it('says plainly that nothing publishes the runtime facts, rather than "not reported"', async () => {
     await openEnvironment()
 
-    expect(sectionRow('Why this transport was chosen')[1]).toBe('no endpoint publishes this')
-    expect(sectionRow('Why this transport was chosen')[1]).not.toBe('not reported')
+    // The lane decision is NOT in this list any more: it has a producer on the
+    // deployment block now, so this fixture — whose payload does not carry it —
+    // reads "not reported", which is the honest wording for a field that could
+    // have been reported and was not. The rows below have no producer at all.
+    expect(sectionRow('Why this transport was chosen')[1]).toBe('not reported')
+    expect(sectionRow('Why this transport was chosen')[1]).not.toBe('no endpoint publishes this')
     expect(sectionRow('Time since this process started')[1]).toBe('no endpoint publishes this')
     // Three cookie/session-mode rows became one line rather than three blanks.
     expect(sectionRow('Effective cookie and session-mode flags')[1]).toBe('no endpoint publishes this')
@@ -979,7 +990,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
    * Every Space row read "not reported" on every deployment, and the reason
    * recorded for it was that the only reader of these two numbers was the admin
    * Users tab, which reaches them BY USER ID — so a self-scoped reading was said not
-   * to exist. It does: `settings.getSubscriptionSetting` answers for the requesting
+   * to exist. It does: `settings.getSubscriptionSettingDetail` answers for the requesting
    * session and carries no identifier either way, which is how the account's own
    * Files preferences pane has always read them. The block now reports.
    */
@@ -991,11 +1002,70 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     expect(sectionRow('Server file allowance, whole MB')[1]).toBe('10')
     expect(sectionRow('Server file allowance used')[1]).toBe('0-25%')
     expect(sectionRow('Room for a file upload')[1]).toBe('room available')
+    expect(sectionRow('Where the file allowance comes from')[1]).toBe('account-setting')
 
     // Precondition on the surface itself: it is asked for exactly the two settings,
     // and nothing it was handed could carry an account identifier.
-    const asked = application.settings.getSubscriptionSetting.mock.calls.map(([name]: [{ name: string }]) => name.name)
+    const asked = application.settings.getSubscriptionSettingDetail.mock.calls.map(
+      ([name]: [{ name: string }]) => name.name,
+    )
     expect(asked).toEqual(['FILE_UPLOAD_BYTES_USED', 'FILE_UPLOAD_BYTES_LIMIT'])
+  })
+
+  /**
+   * *** `-1` IS A FIGURE, AND THIS TAB USED TO THROW IT AWAY. ***
+   *
+   * The parse guard was `Number.isFinite(parsed) && parsed >= 0`, and `-1` is the
+   * ONLY value the files server treats as unlimited — so the commonest allowance
+   * on this fork was read, recognised as a number, and then discarded as if the
+   * server had answered nothing. That is what left "Room for a file upload"
+   * unreported on a deployment whose uploads were in fact unrestricted.
+   */
+  it('keeps the unlimited sentinel instead of discarding it as an unreportable figure', async () => {
+    const text = await openAccount(
+      makeApplication({
+        settings: {
+          getSubscriptionSettingDetail: jest.fn().mockImplementation(async (name: { name: string }) => {
+            return name.name === 'FILE_UPLOAD_BYTES_USED'
+              ? { value: '1048576' }
+              : { value: '-1', origin: 'no-active-subscription' }
+          }),
+        },
+        items: { getItems: () => [{ uuid: 'a-file' }] },
+      }),
+    )
+
+    expect(sectionRow('Server file allowance, whole MB')[1]).toBe('no limit set')
+    expect(sectionRow('Where the file allowance comes from')[1]).toBe('no-active-subscription')
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('1')
+    expect(sectionRow('Room for a file upload')[1]).toBe('no limit set')
+    expect(text).not.toContain('asked for and did not arrive')
+  })
+
+  /**
+   * *** PUBLISHING THE ALLOWANCE MUST NOT SILENCE THE USAGE FINDING. ***
+   *
+   * The Space block's findings were gated on BOTH figures being absent, and the
+   * server now always derives an allowance — so the one new figure would have made
+   * the bookkeeping degradation unreportable on every deployment at once. Asserted
+   * at the wiring seam as well as in the section's own suite, because this is the
+   * state the real server produces for an account whose usage writes were lost.
+   */
+  it('still reports the lost usage bookkeeping while the allowance answers', async () => {
+    const text = await openAccount(
+      makeApplication({
+        settings: {
+          getSubscriptionSettingDetail: jest.fn().mockImplementation(async (name: { name: string }) => {
+            return name.name === 'FILE_UPLOAD_BYTES_USED' ? {} : { value: '-1', origin: 'no-active-subscription' }
+          }),
+        },
+        items: { getItems: () => [{ uuid: 'a-file' }] },
+      }),
+    )
+
+    expect(sectionRow('Server file allowance, whole MB')[1]).toBe('no limit set')
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
+    expect(text).toContain('This account has files and the server reports no usage figure for them')
   })
 
   it('reports a read that threw as a FAILED read, not as a figure nobody asked for', async () => {
@@ -1003,7 +1073,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     // distinguishable, and until this wiring landed only one of them was reachable.
     const text = await openAccount(
       makeApplication({
-        settings: { getSubscriptionSetting: jest.fn().mockRejectedValue(new Error('refused')) },
+        settings: { getSubscriptionSettingDetail: jest.fn().mockRejectedValue(new Error('refused')) },
       }),
     )
 
@@ -1022,7 +1092,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
    */
   it('reports an answer carrying no figure for a fileless account as nothing to report, not a failure', async () => {
     const text = await openAccount(
-      makeApplication({ settings: { getSubscriptionSetting: jest.fn().mockResolvedValue(undefined) } }),
+      makeApplication({ settings: { getSubscriptionSettingDetail: jest.fn().mockResolvedValue({}) } }),
     )
 
     // The figures really are absent, and really are not a zero.
@@ -1039,7 +1109,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
   it('reports an answer carrying no figure for an account WITH files as a bookkeeping degradation', async () => {
     const text = await openAccount(
       makeApplication({
-        settings: { getSubscriptionSetting: jest.fn().mockResolvedValue(undefined) },
+        settings: { getSubscriptionSettingDetail: jest.fn().mockResolvedValue({}) },
         items: { getItems: () => [{ uuid: 'a-file' }] },
       }),
     )
@@ -1068,7 +1138,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
   it('does not let an unparseable setting become a byte count', async () => {
     const text = await openAccount(
       makeApplication({
-        settings: { getSubscriptionSetting: jest.fn().mockResolvedValue('not a number') },
+        settings: { getSubscriptionSettingDetail: jest.fn().mockResolvedValue({ value: 'not a number' }) },
         items: { getItems: () => [{ uuid: 'a-file' }] },
       }),
     )
@@ -1095,11 +1165,11 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     await openAccount(
       makeApplication({
         settings: {
-          getSubscriptionSetting: jest.fn().mockImplementation(async (name: { name: string }) => {
+          getSubscriptionSettingDetail: jest.fn().mockImplementation(async (name: { name: string }) => {
             if (name.name === 'FILE_UPLOAD_BYTES_USED') {
               throw new Error('refused')
             }
-            return '10485760'
+            return { value: '10485760', origin: 'plan-default' }
           }),
         },
       }),
