@@ -248,6 +248,17 @@ jest.mock('@standardnotes/api-gateway', () => ({
   createFallbackHandler: jest.fn(() => jest.fn()),
   createRateLimitMiddleware: jest.fn(() => jest.fn()),
   createSharedServerAccessKeyMiddleware: jest.fn(() => jest.fn()),
+  // NOT a stub. `CanonicalHomeServerFileResourceAuthorizer` calls this on every
+  // FILES_V1 authorization to build the response it hands the canonical
+  // valet-token controllers, and a partial mock that left it `undefined` turned
+  // the round trip below into an unattributable FILE_ACCESS_DENIED -- the exact
+  // failure mode the helper exists to prevent. There is one implementation of
+  // it in the tree and this is it.
+  createDirectCallResponse: (
+    jest.requireActual(
+      '@standardnotes/api-gateway/dist/src/Service/Sync/DirectCallResponse',
+    ) as typeof import('@standardnotes/api-gateway/dist/src/Service/Sync/DirectCallResponse')
+  ).createDirectCallResponse,
   decideCorsOrigin: jest.fn(() => ({ allow: true })),
   // The boot log's precondition diagnosis. Stubbed like every other collaborator
   // in this partial mock; the resolution itself is covered where it lives, in

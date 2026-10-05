@@ -4,6 +4,7 @@ import { ServiceContainerInterface, ServiceIdentifier } from '@standardnotes/dom
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
+import { createDirectCallResponse } from '../Sync/DirectCallResponse'
 
 export class DirectCallServiceProxy implements ServiceProxyInterface {
   constructor(
@@ -41,6 +42,13 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
       }
     }
 
+    // `BaseSessionsController.validate` is declared `validate(request: Request)`
+    // and never names a response, so the bare `{}` that used to sit here was
+    // unreachable -- but it was the same fabrication that failed 100 % of the
+    // websocket sync lane at `e2e87e10` once the controller on the other end
+    // grew a `setHeader`, and this one runs on EVERY single-container request.
+    // The locals are empty on purpose: this call is what establishes the
+    // session, so there is nothing authenticated to project yet.
     const serviceResponse = (await authService.handleRequest(
       {
         body: {
@@ -53,7 +61,7 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
           cookie: stringOfCookies.trim(),
         },
       } as never,
-      {} as never,
+      createDirectCallResponse({}) as never,
       'auth.sessions.validate',
     )) as {
       statusCode: number

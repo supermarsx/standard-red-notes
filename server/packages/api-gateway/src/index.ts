@@ -16,5 +16,9 @@ export * from './Service/Sync/SyncWebSocketPreconditions'
 export * from './Service/Sync/SyncGateDiagnostics'
 export * from './Service/Diagnostics/DeploymentDiagnostics'
 export * from './Service/Sync/SyncWebSocketCommandAdapter'
+// The one header sink for a controller entered in-process. Public because the
+// home server's file-resource authorizer enters controllers the same way; a
+// second copy is how one lane gets fixed and its twin does not.
+export * from './Service/Sync/DirectCallResponse'
 export * from './Service/Sync/CollaborationAuthorizationService'
 export * from './Service/Sync/LoopbackSyncApiRpcAdapter'

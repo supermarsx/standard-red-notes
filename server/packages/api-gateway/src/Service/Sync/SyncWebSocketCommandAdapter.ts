@@ -21,6 +21,7 @@ import {
 } from '@standard-red-notes/websocket-gateway'
 
 import { ResponseLocals } from '../../Controller/ResponseLocals'
+import { createDirectCallResponse } from './DirectCallResponse'
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { sessionCookiesToMap } from './sessionCookies'
 import { CollaborationAuthorizationService } from './CollaborationAuthorizationService'
@@ -96,52 +97,6 @@ class SessionValidationError extends Error {
     super(message)
     this.name = 'SessionValidationError'
   }
-}
-
-/**
- * The Express `Response` a controller is handed when the durable command port
- * enters it DIRECTLY -- no HTTP server, no socket, no middleware (the bundled
- * single-container build's `DirectCallSyncCommandPort`).
- *
- * `{ locals } as unknown as Response` was not enough, and the gap was invisible
- * to every gate. `BaseItemsController.sync` stamps `X-Sync-Command-Status` and
- * `X-Sync-Command-Replayed` on the response one line AFTER the durable write
- * commits, and `syncCommandError` stamps `Retry-After` on a pending command. On
- * the direct-call port that bare literal therefore threw
- *
- *   TypeError: response.setHeader is not a function
- *
- * with the items already persisted: the controller caught its own TypeError,
- * logged "Durable sync command execution failed." and answered 503, `execute`
- * below read the non-2xx and threw, and the socket reported `BACKEND_ERROR` for
- * a save that had in fact landed. Every `SYNC_ITEMS` command on the single
- * container failed that way while advertising the capability. The multi-container
- * topology never saw it because its durable port speaks gRPC and never enters a
- * controller with a fabricated response.
- *
- * The collected headers are intentionally discarded -- this lane carries command
- * status in the frame, not in HTTP headers -- but the methods have to EXIST, and
- * a header written must read back, so a controller that branches on one is not
- * silently told "unset". The sibling fabrication in
- * `CollaborationAuthorizationService.checkAccessWithSyncingServer` has always
- * carried `setHeader` for the same reason.
- */
-function createDirectCallResponse(locals: ResponseLocals): Response {
-  const headers = new Map<string, unknown>()
-  const response: Record<string, unknown> = {
-    locals,
-    getHeader: (name: string): unknown => headers.get(String(name).toLowerCase()),
-    getHeaderNames: (): string[] => [...headers.keys()],
-    hasHeader: (name: string): boolean => headers.has(String(name).toLowerCase()),
-    removeHeader: (name: string): void => {
-      headers.delete(String(name).toLowerCase())
-    },
-  }
-  response.setHeader = (name: string, value: unknown): unknown => {
-    headers.set(String(name).toLowerCase(), value)
-    return response
-  }
-  return response as unknown as Response
 }
 
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

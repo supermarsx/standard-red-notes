@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express'
 
 import { ServiceIdentifier, type ServiceContainerInterface, type ServiceInterface } from '@standardnotes/domain-core'
+import { createDirectCallResponse } from '@standardnotes/api-gateway'
 import {
   classifyPresentedSessionCredential,
   credentialCanAuthenticateSession,
@@ -366,6 +367,31 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
     }
   }
 
+  /**
+   * Enters a canonical controller IN-PROCESS: no Express, no middleware, no
+   * socket -- `Service.handleRequest` looks the registered method up and calls
+   * it with whatever this hands over.
+   *
+   * The response therefore has to be a real enough `Response`, and for a while
+   * it was not: `{ locals } as unknown as Response & never`, an object with no
+   * methods at all. Nothing broke only because the two methods reached from
+   * here (`BaseValetTokenController.create` and
+   * `BaseSharedVaultsController.createValetTokenForSharedVaultFile`) read
+   * `response.locals` and return `this.json(...)` without touching the response
+   * again -- while two SIBLINGS in that same shared-vaults controller,
+   * `createSharedVault` and `deleteSharedVault`, already stamp
+   * `response.setHeader('x-invalidate-cache', ...)`. The first such line added
+   * to a valet-token method would have thrown
+   *
+   *   TypeError: response.setHeader is not a function
+   *
+   * AFTER the valet token was minted, and the files lane would have answered an
+   * unattributable denial on the single container while multi-container (whose
+   * authorizer goes out over HTTP/gRPC) stayed green. That is exactly how the
+   * websocket sync lane came to fail 100 % of its `SYNC_ITEMS` calls at
+   * `e2e87e10`; `createDirectCallResponse` is that fix's header sink, imported
+   * rather than copied so this twin cannot drift away from it.
+   */
   private async callService(
     serviceName: string,
     endpoint: string,
@@ -384,7 +410,7 @@ export class CanonicalHomeServerFileResourceAuthorizer implements HomeServerFile
     const result = (await abortable(
       service.handleRequest(
         request as unknown as Request & never,
-        { locals } as unknown as Response & never,
+        createDirectCallResponse(locals) as unknown as Response & never,
         endpoint,
       ) as Promise<unknown>,
       signal,
