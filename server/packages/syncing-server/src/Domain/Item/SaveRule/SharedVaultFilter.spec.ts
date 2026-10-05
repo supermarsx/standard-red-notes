@@ -8,6 +8,7 @@ import {
   Uuid,
   SharedVaultUser,
 } from '@standardnotes/domain-core'
+import { ConflictType } from '@standardnotes/responses'
 import { SharedVaultUserRepositoryInterface } from '../../SharedVault/User/SharedVaultUserRepositoryInterface'
 import { DetermineSharedVaultOperationOnItem } from '../../UseCase/SharedVaults/DetermineSharedVaultOperationOnItem/DetermineSharedVaultOperationOnItem'
 import { SharedVaultFilter } from './SharedVaultFilter'
@@ -154,6 +155,10 @@ describe('SharedVaultFilter', () => {
 
   describe('when the shared vault operation on item is: move to other shared vault', () => {
     beforeEach(() => {
+      // `existingItem` is part of every move operation DetermineSharedVaultOperationOnItem can
+      // produce (a move is by definition a relocation of an item that already exists), so the
+      // fixture carries it. Omitting it made the ownership comparison trivially unsatisfiable and
+      // would have let the "legitimate owner still passes" case below prove nothing.
       determineSharedVaultOperationOnItem.execute = jest.fn().mockReturnValue(
         Result.ok(
           SharedVaultOperationOnItem.create({
@@ -162,6 +167,7 @@ describe('SharedVaultFilter', () => {
             targetSharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
             type: SharedVaultOperationOnItem.TYPES.MoveToOtherSharedVault,
             incomingItemHash: itemHash,
+            existingItem,
           }).getValue(),
         ),
       )
@@ -346,6 +352,7 @@ describe('SharedVaultFilter', () => {
             targetSharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
             type: SharedVaultOperationOnItem.TYPES.MoveToOtherSharedVault,
             incomingItemHash: itemHash,
+            existingItem,
           }).getValue(),
         ),
       )
@@ -362,6 +369,86 @@ describe('SharedVaultFilter', () => {
       })
 
       expect(result.passed).toBe(false)
+    })
+
+    it('should return as not passed if the user is not the owner of the item', async () => {
+      const itemOwner = Uuid.create('00000000-0000-0000-0000-000000000001').getValue()
+      const otherWriteMember = Uuid.create('00000000-0000-0000-0000-000000000002').getValue()
+
+      existingItem = Item.create({
+        ...existingItem.props,
+        userUuid: itemOwner,
+      }).getValue()
+
+      const operation = SharedVaultOperationOnItem.create({
+        userUuid: otherWriteMember,
+        sharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+        targetSharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
+        type: SharedVaultOperationOnItem.TYPES.MoveToOtherSharedVault,
+        incomingItemHash: itemHash,
+        existingItem,
+      }).getValue()
+
+      // Preconditions: a move really was determined, it really carries the existing item, and the
+      // acting user really is someone other than that item's owner. Without these the refusal below
+      // could come from a missing item or a missing operation rather than from the ownership check.
+      expect(operation.props.type).toEqual(SharedVaultOperationOnItem.TYPES.MoveToOtherSharedVault)
+      expect(operation.props.targetSharedVaultUuid).not.toBeUndefined()
+      expect(operation.props.existingItem?.props.userUuid.value).toEqual(itemOwner.value)
+      expect(operation.props.userUuid.value).not.toEqual(itemOwner.value)
+
+      determineSharedVaultOperationOnItem.execute = jest.fn().mockReturnValue(Result.ok(operation))
+
+      // Write permission in BOTH vaults, so the only thing that can refuse this is ownership.
+      sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(sharedVaultUser)
+      expect(sharedVaultUser.props.permission.value).toEqual(SharedVaultUserPermission.PERMISSIONS.Write)
+
+      const filter = createFilter()
+      const result = await filter.check({
+        apiVersion: '001',
+        existingItem: existingItem,
+        itemHash: itemHash,
+        userUuid: otherWriteMember.value,
+        snjsVersion: '2.200.0',
+      })
+
+      expect(result.passed).toBe(false)
+      expect(result.conflict?.type).toEqual(ConflictType.SharedVaultInsufficientPermissionsError)
+    })
+
+    it('should return as passed when the owner of the item moves it and holds write permission in both vaults', async () => {
+      const itemOwner = Uuid.create('00000000-0000-0000-0000-000000000000').getValue()
+
+      const operation = SharedVaultOperationOnItem.create({
+        userUuid: itemOwner,
+        sharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+        targetSharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
+        type: SharedVaultOperationOnItem.TYPES.MoveToOtherSharedVault,
+        incomingItemHash: itemHash,
+        existingItem,
+      }).getValue()
+
+      // Precondition: this really is the same move operation as the refusal above, differing only in
+      // who is acting, so a pass here cannot come from the move never having been attempted.
+      expect(operation.props.type).toEqual(SharedVaultOperationOnItem.TYPES.MoveToOtherSharedVault)
+      expect(operation.props.existingItem?.props.userUuid.value).toEqual(itemOwner.value)
+      expect(operation.props.userUuid.value).toEqual(itemOwner.value)
+
+      determineSharedVaultOperationOnItem.execute = jest.fn().mockReturnValue(Result.ok(operation))
+
+      sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(sharedVaultUser)
+
+      const filter = createFilter()
+      const result = await filter.check({
+        apiVersion: '001',
+        existingItem: existingItem,
+        itemHash: itemHash,
+        userUuid: itemOwner.value,
+        snjsVersion: '2.200.0',
+      })
+
+      expect(result.passed).toBe(true)
+      expect(result.conflict).toBeUndefined()
     })
   })
 

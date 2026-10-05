@@ -137,6 +137,15 @@ export class SharedVaultFilter implements ItemSaveRuleInterface {
       return this.buildFailResult(operation, ConflictType.SharedVaultInvalidState)
     }
 
+    // Matches handleAddOrRemoveToSharedVaultOperation. Relocating an item between vaults is a change
+    // of custody, not an edit, so write permission in both vaults is not enough: without this a write
+    // member of a shared vault could move ANOTHER member's item into a vault of their choosing.
+    // DetermineSharedVaultOperationOnItem only ever produces this operation with an existing item, so
+    // there is no legitimate move for which the ownership comparison has nothing to compare against.
+    if (!this.isOwnerOfTheItem(operation)) {
+      return this.buildFailResult(operation, ConflictType.SharedVaultInsufficientPermissionsError)
+    }
+
     for (const permission of [sourceSharedVaultPermission, targetSharedVaultPermission]) {
       if (!this.hasSufficientPermissionsToWriteInVault(operation, permission)) {
         return this.buildFailResult(operation, ConflictType.SharedVaultInsufficientPermissionsError)
