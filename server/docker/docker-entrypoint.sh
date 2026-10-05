@@ -396,7 +396,19 @@ if [ -z "$AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION" ]; then
   export AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION=false
 fi
 
-printenv | grep AUTH_SERVER_ | sed 's/AUTH_SERVER_//g' > /opt/server/packages/auth/.env
+# Per-service .env: project every <PREFIX>_FOO into FOO for this service only.
+#
+# `sed -n 's/^PREFIX_//p'` both selects and strips, ANCHORED and once. The
+# previous `grep PREFIX_ | sed 's/PREFIX_//g'` matched the prefix ANYWHERE on the
+# line and stripped EVERY occurrence, so a sibling service's variable bled in
+# under a name that collides with this service's own:
+#   AUTH_SERVER_SYNCING_SERVER_URL=http://localhost:$SYNCING_SERVER_PORT
+# matched `grep SYNCING_SERVER_` and became a SECOND `AUTH_SERVER_URL=` line in
+# syncing-server/.env (pointing at the syncing port, not auth); dotenv keeps the
+# LAST occurrence and printenv's order is not defined, so which value won was a
+# coin flip. Likewise `PUBLIC_FILES_SERVER_URL` became `PUBLIC_URL` in
+# files/.env. Both were observed on a live compose stack.
+printenv | sed -n 's/^AUTH_SERVER_//p' > /opt/server/packages/auth/.env
 chmod 600 /opt/server/packages/auth/.env
 
 ##################
@@ -460,7 +472,8 @@ fi
 file_env 'SYNCING_SERVER_S3_ACCESS_KEY_ID'
 file_env 'SYNCING_SERVER_S3_SECRET_ACCESS_KEY'
 
-printenv | grep SYNCING_SERVER_ | sed 's/SYNCING_SERVER_//g' > /opt/server/packages/syncing-server/.env
+# Anchored projection - see the AUTH_SERVER block above for why.
+printenv | sed -n 's/^SYNCING_SERVER_//p' > /opt/server/packages/syncing-server/.env
 chmod 600 /opt/server/packages/syncing-server/.env
 
 
@@ -521,7 +534,8 @@ if [ -z "$FILES_SERVER_SQS_ENDPOINT" ]; then
   export FILES_SERVER_SQS_ENDPOINT="http://floci:4566"
 fi
 
-printenv | grep FILES_SERVER_ | sed 's/FILES_SERVER_//g' > /opt/server/packages/files/.env
+# Anchored projection - see the AUTH_SERVER block above for why.
+printenv | sed -n 's/^FILES_SERVER_//p' > /opt/server/packages/files/.env
 chmod 600 /opt/server/packages/files/.env
 
 #############
@@ -570,7 +584,8 @@ if [ -z "$REVISIONS_SERVER_SQS_ENDPOINT" ]; then
   export REVISIONS_SERVER_SQS_ENDPOINT="http://floci:4566"
 fi
 
-printenv | grep REVISIONS_SERVER_ | sed 's/REVISIONS_SERVER_//g' > /opt/server/packages/revisions/.env
+# Anchored projection - see the AUTH_SERVER block above for why.
+printenv | sed -n 's/^REVISIONS_SERVER_//p' > /opt/server/packages/revisions/.env
 chmod 600 /opt/server/packages/revisions/.env
 
 ###############
@@ -639,8 +654,9 @@ fi
 # The api-gateway SIGNS durable sync commands with this secret and the
 # syncing-server VERIFIES them, so both halves need the same value. Only one
 # half ever got it. The syncing-server's .env is written from
-# `printenv | grep SYNCING_SERVER_`, which matches the bare name compose passes;
-# the api-gateway's is written from `printenv | grep API_GATEWAY_` below, which
+# `printenv | sed -n 's/^SYNCING_SERVER_//p'`, which matches the bare name compose
+# passes; the api-gateway's is written from the `API_GATEWAY_` projection below,
+# which
 # matched nothing. So `InternalGrpcServiceAuth.ready()` (it wants >= 32 bytes)
 # was permanently false in the gateway, `SyncWebSocketCommandAdapter.ready()`
 # with it, and SYNC_ITEMS was never advertised on this topology no matter what
@@ -661,7 +677,8 @@ fi
 # be resolved at all.
 export API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"
 
-printenv | grep API_GATEWAY_ | sed 's/API_GATEWAY_//g' > /opt/server/packages/api-gateway/.env
+# Anchored projection - see the AUTH_SERVER block above for why.
+printenv | sed -n 's/^API_GATEWAY_//p' > /opt/server/packages/api-gateway/.env
 chmod 600 /opt/server/packages/api-gateway/.env
 
 # Every supervisord program inherits THIS shell's environment, and dotenv never
