@@ -57,14 +57,27 @@ const OPEN_INTERVAL = PENDING_MFA_APPROVALS_SOCKET_OPEN_POLL_INTERVAL_MS
 
 type SocketObserver = (event: string, data?: unknown) => void
 
+/**
+ * The one instant this file calls "now".
+ *
+ * Fixtures must NOT read `Date.now()`: the component reads the clock too, and the
+ * two have to be the same clock with the same origin or a fixture's window is
+ * measured from a different zero than the component's arithmetic. Fake timers are
+ * installed AT this instant, so `Date.now()` inside the component equals
+ * `FIXED_NOW` at mount and advances only by what `advance()` is asked for — which
+ * makes every window below a count of fake milliseconds rather than a race with
+ * however long the run actually takes.
+ */
+const FIXED_NOW = Date.UTC(2026, 0, 15, 12, 0, 0)
+
 const buildApproval = (overrides: Partial<PendingMfaApproval> = {}): PendingMfaApproval => ({
   uuid: 'approval-uuid',
   challengeId: 'challenge-abc',
   status: 'pending',
   requestingUserAgent: 'Mozilla/5.0 (Windows NT 10.0) Chrome/120.0',
   requestingIpAddress: '203.0.113.7',
-  createdAt: Date.now() - 1000,
-  expiresAt: Date.now() + 120_000,
+  createdAt: FIXED_NOW - 1000,
+  expiresAt: FIXED_NOW + 120_000,
   ...overrides,
 })
 
@@ -96,7 +109,7 @@ let container: HTMLElement
 let root: Root
 
 beforeEach(() => {
-  jest.useFakeTimers()
+  jest.useFakeTimers({ now: FIXED_NOW })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -117,9 +130,25 @@ const render = async (application: unknown) => {
   })
 }
 
+/**
+ * Advance the fake clock across a window, then flush once.
+ *
+ * Deliberately the SYNCHRONOUS `advanceTimersByTime` inside one `act` scope rather
+ * than `advanceTimersByTimeAsync`. Both fire exactly the same timers in the same
+ * order, but the async form awaits a microtask drain after EVERY timer — and this
+ * pane holds a 1 s expiry interval, so a 100 s window is 100 awaited React render
+ * cycles instead of one. That cost is wall-clock, and on a loaded machine the first
+ * such window blew Jest's 5 s per-test ceiling; the timeout then abandoned an open
+ * `act()` scope ("overlapping act() calls"), which poisoned the act environment and
+ * took 8 later tests down with it — 9 of 11 failing from one slow window, passing
+ * alone. Collapsing the drains removes the cost, not the coverage: the pane updates
+ * `lastLoadStartedAt` synchronously before it awaits, so every cadence gate decides
+ * identically whichever form is used, and act-exit still flushes each resolved poll
+ * before the assertion reads the DOM.
+ */
 const advance = async (ms: number) => {
   await act(async () => {
-    await jest.advanceTimersByTimeAsync(ms)
+    jest.advanceTimersByTime(ms)
   })
 }
 
@@ -276,7 +305,7 @@ describe('PendingMfaApprovals row retirement without a request', () => {
   })
 
   it('(d) retires an expired row on the local clock, with no request', async () => {
-    const approval = buildApproval({ expiresAt: Date.now() + 2000 })
+    const approval = buildApproval({ expiresAt: FIXED_NOW + 2000 })
     const { application, listPendingMfaApprovals } = makeApplication({
       socketOpen: true,
       approvals: [approval],
