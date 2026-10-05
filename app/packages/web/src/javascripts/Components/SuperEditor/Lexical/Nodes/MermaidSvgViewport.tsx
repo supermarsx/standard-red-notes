@@ -18,6 +18,7 @@ import {
   MermaidBackground,
   MermaidFitMode,
   DEFAULT_MERMAID_BACKGROUND,
+  mermaidViewportBackgroundStyle,
 } from './MermaidSettings'
 
 /**
@@ -116,13 +117,19 @@ type Props = {
   /** Whether the preview box paints a surface colour behind the diagram. */
   background?: MermaidBackground
   /**
-   * WHICH surface colour `background: 'themed'` paints, when the caller has
-   * resolved one. The caller knows something this component cannot: whether the
-   * diagram follows the application's theme or is pinned to one of mermaid's
-   * own, and therefore whether "the surface this diagram belongs on" is the
-   * app's or that theme's. Omit it and the app's own surface variable is used,
-   * which is what every caller got before and what a caller with no theme
-   * resolution of its own still wants.
+   * WHICH surface colour a painting `background` uses, when the caller has
+   * resolved one. The caller knows two things this component cannot: whether
+   * the diagram follows the application's theme or is pinned to one of
+   * mermaid's own — and therefore whether "the surface this diagram belongs on"
+   * is the app's or that theme's — and, for `auto`, whether the box should be
+   * painted at all.
+   *
+   * So the two painting values treat an omitted colour differently, and
+   * deliberately: `themed` falls back to the app's own surface variable (what
+   * every caller got before the pinned distinction existed), while `auto`
+   * paints nothing, because for `auto` "no colour" is the caller's answer that
+   * this diagram already agrees with the app. See
+   * `mermaidViewportBackgroundStyle`.
    */
   backgroundColor?: string
   /** Extra controls (e.g. a resize handle) rendered over the viewport. */
@@ -622,10 +629,13 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({
           overflow: viewportOverflowFor(hasSize),
           cursor: hasSize && zoomPan ? (isPanning ? 'grabbing' : 'grab') : 'default',
           // `themed` paints the surface the diagram belongs on, which is what
-          // makes a light mermaid theme legible inside a dark app theme. The
-          // caller resolves WHICH surface that is (see `backgroundColor`); with
-          // no caller opinion it is the app's own.
-          background: background === 'themed' ? (backgroundColor ?? 'var(--sn-stylekit-background-color)') : undefined,
+          // makes a light mermaid theme legible inside a dark app theme; `auto`
+          // paints that same surface only when the diagram's theme disagrees
+          // with the app's. The caller resolves WHICH surface that is, and
+          // whether there is one at all (see `backgroundColor`); the rule for
+          // turning the pair into a paint lives in MermaidSettings.ts so this
+          // box and `resolveMermaidSurfaceColor` cannot drift apart.
+          background: mermaidViewportBackgroundStyle(background, backgroundColor),
         }}
         onDoubleClick={zoomPan ? onDoubleClick : undefined}
         onPointerDown={zoomPan ? onPointerDown : undefined}

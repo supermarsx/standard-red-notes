@@ -6,6 +6,7 @@ import {
   MERMAID_ALIGNMENT_LABELS,
   MERMAID_ALIGNMENTS,
   MERMAID_BACKGROUND_LABELS,
+  MERMAID_BACKGROUNDS,
   MERMAID_FIT_MODE_LABELS,
   MERMAID_FIT_MODES,
   MERMAID_MAX_HEIGHT_NONE,
@@ -235,25 +236,37 @@ export const MermaidMaxHeightControl: React.FunctionComponent<{
   )
 }
 
-/** Whether the preview box paints the editor's own surface behind the diagram. */
-export const MermaidBackgroundToggle: React.FunctionComponent<{
+/**
+ * Whether the preview box paints a surface behind the diagram.
+ *
+ * A SELECT over `MERMAID_BACKGROUNDS`, not a toggle. It used to be a two-state
+ * button that flipped `themed`/`transparent`, which was a latent bug the moment
+ * the setting grew a third value: from `auto` the toggle could reach the other
+ * two and never return, so the default was a value the control could not
+ * express. Rendering the shared list means a value added there appears here
+ * untouched, and every value is reachable from every value in one action —
+ * which a cycle button would not give either.
+ *
+ * The labels come from `MERMAID_BACKGROUND_LABELS`, as before: this file owns no
+ * vocabulary of its own.
+ */
+export const MermaidBackgroundSelect: React.FunctionComponent<{
   background: MermaidBackground
   onChange: (next: MermaidBackground) => void
 }> = ({ background, onChange }) => (
-  <button
-    type="button"
-    className={
-      'border-border rounded border px-1.5 py-0.5 text-xs ' +
-      (background === 'themed' ? 'bg-info text-info-contrast' : 'hover:bg-contrast')
-    }
-    aria-pressed={background === 'themed'}
-    aria-label="Themed diagram background"
-    onMouseDown={keepFocus}
-    onClick={() => onChange(background === 'themed' ? 'transparent' : 'themed')}
-    title="Paint the editor's own surface colour behind the diagram"
+  <select
+    className={SELECT_CLASS}
+    value={background}
+    aria-label="Diagram background"
+    title="Paint a surface behind the diagram — automatically when its theme disagrees with the app's, always, or never"
+    onChange={(event) => onChange(event.target.value as MermaidBackground)}
   >
-    {MERMAID_BACKGROUND_LABELS[background]}
-  </button>
+    {MERMAID_BACKGROUNDS.map((candidate) => (
+      <option key={candidate} value={candidate}>
+        {MERMAID_BACKGROUND_LABELS[candidate]}
+      </option>
+    ))}
+  </select>
 )
 
 /** Wheel-zoom / drag-pan / pinch, and the zoom cluster over the diagram. */
@@ -355,7 +368,7 @@ export function mermaidSettingsControls(props: MermaidSettingsPanelProps): {
       key: 'background',
       caption: 'Background',
       node: (
-        <MermaidBackgroundToggle
+        <MermaidBackgroundSelect
           background={settings.background}
           onChange={(background) => onSettingsChange({ background })}
         />

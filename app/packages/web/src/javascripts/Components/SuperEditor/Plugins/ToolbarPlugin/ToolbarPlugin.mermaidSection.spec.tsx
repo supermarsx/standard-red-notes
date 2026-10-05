@@ -41,11 +41,14 @@ import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 // MermaidSettingsPanel.tsx. Both are imported here rather than retyped, so a mode
 // or a control added there is asserted to appear instead of being asserted away.
 import {
+  DEFAULT_MERMAID_BACKGROUND,
   DEFAULT_MERMAID_SETTINGS,
   DEFAULT_MERMAID_THEME_MODE,
   DEFAULT_MERMAID_VIEW_MODE,
+  MERMAID_BACKGROUNDS,
   MERMAID_THEME_MODE_LABELS,
   MERMAID_THEME_MODES,
+  MermaidBackground,
   MermaidThemeMode,
 } from '../../Lexical/Nodes/MermaidSettings'
 import { MermaidSettingsPanelProps, mermaidSettingsControls } from '../../Lexical/Nodes/MermaidSettingsPanel'
@@ -223,6 +226,20 @@ const activateMermaidTab = async () => {
 }
 
 const segment = (caption: string) => container.querySelector(`[role="group"][aria-label="${caption}"]`)
+
+/**
+ * Drive a real <select> the way React's onChange sees it — the native value
+ * setter plus a bubbling change event. `select.value = x` alone sets the DOM
+ * property without notifying React, so a control that writes nothing would pass.
+ */
+const setSelectValue = async (field: HTMLSelectElement, value: string) => {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(field, value)
+    field.dispatchEvent(new Event('change', { bubbles: true }))
+    await Promise.resolve()
+  })
+}
 
 /** Read the live node's settings back out of the editor state. */
 const readNode = <T,>(read: (node: MermaidNode) => T): T => {
@@ -455,17 +472,46 @@ describe('the theming controls are inline in the section, not only in its popove
     await openSection()
     const backgroundSegment = captionedSegment('Background')
     expect(backgroundSegment).toBeDefined()
-    const toggle = backgroundSegment!.querySelector('button[aria-label="Themed diagram background"]')
-    expect(toggle).not.toBeNull()
+    const select = backgroundSegment!.querySelector('select[aria-label="Diagram background"]') as HTMLSelectElement
+    expect(select).not.toBeNull()
     expect(backgroundSegment!.querySelector('label')).toBeNull()
+    // Offered values come from the shared list, not from this test.
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([...MERMAID_BACKGROUNDS])
 
-    expect(readNode((node) => node.getSettings().background)).toBe('transparent')
-    await act(async () => {
-      ;(toggle as HTMLButtonElement).click()
-      await Promise.resolve()
-    })
-    expect(readNode((node) => node.getSettings().background)).toBe('themed')
+    expect(readNode((node) => node.getSettings().background)).toBe(DEFAULT_MERMAID_BACKGROUND)
+    const target = MERMAID_BACKGROUNDS.find((value) => value !== DEFAULT_MERMAID_BACKGROUND) as MermaidBackground
+    await setSelectValue(select, target)
+    expect(readNode((node) => node.getSettings().background)).toBe(target)
     expect(readNode((node) => node.getSettings().themeMode)).toBe(DEFAULT_MERMAID_THEME_MODE)
+  })
+
+  /**
+   * THE defect the two-state toggle actually had: from a third value it could
+   * reach the other two and never come back, so the DEFAULT was a value the
+   * control could not express. Asserted as a full reachability matrix over the
+   * shared list — every value, from every value — rather than as one round trip,
+   * because a cycle control passes a round trip and still cannot do this in one
+   * action from an arbitrary starting point.
+   */
+  it('reaches every background value from every background value, including back to the default', async () => {
+    await openSection()
+    const select = () =>
+      captionedSegment('Background')!.querySelector('select[aria-label="Diagram background"]') as HTMLSelectElement
+
+    for (const from of MERMAID_BACKGROUNDS) {
+      for (const to of MERMAID_BACKGROUNDS) {
+        if (from === to) {
+          continue
+        }
+        await setSelectValue(select(), from)
+        expect([from, to, readNode((node) => node.getSettings().background)]).toEqual([from, to, from])
+        await setSelectValue(select(), to)
+        expect([from, to, readNode((node) => node.getSettings().background)]).toEqual([from, to, to])
+        // And the control SHOWS what the node now holds, so the next move is
+        // made from a truthful starting point.
+        expect(select().value).toBe(to)
+      }
+    }
   })
 
   /**
@@ -695,7 +741,7 @@ describe('every setting the chart no longer shows is reachable from this section
       '[role="group"][aria-label="Diagram alignment"]',
       'select[aria-label="Maximum diagram height"]',
       'select[aria-label="Diagram theme"]',
-      'button[aria-label="Themed diagram background"]',
+      'select[aria-label="Diagram background"]',
       'button[aria-label="Pan and zoom over the diagram"]',
       '[data-mermaid-width-section="true"]',
       'input[aria-label="Diagram width"]',
@@ -723,12 +769,15 @@ describe('every setting the chart no longer shows is reachable from this section
 
   it('writes the background and the pan/zoom toggles to the node', async () => {
     await openPanel()
-    expect(readNode((node) => node.getSettings().background)).toBe('transparent')
-    await act(async () => {
-      ;(inPanel('button[aria-label="Themed diagram background"]') as HTMLButtonElement).click()
-      await Promise.resolve()
-    })
+    expect(readNode((node) => node.getSettings().background)).toBe(DEFAULT_MERMAID_BACKGROUND)
+    await setFieldValue(inPanel('select[aria-label="Diagram background"]') as HTMLSelectElement, 'themed')
     expect(readNode((node) => node.getSettings().background)).toBe('themed')
+    // And back to the default, which the old two-state toggle could not express.
+    await setFieldValue(
+      inPanel('select[aria-label="Diagram background"]') as HTMLSelectElement,
+      DEFAULT_MERMAID_BACKGROUND,
+    )
+    expect(readNode((node) => node.getSettings().background)).toBe(DEFAULT_MERMAID_BACKGROUND)
 
     expect(readNode((node) => node.getSettings().zoomPan)).toBe(true)
     await act(async () => {

@@ -63,14 +63,31 @@ export type MermaidAlignment = (typeof MERMAID_ALIGNMENTS)[number]
 export const DEFAULT_MERMAID_ALIGNMENT: MermaidAlignment = 'left'
 
 /**
- * Whether the preview box paints a background. `transparent` is what every
- * existing diagram already rendered as; `themed` paints the editor's own surface
- * colour behind the diagram, which is what makes a light mermaid theme legible
- * inside a dark app theme (and vice versa).
+ * Whether the preview box paints a surface behind the diagram.
+ *
+ *  - `auto`        — paint NOTHING while the diagram's theme agrees with the
+ *                    application's, and paint the diagram's own theme surface
+ *                    when it does not. The default, and the only value that is
+ *                    right in both cases without the user having to notice.
+ *  - `transparent` — never paint. A deliberate override: a diagram pinned to a
+ *                    disagreeing theme stays unreadable, which is the user's
+ *                    call to make.
+ *  - `themed`      — always paint the surface the diagram belongs on (see
+ *                    `resolveMermaidSurfaceColor` — for a pinned diagram that is
+ *                    its mermaid theme's surface, not the app's).
+ *
+ * Why `auto` had to exist rather than `themed` becoming the default: a diagram
+ * that already agrees with the app does not want a box painted round it — that
+ * is a visible rectangle in the middle of a note, on every diagram, forever.
+ * The paint is only ever a REPAIR for the disagreeing case, so the setting that
+ * says "repair it when it needs repairing" is the one that can be a default.
+ *
+ * `auto` is listed first because it is the default; `normalizeMermaidBackground`
+ * accepts any of the three, so a stored `transparent` or `themed` is kept.
  */
-export const MERMAID_BACKGROUNDS = ['transparent', 'themed'] as const
+export const MERMAID_BACKGROUNDS = ['auto', 'transparent', 'themed'] as const
 export type MermaidBackground = (typeof MERMAID_BACKGROUNDS)[number]
-export const DEFAULT_MERMAID_BACKGROUND: MermaidBackground = 'transparent'
+export const DEFAULT_MERMAID_BACKGROUND: MermaidBackground = 'auto'
 
 /** Wheel-zoom / drag-pan / pinch, and the zoom control cluster that drives them. */
 export const DEFAULT_MERMAID_ZOOM_PAN = true
@@ -551,13 +568,25 @@ export function mermaidThemeDisagreesWithApp(mode: unknown, appTheme: MermaidApp
  * own themes it is that theme's background, because painting the app's dark
  * surface behind a diagram pinned to mermaid's light `default` theme is the very
  * thing that made it unreadable.
+ *
+ * `auto` paints that same surface, but only in the one case a transparent box
+ * cannot survive — the diagram's theme disagreeing with the app's. The question
+ * "does it disagree" has exactly one implementation,
+ * `mermaidThemeDisagreesWithApp` above, and this is one of its callers rather
+ * than a second copy of the rule. An `app`-mode diagram is never in
+ * disagreement by construction, so `auto` paints nothing for it — which is why
+ * `auto` can be the default without putting a visible box round every diagram
+ * in the product.
  */
 export function resolveMermaidSurfaceColor(
   background: MermaidBackground,
   mode: unknown,
   appTheme: MermaidAppTheme,
 ): string | undefined {
-  if (background !== 'themed') {
+  if (background === 'transparent') {
+    return undefined
+  }
+  if (background === 'auto' && !mermaidThemeDisagreesWithApp(mode, appTheme)) {
     return undefined
   }
   const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
@@ -565,6 +594,40 @@ export function resolveMermaidSurfaceColor(
     return appTheme.tokens?.background
   }
   return MERMAID_BUILTIN_THEME_BACKGROUNDS[normalized]
+}
+
+/** The app's own surface, as a CSS variable, for a caller that resolved none. */
+export const APP_SURFACE_CSS_VAR = 'var(--sn-stylekit-background-color)'
+
+/**
+ * The `background` the preview box actually paints, given the setting and
+ * whatever colour the caller resolved for it. ONE home for the paint decision,
+ * so the box and `resolveMermaidSurfaceColor` cannot disagree about a value.
+ *
+ * The three cases differ precisely in what "no resolved colour" means:
+ *
+ *  - `transparent` — never paints, resolved colour or not.
+ *  - `themed`      — always paints; with no caller opinion it falls back to the
+ *                    app's own surface variable, which is what every caller got
+ *                    before the pinned-diagram distinction existed.
+ *  - `auto`        — paints EXACTLY what the caller resolved, and nothing when
+ *                    the caller resolved nothing. The fallback must not apply
+ *                    here: `undefined` from `resolveMermaidSurfaceColor` is the
+ *                    deliberate "this diagram already agrees with the app, so
+ *                    leave the box empty" answer, and painting the app surface
+ *                    over it would put that rectangle back on every diagram.
+ */
+export function mermaidViewportBackgroundStyle(
+  background: MermaidBackground,
+  resolvedColor: string | undefined,
+): string | undefined {
+  if (background === 'transparent') {
+    return undefined
+  }
+  if (background === 'themed') {
+    return resolvedColor ?? APP_SURFACE_CSS_VAR
+  }
+  return resolvedColor
 }
 
 /**
@@ -706,6 +769,7 @@ export const MERMAID_THEME_MODE_LABELS: Record<MermaidThemeMode, string> = {
 }
 
 export const MERMAID_BACKGROUND_LABELS: Record<MermaidBackground, string> = {
+  auto: 'Auto',
   transparent: 'Transparent',
   themed: 'Themed',
 }

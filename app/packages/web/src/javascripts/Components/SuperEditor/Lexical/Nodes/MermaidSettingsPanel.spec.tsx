@@ -25,7 +25,14 @@ import {
   mermaidSettingsControls,
   SUGGESTED_FIXED_MERMAID_MAX_HEIGHT_PX,
 } from './MermaidSettingsPanel'
-import { DEFAULT_MERMAID_SETTINGS, MERMAID_MAX_HEIGHT_NONE, MermaidSettings } from './MermaidSettings'
+import {
+  DEFAULT_MERMAID_BACKGROUND,
+  DEFAULT_MERMAID_SETTINGS,
+  MERMAID_BACKGROUND_LABELS,
+  MERMAID_BACKGROUNDS,
+  MERMAID_MAX_HEIGHT_NONE,
+  MermaidSettings,
+} from './MermaidSettings'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -116,7 +123,7 @@ describe('both variants render the same controls — only the arrangement differ
     expect(group('Diagram alignment')).not.toBeNull()
     expect(byLabel('Maximum diagram height')).not.toBeNull()
     expect(byLabel('Diagram theme')).not.toBeNull()
-    expect(byLabel('Themed diagram background')).not.toBeNull()
+    expect(byLabel('Diagram background')).not.toBeNull()
     expect(byLabel('Pan and zoom over the diagram')).not.toBeNull()
     // The width strip is delegated, not reimplemented.
     expect(container.querySelector('[data-mermaid-width-section="true"]')).not.toBeNull()
@@ -172,14 +179,43 @@ describe('every control writes, and writes only its own field', () => {
     expect(patches).toEqual([{ themeMode: 'forest' }])
   })
 
-  it('the background toggle, both ways', () => {
+  /**
+   * The background control is a SELECT over `MERMAID_BACKGROUNDS`, not the
+   * two-state toggle it used to be. The toggle flipped `themed`/`transparent`
+   * and so could never return to a third value: once `auto` became the default,
+   * the control could not express the default. This drives every value FROM
+   * every value and asserts the patch each move emits — the full matrix, since a
+   * cycle control would satisfy any single round trip and still fail this.
+   */
+  it('the background, reaching every value from every value', () => {
+    for (const from of MERMAID_BACKGROUNDS) {
+      for (const to of MERMAID_BACKGROUNDS) {
+        if (from === to) {
+          continue
+        }
+        patches = []
+        render(baseProps({ settings: { ...DEFAULT_MERMAID_SETTINGS, background: from } }))
+        const select = byLabel('Diagram background') as HTMLSelectElement
+        // The control shows where it is starting from, so a user can tell.
+        expect([from, to, select.value]).toEqual([from, to, from])
+        act(() => {
+          select.value = to
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+        })
+        expect([from, to, patches]).toEqual([from, to, [{ background: to }]])
+      }
+    }
+  })
+
+  it('offers exactly the background vocabulary MermaidSettings declares', () => {
     render(baseProps())
-    act(() => (byLabel('Themed diagram background') as HTMLButtonElement).click())
-    expect(patches).toEqual([{ background: 'themed' }])
-    patches = []
-    render(baseProps({ settings: { ...DEFAULT_MERMAID_SETTINGS, background: 'themed' } }))
-    act(() => (byLabel('Themed diagram background') as HTMLButtonElement).click())
-    expect(patches).toEqual([{ background: 'transparent' }])
+    const select = byLabel('Diagram background') as HTMLSelectElement
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([...MERMAID_BACKGROUNDS])
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual(
+      MERMAID_BACKGROUNDS.map((value) => MERMAID_BACKGROUND_LABELS[value]),
+    )
+    // The default is one of the offered values — i.e. expressible by the control.
+    expect(Array.from(select.options).map((option) => option.value)).toContain(DEFAULT_MERMAID_BACKGROUND)
   })
 
   it('the pan/zoom toggle, both ways', () => {

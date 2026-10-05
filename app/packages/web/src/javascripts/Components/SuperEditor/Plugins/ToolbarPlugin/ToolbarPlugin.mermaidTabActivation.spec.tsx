@@ -323,7 +323,7 @@ describe('1. selecting a diagram activates its ribbon tab', () => {
     // first click — a <select>, which is why it is probed by its own label
     // rather than as a role=group.
     expect(container.querySelector('select[aria-label="Diagram theme"]')).not.toBeNull()
-    expect(container.querySelector('button[aria-label="Themed diagram background"]')).not.toBeNull()
+    expect(container.querySelector('select[aria-label="Diagram background"]')).not.toBeNull()
     const captions = Array.from(container.querySelectorAll('.super-toolbar-group')).map((group) =>
       group.getAttribute('aria-label'),
     )

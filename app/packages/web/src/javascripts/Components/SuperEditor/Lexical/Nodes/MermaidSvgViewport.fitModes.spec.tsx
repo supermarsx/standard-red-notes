@@ -21,6 +21,7 @@ import MermaidSvgViewport, {
   MAX_PREVIEW_HEIGHT,
   MIN_PREVIEW_HEIGHT,
 } from './MermaidSvgViewport'
+import { DEFAULT_MERMAID_BACKGROUND } from './MermaidSettings'
 
 /** A portrait diagram: the shape that exposed the height-bound fit. */
 const TALL_SVG =
@@ -291,6 +292,45 @@ describe('the mounted viewport applies the configured mode and cap', () => {
     })
     expect(viewportBox().getAttribute('data-mermaid-background')).toBe('themed')
     expect(innerBox().style.background).toContain('--sn-stylekit-background-color')
+  })
+
+  /**
+   * `transparent` ignores a resolved colour and `themed` invents one; `auto`
+   * does neither — it paints exactly what the caller resolved and nothing when
+   * the caller resolved nothing, because for `auto` "no colour" IS the caller's
+   * answer that this diagram already agrees with the app. Getting that fallback
+   * wrong would put a surface box on every diagram in the product, which is the
+   * reason `auto` could not simply be `themed` by another name.
+   */
+  it('paints for auto only what the caller resolved, with no app fallback', () => {
+    act(() => {
+      root.render(createElement(MermaidSvgViewport, { svg: TALL_SVG, background: 'auto' }))
+    })
+    expect(viewportBox().getAttribute('data-mermaid-background')).toBe('auto')
+    expect(innerBox().style.background).toBe('')
+
+    act(() => {
+      root.render(createElement(MermaidSvgViewport, { svg: TALL_SVG, background: 'auto', backgroundColor: '#ffffff' }))
+    })
+    expect(innerBox().style.background).toBe('rgb(255, 255, 255)')
+
+    // `transparent` stays inert even when a colour is handed to it, so the
+    // explicit override cannot be overridden by a resolution.
+    act(() => {
+      root.render(
+        createElement(MermaidSvgViewport, { svg: TALL_SVG, background: 'transparent', backgroundColor: '#ffffff' }),
+      )
+    })
+    expect(innerBox().style.background).toBe('')
+  })
+
+  /** The default the viewport assumes when a caller expresses no opinion. */
+  it('defaults to the shared default background, which paints nothing on its own', () => {
+    act(() => {
+      root.render(createElement(MermaidSvgViewport, { svg: TALL_SVG }))
+    })
+    expect(viewportBox().getAttribute('data-mermaid-background')).toBe(DEFAULT_MERMAID_BACKGROUND)
+    expect(innerBox().style.background).toBe('')
   })
 
   it('grows the box past the old 480 ceiling when the cap allows it', () => {

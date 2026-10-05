@@ -55,6 +55,10 @@ import {
   migrateMermaidThemeMode,
   resolveMermaidRenderTheme,
   resolveMermaidSurfaceColor,
+  APP_SURFACE_CSS_VAR,
+  MERMAID_BACKGROUND_LABELS,
+  MERMAID_BACKGROUNDS,
+  mermaidViewportBackgroundStyle,
   type MermaidAppTheme,
   type MermaidAppTokens,
 } from './MermaidSettings'
@@ -79,13 +83,29 @@ describe('the default settings are the ones the component actually uses', () => 
     expect(DEFAULT_MERMAID_THEME_MODE).toBe('app')
   })
 
-  it('leaves the pre-existing appearance alone for the two cosmetic fields', () => {
-    // Both of these are what every already-saved diagram rendered as, so turning
+  it('leaves the pre-existing appearance alone where it was not the bug', () => {
+    // Each of these is what every already-saved diagram rendered as, so turning
     // them into settings changes nothing until the user says so.
     expect(DEFAULT_MERMAID_ALIGNMENT).toBe('left')
-    expect(DEFAULT_MERMAID_BACKGROUND).toBe('transparent')
     expect(DEFAULT_MERMAID_ZOOM_PAN).toBe(true)
     expect(DEFAULT_MERMAID_VIEW_MODE).toBe('split')
+  })
+
+  it('does NOT leave the background alone, because transparent WAS the bug', () => {
+    // This default deliberately moved (t122). "What every saved diagram already
+    // rendered as" was the right instinct for alignment and pan/zoom, where the
+    // old behaviour was merely a behaviour; for the background it was the
+    // remaining broken case — a diagram pinned to a theme that disagrees with
+    // the app, on a transparent box, measures 1.40-1.54 contrast in real Chrome,
+    // which is unreadable rather than merely unchanged.
+    //
+    // `auto` is a default that CAN move safely because it paints nothing for a
+    // diagram that agrees with the app, i.e. it is invisible except where the
+    // old value was unreadable. And nothing is migrated: a stored value still
+    // wins (see MermaidNodeSerialization.spec.ts), so this changes only the
+    // diagrams that never had one — which, since `background` did not exist as
+    // a serialized field before version 4, is every diagram authored before it.
+    expect(DEFAULT_MERMAID_BACKGROUND).toBe('auto')
   })
 
   it('offers the options the surfaces claim to offer', () => {
@@ -462,6 +482,87 @@ describe('the preview box background has to agree with the diagram, not the app'
     expect(mermaidThemeDisagreesWithApp('dark', LIGHT_APP)).toBe(true)
     expect(mermaidThemeDisagreesWithApp('app', DARK_APP)).toBe(false)
     expect(mermaidThemeDisagreesWithApp('app', LIGHT_APP)).toBe(false)
+  })
+
+  /*
+   * `auto` — the default, and the value that closes the last broken case: a
+   * diagram PINNED to a theme that disagrees with the app, on a transparent box,
+   * measured at 1.40-1.54 contrast in headless Chrome. It paints only in that
+   * case, which is what lets it be a default: a diagram that already agrees with
+   * the app gets no box drawn round it.
+   */
+  it('paints nothing for auto while the diagram agrees with the app', () => {
+    // `app` mode can never disagree, by construction.
+    expect(resolveMermaidSurfaceColor('auto', 'app', DARK_APP)).toBeUndefined()
+    expect(resolveMermaidSurfaceColor('auto', 'app', LIGHT_APP)).toBeUndefined()
+    // A pin that happens to AGREE is equally fine left alone.
+    expect(resolveMermaidSurfaceColor('auto', 'dark', DARK_APP)).toBeUndefined()
+    expect(resolveMermaidSurfaceColor('auto', 'default', LIGHT_APP)).toBeUndefined()
+  })
+
+  it('paints the diagram theme surface for auto exactly when the pin disagrees', () => {
+    expect(resolveMermaidSurfaceColor('auto', 'default', DARK_APP)).toBe('#ffffff')
+    expect(resolveMermaidSurfaceColor('auto', 'dark', LIGHT_APP)).toBe('#333333')
+    // Which is the same surface `themed` would paint for that pin — `auto` is
+    // the same repair, applied only when it is needed.
+    for (const mode of MERMAID_BUILTIN_THEMES) {
+      for (const app of [DARK_APP, LIGHT_APP]) {
+        const auto = resolveMermaidSurfaceColor('auto', mode, app)
+        expect([mode, app.isDark, auto]).toEqual([
+          mode,
+          app.isDark,
+          mermaidThemeDisagreesWithApp(mode, app) ? resolveMermaidSurfaceColor('themed', mode, app) : undefined,
+        ])
+      }
+    }
+  })
+
+  it('leaves an explicit transparent override alone in every combination', () => {
+    // The whole contract: a user who chose `transparent` keeps it, including in
+    // the disagreeing case `auto` exists to repair.
+    for (const mode of [...MERMAID_BUILTIN_THEMES, 'app']) {
+      for (const app of [DARK_APP, LIGHT_APP, UNREADABLE_DARK, UNREADABLE_LIGHT]) {
+        expect([mode, resolveMermaidSurfaceColor('transparent', mode, app)]).toEqual([mode, undefined])
+      }
+    }
+  })
+
+  it('has nothing to paint for auto when the app palette is unreadable', () => {
+    // No palette means no polarity to disagree with, so nothing is repaired
+    // rather than something being guessed.
+    expect(resolveMermaidSurfaceColor('auto', 'app', UNREADABLE_DARK)).toBeUndefined()
+    // A pin still resolves, because its surface comes from mermaid's own table.
+    expect(resolveMermaidSurfaceColor('auto', 'default', UNREADABLE_DARK)).toBe('#ffffff')
+  })
+
+  /*
+   * The PAINT decision, which is where the three values differ in how they treat
+   * "the caller resolved no colour".
+   */
+  it('turns a setting plus a resolved colour into the box background', () => {
+    expect(mermaidViewportBackgroundStyle('transparent', undefined)).toBeUndefined()
+    expect(mermaidViewportBackgroundStyle('transparent', '#ffffff')).toBeUndefined()
+    // `themed` invents the app surface when the caller has no opinion...
+    expect(mermaidViewportBackgroundStyle('themed', undefined)).toBe(APP_SURFACE_CSS_VAR)
+    expect(mermaidViewportBackgroundStyle('themed', '#333333')).toBe('#333333')
+    // ...and `auto` must NOT, or every agreeing diagram gets a box.
+    expect(mermaidViewportBackgroundStyle('auto', undefined)).toBeUndefined()
+    expect(mermaidViewportBackgroundStyle('auto', '#ffffff')).toBe('#ffffff')
+  })
+
+  it('declares auto as the default, and keeps the other two expressible', () => {
+    expect(DEFAULT_MERMAID_BACKGROUND).toBe('auto')
+    expect(MERMAID_BACKGROUNDS).toContain(DEFAULT_MERMAID_BACKGROUND)
+    // `transparent` stays a value a user can hold and choose.
+    expect(MERMAID_BACKGROUNDS).toContain('transparent')
+    expect(MERMAID_BACKGROUNDS).toContain('themed')
+    // Every value is normalizable and labelled, so none can reach a surface
+    // unvalidated or render as a blank option.
+    for (const value of MERMAID_BACKGROUNDS) {
+      expect(normalizeMermaidBackground(value)).toBe(value)
+      expect(MERMAID_BACKGROUND_LABELS[value].length).toBeGreaterThan(0)
+    }
+    expect(Object.keys(MERMAID_BACKGROUND_LABELS).sort()).toEqual([...MERMAID_BACKGROUNDS].sort())
   })
 
   it('records mermaid own background per built-in theme', () => {

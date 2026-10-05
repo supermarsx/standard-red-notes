@@ -198,7 +198,7 @@ describe('the chart container offers no configuration surface at all', () => {
     '[role="group"][aria-label="Diagram alignment"]',
     '[aria-label="Maximum diagram height"]',
     '[aria-label="Diagram theme"]',
-    '[aria-label="Themed diagram background"]',
+    '[aria-label="Diagram background"]',
     '[aria-label="Pan and zoom over the diagram"]',
     '[aria-label="Diagram width"]',
   ]

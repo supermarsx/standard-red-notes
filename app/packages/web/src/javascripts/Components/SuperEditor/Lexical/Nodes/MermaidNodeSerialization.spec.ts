@@ -21,7 +21,13 @@ import {
   MIN_MERMAID_WIDTH_PERCENT,
   MIN_MERMAID_WIDTH_PX,
 } from './MermaidWidth'
-import { DEFAULT_MERMAID_THEME_MODE, MAX_MERMAID_MAX_HEIGHT_PX, MIN_MERMAID_MAX_HEIGHT_PX } from './MermaidSettings'
+import {
+  DEFAULT_MERMAID_BACKGROUND,
+  DEFAULT_MERMAID_THEME_MODE,
+  MAX_MERMAID_MAX_HEIGHT_PX,
+  MERMAID_BACKGROUNDS,
+  MIN_MERMAID_MAX_HEIGHT_PX,
+} from './MermaidSettings'
 
 const editor = createHeadlessEditor({
   namespace: 'MermaidNodeSerializationTest',
@@ -116,7 +122,10 @@ describe('MermaidNode — the size round-trips', () => {
       fitMode: 'fitWidth',
       maxHeight: undefined,
       alignment: 'left',
-      background: 'transparent',
+      // t122: `auto` — paint a surface only when the diagram's theme disagrees
+      // with the app's. The field did not exist before version 4, so this is
+      // what EVERY pre-existing diagram resolves to.
+      background: 'auto',
       zoomPan: true,
     })
   })
@@ -160,7 +169,7 @@ describe('MermaidNode — the size round-trips', () => {
     const defaults: Record<string, unknown> = {
       fitMode: 'fitWidth',
       alignment: 'left',
-      background: 'transparent',
+      background: 'auto',
       zoomPan: true,
       maxHeight: undefined,
     }
@@ -256,7 +265,14 @@ describe('MermaidNode — a stored size is re-validated on import, never trusted
     )
     expect(json.width).toBeUndefined()
     expect(json.height).toBeUndefined()
-    expect(JSON.stringify(json)).not.toContain('auto')
+    // The unparseable `'auto'` must not be written back as a SIZE. Scoped to the
+    // two size fields rather than probed as a substring of the whole document:
+    // the background setting legitimately spells `auto` since t122, so a
+    // document-wide probe started failing for a value that has nothing to do
+    // with sizes — and, worse, would have passed for a wrong width on the day
+    // any other field happened to contain the word.
+    expect(JSON.stringify({ width: json.width, height: json.height })).not.toContain('auto')
+    expect(JSON.stringify({ width: json.width, height: json.height })).toBe('{}')
   })
 })
 
@@ -380,7 +396,11 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
     expect(json.fitMode).toBe('fitWidth')
     expect(json.maxHeight).toBeUndefined()
     expect(json.alignment).toBe('left')
-    expect(json.background).toBe('transparent')
+    // `background` was not a serialized field at version 3 at all, so there is
+    // no stored choice to respect and the new default applies — which is what
+    // makes a legacy diagram pinned to a disagreeing theme legible again.
+    expect(json.background).toBe('auto')
+    expect(json.background).toBe(DEFAULT_MERMAID_BACKGROUND)
     expect(json.zoomPan).toBe(true)
     // And nothing it DID store was lost.
     expect(json.width).toBe('50%')
@@ -388,6 +408,58 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
     // Except the one field that was never a stored CHOICE at this version — see
     // the migration above.
     expect(json.theme).toBe('app')
+  })
+
+  /**
+   * THE BACKGROUND OVERRIDE CONTRACT (t122).
+   *
+   * `auto` became the default, which changes what a diagram with NO stored
+   * background resolves to. It must change nothing for a diagram that carries
+   * one: `background` is written unconditionally by `exportJSON`, so a stored
+   * value is the only evidence there is, and a silent migration of it would
+   * throw away a deliberate `transparent` — the override the user is entitled
+   * to keep even though it leaves a disagreeing pin unreadable.
+   *
+   * The population this matters for is narrow and worth stating: `background`
+   * became a serialized field at version 4, so a diagram from any earlier build
+   * cannot be carrying one at all. It is only a version-4 note that holds an
+   * explicit value, and those are kept exactly as stored, at every version.
+   */
+  it.each(MERMAID_BACKGROUNDS.map((value) => [value]))('keeps the explicitly stored background %p', (stored) => {
+    for (const version of [1, 2, 3, 4]) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version,
+          code: CODE,
+          theme: 'dark',
+          viewMode: 'split',
+          background: stored,
+        } as SerializedMermaidNode).exportJSON(),
+      )
+      expect([version, stored, json.background]).toEqual([version, stored, stored])
+    }
+  })
+
+  it('has no background field to read before version 4, so the default applies', () => {
+    // Not a migration: there is nothing stored to migrate. This is the whole of
+    // why changing the default reaches every diagram the user already has.
+    for (const version of [1, 2, 3]) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version,
+          code: CODE,
+          theme: 'dark',
+          viewMode: 'split',
+        } as SerializedMermaidNode).exportJSON(),
+      )
+      expect([version, json.background]).toEqual([version, DEFAULT_MERMAID_BACKGROUND])
+      // And the pin itself is untouched, so this is the exact broken case: a
+      // deliberately dark diagram that now gets its own surface painted when
+      // the app is light.
+      expect([version, json.theme]).toEqual([version, 'dark'])
+    }
   })
 })
 
