@@ -126,6 +126,22 @@ export const REALTIME_TOKEN_PATHS: readonly string[] = [
 ]
 
 /**
+ * Standard Red Notes: the SECOND-FACTOR gate, which the `auth-second-factor`
+ * bucket covers.
+ *
+ * Both of these proxy to `auth.pkceParams` (ActionsController v1 `@httpGet`,
+ * ActionsControllerV2 `@httpPost`), and that controller method is where VerifyMFA
+ * runs — the TOTP, U2F, magic-link, app-password and trusted-device checks all
+ * live behind these two paths, with no session required to reach them.
+ *
+ * Both verbs are matched on both paths rather than only the pair each version
+ * currently declares, so adding (or moving) a verb on either version cannot
+ * silently drop the route out of its bucket again. `/v1/recovery/login-params` is
+ * a different endpoint (recovery key params) and keeps its place in `auth-login`.
+ */
+export const SECOND_FACTOR_PATHS: readonly string[] = ['/v1/login-params', '/v2/login-params']
+
+/**
  * Per-session subject for the realtime-token bucket: a digest of the presented
  * bearer credential (never the credential itself — it is a Redis key). A rotated
  * bogus bearer only buys 401s from the cross-service token middleware, never a
@@ -163,6 +179,41 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
         '/v1/recovery/login-params',
         '/v1/account-recovery/lookup',
       ]),
+    },
+    {
+      /**
+       * Standard Red Notes: the second-factor gate (see SECOND_FACTOR_PATHS).
+       *
+       * These two paths sat in NO bucket while `/v1/login` next to them sat in
+       * `auth-login`, so the one endpoint that verifies a 6-digit second factor
+       * was the one endpoint an unauthenticated caller could retry without any
+       * per-address ceiling. The account-side brake (BaseAuthController.pkceParams
+       * now counts a rejected second factor, which drives the progressive delay
+       * ramp and the lock) is the better-targeted half of the fix because it keys
+       * on the account; this is the belt to that braces, and it is what caps the
+       * app-password/trusted-device bcrypt work and the account-existence probing
+       * that present no credential and so are deliberately never counted.
+       *
+       * LIMIT: the login ceiling (default 10 per 60s per address), its own bucket
+       * so second-factor retries and sign-in attempts never consume each other's
+       * allowance. A 2FA sign-in spends 2 of it (one request to learn a code is
+       * wanted, one carrying the code) and each mistype spends 1 more, so a person
+       * who mistypes three times and then succeeds spends 5 of 10 and never sees a
+       * 429 — while a guesser is held to 10 attempts a minute against a TOTP that
+       * rotates every 30 seconds, and to ~150 attempts against the 10^6-wide
+       * magic-link code during its entire 15-minute life. Tunable by the same
+       * admin/env knob as the login tier (security.rateLimit.loginMax /
+       * RATE_LIMIT_LOGIN_MAX); shared-NAT callers share the ceiling, as they
+       * already do on every other bucket here.
+       */
+      bucket: 'auth-second-factor',
+      limit: limits.loginMax,
+      windowSeconds: limits.windowSeconds,
+      match: (method: string, normalizedPath: string): boolean => {
+        const verb = method.toUpperCase()
+
+        return (verb === 'GET' || verb === 'POST') && SECOND_FACTOR_PATHS.includes(normalizedPath)
+      },
     },
     {
       bucket: 'auth-sensitive',

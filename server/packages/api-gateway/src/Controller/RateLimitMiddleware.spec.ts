@@ -5,6 +5,7 @@ import {
   isWithinRateLimit,
   normalizeRateLimitPath,
   RateLimitRedis,
+  SECOND_FACTOR_PATHS,
 } from './RateLimitMiddleware'
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
@@ -94,7 +95,85 @@ describe('RateLimitMiddleware', () => {
     it('does not match authenticated/other paths or unrelated GET methods', () => {
       expect(matchesAny('POST', '/v1/items/sync')).toBe(false)
       expect(matchesAny('GET', '/v1/login')).toBe(false)
-      expect(matchesAny('POST', '/v1/login-params')).toBe(false)
+    })
+  })
+
+  /**
+   * Standard Red Notes: BUCKET MEMBERSHIP PER AUTH PATH.
+   *
+   * No test used to state, path by path, which bucket an auth endpoint lands in.
+   * The suite asserted that the login tier matched the paths it was written with
+   * and that a handful of unrelated paths matched nothing — which is a test of the
+   * list against itself, and says nothing about whether every endpoint that checks
+   * a credential is inside some bucket. That blind spot is how `/v1/login-params`
+   * and `/v2/login-params` — the second-factor gate, where VerifyMFA accepts or
+   * rejects a 6-digit TOTP, a magic-link code, an app password or a trusted-device
+   * token with no session required — sat in NO bucket while `/v1/login` right next
+   * to them sat in `auth-login`. The old suite went further and asserted the gap
+   * was correct: `expect(matchesAny('POST', '/v1/login-params')).toBe(false)` under
+   * the heading "does not match authenticated/other paths". It is not an
+   * authenticated path.
+   *
+   * So this table asserts the BUCKET NAME for every credential-checking auth path.
+   * An endpoint that falls out of its bucket fails here with `undefined`, and one
+   * that silently changes tier fails with the wrong name. Adding a new auth
+   * endpoint means adding a row, which is the point.
+   */
+  describe('bucket membership per auth path', () => {
+    const rules = buildDefaultRateLimitRules(limits)
+    const bucketFor = (method: string, path: string): string | undefined =>
+      rules.find((rule) => rule.match(method, path))?.bucket
+
+    it.each([
+      ['POST', '/v1/login', 'auth-login'],
+      ['POST', '/v2/login', 'auth-login'],
+      ['POST', '/v1/recovery/login', 'auth-login'],
+      ['POST', '/v1/recovery/login-params', 'auth-login'],
+      ['POST', '/v1/account-recovery/lookup', 'auth-login'],
+      // The MFA gate. v1 declares GET, v2 declares POST; both verbs are covered on
+      // both paths so moving or adding a verb cannot drop the gate out again.
+      ['GET', '/v1/login-params', 'auth-second-factor'],
+      ['POST', '/v1/login-params', 'auth-second-factor'],
+      ['GET', '/v2/login-params', 'auth-second-factor'],
+      ['POST', '/v2/login-params', 'auth-second-factor'],
+      ['POST', '/v1/users', 'auth-sensitive'],
+      ['POST', '/v1/mcp-tokens/authenticate', 'auth-sensitive'],
+      ['POST', '/v1/mfa/magic-link/request', 'auth-sensitive'],
+      ['POST', '/v1/users/email-confirmation/resend', 'auth-sensitive'],
+      ['GET', '/v1/assistant/subscription/callback', 'assistant-pairing-callback'],
+      ['POST', '/v1/sockets/tokens', 'realtime-tokens'],
+      ['POST', '/v1/sockets/sync/ticket', 'realtime-tokens'],
+      ['POST', '/sockets/tokens', 'realtime-tokens'],
+    ])('%s %s is metered by the %s bucket', (method, path, bucket) => {
+      expect(bucketFor(method, path)).toEqual(bucket)
+    })
+
+    it('meters the second-factor gate at the login ceiling, in its own bucket', () => {
+      const secondFactor = rules.find((rule) => rule.bucket === 'auth-second-factor')
+
+      // Its own bucket, so second-factor retries and sign-in attempts never eat
+      // each other's allowance; the login ceiling, so a person who mistypes a code
+      // a few times is nowhere near it.
+      expect(secondFactor).toBeDefined()
+      expect(secondFactor?.limit).toEqual(limits.loginMax)
+      expect(secondFactor?.windowSeconds).toEqual(limits.windowSeconds)
+      expect(secondFactor?.subject).toBeUndefined()
+    })
+
+    it('covers every path that reaches the second-factor gate', () => {
+      expect([...SECOND_FACTOR_PATHS]).toEqual(['/v1/login-params', '/v2/login-params'])
+      for (const path of SECOND_FACTOR_PATHS) {
+        expect(bucketFor('GET', path)).toEqual('auth-second-factor')
+        expect(bucketFor('POST', path)).toEqual('auth-second-factor')
+      }
+    })
+
+    it('does not spill onto neighbouring paths or unrelated verbs', () => {
+      expect(bucketFor('DELETE', '/v1/login-params')).toBeUndefined()
+      expect(bucketFor('GET', '/v1/login-params/extra')).toBeUndefined()
+      expect(bucketFor('GET', '/v1/login')).toBeUndefined()
+      // Recovery key params is a different endpoint and keeps its login-tier place.
+      expect(bucketFor('POST', '/v1/recovery/login-params')).toEqual('auth-login')
     })
   })
 
