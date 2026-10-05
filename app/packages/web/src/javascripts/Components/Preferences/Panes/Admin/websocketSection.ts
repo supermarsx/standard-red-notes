@@ -6,6 +6,7 @@ import {
   type SyncNegotiatedOperation,
   type SyncTransportState,
 } from '@/Services/SyncTransport/syncTransportProtocol'
+import { LANE_STATE_CARRIER } from '@/Services/SyncTransport/LaneDegradationLedger'
 import {
   remedyForClientGap,
   remedyForLiveReason,
@@ -402,7 +403,7 @@ export type WebsocketSectionInput = {
   /** `application.syncTransportStatus`. The one direct observation in this section. */
   transport?: TransportStatusInput
   /** The client-side lane-degradation ledger. Absent in a build that records none. */
-  ledger?: LaneDegradationLedgerView
+  ledger?: LaneLedgerSectionView
   counters?: SocketGatewayCountersView
   outcomes?: readonly SectionTaggedOutcome[]
 }
@@ -1856,10 +1857,103 @@ const REJECTION_STATUS_ROW: Record<LaneRejectionStatus, { label: SafeValue; note
   },
 }
 
-function buildLedgerBlock(ledger: LaneDegradationLedgerView | undefined): DiagnosticBlock {
+/**
+ * Where the lane ENDED UP, as a closed four-member bucket.
+ *
+ * *** THE ONE THING THE LIVE ROWS CANNOT SAY. *** "Transport in use right now" at
+ * the top of this section reads READY for a lane that has never moved and for one
+ * that fell back four times in the last minute and happens to be up as the pane
+ * renders. An operator opens this pane because they just watched it move, and that
+ * row answers a question they did not ask. Distinguishing "degraded once and
+ * recovered" from "degraded and never came back" is the single most useful thing
+ * this ledger holds, so it is a row of its own rather than something a reader has
+ * to reconstruct from the history below.
+ *
+ * `reconnecting` is not a spare slot: CONNECTING, AUTHENTICATING and HALF_OPEN are
+ * steps on the way to READY, and calling a dial in progress either a recovery or a
+ * failure would be a verdict the data does not support.
+ */
+export const LANE_LEDGER_OUTCOMES = ['never-degraded', 'recovered', 'still-degraded', 'reconnecting'] as const
+
+export type LaneLedgerOutcome = (typeof LANE_LEDGER_OUTCOMES)[number]
+
+/**
+ * The ledger as this SECTION reads it: every closed field WIDENED to `string`.
+ *
+ * `LaneDegradationLedgerView` in `diagnosticsSections.ts` types the states and
+ * reasons as their closed unions, and it stays assignable to this. Widening here is
+ * not a loosening — it is what makes the `safeEnum` calls below load-bearing instead
+ * of decorative. A closed union in the type system is a compile-time fact about one
+ * build; the producer is a long-lived object in a page that may have been running
+ * since before the last deploy, and an unrecognised code must collapse to
+ * `other (unrecognised)` rather than reach a row. The producer collapses unknown
+ * reasons too; neither half is trusted to be the only one that does.
+ *
+ * `recordingForMs` is optional because the shared view cannot carry it, and a caller
+ * that does not supply it must get "not reported" rather than a fabricated zero.
+ */
+export type LaneLedgerSectionView = {
+  readonly controlPlaneRejections: number
+  readonly controlPlaneRejectionsByStatus: Readonly<Partial<Record<LaneRejectionStatus, number>>>
+  readonly fallbackCounts: Readonly<Record<string, number | undefined>>
+  readonly transitions: readonly {
+    readonly state: string
+    readonly reason?: string
+    readonly socketPreserved: boolean
+    readonly msSinceLedgerStart: number
+  }[]
+  readonly transitionsDropped: number
+  readonly recordingForMs?: number
+}
+
+/** `LaneDegradationLedgerView` must stay readable here. A drift fails this line. */
+type LedgerViewIsReadable = LaneDegradationLedgerView extends LaneLedgerSectionView ? true : never
+export type TheSharedLedgerViewIsReadable = LedgerViewIsReadable
+
+const KNOWN_TRANSPORT_STATES: ReadonlySet<string> = new Set<string>(SOCKET_TRANSPORT_STATES)
+const KNOWN_FALLBACK_REASONS: ReadonlySet<string> = new Set<string>(SOCKET_FALLBACK_REASONS)
+
+/** Narrows a recorded cause to one this build can name, so no cast is needed. */
+function isKnownFallbackReason(reason: string): reason is SyncFallbackReason {
+  return KNOWN_FALLBACK_REASONS.has(reason)
+}
+
+/** Which lane a recorded state carried traffic on, or `undefined` if unnameable. */
+function carrierOf(state: string): 'http' | 'socket' | 'dialling' | undefined {
+  return KNOWN_TRANSPORT_STATES.has(state) ? LANE_STATE_CARRIER[state as SyncTransportState] : undefined
+}
+
+/**
+ * Degradation counts per reason, with every unrecognised key folded into ONE bucket.
+ *
+ * Folded rather than listed: two unknown keys both render as `other (unrecognised)`,
+ * and two rows with the same label are a duplicate React key and a report line that
+ * says the same thing twice. Iterating the RECORD'S OWN keys rather than this build's
+ * closed tuple is what makes the fold reachable at all — a loop over the tuple would
+ * skip an unknown key silently and the count would just be missing.
+ */
+function foldedFallbackCounts(counts: Readonly<Record<string, number | undefined>>): Map<string, number> {
+  const folded = new Map<string, number>()
+  for (const [reason, count] of Object.entries(counts)) {
+    if (typeof count !== 'number' || !Number.isInteger(count) || count <= 0) {
+      continue
+    }
+    const key = KNOWN_FALLBACK_REASONS.has(reason) ? reason : UNRECOGNISED_REASON_KEY
+    folded.set(key, (folded.get(key) ?? 0) + count)
+  }
+  return folded
+}
+
+/** Not a member of any closed set, so it can never collide with a real reason. */
+const UNRECOGNISED_REASON_KEY = '__unrecognised__'
+
+const LEDGER_HISTORY_NOTE =
+  'One transition this client watched, in the order it happened: the lane it moved to, the transport’s own closed cause where it gave one, whether the socket survived, and how long after this ledger started. Nothing here is a clock reading.'
+
+function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): DiagnosticBlock {
   const heading = safeConstant('Lane degradation ledger')
   const description =
-    'What this client has watched the socket lane do, recorded as it happened. The only place a refused control-plane read appears at all: the lane degrades those to HTTP silently, note syncing stays healthy throughout, and without these counters a stranded socket and a working one are the same screen.'
+    'What this client has watched the socket lane do, recorded as it happened. The only place a refused control-plane read appears at all: the lane degrades those to HTTP silently, note syncing stays healthy throughout, and without these counters a stranded socket and a working one are the same screen. Kept in memory for the life of this page — a reload starts it over, which is why it reports its own age.'
 
   if (ledger === undefined) {
     return {
@@ -1872,10 +1966,51 @@ function buildLedgerBlock(ledger: LaneDegradationLedgerView | undefined): Diagno
     }
   }
 
-  const latest = ledger.transitions.length > 0 ? ledger.transitions[ledger.transitions.length - 1] : undefined
+  const transitions = ledger.transitions
+  const latest = transitions.length > 0 ? transitions[transitions.length - 1] : undefined
   const rejections = ledger.controlPlaneRejections
 
+  let degradations = 0
+  let recoveries = 0
+  let unnameableStates = 0
+  for (const transition of transitions) {
+    const carrier = carrierOf(transition.state)
+    if (carrier === undefined) {
+      unnameableStates += 1
+    } else if (carrier === 'http') {
+      degradations += 1
+    } else if (carrier === 'socket') {
+      recoveries += 1
+    }
+  }
+
+  const namedRefusals = LANE_REJECTION_STATUSES.reduce(
+    (total, status) => total + (ledger.controlPlaneRejectionsByStatus[status] ?? 0),
+    0,
+  )
+  // A remainder, never a clamp. `Math.max(0, …)` here would hide the one case worth
+  // seeing — named buckets summing ABOVE the total, which is a producer whose
+  // counters disagree with each other — behind a comfortable zero.
+  const unnameableRefusals = rejections - namedRefusals
+
+  const outcome: LaneLedgerOutcome | undefined =
+    latest === undefined || unnameableStates > 0
+      ? undefined
+      : degradations === 0
+        ? 'never-degraded'
+        : carrierOf(latest.state) === 'http'
+          ? 'still-degraded'
+          : carrierOf(latest.state) === 'socket'
+            ? 'recovered'
+            : 'reconnecting'
+
   const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('This ledger has been recording for'),
+      value: safeDuration(ledger.recordingForMs === undefined ? undefined : ledger.recordingForMs / 1000),
+      ...absentOr(ledger.recordingForMs, 'informational'),
+      note: 'How long this page has been watching. Read every count below against it: the ledger lives in memory and starts over on a reload, so zero transitions on a ledger seconds old establishes nothing at all, while zero on one that has been recording for an hour is a genuinely stable lane. It is deliberately not persisted — the ages here are offsets from this ledger’s own start, a reload is itself the remedy for the stranded lane these counters exist to catch, and neither survives being written to disk and read back.',
+    }),
     diagnosticRow({
       label: safeConstant('Control-plane reads the lane refused'),
       value: safeCount(rejections),
@@ -1898,18 +2033,90 @@ function buildLedgerBlock(ledger: LaneDegradationLedgerView | undefined): Diagno
 
   rows.push(
     diagnosticRow({
+      label: safeConstant('Refusals on a status this build cannot name'),
+      value: safeCount(unnameableRefusals < 0 ? undefined : unnameableRefusals),
+      ...absentOr(
+        unnameableRefusals < 0 ? undefined : unnameableRefusals,
+        unnameableRefusals > 0 ? 'degraded' : 'informational',
+      ),
+      note: 'The total above, less the two statuses this build has rows for. It exists so the two named buckets cannot become a flattering denominator: a producer counting a third refusal status would otherwise leave those refusals in the total with nothing on screen accounting for them. A negative remainder is impossible from a correct producer — the named buckets are subsets of the total — so it is reported as "not reported" rather than as a number, because at that point the counters disagree and neither is worth printing.',
+    }),
+    diagnosticRow({
       label: safeConstant('Transport transitions recorded'),
-      value: safeCount(ledger.transitions.length),
+      value: safeCount(transitions.length),
       verdict: 'informational',
       evidence: EVIDENCE_DIRECT,
-      note: 'How many lane transitions this client has watched. The answer to "it was working a minute ago": a handful over a session is ordinary reconnection, and a ring that keeps filling is a lane that flaps.',
+      note: 'How many lane transitions this client has watched, deduplicated by state, cause and whether the socket survived — a fallback re-asserts the same state on every sync round and counting those repeats would report a stable lane as one that flaps. The answer to "it was working a minute ago": a handful over a session is ordinary reconnection, and a ring that keeps filling is a lane that flaps.',
     }),
     diagnosticRow({
       label: safeConstant('Transitions dropped from the ring'),
       value: safeCount(ledger.transitionsDropped),
       ...absentOr(ledger.transitionsDropped, ledger.transitionsDropped > 0 ? 'degraded' : 'informational'),
-      note: 'Transitions that fell off the end of the bounded ring. Non-zero is itself a finding: the ring is sized for ordinary reconnection, so overflowing it means the lane changed state more often than a healthy session ever does.',
+      note: 'Transitions that fell off the end of the bounded ring. The ring is the only thing here that elides — the counters above and below are keyed by closed sets and are bounded by construction, so what overflowing costs is the ORDER of the oldest transitions and never the fact that they happened. Non-zero is itself a finding: the ring is sized for ordinary reconnection, so filling it means the lane changed state more often than a healthy session ever does.',
     }),
+    diagnosticRow({
+      label: safeConstant('Transitions this build cannot name'),
+      value: safeCount(unnameableStates),
+      ...absentOr(unnameableStates, unnameableStates > 0 ? 'undetermined' : 'informational'),
+      note: 'Recorded transitions whose transport state is not one this build knows. Expected to be zero and worth a row anyway: the derived counts beneath cannot classify such a transition as a degradation or a recovery, so a non-zero count here is why "Where the lane ended up" refuses to answer rather than guessing from a partial reading.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Degradations recorded'),
+      value: safeCount(degradations),
+      ...absentOr(degradations, degradations > 0 ? 'degraded' : 'informational'),
+      note: 'Transitions onto HTTP — HTTP_ONLY, DEGRADED or HTTP_FALLBACK. Counted from the recorded transitions, so a degradation that fell off the ring is NOT counted here; the per-reason counters below are the ones that survive elision.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Recoveries recorded'),
+      value: safeCount(recoveries),
+      ...absentOr(recoveries, 'informational'),
+      note: 'Transitions back onto the socket. A ledger that counted only failures could not tell a lane that degraded once and came straight back from one that went down and stayed down, which is the question an operator actually has. Dials in progress — CONNECTING, AUTHENTICATING, HALF_OPEN — are counted as neither.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Where the lane ended up'),
+      value: safeEnum(outcome, LANE_LEDGER_OUTCOMES),
+      ...absentOr(outcome, outcome === 'still-degraded' ? 'degraded' : 'informational'),
+      note: 'The whole ledger in one word, read from the last transition recorded. "never-degraded" means nothing moved the lane off the socket while this page has been open — which is only as strong as the recording time at the top of this block. "recovered" means it fell back and came back. "still-degraded" means it fell back and has not. "reconnecting" means a dial is in progress and the answer is not settled yet. With no transitions at all, or with a transition this build cannot name, no answer is given rather than a guess.',
+    }),
+  )
+
+  const folded = foldedFallbackCounts(ledger.fallbackCounts)
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('Distinct degradation causes recorded'),
+      value: safeCount(folded.size),
+      ...absentOr(folded.size, 'informational'),
+      note: 'How many different causes sent this lane to HTTP. One cause recurring is a condition; several is usually a lane that cannot hold a connection at all. These counters are keyed by a closed set of reasons and so are bounded without eliding anything — unlike the transition ring, a cause that happened is still counted here after its transition has been dropped.',
+    }),
+  )
+
+  // Iterated in THIS build's order rather than the record's, so the rows do not
+  // reshuffle between two readings of the same lane, with the folded bucket last.
+  for (const reason of [...SOCKET_FALLBACK_REASONS, UNRECOGNISED_REASON_KEY]) {
+    const count = folded.get(reason)
+    if (count === undefined) {
+      continue
+    }
+    const named = isKnownFallbackReason(reason)
+    rows.push(
+      diagnosticRow({
+        label: safeTokens(safeConstant('Degradations with cause'), safeEnum(reason, SOCKET_FALLBACK_REASONS)),
+        value: safeCount(count),
+        // A cause this build cannot name is reported as a degradation rather than
+        // asked about: `syncFallbackDisposition` would have to be given a value it
+        // has no answer for, and guessing "expected" over an unknown cause is the
+        // flattering direction.
+        verdict: named && socketFallbackIsDeferred(reason) ? 'informational' : 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        note: named
+          ? SYNC_FALLBACK_REASON_EXPLANATIONS[reason]
+          : 'A cause this build has no name for, so it is counted and not printed. Every unrecognised cause is folded into this one row on purpose: a newer build’s reason must never be able to put free-form text into an older renderer, and two rows both reading "other" would say the same thing twice.',
+      }),
+    )
+  }
+
+  rows.push(
     diagnosticRow({
       label: safeConstant('Most recent transition'),
       value:
@@ -1936,6 +2143,23 @@ function buildLedgerBlock(ledger: LaneDegradationLedgerView | undefined): Diagno
     }),
   )
 
+  transitions.forEach((transition, index) => {
+    rows.push(
+      diagnosticRow({
+        label: safeTokens(safeConstant('Transition'), safeCount(index + 1)),
+        value: safeTokens(
+          safeEnum(transition.state, SOCKET_TRANSPORT_STATES),
+          safeEnum(transition.reason, SOCKET_FALLBACK_REASONS),
+          safeState(transition.socketPreserved, 'socket preserved', 'socket torn down'),
+          safeDuration(transition.msSinceLedgerStart / 1000),
+        ),
+        verdict: 'informational',
+        evidence: EVIDENCE_DIRECT,
+        note: LEDGER_HISTORY_NOTE,
+      }),
+    )
+  })
+
   const findings: DiagnosticFinding[] = []
 
   const stranded = (ledger.controlPlaneRejectionsByStatus[401] ?? 0) > 0
@@ -1954,6 +2178,28 @@ function buildLedgerBlock(ledger: LaneDegradationLedgerView | undefined): Diagno
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
         remedy: remedyForRefusedControlPlaneReads(stranded),
+      }),
+    )
+  }
+
+  /**
+   * A flap is the one fault only the HISTORY can report.
+   *
+   * Two recoveries mean the lane does come back, so neither the live transport row
+   * nor "Where the lane ended up" will ever be red for it — a flapping lane is
+   * healthy exactly when anybody looks. The threshold is three degradations with at
+   * least two recoveries, which no ordinary session reaches: a reconnect after a
+   * sleep or a network change is one pair.
+   */
+  if (degradations >= 3 && recoveries >= 2) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_LANE_FLAPPING'),
+        title: 'The socket lane has been falling back and recovering repeatedly',
+        detail:
+          'This client has watched the lane leave the socket and come back several times over one page. Every individual reading is healthy — it recovers each time — so nothing else in this pane can report it, and the cost is paid in the gaps: while the lane is off the socket every save is one HTTP request, collaboration rooms are rebuilt and the invite stream re-subscribes from its checkpoint. The causes are the per-cause counters above; a deferred cause such as another tab holding the lane is expected and not this.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
       }),
     )
   }

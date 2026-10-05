@@ -457,6 +457,20 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Standard Red Notes: what this client has WATCHED the realtime lane do, as
+   * opposed to where it is now.
+   *
+   * `syncTransportStatus` above cannot answer "did it ever fall back": a lane that
+   * degraded and recovered reads identically to one that never moved, and the
+   * operator who opens the Diagnostics pane has usually just watched it move.
+   * Undefined when no transport is installed, which stays distinct from an
+   * installed transport whose ledger is empty.
+   */
+  public get syncTransportLedger(): WebSocketSyncTransport['laneDegradationLedger'] | undefined {
+    return this._webSocketSyncTransport?.laneDegradationLedger
+  }
+
+  /**
    * Install websocket-preferred account sync for capable browsers. Capability
    * and one-use ticket requests stay on the authenticated main-thread client;
    * no long-lived session token is ever posted to the worker.
@@ -1532,6 +1546,12 @@ export class WebApplication extends SNApplication implements WebApplicationInter
        * `AdminEmailDeliveryController.endpoint.spec.ts`, not assumed here.
        */
       if (method === 'GET' && (response.status === 401 || response.status === 498)) {
+        // Counted INSIDE the branch that discards the socket's answer, so the
+        // counter cannot drift from the degradation it claims to measure. The
+        // optional call is not defensive style: a diagnostic counter must never be
+        // able to throw inside a control-plane read, and this helper is driven off
+        // the prototype against hand-built transport doubles in its own tests.
+        transport.recordControlPlaneRejection?.(response.status)
         return undefined
       }
 

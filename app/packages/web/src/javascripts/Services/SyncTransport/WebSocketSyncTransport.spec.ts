@@ -1,5 +1,6 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
+import { LANE_LEDGER_TRANSITION_CAPACITY } from './LaneDegradationLedger'
 import { MainToSyncWorkerMessage, SyncWorkerToMainMessage } from './syncTransportProtocol'
 import {
   deriveOpaqueSyncSessionScope,
@@ -2294,6 +2295,225 @@ describe('WebSocketSyncTransport', () => {
       await flush()
 
       await expect(sending).resolves.toMatchObject({ outcome: 'failed', code: 'SESSION_REVOKED' })
+    })
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The lane-degradation ledger, driven through the real transport           */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * The ledger has its own unit tests; these are the ones that can only be written
+   * HERE, because they are about the transport's own seams:
+   *
+   *   - every state assignment reaching the ledger, including the main-thread ones
+   *     that never post a STATE message;
+   *   - a recovery being recorded from the same path a degradation is;
+   *   - the closed reason the pane was missing actually being emitted.
+   *
+   * A ledger wired to only the worker's STATE messages would look correct in its own
+   * suite and still be blind to the half of the degradations this class decides by
+   * itself, which is exactly the shape of defect `transportStatus` already had.
+   */
+  describe('the lane-degradation ledger', () => {
+    it('records a degradation, a recovery and a second degradation in the order they happened', async () => {
+      const transport = createTransport()
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'multi-tab-not-owner' })
+      worker.emit({ type: 'STATE', state: 'CONNECTING' })
+      worker.emit({ type: 'STATE', state: 'READY' })
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: ['SYNC_ITEMS'],
+      })
+      worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
+      await flush()
+
+      const ledger = transport.laneDegradationLedger
+
+      expect(ledger.transitions.map((entry) => [entry.state, entry.reason])).toEqual([
+        ['HTTP_FALLBACK', 'multi-tab-not-owner'],
+        ['CONNECTING', undefined],
+        ['READY', undefined],
+        ['DEGRADED', 'server-kill'],
+      ])
+      expect(ledger.fallbackCounts).toEqual({ 'multi-tab-not-owner': 1, 'server-kill': 1 })
+      expect(ledger.transitionsDropped).toBe(0)
+    })
+
+    it('records whether the socket survived, as the worker reported it', async () => {
+      const transport = createTransport()
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'operation-unavailable', socketPreserved: true })
+      worker.emit({ type: 'STATE', state: 'READY' })
+      worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
+      await flush()
+
+      expect(transport.laneDegradationLedger.transitions.map((entry) => entry.socketPreserved)).toEqual([
+        true,
+        false,
+        false,
+      ])
+    })
+
+    /**
+     * *** THE REASON THE PANE WAS MISSING. ***
+     *
+     * `unsupported-browser` has been in the protocol since the lane was written, with
+     * its own explanation sentence, and the only code that ever emitted it lives
+     * inside the worker — which a browser failing this check never gets to start. So
+     * the one client that can NEVER use the socket was also the one whose
+     * "Reported fallback reason" row read "not reported".
+     */
+    it('names the browser as the reason when the environment cannot carry a socket at all', async () => {
+      const transport = createTransport({
+        environment: { hasWorker: false, hasWebSocket: true, hasIndexedDb: true },
+      })
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+
+      await expect(transport.execute(request(), fallback)).resolves.toEqual({ response: response('http') })
+
+      expect(transport.transportStatus).toEqual({
+        state: 'HTTP_ONLY',
+        fallbackReason: 'unsupported-browser',
+        operations: [],
+      })
+      expect(transport.laneDegradationLedger.fallbackCounts).toEqual({ 'unsupported-browser': 1 })
+    })
+
+    it('names the worker as the reason when the worker itself cannot be constructed', async () => {
+      const transport = createTransport({
+        workerFactory: () => {
+          throw new Error('blocked by policy')
+        },
+      })
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+
+      await expect(transport.execute(request(), fallback)).resolves.toEqual({ response: response('http') })
+
+      expect(transport.transportStatus.fallbackReason).toBe('worker-error')
+      expect(transport.laneDegradationLedger.fallbackCounts).toEqual({ 'worker-error': 1 })
+    })
+
+    /**
+     * A STALE reason is worse than none: it pairs a state with a cause that has
+     * already cleared, and the pane prints the two side by side as one reading.
+     */
+    it('clears a reason that no longer applies rather than carrying it into a shutdown', async () => {
+      const transport = createTransport()
+      // `deinit` rejects whatever is still in flight, which is the point of the
+      // case; the rejection is absorbed here so it cannot fail the run as an
+      // unhandled one.
+      const inFlight = transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      inFlight.catch(() => undefined)
+      await flush()
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'multi-tab-not-owner' })
+      await flush()
+      expect(transport.transportStatus.fallbackReason).toBe('multi-tab-not-owner')
+
+      transport.deinit()
+      await expect(inFlight).rejects.toThrow('deinitialized')
+
+      expect(transport.transportStatus).toEqual({ state: 'HTTP_ONLY', operations: [] })
+      // The degradation that DID happen is still in the ledger — clearing the live
+      // reason loses the current reading, never the history.
+      expect(transport.laneDegradationLedger.fallbackCounts).toEqual({ 'multi-tab-not-owner': 1 })
+    })
+
+    it('does not open the ledger with the state the transport was constructed in', async () => {
+      const transport = createTransport({ getAuthenticatedSessionScope: async () => undefined })
+
+      await transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+
+      expect(transport.transportStatus).toEqual({ state: 'HTTP_ONLY', operations: [] })
+      expect(transport.laneDegradationLedger.transitions).toEqual([])
+    })
+
+    it('records a lane standing down on a socket that stays up', async () => {
+      const transport = createTransport()
+      const authorizing = transport.authorizeCollaborationRoom('note-1')
+      await flush()
+      worker.emit({ type: 'STATE', state: 'READY' })
+      await flush()
+      const open = worker.posts.find((message) => message.type === 'AUTHORIZE_COLLABORATION') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'AUTHORIZE_COLLABORATION' }
+      >
+      worker.emit({ type: 'COLLABORATION_FALLBACK', clientRequestId: open.clientRequestId, reason: 'proxy-failed' })
+      await flush()
+      await authorizing
+
+      const ledger = transport.laneDegradationLedger
+      const last = ledger.transitions[ledger.transitions.length - 1]
+
+      expect(last).toMatchObject({ state: 'READY', reason: 'proxy-failed', socketPreserved: true })
+      // READY is not a state that serves saves over HTTP, so this is NOT counted as
+      // a degradation of the transport: one lane stood down, the rest did not.
+      expect(ledger.fallbackCounts).toEqual({})
+    })
+
+    it('counts a refused control-plane read against the status it was refused with', () => {
+      const transport = createTransport()
+
+      transport.recordControlPlaneRejection(401)
+      transport.recordControlPlaneRejection(498)
+      transport.recordControlPlaneRejection(498)
+      transport.recordControlPlaneRejection(503)
+
+      expect(transport.laneDegradationLedger.controlPlaneRejections).toBe(3)
+      expect(transport.laneDegradationLedger.controlPlaneRejectionsByStatus).toEqual({ 401: 1, 498: 2 })
+    })
+
+    it('stays bounded when the lane flaps far past the ring, and says how much it dropped', async () => {
+      const transport = createTransport()
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+
+      for (let round = 0; round < 60; round += 1) {
+        worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'ack-timeout' })
+        worker.emit({ type: 'STATE', state: 'READY' })
+      }
+      await flush()
+
+      const ledger = transport.laneDegradationLedger
+
+      expect(ledger.transitions).toHaveLength(LANE_LEDGER_TRANSITION_CAPACITY)
+      expect(ledger.transitions.length + ledger.transitionsDropped).toBe(120)
+      // The ring forgot most of them; the per-cause counter did not.
+      expect(ledger.fallbackCounts).toEqual({ 'ack-timeout': 60 })
+    })
+
+    it('publishes nothing but closed codes, booleans, counts and relative ages', async () => {
+      const transport = createTransport()
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+      worker.emit({ type: 'STATE', state: 'READY' })
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: ['SYNC_ITEMS'],
+      })
+      worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
+      await flush()
+
+      const serialised = JSON.stringify(transport.laneDegradationLedger)
+
+      expect(serialised).not.toContain('sync.example.test')
+      expect(serialised).not.toContain('sockets/sync')
+      expect(serialised).not.toContain('device-1')
+      expect(serialised).not.toContain(SESSION_A)
+      expect(serialised).not.toContain('ticketticket')
+      // Not vacuous: the ledger really does carry this session's transitions.
+      expect(serialised).toContain('server-kill')
     })
   })
 })

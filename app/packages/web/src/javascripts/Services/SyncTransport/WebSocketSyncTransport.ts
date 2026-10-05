@@ -36,6 +36,7 @@ import {
   utf8Bytes,
   WorkerAuthenticatedRpcRequest,
 } from './syncTransportProtocol'
+import { LaneDegradationLedger, type LaneLedgerReading } from './LaneDegradationLedger'
 import { OWNER_LEASE_TTL_MS } from './SyncTransportOutbox'
 
 type SyncWorkerLike = {
@@ -495,11 +496,64 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private lastLoggedInviteDeferral?: string
   private pageHideListener?: () => void
   private shutdownBarrier?: () => void
+  /**
+   * The session-long record of what this lane has done. In memory and bounded; see
+   * `LaneDegradationLedger` for why it does not survive a reload.
+   */
+  private readonly ledger = new LaneDegradationLedger({ baselineState: 'HTTP_ONLY' })
 
   constructor(private readonly options: WebSocketSyncTransportOptions) {}
 
   get transportState(): SyncTransportState {
     return this.state
+  }
+
+  /**
+   * What this client has watched the lane do over this page's life.
+   *
+   * Read by the admin Diagnostics pane and by nothing else. `transportStatus` above
+   * answers "where am I now" and cannot answer "did it ever fall back" — after a
+   * recovery the two readings are identical to a lane that never moved, which is
+   * precisely the question an operator opens that pane with.
+   */
+  get laneDegradationLedger(): LaneLedgerReading {
+    return this.ledger.view()
+  }
+
+  /**
+   * Count a control-plane read the socket lane refused and HTTP then served.
+   *
+   * Called from `WebApplication.controlPlaneRpc`, at the exact branch that discards
+   * the socket's answer and retries over HTTP. Recorded THERE rather than inferred
+   * here from an RPC status, so the counter cannot come to disagree with the
+   * behaviour it claims to count — the degradation is one `if`, and this is inside
+   * it.
+   */
+  recordControlPlaneRejection(status: number): void {
+    this.ledger.recordControlPlaneRejection(status)
+  }
+
+  /**
+   * Move the lane, with the cause, in one place.
+   *
+   * *** THE REASON IS A PARAMETER, NOT AN OMISSION. *** Twelve code paths assigned
+   * `this.state` directly and only three of them touched `this.fallbackReason`, so
+   * the pane's "Reported fallback reason" row read "not reported" on transports that
+   * had a perfectly good closed code available — and on the paths that merely
+   * re-asserted HTTP_ONLY it could print a STALE reason describing a condition that
+   * had already cleared, which is worse: a row refusing a value must not be paired
+   * with one claiming a reading. Routing every assignment through here makes
+   * "no cause" a decision a caller has to write down, and gives the ledger the one
+   * seam it needs to see every transition.
+   */
+  private setTransportState(
+    state: SyncTransportState,
+    reason: SyncFallbackReason | undefined,
+    socketPreserved = false,
+  ): void {
+    this.state = state
+    this.fallbackReason = reason
+    this.ledger.recordTransition(state, reason, socketPreserved)
   }
 
   get transportStatus(): {
@@ -993,12 +1047,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     const sessionScope = (await this.currentSessionScope()) ?? this.workerSessionScope
     if (!sessionScope) {
       this.terminateWorker()
-      this.state = 'HTTP_ONLY'
+      // No reason, and the previous one is CLEARED rather than carried: the lane is
+      // down because the session it rode is gone, and whatever sent it to HTTP
+      // before that describes a condition nobody can act on any more.
+      this.setTransportState('HTTP_ONLY', undefined)
       return
     }
     if (this.acknowledgedRevokedSessionScopes.has(sessionScope)) {
       this.terminateWorker()
-      this.state = 'HTTP_ONLY'
+      this.setTransportState('HTTP_ONLY', undefined)
       return
     }
     this.revokedSessionScopes.add(sessionScope)
@@ -1032,13 +1089,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
 
     if (!this.environmentSupported()) {
       this.terminateWorker()
-      this.state = 'HTTP_ONLY'
+      this.setTransportState('HTTP_ONLY', 'unsupported-browser')
       return
     }
 
     const worker = await this.workerForSession(sessionScope)
     if (!worker) {
-      this.state = 'HTTP_ONLY'
+      // KEEPS the reason on purpose: the only way to arrive here is
+      // `workerForSession` having failed, and it has already recorded why.
+      this.setTransportState('HTTP_ONLY', this.fallbackReason)
       return
     }
     const requestId = this.nextRequestId('revoke')
@@ -1054,7 +1113,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       this.acknowledgedRevokedSessionScopes.add(sessionScope)
     } finally {
       this.terminateWorker()
-      this.state = 'HTTP_ONLY'
+      this.setTransportState('HTTP_ONLY', undefined)
     }
   }
 
@@ -1094,7 +1153,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.failAllFileUploads('SHUTDOWN')
     this.negotiated = undefined
     this.rejectAllBarriers(error)
-    this.state = 'HTTP_ONLY'
+    // A deliberate shutdown is not a fallback and must not leave one reported.
+    this.setTransportState('HTTP_ONLY', undefined)
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -1185,12 +1245,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
     const normalizedRequest = normalizeSyncRequestForWire(request)
     if (this.deinitialized) {
-      this.state = 'HTTP_ONLY'
+      this.setTransportState('HTTP_ONLY', undefined)
       return { response: await httpFallback(normalizedRequest) }
     }
     const sessionScope = await this.currentSessionScope()
     if (!sessionScope) {
-      this.state = 'HTTP_ONLY'
+      // There is no closed reason for "this client is not signed in", and
+      // inventing one would put a fault on screen for an ordinary signed-out tab.
+      this.setTransportState('HTTP_ONLY', undefined)
       return { response: await httpFallback(normalizedRequest) }
     }
     if (this.revokedSessionScopes.has(sessionScope)) {
@@ -1200,12 +1262,16 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     // a worker round trip plus an IndexedDB read on every sync only to be told so.
     const laneUnavailable = this.sessionLaneUnavailableReason()
     if (laneUnavailable) {
-      this.state = 'HTTP_ONLY'
-      this.fallbackReason = laneUnavailable
+      this.setTransportState('HTTP_ONLY', laneUnavailable)
       return { response: await httpFallback(normalizedRequest) }
     }
     if (!this.environmentSupported()) {
-      this.state = 'HTTP_ONLY'
+      // *** THE REASON THE PANE WAS MISSING. *** `unsupported-browser` has been in
+      // the protocol, with its own explanation sentence, since the lane was written
+      // — and the only code that ever emitted it is inside the worker, which a
+      // browser failing THIS check never gets to start. So the one client that can
+      // never use the socket at all was also the one reporting no cause for it.
+      this.setTransportState('HTTP_ONLY', 'unsupported-browser')
       return { response: await httpFallback(normalizedRequest) }
     }
     const worker = await this.workerForSession(sessionScope)
@@ -1281,7 +1347,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       this.registerPageHideRelease()
       return worker
     } catch {
-      this.state = 'HTTP_ONLY'
+      // The Worker constructor threw: a blocked worker script, an exhausted
+      // process budget, a CSP that forbids the bundle. `worker-error` is the
+      // transport's own name for exactly this and was being dropped on the floor.
+      this.setTransportState('HTTP_ONLY', 'worker-error')
       return undefined
     }
   }
@@ -1464,8 +1533,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     if (message.type === 'STATE') {
-      this.state = message.state
-      this.fallbackReason = message.reason
+      this.setTransportState(message.state, message.reason, message.socketPreserved === true)
       this.announceTransition(message.state, message.reason)
       if (message.reason === 'multi-tab-not-owner') {
         // Another tab owns the socket for this scope and its lease stands for a
@@ -1639,7 +1707,11 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
       this.pendingCollaboration.delete(message.clientRequestId)
       if (message.type === 'COLLABORATION_FALLBACK') {
-        this.fallbackReason = message.reason
+        // A single lane standing down on a socket that stays up. The transport
+        // state does not move, so this is recorded at the CURRENT state with the
+        // socket marked preserved — otherwise the one degradation that leaves the
+        // connection intact is the one the ledger never sees.
+        this.setTransportState(this.state, message.reason, true)
         collaborationPending.resolve(undefined)
       } else if (message.type === 'COLLABORATION_DENIED') {
         collaborationPending.resolve(null)
@@ -2239,8 +2311,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
 
   private async onWorkerError(): Promise<void> {
     this.terminateWorker()
-    this.state = 'DEGRADED'
-    this.fallbackReason = 'worker-error'
+    this.setTransportState('DEGRADED', 'worker-error')
     this.negotiated = undefined
     for (const pending of this.pendingCollaboration.values()) {
       pending.resolve(undefined)

@@ -244,4 +244,83 @@ describe('WebApplication control-plane websocket RPC lane', () => {
     await expect(get(applicationWith(undefined), '/v1/workflows/status')).resolves.toMatchObject({ ok: true })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  /**
+   * The silent degradation, counted at the one `if` that performs it.
+   *
+   * These refusals leave no other trace anywhere: the socket stays open, note
+   * syncing is unaffected, the caller gets its answer from HTTP and nothing reaches
+   * the screen. A client that could not count them here could not report them at
+   * all, which is the whole reason the admin pane's lane-degradation ledger exists.
+   * Counted inside the branch rather than inferred from an RPC status elsewhere, so
+   * the counter and the behaviour cannot drift apart.
+   */
+  it.each([401, 498])('records the %i refusal it just degraded to HTTP, against that status', async (status) => {
+    const recordControlPlaneRejection = jest.fn()
+    const transport = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({
+        status,
+        headers: {},
+        body: {},
+        transport: 'websocket',
+      }),
+      recordControlPlaneRejection,
+    }
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ relays: [] }),
+    } as unknown as Response)
+
+    await get(applicationWith(transport as unknown as TransportMock), '/v1/admin/email-delivery/relays')
+
+    expect(recordControlPlaneRejection).toHaveBeenCalledTimes(1)
+    expect(recordControlPlaneRejection).toHaveBeenCalledWith(status)
+  })
+
+  it('records nothing for a status it did not degrade on', async () => {
+    const recordControlPlaneRejection = jest.fn()
+    const transport = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({
+        status: 503,
+        headers: {},
+        body: {},
+        transport: 'websocket',
+      }),
+      recordControlPlaneRejection,
+    }
+    globalThis.fetch = jest.fn()
+
+    await get(applicationWith(transport as unknown as TransportMock), '/v1/admin/email-delivery/relays')
+
+    expect(recordControlPlaneRejection).not.toHaveBeenCalled()
+  })
+
+  /**
+   * A diagnostic counter must never be able to break the read it is counting. The
+   * transport doubles in this file are hand-built objects with one method, and a
+   * control-plane GET has to keep working against one.
+   */
+  it('degrades to HTTP unharmed against a transport that cannot record anything', async () => {
+    const transport: TransportMock = {
+      openAuthenticatedRpcStream: jest.fn().mockResolvedValue({
+        status: 401,
+        headers: {},
+        body: {},
+        transport: 'websocket',
+      }),
+    }
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ relays: [] }),
+    } as unknown as Response)
+    globalThis.fetch = fetchMock
+
+    await expect(get(applicationWith(transport), '/v1/admin/email-delivery/relays')).resolves.toMatchObject({
+      status: 200,
+      ok: true,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

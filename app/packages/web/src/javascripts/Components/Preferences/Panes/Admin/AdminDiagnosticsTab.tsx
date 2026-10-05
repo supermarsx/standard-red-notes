@@ -45,7 +45,7 @@ import {
   type Verdict,
 } from './diagnosticsSections'
 import DiagnosticsSection from './DiagnosticsSection'
-import { buildWebsocketSection, socketFallbackIsDeferred } from './websocketSection'
+import { buildWebsocketSection, socketFallbackIsDeferred, type LaneLedgerSectionView } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
 import {
@@ -344,9 +344,18 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   // answers is "what am I on RIGHT NOW", and a value captured at mount would be
   // wrong within seconds of a reconnect.
   const [transport, setTransport] = useState<TransportStatusInput | undefined>(undefined)
+  // The ledger rides the SAME poll, and is read off the same accessor pattern: it
+  // is the history half of the question that row answers, and two readings taken a
+  // tick apart would let the block disagree with the row above it.
+  const [ledger, setLedger] = useState<LaneLedgerSectionView | undefined>(undefined)
   const readTransport = useCallback(() => {
     const status = application.syncTransportStatus
     setTransport(status ? { ...status, operations: [...status.operations] } : undefined)
+    // Passed through RAW, with no `?? {}` and no zeroed stand-in. A client with no
+    // realtime transport installed has no ledger, and the block says so in its own
+    // sentence; a fabricated empty one would claim this client watched the lane and
+    // saw nothing happen, which is a different and much stronger statement.
+    setLedger(application.syncTransportLedger)
   }, [application])
 
   useEffect(() => {
@@ -979,12 +988,16 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   }, [application, payload, transport, spaceReading, flagsReading])
 
   const websocketModel = useMemo(
-    // `counters` and `ledger` are NOT passed: nothing in this build produces
-    // either — the lane-degradation ledger module does not exist at all — and a
-    // `{}` would be a claim that the gateway reported zero sockets and zero
-    // refusals. Their blocks render their own empty notes instead.
-    () => buildWebsocketSection({ payload, transport, outcomes }),
-    [payload, transport, outcomes],
+    // `counters` is still NOT passed: nothing in this build produces it, and a `{}`
+    // would be a claim that the gateway reported zero sockets and zero refusals.
+    // That block renders its own empty note instead.
+    //
+    // `ledger` IS passed now, and only when the transport actually produced one —
+    // `application.syncTransportLedger` is `undefined` with no realtime transport
+    // installed, and that absence must reach the block rather than be smoothed into
+    // an empty reading.
+    () => buildWebsocketSection({ payload, transport, outcomes, ...(ledger === undefined ? {} : { ledger }) }),
+    [payload, transport, outcomes, ledger],
   )
   const environmentModel = useMemo(
     // `runtime` IS passed now and is threaded straight off the payload. It used

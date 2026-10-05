@@ -1,3 +1,4 @@
+import { LaneDegradationLedger, LANE_LEDGER_TRANSITION_CAPACITY } from '@/Services/SyncTransport/LaneDegradationLedger'
 import { SYNC_FALLBACK_REASON_EXPLANATIONS } from '@/Services/SyncTransport/syncTransportProtocol'
 import { EFFORT_LABEL } from './diagnosticRemedies'
 import {
@@ -28,6 +29,7 @@ import {
   SOCKET_OPERATIONS,
   SOCKET_TRANSPORT_STATES,
   SYNC_ITEMS_PROBES,
+  type LaneLedgerSectionView,
   type SocketGatewayCountersView,
   type WebsocketSectionInput,
 } from './websocketSection'
@@ -1450,6 +1452,27 @@ describe('gateway admission and traffic', () => {
 /* The lane-degradation ledger                                                */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A ledger produced by the REAL transport-side recorder, not a literal.
+ *
+ * The literal fixture above is still right for pinning one row against one value,
+ * but it cannot catch the failure that actually matters here: the producer and this
+ * section disagreeing about the shape. `LaneDegradationLedger` lives in the services
+ * layer and does not import this module, so nothing but a test that feeds one into
+ * the other can keep them honest — and because `buildWebsocketSection` is typed,
+ * a drift stops this FILE compiling rather than turning one assertion red.
+ */
+const recorded = (
+  drive: (ledger: LaneDegradationLedger, advance: (ms: number) => void) => void,
+): LaneLedgerSectionView => {
+  let clock = 0
+  const instance = new LaneDegradationLedger({ now: () => clock, baselineState: 'HTTP_ONLY' })
+  drive(instance, (ms) => {
+    clock += ms
+  })
+  return instance.view()
+}
+
 describe('the lane-degradation ledger', () => {
   it('reports a 401 refusal as the stranded case, with a reconnect', () => {
     const model = build({
@@ -1502,6 +1525,404 @@ describe('the lane-degradation ledger', () => {
     expect(String(rowOf(model, 'Transitions dropped from the ring').value)).toBe('4')
     expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('degraded')
   })
+
+  /* ------------------------------------------------------------------------ */
+  /* Recoveries, and the one row the live readings cannot produce             */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE WHOLE POINT OF THE BLOCK. ***
+   *
+   * These three cases are identical in every live reading this pane has: the
+   * transport row says READY for the first two and the gateway counters are the same
+   * for all three. Only the HISTORY separates "it never moved" from "it moved and
+   * came back" from "it moved and stayed down", and separating them is the question
+   * an operator opens this pane holding.
+   */
+  it('tells a lane that never moved from one that recovered from one that did not', () => {
+    const never = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+      }),
+    })
+    const recovered = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'server-kill', false)
+        instance.recordTransition('READY', undefined, false)
+      }),
+    })
+    const down = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'capability-unavailable', false)
+        instance.recordTransition('DEGRADED', 'server-kill', false)
+      }),
+    })
+
+    expect(String(rowOf(never, 'Where the lane ended up').value)).toBe('never-degraded')
+    expect(rowOf(never, 'Where the lane ended up').verdict).toBe('informational')
+
+    expect(String(rowOf(recovered, 'Where the lane ended up').value)).toBe('recovered')
+    expect(rowOf(recovered, 'Where the lane ended up').verdict).toBe('informational')
+    expect(String(rowOf(recovered, 'Degradations recorded').value)).toBe('1')
+    expect(String(rowOf(recovered, 'Recoveries recorded').value)).toBe('1')
+
+    expect(String(rowOf(down, 'Where the lane ended up').value)).toBe('still-degraded')
+    expect(rowOf(down, 'Where the lane ended up').verdict).toBe('degraded')
+    expect(String(rowOf(down, 'Degradations recorded').value)).toBe('2')
+    expect(String(rowOf(down, 'Recoveries recorded').value)).toBe('0')
+  })
+
+  it('calls a dial in progress neither a recovery nor a failure', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'reconnect-gap', false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+      }),
+    })
+
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('reconnecting')
+    expect(String(rowOf(model, 'Degradations recorded').value)).toBe('1')
+    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('0')
+  })
+
+  it('refuses to say where the lane ended up when it has watched nothing at all', () => {
+    const model = build({ ledger: ledger() })
+    const row = rowOf(model, 'Where the lane ended up')
+
+    expect(String(row.value)).toBe(NOT_REPORTED)
+    expect(row.verdict).toBe('undetermined')
+    expect(row.evidence.kind).toBe('absent')
+  })
+
+  /**
+   * A flap is healthy every time anybody looks at it: it recovers. Neither the live
+   * transport row nor "Where the lane ended up" can ever be red for one, so the
+   * finding has to come from counting the history.
+   */
+  it('raises a flapping lane that every single live reading calls healthy', () => {
+    const flapping = build({
+      transport: transport(),
+      ledger: recorded((instance, advance) => {
+        for (let round = 0; round < 4; round += 1) {
+          advance(5_000)
+          instance.recordTransition('HTTP_FALLBACK', 'ack-timeout', false)
+          advance(5_000)
+          instance.recordTransition('READY', undefined, false)
+        }
+      }),
+    })
+
+    expect(String(rowOf(flapping, 'Where the lane ended up').value)).toBe('recovered')
+    expect(codesOf(flapping)).toContain('SOCKET_LANE_FLAPPING')
+    expect(findingOf(flapping, 'SOCKET_LANE_FLAPPING')?.verdict).toBe('degraded')
+  })
+
+  /**
+   * *** A LANE THAT NEVER CAME BACK IS NOT A FLAP. ***
+   *
+   * Written because a mutation that dropped the recovery half of the threshold —
+   * `degradations >= 3` alone — survived every other case in this file. It would
+   * raise SOCKET_LANE_FLAPPING over a lane that fell to HTTP four times and stayed
+   * there, and the finding's own text says that lane "comes back each time". That is
+   * a verdict the data does not support, and it is also the wrong one to act on:
+   * a lane that never recovers is already reported by "Where the lane ended up" and
+   * by the live transport row, and burying it under a flap would send the operator
+   * looking for an intermittent fault instead of a stuck one.
+   */
+  it('does not call a lane that fell down and stayed down a flap', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        advance(1_000)
+        instance.recordTransition('HTTP_FALLBACK', 'ack-timeout', false)
+        advance(1_000)
+        instance.recordTransition('DEGRADED', 'server-kill', false)
+        advance(1_000)
+        instance.recordTransition('HTTP_FALLBACK', 'proxy-failed', false)
+        advance(1_000)
+        instance.recordTransition('HTTP_ONLY', 'capability-unavailable', false)
+      }),
+    })
+
+    // Not vacuous: there are four degradations here, well past the flap threshold,
+    // and the only thing holding the finding back is that none of them recovered.
+    expect(String(rowOf(model, 'Degradations recorded').value)).toBe('4')
+    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('0')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('still-degraded')
+    expect(codesOf(model)).not.toContain('SOCKET_LANE_FLAPPING')
+  })
+
+  it('does not call three degradations and a single recovery a flap either', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        advance(1_000)
+        instance.recordTransition('HTTP_FALLBACK', 'ack-timeout', false)
+        advance(1_000)
+        instance.recordTransition('READY', undefined, false)
+        advance(1_000)
+        instance.recordTransition('HTTP_FALLBACK', 'ack-timeout', false)
+        advance(1_000)
+        instance.recordTransition('DEGRADED', 'server-kill', false)
+      }),
+    })
+
+    expect(String(rowOf(model, 'Degradations recorded').value)).toBe('3')
+    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('1')
+    expect(codesOf(model)).not.toContain('SOCKET_LANE_FLAPPING')
+  })
+
+  it('does not call one reconnect a flap', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'reconnect-gap', false)
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('HTTP_FALLBACK', 'reconnect-gap', false)
+        instance.recordTransition('READY', undefined, false)
+      }),
+    })
+
+    expect(codesOf(model)).not.toContain('SOCKET_LANE_FLAPPING')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The bound, and the elision                                               */
+  /* ------------------------------------------------------------------------ */
+
+  it('renders a bounded number of history rows however long the lane flapped, and says how many it lost', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        for (let round = 0; round < 100; round += 1) {
+          advance(1_000)
+          instance.recordTransition(
+            round % 2 === 0 ? 'HTTP_FALLBACK' : 'READY',
+            round % 2 === 0 ? 'backpressure' : undefined,
+            false,
+          )
+        }
+      }),
+    })
+    const historyRows = allRows(model).filter((row) => String(row.label).startsWith('Transition '))
+
+    expect(historyRows).toHaveLength(LANE_LEDGER_TRANSITION_CAPACITY)
+    expect(String(rowOf(model, 'Transport transitions recorded').value)).toBe(String(LANE_LEDGER_TRANSITION_CAPACITY))
+    expect(String(rowOf(model, 'Transitions dropped from the ring').value)).toBe(
+      String(100 - LANE_LEDGER_TRANSITION_CAPACITY),
+    )
+    // The elision is a REPORTED number, not a silent truncation: the two add back
+    // up to what really happened.
+    expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('degraded')
+    // And the causes survive the elision, because they are keyed by a closed set.
+    expect(String(rowOf(model, 'Degradations with cause backpressure').value)).toBe('50')
+    expect(String(rowOf(model, 'Distinct degradation causes recorded').value)).toBe('1')
+  })
+
+  it('renders the history oldest first, each entry carrying its own cause and relative age', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        advance(2_000)
+        instance.recordTransition('HTTP_FALLBACK', 'multi-tab-not-owner', false)
+        advance(60_000)
+        instance.recordTransition('READY', undefined, true)
+      }),
+    })
+
+    expect(String(rowOf(model, 'Transition 1').value)).toBe('HTTP_FALLBACK multi-tab-not-owner socket torn down 2s')
+    expect(String(rowOf(model, 'Transition 2').value)).toBe(`READY ${NOT_REPORTED} socket preserved 1m 2s`)
+  })
+
+  it('keeps every row label in the ledger block unique, history rows included', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        for (let round = 0; round < 30; round += 1) {
+          advance(500)
+          instance.recordTransition(
+            round % 2 === 0 ? 'DEGRADED' : 'READY',
+            round % 2 === 0 ? 'server-kill' : undefined,
+            false,
+          )
+        }
+      }),
+    })
+    const labels = blockOf(model, 'Lane degradation ledger').rows.map((row) => String(row.label))
+
+    expect(new Set(labels).size).toBe(labels.length)
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The closed sets                                                          */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * The producer collapses an unrecognised reason, and so does this section. Both,
+   * on purpose: a ledger is a long-lived object in a page that may have been running
+   * since before the last deploy, and one expression in one file is not a boundary.
+   * This plants PAST the producer, directly into the section's input, which is the
+   * only way to exercise the renderer's own half.
+   */
+  it('collapses a state and a reason from a build it has never heard of', () => {
+    const forged = 'https://sync.internal.example:8443/?token=hunter2'
+    const model = build({
+      ledger: {
+        controlPlaneRejections: 0,
+        controlPlaneRejectionsByStatus: {},
+        fallbackCounts: { [forged]: 2, 'another-new-reason': 1, 'server-kill': 1 },
+        transitions: [{ state: forged, reason: forged, socketPreserved: false, msSinceLedgerStart: 1_000 }],
+        transitionsDropped: 0,
+        recordingForMs: 10_000,
+      },
+    })
+    const serialised = JSON.stringify(model)
+
+    expect(serialised).not.toContain('sync.internal.example')
+    expect(serialised).not.toContain('hunter2')
+    expect(serialised).not.toContain('another-new-reason')
+    expect(String(rowOf(model, 'Transition 1').value)).toBe(`${UNRECOGNISED} ${UNRECOGNISED} socket torn down 1s`)
+    // Both unknown causes fold onto ONE row, so there is no duplicate label and no
+    // line in the report that says the same thing twice.
+    expect(String(rowOf(model, `Degradations with cause ${UNRECOGNISED}`).value)).toBe('3')
+    // And the fold does not flatter it. `syncFallbackDisposition` has no answer for
+    // a cause outside its union, and the direction a wrong guess fails in matters:
+    // "informational" is the word this pane reserves for a lane standing down
+    // politely, and printing it over a cause nobody can name would describe an
+    // unexplained degradation as expected behaviour.
+    expect(rowOf(model, `Degradations with cause ${UNRECOGNISED}`).verdict).toBe('degraded')
+    expect(String(rowOf(model, 'Degradations with cause server-kill').value)).toBe('1')
+    expect(String(rowOf(model, 'Distinct degradation causes recorded').value)).toBe('2')
+  })
+
+  it('refuses a verdict about where the lane ended up when it cannot name a state it recorded', () => {
+    const model = build({
+      ledger: {
+        controlPlaneRejections: 0,
+        controlPlaneRejectionsByStatus: {},
+        fallbackCounts: {},
+        transitions: [
+          { state: 'READY', socketPreserved: false, msSinceLedgerStart: 0 },
+          { state: 'A_STATE_FROM_A_NEWER_BUILD', socketPreserved: false, msSinceLedgerStart: 10 },
+        ],
+        transitionsDropped: 0,
+        recordingForMs: 10_000,
+      },
+    })
+
+    expect(String(rowOf(model, 'Transitions this build cannot name').value)).toBe('1')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe(NOT_REPORTED)
+    expect(rowOf(model, 'Where the lane ended up').verdict).toBe('undetermined')
+    // Not vacuous: the recognised half was still classified.
+    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('1')
+  })
+
+  it('names a deferred cause without calling it a fault', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'multi-tab-not-owner', false)
+      }),
+    })
+
+    expect(rowOf(model, 'Degradations with cause multi-tab-not-owner').verdict).toBe('informational')
+    expect(rowOf(model, 'Degradations with cause multi-tab-not-owner').note).toBe(
+      SYNC_FALLBACK_REASON_EXPLANATIONS['multi-tab-not-owner'],
+    )
+  })
+
+  it('calls a genuine cause a degradation', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'proxy-failed', false)
+      }),
+    })
+
+    expect(rowOf(model, 'Degradations with cause proxy-failed').verdict).toBe('degraded')
+  })
+
+  it('renders no cause row at all for a cause that never happened', () => {
+    const labels = allRows(build({ ledger: ledger() })).map((row) => String(row.label))
+
+    for (const reason of SOCKET_FALLBACK_REASONS) {
+      expect(labels).not.toContain(`Degradations with cause ${reason}`)
+    }
+    expect(String(rowOf(build({ ledger: ledger() }), 'Distinct degradation causes recorded').value)).toBe('0')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* Absences that are not zeros                                              */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * A reload empties the ledger, so "0 transitions" has to be read against how long
+   * it has been watching. Four seconds of recording establishes nothing; an hour of
+   * it is a genuinely stable lane, and the row is what lets a reader tell them apart.
+   */
+  it('reports how long it has been recording, and refuses to invent one', () => {
+    const young = build({ ledger: recorded(() => undefined) })
+    const old = build({
+      ledger: recorded((_instance, advance) => {
+        advance(3_600_000)
+      }),
+    })
+
+    expect(String(rowOf(young, 'This ledger has been recording for').value)).toBe('under 1s')
+    expect(String(rowOf(old, 'This ledger has been recording for').value)).toBe('1h 0m')
+
+    // The shared view in `diagnosticsSections.ts` cannot carry it, and a caller
+    // supplying that narrower shape must get "not reported" rather than a zero.
+    const shared = build({ ledger: ledger() })
+    expect(String(rowOf(shared, 'This ledger has been recording for').value)).toBe(NOT_REPORTED)
+    expect(rowOf(shared, 'This ledger has been recording for').evidence.kind).toBe('absent')
+  })
+
+  /**
+   * The flattering-denominator guard. Two named buckets over a total they do not sum
+   * to would quietly lose every refusal on a third status, and the two rows that
+   * remained would look like the whole story.
+   */
+  it('accounts for a refusal on a status it has no row for, rather than losing it', () => {
+    const model = build({
+      ledger: ledger({ controlPlaneRejections: 7, controlPlaneRejectionsByStatus: { 401: 2, 498: 1 } }),
+    })
+    const row = rowOf(model, 'Refusals on a status this build cannot name')
+
+    expect(String(row.value)).toBe('4')
+    expect(row.verdict).toBe('degraded')
+  })
+
+  it('refuses to print a remainder at all when the counters disagree with each other', () => {
+    const model = build({
+      ledger: ledger({ controlPlaneRejections: 1, controlPlaneRejectionsByStatus: { 401: 2, 498: 3 } }),
+    })
+    const row = rowOf(model, 'Refusals on a status this build cannot name')
+
+    expect(String(row.value)).toBe(NOT_REPORTED)
+    expect(row.verdict).toBe('undetermined')
+    expect(row.evidence.kind).toBe('absent')
+  })
+
+  it('writes the whole ledger into the copyable report, history rows included', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        advance(1_000)
+        instance.recordTransition('HTTP_FALLBACK', 'server-kill', false)
+        advance(1_000)
+        instance.recordTransition('READY', undefined, false)
+        instance.recordControlPlaneRejection(401)
+      }),
+    })
+    const report = model.reportLines.join('\n')
+
+    expect(report).toContain('### Lane degradation ledger')
+    // Not the block's empty note, and not vacuously so: the block really did
+    // produce rows. Asserted on the block rather than on the whole report, which
+    // carries that sentence for the two blocks nothing populates yet.
+    expect(blockOf(model, 'Lane degradation ledger').emptyNote).toBeUndefined()
+    expect(blockOf(model, 'Lane degradation ledger').rows.length).toBeGreaterThan(10)
+    expect(report).toContain('- Where the lane ended up: recovered')
+    expect(report).toContain('- Degradations recorded: 1')
+    expect(report).toContain('- Recoveries recorded: 1')
+    expect(report).toContain('- Degradations with cause server-kill: 1')
+    expect(report).toContain('- Transition 1: HTTP_FALLBACK server-kill socket torn down 1s')
+    expect(report).toContain('- Transition 2: READY not reported socket torn down 2s')
+    expect(report).toContain('- Control-plane reads refused with 401: 1')
+  })
 })
 
 /* -------------------------------------------------------------------------- */
@@ -1525,6 +1946,29 @@ describe('the copyable report', () => {
     PLANTED_OPAQUE,
     PLANTED_SHAPED,
   ]
+
+  /**
+   * The ledger's own WIDE fields, planted.
+   *
+   * `LaneLedgerSectionView` types `state`, `reason` and every `fallbackCounts` KEY
+   * as `string` on purpose — a long-lived producer in a page older than the deploy
+   * can hold a code this build has never heard of, and the closed unions in
+   * `diagnosticsSections.ts` are a compile-time fact about one build rather than a
+   * guarantee about the object in memory. So those three are server-controlled text
+   * as far as this renderer is concerned, and they are poisoned here for the same
+   * reason `deployment.presence`'s keys are.
+   */
+  const poisonedLedger = (secret: string): LaneLedgerSectionView => ({
+    controlPlaneRejections: 1,
+    controlPlaneRejectionsByStatus: { 401: 1 },
+    fallbackCounts: { [secret]: 2, 'server-kill': 1 },
+    transitions: [
+      { state: secret, reason: secret, socketPreserved: false, msSinceLedgerStart: 1_000 },
+      { state: 'READY', socketPreserved: true, msSinceLedgerStart: 2_000 },
+    ],
+    transitionsDropped: 1,
+    recordingForMs: 30_000,
+  })
 
   const poisoned = (secret: string): WebsocketSectionInput => ({
     payload: {
@@ -1579,8 +2023,48 @@ describe('the copyable report', () => {
       protocol: { version: 1, serverOperations: [secret] },
     },
     transport: transport(),
-    ledger: ledger({ controlPlaneRejections: 1, controlPlaneRejectionsByStatus: { 401: 1 } }),
+    ledger: poisonedLedger(secret),
     counters: counters({ originAdmitted: false, allowedOriginCount: 1, ticketsIssued: 1, handshakeRejected: 1 }),
+  })
+
+  /**
+   * *** THE SWEEP'S OWN NON-VACUITY, FIELD BY FIELD. ***
+   *
+   * A field that is no longer poisoned cannot be leaked by anything, so its half of
+   * every scan below reads green forever — which is indistinguishable from
+   * protection and is the worst shape a secrecy test can take. Each WIDE `string`
+   * the ledger block reads is therefore named here explicitly: adding another one
+   * without adding its plant fails THIS test rather than silently widening the
+   * surface the scans cover.
+   */
+  it('actually feeds every planted value into every wide field the ledger block reads', () => {
+    for (const secret of SECRETS) {
+      const planted = poisoned(secret).ledger
+      const fields: readonly (readonly [string, string])[] = [
+        ['transitions[].state', String(planted?.transitions[0]?.state)],
+        ['transitions[].reason', String(planted?.transitions[0]?.reason)],
+        ['fallbackCounts key', Object.keys(planted?.fallbackCounts ?? {}).join(' ')],
+      ]
+
+      for (const [field, value] of fields) {
+        expect({ field, poisoned: value.includes(secret) }).toEqual({ field, poisoned: true })
+      }
+    }
+  })
+
+  /**
+   * And the rows those fields feed are REACHED — an assertion that they hold no
+   * secret proves nothing if the block never rendered them. Checked against the
+   * same fixture the scans run over, so the two cannot drift apart.
+   */
+  it('renders the ledger rows those fields feed, so the scans below are not over an empty block', () => {
+    const model = build(poisoned(PLANTED_OPAQUE))
+
+    expect(String(rowOf(model, 'Transition 1').value)).toBe(`${UNRECOGNISED} ${UNRECOGNISED} socket torn down 1s`)
+    expect(String(rowOf(model, `Degradations with cause ${UNRECOGNISED}`).value)).toBe('2')
+    expect(String(rowOf(model, 'Degradations with cause server-kill').value)).toBe('1')
+    expect(String(rowOf(model, 'Transitions this build cannot name').value)).toBe('1')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe(NOT_REPORTED)
   })
 
   it.each(SECRETS)('keeps a planted value out of every report line: %s', (secret) => {
