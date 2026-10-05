@@ -117,6 +117,32 @@ describe('DeleteOtherSessionsForUser', () => {
     expect(result.isFailed()).toBeFalsy()
   })
 
+  it('should audit without a webhook dispatcher wired', async () => {
+    webhookDispatcher = undefined as unknown as WebhookDispatcherInterface
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      currentSessionUuid: '00000000-0000-0000-0000-000000000001',
+      markAsRevoked: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(auditLogWriter.write).toHaveBeenCalledTimes(1)
+  })
+
+  it('should dispatch the webhook without an audit writer wired', async () => {
+    auditLogWriter = undefined as unknown as AuditLogWriterInterface
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      currentSessionUuid: '00000000-0000-0000-0000-000000000001',
+      markAsRevoked: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(webhookDispatcher.dispatch).toHaveBeenCalledTimes(1)
+  })
+
   it('should delete all sessions except current for a given user without marking as revoked', async () => {
     const result = await createUseCase().execute({
       userUuid: '00000000-0000-0000-0000-000000000000',
