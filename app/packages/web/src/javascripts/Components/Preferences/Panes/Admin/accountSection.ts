@@ -7,6 +7,7 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceProxy,
+  NOT_PUBLISHED,
   outcomesForSection,
   reportLine,
   safeConstant,
@@ -382,16 +383,65 @@ const SESSION_READING: Record<AdminReading, ReadingVerdict> = {
  *
  * `not-attempted` — nothing in this build reads them. The emptiness is a gap in the
  * PANEL and says nothing about the deployment.
- * `read-and-failed` — they were asked for and the read did not produce them. The
- * emptiness is then a SYMPTOM, and the thing it is a symptom of is the subject.
+ * `read-threw` — the request did not complete, or completed as an error this
+ * client re-threw. The emptiness is then a SYMPTOM, and the thing it is a symptom
+ * of is the subject.
+ * `read-carried-no-figure` — the request COMPLETED and the server carried no
+ * figure. That is an ordinary answer on this fork and is not, on its own, a fault.
  *
- * Two values rather than a boolean because a third is already foreseeable — a read
- * that succeeded and returned nothing — and because a boolean named `failed` reads
- * as `false` for "never tried", which is the conflation this set exists to end.
+ * *** WHY THE THIRD VALUE EXISTS, AND WHAT IT COST NOT TO HAVE IT. ***
+ *
+ * This set had two members and the previous comment here said a third was "already
+ * foreseeable — a read that succeeded and returned nothing". It was not foreseeable;
+ * it was already the commonest reading in the fleet, and folding it into
+ * `read-and-failed` made `ACCOUNT_SPACE_READ_FAILED` fire `broken` over it. Three
+ * things in this repo produce it, none of them a fault:
+ *
+ *   - `FILE_UPLOAD_BYTES_USED` is written by the auth worker only on a SUCCESSFUL
+ *     upload. An account that has never uploaded a file has no such row, the
+ *     subscription-setting read answers 400, and `SettingsGateway` maps 400 to
+ *     `undefined` rather than throwing. A brand-new account therefore read `broken`.
+ *   - With no subscription row at all, auth's `getSubscriptionSetting` answers
+ *     `200 {success: true, setting: undefined}` on purpose — its own comment says
+ *     "In the single-tier, fully-free model there is no real subscription row … so
+ *     clients treat it as 'no usage data' rather than surfacing a request error".
+ *     This pane then rated that deliberate design as a broken deployment.
+ *   - An absent LIMIT is not an absent allowance either: `CreateValetToken` falls
+ *     back to the plan default when the setting is missing, so nothing is refused.
+ *
+ * A thrown read is still a real failure and still reads `broken`. What separates
+ * them is whether an answer arrived, which is a fact the caller has and this module
+ * cannot re-derive — exactly like `not-attempted` and for the same reason.
  */
-export const SPACE_FIGURE_SOURCES = ['not-attempted', 'read-and-failed'] as const
+export const SPACE_FIGURE_SOURCES = ['not-attempted', 'read-threw', 'read-carried-no-figure'] as const
 
 export type SpaceFigureSource = (typeof SPACE_FIGURE_SOURCES)[number]
+
+/**
+ * Whether this ACCOUNT has any uploaded file, as a closed set — the signal that
+ * turns "no usage figure" from an alarm into a statement of fact.
+ *
+ * `present` — at least one file item exists, so an upload has succeeded. A server
+ * with no usage figure for such an account has lost the bookkeeping.
+ * `none` — the local item collection finished loading and holds no file item. There
+ * is nothing for the server to have a figure about.
+ * `not-loaded` — the local database has not finished loading. An empty collection
+ * establishes NOTHING here and must never be read as `none`.
+ *
+ * *** THE THIRD MEMBER IS THE WHOLE POINT. *** A collection answering `[]` for both
+ * "none" and "not read yet" is a trap this repo has already been caught by, and
+ * `[]` is what `items` answers for the entire window between launch and the cold
+ * load completing. The caller reads `sync.isDatabaseLoaded()` — which flips only
+ * after the cold load's own completeness check — and sends `not-loaded` until it
+ * is true, so this module never has to guess which `[]` it was handed.
+ *
+ * A STATE, never a count: the number of files in one person's vault is a fact about
+ * that person, the diagnosis needs only "any or none", and a set with three members
+ * cannot be made to carry a quantity later by accident.
+ */
+export const ACCOUNT_FILE_CENSUS = ['present', 'none', 'not-loaded'] as const
+
+export type AccountFileCensus = (typeof ACCOUNT_FILE_CENSUS)[number]
 
 export type AccountObservations = {
   /** A local session object exists. A LOCAL fact: it says nothing about the server accepting it. */
@@ -439,6 +489,17 @@ export type AccountObservations = {
    * Absent means not even this is known.
    */
   spaceFigureSource?: SpaceFigureSource
+  /**
+   * Whether this account has any uploaded file, as one of `ACCOUNT_FILE_CENSUS`.
+   * Typed wide so an unrecognised value collapses through `safeEnum` rather than
+   * printing, exactly like the role and plan fields.
+   *
+   * Read from SYNCED ITEMS, not from an endpoint: the file list is already in this
+   * client's own collection, so the question "has an upload ever succeeded" costs
+   * no request and discloses nothing — and the answer is what decides whether a
+   * missing usage figure is a defect or simply nothing to report.
+   */
+  fileCensus?: string
   /** `payload.protocol.version`, for context beside the consumability row. */
   protocolVersion?: number
   /** `payload.protocol.serverOperations`. Compared against this build's own two lists. */
@@ -715,6 +776,14 @@ function remedyForFileQuota(exhausted: boolean): Remedy {
 /* Block 1: who this session is, and what it may do                          */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The role-list row's value when nothing produces the names. Not `NOT_PUBLISHED`:
+ * the gap here is a CLIENT surface rather than a server endpoint, and sending an
+ * operator to look for a missing server field would be the same wrong errand in a
+ * new direction.
+ */
+const ROLE_NAMES_UNPUBLISHED = safeConstant('not exposed by any client surface')
+
 const ADMIN_ROLE_NOTE =
   'The server’s own answer, taken from this pane’s own request rather than from a probe invented for the row. A 403 is conclusive: the request authenticated and was then refused on the role. A 401 is NOT evidence about the role at all — the cross-service-token middleware runs before the role check, so the check never happened — and this row reports that as undetermined rather than as a refusal. Confusing the two is the single most common dead end in this area.'
 
@@ -768,25 +837,61 @@ function buildAccessBlock(observed: AccountObservations, reading: AdminReading):
     }),
   ]
 
-  for (const role of ACCOUNT_ROLES) {
+  /**
+   * *** ONE SENTENCE RATHER THAN FIVE EMPTY ROWS, exactly as the admission block
+   * in `websocketSection.ts` does it. ***
+   *
+   * `roles` has no producer: no client surface exposes the role NAMES, only
+   * `hasRole()` for one name at a time, and a list assembled from four probes of
+   * this build's own four names could not report an unrecognised one — which is
+   * the only thing the count row is for. So on every deployment these five rows
+   * each rendered "not reported", and five of them in a column reads as five
+   * failures rather than as one absent input. The information content is
+   * identical and the sentence is the half an operator reads.
+   *
+   * The rows return the moment anything supplies the list, name by name, and the
+   * replacement resolves to `undetermined` — the same verdict each of the five it
+   * replaces carried while absent, so collapsing them cannot move this section's
+   * worst verdict in either direction. (It claims `informational` and the
+   * contract caps that to `undetermined` on absent evidence, which is the right
+   * answer arrived at by the right rule rather than by this call site.)
+   */
+  if (roles === undefined) {
     rows.push(
-      observedRow({
-        label: ROLE_LABEL[role],
-        observed: held(role),
-        value: safeState(held(role), 'held', 'not held'),
+      diagnosticRow({
+        label: safeConstant('Roles held by this account'),
+        value: ROLE_NAMES_UNPUBLISHED,
         verdict: 'informational',
-        note: ROLE_NOTE[role],
+        evidence: EVIDENCE_ABSENT,
+        note: 'Not a failed read: nothing in this client can produce the list. The client exposes only `hasRole()` for one name at a time, so a list built here could hold this build’s own four names and could never report a fifth the server knows about — and reporting an unrecognised role as a count is the one job the list has. Four per-role rows and a count of roles outside this build’s taxonomy appear here the moment a surface supplies the names. The row above — the admin role as the server itself answered — is unaffected and is the one that carries a verdict.',
+      }),
+    )
+  } else {
+    for (const role of ACCOUNT_ROLES) {
+      rows.push(
+        observedRow({
+          label: ROLE_LABEL[role],
+          observed: held(role),
+          value: safeState(held(role), 'held', 'not held'),
+          verdict: 'informational',
+          note: ROLE_NOTE[role],
+        }),
+      )
+    }
+  }
+
+  if (roles !== undefined) {
+    rows.push(
+      diagnosticRow({
+        label: safeConstant('Roles outside this build’s taxonomy'),
+        value: safeCount(unrecognisedRoles),
+        ...absentOr(unrecognisedRoles, 'informational'),
+        note: 'Counted, never printed. A role name is a closed enum only while it is one of the four above; anything else is a server-supplied string of unknown content, and this section is the one place in the pane where such a string could be an identifier. A newer server’s legitimate new role therefore shows up here as a number rather than disappearing.',
       }),
     )
   }
 
   rows.push(
-    diagnosticRow({
-      label: safeConstant('Roles outside this build’s taxonomy'),
-      value: safeCount(unrecognisedRoles),
-      ...absentOr(unrecognisedRoles, 'informational'),
-      note: 'Counted, never printed. A role name is a closed enum only while it is one of the four above; anything else is a server-supplied string of unknown content, and this section is the one place in the pane where such a string could be an identifier. A newer server’s legitimate new role therefore shows up here as a number rather than disappearing.',
-    }),
     diagnosticRow({
       label: safeConstant('Subscription'),
       value: subscription === undefined ? safePresence(undefined) : SUBSCRIPTION_VALUE[subscription],
@@ -855,6 +960,8 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
   const usedMb = wholeMegabytes(observed.fileUploadBytesUsed)
   const limitMb = wholeMegabytes(observed.fileUploadBytesLimit)
 
+  const census = ACCOUNT_FILE_CENSUS.find((candidate) => candidate === observed.fileCensus)
+
   const cap = observed.localSoftCapBytes
   const capSet = cap === undefined ? undefined : cap > 0
   const overCap =
@@ -896,15 +1003,40 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
       ...absentOr(overCap, 'informational'),
       note: 'ADVISORY, and informational even when it reads over: this cap NEVER blocks a save or a sync. It exists so a user who set a budget hears about it, and a row that gave it a tone would read as a fault and send someone looking for a failure that cannot happen.',
     }),
+    diagnosticRow({
+      label: safeConstant('Uploaded files in this account'),
+      value: safeEnum(observed.fileCensus, ACCOUNT_FILE_CENSUS),
+      ...absentOr(census, 'informational'),
+      note: 'A STATE, never a count, and read from this client’s own synced items rather than from any request. It is here because it is the EVIDENCE for the verdict on an absent usage figure: with no file in the account there is nothing for the server to have a figure about, and with files present a missing figure means the upload bookkeeping was lost. "not loaded" is its own answer on purpose — an item collection answers an empty list both for "none" and for "not read yet", and reading the second as the first is how a pane invents a fact. One known gap: the count is taken over DECRYPTED items, so a file whose key is missing is not counted and such an account reads "none" here.',
+    }),
   ]
 
   /**
-   * *** AN EMPTY SPACE BLOCK IS A FACT, AND THERE ARE TWO OF THEM. ***
+   * *** AN EMPTY SPACE BLOCK IS A FACT, AND THERE ARE FOUR OF THEM. ***
    *
    * Every row here read "not reported" on every deployment, and the cause was a
    * WIRING GAP: the tab supplied no space fields at all. That is now fixed, so the
    * emptiness has become informative rather than constant — which is the only
-   * condition under which distinguishing its two kinds is worth anything.
+   * condition under which distinguishing its kinds is worth anything.
+   *
+   * *** AND THE FIRST SPLIT WAS TOO COARSE, WHICH COST A FALSE `broken`. ***
+   *
+   * It had two kinds — nobody asked, and the read failed — and "the read answered
+   * and carried no figure" was deliberately filed under the second. That one
+   * decision rated the ORDINARY state of this fork as a broken deployment:
+   * `FILE_UPLOAD_BYTES_USED` exists only once an upload has succeeded, so an
+   * account that has never uploaded a file has no row, auth answers 400, the client
+   * maps 400 to `undefined` without throwing, and the whole section went `broken`.
+   * The decisive test is that a brand-new account that had merely never uploaded
+   * anything read `broken` — a false alarm of exactly the kind this pane was
+   * cleaned up to remove, and one that would fire for every such account forever.
+   *
+   * So the question an absent figure raises is now answered rather than assumed,
+   * and it is answered with a fact this client already holds: does the account have
+   * any FILE at all? With files present, a server with no usage figure has lost the
+   * bookkeeping, which is a real degradation. With none, there is nothing to report
+   * and saying so is the honest answer. With the collection still loading, neither
+   * is established and the block says that instead of picking the quiet one.
    *
    * A CORRECTION IS RECORDED HERE RATHER THAN QUIETLY DROPPED, because it is the
    * kind of attribution that gets re-derived from memory by the next reader. This
@@ -926,17 +1058,66 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
 
   const findings: DiagnosticFinding[] = []
 
-  if (serverFiguresAbsent && observed.spaceFigureSource === 'read-and-failed') {
+  // A READ THAT THREW. Still `broken`, and narrowed rather than weakened: this arm
+  // now fires only where an answer never arrived, which is what the finding always
+  // claimed in its own text and never actually tested.
+  if (serverFiguresAbsent && observed.spaceFigureSource === 'read-threw') {
     findings.push(
       diagnosticFinding({
         code: safeConstant('ACCOUNT_SPACE_READ_FAILED'),
         title: 'This account’s space figures were asked for and did not arrive',
         detail:
-          'The rows above are empty because the read FAILED, not because this build does not look. These two numbers are per-account SETTINGS served by the auth service, so a read that will not produce them points at the session or at auth — not at the files service, which neither stores nor serves them. Do not read this as evidence about attachments: a deployment whose file transfers are completely broken reports these figures perfectly, and a deployment that cannot report them may transfer files without trouble. If attachments are the symptom, the files rows in the Database & internal comms section are the place, together with the finding there saying that nothing on that screen establishes an authorized transfer.',
+          'The rows above are empty because the read FAILED, not because this build does not look. No answer arrived at all — a request that never completed, or one the client re-threw — which is a different state from a server that answered carrying no figure, and that one is reported separately. These two numbers are per-account SETTINGS served by the auth service, so a read that will not produce them points at the session or at auth — not at the files service, which neither stores nor serves them. Do not read this as evidence about attachments: a deployment whose file transfers are completely broken reports these figures perfectly, and a deployment that cannot report them may transfer files without trouble. If attachments are the symptom, the files rows in the Database & internal comms section are the place, together with the finding there saying that nothing on that screen establishes an authorized transfer.',
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
       }),
     )
+  }
+
+  // AN ANSWER ARRIVED CARRYING NO FIGURE. Three outcomes, decided by whether the
+  // account has a file — never merged, because the whole defect being fixed here
+  // was one state standing in for three.
+  if (serverFiguresAbsent && observed.spaceFigureSource === 'read-carried-no-figure') {
+    if (census === 'present') {
+      findings.push(
+        diagnosticFinding({
+          code: safeConstant('ACCOUNT_SPACE_USAGE_UNRECORDED'),
+          title: 'This account has files and the server reports no usage figure for them',
+          detail:
+            'The read completed and carried nothing, so the request path is fine; what is missing is the bookkeeping. FILE_UPLOAD_BYTES_USED is written by the auth worker on a successful upload, so an account holding files with no figure means those writes did not land — most often a worker that is not consuming its queue. Two facts are measured here and the third is not: that this account holds at least one file, and that the server answered carrying no figure. WHY it is missing — never written, or written and later lost — is not established by anything on this screen. Degraded rather than down: uploads are not refused by a missing figure, and the files themselves are unaffected. What it costs is the quota itself, which cannot be enforced or warned about from a total nobody is keeping.',
+          verdict: 'degraded',
+          // DIRECT, and the two facts it is direct about are both measured here:
+          // this account holds a file item, and the server's answer carried no
+          // usage figure. What is merely inferred — WHY the figure is missing — is
+          // capped in the detail rather than by the evidence, because a `degraded`
+          // claim on proxy evidence caps to `undetermined` and this finding would
+          // then report a measured bookkeeping gap as "could not tell".
+          evidence: EVIDENCE_DIRECT,
+        }),
+      )
+    } else if (census === 'none') {
+      findings.push(
+        diagnosticFinding({
+          code: safeConstant('ACCOUNT_SPACE_NOTHING_TO_REPORT'),
+          title: 'There is no file usage to report for this account yet',
+          detail:
+            'The read completed and the server carried no figure, and this account holds no file — so there is nothing for it to have a figure about. FILE_UPLOAD_BYTES_USED comes into existence on the first successful upload and not before. This is the ordinary state of an account that has never uploaded anything, it is reported here only so the empty rows above are not mistaken for a failed read, and it is not a fault in the deployment, the session or the files lane.',
+          verdict: 'informational',
+          evidence: EVIDENCE_DIRECT,
+        }),
+      )
+    } else {
+      findings.push(
+        diagnosticFinding({
+          code: safeConstant('ACCOUNT_SPACE_FIGURE_UNEXPLAINED'),
+          title: 'The server carried no space figure, and whether that is expected is not established',
+          detail:
+            'The read completed and carried nothing. Whether that is ordinary depends on whether this account has ever uploaded a file, and this client cannot say: its item collection has not finished loading, so an empty file list means "not read yet" rather than "none". Re-run these diagnostics once the app has finished loading and this resolves itself into one of the two answers. It is left undetermined rather than guessed because guessing the quiet one is how a real loss of upload bookkeeping would be reported as nothing at all.',
+          verdict: 'undetermined',
+          evidence: EVIDENCE_ABSENT,
+        }),
+      )
+    }
   }
 
   // `not-attempted` EXPLICITLY, never an absent field. Absent means the caller did
@@ -992,7 +1173,7 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
       label: safeConstant('Room for a file upload'),
       value: state === undefined ? safePresence(undefined) : FILE_QUOTA_VALUE[state],
       ...absentOr(state, exhausted ? 'broken' : state === 'nearly-full' ? 'degraded' : 'healthy'),
-      note: 'The one verdict about the figures in the Space block above. What breaks when this fails: the files server refuses new uploads for this account, with existing files still readable and note syncing entirely unaffected — so the symptom is attachments failing and nothing else, which is why it is so often chased on the transport first. An allowance of nothing ("no allowance granted") refuses every upload and is reported as broken rather than as an absent limit.',
+      note: 'The one verdict about the figures in the Space block above. What breaks when this fails: the files server refuses new uploads for this account, with existing files still readable and note syncing entirely unaffected — so the symptom is attachments failing and nothing else, which is why it is so often chased on the transport first. An allowance of nothing ("no allowance granted") refuses every upload and is reported as broken rather than as an absent limit. AN UNREPORTED LIMIT IS NOT AN ABSENT ALLOWANCE, and this row stays undetermined rather than alarming because of it: when the per-account limit setting is missing the server falls back to the plan default when it mints the upload token, so uploads still go through at a figure this client is never told. Nothing short of attempting an upload establishes the headroom in that state, and this row does not pretend otherwise.',
     }),
     diagnosticRow({
       label: safeConstant('Live sync for this account'),
@@ -1001,7 +1182,7 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
           ? safeState(liveSyncFlag, 'enabled', 'disabled')
           : liveSyncRefused
             ? safeConstant('disabled (refused on the sync lane)')
-            : safePresence(undefined),
+            : NOT_PUBLISHED,
       verdict:
         liveSyncFlag === true ? 'healthy' : liveSyncFlag === false || liveSyncRefused ? 'broken' : 'undetermined',
       evidence: liveSyncFlag !== undefined || liveSyncRefused ? EVIDENCE_DIRECT : EVIDENCE_ABSENT,
@@ -1009,7 +1190,10 @@ function buildRequirementsBlock(observed: AccountObservations, reading: AdminRea
     }),
     diagnosticRow({
       label: safeConstant('Collaboration permitted for this account'),
-      value: safeState(observed.collaborationEnabledForAccount, 'enabled', 'disabled'),
+      value:
+        observed.collaborationEnabledForAccount === undefined
+          ? NOT_PUBLISHED
+          : safeState(observed.collaborationEnabledForAccount, 'enabled', 'disabled'),
       ...absentOr(
         observed.collaborationEnabledForAccount,
         observed.collaborationEnabledForAccount === true ? 'healthy' : 'broken',
@@ -1135,6 +1319,17 @@ const REPORT_ACCOUNT_FLAGS = reportLine(
 )
 
 /**
+ * The file census is a STATE and the report says so, because the obvious next
+ * edit is to make it a number. How many files one person keeps is a fact about
+ * that person, the diagnosis needs only "any or none", and a withholding that is
+ * written down is one a later reader has to argue with rather than overlook.
+ */
+const REPORT_FILE_CENSUS = reportLine(
+  safeConstant('Uploaded files'),
+  safeConstant('reported as present, none or not loaded; never counted and never named'),
+)
+
+/**
  * Build the Account, space & requirements section.
  *
  * Pure and synchronous. Every input is optional and an absent one produces rows
@@ -1169,6 +1364,6 @@ export function buildAccountSection(input: AccountSectionInput = {}): SectionMod
   return buildSectionModel({
     id: 'account',
     blocks,
-    extraReportLines: [REPORT_NO_IDENTIFIERS, REPORT_BYTES_REDUCED, REPORT_ACCOUNT_FLAGS],
+    extraReportLines: [REPORT_NO_IDENTIFIERS, REPORT_BYTES_REDUCED, REPORT_FILE_CENSUS, REPORT_ACCOUNT_FLAGS],
   })
 }

@@ -178,6 +178,24 @@ export function safeConstant<T extends string>(text: T & (string extends T ? nev
   return mint(text)
 }
 
+/**
+ * What a row prints when the FIELD it reports has no producer at all — as opposed
+ * to a field that has one and did not report this time.
+ *
+ * *** THE DIFFERENCE AN OPERATOR ACTUALLY READS. *** "not reported" is the right
+ * word for a reading that could have arrived and did not, and it invites exactly
+ * one question: why not? On a row whose field nothing in the system emits, that
+ * question has no answer and the operator was sent looking for a defect in a pane
+ * that was working correctly — which is the complaint that produced this constant.
+ * Saying so in the value costs one line and closes the question in place.
+ *
+ * Use it ONLY where the absence is structural and permanent until something is
+ * built. A field that is merely absent on this run must keep "not reported": a row
+ * that claims nothing can ever report it, when something can, is the same lie in
+ * the other direction.
+ */
+export const NOT_PUBLISHED: SafeValue = mint('no endpoint publishes this')
+
 /** `yes` / `no` / `not reported`. Three-valued because absent is not false. */
 export function safeYesNo(value: boolean | undefined): SafeValue {
   return mint(value === true ? 'yes' : value === false ? 'no' : NOT_REPORTED)

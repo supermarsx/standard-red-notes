@@ -126,14 +126,34 @@ describe('buildEnvironmentSection with nothing reported', () => {
     const model = buildEnvironmentSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(22)
+    // Three runtime rows collapsed into one, so the count fell by two.
+    expect(rows).toHaveLength(20)
     for (const row of rows) {
-      expect({
+      expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
-        kind: row.evidence.kind,
-        verdict: row.verdict,
-        value: String(row.value),
-      }).toEqual({ label: String(row.label), kind: 'absent', verdict: 'undetermined', value: 'not reported' })
+        kind: 'absent',
+        verdict: 'undetermined',
+      })
+    }
+
+    // *** THE VALUE SPLITS IN TWO, AND BOTH HALVES ARE PINNED. ***
+    // A field that could have been reported and was not says "not reported"; a
+    // field NOTHING in the system emits says so, because rendering the second as
+    // the first sent an operator hunting a defect in a working pane. Asserting
+    // only one half would let a build print the structural wording everywhere.
+    const structural = [
+      'Time since this process started',
+      'Why this transport was chosen',
+      'Effective cookie and session-mode flags',
+    ]
+    for (const row of rows) {
+      expect({ label: String(row.label), value: String(row.value) }).toEqual({
+        label: String(row.label),
+        value: structural.includes(String(row.label)) ? 'no endpoint publishes this' : 'not reported',
+      })
+    }
+    for (const label of structural) {
+      expect(rows.map((row) => String(row.label))).toContain(label)
     }
   })
 
@@ -663,10 +683,14 @@ describe('why this transport was chosen', () => {
   it('reports undetermined rather than guessing when the payload does not carry it', () => {
     const row = rowOf(buildEnvironmentSection({ topology: topology() }), 'Why this transport was chosen')
 
-    expect(row.value).toBe('not reported')
+    // The wording says nothing publishes it — traced to a shell variable that is
+    // never exported — while the verdict and the evidence are unchanged, so the
+    // row still claims nothing about which condition declined gRPC.
+    expect(row.value).toBe('no endpoint publishes this')
     expect(row.verdict).toBe('undetermined')
     expect(row.evidence.kind).toBe('absent')
     expect(row.note).toContain('the reason is undetermined')
+    expect(row.note).toContain('never EXPORTS that variable')
   })
 
   it('refuses a decision code this build does not recognise instead of echoing it', () => {

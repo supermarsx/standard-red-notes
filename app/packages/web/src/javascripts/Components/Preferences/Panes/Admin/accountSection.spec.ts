@@ -7,6 +7,7 @@ import {
   describeSubscription,
   FILE_QUOTA_NEAR_FRACTION,
   fileQuotaFraction,
+  SPACE_FIGURE_SOURCES,
   SUBSCRIPTION_PLANS,
   unconsumableOperationCount,
   unrecognisedRoleCount,
@@ -175,6 +176,11 @@ describe('buildAccountSection never discloses an account identifier', () => {
         roles: ['ADMIN_USER', PLANTED_EMAIL, PLANTED_UUID, PLANTED_IP],
         subscriptionPlan: PLANTED_UUID,
         serverOperations: ['SYNC_ITEMS', PLANTED_EMAIL, PLANTED_DEVICE_ID],
+        // The newest wide `string` member, added to the sweep in the same change
+        // that added the field: a closed-set member that is not planted here is a
+        // path the privacy suite does not cover, and every one of this pane's four
+        // leaks got in through a field nobody had swept.
+        fileCensus: PLANTED_SESSION_UUID,
       }),
       ...extras,
     } as unknown as AccountObservations
@@ -245,6 +251,38 @@ describe('buildAccountSection never discloses an account identifier', () => {
     expect(rowOf(model, 'Role: Full user').value).toBe('not held')
   })
 
+  /**
+   * *** FIVE EMPTY ROWS COLLAPSE TO ONE, AND ONLY WHEN THEY ARE ALL EMPTY. ***
+   *
+   * Both arms are asserted, because a collapse that fired whenever it felt like it
+   * would hide a real role reading, and one that never fired would leave the five
+   * "not reported" rows the operator read as five failures.
+   */
+  it('says in one row that nothing produces the role names, rather than five empty rows', () => {
+    const model = buildAccountSection({
+      observations: { signedIn: true },
+      adminAccess: { payloadRead: true },
+    })
+    const labels = allRows(model).map((row) => String(row.label))
+
+    expect(rowOf(model, 'Roles held by this account').value).toBe('not exposed by any client surface')
+    expect(rowOf(model, 'Roles held by this account').verdict).toBe('undetermined')
+    expect(rowOf(model, 'Roles held by this account').claimed).toBe('informational')
+    expect(labels).not.toContain('Role: Admin user')
+    expect(labels).not.toContain(UNRECOGNISED_ROLES_LABEL)
+    // The row that DOES ask the server is untouched by the collapse.
+    expect(rowOf(model, 'Admin role, as the server answered').verdict).toBe('healthy')
+  })
+
+  it('renders the per-role rows the moment a caller supplies the names', () => {
+    const model = healthySection()
+    const labels = allRows(model).map((row) => String(row.label))
+
+    expect(labels).not.toContain('Roles held by this account')
+    expect(rowOf(model, 'Role: Admin user').value).toBe('held')
+    expect(rowOf(model, UNRECOGNISED_ROLES_LABEL).value).toBe('0')
+  })
+
   it('refuses a plan name outside the three it knows instead of echoing it', () => {
     expect(rowOf(plantedSection(), 'Subscription plan').value).toBe('other (unrecognised)')
   })
@@ -267,6 +305,7 @@ describe('buildAccountSection never discloses an account identifier', () => {
       '- Account identifiers: never collected by this section: e-mail address, account id, session id, device id, client IP address and subscription id',
     )
     expect(report).toContain('- Byte figures: reduced to closed buckets and whole megabytes before they are reported')
+    expect(report).toContain('- Uploaded files: reported as present, none or not loaded; never counted and never named')
     expect(report).toContain(
       '- Per-account feature flags: not reported by any server build; only a refusal observed on the sync lane evidences them',
     )
@@ -510,22 +549,43 @@ describe('the account file allowance', () => {
    * "not read yet", and they are kept apart here by a closed value rather than by
    * the reader's judgement.
    */
-  const emptySpace = (source: AccountObservations['spaceFigureSource']): SectionModel =>
+  const emptySpace = (
+    source: AccountObservations['spaceFigureSource'],
+    census?: AccountObservations['fileCensus'],
+  ): SectionModel =>
     buildAccountSection({
       observations: healthyObservations({
         fileUploadBytesUsed: undefined,
         fileUploadBytesLimit: undefined,
         ...(source === undefined ? {} : { spaceFigureSource: source }),
+        ...(census === undefined ? {} : { fileCensus: census }),
       }),
     })
 
-  it('reports a FAILED space read as broken, because the emptiness is then the symptom', () => {
-    const model = emptySpace('read-and-failed')
+  /**
+   * *** THE CONTROL CASE. A THROWN READ IS STILL BROKEN. ***
+   *
+   * The three-way split below exists to stop a missing figure being rated as a
+   * failure, and the way that goes wrong is by taking the failure with it. This
+   * test is the proof it did not: it asserts `broken` on the one state that is a
+   * real failure, and it asserts it against every arm of the new split — the
+   * census is set to `none`, the arm that is deliberately the quietest, so a
+   * mutation that let the census decide the verdict for a THROWN read would turn
+   * this test red rather than passing on a technicality.
+   */
+  it('still reports a THROWN space read as broken, even for an account with no files at all', () => {
+    const model = emptySpace('read-threw', 'none')
 
-    // Precondition: the rows really are empty, so this is the case under test.
+    // Preconditions, so none of this can go vacuous: the rows really are empty,
+    // the source really is the thrown one, and the census really was read and
+    // really says the quietest thing it can say.
     expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
+    expect(rowOf(model, 'Server file bytes used, whole MB').value).toBe('not reported')
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('none')
+
     expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.verdict).toBe('broken')
     expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.detail).toContain('read FAILED')
+    expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.detail).toContain('No answer arrived at all')
     // *** AND IT DOES NOT ATTRIBUTE ITSELF TO THE FILES LANE. *** These figures are
     // per-account settings served by auth; a deployment whose transfers are entirely
     // broken reports them perfectly. The first draft of this finding said the
@@ -535,7 +595,95 @@ describe('the account file allowance', () => {
       'Do not read this as evidence about attachments',
     )
     expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOT_READ')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOTHING_TO_REPORT')
     expect(model.worstVerdict).toBe('broken')
+  })
+
+  it('reports a thrown read as broken whatever the census says, including with files present', () => {
+    for (const census of ['present', 'none', 'not-loaded'] as const) {
+      const model = emptySpace('read-threw', census)
+
+      expect(rowOf(model, 'Uploaded files in this account').value).toBe(census)
+      expect(findingOf(model, 'ACCOUNT_SPACE_READ_FAILED')?.verdict).toBe('broken')
+      expect(model.worstVerdict).toBe('broken')
+    }
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* An ANSWER carrying no figure is three different things                   */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE FALSE ALARM THIS SPLIT REMOVES, STATED AS ITS OWN TEST. ***
+   *
+   * A brand-new account that has simply never uploaded a file read `broken`, and
+   * that is the decisive case: FILE_UPLOAD_BYTES_USED does not exist until an
+   * upload succeeds, auth answers 400 for the missing row, and the client maps 400
+   * to `undefined` WITHOUT throwing — so the commonest reading in the fleet was
+   * rated as a broken deployment. The assertion is on the whole section's verdict,
+   * not just the finding, because that single finding was what dragged the section.
+   */
+  it('reports an account that has simply never uploaded a file as informational, not broken', () => {
+    const model = emptySpace('read-carried-no-figure', 'none')
+
+    expect(rowOf(model, 'Server file allowance used').value).toBe('not reported')
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('none')
+
+    expect(findingOf(model, 'ACCOUNT_SPACE_NOTHING_TO_REPORT')?.verdict).toBe('informational')
+    expect(findingOf(model, 'ACCOUNT_SPACE_NOTHING_TO_REPORT')?.detail).toContain('this account holds no file')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_USAGE_UNRECORDED')
+    expect(model.worstVerdict).not.toBe('broken')
+    expect(model.worstVerdict).not.toBe('degraded')
+  })
+
+  it('reports a missing figure for an account that HAS files as a degradation of the bookkeeping', () => {
+    const model = emptySpace('read-carried-no-figure', 'present')
+
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('present')
+    expect(findingOf(model, 'ACCOUNT_SPACE_USAGE_UNRECORDED')?.verdict).toBe('degraded')
+    expect(findingOf(model, 'ACCOUNT_SPACE_USAGE_UNRECORDED')?.detail).toContain('bookkeeping')
+    // DIRECT: both halves of the claim are measured here — files exist, and the
+    // answer carried no figure. The cause is capped in the detail, which is
+    // asserted so the cap cannot be dropped silently.
+    expect(findingOf(model, 'ACCOUNT_SPACE_USAGE_UNRECORDED')?.evidence.kind).toBe('direct')
+    expect(findingOf(model, 'ACCOUNT_SPACE_USAGE_UNRECORDED')?.detail).toContain('is not established')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOTHING_TO_REPORT')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
+    expect(model.worstVerdict).toBe('degraded')
+  })
+
+  /**
+   * *** AN UNLOADED COLLECTION IS NOT AN EMPTY ONE. ***
+   *
+   * `items` answers `[]` for the whole window between launch and the cold load
+   * finishing, so reading that as "this account has no files" would report a real
+   * loss of upload bookkeeping as "nothing to report" on every freshly opened app.
+   * It gets its own state and its own verdict, and the verdict is NOT the quiet one.
+   */
+  it('claims neither answer while the item collection has not finished loading', () => {
+    const model = emptySpace('read-carried-no-figure', 'not-loaded')
+
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('not-loaded')
+    expect(findingOf(model, 'ACCOUNT_SPACE_FIGURE_UNEXPLAINED')?.verdict).toBe('undetermined')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOTHING_TO_REPORT')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_USAGE_UNRECORDED')
+  })
+
+  it('claims neither answer when the caller reported no census at all', () => {
+    const model = emptySpace('read-carried-no-figure')
+
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('not reported')
+    expect(findingOf(model, 'ACCOUNT_SPACE_FIGURE_UNEXPLAINED')?.verdict).toBe('undetermined')
+    expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOTHING_TO_REPORT')
+  })
+
+  it('refuses a census value outside its closed set rather than echoing it', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ fileCensus: 'plenty-of-them@somewhere.test' }),
+    })
+
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('other (unrecognised)')
   })
 
   it('reports an unattempted space read as the caller gap it is, not as a quiet deployment', () => {
@@ -563,13 +711,26 @@ describe('the account file allowance', () => {
   })
 
   it('says nothing about the space source when the figures DID arrive', () => {
-    for (const source of ['read-and-failed', 'not-attempted'] as const) {
+    for (const source of SPACE_FIGURE_SOURCES) {
       const model = buildAccountSection({ observations: healthyObservations({ spaceFigureSource: source }) })
 
       expect(rowOf(model, 'Server file allowance used').value).toBe('0-25%')
       expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_READ_FAILED')
       expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOT_READ')
+      expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_USAGE_UNRECORDED')
+      expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_NOTHING_TO_REPORT')
+      expect(codesOf(model)).not.toContain('ACCOUNT_SPACE_FIGURE_UNEXPLAINED')
     }
+  })
+
+  /**
+   * The loop above is only worth anything if it covers every source. Iterating the
+   * exported tuple rather than a hand-written list is what keeps it covering them:
+   * a member added to the union and not to a literal array would leave the new
+   * state untested while the suite stayed green.
+   */
+  it('covers every declared space-figure source in the loop above', () => {
+    expect([...SPACE_FIGURE_SOURCES].sort()).toEqual(['not-attempted', 'read-carried-no-figure', 'read-threw'])
   })
 
   it('does not read an unreported used figure as zero', () => {
@@ -669,8 +830,21 @@ describe('the account file allowance', () => {
   it('carries no verdict anywhere in the Space block, because the verdict is a requirement row', () => {
     const space = healthySection().blocks.find((block) => String(block.heading) === 'Space')
 
-    expect(space?.rows.length).toBe(5)
+    expect(space?.rows.length).toBe(6)
     for (const row of space?.rows ?? []) {
+      // The census row is the one Space row that can be absent on a healthy
+      // model — `healthyObservations` supplies no `fileCensus` — and `absentOr`
+      // claims nothing at all for an absent field rather than claiming the tone
+      // it would carry if present. Still no row here claims a verdict, which is
+      // what this test is about; the census row claims less, not more.
+      if (String(row.label) === 'Uploaded files in this account') {
+        expect({ label: String(row.label), claimed: row.claimed, verdict: row.verdict }).toEqual({
+          label: String(row.label),
+          claimed: 'undetermined',
+          verdict: 'undetermined',
+        })
+        continue
+      }
       expect({ label: String(row.label), verdict: row.verdict }).toEqual({
         label: String(row.label),
         verdict: 'informational',
@@ -759,7 +933,7 @@ describe('the general requirements block', () => {
 
       expect({ reason, value: String(row.value), verdict: row.verdict, kind: row.evidence.kind }).toEqual({
         reason,
-        value: 'not reported',
+        value: 'no endpoint publishes this',
         verdict: 'undetermined',
         kind: 'absent',
       })
@@ -780,7 +954,12 @@ describe('the general requirements block', () => {
   it('asks for the collaboration flag and reads "not reported" until a server sends it', () => {
     const asked = rowOf(healthySection(), 'Collaboration permitted for this account')
 
-    expect(asked.value).toBe('not reported')
+    // The VALUE says plainly that nothing produces it, rather than "not reported",
+    // which reads as a check that failed. The verdict and the evidence are
+    // unchanged — the row still claims nothing — and both are asserted here so the
+    // wording change cannot be mistaken for the row having started to claim.
+    expect(asked.value).toBe('no endpoint publishes this')
+    expect(asked.value).not.toBe('not reported')
     expect(asked.verdict).toBe('undetermined')
     expect(asked.evidence.kind).toBe('absent')
     expect(asked.note).toContain('asked for and not yet sent')
@@ -851,17 +1030,23 @@ describe('roles and subscription', () => {
 
   it('does not read an unreported role list as "no roles"', () => {
     const model = buildAccountSection({ observations: healthyObservations({ roles: undefined }) })
+    const labels = allRows(model).map((row) => String(row.label))
 
     expect(unrecognisedRoleCount(undefined)).toBeUndefined()
+    // The per-role rows are not rendered at all rather than rendered as four
+    // "not reported" ones, and the collapsed row that replaces them says why
+    // instead of reading like a failed read. Neither renders as "not held".
     for (const label of ['Role: Admin user', 'Role: Full user', 'Role: Core user', 'Role: Vaults user']) {
-      const row = rowOf(model, label)
-      expect({ label, value: String(row.value), kind: row.evidence.kind }).toEqual({
-        label,
-        value: 'not reported',
-        kind: 'absent',
-      })
+      expect(labels).not.toContain(label)
     }
-    expect(rowOf(model, UNRECOGNISED_ROLES_LABEL).value).toBe('not reported')
+    expect(labels).not.toContain(UNRECOGNISED_ROLES_LABEL)
+
+    const collapsed = rowOf(model, 'Roles held by this account')
+    expect({ value: String(collapsed.value), kind: collapsed.evidence.kind, verdict: collapsed.verdict }).toEqual({
+      value: 'not exposed by any client surface',
+      kind: 'absent',
+      verdict: 'undetermined',
+    })
   })
 
   it('separates the five subscription states', () => {
@@ -923,7 +1108,7 @@ describe('buildAccountSection with nothing observed', () => {
     const model = buildAccountSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(24)
+    expect(rows).toHaveLength(21)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -947,11 +1132,37 @@ describe('buildAccountSection with nothing observed', () => {
       'Subscription',
       'Server file allowance used',
       'Room for a file upload',
-      'Live sync for this account',
+      'Uploaded files in this account',
       'A session the server accepts',
     ]) {
       expect({ label, value: String(rowOf(model, label).value) }).toEqual({ label, value: 'not reported' })
     }
+  })
+
+  /**
+   * *** "not reported" AND "nothing produces this" ARE DIFFERENT ANSWERS. ***
+   *
+   * The rows above describe facts that could have arrived and did not, and "not
+   * reported" is the honest word for them. The rows below describe fields NOTHING
+   * in the system emits, and rendering those as "not reported" sent an operator
+   * looking for a defect in a pane that was working — which is the complaint this
+   * distinction answers. Both halves are asserted, because a build that printed
+   * the structural wording everywhere would be the same mistake inverted.
+   */
+  it('says plainly where no producer exists, rather than reusing "not reported"', () => {
+    const model = buildAccountSection()
+
+    for (const label of [
+      'Roles held by this account',
+      'Live sync for this account',
+      'Collaboration permitted for this account',
+    ]) {
+      expect({ label, value: String(rowOf(model, label).value) }).not.toEqual({ label, value: 'not reported' })
+    }
+
+    expect(String(rowOf(model, 'Live sync for this account').value)).toBe('no endpoint publishes this')
+    expect(String(rowOf(model, 'Collaboration permitted for this account').value)).toBe('no endpoint publishes this')
+    expect(String(rowOf(model, 'Roles held by this account').value)).toBe('not exposed by any client surface')
   })
 
   it('builds the three blocks it always builds, in order, and names itself once', () => {

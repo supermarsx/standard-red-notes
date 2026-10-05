@@ -146,14 +146,30 @@ describe('buildBackendSection with nothing reported', () => {
     const model = buildBackendSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(25)
+    // Five unproduced durable-store rows collapsed into one, so the count fell by four.
+    expect(rows).toHaveLength(21)
     for (const row of rows) {
-      expect({
+      expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
-        kind: row.evidence.kind,
-        verdict: row.verdict,
-        value: String(row.value),
-      }).toEqual({ label: String(row.label), kind: 'absent', verdict: 'undetermined', value: 'not reported' })
+        kind: 'absent',
+        verdict: 'undetermined',
+      })
+    }
+
+    // *** THE VALUE SPLITS IN TWO, AND BOTH HALVES ARE PINNED. *** A field that
+    // could have been reported and was not says "not reported"; a field NOTHING
+    // in the system emits says so instead, because rendering the second as the
+    // first is what an operator read as a column of failed checks. Asserting only
+    // one half would let a build print the structural wording everywhere.
+    const structural = ['Connection, schema, pool and round trips', 'Queue separation']
+    for (const row of rows) {
+      expect({ label: String(row.label), value: String(row.value) }).toEqual({
+        label: String(row.label),
+        value: structural.includes(String(row.label)) ? 'no endpoint publishes this' : 'not reported',
+      })
+    }
+    for (const label of structural) {
+      expect(rows.map((row) => String(row.label))).toContain(label)
     }
   })
 
@@ -282,7 +298,13 @@ describe('a zero counter means measured none, an absent one means did not ask', 
     const quiet = buildBackendSection({ datastore: { poolInUse: 4, poolSize: 10 } })
     const saturated = buildBackendSection({ datastore: { poolInUse: 19, poolSize: 20 } })
 
-    expect(rowOf(neither, 'Connection pool in use').value).toBe('not reported')
+    // Nothing reported at all: the five unproduced rows collapse into one line
+    // rather than a column of "not reported", so the pool row is not rendered.
+    expect(allRows(neither).map((row) => String(row.label))).not.toContain('Connection pool in use')
+    expect(rowOf(neither, 'Connection, schema, pool and round trips').value).toBe('no endpoint publishes this')
+    // ONE HALF REPORTED IS STILL REPORTED. The collapse must not swallow a row
+    // whose field DID arrive and could not be read on its own — gating this on
+    // the parsed `poolReported` rather than on the raw fields would have.
     expect(rowOf(half, 'Connection pool in use').value).toBe('not reported')
     expect(rowOf(half, 'Connection pool in use').evidence.kind).toBe('absent')
     expect(rowOf(quiet, 'Connection pool in use').value).toBe('4 of 10')
@@ -354,7 +376,7 @@ describe('the durable store', () => {
   it('distinguishes a connected data source from a handle that was never connected', () => {
     const connected = buildBackendSection({ datastore: { connectionState: 'connected' } })
     const handle = buildBackendSection({ datastore: { connectionState: 'handle-only' } })
-    const unreported = buildBackendSection()
+    const unreported = buildBackendSection({ datastore: { readRoundTripMs: 12 } })
 
     expect(rowOf(connected, 'Database connection state').value).toBe('connected')
     expect(rowOf(connected, 'Database connection state').verdict).toBe('healthy')
@@ -364,8 +386,13 @@ describe('the durable store', () => {
     expect(rowOf(handle, 'Database connection state').verdict).toBe('broken')
     expect(findingOf(handle, 'DATABASE_HANDLE_NOT_CONNECTED')?.remedy?.effort).toBe('rebuild')
 
+    // Reported ALONGSIDE another datastore field, so the row is rendered and the
+    // "absent is not a state" reading is the thing under test rather than the
+    // collapse. With nothing reported at all the five rows become one line, which
+    // the pool test above pins.
     expect(rowOf(unreported, 'Database connection state').value).toBe('not reported')
     expect(rowOf(unreported, 'Database connection state').evidence.kind).toBe('absent')
+    expect(allRows(buildBackendSection()).map((row) => String(row.label))).not.toContain('Database connection state')
   })
 
   it('refuses a connection state this build does not recognise rather than printing it', () => {
@@ -988,7 +1015,11 @@ describe('event delivery and queues', () => {
     expect(rowOf(own, 'Queue separation').verdict).toBe('informational')
     expect(codesOf(own)).not.toContain('EVENT_QUEUE_SHARED')
 
-    expect(rowOf(unreported, 'Queue separation').value).toBe('not reported')
+    // Nothing produces this on any deployment — and the pane cannot derive it
+    // either, because the presence map carries no prefixed queue key — so the row
+    // says that rather than "not reported", while still claiming nothing.
+    expect(rowOf(unreported, 'Queue separation').value).toBe('no endpoint publishes this')
+    expect(rowOf(unreported, 'Queue separation').value).not.toBe('not reported')
     expect(rowOf(unreported, 'Queue separation').evidence.kind).toBe('absent')
     expect(codesOf(unreported)).not.toContain('EVENT_QUEUE_SHARED')
   })

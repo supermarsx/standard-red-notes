@@ -1,5 +1,6 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useState } from 'react'
-import { isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
+import { ContentType, isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
+import { convertTimestampToMilliseconds } from '@standardnotes/utils'
 
 import { WebApplication } from '@/Application/WebApplication'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
@@ -66,9 +67,10 @@ type Props = {
  * One reading of this account's server-side space figures.
  *
  * `source` is the closed value the Account section needs in order to tell a read
- * that failed from one nobody attempted; the two byte counts are present only when
- * the server carried them. Both figures absent with `read-and-failed` is the honest
- * description of a request that was made and produced nothing.
+ * that THREW from one that answered carrying nothing from one nobody attempted;
+ * the two byte counts are present only when the server carried them. Both figures
+ * absent with `read-carried-no-figure` is the ordinary description of an account
+ * that has never uploaded a file, and is not a fault.
  */
 type AccountSpaceReading = {
   source: SpaceFigureSource
@@ -411,12 +413,34 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * Files preferences pane has always used it. So the block can report, and does.
    *
    * THREE OUTCOMES, kept apart, because the whole point of the Space block's
-   * finding is that two kinds of empty must not render alike:
+   * finding is that the kinds of empty must not render alike:
    *   - figures arrive          -> the rows carry them, no finding
-   *   - the read THREW          -> `read-and-failed`, and the emptiness is a symptom
-   *   - the read answered none  -> `read-and-failed` as well: the request succeeded
-   *     and the server carried no usage figure, which is still a read that did not
-   *     produce one, and is emphatically not "nobody asked".
+   *   - the read THREW          -> `read-threw`, and the emptiness is a symptom
+   *   - the read ANSWERED none  -> `read-carried-no-figure`, which is an ordinary
+   *     state on this fork and emphatically not a failure.
+   *
+   * *** THE THIRD CASE USED TO REPORT AS THE SECOND, AND THAT WAS A FALSE ALARM
+   * ON EVERY ACCOUNT THAT HAD NEVER UPLOADED A FILE. *** The previous version of
+   * this comment argued the merge was correct — "still a read that did not produce
+   * one" — and the Space block rated it `broken`. It is not one read with two
+   * finishes; it is two different answers:
+   *
+   *   - `FILE_UPLOAD_BYTES_USED` has no row until an upload succeeds. Auth's
+   *     `GetSubscriptionSetting` fails for a missing row, the controller answers
+   *     400, and `SettingsGateway` maps 400 to `undefined` WITHOUT throwing.
+   *   - With no subscription row at all the same controller answers
+   *     `200 {success: true, setting: undefined}` deliberately, so that "clients
+   *     treat it as 'no usage data' rather than surfacing a request error".
+   *
+   * Both of those are an ANSWER. Only a rejected promise is not, and only that is
+   * reported as a failed read now.
+   *
+   * The two settings are also read INDEPENDENTLY rather than in sequence. They
+   * were awaited one after the other in a single `try`, so a throw on the usage
+   * read discarded the allowance read that had not happened yet — one failure
+   * erasing an unrelated figure, and making "both absent" look like one verdict
+   * about both. `allSettled` keeps each answer with its own outcome; the source is
+   * the WORST of the two, because a throw anywhere is a failed read.
    *
    * Only bytes cross this boundary: each setting is parsed to a finite
    * non-negative number and the string is discarded, so no server text can reach a
@@ -426,34 +450,42 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   useEffect(() => {
     let cancelled = false
 
-    const readBytes = async (name: string): Promise<number | undefined> => {
-      const raw = await application.settings.getSubscriptionSetting(SettingName.create(name).getValue())
+    /**
+     * `async`, and the setting NAME is resolved inside it rather than at the call
+     * site, so every throw on this path — including one from `SettingName` itself
+     * — becomes a rejected promise instead of an exception thrown out of the
+     * effect. Reading `SettingName.NAMES` in the argument list took the whole tab
+     * down on a host where that namespace was not available, which is the shape
+     * of defect this pane least affords: the screen that explains a broken
+     * deployment must not be the screen that cannot render on one.
+     */
+    const readBytes = async (pick: 'FileUploadBytesUsed' | 'FileUploadBytesLimit'): Promise<number | undefined> => {
+      const name = SettingName.create(SettingName.NAMES[pick]).getValue()
+      const raw = await application.settings.getSubscriptionSetting(name)
       const parsed = typeof raw === 'string' ? Number.parseFloat(raw) : Number.NaN
 
       return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
     }
 
-    void (async (): Promise<AccountSpaceReading> => {
-      const used = await readBytes(SettingName.NAMES.FileUploadBytesUsed)
-      const limit = await readBytes(SettingName.NAMES.FileUploadBytesLimit)
+    const figureOf = (settled: PromiseSettledResult<number | undefined>): number | undefined => {
+      return settled.status === 'fulfilled' ? settled.value : undefined
+    }
 
-      return {
-        source: 'read-and-failed',
+    void Promise.allSettled([readBytes('FileUploadBytesUsed'), readBytes('FileUploadBytesLimit')]).then((settled) => {
+      if (cancelled) {
+        return
+      }
+
+      const used = figureOf(settled[0])
+      const limit = figureOf(settled[1])
+      const threw = settled.some((result) => result.status === 'rejected')
+
+      setSpaceReading({
+        source: threw ? 'read-threw' : 'read-carried-no-figure',
         ...(used === undefined ? {} : { used }),
         ...(limit === undefined ? {} : { limit }),
-      }
-    })().then(
-      (reading) => {
-        if (!cancelled) {
-          setSpaceReading(reading)
-        }
-      },
-      () => {
-        if (!cancelled) {
-          setSpaceReading({ source: 'read-and-failed' })
-        }
-      },
-    )
+      })
+    })
 
     return () => {
       cancelled = true
@@ -671,7 +703,21 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * teardown — reports NOTHING rather than taking the pane down or, worse,
    * reporting a `false` it never measured.
    *
-   * Four fields the shape declares are deliberately NOT supplied, and their rows
+   * *** ONE OF THESE OMISSIONS WAS WRONG, AND IS NOW WIRED. ***
+   * `subscriptionEndsInSeconds` was left out on the recorded ground that
+   * "`Subscription.endsAt` is a bare `number` in every type in this tree and
+   * nothing establishes whether it is in milliseconds or microseconds". Something
+   * does: `SubscriptionManager.userSubscriptionExpirationDate` — this repo's own
+   * single reader of that field — converts it with `convertTimestampToMilliseconds`,
+   * which decides by DIGIT COUNT and handles seconds, milliseconds and microseconds
+   * alike. The ambiguity the omission was defending against is the one thing that
+   * helper exists to resolve, so the duration is computed with the same call the
+   * rest of the app uses rather than with a second guess about the unit. It throws
+   * on a precision it does not recognise, which is why the call sits INSIDE
+   * `observed` — an unrecognisable timestamp then reports nothing instead of a
+   * fabricated duration, which is the behaviour the omission was reaching for.
+   *
+   * Three fields the shape declares are deliberately NOT supplied, and their rows
    * say so on screen:
    *   - `roles`: no client surface exposes the role NAMES, only `hasRole()` for
    *     one name at a time, and a list assembled from four probes of this build's
@@ -679,11 +725,6 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    *     thing that row is for.
    *   - `offlineSubscription`: `hasFirstPartyOfflineSubscription()` is on the snjs
    *     features client and is not exposed through `featuresController`.
-   *   - `subscriptionEndsInSeconds`: `Subscription.endsAt` is a bare `number` in
-   *     every type in this tree and nothing establishes whether it is in
-   *     milliseconds or microseconds. A duration derived from the wrong unit is a
-   *     fabricated reading, so the field is omitted and the expiry row reads "not
-   *     reported" instead of being wrong by a factor of a thousand.
    *   - `liveSyncEnabledForAccount` / `collaborationEnabledForAccount`: no
    *     endpoint lets a client read its own per-account flags. The section's own
    *     header says so and its rows name what they are waiting for.
@@ -700,6 +741,45 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       ...(subscription === undefined
         ? {}
         : { subscriptionPlan: subscription.planName, subscriptionCancelled: subscription.cancelled }),
+      // A DURATION, computed here and never an instant: the row reports how long is
+      // left, and an expiry date in a pasteable report pins this account to a
+      // purchase. `convertTimestampToMilliseconds` is the repo's own reader of this
+      // field and throws on a precision it cannot place, so the whole expression
+      // sits inside `observed` and an unplaceable timestamp reports nothing.
+      ...(subscription === undefined
+        ? {}
+        : (() => {
+            const endsIn = observed(() => (convertTimestampToMilliseconds(subscription.endsAt) - Date.now()) / 1000)
+            return endsIn === undefined || !Number.isFinite(endsIn) ? {} : { subscriptionEndsInSeconds: endsIn }
+          })()),
+      /**
+       * Whether this account holds any FILE, as the Account section's closed
+       * three-state census — the fact that decides whether an absent server usage
+       * figure is a lost bookkeeping write or simply nothing to report.
+       *
+       * *** THE EMPTY LIST IS THE TRAP, AND `isDatabaseLoaded()` IS THE GUARD. ***
+       * `items` answers `[]` for the whole window between launch and the cold load
+       * completing — `Application.launch` sets `launched` BEFORE
+       * `loadDatabasePayloads()` is even started — so a count taken without this
+       * guard reports "this account has no files" on every freshly opened app, and
+       * the Space block would read that as "nothing to report" over a real loss.
+       * `SyncService.isDatabaseLoaded()` flips only after the cold load's own
+       * completeness check, so it is the one signal that separates the two.
+       *
+       * ONE KNOWN GAP, stated rather than papered over: `getItems` is the decrypted
+       * view, and `getAnyItems` — which would also count a file whose key is
+       * missing — is not on `ItemManagerInterface`, so it is not reachable from
+       * here without widening a shared package. An account whose file items cannot
+       * be decrypted therefore reads `none`. The Space block's row says so, and
+       * that account's undecryptable items are a louder signal elsewhere than a
+       * usage figure would be.
+       */
+      fileCensus: observed(() => {
+        if (!application.sync.isDatabaseLoaded()) {
+          return 'not-loaded'
+        }
+        return application.items.getItems(ContentType.TYPES.File).length > 0 ? 'present' : 'none'
+      }),
       // The default is supplied EXPLICITLY, and that is the whole fix for a row
       // that read "not reported" on every deployment where nobody had set a cap.
       // `getPreference` with one argument answers `undefined` for an unset

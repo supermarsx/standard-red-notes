@@ -42,6 +42,11 @@ jest.mock('@standardnotes/snjs', () => ({
     NAMES: { FileUploadBytesUsed: 'FILE_UPLOAD_BYTES_USED', FileUploadBytesLimit: 'FILE_UPLOAD_BYTES_LIMIT' },
     create: (name: string) => ({ getValue: () => ({ name }) }),
   },
+  // The content type the file census counts over. A double that omits it makes
+  // `ContentType.TYPES.File` throw, `observed` swallow the throw, and the census
+  // read "not reported" for a reason that does not exist in production — the same
+  // trap the SettingName double above records.
+  ContentType: { TYPES: { File: 'SN|FileItem' } },
 }))
 
 jest.mock('@standardnotes/ui-services', () => ({
@@ -222,6 +227,11 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
       return name.name === 'FILE_UPLOAD_BYTES_USED' ? '1048576' : '10485760'
     }),
   },
+  // The file census the Space block reads to decide whether an absent usage
+  // figure is a lost bookkeeping write or simply nothing to report. Two surfaces,
+  // because an empty item list means nothing until the cold load has finished.
+  sync: { isDatabaseLoaded: () => true },
+  items: { getItems: () => [] },
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
   ...overrides,
 })
@@ -832,11 +842,21 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
     expect(activePanel().textContent).not.toContain('Calls failed rather than being retried on HTTP')
   })
 
-  /** No producer exists for the runtime view, and its rows must say so. */
-  it('reports the unproduced runtime facts as not reported', async () => {
+  /**
+   * No producer exists for the runtime view, and its rows must say SO — which is
+   * a different sentence from "not reported". The operator read a column of "not
+   * reported" as a column of failed checks and asked why the diagnostics were
+   * incomplete; the answer for these rows is that nothing emits them.
+   */
+  it('says plainly that nothing publishes the runtime facts, rather than "not reported"', async () => {
     await openEnvironment()
 
-    expect(sectionRow('Why this transport was chosen')[1]).toBe('not reported')
+    expect(sectionRow('Why this transport was chosen')[1]).toBe('no endpoint publishes this')
+    expect(sectionRow('Why this transport was chosen')[1]).not.toBe('not reported')
+    expect(sectionRow('Time since this process started')[1]).toBe('no endpoint publishes this')
+    // Three cookie/session-mode rows became one line rather than three blanks.
+    expect(sectionRow('Effective cookie and session-mode flags')[1]).toBe('no endpoint publishes this')
+    expect(activePanel().textContent).not.toContain('Cookie Secure flag')
   })
 
   it('says the server does not report presence rather than showing an empty table', async () => {
@@ -992,22 +1012,65 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     expect(text).not.toContain('does not read this account’s own space figures')
   })
 
-  it('reports a read that answered nothing as a failed read too, and never as a zero', async () => {
+  /**
+   * *** THE FALSE ALARM, END TO END. ***
+   *
+   * An account that has simply never uploaded a file gets a 200 (or a 400 the
+   * client maps to `undefined` without throwing) carrying no usage figure, and
+   * that used to render as "the read FAILED" and take the whole section to broken.
+   * It is now an informational statement of fact, and the section is not broken.
+   */
+  it('reports an answer carrying no figure for a fileless account as nothing to report, not a failure', async () => {
     const text = await openAccount(
       makeApplication({ settings: { getSubscriptionSetting: jest.fn().mockResolvedValue(undefined) } }),
     )
 
-    // A request that succeeded carrying no usage figure is still a read that did not
-    // produce one. What it must never be is a measured zero.
+    // The figures really are absent, and really are not a zero.
     expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
     expect(sectionRow('Server file bytes used, whole MB')[1]).not.toBe('0')
     expect(sectionRow('Room for a file upload')[1]).toBe('not reported')
-    expect(text).toContain('asked for and did not arrive')
+    // The census really was read, and really says the account has no file.
+    expect(sectionRow('Uploaded files in this account')[1]).toBe('none')
+
+    expect(text).toContain('There is no file usage to report for this account yet')
+    expect(text).not.toContain('asked for and did not arrive')
+  })
+
+  it('reports an answer carrying no figure for an account WITH files as a bookkeeping degradation', async () => {
+    const text = await openAccount(
+      makeApplication({
+        settings: { getSubscriptionSetting: jest.fn().mockResolvedValue(undefined) },
+        items: { getItems: () => [{ uuid: 'a-file' }] },
+      }),
+    )
+
+    expect(sectionRow('Uploaded files in this account')[1]).toBe('present')
+    expect(text).toContain('This account has files and the server reports no usage figure for them')
+    expect(text).not.toContain('asked for and did not arrive')
+  })
+
+  /**
+   * *** AN UNLOADED COLLECTION IS NOT AN EMPTY ONE, AT THE WIRING SEAM. ***
+   * `items` answers `[]` for the whole window between launch and the cold load
+   * completing, so the census is gated on `sync.isDatabaseLoaded()` rather than on
+   * the list being empty. Without that gate this case would read "none" and a real
+   * loss of upload bookkeeping would be reported as nothing to report.
+   */
+  it('does not read an unloaded item collection as an account with no files', async () => {
+    const text = await openAccount(
+      makeApplication({ sync: { isDatabaseLoaded: () => false }, items: { getItems: () => [] } }),
+    )
+
+    expect(sectionRow('Uploaded files in this account')[1]).toBe('not-loaded')
+    expect(text).not.toContain('There is no file usage to report for this account yet')
   })
 
   it('does not let an unparseable setting become a byte count', async () => {
     const text = await openAccount(
-      makeApplication({ settings: { getSubscriptionSetting: jest.fn().mockResolvedValue('not a number') } }),
+      makeApplication({
+        settings: { getSubscriptionSetting: jest.fn().mockResolvedValue('not a number') },
+        items: { getItems: () => [{ uuid: 'a-file' }] },
+      }),
     )
 
     expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
@@ -1016,7 +1079,34 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     // a NaN at the row anyway, so a row-only assertion passes even when the parse
     // guard is gone — and then an unparseable setting silently counts as a figure
     // that arrived, and the block stops reporting that the read produced nothing.
-    expect(text).toContain('asked for and did not arrive')
+    // The account is given a file so the arm under test is the one that still
+    // raises a verdict: a fileless account reports "nothing to report" and the
+    // assertion would pass over a dropped guard.
+    expect(text).toContain('This account has files and the server reports no usage figure for them')
+  })
+
+  /**
+   * *** ONE READ THROWING MUST NOT ERASE THE OTHER. ***
+   * The two settings were awaited in sequence inside one `try`, so a throw on the
+   * usage read discarded the allowance read that had not happened yet. They are
+   * settled independently now, and the allowance still arrives.
+   */
+  it('keeps the allowance figure when only the usage read throws', async () => {
+    await openAccount(
+      makeApplication({
+        settings: {
+          getSubscriptionSetting: jest.fn().mockImplementation(async (name: { name: string }) => {
+            if (name.name === 'FILE_UPLOAD_BYTES_USED') {
+              throw new Error('refused')
+            }
+            return '10485760'
+          }),
+        },
+      }),
+    )
+
+    expect(sectionRow('Server file allowance, whole MB')[1]).toBe('10')
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
   })
 
   /**
@@ -1056,10 +1146,47 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
    * The fields with no client surface. Each reads "not reported" and the row says
    * what it is waiting for; none of them is defaulted to a `false` or a zero.
    */
-  it('reports the facts no client surface exposes as not reported', async () => {
+  it('says in one row that no client surface exposes the role names', async () => {
     await openAccount()
 
-    expect(sectionRow('Roles outside this build’s taxonomy')[1]).toBe('not reported')
+    expect(sectionRow('Roles held by this account')[1]).toBe('not exposed by any client surface')
+    expect(activePanel().textContent).not.toContain('Roles outside this build’s taxonomy')
+    expect(activePanel().textContent).not.toContain('Role: Admin user')
+  })
+
+  /**
+   * *** THE SUBSCRIPTION EXPIRY IS WIRED, AND ITS UNIT IS NOT GUESSED. ***
+   *
+   * This row was left unwired on the recorded ground that nothing established
+   * whether `endsAt` is milliseconds or microseconds. `convertTimestampToMilliseconds`
+   * — the repo's own reader of that field — decides by digit count, so the duration
+   * is computed with the same call the rest of the app uses. Both arms are
+   * asserted: a timestamp it can place produces a duration, and one it cannot
+   * produces nothing rather than a duration wrong by a factor of a thousand.
+   */
+  it('reports the time left on the subscription as a duration, from a timestamp it can place', async () => {
+    // Microseconds, 16 digits, one day after the pinned system time.
+    const oneDayLater = (Date.parse('2026-08-27T00:00:30.000Z') * 1000).toString()
+    expect(oneDayLater).toHaveLength(16)
+
+    await openAccount(
+      makeApplication({
+        subscriptionController: {
+          onlineSubscription: { planName: 'PRO_PLAN', cancelled: false, endsAt: Number(oneDayLater) },
+        },
+      }),
+    )
+
+    expect(sectionRow('Time until the subscription ends')[1]).toBe('1d 0h')
+  })
+
+  it('reports nothing rather than a fabricated duration for a timestamp it cannot place', async () => {
+    await openAccount(
+      makeApplication({
+        subscriptionController: { onlineSubscription: { planName: 'PRO_PLAN', cancelled: false, endsAt: 12_345 } },
+      }),
+    )
+
     expect(sectionRow('Time until the subscription ends')[1]).toBe('not reported')
   })
 

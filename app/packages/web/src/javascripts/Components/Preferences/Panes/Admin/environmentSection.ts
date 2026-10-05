@@ -20,6 +20,7 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceProxy,
+  NOT_PUBLISHED,
   outcomesForSection,
   reportLine,
   safeConstant,
@@ -705,9 +706,9 @@ function buildShapeBlock(topology: DeploymentTopology | undefined, runtime: Envi
     }),
     diagnosticRow({
       label: safeConstant('Time since this process started'),
-      value: safeDuration(runtime.processUptimeSeconds),
+      value: runtime.processUptimeSeconds === undefined ? NOT_PUBLISHED : safeDuration(runtime.processUptimeSeconds),
       ...absentOr(runtime.processUptimeSeconds, 'informational'),
-      note: 'The answer to "I changed the setting and restarted — did it take?", which is the most-asked question in this area and was previously unanswerable from this pane. A duration rather than a start instant: the question is whether the restart happened after the edit, and a duration answers it without putting a clock into a public report.',
+      note: 'The answer to "I changed the setting and restarted — did it take?", which is the most-asked question in this area and is still unanswerable from this pane. A duration rather than a start instant: the question is whether the restart happened after the edit, and a duration answers it without putting a clock into a public report. NOTHING PUBLISHES IT TODAY, and that was verified rather than assumed: neither `/v1/admin/sync-diagnostics` nor `/v1/admin/server-status` carries a process start or uptime in any field, and the readiness probes they relay carry only a status and a per-check boolean. One `process.uptime()` on either response would fill this row.',
     }),
   ]
 
@@ -988,9 +989,12 @@ function buildTransportBlock(
   const rows: DiagnosticRow[] = [
     diagnosticRow({
       label: safeConstant('Why this transport was chosen'),
-      value: safeEnum(runtime.serviceProxyDecision, PROXY_DECISIONS),
+      value:
+        runtime.serviceProxyDecision === undefined
+          ? NOT_PUBLISHED
+          : safeEnum(runtime.serviceProxyDecision, PROXY_DECISIONS),
       ...absentOr(runtime.serviceProxyDecision, decision === 'no-secret' || unreachable ? 'degraded' : 'informational'),
-      note: 'The self-configuring lane records WHICH condition declined gRPC, and that reason is the difference between a deployment where HTTP is correct ("not-colocated": there is no co-located syncing server to speak gRPC to) and one where something is wrong ("syncing-grpc-unreachable": a dial target was configured and the port did not answer). When this is not reported the honest answer is that the reason is undetermined — not that the variable was simply unset.',
+      note: 'The self-configuring lane records WHICH condition declined gRPC, and that reason is the difference between a deployment where HTTP is correct ("not-colocated": there is no co-located syncing server to speak gRPC to) and one where something is wrong ("syncing-grpc-unreachable": a dial target was configured and the port did not answer). WHY IT IS BLANK, traced rather than assumed: the decision is made in `server/docker/internal-grpc-lane-env.sh`, which records it in `SRN_SERVICE_PROXY_TYPE_DECISION` and never EXPORTS that variable — so it is not in the gateway process environment at all, `DeploymentDiagnostics` could not read it even if it tried, and no endpoint carries it. Two one-line changes would fill this row: an `export` in that script and the key added to the deployment report. Until then the reason is undetermined — not that the variable was simply unset.',
     }),
     secretRow(secret, secretPresent),
     diagnosticRow({
@@ -1124,26 +1128,56 @@ function buildSessionBlock(topology: DeploymentTopology | undefined, runtime: En
   const jwtSecret = presenceOf(topology, 'AUTH_JWT_SECRET')
   const partitionedWithoutSecure = runtime.cookiePartitioned === true && runtime.cookieSecure === false
 
-  const rows: DiagnosticRow[] = [
-    diagnosticRow({
-      label: safeConstant('Cookie Secure flag'),
-      value: safeState(runtime.cookieSecure, 'on', 'off'),
-      ...absentOr(runtime.cookieSecure, runtime.cookieSecure === false ? 'degraded' : 'informational'),
-      note: 'The EFFECTIVE value, not whether the variable is set: COOKIE_SECURE defaults to true when unset, so "not set" and "off" are opposite answers and a presence boolean would invert the diagnosis. Off is legitimate on a plain-HTTP local trial and wrong on anything reachable from elsewhere.',
-    }),
-    diagnosticRow({
-      label: safeConstant('Cookie Partitioned flag'),
-      value: safeState(runtime.cookiePartitioned, 'on', 'off'),
-      ...absentOr(runtime.cookiePartitioned, partitionedWithoutSecure ? 'broken' : 'informational'),
-      note: 'CHIPS partitioning, which also defaults to true when unset. The Partitioned attribute REQUIRES Secure: a browser that sees one without the other drops the whole cookie rather than the one attribute, so the session is silently never stored. Nothing logs an error on either side, which is how this broke the quickstart once.',
-    }),
-    diagnosticRow({
-      label: safeConstant('End-to-end test mode'),
-      value: safeYesNo(runtime.e2eTesting),
-      ...absentOr(runtime.e2eTesting, runtime.e2eTesting === true ? 'broken' : 'healthy'),
-      note: 'E2E_TESTING forces legacy HEADER sessions for every user on this deployment. A real deployment running with it on is in a mode where cookie-session faults cannot occur — which is worth knowing twice over, because it also means a green end-to-end suite proves nothing about cookie sessions.',
-    }),
-  ]
+  /**
+   * *** THREE EMPTY ROWS OR ONE SENTENCE. ***
+   *
+   * All three of these are read by the AUTH process and no endpoint this pane can
+   * reach reports one of them, so on every deployment they rendered "not reported"
+   * in a column — which an operator read as three broken checks rather than as one
+   * input nobody sends. Collapsed the way the admission block in
+   * `websocketSection.ts` is, and for the same reason.
+   *
+   * The replacement keeps `undetermined`: each of the three carried that when
+   * absent, and the cookie pair in particular is a configuration that silently
+   * discards every session, so a block that fell to healthy for want of a reading
+   * would be reassuring about the exact thing it cannot see. The rows return,
+   * flag by flag, the moment anything reports one — and because they are EFFECTIVE
+   * values rather than presence, a reading of them cannot be synthesised here:
+   * both default to true when unset, so "unset" and "off" are opposite answers.
+   */
+  const runtimeFlagsReported =
+    runtime.cookieSecure !== undefined || runtime.cookiePartitioned !== undefined || runtime.e2eTesting !== undefined
+
+  const rows: DiagnosticRow[] = runtimeFlagsReported
+    ? [
+        diagnosticRow({
+          label: safeConstant('Cookie Secure flag'),
+          value: safeState(runtime.cookieSecure, 'on', 'off'),
+          ...absentOr(runtime.cookieSecure, runtime.cookieSecure === false ? 'degraded' : 'informational'),
+          note: 'The EFFECTIVE value, not whether the variable is set: COOKIE_SECURE defaults to true when unset, so "not set" and "off" are opposite answers and a presence boolean would invert the diagnosis. Off is legitimate on a plain-HTTP local trial and wrong on anything reachable from elsewhere.',
+        }),
+        diagnosticRow({
+          label: safeConstant('Cookie Partitioned flag'),
+          value: safeState(runtime.cookiePartitioned, 'on', 'off'),
+          ...absentOr(runtime.cookiePartitioned, partitionedWithoutSecure ? 'broken' : 'informational'),
+          note: 'CHIPS partitioning, which also defaults to true when unset. The Partitioned attribute REQUIRES Secure: a browser that sees one without the other drops the whole cookie rather than the one attribute, so the session is silently never stored. Nothing logs an error on either side, which is how this broke the quickstart once.',
+        }),
+        diagnosticRow({
+          label: safeConstant('End-to-end test mode'),
+          value: safeYesNo(runtime.e2eTesting),
+          ...absentOr(runtime.e2eTesting, runtime.e2eTesting === true ? 'broken' : 'healthy'),
+          note: 'E2E_TESTING forces legacy HEADER sessions for every user on this deployment. A real deployment running with it on is in a mode where cookie-session faults cannot occur — which is worth knowing twice over, because it also means a green end-to-end suite proves nothing about cookie sessions.',
+        }),
+      ]
+    : [
+        diagnosticRow({
+          label: safeConstant('Effective cookie and session-mode flags'),
+          value: NOT_PUBLISHED,
+          verdict: 'undetermined',
+          evidence: EVIDENCE_ABSENT,
+          note: 'Three flags, named here rather than rendered as three empty rows: the effective Secure and Partitioned attributes on the session cookie, and whether E2E_TESTING is forcing legacy header sessions. All three are read by the AUTH process and no endpoint this pane can reach reports any of them. They cannot be observed from the browser either — the session cookie is not script-readable, and its attributes are not exposed to a page in any case. Each appears as its own row the moment a server reports it. Presence of the variables would not substitute: both cookie flags default to ON when unset, so "unset" and "off" are opposite answers and a presence reading would invert the diagnosis.',
+        }),
+      ]
 
   const findings: DiagnosticFinding[] = []
 

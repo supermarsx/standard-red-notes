@@ -6,6 +6,7 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceProxy,
+  NOT_PUBLISHED,
   outcomesForSection,
   reportLine,
   safeConstant,
@@ -981,49 +982,100 @@ function buildDatabaseBlock(
       ...absentOr(authProbeMs, 'informational'),
       note: 'How long the whole auth readiness probe took: an internal network hop plus the database query plus the cache ping. It is reported as context rather than as a database measurement, because a slow answer here does not say which of the three was slow. Durations are bucketed to whole seconds, so "under 1s" is the healthy reading and anything printed in seconds is already most of the probe budget.',
     }),
-    diagnosticRow({
-      label: safeConstant('Database connection state'),
-      value: safeEnum(datastore.connectionState, DATABASE_CONNECTION_STATES),
-      ...absentOr(connectionState, connectionState === 'connected' ? 'healthy' : 'broken'),
-      note: 'Whether a durable service holds a CONNECTED data source or merely a handle. Not an academic row: this repo shipped a getter that rebuilt an unconnected data source on every read, so consumers wired after the connected one was built received a dead object and every durable command failed — on every topology, with the container reporting ready throughout. No endpoint reports this yet, so it reads "not reported"; the field is named in this module header rather than guessed at from the probes.',
-    }),
-    diagnosticRow({
-      label: safeConstant('Schema migrations'),
-      value:
-        applied === undefined
-          ? UNREPORTED
-          : applied
-            ? safeYesNo(true)
-            : safeTokens(
-                safeYesNo(false),
-                pending === undefined ? MIGRATION_COUNT_UNREPORTED : safeCount(pending),
-                MIGRATIONS_PENDING,
-              ),
-      ...absentOr(applied, applied === true ? 'healthy' : 'degraded'),
-      note: 'Whether the live schema matches the build. A schema one migration behind answers readiness, serves most routes and fails exactly the ones that touch the new columns, which presents as a single broken feature rather than as a database problem. A count is reported and no schema, table or column name is.',
-    }),
-    diagnosticRow({
-      label: safeConstant('Connection pool in use'),
-      value: poolReported ? safeTokens(safeCount(poolInUse), OF, safeCount(poolSize)) : UNREPORTED,
-      ...absentOr(
-        poolReported ? true : undefined,
-        poolSaturation !== undefined && poolSaturation >= 0.9 ? 'degraded' : 'informational',
-      ),
-      note: 'Connections checked out against the pool maximum. Exhaustion presents as latency rather than as an error — every query waits for a free connection and then succeeds — which is the symptom this pane is least able to attribute from a readiness probe alone. Two counts, never a connection string.',
-    }),
-    diagnosticRow({
-      label: safeConstant('Database read round trip'),
-      value: safeDuration(seconds(readMs)),
-      ...absentOr(readMs, 'informational'),
-      note: 'A read measured by the service that owns the connection, with no network hop or HTTP framing in it. Requested and not yet reported. It is the number the auth readiness duration above is a poor stand-in for.',
-    }),
-    diagnosticRow({
-      label: safeConstant('Database write round trip'),
-      value: safeDuration(seconds(writeMs)),
-      ...absentOr(writeMs, 'informational'),
-      note: 'Reported separately from the read on purpose: a read-only replica, a full volume and a long lock wait all pass a read and fail a write. A deployment in that state looks entirely healthy to every check this pane can currently take.',
-    }),
   ]
+
+  /**
+   * *** FIVE ROWS OR ONE SENTENCE, and the five were read as five failures. ***
+   *
+   * Nothing produces `connectionState`, `migrationsApplied`, `poolInUse`,
+   * `readRoundTripMs` or `writeRoundTripMs` on any deployment: no endpoint this
+   * pane can reach reports one of them, which this block's own description has
+   * always said. So all five rendered "not reported", in a column, directly under
+   * two rows that DID report — and an operator reading that column reasonably
+   * concluded the diagnostics were failing rather than that the fields do not
+   * exist yet. The admission block in `websocketSection.ts` met the same problem
+   * and answered it the same way.
+   *
+   * The replacement keeps `undetermined`, which is what each of the five carried.
+   * Dropping to `informational` would LOWER this section's worst verdict — the
+   * section would read healthy off one answering readiness probe — and a section
+   * that establishes two facts out of seven has not established that the database
+   * is well. Every row returns, field by field, the moment anything reports one.
+   */
+  /**
+   * The gate is over the RAW fields, never over the parsed ones, and that
+   * distinction is the whole correctness of the collapse. `connectionState`
+   * parses to `undefined` for a state this build does not recognise, and
+   * `poolReported` is false when only one half of the pair arrived — both are
+   * cases where the server DID report and the row must stay, saying "other
+   * (unrecognised)" or "not reported of 10". Gating on the parsed values would
+   * have swallowed exactly the readings this section exists to surface.
+   */
+  const datastoreSilent =
+    datastore.connectionState === undefined &&
+    datastore.migrationsApplied === undefined &&
+    datastore.pendingMigrations === undefined &&
+    datastore.poolInUse === undefined &&
+    datastore.poolSize === undefined &&
+    datastore.readRoundTripMs === undefined &&
+    datastore.writeRoundTripMs === undefined
+
+  if (datastoreSilent) {
+    rows.push(
+      diagnosticRow({
+        label: safeConstant('Connection, schema, pool and round trips'),
+        value: NOT_PUBLISHED,
+        verdict: 'undetermined',
+        evidence: EVIDENCE_ABSENT,
+        note: "Five fields, named here rather than rendered as five empty rows: the data source's connection state, whether the live schema matches the build, connections checked out against the pool maximum, and the read and write round trips measured by the service that owns the connection. No endpoint this pane can reach reports any of them, and they are deliberately NOT filled in from the readiness probes above — a probe that says a service answers says nothing about the state of its connection, its schema or its pool. They are requested in this module's header. Each appears as its own row the moment a server reports it, and this block stays undetermined meanwhile because two answered facts out of seven is not a healthy database.",
+      }),
+    )
+  } else {
+    rows.push(
+      diagnosticRow({
+        label: safeConstant('Database connection state'),
+        value: safeEnum(datastore.connectionState, DATABASE_CONNECTION_STATES),
+        ...absentOr(connectionState, connectionState === 'connected' ? 'healthy' : 'broken'),
+        note: 'Whether a durable service holds a CONNECTED data source or merely a handle. Not an academic row: this repo shipped a getter that rebuilt an unconnected data source on every read, so consumers wired after the connected one was built received a dead object and every durable command failed — on every topology, with the container reporting ready throughout. No endpoint reports this yet, so it reads "not reported"; the field is named in this module header rather than guessed at from the probes.',
+      }),
+      diagnosticRow({
+        label: safeConstant('Schema migrations'),
+        value:
+          applied === undefined
+            ? UNREPORTED
+            : applied
+              ? safeYesNo(true)
+              : safeTokens(
+                  safeYesNo(false),
+                  pending === undefined ? MIGRATION_COUNT_UNREPORTED : safeCount(pending),
+                  MIGRATIONS_PENDING,
+                ),
+        ...absentOr(applied, applied === true ? 'healthy' : 'degraded'),
+        note: 'Whether the live schema matches the build. A schema one migration behind answers readiness, serves most routes and fails exactly the ones that touch the new columns, which presents as a single broken feature rather than as a database problem. A count is reported and no schema, table or column name is.',
+      }),
+      diagnosticRow({
+        label: safeConstant('Connection pool in use'),
+        value: poolReported ? safeTokens(safeCount(poolInUse), OF, safeCount(poolSize)) : UNREPORTED,
+        ...absentOr(
+          poolReported ? true : undefined,
+          poolSaturation !== undefined && poolSaturation >= 0.9 ? 'degraded' : 'informational',
+        ),
+        note: 'Connections checked out against the pool maximum. Exhaustion presents as latency rather than as an error — every query waits for a free connection and then succeeds — which is the symptom this pane is least able to attribute from a readiness probe alone. Two counts, never a connection string.',
+      }),
+      diagnosticRow({
+        label: safeConstant('Database read round trip'),
+        value: safeDuration(seconds(readMs)),
+        ...absentOr(readMs, 'informational'),
+        note: 'A read measured by the service that owns the connection, with no network hop or HTTP framing in it. Requested and not yet reported. It is the number the auth readiness duration above is a poor stand-in for.',
+      }),
+      diagnosticRow({
+        label: safeConstant('Database write round trip'),
+        value: safeDuration(seconds(writeMs)),
+        ...absentOr(writeMs, 'informational'),
+        note: 'Reported separately from the read on purpose: a read-only replica, a full volume and a long lock wait all pass a read and fail a write. A deployment in that state looks entirely healthy to every check this pane can currently take.',
+      }),
+    )
+  }
 
   const findings: DiagnosticFinding[] = []
 
@@ -1081,7 +1133,7 @@ function buildDatabaseBlock(
   return {
     heading: safeConstant('Durable storage'),
     description:
-      'The server\'s own database, as far as any endpoint this pane can read reports it — which today is one readiness query taken by the auth service. The remaining rows are the fields this section has asked for and does not have; they read "not reported" rather than being filled in from the probes, because a probe that says a service answers says nothing at all about the state of its connection, its schema or its pool. No connection string, host, port or database name is read or reported anywhere in this section. A count of dead outbox rows is deliberately NOT shown as an empty row: there is no producer for it, and an empty count invites the reading that it is zero.',
+      'The server\'s own database, as far as any endpoint this pane can read reports it — which today is one readiness query taken by the auth service. The fields this section has asked for and does not have are named in a single row rather than rendered as a column of empty ones, because five rows each reading "not reported" is read as five failures and is in fact one absent input; they are not filled in from the probes either, since a probe that says a service answers says nothing at all about the state of its connection, its schema or its pool. No connection string, host, port or database name is read or reported anywhere in this section. A count of dead outbox rows is deliberately NOT shown as an empty row: there is no producer for it, and an empty count invites the reading that it is zero.',
     rows,
     findings,
   }
@@ -1703,9 +1755,9 @@ function buildQueueBlock(topology: DeploymentTopology | undefined, queues: Queue
     }),
     diagnosticRow({
       label: safeConstant('Queue separation'),
-      value: safeEnum(queues.separation, QUEUE_SEPARATIONS),
+      value: queues.separation === undefined ? NOT_PUBLISHED : safeEnum(queues.separation, QUEUE_SEPARATIONS),
       ...absentOr(separation, separation === 'inherited-shared-queue' ? 'broken' : 'informational'),
-      note: 'Whether the in-process gateway consumes its OWN queue or one it inherited from a sibling. This is the highest-value fact in this block and no endpoint reports it. It is a measured defect of this repo rather than a hypothetical: workers once inherited the gateway queue address, both halves consumed from one queue, and roughly four in five realtime pushes — plus revision and e-mail events — went to whichever consumer won the race and were then deleted, with nothing logged. Presence cannot express it: a queue being configured says a queue exists and says nothing about how many consumers are pointed at it. A separation STATE can, with no address at all, and it is requested in this module header.',
+      note: "Whether the in-process gateway consumes its OWN queue or one it inherited from a sibling. This is the highest-value fact in this block and no endpoint reports it — nor can the pane derive it from what IS on the wire, which was checked: `DIAGNOSTIC_ENV_KEYS` carries `SQS_QUEUE_URL` and no prefixed `API_GATEWAY_SQS_*` counterpart, so the presence map cannot tell a gateway that configured its own queue from one reading the workers'. It is a measured defect of this repo rather than a hypothetical: workers once inherited the gateway queue address, both halves consumed from one queue, and roughly four in five realtime pushes — plus revision and e-mail events — went to whichever consumer won the race and were then deleted, with nothing logged. Presence cannot express it: a queue being configured says a queue exists and says nothing about how many consumers are pointed at it. A separation STATE can, with no address at all, and it is requested in this module header.",
     }),
   ]
 
