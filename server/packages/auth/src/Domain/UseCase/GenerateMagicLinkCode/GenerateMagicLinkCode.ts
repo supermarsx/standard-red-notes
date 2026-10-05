@@ -45,6 +45,10 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }
           code,
           expiresAt,
           consumed: false,
+          // A brand-new code starts with its full per-code guess allowance; see
+          // MagicLinkToken.MAX_FAILED_ATTEMPTS. This is also the path a user takes
+          // to recover from a code whose allowance was burned by someone else.
+          failedAttempts: 0,
           createdAt: now,
         },
         new UniqueEntityId(uuidv4()),

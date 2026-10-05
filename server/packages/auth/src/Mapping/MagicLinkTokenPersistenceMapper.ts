@@ -11,6 +11,7 @@ export class MagicLinkTokenPersistenceMapper implements MapperInterface<MagicLin
         code: projection.code,
         expiresAt: projection.expiresAt,
         consumed: projection.consumed,
+        failedAttempts: projection.failedAttempts,
         createdAt: projection.createdAt,
       },
       new UniqueEntityId(projection.uuid),
@@ -30,6 +31,10 @@ export class MagicLinkTokenPersistenceMapper implements MapperInterface<MagicLin
     typeorm.code = domain.props.code
     typeorm.expiresAt = domain.props.expiresAt
     typeorm.consumed = domain.props.consumed
+    // Standard Red Notes: the per-code attempt counter is only a brake if it is
+    // actually written back. Dropping it here would leave every guess costless
+    // across requests while every unit test on the use case still passed.
+    typeorm.failedAttempts = domain.props.failedAttempts
     typeorm.createdAt = domain.props.createdAt
 
     return typeorm

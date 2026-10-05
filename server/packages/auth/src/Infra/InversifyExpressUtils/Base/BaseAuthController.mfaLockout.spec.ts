@@ -703,6 +703,7 @@ describe('BaseAuthController second-factor lockout (the MFA gate)', () => {
             code: '111111',
             expiresAt: new Date(Date.now() + 15 * 60 * 1000),
             consumed: false,
+            failedAttempts: 0,
             createdAt: new Date(),
           },
           new UniqueEntityId('11111111-1111-1111-1111-111111111111'),
@@ -713,6 +714,79 @@ describe('BaseAuthController second-factor lockout (the MFA gate)', () => {
 
       expect(result.statusCode).toEqual(401)
       expect(await lockRepository.totalAttempts(USER_UUID)).toEqual(1)
+    })
+
+    /**
+     * Standard Red Notes: THE TWO BRAKES, COMPOSED — and the explicit answer to
+     * "should exhausting a magic-link code ALSO count toward account lockout?".
+     *
+     * It does, and that is the deliberate choice. The per-code cap and the account
+     * counter answer different questions and neither replaces the other:
+     *
+     *   - the PER-CODE cap bounds the guesses any single six-digit code can absorb
+     *     (five out of 10^6), and it is paid for by the CODE, so burning it costs
+     *     the owner one more email and nothing else; and
+     *   - the ACCOUNT counter is what makes a stream of rejected second factors —
+     *     of ANY kind — eventually slow down and stop, and a magic-link code is a
+     *     second factor like the rest.
+     *
+     * The argument for exempting this path is that an attempt against an already
+     * exhausted code cannot be a guess at anything, so counting it buys nothing.
+     * True, and rejected anyway: an attacker who wants to spend the account's
+     * budget does not need a magic-link token at all — a stream of wrong TOTP codes
+     * does exactly the same thing and always has (see the note on pkceParams). So
+     * the exemption would close no denial-of-service lever while adding precisely
+     * the thing this whole area was broken by: a REJECTED CREDENTIAL THAT DOES NOT
+     * COUNT. The volumetric side is the gateway's `auth-second-factor` bucket.
+     *
+     * The cap (5) is deliberately below MAX_LOGIN_ATTEMPTS (6) here, which is what
+     * lets this test prove the cap on its own terms: when the correct code is
+     * presented at the end, the account is NOT yet locked, so the refusal can only
+     * have come from the token's own counter.
+     */
+    it('spends the per-code cap and the account counter together, then refuses the RIGHT code', async () => {
+      const { controller, lockRepository, magicLinkTokens } = buildHarness({ secondFactor: 'magic-link' })
+      const token = MagicLinkToken.create(
+        {
+          userIdentifier: EMAIL,
+          code: '111111',
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+          consumed: false,
+          failedAttempts: 0,
+          createdAt: new Date(),
+        },
+        new UniqueEntityId('22222222-2222-2222-2222-222222222222'),
+      ).getValue()
+      magicLinkTokens.add(token)
+
+      expect(token.props.consumed).toBe(false)
+      expect(token.isExpired(new Date())).toBe(false)
+      expect(token.hasExhaustedAttempts()).toBe(false)
+      expect(await lockRepository.totalAttempts(USER_UUID)).toEqual(0)
+      expect(MagicLinkToken.MAX_FAILED_ATTEMPTS).toBeLessThan(MAX_LOGIN_ATTEMPTS)
+
+      for (let attempt = 1; attempt <= MagicLinkToken.MAX_FAILED_ATTEMPTS; attempt++) {
+        const rejected = await controller.pkceParams(paramsRequest({ magic_link_code: '222222' }), buildResponse())
+
+        expect(rejected.statusCode).toEqual(401)
+        expect(token.props.failedAttempts).toEqual(attempt)
+        expect(await lockRepository.totalAttempts(USER_UUID)).toEqual(attempt)
+      }
+      expect(token.hasExhaustedAttempts()).toBe(true)
+
+      // The gate is still OPEN at this point, so the next request really reaches
+      // the magic-link verifier rather than bouncing off the account lock.
+      expect(await lockRepository.totalAttempts(USER_UUID)).toBeLessThan(MAX_LOGIN_ATTEMPTS)
+
+      const withTheRightCode = await controller.pkceParams(
+        paramsRequest({ magic_link_code: '111111' }),
+        buildResponse(),
+      )
+
+      expect(withTheRightCode.statusCode).toEqual(401)
+      expect(token.props.consumed).toBe(false)
+      // And the refusal of a dead code still counts, as argued above.
+      expect(await lockRepository.totalAttempts(USER_UUID)).toEqual(MagicLinkToken.MAX_FAILED_ATTEMPTS + 1)
     })
 
     it('increments the lock counter for a rejected app password', async () => {

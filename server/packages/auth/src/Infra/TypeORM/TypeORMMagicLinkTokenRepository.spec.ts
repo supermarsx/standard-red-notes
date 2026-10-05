@@ -34,6 +34,7 @@ describe('TypeORMMagicLinkTokenRepository', () => {
       code: '123456',
       expiresAt: new Date('2026-08-13T12:15:00.000Z'),
       consumed: false,
+      failedAttempts: 0,
       createdAt: new Date('2026-08-13T12:00:00.000Z'),
     } as TypeORMMagicLinkToken
     const token = MagicLinkToken.create(
@@ -42,6 +43,7 @@ describe('TypeORMMagicLinkTokenRepository', () => {
         code: projection.code,
         expiresAt: projection.expiresAt,
         consumed: projection.consumed,
+        failedAttempts: projection.failedAttempts,
         createdAt: projection.createdAt,
       },
       new UniqueEntityId(projection.uuid),
