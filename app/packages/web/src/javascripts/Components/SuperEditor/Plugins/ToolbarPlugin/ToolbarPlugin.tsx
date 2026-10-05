@@ -2901,6 +2901,41 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   const superGroupTabs = groupsBySuperGroup(resolvedGroups)
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
 
+  /**
+   * Standard Red Notes (t120) — bookkeeping for the Mermaid contextual tab's
+   * auto-activation. Two refs, because the two things that make an auto-switch
+   * bearable rather than annoying are independent:
+   *
+   *  - `mermaidTabRestoreRef` remembers the tab the diagram displaced, so
+   *    deselecting hands it back instead of dumping the user on Home. `null` is
+   *    a MEANINGFUL value inside it ("they were on the implicit first tab"),
+   *    which is why it is a wrapper object and not a bare `string | null` ref:
+   *    a bare ref could not tell that apart from "nothing was displaced".
+   *  - `mermaidTabEngagedRef` latches for as long as one diagram stays
+   *    selected, so the activation fires ONCE, on the transition. Lexical
+   *    re-runs its update listener on every keystroke and selection nudge;
+   *    without the latch a user who clicked over to Home would be yanked back
+   *    to the Mermaid tab on the very next update.
+   */
+  const mermaidTabRestoreRef = useRef<{ previousTabId: string | null } | null>(null)
+  const mermaidTabEngagedRef = useRef(false)
+
+  /**
+   * The one place a ribbon tab is chosen BY THE USER (the tab strip's onClick).
+   *
+   * A deliberate move OFF the contextual tab retires the pending restore: we
+   * displaced their tab, they have since picked another one themselves, and
+   * shoving the old one back at them when the diagram is deselected would be
+   * the same yank in the other direction. Clicking the contextual tab itself is
+   * not a move away, so it keeps the restore intact.
+   */
+  const selectRibbonTab = useCallback((tabId: string) => {
+    if (tabId !== CONTEXTUAL_TAB_ID) {
+      mermaidTabRestoreRef.current = null
+    }
+    setActiveTabId(tabId)
+  }, [])
+
   // Layout: by DEFAULT the toolbar keeps every group on a single horizontal line
   // (each group packs its buttons into up to 3 rows below), scrolling
   // horizontally if they overflow. Setting `horizontalScroll: false` opts back
@@ -3238,11 +3273,12 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   }
 
   // Office-ribbon contextual tab: when an element (table/image/link/etc.) is
-  // active in the docked ribbon, surface its tailored actions as an extra,
-  // *available* ribbon tab rather than a separate line. It is made selectable but
-  // is NOT auto-activated — the user stays on whatever tab they were on and may
-  // click into it themselves. (The separate line is kept only for the non-ribbon
-  // floating selection toolbar, further below.)
+  // active in the docked ribbon, surface its tailored actions as an extra
+  // ribbon tab rather than a separate line. For most widgets it is made
+  // selectable but is NOT auto-activated — the user stays on whatever tab they
+  // were on and may click into it themselves. A selected MERMAID diagram is the
+  // one exception; see the activation effect below. (The separate line is kept
+  // only for the non-ribbon floating selection toolbar, further below.)
   const hasContextualTab = canShowAllItems && !!effectiveContextualWidget && contextualButtons.length > 0
   const ribbonTabs = [
     ...superGroupTabs.map((tab) => ({ id: tab.id as string, label: tab.label })),
@@ -3256,19 +3292,65 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     : (superGroupTabs.find((tab) => tab.id === effectiveTabId)?.groups ?? resolvedGroups)
   const activeRibbonGroups = activeGroups.filter((group) => !TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
 
-  // Do NOT auto-select the contextual tab when an element becomes active — the
-  // contextual tab is merely made *available* (rendered in the tab strip), and
-  // the user stays on whatever tab they were on. They can click it themselves.
-  //
-  // We only handle the inverse: if the user is currently ON the contextual tab
-  // and the contextual element goes away, drop the explicit selection so the
-  // ribbon falls back to a sensible default (the first tab, i.e. Home) via the
-  // `effectiveTabId` resolution above, instead of leaving them on a dead tab.
+  /**
+   * Standard Red Notes (t120) — tab ownership around the contextual tab.
+   *
+   * A selected MERMAID diagram auto-activates the contextual tab; every other
+   * contextual widget keeps the old behaviour of being merely *available*. The
+   * asymmetry is deliberate: a table / link / image contextual tab appears
+   * while the caret sits in ordinary prose the user is still typing, so
+   * stealing the ribbon there would fight them. A mermaid node, by contrast,
+   * can only become the selected node by being clicked, and since t119 the
+   * toolbar section is the ONLY place a diagram is configurable at all — so
+   * that click IS the request for its controls, and making it cost a second
+   * click on the tab was the regression this closes.
+   *
+   * Undocked there is no tab strip at all (`hasContextualTab` folds in
+   * `canShowAllItems`), so `shouldAutoActivateContextualTab` is false and the
+   * floating toolbar's flat "Mermaid tools" row is reached untouched.
+   *
+   * This single effect owns every programmatic tab change, deliberately. Split
+   * across two effects the deactivation rules race: whichever ran first would
+   * blank `activeTabId` and the other would then see a tab it did not expect.
+   */
+  const shouldAutoActivateContextualTab = hasContextualTab && mermaidSelection !== null
   useEffect(() => {
+    if (shouldAutoActivateContextualTab) {
+      // Latched: once per selected diagram, NOT once per Lexical update.
+      if (mermaidTabEngagedRef.current) {
+        return
+      }
+      mermaidTabEngagedRef.current = true
+      // Already standing on a contextual tab? Then nothing of theirs is being
+      // displaced, and `null` (fall back to the first tab) is what deselecting
+      // should give back — which is also exactly the pre-t120 behaviour.
+      mermaidTabRestoreRef.current = { previousTabId: activeTabId === CONTEXTUAL_TAB_ID ? null : activeTabId }
+      setActiveTabId(CONTEXTUAL_TAB_ID)
+      return
+    }
+
+    mermaidTabEngagedRef.current = false
+    const restore = mermaidTabRestoreRef.current
+    mermaidTabRestoreRef.current = null
+
+    if (restore) {
+      // Hand back exactly the tab the diagram displaced — but only to someone
+      // still standing where we put them. TWO guards keep this from becoming a
+      // yank, and they catch different cases: `selectRibbonTab` retires the
+      // restore when they walk away and then walk back, and the `prev` check
+      // here covers the commoner case of walking away and staying away.
+      setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? restore.previousTabId : prev))
+      return
+    }
+
+    // Nothing of ours to undo, so the pre-existing rule still applies: if the
+    // contextual element is gone and the user is standing on its tab, drop the
+    // explicit selection so `effectiveTabId` falls back to the first tab (i.e.
+    // Home) instead of leaving them on a dead one.
     if (!hasContextualTab) {
       setActiveTabId((prev) => (prev === CONTEXTUAL_TAB_ID ? null : prev))
     }
-  }, [hasContextualTab])
+  }, [shouldAutoActivateContextualTab, hasContextualTab, activeTabId])
 
   // Standard Red Notes — Word-like floating selection mini-toolbar.
   //
@@ -3586,7 +3668,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                           role="tab"
                           aria-selected={isActive}
                           onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => setActiveTabId(tab.id)}
+                          onClick={() => selectRibbonTab(tab.id)}
                           className={classNames(
                             'rounded-md border-b-2 px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap transition-colors',
                             isContextualTab
