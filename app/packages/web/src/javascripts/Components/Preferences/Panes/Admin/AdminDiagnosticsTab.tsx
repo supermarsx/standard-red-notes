@@ -987,23 +987,39 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     [payload, transport, outcomes],
   )
   const environmentModel = useMemo(
-    // `runtime` is NOT passed: `serviceProxyDecision`, the two effective cookie
-    // flags, `E2E_TESTING` and the process uptime are read by the AUTH process
-    // and no endpoint this pane can reach reports any of them. `transportFallback`
-    // IS on the wire and is threaded.
+    // `runtime` IS passed now and is threaded straight off the payload. It used
+    // to be withheld because nothing produced it: the gateway uptime, the two
+    // EFFECTIVE session-cookie attributes, `E2E_TESTING` and auth's own uptime
+    // are read by the AUTH process, and no endpoint carried them. The gateway
+    // probes auth's runtime route for them today and reports its own outcome
+    // beside them, so the section can say WHY they are absent instead of leaving
+    // four blanks. The lane decision moved to `topology`, where the server puts
+    // it. Passed RAW, with no `?? {}`: an absent block must stay absent, because
+    // the section tells "older server" apart from "the probe did not answer".
     () =>
       buildEnvironmentSection({
         topology,
         deploymentMarker: deployment,
         fallback: payload?.transportFallback,
+        runtime: payload?.runtime,
         outcomes,
       }),
     [topology, deployment, payload, outcomes],
   )
   const backendModel = useMemo(
-    // `datastore` and `queues` are NOT passed: no endpoint reports a connection
-    // state, a migration count, a pool figure or a queue identity yet, and those
-    // rows say which field they are waiting for.
+    // `datastore` and `queues` ARE passed now, both raw and both optional. The
+    // durable store is reported by the service that OWNS the handle and relayed
+    // through the same auth runtime probe, so it is absent exactly when that
+    // probe did not answer; the queue block carries the separation VERDICT the
+    // server derives once from its own consumer census plus the presence pair,
+    // which is the only place that derivation may happen — doing it again here
+    // would be two implementations of one rule.
+    //
+    // Raw rather than defaulted, for the queue block especially: an absent block
+    // is a server older than it, and a present block with no verdict in it is a
+    // server that looked and could not classify. A `?? {}` here would erase that
+    // distinction before the row that depends on it ever saw it.
+    //
     // `buildIdentified` IS passed, and it is one boolean rather than the revision:
     // the section needs only "did this build record one", for the single inference
     // that a probe reporting no depth cannot be read on an image nobody can place.
@@ -1014,10 +1030,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         serverStatus,
         statusError,
         topology,
+        datastore: payload?.datastore,
+        queues: payload?.queues,
         buildIdentified: !describeDeployment(deployment).unstamped,
         outcomes,
       }),
-    [serverStatus, statusError, topology, deployment, outcomes],
+    [serverStatus, statusError, topology, deployment, payload, outcomes],
   )
   const accountModel = useMemo(
     () =>

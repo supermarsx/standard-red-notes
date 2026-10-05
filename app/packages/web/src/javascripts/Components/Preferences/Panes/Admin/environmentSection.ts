@@ -20,7 +20,6 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceProxy,
-  NOT_PUBLISHED,
   outcomesForSection,
   reportLine,
   safeConstant,
@@ -251,6 +250,44 @@ export type InternalGrpcSecretOrigin = (typeof INTERNAL_GRPC_SECRET_STATES)[numb
  */
 export type EveryProxyDecisionIsNamed = AssertNever<Exclude<ProxyDecision, (typeof SERVICE_PROXY_DECISIONS)[number]>>
 
+/**
+ * What the gateway's read of the AUTH process's runtime route established.
+ *
+ * The four auth-sourced facts below — the two effective cookie attributes, the
+ * legacy-session switch and auth's own uptime — are read by the gateway over the
+ * same probe URL the readiness check uses, so this outcome is what says whether
+ * they could be read at all. Without it their absence has no explanation and an
+ * operator is left asking why four rows are blank.
+ *
+ * *** `unreachable` IS THE CORRECT ANSWER ON THE SINGLE CONTAINER. *** Auth runs
+ * in-process there and has no HTTP listener, so no row in this section treats any
+ * member of this union as a fault. Whether the auth SERVICE is reachable at all
+ * is the Database & internal comms section's probe to report, with its own
+ * findings, and a second verdict here would double-count one outage.
+ *
+ * The server's union has no `other` member — it is the gateway's own outcome
+ * rather than a token off a wire — so an unrecognised value is this build being
+ * behind and collapses through `safeEnum`.
+ */
+export const AUTH_RUNTIME_PROBES = ['answered', 'unreachable', 'not-configured', 'unreadable'] as const
+
+export type AuthRuntimeProbe = (typeof AUTH_RUNTIME_PROBES)[number]
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each probe outcome means, and in
+ * particular which of them are ordinary.
+ */
+const AUTH_PROBE_NOTE: Record<AuthRuntimeProbe, string> = {
+  answered:
+    'The auth process answered its runtime route, so the four auth-owned facts below were read from the process that owns them.',
+  unreachable:
+    "The dial did not complete. ORDINARY ON THE SINGLE CONTAINER, where auth runs in-process and has no HTTP listener at all — the rows below are absent there by design, not by fault. On a multi-container deployment it means the auth service did not answer on the address this gateway probes, and whether that service is up is the Database & internal comms section's row rather than this one.",
+  'not-configured':
+    'This gateway has no auth probe address, so nothing was dialled. The four facts below cannot be read on this deployment and their absence is explained rather than left blank.',
+  unreadable:
+    'Auth answered and the body carried nothing this gateway could admit: an auth older than the route, or something else answering on that port. The gateway reads that body by allowlist, so an unreadable answer yields no fields rather than fields of unknown provenance.',
+}
+
 /** The lanes the per-call gRPC fallback is counted on. Closed, server-side. */
 export const GRPC_FALLBACK_LANES = ['session-validation', 'items-sync'] as const
 
@@ -285,10 +322,14 @@ export const GRPC_FAILURE_CLASSES = [
 export type { TransportFallbackLaneView, TransportFallbackView } from './syncDiagnostics'
 
 /**
- * The facts this section needs that the topology block cannot carry.
+ * The facts this section needs that the topology block cannot carry — now
+ * `payload.runtime`, which a server publishes.
  *
- * All optional, all closed-category, and all absent on a server that does not
- * report them yet.
+ * All optional, all closed-category, and all absent on a server older than the
+ * block. The four auth-owned ones are additionally absent whenever
+ * `authRuntimeProbe` is anything but `answered`, which is why that outcome is a
+ * row of its own: four blanks with no stated reason is the reading an operator
+ * takes for four failed checks.
  *
  * *** THE LANE DECISION USED TO LIVE HERE, AND IT HAS A PRODUCER NOW. ***
  * `serviceProxyDecision` was declared on this view while nothing emitted it. It
@@ -310,6 +351,12 @@ export type { TransportFallbackLaneView, TransportFallbackView } from './syncDia
  * the gateway's `presence` map.
  */
 export type EnvironmentRuntimeView = {
+  /**
+   * Whether the gateway could read the auth process's runtime route. The SERVER's
+   * enum, typed wide so an unrecognised outcome degrades rather than being
+   * rendered as one this build knows.
+   */
+  authRuntimeProbe?: string
   /** Effective `COOKIE_SECURE`. Defaults to true when the variable is unset. */
   cookieSecure?: boolean
   /** Effective `COOKIE_PARTITIONED`. Defaults to true when the variable is unset. */
@@ -318,6 +365,13 @@ export type EnvironmentRuntimeView = {
   e2eTesting?: boolean
   /** How long this process has been up. A duration, never a start instant. */
   processUptimeSeconds?: number
+  /**
+   * How long the AUTH process has been up. A second duration rather than a
+   * second reading of the first: the two differ exactly when one half of the
+   * deployment restarted alone, which is the state in which a setting applied to
+   * one container and not the other.
+   */
+  authProcessUptimeSeconds?: number
 }
 
 export type EnvironmentSectionInput = {
@@ -757,6 +811,31 @@ function remedyForInertConfig(keys: readonly KnownEnvKey[]): Remedy {
 /* Block 1: what shape of deployment is this                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * What the auth-probe row says, in four reported states plus two absences that
+ * are not the same absence.
+ *
+ * NO ARM IS A FAULT. The row exists to EXPLAIN the four auth-owned rows, and the
+ * commonest reason they are absent is a deployment where auth has no HTTP
+ * listener at all. A verdict here would alarm every single-container operator
+ * and would also double-count a real auth outage, which the Database & internal
+ * comms section reports with its own probe and its own findings.
+ */
+function authProbeNote(reported: string | undefined): string {
+  const base =
+    "Whether the gateway could read the AUTH process's runtime route, which is where the two effective cookie attributes, the legacy-session switch and auth's own uptime come from. It carries NO verdict in any state: on the bundled single container auth runs in-process with no HTTP listener, so a dial that does not complete is correct there, and whether the auth SERVICE is up is the Database & internal comms section's probe rather than this one."
+  const outcome = AUTH_RUNTIME_PROBES.find((candidate) => candidate === reported)
+
+  if (reported === undefined) {
+    return `${base} Nothing was reported for it: a server older than this block, which is also why the four rows it gates are absent.`
+  }
+  if (outcome === undefined) {
+    return `${base} The server reported an outcome this build has no name for, and the value itself is refused rather than printed. The gap is on the CLIENT; a client update names it.`
+  }
+
+  return `${base} ${AUTH_PROBE_NOTE[outcome]}`
+}
+
 function buildShapeBlock(topology: DeploymentTopology | undefined, runtime: EnvironmentRuntimeView): DiagnosticBlock {
   const recorded = topology?.recorded === true
   const mode: DeploymentModeToken | undefined = recorded ? (topology?.mode ?? 'unset') : undefined
@@ -822,9 +901,22 @@ function buildShapeBlock(topology: DeploymentTopology | undefined, runtime: Envi
     }),
     diagnosticRow({
       label: safeConstant('Time since this process started'),
-      value: runtime.processUptimeSeconds === undefined ? NOT_PUBLISHED : safeDuration(runtime.processUptimeSeconds),
+      value: safeDuration(runtime.processUptimeSeconds),
       ...absentOr(runtime.processUptimeSeconds, 'informational'),
-      note: 'The answer to "I changed the setting and restarted — did it take?", which is the most-asked question in this area and is still unanswerable from this pane. A duration rather than a start instant: the question is whether the restart happened after the edit, and a duration answers it without putting a clock into a public report. NOTHING PUBLISHES IT TODAY, and that was verified rather than assumed: neither `/v1/admin/sync-diagnostics` nor `/v1/admin/server-status` carries a process start or uptime in any field, and the readiness probes they relay carry only a status and a per-check boolean. One `process.uptime()` on either response would fill this row.',
+      note: 'The answer to "I changed the setting and restarted — did it take?", which is the most-asked question in this area. A duration rather than a start instant: the question is whether the restart happened after the edit, and a duration answers it without putting a clock into a public report. This is the GATEWAY process; the auth process has its own row below, because the two differ exactly when one half restarted alone — the state in which a setting took on one container and not the other. Read the row below against this one rather than either alone.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Time since the auth process started'),
+      value: safeDuration(runtime.authProcessUptimeSeconds),
+      ...absentOr(runtime.authProcessUptimeSeconds, 'informational'),
+      note: 'The same question asked of the other half. A large gap between this and the row above is not a fault in itself — containers do restart independently — but it is the single fact that explains a setting which "did not take": one process re-read the configuration and the other did not. Absent whenever the auth runtime probe did not answer, which the probe row states; on the single container auth has no HTTP listener and this is absent by design.',
+    }),
+    observedRow({
+      label: safeConstant('Auth runtime read'),
+      observed: runtime.authRuntimeProbe,
+      value: safeEnum(runtime.authRuntimeProbe, AUTH_RUNTIME_PROBES),
+      verdict: 'informational',
+      note: authProbeNote(runtime.authRuntimeProbe),
     }),
   ]
 
@@ -1313,7 +1405,27 @@ function buildTransportBlock(
     )
   }
 
-  if (secretOrigin === 'minted-ephemeral' || secretOrigin === 'mint-failed') {
+  /**
+   * *** AT MOST ONE FINDING ABOUT THIS SECRET. ***
+   *
+   * The two questions asked of it — is it long enough, and where did it come
+   * from — have one answer in common, and it is reachable: a launcher that could
+   * not mint leaves the resolver with no secret, so `mint-failed` and the
+   * threshold's `absent` arrive together. Both findings then say "set the
+   * variable" in different words with overlapping steps, and an operator reading
+   * two remedy cards for one fix has to work out whether they are the same fix.
+   *
+   * So the DURABILITY finding yields to the more fundamental one: if the pane has
+   * already said there is no usable secret, it does not also say the one that
+   * does not exist was not written down. The ROW still reports `mint-failed`
+   * either way, so nothing is hidden — only the second remedy card. Nothing
+   * suppresses `minted-ephemeral`, because the threshold finding cannot fire with
+   * it: an ephemeral secret is present and long enough, and is exactly the state
+   * no other row can see.
+   */
+  const secretAlreadyFaulted = secret === 'absent' || secret === 'too-short'
+
+  if (!secretAlreadyFaulted && (secretOrigin === 'minted-ephemeral' || secretOrigin === 'mint-failed')) {
     const ephemeral = secretOrigin === 'minted-ephemeral'
     findings.push(
       diagnosticFinding({
@@ -1391,21 +1503,27 @@ function buildSessionBlock(topology: DeploymentTopology | undefined, runtime: En
   const partitionedWithoutSecure = runtime.cookiePartitioned === true && runtime.cookieSecure === false
 
   /**
-   * *** THREE EMPTY ROWS OR ONE SENTENCE. ***
+   * *** THREE EMPTY ROWS OR ONE SENTENCE — AND THEY RETURN NOW. ***
    *
-   * All three of these are read by the AUTH process and no endpoint this pane can
-   * reach reports one of them, so on every deployment they rendered "not reported"
-   * in a column — which an operator read as three broken checks rather than as one
-   * input nobody sends. Collapsed the way the admission block in
-   * `websocketSection.ts` is, and for the same reason.
+   * All three are read by the AUTH process. While nothing reported them they
+   * rendered "not reported" in a column, which an operator read as three broken
+   * checks rather than as one input nobody sent, so they were collapsed the way
+   * the admission block in `websocketSection.ts` is. The auth runtime route
+   * publishes all three today, so on a deployment where that route answers the
+   * three rows are back, flag by flag, exactly as this comment promised.
    *
-   * The replacement keeps `undetermined`: each of the three carried that when
-   * absent, and the cookie pair in particular is a configuration that silently
-   * discards every session, so a block that fell to healthy for want of a reading
-   * would be reassuring about the exact thing it cannot see. The rows return,
-   * flag by flag, the moment anything reports one — and because they are EFFECTIVE
-   * values rather than presence, a reading of them cannot be synthesised here:
-   * both default to true when unset, so "unset" and "off" are opposite answers.
+   * The collapse SURVIVES for the deployments where it is still the truth — an
+   * older server, and every deployment whose auth process has no HTTP listener to
+   * probe — and its one row now says WHICH of those it is instead of implying
+   * nobody publishes the facts.
+   *
+   * It keeps `undetermined`: each of the three carried that when absent, and the
+   * cookie pair in particular is a configuration that silently discards every
+   * session, so a block that fell to healthy for want of a reading would be
+   * reassuring about the exact thing it cannot see. A reading cannot be
+   * synthesised here either, because these are EFFECTIVE values rather than
+   * presence: both default to true when unset, so "unset" and "off" are opposite
+   * answers.
    */
   const runtimeFlagsReported =
     runtime.cookieSecure !== undefined || runtime.cookiePartitioned !== undefined || runtime.e2eTesting !== undefined
@@ -1416,13 +1534,13 @@ function buildSessionBlock(topology: DeploymentTopology | undefined, runtime: En
           label: safeConstant('Cookie Secure flag'),
           value: safeState(runtime.cookieSecure, 'on', 'off'),
           ...absentOr(runtime.cookieSecure, runtime.cookieSecure === false ? 'degraded' : 'informational'),
-          note: 'The EFFECTIVE value, not whether the variable is set: COOKIE_SECURE defaults to true when unset, so "not set" and "off" are opposite answers and a presence boolean would invert the diagnosis. Off is legitimate on a plain-HTTP local trial and wrong on anything reachable from elsewhere.',
+          note: 'The EFFECTIVE value, read off the attributes the auth process actually puts on the session cookie — not whether COOKIE_SECURE is set. The distinction is the whole reason this is asked of the server: the variable defaults to true when unset, so "not set" and "off" are opposite answers and a presence boolean would invert the diagnosis. It is not observable from here either: the session cookie is HttpOnly, and a cookie\'s attributes are never exposed to a page even when the cookie is. Off is legitimate on a plain-HTTP local trial and wrong on anything reachable from elsewhere.',
         }),
         diagnosticRow({
           label: safeConstant('Cookie Partitioned flag'),
           value: safeState(runtime.cookiePartitioned, 'on', 'off'),
           ...absentOr(runtime.cookiePartitioned, partitionedWithoutSecure ? 'broken' : 'informational'),
-          note: 'CHIPS partitioning, which also defaults to true when unset. The Partitioned attribute REQUIRES Secure: a browser that sees one without the other drops the whole cookie rather than the one attribute, so the session is silently never stored. Nothing logs an error on either side, which is how this broke the quickstart once.',
+          note: 'CHIPS partitioning, also the EFFECTIVE attribute rather than the variable, and it also defaults to true when unset. The Partitioned attribute REQUIRES Secure: a browser that sees one without the other drops the whole cookie rather than the one attribute, so the session is silently never stored. Nothing logs an error on either side, which is how this broke the quickstart once.',
         }),
         diagnosticRow({
           label: safeConstant('End-to-end test mode'),
@@ -1434,10 +1552,14 @@ function buildSessionBlock(topology: DeploymentTopology | undefined, runtime: En
     : [
         diagnosticRow({
           label: safeConstant('Effective cookie and session-mode flags'),
-          value: NOT_PUBLISHED,
+          value: safePresence(undefined),
           verdict: 'undetermined',
           evidence: EVIDENCE_ABSENT,
-          note: 'Three flags, named here rather than rendered as three empty rows: the effective Secure and Partitioned attributes on the session cookie, and whether E2E_TESTING is forcing legacy header sessions. All three are read by the AUTH process and no endpoint this pane can reach reports any of them. They cannot be observed from the browser either — the session cookie is not script-readable, and its attributes are not exposed to a page in any case. Each appears as its own row the moment a server reports it. Presence of the variables would not substitute: both cookie flags default to ON when unset, so "unset" and "off" are opposite answers and a presence reading would invert the diagnosis.',
+          note: `Three flags, named here rather than rendered as three empty rows: the effective Secure and Partitioned attributes on the session cookie, and whether E2E_TESTING is forcing legacy header sessions. All three are read by the AUTH process and arrive through its runtime route, so they are absent together and for one reason — which the "Auth runtime read" row above states. ${
+            runtime.authRuntimeProbe === undefined
+              ? 'Nothing reported that outcome either, so this is a server older than the whole block.'
+              : 'That outcome is reported above; on the bundled single container, where auth has no HTTP listener, these three are absent by design rather than by fault.'
+          } Each appears as its own row the moment the route answers. Presence of the variables would not substitute: both cookie flags default to ON when unset, so "unset" and "off" are opposite answers and a presence reading would invert the diagnosis. They cannot be observed from the browser at all — the session cookie is HttpOnly, and a cookie's attributes are never exposed to a page in any case.`,
         }),
       ]
 

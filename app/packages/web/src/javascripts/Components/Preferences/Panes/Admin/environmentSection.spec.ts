@@ -5,6 +5,7 @@ import { DECLARED_ENV_KEYS } from './diagnosticEnvironment'
 import { EFFORT_LABEL, type DeploymentTopology } from './diagnosticRemedies'
 import { EFFORT_TONE } from './diagnosticsPresentation'
 import {
+  NOT_PUBLISHED,
   UNRECOGNISED,
   VERDICTS,
   type DiagnosticFinding,
@@ -12,6 +13,7 @@ import {
   type SectionModel,
 } from './diagnosticsSections'
 import {
+  AUTH_RUNTIME_PROBES,
   BOUND_SERVICE_PROXIES,
   buildEnvironmentSection,
   CACHE_SETTINGS,
@@ -130,9 +132,10 @@ describe('buildEnvironmentSection with nothing reported', () => {
     const rows = allRows(model)
 
     // Three runtime rows collapsed into one, so the count fell by two; the
-    // secret's ORIGIN then added one back when the launcher's state reached the
-    // deployment report.
-    expect(rows).toHaveLength(21)
+    // secret's ORIGIN added one back when the launcher's state reached the
+    // deployment report, and the auth uptime and the auth-runtime read added two
+    // more when the runtime block landed.
+    expect(rows).toHaveLength(23)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -141,27 +144,31 @@ describe('buildEnvironmentSection with nothing reported', () => {
       })
     }
 
-    // *** THE VALUE SPLITS IN TWO, AND BOTH HALVES ARE PINNED. ***
-    // A field that could have been reported and was not says "not reported"; a
-    // field NOTHING in the system emits says so, because rendering the second as
-    // the first sent an operator hunting a defect in a working pane. Asserting
-    // only one half would let a build print the structural wording everywhere.
-    // *** ONE LABEL LEFT THIS LIST, AND THAT IS THE POINT OF THE CONSTANT. ***
-    // "Why this transport was chosen" belonged here while its field had no
-    // producer at all. The launcher's decision is on the deployment report now,
-    // so an absent reading is a server older than the field — a field that
-    // "could have been reported and was not", which is the definition of "not
-    // reported" and the opposite of the structural wording.
-    const structural = ['Time since this process started', 'Effective cookie and session-mode flags']
+    /**
+     * *** THE STRUCTURAL WORDING IS NOW WRONG FOR EVERY ROW IN THIS SECTION,
+     * AND THAT IS ASSERTED RATHER THAN ASSUMED. ***
+     *
+     * "no endpoint publishes this" is for a field with no producer anywhere.
+     * Three rows wore it: the lane decision, the gateway uptime, and the
+     * collapsed cookie/session-mode row. All three have producers now — the
+     * deployment block and the runtime block — so every absence in this section
+     * is "a field that could have been reported and was not", which is exactly
+     * what "not reported" means.
+     *
+     * A list that has emptied cannot be iterated into an assertion, so the
+     * property is stated directly: EVERY row reads "not reported", and NO row
+     * carries the structural wording. The second half would pass trivially if the
+     * two strings were ever made equal, so the constant is asserted distinct
+     * first — that is what keeps this from becoming a scan that cannot fail.
+     */
+    expect(NOT_PUBLISHED).not.toBe('not reported')
     for (const row of rows) {
       expect({ label: String(row.label), value: String(row.value) }).toEqual({
         label: String(row.label),
-        value: structural.includes(String(row.label)) ? 'no endpoint publishes this' : 'not reported',
+        value: 'not reported',
       })
     }
-    for (const label of structural) {
-      expect(rows.map((row) => String(row.label))).toContain(label)
-    }
+    expect(rows.map((row) => String(row.value))).not.toContain(String(NOT_PUBLISHED))
   })
 
   it('raises no finding and reports the section as undetermined rather than healthy', () => {
@@ -868,6 +875,162 @@ describe('why this transport was chosen', () => {
 })
 
 /* -------------------------------------------------------------------------- */
+/* The runtime block: two uptimes, and the probe that gates the auth half     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * *** THE ROWS THAT SAID NOBODY PUBLISHES THEM, AND THE ONE RULE THAT KEEPS
+ * THEM HONEST NOW. ***
+ *
+ * `payload.runtime` answers the gateway uptime and — through a probe of the auth
+ * process — auth's uptime, the two EFFECTIVE session-cookie attributes and the
+ * legacy-session switch. The four auth-owned ones are absent together whenever
+ * that probe did not answer, and `unreachable` is the CORRECT outcome on the
+ * bundled single container, where auth runs in-process with no HTTP listener.
+ *
+ * So the property under test is not "the rows render". It is that NO arm of the
+ * probe is treated as a fault, because a pane that paints the commonest
+ * single-container reading red is worse than one that says nothing.
+ */
+describe('the runtime block', () => {
+  const withRuntime = (overrides: Partial<EnvironmentRuntimeView>): SectionModel =>
+    buildEnvironmentSection({ topology: topology(), runtime: runtime(overrides) })
+
+  it('reports the gateway uptime as a duration, and as nothing when the block is absent', () => {
+    const reported = rowOf(withRuntime({ processUptimeSeconds: 7200 }), 'Time since this process started')
+    const absent = rowOf(buildEnvironmentSection({ topology: topology() }), 'Time since this process started')
+
+    expect(reported.value).toBe('2h 0m')
+    expect(reported.verdict).toBe('informational')
+    expect(reported.evidence.kind).toBe('direct')
+    // The field has a producer now, so an absence is an older server rather than
+    // a gap in the system — "not reported", never the structural wording.
+    expect(absent.value).toBe('not reported')
+    expect(absent.value).not.toBe(String(NOT_PUBLISHED))
+    expect(absent.evidence.kind).toBe('absent')
+  })
+
+  /**
+   * TWO UPTIMES, NOT ONE READ TWICE. They differ exactly when one half of the
+   * deployment restarted alone, which is the state in which a setting took on one
+   * container and not the other — the question the gateway row is most often
+   * opened to answer, and the one it cannot answer by itself.
+   */
+  it('reports the auth uptime separately, so a half-restarted deployment is visible', () => {
+    const model = withRuntime({ processUptimeSeconds: 120, authProcessUptimeSeconds: 864000 })
+
+    expect(rowOf(model, 'Time since this process started').value).toBe('2m 0s')
+    expect(rowOf(model, 'Time since the auth process started').value).toBe('10d 0h')
+    expect(rowOf(model, 'Time since the auth process started').verdict).toBe('informational')
+    // A gap is not a fault on its own, and the row must not invent one.
+    expect(model.worstVerdict).not.toBe('degraded')
+    expect(model.worstVerdict).not.toBe('broken')
+  })
+
+  it('reads an absent auth uptime as absent rather than as the gateway figure', () => {
+    const row = rowOf(withRuntime({ processUptimeSeconds: 7200 }), 'Time since the auth process started')
+
+    expect(row.value).toBe('not reported')
+    expect(row.value).not.toBe('2h 0m')
+    expect(row.evidence.kind).toBe('absent')
+  })
+
+  for (const outcome of AUTH_RUNTIME_PROBES) {
+    it(`prints the ${outcome} probe outcome as itself and carries no verdict for it`, () => {
+      const row = rowOf(withRuntime({ authRuntimeProbe: outcome }), 'Auth runtime read')
+
+      expect(row.value).toBe(outcome)
+      expect(row.value).not.toBe(UNRECOGNISED)
+      expect(row.evidence.kind).toBe('direct')
+      // *** NO ARM IS A FAULT. *** `unreachable` is what the bundled single
+      // container reports, every time, by design.
+      expect(row.verdict).toBe('informational')
+      expect(row.tone).toBe('neutral')
+    })
+  }
+
+  it('does not let an unreachable auth process drag the section down', () => {
+    const model = buildEnvironmentSection({
+      topology: topology({ mode: 'home-server', grpcProxyBindableInThisMode: false }),
+      runtime: runtime({ processUptimeSeconds: 60, authRuntimeProbe: 'unreachable' }),
+    })
+
+    expect(rowOf(model, 'Auth runtime read').note).toContain('ORDINARY ON THE SINGLE CONTAINER')
+    expect(model.worstVerdict).not.toBe('broken')
+    expect(model.worstVerdict).not.toBe('degraded')
+    expect(codesOf(model)).toEqual([])
+  })
+
+  it('refuses a probe outcome this build does not recognise instead of echoing it', () => {
+    const model = withRuntime({ authRuntimeProbe: 'PLANTED-PROBE-MARKER' })
+
+    expect(rowOf(model, 'Auth runtime read').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Auth runtime read').note).toContain('The gap is on the CLIENT')
+    expect(JSON.stringify(model)).not.toContain('PLANTED-PROBE-MARKER')
+  })
+
+  it('says nothing was reported for the probe when the whole block is absent', () => {
+    const row = rowOf(buildEnvironmentSection({ topology: topology() }), 'Auth runtime read')
+
+    expect(row.value).toBe('not reported')
+    expect(row.evidence.kind).toBe('absent')
+    expect(row.note).toContain('a server older than this block')
+  })
+
+  /**
+   * *** EFFECTIVE, NOT PRESENT — WHICH IS THE WHOLE REASON TO ASK THE SERVER.
+   * ***
+   *
+   * Both cookie flags default to TRUE when unset, so "not set" and "off" are
+   * opposite answers; a presence boolean would invert the diagnosis. The rows say
+   * so, and the three return as three rows the moment the probe answers.
+   */
+  it('returns the three session-mode rows as themselves once the probe answers', () => {
+    const model = withRuntime({
+      authRuntimeProbe: 'answered',
+      cookieSecure: true,
+      cookiePartitioned: false,
+      e2eTesting: false,
+    })
+
+    expect(rowOf(model, 'Cookie Secure flag').value).toBe('on')
+    expect(rowOf(model, 'Cookie Secure flag').note).toContain('EFFECTIVE value, read off the attributes')
+    expect(rowOf(model, 'Cookie Partitioned flag').value).toBe('off')
+    expect(rowOf(model, 'Cookie Partitioned flag').note).toContain('EFFECTIVE attribute rather than the variable')
+    expect(rowOf(model, 'End-to-end test mode').value).toBe('no')
+    expect(allRows(model).map((row) => String(row.label))).not.toContain('Effective cookie and session-mode flags')
+  })
+
+  it('still raises the partitioned-without-secure fault off the effective pair', () => {
+    const model = withRuntime({ authRuntimeProbe: 'answered', cookieSecure: false, cookiePartitioned: true })
+
+    expect(codesOf(model)).toContain('COOKIE_PARTITIONED_WITHOUT_SECURE')
+    expect(rowOf(model, 'Cookie Partitioned flag').verdict).toBe('broken')
+  })
+
+  /**
+   * The collapse SURVIVES for the deployments where it is still the truth, and
+   * its one row now says WHICH of the two it is instead of implying that nobody
+   * publishes the facts.
+   */
+  it('keeps the collapsed row when the probe could not read them, and names the reason', () => {
+    const probed = withRuntime({ authRuntimeProbe: 'unreachable', processUptimeSeconds: 10 })
+    const older = buildEnvironmentSection({ topology: topology() })
+
+    for (const model of [probed, older]) {
+      const row = rowOf(model, 'Effective cookie and session-mode flags')
+      expect(row.value).toBe('not reported')
+      expect(row.value).not.toBe(String(NOT_PUBLISHED))
+      expect(row.verdict).toBe('undetermined')
+      expect(allRows(model).map((label) => String(label.label))).not.toContain('Cookie Secure flag')
+    }
+
+    expect(rowOf(probed, 'Effective cookie and session-mode flags').note).toContain('absent by design rather than')
+    expect(rowOf(older, 'Effective cookie and session-mode flags').note).toContain('older than the whole block')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
 /* The same secret, asked how it came to be                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -974,6 +1137,83 @@ describe('how the internal gRPC secret came to be', () => {
       expect(rowOf(model, 'Internal gRPC secret origin').verdict).toBe('informational')
       expect(codesOf(model)).not.toContain('GRPC_SECRET_NOT_DURABLE')
     }
+  })
+
+  /**
+   * *** AT MOST ONE FINDING ABOUT THIS SECRET, SWEPT RATHER THAN SPOT-CHECKED.
+   * ***
+   *
+   * Two questions are asked of one secret — is it long enough, and where did it
+   * come from — and their answers overlap on a reachable state: a launcher that
+   * could not mint leaves the resolver with no secret, so `mint-failed` and the
+   * threshold's `absent` arrive together and both findings say "set the
+   * variable" with different steps. The cross-product is swept instead of
+   * sampled, because the colliding pair is one cell of it and a spot check is
+   * how you miss the cell you did not think of.
+   */
+  it('never raises two findings about one secret, across every origin and decision', () => {
+    const SECRET_CODES = ['GRPC_SECRET_TOO_SHORT', 'GRPC_SECRET_NOT_DURABLE']
+
+    for (const state of INTERNAL_GRPC_SECRET_STATES) {
+      for (const decision of [...PROXY_DECISIONS, 'unset', undefined]) {
+        for (const present of [true, false]) {
+          const model = buildEnvironmentSection({
+            topology: topology({
+              internalGrpcSecretState: state,
+              serviceProxyDecision: decision,
+              presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: present },
+            }),
+          })
+          const raised = codesOf(model).filter((code) => SECRET_CODES.includes(code))
+
+          expect({ state, decision, present, raised: raised.length }).toEqual({
+            state,
+            decision,
+            present,
+            raised: raised.length > 1 ? 'at most one' : raised.length,
+          })
+        }
+      }
+    }
+  })
+
+  /**
+   * The control for that guard, in both directions: the colliding cell really
+   * does reach both conditions, and the suppressed finding is NOT suppressed
+   * where it is the only thing that can see the fault. Without the first half the
+   * sweep above would be passing over a pair that never meets.
+   */
+  it('yields the durability finding to the absent-secret one, and only there', () => {
+    const collides = buildEnvironmentSection({
+      topology: topology({
+        internalGrpcSecretState: 'mint-failed',
+        serviceProxyDecision: 'no-secret',
+        presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: false },
+      }),
+    })
+
+    // Both conditions are genuinely met in this cell.
+    expect(rowOf(collides, 'Internal gRPC auth secret').value).toBe('not set')
+    expect(rowOf(collides, 'Internal gRPC secret origin').value).toBe('mint-failed')
+    // And exactly one finding is raised: the fundamental one.
+    expect(codesOf(collides)).toContain('GRPC_SECRET_TOO_SHORT')
+    expect(codesOf(collides)).not.toContain('GRPC_SECRET_NOT_DURABLE')
+
+    // Where the threshold says nothing, the durability finding is the only thing
+    // that can see the fault and still fires.
+    const alone = buildEnvironmentSection({ topology: topology({ internalGrpcSecretState: 'mint-failed' }) })
+    expect(codesOf(alone)).toContain('GRPC_SECRET_NOT_DURABLE')
+    // An ephemeral mint is never suppressed: the threshold finding cannot fire
+    // with it, because that secret is present and long enough.
+    const ephemeral = buildEnvironmentSection({
+      topology: topology({
+        internalGrpcSecretState: 'minted-ephemeral',
+        serviceProxyDecision: 'grpc-default',
+        presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true },
+      }),
+    })
+    expect(codesOf(ephemeral)).toContain('GRPC_SECRET_NOT_DURABLE')
+    expect(codesOf(ephemeral)).not.toContain('GRPC_SECRET_TOO_SHORT')
   })
 
   it('reports an origin and a threshold as two different facts about one secret', () => {
@@ -1540,6 +1780,7 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     'sk-live-PLANTED-SECRET-0123456789abcdef',
     'PLANTED-DECISION-MARKER',
     'PLANTED-SECRET-STATE-MARKER',
+    'PLANTED-PROBE-MARKER',
     'token-PLANTED-REVISION-MARKER',
     'v9.9.9-PLANTED-VERSION-MARKER',
     'PLANTED-FAILURE-CLASS-MARKER',
@@ -1596,10 +1837,16 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
       },
     },
     runtime: runtime({
+      // The runtime block's only string field, poisoned like every other one.
+      // The three booleans and the two durations cannot carry a value by
+      // construction, which is why they are not in the plant list — and is
+      // exactly the shape the server was asked for them in.
+      authRuntimeProbe: 'PLANTED-PROBE-MARKER',
       cookieSecure: false,
       cookiePartitioned: true,
       e2eTesting: true,
       processUptimeSeconds: 3600,
+      authProcessUptimeSeconds: 7200,
     }),
   })
 
@@ -1652,7 +1899,9 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
 
     expect(rowOf(model, 'Why this transport was chosen').value).toBe(UNRECOGNISED)
     expect(rowOf(model, 'Internal gRPC secret origin').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Auth runtime read').value).toBe(UNRECOGNISED)
     expect(rowOf(model, 'Most recent gRPC failure').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Time since the auth process started').value).toBe('2h 0m')
     expect(rowOf(model, 'Deployment identity').value).toBe('marker in an unrecognised format')
     expect(rowOf(model, 'Time since this process started').value).toBe('1h 0m')
     expect(codesOf(model).sort()).toEqual(

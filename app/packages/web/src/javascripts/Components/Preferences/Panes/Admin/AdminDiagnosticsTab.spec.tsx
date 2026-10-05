@@ -879,6 +879,71 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
     expect(activePanel().textContent).not.toContain('Cookie Secure flag')
   })
 
+  /**
+   * *** THE WIRING, THROUGH THE REAL TAB. ***
+   *
+   * `payload.runtime` is threaded now, and a model that compiles is not a model
+   * that renders: the rows are read out of the mounted table rather than off a
+   * builder, because an unthreaded field leaves every one of them reading "not
+   * reported" on a deployment that is reporting — the scar `environmentSection.ts`
+   * records in its own header, from the per-call fallback counters.
+   */
+  it('threads the runtime block, so the gateway and auth facts render as values', async () => {
+    await openEnvironment(
+      makeApplication({
+        serverGetJsonRequest: jest.fn().mockResolvedValue({
+          status: 200,
+          ok: true,
+          data: {
+            ...unavailablePayload,
+            runtime: {
+              processUptimeSeconds: 7200,
+              authRuntimeProbe: 'answered',
+              authProcessUptimeSeconds: 120,
+              cookieSecure: true,
+              cookiePartitioned: false,
+              e2eTesting: false,
+            },
+          },
+        }),
+      }),
+    )
+
+    expect(sectionRow('Time since this process started')[1]).toBe('2h 0m')
+    expect(sectionRow('Time since the auth process started')[1]).toBe('2m 0s')
+    expect(sectionRow('Auth runtime read')[1]).toBe('answered')
+    // The three collapsed flags are three rows again, as EFFECTIVE values.
+    expect(sectionRow('Cookie Secure flag')[1]).toBe('on')
+    expect(sectionRow('Cookie Partitioned flag')[1]).toBe('off')
+    expect(sectionRow('End-to-end test mode')[1]).toBe('no')
+    expect(activePanel().textContent).not.toContain('Effective cookie and session-mode flags')
+  })
+
+  /**
+   * The single container is the deployment this must not alarm: auth runs
+   * in-process with no HTTP listener, so the probe legitimately cannot complete
+   * and the four auth-owned rows are absent BY DESIGN.
+   */
+  it('does not paint an unprobeable auth process as a fault', async () => {
+    await openEnvironment(
+      makeApplication({
+        serverGetJsonRequest: jest.fn().mockResolvedValue({
+          status: 200,
+          ok: true,
+          data: {
+            ...unavailablePayload,
+            runtime: { processUptimeSeconds: 30, authRuntimeProbe: 'unreachable' },
+          },
+        }),
+      }),
+    )
+
+    expect(sectionRow('Auth runtime read')[1]).toBe('unreachable')
+    expect(sectionRow('Auth runtime read')[2]).toBe('Info')
+    expect(sectionRow('Time since the auth process started')[1]).toBe('not reported')
+    expect(sectionRow('Effective cookie and session-mode flags')[1]).toBe('not reported')
+  })
+
   it('says the server does not report presence rather than showing an empty table', async () => {
     const text = await openEnvironment(
       makeApplication({
@@ -920,6 +985,98 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     for (const heading of ['Durable storage', 'Shared cache', 'Internal service communication', 'Event delivery']) {
       expect(text).toContain(heading)
     }
+  })
+
+  /**
+   * *** THE OTHER HALF OF THE WIRING, THROUGH THE REAL TAB. ***
+   *
+   * `payload.datastore` and `payload.queues` are threaded now. Read out of the
+   * mounted table for the same reason as the runtime block: a field declared and
+   * not threaded leaves its rows reading "not reported" over a server that is
+   * answering, which is the one failure this whole task exists to close.
+   *
+   * The queue assertion is the load-bearing one. The VERDICT is the server's,
+   * derived once from its own consumer census plus the presence pair; the count
+   * is printed beside it as evidence and must not be the thing the verdict comes
+   * from.
+   */
+  it('threads the datastore and queue blocks, including the verdict the server derived', async () => {
+    await openBackend(
+      makeApplication({
+        serverGetJsonRequest: jest.fn().mockResolvedValue({
+          status: 200,
+          ok: true,
+          data: {
+            ...unavailablePayload,
+            datastore: {
+              connectionState: 'handle-only',
+              writeProbe: 'accepted',
+              migrationsApplied: true,
+              readRoundTripMs: 4,
+              writeRoundTripMs: 9,
+            },
+            queues: { separation: 'inherited-shared-queue', consumerCount: 5 },
+          },
+        }),
+      }),
+    )
+
+    expect(sectionRow('Database connection state')[1]).toBe('handle-only')
+    expect(sectionRow('Database connection state')[2]).toBe('Down')
+    expect(sectionRow('Database write probe')[1]).toBe('accepted')
+    // Narrow positive: accepted is a necessary condition, so it is capped.
+    expect(sectionRow('Database write probe')[2]).toBe('Unknown')
+    expect(sectionRow('Schema migrations')[1]).toBe('yes')
+    // Absent pool figures inside a block that DID report: the driver keeps none.
+    expect(sectionRow('Connection pool in use')[1]).toBe('no pool kept by this driver')
+    expect(sectionRow('Queue separation')[1]).toBe('inherited-shared-queue')
+    expect(sectionRow('Queue separation')[2]).toBe('Down')
+    expect(sectionRow('Co-resident queue consumers')[1]).toBe('5')
+    expect(sectionRow('Co-resident queue consumers')[2]).toBe('Info')
+    expect(activePanel().textContent).toContain('Two consumers are reading one event queue')
+    expect(activePanel().textContent).not.toContain('Connection, schema, pool and round trips')
+  })
+
+  /**
+   * The census WITHOUT a verdict: the server looked, could not classify, and
+   * omitted `separation`. The pane must render that as its own answer rather than
+   * reading `1` as "no collision" — which is exactly what a deployment whose
+   * workers live in another container reports.
+   */
+  it('renders a withheld queue verdict as withheld, not as the reassuring answer', async () => {
+    await openBackend(
+      makeApplication({
+        serverGetJsonRequest: jest.fn().mockResolvedValue({
+          status: 200,
+          ok: true,
+          data: { ...unavailablePayload, queues: { consumerCount: 1 } },
+        }),
+      }),
+    )
+
+    expect(sectionRow('Co-resident queue consumers')[1]).toBe('1')
+    expect(sectionRow('Queue separation')[1]).toBe('not classifiable from here')
+    expect(sectionRow('Queue separation')[2]).toBe('Unknown')
+    expect(activePanel().textContent).not.toContain('Two consumers are reading one event queue')
+  })
+
+  /**
+   * *** THE OTHER SIDE OF THAT DISTINCTION, AND IT IS A PROPERTY OF THE
+   * THREADING RATHER THAN OF THE SECTION. ***
+   *
+   * A payload with NO `queues` block at all is a server older than it, and the
+   * row must say "not reported" — not the withheld-verdict wording the test
+   * above pins. The section can only tell those apart if the tab hands it the
+   * RAW optional, so a `?? {}` anywhere on the way in collapses the two into
+   * one, silently, with every section-level test still green. That mutation
+   * survived until this assertion existed.
+   */
+  it('keeps an absent queue block distinct from a verdict the server withheld', async () => {
+    await openBackend()
+
+    expect(sectionRow('Queue separation')[1]).toBe('not reported')
+    expect(sectionRow('Queue separation')[1]).not.toBe('not classifiable from here')
+    expect(sectionRow('Co-resident queue consumers')[1]).toBe('not reported')
   })
 
   it('calls the same endpoint the Server pane calls, exactly once, and adds no route of its own', async () => {

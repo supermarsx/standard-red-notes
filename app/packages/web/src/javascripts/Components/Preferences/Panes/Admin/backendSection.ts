@@ -6,7 +6,6 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceProxy,
-  NOT_PUBLISHED,
   outcomesForSection,
   reportLine,
   safeConstant,
@@ -150,10 +149,13 @@ import { errorKind } from './healthReport'
  * reads their getter twice.
  *
  * A readiness probe cannot see this. It reports that the SERVICE answers, and the
- * service answers perfectly. So "connected" and "a handle exists" is a row this
- * section wants and no endpoint reports — declared below as `DatastoreView`,
- * rendered "not reported" on absent evidence, with the field named in the
- * request list at the bottom of this header rather than invented here.
+ * service answers perfectly. So "connected" and "a handle exists" had to be a row
+ * of its own — declared below as `DatastoreView` and rendered "not reported" while
+ * nothing produced it. IT HAS A PRODUCER NOW: the service that owns the handle
+ * reports the block, the gateway relays it through the auth runtime route, and
+ * `handle-only` is a member. The block is still absent whenever that route does
+ * not answer, which is a different absence from "nobody publishes this" and is
+ * stated as one.
  *
  * -------------------------------------------------------------------------------
  * 5. What this section does NOT say, because another section owns it.
@@ -174,32 +176,41 @@ import { errorKind } from './healthReport'
  * -------------------------------------------------------------------------------
  *
  * Every one of these would be a boolean, a closed enum, a bounded count or a
- * duration, and none of them needs a single address to express:
+ * duration, and none of them needs a single address to express. ITEMS (a) TO (f)
+ * ARE PUBLISHED NOW and are kept here, struck through in prose, because the
+ * reason each was wanted is the reason each row reads the way it does:
  *
- *   a. `datastore.connectionState` — `connected` / `handle-only` / `disconnected`
- *      per durable service. Section 4 above. The single highest-value field in
- *      this list: it is the only one that can see a defect this repo has
- *      actually shipped, on every topology at once.
- *   b. `datastore.migrationsApplied` + `pendingMigrations` — a boolean and a
- *      count. A schema one migration behind is a 500 on one route and nothing
- *      anywhere else.
- *   c. `datastore.poolInUse` + `poolSize` — two counts. Pool exhaustion presents
- *      as latency, which is the symptom this pane is worst at attributing.
- *   d. `datastore.readRoundTripMs` + `writeRoundTripMs` — two durations, measured
- *      by the service that owns the handle. A read-only replica, a full disk and
- *      a lock wait all pass a `SELECT 1` and fail a write.
- *   e. `datastore.deadOutboxRows` — one count. There is no requeue path for these
- *      rows, so the count is the whole diagnosis. NO ROW IS RENDERED for it
- *      until a server reports it: a row reading "not reported" for a number that
- *      has no producer invites the reading that the number is zero.
- *   f. `queues.separation` — `own-prefixed-queue` / `inherited-shared-queue` /
- *      `in-process-fan-out` / `none`. Section below. STILL WANTED, and the reason
- *      has narrowed: the presence map gained `API_GATEWAY_SQS_QUEUE_URL`, so the
- *      PREFIX half is derived here now and has its own row. What presence cannot
- *      show is a second consumer — a standalone gateway with no workers reports
- *      the same two booleans as one splitting a queue with four — so the
- *      `collided` verdict is still unresolved. Either this field, or a consumer
- *      count on the queue block, would settle it; a count is the smaller ask.
+ *   a. `datastore.connectionState` — LANDED. `connected` / `handle-only` /
+ *      `disconnected` / `other`, reported by the service that owns the handle.
+ *      Section 4 above. The single highest-value field in this list: it is the
+ *      only one that can see a defect this repo has actually shipped, on every
+ *      topology at once.
+ *   b. `datastore.migrationsApplied` + `pendingMigrations` — LANDED. A boolean and
+ *      a bounded count. A schema one migration behind is a 500 on one route and
+ *      nothing anywhere else. An ABSENT count means the schema was unreadable,
+ *      never that none are pending.
+ *   c. `datastore.poolInUse` + `poolSize` — LANDED. Two bounded counts. Pool
+ *      exhaustion presents as latency, which is the symptom this pane is worst at
+ *      attributing. ABSENT means the driver keeps no pool at all — SQLite, which
+ *      is what the single container runs — and not an empty one.
+ *   d. `datastore.readRoundTripMs` + `writeRoundTripMs` — LANDED, as bounded whole
+ *      milliseconds measured by the service that owns the handle, with
+ *      `writeProbe` beside them saying what the write ATTEMPT established. A
+ *      read-only replica, a full disk and a lock wait all pass a `SELECT 1` and
+ *      fail a write, and the write probe is the only row that separates them.
+ *   e. `datastore.deadOutboxRows` — STILL WANTED. One count. There is no requeue
+ *      path for these rows, so the count is the whole diagnosis. NO ROW IS
+ *      RENDERED for it until a server reports it: a row reading "not reported"
+ *      for a number that has no producer invites the reading that it is zero.
+ *   f. `queues.separation` — LANDED, together with `queues.consumerCount`, and
+ *      this is the one that mattered. The presence pair gave the PREFIX half; the
+ *      missing half was whether a SECOND consumer exists, which only the gateway
+ *      process can see because the sibling workers are supervisord programs in
+ *      its own container. The server derives the verdict from both ONCE, so the
+ *      count and the verdict cannot drift, and omits the verdict when it is not
+ *      classifiable. The count is supporting evidence and NEVER a verdict here:
+ *      `1` means "the only consumer I can see", which is also what a deployment
+ *      whose workers live in another container reports.
  *   g. `services[].probedVia` — `probe-map` / `service-url` / `not-configured`.
  *      Closed enum. It would turn the central caveat of section 3 from a
  *      permanent hedge into a measured fact: a probe that resolved from the
@@ -378,30 +389,71 @@ export const GATEWAY_QUEUE_PREFIXES = ['own-prefixed', 'not-own-prefixed', 'no-q
 
 export type GatewayQueuePrefix = (typeof GATEWAY_QUEUE_PREFIXES)[number]
 
-/** The states a durable service's `DataSource` handle can be in. See header §4. */
-export const DATABASE_CONNECTION_STATES = ['connected', 'handle-only', 'disconnected'] as const
+/**
+ * The states a durable service's `DataSource` handle can be in. See header §4.
+ *
+ * `other` is the SERVER's own collapse of a token its own build could not name,
+ * and it is a member here so that it renders as itself rather than as this
+ * build's "other (unrecognised)". The two are different facts — one is a server
+ * that could not name what it read, the other is a client behind its server —
+ * and the row's note says which.
+ */
+export const DATABASE_CONNECTION_STATES = ['connected', 'handle-only', 'disconnected', 'other'] as const
+
+export type DatabaseConnectionState = (typeof DATABASE_CONNECTION_STATES)[number]
+
+/**
+ * What the WRITE probe established, as the service that owns the handle reports
+ * it.
+ *
+ * The probe is a zero-row DML — a self-assignment under an impossible predicate
+ * — so it matches no row, takes no row lock and writes no undo record, and a
+ * read-only server, a read-only replica and a revoked UPDATE grant all REFUSE
+ * it. That is the whole value of the row: those three states pass every read this
+ * pane can take, including the auth readiness query, and fail every real write.
+ *
+ * `accepted` is reported as a NECESSARY condition rather than as health. A
+ * statement that changes nothing being accepted does not establish that a write
+ * with rows to change would succeed — a full volume, a constraint or a trigger
+ * all still refuse that — so the positive arm caps and the negative arm, which is
+ * conclusive, survives.
+ */
+export const WRITE_PROBE_OUTCOMES = ['accepted', 'refused', 'timed-out', 'not-attempted', 'other'] as const
+
+export type WriteProbeOutcome = (typeof WRITE_PROBE_OUTCOMES)[number]
 
 /* -------------------------------------------------------------------------- */
 /* Inputs                                                                     */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Facts about the durable store that no endpoint this pane can read reports yet.
+ * Facts about the durable store, as `payload.datastore`.
  *
- * Declared here, produced nowhere, exactly as the contract's
- * `LaneDegradationLedgerView` and the payload's `TransportFallbackView` were
- * declared before their producers existed. Every field is optional and typed
- * wide where it is the SERVER's enum, so a newer server's member degrades to
- * "other (unrecognised)" through `safeEnum` instead of being rendered as one of
- * the members this build does know.
+ * Declared here before a producer existed, exactly as the contract's
+ * `LaneDegradationLedgerView` and the payload's `TransportFallbackView` were.
+ * The producer exists now: the service that OWNS the handle reports it, and the
+ * gateway relays it through the auth runtime route — so the whole block is absent
+ * whenever that route did not answer, which the Environment section's probe row
+ * states. Every field is optional and typed wide where it is the SERVER's enum,
+ * so a newer server's member degrades to "other (unrecognised)" through
+ * `safeEnum` instead of being rendered as one of the members this build knows.
+ *
+ * *** ABSENT IS NOT ZERO, FIELD BY FIELD, AND EACH ABSENCE MEANS SOMETHING
+ * DIFFERENT. *** No `pendingMigrations` means the schema was UNREADABLE, not that
+ * none are pending. No `poolInUse`/`poolSize` means the driver keeps no pool at
+ * all — SQLite — and not an empty pool. No round trip means that probe did not
+ * complete. Each is rendered as its own state; collapsing any of them onto a
+ * zero would be the panel reporting a measurement nobody took.
  *
  * There is nothing in this shape that could carry a connection string, a
  * database name or a credential — which matters, because the whole reason it
  * exists is to make a DATABASE failure observable.
  */
 export type DatastoreView = {
-  /** `connected` / `handle-only` / `disconnected`. The defect in header §4. */
+  /** `connected` / `handle-only` / `disconnected` / `other`. The defect in header §4. */
   connectionState?: string
+  /** `accepted` / `refused` / `timed-out` / `not-attempted` / `other`. */
+  writeProbe?: string
   /** Whether every migration this build ships has been applied. */
   migrationsApplied?: boolean
   /** How many migrations the live schema is behind. `0` means up to date. */
@@ -424,8 +476,30 @@ export type DatastoreView = {
 
 /** Which queue the halves of this deployment are pointed at. See header item (f). */
 export type QueueView = {
-  /** One of `QUEUE_SEPARATIONS`, typed wide because it is the server's enum. */
+  /**
+   * One of `QUEUE_SEPARATIONS`, typed wide because it is the server's enum.
+   *
+   * OMITTED when the server could not classify it — a bare queue with no second
+   * co-resident consumer to compare against, or no census at all, where a second
+   * consumer could still exist in another container. That omission is the only
+   * form this fact has for saying "I cannot tell", and it must not be rendered as
+   * either answer.
+   */
   separation?: string
+  /**
+   * Co-resident queue consumers: this gateway, when a queue is configured for it,
+   * plus one for each supervisord worker beside it. A bounded cardinality, never
+   * an address.
+   *
+   * *** SUPPORTING EVIDENCE, NEVER A VERDICT. *** `1` does NOT mean "no
+   * collision": it means "the only consumer I can SEE", which is exactly what a
+   * deployment whose workers run in another container reports. And ABSENT IS NOT
+   * `1` — nothing at all means the control channel did not answer and no census
+   * was taken. The verdict is `separation`, derived from this and the presence
+   * pair ONCE, server-side, so the two cannot drift; this section renders the
+   * verdict and prints the count beside it.
+   */
+  consumerCount?: number
 }
 
 export type BackendSectionInput = {
@@ -486,6 +560,28 @@ const booleanOrAbsent = (value: unknown): boolean | undefined => (typeof value =
  */
 function numberOrAbsent(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * The same, for a figure rendered by `safeCount` — which additionally requires a
+ * whole number.
+ *
+ * *** WHY THIS IS NOT JUST `numberOrAbsent`. *** `safeCount` refuses a
+ * non-integer and prints "not reported"; `numberOrAbsent` admits one. A count of
+ * `1.5` therefore produced a row whose VALUE said "not reported" while its
+ * EVIDENCE said `direct` — the panel claiming it looked and got an answer, over
+ * a figure it had just refused to print. That is the row disagreeing with itself,
+ * which is the one defect this contract exists to make impossible, and it is a
+ * latent bug in every count-shaped row rather than only the new one.
+ *
+ * Durations keep `numberOrAbsent`: a fractional millisecond is a legitimate
+ * measurement and `safeDuration` prints it, so integrality there would refuse
+ * real readings.
+ */
+function countOrAbsent(value: unknown): number | undefined {
+  const number = numberOrAbsent(value)
+
+  return number !== undefined && Number.isInteger(number) ? number : undefined
 }
 
 type ProbeReading = {
@@ -792,6 +888,34 @@ function remedyForProbeNearDeadline(): Remedy {
   }
 }
 
+/**
+ * The store that reads and will not write.
+ *
+ * `peer-service` rather than `restart`: all three causes are on the database
+ * itself or on the grant it was reached with, and nothing in this app's
+ * configuration changes any of them. It is not `rebuild` either — no new image
+ * helps a replica that is read-only by design.
+ */
+function remedyForRefusedWrites(): Remedy {
+  return {
+    code: 'DATABASE_WRITES_REFUSED',
+    summary:
+      "The database accepted a read and refused a statement that changes nothing, so it will refuse every real write. The fix is on the database or on the grant, not on this deployment's configuration.",
+    steps: [
+      'Check whether the server is open read-only, or whether the address this service was given points at a READ REPLICA. A replica answers every read on this screen perfectly and refuses all DML, which is exactly this reading.',
+      'Check the UPDATE grant on the database user this service connects as. A revoked write grant produces the same outcome with the server fully writable.',
+      'Check for a full volume on the database host. A store with no room left refuses writes while reads keep being served from what is already there.',
+      'Do not restart this app to clear it. The probe is re-run on every read of this pane, so the row answers again the moment the store accepts a write.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      'The service that owns the connection reported that a zero-row write statement was REFUSED. It matches no row, takes no lock and writes no undo record, so nothing about the statement itself can be the cause.',
+      'Every read-based check on this screen — including the auth readiness query — passes in this state, which is why it is worth a row of its own rather than being inferred from latency.',
+    ],
+  }
+}
+
 function remedyForDatabaseHandleNotConnected(): Remedy {
   return {
     code: 'DATABASE_HANDLE_NOT_CONNECTED',
@@ -966,9 +1090,22 @@ function buildReadBlock(
 
 const OF = safeConstant('of')
 
-const UNREPORTED = safePresence(undefined)
-
 const MIGRATION_COUNT_UNREPORTED = safeConstant('(count not reported)')
+
+/**
+ * The two absences in this block that are NOT a missing measurement but a
+ * measurement that does not apply.
+ *
+ * A driver that keeps no pool at all — SQLite, which the bundled single container
+ * runs — reports neither pool figure, and that is a correct and complete answer.
+ * Rendering it as "not reported" invites the operator to go looking for the pool
+ * rows on a deployment that has no pool, and rendering it as `0 of 0` would be
+ * worse: a fabricated saturation reading over a driver that cannot saturate.
+ */
+const NO_POOL = safeConstant('no pool kept by this driver')
+
+/** The schema could not be read at all, which is not "nothing is pending". */
+const SCHEMA_UNREADABLE = safeConstant('schema not readable')
 
 const MIGRATIONS_PENDING = safeConstant('pending')
 
@@ -987,13 +1124,14 @@ function buildDatabaseBlock(
 
   const authProbeMs = services.byName.auth?.responseTimeMs
   const connectionState = DATABASE_CONNECTION_STATES.find((candidate) => candidate === datastore.connectionState)
+  const writeProbe = WRITE_PROBE_OUTCOMES.find((candidate) => candidate === datastore.writeProbe)
   const applied = booleanOrAbsent(datastore.migrationsApplied)
-  const pending = numberOrAbsent(datastore.pendingMigrations)
+  const pending = countOrAbsent(datastore.pendingMigrations)
   const readMs = numberOrAbsent(datastore.readRoundTripMs)
   const writeMs = numberOrAbsent(datastore.writeRoundTripMs)
 
-  const poolInUse = numberOrAbsent(datastore.poolInUse)
-  const poolSize = numberOrAbsent(datastore.poolSize)
+  const poolInUse = countOrAbsent(datastore.poolInUse)
+  const poolSize = countOrAbsent(datastore.poolSize)
   // Both halves or neither: one count on its own has no reading. A reported
   // maximum of zero is kept OUT of the saturation figure rather than dividing
   // by it, while the counts themselves are still printed.
@@ -1017,22 +1155,27 @@ function buildDatabaseBlock(
   ]
 
   /**
-   * *** FIVE ROWS OR ONE SENTENCE, and the five were read as five failures. ***
+   * *** THE COLLAPSE, AND THE ROWS IT NOW GIVES WAY TO. ***
    *
-   * Nothing produces `connectionState`, `migrationsApplied`, `poolInUse`,
-   * `readRoundTripMs` or `writeRoundTripMs` on any deployment: no endpoint this
-   * pane can reach reports one of them, which this block's own description has
-   * always said. So all five rendered "not reported", in a column, directly under
-   * two rows that DID report — and an operator reading that column reasonably
-   * concluded the diagnostics were failing rather than that the fields do not
-   * exist yet. The admission block in `websocketSection.ts` met the same problem
-   * and answered it the same way.
+   * While nothing produced `connectionState`, `migrationsApplied`, `poolInUse`,
+   * `readRoundTripMs` or `writeRoundTripMs`, all five rendered "not reported" in a
+   * column directly under two rows that DID report, and an operator reading that
+   * column reasonably concluded the diagnostics were failing rather than that the
+   * fields did not exist. They were collapsed into one named row, the way the
+   * admission block in `websocketSection.ts` is.
    *
-   * The replacement keeps `undetermined`, which is what each of the five carried.
-   * Dropping to `informational` would LOWER this section's worst verdict — the
-   * section would read healthy off one answering readiness probe — and a section
-   * that establishes two facts out of seven has not established that the database
-   * is well. Every row returns, field by field, the moment anything reports one.
+   * The service that owns the handle reports all of them now, so on a deployment
+   * whose auth runtime route answers the rows are back, field by field, exactly as
+   * this comment promised. The collapse SURVIVES for the deployments where it is
+   * still the truth — a server older than the block, and any deployment whose auth
+   * process cannot be probed — and its one row now says which of those it is
+   * instead of implying nobody publishes the facts.
+   *
+   * It keeps `undetermined`, which is what each of the five carried. Dropping to
+   * `informational` would LOWER this section's worst verdict — the section would
+   * read healthy off one answering readiness probe — and a section that
+   * establishes two facts out of eight has not established that the database is
+   * well.
    */
   /**
    * The gate is over the RAW fields, never over the parsed ones, and that
@@ -1045,6 +1188,7 @@ function buildDatabaseBlock(
    */
   const datastoreSilent =
     datastore.connectionState === undefined &&
+    datastore.writeProbe === undefined &&
     datastore.migrationsApplied === undefined &&
     datastore.pendingMigrations === undefined &&
     datastore.poolInUse === undefined &&
@@ -1056,10 +1200,10 @@ function buildDatabaseBlock(
     rows.push(
       diagnosticRow({
         label: safeConstant('Connection, schema, pool and round trips'),
-        value: NOT_PUBLISHED,
+        value: safePresence(undefined),
         verdict: 'undetermined',
         evidence: EVIDENCE_ABSENT,
-        note: "Five fields, named here rather than rendered as five empty rows: the data source's connection state, whether the live schema matches the build, connections checked out against the pool maximum, and the read and write round trips measured by the service that owns the connection. No endpoint this pane can reach reports any of them, and they are deliberately NOT filled in from the readiness probes above — a probe that says a service answers says nothing about the state of its connection, its schema or its pool. They are requested in this module's header. Each appears as its own row the moment a server reports it, and this block stays undetermined meanwhile because two answered facts out of seven is not a healthy database.",
+        note: "Six fields, named here rather than rendered as six empty rows: the data source's connection state, what a real write statement established, whether the live schema matches the build, connections checked out against the pool maximum, and the read and write round trips. They are reported by the service that OWNS the connection and reach this pane through the auth runtime route, so they are absent together and for one reason — a server older than the block, or an auth process that could not be probed, which the Environment & setup section's auth-runtime row states. They are deliberately NOT filled in from the readiness probes above: a probe that says a service answers says nothing about the state of its connection, its schema or its pool. Each appears as its own row the moment that route answers, and this block stays undetermined meanwhile because two answered facts out of eight is not a healthy database.",
       }),
     )
   } else {
@@ -1067,14 +1211,58 @@ function buildDatabaseBlock(
       diagnosticRow({
         label: safeConstant('Database connection state'),
         value: safeEnum(datastore.connectionState, DATABASE_CONNECTION_STATES),
-        ...absentOr(connectionState, connectionState === 'connected' ? 'healthy' : 'broken'),
-        note: 'Whether a durable service holds a CONNECTED data source or merely a handle. Not an academic row: this repo shipped a getter that rebuilt an unconnected data source on every read, so consumers wired after the connected one was built received a dead object and every durable command failed — on every topology, with the container reporting ready throughout. No endpoint reports this yet, so it reads "not reported"; the field is named in this module header rather than guessed at from the probes.',
+        // Gated on the RAW field, not the parsed one: a state this build cannot
+        // name was still REPORTED, so the evidence is direct and the value is the
+        // refusal constant. Gating on the parsed value printed "other
+        // (unrecognised)" while claiming nothing had been reported — the row
+        // disagreeing with itself.
+        //
+        // `other` is the server collapsing a token IT could not name, so it
+        // establishes nothing about the handle and must not be read as a fault
+        // either. Only the two states that ARE a fault carry one.
+        ...absentOr(
+          datastore.connectionState,
+          connectionState === 'connected'
+            ? 'healthy'
+            : connectionState === 'handle-only' || connectionState === 'disconnected'
+              ? 'broken'
+              : 'informational',
+        ),
+        note: 'Whether the durable service holds a CONNECTED data source or merely a handle, reported by the service that owns it. Not an academic row: this repo shipped a getter that rebuilt an unconnected data source on every read, so consumers wired after the connected one was built received a dead object and every durable command failed — on every topology, with the container reporting ready throughout. "handle-only" is exactly that state and is the member no readiness probe can see. "other" is the SERVER collapsing a token its own build could not name, which says nothing about the handle either way and carries no verdict; "other (unrecognised)" instead means this client is behind its server.',
+      }),
+      diagnosticRow({
+        label: safeConstant('Database write probe'),
+        value: safeEnum(datastore.writeProbe, WRITE_PROBE_OUTCOMES),
+        verdict:
+          writeProbe === 'accepted'
+            ? 'healthy'
+            : writeProbe === 'refused'
+              ? 'broken'
+              : writeProbe === 'timed-out'
+                ? 'degraded'
+                : 'informational',
+        // Raw, for the same reason as the row above: an outcome this build cannot
+        // name was still reported.
+        evidence:
+          datastore.writeProbe === undefined
+            ? EVIDENCE_ABSENT
+            : writeProbe === 'accepted' || writeProbe === 'refused'
+              ? evidenceProxy({
+                  observed:
+                    'that a statement which changes no row was accepted or refused by the service that owns the connection',
+                  cannotConfirm: 'that a real write, with rows to change, would succeed',
+                  necessaryCondition: true,
+                })
+              : EVIDENCE_DIRECT,
+        note: 'What a REAL write statement established, which no read can. The probe is a self-assignment under an impossible predicate, so it matches no row, takes no row lock and writes no undo record — and a read-only server, a read-only replica and a revoked UPDATE grant all refuse it while every read on this screen, including the auth readiness query above, still passes. "accepted" is reported as undetermined on purpose: a statement that changes nothing being accepted is necessary for a write to work and does not establish it, because a full volume, a constraint or a trigger refuses the real one. "refused" is conclusive and keeps its verdict. "not-attempted" is a deployment where the probe was not run rather than one that failed it.',
       }),
       diagnosticRow({
         label: safeConstant('Schema migrations'),
+        // An absent `applied` inside a block that DID report is the schema being
+        // unreadable, which is its own answer and not a missing field.
         value:
           applied === undefined
-            ? UNREPORTED
+            ? SCHEMA_UNREADABLE
             : applied
               ? safeYesNo(true)
               : safeTokens(
@@ -1083,28 +1271,41 @@ function buildDatabaseBlock(
                   MIGRATIONS_PENDING,
                 ),
         ...absentOr(applied, applied === true ? 'healthy' : 'degraded'),
-        note: 'Whether the live schema matches the build. A schema one migration behind answers readiness, serves most routes and fails exactly the ones that touch the new columns, which presents as a single broken feature rather than as a database problem. A count is reported and no schema, table or column name is.',
+        note: 'Whether the live schema matches the build. A schema one migration behind answers readiness, serves most routes and fails exactly the ones that touch the new columns, which presents as a single broken feature rather than as a database problem. A count is reported and no schema, table or column name is. AN ABSENT COUNT IS NOT ZERO: the migration table could not be read, so nothing is known about how far behind the schema is — reporting that as "none pending" would be the panel inventing the most reassuring reading available.',
       }),
       diagnosticRow({
         label: safeConstant('Connection pool in use'),
-        value: poolReported ? safeTokens(safeCount(poolInUse), OF, safeCount(poolSize)) : UNREPORTED,
+        /**
+         * *** THREE READINGS, NOT TWO. ***
+         *
+         * NEITHER raw figure present, inside a block that otherwise reported, is
+         * the driver keeping no pool — SQLite — which is a complete answer.
+         * ONE figure present is a pair that cannot be read, and that keeps the
+         * old composite rendering ("not reported of 10"): the half that did
+         * arrive is still a fact, and NO_POOL there would claim the driver has no
+         * pool over a server that just told us its maximum.
+         */
+        value:
+          datastore.poolInUse === undefined && datastore.poolSize === undefined
+            ? NO_POOL
+            : safeTokens(safeCount(poolInUse), OF, safeCount(poolSize)),
         ...absentOr(
           poolReported ? true : undefined,
           poolSaturation !== undefined && poolSaturation >= 0.9 ? 'degraded' : 'informational',
         ),
-        note: 'Connections checked out against the pool maximum. Exhaustion presents as latency rather than as an error — every query waits for a free connection and then succeeds — which is the symptom this pane is least able to attribute from a readiness probe alone. Two counts, never a connection string.',
+        note: 'Connections checked out against the pool maximum. Exhaustion presents as latency rather than as an error — every query waits for a free connection and then succeeds — which is the symptom this pane is least able to attribute from a readiness probe alone. Two counts, never a connection string. NO FIGURES IS NOT AN EMPTY POOL: a driver that keeps no pool reports neither, which is the complete and correct answer on the SQLite the bundled single container runs, and there is nothing to exhaust there.',
       }),
       diagnosticRow({
         label: safeConstant('Database read round trip'),
         value: safeDuration(seconds(readMs)),
         ...absentOr(readMs, 'informational'),
-        note: 'A read measured by the service that owns the connection, with no network hop or HTTP framing in it. Requested and not yet reported. It is the number the auth readiness duration above is a poor stand-in for.',
+        note: 'A read measured by the service that owns the connection, with no network hop or HTTP framing in it — the number the auth readiness duration above is a poor stand-in for, because that one also contains an internal hop and a cache ping. Absent means that probe did not complete, which is not a round trip of zero.',
       }),
       diagnosticRow({
         label: safeConstant('Database write round trip'),
         value: safeDuration(seconds(writeMs)),
         ...absentOr(writeMs, 'informational'),
-        note: 'Reported separately from the read on purpose: a read-only replica, a full volume and a long lock wait all pass a read and fail a write. A deployment in that state looks entirely healthy to every check this pane can currently take.',
+        note: 'Reported separately from the read on purpose: a read-only replica, a full volume and a long lock wait all pass a read and fail a write. WHETHER the write was accepted at all is the probe row above — this is only how long it took — and absent here means the attempt did not complete rather than that it was instant.',
       }),
     )
   }
@@ -1148,6 +1349,24 @@ function buildDatabaseBlock(
     )
   }
 
+  if (writeProbe === 'refused') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('DATABASE_WRITES_REFUSED'),
+        title: 'The database refused a statement that changes nothing',
+        detail:
+          'The probe is a self-assignment under an impossible predicate: it matches no row, takes no lock and writes no undo record, so a store that refuses it refuses every real write too. Three deployments land here and all three pass every read on this screen — a server opened read-only, a read-only replica being written to, and a database user whose UPDATE grant was revoked. The symptom is that sign-in, sync and sharing all read fine and nothing can be saved.',
+        verdict: 'broken',
+        evidence: evidenceProxy({
+          observed: 'that the service owning the connection had a zero-row write statement refused',
+          cannotConfirm: 'which of the three causes applies on this deployment',
+          necessaryCondition: true,
+        }),
+        remedy: remedyForRefusedWrites(),
+      }),
+    )
+  }
+
   if (applied === false) {
     findings.push(
       diagnosticFinding({
@@ -1165,7 +1384,7 @@ function buildDatabaseBlock(
   return {
     heading: safeConstant('Durable storage'),
     description:
-      'The server\'s own database, as far as any endpoint this pane can read reports it — which today is one readiness query taken by the auth service. The fields this section has asked for and does not have are named in a single row rather than rendered as a column of empty ones, because five rows each reading "not reported" is read as five failures and is in fact one absent input; they are not filled in from the probes either, since a probe that says a service answers says nothing at all about the state of its connection, its schema or its pool. No connection string, host, port or database name is read or reported anywhere in this section. A count of dead outbox rows is deliberately NOT shown as an empty row: there is no producer for it, and an empty count invites the reading that it is zero.',
+      'The server\'s own database: one readiness query taken by the auth service, plus the connection state, write probe, schema, pool and round trips reported by the service that OWNS the handle. Those six arrive together through the auth runtime route and are collapsed into a single named row when that route did not answer, because six rows each reading "not reported" is read as six failures and is in fact one absent input; they are never filled in from the probes either, since a probe that says a service answers says nothing at all about the state of its connection, its schema or its pool. ABSENT IS NOT ZERO in any of them, and each absence has its own wording: an unreadable schema, a driver that keeps no pool, a probe that did not complete. No connection string, host, port or database name is read or reported anywhere in this section. A count of dead outbox rows is deliberately NOT shown as an empty row: there is still no producer for it, and an empty count invites the reading that it is zero.',
     rows,
     findings,
   }
@@ -1796,13 +2015,34 @@ const QUEUE_PREFIX_NOTE: Record<GatewayQueuePrefix, string> = {
     'Neither name is set, so there is no queue for the halves of this deployment to share. Events fan out in-process, which is a supported configuration and is the single-node default.',
 }
 
-function buildQueueBlock(topology: DeploymentTopology | undefined, queues: QueueView): DiagnosticBlock {
+/**
+ * *** THE THREE READINGS OF AN ABSENT VERDICT, AND WHY THEY ARE NOT ONE. ***
+ *
+ * `queues.separation` is omitted by the server when it cannot classify the
+ * deployment, which is the only form this fact has for saying "I cannot tell". So
+ * the row has to tell three absences apart:
+ *
+ *   - the whole `queues` block missing: a server older than it.
+ *   - the block present and the verdict omitted: the server looked and could not
+ *     classify — a bare queue with no second co-resident consumer, or no census
+ *     at all, where a second consumer may still exist in another container.
+ *   - a token outside this build's tuple: this client is behind its server.
+ *
+ * Rendering the second as the first would blame the server's age for a judgement
+ * it deliberately withheld; rendering either as a VERDICT would be the panel
+ * inventing the reassuring half of a question it was explicitly told is open.
+ */
+const SEPARATION_UNCLASSIFIED = safeConstant('not classifiable from here')
+
+function buildQueueBlock(topology: DeploymentTopology | undefined, queues: QueueView | undefined): DiagnosticBlock {
+  const reported = queues ?? {}
   const queueConfigured = presenceOf(topology, 'SQS_QUEUE_URL')
   const ownQueueConfigured = presenceOf(topology, 'API_GATEWAY_SQS_QUEUE_URL')
   const topicConfigured = presenceOf(topology, 'SNS_TOPIC_ARN')
   const fanOut = queueConfigured === undefined ? undefined : queueConfigured ? 'queue-backed' : 'in-process'
   const prefix = queuePrefixOf(ownQueueConfigured, queueConfigured)
-  const separation = QUEUE_SEPARATIONS.find((candidate) => candidate === queues.separation)
+  const separation = QUEUE_SEPARATIONS.find((candidate) => candidate === reported.separation)
+  const consumers = countOrAbsent(reported.consumerCount)
 
   const rows: DiagnosticRow[] = [
     observedRow({
@@ -1829,10 +2069,32 @@ function buildQueueBlock(topology: DeploymentTopology | undefined, queues: Queue
           : `${QUEUE_PREFIX_NOTE[prefix]} Presence only — no queue address, endpoint or credential is read, and none could be. This row carries no verdict of its own, because the same two booleans are produced by a deployment where this is correct and by one where it is the fault.`,
     }),
     diagnosticRow({
+      label: safeConstant('Co-resident queue consumers'),
+      value: safeCount(consumers),
+      ...absentOr(consumers, 'informational'),
+      note: 'How many queue consumers live in THIS process group: the gateway, when a queue is configured for it, plus one for each supervisord worker beside it. A cardinality, never an address, and SUPPORTING EVIDENCE rather than a verdict — which is why it carries no tone whatever it reads. A ONE DOES NOT MEAN "NO COLLISION": it means "the only consumer I can see", which is exactly what a deployment whose workers run in another container reports. ABSENT DOES NOT MEAN ZERO OR ONE either: nothing at all means the control channel did not answer, so no census was taken. The verdict this feeds is the row below, which the server derives from this count and the queue presence pair together, once, so the two cannot disagree.',
+    }),
+    diagnosticRow({
       label: safeConstant('Queue separation'),
-      value: queues.separation === undefined ? NOT_PUBLISHED : safeEnum(queues.separation, QUEUE_SEPARATIONS),
+      value:
+        reported.separation === undefined
+          ? queues === undefined
+            ? safePresence(undefined)
+            : SEPARATION_UNCLASSIFIED
+          : safeEnum(reported.separation, QUEUE_SEPARATIONS),
+      // Only the collided member carries a verdict. `none` is tempting to call a
+      // degradation and is not one on its own evidence: the server reaches it from
+      // the MODE alone, and a compose deployment running no workers fans events out
+      // in-process perfectly well. A verdict there would be a judgement about which
+      // services the operator runs, made from a field that does not say.
       ...absentOr(separation, separation === 'inherited-shared-queue' ? 'broken' : 'informational'),
-      note: 'Whether the halves of this deployment consume SEPARATE queues or one between them, which is the highest-value fact in this block. It is a measured defect of this repo rather than a hypothetical: workers once inherited the gateway queue address, both halves consumed from one queue, and roughly four in five realtime pushes — plus revision and e-mail events — went to whichever consumer won the race and were then deleted, with nothing logged, because both consumers succeeded on different messages. HALF OF IT IS NOW DERIVABLE AND IS THE ROW ABOVE: the presence map gained the prefixed queue name, so a gateway that configured its own queue can be told from one reading the bare name. The half that remains is the one that decides the verdict — whether a SECOND CONSUMER is pointed at that queue — and presence cannot show it: a standalone gateway with no workers reports exactly the same two booleans as a gateway splitting a queue with four. So this row claims nothing, and will keep saying so until something reports a consumer census or a separation state outright. A separation STATE would answer it with no address in it at all.',
+      note: `Whether the halves of this deployment consume SEPARATE queues or one between them — the highest-value fact in this block, and a measured defect of this repo rather than a hypothetical: workers once inherited the gateway queue address, both halves consumed from one queue, and roughly four in five realtime pushes plus revision and e-mail events went to whichever consumer won the race and were then deleted, with nothing logged, because both consumers succeeded on different messages. The verdict is derived ONCE, on the server, from the queue presence pair and the consumer census above, so this row and that count cannot drift apart. ${
+        reported.separation === undefined
+          ? queues === undefined
+            ? 'Nothing was reported here: a server older than this block.'
+            : 'THE SERVER LOOKED AND WITHHELD A VERDICT, which is a different answer from not looking and is the only form this fact has for saying so. It happens on a deployment reading a bare queue with no second co-resident consumer to compare against, or where no census could be taken at all — and a second consumer may still exist in another container, which this process cannot see. So no verdict, rather than the reassuring one.'
+          : 'Only "inherited-shared-queue" carries a verdict here, and it is the proven one: a bare queue with a second co-resident consumer draining it. "none" is deliberately left without one — the server reaches it from the deployment MODE alone, and a compose deployment running no workers fans events out in-process perfectly well, so a tone there would be a judgement about which services are running made from a field that does not say. "in-process-fan-out" is the single container, where the fan-out is a function call and is correct rather than missing.'
+      }`,
     }),
   ]
 
@@ -1926,7 +2188,6 @@ const REPORT_DEAD_OUTBOX = reportLine(
 export function buildBackendSection(input: BackendSectionInput = {}): SectionModel {
   const status = isRecord(input.serverStatus) ? input.serverStatus : undefined
   const datastore = input.datastore ?? {}
-  const queues = input.queues ?? {}
   const services = readServices(status)
   const outcomes = outcomesForSection(input.outcomes ?? [], 'backend')
 
@@ -1935,7 +2196,11 @@ export function buildBackendSection(input: BackendSectionInput = {}): SectionMod
     buildDatabaseBlock(status, datastore, services),
     buildCacheBlock(status, input.topology),
     buildCommunicationBlock(services, input.topology, input.buildIdentified),
-    buildQueueBlock(input.topology, queues),
+    // The RAW optional, not a defaulted `{}`: an absent block is a server older
+    // than it, and a present block with no verdict in it is a server that looked
+    // and withheld one. Defaulting here would erase that distinction before the
+    // row that depends on it ever sees it.
+    buildQueueBlock(input.topology, input.queues),
   ]
 
   if (outcomes.length > 0) {

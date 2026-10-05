@@ -384,6 +384,79 @@ export type SyncDiagnosticsPayload = {
    * panel inventing a healthy reading.
    */
   transportFallback?: TransportFallbackView
+  /**
+   * The RUNTIME facts no browser can observe, served beside `deployment`.
+   *
+   * `processUptimeSeconds` is the gateway's own. The other four come from the
+   * AUTH process, which the gateway reads over the same probe URL the readiness
+   * check uses, so `authRuntimeProbe` is what says whether they could be read at
+   * all — and `unreachable` is the CORRECT answer on the bundled single
+   * container, where auth runs in-process and has no HTTP listener.
+   *
+   * The two cookie flags are EFFECTIVE values read off the real cookie factory,
+   * not presence booleans: both default to TRUE when unset, so "not set" and
+   * "off" are opposite answers and a presence reading would invert the
+   * diagnosis. They are not observable from a page either — the session cookie
+   * is HttpOnly, and a cookie's attributes are never exposed to script even when
+   * the cookie is.
+   *
+   * Every closed code is typed WIDE here for the reason every server enum in
+   * this file is: this build cannot be recompiled against a newer server, so an
+   * unrecognised member must degrade through `safeEnum` rather than be rendered
+   * as one of the members this build knows.
+   */
+  runtime?: {
+    processUptimeSeconds?: number
+    /** `answered` / `unreachable` / `not-configured` / `unreadable`. */
+    authRuntimeProbe?: string
+    /** The AUTH process's uptime. Absent unless the probe answered. */
+    authProcessUptimeSeconds?: number
+    cookieSecure?: boolean
+    cookiePartitioned?: boolean
+    e2eTesting?: boolean
+  }
+  /**
+   * The durable store, as reported by the service that OWNS the handle — which
+   * is why it arrives through the auth runtime probe above and is absent when
+   * that probe did not answer.
+   *
+   * ABSENT IS NOT ZERO anywhere in this block, and each absence is its own
+   * state: no `pendingMigrations` means the schema was unreadable, not that none
+   * are pending; no `poolInUse`/`poolSize` means the driver keeps no pool
+   * (SQLite), not an empty pool; no round trip means that probe did not
+   * complete.
+   */
+  datastore?: {
+    /** `connected` / `handle-only` / `disconnected` / `other`. */
+    connectionState?: string
+    /** `accepted` / `refused` / `timed-out` / `not-attempted` / `other`. */
+    writeProbe?: string
+    migrationsApplied?: boolean
+    pendingMigrations?: number
+    poolInUse?: number
+    poolSize?: number
+    readRoundTripMs?: number
+    writeRoundTripMs?: number
+  }
+  /**
+   * Which queue the halves of this deployment are pointed at.
+   *
+   * `separation` is the VERDICT, derived once on the server from the presence
+   * pair plus the census below so the two cannot drift, and OMITTED when it is
+   * not classifiable — which is the only form that can say "I cannot tell".
+   *
+   * `consumerCount` is the census it rests on: co-resident queue consumers, this
+   * gateway plus each supervisord worker. Supporting evidence, never a verdict —
+   * `1` means "the only consumer I can SEE", which is also what a deployment
+   * whose workers live in another container reports. ABSENT IS NOT `1` either:
+   * nothing at all means the control channel did not answer and no census was
+   * taken.
+   */
+  queues?: {
+    /** `own-prefixed-queue` / `inherited-shared-queue` / `in-process-fan-out` / `none`. */
+    separation?: string
+    consumerCount?: number
+  }
   gate?: {
     recorded?: boolean
     gatewayAttached?: boolean

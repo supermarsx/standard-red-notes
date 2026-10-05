@@ -8,6 +8,7 @@ import {
 } from './backendSection'
 import type { DeploymentTopology } from './diagnosticRemedies'
 import {
+  NOT_PUBLISHED,
   UNRECOGNISED,
   VERDICTS,
   type DiagnosticFinding,
@@ -146,9 +147,9 @@ describe('buildBackendSection with nothing reported', () => {
     const model = buildBackendSection()
     const rows = allRows(model)
 
-    // Five unproduced durable-store rows collapsed into one, so the count fell by
-    // four; the derived queue-prefix row then added one back.
-    expect(rows).toHaveLength(22)
+    // Six unproduced durable-store rows collapsed into one, so the count fell by
+    // five; the derived queue-prefix row and the consumer census added two back.
+    expect(rows).toHaveLength(23)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -157,21 +158,29 @@ describe('buildBackendSection with nothing reported', () => {
       })
     }
 
-    // *** THE VALUE SPLITS IN TWO, AND BOTH HALVES ARE PINNED. *** A field that
-    // could have been reported and was not says "not reported"; a field NOTHING
-    // in the system emits says so instead, because rendering the second as the
-    // first is what an operator read as a column of failed checks. Asserting only
-    // one half would let a build print the structural wording everywhere.
-    const structural = ['Connection, schema, pool and round trips', 'Queue separation']
+    /**
+     * *** THE STRUCTURAL WORDING IS NOW WRONG FOR EVERY ROW IN THIS SECTION,
+     * AND THAT IS ASSERTED RATHER THAN ASSUMED. ***
+     *
+     * Two rows wore "no endpoint publishes this": the collapsed durable-store row
+     * and the queue separation verdict. Both have producers now — the service
+     * that owns the handle reports the first, and the gateway derives the second
+     * from its own consumer census — so every absence here is "a field that could
+     * have been reported and was not", which is what "not reported" means.
+     *
+     * The emptied list cannot be iterated into an assertion, so the property is
+     * stated directly, with the constant asserted DISTINCT from "not reported"
+     * first: without that, a build that made the two strings equal would pass the
+     * scan trivially.
+     */
+    expect(NOT_PUBLISHED).not.toBe('not reported')
     for (const row of rows) {
       expect({ label: String(row.label), value: String(row.value) }).toEqual({
         label: String(row.label),
-        value: structural.includes(String(row.label)) ? 'no endpoint publishes this' : 'not reported',
+        value: 'not reported',
       })
     }
-    for (const label of structural) {
-      expect(rows.map((row) => String(row.label))).toContain(label)
-    }
+    expect(rows.map((row) => String(row.value))).not.toContain(String(NOT_PUBLISHED))
   })
 
   it('raises no finding and reports the section as undetermined rather than healthy', () => {
@@ -287,10 +296,122 @@ describe('a zero counter means measured none, an absent one means did not ask', 
     expect(rowOf(model, 'Database read round trip').value).toBe('not reported')
     expect(rowOf(model, 'Database read round trip').evidence.kind).toBe('absent')
     expect(rowOf(model, 'Database write round trip').value).toBe('not reported')
-    // A fractional pool count is still a finite non-negative number and is
-    // reported; `safeCount` refuses the non-integer, so the row says so rather
-    // than printing a connection count of 1.5.
+    // A fractional connection count is refused and the half that DID arrive is
+    // still printed, so the row says which half it could not read rather than
+    // printing a connection count of 1.5. It is also not read as "this driver
+    // keeps no pool": the server just reported a maximum, so a pool exists.
     expect(rowOf(model, 'Connection pool in use').value).toBe('not reported of 10')
+    expect(rowOf(model, 'Connection pool in use').value).not.toBe('no pool kept by this driver')
+    // And the row does not claim it looked and got an answer while printing a
+    // refusal — the value and the evidence have to agree.
+    expect(rowOf(model, 'Connection pool in use').evidence.kind).toBe('absent')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The write probe: the one row a read cannot stand in for                  */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THREE DEPLOYMENTS PASS EVERY READ ON THIS SCREEN AND REFUSE EVERY
+   * WRITE. ***
+   *
+   * A server opened read-only, a read-only replica being written to, and a
+   * revoked UPDATE grant. The probe is a self-assignment under an impossible
+   * predicate, so it matches no row and takes no lock, and all three refuse it —
+   * which makes `refused` conclusive about writes while `accepted` establishes
+   * only a NECESSARY condition: a statement that changes nothing being accepted
+   * does not mean a real write would be, because a full volume, a constraint or
+   * a trigger still refuses that one.
+   *
+   * So the two arms are asserted to behave DIFFERENTLY under the same proxy —
+   * the positive capped, the negative surviving. Asserting only one would pass
+   * against a row with no evidence discipline at all.
+   */
+  it('caps an accepted write probe and lets a refusal survive as broken', () => {
+    const accepted = buildBackendSection({ datastore: { writeProbe: 'accepted' } })
+    const refused = buildBackendSection({ datastore: { writeProbe: 'refused' } })
+
+    expect(rowOf(accepted, 'Database write probe').value).toBe('accepted')
+    expect(rowOf(accepted, 'Database write probe').claimed).toBe('healthy')
+    expect(rowOf(accepted, 'Database write probe').verdict).toBe('undetermined')
+    expect(rowOf(accepted, 'Database write probe').caveat).toContain('does not establish')
+    expect(codesOf(accepted)).not.toContain('DATABASE_WRITES_REFUSED')
+
+    expect(rowOf(refused, 'Database write probe').value).toBe('refused')
+    expect(rowOf(refused, 'Database write probe').claimed).toBe('broken')
+    expect(rowOf(refused, 'Database write probe').verdict).toBe('broken')
+    expect(refused.worstVerdict).toBe('broken')
+    const finding = findingOf(refused, 'DATABASE_WRITES_REFUSED')
+    expect(finding?.verdict).toBe('broken')
+    expect(finding?.remedy?.effort).toBe('peer-service')
+    expect(finding?.remedy?.steps?.[0]).toContain('READ REPLICA')
+  })
+
+  it('separates a timed-out probe from one that was never attempted', () => {
+    const timedOut = buildBackendSection({ datastore: { writeProbe: 'timed-out' } })
+    const notAttempted = buildBackendSection({ datastore: { writeProbe: 'not-attempted' } })
+
+    expect(rowOf(timedOut, 'Database write probe').verdict).toBe('degraded')
+    expect(rowOf(timedOut, 'Database write probe').evidence.kind).toBe('direct')
+    // Not a failure: a deployment where the probe did not run is not one that
+    // failed it, and a verdict here would invent an outage out of an omission.
+    expect(rowOf(notAttempted, 'Database write probe').verdict).toBe('informational')
+    for (const model of [timedOut, notAttempted]) {
+      expect(codesOf(model)).not.toContain('DATABASE_WRITES_REFUSED')
+    }
+  })
+
+  it('refuses a write-probe outcome this build does not recognise', () => {
+    const model = buildBackendSection({ datastore: { writeProbe: 'PLANTED-WRITE-PROBE-MARKER' } })
+
+    expect(rowOf(model, 'Database write probe').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Database write probe').verdict).toBe('informational')
+    expect(JSON.stringify(model)).not.toContain('PLANTED-WRITE-PROBE-MARKER')
+    expect(codesOf(model)).not.toContain('DATABASE_WRITES_REFUSED')
+  })
+
+  /**
+   * The server's own `other` is a token ITS build could not name, so it says
+   * nothing about the handle and must not read as a fault — while `handle-only`
+   * and `disconnected`, which do say something, keep their verdict.
+   */
+  it('does not read the server own collapse of a connection state as a fault', () => {
+    const collapsed = buildBackendSection({ datastore: { connectionState: 'other' } })
+
+    expect(rowOf(collapsed, 'Database connection state').value).toBe('other')
+    expect(rowOf(collapsed, 'Database connection state').value).not.toBe(UNRECOGNISED)
+    expect(rowOf(collapsed, 'Database connection state').verdict).toBe('informational')
+    expect(codesOf(collapsed)).not.toContain('DATABASE_HANDLE_NOT_CONNECTED')
+
+    for (const [state, verdict] of [
+      ['connected', 'healthy'],
+      ['handle-only', 'broken'],
+      ['disconnected', 'broken'],
+    ] as const) {
+      const model = buildBackendSection({ datastore: { connectionState: state } })
+      expect(rowOf(model, 'Database connection state').value).toBe(state)
+      expect(rowOf(model, 'Database connection state').verdict).toBe(verdict)
+    }
+    expect(codesOf(buildBackendSection({ datastore: { connectionState: 'handle-only' } }))).toContain(
+      'DATABASE_HANDLE_NOT_CONNECTED',
+    )
+  })
+
+  /**
+   * *** AN UNREADABLE SCHEMA IS NOT A SCHEMA WITH NOTHING PENDING. *** Inside a
+   * block that otherwise reported, an absent `migrationsApplied` means the
+   * migration table could not be read, and reporting that as "up to date" would
+   * be the panel choosing the most reassuring reading available.
+   */
+  it('says the schema was unreadable rather than implying nothing is pending', () => {
+    const row = rowOf(buildBackendSection({ datastore: { connectionState: 'connected' } }), 'Schema migrations')
+
+    expect(row.value).toBe('schema not readable')
+    expect(row.value).not.toBe('yes')
+    expect(row.value).not.toContain('0')
+    expect(row.verdict).toBe('undetermined')
+    expect(row.evidence.kind).toBe('absent')
+    expect(row.note).toContain('AN ABSENT COUNT IS NOT ZERO')
   })
 
   it('reports the pool only when both halves arrive, and warns at saturation', () => {
@@ -299,15 +420,39 @@ describe('a zero counter means measured none, an absent one means did not ask', 
     const quiet = buildBackendSection({ datastore: { poolInUse: 4, poolSize: 10 } })
     const saturated = buildBackendSection({ datastore: { poolInUse: 19, poolSize: 20 } })
 
-    // Nothing reported at all: the five unproduced rows collapse into one line
-    // rather than a column of "not reported", so the pool row is not rendered.
+    // Nothing reported at all: the six rows collapse into one line rather than a
+    // column of "not reported", so the pool row is not rendered. The collapsed
+    // row no longer claims nobody publishes the fields — the service that owns
+    // the handle does — so it reads as the ordinary absence it is.
     expect(allRows(neither).map((row) => String(row.label))).not.toContain('Connection pool in use')
-    expect(rowOf(neither, 'Connection, schema, pool and round trips').value).toBe('no endpoint publishes this')
-    // ONE HALF REPORTED IS STILL REPORTED. The collapse must not swallow a row
-    // whose field DID arrive and could not be read on its own — gating this on
-    // the parsed `poolReported` rather than on the raw fields would have.
-    expect(rowOf(half, 'Connection pool in use').value).toBe('not reported')
+    expect(rowOf(neither, 'Connection, schema, pool and round trips').value).toBe('not reported')
+    expect(rowOf(neither, 'Connection, schema, pool and round trips').value).not.toBe(String(NOT_PUBLISHED))
+    expect(rowOf(neither, 'Connection, schema, pool and round trips').note).toContain('auth runtime route')
+    /**
+     * *** ONE HALF REPORTED IS STILL REPORTED, AND NO POOL IS NOT AN EMPTY POOL.
+     * ***
+     *
+     * The collapse must not swallow a row whose field DID arrive and could not be
+     * read on its own — gating this on the parsed `poolReported` rather than on
+     * the raw fields would have. And inside a block that reported, absent pool
+     * figures mean the DRIVER KEEPS NO POOL (SQLite, which the single container
+     * runs), which is a complete answer rather than a missing measurement: a
+     * reader told "not reported" goes looking for a pool that does not exist, and
+     * `0 of 0` would be a saturation reading nobody took.
+     */
+    expect(rowOf(half, 'Connection pool in use').value).toBe('4 of not reported')
     expect(rowOf(half, 'Connection pool in use').evidence.kind).toBe('absent')
+    // NEITHER figure, inside a block that otherwise reported, is the driver
+    // keeping no pool at all — SQLite, which the single container runs. That is a
+    // complete answer, and it is neither "not reported" (which sends a reader
+    // looking for a pool that does not exist) nor `0 of 0` (a saturation reading
+    // nobody took).
+    const noPool = buildBackendSection({ datastore: { connectionState: 'connected' } })
+    expect(rowOf(noPool, 'Connection pool in use').value).toBe('no pool kept by this driver')
+    expect(rowOf(noPool, 'Connection pool in use').value).not.toBe('not reported')
+    expect(rowOf(noPool, 'Connection pool in use').value).not.toContain('0')
+    expect(rowOf(noPool, 'Connection pool in use').evidence.kind).toBe('absent')
+    expect(rowOf(noPool, 'Connection pool in use').note).toContain('NO FIGURES IS NOT AN EMPTY POOL')
     expect(rowOf(quiet, 'Connection pool in use').value).toBe('4 of 10')
     expect(rowOf(quiet, 'Connection pool in use').verdict).toBe('informational')
     expect(rowOf(saturated, 'Connection pool in use').value).toBe('19 of 20')
@@ -396,14 +541,30 @@ describe('the durable store', () => {
     expect(allRows(buildBackendSection()).map((row) => String(row.label))).not.toContain('Database connection state')
   })
 
+  /**
+   * *** REFUSED IS NOT UNREPORTED, AND THE ROW MUST NOT SAY BOTH. ***
+   *
+   * An unrecognised state WAS reported; this build simply cannot name it. So the
+   * value is the refusal constant and the EVIDENCE IS DIRECT — the panel did
+   * look, and it did get an answer. This assertion used to read `absent`, which
+   * is the row claiming nothing was reported while printing a refusal of
+   * something that was: the same disagreement between a value and its evidence
+   * that the pool row carried for a fractional count.
+   *
+   * No verdict is derived either way, which is the part that was right.
+   */
   it('refuses a connection state this build does not recognise rather than printing it', () => {
     const model = buildBackendSection({ datastore: { connectionState: 'reconnecting-soon' } })
+    const silent = buildBackendSection({ datastore: { writeProbe: 'accepted' } })
 
     expect(rowOf(model, 'Database connection state').value).toBe(UNRECOGNISED)
-    // Unrecognised is not a claim either way: the state was reported and this
-    // build cannot read it, so no verdict is derived from it.
-    expect(rowOf(model, 'Database connection state').evidence.kind).toBe('absent')
+    expect(rowOf(model, 'Database connection state').evidence.kind).toBe('direct')
+    expect(rowOf(model, 'Database connection state').verdict).toBe('informational')
     expect(codesOf(model)).not.toContain('DATABASE_HANDLE_NOT_CONNECTED')
+    // The control: a state that genuinely was NOT reported still reads absent,
+    // so the two are kept apart rather than merged in the other direction.
+    expect(rowOf(silent, 'Database connection state').value).toBe('not reported')
+    expect(rowOf(silent, 'Database connection state').evidence.kind).toBe('absent')
   })
 
   it('bucket the auth readiness duration without claiming it measures the database', () => {
@@ -1016,12 +1177,140 @@ describe('event delivery and queues', () => {
     expect(rowOf(own, 'Queue separation').verdict).toBe('informational')
     expect(codesOf(own)).not.toContain('EVENT_QUEUE_SHARED')
 
-    // Nothing produces this on any deployment, so the row says that rather than
-    // "not reported", while still claiming nothing.
-    expect(rowOf(unreported, 'Queue separation').value).toBe('no endpoint publishes this')
-    expect(rowOf(unreported, 'Queue separation').value).not.toBe('not reported')
+    // A server older than the whole block: the ordinary absence, and no longer
+    // the structural wording, because the field has a producer now.
+    expect(rowOf(unreported, 'Queue separation').value).toBe('not reported')
+    expect(rowOf(unreported, 'Queue separation').value).not.toBe(String(NOT_PUBLISHED))
     expect(rowOf(unreported, 'Queue separation').evidence.kind).toBe('absent')
+    expect(rowOf(unreported, 'Queue separation').note).toContain('a server older than this block')
     expect(codesOf(unreported)).not.toContain('EVENT_QUEUE_SHARED')
+  })
+
+  /**
+   * *** THE SERVER LOOKING AND WITHHOLDING IS NOT THE SERVER NOT LOOKING. ***
+   *
+   * `queues.separation` is OMITTED when the gateway could not classify the
+   * deployment — a bare queue with no second co-resident consumer, or no census
+   * at all, where a second consumer may still live in another container. That
+   * omission is the only form this fact has for saying "I cannot tell", so the
+   * row has to tell it apart from a server too old to send the block, and from a
+   * verdict this build cannot name. Three absences, three sentences.
+   */
+  it('separates a withheld verdict from a server that never sent one', () => {
+    const olderServer = buildBackendSection({ topology: topology({ presence: { SQS_QUEUE_URL: true } }) })
+    const withheld = buildBackendSection({
+      topology: topology({ presence: { SQS_QUEUE_URL: true } }),
+      queues: { consumerCount: 1 },
+    })
+
+    expect(rowOf(olderServer, 'Queue separation').value).toBe('not reported')
+    expect(rowOf(olderServer, 'Queue separation').note).toContain('a server older than this block')
+
+    expect(rowOf(withheld, 'Queue separation').value).toBe('not classifiable from here')
+    expect(rowOf(withheld, 'Queue separation').value).not.toBe('not reported')
+    expect(rowOf(withheld, 'Queue separation').note).toContain('THE SERVER LOOKED AND WITHHELD A VERDICT')
+    // Neither is a verdict, and neither invents the reassuring answer.
+    for (const model of [olderServer, withheld]) {
+      expect(rowOf(model, 'Queue separation').verdict).toBe('undetermined')
+      expect(rowOf(model, 'Queue separation').evidence.kind).toBe('absent')
+      expect(codesOf(model)).not.toContain('EVENT_QUEUE_SHARED')
+    }
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The census: supporting evidence, and three readings of a small number    */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** A COUNT OF `1` IS NOT "NO COLLISION", AND ABSENT IS NEITHER `0` NOR
+   * `1`. ***
+   *
+   * The census counts CO-RESIDENT consumers — this gateway plus each supervisord
+   * worker — so `1` means "the only consumer I can see", which is exactly what a
+   * deployment whose workers run in another container reports. The verdict comes
+   * from `separation`, which the server derives from this count AND the presence
+   * pair once, so the two cannot drift. This row therefore carries no verdict at
+   * any value, which is asserted across the whole range rather than at one point.
+   */
+  it('prints the consumer census as evidence and never as a verdict', () => {
+    for (const consumerCount of [0, 1, 2, 5, 64]) {
+      const model = buildBackendSection({
+        topology: topology({ presence: { SQS_QUEUE_URL: true } }),
+        queues: { consumerCount },
+      })
+      const row = rowOf(model, 'Co-resident queue consumers')
+
+      expect(row.value).toBe(String(consumerCount))
+      expect(row.verdict).toBe('informational')
+      expect(row.tone).toBe('neutral')
+      expect(row.evidence.kind).toBe('direct')
+      // The count alone never raises the shared-queue finding, at any value.
+      expect(codesOf(model)).not.toContain('EVENT_QUEUE_SHARED')
+    }
+  })
+
+  it('reads an absent census as a census that was never taken, not as one or zero', () => {
+    const row = rowOf(
+      buildBackendSection({
+        topology: topology({ presence: { SQS_QUEUE_URL: true } }),
+        queues: { separation: 'own-prefixed-queue' },
+      }),
+      'Co-resident queue consumers',
+    )
+
+    expect(row.value).toBe('not reported')
+    expect(row.value).not.toBe('0')
+    expect(row.value).not.toBe('1')
+    expect(row.evidence.kind).toBe('absent')
+    expect(row.note).toContain('ABSENT DOES NOT MEAN ZERO OR ONE')
+  })
+
+  it('refuses a census that is not a bounded count', () => {
+    for (const consumerCount of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const row = rowOf(
+        buildBackendSection({ topology: topology(), queues: { consumerCount } }),
+        'Co-resident queue consumers',
+      )
+
+      expect(row.value).toBe('not reported')
+      expect(row.evidence.kind).toBe('absent')
+    }
+  })
+
+  /**
+   * The verdict and the census arrive together on a collided deployment, and the
+   * verdict is what carries the finding. Asserting the pair is what proves the
+   * row is rendering the SERVER's derivation rather than re-deriving it here from
+   * the count — which is the thing that could drift.
+   */
+  it('renders the collided verdict the server derived, with the census beside it', () => {
+    const model = buildBackendSection({
+      topology: topology({ presence: { SQS_QUEUE_URL: true, API_GATEWAY_SQS_QUEUE_URL: false } }),
+      queues: { separation: 'inherited-shared-queue', consumerCount: 5 },
+    })
+
+    expect(rowOf(model, 'Queue separation').value).toBe('inherited-shared-queue')
+    expect(rowOf(model, 'Queue separation').verdict).toBe('broken')
+    expect(rowOf(model, 'Co-resident queue consumers').value).toBe('5')
+    expect(rowOf(model, 'Gateway event queue prefix').value).toBe('not-own-prefixed')
+    expect(codesOf(model)).toContain('EVENT_QUEUE_SHARED')
+  })
+
+  it('carries no verdict for the two separations that are not a fault', () => {
+    for (const separation of ['own-prefixed-queue', 'in-process-fan-out', 'none']) {
+      const model = buildBackendSection({ topology: topology(), queues: { separation, consumerCount: 1 } })
+
+      expect(rowOf(model, 'Queue separation').value).toBe(separation)
+      expect(rowOf(model, 'Queue separation').verdict).toBe('informational')
+      expect(codesOf(model)).not.toContain('EVENT_QUEUE_SHARED')
+    }
+    // `none` is deliberately NOT a degradation: the server reaches it from the
+    // MODE alone, and a compose deployment running no workers fans events out
+    // in-process perfectly well. A tone there would be a judgement about which
+    // services are running, taken from a field that does not say.
+    expect(rowOf(buildBackendSection({ queues: { separation: 'none' } }), 'Queue separation').note).toContain(
+      'a field that does not say',
+    )
   })
 
   /* ------------------------------------------------------------------------ */
@@ -1071,11 +1360,11 @@ describe('event delivery and queues', () => {
     expect(codesOf(model)).not.toContain('EVENT_QUEUE_SHARED')
     expect(model.worstVerdict).not.toBe('broken')
     expect(model.worstVerdict).not.toBe('degraded')
-    // And the separation row beside it is still unresolved, and says what is
-    // missing rather than deriving a verdict it cannot have.
-    expect(rowOf(model, 'Queue separation').value).toBe('no endpoint publishes this')
-    expect(rowOf(model, 'Queue separation').note).toContain('whether a SECOND CONSUMER')
-    expect(rowOf(model, 'Queue separation').note).toContain('HALF OF IT IS NOW DERIVABLE')
+    // And the separation row beside it claims nothing on its own: the verdict is
+    // the SERVER's to derive from this pair plus its own consumer census, and
+    // this fixture carries no queues block at all.
+    expect(rowOf(model, 'Queue separation').value).toBe('not reported')
+    expect(rowOf(model, 'Queue separation').verdict).toBe('undetermined')
   })
 
   it('derives no-queue-configured when neither name is set', () => {
@@ -1346,6 +1635,7 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
     'PLANTED-SERVICE-NAME',
     'PLANTED-SEPARATION-STATE',
     'PLANTED-CONNECTION-STATE',
+    'PLANTED-WRITE-PROBE-STATE',
   ]
 
   /**
@@ -1377,81 +1667,117 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
 
   const FRAGMENTS = [...new Set(SECRETS.flatMap(fragmentsOf))]
 
-  const plantedUnreadable = (): SectionModel => buildBackendSection({ statusError: PLANTED_ERROR })
+  const plantedUnreadableInput = (): BackendSectionInput => ({ statusError: PLANTED_ERROR })
 
-  const planted = (): SectionModel =>
-    buildBackendSection({
-      serverStatus: {
-        health: {
-          gateway: { redis: 'mysql://root:PLANTED-DB-PASSWORD@db.internal:3306/standardnotes' },
-          auth: {
-            reachable: true,
-            // Free-form on the wire, reported as a PRESENCE by the health report
-            // and read by nothing at all here.
-            status: 'https://syncing-server.planted.internal:3000/healthcheck/readiness',
-            checks: { db: false, redis: false, 'sk-live-PLANTED-SECRET-0123456789abcdef': true },
-            responseTimeMs: 2900,
-          },
+  const plantedUnreadable = (): SectionModel => buildBackendSection(plantedUnreadableInput())
+
+  /**
+   * The INPUT, returned so the sweep can prove it is not passing on a fixture
+   * that stopped carrying one of its plants.
+   *
+   * *** A PLANT THAT IS NOT IN THE INPUT PROVES NOTHING. *** Every string-typed
+   * field this module reads off the wire is poisoned here, and the test below
+   * asserts each marker is PRESENT in the serialised input before asserting it is
+   * absent from the output. Two fields arrived with the runtime block — the write
+   * probe and the queue census — and a hand-maintained list is exactly the thing
+   * that silently fails to grow with them.
+   */
+  const plantedInput = (): BackendSectionInput => ({
+    serverStatus: {
+      health: {
+        gateway: { redis: 'mysql://root:PLANTED-DB-PASSWORD@db.internal:3306/standardnotes' },
+        auth: {
+          reachable: true,
+          // Free-form on the wire, reported as a PRESENCE by the health report
+          // and read by nothing at all here.
+          status: 'https://syncing-server.planted.internal:3000/healthcheck/readiness',
+          checks: { db: false, redis: false, 'sk-live-PLANTED-SECRET-0123456789abcdef': true },
+          responseTimeMs: 2900,
         },
-        services: [
-          { name: 'api-gateway', reachable: true, status: 'ok' },
-          // A known service whose DETAIL carries the address a probe failure put
-          // there. This module reads `status` and `reachable` and never `detail`.
-          {
-            name: 'syncing-server',
-            reachable: false,
-            status: 'down',
-            detail: 'PLANTED-DETAIL-FROM-PROBE 10.44.12.9:3104',
-            responseTimeMs: 2400,
-          },
-          {
-            name: 'files',
-            reachable: true,
-            status: 'degraded',
-            detail: 'redis://user:PLANTED-PASSWORD@cache.internal:6379',
-          },
-          { name: 'websocket-gateway', reachable: false, status: 'unknown', detail: 'not configured' },
-          // A name off the wire, which must be counted and never printed.
-          { name: 'PLANTED-SERVICE-NAME', reachable: true, status: 'ok', responseTimeMs: 1 },
-        ],
-        // Fields this section does not read at all. Planted anyway: a future
-        // reader of this payload must not be able to add one without this scan
-        // noticing.
-        network: { trustProxy: '10.0.0.0/8', clientIpHeader: 'X-Planted-Header' },
-        masterSwitches: { currentVersion: 'v9.9.9-PLANTED-VERSION' },
       },
-      topology: topology({
-        // The three topology fields the files-probe target is derived from, each
-        // poisoned. `mode` and `serviceProxySetting` are the server's enums and go
-        // through `safeEnum`; the presence KEY is server-chosen text that this
-        // section only ever tests membership of.
-        mode: PLANTED_OPAQUE as 'other',
-        serviceProxySetting: PLANTED_OPAQUE as 'other',
-        presence: {
-          SQS_QUEUE_URL: true,
-          // Both halves of the queue pair, so the derived prefix row is exercised
-          // by the scan rather than sitting at "not reported" inside it.
-          API_GATEWAY_SQS_QUEUE_URL: true,
-          SNS_TOPIC_ARN: true,
-          'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
-          [PLANTED_OPAQUE]: true,
+      services: [
+        { name: 'api-gateway', reachable: true, status: 'ok' },
+        // A known service whose DETAIL carries the address a probe failure put
+        // there. This module reads `status` and `reachable` and never `detail`.
+        {
+          name: 'syncing-server',
+          reachable: false,
+          status: 'down',
+          detail: 'PLANTED-DETAIL-FROM-PROBE 10.44.12.9:3104',
+          responseTimeMs: 2400,
         },
-      }),
-      datastore: {
-        connectionState: 'PLANTED-CONNECTION-STATE',
-        migrationsApplied: false,
-        pendingMigrations: 2,
-        poolInUse: 19,
-        poolSize: 20,
-        readRoundTripMs: 40,
-        writeRoundTripMs: 90,
-        deadOutboxRows: 7,
+        {
+          name: 'files',
+          reachable: true,
+          status: 'degraded',
+          detail: 'redis://user:PLANTED-PASSWORD@cache.internal:6379',
+        },
+        { name: 'websocket-gateway', reachable: false, status: 'unknown', detail: 'not configured' },
+        // A name off the wire, which must be counted and never printed.
+        { name: 'PLANTED-SERVICE-NAME', reachable: true, status: 'ok', responseTimeMs: 1 },
+      ],
+      // Fields this section does not read at all. Planted anyway: a future
+      // reader of this payload must not be able to add one without this scan
+      // noticing.
+      network: { trustProxy: '10.0.0.0/8', clientIpHeader: 'X-Planted-Header' },
+      masterSwitches: { currentVersion: 'v9.9.9-PLANTED-VERSION' },
+    },
+    topology: topology({
+      // The three topology fields the files-probe target is derived from, each
+      // poisoned. `mode` and `serviceProxySetting` are the server's enums and go
+      // through `safeEnum`; the presence KEY is server-chosen text that this
+      // section only ever tests membership of.
+      mode: PLANTED_OPAQUE as 'other',
+      serviceProxySetting: PLANTED_OPAQUE as 'other',
+      presence: {
+        SQS_QUEUE_URL: true,
+        // Both halves of the queue pair, so the derived prefix row is exercised
+        // by the scan rather than sitting at "not reported" inside it.
+        API_GATEWAY_SQS_QUEUE_URL: true,
+        SNS_TOPIC_ARN: true,
+        'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
+        [PLANTED_OPAQUE]: true,
       },
-      queues: { separation: 'PLANTED-SEPARATION-STATE' },
-    })
+    }),
+    datastore: {
+      connectionState: 'PLANTED-CONNECTION-STATE',
+      writeProbe: 'PLANTED-WRITE-PROBE-STATE',
+      migrationsApplied: false,
+      pendingMigrations: 2,
+      poolInUse: 19,
+      poolSize: 20,
+      readRoundTripMs: 40,
+      writeRoundTripMs: 90,
+      deadOutboxRows: 7,
+    },
+    // Both queue fields: the string one poisoned, and the census at a value
+    // that would be a collision if anything here derived one from the count.
+    queues: { separation: 'PLANTED-SEPARATION-STATE', consumerCount: 5 },
+  })
+
+  const planted = (): SectionModel => buildBackendSection(plantedInput())
 
   /** Both planted models, so neither leak path can be left unscanned. */
   const plantedModels = (): readonly SectionModel[] => [planted(), plantedUnreadable()]
+
+  /**
+   * *** THE SWEEP'S OWN NON-VACUITY, FIELD BY FIELD. ***
+   *
+   * Asserted before the refusals: a marker no longer anywhere in the INPUT cannot
+   * be kept out of the output by anything, and a fixture that quietly stopped
+   * carrying one would leave its half of this scan reading green forever.
+   */
+  it('actually feeds every planted value into the section', () => {
+    // BOTH inputs, because the plant list covers both leak paths: the error text
+    // only ever reaches the unreadable model, and a scan over one input would
+    // call that plant missing or — worse, if the assertion were loosened to make
+    // it pass — stop noticing a plant that really had gone.
+    const serialisedInput = `${JSON.stringify(plantedInput())}\n${JSON.stringify(plantedUnreadableInput())}`
+
+    for (const secret of SECRETS) {
+      expect(serialisedInput).toContain(secret)
+    }
+  })
 
   it.each([...SECRETS])('keeps the planted value %p out of the serialised model', (secret) => {
     for (const model of plantedModels()) {
@@ -1493,9 +1819,14 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
     expect(rowOf(model, 'Admin status endpoint').value).toBe('answered')
     expect(rowOf(model, 'Database connection state').value).toBe(UNRECOGNISED)
     expect(rowOf(model, 'Queue separation').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Database write probe').value).toBe(UNRECOGNISED)
     // Derived from two booleans in a poisoned presence map, so the scan covers
     // the new read rather than stepping over it.
     expect(rowOf(model, 'Gateway event queue prefix').value).toBe('own-prefixed')
+    // The census is printed beside a refused verdict and raises nothing on its
+    // own, which is the property the whole row exists to hold.
+    expect(rowOf(model, 'Co-resident queue consumers').value).toBe('5')
+    expect(codesOf(model)).not.toContain('EVENT_QUEUE_SHARED')
     expect(rowOf(model, 'Schema migrations').value).toBe('no 2 pending')
     expect(rowOf(model, 'Connection pool in use').value).toBe('19 of 20')
     expect(rowOf(model, 'Syncing server probe').value).toBe('did not connect')
