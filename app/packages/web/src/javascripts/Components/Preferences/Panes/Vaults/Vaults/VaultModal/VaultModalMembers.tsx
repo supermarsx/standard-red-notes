@@ -57,14 +57,42 @@ export const VaultModalMembers = ({
   const application = useApplication()
   const currentUserUuid = application.sessions.getUser()?.uuid
 
+  /**
+   * Removing a member is OWNER-only, not admin-only, at both of the layers that actually decide:
+   * `VaultUserService.removeUserFromSharedVault` throws unless the signed-in user owns the vault, and
+   * the server's `RemoveUserFromSharedVault` rejects "only owner can remove other users from shared
+   * vault". The button used to be gated on `isCurrentUserAdmin`, so an admin member who is not the
+   * owner was offered an action that could only ever fail.
+   */
+  const isCurrentUserVaultOwner =
+    vault.isSharedVaultListing() && application.vaultUsers.isCurrentUserSharedVaultOwner(vault)
+
   const removeMemberFromVault = useCallback(
     async (memberItem: SharedVaultUserServerHash) => {
-      if (vault.isSharedVaultListing()) {
-        await application.vaultUsers.removeUserFromSharedVault(vault, memberItem.user_uuid)
-        onChange()
+      if (!vault.isSharedVaultListing()) {
+        return
       }
+
+      // `removeUserFromSharedVault` THROWS rather than returning a failed Result for its own
+      // preconditions (not the owner, vault locked), and it rotates the vault key AFTER the server
+      // has already dropped the membership, which can fail on its own. Unhandled, that was a silent
+      // dead click: the modal neither refreshed nor said anything.
+      //
+      // `onChange` runs either way, deliberately. A thrown precondition changed nothing, so a
+      // refetch is merely redundant; a failure after the server call means the member really is gone
+      // and the list on screen is the stale one.
+      try {
+        const result = await application.vaultUsers.removeUserFromSharedVault(vault, memberItem.user_uuid)
+        if (result.isFailed()) {
+          void application.alerts.alert(result.getError())
+        }
+      } catch (error) {
+        void application.alerts.alert(error instanceof Error ? error.message : String(error))
+      }
+
+      onChange()
     },
-    [application.vaultUsers, vault, onChange],
+    [application.alerts, application.vaultUsers, vault, onChange],
   )
 
   const vaultHasNoDesignatedSurvivor = vault.isSharedVaultListing() && !vault.sharing.designatedSurvivor
@@ -125,7 +153,7 @@ export const VaultModalMembers = ({
                 )}
               </div>
               <div className="col-start-2 row-start-2">{permission}</div>
-              {isCurrentUserAdmin && !isMemberVaultOwner && (
+              {isCurrentUserVaultOwner && !isMemberVaultOwner && (
                 <Button
                   className="col-start-2 row-start-3 mt-1"
                   label="Remove From Vault"

@@ -61,20 +61,34 @@ const member = (userUuid: string, permission = 'admin'): SharedVaultUserServerHa
     is_designated_survivor: false,
   }) as unknown as SharedVaultUserServerHash
 
-const makeApplication = (contactsByUserUuid: Record<string, { uuid: string; name: string }>) =>
+const okResult = { isFailed: () => false, getError: () => '' }
+
+type ApplicationOverrides = {
+  /** Whether the SIGNED-IN user owns this vault. Removal is owner-only at every enforcing layer. */
+  isCurrentUserSharedVaultOwner?: boolean
+  removeUserFromSharedVault?: jest.Mock
+  alert?: jest.Mock
+}
+
+const makeApplication = (
+  contactsByUserUuid: Record<string, { uuid: string; name: string }>,
+  overrides: ApplicationOverrides = {},
+) =>
   ({
     addAndroidBackHandlerEventListener: () => () => undefined,
     setAndroidBackHandlerFallbackListener: () => undefined,
     addNativeMobileEventListener: () => () => undefined,
     isNativeMobileWeb: () => false,
     sessions: { getUser: () => ({ uuid: OWN_UUID }) },
+    alerts: { alert: overrides.alert ?? jest.fn() },
     contacts: {
       findContactForServerUser: (user: SharedVaultUserServerHash) => contactsByUserUuid[user.user_uuid],
     },
     vaultUsers: {
       isVaultUserOwner: (user: SharedVaultUserServerHash) => user.user_uuid === OWN_UUID,
+      isCurrentUserSharedVaultOwner: () => overrides.isCurrentUserSharedVaultOwner ?? true,
       getFormattedMemberPermission: (permission: string) => `Permission: ${permission}`,
-      removeUserFromSharedVault: jest.fn(),
+      removeUserFromSharedVault: overrides.removeUserFromSharedVault ?? jest.fn().mockResolvedValue(okResult),
     },
   }) as unknown as import('@/Application/WebApplication').WebApplication
 
@@ -179,5 +193,110 @@ describe('VaultModalMembers separates unresolvable from untrusted', () => {
       (element) => element.getAttribute('title') ?? '',
     )
     expect(titles.some((title) => title.includes('your own membership'))).toBe(true)
+  })
+})
+
+/**
+ * Removal is OWNER-only wherever it is actually enforced: `VaultUserService.removeUserFromSharedVault`
+ * throws unless the signed-in user owns the vault, and the server's `RemoveUserFromSharedVault` fails
+ * with "only owner can remove other users from shared vault". The button was gated on
+ * `isCurrentUserAdmin`, so an admin MEMBER was offered an action that could only ever fail — and the
+ * click handler awaited a throwing call with no catch, so it failed silently.
+ */
+describe('VaultModalMembers offers removal only to the vault owner', () => {
+  const removeButtonLabels = () =>
+    Array.from(container.querySelectorAll('button')).map((button) => button.textContent ?? '')
+
+  it('(g) offers removal of another member when the signed-in user owns the vault', async () => {
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: true },
+    )
+
+    await render(application, [member(OTHER_UUID, 'write')])
+
+    // Precondition: the member on screen is NOT the owner, so the row is eligible for removal at all.
+    expect(application.vaultUsers.isVaultUserOwner(member(OTHER_UUID, 'write'))).toBe(false)
+    expect(removeButtonLabels().some((label) => label.includes('Remove From Vault'))).toBe(true)
+  })
+
+  it('(h) withholds removal from an admin member who does not own the vault', async () => {
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: false },
+    )
+
+    await render(application, [member(OTHER_UUID, 'admin')])
+
+    // Preconditions: the row rendered at all, and its member is not the vault owner — so the absence
+    // below is the owner gate and not an empty list or an owner row.
+    expect(container.textContent).toContain('Chico')
+    expect(application.vaultUsers.isVaultUserOwner(member(OTHER_UUID, 'admin'))).toBe(false)
+    expect(removeButtonLabels().some((label) => label.includes('Remove From Vault'))).toBe(false)
+  })
+
+  it('(i) surfaces a thrown removal instead of swallowing it, and still refreshes the list', async () => {
+    const removeUserFromSharedVault = jest.fn().mockRejectedValue(new Error('Cannot remove user from locked vault'))
+    const alert = jest.fn()
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: true, removeUserFromSharedVault, alert },
+    )
+
+    const onChange = jest.fn()
+    await act(async () => {
+      root.render(
+        createElement(ApplicationProvider, {
+          application,
+          children: createElement(AndroidBackHandlerProvider, {
+            application,
+            children: createElement(VaultModalMembers, {
+              members: [member(OTHER_UUID, 'write')],
+              vault,
+              isCurrentUserAdmin: true,
+              onChange,
+            }),
+          }),
+        }),
+      )
+    })
+
+    const removeButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      (button.textContent ?? '').includes('Remove From Vault'),
+    )
+    // Precondition: there is a button to click, so a passing test cannot mean "nothing happened".
+    expect(removeButton).toBeDefined()
+
+    await act(async () => {
+      removeButton?.click()
+    })
+
+    expect(removeUserFromSharedVault).toHaveBeenCalledTimes(1)
+    expect(alert).toHaveBeenCalledWith('Cannot remove user from locked vault')
+    expect(onChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('(j) surfaces a failed removal Result without throwing', async () => {
+    const removeUserFromSharedVault = jest
+      .fn()
+      .mockResolvedValue({ isFailed: () => true, getError: () => 'Only owner can remove other users' })
+    const alert = jest.fn()
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: true, removeUserFromSharedVault, alert },
+    )
+
+    await render(application, [member(OTHER_UUID, 'write')])
+
+    const removeButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      (button.textContent ?? '').includes('Remove From Vault'),
+    )
+    expect(removeButton).toBeDefined()
+
+    await act(async () => {
+      removeButton?.click()
+    })
+
+    expect(alert).toHaveBeenCalledWith('Only owner can remove other users')
   })
 })

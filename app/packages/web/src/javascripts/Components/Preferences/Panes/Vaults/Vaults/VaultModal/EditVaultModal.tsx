@@ -65,15 +65,18 @@ const EditVaultModalContent: FunctionComponent<{
     }
 
     if (existingVault.isSharedVaultListing()) {
-      setIsAdmin(
-        existingVault.isSharedVaultListing() && application.vaultUsers.isCurrentUserSharedVaultAdmin(existingVault),
-      )
-
       setIsLoadingCollaborationInfo(true)
       const users = await application.vaultUsers.getSharedVaultUsersFromServer(existingVault)
       if (users) {
         setMembers(users)
       }
+
+      // AFTER the member fetch, deliberately. `isCurrentUserSharedVaultAdmin` resolves the signed-in
+      // user's permission out of the VaultUserCache, and the only thing that fills that cache is the
+      // fetch above. Asked first, it saw an empty cache and fell back to "am I the owner?", so an
+      // admin member who does not own the vault was told they were not an admin for the whole life of
+      // the modal and never saw the admin-only controls.
+      setIsAdmin(application.vaultUsers.isCurrentUserSharedVaultAdmin(existingVault))
 
       const invites = await application.vaultInvites.getOutboundInvites(existingVault)
       if (!isClientDisplayableError(invites)) {
