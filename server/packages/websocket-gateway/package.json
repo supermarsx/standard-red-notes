@@ -24,6 +24,8 @@
     "e2e:push-roundtrip": "node e2e/push-roundtrip.e2e.mjs",
     "e2e:push-roundtrip:self-test": "node e2e/push-roundtrip.e2e.mjs --self-test",
     "e2e:sync-items-oversized": "node e2e/sync-items-oversized.e2e.mjs",
+    "e2e:capability-fallback": "node e2e/capability-fallback.e2e.mjs",
+    "e2e:capability-fallback:self-test": "node e2e/capability-fallback.e2e.mjs --self-test",
     "e2e:browser": "node e2e/browser.e2e.mjs && node e2e/feature-access.e2e.mjs && node e2e/account-export-import.e2e.mjs",
     "lint": "eslint src test",
     "lint:fix": "eslint src test --fix",

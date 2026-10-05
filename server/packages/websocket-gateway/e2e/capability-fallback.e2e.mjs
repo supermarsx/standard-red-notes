@@ -20,6 +20,16 @@
  * reconfigured by the caller) then differs only in the `lane` column, which is
  * exactly the comparison the matrix needs.
  *
+ * WHAT "works" MEANS. A lane row is green only on a PRESENT SUCCESS: a frame
+ * the gateway emits only after it actually did the work, or an ERROR whose code
+ * names a policy the server decided (`LANE_POLICY_CODES`). It is deliberately
+ * never "any answer that is not OPERATION_UNAVAILABLE". That predicate recorded
+ * `FILES_V1 lane: works` against an image on which EVERY cookie-session file
+ * operation was refused `FILE_ACCESS_DENIED` -- it is not a gate, because the
+ * one error code it names is not the one a broken lane produces. The FILES_V1
+ * row now carries a real file: OPEN accepted, every chunk ACKed, FINISH
+ * completed on the client's digest, downloaded back and compared byte for byte.
+ *
  * CONTROLS. Every probe here has a planted condition that must make it FAIL, so
  * a green row cannot be a probe that is incapable of going red:
  *
@@ -51,7 +61,8 @@
  *        must refuse 503 SYNC_DISABLED, and that is the pass),
  *      REGISTER_API (20240226 => cookie session, 20200115 => legacy),
  *      RPC_PATH, INVITE_HTTP_PATH,
- *      CONTROL, MATRIX_JSON (path to write the machine-readable matrix to).
+ *      CONTROL, MATRIX_JSON (path to write the machine-readable matrix to),
+ *      FILE_PROBE_BYTES (size of the file the FILES_V1 round trip carries).
  */
 import { WebSocket } from 'ws'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -263,6 +274,52 @@ function makeNote(bytes = 512) {
 }
 
 // ---------------------------------------------------------------------------
+// FILES_V1 binary wire format, byte-for-byte the same as
+// websocket-gateway/src/filesProtocol.ts: an 8-byte prefix (ASCII magic `SRNF`,
+// uint8 version, uint8 kind, BE uint16 header length), the JSON header, then
+// the payload. --self-test round-trips these against each other so a drift here
+// shows up with no stack.
+// ---------------------------------------------------------------------------
+const FILE_BINARY_MAGIC = Buffer.from('SRNF', 'ascii')
+const FILE_BINARY_PREFIX_BYTES = 8
+const FILES_PROTOCOL_VERSION = 1
+const FILE_PROBE_BYTES = Number(process.env.FILE_PROBE_BYTES ?? 3000)
+
+export function encodeFileChunkFrame(header, bytes) {
+  const headerBytes = Buffer.from(JSON.stringify(header), 'utf8')
+  const frame = Buffer.allocUnsafe(FILE_BINARY_PREFIX_BYTES + headerBytes.byteLength + bytes.byteLength)
+  FILE_BINARY_MAGIC.copy(frame, 0)
+  frame.writeUInt8(FILES_PROTOCOL_VERSION, 4)
+  frame.writeUInt8(header.kind === 'UPLOAD_CHUNK' ? 1 : 2, 5)
+  frame.writeUInt16BE(headerBytes.byteLength, 6)
+  headerBytes.copy(frame, FILE_BINARY_PREFIX_BYTES)
+  Buffer.from(bytes).copy(frame, FILE_BINARY_PREFIX_BYTES + headerBytes.byteLength)
+  return frame
+}
+
+/** Returns undefined for anything that is not a well-formed file chunk frame. */
+export function decodeFileChunkFrame(raw) {
+  const frame = Buffer.from(raw)
+  if (frame.byteLength < FILE_BINARY_PREFIX_BYTES) return undefined
+  if (!frame.subarray(0, FILE_BINARY_MAGIC.byteLength).equals(FILE_BINARY_MAGIC)) return undefined
+  if (frame.readUInt8(4) !== FILES_PROTOCOL_VERSION) return undefined
+  const headerLength = frame.readUInt16BE(6)
+  if (FILE_BINARY_PREFIX_BYTES + headerLength > frame.byteLength) return undefined
+  let header
+  try {
+    header = JSON.parse(
+      frame.subarray(FILE_BINARY_PREFIX_BYTES, FILE_BINARY_PREFIX_BYTES + headerLength).toString('utf8'),
+    )
+  } catch {
+    return undefined
+  }
+  const bytes = frame.subarray(FILE_BINARY_PREFIX_BYTES + headerLength)
+  if (!header || typeof header !== 'object' || header.byteLength !== bytes.byteLength) return undefined
+  if (createHash('sha256').update(bytes).digest('hex') !== header.sha256) return undefined
+  return { header, bytes }
+}
+
+// ---------------------------------------------------------------------------
 // Pure predicates, exercised by BOTH the live run and --self-test so the
 // pass/fail rule cannot drift between them.
 // ---------------------------------------------------------------------------
@@ -285,9 +342,118 @@ export const isRpcOk = (frame) => frame?.type === 'RPC_RESPONSE' && frame?.paylo
 export const isOperationUnavailable = (frame) =>
   frame?.type === 'ERROR' && frame?.payload?.code === 'OPERATION_UNAVAILABLE'
 
+/**
+ * ERROR codes that are a DECISION the lane carried, not a failure of the lane.
+ *
+ * Closed on purpose, and deliberately short. Every code the gateway emits for a
+ * transport, session, availability, quota or backend failure is ABSENT, so a
+ * new failure code added upstream cannot silently widen what counts as "the
+ * lane worked" -- it lands outside the list and reads as broken, which is the
+ * safe direction. Compare `SyncAuthorizationCode` in syncCommandHandler.ts;
+ * SESSION_STALE and SESSION_REVOKED are public there but are NOT policy here:
+ * they mean the credential this lane carries stopped working.
+ */
+export const LANE_POLICY_CODES = Object.freeze([
+  'NOT_AUTHORIZED',
+  'READ_ONLY',
+  'CONTENT_LIMIT',
+  'SHARED_VAULT_FORBIDDEN',
+  'LIVE_SYNC_DISABLED',
+  'CHALLENGE_EXPIRED',
+])
+
+/**
+ * Did the lane CARRY this request?
+ *
+ * The rule is a PRESENT SUCCESS: one of the frame types the handler emits only
+ * after it has actually done the work, or an ERROR whose code names a policy
+ * the server decided. It is deliberately NOT "any answer that is not
+ * OPERATION_UNAVAILABLE".
+ *
+ * That older predicate was not a gate. It reported `FILES_V1 lane: works`
+ * against the pre-`efa5b985` image, on which every cookie-session file
+ * operation answered `ERROR FILE_ACCESS_DENIED` -- an error, just not the one
+ * error it happened to name. A dead backend (BACKEND_ERROR / BACKEND_TIMEOUT),
+ * a refused credential (SESSION_STALE / SESSION_REVOKED), an unavailable store
+ * (INVITE_STORE_UNAVAILABLE) all read as a working lane under it, and only
+ * exactly one code could ever turn a row red.
+ */
+export function laneCarried(answer, successTypes, policyCodes = []) {
+  if (!answer || typeof answer.type !== 'string') return false
+  if (successTypes.includes(answer.type)) return true
+  if (answer.type !== 'ERROR') return false
+  return policyCodes.includes(answer?.payload?.code)
+}
+
+/**
+ * The FILES_V1 lane verdict: a file actually made the round trip.
+ *
+ * OPEN accepted, every chunk ACKed, FINISH completed on the digest the client
+ * computed, the download accepted and completed on that same digest, and the
+ * bytes that came back identical to the bytes that went out -- which is exactly
+ * the round trip `efa5b985` ran by hand to prove the fix. Every field must be
+ * PRESENT and positive; an absent stage is a failure, so a trip that died at
+ * FILES_UPLOAD_OPEN (what the broken build does) cannot read as success.
+ */
+export function fileRoundTripSucceeded(trip) {
+  if (!trip || typeof trip !== 'object') return false
+  const expected = trip.expectedSha256
+  return (
+    trip.metadataAnswered === true &&
+    trip.uploadAccepted === true &&
+    Number.isInteger(trip.chunksSent) &&
+    trip.chunksSent > 0 &&
+    trip.chunksAcked === trip.chunksSent &&
+    trip.finishCompleted === true &&
+    typeof expected === 'string' &&
+    /^[a-f0-9]{64}$/u.test(expected) &&
+    trip.uploadSha256 === expected &&
+    trip.downloadAccepted === true &&
+    trip.downloadCompleted === true &&
+    trip.downloadSha256 === expected &&
+    trip.bytesIdentical === true
+  )
+}
+
 /** The fallback verdict: an HTTP leg counts only on a 2xx that carried data. */
 export function httpFallbackSucceeded(result) {
   return result?.status === 200 && result?.json !== undefined && result?.json !== null
+}
+
+/**
+ * The weaker REACHABILITY bar, for the legs where a 200 is a deployment choice
+ * rather than a contract (an assistant with no provider configured, a
+ * collaboration authorize that legitimately refuses).
+ *
+ * Reachable means the ROUTE answered: a 2xx, or a 4xx the handler itself
+ * produced. 404/405 mean there is no route; a 3xx means the route is somewhere
+ * else; a 5xx means the route exists but nothing behind it answered. A client
+ * cannot fall back onto any of those, so none of them is reachability. The old
+ * `status !== 404 && status !== 405` called a 502 a working fallback.
+ */
+export function httpFallbackReachable(result) {
+  const status = result?.status
+  if (!Number.isInteger(status)) return false
+  if (status === 404 || status === 405) return false
+  return (status >= 200 && status < 300) || (status >= 400 && status < 500)
+}
+
+/** Tri-state so the matrix word means something: works > reachable > broken. */
+export function httpFallbackVerdict(result) {
+  if (httpFallbackSucceeded(result)) return 'works'
+  return httpFallbackReachable(result) ? 'reachable' : 'broken'
+}
+
+/**
+ * The legacy /sockets lane verdict.
+ *
+ * `ws` resolves `open` the moment the HTTP 101 lands, and "no close event yet"
+ * is an absence, not a success -- the same shape as the FILES_V1 false green.
+ * A lane counts as usable when the SERVER ANSWERED something we asked it for: a
+ * control pong on the live connection, with no close.
+ */
+export function legacyLaneUsable(probe) {
+  return probe?.pong === true && probe?.closed === false
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +465,16 @@ function openSyncSocket({ cookie } = {}) {
       origin: ORIGIN,
       ...(cookie ? { headers: { cookie } } : {}),
     })
-    const state = { ws, frames: [], close: undefined, upgradeStatus: undefined }
-    ws.on('message', (data) => {
+    const state = { ws, frames: [], binaries: [], close: undefined, upgradeStatus: undefined }
+    ws.on('message', (data, isBinary) => {
+      // FILES_V1 download chunks arrive as BINARY frames, never as JSON. The
+      // old handler ran them through JSON.parse and filed the result as
+      // `UNPARSEABLE`, which no predicate ever read -- so a download could not
+      // be measured at all, only its absence.
+      if (isBinary) {
+        state.binaries.push(Buffer.from(data))
+        return
+      }
       try {
         state.frames.push(JSON.parse(data.toString()))
       } catch {
@@ -335,6 +509,36 @@ function openLegacySocket(authToken) {
     ws.on('error', (err) => reject(err instanceof Error ? err : new Error(String(err))))
     ws.on('open', () => resolve(state))
     setTimeout(() => reject(new Error('legacy socket open timeout')), 15_000)
+  })
+}
+
+/**
+ * Ask a live legacy socket for a control pong. A websocket server answers a
+ * ping frame per RFC 6455, so a pong is evidence the connection is ALIVE and
+ * the server is still servicing it — which "we have not seen a close event" is
+ * not. A socket already closed, or one whose peer never answers, reports
+ * `pong: false` and the lane reads broken.
+ */
+function legacyLaneProbe(state, timeoutMs = 5_000) {
+  return new Promise((resolve) => {
+    if (state.close !== undefined || state.ws.readyState !== 1) {
+      resolve({ pong: false, closed: true })
+      return
+    }
+    let settled = false
+    const done = (pong) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ pong, closed: state.close !== undefined })
+    }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    state.ws.once('pong', () => done(true))
+    try {
+      state.ws.ping(randomBytes(8))
+    } catch {
+      done(false)
+    }
   })
 }
 
@@ -401,6 +605,134 @@ function selfTest() {
   )
   control('the unavailable probe', !isOperationUnavailable({ type: 'ERROR', payload: { code: 'INVALID_DIGEST' } }))
 
+  // laneCarried: a PRESENT success, or a named policy decision. The regression
+  // this replaces is the last case: the exact frame the pre-efa5b985 build
+  // answered, which the old `!isOperationUnavailable` predicate called `works`.
+  check(
+    'a success frame is carried',
+    laneCarried({ type: 'INVITE_RECONCILE' }, ['INVITE_RECONCILE'], LANE_POLICY_CODES),
+  )
+  check(
+    'a named policy refusal is carried',
+    laneCarried(
+      { type: 'ERROR', payload: { code: 'NOT_AUTHORIZED' } },
+      ['COLLABORATION_AUTHORIZED'],
+      LANE_POLICY_CODES,
+    ),
+  )
+  check(
+    'a backend failure is NOT carried',
+    !laneCarried({ type: 'ERROR', payload: { code: 'BACKEND_ERROR' } }, ['RPC_RESPONSE'], LANE_POLICY_CODES),
+  )
+  check(
+    'a stale session is NOT carried',
+    !laneCarried({ type: 'ERROR', payload: { code: 'SESSION_STALE' } }, ['FILES_METADATA'], LANE_POLICY_CODES),
+  )
+  check('no answer at all is NOT carried', !laneCarried(undefined, ['FILES_METADATA'], LANE_POLICY_CODES))
+  check(
+    'REGRESSION (efa5b985): FILE_ACCESS_DENIED is NOT a working files lane',
+    !laneCarried({ type: 'ERROR', payload: { code: 'FILE_ACCESS_DENIED' } }, ['FILES_METADATA'], LANE_POLICY_CODES),
+  )
+  control(
+    'the lane-carried probe',
+    !laneCarried({ type: 'ERROR', payload: { code: 'FILE_ACCESS_DENIED' } }, ['FILES_METADATA'], LANE_POLICY_CODES),
+  )
+
+  // The files binary wire format, against itself.
+  const probeBytes = randomBytes(64)
+  const probeHeader = {
+    kind: 'UPLOAD_CHUNK',
+    requestId: 'req-selftest',
+    transferId: 'transfer-selftest',
+    generation: 1,
+    index: 0,
+    offset: 0,
+    declaredSize: probeBytes.byteLength,
+    byteLength: probeBytes.byteLength,
+    sha256: createHash('sha256').update(probeBytes).digest('hex'),
+    final: true,
+  }
+  const encoded = encodeFileChunkFrame(probeHeader, probeBytes)
+  const decoded = decodeFileChunkFrame(encoded)
+  check(
+    'a file chunk frame round-trips through the wire format',
+    decoded !== undefined && Buffer.from(decoded.bytes).equals(probeBytes) && decoded.header.index === 0,
+  )
+  const tampered = Buffer.from(encoded)
+  tampered[tampered.byteLength - 1] ^= 0xff
+  control('the file chunk decoder', decodeFileChunkFrame(tampered) === undefined)
+
+  // fileRoundTripSucceeded: EVERY stage must be present. Each negative below is
+  // one stage knocked out of an otherwise complete trip.
+  const digestA = createHash('sha256').update(Buffer.from('a')).digest('hex')
+  const completeTrip = {
+    metadataAnswered: true,
+    uploadAccepted: true,
+    chunksSent: 2,
+    chunksAcked: 2,
+    finishCompleted: true,
+    uploadSha256: digestA,
+    downloadAccepted: true,
+    downloadCompleted: true,
+    downloadSha256: digestA,
+    bytesIdentical: true,
+    expectedSha256: digestA,
+  }
+  check('a complete file round trip succeeds', fileRoundTripSucceeded(completeTrip))
+  for (const [label, patch] of [
+    ['the metadata answer', { metadataAnswered: false }],
+    ['the upload OPEN', { uploadAccepted: false }],
+    ['a chunk ACK', { chunksAcked: 1 }],
+    ['every chunk', { chunksSent: 0, chunksAcked: 0 }],
+    ['the FINISH', { finishCompleted: false }],
+    ['the finish digest', { uploadSha256: 'f'.repeat(64) }],
+    ['the download OPEN', { downloadAccepted: false }],
+    ['the download completion', { downloadCompleted: false }],
+    ['the download digest', { downloadSha256: 'f'.repeat(64) }],
+    ['the byte comparison', { bytesIdentical: false }],
+  ]) {
+    check(`a file round trip missing ${label} FAILS`, !fileRoundTripSucceeded({ ...completeTrip, ...patch }))
+  }
+  check('an empty file round trip FAILS', !fileRoundTripSucceeded({}))
+  check('an absent file round trip FAILS', !fileRoundTripSucceeded(undefined))
+  // The exact shape the broken build produces: OPEN refused, nothing after it.
+  check(
+    'REGRESSION (efa5b985): a trip that died at FILES_UPLOAD_OPEN FAILS',
+    !fileRoundTripSucceeded({
+      metadataAnswered: true,
+      uploadAccepted: false,
+      chunksSent: 0,
+      chunksAcked: 0,
+      finishCompleted: false,
+      downloadAccepted: false,
+      downloadCompleted: false,
+      bytesIdentical: false,
+      expectedSha256: digestA,
+      lastError: 'FILE_ACCESS_DENIED',
+    }),
+  )
+  control('the file round-trip verdict', !fileRoundTripSucceeded({ ...completeTrip, bytesIdentical: false }))
+
+  check('a 200 with a body is a reachable fallback', httpFallbackReachable({ status: 200 }))
+  check('a 403 the handler produced is reachable', httpFallbackReachable({ status: 403 }))
+  check('a 404 is NOT reachable', !httpFallbackReachable({ status: 404 }))
+  check('a 405 is NOT reachable', !httpFallbackReachable({ status: 405 }))
+  check('a 502 is NOT reachable (the old predicate called this one green)', !httpFallbackReachable({ status: 502 }))
+  check('a 301 is NOT reachable', !httpFallbackReachable({ status: 301 }))
+  check('a fetch that never answered is NOT reachable', !httpFallbackReachable({ status: 0 }))
+  check(
+    'the tri-state verdict ranks works over reachable',
+    httpFallbackVerdict({ status: 200, json: { a: 1 } }) === 'works',
+  )
+  check('a 403 verdict is reachable', httpFallbackVerdict({ status: 403, json: { error: {} } }) === 'reachable')
+  check('a 503 verdict is broken', httpFallbackVerdict({ status: 503, json: { error: {} } }) === 'broken')
+  control('the reachability probe', !httpFallbackReachable({ status: 503 }))
+
+  check('a legacy lane that answered a ping is usable', legacyLaneUsable({ pong: true, closed: false }))
+  check('a legacy lane that never ponged is NOT usable', !legacyLaneUsable({ pong: false, closed: false }))
+  check('a legacy lane that closed is NOT usable', !legacyLaneUsable({ pong: true, closed: true }))
+  control('the legacy lane probe', !legacyLaneUsable({ pong: false, closed: false }))
+
   check('a 200 with a body is a successful fallback', httpFallbackSucceeded({ status: 200, json: { a: 1 } }))
   check('a 401 is not a successful fallback', !httpFallbackSucceeded({ status: 401, json: { error: {} } }))
   check(
@@ -455,6 +787,16 @@ async function main() {
       body: { deviceId: DEVICE_ID + '-ctrl2' },
     })
     note(`cookie-only ticket mint (no Authorization header) status=${cookieOnly.status}`)
+  }
+  if (REGISTER_API === '20240226' && !cookieSession) {
+    // Registered at the cookie api and got a `1:` token back: the stack has
+    // `E2E_TESTING=true` (auth binds `forceLegacySessions` to it) or an
+    // equivalent override. EVERY row below is then measured on a header
+    // session, which is the one configuration in which a cookie-session defect
+    // -- the FILES_V1 defect efa5b985 fixed, among others -- cannot occur.
+    note(
+      'this run registered at api 20240226 and still got a LEGACY (1:) session, so the stack forces legacy sessions (E2E_TESTING=true): every row below says nothing about cookie sessions',
+    )
   }
   if (EXPECT_SESSION) {
     // Asserted, never assumed. Both kinds return a `session` object and set
@@ -746,12 +1088,15 @@ async function main() {
       25_000,
     )
     assistantLane = answer
-    // A stack with no assistant provider configured answers an upstream error,
-    // NOT OPERATION_UNAVAILABLE. The distinction is the whole point: the first
-    // means the lane carried the call, the second means it refused to.
+    // A stack with no assistant provider configured still ACCEPTS the RPC and
+    // reports the provider error in-band on the stream, so the bar here is an
+    // `RPC_*` frame -- a type the gateway emits only once it has handed the
+    // call to the backend -- or a named policy refusal. An ERROR frame of any
+    // other code (BACKEND_ERROR, SESSION_STALE, OPERATION_UNAVAILABLE) means
+    // the lane did not carry it.
     const carried = check(
-      'a STREAM_ASSISTANT RPC is CARRIED by the lane (any answer that is not OPERATION_UNAVAILABLE)',
-      answer !== undefined && !isOperationUnavailable(answer),
+      'a STREAM_ASSISTANT RPC is CARRIED by the lane (an RPC_* answer, or a named policy refusal)',
+      laneCarried(answer, ['RPC_ACCEPTED', 'RPC_RESPONSE', 'RPC_CHUNK', 'RPC_END'], LANE_POLICY_CODES),
       { type: answer?.type, status: answer?.payload?.status, code: answer?.payload?.code },
     )
     row('STREAM_ASSISTANT', {
@@ -768,20 +1113,23 @@ async function main() {
   })
   // The fallback bar here is REACHABILITY, not a 200: an unconfigured provider
   // is a deployment choice, while a 404 would mean the route does not exist and
-  // the socket is the only way in.
-  const assistantReachable = check(
-    `FALLBACK: POST ${ASSISTANT_PATH} is reachable over plain HTTP (not 404/405)`,
-    assistantFallback.status !== 404 && assistantFallback.status !== 405,
-    { status: assistantFallback.status, body: assistantFallback.text.slice(0, 160) },
+  // the socket is the only way in. Reachability is a CLOSED set of statuses
+  // (see httpFallbackReachable): the old `!== 404 && !== 405` called a 502 a
+  // working fallback.
+  const assistantVerdict = httpFallbackVerdict(assistantFallback)
+  check(
+    `FALLBACK: POST ${ASSISTANT_PATH} ANSWERS over plain HTTP (2xx, or a 4xx the handler produced)`,
+    assistantVerdict !== 'broken',
+    { status: assistantFallback.status, verdict: assistantVerdict, body: assistantFallback.text.slice(0, 160) },
   )
   row('STREAM_ASSISTANT', {
-    fallback: assistantReachable ? 'reachable' : 'broken',
+    fallback: assistantVerdict,
     fallbackPath: `POST ${ASSISTANT_PATH}`,
     fallbackStatus: assistantFallback.status,
   })
   if (CONTROL) {
     const broken = await raw('POST', '/v1/assistant/stream-does-not-exist', { token, body: {} })
-    control('the assistant reachability probe', broken.status === 404 || broken.status === 405, {
+    control('the assistant reachability probe', httpFallbackVerdict(broken) === 'broken', {
       status: broken.status,
     })
   }
@@ -807,12 +1155,14 @@ async function main() {
       (f) => f.requestId === requestId && (f.type === 'COLLABORATION_AUTHORIZED' || f.type === 'ERROR'),
       25_000,
     )
-    // An ANSWER is the contract. A deployment where collaboration is not
-    // entitled answers `authorized: false`, which is a correct answer, not a
-    // broken lane; OPERATION_UNAVAILABLE or silence is a broken lane.
+    // An ANSWER is the contract, but it has to be an answer the server
+    // DECIDED: a COLLABORATION_AUTHORIZED frame (`authorized` either way), or
+    // an ERROR naming a policy -- a note this account cannot edit answers
+    // ERROR NOT_AUTHORIZED, which is correct. BACKEND_ERROR, BACKEND_TIMEOUT,
+    // SESSION_STALE, OPERATION_UNAVAILABLE and silence are all a broken lane.
     const carried = check(
-      'a COLLABORATION_AUTHORIZE frame is ANSWERED by the lane',
-      answer !== undefined && !isOperationUnavailable(answer),
+      'a COLLABORATION_AUTHORIZE frame is ANSWERED by the lane (authorized either way, or a named policy refusal)',
+      laneCarried(answer, ['COLLABORATION_AUTHORIZED'], LANE_POLICY_CODES),
       { type: answer?.type, authorized: answer?.payload?.authorized, code: answer?.payload?.code },
     )
     row('AUTHORIZE_COLLABORATION', {
@@ -828,19 +1178,20 @@ async function main() {
     headers: { 'idempotency-key': randomUUID() },
     body: { noteUuid: collabNoteUuid, collaborationProtocolVersion: 3, epochDiscovery: true },
   })
-  const collabReachable = check(
-    'FALLBACK: POST /v1/collaboration/authorize is reachable over plain HTTP (not 404/405)',
-    collabFallback.status !== 404 && collabFallback.status !== 405,
-    { status: collabFallback.status, body: collabFallback.text.slice(0, 160) },
+  const collabVerdict = httpFallbackVerdict(collabFallback)
+  check(
+    'FALLBACK: POST /v1/collaboration/authorize ANSWERS over plain HTTP (2xx, or a 4xx the handler produced)',
+    collabVerdict !== 'broken',
+    { status: collabFallback.status, verdict: collabVerdict, body: collabFallback.text.slice(0, 160) },
   )
   row('AUTHORIZE_COLLABORATION', {
-    fallback: collabReachable ? 'reachable' : 'broken',
+    fallback: collabVerdict,
     fallbackPath: 'POST /v1/collaboration/authorize',
     fallbackStatus: collabFallback.status,
   })
   if (CONTROL) {
     const broken = await raw('POST', '/v1/collaboration/authorize-nope', { token, body: {} })
-    control('the collaboration reachability probe', broken.status === 404 || broken.status === 405, {
+    control('the collaboration reachability probe', httpFallbackVerdict(broken) === 'broken', {
       status: broken.status,
     })
   }
@@ -858,9 +1209,11 @@ async function main() {
         f.requestId === requestId && ['INVITE_READY', 'INVITE_BATCH', 'INVITE_RECONCILE', 'ERROR'].includes(f.type),
       25_000,
     )
+    // INVITE_STORE_UNAVAILABLE is the gateway saying the invite store is down.
+    // Under the old predicate that was a working lane; it is not one.
     const carried = check(
-      'an INVITE_SUBSCRIBE is answered by the lane',
-      answer !== undefined && !isOperationUnavailable(answer),
+      'an INVITE_SUBSCRIBE is answered by the lane (INVITE_READY/BATCH/RECONCILE, or a named policy refusal)',
+      laneCarried(answer, ['INVITE_READY', 'INVITE_BATCH', 'INVITE_RECONCILE'], LANE_POLICY_CODES),
       {
         type: answer?.type,
         code: answer?.payload?.code,
@@ -875,58 +1228,263 @@ async function main() {
   }
   // The documented fallback for invite push is HTTP polling of the invite list.
   const inviteFallback = await raw('GET', INVITE_HTTP_PATH, { token, cookie: account.cookie || undefined })
-  const inviteReachable = check(
-    'FALLBACK: the invite list is readable over plain HTTP (not 404/405)',
-    inviteFallback.status !== 404 && inviteFallback.status !== 405,
-    { status: inviteFallback.status, body: inviteFallback.text.slice(0, 160) },
+  const inviteVerdict = httpFallbackVerdict(inviteFallback)
+  check(
+    'FALLBACK: the invite list ANSWERS over plain HTTP (2xx with data, or a 4xx the handler produced)',
+    inviteVerdict !== 'broken',
+    { status: inviteFallback.status, verdict: inviteVerdict, body: inviteFallback.text.slice(0, 160) },
   )
   row('INVITE_EVENTS', {
-    fallback: inviteReachable ? 'reachable' : 'broken',
+    fallback: inviteVerdict,
     fallbackPath: 'GET ' + INVITE_HTTP_PATH,
     fallbackStatus: inviteFallback.status,
   })
   if (CONTROL) {
     const broken = await raw('GET', INVITE_HTTP_PATH + '-nope', { token })
-    control('the invite reachability probe', broken.status === 404 || broken.status === 405, { status: broken.status })
+    control('the invite reachability probe', httpFallbackVerdict(broken) === 'broken', { status: broken.status })
   }
 
   // =====================================================================
   // FILES_V1
   // =====================================================================
   console.log('\n[FILES_V1]')
-  if (census.advertised.FILES_V1 && (await ensureSocket())) {
-    const requestId = `req-${randomUUID()}`
-    socket.ws.send(
-      JSON.stringify(
-        syncFrame(
-          'FILES_METADATA',
-          // `isFileResourceReference` (filesProtocol.ts) requires
-          // ownershipType 'user' | 'shared-vault' and refuses any
-          // sharedVault* field on a 'user' reference. A malformed reference is
-          // not an OPERATION_UNAVAILABLE — it closes the socket on an invalid
-          // envelope, which would read as "the lane never answered".
-          { resources: [{ ownershipType: 'user', remoteIdentifier: randomUUID() }], deadlineMs: 20_000 },
-          { sequence: sequence++, requestId },
-        ),
-      ),
+
+  /**
+   * ONE COMPLETE FILES_V1 ROUND TRIP over the live socket, recorded stage by
+   * stage. Nothing here is inferred from the absence of an error: every field
+   * is set only when the gateway sent the frame that stage actually produces,
+   * and the last field is a byte comparison of what came back.
+   *
+   * This replaces a probe that sent one FILES_METADATA frame and called the
+   * lane `works` on any answer that was not OPERATION_UNAVAILABLE — which is
+   * how `FILES_V1 lane: works` was recorded against a build where every
+   * cookie-session file operation answered ERROR FILE_ACCESS_DENIED
+   * (efa5b985). The metadata frame is kept as the FIRST stage, now asserted
+   * positively: a `user`-owned resource that does not exist yet must answer a
+   * FILES_METADATA frame with an `entries` array, never a denial.
+   *
+   * `corruptFinishDigest` is the planted break for CONTROL=1: the bytes go up
+   * correctly and the FINISH names a digest they do not have, which the
+   * adapter must refuse (FILE_INTEGRITY_MISMATCH).
+   */
+  async function fileRoundTrip({ corruptFinishDigest = false } = {}) {
+    const trip = {
+      metadataAnswered: false,
+      uploadAccepted: false,
+      chunksSent: 0,
+      chunksAcked: 0,
+      finishCompleted: false,
+      uploadSha256: undefined,
+      downloadAccepted: false,
+      downloadCompleted: false,
+      downloadSha256: undefined,
+      bytesIdentical: false,
+      expectedSha256: undefined,
+      declaredSize: 0,
+      receivedBytes: 0,
+      stoppedAt: 'start',
+      lastError: undefined,
+    }
+    if (!(await ensureSocket())) {
+      trip.stoppedAt = 'no-socket'
+      return trip
+    }
+    const live = socket
+    const stop = (stage, answer) => {
+      trip.stoppedAt = stage
+      trip.lastError =
+        answer === undefined
+          ? 'no-answer'
+          : `${answer.type}${answer.payload?.code === undefined ? '' : ':' + answer.payload.code}`
+      return trip
+    }
+
+    const remoteIdentifier = randomUUID()
+    const bytes = randomBytes(Math.max(2, FILE_PROBE_BYTES))
+    const declaredSize = bytes.byteLength
+    trip.declaredSize = declaredSize
+    trip.expectedSha256 = createHash('sha256').update(bytes).digest('hex')
+
+    // 1. METADATA. `isFileResourceReference` (filesProtocol.ts) requires
+    //    ownershipType 'user' | 'shared-vault' and refuses any sharedVault*
+    //    field on a 'user' reference; a malformed reference closes the socket
+    //    on an invalid envelope rather than answering, so the reference below
+    //    is the exact legal shape.
+    const metaFrame = syncFrame(
+      'FILES_METADATA',
+      { resources: [{ ownershipType: 'user', remoteIdentifier }], deadlineMs: 20_000 },
+      { sequence: sequence++ },
     )
-    const answer = await waitForFrame(
-      socket,
-      (f) => f.requestId === requestId && (f.type === 'FILES_METADATA' || f.type === 'ERROR'),
+    live.ws.send(JSON.stringify(metaFrame))
+    const meta = await waitForFrame(
+      live,
+      (f) => f.commandId === metaFrame.commandId && (f.type === 'FILES_METADATA' || f.type === 'ERROR'),
       25_000,
     )
-    const carried = check(
-      'a FILES_METADATA frame is answered by the lane',
-      answer !== undefined && !isOperationUnavailable(answer),
+    if (meta?.type !== 'FILES_METADATA' || !Array.isArray(meta.payload?.entries)) return stop('metadata', meta)
+    trip.metadataAnswered = true
+
+    // 2. UPLOAD OPEN.
+    const openFrame = syncFrame(
+      'FILES_UPLOAD_OPEN',
       {
-        type: answer?.type,
-        code: answer?.payload?.code,
+        resource: { ownershipType: 'user', remoteIdentifier },
+        decryptedSize: declaredSize,
+        declaredSize,
+        mimeType: 'application/octet-stream',
+        deadlineMs: 30_000,
+      },
+      { sequence: sequence++ },
+    )
+    live.ws.send(JSON.stringify(openFrame))
+    const opened = await waitForFrame(
+      live,
+      (f) => f.commandId === openFrame.commandId && (f.type === 'FILES_ACCEPTED' || f.type === 'ERROR'),
+      30_000,
+    )
+    if (opened?.type !== 'FILES_ACCEPTED' || opened.payload?.mode !== 'upload') return stop('upload-open', opened)
+    const transferId = opened.payload.transferId
+    const generation = opened.payload.generation
+    if (typeof transferId !== 'string' || !Number.isInteger(generation)) return stop('upload-open', opened)
+    trip.uploadAccepted = true
+
+    // 3. CHUNKS, deliberately more than one so the gateway's index/offset
+    //    accounting is exercised rather than a single all-in-one write.
+    const split = Math.floor(declaredSize / 2)
+    const ranges =
+      split > 0 && split < declaredSize
+        ? [
+            [0, split],
+            [split, declaredSize],
+          ]
+        : [[0, declaredSize]]
+    for (let index = 0; index < ranges.length; index += 1) {
+      const [start, end] = ranges[index]
+      const slice = bytes.subarray(start, end)
+      const chunkRequestId = `req-chunk${index}-${randomUUID()}`
+      live.ws.send(
+        encodeFileChunkFrame(
+          {
+            kind: 'UPLOAD_CHUNK',
+            requestId: chunkRequestId,
+            transferId,
+            generation,
+            index,
+            offset: start,
+            declaredSize,
+            byteLength: slice.byteLength,
+            sha256: createHash('sha256').update(slice).digest('hex'),
+            final: end === declaredSize,
+          },
+          slice,
+        ),
+      )
+      trip.chunksSent += 1
+      const ack = await waitForFrame(
+        live,
+        (f) => f.requestId === chunkRequestId && (f.type === 'FILES_CHUNK_ACK' || f.type === 'ERROR'),
+        30_000,
+      )
+      if (ack?.type !== 'FILES_CHUNK_ACK' || ack.payload?.index !== index || ack.payload?.nextOffset !== end) {
+        return stop(`chunk-${index}`, ack)
+      }
+      trip.chunksAcked += 1
+    }
+
+    // 4. FINISH, on the digest of the bytes the client sent.
+    const finishDigest = corruptFinishDigest
+      ? createHash('sha256').update(randomBytes(32)).digest('hex')
+      : trip.expectedSha256
+    const finishFrame = syncFrame(
+      'FILES_UPLOAD_FINISH',
+      { transferId, generation, declaredSize, sha256: finishDigest, deadlineMs: 30_000 },
+      { sequence: sequence++ },
+    )
+    live.ws.send(JSON.stringify(finishFrame))
+    const completed = await waitForFrame(
+      live,
+      (f) => f.commandId === finishFrame.commandId && (f.type === 'FILES_COMPLETE' || f.type === 'ERROR'),
+      40_000,
+    )
+    if (completed?.type !== 'FILES_COMPLETE' || completed.payload?.mode !== 'upload') return stop('finish', completed)
+    trip.finishCompleted = true
+    trip.uploadSha256 = completed.payload?.sha256
+
+    // 5. DOWNLOAD the same resource back. Chunks arrive as BINARY frames, so
+    //    the cursor below is where this trip's bytes start in the socket's
+    //    binary buffer.
+    const binaryCursor = live.binaries.length
+    const downloadFrame = syncFrame(
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier },
+        offset: 0,
+        initialCreditBytes: 524_288,
+        deadlineMs: 30_000,
+      },
+      { sequence: sequence++ },
+    )
+    live.ws.send(JSON.stringify(downloadFrame))
+    const downloadOpened = await waitForFrame(
+      live,
+      (f) => f.commandId === downloadFrame.commandId && (f.type === 'FILES_ACCEPTED' || f.type === 'ERROR'),
+      30_000,
+    )
+    if (downloadOpened?.type !== 'FILES_ACCEPTED' || downloadOpened.payload?.mode !== 'download') {
+      return stop('download-open', downloadOpened)
+    }
+    trip.downloadAccepted = true
+    const downloadComplete = await waitForFrame(
+      live,
+      (f) => f.commandId === downloadFrame.commandId && (f.type === 'FILES_COMPLETE' || f.type === 'ERROR'),
+      40_000,
+    )
+    if (downloadComplete?.type !== 'FILES_COMPLETE' || downloadComplete.payload?.mode !== 'download') {
+      return stop('download', downloadComplete)
+    }
+    trip.downloadCompleted = true
+    trip.downloadSha256 = downloadComplete.payload?.sha256
+
+    // 6. The bytes themselves.
+    const received = []
+    for (const raw of live.binaries.slice(binaryCursor)) {
+      const chunk = decodeFileChunkFrame(raw)
+      if (chunk?.header?.kind === 'DOWNLOAD_CHUNK') received.push(Buffer.from(chunk.bytes))
+    }
+    const assembled = Buffer.concat(received)
+    trip.receivedBytes = assembled.byteLength
+    trip.bytesIdentical = assembled.byteLength === declaredSize && assembled.equals(bytes)
+    trip.stoppedAt = trip.bytesIdentical ? 'complete' : 'bytes'
+    return trip
+  }
+
+  if (census.advertised.FILES_V1 && (await ensureSocket())) {
+    const trip = await fileRoundTrip()
+    const works = check(
+      'a file makes a COMPLETE FILES_V1 round trip over the socket (metadata -> open -> chunks -> finish -> download -> byte-identical)',
+      fileRoundTripSucceeded(trip),
+      {
+        stoppedAt: trip.stoppedAt,
+        lastError: trip.lastError,
+        chunks: `${trip.chunksAcked}/${trip.chunksSent}`,
+        bytes: `${trip.receivedBytes}/${trip.declaredSize}`,
+        bytesIdentical: trip.bytesIdentical,
       },
     )
-    row('FILES_V1', {
-      lane: carried ? 'works' : 'broken',
-      laneDetail: { type: answer?.type, code: answer?.payload?.code },
-    })
+    row('FILES_V1', { lane: works ? 'works' : 'broken', laneDetail: trip })
+    if (!works && String(trip.lastError).includes('FILE_ACCESS_DENIED')) {
+      note(
+        'DEFECT CANDIDATE: FILES_V1 answered FILE_ACCESS_DENIED for the account that OWNS the resource — the lane is not carrying this session kind (the defect efa5b985 fixed for cookie sessions on a single container)',
+      )
+    }
+    if (CONTROL) {
+      const planted = await fileRoundTrip({ corruptFinishDigest: true })
+      control(
+        'the FILES_V1 round-trip probe (a FINISH naming the wrong digest must not complete)',
+        !fileRoundTripSucceeded(planted),
+        { stoppedAt: planted.stoppedAt, lastError: planted.lastError },
+      )
+    }
   } else {
     row('FILES_V1', { lane: census.advertised.FILES_V1 ? 'untested' : 'withheld' })
   }
@@ -938,22 +1496,24 @@ async function main() {
     cookie: account.cookie || undefined,
     body: { operation: 'write', resources: [{ remoteIdentifier: randomUUID(), unencryptedFileSize: 1024 }] },
   })
-  const valetReachable = check(
-    'FALLBACK: the HTTP valet-token mint is reachable (not 404/405)',
-    valet.status !== 404 && valet.status !== 405,
+  const valetVerdict = httpFallbackVerdict(valet)
+  check(
+    'FALLBACK: the HTTP valet-token mint ANSWERS (2xx with data, or a 4xx the handler produced)',
+    valetVerdict !== 'broken',
     {
       status: valet.status,
+      verdict: valetVerdict,
       body: valet.text.slice(0, 200),
     },
   )
   row('FILES_V1', {
-    fallback: valetReachable ? 'reachable' : 'broken',
+    fallback: valetVerdict,
     fallbackPath: 'POST /v1/files/valet-tokens',
     fallbackStatus: valet.status,
   })
   if (CONTROL) {
     const broken = await raw('POST', '/v1/files/valet-tokens-nope', { token, body: {} })
-    control('the files reachability probe', broken.status === 404 || broken.status === 405, { status: broken.status })
+    control('the files reachability probe', httpFallbackVerdict(broken) === 'broken', { status: broken.status })
   }
 
   // =====================================================================
@@ -977,9 +1537,17 @@ async function main() {
     })
     if (legacy) {
       await sleep(600)
-      const open = check('the legacy /sockets lane upgrades and stays open', legacy.close === undefined, {
-        close: legacy.close,
-      })
+      // A PRESENT success, not the absence of a close frame: ask the server
+      // something on the live connection and require it to answer. `ws`
+      // resolves `open` on the HTTP 101, so "no close event yet" proves only
+      // that nothing has happened yet — the same shape as the FILES_V1 false
+      // green this script was built to stop producing.
+      const probe = await legacyLaneProbe(legacy)
+      const open = check(
+        'the legacy /sockets lane answers a control ping on the live connection (and did not close)',
+        legacyLaneUsable(probe),
+        { ...probe, close: legacy.close },
+      )
       legacyLane = open ? 'works' : 'broken'
       // Pin the path: any other pathname must be refused 1008/HTTP, which is
       // what proves the probe is really testing the pinned lane.
@@ -1004,8 +1572,11 @@ async function main() {
       detail = { upgradeRefused: bogus.error.message }
     } else {
       await sleep(1500)
-      rejected = bogus.close !== undefined
-      detail = { close: bogus.close, messages: bogus.messages.length }
+      // Settled by the SAME predicate the real row uses, so the control cannot
+      // pass under a rule the row does not live by.
+      const probe = await legacyLaneProbe(bogus)
+      rejected = !legacyLaneUsable(probe)
+      detail = { ...probe, close: bogus.close, messages: bogus.messages.length }
       try {
         bogus.ws.close()
       } catch {}

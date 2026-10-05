@@ -6,9 +6,14 @@
  * Proves:
  *   1. `/healthcheck/readiness` answers through the front door.
  *   2. An internal (`x-internal-secret`) mint through the FRONT DOOR is
- *      REFUSED. nginx blanks `X-Internal-Secret` on `/sockets` and the gateway
- *      refuses an internal mint whenever `x-forwarded-for` is present or the
- *      peer is not loopback, so the internet-facing credential is inert.
+ *      REFUSED BY NAME (401/403), on whichever of `/sockets/tokens` and
+ *      `/v1/sockets/tokens` this topology actually serves, and neither hands
+ *      back a token. nginx blanks `X-Internal-Secret` on `/sockets` and the
+ *      gateway refuses an internal mint whenever `x-forwarded-for` is present
+ *      or the peer is not loopback, so the internet-facing credential is
+ *      inert. A 404 is NOT a refusal: it means the probe never reached the
+ *      mint, which is what the old `status !== 200` predicate scored green on
+ *      the single-container front door.
  *   3. The same internal mint SUCCEEDS from loopback (inside the container).
  *   4. `POST /sockets/tokens` mints via the X-AUTH-TOKEN cross-service path
  *      (signing a CrossServiceTokenData JWT with AUTH_JWT_SECRET, exactly as
@@ -101,8 +106,8 @@ function connect(token) {
   })
 }
 
-async function mint(origin, headers, body) {
-  const response = await fetch(`${origin}/sockets/tokens`, {
+async function mint(origin, headers, body, path = '/sockets/tokens') {
+  const response = await fetch(`${origin}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     ...(body === undefined ? {} : { body }),
@@ -132,14 +137,26 @@ async function main() {
 
   // 1. The internet-facing internal-secret mint must be refused at the front
   //    door: nginx blanks the header and the gateway refuses proxied peers.
-  const frontDoor = await mint(
-    GATEWAY_HTTP,
-    { 'x-internal-secret': INTERNAL_SECRET },
-    JSON.stringify({ userUuid, sessionUuid: listenerSession }),
-  )
+  //
+  //    REFUSED, not merely "did not succeed". `status !== 200` passes on a 404
+  //    -- and on the single-container front door `/sockets/tokens` IS a 404,
+  //    because nginx preserves the URI and the mint lives at
+  //    `/v1/sockets/tokens`. So this leg used to report the credential inert
+  //    on an origin where it had never reached the endpoint at all. Both
+  //    pathnames are probed now: at least one must ANSWER with a named refusal
+  //    (401/403), and NEITHER may hand back a token.
+  const frontDoorBody = JSON.stringify({ userUuid, sessionUuid: listenerSession })
+  const frontDoorAttempts = []
+  for (const path of ['/sockets/tokens', '/v1/sockets/tokens']) {
+    const attempt = await mint(GATEWAY_HTTP, { 'x-internal-secret': INTERNAL_SECRET }, frontDoorBody, path)
+    frontDoorAttempts.push({ path, ...attempt })
+  }
+  const issuedAToken = frontDoorAttempts.some((a) => a.status === 200 || typeof a.body?.token === 'string')
+  const namedRefusal = frontDoorAttempts.find((a) => a.status === 401 || a.status === 403)
   check(
-    `internal mint through the front door is refused (got ${frontDoor.status})`,
-    frontDoor.status !== 200 && typeof frontDoor.body.token !== 'string',
+    `internal mint through the front door is REFUSED by name, not merely absent ` +
+      `(${frontDoorAttempts.map((a) => `${a.path}:${a.status}`).join(' ')})`,
+    namedRefusal !== undefined && !issuedAToken,
   )
 
   if (!GATEWAY_INTERNAL_HTTP) {

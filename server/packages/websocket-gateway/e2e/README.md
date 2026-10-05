@@ -31,6 +31,49 @@ container.
 | `capability-fallback.e2e.mjs` | the socket capability census from `AUTHENTICATED`, each capability exercised over the lane, and each documented HTTP fallback exercised on the same account in the same run; `CONTROL=1` adds a planted break per probe | host or container, any proxy configuration |
 | `browser.e2e.mjs`, `feature-access.e2e.mjs`, `account-export-import.e2e.mjs` | browser-driven flows (`yarn e2e:browser`) | host |
 
+## A lane is "working" only on a PRESENT success
+
+`capability-fallback.e2e.mjs` used to settle four of its six lane rows with
+`answer !== undefined && !isOperationUnavailable(answer)` — "the lane works
+unless it answered this one error code". That is not a gate. It recorded
+`FILES_V1 lane: works` against an image on which **every** cookie-session file
+operation answered `ERROR FILE_ACCESS_DENIED` (the defect `efa5b985` fixed):
+an error, just not the one error the predicate happened to name.
+
+The rule now is a present success, and it is the same rule everywhere:
+
+| leg | green on |
+|---|---|
+| `SYNC_ITEMS` | a `COMMITTED` answer **and** the note read back over HTTP |
+| `API_RPC` | an `RPC_RESPONSE` with `status: 200` |
+| `STREAM_ASSISTANT` | an `RPC_*` frame, or an ERROR in `LANE_POLICY_CODES` |
+| `AUTHORIZE_COLLABORATION` | `COLLABORATION_AUTHORIZED`, or an ERROR in `LANE_POLICY_CODES` |
+| `INVITE_EVENTS` | `INVITE_READY` / `INVITE_BATCH` / `INVITE_RECONCILE`, or an ERROR in `LANE_POLICY_CODES` |
+| `FILES_V1` | a whole file round trip: metadata answered, upload OPEN accepted, every chunk ACKed, FINISH completed on the client's digest, download accepted and completed on that digest, bytes byte-identical |
+| `LEGACY_PUSH` | the server answered a control **ping** on the live connection |
+| any HTTP fallback | a 2xx, or a 4xx the handler itself produced (`httpFallbackReachable`) |
+
+`LANE_POLICY_CODES` is a closed list of codes that mean *the server decided*
+(`NOT_AUTHORIZED`, `READ_ONLY`, `CONTENT_LIMIT`, `SHARED_VAULT_FORBIDDEN`,
+`LIVE_SYNC_DISABLED`, `CHALLENGE_EXPIRED`). Everything else — `BACKEND_ERROR`,
+`BACKEND_TIMEOUT`, `SESSION_STALE`, `SESSION_REVOKED`, `OPERATION_UNAVAILABLE`,
+`INVITE_STORE_UNAVAILABLE`, `FILE_ACCESS_DENIED` — is a broken lane. A failure
+code added upstream lands outside the list and reads broken, which is the safe
+direction.
+
+Two corollaries that cost real debugging time:
+
+- **A 5xx is not reachability.** `status !== 404 && status !== 405` called a 502
+  a working HTTP fallback. Reachability is now a closed set of statuses.
+- **"No close event yet" is not a live socket.** `ws` resolves `open` on the
+  HTTP 101, so the legacy lane is settled by a ping/pong round trip instead.
+
+Proven red on a known break: run against `standard-red-notes/single:t100e2b`
+(the last image without the authorizer's cookie channel) the FILES_V1 row
+reports `lane: broken`, `stoppedAt: metadata`, `lastError: ERROR:FILE_ACCESS_DENIED`;
+against a current single container the same row reports `lane: works`,
+`chunks 2/2`, `bytes 3000/3000`, `bytesIdentical: true`.
+
 ## Session kind matters, and it is chosen at registration
 
 `SessionService.shouldOperateOnCookieBasedSessions` issues a COOKIE session only
@@ -42,7 +85,27 @@ defect. `capability-fallback.e2e.mjs` registers at `20240226` by default,
 asserts the `2:` access-token prefix under `EXPECT_SESSION=cookie`, and under
 `CONTROL=1` proves the cookie half is load-bearing by showing the bearer ALONE
 is refused 401. Set `REGISTER_API=20200115` to re-take the same matrix on legacy
-sessions and diff the two.
+sessions and diff the two. A run that asks for the cookie api and gets a `1:`
+token back now emits an unprompted note saying so, because every row it then
+prints is measured on a header session.
+
+Where the flag actually is, measured:
+
+- `server/docker/single/entrypoint.sh` pins `E2E_TESTING false`, so the single
+  container issues real cookie sessions. The FILES_V1 defect was reachable
+  there, which is why the round trip above can be shown red against
+  `single:t100e2b` and green against a current build.
+- No compose file sets it, so the multi-container stack issues cookie sessions
+  too.
+- `server/.github/workflows/e2e-home-server.yml` writes `E2E_TESTING=true` into
+  `packages/home-server/.env`. That suite therefore runs in the one
+  configuration where a cookie-session defect cannot occur, and a green run of
+  it is not evidence about cookie sessions.
+
+So the flag does **not** make this class invisible to the scripts in this
+directory, provided they are pointed at a stack that does not set it — but it
+does make the home-server workflow structurally blind to it, and that workflow
+is the only one of the two that CI runs.
 
 ## Not every capability has a configuration lever
 
@@ -62,6 +125,16 @@ Measured live on the multi-container image at `71e055f8`:
 `yarn e2e` runs `realtime` then `collab-yjs`. The push round trip and the
 oversized-result script have their own scripts because they register accounts
 and take tens of seconds.
+
+## Nothing in CI runs the capability matrix
+
+`yarn e2e` is `realtime` + `collab-yjs`, and no workflow calls
+`capability-fallback.e2e.mjs`, `session-reauth.e2e.mjs` or
+`transport-fallback.e2e.mjs` at all. They are operator-run probes. Two scripts
+exist now — `e2e:capability-fallback` and `e2e:capability-fallback:self-test`
+— and the self-test needs no stack and no Docker, so it is the half that can
+be wired into CI cheaply. Until something calls them, a correct predicate here
+is a gate nobody consumes: it goes red only when a person runs it.
 
 ## Reaching the gateway
 
