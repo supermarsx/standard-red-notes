@@ -1,5 +1,12 @@
 import { TimerInterface } from '@standardnotes/time'
-import { NotificationPayload, Result, SharedVaultUser } from '@standardnotes/domain-core'
+import {
+  NotificationPayload,
+  Result,
+  SharedVaultUser,
+  SharedVaultUserPermission,
+  Timestamps,
+  Uuid,
+} from '@standardnotes/domain-core'
 import { DomainEventInterface, DomainEventPublisherInterface } from '@standardnotes/domain-events'
 
 import { SharedVaultRepositoryInterface } from '../../../SharedVault/SharedVaultRepositoryInterface'
@@ -38,6 +45,7 @@ describe('AddUserToSharedVault', () => {
 
     sharedVaultUserRepository = {} as jest.Mocked<SharedVaultUserRepositoryInterface>
     sharedVaultUserRepository.save = jest.fn()
+    sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(null)
 
     timer = {} as jest.Mocked<TimerInterface>
     timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(123456789)
@@ -171,7 +179,78 @@ describe('AddUserToSharedVault', () => {
     })
 
     expect(result.isFailed()).toBe(false)
+    // The existing-member lookup really was consulted, and found nothing — so the success below is
+    // the "no duplicate yet" branch rather than a branch that never ran.
+    expect(sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid).toHaveBeenCalledTimes(1)
+    await expect(
+      (sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid as jest.Mock).mock.results[0].value,
+    ).resolves.toBeNull()
     expect(sharedVaultUserRepository.save).toHaveBeenCalled()
+  })
+
+  it('should refuse to add a user who is already a member of the shared vault', async () => {
+    const existingMembership = SharedVaultUser.create({
+      userUuid: Uuid.create(validUuid).getValue(),
+      sharedVaultUuid: Uuid.create(validUuid).getValue(),
+      permission: SharedVaultUserPermission.create(SharedVaultUserPermission.PERMISSIONS.Write).getValue(),
+      timestamps: Timestamps.create(123, 123).getValue(),
+      isDesignatedSurvivor: false,
+    }).getValue()
+
+    // Precondition: the membership fixture really is a membership of this vault for this user, so a
+    // refusal below cannot come from an empty or mismatched fixture.
+    expect(existingMembership.props.userUuid.value).toEqual(validUuid)
+    expect(existingMembership.props.sharedVaultUuid.value).toEqual(validUuid)
+
+    sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(existingMembership)
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      sharedVaultUuid: validUuid,
+      userUuid: validUuid,
+      permission: 'read',
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe('User is already a member of this shared vault')
+
+    // The lookup really was made for the vault and user being added.
+    const lookupArguments = (sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid as jest.Mock).mock.calls[0][0]
+    expect(lookupArguments.userUuid.value).toEqual(validUuid)
+    expect(lookupArguments.sharedVaultUuid.value).toEqual(validUuid)
+
+    // No second row, and no membership side effects announcing an addition that did not happen.
+    expect(sharedVaultUserRepository.save).not.toHaveBeenCalled()
+    expect(addNotificationsForUsers.execute).not.toHaveBeenCalled()
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('should refuse the duplicate even when the shared vault existence check is skipped', async () => {
+    const existingMembership = SharedVaultUser.create({
+      userUuid: Uuid.create(validUuid).getValue(),
+      sharedVaultUuid: Uuid.create(validUuid).getValue(),
+      permission: SharedVaultUserPermission.create(SharedVaultUserPermission.PERMISSIONS.Admin).getValue(),
+      timestamps: Timestamps.create(123, 123).getValue(),
+      isDesignatedSurvivor: false,
+    }).getValue()
+
+    sharedVaultRepository.findByUuid = jest.fn().mockResolvedValue(null)
+    sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(existingMembership)
+
+    const useCase = createUseCase()
+
+    const result = await useCase.execute({
+      sharedVaultUuid: validUuid,
+      userUuid: validUuid,
+      permission: 'read',
+      skipSharedVaultExistenceCheck: true,
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe('User is already a member of this shared vault')
+    expect(sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid).toHaveBeenCalledTimes(1)
+    expect(sharedVaultUserRepository.save).not.toHaveBeenCalled()
   })
 
   it('should add a user to a shared vault and skip checking if shared vault exists to avoid race conditions', async () => {

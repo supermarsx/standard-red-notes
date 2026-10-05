@@ -78,6 +78,20 @@ export class AddUserToSharedVault implements UseCaseInterface<SharedVaultUser> {
     }
     const permission = permissionOrError.getValue()
 
+    // Mirrors the check InviteUserToSharedVault already performs. Without it two concurrent accepts
+    // of the same invite could each write a membership row, and removal
+    // (`findByUserUuidAndSharedVaultUuid` -> `getOne()` -> `remove`) deletes exactly one row — so the
+    // revoked user would stay in the vault. The composite unique index added in
+    // `1787100000000-add-unique-shared-vault-membership` is the database-level backstop for the
+    // window this check cannot close on its own.
+    const alreadyExistingMember = await this.sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid({
+      userUuid,
+      sharedVaultUuid,
+    })
+    if (alreadyExistingMember) {
+      return Result.fail('User is already a member of this shared vault')
+    }
+
     const timestamps = Timestamps.create(
       this.timer.getTimestampInMicroseconds(),
       this.timer.getTimestampInMicroseconds(),
