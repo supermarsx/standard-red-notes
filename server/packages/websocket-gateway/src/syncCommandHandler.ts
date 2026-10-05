@@ -416,6 +416,22 @@ export interface SyncCommandHandlerOptions {
   files?: SyncFilesAdapter
   isEnabled: () => boolean
   metrics?: SyncCommandMetrics
+  /**
+   * Called exactly once when a handshake presents a ticket this socket does
+   * not accept -- the store did not consume it, or the device it was minted
+   * for is not the device presenting it.
+   *
+   * It exists so the count can live in the GATEWAY rather than on the socket.
+   * A per-socket tally of the handshake that closed the socket is a tally of
+   * one, discarded a millisecond later, which is the shape of counter that
+   * answers nothing. Deliberately NOT called for the authentication deadline
+   * (nobody presented anything), the per-user socket limit (a ticket that WAS
+   * accepted) or a store that threw (an outage, not a refusal): each is a
+   * different fault with a different fix, and folding them in would fire the
+   * panel's "these two processes disagree about the ticket secret" correlation
+   * over an idle client.
+   */
+  onHandshakeRejected?: () => void
   /** Throttled refusal log for conditions an operator should see (post-crash BUSY leases). */
   logRefusal?: SyncRefusalLogger
   /** Contract C4: replaces the discovery epoch with the room's current epoch when one exists. */
@@ -775,6 +791,7 @@ export class SyncCommandHandler {
       const consumed = await this.options.tickets.consume(frame.payload.ticket, this.lifecycleAbort.signal)
       if (!consumed || !constantTimeTextMatches(consumed.deviceId, frame.payload.deviceId)) {
         this.options.metrics?.increment('auth', 'rejected')
+        this.options.onHandshakeRejected?.()
         this.failAndClose('AUTH_REJECTED', 'Authentication failed.')
         return
       }

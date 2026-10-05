@@ -416,6 +416,159 @@ export const SYNC_STORE_READINESS_REASONS: ReadonlySet<SyncUnavailabilityReason>
   'invite-event-store-unavailable',
 ])
 
+/* -------------------------------------------------------------------------- */
+/* Admission and traffic counters                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The gateway's own closed reasons for turning a `/sockets/sync` upgrade away,
+ * as the CLOSE REASON spells them. They are protocol identifiers a client reads
+ * off a 1008/1013, so they are kebab-case and they are not free to change.
+ */
+export const SOCKET_REJECTION_CODES = ['origin-not-allowed', 'query-string-not-permitted', 'unavailable'] as const
+
+export type SocketRejectionCode = (typeof SOCKET_REJECTION_CODES)[number]
+
+/**
+ * The counter key each close reason increments.
+ *
+ * One map, so the counter and the close reason cannot drift: a new refusal
+ * cause has to name its counter here or it does not compile. The keys are the
+ * camelCase ones the admin panel already declares (`SOCKET_REJECTION_CAUSES` in
+ * `websocketSection.ts`), member for member, so a count served from here cannot
+ * arrive under a name the client has no row for.
+ */
+export const SOCKET_REJECTION_COUNTERS = {
+  'origin-not-allowed': 'originNotAllowed',
+  'query-string-not-permitted': 'queryStringNotPermitted',
+  unavailable: 'unavailable',
+} as const satisfies Record<SocketRejectionCode, string>
+
+export type SocketRejectionCounter = (typeof SOCKET_REJECTION_COUNTERS)[SocketRejectionCode]
+
+/**
+ * Bounds this build declares for the admission block. Every count is SATURATED
+ * at its ceiling on the way out (the same move `runtime.processUptimeSeconds`
+ * makes), so no figure this gateway emits can ever be unbounded -- and a reader
+ * may treat anything above a ceiling as malformed rather than as a measurement.
+ */
+export const MAX_REPORTED_ORIGIN_RULES = 1_024
+export const MAX_REPORTED_LIVE_SOCKETS = 1_000_000
+export const MAX_REPORTED_ADMISSION_EVENTS = 1_000_000_000
+
+/**
+ * What an upgrade (or a diagnostics question ABOUT one) carries that the origin
+ * decision reads. A struct rather than an `IncomingMessage` so the admission
+ * question can be asked by a caller that holds an ordinary HTTP request -- the
+ * admin diagnostics endpoint -- through the SAME predicate the upgrade path
+ * runs, rather than through a second implementation of the rule that can
+ * disagree with it silently.
+ *
+ * It carries no credential: an origin, a host and a forwarded scheme are the
+ * whole of what the decision looks at.
+ */
+export interface AdmissionProbe {
+  /** The browser's `Origin` header, verbatim. Attacker-controlled input; never logged, never emitted. */
+  origin?: string
+  /** The `Host` header the request arrived at. */
+  host?: string
+  forwardedProto?: string | readonly string[]
+  /** Whether the socket underneath is TLS, used only when no forwarded scheme is present. */
+  encrypted?: boolean
+  /**
+   * THE ONE WIDENING, and only a diagnostics probe may set it.
+   *
+   * A reverse proxy may forward the API under a host whose port it normalised
+   * away while forwarding the socket under the host the browser used --
+   * `app/docker/single/nginx.conf` does exactly that, `Host $host` for `/v1`
+   * and `Host $http_host` for `/sockets`, thirty lines apart, the second with a
+   * comment about this very check. Comparing the ADMIN request's host strictly
+   * would then answer a conclusive NO about a socket the same deployment
+   * admits, and a NO is the answer the panel renders as broken.
+   *
+   * So when the host carries no port at all, the comparison falls back to
+   * scheme and hostname. It can only ever turn an ambiguous NO into a YES, and
+   * a YES is reported by the panel as `undetermined` ("admission is necessary
+   * and nowhere near sufficient") while a NO is conclusive. The real upgrade
+   * path NEVER sets this: a socket is admitted or refused on the strict rule.
+   */
+  proxyNormalizedHostPort?: boolean
+}
+
+/**
+ * Gateway-side admission and traffic counters: the eight members the admin
+ * panel's `SocketGatewayCountersView` declares, with the same names, so the
+ * client pass is a field read.
+ *
+ * SECRECY. Every member is a boolean or a bounded count. There is no `string`
+ * field here and there is nowhere for one to go: a refusal is a count against a
+ * closed cause, never an identified client. No origin, address, port, ticket,
+ * session, device or user identifier can travel in this shape.
+ *
+ * LIFETIME, stated per member below, because a counter that silently resets is
+ * worse than no counter: four of them are monotonic SINCE ATTACH (the same
+ * lifetime the existing `pushesDispatched` already has), one is an
+ * instantaneous gauge, two are configuration and one is per-question.
+ */
+export interface GatewayAdmission {
+  /**
+   * Whether this gateway would admit the origin the asking request carried.
+   * PER QUESTION, not a counter. OMITTED when the caller could not name an
+   * origin at all -- which is not `false`: absent means nobody asked the
+   * question with an origin in hand, while `false` is this gateway answering
+   * no about a real one.
+   */
+  originAdmitted?: boolean
+  /**
+   * How many ORIGIN RULES admit a client: each entry of the normalised
+   * allowlist, plus ONE for the derived same-origin rule when it is enabled.
+   *
+   * Rules rather than list entries, deliberately. Zero then means exactly what
+   * the lane's own `no-allowed-origins` precondition means -- this gateway
+   * admits nobody -- which is the reading the panel renders as broken. The raw
+   * list cardinality would read zero on the bundled single container, whose
+   * allowlist is empty BECAUSE same-origin admission covers it, and paint a
+   * healthy deployment broken forever. The `allowsSameOrigin` boolean beside it
+   * says what the extra rule is. CONFIGURATION, not a counter.
+   */
+  allowedOriginCount: number
+  /** Whether the derived same-origin rule is enabled. CONFIGURATION, not a counter. */
+  allowsSameOrigin: boolean
+  /** Open sockets this ws server holds right now, both lanes. An instantaneous GAUGE, never a total. */
+  liveSockets: number
+  /** Sync tickets minted. MONOTONIC SINCE ATTACH. */
+  ticketsIssued: number
+  /**
+   * Mint requests that reached this issuer and produced no ticket: an unmet
+   * precondition, the shutdown race, or a ticket store that failed. Issued plus
+   * refused is every mint that reached the issuer. MONOTONIC SINCE ATTACH.
+   *
+   * WHAT IT DOES NOT COUNT, measured on a live container rather than reasoned
+   * about: a mint made while the lane advertises NO capability at all is
+   * refused by the HTTP layer before the request reaches this issuer
+   * (`SyncWebSocketAccessService.issueTicket` throws on an empty capability
+   * list), so a structurally-down lane shows `ticketsRefused: 0` however many
+   * clients ask. That is not this counter's job to report and it is not
+   * invisible: `live.unavailabilityReasons` names the structural refusal
+   * directly. What lands here is the refusal no other field can show — the
+   * store that was ready at the capability check and failed at the issue, and
+   * the mint that raced a shutdown.
+   */
+  ticketsRefused: number
+  /**
+   * Handshakes that presented a ticket the store did not accept (or whose
+   * device did not match it). NOT the deadline, the per-user socket limit or a
+   * store outage -- each of those is a different fault with a different fix,
+   * and folding them in here would fire the panel's "the two processes disagree
+   * about the ticket secret" correlation over an idle client. MONOTONIC SINCE
+   * ATTACH: it is counted in the gateway, not on the socket, so a reconnect
+   * cannot reset it.
+   */
+  handshakeRejected: number
+  /** Upgrades refused at the door, by closed cause. MONOTONIC SINCE ATTACH. */
+  rejections: Readonly<Record<SocketRejectionCounter, number>>
+}
+
 /** Thrown by `SyncGatewayAccess.issueTicket` so the HTTP layer can name the cause. */
 export class SyncUnavailableError extends Error {
   readonly reasons: readonly SyncUnavailabilityReason[]
@@ -721,6 +874,16 @@ export interface AttachedGateway {
   sync: SyncGatewayAccess
   /** A point-in-time, side-effect-free snapshot; cheap enough to call per readiness probe. */
   health(): GatewayHealth
+  /**
+   * The admission and traffic block for the admin diagnostics, answered for
+   * ONE asking request. Side-effect-free and cheap; it takes a probe rather
+   * than returning a snapshot because one of its eight members -- "would you
+   * admit this caller's origin" -- is a question and not a measurement.
+   *
+   * Separate from `health()` deliberately: `health()` is what the readiness
+   * probe calls on an interval and it answers the same thing for everyone.
+   */
+  admission(probe?: AdmissionProbe): GatewayAdmission
   /** Tear down the ws server, heartbeat, redis bridge and SQS consumer. */
   stop(): Promise<void>
 }
@@ -927,8 +1090,14 @@ function normalizeAllowedOrigins(origins: readonly string[]): ReadonlySet<string
  * the supported deployments preserve Host and overwrite X-Forwarded-Proto.
  * Comparing those values gives an exact same-site fallback without accepting a
  * wildcard origin or trusting a caller-provided query credential.
+ *
+ * Takes an `AdmissionProbe` rather than the request so that the admin
+ * diagnostics question -- "would this gateway admit the origin my caller
+ * arrived from?" -- is answered by THIS function and not by a second copy of
+ * the rule. See `AdmissionProbe.proxyNormalizedHostPort` for the single
+ * widening a diagnostics caller may ask for, which the upgrade path never sets.
  */
-function isSameOriginUpgrade(request: IncomingMessage, origin: string): boolean {
+function isSameOriginTarget(probe: AdmissionProbe, origin: string): boolean {
   let parsed: URL
   try {
     parsed = new URL(origin)
@@ -939,12 +1108,12 @@ function isSameOriginUpgrade(request: IncomingMessage, origin: string): boolean 
     return false
   }
 
-  const rawHost = request.headers.host
+  const rawHost = probe.host
   if (typeof rawHost !== 'string' || rawHost.length === 0) {
     return false
   }
-  const forwarded = request.headers['x-forwarded-proto']
-  const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded
+  const forwarded = probe.forwardedProto
+  const forwardedValue = typeof forwarded === 'string' ? forwarded : forwarded?.[0]
   let effectiveProtocol: 'http:' | 'https:'
   if (forwardedValue !== undefined) {
     const forwardedProtocols = forwardedValue.split(',').map((value) => value.trim().toLowerCase())
@@ -953,7 +1122,7 @@ function isSameOriginUpgrade(request: IncomingMessage, origin: string): boolean 
     }
     effectiveProtocol = `${forwardedProtocols[0]}:`
   } else {
-    effectiveProtocol = (request.socket as { encrypted?: boolean }).encrypted === true ? 'https:' : 'http:'
+    effectiveProtocol = probe.encrypted === true ? 'https:' : 'http:'
   }
 
   let target: URL
@@ -966,7 +1135,57 @@ function isSameOriginUpgrade(request: IncomingMessage, origin: string): boolean 
   // URL.origin canonicalizes host case and default ports. Comparing the full
   // effective origins therefore admits https://host against Host host:443,
   // while rejecting the same hostname on another port or forwarded scheme.
-  return parsed.origin === target.origin
+  if (parsed.origin === target.origin) {
+    return true
+  }
+
+  // The diagnostics widening, and ONLY when the host carries no port for the
+  // comparison to use. `/:\d+$/` rather than a search for ':' so a bracketed
+  // IPv6 host (`[::1]`, `[::1]:3000`) is read correctly.
+  return (
+    probe.proxyNormalizedHostPort === true &&
+    !/:\d+$/.test(rawHost) &&
+    parsed.protocol === target.protocol &&
+    parsed.hostname === target.hostname
+  )
+}
+
+/**
+ * The ONE origin decision, run by the upgrade path and by the diagnostics
+ * probe alike.
+ *
+ * An absent or non-string origin is refused: a browser always sends one on a
+ * WebSocket upgrade, so a missing one is not a browser.
+ */
+function admitsProbeOrigin(
+  allowedOrigins: ReadonlySet<string>,
+  allowSameOrigin: boolean,
+  probe: AdmissionProbe,
+): boolean {
+  const origin = probe.origin
+
+  return (
+    typeof origin === 'string' && (allowedOrigins.has(origin) || (allowSameOrigin && isSameOriginTarget(probe, origin)))
+  )
+}
+
+/** The probe an actual upgrade carries. The widening is deliberately absent. */
+function admissionProbeOf(request: IncomingMessage): AdmissionProbe {
+  const origin = request.headers.origin
+
+  return {
+    ...(typeof origin === 'string' ? { origin } : {}),
+    ...(typeof request.headers.host === 'string' ? { host: request.headers.host } : {}),
+    ...(request.headers['x-forwarded-proto'] === undefined
+      ? {}
+      : { forwardedProto: request.headers['x-forwarded-proto'] }),
+    encrypted: (request.socket as { encrypted?: boolean }).encrypted === true,
+  }
+}
+
+/** Saturate a measured count at the ceiling this build declares for it. */
+function boundedAdmissionCount(value: number, max: number): number {
+  return Math.max(0, Math.min(Math.floor(value), max))
 }
 
 async function settleWithin(operation: Promise<unknown>, timeoutMs: number): Promise<boolean> {
@@ -1164,6 +1383,27 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       },
     )
   }
+  // *** ADMISSION COUNTERS ***
+  //
+  // Closure-scoped, so they live as long as the ATTACH and not as long as any
+  // socket: the whole point of counting a refusal is that the client it
+  // refused is gone. Monotonic since attach, the same lifetime the existing
+  // `pushesDispatched` already has and the one the panel's copy states. A
+  // restart resets them, which is why the panel reads them beside the process
+  // uptime the runtime block publishes.
+  //
+  // Counts only. There is no map keyed by client here and there must never be
+  // one: a refusal is a count against a closed cause, never an identified
+  // browser.
+  let ticketsIssued = 0
+  let ticketsRefused = 0
+  let handshakeRejected = 0
+  const admissionRejections: Record<SocketRejectionCounter, number> = {
+    originNotAllowed: 0,
+    queryStringNotPermitted: 0,
+    unavailable: 0,
+  }
+
   const sync: SyncGatewayAccess = {
     unavailabilityReasons: syncUnavailabilityReasons,
     capabilities: () => {
@@ -1177,28 +1417,47 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       }
     },
     issueTicket: async (identity) => {
-      const reasons = syncUnavailabilityReasons()
-      if (reasons.length > 0) {
-        logSyncRefusal('ticket refused', reasons)
-        throw new SyncUnavailableError(reasons)
-      }
-      const operation = syncTickets.issue(identity)
-      ticketOperations.add(operation)
+      // Every mint that reaches this issuer lands in exactly one of the two
+      // counters, decided by the OUTCOME rather than by the arm it took: a
+      // precondition refusal, the shutdown race and a ticket store that threw
+      // all produced no ticket, and a panel row that counted only the first
+      // would read zero on the deployment whose store is the thing that broke.
+      // The flag is set at the last statement before the return, so a mint that
+      // never settles is counted as neither.
+      let minted = false
       try {
-        const issued = await operation
-        if (stopping) {
-          throw new SyncUnavailableError(['gateway-stopping'], 'WebSocket sync is stopping.')
+        const reasons = syncUnavailabilityReasons()
+        if (reasons.length > 0) {
+          logSyncRefusal('ticket refused', reasons)
+          throw new SyncUnavailableError(reasons)
         }
-        return {
-          ticket: issued.ticket,
-          expiresAt: issued.expiresAt,
-          issuedAt: issued.issuedAt ?? Date.now(),
-          endpoint: SYNC_SOCKET_PATH,
-          capability: SYNC_CAPABILITY_ID,
-          version: SYNC_PROTOCOL_VERSION,
+        const operation = syncTickets.issue(identity)
+        ticketOperations.add(operation)
+        try {
+          const issued = await operation
+          if (stopping) {
+            throw new SyncUnavailableError(['gateway-stopping'], 'WebSocket sync is stopping.')
+          }
+          const response: SyncTicketResponse = {
+            ticket: issued.ticket,
+            expiresAt: issued.expiresAt,
+            issuedAt: issued.issuedAt ?? Date.now(),
+            endpoint: SYNC_SOCKET_PATH,
+            capability: SYNC_CAPABILITY_ID,
+            version: SYNC_PROTOCOL_VERSION,
+          }
+          minted = true
+
+          return response
+        } finally {
+          ticketOperations.delete(operation)
         }
       } finally {
-        ticketOperations.delete(operation)
+        if (minted) {
+          ticketsIssued += 1
+        } else {
+          ticketsRefused += 1
+        }
       }
     },
   }
@@ -1255,10 +1514,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     if (url.pathname === SYNC_SOCKET_PATH) {
-      const origin = req.headers.origin
-      const originAllowed =
-        typeof origin === 'string' &&
-        (syncAllowedOrigins.has(origin) || (syncAllowsSameOrigin && isSameOriginUpgrade(req, origin)))
+      const originAllowed = admitsProbeOrigin(syncAllowedOrigins, syncAllowsSameOrigin, admissionProbeOf(req))
       const unavailability = syncUnavailabilityReasons()
       if (url.search.length > 0 || !originAllowed || unavailability.length > 0) {
         // Name the cause. "connection rejected" alone cannot tell an operator
@@ -1266,8 +1522,12 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         // deployment never allowed, or hit a genuinely-down backend -- three
         // completely different fixes. The origin itself is NOT logged: it is
         // attacker-controlled input, and the boolean is the diagnostic.
-        const rejection =
+        const rejection: SocketRejectionCode =
           url.search.length > 0 ? 'query-string-not-permitted' : !originAllowed ? 'origin-not-allowed' : 'unavailable'
+        // Counted against the SAME closed cause the close reason names, through
+        // the one map, so an operator reading the panel and a client reading a
+        // 1008 are reading the same event. Nothing about WHICH client is kept.
+        admissionRejections[SOCKET_REJECTION_COUNTERS[rejection]] += 1
         logRefusal(
           `[ws-sync] connection rejected: ${rejection}`,
           `connection:${rejection}:${unavailability.join()}`,
@@ -1303,6 +1563,12 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         // and whatever else it names) share the gateway's throttled logger;
         // without this they were computed and then dropped on the floor.
         logRefusal,
+        // The one handshake outcome the gateway counts. The sink is the attach
+        // closure, never this socket, so the count survives the reconnect it
+        // exists to describe.
+        onHandshakeRejected: (): void => {
+          handshakeRejected += 1
+        },
         apiRpc: syncOptions!.apiRpc,
         inviteEvents: syncOptions!.inviteEvents,
         files: syncOptions!.files,
@@ -1660,6 +1926,38 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     pushesDispatched,
   })
 
+  const admission = (probe: AdmissionProbe = {}): GatewayAdmission => ({
+    // ABSENT IS NOT `false`. A caller that could not name an origin never
+    // asked the question; this gateway answering "no" about a real one is a
+    // conclusive fault with a finding behind it, and the two must not render
+    // the same. An origin that is present but unparseable IS a no: that is
+    // what the upgrade path does with it.
+    ...(typeof probe.origin === 'string' && probe.origin.length > 0
+      ? { originAdmitted: admitsProbeOrigin(syncAllowedOrigins, syncAllowsSameOrigin, probe) }
+      : {}),
+    // Rules, not list entries -- see `GatewayAdmission.allowedOriginCount`.
+    // Combined here, once, beside the boolean that explains the extra rule, so
+    // the count and the lane's own `no-allowed-origins` precondition cannot
+    // drift into disagreeing about who is admitted.
+    allowedOriginCount: boundedAdmissionCount(
+      syncAllowedOrigins.size + (syncAllowsSameOrigin ? 1 : 0),
+      MAX_REPORTED_ORIGIN_RULES,
+    ),
+    allowsSameOrigin: syncAllowsSameOrigin,
+    liveSockets: boundedAdmissionCount(wss.clients.size, MAX_REPORTED_LIVE_SOCKETS),
+    ticketsIssued: boundedAdmissionCount(ticketsIssued, MAX_REPORTED_ADMISSION_EVENTS),
+    ticketsRefused: boundedAdmissionCount(ticketsRefused, MAX_REPORTED_ADMISSION_EVENTS),
+    handshakeRejected: boundedAdmissionCount(handshakeRejected, MAX_REPORTED_ADMISSION_EVENTS),
+    rejections: {
+      originNotAllowed: boundedAdmissionCount(admissionRejections.originNotAllowed, MAX_REPORTED_ADMISSION_EVENTS),
+      queryStringNotPermitted: boundedAdmissionCount(
+        admissionRejections.queryStringNotPermitted,
+        MAX_REPORTED_ADMISSION_EVENTS,
+      ),
+      unavailable: boundedAdmissionCount(admissionRejections.unavailable, MAX_REPORTED_ADMISSION_EVENTS),
+    },
+  })
+
   let stopPromise: Promise<void> | undefined
   const stop = (): Promise<void> => {
     if (stopPromise) {
@@ -1750,6 +2048,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     dispatch: (message: DispatchMessage): number => dispatchToRegistry(registry, message),
     sync,
     health,
+    admission,
     stop,
   }
 }

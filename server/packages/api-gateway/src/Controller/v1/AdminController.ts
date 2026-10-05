@@ -57,6 +57,7 @@ import {
   deriveQueueSeparation,
   readAuthRuntimeBody,
 } from '../../Service/Diagnostics/RuntimeDiagnostics'
+import { admissionProbeFromHeaders, readGatewayAdmission } from '../../Service/Diagnostics/AdmissionDiagnostics'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -919,7 +920,7 @@ export class AdminController extends BaseHttpController {
    * serialized response against planted secret values.
    */
   @httpGet('/sync-diagnostics', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async getSyncDiagnostics(_request: Request, response: Response): Promise<void> {
+  async getSyncDiagnostics(request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
 
@@ -994,6 +995,39 @@ export class AdminController extends BaseHttpController {
         }),
         consumerCount,
       },
+      // Standard Red Notes: GATEWAY ADMISSION AND TRAFFIC — whether clients
+      // arrive at the socket at all, and whether they are being turned away.
+      //
+      // No endpoint published one of these, so the panel's whole block rendered
+      // a single sentence saying so. They are unreachable from a browser by
+      // construction: a refused upgrade is closed with a 1008 no screen reads,
+      // and the browser that was refused is not the browser reading this pane.
+      //
+      // ALL OR NOTHING. The panel renders all ten rows the moment ONE member is
+      // defined, so a partial fill would be nine rows reading "not reported" as
+      // though they had been measured and found empty. The block is therefore
+      // omitted ENTIRELY when no gateway is attached, and otherwise carries
+      // every member.
+      //
+      // The probe is built from THIS request's headers so the one per-request
+      // member — "would you admit the origin I arrived from" — is answered by
+      // the gateway's own upgrade predicate rather than by a second copy of the
+      // rule. What comes back is read BY ALLOWLIST: the gateway is a separately
+      // versioned package, and a field it grows later must not reach a client
+      // by riding along in a spread.
+      //
+      // SECRECY: a refusal is a count against a closed cause, never an
+      // identified client. The allowlist's CONTENTS never leave the gateway —
+      // only how many rules it holds and one boolean about the asking client's
+      // own origin, which that client already possesses.
+      admission: readGatewayAdmission(
+        webSocketGatewayAccessService.admission(
+          admissionProbeFromHeaders(
+            request.headers,
+            (request.socket as { encrypted?: boolean } | undefined)?.encrypted === true,
+          ),
+        ),
+      ),
       // Standard Red Notes: topology + configuration PRESENCE. The gate says
       // which precondition is unmet; this says what the operator can actually do
       // about it, because the right action differs per topology and the panel

@@ -1,4 +1,9 @@
-import { attachWebSocketGateway, type AttachedGateway, type AttachOptions } from '@standard-red-notes/websocket-gateway'
+import {
+  attachWebSocketGateway,
+  type AdmissionProbe,
+  type AttachedGateway,
+  type AttachOptions,
+} from '@standard-red-notes/websocket-gateway'
 import type { IncomingMessage, ServerResponse } from 'http'
 
 import type { RealtimeGatewayHealth } from '../Readiness/AggregateReadinessService'
@@ -83,6 +88,31 @@ export class WebSocketGatewayAccessService {
   health(): RealtimeGatewayHealth | undefined {
     const provider = this.provider as (AttachedGateway & { health?: () => RealtimeGatewayHealth }) | undefined
     return provider?.health?.()
+  }
+
+  /**
+   * Standard Red Notes: the attached gateway's admission block for ONE asking
+   * request, for the admin sync diagnostics. `undefined` when nothing is
+   * attached — which is the NOTHING half of that block's all-or-nothing
+   * contract, and the honest answer for a process holding no socket.
+   *
+   * Read structurally, like `health()` above, so a gateway build predating
+   * `admission()` still satisfies the interface and simply reports nothing
+   * instead of throwing a 500 out of a diagnostics endpoint. The return is
+   * deliberately `unknown`: the caller reads it BY ALLOWLIST, so typing it as
+   * the gateway's own interface here would invite a passthrough.
+   */
+  admission(probe: AdmissionProbe): unknown {
+    const provider = this.provider as (AttachedGateway & { admission?: (p: AdmissionProbe) => unknown }) | undefined
+    try {
+      return provider?.admission?.(probe)
+    } catch {
+      // The deployment this pane exists for is the broken one. A gateway
+      // mid-teardown must cost the admin endpoint its admission block, never
+      // its status code, and the block's absence is already the panel's
+      // "nothing reported" — so the degradation needs no second vocabulary.
+      return undefined
+    }
   }
 }
 
