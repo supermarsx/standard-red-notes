@@ -1,5 +1,34 @@
 import { HexString } from '@standardnotes/sncrypto-common'
 
+const HEX_SHA256 = /^[a-f0-9]{64}$/u
+
+/**
+ * A whole-stream SHA-256 that does not exist yet.
+ *
+ * The uploader only learns a file's digest after it has streamed the whole file,
+ * which is strictly after this transfer has to be constructed — so the transfer
+ * takes the running hash rather than its value.
+ *
+ * `final()` is SINGLE-USE. The underlying libsodium state is released on
+ * finalize, so a second call reads freed state rather than returning the same
+ * answer. {@link SocketUploadTransfer} therefore memoizes it.
+ *
+ * `bytesHashed` counts the bytes of the ENCRYPTED stream fed in so far, which is
+ * the same quantity the transfer's `declaredSize` describes; the two disagreeing
+ * means the size plan and the bytes actually produced have diverged.
+ */
+export type SocketUploadDigestHandle = {
+  readonly bytesHashed: number
+  final(): HexString
+}
+
+/**
+ * Either the finished digest or the handle that will produce it. Both forms are
+ * accepted so a caller that genuinely has the hex string up front — a re-upload
+ * of bytes already hashed, or a test — need not wrap it.
+ */
+export type SocketUploadDigest = HexString | SocketUploadDigestHandle
+
 /** Where the server says it actually is, plus the handles needed to get back to it. */
 export type SocketUploadPosition = {
   transferId: string
@@ -61,6 +90,14 @@ export class SocketUploadTransferError extends Error {}
  * same bytes however many resume cycles occur, so it is computed once and passed
  * in here unchanged. Recomputing it per attempt would require bytes the client may
  * no longer hold once the server has rewound it.
+ *
+ * **One transfer per file, never one per resume attempt.** A resume is handled
+ * inside this object, by {@link socketLost} followed by {@link accepted}. Building
+ * a second `SocketUploadTransfer` around the same upload throws away the
+ * `finishAttempted` flag that decides replay safety, and — when the digest was
+ * handed over as a {@link SocketUploadDigestHandle} — would call `final()` on a
+ * state the first transfer already released. The memoization below makes a single
+ * transfer safe to read from repeatedly; it cannot protect a second one.
  */
 export class SocketUploadTransfer {
   private phase: Phase = { name: 'unopened' }
@@ -72,17 +109,55 @@ export class SocketUploadTransfer {
    * restart risks applying the same upload a second time.
    */
   private finishAttempted = false
+  /** The resolved digest, kept because `final()` cannot be asked twice. */
+  private memoizedSha256?: HexString
 
   constructor(
     private readonly declaredSize: number,
-    private readonly sha256: HexString,
+    private readonly digest: SocketUploadDigest,
   ) {
     if (!Number.isSafeInteger(declaredSize) || declaredSize < 1) {
       throw new SocketUploadTransferError('A socket upload needs a positive declared size.')
     }
-    if (!/^[a-f0-9]{64}$/u.test(sha256)) {
+    // A handle cannot be checked here — it has no value yet. Its shape is checked
+    // in `sha256` instead, at the one moment the value exists.
+    if (typeof digest === 'string' && !HEX_SHA256.test(digest)) {
       throw new SocketUploadTransferError('A socket upload needs the hex digest of its encrypted stream.')
     }
+  }
+
+  /**
+   * The whole-stream digest, resolved at most once per transfer and read up to
+   * three times (the FINISH from `sending`, the re-issued FINISH from `finishing`,
+   * and the comparison in `completed`). Memoized because `final()` releases the
+   * hash state: a second call would read freed memory, not re-answer.
+   *
+   * Returns `undefined` only after abandoning the transfer, so every caller can
+   * treat `undefined` as "the decision has already been made, stop".
+   */
+  private get sha256(): HexString | undefined {
+    if (this.memoizedSha256 !== undefined) {
+      return this.memoizedSha256
+    }
+    const digest = this.digest
+    if (typeof digest === 'string') {
+      this.memoizedSha256 = digest
+      return this.memoizedSha256
+    }
+    if (digest.bytesHashed !== this.declaredSize) {
+      // The cheapest place to catch a wrong size plan: the bytes that were
+      // actually produced disagree with the length the server was promised, so
+      // whatever this digest covers is not the file being declared.
+      this.abandon('FILE_INVALID_STATE')
+      return undefined
+    }
+    const finalized = digest.final()
+    if (!HEX_SHA256.test(finalized)) {
+      this.abandon('FILE_INVALID_STATE')
+      return undefined
+    }
+    this.memoizedSha256 = finalized
+    return this.memoizedSha256
   }
 
   /**
@@ -114,11 +189,18 @@ export class SocketUploadTransfer {
       case 'sending': {
         const position = this.phase.position
         if (position.nextOffset === this.declaredSize) {
+          const sha256 = this.sha256
+          if (sha256 === undefined) {
+            // The getter abandoned the transfer, so re-ask from the phase it left
+            // behind. This recurses exactly once: `abandon` always lands on
+            // `abandoned`, which answers without reading the digest.
+            return this.nextAction()
+          }
           return {
             type: 'finish',
             transferId: position.transferId,
             generation: position.generation,
-            sha256: this.sha256,
+            sha256,
           }
         }
         return {
@@ -129,13 +211,19 @@ export class SocketUploadTransfer {
           generation: position.generation,
         }
       }
-      case 'finishing':
+      case 'finishing': {
+        const position = this.phase.position
+        const sha256 = this.sha256
+        if (sha256 === undefined) {
+          return this.nextAction()
+        }
         return {
           type: 'finish',
-          transferId: this.phase.position.transferId,
-          generation: this.phase.position.generation,
-          sha256: this.sha256,
+          transferId: position.transferId,
+          generation: position.generation,
+          sha256,
         }
+      }
       case 'completed':
         return { type: 'done', sha256: this.phase.sha256 }
       case 'abandoned':
@@ -222,7 +310,12 @@ export class SocketUploadTransfer {
     if (this.phase.name === 'abandoned' || this.phase.name === 'completed') {
       return
     }
-    if (sha256 !== this.sha256) {
+    const expected = this.sha256
+    if (expected === undefined) {
+      // The getter already abandoned this transfer; its verdict stands.
+      return
+    }
+    if (sha256 !== expected) {
       // The server published a different stream than the one this client hashed.
       this.abandon('FILE_INTEGRITY_MISMATCH')
       return

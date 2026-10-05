@@ -1,7 +1,16 @@
-import { SocketUploadTransfer, SocketUploadTransferError } from './SocketUploadTransfer'
+import { EncryptedStreamDigest } from './EncryptedStreamDigest'
+import { SocketUploadDigestHandle, SocketUploadTransfer, SocketUploadTransferError } from './SocketUploadTransfer'
 
 const DIGEST = 'a'.repeat(64)
 const OTHER_DIGEST = 'b'.repeat(64)
+
+/**
+ * Compile-time proof that the digest the wiring task will actually hand over
+ * satisfies the handle this transfer now takes. If `EncryptedStreamDigest` ever
+ * stops fitting, this resolves to `never` and the spec no longer compiles.
+ */
+type RealDigestFitsHandle = EncryptedStreamDigest extends SocketUploadDigestHandle ? true : never
+const realDigestFitsHandle: RealDigestFitsHandle = true
 
 describe('SocketUploadTransfer', () => {
   const opened = (subject: SocketUploadTransfer, overrides: Record<string, unknown> = {}) =>
@@ -526,6 +535,155 @@ describe('SocketUploadTransfer', () => {
       transfer.completed(DIGEST)
 
       expect(transfer.position).toBeUndefined()
+    })
+  })
+
+  /**
+   * The uploader cannot know a file's digest until it has streamed the whole
+   * file, so the transfer — which must exist before the first byte goes out —
+   * takes the running hash instead of its value.
+   */
+  describe('a digest that does not exist yet', () => {
+    const handle = (bytesHashed: number, value = DIGEST) => {
+      let released = false
+      return {
+        bytesHashed,
+        // Mirrors `EncryptedStreamDigest`: libsodium releases the hash state on
+        // finalize, so a second call reads freed state. Modelling that here means
+        // a lost memoization fails loudly rather than quietly returning the same
+        // answer a stub would have handed back.
+        final: jest.fn(() => {
+          if (released) {
+            throw new Error('final() was called a second time on a released hash state.')
+          }
+          released = true
+          return value
+        }),
+      }
+    }
+
+    /** Drives a transfer to the point where every declared byte is stored. */
+    const allBytesStored = (transfer: SocketUploadTransfer) => {
+      opened(transfer)
+      transfer.chunkAcknowledged({
+        transferId: 'transfer-1',
+        generation: 1,
+        nextIndex: 1,
+        nextOffset: 10,
+        resumeId: 'resume-2',
+      })
+      return transfer
+    }
+
+    it('proves the real streaming digest satisfies the handle', () => {
+      expect(realDigestFitsHandle).toBe(true)
+    })
+
+    it('finishes with the digest the handle produces, not one supplied up front', () => {
+      const digest = handle(10)
+      const transfer = allBytesStored(new SocketUploadTransfer(10, digest))
+
+      expect(transfer.nextAction()).toEqual({
+        type: 'finish',
+        transferId: 'transfer-1',
+        generation: 1,
+        sha256: DIGEST,
+      })
+    })
+
+    it('does not touch the handle until every declared byte is stored', () => {
+      const digest = handle(10)
+      const transfer = new SocketUploadTransfer(10, digest)
+      opened(transfer)
+
+      // Still mid-stream: finalizing here would hash a prefix of the file.
+      expect(transfer.nextAction()).toMatchObject({ type: 'send-chunk' })
+      expect(digest.final).not.toHaveBeenCalled()
+    })
+
+    it('finalizes exactly once however many times the digest is read', () => {
+      const digest = handle(10)
+      const transfer = allBytesStored(new SocketUploadTransfer(10, digest))
+
+      // The three reads the protocol actually performs: the first FINISH, the
+      // identical FINISH re-issued from `finishing`, and the completion compare.
+      expect(transfer.nextAction()).toMatchObject({ type: 'finish', sha256: DIGEST })
+      transfer.finishSent()
+      expect(transfer.nextAction()).toMatchObject({ type: 'finish', sha256: DIGEST })
+      transfer.completed(DIGEST)
+      expect(transfer.nextAction()).toEqual({ type: 'done', sha256: DIGEST })
+
+      // `final()` releases the hash state, so a second call would read freed
+      // memory rather than re-answer. Memoization is the whole reason this holds.
+      expect(digest.final).toHaveBeenCalledTimes(1)
+    })
+
+    it('behaves identically when handed the finished hex digest instead', () => {
+      const transfer = allBytesStored(new SocketUploadTransfer(10, DIGEST))
+
+      expect(transfer.nextAction()).toMatchObject({ type: 'finish', sha256: DIGEST })
+      transfer.finishSent()
+      expect(transfer.nextAction()).toMatchObject({ type: 'finish', sha256: DIGEST })
+      transfer.completed(DIGEST)
+      expect(transfer.nextAction()).toEqual({ type: 'done', sha256: DIGEST })
+    })
+
+    it('refuses a handle that hashed fewer bytes than the transfer declared', () => {
+      const digest = handle(9)
+      const transfer = allBytesStored(new SocketUploadTransfer(10, digest))
+
+      // The size plan and the bytes actually produced disagree, so this digest
+      // does not cover the file being declared. Caught before FINISH, where it
+      // is still safe to fall back.
+      expect(transfer.nextAction()).toEqual({
+        type: 'abandon',
+        code: 'FILE_INVALID_STATE',
+        safeToFallback: true,
+      })
+      expect(digest.final).not.toHaveBeenCalled()
+    })
+
+    it('refuses a handle that hashed more bytes than the transfer declared', () => {
+      const digest = handle(11)
+      const transfer = allBytesStored(new SocketUploadTransfer(10, digest))
+      // Reaching `finishing` without ever asking for the digest: FINISH is
+      // written by the caller, which does not consult the hash.
+      transfer.finishSent()
+
+      expect(transfer.nextAction()).toEqual({
+        type: 'abandon',
+        code: 'FILE_INVALID_STATE',
+        safeToFallback: false,
+      })
+      expect(digest.final).not.toHaveBeenCalled()
+    })
+
+    it('refuses a short handle at completion rather than publishing the upload', () => {
+      const digest = handle(9)
+      const transfer = allBytesStored(new SocketUploadTransfer(10, digest))
+      transfer.finishSent()
+
+      transfer.completed(DIGEST)
+
+      // Not `{ type: 'done' }`: this client never proved it hashed the file the
+      // server says it published.
+      expect(transfer.nextAction()).toEqual({
+        type: 'abandon',
+        code: 'FILE_INVALID_STATE',
+        safeToFallback: false,
+      })
+    })
+
+    it('refuses a handle whose finalized value is not a hex digest', () => {
+      // The hex-string form is rejected in the constructor; a handle has no value
+      // to check until it is finalized, so the same invariant is enforced there.
+      const transfer = allBytesStored(new SocketUploadTransfer(10, handle(10, 'not-a-digest')))
+
+      expect(transfer.nextAction()).toEqual({
+        type: 'abandon',
+        code: 'FILE_INVALID_STATE',
+        safeToFallback: true,
+      })
     })
   })
 })
