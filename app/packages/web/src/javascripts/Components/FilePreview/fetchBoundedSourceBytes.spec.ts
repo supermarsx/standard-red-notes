@@ -119,7 +119,7 @@ describe('fetchBoundedSourceBytes', () => {
 
   /**
    * `fetch('data:…')` is governed by CSP `connect-src`. The shipped policy
-   * (`connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://… wss:`)
+   * (`connect-src 'self' blob: https: http://localhost:* http://127.0.0.1:* ws://… wss:`)
    * does not list `data:`, so such a fetch is BLOCKED and the violation report
    * prints the entire data URL — a whole base64 image — into the console, while
    * the inline preview and "save to Files" both fail. The only way to be immune
