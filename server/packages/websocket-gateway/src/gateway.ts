@@ -27,6 +27,7 @@ import {
 import {
   RoomRegistry,
   parseRelayFrame,
+  rejectedControlFrameIdentity,
   handleRelayFrame,
   type RoomDeniedReason,
   type RoomJoinAuthorizer,
@@ -1518,39 +1519,75 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         return
       }
       const frame = parseRelayFrame(raw)
-      if (frame) {
-        if (!relayBacklog.tryEnqueue(rawBytes)) {
-          logRefusal('[ws] relay backlog exceeded', 'legacy:relay-backlog', { conn: conn.connectionId })
-          // R15: drop the frame and evict the rooms, but KEEP THE SOCKET. The
-          // legacy socket also carries push, invite and MFA notifications, so
-          // closing it over one collaboration burst took four unrelated lanes
-          // down and left the client reconnecting with backoff. The backlog is
-          // already >= the ingress burst, so reaching this is a genuinely
-          // pathological producer, not a fast one.
-          evictRooms('rate-limited')
-          return
+      if (!frame) {
+        // A frame the parser refused used to be dropped in total silence, so a
+        // client blocked on `room-reserved`/`room-joined` spent its whole 10 s
+        // timeout learning nothing -- which is how one protocol-version bump
+        // cost two weeks of red CI (`cb0395ce`) and made the retry ladder
+        // undiagnosable. Answer the two control frames a peer actually waits
+        // on, and only those: `rejectedControlFrameIdentity` returns null for
+        // the raw `'ping'` heartbeat, for JSON this lane does not own, and for
+        // every relay type where a denial would be ignored or would tear down
+        // a live room over one bad payload.
+        const rejected = rejectedControlFrameIdentity(raw)
+        if (rejected) {
+          // The frame itself is attacker-controlled input and is NEVER logged
+          // or echoed: not its bytes, not which field failed, not a parse
+          // error. The reply carries the bounded room/requestId the client
+          // correlates by (it ignores a denial that matches neither) plus one
+          // code from the closed `RoomDeniedReason` set -- `'policy'`, the same
+          // reason an `incompatible-protocol` lifecycle failure already maps to.
+          // Reply volume is bounded by the ingress limiter consumed above.
+          const reason: RoomDeniedReason = 'policy'
+          logRefusal('[ws] malformed collaboration control frame denied', 'legacy:malformed-control-frame', {
+            conn: conn.connectionId,
+          })
+          try {
+            socket.send(
+              JSON.stringify({
+                t: 'room-denied',
+                room: rejected.room,
+                ...(rejected.requestId ? { requestId: rejected.requestId } : {}),
+                reason,
+              }),
+            )
+          } catch {
+            /* socket unwritable; there is nothing left to tell this peer */
+          }
         }
-        referencedRooms.add(frame.room)
-        // handleRelayFrame is async (room-join may consult the membership
-        // authorizer). Swallow rejections so a failing authorizer can never crash
-        // the message handler / gateway; the authorizer itself already fails closed.
-        relayQueue = relayQueue
-          .then(() => {
-            return connectionClosed
-              ? 0
-              : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationPlane)
-          })
-          .then(() => undefined)
-          .catch((err) => {
-            logger.warn('[ws] relay frame handling failed', safeErrorLogMetadata(err))
-          })
-          .finally(() => {
-            relayBacklog.settle(rawBytes)
-            if (!rooms.isMember(frame.room, conn)) {
-              referencedRooms.delete(frame.room)
-            }
-          })
+        return
       }
+      if (!relayBacklog.tryEnqueue(rawBytes)) {
+        logRefusal('[ws] relay backlog exceeded', 'legacy:relay-backlog', { conn: conn.connectionId })
+        // R15: drop the frame and evict the rooms, but KEEP THE SOCKET. The
+        // legacy socket also carries push, invite and MFA notifications, so
+        // closing it over one collaboration burst took four unrelated lanes
+        // down and left the client reconnecting with backoff. The backlog is
+        // already >= the ingress burst, so reaching this is a genuinely
+        // pathological producer, not a fast one.
+        evictRooms('rate-limited')
+        return
+      }
+      referencedRooms.add(frame.room)
+      // handleRelayFrame is async (room-join may consult the membership
+      // authorizer). Swallow rejections so a failing authorizer can never crash
+      // the message handler / gateway; the authorizer itself already fails closed.
+      relayQueue = relayQueue
+        .then(() => {
+          return connectionClosed
+            ? 0
+            : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationPlane)
+        })
+        .then(() => undefined)
+        .catch((err) => {
+          logger.warn('[ws] relay frame handling failed', safeErrorLogMetadata(err))
+        })
+        .finally(() => {
+          relayBacklog.settle(rawBytes)
+          if (!rooms.isMember(frame.room, conn)) {
+            referencedRooms.delete(frame.room)
+          }
+        })
     })
   })
 

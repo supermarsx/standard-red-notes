@@ -1233,6 +1233,117 @@ describe('websocket connection lifecycle', () => {
     socket.close()
   })
 
+  it('answers an unparseable room-reserve with room-denied rather than silence', async () => {
+    await attachGateway()
+    const token = mintConnectionToken({ userUuid: 'user-A', sessionUuid: 'session-A' }, CONNECTION_SECRET, '60s')
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+
+    const denied = nextMessage(socket)
+    // Byte-for-byte the shape of `cb0395ce`: a peer one collaboration protocol
+    // version behind. `parseRelayFrame` refuses it, and while such a frame was
+    // dropped in silence the peer waited out its entire reservation timeout
+    // with no reason -- two weeks of red CI, and an undiagnosable retry ladder.
+    socket.send(
+      JSON.stringify({
+        t: 'room-reserve',
+        room: 'note-stale',
+        requestId: 'stale-lease',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION - 1,
+        expectedRoomEpoch: ROOM_EPOCH,
+        cap: 'capability-bytes-that-must-never-be-echoed',
+      }),
+    )
+
+    // Correlated (the client ignores a denial matching neither its room nor its
+    // requestId) and carrying nothing else: one code from the closed C1 set.
+    expect(JSON.parse(await denied)).toEqual({
+      t: 'room-denied',
+      room: 'note-stale',
+      requestId: 'stale-lease',
+      reason: 'policy',
+    })
+    // A denial replaces a timeout; it must cost neither the socket (push,
+    // invite and MFA ride the same lane) nor anything resembling membership.
+    expect(socket.readyState).toBe(WebSocket.OPEN)
+    expect(attached!.rooms.members('note-stale').length).toBe(0)
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[ws] malformed collaboration control frame denied',
+      JSON.stringify({ conn: attached!.registry.get('user-A')[0].connectionId, suppressedSinceLastLog: 0 }),
+    )
+    // The frame is attacker-controlled input: neither its capability bytes nor
+    // its room id may reach a log line, and no parse error may be described.
+    const logged = JSON.stringify(logger.warn.mock.calls)
+    expect(logged).not.toContain('capability-bytes-that-must-never-be-echoed')
+    expect(logged).not.toContain('note-stale')
+    expect(logged).not.toMatch(/protocolVersion|JSON|unexpected|token/i)
+
+    socket.close()
+  })
+
+  it('denies a malformed room-join with no usable requestId without inventing one', async () => {
+    await attachGateway()
+    const token = mintConnectionToken({ userUuid: 'user-A', sessionUuid: 'session-A' }, CONNECTION_SECRET, '60s')
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+
+    const deniedWithoutRequestId = nextMessage(socket)
+    socket.send(JSON.stringify({ t: 'room-join', room: 'note-2', protocolVersion: 99 }))
+    expect(JSON.parse(await deniedWithoutRequestId)).toEqual({ t: 'room-denied', room: 'note-2', reason: 'policy' })
+
+    // An out-of-bounds requestId is dropped from the reply rather than echoed:
+    // the frame named no correlation this build is willing to repeat back.
+    const deniedWithoutEmptyRequestId = nextMessage(socket)
+    socket.send(JSON.stringify({ t: 'room-join', room: 'note-3', requestId: '' }))
+    expect(JSON.parse(await deniedWithoutEmptyRequestId)).toEqual({
+      t: 'room-denied',
+      room: 'note-3',
+      reason: 'policy',
+    })
+
+    socket.close()
+  })
+
+  it('sends no denial for a frame nothing on this lane is waiting on', async () => {
+    await attachGateway()
+    const token = mintConnectionToken({ userUuid: 'user-A', sessionUuid: 'session-A' }, CONNECTION_SECRET, '60s')
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+
+    const received: string[] = []
+    socket.on('message', (data) => received.push(data.toString()))
+
+    for (const message of [
+      'not-a-frame',
+      '{',
+      '{"t":"room-join","room":',
+      '["room-join","note-1"]',
+      // JSON this lane does not own: answering it would make the gateway
+      // invent a collaboration denial for another protocol's message.
+      JSON.stringify({ t: 'presence-poll', room: 'note-1' }),
+      // A relay type nothing blocks on. A `room-denied` here is either ignored
+      // or, correlated to a live lease, tears a working room down.
+      JSON.stringify({ t: 'yjs', room: 'note-1', payload: '' }),
+      JSON.stringify({ t: 'awareness', room: 'note-1', payload: '' }),
+      JSON.stringify({ t: 'room-leave', room: 'note-1', requestId: '' }),
+      JSON.stringify({ t: 'room-presence-heartbeat', room: 'note-1', requestId: 'r', clientId: -1 }),
+      // Awaited types whose own room id cannot address a denial.
+      JSON.stringify({ t: 'room-join' }),
+      JSON.stringify({ t: 'room-join', room: 'x'.repeat(201) }),
+    ]) {
+      socket.send(message)
+    }
+    socket.send('ping')
+
+    // Frames are processed in order and both the pong and a denial are written
+    // synchronously, so the pong proves every frame above was already handled.
+    await vi.waitFor(() => expect(received).toContain('pong'))
+    expect(received.filter((message) => message !== 'pong')).toEqual([])
+
+    socket.close()
+  })
+
   it('terminates a socket that never answers the heartbeat ping', async () => {
     vi.useFakeTimers()
     try {

@@ -442,6 +442,67 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
   return { t: t as 'yjs' | 'awareness' | 'comment', room, payload }
 }
 
+/**
+ * The control frames a client BLOCKS on. Both are answered with `room-joined` /
+ * `room-reserved` or `room-denied`, and the client's reservation/activation
+ * phase sits on a timeout until one arrives. They are the only frames a failed
+ * parse may be answered with: everything else on this socket is either
+ * fire-and-forget (`room-leave`), best-effort (`room-presence-heartbeat`) or an
+ * opaque relay payload (`yjs*`, `awareness`, `comment`), and a client correlates
+ * a `room-denied` by its join/reserve requestId -- so answering those would
+ * either be ignored or, worse, tear down a live room over one bad payload.
+ */
+const AWAITED_CONTROL_TYPES: ReadonlySet<string> = new Set(['room-reserve', 'room-join'])
+
+/**
+ * Correlation identity of a frame that LOOKS like an awaited collaboration
+ * control frame yet failed `parseRelayFrame`. Both fields are client input that
+ * passed the SAME bounds `parseRelayFrame` enforces, and they are the only
+ * things echoed: a client ignores any `room-denied` whose room and requestId do
+ * not match its pending request, so without them the reply is silence twice
+ * over.
+ */
+export type RejectedControlFrameIdentity = { room: string; requestId?: string }
+
+/**
+ * Decide whether a frame `parseRelayFrame` rejected may be answered with a
+ * `room-denied`, and with what correlation.
+ *
+ * Call it ONLY where `parseRelayFrame` returned null. A rejected control frame
+ * that goes unanswered costs the peer its whole reservation timeout with no
+ * reason given -- that is how a protocol-version bump once cost two weeks of
+ * red CI (`cb0395ce`). The answer carries nothing but the bounded room id, the
+ * bounded requestId and a reason from the closed `RoomDeniedReason` set: never
+ * the raw frame, never a parse error, never which field was wrong.
+ *
+ * Returns null -- stay silent -- for anything that is not an awaited control
+ * frame: non-JSON text (the raw `'ping'` heartbeat), JSON this lane does not
+ * own, a relay type nothing waits on, and a frame whose own room id is out of
+ * bounds (there is no room to address a denial to).
+ */
+export function rejectedControlFrameIdentity(raw: string): RejectedControlFrameIdentity | null {
+  if (raw.length === 0 || raw[0] !== '{') {
+    return null
+  }
+  let obj: Record<string, unknown>
+  try {
+    obj = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const t = obj.t
+  if (typeof t !== 'string' || !AWAITED_CONTROL_TYPES.has(t)) {
+    return null
+  }
+  const room = obj.room
+  if (typeof room !== 'string' || room.length === 0 || room.length > MAX_ROOM_ID) {
+    return null
+  }
+  const requestId = obj.requestId
+  const correlatable = typeof requestId === 'string' && requestId.length > 0 && requestId.length <= MAX_REQUEST_ID
+  return { room, ...(correlatable ? { requestId } : {}) }
+}
+
 function isValidCollaborationEpoch(value: unknown): value is string {
   return typeof value === 'string' && COLLABORATION_EPOCH_PATTERN.test(value)
 }
