@@ -193,7 +193,13 @@ import { errorKind } from './healthReport'
  *      until a server reports it: a row reading "not reported" for a number that
  *      has no producer invites the reading that the number is zero.
  *   f. `queues.separation` — `own-prefixed-queue` / `inherited-shared-queue` /
- *      `in-process-fan-out` / `none`. Section below.
+ *      `in-process-fan-out` / `none`. Section below. STILL WANTED, and the reason
+ *      has narrowed: the presence map gained `API_GATEWAY_SQS_QUEUE_URL`, so the
+ *      PREFIX half is derived here now and has its own row. What presence cannot
+ *      show is a second consumer — a standalone gateway with no workers reports
+ *      the same two booleans as one splitting a queue with four — so the
+ *      `collided` verdict is still unresolved. Either this field, or a consumer
+ *      count on the queue block, would settle it; a count is the smaller ask.
  *   g. `services[].probedVia` — `probe-map` / `service-url` / `not-configured`.
  *      Closed enum. It would turn the central caveat of section 3 from a
  *      permanent hedge into a measured fact: a probe that resolved from the
@@ -345,6 +351,32 @@ export const FAN_OUT_MODES = ['queue-backed', 'in-process'] as const
  * is requested as item (f) of the header's list.
  */
 export const QUEUE_SEPARATIONS = ['own-prefixed-queue', 'inherited-shared-queue', 'in-process-fan-out', 'none'] as const
+
+/**
+ * The HALF of that question presence CAN now answer, and the exact line where it
+ * stops.
+ *
+ * `DIAGNOSTIC_ENV_KEYS` used to carry `SQS_QUEUE_URL` and no prefixed
+ * counterpart, so a gateway consuming its own queue and one consuming the
+ * workers' produced an identical presence map. It now carries
+ * `API_GATEWAY_SQS_QUEUE_URL` as well, and that is a genuinely different reading:
+ * the container writes the gateway's dotenv from the `API_GATEWAY_` prefix, so a
+ * queue the gateway OWNS arrives under the prefixed name while one it merely
+ * INHERITED arrives bare and alone.
+ *
+ * *** WHAT THESE THREE STATES DO NOT SAY. *** None of them is `collided`.
+ * Presence cannot show a SECOND CONSUMER, and a standalone gateway with no
+ * workers produces exactly the same two booleans as a gateway splitting a queue
+ * with four of them. `not-own-prefixed` is therefore the configuration in which
+ * the measured defect is POSSIBLE and not evidence that it is happening; the
+ * separation row below keeps that verdict unresolved and names the field that
+ * would settle it. A row that read "inherited-shared-queue" off these booleans
+ * would be the pane asserting an outage it cannot see — which is the failure this
+ * whole section exists to end, pointed the other way.
+ */
+export const GATEWAY_QUEUE_PREFIXES = ['own-prefixed', 'not-own-prefixed', 'no-queue-configured'] as const
+
+export type GatewayQueuePrefix = (typeof GATEWAY_QUEUE_PREFIXES)[number]
 
 /** The states a durable service's `DataSource` handle can be in. See header §4. */
 export const DATABASE_CONNECTION_STATES = ['connected', 'handle-only', 'disconnected'] as const
@@ -1733,10 +1765,43 @@ function presenceOf(topology: DeploymentTopology | undefined, key: string): bool
   return presence[key] === true
 }
 
+/**
+ * The prefix state, derived from the two presence booleans and from nothing else.
+ *
+ * Deliberately `undefined` in the one combination that cannot be told apart: the
+ * prefixed name absent and the bare name NOT REPORTED is consistent both with a
+ * gateway reading an inherited queue and with a deployment that has no queue at
+ * all, and those are opposite answers. Reporting either would be a coin toss
+ * rendered as an observation.
+ */
+function queuePrefixOf(prefixed: boolean | undefined, bare: boolean | undefined): GatewayQueuePrefix | undefined {
+  if (prefixed === undefined) {
+    return undefined
+  }
+  if (prefixed) {
+    return 'own-prefixed'
+  }
+  if (bare === undefined) {
+    return undefined
+  }
+  return bare ? 'not-own-prefixed' : 'no-queue-configured'
+}
+
+const QUEUE_PREFIX_NOTE: Record<GatewayQueuePrefix, string> = {
+  'own-prefixed':
+    "This gateway has a queue of its own: the prefixed variable is set, and the container writes the gateway's dotenv from that prefix. That is the fix for the measured defect below being IN PLACE. It is not proof of separation — presence cannot compare two addresses, and nothing here reads one — but its absence is how the defect happens.",
+  'not-own-prefixed':
+    'A queue is configured and this gateway has none of its own, so it is reading whatever the bare name points at. CORRECT on a deployment with no other consumer, and the exact configuration of the measured defect on one with workers: a queue delivers each message once, so two consumers split the traffic instead of each seeing it. Which of those this is cannot be derived from presence, and the row below says so rather than guessing.',
+  'no-queue-configured':
+    'Neither name is set, so there is no queue for the halves of this deployment to share. Events fan out in-process, which is a supported configuration and is the single-node default.',
+}
+
 function buildQueueBlock(topology: DeploymentTopology | undefined, queues: QueueView): DiagnosticBlock {
   const queueConfigured = presenceOf(topology, 'SQS_QUEUE_URL')
+  const ownQueueConfigured = presenceOf(topology, 'API_GATEWAY_SQS_QUEUE_URL')
   const topicConfigured = presenceOf(topology, 'SNS_TOPIC_ARN')
   const fanOut = queueConfigured === undefined ? undefined : queueConfigured ? 'queue-backed' : 'in-process'
+  const prefix = queuePrefixOf(ownQueueConfigured, queueConfigured)
   const separation = QUEUE_SEPARATIONS.find((candidate) => candidate === queues.separation)
 
   const rows: DiagnosticRow[] = [
@@ -1753,11 +1818,21 @@ function buildQueueBlock(topology: DeploymentTopology | undefined, queues: Queue
       ...absentOr(topicConfigured, 'informational'),
       note: 'Whether a publish topic is configured alongside the queue. Presence only. Absent is a supported configuration on a single-node deployment, which fans events out in-process instead, so this is never a fault on its own.',
     }),
+    observedRow({
+      label: safeConstant('Gateway event queue prefix'),
+      observed: prefix,
+      value: safeEnum(prefix, GATEWAY_QUEUE_PREFIXES),
+      verdict: 'informational',
+      note:
+        prefix === undefined
+          ? 'Whether this gateway has a queue of its OWN, derived from two presence booleans: the prefixed `API_GATEWAY_SQS_QUEUE_URL` and the bare `SQS_QUEUE_URL`. Not derivable here — the prefixed name was not reported, or it is absent while the bare name was not reported either, and that pair is consistent both with an inherited queue and with no queue at all. No address is read in any case. This row carries no verdict: it reports a configuration, and the separation row below is where the question it half-answers lives.'
+          : `${QUEUE_PREFIX_NOTE[prefix]} Presence only — no queue address, endpoint or credential is read, and none could be. This row carries no verdict of its own, because the same two booleans are produced by a deployment where this is correct and by one where it is the fault.`,
+    }),
     diagnosticRow({
       label: safeConstant('Queue separation'),
       value: queues.separation === undefined ? NOT_PUBLISHED : safeEnum(queues.separation, QUEUE_SEPARATIONS),
       ...absentOr(separation, separation === 'inherited-shared-queue' ? 'broken' : 'informational'),
-      note: "Whether the in-process gateway consumes its OWN queue or one it inherited from a sibling. This is the highest-value fact in this block and no endpoint reports it — nor can the pane derive it from what IS on the wire, which was checked: `DIAGNOSTIC_ENV_KEYS` carries `SQS_QUEUE_URL` and no prefixed `API_GATEWAY_SQS_*` counterpart, so the presence map cannot tell a gateway that configured its own queue from one reading the workers'. It is a measured defect of this repo rather than a hypothetical: workers once inherited the gateway queue address, both halves consumed from one queue, and roughly four in five realtime pushes — plus revision and e-mail events — went to whichever consumer won the race and were then deleted, with nothing logged. Presence cannot express it: a queue being configured says a queue exists and says nothing about how many consumers are pointed at it. A separation STATE can, with no address at all, and it is requested in this module header.",
+      note: 'Whether the halves of this deployment consume SEPARATE queues or one between them, which is the highest-value fact in this block. It is a measured defect of this repo rather than a hypothetical: workers once inherited the gateway queue address, both halves consumed from one queue, and roughly four in five realtime pushes — plus revision and e-mail events — went to whichever consumer won the race and were then deleted, with nothing logged, because both consumers succeeded on different messages. HALF OF IT IS NOW DERIVABLE AND IS THE ROW ABOVE: the presence map gained the prefixed queue name, so a gateway that configured its own queue can be told from one reading the bare name. The half that remains is the one that decides the verdict — whether a SECOND CONSUMER is pointed at that queue — and presence cannot show it: a standalone gateway with no workers reports exactly the same two booleans as a gateway splitting a queue with four. So this row claims nothing, and will keep saying so until something reports a consumer census or a separation state outright. A separation STATE would answer it with no address in it at all.',
     }),
   ]
 

@@ -120,7 +120,10 @@ import { describeDeployment, type DeploymentIdentityView, type TransportFallback
  * secret is reported as one of four closed states and never as a length: a
  * length is a fact about a secret, and the report this feeds is written to be
  * pasted in public. The threshold wording ("at least 32 bytes", "shorter than 32
- * bytes") is a constant of this build, derived from two closed enums.
+ * bytes") is a constant of this build, derived from two closed enums. The same
+ * secret's ORIGIN is a second row and the same discipline: a closed state token
+ * saying whether it was supplied, persisted, minted or never prepared — never a
+ * value, never a length, and never the path it was persisted to.
  *
  * The deployment REVISION is the one server-supplied value this section prints,
  * and it is printed through `safeToken` against `DEPLOY_REVISION` — the same
@@ -177,6 +180,77 @@ export const PROXY_DECISIONS = [
 
 export type ProxyDecision = (typeof PROXY_DECISIONS)[number]
 
+/**
+ * The vocabulary the DECISION ROW renders through, which is the seven outcomes
+ * above plus the server's two sentinels.
+ *
+ * `PROXY_DECISIONS` is the set of decisions the resolver can REACH, and that is
+ * what the secret-threshold derivation and the unreachable-listener finding read.
+ * The server's `ServiceProxyDecision` union is wider by exactly two members, and
+ * both have to be renderable or they would collapse to "other (unrecognised)" —
+ * the defect `SERVICE_PROXY_SETTINGS` already had once, where `auto` (the value
+ * the setup script WRITES by default) was reported to its operator as a typo.
+ *
+ * `unset` means NO LAUNCHER RECORDED A DECISION: an image older than the export
+ * that made the variable visible to a child process, or a gateway started outside
+ * `supervisor-server.sh` — a bare `yarn start`, the standalone harness. That is
+ * not the same fact as "the reason could not be determined", and the row must not
+ * render it as one.
+ *
+ * `other` is the SERVER's own collapse of a token it did not recognise either. It
+ * is rendered as itself rather than as this build's collapse constant, because
+ * the two say different things: one is a client that is behind, the other is a
+ * launcher that recorded something its own gateway could not name.
+ */
+export const SERVICE_PROXY_DECISIONS = [
+  'operator',
+  'grpc-default',
+  'not-colocated',
+  'no-grpc-urls',
+  'no-secret',
+  'auth-grpc-unreachable',
+  'syncing-grpc-unreachable',
+  'unset',
+  'other',
+] as const
+
+/**
+ * How the durable-command secret the socket SYNC_ITEMS lane needs CAME TO BE, as
+ * the server's `InternalGrpcSecretState` — a state token, never the secret and
+ * never its length.
+ *
+ * This is a different question from the 32-byte threshold below and answers
+ * something the threshold cannot. `minted-ephemeral` and `mint-failed` are
+ * silently fatal to the lane and look exactly like a working deployment from
+ * outside; `persisted` versus `supplied` is the difference between a value living
+ * on a volume and one the operator can rotate in their own `.env`.
+ *
+ * Both sentinels mean what they mean above: `unset` is no launcher, `other` is a
+ * token the launcher recorded and the gateway could not name.
+ */
+export const INTERNAL_GRPC_SECRET_STATES = [
+  'supplied',
+  'persisted',
+  'minted-persisted',
+  'minted-ephemeral',
+  'not-colocated',
+  'mint-failed',
+  'unset',
+  'other',
+] as const
+
+export type InternalGrpcSecretOrigin = (typeof INTERNAL_GRPC_SECRET_STATES)[number]
+
+/**
+ * Every resolver outcome is renderable by the row's own vocabulary.
+ *
+ * `Uncovered` is `never` when `SERVICE_PROXY_DECISIONS` still covers
+ * `PROXY_DECISIONS`, so a decision added to the logic half and forgotten in the
+ * rendering half is a type error here rather than a row that reads
+ * "unrecognised" on a deployment whose launcher is working perfectly.
+ */
+export type EveryProxyDecisionIsNamed = AssertNever<Exclude<ProxyDecision, (typeof SERVICE_PROXY_DECISIONS)[number]>>
+
 /** The lanes the per-call gRPC fallback is counted on. Closed, server-side. */
 export const GRPC_FALLBACK_LANES = ['session-validation', 'items-sync'] as const
 
@@ -214,12 +288,17 @@ export type { TransportFallbackLaneView, TransportFallbackView } from './syncDia
  * The facts this section needs that the topology block cannot carry.
  *
  * All optional, all closed-category, and all absent on a server that does not
- * report them yet. `serviceProxyDecision` is typed as a WIDE string on purpose,
- * exactly as `gate.syncItems.state` is: it is the SERVER's enum, this build
- * cannot be recompiled against a newer server, and parsing it against this
- * build's own `PROXY_DECISIONS` through `safeEnum` is what makes an unrecognised
- * code degrade to "other (unrecognised)" instead of being rendered as one of the
- * members this build does know.
+ * report them yet.
+ *
+ * *** THE LANE DECISION USED TO LIVE HERE, AND IT HAS A PRODUCER NOW. ***
+ * `serviceProxyDecision` was declared on this view while nothing emitted it. It
+ * is emitted today, on the DEPLOYMENT block — `SRN_SERVICE_PROXY_TYPE_DECISION`
+ * was being recorded by the launcher and never exported, so no child process
+ * including the gateway could see it; both halves are fixed and
+ * `DeploymentDiagnostics` reads it into a closed union. So it is read off
+ * `DeploymentTopology` with the rest of the topology rather than from here. Two
+ * places to read one fact from is how a row comes to disagree with itself, and
+ * the honest spelling of "this arrives with the topology" is to read it there.
  *
  * The two cookie flags are EFFECTIVE VALUES rather than presence, and that is a
  * deliberate departure from the rest of this section: both default to `true`
@@ -231,7 +310,6 @@ export type { TransportFallbackLaneView, TransportFallbackView } from './syncDia
  * the gateway's `presence` map.
  */
 export type EnvironmentRuntimeView = {
-  serviceProxyDecision?: string
   /** Effective `COOKIE_SECURE`. Defaults to true when the variable is unset. */
   cookieSecure?: boolean
   /** Effective `COOKIE_PARTITIONED`. Defaults to true when the variable is unset. */
@@ -503,6 +581,44 @@ function remedyForShortInternalSecret(present: boolean): Remedy {
 }
 
 /**
+ * The secret the launcher could not make DURABLE, which is a different fault from
+ * the secret that is too short and has a different fix.
+ *
+ * `mint-failed` is conclusive: the launcher had no secret supplied, none persisted,
+ * and could not mint one, so there is nothing for the durable adapter to
+ * authenticate with and it never reports ready. `minted-ephemeral` is the one that
+ * looks like a working deployment — a secret exists for the life of THIS process
+ * and was never written down, so it is correct until one half of the deployment
+ * restarts without the other, at which point the two hold different valid secrets
+ * and fail exactly like one short secret: the connection succeeds and readiness
+ * never arrives. Nothing logs the divergence.
+ */
+function remedyForUndurableInternalSecret(ephemeral: boolean): Remedy {
+  return {
+    code: 'GRPC_SECRET_NOT_DURABLE',
+    summary: ephemeral
+      ? 'The durable-command secret was minted for this process only and never written down, so it changes on the next start. Supply it explicitly, or make its persistence path writable. Restart only — no rebuild.'
+      : 'The launcher could not obtain or mint a durable-command secret at all, so the durable command port never reports ready. Supply one explicitly. Restart only — no rebuild.',
+    steps: [
+      'Set SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET to a strong random value of at least 32 bytes, in the place this deployment actually reads — on the bundled compose stack that is the .env compose forwards, not the container environment directly.',
+      'Set the SAME value on the syncing server. A supplied secret is the one state that does not depend on anything surviving a restart.',
+      ephemeral
+        ? 'If you would rather the container keep minting it, give the data volume the launcher persists it to a writable mount. An ephemeral mint is not a safe steady state: it is correct until one half restarts without the other, and then both sides hold valid secrets that disagree.'
+        : 'If you would rather the container mint it, give the data volume the launcher persists it to a writable mount. Nothing was minted here, so a read-only or absent mount is the first thing to check.',
+      'Restart both containers, then re-read this pane.',
+    ],
+    effort: CONFIG_AND_RESTART,
+    basis: 'verified',
+    because: [
+      ephemeral
+        ? 'The launcher recorded that it minted the secret and could not persist it. That is reported as a state and never as a value, and this pane never receives the secret itself.'
+        : 'The launcher recorded that minting the secret failed. That is reported as a state and never as a value, and this pane never receives the secret itself.',
+      'This is the failure that presents as healthy from outside: the socket stays up and carries everything except note syncing, which is withheld rather than refused.',
+    ],
+  }
+}
+
+/**
  * The findings in this section whose fix is not on this container.
  *
  * These two took `wait` until `peer-service` existed. `wait` was not a lie — the
@@ -733,14 +849,18 @@ function buildShapeBlock(topology: DeploymentTopology | undefined, runtime: Envi
  * before its length test, so the threshold was genuinely not measured on this
  * deployment.
  *
- * `unreported` — no lane decision was reported at all, so the threshold check did
- * not run here. Split out because collapsing it onto `unmeasured` made the row
- * print "the boot-time lane resolver returned before it reached the length test on
- * this deployment" over a deployment whose resolver was never read — a confident
- * statement about an observation that was never made, which is the one thing this
- * pane's contract forbids outright. And it is the state every deployment is in
- * today: nothing reports `serviceProxyDecision`, so the threshold check cannot run
- * at all, and saying so is the whole content of the row.
+ * `unreported` — no lane decision this row can read was reported, so the threshold
+ * check did not run here. Split out because collapsing it onto `unmeasured` made
+ * the row print "the boot-time lane resolver returned before it reached the length
+ * test on this deployment" over a deployment whose resolver was never read — a
+ * confident statement about an observation that was never made, which is the one
+ * thing this pane's contract forbids outright.
+ *
+ * It was the state EVERY deployment was in while the decision had no producer, and
+ * it is now the state of two narrower ones: a server older than the field, and a
+ * server reporting the `unset` sentinel — a gateway started outside the shipped
+ * supervisor, which never runs the resolver at all. Both of those genuinely did
+ * not measure the secret, and neither of them returned early from a check.
  */
 export const GRPC_SECRET_STATES = ['sufficient', 'too-short', 'absent', 'unmeasured', 'unreported'] as const
 
@@ -810,7 +930,7 @@ const SECRET_UNMEASURED = safeConstant('(length not established)')
 const SECRET_THRESHOLD_UNREPORTED = safeConstant('(threshold not established: no lane decision reported)')
 
 const SECRET_UNREPORTED_NOTE =
-  ' The threshold check did not run here, and this row says so rather than leaving a blank where its answer belongs. What measures this secret against the minimum is the boot-time lane resolver, and the only way its answer reaches this pane is the lane DECISION — a closed enum, one of whose members is the resolver declining because the secret fell short. No endpoint reports that decision today, so there is nothing for this row to read. The missing fact is a four-letter enum member, not a measurement: this pane never reads the secret, never receives it, and could not measure it if it did. Until a server sends the decision, presence is all that is observed, and it is reported as the proxy it is.'
+  ' The threshold check did not run here, and this row says so rather than leaving a blank where its answer belongs. What measures this secret against the minimum is the boot-time lane resolver, and the only way its answer reaches this pane is the lane DECISION — a closed enum, one of whose members is the resolver declining because the secret fell short. This deployment reported no decision this row can read, which is one of two things: a server older than the field, or a server reporting that no launcher recorded one at all — a gateway started outside the shipped supervisor, where the resolver never runs. The decision row above says which. The missing fact is an enum member, not a measurement: this pane never reads the secret, never receives it, and could not measure it if it did. Until a decision arrives, presence is all that is observed, and it is reported as the proxy it is.'
 
 const SECRET_NOTE =
   'Three states, never a length and never the value. A secret below 32 bytes counts as UNCONFIGURED to the durable adapter, which then never reports ready — so a short secret and an absent one have the same consequence and completely different fixes. "At least 32 bytes" is reported as undetermined on purpose: the length passing is necessary and not sufficient, because the gateway and the syncing server must also hold the SAME secret, and two valid secrets that disagree fail exactly like one short one.'
@@ -866,6 +986,91 @@ function secretRow(state: GrpcSecretState | undefined, present: boolean | undefi
     verdict: 'broken',
     evidence: EVIDENCE_DIRECT,
     note: SECRET_NOTE,
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* The same secret, asked a different question: how did it come to be          */
+/* -------------------------------------------------------------------------- */
+
+const SECRET_ORIGIN_LABEL = safeConstant('Internal gRPC secret origin')
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each origin state means, and what
+ * it costs. A state nobody wrote a sentence for fails compilation rather than
+ * inheriting another state's.
+ *
+ * The two that matter are the two that look like success. A secret minted and not
+ * persisted, and a mint that failed, are both invisible from outside the
+ * container: the socket stays up, carries collaboration, API RPC, invites and
+ * files, and withholds note syncing only.
+ */
+const SECRET_ORIGIN_NOTE: Record<InternalGrpcSecretOrigin, string> = {
+  supplied:
+    'The operator supplied the secret, so it is a value they hold and can rotate in their own configuration rather than one living on a volume. This is the state that survives every restart and every volume reset. It still says nothing about whether the syncing server holds the SAME value, which is the row above.',
+  persisted:
+    'The secret was read back from the launcher\'s persistence path, so it survives a restart. Worth telling apart from "supplied": rotating it means replacing a file on a volume, not editing a variable, and a volume reset will mint a new one.',
+  'minted-persisted':
+    'The launcher minted the secret and wrote it down, so it survives a restart. This is the ordinary state of a deployment nobody configured by hand, and it is a correct one.',
+  'minted-ephemeral':
+    'THE STATE THAT LOOKS LIKE SUCCESS. The launcher minted a secret and could not persist it, so it exists for the life of this process and nowhere else. It is correct right now and stops being correct the moment one half of the deployment restarts without the other: both halves then hold valid secrets that disagree, which fails exactly like one short secret — the connection succeeds and readiness never arrives — and nothing logs the divergence.',
+  'not-colocated':
+    'There is no co-located syncing server to share a durable-command secret with, so the launcher prepared none. Correct rather than missing: this is the same deployment shape that makes HTTP the right transport, and no value set here would change it.',
+  'mint-failed':
+    'The launcher had no secret supplied, none persisted, and could not mint one. There is nothing for the durable adapter to authenticate with, so the durable command port never reports ready and note syncing is withheld while the socket carries everything else.',
+  unset:
+    "No launcher recorded a state. That is an image older than the fix that made the launcher EXPORT its decisions — until then the value was set in the launcher's own shell and no child process, the gateway included, could see it — or a gateway started outside the shipped supervisor, where the launcher does not run at all. It is not a statement that no secret was prepared.",
+  other:
+    'The LAUNCHER recorded a state its own gateway could not name, which is what this token is: the server collapsed it rather than passing the value on. Nothing is known about the secret beyond the row above.',
+}
+
+/**
+ * The note for a token outside the set entirely — this build being behind the
+ * server, which is a different fact from the server's own `other` sentinel above
+ * and must not borrow its sentence. One says the launcher said something its
+ * gateway could not name; this one says the gateway named it and this client
+ * cannot.
+ */
+const SECRET_ORIGIN_UNRECOGNISED_NOTE =
+  "The server reported an origin state this build has no name for, and the value itself is refused rather than printed. The gap is on the CLIENT: a newer server knows a state this one does not, so a client update is what explains it, and the server's own boot log names it in the meantime."
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The verdict each origin carries.
+ *
+ * The three durable origins are `informational` and deliberately NOT `healthy`: a
+ * stable secret is still only one half of the condition — both sides must hold the
+ * same one — and that claim is made, and capped, on the row above. Claiming health
+ * twice for one secret is how a green chip came to sit over a withheld operation.
+ */
+const SECRET_ORIGIN_VERDICT: Record<InternalGrpcSecretOrigin, Verdict> = {
+  supplied: 'informational',
+  persisted: 'informational',
+  'minted-persisted': 'informational',
+  'minted-ephemeral': 'degraded',
+  'not-colocated': 'informational',
+  'mint-failed': 'broken',
+  unset: 'informational',
+  other: 'informational',
+}
+
+/**
+ * The origin row. A STATE and never the secret, never a length, and never a path:
+ * the words "persisted" and "ephemeral" are constants of this build, and the token
+ * itself is admitted only if it is one this build compiled in.
+ */
+function secretOriginRow(reported: string | undefined): DiagnosticRow {
+  const state = INTERNAL_GRPC_SECRET_STATES.find((candidate) => candidate === reported)
+
+  return diagnosticRow({
+    label: SECRET_ORIGIN_LABEL,
+    value: safeEnum(reported, INTERNAL_GRPC_SECRET_STATES),
+    ...absentOr(reported, state === undefined ? 'informational' : SECRET_ORIGIN_VERDICT[state]),
+    note:
+      state === undefined
+        ? reported === undefined
+          ? 'How the durable-command secret the socket SYNC_ITEMS lane needs came to be — supplied, read back from a persistence path, minted, or not prepared at all. A state, never the secret and never its length. This server did not report one: either it predates the field, or it predates the fix that made the launcher export its decisions to the gateway process at all.'
+          : SECRET_ORIGIN_UNRECOGNISED_NOTE
+        : SECRET_ORIGIN_NOTE[state],
   })
 }
 
@@ -962,13 +1167,54 @@ function laneTotals(fallback: TransportFallbackView | undefined): LaneTotals {
   }
 }
 
+/**
+ * What the decision row says, in five branches that are five different facts.
+ *
+ * The blank this row used to carry was traced to the launcher assigning
+ * `SRN_SERVICE_PROXY_TYPE_DECISION` in eight branches and never EXPORTING it: the
+ * echo on the next line was always right, because it ran in the same shell, and
+ * the line after it `exec`s the gateway, where a child inherits only exported
+ * variables. Both halves are fixed — the export, and a closed union on the
+ * deployment report — so the row reads a reported decision now.
+ *
+ * The four non-reasons are kept apart because the sentences are not
+ * interchangeable. `unset` is a launcher that recorded nothing, ABSENT is a server
+ * too old to carry the field, `other` is the launcher recording a token its own
+ * gateway could not name, and a token outside the set is this client being behind.
+ * Collapsing any pair of those produces a confident statement about an observation
+ * that was not made, which is the one thing this pane's contract forbids outright.
+ */
+function decisionNote(reported: string | undefined, decision: ProxyDecision | undefined): string {
+  const base =
+    'The self-configuring lane records WHICH condition declined gRPC, and that reason is the difference between a deployment where HTTP is correct ("not-colocated": there is no co-located syncing server to speak gRPC to) and one where something is wrong ("syncing-grpc-unreachable": a dial target was configured and the port did not answer). It is also the only thing on the wire that carries the resolver\'s measurement of the internal secret: "no-secret" is the resolver declining because that secret fell short, which is what the threshold row below reads.'
+
+  if (reported === undefined) {
+    return `${base} Nothing was reported for it here. The field is on the deployment block, so this is a server older than it rather than a fact nobody publishes — and the reason is undetermined, which is not the same as the variable having been unset.`
+  }
+  if (reported === 'unset') {
+    return `${base} This deployment reports that NO LAUNCHER RECORDED A DECISION, which is a different fact from the reason being undetermined. It is an image older than the export fix, or a gateway started outside the shipped supervisor — a bare start, or a harness — where the resolver does not run at all. Nothing is wrong with the transport on the strength of this row.`
+  }
+  if (reported === 'other') {
+    return `${base} The launcher recorded a token its own gateway could not name, so the server collapsed it to this sentinel rather than passing the value on. Its boot log names the raw token.`
+  }
+  if (decision === undefined) {
+    return `${base} The server reported a decision code this build has no name for, and the value itself is refused rather than printed. The gap is on the CLIENT: a client update is what names it, and the server's boot log names it in the meantime.`
+  }
+
+  return base
+}
+
 function buildTransportBlock(
   topology: DeploymentTopology | undefined,
-  runtime: EnvironmentRuntimeView,
   fallback: TransportFallbackView | undefined,
 ): DiagnosticBlock {
   const recorded = topology?.recorded === true
-  const decision = PROXY_DECISIONS.find((candidate) => candidate === runtime.serviceProxyDecision)
+  // Read off the TOPOLOGY, where the server puts it. Gated on `recorded` for the
+  // same reason every other topology field is: an unrecorded block is silence,
+  // not a set of defaults.
+  const reportedDecision = recorded ? topology?.serviceProxyDecision : undefined
+  const decision = PROXY_DECISIONS.find((candidate) => candidate === reportedDecision)
+  const secretOrigin = recorded ? topology?.internalGrpcSecretState : undefined
   const bound = recorded ? topology?.boundServiceProxy : undefined
   const secretPresent = presenceOf(topology, 'SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
   const secret = describeInternalGrpcSecret(decision, secretPresent)
@@ -989,14 +1235,12 @@ function buildTransportBlock(
   const rows: DiagnosticRow[] = [
     diagnosticRow({
       label: safeConstant('Why this transport was chosen'),
-      value:
-        runtime.serviceProxyDecision === undefined
-          ? NOT_PUBLISHED
-          : safeEnum(runtime.serviceProxyDecision, PROXY_DECISIONS),
-      ...absentOr(runtime.serviceProxyDecision, decision === 'no-secret' || unreachable ? 'degraded' : 'informational'),
-      note: 'The self-configuring lane records WHICH condition declined gRPC, and that reason is the difference between a deployment where HTTP is correct ("not-colocated": there is no co-located syncing server to speak gRPC to) and one where something is wrong ("syncing-grpc-unreachable": a dial target was configured and the port did not answer). WHY IT IS BLANK, traced rather than assumed: the decision is made in `server/docker/internal-grpc-lane-env.sh`, which records it in `SRN_SERVICE_PROXY_TYPE_DECISION` and never EXPORTS that variable — so it is not in the gateway process environment at all, `DeploymentDiagnostics` could not read it even if it tried, and no endpoint carries it. Two one-line changes would fill this row: an `export` in that script and the key added to the deployment report. Until then the reason is undetermined — not that the variable was simply unset.',
+      value: safeEnum(reportedDecision, SERVICE_PROXY_DECISIONS),
+      ...absentOr(reportedDecision, decision === 'no-secret' || unreachable ? 'degraded' : 'informational'),
+      note: decisionNote(reportedDecision, decision),
     }),
     secretRow(secret, secretPresent),
+    secretOriginRow(secretOrigin),
     diagnosticRow({
       label: safeConstant('gRPC transport health'),
       value: health === undefined ? safePresence(undefined) : GRPC_HEALTH_VALUE[health],
@@ -1065,6 +1309,24 @@ function buildTransportBlock(
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
         remedy: remedyForShortInternalSecret(secret === 'too-short'),
+      }),
+    )
+  }
+
+  if (secretOrigin === 'minted-ephemeral' || secretOrigin === 'mint-failed') {
+    const ephemeral = secretOrigin === 'minted-ephemeral'
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('GRPC_SECRET_NOT_DURABLE'),
+        title: ephemeral
+          ? 'The durable-command secret exists only in this process'
+          : 'The launcher could not obtain a durable-command secret',
+        detail: ephemeral
+          ? 'The launcher minted the secret and could not write it down, so it is correct for exactly as long as this process lives. It stops being correct the moment one half of the deployment restarts without the other: both halves then hold valid secrets that disagree, which fails exactly like one short secret — readiness never arrives — and nothing logs the divergence. This is the state that looks like a working deployment from outside.'
+          : 'Nothing was supplied, nothing was persisted and minting failed, so the durable adapter has no credential and never reports ready. Note syncing is withheld while the socket stays up and carries collaboration, API RPC, invites and files, which is why every other panel looks healthy.',
+        verdict: ephemeral ? 'degraded' : 'broken',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForUndurableInternalSecret(ephemeral),
       }),
     )
   }
@@ -1592,7 +1854,7 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
 
   const blocks: DiagnosticBlock[] = [
     buildShapeBlock(input.topology, runtime),
-    buildTransportBlock(input.topology, runtime, input.fallback),
+    buildTransportBlock(input.topology, input.fallback),
     buildSessionBlock(input.topology, runtime),
     buildIdentityBlock(input.topology, input.deploymentMarker),
   ]

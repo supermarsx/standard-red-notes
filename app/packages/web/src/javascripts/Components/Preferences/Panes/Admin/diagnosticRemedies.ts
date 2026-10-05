@@ -72,6 +72,28 @@ export type DeploymentTopology = {
    * `other` told an operator who had configured the default that it was a typo.
    */
   serviceProxySetting?: 'grpc' | 'http' | 'auto' | 'unset' | 'other'
+  /**
+   * WHY the launcher settled on the transport it did — the server's
+   * `ServiceProxyDecision`, fed by `SRN_SERVICE_PROXY_TYPE_DECISION`.
+   *
+   * Typed WIDE on purpose, exactly as `gate.syncItems.state` is: it is the
+   * SERVER's enum, this build cannot be recompiled against a newer server, and
+   * parsing it against `environmentSection.ts`'s own `SERVICE_PROXY_DECISIONS`
+   * through `safeEnum` is what makes an unrecognised code degrade to "other
+   * (unrecognised)" instead of being rendered as one of the members this build
+   * does know. The two sentinels are part of the server's union: `unset` means no
+   * launcher recorded a decision, which is a different fact from "the reason could
+   * not be determined", and `other` is the server's own collapse of a token it did
+   * not recognise either.
+   */
+  serviceProxyDecision?: string
+  /**
+   * How the durable-command secret the socket SYNC_ITEMS lane needs came to be —
+   * the server's `InternalGrpcSecretState`, fed by
+   * `SRN_INTERNAL_GRPC_SECRET_STATE`. A STATE, never the secret and never its
+   * length; wide for the same reason as the field above.
+   */
+  internalGrpcSecretState?: string
   boundServiceProxy?: 'direct-call' | 'grpc' | 'http'
   cacheSetting?: 'memory' | 'redis' | 'unset' | 'other'
   syncSwitchSetting?: 'true' | 'false' | 'unset' | 'other'

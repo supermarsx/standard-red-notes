@@ -143,8 +143,9 @@ const GROUPS = [
   },
   {
     title: 'Event fan-out',
-    description: 'Optional. Absent on single-node deployments, which fan events out in-process instead.',
-    keys: ['SQS_QUEUE_URL', 'SNS_TOPIC_ARN'],
+    description:
+      'Optional. Absent on single-node deployments, which fan events out in-process instead. Two queue names rather than one: the PREFIXED one is what gives the gateway a queue of its own.',
+    keys: ['SQS_QUEUE_URL', 'API_GATEWAY_SQS_QUEUE_URL', 'SNS_TOPIC_ARN'],
   },
   {
     title: 'Deployment identity',
@@ -197,6 +198,7 @@ const OPTIONAL_KEYS: ReadonlySet<KnownEnvKey> = new Set<KnownEnvKey>([
   'WEBSOCKET_GATEWAY_INTERNAL_SECRET',
   'REDIS_PORT',
   'SQS_QUEUE_URL',
+  'API_GATEWAY_SQS_QUEUE_URL',
   'SNS_TOPIC_ARN',
   'SRN_DEPLOY_REVISION',
   'SRN_DEPLOY_VERSION',
@@ -286,6 +288,45 @@ function classify(
     return {
       relevance: 'inert',
       note: 'Paired with REDIS_HOST, which this topology does not use for the gateway binding.',
+    }
+  }
+
+  /**
+   * *** THE PREFIXED QUEUE NAME IS OPTIONAL IN EVERY TOPOLOGY, AND IS NEVER THE
+   * SAME ANSWER AS ITS UNPREFIXED SIBLING. ***
+   *
+   * `API_GATEWAY_SQS_QUEUE_URL` is a PROJECTION SOURCE rather than a knob the
+   * gateway reads under that name: the container writes the gateway's dotenv with
+   * `printenv | sed -n 's/^API_GATEWAY_//p'`, so this variable arrives in the
+   * process as the bare `SQS_QUEUE_URL` the code actually reads. Its presence is
+   * therefore the evidence that the gateway has a queue OF ITS OWN, and its
+   * absence beside a set bare name is the evidence that it is reading a queue
+   * configured for something else.
+   *
+   * `required` would be wrong everywhere. Absence is a supported configuration in
+   * every topology: a deployment with no queue at all fans events out in-process,
+   * and a deployment with a queue but no second consumer has nothing to separate
+   * from. `inert` would also be wrong, and more subtly: the projection runs
+   * unconditionally, so a value set here IS read — what differs by topology is
+   * whether it is worth setting. So the relevance is `optional` and the TOPOLOGY
+   * is carried in the note, which is where a judgement that depends on the shape
+   * of the deployment belongs.
+   */
+  if (key === 'API_GATEWAY_SQS_QUEUE_URL') {
+    if (homeServer) {
+      return {
+        relevance: 'optional',
+        note: present
+          ? 'Set, and nothing on a single container needs it: this shape forces in-process event fan-out, and one process cannot split a queue with itself. Harmless.'
+          : 'Not needed on a single container, which forces in-process event fan-out. There is no sibling consumer here to take a queue of its own from.',
+      }
+    }
+
+    return {
+      relevance: 'optional',
+      note: present
+        ? 'Set, which is the evidence that this gateway has a queue of its own rather than the one the workers consume. Presence only — no address is read — and it cannot show that the two queues are actually different, nor that a second consumer exists.'
+        : 'Not set, so this gateway reads whatever the bare SQS_QUEUE_URL points at. That is correct on a deployment with no other consumer and is the measured defect on one with workers: a queue delivers each message once, so two consumers SPLIT the traffic instead of each seeing it. The Database & internal comms section reads this same pair as a prefix state.',
     }
   }
 

@@ -146,8 +146,9 @@ describe('buildBackendSection with nothing reported', () => {
     const model = buildBackendSection()
     const rows = allRows(model)
 
-    // Five unproduced durable-store rows collapsed into one, so the count fell by four.
-    expect(rows).toHaveLength(21)
+    // Five unproduced durable-store rows collapsed into one, so the count fell by
+    // four; the derived queue-prefix row then added one back.
+    expect(rows).toHaveLength(22)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -1015,13 +1016,122 @@ describe('event delivery and queues', () => {
     expect(rowOf(own, 'Queue separation').verdict).toBe('informational')
     expect(codesOf(own)).not.toContain('EVENT_QUEUE_SHARED')
 
-    // Nothing produces this on any deployment — and the pane cannot derive it
-    // either, because the presence map carries no prefixed queue key — so the row
-    // says that rather than "not reported", while still claiming nothing.
+    // Nothing produces this on any deployment, so the row says that rather than
+    // "not reported", while still claiming nothing.
     expect(rowOf(unreported, 'Queue separation').value).toBe('no endpoint publishes this')
     expect(rowOf(unreported, 'Queue separation').value).not.toBe('not reported')
     expect(rowOf(unreported, 'Queue separation').evidence.kind).toBe('absent')
     expect(codesOf(unreported)).not.toContain('EVENT_QUEUE_SHARED')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The half of the question presence can now answer — and only that half    */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE PREFIX IS DERIVABLE. `COLLIDED` IS NOT, AND MUST NOT BE CLAIMED. ***
+   *
+   * The presence map gained `API_GATEWAY_SQS_QUEUE_URL`, so a gateway that
+   * configured its own queue can be told from one reading the bare name. What
+   * those two booleans CANNOT show is a second consumer: a standalone gateway
+   * with no workers produces exactly the same pair as a gateway splitting a queue
+   * with four of them.
+   *
+   * So each state is asserted individually — an assertion over a set is satisfied
+   * by any member of it — and every one of them is asserted NOT to produce the
+   * shared-queue finding. A row that read "inherited-shared-queue" off this pair
+   * would be the pane asserting an outage it cannot see, which is the same defect
+   * as a green chip over a withheld operation, pointed the other way.
+   */
+  const prefixRow = (presence: Record<string, boolean>): DiagnosticRow =>
+    rowOf(buildBackendSection({ topology: topology({ presence }) }), 'Gateway event queue prefix')
+
+  it('derives own-prefixed from the prefixed key, with no verdict and no address', () => {
+    const row = prefixRow({ API_GATEWAY_SQS_QUEUE_URL: true, SQS_QUEUE_URL: true })
+
+    expect(row.value).toBe('own-prefixed')
+    expect(row.verdict).toBe('informational')
+    expect(row.evidence.kind).toBe('direct')
+    expect(row.note).toContain('not proof of separation')
+  })
+
+  it('derives not-own-prefixed, and still refuses to call it a collision', () => {
+    const model = buildBackendSection({
+      topology: topology({ presence: { API_GATEWAY_SQS_QUEUE_URL: false, SQS_QUEUE_URL: true } }),
+    })
+    const row = rowOf(model, 'Gateway event queue prefix')
+
+    expect(row.value).toBe('not-own-prefixed')
+    // NO VERDICT. This is the configuration in which the measured defect is
+    // possible, and it is also exactly what a correct single-consumer deployment
+    // looks like. Claiming a degradation here would be guessing.
+    expect(row.verdict).toBe('informational')
+    expect(row.evidence.kind).toBe('direct')
+    expect(row.note).toContain('CORRECT on a deployment with no other consumer')
+    expect(codesOf(model)).not.toContain('EVENT_QUEUE_SHARED')
+    expect(model.worstVerdict).not.toBe('broken')
+    expect(model.worstVerdict).not.toBe('degraded')
+    // And the separation row beside it is still unresolved, and says what is
+    // missing rather than deriving a verdict it cannot have.
+    expect(rowOf(model, 'Queue separation').value).toBe('no endpoint publishes this')
+    expect(rowOf(model, 'Queue separation').note).toContain('whether a SECOND CONSUMER')
+    expect(rowOf(model, 'Queue separation').note).toContain('HALF OF IT IS NOW DERIVABLE')
+  })
+
+  it('derives no-queue-configured when neither name is set', () => {
+    const row = prefixRow({ API_GATEWAY_SQS_QUEUE_URL: false, SQS_QUEUE_URL: false })
+
+    expect(row.value).toBe('no-queue-configured')
+    expect(row.note).toContain('fan out in-process')
+  })
+
+  /**
+   * *** THE ONE COMBINATION THAT IS NOT DERIVABLE, AND IS NOT GUESSED. ***
+   *
+   * The prefixed name absent with the bare name NOT REPORTED is consistent both
+   * with an inherited queue and with no queue at all, and those are opposite
+   * answers. The row reports nothing rather than picking one.
+   */
+  it('reports nothing when the pair cannot be told apart, rather than choosing', () => {
+    const halfReported = prefixRow({ API_GATEWAY_SQS_QUEUE_URL: false })
+    const neitherReported = prefixRow({ SNS_TOPIC_ARN: true })
+    const prefixSilent = prefixRow({ SQS_QUEUE_URL: true })
+
+    for (const row of [halfReported, neitherReported, prefixSilent]) {
+      expect(row.value).toBe('not reported')
+      expect(row.evidence.kind).toBe('absent')
+      expect(row.verdict).toBe('undetermined')
+    }
+    // The positive control: the SAME pair of keys, one boolean different, IS
+    // derivable — so the four assertions above are not passing on a builder that
+    // never derives anything.
+    expect(prefixRow({ API_GATEWAY_SQS_QUEUE_URL: false, SQS_QUEUE_URL: false }).value).toBe('no-queue-configured')
+  })
+
+  it('does not treat recorded:false as a prefix reading either', () => {
+    const row = rowOf(
+      buildBackendSection({ topology: { recorded: false, presence: { API_GATEWAY_SQS_QUEUE_URL: true } } }),
+      'Gateway event queue prefix',
+    )
+
+    expect(row.value).toBe('not reported')
+    expect(row.evidence.kind).toBe('absent')
+  })
+
+  /**
+   * A server that DOES report a separation state keeps the verdict, and the
+   * derived row keeps reporting the configuration beside it. The two are not
+   * alternatives: one is what was configured, the other is what is happening.
+   */
+  it('lets a reported separation state carry the verdict the prefix row cannot', () => {
+    const model = buildBackendSection({
+      topology: topology({ presence: { API_GATEWAY_SQS_QUEUE_URL: false, SQS_QUEUE_URL: true } }),
+      queues: { separation: 'inherited-shared-queue' },
+    })
+
+    expect(rowOf(model, 'Gateway event queue prefix').value).toBe('not-own-prefixed')
+    expect(rowOf(model, 'Queue separation').verdict).toBe('broken')
+    expect(codesOf(model)).toContain('EVENT_QUEUE_SHARED')
   })
 
   it('refuses a separation state this build does not recognise', () => {
@@ -1319,6 +1429,9 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
         serviceProxySetting: PLANTED_OPAQUE as 'other',
         presence: {
           SQS_QUEUE_URL: true,
+          // Both halves of the queue pair, so the derived prefix row is exercised
+          // by the scan rather than sitting at "not reported" inside it.
+          API_GATEWAY_SQS_QUEUE_URL: true,
           SNS_TOPIC_ARN: true,
           'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
           [PLANTED_OPAQUE]: true,
@@ -1380,6 +1493,9 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
     expect(rowOf(model, 'Admin status endpoint').value).toBe('answered')
     expect(rowOf(model, 'Database connection state').value).toBe(UNRECOGNISED)
     expect(rowOf(model, 'Queue separation').value).toBe(UNRECOGNISED)
+    // Derived from two booleans in a poisoned presence map, so the scan covers
+    // the new read rather than stepping over it.
+    expect(rowOf(model, 'Gateway event queue prefix').value).toBe('own-prefixed')
     expect(rowOf(model, 'Schema migrations').value).toBe('no 2 pending')
     expect(rowOf(model, 'Connection pool in use').value).toBe('19 of 20')
     expect(rowOf(model, 'Syncing server probe').value).toBe('did not connect')

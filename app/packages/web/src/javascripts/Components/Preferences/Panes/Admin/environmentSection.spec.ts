@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 
+import { DECLARED_ENV_KEYS } from './diagnosticEnvironment'
 import { EFFORT_LABEL, type DeploymentTopology } from './diagnosticRemedies'
 import { EFFORT_TONE } from './diagnosticsPresentation'
 import {
@@ -19,7 +20,9 @@ import {
   describeInternalGrpcSecret,
   ENVIRONMENT_RELEVANCES,
   GRPC_FAILURE_CLASSES,
+  INTERNAL_GRPC_SECRET_STATES,
   PROXY_DECISIONS,
+  SERVICE_PROXY_DECISIONS,
   SERVICE_PROXY_SETTINGS,
   SYNC_SWITCH_SETTINGS,
   type EnvironmentRuntimeView,
@@ -126,8 +129,10 @@ describe('buildEnvironmentSection with nothing reported', () => {
     const model = buildEnvironmentSection()
     const rows = allRows(model)
 
-    // Three runtime rows collapsed into one, so the count fell by two.
-    expect(rows).toHaveLength(20)
+    // Three runtime rows collapsed into one, so the count fell by two; the
+    // secret's ORIGIN then added one back when the launcher's state reached the
+    // deployment report.
+    expect(rows).toHaveLength(21)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -141,11 +146,13 @@ describe('buildEnvironmentSection with nothing reported', () => {
     // field NOTHING in the system emits says so, because rendering the second as
     // the first sent an operator hunting a defect in a working pane. Asserting
     // only one half would let a build print the structural wording everywhere.
-    const structural = [
-      'Time since this process started',
-      'Why this transport was chosen',
-      'Effective cookie and session-mode flags',
-    ]
+    // *** ONE LABEL LEFT THIS LIST, AND THAT IS THE POINT OF THE CONSTANT. ***
+    // "Why this transport was chosen" belonged here while its field had no
+    // producer at all. The launcher's decision is on the deployment report now,
+    // so an absent reading is a server older than the field — a field that
+    // "could have been reported and was not", which is the definition of "not
+    // reported" and the opposite of the structural wording.
+    const structural = ['Time since this process started', 'Effective cookie and session-mode flags']
     for (const row of rows) {
       expect({ label: String(row.label), value: String(row.value) }).toEqual({
         label: String(row.label),
@@ -496,10 +503,13 @@ describe('configuration presence, from the reused classifier', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('the internal gRPC auth secret', () => {
+  // The decision arrives WITH the topology, which is where the server puts it.
   const sectionFor = (decision: string | undefined, present: boolean): SectionModel =>
     buildEnvironmentSection({
-      topology: topology({ presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: present } }),
-      runtime: runtime({ serviceProxyDecision: decision }),
+      topology: topology({
+        presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: present },
+        serviceProxyDecision: decision,
+      }),
     })
 
   it('separates a short secret from an absent one, on direct evidence', () => {
@@ -545,8 +555,10 @@ describe('the internal gRPC auth secret', () => {
   })
 
   it('reports nothing at all when no topology was reported', () => {
+    // A decision on an UNRECORDED block is silence, not a reading: the whole
+    // block is gated on `recorded`, so this must stay "not reported".
     const row = rowOf(
-      buildEnvironmentSection({ runtime: runtime({ serviceProxyDecision: 'operator' }) }),
+      buildEnvironmentSection({ topology: { recorded: false, serviceProxyDecision: 'operator' } }),
       'Internal gRPC auth secret',
     )
 
@@ -668,11 +680,12 @@ describe('the internal gRPC auth secret', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('why this transport was chosen', () => {
+  const withDecision = (decision: string): EnvironmentSectionInput => ({
+    topology: topology({ serviceProxyDecision: decision }),
+  })
+
   it('surfaces the reason when the payload carries it', () => {
-    const model = buildEnvironmentSection({
-      topology: topology(),
-      runtime: runtime({ serviceProxyDecision: 'not-colocated' }),
-    })
+    const model = buildEnvironmentSection(withDecision('not-colocated'))
     const row = rowOf(model, 'Why this transport was chosen')
 
     expect(row.value).toBe('not-colocated')
@@ -680,38 +693,119 @@ describe('why this transport was chosen', () => {
     expect(row.evidence.kind).toBe('direct')
   })
 
+  /**
+   * *** EVERY RESOLVER OUTCOME IS RENDERABLE, OR THE ROW CALLS A WORKING
+   * LAUNCHER A TYPO. ***
+   *
+   * This is the defect `SERVICE_PROXY_SETTINGS` already had: a tuple too narrow
+   * for the server's union reported a deliberate setting as unrecognised. The
+   * behaviour is asserted per token rather than over a set, because an assertion
+   * over a set is satisfied by any member of it.
+   */
+  for (const decision of PROXY_DECISIONS) {
+    it(`prints ${decision} as itself rather than as unrecognised`, () => {
+      const row = rowOf(buildEnvironmentSection(withDecision(decision)), 'Why this transport was chosen')
+
+      expect(row.value).toBe(decision)
+      expect(row.value).not.toBe(UNRECOGNISED)
+      expect(row.evidence.kind).toBe('direct')
+    })
+  }
+
+  /**
+   * *** THE ROW THE EXPORT FIX FILLED, AND THE THREE NON-ANSWERS IT MUST STILL
+   * KEEP APART. ***
+   *
+   * The launcher assigned `SRN_SERVICE_PROXY_TYPE_DECISION` in eight branches and
+   * never exported it, so no child process — the gateway included — could see it
+   * and this row could only ever be blank. It reads a decision now, which makes
+   * three different absences newly distinguishable, and each of them is a
+   * different sentence:
+   *
+   *   - the server did not send the field (older than it),
+   *   - the server sent `unset`: no launcher recorded a decision at all,
+   *   - the server sent `other`: the launcher recorded a token its own gateway
+   *     could not name.
+   *
+   * Collapsing any pair would print a confident statement about an observation
+   * nobody made, which is what the row did before this split: it said a shell
+   * variable was never exported, over a deployment where it now is.
+   */
   it('reports undetermined rather than guessing when the payload does not carry it', () => {
     const row = rowOf(buildEnvironmentSection({ topology: topology() }), 'Why this transport was chosen')
 
-    // The wording says nothing publishes it — traced to a shell variable that is
-    // never exported — while the verdict and the evidence are unchanged, so the
-    // row still claims nothing about which condition declined gRPC.
-    expect(row.value).toBe('no endpoint publishes this')
+    // "not reported" rather than the structural wording: the field HAS a
+    // producer now, so an absent reading is an old server and not a gap in the
+    // system. The verdict and the evidence are unchanged — the row still claims
+    // nothing about which condition declined gRPC.
+    expect(row.value).toBe('not reported')
+    expect(row.value).not.toBe('no endpoint publishes this')
     expect(row.verdict).toBe('undetermined')
     expect(row.evidence.kind).toBe('absent')
     expect(row.note).toContain('the reason is undetermined')
-    expect(row.note).toContain('never EXPORTS that variable')
+    // The traced-to-a-missing-export paragraph described a defect that is fixed.
+    expect(row.note).not.toContain('never EXPORTS that variable')
+  })
+
+  it('reads the unset sentinel as a launcher that recorded nothing, not as an undetermined reason', () => {
+    const row = rowOf(buildEnvironmentSection(withDecision('unset')), 'Why this transport was chosen')
+
+    expect(row.value).toBe('unset')
+    expect(row.value).not.toBe(UNRECOGNISED)
+    // A REPORTED sentinel is a reading, so the evidence is direct — and the row
+    // still carries no verdict, because nothing is wrong on the strength of it.
+    expect(row.evidence.kind).toBe('direct')
+    expect(row.verdict).toBe('informational')
+    expect(row.note).toContain('NO LAUNCHER RECORDED A DECISION')
+    expect(row.note).not.toContain('Nothing was reported for it here')
+    // And it does not pull the threshold row into the wrong explanation either.
+    const secret = rowOf(
+      buildEnvironmentSection({
+        topology: topology({
+          serviceProxyDecision: 'unset',
+          presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true },
+        }),
+      }),
+      'Internal gRPC auth secret',
+    )
+    expect(String(secret.value)).toBe('set (threshold not established: no lane decision reported)')
+    expect(secret.note).not.toContain('returned before it reached the length test')
+  })
+
+  it("keeps the server's own collapse apart from this build being behind", () => {
+    const serverCollapsed = rowOf(buildEnvironmentSection(withDecision('other')), 'Why this transport was chosen')
+    const clientBehind = rowOf(
+      buildEnvironmentSection(withDecision('PLANTED-DECISION-MARKER')),
+      'Why this transport was chosen',
+    )
+
+    expect(serverCollapsed.value).toBe('other')
+    expect(serverCollapsed.note).toContain('its own gateway could not name')
+    expect(clientBehind.value).toBe(UNRECOGNISED)
+    expect(clientBehind.note).toContain('The gap is on the CLIENT')
+    expect(serverCollapsed.note).not.toBe(clientBehind.note)
   })
 
   it('refuses a decision code this build does not recognise instead of echoing it', () => {
-    const model = buildEnvironmentSection({
-      topology: topology(),
-      runtime: runtime({ serviceProxyDecision: 'PLANTED-DECISION-MARKER' }),
-    })
+    const model = buildEnvironmentSection(withDecision('PLANTED-DECISION-MARKER'))
 
     expect(rowOf(model, 'Why this transport was chosen').value).toBe(UNRECOGNISED)
     expect(JSON.stringify(model)).not.toContain('PLANTED-DECISION-MARKER')
   })
 
+  it('does not treat a decision on an unrecorded block as a reading', () => {
+    const row = rowOf(
+      buildEnvironmentSection({ topology: { recorded: false, serviceProxyDecision: 'grpc-default' } }),
+      'Why this transport was chosen',
+    )
+
+    expect(row.value).toBe('not reported')
+    expect(row.evidence.kind).toBe('absent')
+  })
+
   it('names an unreachable listener as the lane resolver recorded it', () => {
-    const auth = buildEnvironmentSection({
-      topology: topology(),
-      runtime: runtime({ serviceProxyDecision: 'auth-grpc-unreachable' }),
-    })
-    const syncing = buildEnvironmentSection({
-      topology: topology(),
-      runtime: runtime({ serviceProxyDecision: 'syncing-grpc-unreachable' }),
-    })
+    const auth = buildEnvironmentSection(withDecision('auth-grpc-unreachable'))
+    const syncing = buildEnvironmentSection(withDecision('syncing-grpc-unreachable'))
 
     expect(rowOf(auth, 'Why this transport was chosen').verdict).toBe('degraded')
     expect(findingOf(auth, 'GRPC_LISTENER_UNREACHABLE')?.remedy?.steps?.[0]).toContain('auth server is up')
@@ -730,10 +824,7 @@ describe('why this transport was chosen', () => {
    * into every genuinely transient remedy instead of fixing it.
    */
   it('sends an unreachable listener to the service that owns the fix, not to "Transient"', () => {
-    const syncing = buildEnvironmentSection({
-      topology: topology(),
-      runtime: runtime({ serviceProxyDecision: 'syncing-grpc-unreachable' }),
-    })
+    const syncing = buildEnvironmentSection(withDecision('syncing-grpc-unreachable'))
     const serving = buildEnvironmentSection({
       topology: topology({ boundServiceProxy: 'grpc' }),
       fallback: {
@@ -768,13 +859,143 @@ describe('why this transport was chosen', () => {
   })
 
   it('does not raise a listener finding for a decision that is not about a listener', () => {
-    for (const decision of ['operator', 'grpc-default', 'not-colocated', 'no-grpc-urls']) {
-      const model = buildEnvironmentSection({
-        topology: topology(),
-        runtime: runtime({ serviceProxyDecision: decision }),
-      })
+    for (const decision of ['operator', 'grpc-default', 'not-colocated', 'no-grpc-urls', 'unset', 'other']) {
+      const model = buildEnvironmentSection(withDecision(decision))
 
       expect(codesOf(model)).not.toContain('GRPC_LISTENER_UNREACHABLE')
+    }
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* The same secret, asked how it came to be                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * *** THE SECOND VARIABLE THAT WAS RECORDED AND NEVER EXPORTED. ***
+ *
+ * `SRN_INTERNAL_GRPC_SECRET_STATE` had the identical defect to the lane decision
+ * and hid better: its only reader was a `case` in the shell that sourced the
+ * helper, so the boot log was correct while no child process could see the
+ * variable at all. It is exported now and reaches the deployment report as a
+ * closed union, and this block is what that union renders as.
+ *
+ * It answers a DIFFERENT question from the threshold row beside it, and the two
+ * must not be conflated: the threshold is "is the secret long enough", this is
+ * "where did the secret come from, and will it still be there after a restart".
+ * The two states that matter are the two that look like success from outside.
+ */
+describe('how the internal gRPC secret came to be', () => {
+  const withOrigin = (state: string): SectionModel =>
+    buildEnvironmentSection({ topology: topology({ internalGrpcSecretState: state }) })
+
+  for (const state of INTERNAL_GRPC_SECRET_STATES) {
+    it(`prints ${state} as itself rather than as unrecognised`, () => {
+      const row = rowOf(withOrigin(state), 'Internal gRPC secret origin')
+
+      expect(row.value).toBe(state)
+      expect(row.value).not.toBe(UNRECOGNISED)
+      expect(row.evidence.kind).toBe('direct')
+    })
+  }
+
+  it('reports nothing rather than a default when the server does not carry the field', () => {
+    const row = rowOf(buildEnvironmentSection({ topology: topology() }), 'Internal gRPC secret origin')
+
+    expect(row.value).toBe('not reported')
+    expect(row.verdict).toBe('undetermined')
+    expect(row.evidence.kind).toBe('absent')
+    expect(row.note).toContain('predates the fix that made the launcher export')
+  })
+
+  it('does not treat an origin on an unrecorded block as a reading', () => {
+    const row = rowOf(
+      buildEnvironmentSection({ topology: { recorded: false, internalGrpcSecretState: 'mint-failed' } }),
+      'Internal gRPC secret origin',
+    )
+
+    expect(row.value).toBe('not reported')
+    expect(row.evidence.kind).toBe('absent')
+    expect(
+      codesOf(buildEnvironmentSection({ topology: { recorded: false, internalGrpcSecretState: 'mint-failed' } })),
+    ).not.toContain('GRPC_SECRET_NOT_DURABLE')
+  })
+
+  it('refuses an origin state this build does not recognise instead of echoing it', () => {
+    const model = withOrigin('PLANTED-SECRET-STATE-MARKER')
+
+    expect(rowOf(model, 'Internal gRPC secret origin').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Internal gRPC secret origin').note).toContain('The gap is on the CLIENT')
+    expect(JSON.stringify(model)).not.toContain('PLANTED-SECRET-STATE-MARKER')
+    // The server's OWN collapse sentinel is a different fact and keeps its own
+    // sentence; sharing one would say the client is behind over a launcher that
+    // reported something its own gateway could not name.
+    expect(rowOf(withOrigin('other'), 'Internal gRPC secret origin').note).not.toContain('The gap is on the CLIENT')
+  })
+
+  it('calls a failed mint broken and names the fix, because nothing authenticates the lane', () => {
+    const model = withOrigin('mint-failed')
+    const row = rowOf(model, 'Internal gRPC secret origin')
+
+    expect(row.verdict).toBe('broken')
+    expect(row.evidence.kind).toBe('direct')
+    expect(model.worstVerdict).toBe('broken')
+    const finding = findingOf(model, 'GRPC_SECRET_NOT_DURABLE')
+    expect(finding?.verdict).toBe('broken')
+    expect(finding?.title).toContain('could not obtain')
+    expect(finding?.remedy?.effort).toBe('restart')
+    expect(finding?.remedy?.steps?.[0]).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
+  })
+
+  it('calls an ephemeral mint a degradation, because it is correct until one half restarts', () => {
+    const model = withOrigin('minted-ephemeral')
+    const row = rowOf(model, 'Internal gRPC secret origin')
+
+    expect(row.verdict).toBe('degraded')
+    expect(row.note).toContain('THE STATE THAT LOOKS LIKE SUCCESS')
+    const finding = findingOf(model, 'GRPC_SECRET_NOT_DURABLE')
+    expect(finding?.verdict).toBe('degraded')
+    expect(finding?.title).toContain('only in this process')
+    expect(finding?.remedy?.summary).toContain('never written down')
+  })
+
+  /**
+   * *** THE THREE DURABLE ORIGINS CARRY NO VERDICT, DELIBERATELY. ***
+   *
+   * A secret that survives a restart is still only half the condition — both
+   * sides must hold the SAME one — and that claim is made, and capped, on the
+   * threshold row. Rating these `healthy` would be the second green chip over one
+   * secret, which is exactly the shape of the defect this pane was built after.
+   */
+  it('claims nothing for the three durable origins, and raises no finding for them', () => {
+    for (const state of ['supplied', 'persisted', 'minted-persisted', 'not-colocated', 'unset', 'other']) {
+      const model = withOrigin(state)
+
+      expect(rowOf(model, 'Internal gRPC secret origin').verdict).toBe('informational')
+      expect(codesOf(model)).not.toContain('GRPC_SECRET_NOT_DURABLE')
+    }
+  })
+
+  it('reports an origin and a threshold as two different facts about one secret', () => {
+    const model = buildEnvironmentSection({
+      topology: topology({
+        serviceProxyDecision: 'grpc-default',
+        internalGrpcSecretState: 'minted-ephemeral',
+        presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true },
+      }),
+    })
+
+    // Long enough AND not durable, which is a pair no single row could carry.
+    expect(rowOf(model, 'Internal gRPC auth secret').value).toBe('at least 32 bytes')
+    expect(rowOf(model, 'Internal gRPC secret origin').value).toBe('minted-ephemeral')
+  })
+
+  it('never emits a length or a path from either secret row', () => {
+    for (const state of INTERNAL_GRPC_SECRET_STATES) {
+      const value = String(rowOf(withOrigin(state), 'Internal gRPC secret origin').value)
+
+      expect(value).not.toMatch(/\d/)
+      expect(value).not.toContain('/')
     }
   })
 })
@@ -1318,6 +1539,7 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
   const SECRETS = [
     'sk-live-PLANTED-SECRET-0123456789abcdef',
     'PLANTED-DECISION-MARKER',
+    'PLANTED-SECRET-STATE-MARKER',
     'token-PLANTED-REVISION-MARKER',
     'v9.9.9-PLANTED-VERSION-MARKER',
     'PLANTED-FAILURE-CLASS-MARKER',
@@ -1326,48 +1548,79 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     'PLANTED_VARIABLE_SHAPED_KEY',
   ]
 
-  const planted = (): SectionModel =>
-    buildEnvironmentSection({
-      topology: topology({
-        presence: {
-          'sk-live-PLANTED-SECRET-0123456789abcdef': true,
-          'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
-          PLANTED_VARIABLE_SHAPED_KEY: true,
-          SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true,
-          AUTH_JWT_SECRET: false,
-          REDIS_URL: false,
-          // Both deploy variables are reported, so the unstamped finding takes
-          // its longest prose branch — the one that names the runtime evidence
-          // for each. A fixture that left them out let a mutation interpolating
-          // the raw marker into that branch survive the planted-value scan.
-          SRN_DEPLOY_REVISION: true,
-          SRN_DEPLOY_VERSION: false,
-        },
-      }),
-      deploymentMarker: {
-        revision: 'token-PLANTED-REVISION-MARKER',
-        version: 'v9.9.9-PLANTED-VERSION-MARKER',
+  /**
+   * The input, returned so the sweep can prove it is not passing on a fixture
+   * that stopped carrying one of its plants.
+   *
+   * *** A PLANT THAT IS NOT IN THE INPUT PROVES NOTHING. *** Every field this
+   * section reads that is a `string` off the wire is poisoned here, and the test
+   * below asserts each marker is PRESENT in the serialised input before asserting
+   * it is absent from the output. Two fields were added to the deployment report
+   * — the lane decision and the secret origin — and a hand-maintained list is
+   * exactly the thing that silently fails to grow with them; this is the cheapest
+   * check that notices.
+   */
+  const plantedInput = (): EnvironmentSectionInput => ({
+    topology: topology({
+      serviceProxyDecision: 'PLANTED-DECISION-MARKER',
+      internalGrpcSecretState: 'PLANTED-SECRET-STATE-MARKER',
+      presence: {
+        'sk-live-PLANTED-SECRET-0123456789abcdef': true,
+        'redis://user:PLANTED-PASSWORD@cache.internal:6379': true,
+        PLANTED_VARIABLE_SHAPED_KEY: true,
+        SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: true,
+        AUTH_JWT_SECRET: false,
+        REDIS_URL: false,
+        // Both deploy variables are reported, so the unstamped finding takes
+        // its longest prose branch — the one that names the runtime evidence
+        // for each. A fixture that left them out let a mutation interpolating
+        // the raw marker into that branch survive the planted-value scan.
+        SRN_DEPLOY_REVISION: true,
+        SRN_DEPLOY_VERSION: false,
       },
-      fallback: {
-        observed: true,
-        everDegraded: true,
-        lanes: {
-          'items-sync': {
-            degradedCalls: 2,
-            refusedCalls: 1,
-            lastFailureClass: 'PLANTED-FAILURE-CLASS-MARKER',
-            lastFailureAgeMs: 1000,
-          },
+    }),
+    deploymentMarker: {
+      revision: 'token-PLANTED-REVISION-MARKER',
+      version: 'v9.9.9-PLANTED-VERSION-MARKER',
+    },
+    fallback: {
+      observed: true,
+      everDegraded: true,
+      lanes: {
+        'items-sync': {
+          degradedCalls: 2,
+          refusedCalls: 1,
+          lastFailureClass: 'PLANTED-FAILURE-CLASS-MARKER',
+          lastFailureAgeMs: 1000,
         },
       },
-      runtime: runtime({
-        serviceProxyDecision: 'PLANTED-DECISION-MARKER',
-        cookieSecure: false,
-        cookiePartitioned: true,
-        e2eTesting: true,
-        processUptimeSeconds: 3600,
-      }),
-    })
+    },
+    runtime: runtime({
+      cookieSecure: false,
+      cookiePartitioned: true,
+      e2eTesting: true,
+      processUptimeSeconds: 3600,
+    }),
+  })
+
+  const planted = (): SectionModel => buildEnvironmentSection(plantedInput())
+
+  /**
+   * *** THE SWEEP'S OWN NON-VACUITY, FIELD BY FIELD. ***
+   *
+   * Asserted before the refusals: a marker that is no longer anywhere in the
+   * INPUT cannot be kept out of the output by anything, and a fixture that quietly
+   * stopped carrying one would leave its half of this scan reading green forever.
+   * This is what makes the two fields added to the deployment report provably
+   * inside the sweep rather than merely listed beside it.
+   */
+  it('actually feeds every planted value into the section', () => {
+    const serialisedInput = JSON.stringify(plantedInput())
+
+    for (const secret of SECRETS) {
+      expect(serialisedInput).toContain(secret)
+    }
+  })
 
   it('keeps every planted value out of the serialised model', () => {
     const serialised = JSON.stringify(planted())
@@ -1398,6 +1651,7 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     const model = planted()
 
     expect(rowOf(model, 'Why this transport was chosen').value).toBe(UNRECOGNISED)
+    expect(rowOf(model, 'Internal gRPC secret origin').value).toBe(UNRECOGNISED)
     expect(rowOf(model, 'Most recent gRPC failure').value).toBe(UNRECOGNISED)
     expect(rowOf(model, 'Deployment identity').value).toBe('marker in an unrecognised format')
     expect(rowOf(model, 'Time since this process started').value).toBe('1h 0m')
@@ -1596,6 +1850,174 @@ describe('the topology vocabularies this section can name', () => {
     expect(unionTokens(serverSource(), 'ServiceProxySetting')).toEqual(
       expect.arrayContaining(['grpc', 'http', 'auto', 'unset', 'other']),
     )
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The two unions the launcher's own decisions arrive as                    */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * The same tie for a union written across several lines.
+   *
+   * `unionTokens` matches one LINE, which is all the five above need and is why
+   * it throws rather than returning `[]` when the shape changes. The two
+   * launcher unions are declared in the leading-`|` form, so they need a parser
+   * that reads to the end of the declaration — taken as the first blank line,
+   * which is what separates every declaration in that file from the comment
+   * block of the next one.
+   *
+   * It throws on a missing declaration for exactly the reason the other one
+   * does: a parse that answered `[]` on a renamed union would turn its
+   * comparison into a comparison against nothing.
+   */
+  const declaredUnion = (source: string, name: string): string[] => {
+    const marker = `\nexport type ${name} =`
+    const start = source.replace(/\r\n/g, '\n').indexOf(marker)
+    if (start < 0) {
+      throw new Error(`no "export type ${name} =" declaration in ${SERVER_SOURCE}`)
+    }
+
+    const body = source.replace(/\r\n/g, '\n').slice(start + marker.length)
+    const end = body.indexOf('\n\n')
+    const tokens = [...(end < 0 ? body : body.slice(0, end)).matchAll(/'([^']+)'/g)].map((match) => match[1])
+    if (tokens.length === 0) {
+      throw new Error(`"export type ${name}" declares no quoted members`)
+    }
+
+    return tokens
+  }
+
+  const CONTINUED: ReadonlyArray<[string, readonly string[]]> = [
+    ['ServiceProxyDecision', SERVICE_PROXY_DECISIONS],
+    ['InternalGrpcSecretState', INTERNAL_GRPC_SECRET_STATES],
+  ]
+
+  for (const [name, tokens] of CONTINUED) {
+    it(`names exactly the ${name} tokens the server declares`, () => {
+      expect([...declaredUnion(serverSource(), name)].sort()).toEqual([...tokens].sort())
+    })
+  }
+
+  it('reads the multi-line parser against a declaration it can also prove is there', () => {
+    const source = serverSource()
+
+    for (const [name] of CONTINUED) {
+      expect(source).toContain(`export type ${name} =`)
+      expect(declaredUnion(source, name).length).toBeGreaterThan(1)
+    }
+    // And it stops at the end of the declaration rather than swallowing the next
+    // one: the two unions are adjacent in that file, and a parser that ran on
+    // would make each of the comparisons above pass against the union of both.
+    expect(declaredUnion(source, 'ServiceProxyDecision')).not.toContain('mint-failed')
+    expect(declaredUnion(source, 'InternalGrpcSecretState')).not.toContain('grpc-default')
+  })
+
+  it('throws rather than passing vacuously when a continued declaration is gone', () => {
+    const renamed = serverSource().replace('export type InternalGrpcSecretState =', 'export type SecretOrigin =')
+
+    expect(() => declaredUnion(renamed, 'InternalGrpcSecretState')).toThrow(
+      'no "export type InternalGrpcSecretState =" declaration',
+    )
+    expect(declaredUnion(serverSource(), 'InternalGrpcSecretState').length).toBeGreaterThan(1)
+  })
+
+  it('fails when the server declares a secret-origin token this build does not name', () => {
+    const planted = serverSource().replace(
+      'export type InternalGrpcSecretState =\n',
+      "export type InternalGrpcSecretState =\n  | 'rotated'\n",
+    )
+
+    expect(declaredUnion(planted, 'InternalGrpcSecretState')).toContain('rotated')
+    expect([...declaredUnion(planted, 'InternalGrpcSecretState')].sort()).not.toEqual(
+      [...INTERNAL_GRPC_SECRET_STATES].sort(),
+    )
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The env-key list, which had no tie at all — and that is why it drifted   */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE MIRROR NOBODY WAS WATCHING. ***
+   *
+   * The five topology unions have been pinned to the server source for a while.
+   * `DIAGNOSTIC_ENV_KEYS` was not pinned to anything, and it drifted exactly as
+   * an unpinned mirror does: the server added `API_GATEWAY_SQS_QUEUE_URL`, this
+   * build had no row for it, and the only trace was the count on the
+   * "Reported by a newer server" row reading 1 — which is the mechanism working
+   * as designed, and is still a row an operator has to interpret.
+   *
+   * Set equality in BOTH directions, because the two failures are different: a
+   * key the server reports and this build cannot name is a row the operator
+   * loses, and a key this build declares that the server never sends is a row
+   * that silently never appears — a knob implied to exist.
+   */
+  const envKeys = (source: string): string[] => {
+    const anchor = 'export const DIAGNOSTIC_ENV_KEYS = ['
+    const start = source.indexOf(anchor)
+    if (start < 0) {
+      throw new Error(`no "${anchor}" in ${SERVER_SOURCE}`)
+    }
+
+    const end = source.indexOf('] as const', start)
+    if (end < 0) {
+      throw new Error(`"${anchor}" is not terminated in ${SERVER_SOURCE}`)
+    }
+
+    const tokens = [...source.slice(start + anchor.length, end).matchAll(/'([A-Z][A-Z0-9_]*)'/g)].map(
+      (match) => match[1],
+    )
+    if (tokens.length === 0) {
+      throw new Error(`"${anchor}" lists no variable names`)
+    }
+
+    return tokens
+  }
+
+  it('declares a row for exactly the variables the server reports presence for', () => {
+    expect([...envKeys(serverSource())].sort()).toEqual([...DECLARED_ENV_KEYS].sort())
+  })
+
+  it('is parsing a real list rather than an accidental match', () => {
+    const keys = envKeys(serverSource())
+
+    expect(keys.length).toBeGreaterThan(15)
+    // The two halves of the pair the queue rows read, both present by name.
+    expect(keys).toContain('SQS_QUEUE_URL')
+    expect(keys).toContain('API_GATEWAY_SQS_QUEUE_URL')
+    // Nothing from the surrounding prose: the block is full of backquoted names.
+    for (const key of keys) {
+      expect(key).toMatch(/^[A-Z][A-Z0-9_]*$/)
+    }
+  })
+
+  it('fails when the server reports a variable this build has no row for', () => {
+    const planted = serverSource().replace("  'SNS_TOPIC_ARN',", "  'SNS_TOPIC_ARN',\n  'SOME_LATER_QUEUE_VARIABLE',")
+
+    expect(envKeys(planted)).toContain('SOME_LATER_QUEUE_VARIABLE')
+    expect([...envKeys(planted)].sort()).not.toEqual([...DECLARED_ENV_KEYS].sort())
+  })
+
+  it('throws rather than passing vacuously when the list it parses is gone', () => {
+    const renamed = serverSource().replace('export const DIAGNOSTIC_ENV_KEYS = [', 'export const ENV_KEYS = [')
+
+    expect(() => envKeys(renamed)).toThrow('no "export const DIAGNOSTIC_ENV_KEYS = ["')
+  })
+
+  /**
+   * The BEHAVIOUR the tie exists for, asserted through the real builder: a
+   * payload carrying every key the server sends must leave nothing for the
+   * unrecognised count. Asserting the tie alone would pass over a client that
+   * knows the names and still fails to group one of them into a row.
+   */
+  it('recognises every key a current server sends, so the count reads zero', () => {
+    const model = buildEnvironmentSection({
+      topology: topology({ presence: Object.fromEntries(envKeys(serverSource()).map((key) => [key, true])) }),
+    })
+
+    expect(rowOf(model, 'Variables this build does not recognise').value).toBe('0')
+    // Not vacuous: the key that WAS unrecognised is now a row of its own.
+    expect(rowOf(model, 'API_GATEWAY_SQS_QUEUE_URL').value).toBe('set (optional)')
   })
 })
 
