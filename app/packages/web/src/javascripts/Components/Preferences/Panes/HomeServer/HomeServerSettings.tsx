@@ -44,7 +44,7 @@ const HomeServerSettings = () => {
         result.status === 'on' ? (
           <>
             Accessible on local network at{' '}
-            <a href={result.url} className="text-info font-bold" target="_blank">
+            <a href={result.url} className="text-info font-bold" target="_blank" rel="noopener noreferrer">
               {result.url}
             </a>
           </>

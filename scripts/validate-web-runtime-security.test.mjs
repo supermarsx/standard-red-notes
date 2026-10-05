@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -1511,4 +1512,107 @@ test("the reload control is mounted in the General preferences pane", () => {
   // Offline is warned about rather than silently destructive.
   assert.match(reloadAppControl, /You appear to be offline/);
   assert.match(reloadAppControl, /alerts\.confirm\(/);
+});
+
+// ---------------------------------------------------------------------------
+// Outbound-link hygiene
+// ---------------------------------------------------------------------------
+
+function collectComponentFiles(directory) {
+  const found = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...collectComponentFiles(full));
+    } else if (entry.name.endsWith(".tsx") && !entry.name.includes(".spec.")) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+/**
+ * Recover the JSX opening tag that encloses `index`.
+ *
+ * Walks back to the tag's `<` and forward to the `>` that closes it, tracking
+ * brace depth and quote state because a JSX attribute expression and a quoted
+ * attribute value can both contain a bare `>`. Returns null when no enclosing
+ * tag can be recovered, which the caller treats as a failure rather than a
+ * pass — an unparseable tag must not be silently admitted.
+ */
+function enclosingJsxTag(source, index) {
+  const start = source.lastIndexOf("<", index);
+  if (start < 0) {
+    return null;
+  }
+  let depth = 0;
+  let quote = null;
+  for (let i = start; i < source.length; i += 1) {
+    const character = source[i];
+    if (quote !== null) {
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+    } else if (character === ">" && depth === 0) {
+      return source.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+test("every new-tab link in the web app denies the opener and the referrer", () => {
+  // A `target` of the blank keyword in any of its JSX spellings.
+  const newTabTarget = /target\s*=\s*(?:"|'|\{\s*['"])_blank/g;
+  // Either token severs `window.opener`; `noreferrer` additionally withholds
+  // the Referer, which would otherwise disclose this instance's origin to the
+  // third party. Requiring only one of the two keeps the existing
+  // `rel="noreferrer"` call sites correct, which they are.
+  const opensSafely = /\brel\s*=\s*["'][^"']*(?:noopener|noreferrer)/;
+
+  const files = collectComponentFiles(
+    path.join(root, "app/packages/web/src/javascripts"),
+  );
+  assert.ok(
+    files.length > 100,
+    "the scan must reach the whole component tree, not a stale subdirectory",
+  );
+
+  const offenders = [];
+  let examined = 0;
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    newTabTarget.lastIndex = 0;
+    let match = newTabTarget.exec(source);
+    while (match !== null) {
+      examined += 1;
+      const tag = enclosingJsxTag(source, match.index);
+      if (tag === null || !opensSafely.test(tag)) {
+        const line = source.slice(0, match.index).split("\n").length;
+        offenders.push(
+          `${path.relative(root, file).split(path.sep).join("/")}:${line}`,
+        );
+      }
+      match = newTabTarget.exec(source);
+    }
+  }
+
+  // Guards the guard: a scan that found nothing to examine would pass while
+  // asserting nothing, which is how this class of check goes quietly inert.
+  assert.ok(
+    examined >= 10,
+    `expected the web app to still contain new-tab links; examined ${examined}`,
+  );
+  assert.deepEqual(
+    offenders,
+    [],
+    "these new-tab links carry neither noopener nor noreferrer",
+  );
 });

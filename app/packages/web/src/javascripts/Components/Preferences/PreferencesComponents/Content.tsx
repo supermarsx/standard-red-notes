@@ -35,6 +35,12 @@ export const LinkButton: FunctionComponent<{
 }> = ({ label, link, className, onClick }) => (
   <a
     target="_blank"
+    // `link` is an outbound third-party URL (a changelog download page today),
+    // so deny the opened tab a window.opener handle and withhold the Referer
+    // that would otherwise disclose this instance's origin. Modern browsers
+    // imply noopener for target="_blank", but noreferrer is never implied and
+    // the desktop app's embedded browser is not guaranteed to be modern.
+    rel="noopener noreferrer"
     className={classNames(
       'border-border bg-normal-button text-text hover:bg-contrast focus:bg-contrast block w-fit rounded border border-solid px-4 py-1.5 text-base font-bold lg:text-sm',
       className,
