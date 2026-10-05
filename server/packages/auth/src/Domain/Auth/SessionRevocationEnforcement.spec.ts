@@ -127,6 +127,8 @@ describe('Session revocation enforcement (integration)', () => {
     ephemeralSessionRepository.findOneByPrivateIdentifier = jest.fn().mockResolvedValue(null)
     ephemeralSessionRepository.findOneByUuidAndUserUuid = jest.fn().mockResolvedValue(null)
     ephemeralSessionRepository.deleteOne = jest.fn()
+    // The bulk "sign out other sessions" sweep now reaches the ephemeral store too.
+    ephemeralSessionRepository.findAllByUserUuid = jest.fn().mockResolvedValue([])
 
     revokedSessionRepository = {} as jest.Mocked<RevokedSessionRepositoryInterface>
     revokedSessionRepository.findOneByUuid = jest.fn(async (uuid: string) => revokedSessionsTable.get(uuid) ?? null)
@@ -228,7 +230,11 @@ describe('Session revocation enforcement (integration)', () => {
     const other1 = createLiveSession('33333333-3333-3333-3333-333333333332', 'access-other-1')
     const other2 = createLiveSession('33333333-3333-3333-3333-333333333333', 'access-other-2')
 
-    const deleteOtherSessions = new DeleteOtherSessionsForUser(sessionRepository, sessionService)
+    const deleteOtherSessions = new DeleteOtherSessionsForUser(
+      sessionRepository,
+      ephemeralSessionRepository,
+      sessionService,
+    )
 
     const result = await deleteOtherSessions.execute({
       userUuid: USER_UUID,
