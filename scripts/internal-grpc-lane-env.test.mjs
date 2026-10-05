@@ -116,12 +116,44 @@ function run(directory, { body, env = {}, shellOptions = "set -u" }) {
       parsed[line.slice(0, separator)] = line.slice(separator + 1);
     }
   }
+
+  // Asserted HERE rather than case by case, so every branch of both functions
+  // proves it and a new case cannot forget to. The two outcome tokens were
+  // assigned and never exported: readable in the shell that sourced the helper,
+  // invisible to every child of it — which is every supervisord program, and so
+  // the api-gateway whose `process.env` the admin panel reports from.
+  for (const [token, exported] of [
+    ["DECISION", "SRN_SERVICE_PROXY_TYPE_DECISION_EXPORTED"],
+    ["STATE", "SRN_INTERNAL_GRPC_SECRET_STATE_EXPORTED"],
+  ]) {
+    if (parsed[token] === undefined) {
+      continue;
+    }
+    assert.equal(
+      parsed[exported],
+      `EXPORTED:${parsed[token]}`,
+      `${exported.replace("_EXPORTED", "")} must be exported, not merely assigned: a child process read ${JSON.stringify(parsed[exported] ?? "")} while the sourcing shell read ${JSON.stringify(parsed[token])}`,
+    );
+  }
+
   return parsed;
 }
+
+// `env` is an external command, so it is a CHILD process and lists only
+// EXPORTED variables. Reading the outcome tokens back through it is the
+// difference the two state variables got wrong for their whole life: both were
+// assigned and never exported, which looks identical from inside the shell that
+// sourced the helper — the entrypoint's own boot log read them correctly — and
+// means supervisord's programs, and so the gateway's `process.env`, never saw
+// them at all. `EXPORTED:` is prefixed so "exported and empty" cannot be
+// mistaken for "not exported".
+const exportedLine = (name) =>
+  `printf "${name}_EXPORTED=%s\\n" "$(env | sed -n 's/^${name}=/EXPORTED:/p')"`;
 
 const SECRET_BODY = [
   "srn_prepare_internal_grpc_secret",
   'printf "STATE=%s\\n" "$SRN_INTERNAL_GRPC_SECRET_STATE"',
+  exportedLine("SRN_INTERNAL_GRPC_SECRET_STATE"),
   'printf "SYNC=%s\\n" "${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"',
   'printf "GATEWAY=%s\\n" "${API_GATEWAY_SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"',
   'if [ -r "$SRN_INTERNAL_GRPC_SECRET_FILE" ]; then',
@@ -137,6 +169,7 @@ const SECRET_BODY = [
 const PROXY_BODY = [
   "srn_resolve_service_proxy_type",
   'printf "DECISION=%s\\n" "$SRN_SERVICE_PROXY_TYPE_DECISION"',
+  exportedLine("SRN_SERVICE_PROXY_TYPE_DECISION"),
   'printf "PROXY=%s\\n" "${SERVICE_PROXY_TYPE:-}"',
   'printf "PROBES=%s\\n" "$(tr "\\n" ";" < "$PWD/nc.log")"',
 ].join("\n");
@@ -200,7 +233,7 @@ test("the short-secret threshold counts bytes, not characters", () => {
       '  multibyte="${multibyte}$(printf "\\303\\251")"',
       "  index=$((index + 1))",
       "done",
-      "export SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=\"$multibyte\"",
+      'export SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="$multibyte"',
       'printf "CHARACTERS=%s\\n" "${#multibyte}"',
       SECRET_BODY,
     ].join("\n"),
@@ -377,6 +410,60 @@ test("gRPC is declined when the durable-command secret or a dial target is missi
   assert.equal(notColocated.PROXY, "");
 });
 
+// The consumer that matters is a NODE process: `supervisor-server.sh` ends in
+// `exec yarn node docker/entrypoint-server.js`, and `DeploymentDiagnostics`
+// reads both tokens out of `process.env` to fill the admin panel's "why is this
+// deployment on HTTP" and "durable-command secret" rows. `env`-based checks
+// prove the export attribute; this proves the thing the export is FOR.
+test("both outcome tokens reach a node process's process.env", () => {
+  const directory = sandbox();
+  const parsed = run(directory, {
+    body: [
+      "srn_prepare_internal_grpc_secret",
+      "srn_resolve_service_proxy_type",
+      `printf "NODE_STATE=%s\\n" "$(node -e 'process.stdout.write(process.env.SRN_INTERNAL_GRPC_SECRET_STATE || "ABSENT")')"`,
+      `printf "NODE_DECISION=%s\\n" "$(node -e 'process.stdout.write(process.env.SRN_SERVICE_PROXY_TYPE_DECISION || "ABSENT")')"`,
+    ].join("\n"),
+    shellOptions: "set -euo pipefail",
+    env: proxyEnvironment({ SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: "" }),
+  });
+
+  // The secret is minted here, so the proxy resolver finds a usable one.
+  assert.equal(parsed.NODE_STATE, "minted-persisted");
+  assert.equal(parsed.NODE_DECISION, "grpc-default");
+  // ABSENT is what the variable looked like for this module's whole life: the
+  // launcher logged a decision and the process it exec'd had no such variable.
+  assert.notEqual(parsed.NODE_STATE, "ABSENT");
+  assert.notEqual(parsed.NODE_DECISION, "ABSENT");
+});
+
+test("a declining branch exports its reason too, so HTTP can be explained", () => {
+  // The reason matters most when gRPC was NOT taken: `not-colocated` means HTTP
+  // is correct here, `syncing-grpc-unreachable` means something is broken. Both
+  // had to cross the process boundary for the panel to tell them apart.
+  const unreachable = run(sandbox(), {
+    body: [
+      "srn_resolve_service_proxy_type",
+      `printf "NODE_DECISION=%s\\n" "$(node -e 'process.stdout.write(process.env.SRN_SERVICE_PROXY_TYPE_DECISION || "ABSENT")')"`,
+      'printf "PROXY=%s\\n" "${SERVICE_PROXY_TYPE:-}"',
+    ].join("\n"),
+    shellOptions: "set -euo pipefail",
+    env: proxyEnvironment({ FAKE_NC_CLOSED_PORT: "50052" }),
+  });
+  assert.equal(unreachable.NODE_DECISION, "syncing-grpc-unreachable");
+  assert.equal(unreachable.PROXY, "");
+
+  const split = run(sandbox({ supervisord: GATEWAY_ONLY_SUPERVISORD }), {
+    body: [
+      "srn_resolve_service_proxy_type",
+      `printf "NODE_DECISION=%s\\n" "$(node -e 'process.stdout.write(process.env.SRN_SERVICE_PROXY_TYPE_DECISION || "ABSENT")')"`,
+    ].join("\n"),
+    shellOptions: "set -euo pipefail",
+    env: proxyEnvironment(),
+  });
+  assert.equal(split.NODE_DECISION, "not-colocated");
+});
+
 // The helper is only worth anything if something calls it. Each of these three
 // wirings is a place the lane has silently died before: a value that reached
 // only one half, and a switch nothing set.
@@ -401,11 +488,32 @@ test("the helper is wired into the image, the entrypoint and the gateway launche
     ". /usr/local/bin/internal-grpc-lane-env.sh",
   );
   const prepared = entrypoint.indexOf("srn_prepare_internal_grpc_secret");
-  const syncingProjection = entrypoint.indexOf(
-    "printenv | grep SYNCING_SERVER_ | sed 's/SYNCING_SERVER_//g' > /opt/server/packages/syncing-server/.env",
+  // Located by the DESTINATION path, not by the whole pipeline. These two lines
+  // were matched verbatim and the projections were later rewritten from
+  // `printenv | grep X_ | sed 's/X_//g'` to the anchored
+  // `printenv | sed -n 's/^X_//p'`; both `indexOf` calls then returned -1, the
+  // ordering assertion read `prepared < -1`, and this gate sat red while
+  // asserting nothing about the thing it names. Finding each line is asserted
+  // separately so a renamed destination fails loudly instead of silently.
+  const projectionOf = (destination) => {
+    const line = entrypoint
+      .split("\n")
+      .find(
+        (candidate) =>
+          candidate.includes(`> ${destination}`) &&
+          candidate.startsWith("printenv"),
+      );
+    assert.ok(
+      line !== undefined,
+      `no printenv projection writes ${destination}`,
+    );
+    return entrypoint.indexOf(line);
+  };
+  const syncingProjection = projectionOf(
+    "/opt/server/packages/syncing-server/.env",
   );
-  const gatewayProjection = entrypoint.indexOf(
-    "printenv | grep API_GATEWAY_ | sed 's/API_GATEWAY_//g' > /opt/server/packages/api-gateway/.env",
+  const gatewayProjection = projectionOf(
+    "/opt/server/packages/api-gateway/.env",
   );
   assert.ok(sourced >= 0 && prepared > sourced);
   // Both dotenvs are written from the resolved value, or one half gets nothing.

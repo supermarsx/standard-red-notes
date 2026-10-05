@@ -90,7 +90,19 @@ srn_mint_hex32() {
 # unset secret is byte-identical to the behaviour before this file existed.
 srn_prepare_internal_grpc_secret() {
   local supplied persisted minted secret_file secret_dir
-  SRN_INTERNAL_GRPC_SECRET_STATE="unset"
+  # EXPORTED, not merely assigned — the same mistake its sibling
+  # SRN_SERVICE_PROXY_TYPE_DECISION made below. docker-entrypoint.sh reads this
+  # one in the SAME shell that sourced this file, so a plain assignment was
+  # enough for the boot log and the omission was invisible there; but every
+  # supervisord program is a CHILD of that shell, and a child only inherits
+  # exported variables. Without the export the mint outcome is absent from the
+  # gateway's `process.env` entirely, and `DeploymentDiagnostics`
+  # (`internalGrpcSecretState`) cannot report it however hard it reads.
+  #
+  # Marked once, here: POSIX keeps the export attribute across the later plain
+  # assignments in this function, so every branch below is exported too. The
+  # value is one of the state tokens above — never the secret.
+  export SRN_INTERNAL_GRPC_SECRET_STATE="unset"
   secret_file="${SRN_INTERNAL_GRPC_SECRET_FILE:-/opt/server/packages/api-gateway/data/internal-grpc-auth-secret}"
   supplied="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}"
 
@@ -200,7 +212,16 @@ srn_grpc_endpoint_reachable() {
 # exact string `grpc` as gRPC, so an `auto` that somehow reached it unprocessed
 # selects the HTTP proxies rather than a transport with no fallback.
 #
-# Reports in SRN_SERVICE_PROXY_TYPE_DECISION, and always returns 0:
+# Reports in SRN_SERVICE_PROXY_TYPE_DECISION — which is EXPORTED, so the node
+# process this launcher execs can read it out of `process.env` and
+# `DeploymentDiagnostics` can publish it as `serviceProxyDecision`. It used to be
+# assigned and never exported: the launcher's own `echo` on the next line read
+# it as an ordinary shell variable and looked correct, while the gateway two
+# lines later had no such variable at all, so the admin panel's "why is this
+# deployment on HTTP" row could only ever be blank. The decision tokens below
+# are a closed set and none of them is, or embeds, a value.
+#
+# Always returns 0:
 #   operator                  an explicit value was supplied; untouched
 #   grpc-default              defaulted to grpc; every condition held
 #   not-colocated             no co-located syncing-server to talk gRPC to
@@ -212,7 +233,9 @@ srn_grpc_endpoint_reachable() {
 #   syncing-grpc-unreachable  likewise
 srn_resolve_service_proxy_type() {
   local configured auth_target sync_target
-  SRN_SERVICE_PROXY_TYPE_DECISION="operator"
+  # Exported once here; POSIX keeps the attribute across the plain assignments
+  # in the branches below, so every outcome reaches the gateway process.
+  export SRN_SERVICE_PROXY_TYPE_DECISION="operator"
 
   configured="${SERVICE_PROXY_TYPE:-}"
   if [ -z "$configured" ]; then

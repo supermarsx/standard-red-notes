@@ -35,6 +35,15 @@
  *   - `DIAGNOSTIC_ENV_KEYS` is a list of VARIABLE NAMES, which are public
  *     (they are documented, and they are in the compose files).
  * Do not add a `string` field to this module. Add a literal-union field instead.
+ *
+ * This is why the queue keys are answered by PRESENCE and the launcher outcomes
+ * by a closed union: a queue URL can embed an account id, an endpoint and
+ * sometimes a credential, and a launcher that one day reported a reason as free
+ * text could carry a host or a port out with it. A denylist of forbidden
+ * substrings would not hold this boundary — the shape of the report is what
+ * holds it, and the spec's poisoned-sentinel sweep proves the shape by feeding
+ * this module a distinctive value for EVERY key it reads, whatever that set
+ * grows into, and asserting none of them reaches the serialized payload.
  */
 
 /**
@@ -80,6 +89,88 @@ export type ServiceProxySetting = 'grpc' | 'http' | 'auto' | 'unset' | 'other'
 const SERVICE_PROXY_TOKENS = ['grpc', 'http', 'auto'] as const satisfies readonly ServiceProxySetting[]
 
 /**
+ * `SRN_SERVICE_PROXY_TYPE_DECISION` — WHY the container is on the transport it
+ * is on, as decided by `srn_resolve_service_proxy_type`
+ * (`server/docker/internal-grpc-lane-env.sh`), which runs as the api-gateway's
+ * own supervisord launcher after the backends are up.
+ *
+ * `serviceProxySetting` says what was CONFIGURED and `boundServiceProxy` says
+ * what was BOUND; neither can say why they differ, and on this deployment they
+ * differ by design — the shipped default is `auto`, which the launcher resolves.
+ * The difference the operator needs is between a deployment where HTTP is the
+ * right answer (`not-colocated`: there is no co-located syncing-server to speak
+ * gRPC to) and one where something is broken (`syncing-grpc-unreachable`: a dial
+ * target was configured and the port did not answer).
+ *
+ * The launcher recorded this all along and never EXPORTED it, so it was not in
+ * the gateway's `process.env` at all and the panel's row could only ever be
+ * blank. Both halves had to change; the export alone would have moved the blank
+ * one layer along.
+ *
+ * `unset` means no launcher recorded a decision — an image older than the
+ * export, or a gateway started outside `supervisor-server.sh` (a bare
+ * `yarn start`, the standalone harness). That is NOT the same as "the reason is
+ * undetermined", and the panel must not render it as one.
+ */
+export type ServiceProxyDecision =
+  | 'operator'
+  | 'grpc-default'
+  | 'not-colocated'
+  | 'no-grpc-urls'
+  | 'no-secret'
+  | 'auth-grpc-unreachable'
+  | 'syncing-grpc-unreachable'
+  | 'unset'
+  | 'other'
+
+/** As above: the tokens the union admits, as a value, so the two cannot drift. */
+const SERVICE_PROXY_DECISION_TOKENS = [
+  'operator',
+  'grpc-default',
+  'not-colocated',
+  'no-grpc-urls',
+  'no-secret',
+  'auth-grpc-unreachable',
+  'syncing-grpc-unreachable',
+] as const satisfies readonly ServiceProxyDecision[]
+
+/**
+ * `SRN_INTERNAL_GRPC_SECRET_STATE` — how the durable-command secret the socket
+ * SYNC_ITEMS lane needs came to be, as decided by
+ * `srn_prepare_internal_grpc_secret` in the same helper. A STATE, never the
+ * secret: the tokens are a closed set and none of them carries a value.
+ *
+ * It is worth reporting because `minted-ephemeral` and `mint-failed` are
+ * silently fatal to the lane and look exactly like a working deployment from
+ * outside, and because `persisted` vs `supplied` is the difference between a
+ * value the operator can rotate in their `.env` and one living on a volume.
+ *
+ * This variable had the SAME unexported-assignment bug as the decision above,
+ * and it hid better: `docker-entrypoint.sh` reads it in the same shell that
+ * sourced the helper, so its boot log was correct while no child process — the
+ * gateway included — could see the variable at all.
+ */
+export type InternalGrpcSecretState =
+  | 'supplied'
+  | 'persisted'
+  | 'minted-persisted'
+  | 'minted-ephemeral'
+  | 'not-colocated'
+  | 'mint-failed'
+  | 'unset'
+  | 'other'
+
+/** As above: the tokens the union admits, as a value, so the two cannot drift. */
+const INTERNAL_GRPC_SECRET_STATE_TOKENS = [
+  'supplied',
+  'persisted',
+  'minted-persisted',
+  'minted-ephemeral',
+  'not-colocated',
+  'mint-failed',
+] as const satisfies readonly InternalGrpcSecretState[]
+
+/**
  * Which service-proxy implementation the container ACTUALLY bound — the branch
  * that ran, not a re-derivation of the conditions. Re-deriving it here is how the
  * boot log and the panel would drift.
@@ -95,8 +186,10 @@ export type SyncSwitchSetting = 'true' | 'false' | 'unset' | 'other'
 /**
  * The variables the realtime lane, the files lane and the deployment marker
  * actually depend on. Every name here was verified to be read by this package
- * (`env.get('<NAME>'…)`); a name nobody reads would be a lie of omission in the
- * other direction, implying a knob that does not exist.
+ * (`env.get('<NAME>'…)`) or, for `API_GATEWAY_SQS_QUEUE_URL`, to be the
+ * PROJECTION SOURCE of a name that is — see the note beside it. A name that is
+ * neither would be a lie of omission in the other direction, implying a knob
+ * that does not exist.
  */
 export const DIAGNOSTIC_ENV_KEYS = [
   // Realtime transport
@@ -119,8 +212,30 @@ export const DIAGNOSTIC_ENV_KEYS = [
   'FILES_SERVER_URL',
   'VALET_TOKEN_SECRET',
   'AUTH_JWT_SECRET',
-  // Event fan-out
+  // Event fan-out.
+  //
+  // `SQS_QUEUE_URL` alone could not answer the question the panel asks of it.
+  // The gateway's dotenv is projected from the `API_GATEWAY_` prefix
+  // (`printenv | sed -n 's/^API_GATEWAY_//p' > api-gateway/.env`), so a queue
+  // the gateway OWNS arrives as `API_GATEWAY_SQS_QUEUE_URL` in the process
+  // environment AND as the bare `SQS_QUEUE_URL` in the dotenv, while a queue it
+  // merely INHERITED from a sibling arrives bare and alone. With only the bare
+  // name on the wire the two are indistinguishable, which is why the panel's
+  // "Queue separation" row had nothing to derive from.
+  //
+  // That is not a hypothetical row. Workers once inherited the gateway's bare
+  // `SQS_QUEUE_URL`; a queue delivers each message once, so the two consumers
+  // split the traffic instead of each seeing it, and roughly four in five
+  // realtime pushes plus revision and e-mail events went to whichever consumer
+  // won the race and were then deleted. Nothing logged an error — both halves
+  // succeeded, on different messages. The fix was the `API_GATEWAY_SQS_*`
+  // prefix, and its PRESENCE is exactly the evidence that the fix is in place.
+  //
+  // Presence only, as everywhere here: a queue URL can embed an account id, an
+  // endpoint and sometimes a credential, and none of that is read. One boolean
+  // per name; the names themselves are public (they are in `docker-compose.yml`).
   'SQS_QUEUE_URL',
+  'API_GATEWAY_SQS_QUEUE_URL',
   'SNS_TOPIC_ARN',
   // Deployment identity
   'SRN_DEPLOY_REVISION',
@@ -140,6 +255,17 @@ export type DeploymentDiagnosticsReport = {
   recorded: boolean
   mode: DeploymentMode
   serviceProxySetting: ServiceProxySetting
+  /**
+   * WHY the launcher settled on the transport it did. A closed union; `unset`
+   * means no launcher recorded one, which is a different fact from "the reason
+   * could not be determined". See `ServiceProxyDecision`.
+   */
+  serviceProxyDecision: ServiceProxyDecision
+  /**
+   * How the durable-command secret the socket SYNC_ITEMS lane needs came to be.
+   * A state token, never the secret. See `InternalGrpcSecretState`.
+   */
+  internalGrpcSecretState: InternalGrpcSecretState
   boundServiceProxy: BoundServiceProxy
   cacheSetting: CacheSetting
   syncSwitchSetting: SyncSwitchSetting
@@ -201,6 +327,18 @@ export function observeDeployment(read: EnvReader, bindings: DeploymentBindings)
       'unset',
       'other',
     ),
+    serviceProxyDecision: readToken<ServiceProxyDecision>(
+      read('SRN_SERVICE_PROXY_TYPE_DECISION'),
+      SERVICE_PROXY_DECISION_TOKENS,
+      'unset',
+      'other',
+    ),
+    internalGrpcSecretState: readToken<InternalGrpcSecretState>(
+      read('SRN_INTERNAL_GRPC_SECRET_STATE'),
+      INTERNAL_GRPC_SECRET_STATE_TOKENS,
+      'unset',
+      'other',
+    ),
     boundServiceProxy: bindings.boundServiceProxy,
     cacheSetting: readToken<CacheSetting>(read('CACHE_TYPE'), ['memory', 'redis'], 'unset', 'other'),
     syncSwitchSetting: readToken<SyncSwitchSetting>(
@@ -222,6 +360,8 @@ const NOT_RECORDED: DeploymentDiagnosticsReport = Object.freeze({
   recorded: false,
   mode: 'unset',
   serviceProxySetting: 'unset',
+  serviceProxyDecision: 'unset',
+  internalGrpcSecretState: 'unset',
   boundServiceProxy: 'http',
   cacheSetting: 'unset',
   syncSwitchSetting: 'unset',
