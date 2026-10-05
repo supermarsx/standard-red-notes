@@ -28,6 +28,8 @@ import { getSuperJSONFromClipPayload } from './getSuperJSONFromClipHTML'
 import ClippedNoteView from './ClippedNoteView'
 import { useStateRef } from '@/Hooks/useStateRef'
 import usePreference from '@/Hooks/usePreference'
+import { decodeDataUrlBytes } from '@/Components/FilePreview/fetchBoundedSourceBytes'
+import { MAX_LOCAL_FILE_SIZE } from '@/Constants/Constants'
 import { createLinkFromItem } from '@/Utils/Items/Search/createLinkFromItem'
 import ItemSelectionDropdown from '../ItemSelectionDropdown/ItemSelectionDropdown'
 import LinkedItemBubble from '../LinkedItems/LinkedItemBubble'
@@ -206,11 +208,18 @@ const ClipperView = ({ applicationGroup }: { applicationGroup: WebApplicationGro
         return
       }
       if (clipPayload.isScreenshot) {
-        const blob = await fetch(clipPayload.content).then((response) => response.blob())
+        /**
+         * The screenshot arrives as a `data:` URL. Decoded in-process rather
+         * than `fetch`ed: CSP `connect-src` does not admit `data:`, so the
+         * fetch was blocked and the violation report printed the entire
+         * screenshot into the console.
+         */
+        const bytes = decodeDataUrlBytes(clipPayload.content, MAX_LOCAL_FILE_SIZE)
 
-        const file = new File([blob], `${clipPayload.title} - ${clipPayload.url}.png`, {
+        const file = new File([bytes as BlobPart], `${clipPayload.title} - ${clipPayload.url}.png`, {
           type: 'image/png',
         })
+        bytes.fill(0)
 
         const uploadedFile = await application.filesController.uploadNewFile(file).catch(console.error)
 

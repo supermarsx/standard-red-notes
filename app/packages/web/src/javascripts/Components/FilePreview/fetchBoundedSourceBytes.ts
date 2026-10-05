@@ -19,15 +19,94 @@ type Options = {
 
 const AllowedSourceProtocols = new Set(['blob:', 'data:', 'http:', 'https:'])
 
-function validateSource(source: string): void {
+/**
+ * True only for a source an attachment renderer may put in an `<img>`/`<video>`
+ * `src`, or hand to the reader below.
+ *
+ * Pasted and imported HTML is the reason this exists. A `<img src="file:///…">`
+ * — which Word, Outlook and Windows Explorer all place in the `text/html`
+ * clipboard flavour — is refused outright by the browser on an https page
+ * ("Security Error: Content at https://… may not load or link to file:///…"),
+ * so a node must never be built around one, and an already-saved one must never
+ * reach the DOM.
+ */
+export function isRenderableAttachmentSource(source: string): boolean {
   try {
     const url = new URL(source, globalThis.location?.href ?? 'https://local.invalid/')
-    if (!AllowedSourceProtocols.has(url.protocol)) {
-      throw new Error('Unsupported protocol')
+    return AllowedSourceProtocols.has(url.protocol)
+  } catch {
+    return false
+  }
+}
+
+function validateSource(source: string): void {
+  if (!isRenderableAttachmentSource(source)) {
+    throw new BoundedSourceFetchError('invalid-source', 'The file source is not safe to load')
+  }
+}
+
+/**
+ * Decodes a `data:` URL without going through `fetch`.
+ *
+ * `fetch('data:…')` is governed by CSP `connect-src`, and a hardened policy
+ * (the one this app ships: `connect-src 'self' https: …`) does not list `data:`.
+ * The request is then blocked, and the violation report prints the ENTIRE data
+ * URL — a whole base64 image — into the console, while the preview and the
+ * "save to Files" action both fail. Nothing is fetched from the network for a
+ * data URL anyway, so decode it here and depend on no policy at all.
+ */
+export function decodeDataUrlBytes(source: string, maximumBytes: number): Uint8Array {
+  const normalized = source.trimStart()
+  if (!normalized.toLowerCase().startsWith('data:')) {
+    throw new BoundedSourceFetchError('invalid-source', 'The file source is not safe to load')
+  }
+  return decodeDataUrl(normalized, maximumBytes)
+}
+
+function decodeDataUrl(source: string, maximumBytes: number): Uint8Array {
+  const separator = source.indexOf(',')
+  if (separator === -1) {
+    throw new BoundedSourceFetchError('invalid-source', 'The file source is not safe to load')
+  }
+
+  const metadata = source.slice('data:'.length, separator)
+  const payload = source.slice(separator + 1)
+  const isBase64 = /;base64(?:;|$)/i.test(metadata)
+
+  if (!isBase64) {
+    // Percent-encoded (the only other data-URL form). `decodeURIComponent`
+    // yields the raw code units, each of which is one byte here.
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(payload)
+    } catch {
+      throw new BoundedSourceFetchError('invalid-source', 'The file source is not safe to load')
     }
+    if (decoded.length > maximumBytes) {
+      throw new BoundedSourceFetchError('size-limit', 'The attachment exceeds the safe size limit')
+    }
+    return Uint8Array.from(decoded, (character) => character.charCodeAt(0) & 0xff)
+  }
+
+  const encoded = payload.replace(/\s/g, '')
+  // 4 base64 characters carry 3 bytes. Refuse an oversized payload before
+  // allocating anything, rather than after.
+  if (Math.floor(encoded.length / 4) * 3 > maximumBytes + 3) {
+    throw new BoundedSourceFetchError('size-limit', 'The attachment exceeds the safe size limit')
+  }
+
+  let binary: string
+  try {
+    binary = atob(encoded)
   } catch {
     throw new BoundedSourceFetchError('invalid-source', 'The file source is not safe to load')
   }
+
+  if (binary.length > maximumBytes) {
+    throw new BoundedSourceFetchError('size-limit', 'The attachment exceeds the safe size limit')
+  }
+
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
 /**
@@ -45,6 +124,16 @@ export async function fetchBoundedSourceBytes(source: string, options: Options):
     throw new BoundedSourceFetchError('aborted', 'The file load was aborted')
   }
   validateSource(source)
+
+  if (source.trimStart().toLowerCase().startsWith('data:')) {
+    const bytes = decodeDataUrl(source.trimStart(), maximumBytes)
+    if (signal?.aborted) {
+      bytes.fill(0)
+      throw new BoundedSourceFetchError('aborted', 'The file load was aborted')
+    }
+    onProgress?.(bytes.byteLength)
+    return bytes
+  }
 
   const controller = new AbortController()
   const chunks: Uint8Array[] = []

@@ -1,3 +1,6 @@
+import { decodeDataUrlBytes } from '@/Components/FilePreview/fetchBoundedSourceBytes'
+import { MAX_LOCAL_FILE_SIZE } from '@/Constants/Constants'
+
 export class PhotoRecorder {
   public video!: HTMLVideoElement
   public devices!: MediaDeviceInfo[]
@@ -85,9 +88,15 @@ export class PhotoRecorder {
       return undefined
     }
 
-    const res: Response = await fetch(dataUrl)
-    const blob: Blob = await res.blob()
-    const file = new File([blob], fileName, { type: 'image/png' })
+    /**
+     * Decoded in-process, never `fetch`ed. `fetch('data:…')` is governed by CSP
+     * `connect-src`, which this app's policy does not open to `data:` (a blocked
+     * data: fetch dumps the whole payload into the violation report). The bytes
+     * are already here; there is nothing to request.
+     */
+    const bytes = decodeDataUrlBytes(dataUrl, MAX_LOCAL_FILE_SIZE)
+    const file = new File([bytes as BlobPart], fileName, { type: 'image/png' })
+    bytes.fill(0)
     return file
   }
 

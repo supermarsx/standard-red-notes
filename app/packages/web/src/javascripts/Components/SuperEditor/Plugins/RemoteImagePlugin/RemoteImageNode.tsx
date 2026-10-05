@@ -13,6 +13,7 @@ import {
 } from 'lexical'
 import RemoteImageComponent from './RemoteImageComponent'
 import { ImageFloat } from '../ImageTools/ImageToolsTypes'
+import { isRenderableAttachmentSource } from '@/Components/FilePreview/fetchBoundedSourceBytes'
 
 type SerializedRemoteImageNode = Spread<
   {
@@ -117,8 +118,21 @@ export class RemoteImageNode extends DecoratorBlockNode {
             if (!(domNode instanceof HTMLImageElement)) {
               return null
             }
+            const source = domNode.currentSrc || domNode.src
+            /**
+             * Pasted and imported HTML decides this string. Word, Outlook and
+             * Windows Explorer all put `<img src="file:///C:/…/clip_image001.png">`
+             * in the `text/html` clipboard flavour; building a node around one
+             * means every later render of the note asks an https page to load a
+             * `file://` subresource, which the browser refuses outright
+             * ("Security Error: Content at https://… may not load or link to
+             * file:///…"). Drop the image instead of persisting an unloadable node.
+             */
+            if (!isRenderableAttachmentSource(source)) {
+              return null
+            }
             return {
-              node: $createRemoteImageNode(domNode.currentSrc || domNode.src, domNode.alt),
+              node: $createRemoteImageNode(source, domNode.alt),
             }
           },
           priority: 2,

@@ -168,10 +168,14 @@ describe('InlineFileComponent PDF preview', () => {
       'h-[clamp(20rem,65vh,48rem)]',
     )
     expect(container.querySelector('[data-inline-pdf-bytes="37,80,68,70"]')).not.toBeNull()
-    expect(fetchMock).toHaveBeenCalledWith(
-      'data:application/pdf;base64,JVBERg==',
-      expect.objectContaining({ credentials: 'omit', referrerPolicy: 'no-referrer' }),
-    )
+    /**
+     * A `data:` source is decoded in-process, NOT fetched. `fetch('data:…')` is
+     * governed by CSP `connect-src`, which this app's policy does not open to
+     * `data:`; the request is blocked and the violation report prints the whole
+     * data URL (an entire base64 image/document) into the console while the
+     * preview silently fails. Bytes above, no request here.
+     */
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('does not fetch an offscreen inline attachment until it approaches the viewport', async () => {
@@ -197,7 +201,10 @@ describe('InlineFileComponent PDF preview', () => {
       root.render(
         createElement(InlineFileComponent, {
           className: { base: '', focus: '' },
-          src: 'data:application/pdf;base64,JVBERg==',
+          // An https source, so the lazy-load contract is still measured by the
+          // number of network reads (a data: source is decoded in-process and
+          // issues none at all).
+          src: 'https://files.example.test/offscreen.pdf',
           mimeType: 'application/pdf',
           fileName: 'offscreen.pdf',
           format: null,

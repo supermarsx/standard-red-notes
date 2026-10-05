@@ -53,11 +53,13 @@ export class VideoRecorder {
   }
 
   private onData = async (event: BlobEvent) => {
-    const blob = new Blob([event.data], { type: 'video/mp4' })
-    const url = URL.createObjectURL(blob)
-    const res: Response = await fetch(url)
-    const responseBlob: Blob = await res.blob()
-    const file = new File([responseBlob], this.fileName, { type: 'video/mp4' })
+    /**
+     * The recorded Blob goes straight into the File. It used to be round-tripped
+     * through `URL.createObjectURL` + `fetch`, which copied the whole recording
+     * for no reason, leaked the object URL, and made the recorder depend on CSP
+     * `connect-src` admitting `blob:`.
+     */
+    const file = new File([event.data], this.fileName, { type: 'video/mp4' })
 
     this.dataReadyPromise.resolve(file)
   }
