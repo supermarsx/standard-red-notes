@@ -3,6 +3,8 @@ const { after, before, test } = require('node:test')
 
 require('reflect-metadata')
 
+const { Readable } = require('node:stream')
+
 const { Container } = require('inversify')
 
 const { BaseHttpController, InversifyExpressServer, controller, httpGet, response } = require('../dist/src/index.js')
@@ -30,6 +32,28 @@ class CompatibilityController extends BaseHttpController {
   delegate(_request, _response, next) {
     next()
   }
+
+  // The shape the files service uses for a ranged download: write the success head
+  // first, then hand the framework a THUNK that pipes storage into the response.
+  // Upstream inversify-express-utils called a returned function; without that the
+  // body is never produced and the response is never ended, so the request hangs.
+  async deferredStream(_request, nativeResponse) {
+    nativeResponse.writeHead(206, {
+      'Content-Range': 'bytes 0-7/8',
+      'Content-Length': 8,
+      'Content-Type': 'application/octet-stream',
+    })
+
+    return () => Readable.from([Buffer.from('deferred')]).pipe(nativeResponse)
+  }
+
+  // The 416 branch of the same handler: head already written, nothing to pipe, the
+  // thunk only ends the response.
+  async deferredEnd(_request, nativeResponse) {
+    nativeResponse.writeHead(416, { 'Content-Range': 'bytes */8' })
+
+    return () => nativeResponse.end()
+  }
 }
 
 const decorateRoute = (methodName, path) => {
@@ -43,6 +67,8 @@ decorateRoute('manual', '/manual')
 response()(CompatibilityController.prototype, 'explicit', 0)
 decorateRoute('explicit', '/explicit')
 decorateRoute('delegate', '/next')
+decorateRoute('deferredStream', '/deferred-stream')
+decorateRoute('deferredEnd', '/deferred-end')
 controller('/compatibility')(CompatibilityController)
 
 let server
@@ -103,4 +129,28 @@ test('delegates a third next parameter without an automatic reply', async () => 
 
   assert.equal(result.status, 207)
   assert.deepEqual(await result.json(), { delegated: true })
+})
+
+// Regression: a handler that writes its own head and returns a thunk. Both requests
+// below HANG (no status line at all) when the deferred-send contract is missing, so
+// every assertion is behind an explicit timeout — a hang must read as a failure, not
+// as a stuck test run.
+test('invokes a returned function so a deferred stream body is actually sent', async () => {
+  const result = await fetch(`${baseUrl}/compatibility/deferred-stream`, {
+    signal: AbortSignal.timeout(5000),
+  })
+
+  assert.equal(result.status, 206)
+  assert.equal(result.headers.get('content-range'), 'bytes 0-7/8')
+  assert.equal(await result.text(), 'deferred')
+})
+
+test('invokes a returned function that only ends the response', async () => {
+  const result = await fetch(`${baseUrl}/compatibility/deferred-end`, {
+    signal: AbortSignal.timeout(5000),
+  })
+
+  assert.equal(result.status, 416)
+  assert.equal(result.headers.get('content-range'), 'bytes */8')
+  assert.equal(await result.text(), '')
 })

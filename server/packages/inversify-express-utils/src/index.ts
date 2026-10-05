@@ -194,6 +194,54 @@ class CompatibilityExpressHttpAdapter extends InversifyExpressHttpAdapter {
   }
 }
 
+/**
+ * Restores the legacy `inversify-express-utils` deferred-send contract: a handler may
+ * return a FUNCTION, and the framework calls it after the handler resolves. Upstream
+ * did this in its handlerFactory (`else if (value instanceof Function) { value() }`).
+ * The file-download handlers rely on it: they write their own 206/416 head and hand
+ * back a thunk that pipes the storage stream into the response.
+ *
+ * `@inversifyjs/http-core`'s reply pipeline has no such branch — it serializes anything
+ * that is not a string / object / Readable with `JSON.stringify`, which is `undefined`
+ * for a function, and the overrides above then suppress even that because `writeHead`
+ * has already set `headersSent`. Without this interceptor the response head is written,
+ * the body is never produced and the response is never ended: the request hangs until
+ * the client gives up. Every `GET /v1/files` download did exactly that.
+ *
+ * This lives in a GLOBAL INTERCEPTOR rather than in a wrapper around the controller
+ * method, so the method itself keeps returning the thunk to any direct caller (unit
+ * tests, and the `controllerContainer` direct-call registrations that bypass Express
+ * entirely). Only the HTTP reply path is changed.
+ *
+ * The thunk's own return value is discarded and `undefined` is handed to the adapter,
+ * which the overrides above turn into a no-op once the handler owns the response.
+ */
+const deferredSendInterceptorIdentifier = Symbol('DeferredSendInterceptor')
+
+interface ResultTransformCollector {
+  push(transform: (result: unknown) => unknown): void
+}
+
+class DeferredSendInterceptor {
+  async intercept(
+    _request: Request,
+    _response: Response,
+    next: () => Promise<ResultTransformCollector>,
+  ): Promise<void> {
+    const collector = await next()
+
+    collector.push((result: unknown): unknown => {
+      if (typeof result !== 'function') {
+        return result
+      }
+
+      ;(result as () => unknown)()
+
+      return undefined
+    })
+  }
+}
+
 const createRouteDecorator = (route: (path?: string) => MethodDecorator): RouteDecorator => {
   return (path: string, ...middleware: MiddlewareIdentifier[]): MethodDecorator => {
     return (target, key, descriptor): void => {
@@ -380,7 +428,14 @@ export class InversifyExpressServer {
       }
     }
 
+    if (!this.container.isBound(deferredSendInterceptorIdentifier)) {
+      this.container.bind(deferredSendInterceptorIdentifier).toConstantValue(new DeferredSendInterceptor())
+    }
+
     const adapter = new CompatibilityExpressHttpAdapter(this.container, { logger: false }, this.app)
+    // Must precede build(): the adapter refuses global interceptors afterwards, and the
+    // per-route handlers are composed during build().
+    adapter.useGlobalInterceptors(deferredSendInterceptorIdentifier)
     await adapter.build()
     this.errorConfigFunction?.(this.app)
     this.built = true
