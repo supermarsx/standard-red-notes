@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { EncryptionProviderInterface } from './../Encryption/EncryptionProviderInterface'
 import { LegacyApiServiceInterface } from './../Api/LegacyApiServiceInterface'
 import { PureCryptoInterface, SodiumTag, StreamEncryptor } from '@standardnotes/sncrypto-common'
@@ -17,10 +18,20 @@ import {
   FileSystemApi,
   SocketFileDownloadOutcome,
   SocketFileDownloadRequest,
+  SocketFileUploadAcknowledgement,
+  SocketFileUploadChunkOutcome,
+  SocketFileUploadFinishOutcome,
+  SocketFileUploadOpenOutcome,
+  SocketFileUploadRequest,
+  SocketFileUploadSession,
+  SocketUploadDriver,
 } from '@standardnotes/files'
 import { HttpServiceInterface } from '@standardnotes/api'
 import { LoggerInterface } from '@standardnotes/utils'
 import { ClientDisplayableError, ValetTokenOperation } from '@standardnotes/responses'
+
+/** A transport whose upload lane simply is not there — what every deployment without FILES_V1 reports. */
+const laneAbsentUpload = () => jest.fn().mockResolvedValue({ outcome: 'unavailable' } as SocketFileUploadOpenOutcome)
 
 describe('fileService', () => {
   let apiService: LegacyApiServiceInterface
@@ -758,7 +769,11 @@ describe('fileService', () => {
           return { outcome: 'completed', sha256: 'sha' }
         })
 
-      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+      fileService.setFileSocketTransport({
+        isFileLaneAvailable: () => true,
+        downloadFileOverSocket,
+        uploadFileOverSocket: laneAbsentUpload(),
+      })
 
       const onBytes = jest.fn().mockResolvedValue(undefined)
       const error = await fileService.downloadFile(file, onBytes)
@@ -787,7 +802,11 @@ describe('fileService', () => {
 
           return { outcome: 'completed', sha256: 'sha' }
         })
-      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+      fileService.setFileSocketTransport({
+        isFileLaneAvailable: () => true,
+        downloadFileOverSocket,
+        uploadFileOverSocket: laneAbsentUpload(),
+      })
 
       const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
 
@@ -807,7 +826,11 @@ describe('fileService', () => {
 
       const downloadFileOverSocket = jest.fn()
       if (laneAvailable !== undefined) {
-        fileService.setFileSocketTransport({ isFileLaneAvailable: () => laneAvailable, downloadFileOverSocket })
+        fileService.setFileSocketTransport({
+          isFileLaneAvailable: () => laneAvailable,
+          downloadFileOverSocket,
+          uploadFileOverSocket: laneAbsentUpload(),
+        })
       }
 
       const onBytes = jest.fn().mockResolvedValue(undefined)
@@ -839,7 +862,11 @@ describe('fileService', () => {
       // Lane live, but the vault listing that records the owner is not loaded, so
       // `SocketPreferredFilesApi` declines the socket and falls back to HTTP.
       fileService.setSharedVaultOwnerResolver(() => undefined)
-      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+      fileService.setFileSocketTransport({
+        isFileLaneAvailable: () => true,
+        downloadFileOverSocket,
+        uploadFileOverSocket: laneAbsentUpload(),
+      })
 
       const rangeTokens: string[] = []
       recordHttpRanges(rangeTokens)
@@ -888,6 +915,7 @@ describe('fileService', () => {
             return true
           }),
           downloadFileOverSocket,
+          uploadFileOverSocket: laneAbsentUpload(),
         })
 
         apiService.createUserFileValetToken = jest.fn().mockImplementation(async () => {
@@ -923,7 +951,11 @@ describe('fileService', () => {
 
           return { outcome: 'failed', code: 'socket-closed', retryable: true, safeToFallback: false }
         })
-      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+      fileService.setFileSocketTransport({
+        isFileLaneAvailable: () => true,
+        downloadFileOverSocket,
+        uploadFileOverSocket: laneAbsentUpload(),
+      })
 
       const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
 
@@ -960,6 +992,7 @@ describe('fileService', () => {
       fileService.setFileSocketTransport({
         isFileLaneAvailable: () => true,
         downloadFileOverSocket: jest.fn().mockResolvedValue({ outcome: 'unavailable' }),
+        uploadFileOverSocket: laneAbsentUpload(),
       })
 
       const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
@@ -998,6 +1031,268 @@ describe('fileService', () => {
 
       expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(2)
       expect(rangeTokens).toEqual(['valet-token-1', 'valet-token-2'])
+    })
+  })
+
+  describe('uploads over the socket lane', () => {
+    const MINIMUM_CHUNK = 5_000_000
+
+    let uploadRequests: SocketFileUploadRequest[]
+    let openOutcome: () => Promise<SocketFileUploadOpenOutcome>
+    let frames: Array<{ index: number; offset: number; length: number }>
+    let finishes: Array<{ declaredSize: number; sha256: string }>
+    let storedLength: number
+    let session: SocketFileUploadSession
+    let chunkOutcome: (() => SocketFileUploadChunkOutcome | undefined) | undefined
+    let finishOutcome: (() => SocketFileUploadFinishOutcome | undefined) | undefined
+
+    const installTransport = (laneAvailable = true) => {
+      fileService.setFileSocketTransport({
+        isFileLaneAvailable: () => laneAvailable,
+        downloadFileOverSocket: jest.fn().mockResolvedValue({ outcome: 'unavailable' }),
+        uploadFileOverSocket: jest.fn(async (request: SocketFileUploadRequest) => {
+          uploadRequests.push(request)
+          return openOutcome()
+        }),
+      })
+    }
+
+    beforeEach(() => {
+      uploadRequests = []
+      frames = []
+      finishes = []
+      storedLength = 0
+      chunkOutcome = undefined
+      finishOutcome = undefined
+
+      // Real streaming crypto is not the subject here; what matters is that the
+      // encryptor adds a fixed 17 bytes per push, exactly as the size plan predicts.
+      crypto.xchacha20StreamEncryptorPush = jest
+        .fn()
+        .mockImplementation((_state: unknown, plaintext: Uint8Array) => new Uint8Array(plaintext.byteLength + 17))
+      crypto.generateRandomKey = jest.fn().mockReturnValue('file-key')
+      // Node's own SHA-256 standing in for libsodium's streaming hash, so the
+      // digest the lane finishes with is a real hash of the bytes it sent.
+      const digests = new Map<number, ReturnType<typeof createHash>>()
+      let nextDigest = 1
+      crypto.sha256StreamInit = jest.fn(() => {
+        const state = nextDigest++
+        digests.set(state, createHash('sha256'))
+        return { state } as never
+      })
+      crypto.sha256StreamUpdate = jest.fn((hash: { state: unknown }, bytes: Uint8Array) => {
+        digests.get(hash.state as number)?.update(Buffer.from(bytes))
+      })
+      crypto.sha256StreamFinal = jest.fn((hash: { state: unknown }) => {
+        const key = hash.state as number
+        const digest = digests.get(key) as ReturnType<typeof createHash>
+        digests.delete(key)
+        return digest.digest('hex')
+      })
+
+      session = {
+        sendChunk: jest.fn(async (chunk: { index: number; offset: number; bytes: Uint8Array }) => {
+          const refusal = chunkOutcome?.()
+          if (refusal) {
+            return refusal
+          }
+          frames.push({ index: chunk.index, offset: chunk.offset, length: chunk.bytes.byteLength })
+          storedLength = chunk.offset + chunk.bytes.byteLength
+          return {
+            outcome: 'acknowledged',
+            transferId: 'transfer-1',
+            generation: 1,
+            index: chunk.index,
+            duplicate: false,
+            nextIndex: chunk.index + 1,
+            nextOffset: storedLength,
+            resumeId: 'resume-1',
+          } as SocketFileUploadAcknowledgement
+        }),
+        finish: jest.fn(async (input: { declaredSize: number; sha256: string }) => {
+          const refusal = finishOutcome?.()
+          if (refusal) {
+            return refusal
+          }
+          finishes.push(input)
+          return { outcome: 'completed', sha256: input.sha256 } as SocketFileUploadFinishOutcome
+        }),
+        cancel: jest.fn(),
+      }
+
+      openOutcome = async () => ({
+        outcome: 'opened',
+        position: {
+          transferId: 'transfer-1',
+          generation: 1,
+          resumeId: 'resume-1',
+          nextIndex: 0,
+          nextOffset: 0,
+          declaredSize: uploadRequests[uploadRequests.length - 1].declaredSize,
+          maxFrameBytes: 256 * 1024,
+        },
+        session,
+      })
+
+      apiService.startUploadSession = jest.fn().mockResolvedValue({ status: 200, data: { uploadId: 'upload-1' } })
+      apiService.uploadFileBytes = jest.fn().mockResolvedValue(true)
+      apiService.closeUploadSession = jest.fn().mockResolvedValue(true)
+      apiService.createUserFileValetToken = jest.fn().mockResolvedValue('valet-token')
+      mutator.insertItem = jest.fn().mockImplementation(async (item: unknown) => item)
+    })
+
+    it('opens the lane and mints NO write valet token and NO HTTP upload session', async () => {
+      installTransport()
+
+      const operation = await fileService.beginNewFileUpload(10)
+
+      expect(operation).toBeInstanceOf(SocketUploadDriver)
+      expect(apiService.createUserFileValetToken).not.toHaveBeenCalled()
+      expect(apiService.startUploadSession).not.toHaveBeenCalled()
+      expect(uploadRequests).toEqual([
+        {
+          remoteIdentifier: expect.any(String),
+          fileUuid: expect.any(String),
+          // 10 plaintext bytes in one chunk is 27 encrypted bytes.
+          decryptedSize: 10,
+          declaredSize: 27,
+          mimeType: 'application/octet-stream',
+        },
+      ])
+    })
+
+    it('declares the planned ENCRYPTED total, which the decrypted size would understate', async () => {
+      installTransport()
+
+      await fileService.beginNewFileUpload(MINIMUM_CHUNK + 1)
+
+      // Two chunks, so two lots of 17 bytes of overhead.
+      expect(uploadRequests[0]).toMatchObject({ decryptedSize: MINIMUM_CHUNK + 1, declaredSize: MINIMUM_CHUNK + 35 })
+    })
+
+    it('carries a whole upload over the socket and publishes it without closing an HTTP session', async () => {
+      installTransport()
+
+      const operation = (await fileService.beginNewFileUpload(10)) as SocketUploadDriver
+      expect(await fileService.pushBytesForUpload(operation, new Uint8Array(10), 0, true)).toBeUndefined()
+
+      const item = await fileService.finishUpload(operation, { name: 'note.txt', mimeType: 'text/plain' }, 'uuid-1')
+
+      expect(item).not.toBeInstanceOf(ClientDisplayableError)
+      expect(frames).toEqual([{ index: 0, offset: 0, length: 27 }])
+      expect(finishes).toEqual([
+        { transferId: 'transfer-1', generation: 1, declaredSize: 27, sha256: expect.any(String) },
+      ])
+      expect(apiService.closeUploadSession).not.toHaveBeenCalled()
+      expect(apiService.uploadFileBytes).not.toHaveBeenCalled()
+      expect(mutator.insertItem).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses to publish a file item when the socket upload never completed', async () => {
+      installTransport()
+      // A failure AT FINISH is the one that cannot be rescued: the server may
+      // already have published the file, so restarting over HTTP could apply the
+      // same upload twice.
+      finishOutcome = () => ({ outcome: 'failed', code: 'FILE_BACKEND_ERROR', retryable: false, safeToFallback: false })
+
+      const operation = (await fileService.beginNewFileUpload(10)) as SocketUploadDriver
+      const pushed = await fileService.pushBytesForUpload(operation, new Uint8Array(10), 0, true)
+      const item = await fileService.finishUpload(operation, { name: 'note.txt', mimeType: 'text/plain' }, 'uuid-1')
+
+      expect(pushed).toBeInstanceOf(ClientDisplayableError)
+      expect((pushed as ClientDisplayableError).text).toContain('FILE_BACKEND_ERROR')
+      expect(item).toBeInstanceOf(ClientDisplayableError)
+      expect(mutator.insertItem).not.toHaveBeenCalled()
+      // Never silently re-routed after FINISH, whatever the socket reported.
+      expect(apiService.createUserFileValetToken).not.toHaveBeenCalled()
+      expect(apiService.uploadFileBytes).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['no transport is installed at all', undefined],
+      ['the lane was never negotiated', false],
+    ])('uploads over HTTP, exactly as before, when %s', async (_case, laneAvailable) => {
+      if (laneAvailable !== undefined) {
+        installTransport(laneAvailable)
+      }
+
+      const operation = await fileService.beginNewFileUpload(10)
+      await fileService.pushBytesForUpload(operation as never, new Uint8Array(10), 0, true)
+      await fileService.finishUpload(operation as never, { name: 'note.txt', mimeType: 'text/plain' }, 'uuid-1')
+
+      expect(operation).not.toBeInstanceOf(SocketUploadDriver)
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledWith(
+        expect.any(String),
+        ValetTokenOperation.Write,
+        10,
+      )
+      expect(apiService.startUploadSession).toHaveBeenCalledTimes(1)
+      expect(apiService.uploadFileBytes).toHaveBeenCalledTimes(1)
+      expect(apiService.closeUploadSession).toHaveBeenCalledTimes(1)
+      expect(uploadRequests).toHaveLength(laneAvailable === false ? 0 : 0)
+    })
+
+    it.each([
+      [
+        'the open is refused',
+        { outcome: 'failed', code: 'FILE_LIMIT_EXCEEDED', retryable: false, safeToFallback: true },
+      ],
+      ['the lane reports itself unavailable', { outcome: 'unavailable' }],
+    ])('mints the write valet token only once %s', async (_case, outcome) => {
+      installTransport()
+      openOutcome = async () => outcome as SocketFileUploadOpenOutcome
+
+      const operation = await fileService.beginNewFileUpload(10)
+
+      expect(operation).not.toBeInstanceOf(SocketUploadDriver)
+      expect(uploadRequests).toHaveLength(1)
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(1)
+      expect(apiService.startUploadSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('leaves an empty file on HTTP without consulting the lane, which refuses a zero size', async () => {
+      installTransport()
+
+      const operation = await fileService.beginNewFileUpload(0)
+
+      expect(operation).not.toBeInstanceOf(SocketUploadDriver)
+      expect(uploadRequests).toHaveLength(0)
+      expect(apiService.startUploadSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('restarts over HTTP when the lane drops after the open but before a byte is stored', async () => {
+      installTransport()
+      chunkOutcome = () => ({ outcome: 'failed', code: 'SOCKET_CLOSED', retryable: true, safeToFallback: true })
+
+      const operation = (await fileService.beginNewFileUpload(10)) as SocketUploadDriver
+      expect(apiService.startUploadSession).not.toHaveBeenCalled()
+
+      const pushed = await fileService.pushBytesForUpload(operation, new Uint8Array(10), 0, true)
+      const item = await fileService.finishUpload(operation, { name: 'note.txt', mimeType: 'text/plain' }, 'uuid-1')
+
+      expect(pushed).toBeUndefined()
+      expect(operation.transport).toBe('http')
+      // The token and the session were minted only once HTTP actually had to carry it.
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(1)
+      expect(apiService.startUploadSession).toHaveBeenCalledTimes(1)
+      expect(apiService.uploadFileBytes).toHaveBeenCalledTimes(1)
+      expect(apiService.closeUploadSession).toHaveBeenCalledTimes(1)
+      expect(item).not.toBeInstanceOf(ClientDisplayableError)
+    })
+
+    it('cuts the plaintext to the plan rather than to the chunking the caller happens to use', async () => {
+      installTransport()
+      const size = MINIMUM_CHUNK + 1
+
+      const operation = (await fileService.beginNewFileUpload(size)) as SocketUploadDriver
+      // One oversized push, the way ByteChunker's `Math.max(floor, buffered)` pops.
+      await fileService.pushBytesForUpload(operation, new Uint8Array(size), 0, true)
+
+      const pushes = (crypto.xchacha20StreamEncryptorPush as jest.Mock).mock.calls
+      expect(pushes.map((call) => (call[1] as Uint8Array).byteLength)).toEqual([MINIMUM_CHUNK, 1])
+      expect(operation.encryptedChunkSizes).toEqual([MINIMUM_CHUNK + 17, 18])
+      expect(frames.reduce((total, frame) => total + frame.length, 0)).toBe(MINIMUM_CHUNK + 35)
+      expect(Math.max(...frames.map((frame) => frame.length))).toBeLessThanOrEqual(256 * 1024)
     })
   })
 })

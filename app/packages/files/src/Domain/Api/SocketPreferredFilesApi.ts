@@ -7,7 +7,11 @@ import {
 import { DownloadFileParams } from './DownloadFileParams'
 import { FileOwnershipType } from './FileOwnershipType'
 import { FilesApiInterface } from './FilesApiInterface'
-import { FileSocketTransportInterface } from './FileSocketTransportInterface'
+import {
+  FileSocketTransportInterface,
+  SocketFileUploadPosition,
+  SocketFileUploadSession,
+} from './FileSocketTransportInterface'
 import { OrderedByteChunker } from '../Chunker/OrderedByteChunker'
 
 /**
@@ -25,9 +29,15 @@ import { OrderedByteChunker } from '../Chunker/OrderedByteChunker'
  *    stateful and chunk-ordered. Falling back after bytes have been handed to it
  *    would decrypt the head of the file twice, so fallback is permitted only
  *    while the transport proves nothing was delivered.
- * 3. **Uploads are not on this lane yet.** They are delegated unchanged. An upload
- *    that dies mid-flight may already have been applied server-side, and honest
- *    recovery for that needs the resume protocol, not a retry.
+ * 3. **Uploads take the lane only once the server has accepted an open.** The
+ *    HTTP upload methods below are still verbatim pass-throughs; what moves an
+ *    upload off them is {@link SocketPreferredFilesApi.openSocketUpload}, and it
+ *    decides on an answered round trip rather than on a liveness check. A check
+ *    is a prediction that can be stale by the time bytes move; an accepted open
+ *    is proof. Anything else — lane absent, open refused, vault owner unknown —
+ *    answers `undefined`, and the caller mints its WRITE valet token and opens
+ *    its HTTP session only then, so that work is underneath the decision rather
+ *    than in front of it.
  * 4. **Shared-vault downloads need the vault's owner, and will not invent one.**
  *    HTTP carries the owner as request context; the socket must name it in the
  *    resource itself. When it cannot be resolved from the vault listing that
@@ -77,6 +87,60 @@ export class SocketPreferredFilesApi implements FilesApiInterface {
 
   closeUploadSession(valetToken: string, ownershipType: FileOwnershipType): Promise<boolean | ClientDisplayableError> {
     return this.http.closeUploadSession(valetToken, ownershipType)
+  }
+
+  /**
+   * Opens this upload on the socket, or answers `undefined` to mean "HTTP carries
+   * it".
+   *
+   * Every way of landing on HTTP ends here, which is the point: the caller does
+   * no upload-session work until this has answered. An open that fails has sent
+   * no bytes and published nothing, so it is always safe to start again over
+   * HTTP; a `FILE_*` code at this point is a reason to use the other transport,
+   * not an error to report.
+   */
+  async openSocketUpload(params: {
+    remoteIdentifier: string
+    fileUuid: string
+    ownershipType: FileOwnershipType
+    sharedVaultUuid?: string
+    /** Plaintext length. Zero has no socket lane: the gateway's own size check refuses it. */
+    decryptedSize: number
+    /** `plannedEncryptedSize`, never the decrypted size — the cap bounds the encrypted total. */
+    declaredSize: number
+    mimeType: string
+  }): Promise<{ position: SocketFileUploadPosition; session: SocketFileUploadSession } | undefined> {
+    if (
+      !this.socket.isFileLaneAvailable() ||
+      (params.ownershipType !== 'user' && params.ownershipType !== 'shared-vault') ||
+      params.decryptedSize < 1
+    ) {
+      return undefined
+    }
+
+    let sharedVault: { sharedVaultUuid: string; sharedVaultOwnerUuid: string } | undefined
+    if (params.ownershipType === 'shared-vault') {
+      const sharedVaultUuid = params.sharedVaultUuid
+      const sharedVaultOwnerUuid = sharedVaultUuid ? this.resolveSharedVaultOwnerUuid?.(sharedVaultUuid) : undefined
+      if (!sharedVaultUuid || !sharedVaultOwnerUuid) {
+        // Same rule as the download path: HTTP carries the vault owner as request
+        // context, and a guessed owner would fail closed server-side and read as
+        // a permissions bug rather than as the missing lookup it is.
+        return undefined
+      }
+      sharedVault = { sharedVaultUuid, sharedVaultOwnerUuid }
+    }
+
+    const opened = await this.socket.uploadFileOverSocket({
+      remoteIdentifier: params.remoteIdentifier,
+      fileUuid: params.fileUuid,
+      ...(sharedVault ? { sharedVault } : {}),
+      decryptedSize: params.decryptedSize,
+      declaredSize: params.declaredSize,
+      mimeType: params.mimeType,
+    })
+
+    return opened.outcome === 'opened' ? { position: opened.position, session: opened.session } : undefined
   }
 
   moveFile(valetToken: string): Promise<boolean> {

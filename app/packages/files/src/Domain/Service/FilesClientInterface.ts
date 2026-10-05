@@ -1,4 +1,5 @@
 import { EncryptAndUploadFileOperation } from '../Operations/EncryptAndUpload'
+import { SocketUploadDriver } from '../UseCase/SocketUploadDriver'
 import { LocalOnlyFileUploadOperation } from '../Operations/EncryptLocalOnly'
 import { FileItem, FileMetadata, VaultListingInterface, SharedVaultListingInterface } from '@standardnotes/models'
 import { ClientDisplayableError } from '@standardnotes/responses'
@@ -9,6 +10,15 @@ import { FileSystemNoSelection } from '../Api/FileSystemNoSelection'
 import { FileBackupMetadataFile } from '../Device/FileBackupMetadataFile'
 import { LocalFileBackendInterface } from './LocalFileBackendInterface'
 import { FileSocketTransportInterface } from '../Api/FileSocketTransportInterface'
+
+/**
+ * What `beginNewFileUpload` hands back. Which member it is says which transport
+ * accepted the upload, and callers deliberately cannot tell them apart: both
+ * expose the same `getProgress` / `getResult` / `encryptedChunkSizes` surface, and
+ * a {@link SocketUploadDriver} that has fallen back reads straight through to an
+ * {@link EncryptAndUploadFileOperation} underneath.
+ */
+export type FileUploadOperation = EncryptAndUploadFileOperation | SocketUploadDriver
 
 export interface FilesClientInterface {
   minimumChunkSize(): number
@@ -59,15 +69,15 @@ export interface FilesClientInterface {
   beginNewFileUpload(
     sizeInBytes: number,
     vault?: VaultListingInterface,
-  ): Promise<EncryptAndUploadFileOperation | ClientDisplayableError>
+  ): Promise<FileUploadOperation | ClientDisplayableError>
   pushBytesForUpload(
-    operation: EncryptAndUploadFileOperation,
+    operation: FileUploadOperation,
     bytes: Uint8Array,
     chunkId: number,
     isFinalChunk: boolean,
   ): Promise<ClientDisplayableError | undefined>
   finishUpload(
-    operation: EncryptAndUploadFileOperation,
+    operation: FileUploadOperation,
     fileMetadata: FileMetadata,
     uuid: string,
   ): Promise<FileItem | ClientDisplayableError>

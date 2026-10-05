@@ -1982,4 +1982,318 @@ describe('WebSocketSyncTransport', () => {
       expect(transport.transportStatus.operations).toEqual([])
     })
   })
+
+  describe('uploadFileOverSocket', () => {
+    const SHA = 'a'.repeat(64)
+
+    const connectWithLane = async (operations = ['SYNC_ITEMS', 'FILES_V1']) => {
+      const transport = createTransport()
+      // The bootstrapping request is rejected outright by a session revocation,
+      // so it is swallowed here rather than left to crash the worker as an
+      // unhandled rejection.
+      void transport.execute(request(), jest.fn().mockResolvedValue(response('http'))).catch(() => undefined)
+      await flush()
+      worker.emit({ type: 'STATE', state: 'READY', socketPreserved: true })
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: operations as never,
+      })
+      await flush()
+      return transport
+    }
+
+    const lastPost = <T extends MainToSyncWorkerMessage['type']>(type: T) =>
+      [...worker.posts].reverse().find((post) => post.type === type) as Extract<MainToSyncWorkerMessage, { type: T }>
+
+    const openRequest = (overrides: Record<string, unknown> = {}) => ({
+      remoteIdentifier: 'remote-1',
+      fileUuid: 'file-1',
+      decryptedSize: 10,
+      declaredSize: 27,
+      mimeType: 'application/octet-stream',
+      ...overrides,
+    })
+
+    const accept = async (overrides: Record<string, unknown> = {}) => {
+      const clientRequestId = lastPost('OPEN_FILE_UPLOAD').clientRequestId
+      worker.emit({
+        type: 'FILE_UPLOAD_ACCEPTED',
+        clientRequestId,
+        transferId: 'transfer-1',
+        generation: 1,
+        resumeId: 'resume-1',
+        nextIndex: 0,
+        nextOffset: 0,
+        declaredSize: 27,
+        ...overrides,
+      } as never)
+      await flush()
+      return clientRequestId
+    }
+
+    it('answers unavailable without touching the worker when the lane was never negotiated', async () => {
+      const transport = await connectWithLane(['SYNC_ITEMS'])
+
+      await expect(transport.uploadFileOverSocket(openRequest())).resolves.toEqual({ outcome: 'unavailable' })
+      expect(worker.posts.some((post) => post.type === 'OPEN_FILE_UPLOAD')).toBe(false)
+    })
+
+    it('answers unavailable once the socket has degraded, with nothing attempted', async () => {
+      const transport = await connectWithLane()
+      worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
+      await flush()
+
+      await expect(transport.uploadFileOverSocket(openRequest())).resolves.toEqual({ outcome: 'unavailable' })
+      expect(worker.posts.some((post) => post.type === 'OPEN_FILE_UPLOAD')).toBe(false)
+    })
+
+    it.each([
+      ['a zero decrypted size, which the gateway refuses', { decryptedSize: 0 }],
+      ['an encrypted total above the 5 GiB transfer cap', { declaredSize: 5 * 1024 * 1024 * 1024 + 1 }],
+      ['an empty mime type', { mimeType: '' }],
+      ['a mime type carrying a control character', { mimeType: 'text/plain\u0000' }],
+      ['an unusable remote identifier', { remoteIdentifier: 'has spaces' }],
+    ])('refuses %s before a round trip, so HTTP carries the upload', async (_case, overrides) => {
+      const transport = await connectWithLane()
+
+      await expect(transport.uploadFileOverSocket(openRequest(overrides))).resolves.toEqual({ outcome: 'unavailable' })
+      expect(worker.posts.some((post) => post.type === 'OPEN_FILE_UPLOAD')).toBe(false)
+    })
+
+    it('opens the upload and reports the gateway frame limit with the accepted position', async () => {
+      const transport = await connectWithLane()
+
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+      expect(lastPost('OPEN_FILE_UPLOAD').request).toEqual({
+        resource: { ownershipType: 'user', remoteIdentifier: 'remote-1', fileUuid: 'file-1' },
+        decryptedSize: 10,
+        declaredSize: 27,
+        mimeType: 'application/octet-stream',
+        deadlineMs: 30_000,
+      })
+      await accept()
+
+      const opened = await opening
+      expect(opened).toMatchObject({
+        outcome: 'opened',
+        position: { transferId: 'transfer-1', generation: 1, nextOffset: 0, declaredSize: 27, maxFrameBytes: 262_144 },
+      })
+    })
+
+    it('carries the shared vault owner into the resource, never inventing one', async () => {
+      const transport = await connectWithLane()
+
+      void transport.uploadFileOverSocket(
+        openRequest({ sharedVault: { sharedVaultUuid: 'vault-1', sharedVaultOwnerUuid: 'owner-1' } }),
+      )
+      await flush()
+
+      expect(lastPost('OPEN_FILE_UPLOAD').request.resource).toEqual({
+        ownershipType: 'shared-vault',
+        remoteIdentifier: 'remote-1',
+        fileUuid: 'file-1',
+        sharedVaultUuid: 'vault-1',
+        sharedVaultOwnerUuid: 'owner-1',
+      })
+    })
+
+    it('reports a refused open as a failure that is safe to retry over HTTP', async () => {
+      const transport = await connectWithLane()
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+
+      worker.emit({
+        type: 'FILE_UPLOAD_ERROR',
+        clientRequestId: lastPost('OPEN_FILE_UPLOAD').clientRequestId,
+        code: 'FILE_LIMIT_EXCEEDED',
+        retryable: false,
+        safeToFallback: true,
+      } as never)
+
+      await expect(opening).resolves.toEqual({
+        outcome: 'failed',
+        code: 'FILE_LIMIT_EXCEEDED',
+        retryable: false,
+        safeToFallback: true,
+      })
+    })
+
+    it('writes chunks and resolves each one on its acknowledgement', async () => {
+      const transport = await connectWithLane()
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+      const clientRequestId = await accept()
+      const opened = await opening
+      if (opened.outcome !== 'opened') {
+        throw new Error('expected an opened upload')
+      }
+
+      const sending = opened.session.sendChunk({ index: 0, offset: 0, bytes: new Uint8Array([1, 2, 3]) })
+      await flush()
+      expect(lastPost('SEND_FILE_CHUNK')).toMatchObject({ index: 0, offset: 0, bytes: new Uint8Array([1, 2, 3]) })
+
+      worker.emit({
+        type: 'FILE_UPLOAD_CHUNK_ACK',
+        clientRequestId,
+        transferId: 'transfer-1',
+        generation: 1,
+        index: 0,
+        duplicate: false,
+        nextIndex: 1,
+        nextOffset: 3,
+        resumeId: 'resume-1',
+      } as never)
+
+      await expect(sending).resolves.toEqual({
+        outcome: 'acknowledged',
+        transferId: 'transfer-1',
+        generation: 1,
+        index: 0,
+        duplicate: false,
+        nextIndex: 1,
+        nextOffset: 3,
+        resumeId: 'resume-1',
+      })
+    })
+
+    it('refuses a second concurrent write, because the next ack would be ambiguous', async () => {
+      const transport = await connectWithLane()
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+      await accept()
+      const opened = await opening
+      if (opened.outcome !== 'opened') {
+        throw new Error('expected an opened upload')
+      }
+
+      void opened.session.sendChunk({ index: 0, offset: 0, bytes: new Uint8Array([1]) })
+      await flush()
+
+      await expect(opened.session.sendChunk({ index: 1, offset: 1, bytes: new Uint8Array([2]) })).resolves.toEqual({
+        outcome: 'failed',
+        code: 'FILE_STEP_IN_FLIGHT',
+        retryable: false,
+        safeToFallback: false,
+      })
+    })
+
+    it('reports a finish failure as unsafe to replay, whatever the socket observed', async () => {
+      const transport = await connectWithLane()
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+      const clientRequestId = await accept()
+      const opened = await opening
+      if (opened.outcome !== 'opened') {
+        throw new Error('expected an opened upload')
+      }
+
+      const finishing = opened.session.finish({
+        transferId: 'transfer-1',
+        generation: 1,
+        declaredSize: 27,
+        sha256: SHA,
+      })
+      await flush()
+      expect(lastPost('FINISH_FILE_UPLOAD')).toMatchObject({ transferId: 'transfer-1', declaredSize: 27, sha256: SHA })
+
+      // The worker still believes a replay is safe; this thread knows FINISH was
+      // written, and the stricter of the two is what the caller is told.
+      worker.emit({
+        type: 'FILE_UPLOAD_ERROR',
+        clientRequestId,
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+        safeToFallback: true,
+      } as never)
+
+      await expect(finishing).resolves.toEqual({
+        outcome: 'failed',
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+        safeToFallback: false,
+      })
+    })
+
+    it('resolves finish on the gateway digest and stops tracking the upload', async () => {
+      const transport = await connectWithLane()
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+      const clientRequestId = await accept()
+      const opened = await opening
+      if (opened.outcome !== 'opened') {
+        throw new Error('expected an opened upload')
+      }
+
+      const finishing = opened.session.finish({
+        transferId: 'transfer-1',
+        generation: 1,
+        declaredSize: 27,
+        sha256: SHA,
+      })
+      await flush()
+      worker.emit({ type: 'FILE_UPLOAD_COMPLETE', clientRequestId, sha256: SHA } as never)
+
+      await expect(finishing).resolves.toEqual({ outcome: 'completed', sha256: SHA })
+      await expect(
+        opened.session.sendChunk({ index: 1, offset: 1, bytes: new Uint8Array([2]) }),
+      ).resolves.toMatchObject({ outcome: 'failed', code: 'SOCKET_CLOSED' })
+    })
+
+    it('cancels the transfer and reports the cancellation to the step in flight', async () => {
+      const transport = await connectWithLane()
+      const controller = new AbortController()
+      const opening = transport.uploadFileOverSocket(openRequest({ signal: controller.signal }))
+      await flush()
+      await accept()
+      const opened = await opening
+      if (opened.outcome !== 'opened') {
+        throw new Error('expected an opened upload')
+      }
+
+      const sending = opened.session.sendChunk({ index: 0, offset: 0, bytes: new Uint8Array([1]) })
+      await flush()
+      controller.abort()
+
+      await expect(sending).resolves.toEqual({
+        outcome: 'failed',
+        code: 'FILE_CANCELLED',
+        retryable: false,
+        safeToFallback: true,
+      })
+      expect(worker.posts.some((post) => post.type === 'CANCEL_FILE_UPLOAD')).toBe(true)
+    })
+
+    it('answers aborted before anything is written when the signal is already aborted', async () => {
+      const transport = await connectWithLane()
+      const controller = new AbortController()
+      controller.abort()
+
+      await expect(transport.uploadFileOverSocket(openRequest({ signal: controller.signal }))).resolves.toEqual({
+        outcome: 'aborted',
+      })
+      expect(worker.posts.some((post) => post.type === 'OPEN_FILE_UPLOAD')).toBe(false)
+    })
+
+    it('fails the step in flight when the session is revoked', async () => {
+      const transport = await connectWithLane()
+      const opening = transport.uploadFileOverSocket(openRequest())
+      await flush()
+      await accept()
+      const opened = await opening
+      if (opened.outcome !== 'opened') {
+        throw new Error('expected an opened upload')
+      }
+
+      const sending = opened.session.sendChunk({ index: 0, offset: 0, bytes: new Uint8Array([1]) })
+      await flush()
+      void transport.notifySessionRevoked()
+      await flush()
+
+      await expect(sending).resolves.toMatchObject({ outcome: 'failed', code: 'SESSION_REVOKED' })
+    })
+  })
 })

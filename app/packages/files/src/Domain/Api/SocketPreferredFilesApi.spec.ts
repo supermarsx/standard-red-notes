@@ -6,6 +6,9 @@ import {
   FileSocketTransportInterface,
   SocketFileDownloadOutcome,
   SocketFileDownloadRequest,
+  SocketFileUploadOpenOutcome,
+  SocketFileUploadRequest,
+  SocketFileUploadSession,
 } from './FileSocketTransportInterface'
 import { SocketPreferredFilesApi } from './SocketPreferredFilesApi'
 
@@ -21,6 +24,9 @@ describe('SocketPreferredFilesApi', () => {
   let socketOutcome: (request: SocketFileDownloadRequest) => Promise<SocketFileDownloadOutcome>
   let socket: FileSocketTransportInterface
   let received: Uint8Array[]
+  let uploadRequests: SocketFileUploadRequest[]
+  let uploadOutcome: (request: SocketFileUploadRequest) => Promise<SocketFileUploadOpenOutcome>
+  let uploadSession: SocketFileUploadSession
 
   const params = (overrides: Partial<DownloadFileParams> = {}): DownloadFileParams => ({
     file: {
@@ -54,10 +60,37 @@ describe('SocketPreferredFilesApi', () => {
   const subject = (resolveOwner?: (sharedVaultUuid: string) => string | undefined) =>
     new SocketPreferredFilesApi(http, socket, resolveOwner)
 
+  const openedPosition = {
+    transferId: 'transfer-1',
+    generation: 1,
+    resumeId: 'resume-1',
+    nextIndex: 0,
+    nextOffset: 0,
+    declaredSize: 17,
+    maxFrameBytes: 256 * 1024,
+  }
+
+  const uploadParams = (overrides: Record<string, unknown> = {}) => ({
+    remoteIdentifier: REMOTE_IDENTIFIER,
+    fileUuid: FILE_UUID,
+    ownershipType: 'user' as const,
+    decryptedSize: 10,
+    declaredSize: 27,
+    mimeType: 'application/octet-stream',
+    ...overrides,
+  })
+
   beforeEach(() => {
     received = []
     laneAvailable = false
     socketRequests = []
+    uploadRequests = []
+    uploadSession = {
+      sendChunk: jest.fn(),
+      finish: jest.fn(),
+      cancel: jest.fn(),
+    }
+    uploadOutcome = async () => ({ outcome: 'opened', position: openedPosition, session: uploadSession })
     socketOutcome = async () => ({ outcome: 'unavailable' })
     http = {
       createUserFileValetToken: jest.fn().mockResolvedValue('token'),
@@ -75,6 +108,10 @@ describe('SocketPreferredFilesApi', () => {
         socketRequests.push(request)
         return socketOutcome(request)
       },
+      uploadFileOverSocket: async (request) => {
+        uploadRequests.push(request)
+        return uploadOutcome(request)
+      },
     }
   })
 
@@ -86,6 +123,11 @@ describe('SocketPreferredFilesApi', () => {
         downloadFileOverSocket: async (request) => {
           consulted()
           socketRequests.push(request)
+          return { outcome: 'unavailable' }
+        },
+        uploadFileOverSocket: async (request) => {
+          consulted()
+          uploadRequests.push(request)
           return { outcome: 'unavailable' }
         },
       }
@@ -306,6 +348,113 @@ describe('SocketPreferredFilesApi', () => {
 
       expect(result).toBeInstanceOf(ClientDisplayableError)
       expect(http.downloadFile).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('openSocketUpload', () => {
+    it('does not consult the socket at all when the lane is absent', async () => {
+      laneAvailable = false
+
+      await expect(subject().openSocketUpload(uploadParams())).resolves.toBeUndefined()
+
+      expect(uploadRequests).toHaveLength(0)
+    })
+
+    it('forwards the planned ENCRYPTED total as declaredSize, and the plaintext length separately', async () => {
+      laneAvailable = true
+
+      const opened = await subject().openSocketUpload(
+        uploadParams({ decryptedSize: 5_000_001, declaredSize: 5_000_035 }),
+      )
+
+      expect(opened).toEqual({ position: openedPosition, session: uploadSession })
+      expect(uploadRequests).toEqual([
+        {
+          remoteIdentifier: REMOTE_IDENTIFIER,
+          fileUuid: FILE_UUID,
+          decryptedSize: 5_000_001,
+          declaredSize: 5_000_035,
+          mimeType: 'application/octet-stream',
+        },
+      ])
+    })
+
+    it('leaves an empty file on HTTP without a round trip, because the gateway refuses a zero size', async () => {
+      laneAvailable = true
+
+      await expect(
+        subject().openSocketUpload(uploadParams({ decryptedSize: 0, declaredSize: 17 })),
+      ).resolves.toBeUndefined()
+
+      expect(uploadRequests).toHaveLength(0)
+    })
+
+    it('names the shared vault owner from the vault listing and never guesses one', async () => {
+      laneAvailable = true
+
+      const opened = await subject(() => VAULT_OWNER_UUID).openSocketUpload(
+        uploadParams({ ownershipType: 'shared-vault', sharedVaultUuid: VAULT_UUID }),
+      )
+
+      expect(opened).toBeDefined()
+      expect(uploadRequests[0].sharedVault).toEqual({
+        sharedVaultUuid: VAULT_UUID,
+        sharedVaultOwnerUuid: VAULT_OWNER_UUID,
+      })
+    })
+
+    it('stays on HTTP when the shared vault owner cannot be resolved locally', async () => {
+      laneAvailable = true
+
+      await expect(
+        subject(() => undefined).openSocketUpload(
+          uploadParams({ ownershipType: 'shared-vault', sharedVaultUuid: VAULT_UUID }),
+        ),
+      ).resolves.toBeUndefined()
+
+      expect(uploadRequests).toHaveLength(0)
+    })
+
+    it('stays on HTTP when a shared-vault upload names no vault at all', async () => {
+      laneAvailable = true
+
+      await expect(
+        subject(() => VAULT_OWNER_UUID).openSocketUpload(uploadParams({ ownershipType: 'shared-vault' })),
+      ).resolves.toBeUndefined()
+
+      expect(uploadRequests).toHaveLength(0)
+    })
+
+    it.each([
+      ['unavailable', { outcome: 'unavailable' } as SocketFileUploadOpenOutcome],
+      ['aborted', { outcome: 'aborted' } as SocketFileUploadOpenOutcome],
+      [
+        'failed',
+        {
+          outcome: 'failed',
+          code: 'FILE_LIMIT_EXCEEDED',
+          retryable: false,
+          safeToFallback: true,
+        } as SocketFileUploadOpenOutcome,
+      ],
+    ])('answers undefined so HTTP carries the upload when the open is %s', async (_label, outcome) => {
+      laneAvailable = true
+      uploadOutcome = async () => outcome
+
+      await expect(subject().openSocketUpload(uploadParams())).resolves.toBeUndefined()
+
+      expect(uploadRequests).toHaveLength(1)
+    })
+
+    it('never mints, starts or closes an HTTP upload session itself', async () => {
+      laneAvailable = true
+
+      await subject().openSocketUpload(uploadParams())
+
+      expect(http.createUserFileValetToken).not.toHaveBeenCalled()
+      expect(http.startUploadSession).not.toHaveBeenCalled()
+      expect(http.closeUploadSession).not.toHaveBeenCalled()
+      expect(http.uploadFileBytes).not.toHaveBeenCalled()
     })
   })
 })

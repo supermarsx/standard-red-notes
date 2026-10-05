@@ -16,6 +16,9 @@ import {
   AuthenticatedRpcRequest as AuthenticatedRpcRequestInput,
   DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
   DEFAULT_FILE_TRANSFER_DEADLINE_MS,
+  MAX_FILE_CHUNK_BYTES,
+  MAX_FILE_MIME_TYPE_BYTES,
+  MAX_FILE_TRANSFER_BYTES,
   DEFAULT_RPC_CREDIT_BYTES,
   DEFAULT_RPC_DEADLINE_MS,
   isSocketFileResourceReference,
@@ -293,6 +296,99 @@ type PendingFileDownload = {
   abortCleanup?: () => void
 }
 
+type FileUploadWorkerMessage = Extract<
+  SyncWorkerToMainMessage,
+  { type: 'FILE_UPLOAD_ACCEPTED' | 'FILE_UPLOAD_CHUNK_ACK' | 'FILE_UPLOAD_COMPLETE' | 'FILE_UPLOAD_ERROR' }
+>
+
+export type SocketFileUploadRequest = {
+  /** Passed through to the gateway byte-identical; also this file's xchacha20 AAD. */
+  remoteIdentifier: string
+  fileUuid: string
+  sharedVault?: { sharedVaultUuid: string; sharedVaultOwnerUuid: string }
+  /** Plaintext length. The gateway's size check refuses zero, so an empty file has no lane here. */
+  decryptedSize: number
+  /** The ENCRYPTED total. Re-asserted by the gateway in every binary frame header and again at FINISH. */
+  declaredSize: number
+  mimeType: string
+  signal?: AbortSignal
+}
+
+export type SocketFileUploadPosition = {
+  transferId: string
+  generation: number
+  resumeId: string
+  nextIndex: number
+  nextOffset: number
+  declaredSize: number
+  /** The gateway's own per-frame payload limit, reported so callers need not redeclare it. */
+  maxFrameBytes: number
+}
+
+export type SocketFileUploadFailure = {
+  outcome: 'failed'
+  code: string
+  retryable: boolean
+  /** Only what the socket observed; the caller's upload state machine has the final say. */
+  safeToFallback: boolean
+}
+
+export type SocketFileUploadOpenOutcome =
+  | { outcome: 'opened'; position: SocketFileUploadPosition; session: SocketFileUploadSession }
+  /** No socket, or the gateway does not advertise FILES_V1. Nothing was attempted. */
+  | { outcome: 'unavailable' }
+  | { outcome: 'aborted' }
+  | SocketFileUploadFailure
+
+export type SocketFileUploadAcknowledgement = {
+  outcome: 'acknowledged'
+  transferId: string
+  generation: number
+  index: number
+  duplicate: boolean
+  nextIndex: number
+  nextOffset: number
+  resumeId: string
+}
+
+export type SocketFileUploadChunkOutcome =
+  SocketFileUploadAcknowledgement | { outcome: 'aborted' } | SocketFileUploadFailure
+
+export type SocketFileUploadFinishOutcome =
+  { outcome: 'completed'; sha256: string } | { outcome: 'aborted' } | SocketFileUploadFailure
+
+/**
+ * One opened FILES_V1 upload. Strictly sequential: exactly one `sendChunk` may be
+ * outstanding, because the gateway's chunk acks carry no client correlation id of
+ * their own and because the whole purpose of an ack is to learn where the server
+ * actually is before deciding what to send next.
+ */
+export interface SocketFileUploadSession {
+  sendChunk(chunk: { index: number; offset: number; bytes: Uint8Array }): Promise<SocketFileUploadChunkOutcome>
+  finish(input: {
+    transferId: string
+    generation: number
+    declaredSize: number
+    sha256: string
+  }): Promise<SocketFileUploadFinishOutcome>
+  cancel(): void
+}
+
+type PendingFileUploadStep =
+  | { kind: 'open'; settle: (outcome: SocketFileUploadOpenOutcome) => void }
+  | { kind: 'chunk'; settle: (outcome: SocketFileUploadChunkOutcome) => void }
+  | { kind: 'finish'; settle: (outcome: SocketFileUploadFinishOutcome) => void }
+
+type PendingFileUpload = {
+  sessionScope: string
+  /** The step currently awaiting an answer, if any. Never more than one. */
+  step?: PendingFileUploadStep
+  /** True once FINISH has been written, which is what makes a replay unsafe. */
+  finishAttempted: boolean
+  closed: boolean
+  abortCleanup?: () => void
+}
+
 const CAPABILITY_REPROBE_MS = 60_000
 
 /**
@@ -361,6 +457,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private readonly pendingInviteSubscriptions = new Map<string, PendingInviteSubscription>()
   private readonly pendingRpcs = new Map<string, PendingRpc>()
   private readonly pendingFileDownloads = new Map<string, PendingFileDownload>()
+  private readonly pendingFileUploads = new Map<string, PendingFileUpload>()
   private readonly checkpointBarriers = new Map<string, Barrier>()
   private readonly revocationBarriers = new Map<string, Barrier>()
   private readonly revokedSessionScopes = new Set<string>()
@@ -594,6 +691,259 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     })
   }
 
+  /**
+   * Opens one file upload on the negotiated socket.
+   *
+   * Opens nothing on its own: with no socket already up and advertising FILES_V1
+   * this answers `unavailable` without a ticket request or a connection attempt,
+   * and the caller uploads over HTTP exactly as before. Authorization is
+   * unchanged — the client sends only a resource reference and the gateway mints
+   * its own single-use credential per operation — so this lane cannot move bytes
+   * the HTTP path would have refused.
+   *
+   * Every validation below mirrors one the worker and the gateway perform anyway.
+   * Duplicating them is deliberate: a request this client already knows will be
+   * refused should cost no round trip, and should leave no transfer in a state
+   * that then needs resolving.
+   */
+  async uploadFileOverSocket(request: SocketFileUploadRequest): Promise<SocketFileUploadOpenOutcome> {
+    if (!this.isFileLaneAvailable() || !this.environmentSupported()) {
+      return { outcome: 'unavailable' }
+    }
+    const resource: SocketFileResourceReference = request.sharedVault
+      ? {
+          ownershipType: 'shared-vault',
+          remoteIdentifier: request.remoteIdentifier,
+          fileUuid: request.fileUuid,
+          sharedVaultUuid: request.sharedVault.sharedVaultUuid,
+          sharedVaultOwnerUuid: request.sharedVault.sharedVaultOwnerUuid,
+        }
+      : { ownershipType: 'user', remoteIdentifier: request.remoteIdentifier, fileUuid: request.fileUuid }
+    if (
+      !isSocketFileResourceReference(resource) ||
+      !isTransferSize(request.decryptedSize) ||
+      // The 5 GiB cap bounds the ENCRYPTED total, so the per-chunk overhead eats
+      // into it. Checking the decrypted size here instead would admit a band of
+      // files that the gateway then refuses at the open.
+      !isTransferSize(request.declaredSize) ||
+      !isSendableMimeType(request.mimeType)
+    ) {
+      return { outcome: 'unavailable' }
+    }
+    const sessionScope = await this.currentSessionScope()
+    if (!sessionScope || this.revokedSessionScopes.has(sessionScope) || this.workerSessionScope !== sessionScope) {
+      return { outcome: 'unavailable' }
+    }
+    const worker = this.worker
+    if (!worker || !this.isFileLaneAvailable()) {
+      return { outcome: 'unavailable' }
+    }
+    if (request.signal?.aborted) {
+      return { outcome: 'aborted' }
+    }
+
+    const clientRequestId = this.nextRequestId('file-upload')
+    const pending: PendingFileUpload = { sessionScope, finishAttempted: false, closed: false }
+    this.pendingFileUploads.set(clientRequestId, pending)
+    if (request.signal) {
+      const abort = () => this.cancelFileUpload(clientRequestId, pending)
+      request.signal.addEventListener('abort', abort, { once: true })
+      pending.abortCleanup = () => request.signal?.removeEventListener('abort', abort)
+    }
+
+    const opened = await new Promise<SocketFileUploadOpenOutcome>((resolve) => {
+      pending.step = { kind: 'open', settle: resolve }
+      worker.postMessage({
+        type: 'OPEN_FILE_UPLOAD',
+        clientRequestId,
+        sessionScope,
+        request: {
+          resource,
+          decryptedSize: request.decryptedSize,
+          declaredSize: request.declaredSize,
+          mimeType: request.mimeType,
+          deadlineMs: DEFAULT_FILE_TRANSFER_DEADLINE_MS,
+        },
+      })
+    })
+    if (opened.outcome !== 'opened') {
+      this.closeFileUpload(clientRequestId, pending)
+    }
+    return opened
+  }
+
+  private fileUploadSession(clientRequestId: string, pending: PendingFileUpload): SocketFileUploadSession {
+    return {
+      sendChunk: (chunk) =>
+        this.awaitFileUploadStep<SocketFileUploadChunkOutcome>(clientRequestId, pending, (settle, worker) => {
+          pending.step = { kind: 'chunk', settle }
+          worker.postMessage({
+            type: 'SEND_FILE_CHUNK',
+            clientRequestId,
+            index: chunk.index,
+            offset: chunk.offset,
+            bytes: chunk.bytes,
+          })
+        }),
+      finish: (input) =>
+        this.awaitFileUploadStep<SocketFileUploadFinishOutcome>(clientRequestId, pending, (settle, worker) => {
+          // Marked before the write. The client cannot know whether bytes it wrote
+          // arrived, so "FINISH was attempted" is the only transition point that
+          // never under-states the risk of the upload already having been applied.
+          pending.finishAttempted = true
+          pending.step = { kind: 'finish', settle }
+          worker.postMessage({
+            type: 'FINISH_FILE_UPLOAD',
+            clientRequestId,
+            transferId: input.transferId,
+            generation: input.generation,
+            declaredSize: input.declaredSize,
+            sha256: input.sha256,
+          })
+        }),
+      cancel: () => this.cancelFileUpload(clientRequestId, pending),
+    }
+  }
+
+  private awaitFileUploadStep<T extends SocketFileUploadChunkOutcome | SocketFileUploadFinishOutcome>(
+    clientRequestId: string,
+    pending: PendingFileUpload,
+    write: (settle: (outcome: T) => void, worker: SyncWorkerLike) => void,
+  ): Promise<T> {
+    const unusable = {
+      outcome: 'failed',
+      code: 'SOCKET_CLOSED',
+      retryable: true,
+      safeToFallback: !pending.finishAttempted,
+    } as T
+    const worker = this.worker
+    if (pending.closed || this.pendingFileUploads.get(clientRequestId) !== pending || !worker) {
+      return Promise.resolve(unusable)
+    }
+    if (pending.step) {
+      // One outstanding step at a time: a second concurrent write would make the
+      // next ack ambiguous, and an ambiguous ack is a wrong `nextOffset`.
+      return Promise.resolve({
+        outcome: 'failed',
+        code: 'FILE_STEP_IN_FLIGHT',
+        retryable: false,
+        safeToFallback: false,
+      } as T)
+    }
+    return new Promise<T>((resolve) => write(resolve, worker))
+  }
+
+  private handleFileUploadWorkerMessage(message: FileUploadWorkerMessage, pending: PendingFileUpload): void {
+    const step = pending.step
+    if (message.type === 'FILE_UPLOAD_ERROR') {
+      const failure: SocketFileUploadFailure = {
+        outcome: 'failed',
+        code: message.code,
+        retryable: message.retryable,
+        // The worker reports what the socket saw; this thread additionally knows
+        // whether FINISH was ever written, and that is the stricter of the two.
+        safeToFallback: message.safeToFallback && !pending.finishAttempted,
+      }
+      this.settleFileUploadStep(pending, failure)
+      this.closeFileUpload(message.clientRequestId, pending)
+      return
+    }
+    if (message.type === 'FILE_UPLOAD_ACCEPTED') {
+      if (step?.kind !== 'open') {
+        return
+      }
+      pending.step = undefined
+      step.settle({
+        outcome: 'opened',
+        position: {
+          transferId: message.transferId,
+          generation: message.generation,
+          resumeId: message.resumeId,
+          nextIndex: message.nextIndex,
+          nextOffset: message.nextOffset,
+          declaredSize: message.declaredSize,
+          maxFrameBytes: MAX_FILE_CHUNK_BYTES,
+        },
+        session: this.fileUploadSession(message.clientRequestId, pending),
+      })
+      return
+    }
+    if (message.type === 'FILE_UPLOAD_CHUNK_ACK') {
+      if (step?.kind !== 'chunk') {
+        return
+      }
+      pending.step = undefined
+      step.settle({
+        outcome: 'acknowledged',
+        transferId: message.transferId,
+        generation: message.generation,
+        index: message.index,
+        duplicate: message.duplicate,
+        nextIndex: message.nextIndex,
+        nextOffset: message.nextOffset,
+        resumeId: message.resumeId,
+      })
+      return
+    }
+    if (step?.kind !== 'finish') {
+      return
+    }
+    pending.step = undefined
+    step.settle({ outcome: 'completed', sha256: message.sha256 })
+    this.closeFileUpload(message.clientRequestId, pending)
+  }
+
+  private settleFileUploadStep(pending: PendingFileUpload, failure: SocketFileUploadFailure): void {
+    const step = pending.step
+    if (!step) {
+      return
+    }
+    pending.step = undefined
+    if (step.kind === 'open') {
+      step.settle(failure)
+      return
+    }
+    step.settle(failure)
+  }
+
+  private cancelFileUpload(clientRequestId: string, pending: PendingFileUpload): void {
+    if (pending.closed) {
+      return
+    }
+    this.worker?.postMessage({ type: 'CANCEL_FILE_UPLOAD', clientRequestId })
+    this.settleFileUploadStep(pending, {
+      outcome: 'failed',
+      code: 'FILE_CANCELLED',
+      retryable: false,
+      safeToFallback: !pending.finishAttempted,
+    })
+    this.closeFileUpload(clientRequestId, pending)
+  }
+
+  private closeFileUpload(clientRequestId: string, pending: PendingFileUpload): void {
+    pending.closed = true
+    if (this.pendingFileUploads.get(clientRequestId) === pending) {
+      this.pendingFileUploads.delete(clientRequestId)
+    }
+    pending.abortCleanup?.()
+    pending.abortCleanup = undefined
+  }
+
+  private failAllFileUploads(code: string, sessionScope?: string): void {
+    for (const [clientRequestId, pending] of [...this.pendingFileUploads]) {
+      if (sessionScope !== undefined && pending.sessionScope !== sessionScope) {
+        continue
+      }
+      this.settleFileUploadStep(pending, {
+        outcome: 'failed',
+        code,
+        retryable: false,
+        safeToFallback: !pending.finishAttempted,
+      })
+      this.closeFileUpload(clientRequestId, pending)
+    }
+  }
+
   async subscribeInviteEvents(options: InviteRealtimeSubscriptionOptions): Promise<() => void> {
     if (this.deinitialized || !this.environmentSupported()) {
       throw new AuthenticatedRpcError('SOCKET_UNAVAILABLE', true, true)
@@ -677,6 +1027,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
     }
     this.failAllFileDownloads('SESSION_REVOKED', sessionScope)
+    this.failAllFileUploads('SESSION_REVOKED', sessionScope)
     this.negotiated = undefined
 
     if (!this.environmentSupported()) {
@@ -740,6 +1091,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
     this.pendingInviteSubscriptions.clear()
     this.failAllFileDownloads('SHUTDOWN')
+    this.failAllFileUploads('SHUTDOWN')
     this.negotiated = undefined
     this.rejectAllBarriers(error)
     this.state = 'HTTP_ONLY'
@@ -1261,6 +1613,19 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       const fileDownloadPending = this.pendingFileDownloads.get(message.clientRequestId)
       if (fileDownloadPending) {
         this.handleFileDownloadWorkerMessage(message, fileDownloadPending)
+      }
+      return
+    }
+
+    if (
+      message.type === 'FILE_UPLOAD_ACCEPTED' ||
+      message.type === 'FILE_UPLOAD_CHUNK_ACK' ||
+      message.type === 'FILE_UPLOAD_COMPLETE' ||
+      message.type === 'FILE_UPLOAD_ERROR'
+    ) {
+      const fileUploadPending = this.pendingFileUploads.get(message.clientRequestId)
+      if (fileUploadPending) {
+        this.handleFileUploadWorkerMessage(message, fileUploadPending)
       }
       return
     }
@@ -1889,6 +2254,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
     this.pendingInviteSubscriptions.clear()
     this.failAllFileDownloads('WORKER_ERROR')
+    this.failAllFileUploads('WORKER_ERROR')
     const entries = [...this.pending.entries()]
     this.pending.clear()
     for (const [, pending] of entries) {
@@ -2019,4 +2385,22 @@ function decodeRpcBase64(value: string, expectedLength: number): Uint8Array {
     bytes[index] = decoded.charCodeAt(index)
   }
   return bytes
+}
+
+/**
+ * Mirrors the gateway's `isFileTransferSize`. Applied to the ENCRYPTED total as
+ * well as the decrypted one, because the 5 GiB cap bounds the encrypted stream.
+ */
+function isTransferSize(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 1 && value <= MAX_FILE_TRANSFER_BYTES
+}
+
+/** Mirrors the gateway's `isFileMimeType`: non-empty, bounded, no control characters. */
+function isSendableMimeType(value: string): boolean {
+  return (
+    value.length > 0 &&
+    utf8Bytes(value).byteLength <= MAX_FILE_MIME_TYPE_BYTES &&
+    // eslint-disable-next-line no-control-regex
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  )
 }

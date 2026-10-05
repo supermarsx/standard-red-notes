@@ -57,6 +57,14 @@ import {
   SocketPreferredFilesApi,
   DownloadFileParams,
   FileOwnershipType,
+  EncryptedStreamDigest,
+  FileEncryptor,
+  FileUploadOperation,
+  planUploadSize,
+  SocketFileUploadPosition,
+  SocketFileUploadSession,
+  SocketUploadDriver,
+  UploadSizePlan,
 } from '@standardnotes/files'
 import { AlertService, ButtonType } from '../Alert/AlertService'
 import { ChallengeServiceInterface } from '../Challenge'
@@ -485,32 +493,119 @@ export class FileService extends AbstractService implements FilesClientInterface
     }
   }
 
+  /**
+   * Begins an upload, over the realtime socket when the server accepts one there
+   * and over HTTP otherwise.
+   *
+   * The ordering is the whole point. The socket open is tried FIRST, and the
+   * WRITE valet token and the HTTP upload session are minted only on the branch
+   * that actually needs them — the same shape as the download path, where the
+   * READ token is minted underneath `SocketPreferredFilesApi` rather than in
+   * front of it. Deciding on an accepted open rather than on `isFileLaneAvailable()`
+   * also closes the window a liveness check leaves open: the lane can drop
+   * between a check and the first byte, but an open the server answered cannot
+   * be stale in that way.
+   */
   public async beginNewFileUpload(
     sizeInBytes: number,
     vault?: VaultListingInterface,
-  ): Promise<EncryptAndUploadFileOperation | ClientDisplayableError> {
+  ): Promise<FileUploadOperation | ClientDisplayableError> {
     const remoteIdentifier = UuidGenerator.GenerateUuid()
+    const key = this.crypto.generateRandomKey(FileProtocolV1Constants.KeySize)
+    const fileParams = {
+      key,
+      remoteIdentifier,
+      decryptedSize: sizeInBytes,
+    }
+    const ownershipType: FileOwnershipType = vault && vault.isSharedVaultListing() ? 'shared-vault' : 'user'
+
+    const beginOverHttp = () => this.beginHttpFileUpload(fileParams, sizeInBytes, ownershipType, vault)
+
+    const socketUpload = await this.openSocketUpload(remoteIdentifier, sizeInBytes, ownershipType, vault)
+    if (!socketUpload) {
+      return beginOverHttp()
+    }
+
+    const encryptor = new FileEncryptor(fileParams, this.crypto)
+
+    return new SocketUploadDriver({
+      plan: socketUpload.plan,
+      file: fileParams,
+      encryptionHeader: encryptor.initializeHeader(),
+      encryptor,
+      digest: new EncryptedStreamDigest(this.crypto),
+      session: socketUpload.session,
+      position: socketUpload.position,
+      vault,
+      beginHttpFallback: beginOverHttp,
+    })
+  }
+
+  /**
+   * Asks the socket-preferred client to open this upload on the lane.
+   *
+   * `declaredSize` is the PLANNED ENCRYPTED total, never the file's own size: the
+   * 5 GiB transfer cap bounds the encrypted stream, so the per-chunk overhead
+   * eats into it, and at a 5 MB chunk size the largest decrypted file that still
+   * fits is 5,368,690,862 bytes. Sending the decrypted size instead would wave
+   * roughly 18 KB worth of files past this point and have them refused at the open.
+   *
+   * The mime type is deliberately generic. The gateway only requires a legal
+   * non-empty value, and the real type is not known until the reader finishes —
+   * strictly after the open. The file item still records the real type.
+   */
+  private async openSocketUpload(
+    remoteIdentifier: string,
+    sizeInBytes: number,
+    ownershipType: FileOwnershipType,
+    vault?: VaultListingInterface,
+  ): Promise<
+    { plan: UploadSizePlan; position: SocketFileUploadPosition; session: SocketFileUploadSession } | undefined
+  > {
+    if (!this.socketTransport) {
+      return undefined
+    }
+
+    let plan: UploadSizePlan
+    try {
+      plan = planUploadSize(sizeInBytes, this.minimumChunkSize())
+    } catch {
+      return undefined
+    }
+
+    const api = new SocketPreferredFilesApi(this.api, this.socketTransport, this.sharedVaultOwnerResolver)
+    const opened = await api.openSocketUpload({
+      remoteIdentifier,
+      fileUuid: remoteIdentifier,
+      ownershipType,
+      ...(vault && vault.isSharedVaultListing() ? { sharedVaultUuid: vault.sharing.sharedVaultUuid } : {}),
+      decryptedSize: plan.decryptedSize,
+      declaredSize: plan.encryptedSize,
+      mimeType: 'application/octet-stream',
+    })
+
+    return opened ? { plan, position: opened.position, session: opened.session } : undefined
+  }
+
+  private async beginHttpFileUpload(
+    fileParams: { key: string; remoteIdentifier: string; decryptedSize: number },
+    sizeInBytes: number,
+    ownershipType: FileOwnershipType,
+    vault?: VaultListingInterface,
+  ): Promise<EncryptAndUploadFileOperation | ClientDisplayableError> {
     const valetTokenResult =
       vault && vault.isSharedVaultListing()
         ? await this.createSharedVaultValetToken({
             sharedVaultUuid: vault.sharing.sharedVaultUuid,
             sharedVaultOwnerUuid: vault.sharing.ownerUserUuid,
-            remoteIdentifier,
+            remoteIdentifier: fileParams.remoteIdentifier,
             operation: ValetTokenOperation.Write,
             unencryptedFileSizeForUpload: sizeInBytes,
           })
-        : await this.createUserValetToken(remoteIdentifier, ValetTokenOperation.Write, sizeInBytes)
+        : await this.createUserValetToken(fileParams.remoteIdentifier, ValetTokenOperation.Write, sizeInBytes)
 
     if (valetTokenResult instanceof ClientDisplayableError) {
       return valetTokenResult
-    }
-
-    const key = this.crypto.generateRandomKey(FileProtocolV1Constants.KeySize)
-
-    const fileParams = {
-      key,
-      remoteIdentifier,
-      decryptedSize: sizeInBytes,
     }
 
     const uploadOperation = new EncryptAndUploadFileOperation(
@@ -521,10 +616,7 @@ export class FileService extends AbstractService implements FilesClientInterface
       vault,
     )
 
-    const uploadSessionStarted = await this.api.startUploadSession(
-      valetTokenResult,
-      vault && vault.isSharedVaultListing() ? 'shared-vault' : 'user',
-    )
+    const uploadSessionStarted = await this.api.startUploadSession(valetTokenResult, ownershipType)
 
     if (isErrorResponse(uploadSessionStarted)) {
       return ClientDisplayableError.FromNetworkError(uploadSessionStarted)
@@ -538,11 +630,21 @@ export class FileService extends AbstractService implements FilesClientInterface
   }
 
   public async pushBytesForUpload(
-    operation: EncryptAndUploadFileOperation,
+    operation: FileUploadOperation,
     bytes: Uint8Array,
     chunkId: number,
     isFinalChunk: boolean,
   ): Promise<ClientDisplayableError | undefined> {
+    if (operation instanceof SocketUploadDriver) {
+      const pushed = await operation.pushBytes(bytes, chunkId, isFinalChunk)
+
+      if (pushed.outcome === 'failed') {
+        return new ClientDisplayableError(`Failed to push file bytes to server (${pushed.code})`)
+      }
+
+      return undefined
+    }
+
     const success = await operation.pushBytes(bytes, chunkId, isFinalChunk)
 
     if (!success) {
@@ -553,21 +655,37 @@ export class FileService extends AbstractService implements FilesClientInterface
   }
 
   public async finishUpload(
-    operation: EncryptAndUploadFileOperation,
+    operation: FileUploadOperation,
     fileMetadata: FileMetadata,
     uuid: string,
   ): Promise<FileItem | ClientDisplayableError> {
-    const uploadSessionClosed = await this.api.closeUploadSession(
-      operation.getValetToken(),
-      operation.vault && operation.vault.isSharedVaultListing() ? 'shared-vault' : 'user',
-    )
+    /**
+     * A socket upload is already published: `FILES_UPLOAD_FINISH` is its commit,
+     * and it was written as soon as the last acknowledged byte reached
+     * `declaredSize`. There is no HTTP session to close, and closing one would
+     * need a WRITE valet token that was deliberately never minted.
+     */
+    const closable = operation.getValetToken()
 
-    if (uploadSessionClosed instanceof ClientDisplayableError) {
-      return uploadSessionClosed
-    }
-
-    if (!uploadSessionClosed) {
+    if (operation instanceof SocketUploadDriver && operation.transport === 'socket') {
+      if (operation.completedSha256 === undefined) {
+        return new ClientDisplayableError('File upload ended before the server published it')
+      }
+    } else if (closable === undefined) {
       return new ClientDisplayableError('Could not close upload session')
+    } else {
+      const uploadSessionClosed = await this.api.closeUploadSession(
+        closable,
+        operation.vault && operation.vault.isSharedVaultListing() ? 'shared-vault' : 'user',
+      )
+
+      if (uploadSessionClosed instanceof ClientDisplayableError) {
+        return uploadSessionClosed
+      }
+
+      if (!uploadSessionClosed) {
+        return new ClientDisplayableError('Could not close upload session')
+      }
     }
 
     const result = operation.getResult()

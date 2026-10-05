@@ -476,16 +476,18 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this.sync.setAccountSyncTransport(transport)
 
     /**
-     * Offer the socket to file downloads. This installs a preference, not a
-     * switch: the files layer re-checks `isFileLaneAvailable()` per download, and
-     * that is true only while a live socket has actually negotiated FILES_V1. On a
-     * deployment that does not advertise the lane — which is the usual case — the
-     * check is false and downloads run over HTTP with nothing attempted. Uploads
-     * are untouched and stay on HTTP regardless.
+     * Offer the socket to file transfers. This installs a preference, not a
+     * switch. Downloads re-check `isFileLaneAvailable()` per download, and that is
+     * true only while a live socket has actually negotiated FILES_V1. Uploads go
+     * further and decide on an ANSWERED open rather than on that check, so a lane
+     * that drops between the check and the first byte still lands on HTTP. On a
+     * deployment that does not advertise the lane — the usual case — nothing is
+     * attempted and both directions run over HTTP exactly as before.
      */
     this.files.setFileSocketTransport?.({
       isFileLaneAvailable: () => transport.isFileLaneAvailable(),
       downloadFileOverSocket: (request) => transport.downloadFileOverSocket(request),
+      uploadFileOverSocket: (request) => transport.uploadFileOverSocket(request),
     })
     this.disposers.push(() => this.files.setFileSocketTransport?.(undefined))
 
