@@ -2768,7 +2768,7 @@ export class LegacyApiService
 
         const body = new Uint8Array(response.data)
 
-        if (sourceStatus === HttpStatusCode.NoContent) {
+        if (sourceStatus === HttpStatusCode.Success) {
           /**
            * RFC 9110 15.3.7: a server MAY ignore `Range` and answer `200` with
            * the complete representation, and an intermediary MAY collapse a
@@ -2871,7 +2871,17 @@ export class LegacyApiService
   }): ClientDisplayableError {
     const describedContentRange = detail.contentRange === null ? 'absent' : detail.contentRange
 
-    return new ClientDisplayableError(`${detail.reason}${describedContentRange.slice(0, 0)}`)
+    console.error('File download rejected a chunk response.', {
+      reason: detail.reason,
+      chunkIndex: detail.chunkIndex,
+      status: detail.status,
+      requestedRange: detail.requestedRange,
+      contentRange: describedContentRange,
+    })
+
+    return new ClientDisplayableError(
+      `${detail.reason} (chunk ${detail.chunkIndex}, HTTP ${detail.status}, requested ${detail.requestedRange}, Content-Range ${describedContentRange})`,
+    )
   }
 
   async checkIntegrity(integrityPayloads: IntegrityPayload[]): Promise<HttpResponse<CheckIntegrityResponse>> {
