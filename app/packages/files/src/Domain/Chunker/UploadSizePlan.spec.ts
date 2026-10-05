@@ -64,6 +64,20 @@ describe('UploadSizePlan', () => {
       expect(Number.isSafeInteger(encryptedSize)).toBe(true)
     })
 
+    it('shows the overhead eating into MAX_FILE_TRANSFER_BYTES, which bounds the ENCRYPTED total', () => {
+      // MAX_FILE_TRANSFER_BYTES — websocket-gateway/src/filesProtocol.ts:8.
+      const cap = 5 * 1024 * 1024 * 1024
+
+      // A decrypted file of exactly the cap does not fit once encrypted, so a
+      // caller that checks the decrypted size against the cap opens a transfer
+      // the gateway will refuse.
+      expect(plannedEncryptedSize(cap, MinimumChunkSize)).toBeGreaterThan(cap)
+
+      const largestThatFits = 5_368_690_862
+      expect(plannedEncryptedSize(largestThatFits, MinimumChunkSize)).toBe(cap)
+      expect(plannedEncryptedSize(largestThatFits + 1, MinimumChunkSize)).toBeGreaterThan(cap)
+    })
+
     it('refuses a size it could not represent exactly', () => {
       expect(() => plannedEncryptedSize(Number.MAX_SAFE_INTEGER, 1)).toThrow(UploadSizePlanError)
     })

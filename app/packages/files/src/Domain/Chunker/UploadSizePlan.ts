@@ -104,7 +104,11 @@ export function plannedChunkCount(decryptedSize: number, decryptedChunkSize: num
  * result against `MAX_FILE_TRANSFER_BYTES` (`filesProtocol.ts:8`, mirrored for
  * the client in
  * `app/packages/web/src/javascripts/Services/SyncTransport/syncTransportProtocol.ts:29`)
- * before opening.
+ * before opening — and against **this** result, not against the decrypted size.
+ * The cap bounds the encrypted total, so the overhead eats into it: at a 5 MB
+ * chunk size the largest decrypted file that still fits under 5 GiB is
+ * 5,368,690,862 bytes, and the ~18 KB band above that would pass a
+ * decrypted-size check and then fail the open.
  *
  * Unrelated to all of the above: the 256 KiB `MAX_FILE_CHUNK_BYTES`
  * (`filesProtocol.ts:5`) is a *frame* limit. The transport re-slices the
