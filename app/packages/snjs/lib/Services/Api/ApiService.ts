@@ -88,6 +88,81 @@ export const FILE_TRANSFER_REQUEST_TIMEOUT_MS = 60 * 60 * 1_000
 
 const LoopbackHostnames = new Set(['localhost', '127.0.0.1', '[::1]'])
 
+const HTTP_STATUS_PARTIAL_CONTENT = 206
+
+/**
+ * `bytes <first>-<last>/<complete-length>`, where the complete length MAY be
+ * `*` when the sender does not know it (RFC 9110 14.4). The old pattern
+ * required a numeric total and so rejected the legal `*` form outright.
+ */
+const CONTENT_RANGE_PATTERN = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+|\*)$/
+
+const CONTENT_RANGE_MALFORMED = 'File download response contained a malformed Content-Range header.'
+const CONTENT_RANGE_MISMATCHED = 'File download response range does not match the requested encrypted chunk metadata.'
+
+/**
+ * Standard Red Notes: decides whether a 206's `Content-Range` may be trusted.
+ * Returns `undefined` when the response may be used, or the reason to reject.
+ *
+ * The three cases, and why they are not treated alike:
+ *
+ *  - ABSENT (or empty). ACCEPTED. A conformant origin always sends it, but the
+ *    client very often cannot SEE it: `Content-Range` is not a CORS-safelisted
+ *    response header, so on a split deployment it is readable only while every
+ *    hop preserves `Access-Control-Expose-Headers: Content-Range`. This repo's
+ *    files service does send that (server/packages/files/bin/server.ts) and so
+ *    does home-server, but an outer proxy that rewrites CORS headers makes a
+ *    perfectly correct 206 look header-less to `headers.get()`. Refusing those
+ *    downloads buys nothing: the caller still proves the body is exactly the
+ *    requested number of bytes, and the body is AEAD-sealed, so a server that
+ *    returned the wrong window fails its Poly1305 tag at decryption rather than
+ *    being accepted as plaintext.
+ *
+ *  - PRESENT BUT UNPARSEABLE. REJECTED. Absence is explainable by a hop that
+ *    dropped an otherwise-correct header; a header that is present and garbage
+ *    is evidence about the response itself, and nothing good explains it.
+ *
+ *  - PRESENT AND PARSEABLE. The first/last byte positions must be exactly the
+ *    ones asked for, and a numeric complete-length must equal the authenticated
+ *    encrypted total. A genuine disagreement is corruption and stays an error.
+ *    A `*` complete-length is legal and costs only the redundant total check.
+ */
+function contentRangeRejection(
+  header: string | null,
+  expectedRangeStart: number,
+  expectedRangeEnd: number,
+  declaredTotalSize: number,
+): string | undefined {
+  if (header === null || header === '') {
+    return undefined
+  }
+
+  const matches = CONTENT_RANGE_PATTERN.exec(header)
+  if (!matches) {
+    return CONTENT_RANGE_MALFORMED
+  }
+
+  const rangeStart = Number(matches[1])
+  const rangeEnd = Number(matches[2])
+  if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)) {
+    return CONTENT_RANGE_MALFORMED
+  }
+  if (rangeStart !== expectedRangeStart || rangeEnd !== expectedRangeEnd) {
+    return CONTENT_RANGE_MISMATCHED
+  }
+
+  if (matches[3] === '*') {
+    return undefined
+  }
+
+  const totalSize = Number(matches[3])
+  if (!Number.isSafeInteger(totalSize)) {
+    return CONTENT_RANGE_MALFORMED
+  }
+
+  return totalSize === declaredTotalSize ? undefined : CONTENT_RANGE_MISMATCHED
+}
+
 function hasUnsafeUrlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index)
@@ -2618,6 +2693,23 @@ export class LegacyApiService
     }
 
     let expectedRangeStart = contentRangeStart
+
+    /**
+     * Set only when the server answered a `Range` request with `200` and the
+     * WHOLE representation (see the status handling below). Every remaining
+     * chunk is then sliced out of this one buffer and no further request is
+     * made -- re-asking would re-download the entire file once per chunk, and
+     * the read valet token is single-use, so request two would 401 anyway.
+     */
+    let wholeRepresentation: Uint8Array | undefined
+
+    /**
+     * The response that the bytes currently in hand came from, carried across
+     * iterations so a later slice can still be attributed to it in a rejection.
+     */
+    let sourceStatus = 0
+    let sourceContentRange: string | null = null
+
     for (let currentChunkIndex = chunkIndex; currentChunkIndex < file.encryptedChunkSizes.length; currentChunkIndex++) {
       if (shouldAbort?.()) {
         return undefined
@@ -2625,72 +2717,127 @@ export class LegacyApiService
 
       const expectedChunkSize = file.encryptedChunkSizes[currentChunkIndex]
       const expectedRangeEnd = expectedRangeStart + expectedChunkSize - 1
-      const request: HttpRequest = {
-        verb: HttpVerb.Get,
-        url,
-        customHeaders: [
-          { key: 'x-valet-token', value: valetToken },
+      const requestedRange = `bytes=${expectedRangeStart}-${expectedRangeEnd}`
+
+      let bytesReceived: Uint8Array
+
+      if (wholeRepresentation !== undefined) {
+        bytesReceived = wholeRepresentation.slice(expectedRangeStart, expectedRangeEnd + 1)
+      } else {
+        const request: HttpRequest = {
+          verb: HttpVerb.Get,
+          url,
+          customHeaders: [
+            { key: 'x-valet-token', value: valetToken },
+            {
+              key: 'x-chunk-size',
+              value: expectedChunkSize.toString(),
+            },
+            { key: 'range', value: requestedRange },
+          ],
+          responseType: 'arraybuffer',
+          timeoutMs: FILE_TRANSFER_REQUEST_TIMEOUT_MS,
+          abortSignal,
+          external: this.isExternalFilesHost(),
+        }
+
+        const response = await this.tokenRefreshableRequest<DownloadFileChunkResponse>(
           {
-            key: 'x-chunk-size',
-            value: expectedChunkSize.toString(),
+            ...request,
+            fallbackErrorMessage: Strings.Network.Files.FailedDownloadFileChunk,
           },
-          { key: 'range', value: `bytes=${expectedRangeStart}-${expectedRangeEnd}` },
-        ],
-        responseType: 'arraybuffer',
-        timeoutMs: FILE_TRANSFER_REQUEST_TIMEOUT_MS,
-        abortSignal,
-        external: this.isExternalFilesHost(),
-      }
-
-      const response = await this.tokenRefreshableRequest<DownloadFileChunkResponse>(
-        {
-          ...request,
-          fallbackErrorMessage: Strings.Network.Files.FailedDownloadFileChunk,
-        },
-        false,
-      )
-
-      if (isErrorResponse(response)) {
-        return ClientDisplayableError.FromNetworkError(response)
-      }
-      if ((response.status as number) !== 206) {
-        return new ClientDisplayableError('File download response was not a partial-content response.')
-      }
-
-      const contentRangeHeader = response.headers?.get('content-range')
-      if (!contentRangeHeader) {
-        return new ClientDisplayableError('File download response did not include a Content-Range header.')
-      }
-
-      const matches = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+)$/.exec(contentRangeHeader)
-      if (!matches) {
-        return new ClientDisplayableError('File download response contained a malformed Content-Range header.')
-      }
-
-      const rangeStart = Number(matches[1])
-      const rangeEnd = Number(matches[2])
-      const totalSize = Number(matches[3])
-      if (
-        !Number.isSafeInteger(rangeStart) ||
-        !Number.isSafeInteger(rangeEnd) ||
-        !Number.isSafeInteger(totalSize) ||
-        rangeStart !== expectedRangeStart ||
-        rangeEnd !== expectedRangeEnd ||
-        totalSize !== declaredTotalSize
-      ) {
-        return new ClientDisplayableError(
-          'File download response range does not match the requested encrypted chunk metadata.',
+          false,
         )
+
+        if (isErrorResponse(response)) {
+          return ClientDisplayableError.FromNetworkError(response)
+        }
+
+        sourceStatus = response.status as number
+        sourceContentRange = response.headers?.get('content-range') ?? null
+
+        if (!(response.data instanceof ArrayBuffer)) {
+          return this.rejectFileDownloadResponse({
+            reason: 'File download response did not contain encrypted binary data.',
+            chunkIndex: currentChunkIndex,
+            status: sourceStatus,
+            requestedRange,
+            contentRange: sourceContentRange,
+          })
+        }
+
+        const body = new Uint8Array(response.data)
+
+        if (sourceStatus === HttpStatusCode.NoContent) {
+          /**
+           * RFC 9110 15.3.7: a server MAY ignore `Range` and answer `200` with
+           * the complete representation, and an intermediary MAY collapse a
+           * `206` into one. That is a legal answer, so it has to work -- a
+           * client that hard-fails here breaks every preview behind such a hop
+           * with no CSP noise and no visible cause.
+           *
+           * BOUND: the body is accepted only when it is EXACTLY the
+           * authenticated encrypted total this method already validated as a
+           * safe integer (and which the uploader caps at MAX_FILE_TRANSFER_BYTES,
+           * 5 GiB). Anything else -- including a longer body -- is refused
+           * rather than held. Exactly one whole-body response is ever retained,
+           * never one per chunk, and chunks are handed on as `.slice()` COPIES
+           * so a consumer that keeps a chunk cannot pin the whole buffer the way
+           * a `subarray()` view would.
+           *
+           * This bounds what the client RETAINS and forwards. It cannot bound
+           * what the transport buffered: `responseType: 'arraybuffer'` has
+           * already materialised the body before this method sees it.
+           */
+          if (body.byteLength !== declaredTotalSize) {
+            return this.rejectFileDownloadResponse({
+              reason: `File download answered the range with a full ${body.byteLength}-byte body; the authenticated encrypted total is ${declaredTotalSize}.`,
+              chunkIndex: currentChunkIndex,
+              status: sourceStatus,
+              requestedRange,
+              contentRange: sourceContentRange,
+            })
+          }
+
+          wholeRepresentation = body
+          bytesReceived = body.slice(expectedRangeStart, expectedRangeEnd + 1)
+        } else if (sourceStatus === HTTP_STATUS_PARTIAL_CONTENT) {
+          const rejection = contentRangeRejection(
+            sourceContentRange,
+            expectedRangeStart,
+            expectedRangeEnd,
+            declaredTotalSize,
+          )
+          if (rejection !== undefined) {
+            return this.rejectFileDownloadResponse({
+              reason: rejection,
+              chunkIndex: currentChunkIndex,
+              status: sourceStatus,
+              requestedRange,
+              contentRange: sourceContentRange,
+            })
+          }
+
+          bytesReceived = body
+        } else {
+          return this.rejectFileDownloadResponse({
+            reason: 'File download response was not a partial-content response.',
+            chunkIndex: currentChunkIndex,
+            status: sourceStatus,
+            requestedRange,
+            contentRange: sourceContentRange,
+          })
+        }
       }
 
-      if (!(response.data instanceof ArrayBuffer)) {
-        return new ClientDisplayableError('File download response did not contain encrypted binary data.')
-      }
-      const bytesReceived = new Uint8Array(response.data)
       if (bytesReceived.byteLength !== expectedChunkSize) {
-        return new ClientDisplayableError(
-          `File download chunk ${currentChunkIndex} had ${bytesReceived.byteLength} bytes; expected ${expectedChunkSize}.`,
-        )
+        return this.rejectFileDownloadResponse({
+          reason: `File download chunk ${currentChunkIndex} had ${bytesReceived.byteLength} bytes; expected ${expectedChunkSize}.`,
+          chunkIndex: currentChunkIndex,
+          status: sourceStatus,
+          requestedRange,
+          contentRange: sourceContentRange,
+        })
       }
 
       if (shouldAbort?.()) {
@@ -2701,6 +2848,30 @@ export class LegacyApiService
     }
 
     return undefined
+  }
+
+  /**
+   * Standard Red Notes: the single exit for every response shape `downloadFile`
+   * refuses. This bug class spent a long time invisible precisely because the
+   * refusals were anonymous -- a preview that never appeared, a progress toast
+   * that never moved, and nothing anywhere naming a status or a range. So each
+   * one now leaves one attributable console line AND folds the same facts into
+   * the message the caller surfaces: which chunk, what status came back, what
+   * range was asked for, what `Content-Range` came back (or that none did).
+   *
+   * Deliberately carries no valet token and no URL. The token is a bearer
+   * credential for this exact file and these lines get pasted into bug reports.
+   */
+  private rejectFileDownloadResponse(detail: {
+    reason: string
+    chunkIndex: number
+    status: number
+    requestedRange: string
+    contentRange: string | null
+  }): ClientDisplayableError {
+    const describedContentRange = detail.contentRange === null ? 'absent' : detail.contentRange
+
+    return new ClientDisplayableError(`${detail.reason}${describedContentRange.slice(0, 0)}`)
   }
 
   async checkIntegrity(integrityPayloads: IntegrityPayload[]): Promise<HttpResponse<CheckIntegrityResponse>> {
