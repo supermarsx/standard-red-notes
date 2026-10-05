@@ -49,6 +49,14 @@ import { webSocketGatewayAccessService } from '../../Service/Sync/SyncWebSocketR
 import { SYNC_SERVER_OPERATIONS, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
 import { deploymentDiagnostics } from '../../Service/Diagnostics/DeploymentDiagnostics'
 import { grpcTransportFallbackDiagnostics } from '../../Service/gRPC/GrpcTransportFallbackDiagnostics'
+import {
+  AuthRuntimeProbeOutcome,
+  AuthRuntimeReading,
+  MAX_UPTIME_SECONDS,
+  deriveQueueConsumerCount,
+  deriveQueueSeparation,
+  readAuthRuntimeBody,
+} from '../../Service/Diagnostics/RuntimeDiagnostics'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -911,7 +919,7 @@ export class AdminController extends BaseHttpController {
    * serialized response against planted secret values.
    */
   @httpGet('/sync-diagnostics', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  getSyncDiagnostics(_request: Request, response: Response): void {
+  async getSyncDiagnostics(_request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
 
@@ -920,16 +928,78 @@ export class AdminController extends BaseHttpController {
 
     const capabilities = syncWebSocketAccessService.capabilities().capabilities
     const unavailabilityReasons = [...syncWebSocketAccessService.unavailabilityReasons()]
+    const deployment = deploymentDiagnostics.report()
+
+    // Standard Red Notes: the two reads that need I/O, taken together so the
+    // admin request pays for one round trip rather than two. Neither can fail
+    // the endpoint: each degrades to a closed token or an absent field.
+    const [authRuntime, consumerCount] = await Promise.all([
+      this.probeAuthRuntime(),
+      this.probeQueueConsumerCount(
+        deployment.presence['SQS_QUEUE_URL'] === true || deployment.presence['API_GATEWAY_SQS_QUEUE_URL'] === true,
+      ),
+    ])
+    // Split rather than spread whole: the datastore is its own top-level block
+    // (the Backend section owns it), and a blind spread would also plant it
+    // inside `runtime`, where a second copy would start drifting.
+    const { datastore, ...authSession } = authRuntime.reading ?? {}
 
     response.json({
       capturedAt: new Date().toISOString(),
       gate: syncGateDiagnostics.report(),
+      // Standard Red Notes: the RUNTIME facts the panel could not reach. The
+      // gateway's own uptime (the answer to "I changed the setting and
+      // restarted — did it take?"), and the auth-owned half: the EFFECTIVE
+      // session-cookie attributes and the legacy-session switch, which are read
+      // by the AUTH process, default to ON when unset (so a presence boolean
+      // would invert the diagnosis), and are not observable from a browser at
+      // all — the session cookie is HttpOnly and a cookie's attributes are never
+      // exposed to a page even when the cookie is.
+      //
+      // Deliberately NOT here: the internal gRPC secret's threshold state. It is
+      // derivable from the lane decision plus one presence boolean that
+      // `deployment` below already carries, and the panel already derives it
+      // there; a second derivation on this side would be two implementations of
+      // one rule, and the one that disagrees silently is the server's.
+      runtime: {
+        processUptimeSeconds: Math.min(Math.floor(process.uptime()), MAX_UPTIME_SECONDS),
+        authRuntimeProbe: authRuntime.outcome,
+        ...authSession,
+      },
+      // Standard Red Notes: the durable store, as the service that OWNS the
+      // handle reports it. The gateway holds no database handle, and a readiness
+      // probe cannot see the defect this block exists for: an initialized
+      // `DataSource` whose queries do not complete answers HTTP perfectly.
+      // Absent when the auth runtime route did not answer.
+      datastore,
+      // Standard Red Notes: the queue census and the verdict it resolves.
+      //
+      // `collided` is not derivable from presence: a standalone gateway with one
+      // bare queue and a compose stack whose workers inherited the gateway's
+      // bare queue produce IDENTICAL presence booleans. The missing half is
+      // whether a SECOND consumer exists, which only this process can see — the
+      // sibling workers are supervisord programs in this container. The count is
+      // published as the primitive, and `separation` combines it with presence
+      // once, here, so the two can never disagree.
+      //
+      // Both are omitted rather than guessed when the control channel did not
+      // answer. ABSENT IS NOT `1`: a census that was never taken must not read as
+      // "I am the only consumer" on the deployment whose workers are elsewhere.
+      queues: {
+        separation: deriveQueueSeparation({
+          ownPrefixedQueuePresent: deployment.presence['API_GATEWAY_SQS_QUEUE_URL'] === true,
+          bareQueuePresent: deployment.presence['SQS_QUEUE_URL'] === true,
+          mode: deployment.mode,
+          consumerCount,
+        }),
+        consumerCount,
+      },
       // Standard Red Notes: topology + configuration PRESENCE. The gate says
       // which precondition is unmet; this says what the operator can actually do
       // about it, because the right action differs per topology and the panel
       // must not recommend a variable this deployment never reads. Same secrecy
       // contract as the gate: booleans and closed enums only.
-      deployment: deploymentDiagnostics.report(),
+      deployment,
       // Standard Red Notes: the RUNTIME counterpart to `deployment`. The
       // service-proxy branch is recorded once at boot, so a gRPC listener that
       // dies afterwards leaves `boundServiceProxy: 'grpc'` reading healthy
@@ -2609,6 +2679,74 @@ export class AdminController extends BaseHttpController {
       return { reachable: false, responseTimeMs: elapsed() }
     } finally {
       clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Standard Red Notes: fetch the auth process's runtime diagnostics and read
+   * them BY ALLOWLIST.
+   *
+   * Same probe-base resolution as every other probe here, so it reaches auth on
+   * exactly the deployments the readiness probe already reaches it on. Never
+   * throws: each failure mode becomes one of four closed tokens.
+   *
+   * THE ALLOWLIST IS THE BOUNDARY, not this method. `readAuthRuntimeBody`
+   * reconstructs every field from an admitted value, so a key a newer auth grows
+   * — or that something else answering on that port invents — cannot reach a
+   * client by riding along in a spread. A probe FAILURE is reduced to a token
+   * and its error is never inspected: that is where a driver puts a host and a
+   * port.
+   */
+  private async probeAuthRuntime(
+    fetchFn: ReadinessFetchLike = globalThis.fetch.bind(globalThis) as unknown as ReadinessFetchLike,
+  ): Promise<{ outcome: AuthRuntimeProbeOutcome; reading?: AuthRuntimeReading }> {
+    const authProbeUrl = this.serviceProbeUrls?.['auth'] ?? this.authServerUrl
+    if (!authProbeUrl) {
+      return { outcome: 'not-configured' }
+    }
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3000)
+    try {
+      const diagnosticsResponse = await fetchFn(`${authProbeUrl}/healthcheck/diagnostics`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      if (diagnosticsResponse.status !== 200) {
+        // A 404 is an auth older than the route; anything else is an auth that
+        // declined. Neither is a dial failure, and neither carries a reading.
+        return { outcome: 'unreadable' }
+      }
+
+      const reading = readAuthRuntimeBody(await diagnosticsResponse.json())
+
+      return reading === undefined ? { outcome: 'unreadable' } : { outcome: 'answered', reading }
+    } catch {
+      return { outcome: 'unreachable' }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Standard Red Notes: how many queue consumers live in this process group —
+   * the census that turns two identical queue presence booleans into a verdict.
+   * `undefined` when the control channel said nothing, which is the absence of
+   * evidence and neither a zero nor a one.
+   */
+  private async probeQueueConsumerCount(queueConfigured: boolean): Promise<number | undefined> {
+    if (!this.serviceControlService) {
+      return undefined
+    }
+
+    try {
+      return deriveQueueConsumerCount({
+        queueConfigured,
+        supervisord: await this.serviceControlService.getProgramStatuses(),
+      })
+    } catch {
+      return undefined
     }
   }
 

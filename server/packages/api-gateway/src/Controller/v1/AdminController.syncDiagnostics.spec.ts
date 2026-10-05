@@ -62,24 +62,24 @@ describe('AdminController sync-diagnostics', () => {
     syncWebSocketAccessService.clearProvider()
   })
 
-  it('refuses a non-admin with 403 and answers nothing', () => {
+  it('refuses a non-admin with 403 and answers nothing', async () => {
     const response = responseWith([{ name: 'CORE_USER' }])
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     expect(statusMock).toHaveBeenCalledWith(403)
     expect(jsonMock).toHaveBeenCalledWith({ error: { message: 'Admin role required.' } })
   })
 
-  it('refuses a session carrying no roles at all', () => {
+  it('refuses a session carrying no roles at all', async () => {
     const response = responseWith([])
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     expect(statusMock).toHaveBeenCalledWith(403)
   })
 
-  it('names the single unmet condition rather than a category', () => {
+  it('names the single unmet condition rather than a category', async () => {
     // The deployment this feature was built for: the kill switch is on (default),
     // the signing secret is set, Redis is bound — only the durable backend is
     // missing. The lane now COMES UP in this state and serves collaboration,
@@ -94,7 +94,7 @@ describe('AdminController sync-diagnostics', () => {
     })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
       gate: {
@@ -113,7 +113,7 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.unmetPreconditions).toHaveLength(1)
   })
 
-  it('reports the lane and SYNC_ITEMS as both healthy when the durable backend reports ready', () => {
+  it('reports the lane and SYNC_ITEMS as both healthy when the durable backend reports ready', async () => {
     syncGateDiagnostics.record({
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
@@ -127,7 +127,7 @@ describe('AdminController sync-diagnostics', () => {
     syncGateDiagnostics.observeSyncItems({ backend: { ready: () => true, execute: jest.fn(), status: jest.fn() } })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
       gate: { syncLaneEnabled: boolean; syncItemsAdvertised: boolean; unmetCodes: string[] }
@@ -145,7 +145,7 @@ describe('AdminController sync-diagnostics', () => {
    * the handshake refuses SYNC_ITEMS. The pane reported "advertised" for days
    * while every client synced items over HTTP.
    */
-  it('reports SYNC_ITEMS as withheld when the bound durable backend refuses the handshake check', () => {
+  it('reports SYNC_ITEMS as withheld when the bound durable backend refuses the handshake check', async () => {
     syncGateDiagnostics.record({
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
@@ -156,7 +156,7 @@ describe('AdminController sync-diagnostics', () => {
     syncGateDiagnostics.observeSyncItems({ backend: { ready: () => false, execute: jest.fn(), status: jest.fn() } })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
       gate: {
@@ -177,7 +177,7 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.syncItems.remedy).toContain('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET')
   })
 
-  it('makes no SYNC_ITEMS claim at all when no host probed the handshake predicate', () => {
+  it('makes no SYNC_ITEMS claim at all when no host probed the handshake predicate', async () => {
     // "Could not determine" is NOT "unavailable": the field is ABSENT rather
     // than false, because the panel's guard is `!== undefined` and a `false`
     // here would tell an operator their notes are on HTTP on no evidence.
@@ -190,7 +190,7 @@ describe('AdminController sync-diagnostics', () => {
     })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
       gate: { syncItemsAdvertised?: boolean; syncItems: { state: string; cause: string } }
@@ -200,7 +200,7 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.syncItems.cause).toBe('NEVER_PROBED')
   })
 
-  it('reports SYNC_ITEMS as unadvertised whenever the lane itself is down', () => {
+  it('reports SYNC_ITEMS as unadvertised whenever the lane itself is down', async () => {
     // SYNC_ITEMS cannot be offered over a socket that never opened, so a
     // transport failure must not leave it reading as advertised.
     syncGateDiagnostics.record({
@@ -212,7 +212,7 @@ describe('AdminController sync-diagnostics', () => {
     })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
       gate: { syncLaneEnabled: boolean; syncItemsAdvertised: boolean; unmetCodes: string[] }
@@ -222,7 +222,7 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.unmetCodes).toEqual(['REDIS_UNBOUND'])
   })
 
-  it('reports every unmet condition, not just the first', () => {
+  it('reports every unmet condition, not just the first', async () => {
     syncGateDiagnostics.record({
       connectionTokenSecretPresent: false,
       webSocketSyncEnabled: false,
@@ -232,7 +232,7 @@ describe('AdminController sync-diagnostics', () => {
     })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as { gate: { gatewayAttached: boolean; unmetCodes: string[] } }
     expect(gate.gatewayAttached).toBe(false)
@@ -244,19 +244,19 @@ describe('AdminController sync-diagnostics', () => {
     ])
   })
 
-  it('distinguishes a gate that has not run from a gate that passed', () => {
+  it('distinguishes a gate that has not run from a gate that passed', async () => {
     // An empty unmet list must not be rendered as four green ticks when the
     // evidence for them was never recorded.
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as { gate: { recorded: boolean; syncLaneEnabled: boolean } }
     expect(gate.recorded).toBe(false)
     expect(gate.syncLaneEnabled).toBe(false)
   })
 
-  it('carries the FILES_V1 sub-gate separately from the sync gate', () => {
+  it('carries the FILES_V1 sub-gate separately from the sync gate', async () => {
     syncGateDiagnostics.record({
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
@@ -267,7 +267,7 @@ describe('AdminController sync-diagnostics', () => {
     })
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
       gate: { syncLaneEnabled: boolean; files: { advertised: boolean; unmetCondition: string; remedy: string } }
@@ -279,10 +279,10 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.files.remedy).toContain('VALET_TOKEN_SECRET')
   })
 
-  it('reports the live refusal reasons and that no ticket can be issued', () => {
+  it('reports the live refusal reasons and that no ticket can be issued', async () => {
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { live } = payload() as unknown as {
       live: { capabilities: unknown[]; unavailabilityReasons: string[]; ticketAvailable: boolean }
@@ -292,7 +292,7 @@ describe('AdminController sync-diagnostics', () => {
     expect(live.ticketAvailable).toBe(false)
   })
 
-  it('reports ticketAvailable once the gateway advertises and stops refusing', () => {
+  it('reports ticketAvailable once the gateway advertises and stops refusing', async () => {
     syncWebSocketAccessService.setProvider({
       capabilities: () => ({ capabilities: [{ id: 'ws-sync', version: 1, endpoint: '/sockets/sync' }] }),
       issueTicket: jest.fn(),
@@ -300,7 +300,7 @@ describe('AdminController sync-diagnostics', () => {
     } as never)
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { live } = payload() as unknown as { live: { ticketAvailable: boolean } }
     expect(live.ticketAvailable).toBe(true)
@@ -322,7 +322,7 @@ describe('AdminController sync-diagnostics', () => {
    * edit routes this handler through either of them, this test fails instead of
    * the single-container deployment.
    */
-  it('answers without touching the service proxy, so it needs no controllerContainer registration', () => {
+  it('answers without touching the service proxy, so it needs no controllerContainer registration', async () => {
     const explode = (name: string) => () => {
       throw new Error(`Method not found: getSyncDiagnostics must not reach ${name} — it is gateway-local.`)
     }
@@ -341,7 +341,7 @@ describe('AdminController sync-diagnostics', () => {
     })
     const response = adminResponse()
 
-    new AdminController(throwingProxy, throwingResolver).getSyncDiagnostics({} as Request, response)
+    await new AdminController(throwingProxy, throwingResolver).getSyncDiagnostics({} as Request, response)
 
     // A real answer, not a 500 and not a 403.
     expect(statusMock).not.toHaveBeenCalled()
@@ -349,10 +349,10 @@ describe('AdminController sync-diagnostics', () => {
     expect(gate.unmetCodes).toEqual(['REDIS_UNBOUND'])
   })
 
-  it('advertises the server protocol operations including FILES_V1', () => {
+  it('advertises the server protocol operations including FILES_V1', async () => {
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const { protocol } = payload() as unknown as { protocol: { version: number; serverOperations: string[] } }
     expect(protocol.version).toBe(1)
@@ -367,15 +367,15 @@ describe('AdminController sync-diagnostics', () => {
    * read). `recorded: false` is therefore not a cosmetic default — it is the flag
    * that suppresses every topology-conditional remedy.
    */
-  it('reports the deployment topology as not recorded until the container records it', () => {
+  it('reports the deployment topology as not recorded until the container records it', async () => {
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     expect((payload() as Record<string, { recorded: boolean }>).deployment.recorded).toBe(false)
   })
 
-  it('carries the recorded topology, the branch that ran, and configuration presence', () => {
+  it('carries the recorded topology, the branch that ran, and configuration presence', async () => {
     deploymentDiagnostics.record(
       observeDeployment((key) => ({ MODE: 'home-server', SYNCING_SERVER_GRPC_URL: '0.0.0.0:50052' })[key], {
         boundServiceProxy: 'direct-call',
@@ -385,7 +385,7 @@ describe('AdminController sync-diagnostics', () => {
     )
     const response = adminResponse()
 
-    makeController().getSyncDiagnostics({} as Request, response)
+    await makeController().getSyncDiagnostics({} as Request, response)
 
     const deployment = (payload() as Record<string, Record<string, unknown>>).deployment
     expect(deployment.recorded).toBe(true)
@@ -404,7 +404,7 @@ describe('AdminController sync-diagnostics', () => {
    * them may appear anywhere in the serialized response, at any nesting depth,
    * in any casing, whole or in part.
    */
-  it('never leaks a configured value, secret or host into the payload', () => {
+  it('never leaks a configured value, secret or host into the payload', async () => {
     const planted = {
       WEB_SOCKET_CONNECTION_TOKEN_SECRET: 'ws-token-secret-must-not-appear',
       AUTH_JWT_SECRET: 'auth-jwt-secret-must-not-appear',
@@ -444,7 +444,7 @@ describe('AdminController sync-diagnostics', () => {
         })
         const response = adminResponse()
 
-        makeController().getSyncDiagnostics({} as Request, response)
+        await makeController().getSyncDiagnostics({} as Request, response)
 
         const serialized = JSON.stringify(payload()).toLowerCase()
         for (const value of Object.values(planted)) {

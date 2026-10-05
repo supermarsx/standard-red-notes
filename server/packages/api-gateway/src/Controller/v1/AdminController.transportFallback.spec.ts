@@ -55,8 +55,8 @@ describe('AdminController sync-diagnostics transport fallback', () => {
     }
   }
 
-  const diagnose = (): Payload => {
-    makeController().getSyncDiagnostics({} as Request, adminResponse())
+  const diagnose = async (): Promise<Payload> => {
+    await makeController().getSyncDiagnostics({} as Request, adminResponse())
 
     return jsonMock.mock.calls[0][0] as Payload
   }
@@ -81,10 +81,10 @@ describe('AdminController sync-diagnostics transport fallback', () => {
     deploymentDiagnostics.clear()
   })
 
-  it('carries the transport fallback block with both lanes at zero on a healthy gateway', () => {
+  it('carries the transport fallback block with both lanes at zero on a healthy gateway', async () => {
     recordBoundProxy('grpc')
 
-    const { deployment, transportFallback } = diagnose()
+    const { deployment, transportFallback } = await diagnose()
 
     expect(deployment.boundServiceProxy).toBe('grpc')
     expect(transportFallback.observed).toBe(false)
@@ -97,12 +97,12 @@ describe('AdminController sync-diagnostics transport fallback', () => {
    * The state that had no representation before: the branch that ran was gRPC,
    * and the calls are going out over HTTP.
    */
-  it('distinguishes a gateway that BOUND gRPC but is SERVING over HTTP', () => {
+  it('distinguishes a gateway that BOUND gRPC but is SERVING over HTTP', async () => {
     recordBoundProxy('grpc')
     grpcTransportFallbackDiagnostics.recordDegradation('session-validation', 'channel-unavailable')
     grpcTransportFallbackDiagnostics.recordDegradation('items-sync', 'method-unimplemented')
 
-    const { deployment, transportFallback } = diagnose()
+    const { deployment, transportFallback } = await diagnose()
 
     expect(deployment.boundServiceProxy).toBe('grpc')
     expect(transportFallback.everDegraded).toBe(true)
@@ -121,21 +121,21 @@ describe('AdminController sync-diagnostics transport fallback', () => {
    * un-deduplicated item write that must not be re-delivered on a second
    * transport. It must never read as a degradation the gateway absorbed.
    */
-  it('reports a refused fallback as its own number, not as a degradation', () => {
+  it('reports a refused fallback as its own number, not as a degradation', async () => {
     recordBoundProxy('grpc')
     grpcTransportFallbackDiagnostics.recordRefusal('items-sync', 'channel-unavailable')
 
-    const { transportFallback } = diagnose()
+    const { transportFallback } = await diagnose()
 
     expect(transportFallback.observed).toBe(true)
     expect(transportFallback.everDegraded).toBe(false)
     expect(transportFallback.lanes['items-sync']).toMatchObject({ degradedCalls: 0, refusedCalls: 1 })
   })
 
-  it('leaves a plain HTTP deployment reading as untouched', () => {
+  it('leaves a plain HTTP deployment reading as untouched', async () => {
     recordBoundProxy('http')
 
-    const { deployment, transportFallback } = diagnose()
+    const { deployment, transportFallback } = await diagnose()
 
     expect(deployment.boundServiceProxy).toBe('http')
     expect(transportFallback.observed).toBe(false)
@@ -145,12 +145,12 @@ describe('AdminController sync-diagnostics transport fallback', () => {
    * Same secrecy contract as the rest of the payload. The recorder's own spec
    * pins its field types; this pins that nothing richer reached the response.
    */
-  it('contributes no free-form string to the payload', () => {
+  it('contributes no free-form string to the payload', async () => {
     recordBoundProxy('grpc')
     grpcTransportFallbackDiagnostics.recordDegradation('session-validation', 'transport-internal')
     grpcTransportFallbackDiagnostics.recordRefusal('items-sync', 'application')
 
-    const block = diagnose().transportFallback
+    const block = (await diagnose()).transportFallback
     const serialized = JSON.stringify(block)
 
     expect(Object.keys(block)).toEqual(['observed', 'everDegraded', 'lanes'])
