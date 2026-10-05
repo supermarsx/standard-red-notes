@@ -253,6 +253,37 @@ export class BaseAuthController extends BaseHttpController {
       )
     }
 
+    /**
+     * Standard Red Notes: THE SECOND FACTOR IS A CREDENTIAL, SO THIS ROUTE IS A
+     * CREDENTIAL CHECK AND HAS TO BE TREATED AS ONE.
+     *
+     * This is where VerifyMFA runs — a TOTP, a U2F assertion, a magic-link code,
+     * an app password or a trusted-device token is accepted or rejected here, with
+     * no session required. Yet lockout enforcement lived only on /pkce_sign_in and
+     * /recovery/login (LockMiddleware on those two routes, enforceLoginLock in
+     * those two controller methods), and no gateway rate-limit bucket covered
+     * `/v1/login-params` or `/v2/login-params` either. A second factor could
+     * therefore be guessed as fast as the network allowed: a 6-digit TOTP is 10^6
+     * wide, and a magic-link code is 6 NUMERIC digits that stay valid for fifteen
+     * minutes with no per-code attempt limit of its own.
+     *
+     * Evaluating the guard here puts the progressive delay ramp and the hard lock
+     * on the second-factor gate, and the increment added to the failure branch
+     * below is what makes that ramp climb. Counting without consulting the guard
+     * would have left the counter rising while this route still answered at full
+     * speed — the increment feeds the ramp; it is not itself a brake.
+     *
+     * Placed AFTER the authenticated `locals.session` branch deliberately: an
+     * already-signed-in client fetching its own key params (credential change, key
+     * rotation) presents no second factor and must not be held behind an attacker-
+     * driven lock counter. For the same reason the guard is NOT attached to the
+     * route as middleware — middleware would run before the session is resolved.
+     */
+    const lockedOut = await this.enforceLoginLock(request, response)
+    if (lockedOut !== null) {
+      return lockedOut
+    }
+
     // Standard Red Notes: app-password 2FA bypass for headless/automation clients
     // (e.g. the MCP bridge). If the request carries a valid app password we treat
     // the interactive MFA challenge as satisfied for THIS sign-in only. This does
@@ -284,9 +315,11 @@ export class BaseAuthController extends BaseHttpController {
     // in SignIn, and the e2e encryption key is still derived client-side from
     // the real account password (trust never grants decryption).
     let trustedDeviceSatisfiesMfa = false
+    let trustedDeviceTokenPresented = false
     if (!appPasswordSatisfiesMfa) {
       const presentedDeviceToken = request.body.trusted_device_token
       if (typeof presentedDeviceToken === 'string' && presentedDeviceToken.length > 0) {
+        trustedDeviceTokenPresented = true
         const trustedDeviceResult = await this.verifyTrustedDevice.execute({
           email: request.body.email as string,
           deviceToken: presentedDeviceToken,
@@ -326,6 +359,63 @@ export class BaseAuthController extends BaseHttpController {
           })
 
     if (!verifyMFAResponse.success) {
+      /**
+       * Standard Red Notes: COUNT THE REJECTED SECOND FACTOR.
+       *
+       * increaseLoginAttempts was previously called only on a failed ACCOUNT
+       * PASSWORD (pkceSignIn) and a failed recovery-code sign-in. A wrong TOTP, a
+       * wrong magic-link code, a wrong app password and a wrong trusted-device
+       * token all cost the attacker nothing: the counter never moved, so the
+       * progressive delay ramp never started climbing, the hard lock was never
+       * reached, and the adaptive proof-of-work threshold
+       * (ProofOfWorkGate.adaptiveRequirementReached, which reads the very same
+       * lock counters) was never crossed either.
+       *
+       * WHAT IS COUNTED, AND WHY NOT EVERYTHING. Only an attempt that actually
+       * PRESENTED a second factor and had it REJECTED:
+       *
+       *   - ErrorTag.MfaInvalid — a wrong/reused TOTP, a failed U2F assertion, a
+       *     wrong/expired/consumed magic-link code. Every brute-force guess lands
+       *     here by construction, so nothing a guesser can do avoids the counter.
+       *   - a presented app password that did not verify, and a presented
+       *     trusted-device token that did not verify. Both are second-factor
+       *     credentials; both are bcrypt compares, so leaving them uncounted also
+       *     left an unmetered CPU cost.
+       *
+       * A bare "mfa-required" / "u2f-required" response is NOT counted. That is
+       * the FIRST round trip of every single sign-in on a 2FA account — the client
+       * cannot know a code is wanted until the server says so — and it carries no
+       * guess at all. Counting it would mean every legitimate 2FA sign-in spent
+       * lockout budget, and would hand any stranger who knows an email address a
+       * one-request-per-step denial of service against an account they cannot
+       * otherwise touch. The volumetric side of that probing is the gateway rate
+       * limiter's job (bucket `auth-second-factor`), not the lock counter's.
+       *
+       * Deliberate consequence, stated plainly: a mistyped second factor now
+       * counts toward lockout exactly as a mistyped password does. The counter is
+       * cleared by a COMPLETED sign-in (pkceSignIn, below) rather than here — see
+       * the note there for why a satisfied second factor alone must not reset it.
+       */
+      const appPasswordRejected =
+        typeof presentedAppPassword === 'string' && presentedAppPassword.length > 0 && !appPasswordSatisfiesMfa
+      const trustedDeviceRejected = trustedDeviceTokenPresented && !trustedDeviceSatisfiesMfa
+      const secondFactorWasRejected =
+        verifyMFAResponse.errorTag === ErrorTag.MfaInvalid || appPasswordRejected || trustedDeviceRejected
+
+      if (secondFactorWasRejected) {
+        const increaseResultOrError = await this.increaseLoginAttempts.execute({
+          email: request.body.email as string,
+          skipUsernameValidation: true,
+        })
+        if (increaseResultOrError.isFailed()) {
+          this.logger.error('Failed to increase login attempts after a rejected second factor.', {
+            application: request.headers['x-application-version'] as string,
+          })
+        } else if (increaseResultOrError.getValue().isNonCaptchaLimitReached) {
+          this.setCaptchaRequiredHeader(response)
+        }
+      }
+
       // Standard Red Notes: push-MFA. When an untrusted device hits the 2FA
       // challenge, create a short-lived pending approval and push a request to
       // the user's other trusted sessions over the websocket gateway. The
@@ -447,6 +537,23 @@ export class BaseAuthController extends BaseHttpController {
       )
     }
 
+    /**
+     * Standard Red Notes: THE ONLY PLACE THE COUNTER IS CLEARED, and deliberately
+     * so now that a rejected second factor also increments it (see pkceParams).
+     *
+     * A completed sign-in has proven BOTH factors, so clearing here cannot be
+     * provoked by half a credential: somebody who mistypes their TOTP twice and
+     * then signs in successfully is back to zero one request later, exactly as
+     * somebody who mistypes their password twice always has been.
+     *
+     * Clearing at the second-factor gate instead would have been a real
+     * regression: /login-params verifies no account password, so a holder of the
+     * second factor alone (a stolen TOTP seed, an intercepted magic-link code)
+     * could reset the PASSWORD lockout counter at will and brute-force the
+     * password indefinitely — alternating a guess against /pkce_sign_in with a
+     * counter reset against /login-params. The clear belongs where both factors
+     * have been shown, and that is here.
+     */
     await this.clearLoginAttempts.execute({ email: request.body.email })
 
     if (signInResult.result.response !== undefined) {
