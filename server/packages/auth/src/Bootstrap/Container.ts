@@ -544,7 +544,7 @@ import { GetSessionFromToken } from '../Domain/UseCase/GetSessionFromToken/GetSe
 import { CooldownSessionTokens } from '../Domain/UseCase/CooldownSessionTokens/CooldownSessionTokens'
 import { SessionTokensCooldownRepositoryInterface } from '../Domain/Session/SessionTokensCooldownRepositoryInterface'
 import { RedisSessionTokensCooldownRepository } from '../Infra/Redis/RedisSessionTokensCooldownRepository'
-import { InMemorySessionTokensCooldownRepository } from '../Infra/InMemory/InMemorySessionTokensCooldownRepository'
+import { TypeORMSessionTokensCooldownRepository } from '../Infra/TypeORM/TypeORMSessionTokensCooldownRepository'
 import { GetCooldownSessionTokens } from '../Domain/UseCase/GetCooldownSessionTokens/GetCooldownSessionTokens'
 import { VerifyUserServerPassword } from '../Domain/UseCase/VerifyUserServerPassword/VerifyUserServerPassword'
 import {
@@ -1604,7 +1604,12 @@ export class ContainerConfigLoader {
         )
       container
         .bind<SessionTokensCooldownRepositoryInterface>(TYPES.Auth_SessionTokensCooldownRepository)
-        .toConstantValue(new InMemorySessionTokensCooldownRepository(container.get<winston.Logger>(TYPES.Auth_Logger)))
+        .toConstantValue(
+          new TypeORMSessionTokensCooldownRepository(
+            container.get(TYPES.Auth_CacheEntryRepository),
+            container.get(TYPES.Auth_Timer),
+          ),
+        )
       container
         .bind<MfaSecretRepositoryInterface>(TYPES.Auth_MfaSecretRepository)
         .toConstantValue(
