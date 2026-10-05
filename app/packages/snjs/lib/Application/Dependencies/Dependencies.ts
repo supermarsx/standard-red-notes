@@ -930,6 +930,8 @@ export class Dependencies {
         this.get<GetInboundMessages>(TYPES.GetInboundMessages),
         this.get<GetUntrustedPayload>(TYPES.GetUntrustedPayload),
         this.get<GetKeyPairs>(TYPES.GetKeyPairs),
+        this.get<GetSharedVaults>(TYPES.GetSharedVaults),
+        this.get<GetVaultUsers>(TYPES.GetVaultUsers),
         this.get<InternalEventBus>(TYPES.InternalEventBus),
       )
     })

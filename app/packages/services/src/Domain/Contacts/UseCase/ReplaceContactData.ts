@@ -12,6 +12,21 @@ import {
 import { FindContact } from './FindContact'
 import { ContentType, Result, UseCaseInterface } from '@standardnotes/domain-core'
 
+/**
+ * Applies a contact record received from a trusted contact (an AsymmetricMessage ContactShare).
+ *
+ * It used to call `TrustedContactMutator.replacePublicKeySet`, which overwrites the whole key set
+ * with whatever the sender supplied and so DISCARDS the `previousKeySet` chain. That chain is what
+ * `TrustedContact.getTrustStatusForSigningPublicKey` walks to recognise a key a contact has since
+ * rotated away from: destroying it silently turns every item this account already holds that was
+ * signed with a superseded key from "signed with a non-current key" into "not trusted", and it lets
+ * one sender erase the rotation history another sender established.
+ *
+ * It now appends instead, exactly as EditContact does for the SenderKeypairChanged path: a key set
+ * that differs from the current one is pushed with the current one as its predecessor, and an
+ * identical one is left alone so that a repeated share does not grow the chain. Rotation still
+ * propagates; history survives.
+ */
 export class ReplaceContactData implements UseCaseInterface<TrustedContactInterface> {
   constructor(
     private mutator: MutatorClientInterface,
@@ -42,7 +57,19 @@ export class ReplaceContactData implements UseCaseInterface<TrustedContactInterf
       existingContact,
       (mutator) => {
         mutator.name = data.name
-        mutator.replacePublicKeySet(data.publicKeySet)
+
+        const incomingKeySet = data.publicKeySet
+        const currentKeySet = existingContact.publicKeySet
+
+        if (
+          incomingKeySet.encryption !== currentKeySet.encryption ||
+          incomingKeySet.signing !== currentKeySet.signing
+        ) {
+          mutator.addPublicKey({
+            encryption: incomingKeySet.encryption,
+            signing: incomingKeySet.signing,
+          })
+        }
       },
       MutationType.UpdateUserTimestamps,
       PayloadEmitSource.RemoteRetrieved,
