@@ -36,8 +36,12 @@ export class SendMessageToUser implements UseCaseInterface<Message> {
     }
 
     if (dto.replaceabilityIdentifier) {
-      const existingMessage = await this.messageRepository.findByRecipientUuidAndReplaceabilityIdentifier({
+      // Scoped by sender as well as recipient: the identifier is deterministic and therefore known to
+      // every current and former member of the vault, so a recipient-only lookup turned this
+      // replacement into a cross-account delete of the owner's pending rotation message.
+      const existingMessage = await this.messageRepository.findByRecipientUuidAndSenderUuidAndReplaceabilityIdentifier({
         recipientUuid,
+        senderUuid,
         replaceabilityIdentifier: dto.replaceabilityIdentifier,
       })
 
