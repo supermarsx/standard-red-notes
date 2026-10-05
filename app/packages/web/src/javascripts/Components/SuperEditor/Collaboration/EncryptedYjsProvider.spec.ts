@@ -1739,6 +1739,82 @@ describe('EncryptedYjsProvider convergence', () => {
     }
   })
 
+  it('names a thrown reactivation and keeps retrying it as a lease failure', async () => {
+    jest.useFakeTimers()
+    const random = jest.spyOn(Math, 'random').mockReturnValue(1)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const onBootstrapRetry = jest.fn()
+    let status: ((connected: boolean) => void) | undefined
+    let connected = true
+    const channel: CollabChannel = {
+      isConnected: () => connected,
+      authorize: jest.fn(),
+      subscribe: () => jest.fn(),
+      subscribeStatus: (handler) => {
+        status = handler
+        return () => {
+          status = undefined
+        }
+      },
+      send: jest.fn(),
+    }
+    const reactivate = jest.fn().mockRejectedValue(new Error('reservation subscription exploded'))
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'ladder-throw-room',
+      channel,
+      createTestTransportCipher(),
+      undefined,
+      'ladder-throw-lease',
+      {
+        activeLease: {
+          requestId: 'ladder-throw-lease',
+          shouldBootstrap: true,
+          protocolVersion: 3,
+          maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
+          release: jest.fn(),
+        },
+        shouldBootstrap: true,
+        validateAttachment: jest.fn(() => true),
+        reactivate,
+        onFatal: jest.fn(),
+        onBootstrapRetry,
+      },
+    )
+
+    try {
+      provider.connect()
+      await Promise.resolve()
+      // Precondition: the lease attached, so a thrown REactivation is what follows.
+      expect(provider.isRoomJoined()).toBe(true)
+
+      connected = false
+      status?.(false)
+      connected = true
+      status?.(true)
+      await Promise.resolve()
+      await jest.advanceTimersByTimeAsync(31_000)
+      await provider.flush()
+
+      expect(reactivate).toHaveBeenCalledTimes(6)
+      expect(onBootstrapRetry).toHaveBeenCalledTimes(1)
+      // A throw is a lease failure like any other, and it says so rather than
+      // leaking the thrown value.
+      expect(provider.getLastLeaseFailure()).toBe('lease-reactivation-threw')
+      const messages = consoleError.mock.calls.map((call) => String(call[0]))
+      expect(messages).toContain(
+        '[collab] encrypted-yjs-join-retries-exhausted attempts=5 reason=lease-reactivation-threw',
+      )
+      expect(messages.some((message) => message.includes('reservation subscription exploded'))).toBe(false)
+    } finally {
+      provider.destroy()
+      consoleError.mockRestore()
+      random.mockRestore()
+      jest.useRealTimers()
+    }
+  })
+
   it('remounts without spending the retry ladder when reactivation requires a remount', async () => {
     jest.useFakeTimers()
     const random = jest.spyOn(Math, 'random').mockReturnValue(1)
