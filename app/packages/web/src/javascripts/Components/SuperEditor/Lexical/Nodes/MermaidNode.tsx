@@ -31,7 +31,6 @@ import {
 import MermaidSvgViewport from './MermaidSvgViewport'
 import { MermaidResizeHandle } from './MermaidBlockControls'
 import { MermaidWidthUnit, normalizeMermaidHeight, normalizeMermaidWidth, parseMermaidWidth } from './MermaidWidth'
-import { MermaidSettingsPanel } from './MermaidSettingsPanel'
 import {
   DEFAULT_MERMAID_THEME_MODE,
   DEFAULT_MERMAID_VIEW_MODE,
@@ -481,36 +480,6 @@ function MermaidComponent({
     [persistCode],
   )
 
-  /**
-   * The ONE write path for every setting, shared by this block's own top bar and
-   * by the editor toolbar's Mermaid section (which calls the identical node
-   * setters). A patch, not a whole object, so a control only ever states the
-   * field it owns.
-   */
-  const setSettings = useCallback(
-    (patch: Partial<MermaidSettings>) => {
-      editor.update(() => {
-        const node = $getNodeByKey(nodeKey)
-        if ($isMermaidNode(node)) {
-          node.setSettings(patch)
-        }
-      })
-    },
-    [editor, nodeKey],
-  )
-
-  const setViewMode = useCallback(
-    (next: MermaidViewMode) => {
-      editor.update(() => {
-        const node = $getNodeByKey(nodeKey)
-        if ($isMermaidNode(node)) {
-          node.setViewMode(next)
-        }
-      })
-    },
-    [editor, nodeKey],
-  )
-
   const reload = useCallback(() => {
     setReloadToken((t) => t + 1)
   }, [])
@@ -559,30 +528,6 @@ function MermaidComponent({
     )
   }, [editor, setSelected])
 
-  const setWidth = useCallback(
-    (next: string | undefined) => {
-      editor.update(() => {
-        const node = $getNodeByKey(nodeKey)
-        if ($isMermaidNode(node)) {
-          node.setWidth(next)
-        }
-      })
-    },
-    [editor, nodeKey],
-  )
-
-  const setHeight = useCallback(
-    (next: number | undefined) => {
-      editor.update(() => {
-        const node = $getNodeByKey(nodeKey)
-        if ($isMermaidNode(node)) {
-          node.setHeight(next)
-        }
-      })
-    },
-    [editor, nodeKey],
-  )
-
   const onResizeEnd = useCallback(
     (nextWidth: string | undefined, nextHeight: number | undefined) => {
       editor.update(() => {
@@ -627,11 +572,15 @@ function MermaidComponent({
       // on a block narrower than the column, which is the only case with slack.
       style={{ width, maxWidth: '100%', ...mermaidAlignmentStyle(settings.alignment) }}
     >
-      {/* THE CHART'S OWN TOP BAR. Every mermaid configuration lives here, in the
-          shared MermaidSettingsPanel — the identical component the editor
-          toolbar's Mermaid section mounts in its popover, driving the identical
-          node setters. Templates and Reload stay beside it because they are
-          actions on the source, not configuration. */}
+      {/* THE CHART'S OWN TOP BAR — the block's identity, plus the two actions on
+          its SOURCE: pick a template, re-render. No configuration. Every mermaid
+          setting now has exactly ONE home, the editor toolbar's Mermaid section
+          (ToolbarPlugin), which appears while the diagram is selected; the user
+          asked for it not to be offered twice. The shared control definitions
+          (MermaidSettingsPanel, and `mermaidSettingsControls`, which the toolbar
+          renders from) are untouched, and its `bar` arrangement is still built
+          and still tested — restoring this surface, or a chosen subset of it, is
+          a matter of mounting that component again. */}
       <div
         className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs"
         data-mermaid-top-bar="true"
@@ -669,23 +618,6 @@ function MermaidComponent({
             Reload
           </button>
         </div>
-      </div>
-
-      <div className="border-border border-b px-2 py-1">
-        <MermaidSettingsPanel
-          variant="bar"
-          settings={settings}
-          onSettingsChange={setSettings}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          width={width}
-          onWidthChange={setWidth}
-          height={height}
-          onHeightChange={setHeight}
-          // The width strip stays selection-gated, as it already was: it carries
-          // the resize affordance's units and belongs with a selected block.
-          showWidth={isSelected}
-        />
       </div>
 
       <div className={'flex ' + (viewMode === 'split' ? 'flex-col md:flex-row' : 'flex-col')}>
@@ -940,7 +872,7 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     this.setSettings({ themeMode })
   }
 
-  /** Every setting, resolved. The shape both surfaces render from. */
+  /** Every setting, resolved. The shape the toolbar section renders from. */
   getSettings(): MermaidSettings {
     return this.getLatest().__settings
   }

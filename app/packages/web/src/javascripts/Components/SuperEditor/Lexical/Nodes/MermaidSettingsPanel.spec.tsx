@@ -3,13 +3,17 @@
  *
  * The shared mermaid settings controls (t118).
  *
- * The POINT of this file is the mirroring: both the diagram block's own top bar
- * and the editor toolbar's Mermaid section mount this one component, so a control
- * that exists on one surface and not the other, or that writes differently on
- * one, is the failure this guards. It therefore asserts that
+ * The POINT of this file is that there is ONE control list, whatever arrangement
+ * renders it: a control that exists in one arrangement and not the other, or that
+ * writes differently in one, is the failure this guards. It asserts that
  * `mermaidSettingsControls` is the single list BOTH variants render, that the
  * variants differ only in arrangement, and that every control's write arrives on
  * the caller's callback.
+ *
+ * Only `panel` is mounted in the product today — t119 unmounted the chart
+ * container's `bar` surface, because the user asked not to be offered the same
+ * controls twice. `bar` stays covered here deliberately: it is what makes
+ * restoring that surface, or a subset of it, a mount rather than a rewrite.
  *
  * jsdom has no layout engine, so nothing here measures a box.
  */
@@ -87,7 +91,7 @@ const typeInto = (field: HTMLInputElement, value: string) => {
   })
 }
 
-describe('the control list is the single source both surfaces render', () => {
+describe('the control list is the single source both arrangements render', () => {
   it('names every control exactly once, in order', () => {
     const controls = mermaidSettingsControls(baseProps())
     expect(controls.map((control) => control.key)).toEqual(CONTROL_KEYS)

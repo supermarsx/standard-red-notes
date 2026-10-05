@@ -27,20 +27,25 @@ import {
 /**
  * Standard Red Notes — the Mermaid diagram's configuration controls.
  *
- * Each control is ONE exported component, and both surfaces that expose mermaid
- * configuration mount those same components:
+ * Each control is ONE exported component, and the surface that exposes mermaid
+ * configuration mounts those same components:
  *
- *   - the diagram block's own top bar — `MermaidSettingsPanel` with
- *     `variant: 'bar'`, mounted by MermaidNode; and
  *   - the editor toolbar's dedicated "Mermaid" contextual section — the clusters
  *     directly inside its captioned segments, plus this same panel with
  *     `variant: 'panel'` inside its settings popover (ToolbarPlugin).
  *
+ * `variant: 'bar'` is the OTHER arrangement, the one the chart container used to
+ * mount on its own top bar. t119 unmounted that surface — the user asked not to
+ * be offered the same controls twice — and this file deliberately kept it: the
+ * control LIST is the single ordered `mermaidSettingsControls` either way, both
+ * arrangements are still built and still tested, so restoring the chart surface,
+ * or a chosen subset of it, is a matter of mounting this component again. What
+ * must never come back is a second, hand-written copy of a control.
+ *
  * Mirrored, never forked. There is no per-surface copy of a control's markup, its
  * labels or its write rule: the labels come from MermaidSettings.ts, the write is
  * the caller's `onChange`, and the panel itself is assembled from the very same
- * exported clusters the toolbar uses. A control therefore cannot exist on one
- * surface and be missing — or behave differently — on the other.
+ * exported clusters the toolbar's inline segments use.
  *
  * Pure: state arrives as props, every change leaves as a callback. Nothing here
  * touches the editor, the application or a preference store, so the whole render
@@ -289,10 +294,10 @@ export type MermaidSettingsPanelProps = {
   height: number | undefined
   onHeightChange: (next: number | undefined) => void
   /**
-   * Whether the width strip renders. It is the one control that is selection-gated
-   * inside the block (it carries the resize affordance's units), so the mount
-   * point decides; the toolbar surface passes true, because reaching the Mermaid
-   * section already requires a selected diagram.
+   * Whether the width strip renders. The mount point decides; the toolbar surface
+   * passes true, because reaching the Mermaid section already requires a selected
+   * diagram. (It is a prop at all because the chart surface used to gate it on its
+   * own selection state.)
    */
   showWidth: boolean
 }

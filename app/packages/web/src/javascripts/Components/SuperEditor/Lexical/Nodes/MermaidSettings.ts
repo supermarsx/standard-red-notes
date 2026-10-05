@@ -2,19 +2,22 @@
  * Standard Red Notes — the ONE source of truth for a Mermaid diagram block's
  * configuration.
  *
- * Every mermaid setting is read and written through this module, by both of the
- * surfaces that expose them:
+ * Every mermaid setting is read and written through this module. Since t119 it
+ * has exactly ONE surface:
  *
- *   1. the diagram block's own top bar (MermaidSettingsPanel, mounted by
- *      MermaidNode), and
- *   2. the editor toolbar's dedicated "Mermaid" contextual section
- *      (ToolbarPlugin, which mounts the SAME MermaidSettingsPanel component in
- *      its popover and drives the same node setters).
+ *   - the editor toolbar's dedicated "Mermaid" contextual section (ToolbarPlugin),
+ *     which appears while a diagram is selected and mounts MermaidSettingsPanel
+ *     in its popover, driving the node's own setters.
  *
- * The two surfaces therefore cannot disagree: they share the normalizers, the
- * default constants and the resolution functions below, exactly as the six
- * Preferences settings that are also surfaced on an inline bar do. Nothing is
- * duplicated per surface — if a control needs a rule, the rule lives here.
+ * The chart container used to mount that same panel as well. The user asked for
+ * the configuration not to be offered twice, so the container now carries only
+ * its own header (identity, Templates, Reload) and the corner drag handle. The
+ * panel's other arrangement is still built and still tested, so restoring that
+ * surface — or a chosen subset of it — is a matter of mounting it again.
+ *
+ * Nothing is duplicated per surface either way: the normalizers, the default
+ * constants and the resolution functions below are shared, so if a control needs
+ * a rule, the rule lives here.
  *
  * Every value is a SYNCED value: another client, an older build, or a hand-edited
  * note may have written it. So each normalizer takes `unknown`, never throws, and
@@ -77,8 +80,9 @@ export const DEFAULT_MERMAID_ZOOM_PAN = true
  * mermaid SOURCE is shown beside the rendered diagram. `graphical` shows the
  * form-based flowchart builder instead of the raw code textarea.
  *
- * Lives here, with the other settings, so the block's own top bar and the
- * toolbar's Mermaid section drive it from one list.
+ * Lives here, with the other settings, so the toolbar's Mermaid section drives it
+ * from the same list as everything else — it is a setting on the node, not a
+ * piece of local component state.
  */
 export const MERMAID_VIEW_MODES = ['split', 'code', 'preview', 'graphical'] as const
 export type MermaidViewMode = (typeof MERMAID_VIEW_MODES)[number]
@@ -362,7 +366,7 @@ export function mermaidAlignmentStyle(alignment: MermaidAlignment): {
   return { marginLeft: undefined, marginRight: undefined }
 }
 
-/** Human-readable labels, shared by both surfaces so they cannot drift. */
+/** Human-readable labels, shared by every control so they cannot drift. */
 export const MERMAID_FIT_MODE_LABELS: Record<MermaidFitMode, string> = {
   fitWidth: 'Fit width',
   fitBoth: 'Fit both',

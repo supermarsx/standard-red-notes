@@ -38,10 +38,35 @@ import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import { $createMermaidNode, $isMermaidNode, MermaidNode } from '../../Lexical/Nodes/MermaidNode'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 
-jest.mock('@/Hooks/useMediaQuery', () => ({
-  useMediaQuery: () => false,
-  MutuallyExclusiveMediaQueryBreakpoints: { sm: 'sm', md: 'md' },
-}))
+/**
+ * Desktop layout — `isMobile` reads the MUTUALLY EXCLUSIVE `sm` query, which is
+ * false here. The Popover this file now opens reads `MediaQueryBreakpoints.md`
+ * instead, so the mock has to carry BOTH maps and answer true for the desktop
+ * one, exactly as ToolbarPlugin.checklistSubsection.spec.tsx does.
+ */
+jest.mock('@/Hooks/useMediaQuery', () => {
+  const MediaQueryBreakpoints = {
+    sm: 'q-sm',
+    md: 'q-md',
+    lg: 'q-lg',
+    xl: 'q-xl',
+    '2xl': 'q-2xl',
+    pointerFine: 'q-fine',
+  }
+  const MutuallyExclusiveMediaQueryBreakpoints = {
+    sm: 'x-sm',
+    md: 'x-md',
+    lg: 'x-lg',
+    xl: 'x-xl',
+    '2xl': 'x-2xl',
+    pointerFine: 'x-fine',
+  }
+  return {
+    MediaQueryBreakpoints,
+    MutuallyExclusiveMediaQueryBreakpoints,
+    useMediaQuery: (query: string) => query === MediaQueryBreakpoints.md,
+  }
+})
 
 // The FLOATING toolbar reaches SelectionTools, which needs the pane context. Stubbed
 // on the SelectionTools.spec.tsx model rather than mounting a real PaneController.
@@ -103,6 +128,18 @@ beforeEach(() => {
   docked = true
   jest.mocked(useResponsiveAppPane).mockReturnValue({ presentPane: jest.fn() } as never)
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = MockResizeObserver
+  // jsdom has no matchMedia, and the Popover's own hooks call it directly rather
+  // than through the mocked useMediaQuery.
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  })) as never
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -415,6 +452,153 @@ describe('the Mermaid section writes to the selected node, not to a copy of its 
     )
     expect(pressed).toHaveLength(1)
     expect(pressed[0].getAttribute('aria-label')).toBe('Align right')
+  })
+})
+
+/**
+ * REACHABILITY (t119). The chart container no longer mounts a configuration
+ * surface — see MermaidNode.selection.spec.tsx, which asserts its absence. That
+ * makes this section the single home of every mermaid setting, so "the section
+ * exists" is no longer enough: each control the chart used to carry has to be
+ * reachable HERE, through the real popover, and has to write to the real node.
+ *
+ * Three of them (Source, Fit, Align) are also inline segments above. The other
+ * five — maximum height, theme, background, pan & zoom and the width strip —
+ * exist nowhere else in the product, so this is the only thing standing between
+ * them and being unreachable.
+ */
+describe('every setting the chart no longer shows is reachable from this section', () => {
+  const diagramGroup = () =>
+    Array.from(container.querySelectorAll('.super-toolbar-group')).find(
+      (candidate) => candidate.getAttribute('aria-label') === 'Diagram',
+    )
+
+  const openSettings = async () => {
+    const button = diagramGroup()!.querySelector('button') as HTMLButtonElement
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button.click()
+      await Promise.resolve()
+    })
+  }
+
+  /** The popover renders outside `container`, so it is found on the document. */
+  const panel = () => document.querySelector('[data-mermaid-settings="panel"]')
+  const inPanel = (selector: string) => panel()!.querySelector(selector)
+
+  const openPanel = async () => {
+    await mount()
+    await insertAndSelectMermaid()
+    await activateMermaidTab()
+    await openSettings()
+    expect(panel()).not.toBeNull()
+  }
+
+  /** Drive a real <select>/<input> the way React's onChange sees it. */
+  const setFieldValue = async (field: HTMLInputElement | HTMLSelectElement, value: string) => {
+    const prototype = field instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(field, value)
+      field.dispatchEvent(new Event(field instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+      await Promise.resolve()
+    })
+  }
+
+  it('renders no panel until the settings button is pressed', async () => {
+    await mount()
+    await insertAndSelectMermaid()
+    await activateMermaidTab()
+    expect(diagramGroup()).toBeDefined()
+    expect(panel()).toBeNull()
+  })
+
+  it('opens the shared panel, holding every control the chart used to carry', async () => {
+    await openPanel()
+    for (const selector of [
+      '[role="group"][aria-label="View mode"]',
+      '[role="group"][aria-label="Fit mode"]',
+      '[role="group"][aria-label="Diagram alignment"]',
+      'select[aria-label="Maximum diagram height"]',
+      'select[aria-label="Diagram theme"]',
+      'button[aria-label="Themed diagram background"]',
+      'button[aria-label="Pan and zoom over the diagram"]',
+      '[data-mermaid-width-section="true"]',
+      'input[aria-label="Diagram width"]',
+    ]) {
+      expect([selector, inPanel(selector) !== null]).toEqual([selector, true])
+    }
+  })
+
+  it('writes the theme to the node — the control exists on no other surface', async () => {
+    await openPanel()
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('app')
+    await setFieldValue(inPanel('select[aria-label="Diagram theme"]') as HTMLSelectElement, 'forest')
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('forest')
+  })
+
+  it('writes the maximum height to the node, and offers the pixel field once fixed', async () => {
+    await openPanel()
+    expect(readNode((node) => node.getSettings().maxHeight)).toBeUndefined()
+    await setFieldValue(inPanel('select[aria-label="Maximum diagram height"]') as HTMLSelectElement, 'none')
+    expect(readNode((node) => node.getSettings().maxHeight)).toBe('none')
+    await setFieldValue(inPanel('select[aria-label="Maximum diagram height"]') as HTMLSelectElement, 'fixed')
+    expect(readNode((node) => node.getSettings().maxHeight)).toBe(600)
+    expect(inPanel('input[aria-label="Maximum diagram height in pixels"]')).not.toBeNull()
+  })
+
+  it('writes the background and the pan/zoom toggles to the node', async () => {
+    await openPanel()
+    expect(readNode((node) => node.getSettings().background)).toBe('transparent')
+    await act(async () => {
+      ;(inPanel('button[aria-label="Themed diagram background"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(readNode((node) => node.getSettings().background)).toBe('themed')
+
+    expect(readNode((node) => node.getSettings().zoomPan)).toBe(true)
+    await act(async () => {
+      ;(inPanel('button[aria-label="Pan and zoom over the diagram"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(readNode((node) => node.getSettings().zoomPan)).toBe(false)
+  })
+
+  it('writes a width typed into the strip to the node, normalized', async () => {
+    await openPanel()
+    expect(readNode((node) => node.getWidth())).toBeUndefined()
+    const field = inPanel('input[aria-label="Diagram width"]') as HTMLInputElement
+    await setFieldValue(field, '420')
+    await act(async () => {
+      field.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      await Promise.resolve()
+    })
+    // A bare number is pixels, and the node stores the normalized spelling.
+    expect(readNode((node) => node.getWidth())).toBe('420px')
+  })
+
+  it('also reaches the width presets and the Fit-to-container reset', async () => {
+    await openPanel()
+    const presets = document.querySelector('[role="group"][aria-label="Width presets"]')
+    expect(presets).not.toBeNull()
+    const half = Array.from(presets!.querySelectorAll('button')).find(
+      (button) => button.textContent === '50%',
+    ) as HTMLButtonElement
+    await act(async () => {
+      half.click()
+      await Promise.resolve()
+    })
+    expect(readNode((node) => node.getWidth())).toBe('50%')
+
+    const reset = Array.from(panel()!.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Fit to container',
+    ) as HTMLButtonElement
+    expect(reset).toBeDefined()
+    await act(async () => {
+      reset.click()
+      await Promise.resolve()
+    })
+    expect(readNode((node) => node.getWidth())).toBeUndefined()
   })
 })
 

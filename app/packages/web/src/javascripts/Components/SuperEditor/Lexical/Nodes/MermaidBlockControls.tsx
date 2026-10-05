@@ -13,9 +13,17 @@ import {
 } from './MermaidWidth'
 
 /**
- * Standard Red Notes — the Mermaid diagram block's size controls.
+ * Standard Red Notes — the Mermaid diagram's size controls.
  *
- * SELECTION-GATED, mirroring the table's own selected-only control:
+ * TWO DIFFERENT HOMES since t119. `MermaidWidthSection` is a configuration
+ * control, so it now renders only inside the editor toolbar's Mermaid settings
+ * popover (through MermaidSettingsPanel), where `visible` is always true because
+ * reaching that section already required a selected diagram. `MermaidResizeHandle`
+ * is not a control panel but a corner grab point ON the chart, so it stays in the
+ * block — and stays gated on the block being the real Lexical selection, which is
+ * what `active` carries.
+ *
+ * SELECTION-GATING, mirroring the table's own selected-only control:
  * `Plugins/TableCellActionMenuPlugin/index.tsx` renders its chevron + action
  * menu only while a table cell is the current Lexical selection
  * (`index.tsx:448-493` reads `$getSelection()` inside an update listener;
@@ -25,7 +33,7 @@ import {
  * (`Plugins/RemoteImagePlugin/RemoteImageComponent.tsx:109-130`), with the
  * resulting flag gating visibility exactly as
  * `Plugins/ImageTools/SuperEmbeddedImage.tsx:122-132` gates the image resizer
- * and toolbar. MermaidNode uses that, and passes the result here as `visible`.
+ * and toolbar. MermaidNode uses that, and passes the result here as `active`.
  *
  * FOCUS: every button carries `onMouseDown={e => e.preventDefault()}`, the
  * guard `Plugins/ImageTools/ImageToolbar.tsx:70,101,116,137` uses to keep the
@@ -43,7 +51,7 @@ const PRESETS: { label: string; value: string }[] = [
 ]
 
 export type MermaidWidthSectionProps = {
-  /** Whether the block is the current selection. Nothing renders when false. */
+  /** Whether the strip renders at all; the mount point decides. */
   visible: boolean
   /** The node's stored width — already normalized, or undefined for "fit". */
   width: string | undefined

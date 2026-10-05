@@ -167,9 +167,10 @@ import { BlockCatalogContext, buildInsertSections, getFullBlockCatalog, InsertSe
 // path as the Insert-tab catalog entry and the slash picker, rather than a second
 // mechanism — `MermaidBlock.onSelect` is the one way a Mermaid node is created.
 import { MermaidBlock } from '../Blocks/Mermaid'
-// Standard Red Notes: the dedicated "Mermaid" contextual section. It drives the
-// node's own setters and mounts the SAME MermaidSettingsPanel the diagram block's
-// top bar does, so the two surfaces cannot disagree — see MermaidSettings.ts.
+// Standard Red Notes: the dedicated "Mermaid" contextual section — since t119 the
+// ONLY surface that configures a diagram. It drives the node's own setters and
+// mounts MermaidSettingsPanel, which the chart container no longer does: the user
+// asked not to be offered the same controls twice. See MermaidSettings.ts.
 import { $isMermaidNode, type MermaidNode } from '../../Lexical/Nodes/MermaidNode'
 import {
   MermaidSettingsPanel,
@@ -3110,12 +3111,12 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
       // while `mermaidSelection` is set), with the rest condensed behind one
       // settings button.
       //
-      // Its contents are not a second copy of the diagram block's controls: they
-      // ARE the block's controls. `mermaidSettingsControls` is the single ordered
-      // list MermaidSettingsPanel renders from, and the three inline segments pick
-      // their clusters out of it by key, so a control cannot behave differently
-      // here than it does in the chart's own top bar. The button opens that same
-      // panel, holding every setting including these three.
+      // Since t119 this is the ONLY place a diagram is configured — the chart
+      // container used to carry the same panel and the user asked for it to stop.
+      // `mermaidSettingsControls` is the single ordered list MermaidSettingsPanel
+      // renders from; the three inline segments pick their clusters out of it by
+      // key, and the button opens that same panel holding every setting, so no
+      // control can go missing by being split across the two.
       case ContextualWidgetKind.Mermaid: {
         const mermaidControls = mermaidSettingsControls(mermaidSettingsPanelProps)
         for (const key of ['source', 'fit', 'alignment']) {
@@ -3138,8 +3139,8 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 <>
                   <div className="mb-1 font-semibold">Mermaid settings</div>
                   <div className="max-w-[35ch] text-xs">
-                    Fit, maximum height, alignment, theme, background, pan &amp; zoom, source and width — the same
-                    controls as the diagram&apos;s own bar.
+                    Fit, maximum height, alignment, theme, background, pan &amp; zoom, source and width — every setting
+                    for the selected diagram.
                   </div>
                 </>
               }
@@ -4797,10 +4798,11 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           />
         </div>
       </Popover>
-      {/* Standard Red Notes — the Mermaid section's settings popover. Its content
-          is the SAME MermaidSettingsPanel the diagram block's own top bar mounts,
+      {/* Standard Red Notes — the Mermaid section's settings popover, and since
+          t119 the only home of maximum height, theme, background, pan & zoom and
+          the width strip: the chart container mounts no panel any more. It is
           handed the same props object the section's inline clusters use, so the
-          chart's bar and the toolbar cannot disagree about a single setting. */}
+          condensed and inline halves cannot disagree about a single setting. */}
       <Popover
         title="Mermaid settings"
         anchorElement={mermaidSettingsAnchorRef}
