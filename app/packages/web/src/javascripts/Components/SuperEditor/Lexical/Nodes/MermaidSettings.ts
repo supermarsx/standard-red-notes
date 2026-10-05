@@ -283,13 +283,330 @@ export function mermaidAppThemeIsDark(input: {
   return input.prefersDark === true
 }
 
-/** The mermaid theme name to hand `mermaid.initialize` for a stored mode. */
+/**
+ * The mermaid theme name to hand `mermaid.initialize` for a stored mode.
+ *
+ * This is the COARSE answer, and it is now only the fallback: see
+ * `resolveMermaidRenderTheme`, which uses the application's own palette when it
+ * can be read. It stays because an environment with no layout engine (jsdom, or
+ * first paint before any stylesheet has applied) has no palette to read, and
+ * mermaid's own light/dark pair is the honest answer there.
+ */
 export function resolveMermaidTheme(mode: unknown, appIsDark: boolean): MermaidBuiltinTheme {
   const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
   if (normalized === 'app') {
     return appIsDark ? 'dark' : 'default'
   }
   return normalized
+}
+
+/**
+ * The background colour each of mermaid's built-in themes actually renders
+ * against, read out of mermaid 11.16.1 itself rather than guessed — the library
+ * reports `white` for `default`/`forest`, which is `#ffffff`.
+ *
+ * Needed because a diagram PINNED to one of these themes does not follow the
+ * application's surface, so "paint the surface behind it" has to mean that
+ * theme's surface, not the app's, or the pin is exactly what breaks it.
+ */
+export const MERMAID_BUILTIN_THEME_BACKGROUNDS: Record<MermaidBuiltinTheme, string> = {
+  default: '#ffffff',
+  dark: '#333333',
+  forest: '#ffffff',
+  neutral: '#ffffff',
+  base: '#f4f4f4',
+}
+
+/** Which of mermaid's built-in themes is a dark one. Only `dark` is. */
+export const MERMAID_BUILTIN_THEME_IS_DARK: Record<MermaidBuiltinTheme, boolean> = {
+  default: false,
+  dark: true,
+  forest: false,
+  neutral: false,
+  base: false,
+}
+
+/**
+ * The application's own palette, as read from the `--sn-stylekit-*` custom
+ * properties on `document.documentElement` — which is where ThemeManager both
+ * writes a theme (by attaching its stylesheet) and reads the result back from
+ * (`ThemeManager.getBackgroundColor`). Every field is a colour the live cascade
+ * resolved, so a third-party or custom theme is covered for free.
+ */
+export type MermaidAppTokens = {
+  /** The surface a diagram sits on. */
+  background: string
+  /** Body text. */
+  foreground: string
+  /** One step up from the surface — what a raised box uses. */
+  contrastBackground: string
+  secondaryBackground: string
+  secondaryContrastBackground: string
+  border: string
+  /** A mid-tone that reads on both polarities; used for edges and grid lines. */
+  passive: string
+}
+
+/**
+ * The application's theme as the diagram needs it: which polarity, and the
+ * palette itself when it could be read at all (`null` in jsdom, or before any
+ * stylesheet has applied).
+ */
+export type MermaidAppTheme = {
+  isDark: boolean
+  tokens: MermaidAppTokens | null
+}
+
+/** Is this string something a browser would actually paint? */
+export function isUsableCssColor(value: unknown): boolean {
+  return parseCssColorLuminance(value) !== null
+}
+
+/** Dark, light, or "not a colour I can read". */
+export function isDarkMermaidSurface(value: unknown): boolean | null {
+  const luminance = parseCssColorLuminance(value)
+  return luminance === null ? null : luminance <= DARK_SURFACE_LUMINANCE_THRESHOLD
+}
+
+/**
+ * The custom properties the palette is read from. Named here so a spec and the
+ * reader cannot drift apart.
+ */
+export const MERMAID_APP_TOKEN_PROPERTIES = {
+  themeType: '--sn-stylekit-theme-type',
+  background: '--sn-stylekit-background-color',
+  foreground: '--sn-stylekit-foreground-color',
+  contrastBackground: '--sn-stylekit-contrast-background-color',
+  secondaryBackground: '--sn-stylekit-secondary-background-color',
+  secondaryContrastBackground: '--sn-stylekit-secondary-contrast-background-color',
+  border: '--sn-stylekit-border-color',
+  passive: '--sn-stylekit-passive-color-1',
+} as const
+
+/**
+ * Assemble the application's palette from a property reader. Pure — the reader
+ * is `getComputedStyle(document.documentElement).getPropertyValue` in the app
+ * and a plain record in a spec.
+ *
+ * Returns `null` rather than a half-palette whenever the result could not be
+ * trusted, and the caller then falls back to mermaid's own coarse light/dark
+ * pair — the behaviour that shipped before — so this can never be worse.
+ *
+ * The POLARITY GUARD is the load-bearing part. A theme stylesheet only
+ * overrides the properties it declares, and the base `:root` (this product's
+ * dark burgundy palette) stays underneath it, so a theme that declares no
+ * `--sn-stylekit-secondary-contrast-background-color` leaves a DARK value
+ * readable under a LIGHT theme — Proton is exactly that case, and Midnight,
+ * Futura and Proton all leave `--sn-stylekit-passive-color-1` inherited. A
+ * surface token whose own darkness disagrees with the theme's is therefore an
+ * inherited leftover, not this theme's colour, and is skipped; text is required
+ * to be the opposite polarity of the surface for the same reason.
+ */
+export function buildMermaidAppTokens(read: (property: string) => unknown, isDark: boolean): MermaidAppTokens | null {
+  const value = (property: string): string => {
+    const raw = read(property)
+    return typeof raw === 'string' ? raw.trim() : ''
+  }
+  /** The first candidate that is a colour AND sits on the theme's own side. */
+  const surface = (...properties: readonly string[]): string | null => {
+    for (const property of properties) {
+      const candidate = value(property)
+      if (isDarkMermaidSurface(candidate) === isDark) {
+        return candidate
+      }
+    }
+    return null
+  }
+  /** A line colour legitimately sits on either side, so only usability matters. */
+  const line = (...properties: readonly string[]): string | null => {
+    for (const property of properties) {
+      const candidate = value(property)
+      if (isUsableCssColor(candidate)) {
+        return candidate
+      }
+    }
+    return null
+  }
+
+  const properties = MERMAID_APP_TOKEN_PROPERTIES
+  const background = surface(properties.background)
+  const foreground = value(properties.foreground)
+  const contrastBackground = surface(
+    properties.contrastBackground,
+    properties.secondaryBackground,
+    properties.secondaryContrastBackground,
+  )
+  if (background === null || contrastBackground === null) {
+    return null
+  }
+  if (isDarkMermaidSurface(foreground) !== !isDark) {
+    return null
+  }
+
+  return {
+    background,
+    foreground,
+    contrastBackground,
+    secondaryBackground: surface(properties.secondaryBackground, properties.contrastBackground) ?? contrastBackground,
+    secondaryContrastBackground:
+      surface(properties.secondaryContrastBackground, properties.contrastBackground) ?? contrastBackground,
+    border: line(properties.border, properties.passive) ?? foreground,
+    passive: line(properties.passive, properties.border) ?? foreground,
+  }
+}
+
+/**
+ * Mermaid `themeVariables` derived from the application's own design tokens.
+ *
+ * Why this exists rather than `theme: 'dark' | 'default'` alone: mermaid's
+ * `dark` theme hardcodes its palette and ignores overrides (measured —
+ * `mainBkg` stays `#1f2020`, `textColor` stays `#ccc`, and a gantt chart's
+ * section bands stay a yellow `hsl(52.9, 28.8%, 58.4%)` and a near-white
+ * `#EAE8D9`). Against this product's `#16090f` surface those node boxes have a
+ * contrast ratio of 1.19 — they are all but invisible. Mermaid's `base` theme is
+ * the one built to DERIVE a palette from what it is given, so `app` mode renders
+ * as `base` plus these.
+ *
+ * The four keys after the core set are mermaid's own residual hardcodes that
+ * `base` does NOT derive from `primaryColor`/`background`: without them a dark
+ * diagram still gets a `white` alternating gantt band, a `lightgrey` done-task
+ * bar under light text, a `lightgrey` grid and a black edge-label box.
+ */
+export function mermaidAppThemeVariables(tokens: MermaidAppTokens, isDark: boolean): Record<string, string | boolean> {
+  return {
+    darkMode: isDark,
+    background: tokens.background,
+    primaryColor: tokens.contrastBackground,
+    // The node OUTLINE, and deliberately the mid-tone rather than
+    // `--sn-stylekit-border-color`. A node fill is one step off the surface (the
+    // app's own convention for a raised box), so the outline is what separates
+    // a box from the page, and the border token is tuned for large panels:
+    // measured against each theme's own surface it is 1.31 under
+    // standard-notes-blue and 1.15 under Midnight — an outline that is not
+    // there. The mid-tone measures 6.98 against this product's dark surface and
+    // 4.56 against white.
+    primaryBorderColor: tokens.passive,
+    primaryTextColor: tokens.foreground,
+    secondaryColor: tokens.secondaryContrastBackground,
+    tertiaryColor: tokens.secondaryBackground,
+    textColor: tokens.foreground,
+    titleColor: tokens.foreground,
+    lineColor: tokens.passive,
+    altSectionBkgColor: tokens.secondaryBackground,
+    doneTaskBkgColor: tokens.secondaryContrastBackground,
+    doneTaskBorderColor: tokens.passive,
+    // A grid is SUPPOSED to recede, so this one keeps the subtle border token.
+    gridColor: tokens.border,
+    edgeLabelBackground: tokens.background,
+  }
+}
+
+/** What actually reaches `mermaid.initialize` for a diagram. */
+export type MermaidRenderTheme = {
+  theme: MermaidBuiltinTheme
+  /** Absent for a pinned built-in theme, and when no palette could be read. */
+  themeVariables?: Record<string, string | boolean>
+}
+
+/**
+ * THE resolution every render surface goes through: a stored theme mode plus the
+ * live application theme, in, and mermaid's own config out.
+ *
+ * `app` becomes mermaid's `base` theme carrying the application's palette, so
+ * node fills, text, edges, clusters and a gantt chart's bands are all the
+ * surface the user is actually looking at. A pinned built-in theme is handed
+ * through untouched — a deliberate override stays an override.
+ */
+export function resolveMermaidRenderTheme(mode: unknown, appTheme: MermaidAppTheme): MermaidRenderTheme {
+  const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
+  if (normalized !== 'app') {
+    return { theme: normalized }
+  }
+  if (!appTheme.tokens) {
+    return { theme: resolveMermaidTheme(normalized, appTheme.isDark) }
+  }
+  return { theme: 'base', themeVariables: mermaidAppThemeVariables(appTheme.tokens, appTheme.isDark) }
+}
+
+/**
+ * Does the diagram's resolved theme disagree with the application's polarity?
+ * This is the ONE combination a transparent background cannot survive — a light
+ * diagram floating on a dark surface, or the reverse — and `app` mode is never
+ * in it by construction.
+ */
+export function mermaidThemeDisagreesWithApp(mode: unknown, appTheme: MermaidAppTheme): boolean {
+  const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
+  if (normalized === 'app') {
+    return false
+  }
+  return MERMAID_BUILTIN_THEME_IS_DARK[normalized] !== appTheme.isDark
+}
+
+/**
+ * The colour the preview box paints behind the diagram, or `undefined` for "paint
+ * nothing".
+ *
+ * `themed` means "the surface this diagram belongs on", which is NOT
+ * unconditionally the application's: for a diagram pinned to one of mermaid's
+ * own themes it is that theme's background, because painting the app's dark
+ * surface behind a diagram pinned to mermaid's light `default` theme is the very
+ * thing that made it unreadable.
+ */
+export function resolveMermaidSurfaceColor(
+  background: MermaidBackground,
+  mode: unknown,
+  appTheme: MermaidAppTheme,
+): string | undefined {
+  if (background !== 'themed') {
+    return undefined
+  }
+  const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
+  if (normalized === 'app') {
+    return appTheme.tokens?.background
+  }
+  return MERMAID_BUILTIN_THEME_BACKGROUNDS[normalized]
+}
+
+/**
+ * The first serialized version whose `theme` field could say `app` at all.
+ * Equals `MERMAID_VERSION` in MermaidNode.tsx, which is where the number is
+ * owned; this is the threshold the migration below compares against.
+ */
+export const FIRST_MERMAID_VERSION_WITH_APP_THEME = 4
+
+/**
+ * The theme every version-2/3 build wrote when the user chose nothing.
+ * `DEFAULT_MERMAID_THEME` was literally `'default'` then (see
+ * `git show 768b9a14:…/MermaidNode.tsx`), and `exportJSON` wrote the field
+ * unconditionally.
+ */
+export const LEGACY_DEFAULT_MERMAID_THEME: MermaidBuiltinTheme = 'default'
+
+/**
+ * Translate a stored `theme` field into a theme MODE, which is the one place
+ * "an old note keeps its appearance" is traded against "the operator's existing
+ * notes never adapt to anything".
+ *
+ * The problem being solved: a build before version 4 had no `app` mode, and its
+ * default was mermaid's own light `default` theme, written into the note whether
+ * or not the user ever opened the control. So EVERY diagram authored before this
+ * is pinned light, and inside a dark app it is a light chart on a dark page — the
+ * every-note breakage the operator reported. A stored value alone cannot tell
+ * "the user chose light" from "no build ever asked them".
+ *
+ * The serialized VERSION can. Below 4 a preference for `app` was inexpressible,
+ * so a stored `default` there means "never chose" and becomes `app`; at 4 and
+ * above `app` was on offer, so a stored `default` IS a choice and is kept. Every
+ * other stored name — `dark`, `forest`, `neutral`, `base` — was never a default,
+ * so it is a deliberate choice at any version and is kept at any version.
+ */
+export function migrateMermaidThemeMode(storedTheme: unknown, storedVersion: unknown): unknown {
+  const normalized = normalizeMermaidThemeMode(storedTheme)
+  if (normalized !== LEGACY_DEFAULT_MERMAID_THEME) {
+    return storedTheme
+  }
+  const version = typeof storedVersion === 'number' && Number.isFinite(storedVersion) ? storedVersion : 0
+  return version >= FIRST_MERMAID_VERSION_WITH_APP_THEME ? storedTheme : DEFAULT_MERMAID_THEME_MODE
 }
 
 /**

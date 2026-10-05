@@ -35,17 +35,20 @@ import {
   DEFAULT_MERMAID_THEME_MODE,
   DEFAULT_MERMAID_VIEW_MODE,
   mermaidAlignmentStyle,
-  mermaidAppThemeIsDark,
-  MermaidBuiltinTheme,
+  type MermaidAppTheme,
   MermaidMaxHeight,
+  type MermaidRenderTheme,
   MermaidSettings,
   MermaidThemeMode,
   MermaidViewMode,
+  migrateMermaidThemeMode,
   normalizeMermaidViewMode,
   resolveMermaidMaxHeightPx,
+  resolveMermaidRenderTheme,
   resolveMermaidSettings,
-  resolveMermaidTheme,
+  resolveMermaidSurfaceColor,
 } from './MermaidSettings'
+import { useMermaidAppTheme } from './MermaidAppTheme'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
@@ -67,25 +70,6 @@ const RENDER_DEBOUNCE_MS = 400
  */
 const INTERACTIVE_IN_BLOCK =
   'input, textarea, select, button, a, label, [data-mermaid-width-section="true"], [data-mermaid-settings]'
-
-/**
- * Is the application showing a dark theme? Read from the live computed style, so
- * it follows whatever theme is installed rather than a hardcoded list. The
- * decision itself is the pure `mermaidAppThemeIsDark`; this only gathers its
- * inputs, and tolerates an environment with no layout engine (jsdom returns empty
- * strings, which falls through to the OS preference).
- */
-function readAppThemeIsDark(): boolean {
-  if (typeof window === 'undefined' || typeof document === 'undefined') {
-    return false
-  }
-  const styles = window.getComputedStyle(document.documentElement)
-  return mermaidAppThemeIsDark({
-    themeType: styles.getPropertyValue('--sn-stylekit-theme-type'),
-    backgroundColor: styles.getPropertyValue('--sn-stylekit-background-color'),
-    prefersDark: window.matchMedia?.('(prefers-color-scheme: dark)')?.matches === true,
-  })
-}
 
 // Lazily loaded mermaid singleton so the heavy library is code-split and only
 // fetched when a diagram is actually rendered.
@@ -388,7 +372,7 @@ function MermaidComponent({
   }, [code])
 
   const render = useCallback(
-    async (source: string, activeTheme: MermaidBuiltinTheme) => {
+    async (source: string, activeTheme: MermaidRenderTheme) => {
       const token = ++renderTokenRef.current
       const trimmed = source.trim()
       if (!trimmed) {
@@ -401,7 +385,14 @@ function MermaidComponent({
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
-          theme: activeTheme,
+          theme: activeTheme.theme,
+          // The APPLICATION's own design tokens, not mermaid's generic palette.
+          // Absent for a pinned built-in theme: measured against mermaid
+          // 11.16.1, `initialize` rebuilds its config from the defaults rather
+          // than accumulating, so a pinned diagram rendered after an app-themed
+          // one gets mermaid's own clean palette (`mainBkg` back to `#ECECFF`)
+          // and not the previous diagram's overrides.
+          themeVariables: activeTheme.themeVariables,
           fontFamily: 'inherit',
         })
         const id = `mermaid-${nodeKey}-${renderSeq++}`
@@ -424,34 +415,32 @@ function MermaidComponent({
     [nodeKey],
   )
 
-  // Whether the APPLICATION is showing a dark theme, which is what the default
-  // `app` theme mode follows. Re-read when the OS preference flips and when the
-  // document element's own styling changes (how a theme is installed here), so a
-  // theme switch re-renders the diagram instead of leaving a light chart in a
-  // dark editor until the next keystroke.
-  const [appIsDark, setAppIsDark] = useState(readAppThemeIsDark)
-  useEffect(() => {
-    const refresh = () => setAppIsDark(readAppThemeIsDark())
-    refresh()
-    const media = window.matchMedia?.('(prefers-color-scheme: dark)')
-    media?.addEventListener?.('change', refresh)
-    const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(refresh)
-    observer?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] })
-    return () => {
-      media?.removeEventListener?.('change', refresh)
-      observer?.disconnect()
-    }
-  }, [])
+  // The APPLICATION's live theme — its polarity AND its palette — which is what
+  // the default `app` theme mode follows. The subscription (a stylesheet
+  // finishing load, `<head>` gaining or losing one, an inline-style palette, the
+  // OS preference) lives in MermaidAppTheme.ts, whose header says why each of
+  // those is needed and which one the previous observer was missing.
+  const appTheme: MermaidAppTheme = useMermaidAppTheme()
 
-  const activeTheme = resolveMermaidTheme(settings.themeMode, appIsDark)
+  const activeTheme = resolveMermaidRenderTheme(settings.themeMode, appTheme)
+  // The identity of what reaches mermaid, so the render effect below re-runs on a
+  // palette change and ONLY on one. `activeTheme` is a fresh object every
+  // render, so it cannot be a dependency itself.
+  const activeThemeKey = JSON.stringify(activeTheme)
 
   // Debounced render whenever the draft, resolved theme, or reload token changes.
+  // THE live-theme path: a theme switch changes `activeThemeKey`, which
+  // re-renders the diagram. Mermaid caches nothing across `render()` calls, but
+  // this component does — `svg` is held in state and the viewport injects it
+  // once per change — so without a new render the old SVG stays on screen with
+  // the old theme's colours baked into its own `<style>`.
   useEffect(() => {
     const handle = window.setTimeout(() => {
       void render(draft, activeTheme)
     }, RENDER_DEBOUNCE_MS)
     return () => window.clearTimeout(handle)
-  }, [draft, activeTheme, reloadToken, render])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, activeThemeKey, reloadToken, render])
 
   // Invalidate any in-flight render when the component unmounts.
   useEffect(() => {
@@ -663,6 +652,12 @@ function MermaidComponent({
                   )}
                   zoomPan={settings.zoomPan}
                   background={settings.background}
+                  // WHICH surface `themed` paints. Not unconditionally the
+                  // app's: a diagram pinned to one of mermaid's own themes does
+                  // not follow the app, so painting the app's dark surface
+                  // behind a light-pinned chart is the thing that made it
+                  // unreadable. See resolveMermaidSurfaceColor.
+                  backgroundColor={resolveMermaidSurfaceColor(settings.background, settings.themeMode, appTheme)}
                 >
                   <MermaidResizeHandle
                     active={isSelected}
@@ -698,8 +693,14 @@ export type SerializedMermaidNode = Spread<
     /**
      * The theme MODE. Versions 2-3 stored one of mermaid's own theme names here;
      * version 4 widened it to include `app` (follow the application's theme) and
-     * kept the field name, so an older note's stored theme is still exactly the
-     * theme it gets — see `resolveMermaidThemeMode`.
+     * kept the field name.
+     *
+     * Reading it back is version-gated, and that is the whole of the backward
+     * compatibility story: at versions below 4 the field was written as
+     * mermaid's light `default` for every diagram the user never configured, so
+     * at those versions that one value means "nobody ever asked" and resolves to
+     * `app`. Every other name, and `default` from version 4 on, is a deliberate
+     * choice and is kept exactly. See `migrateMermaidThemeMode`.
      */
     theme: MermaidThemeMode
     viewMode: MermaidViewMode
@@ -799,9 +800,17 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     // observable. The theme is passed through unvalidated for the same reason —
     // `resolveMermaidSettings` is what decides whether a stored theme is one it
     // recognizes, and what an unrecognized one falls back to.
+    //
+    // The ONE translation the theme does get is the version-gated migration:
+    // every build before version 4 wrote mermaid's light `default` theme into
+    // the note whether or not the user had chosen anything, so an existing
+    // diagram could never follow the app. `migrateMermaidThemeMode` turns that
+    // one value, at those versions only, into `app`; every deliberate choice —
+    // any other name, and `default` at version 4 or later, where `app` was on
+    // offer — is handed through unchanged.
     return $createMermaidNode(
       code,
-      serializedNode.theme as MermaidThemeMode,
+      migrateMermaidThemeMode(serializedNode.theme, serializedNode.version) as MermaidThemeMode,
       viewMode,
       serializedNode.width,
       serializedNode.height,

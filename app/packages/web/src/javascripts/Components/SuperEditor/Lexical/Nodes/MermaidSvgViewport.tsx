@@ -113,8 +113,18 @@ type Props = {
   maxHeightPx?: number | null
   /** Whether wheel-zoom / drag-pan / pinch and the zoom controls are available. */
   zoomPan?: boolean
-  /** Whether the preview box paints the editor's surface colour behind the diagram. */
+  /** Whether the preview box paints a surface colour behind the diagram. */
   background?: MermaidBackground
+  /**
+   * WHICH surface colour `background: 'themed'` paints, when the caller has
+   * resolved one. The caller knows something this component cannot: whether the
+   * diagram follows the application's theme or is pinned to one of mermaid's
+   * own, and therefore whether "the surface this diagram belongs on" is the
+   * app's or that theme's. Omit it and the app's own surface variable is used,
+   * which is what every caller got before and what a caller with no theme
+   * resolution of its own still wants.
+   */
+  backgroundColor?: string
   /** Extra controls (e.g. a resize handle) rendered over the viewport. */
   children?: React.ReactNode
 }
@@ -362,6 +372,7 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({
   maxHeightPx = MAX_PREVIEW_HEIGHT,
   zoomPan = DEFAULT_MERMAID_ZOOM_PAN,
   background = DEFAULT_MERMAID_BACKGROUND,
+  backgroundColor,
   children,
 }) => {
   const appliedFitMode = effectiveFitMode(fitMode, zoomPan)
@@ -610,9 +621,11 @@ const MermaidSvgViewport: FunctionComponent<Props> = ({
           height: `${boxHeight}px`,
           overflow: viewportOverflowFor(hasSize),
           cursor: hasSize && zoomPan ? (isPanning ? 'grabbing' : 'grab') : 'default',
-          // `themed` paints the editor's own surface behind the diagram, which is
-          // what makes a light mermaid theme legible inside a dark app theme.
-          background: background === 'themed' ? 'var(--sn-stylekit-background-color)' : undefined,
+          // `themed` paints the surface the diagram belongs on, which is what
+          // makes a light mermaid theme legible inside a dark app theme. The
+          // caller resolves WHICH surface that is (see `backgroundColor`); with
+          // no caller opinion it is the app's own.
+          background: background === 'themed' ? (backgroundColor ?? 'var(--sn-stylekit-background-color)') : undefined,
         }}
         onDoubleClick={zoomPan ? onDoubleClick : undefined}
         onPointerDown={zoomPan ? onPointerDown : undefined}

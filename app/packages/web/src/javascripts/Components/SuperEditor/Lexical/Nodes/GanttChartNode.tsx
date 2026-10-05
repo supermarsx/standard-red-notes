@@ -13,6 +13,8 @@ import {
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import Icon from '@/Components/Icon/Icon'
 import MermaidSvgViewport from './MermaidSvgViewport'
+import { useMermaidAppTheme } from './MermaidAppTheme'
+import { resolveMermaidRenderTheme, resolveMermaidSurfaceColor, type MermaidRenderTheme } from './MermaidSettings'
 
 /**
  * Gantt-chart block. Reuses **mermaid** (already a dependency — see MermaidNode)
@@ -156,20 +158,6 @@ function loadMermaid(): Promise<typeof import('mermaid').default> {
   return mermaidPromise
 }
 
-function prefersDark(): boolean {
-  try {
-    const bg = getComputedStyle(document.body).backgroundColor
-    const match = bg.match(/\d+/g)
-    if (match && match.length >= 3) {
-      const [r, g, b] = match.map(Number)
-      return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5
-    }
-  } catch {
-    /* ignore */
-  }
-  return false
-}
-
 let renderSeq = 0
 
 // Exported (not just used internally) so its render contract — specifically,
@@ -196,8 +184,22 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
     [editor, nodeKey],
   )
 
+  // The APPLICATION's live theme, through the same resolution the Mermaid block
+  // uses. This block used to make its own, worse decision: a `prefersDark()`
+  // that read `getComputedStyle(document.body).backgroundColor` — which reports
+  // `rgba(0, 0, 0, 0)` on a body with no background of its own and therefore
+  // claimed "dark" — and which nothing re-read, so the chart kept whichever
+  // polarity it was first rendered with for the lifetime of the note. A gantt
+  // chart is also the diagram type that suffers most from mermaid's coarse
+  // `theme: 'dark'`: its section bands stay a hardcoded yellow and a near-white
+  // `#EAE8D9` no matter what, which is why `resolveMermaidRenderTheme` renders
+  // the app's palette through mermaid's `base` theme instead.
+  const appTheme = useMermaidAppTheme()
+  const activeTheme = resolveMermaidRenderTheme('app', appTheme)
+  const activeThemeKey = JSON.stringify(activeTheme)
+
   const render = useCallback(
-    async (source: GanttChartData) => {
+    async (source: GanttChartData, theme: MermaidRenderTheme) => {
       const code = buildGanttSource(source).trim()
       if (!source.tasks.length) {
         setSvg('')
@@ -209,7 +211,8 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
-          theme: prefersDark() ? 'dark' : 'default',
+          theme: theme.theme,
+          themeVariables: theme.themeVariables,
           fontFamily: 'inherit',
         })
         const id = `gantt-${nodeKey}-${renderSeq++}`
@@ -223,10 +226,13 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
     [nodeKey],
   )
 
+  // Re-renders on a LIVE theme change as well as on a data change: the SVG is
+  // held in state with the previous theme's colours baked into its own <style>,
+  // so nothing short of a new render restyles it.
   useEffect(() => {
-    void render(data)
+    void render(data, activeTheme)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data])
+  }, [data, activeThemeKey])
 
   const setTitle = (title: string) => mutate((d) => (d.title = title))
   const setTaskField = (index: number, field: keyof GanttTask, value: string) =>
@@ -321,7 +327,16 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
 
       <div className="p-2">
         {svg ? (
-          <MermaidSvgViewport svg={svg} />
+          // `themed`, not transparent: a gantt chart's own alternating section
+          // bands ARE a background, so the box has to agree with them or the
+          // bands end at the chart's edge over a differently-coloured page.
+          // The colour is the app's surface, resolved the same way the Mermaid
+          // block resolves its own.
+          <MermaidSvgViewport
+            svg={svg}
+            background="themed"
+            backgroundColor={resolveMermaidSurfaceColor('themed', 'app', appTheme)}
+          />
         ) : (
           !error && (
             <div className="text-passive-1 text-sm" data-srn-print-exclude="true">

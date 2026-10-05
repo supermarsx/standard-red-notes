@@ -295,14 +295,25 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
   })
 
   /**
-   * The rule that keeps an existing note looking the way it was authored: the
-   * default theme MODE moved to `app` (follow the application's light/dark theme)
-   * in version 4, but versions 2 and 3 always WROTE a `theme`, so every existing
-   * diagram carries an explicit one and keeps it. Only a diagram with no theme at
-   * all — a version-1 node — picks up the new default.
+   * The rule, and the ONE place "an old note keeps its appearance" is traded
+   * against "the operator's existing notes never adapt to anything".
+   *
+   * This file previously asserted that EVERY version-2/3 stored theme is kept,
+   * on the reasoning that versions 2 and 3 always wrote a `theme`, so a stored
+   * value is a choice. The second half does not follow: those builds wrote
+   * `theme` whether or not the user had chosen anything, and their default was
+   * literally mermaid's light `default` theme (`DEFAULT_MERMAID_THEME` in
+   * `git show 768b9a14:…/MermaidNode.tsx`). So a stored `default` at those
+   * versions is overwhelmingly "nobody ever asked", and keeping it is what made
+   * every pre-existing diagram render light inside a dark app — the breakage the
+   * operator reported as diagrams not adapting "overall".
+   *
+   * The serialized VERSION is the honest discriminator: below 4, `app` was not
+   * expressible, so `default` there means "unset" and becomes `app`. Every other
+   * name was never a default, so it is a deliberate choice at any version.
    */
-  it('keeps a version-2/3 stored theme rather than adopting the new default', () => {
-    for (const stored of ['default', 'dark', 'forest', 'neutral', 'base']) {
+  it('keeps every version-2/3 stored theme that was never a default', () => {
+    for (const stored of ['dark', 'forest', 'neutral', 'base']) {
       const json = inEditor(() =>
         MermaidNode.importJSON({
           type: 'mermaid',
@@ -313,6 +324,36 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
         } as unknown as SerializedMermaidNode).exportJSON(),
       )
       expect(json.theme).toBe(stored)
+    }
+  })
+
+  it('adopts the app-following default for a version-2/3 node left on the old default', () => {
+    for (const version of [1, 2, 3]) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version,
+          code: CODE,
+          theme: 'default',
+          viewMode: 'split',
+        } as unknown as SerializedMermaidNode).exportJSON(),
+      )
+      expect(json.theme).toBe('app')
+    }
+  })
+
+  it('keeps `default` from version 4 on, where choosing the app mode was possible', () => {
+    for (const version of [MERMAID_VERSION, MERMAID_VERSION + 1]) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version,
+          code: CODE,
+          theme: 'default',
+          viewMode: 'split',
+        } as unknown as SerializedMermaidNode).exportJSON(),
+      )
+      expect(json.theme).toBe('default')
     }
   })
 
@@ -344,7 +385,9 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
     // And nothing it DID store was lost.
     expect(json.width).toBe('50%')
     expect(json.height).toBe(300)
-    expect(json.theme).toBe('default')
+    // Except the one field that was never a stored CHOICE at this version — see
+    // the migration above.
+    expect(json.theme).toBe('app')
   })
 })
 
