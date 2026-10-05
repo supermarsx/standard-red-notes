@@ -1,9 +1,11 @@
 import { MutatorClientInterface } from './../Mutator/MutatorClientInterface'
 import {
   ClientDisplayableError,
+  HttpResponse,
   isClientDisplayableError,
   isErrorResponse,
   SharedVaultMoveType,
+  StartUploadSessionResponse,
   ValetTokenOperation,
 } from '@standardnotes/responses'
 import {
@@ -53,6 +55,8 @@ import {
   LocalOnlyFileUploadOperation,
   FileSocketTransportInterface,
   SocketPreferredFilesApi,
+  DownloadFileParams,
+  FileOwnershipType,
 } from '@standardnotes/files'
 import { AlertService, ButtonType } from '../Alert/AlertService'
 import { ChallengeServiceInterface } from '../Challenge'
@@ -67,11 +71,103 @@ import { diagnoseDeleteFileFailure } from './DeleteFileFailure'
 
 const OneHundredMb = 100 * 1_000_000
 
+/**
+ * Stands in for the READ valet token for the lifetime of a download operation that
+ * may never need one.
+ *
+ * It is never transmitted: `LazyReadValetTokenFilesApi.downloadFile` is the only
+ * code that hands a token to the HTTP client, and it always substitutes the token
+ * it has just minted. Deliberately non-empty and self-describing so that if some
+ * future path ever did send it, the server's rejection names this bug instead of
+ * reading as an ordinary expired credential.
+ */
+const DeferredReadValetTokenPlaceholder = 'deferred-read-valet-token-not-yet-minted'
+
+/**
+ * Wraps the HTTP files client so that a download's READ valet token is minted at
+ * the moment HTTP is actually about to carry the bytes, and not a moment earlier.
+ *
+ * Why it sits *underneath* `SocketPreferredFilesApi` rather than over it: which
+ * transport carries a download is not decided until `SocketPreferredFilesApi`
+ * runs, and that decision can still land on HTTP well after the lane looked
+ * available — the lane may not be negotiated, a shared vault's owner may not be
+ * resolvable locally, the socket may report the lane unavailable, or it may fail
+ * having delivered nothing. Every one of those paths reaches HTTP through
+ * `http.downloadFile`, which is this method, so there is no window in which the
+ * transport has been chosen and the mint has already been skipped.
+ *
+ * Minting happens once per `downloadFile` call, never once per range: the HTTP
+ * client issues every range of a multi-chunk file under the single token it is
+ * given, and the server consumes that single-use token on the final range.
+ */
+class LazyReadValetTokenFilesApi implements FilesApiInterface {
+  constructor(
+    private readonly http: FilesApiInterface,
+    private readonly mintReadToken: () => Promise<string | ClientDisplayableError>,
+  ) {}
+
+  async downloadFile(params: DownloadFileParams): Promise<ClientDisplayableError | undefined> {
+    const tokenResult = await this.mintReadToken()
+
+    if (tokenResult instanceof ClientDisplayableError) {
+      return tokenResult
+    }
+
+    // Minting is a network round trip of its own. A caller that gave up while it
+    // was in flight must not then have the download it cancelled begin; matching
+    // the HTTP client, an aborted download is reported as a non-error.
+    if (params.abortSignal?.aborted === true || params.shouldAbort?.() === true) {
+      return undefined
+    }
+
+    return this.http.downloadFile({ ...params, valetToken: tokenResult })
+  }
+
+  createUserFileValetToken(
+    remoteIdentifier: string,
+    operation: ValetTokenOperation,
+    unencryptedFileSize?: number,
+  ): Promise<string | ClientDisplayableError> {
+    return this.http.createUserFileValetToken(remoteIdentifier, operation, unencryptedFileSize)
+  }
+
+  startUploadSession(
+    valetToken: string,
+    ownershipType: FileOwnershipType,
+  ): Promise<HttpResponse<StartUploadSessionResponse>> {
+    return this.http.startUploadSession(valetToken, ownershipType)
+  }
+
+  uploadFileBytes(
+    valetToken: string,
+    ownershipType: FileOwnershipType,
+    chunkId: number,
+    encryptedBytes: Uint8Array,
+  ): Promise<boolean> {
+    return this.http.uploadFileBytes(valetToken, ownershipType, chunkId, encryptedBytes)
+  }
+
+  closeUploadSession(valetToken: string, ownershipType: FileOwnershipType): Promise<boolean | ClientDisplayableError> {
+    return this.http.closeUploadSession(valetToken, ownershipType)
+  }
+
+  moveFile(valetToken: string): Promise<boolean> {
+    return this.http.moveFile(valetToken)
+  }
+
+  deleteFile(valetToken: string, ownershipType: FileOwnershipType): Promise<HttpResponse> {
+    return this.http.deleteFile(valetToken, ownershipType)
+  }
+
+  getFilesDownloadUrl(ownershipType: FileOwnershipType): string {
+    return this.http.getFilesDownloadUrl(ownershipType)
+  }
+}
+
 export class FileService extends AbstractService implements FilesClientInterface {
   private encryptedCache: FileMemoryCache = new FileMemoryCache(OneHundredMb)
   private sharedVault: SharedVaultServerInterface
   private localFileBackend?: LocalFileBackendInterface
-  private socketPreferredApi?: FilesApiInterface
   private socketTransport?: FileSocketTransportInterface
   private sharedVaultOwnerResolver?: (sharedVaultUuid: string) => string | undefined
 
@@ -102,7 +198,6 @@ export class FileService extends AbstractService implements FilesClientInterface
    */
   public setFileSocketTransport(transport: FileSocketTransportInterface | undefined): void {
     this.socketTransport = transport
-    this.rebuildSocketPreferredApi()
   }
 
   /**
@@ -117,24 +212,26 @@ export class FileService extends AbstractService implements FilesClientInterface
    */
   public setSharedVaultOwnerResolver(resolve: ((sharedVaultUuid: string) => string | undefined) | undefined): void {
     this.sharedVaultOwnerResolver = resolve
-    this.rebuildSocketPreferredApi()
   }
 
-  private rebuildSocketPreferredApi(): void {
-    this.socketPreferredApi = this.socketTransport
-      ? new SocketPreferredFilesApi(this.api, this.socketTransport, this.sharedVaultOwnerResolver)
-      : undefined
-  }
-
-  /** Downloads may use the socket; every other file operation stays on HTTP. */
-  private get downloadApi(): FilesApiInterface {
-    return this.socketPreferredApi ?? this.api
+  /**
+   * Assembles the client one download will use: socket-preferred when a transport
+   * is installed, HTTP otherwise, with `http` underneath in both cases.
+   *
+   * Built per download rather than cached because `http` carries that download's
+   * own single-use READ token mint. The decorator itself is stateless, and both
+   * the liveness check and the fallback it may take happen inside it, so the
+   * transport decision is still made as late as it ever was.
+   */
+  private downloadApiOver(http: FilesApiInterface): FilesApiInterface {
+    return this.socketTransport
+      ? new SocketPreferredFilesApi(http, this.socketTransport, this.sharedVaultOwnerResolver)
+      : http
   }
 
   override deinit(): void {
     super.deinit()
 
-    this.socketPreferredApi = undefined
     this.socketTransport = undefined
     this.sharedVaultOwnerResolver = undefined
     this.encryptedCache.clear()
@@ -317,6 +414,26 @@ export class FileService extends AbstractService implements FilesClientInterface
     }
 
     return valetTokenResponse.data.valetToken
+  }
+
+  /**
+   * Mints the single-use READ token for one download, from whichever endpoint
+   * owns the file: `POST /v1/files/valet-tokens` for a personal file, and
+   * `POST /v1/shared-vaults/{uuid}/valet-tokens` for one in a shared vault.
+   *
+   * Both are equally deferred. A shared-vault download can take the socket too —
+   * whenever its owner resolves from the vault listing — so minting it eagerly
+   * would waste exactly the same round trip.
+   */
+  private createReadValetToken(file: FileItem): Promise<string | ClientDisplayableError> {
+    return file.shared_vault_uuid
+      ? this.createSharedVaultValetToken({
+          sharedVaultUuid: file.shared_vault_uuid,
+          remoteIdentifier: file.remoteIdentifier,
+          operation: ValetTokenOperation.Read,
+          fileUuidRequiredForExistingFiles: file.uuid,
+        })
+      : this.createUserValetToken(file.remoteIdentifier, ValetTokenOperation.Read)
   }
 
   public async moveFileToSharedVault(
@@ -599,24 +716,32 @@ export class FileService extends AbstractService implements FilesClientInterface
       const cacheEntryChunks: Uint8Array[] = []
       let cacheEntrySize = 0
 
-      const tokenResult = file.shared_vault_uuid
-        ? await this.createSharedVaultValetToken({
-            sharedVaultUuid: file.shared_vault_uuid,
-            remoteIdentifier: file.remoteIdentifier,
-            operation: ValetTokenOperation.Read,
-            fileUuidRequiredForExistingFiles: file.uuid,
-          })
-        : await this.createUserValetToken(file.remoteIdentifier, ValetTokenOperation.Read)
-
       if (options?.signal?.aborted) {
         return undefined
       }
 
-      if (tokenResult instanceof ClientDisplayableError) {
-        return tokenResult
-      }
+      /**
+       * The READ token is minted lazily, by the wrapper below, only if the HTTP
+       * client is actually reached. A socket download never mints one — it is the
+       * gateway, not this client, that authorizes that lane — and an eager mint
+       * there is a wasted authenticated round trip on every single image view.
+       *
+       * The decision cannot be taken here: `isFileLaneAvailable()` answers for
+       * this instant, and the lane can still be gone by the time the bytes move.
+       * Deferring the mint all the way down to the one call that transmits a
+       * token means every fallback — lane never negotiated, owner unresolvable,
+       * socket failed with nothing delivered — still mints, just later.
+       */
+      const downloadApi = this.downloadApiOver(
+        new LazyReadValetTokenFilesApi(this.api, () => this.createReadValetToken(file)),
+      )
 
-      const operation = new DownloadAndDecryptFileOperation(file, this.crypto, this.downloadApi, tokenResult)
+      const operation = new DownloadAndDecryptFileOperation(
+        file,
+        this.crypto,
+        downloadApi,
+        DeferredReadValetTokenPlaceholder,
+      )
 
       // Tear down the in-flight download/decrypt if the caller aborts (e.g. the preview modal
       // is closed mid-download). Always remove the listener when this run settles;

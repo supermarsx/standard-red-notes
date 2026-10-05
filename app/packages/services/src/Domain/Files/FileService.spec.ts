@@ -12,11 +12,15 @@ import { FileService } from './FileService'
 import {
   BackupServiceInterface,
   DownloadAndDecryptFileOperation,
+  DownloadFileParams,
   FileHandleRead,
   FileSystemApi,
+  SocketFileDownloadOutcome,
+  SocketFileDownloadRequest,
 } from '@standardnotes/files'
 import { HttpServiceInterface } from '@standardnotes/api'
 import { LoggerInterface } from '@standardnotes/utils'
+import { ClientDisplayableError, ValetTokenOperation } from '@standardnotes/responses'
 
 describe('fileService', () => {
   let apiService: LegacyApiServiceInterface
@@ -687,5 +691,313 @@ describe('fileService', () => {
     await expect(fileService.readBackupFileAndSaveDecrypted({} as FileHandleRead, file, fileSystem)).resolves.toBe(
       'failed',
     )
+  })
+
+  describe('lazy read valet token', () => {
+    /**
+     * A read valet token is a `POST /v1/files/valet-tokens` round trip of its own,
+     * and the socket download path never sends one — the gateway authorizes that
+     * lane itself. These cover the four crossings between the two transports, and
+     * in each one the load-bearing assertion is about the mint that must NOT
+     * happen, or the single mint that must.
+     */
+    const networkFile = (uuid: string, encryptedChunkSizes: number[] = [1], sharedVaultUuid?: string) => {
+      const encryptedSize = encryptedChunkSizes.reduce((total, size) => total + size, 0)
+
+      return {
+        uuid,
+        localOnly: false,
+        decryptedSize: encryptedSize,
+        encryptedSize,
+        encryptedChunkSizes,
+        remoteIdentifier: `remote-${uuid}`,
+        encryptionHeader: 'header',
+        key: 'key',
+        shared_vault_uuid: sharedVaultUuid,
+      } as unknown as jest.Mocked<FileItem>
+    }
+
+    /** Emits one HTTP range per encrypted chunk, recording the token each range carried. */
+    const recordHttpRanges = (rangeTokens: string[]) => {
+      apiService.downloadFile = jest.fn().mockImplementation(async (params: DownloadFileParams) => {
+        for (let index = 0; index < params.file.encryptedChunkSizes.length; index++) {
+          if (params.shouldAbort?.()) {
+            break
+          }
+          rangeTokens.push(params.valetToken)
+          await params.onBytesReceived(new Uint8Array(params.file.encryptedChunkSizes[index]))
+        }
+
+        return undefined
+      })
+    }
+
+    const decryptorYielding = (chunkCount: number) => {
+      let index = 0
+      crypto.xchacha20StreamDecryptorPush = jest.fn().mockImplementation(() => ({
+        message: new Uint8Array([0xaa]),
+        tag:
+          ++index === chunkCount
+            ? SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL
+            : SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH,
+      }))
+    }
+
+    beforeEach(() => {
+      backupService.getFileBackupInfo = jest.fn().mockResolvedValue(undefined)
+      apiService.createUserFileValetToken = jest.fn().mockResolvedValue('valet-token')
+    })
+
+    it('mints no read valet token at all when the socket lane carries the download', async () => {
+      const file = networkFile('socket-download')
+      const downloadFileOverSocket = jest
+        .fn()
+        .mockImplementation(async (request: SocketFileDownloadRequest): Promise<SocketFileDownloadOutcome> => {
+          await request.onBytes(new Uint8Array(1))
+
+          return { outcome: 'completed', sha256: 'sha' }
+        })
+
+      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+
+      const onBytes = jest.fn().mockResolvedValue(undefined)
+      const error = await fileService.downloadFile(file, onBytes)
+
+      expect(error).toBeUndefined()
+      expect(downloadFileOverSocket).toHaveBeenCalledTimes(1)
+      expect(onBytes).toHaveBeenCalledTimes(1)
+      // The whole point of the change: not one authenticated round trip spent on a
+      // credential the socket lane never presents.
+      expect(apiService.createUserFileValetToken).not.toHaveBeenCalled()
+      expect(apiService.downloadFile).not.toHaveBeenCalled()
+    })
+
+    it('mints no shared-vault read valet token when the socket lane carries the download', async () => {
+      const file = networkFile('socket-shared-vault', [1], 'vault-uuid')
+      const createSharedVaultFileValetToken = jest.fn()
+      fileService['sharedVault'] = {
+        createSharedVaultFileValetToken,
+      } as unknown as (typeof fileService)['sharedVault']
+      fileService.setSharedVaultOwnerResolver(() => 'owner-uuid')
+
+      const downloadFileOverSocket = jest
+        .fn()
+        .mockImplementation(async (request: SocketFileDownloadRequest): Promise<SocketFileDownloadOutcome> => {
+          await request.onBytes(new Uint8Array(1))
+
+          return { outcome: 'completed', sha256: 'sha' }
+        })
+      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+
+      const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
+
+      expect(error).toBeUndefined()
+      expect(downloadFileOverSocket).toHaveBeenCalledTimes(1)
+      expect(createSharedVaultFileValetToken).not.toHaveBeenCalled()
+      expect(apiService.downloadFile).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['no transport is installed', undefined],
+      ['the lane is not available', false],
+    ])('still mints the read valet token, and downloads over HTTP, when %s', async (_case, laneAvailable) => {
+      const file = networkFile('http-download')
+      const rangeTokens: string[] = []
+      recordHttpRanges(rangeTokens)
+
+      const downloadFileOverSocket = jest.fn()
+      if (laneAvailable !== undefined) {
+        fileService.setFileSocketTransport({ isFileLaneAvailable: () => laneAvailable, downloadFileOverSocket })
+      }
+
+      const onBytes = jest.fn().mockResolvedValue(undefined)
+      const error = await fileService.downloadFile(file, onBytes)
+
+      expect(error).toBeUndefined()
+      expect(downloadFileOverSocket).not.toHaveBeenCalled()
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(1)
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledWith(
+        'remote-http-download',
+        ValetTokenOperation.Read,
+        undefined,
+      )
+      // The minted token, not the placeholder the operation was constructed with.
+      expect(rangeTokens).toEqual(['valet-token'])
+      expect(onBytes).toHaveBeenCalledTimes(1)
+    })
+
+    it('still mints the shared-vault read valet token when the vault owner cannot be resolved', async () => {
+      const file = networkFile('http-shared-vault', [1], 'vault-uuid')
+      const createSharedVaultFileValetToken = jest
+        .fn()
+        .mockResolvedValue({ status: 200, data: { valetToken: 'shared-vault-token' } })
+      fileService['sharedVault'] = {
+        createSharedVaultFileValetToken,
+      } as unknown as (typeof fileService)['sharedVault']
+
+      const downloadFileOverSocket = jest.fn()
+      // Lane live, but the vault listing that records the owner is not loaded, so
+      // `SocketPreferredFilesApi` declines the socket and falls back to HTTP.
+      fileService.setSharedVaultOwnerResolver(() => undefined)
+      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+
+      const rangeTokens: string[] = []
+      recordHttpRanges(rangeTokens)
+
+      const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
+
+      expect(error).toBeUndefined()
+      expect(downloadFileOverSocket).not.toHaveBeenCalled()
+      expect(createSharedVaultFileValetToken).toHaveBeenCalledTimes(1)
+      expect(createSharedVaultFileValetToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sharedVaultUuid: 'vault-uuid',
+          fileUuid: 'http-shared-vault',
+          operation: ValetTokenOperation.Read,
+        }),
+      )
+      expect(rangeTokens).toEqual(['shared-vault-token'])
+    })
+
+    it.each([
+      ['reports the lane gone', { outcome: 'unavailable' } as SocketFileDownloadOutcome],
+      [
+        'fails having delivered nothing',
+        {
+          outcome: 'failed',
+          code: 'socket-closed',
+          retryable: true,
+          safeToFallback: true,
+        } as SocketFileDownloadOutcome,
+      ],
+    ])(
+      'mints the read valet token after the fact when the lane is available at check time but %s',
+      async (_case, outcome) => {
+        const file = networkFile('lane-dropped')
+        const order: string[] = []
+
+        const downloadFileOverSocket = jest.fn().mockImplementation(async () => {
+          order.push('socket-attempt')
+
+          return outcome
+        })
+        fileService.setFileSocketTransport({
+          isFileLaneAvailable: jest.fn(() => {
+            order.push('lane-check')
+
+            return true
+          }),
+          downloadFileOverSocket,
+        })
+
+        apiService.createUserFileValetToken = jest.fn().mockImplementation(async () => {
+          order.push('mint')
+
+          return 'valet-token'
+        })
+        apiService.downloadFile = jest.fn().mockImplementation(async (params: DownloadFileParams) => {
+          order.push(`http:${params.valetToken}`)
+          await params.onBytesReceived(new Uint8Array(params.file.encryptedChunkSizes[0]))
+
+          return undefined
+        })
+
+        const onBytes = jest.fn().mockResolvedValue(undefined)
+        const error = await fileService.downloadFile(file, onBytes)
+
+        // Succeeds over HTTP, and — the part that closes the window — the mint
+        // happens strictly AFTER the transport was chosen and lost, never before.
+        expect(error).toBeUndefined()
+        expect(order).toEqual(['lane-check', 'socket-attempt', 'mint', 'http:valet-token'])
+        expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(1)
+        expect(onBytes).toHaveBeenCalledTimes(1)
+      },
+    )
+
+    it('does not fall back, or mint, when the socket failed after delivering bytes', async () => {
+      const file = networkFile('socket-partial')
+      const downloadFileOverSocket = jest
+        .fn()
+        .mockImplementation(async (request: SocketFileDownloadRequest): Promise<SocketFileDownloadOutcome> => {
+          await request.onBytes(new Uint8Array(1))
+
+          return { outcome: 'failed', code: 'socket-closed', retryable: true, safeToFallback: false }
+        })
+      fileService.setFileSocketTransport({ isFileLaneAvailable: () => true, downloadFileOverSocket })
+
+      const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
+
+      expect(error?.text).toContain('socket-closed')
+      expect(apiService.createUserFileValetToken).not.toHaveBeenCalled()
+      expect(apiService.downloadFile).not.toHaveBeenCalled()
+    })
+
+    it('mints exactly one read valet token for a multi-chunk HTTP download, used on every range', async () => {
+      const file = networkFile('multi-chunk-http', [2, 2, 2])
+      decryptorYielding(3)
+
+      const rangeTokens: string[] = []
+      recordHttpRanges(rangeTokens)
+
+      const onBytes = jest.fn().mockResolvedValue(undefined)
+      const error = await fileService.downloadFile(file, onBytes)
+
+      expect(error).toBeUndefined()
+      expect(onBytes).toHaveBeenCalledTimes(3)
+      // Single-use token: minted once, carried by all three ranges, and consumed
+      // server-side on the final one. One mint per range would be a 401 storm.
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(1)
+      expect(apiService.downloadFile).toHaveBeenCalledTimes(1)
+      expect(rangeTokens).toEqual(['valet-token', 'valet-token', 'valet-token'])
+    })
+
+    it('mints exactly one read valet token when the lane drops and HTTP serves a multi-chunk file', async () => {
+      const file = networkFile('multi-chunk-fallback', [2, 2, 2])
+      decryptorYielding(3)
+
+      const rangeTokens: string[] = []
+      recordHttpRanges(rangeTokens)
+      fileService.setFileSocketTransport({
+        isFileLaneAvailable: () => true,
+        downloadFileOverSocket: jest.fn().mockResolvedValue({ outcome: 'unavailable' }),
+      })
+
+      const error = await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
+
+      expect(error).toBeUndefined()
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(1)
+      expect(rangeTokens).toEqual(['valet-token', 'valet-token', 'valet-token'])
+    })
+
+    it('reports a failed mint, and starts no download, exactly as the eager mint did', async () => {
+      const file = networkFile('mint-failure')
+      apiService.createUserFileValetToken = jest
+        .fn()
+        .mockResolvedValue(new ClientDisplayableError('Could not create valet token'))
+
+      const onBytes = jest.fn().mockResolvedValue(undefined)
+      const error = await fileService.downloadFile(file, onBytes)
+
+      expect(error?.text).toBe('Could not create valet token')
+      expect(apiService.downloadFile).not.toHaveBeenCalled()
+      expect(onBytes).not.toHaveBeenCalled()
+      expect(fileService['encryptedCache'].get(file.uuid)).toBeFalsy()
+    })
+
+    it('mints again for a second download of the same file rather than replaying a consumed token', async () => {
+      const file = networkFile('second-download')
+      const rangeTokens: string[] = []
+      recordHttpRanges(rangeTokens)
+
+      let minted = 0
+      apiService.createUserFileValetToken = jest.fn().mockImplementation(async () => `valet-token-${++minted}`)
+
+      await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
+      fileService['encryptedCache'].remove(file.uuid)
+      await fileService.downloadFile(file, jest.fn().mockResolvedValue(undefined))
+
+      expect(apiService.createUserFileValetToken).toHaveBeenCalledTimes(2)
+      expect(rangeTokens).toEqual(['valet-token-1', 'valet-token-2'])
+    })
   })
 })
