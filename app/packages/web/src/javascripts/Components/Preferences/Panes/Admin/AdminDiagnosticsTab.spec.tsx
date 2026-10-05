@@ -696,14 +696,83 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
     const text = await openWebsocket()
 
     expect(text).toContain('Gateway admission and traffic')
-    expect(text).toContain('Nothing populates these counters on any deployment yet')
-    expect(text).toContain('Every row here appears the moment one is reported')
+    expect(text).toContain('reported no admission counters at all')
+    expect(text).toContain('appears the moment the block arrives')
     expect(text).toContain('Lane degradation ledger')
     expect(text).toContain('This client build records no lane-degradation ledger')
     expect(text).toContain('absence of evidence, not evidence of none')
     // The rows are gone, not merely empty — and a zero is still nowhere near them.
     expect(text).not.toContain('Sockets the gateway holds now')
     expect(text).not.toContain('This client’s origin admitted')
+  })
+
+  /**
+   * *** THE ADMISSION BLOCK, THROUGH THE REAL TAB. ***
+   *
+   * It is the last block that had no producer, and a shape declared but not
+   * threaded is the defect this directory keeps repeating: a ledger the server
+   * was already sending, with a payload type that did not say so, left every row
+   * reading "not reported" on a deployment that was reporting. Read out of the
+   * mounted table rather than off the builder, and driven through
+   * `payload.admission` because that is the path a real deployment takes.
+   */
+  it('threads the admission block, so the ten counter rows render as values', async () => {
+    await openWebsocket(
+      makeApplication({
+        serverGetJsonRequest: jest.fn().mockResolvedValue({
+          status: 200,
+          ok: true,
+          data: {
+            ...unavailablePayload,
+            admission: {
+              originAdmitted: true,
+              allowedOriginCount: 2,
+              allowsSameOrigin: true,
+              liveSockets: 4,
+              ticketsIssued: 11,
+              ticketsRefused: 0,
+              handshakeRejected: 0,
+              rejections: { originNotAllowed: 1, queryStringNotPermitted: 0, unavailable: 0 },
+            },
+          },
+        }),
+      }),
+    )
+
+    expect(sectionRow('Origin rules the gateway admits on')[1]).toBe('2')
+    expect(sectionRow('Sockets the gateway holds now')[1]).toBe('4')
+    expect(sectionRow('Tickets issued since attach')[1]).toBe('11')
+    expect(sectionRow('Tickets refused since attach')[1]).toBe('0')
+    expect(sectionRow('Connections refused since attach: origin not allowed')[1]).toBe('1')
+    // A positive admission is NECESSARY and nowhere near sufficient, so it caps.
+    expect(sectionRow('This client’s origin admitted')[1]).toBe('yes')
+    expect(sectionRow('This client’s origin admitted')[2]).toBe('Unknown')
+    expect(activePanel().textContent).not.toContain('reported no admission counters at all')
+  })
+
+  /**
+   * The server omits the whole block when no gateway is attached, and the pane
+   * must say THAT rather than "this server reported nothing" — which would send
+   * an operator looking for a missing endpoint instead of at the boot gate, where
+   * the actual finding is.
+   */
+  it('says no gateway is attached rather than blaming the server build', async () => {
+    const text = await openWebsocket(
+      makeApplication({
+        serverGetJsonRequest: jest.fn().mockResolvedValue({
+          status: 200,
+          ok: true,
+          data: {
+            ...unavailablePayload,
+            gate: { ...unavailablePayload.gate, recorded: true, gatewayAttached: false },
+          },
+        }),
+      }),
+    )
+
+    expect(text).toContain('No gateway is attached')
+    expect(text).toContain('the complete answer rather than a gap')
+    expect(text).not.toContain('reported no admission counters at all')
   })
 
   it('renders every realtime health row the gateway reported', async () => {

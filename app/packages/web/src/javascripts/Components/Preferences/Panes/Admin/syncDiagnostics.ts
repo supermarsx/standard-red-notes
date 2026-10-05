@@ -457,6 +457,49 @@ export type SyncDiagnosticsPayload = {
     separation?: string
     consumerCount?: number
   }
+  /**
+   * What the socket ADMITS and REFUSES, from the gateway that holds the sockets.
+   *
+   * Unreachable from a browser by construction: a refused upgrade is closed with
+   * a 1008 that no screen reads, and the browser that was refused is not the
+   * browser reading this pane. So the gateway is asked, and it answers with
+   * counts against closed causes — never an identified client, and never the
+   * allowlist's contents.
+   *
+   * *** ALL OR NOTHING, AND THAT IS A CONTRACT THE PANEL DEPENDS ON. *** The
+   * admission block renders all ten of its rows the moment ONE member is
+   * defined, so a partial fill would be nine rows reading "not reported" as
+   * though they had been measured and found empty. The server therefore omits
+   * the block ENTIRELY when no gateway is attached, rather than sending an empty
+   * one — and `rejections` is omitted on the same principle when no cause was
+   * admissible.
+   *
+   * Each member's LIFETIME is part of its meaning and is stated on the row that
+   * prints it: `liveSockets` is a windowed gauge, the counters are monotonic
+   * since the gateway attached, `originAdmitted` is per request, and the two
+   * origin members are configuration.
+   */
+  admission?: {
+    /** Per REQUEST. Absent when the request named no origin, which is not `false`. */
+    originAdmitted?: boolean
+    /** How many origin RULES admit a client: allowlist entries, plus one for same-origin. */
+    allowedOriginCount?: number
+    allowsSameOrigin?: boolean
+    /** WINDOWED — a gauge at the instant of capture, never a total. */
+    liveSockets?: number
+    /** MONOTONIC SINCE ATTACH. */
+    ticketsIssued?: number
+    /** MONOTONIC SINCE ATTACH. Reads 0 on a structurally down lane; see the row. */
+    ticketsRefused?: number
+    /** MONOTONIC SINCE ATTACH. */
+    handshakeRejected?: number
+    /** MONOTONIC SINCE ATTACH, by closed cause. Omitted rather than sent empty. */
+    rejections?: {
+      originNotAllowed?: number
+      queryStringNotPermitted?: number
+      unavailable?: number
+    }
+  }
   gate?: {
     recorded?: boolean
     gatewayAttached?: boolean

@@ -1384,17 +1384,17 @@ describe('gateway admission and traffic', () => {
   it('reports each rejection cause as its own count, and never as zero when absent', () => {
     const model = build({ counters: counters({ rejections: { originNotAllowed: 7 } }) })
 
-    expect(String(rowOf(model, 'Connections refused: origin not allowed').value)).toBe('7')
-    expect(rowOf(model, 'Connections refused: origin not allowed').verdict).toBe('degraded')
-    expect(String(rowOf(model, 'Connections refused: lane unavailable').value)).toBe(NOT_REPORTED)
-    expect(rowOf(model, 'Connections refused: lane unavailable').evidence.kind).toBe('absent')
+    expect(String(rowOf(model, 'Connections refused since attach: origin not allowed').value)).toBe('7')
+    expect(rowOf(model, 'Connections refused since attach: origin not allowed').verdict).toBe('degraded')
+    expect(String(rowOf(model, 'Connections refused since attach: lane unavailable').value)).toBe(NOT_REPORTED)
+    expect(rowOf(model, 'Connections refused since attach: lane unavailable').evidence.kind).toBe('absent')
   })
 
   it('reads a reported zero as a measurement rather than as silence', () => {
     const model = build({ counters: counters({ rejections: { unavailable: 0 }, liveSockets: 0 }) })
 
-    expect(String(rowOf(model, 'Connections refused: lane unavailable').value)).toBe('0')
-    expect(rowOf(model, 'Connections refused: lane unavailable').evidence.kind).toBe('direct')
+    expect(String(rowOf(model, 'Connections refused since attach: lane unavailable').value)).toBe('0')
+    expect(rowOf(model, 'Connections refused since attach: lane unavailable').evidence.kind).toBe('direct')
     expect(rowOf(model, 'Sockets the gateway holds now').verdict).toBe('informational')
   })
 
@@ -1403,10 +1403,10 @@ describe('gateway admission and traffic', () => {
   /* ------------------------------------------------------------------------ */
 
   /**
-   * No endpoint publishes any of these, so on every deployment today this block
-   * rendered ten rows each reading "not reported" — a panel that looks broken
-   * while saying nothing. It says it in one line instead, and the rows come back
-   * the moment ONE counter is reported, which the second half pins.
+   * While nothing published these, this block rendered ten rows each reading
+   * "not reported" — a panel that looks broken while saying nothing. It says it
+   * in one line instead, and the rows come back the moment ONE counter is
+   * reported, which the second half pins.
    */
   const ADMISSION = 'Gateway admission and traffic'
 
@@ -1416,9 +1416,218 @@ describe('gateway admission and traffic', () => {
 
       expect(block.rows).toEqual([])
       expect(block.findings).toEqual([])
-      expect(block.emptyNote).toContain('Nothing populates these counters on any deployment yet')
-      expect(block.emptyNote).toContain('appears the moment one is reported')
+      expect(block.emptyNote).toContain('reported no admission counters at all')
+      expect(block.emptyNote).toContain('appears the moment the block arrives')
     }
+  })
+
+  /**
+   * *** TWO SILENCES, TWO SENTENCES. ***
+   *
+   * The server publishes this block ALL OR NOTHING and omits it entirely when no
+   * gateway is attached, because a partial fill would be nine rows reading "not
+   * reported" as though they had been measured. So an empty block means one of
+   * two different things, and the gate block already carries the fact that
+   * separates them. Saying "this server reported nothing" over a deployment with
+   * no gateway sends an operator looking for a missing endpoint instead of at the
+   * boot gate three blocks up, which is where the actual finding is.
+   */
+  it('tells a gateway that is not attached apart from a server that sent nothing', () => {
+    const noGateway = blockOf(build({ payload: payload({ gate: gate({ gatewayAttached: false }) }) }), ADMISSION)
+    const olderServer = blockOf(build({ payload: payload({ gate: gate({ gatewayAttached: true }) }) }), ADMISSION)
+
+    expect(noGateway.emptyNote).toContain('No gateway is attached')
+    expect(noGateway.emptyNote).toContain('the complete answer rather than a gap')
+    expect(noGateway.emptyNote).not.toContain('reported no admission counters at all')
+
+    expect(olderServer.emptyNote).toContain('reported no admission counters at all')
+    expect(olderServer.emptyNote).not.toContain('No gateway is attached')
+
+    // Neither silence invents a verdict, and neither renders a row.
+    for (const block of [noGateway, olderServer]) {
+      expect(block.rows).toEqual([])
+      expect(block.findings).toEqual([])
+    }
+  })
+
+  it('does not answer which silence it is from an unrecorded gate', () => {
+    const block = blockOf(build({ payload: { gate: { recorded: false, gatewayAttached: false } } }), ADMISSION)
+
+    // `recorded: false` is silence about the gateway too, so the block must not
+    // read the stale boolean beside it as an answer.
+    expect(block.emptyNote).toContain('reported no admission counters at all')
+    expect(block.emptyNote).not.toContain('No gateway is attached')
+  })
+
+  /**
+   * *** THE WIRING ITSELF. ***
+   *
+   * The counters arrive on `payload.admission`, and a shape declared but not
+   * threaded is the defect `environmentSection.ts` records in its own header: it
+   * declared a ledger the server was already sending and every row read "not
+   * reported" on a deployment that was reporting. Driven through the payload
+   * rather than through `counters`, because that is the path a real deployment
+   * takes.
+   */
+  it('reads the admission block off the payload the gateway publishes', () => {
+    const model = build({
+      payload: payload({
+        admission: {
+          originAdmitted: true,
+          allowedOriginCount: 2,
+          allowsSameOrigin: true,
+          liveSockets: 3,
+          ticketsIssued: 9,
+          ticketsRefused: 0,
+          handshakeRejected: 0,
+          rejections: { originNotAllowed: 4, queryStringNotPermitted: 0, unavailable: 0 },
+        },
+      }),
+    })
+
+    expect(blockOf(model, ADMISSION).rows).toHaveLength(10)
+    expect(String(rowOf(model, 'Origin rules the gateway admits on').value)).toBe('2')
+    expect(String(rowOf(model, 'Sockets the gateway holds now').value)).toBe('3')
+    expect(String(rowOf(model, 'Tickets issued since attach').value)).toBe('9')
+    expect(String(rowOf(model, 'Connections refused since attach: origin not allowed').value)).toBe('4')
+    expect(rowOf(model, 'Connections refused since attach: origin not allowed').verdict).toBe('degraded')
+  })
+
+  /**
+   * *** EVERY COUNTER ROW STATES ITS LIFETIME, AND THE GAUGE SAYS IT IS NOT A
+   * TOTAL. ***
+   *
+   * A reader who takes the gauge for a total, or a total for a gauge, draws the
+   * wrong conclusion from both: a deployment that served a thousand sockets and
+   * holds none now reads zero on one row and a thousand on the next, and both are
+   * correct. The property is asserted over ALL SEVEN counter rows rather than at
+   * one of them, because a lifetime stated on six rows and missing from the
+   * seventh is exactly the row someone misreads.
+   */
+  it('says of every counter whether it is a total since attach or a gauge', () => {
+    const model = build({
+      payload: payload({
+        admission: {
+          liveSockets: 1,
+          ticketsIssued: 1,
+          ticketsRefused: 1,
+          handshakeRejected: 1,
+          rejections: { originNotAllowed: 1, queryStringNotPermitted: 1, unavailable: 1 },
+        },
+      }),
+    })
+
+    for (const label of [
+      'Tickets issued since attach',
+      'Tickets refused since attach',
+      'Handshakes rejected since attach',
+      'Connections refused since attach: origin not allowed',
+      'Connections refused since attach: query string not permitted',
+      'Connections refused since attach: lane unavailable',
+    ]) {
+      expect({ label, states: rowOf(model, label).note.includes('MONOTONIC SINCE THIS GATEWAY ATTACHED') }).toEqual({
+        label,
+        states: true,
+      })
+    }
+
+    // And the one that is NOT a total says so in the other direction.
+    const gauge = rowOf(model, 'Sockets the gateway holds now')
+    expect(gauge.note).toContain('WINDOWED')
+    expect(gauge.note).toContain('not a total since attach')
+    expect(gauge.note).not.toContain('MONOTONIC SINCE THIS GATEWAY ATTACHED')
+  })
+
+  /**
+   * *** A ZERO HERE IS THE ONE READING THAT CANNOT BE TRUSTED ON ITS OWN. ***
+   *
+   * A lane advertising no capability refuses the mint before it reaches the
+   * gateway's issuer, so this counter holds at zero while every client is being
+   * refused a 503. The row must point at the reasons that DO name that case
+   * rather than letting the zero read as "nobody was refused" — and it must not
+   * acquire a healthy verdict off it either.
+   */
+  it('does not let a zero ticket-refusal count read as nobody being refused', () => {
+    const row = rowOf(
+      build({ payload: payload({ admission: { ticketsRefused: 0, ticketsIssued: 0 } }) }),
+      'Tickets refused since attach',
+    )
+
+    expect(String(row.value)).toBe('0')
+    expect(row.verdict).toBe('informational')
+    expect(row.verdict).not.toBe('healthy')
+    expect(row.note).toContain('NOT "NOBODY WAS REFUSED"')
+    expect(row.note).toContain('refuses the mint BEFORE it reaches this issuer')
+    expect(row.note).toContain('live refusal reasons above')
+  })
+
+  /**
+   * The count is of RULES, and the same-origin rule is derived rather than
+   * listed. Counting list entries would read zero on every single container —
+   * which this row renders `broken` — so the wording has to say which it counts
+   * or the verdict is unreadable.
+   */
+  it('counts origin rules rather than allowlist entries, and says so', () => {
+    const derived = rowOf(
+      build({ payload: payload({ admission: { allowedOriginCount: 1, allowsSameOrigin: true } }) }),
+      'Origin rules the gateway admits on',
+    )
+    const none = rowOf(
+      build({ payload: payload({ admission: { allowedOriginCount: 0, allowsSameOrigin: false } }) }),
+      'Origin rules the gateway admits on',
+    )
+
+    expect(String(derived.value)).toBe('1')
+    expect(derived.verdict).toBe('informational')
+    expect(derived.note).toContain('counts RULES rather than allowlist entries')
+    expect(derived.note).toContain('PLUS one for the same-origin rule')
+
+    // Zero RULES is the lane's own condition and keeps its verdict.
+    expect(String(none.value)).toBe('0')
+    expect(none.verdict).toBe('broken')
+  })
+
+  /**
+   * A refusal on a lane that was never composed is counted here deliberately,
+   * because it is the cause the CLIENT was given: the same 1008 close. Re-labelling
+   * it would make the row disagree with what the browser was told.
+   */
+  it('keeps a never-composed lane refusal under the cause the client was given', () => {
+    const row = rowOf(
+      build({ payload: payload({ admission: { rejections: { originNotAllowed: 2 } } }) }),
+      'Connections refused since attach: origin not allowed',
+    )
+
+    expect(String(row.value)).toBe('2')
+    expect(row.note).toContain('never COMPOSED')
+    expect(row.note).toContain('same 1008 close')
+  })
+
+  /**
+   * `originAdmitted` is PER REQUEST and is omitted when the request named no
+   * origin. That absence must not become the `false` the pane renders as a
+   * conclusive fault with a finding behind it.
+   */
+  it('reads an unasked origin question as unasked, never as a refusal', () => {
+    const model = build({ payload: payload({ admission: { liveSockets: 0 } }) })
+    const row = rowOf(model, 'This client’s origin admitted')
+
+    expect(String(row.value)).toBe(NOT_REPORTED)
+    expect(row.verdict).toBe('undetermined')
+    /**
+     * *** `claimed` AS WELL AS `verdict`, AND THE MUTANT THAT PROVED IT. ***
+     *
+     * Absent evidence caps every claim to `undetermined`, so a builder that said
+     * `broken` for an unasked question renders identically and this assertion
+     * passed over it. `claimed` is stored precisely so a cap is VISIBLE rather
+     * than silently absorbing a misstatement — the row would be on record as
+     * having claimed a refusal nobody was told about, and the next author to
+     * widen the evidence would ship it.
+     */
+    expect(row.claimed).toBe('undetermined')
+    expect(row.evidence.kind).toBe('absent')
+    expect(row.note).toContain('is NOT a no')
+    expect(codesOf(model)).not.toContain('SOCKET_ORIGIN_NOT_ADMITTED')
   })
 
   it('renders its rows again the moment any single counter is reported', () => {
@@ -2021,10 +2230,32 @@ describe('the copyable report', () => {
         },
       },
       protocol: { version: 1, serverOperations: [secret] },
+      /**
+       * *** THE ADMISSION BLOCK HAS NO STRING FIELD, AND ITS ONE WIRE-CHOSEN
+       * NAME IS POISONED ANYWAY. ***
+       *
+       * Every member is a boolean, a bounded count or a record keyed by a cause
+       * this build declares, so there is nothing in the shape a value could ride
+       * in on — which is why the server was asked for it in that shape. The one
+       * thing the SERVER still chooses is a KEY of `rejections`, exactly as it
+       * chooses the keys of `deployment.presence`, so a key off the wire is
+       * planted here and must reach neither a label nor a count. Reading by this
+       * build's own closed tuple is what refuses it; nothing is scrubbed.
+       */
+      admission: {
+        originAdmitted: false,
+        allowedOriginCount: 1,
+        allowsSameOrigin: true,
+        liveSockets: 2,
+        ticketsIssued: 1,
+        ticketsRefused: 1,
+        handshakeRejected: 1,
+        rejections: { originNotAllowed: 3, [secret]: 9 } as Record<string, number>,
+      },
     },
     transport: transport(),
     ledger: poisonedLedger(secret),
-    counters: counters({ originAdmitted: false, allowedOriginCount: 1, ticketsIssued: 1, handshakeRejected: 1 }),
+    counters: counters(),
   })
 
   /**
@@ -2049,6 +2280,16 @@ describe('the copyable report', () => {
       for (const [field, value] of fields) {
         expect({ field, poisoned: value.includes(secret) }).toEqual({ field, poisoned: true })
       }
+
+      // The admission block's one server-chosen name, held to the same rule: a
+      // plant that stops being in the input cannot be kept out of the output by
+      // anything, and its half of the scan would read green forever.
+      expect({
+        field: 'rejections key',
+        poisoned: Object.keys(poisoned(secret).payload?.admission?.rejections ?? {}).some((key) =>
+          key.includes(secret),
+        ),
+      }).toEqual({ field: 'rejections key', poisoned: true })
     }
   })
 
@@ -2065,6 +2306,31 @@ describe('the copyable report', () => {
     expect(String(rowOf(model, 'Degradations with cause server-kill').value)).toBe('1')
     expect(String(rowOf(model, 'Transitions this build cannot name').value)).toBe('1')
     expect(String(rowOf(model, 'Where the lane ended up').value)).toBe(NOT_REPORTED)
+  })
+
+  /**
+   * The same companion for the admission block, for the same reason: a scan
+   * asserting a poisoned rejection KEY reaches nothing proves nothing while the
+   * block renders no rows at all. All ten are asserted present, and the count the
+   * poisoned key carried is asserted ABSENT from every row value — it is not
+   * summed into a cause this build does know, and no row is invented for it.
+   */
+  it('renders the admission rows those fields feed, and drops the key it cannot name', () => {
+    const model = build(poisoned(PLANTED_OPAQUE))
+
+    expect(blockOf(model, 'Gateway admission and traffic').rows).toHaveLength(10)
+    expect(String(rowOf(model, 'Connections refused since attach: origin not allowed').value)).toBe('3')
+    // The two causes the server did not report stay unreported rather than zero.
+    expect(String(rowOf(model, 'Connections refused since attach: lane unavailable').value)).toBe(NOT_REPORTED)
+    expect(String(rowOf(model, 'This client’s origin admitted').value)).toBe('no')
+    expect(String(rowOf(model, 'Sockets the gateway holds now').value)).toBe('2')
+    // `9` was the poisoned key's count. It must not surface anywhere.
+    for (const row of allRows(model)) {
+      expect({ label: String(row.label), value: String(row.value) }).not.toEqual({
+        label: String(row.label),
+        value: '9',
+      })
+    }
   })
 
   it.each(SECRETS)('keeps a planted value out of every report line: %s', (secret) => {

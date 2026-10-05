@@ -988,9 +988,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   }, [application, payload, transport, spaceReading, flagsReading])
 
   const websocketModel = useMemo(
-    // `counters` is still NOT passed: nothing in this build produces it, and a `{}`
-    // would be a claim that the gateway reported zero sockets and zero refusals.
-    // That block renders its own empty note instead.
+    // `counters` is still NOT passed, and it no longer carries the admission half:
+    // the gateway publishes that on `payload.admission`, which the section reads
+    // for itself from the payload below. What is left in `counters` is
+    // `advertisable`, which feeds the capability block's notes and which nothing
+    // produces — and a `{}` there would be a claim that the gateway reported zero
+    // sockets and zero refusals, so the block renders its own empty note instead.
     //
     // `ledger` IS passed now, and only when the transport actually produced one —
     // `application.syncTransportLedger` is `undefined` with no realtime transport

@@ -360,14 +360,19 @@ export type SocketRejectionCause = (typeof SOCKET_REJECTION_CAUSES)[number]
 /**
  * Gateway-side admission and traffic counters.
  *
- * DECLARED HERE AND OPTIONAL ON PURPOSE, and the cost of that is stated rather
- * than hidden: nothing populates this today, so every row it feeds reads "not
- * reported" until the gateway half lands. `environmentSection.ts` has the scar
- * from the other arrangement — it declared a ledger the server was already
- * sending, the payload type did not say so, and every row read "not reported" on
- * a deployment that was reporting. So this shape is the one the gateway must
- * mirror, it is supplied by the caller rather than read off a payload field this
- * build cannot see, and an absent member is "did not ask" everywhere below.
+ * DECLARED HERE BEFORE A PRODUCER EXISTED, which is the arrangement
+ * `environmentSection.ts` has the scar from — it declared a ledger the server was
+ * already sending, the payload type did not say so, and every row read "not
+ * reported" on a deployment that was reporting. The gateway half has landed, so
+ * all but one of these members now arrive on `payload.admission` and are read
+ * from there. `advertisable` is the exception: it feeds the CAPABILITY block's
+ * notes, nothing publishes it, and it stays a caller input.
+ *
+ * *** EVERY MEMBER'S LIFETIME IS PART OF ITS MEANING. *** "3 refusals" says
+ * nothing until you know whether that is three since the process started or
+ * three right now, and a reader who takes one for the other draws the wrong
+ * conclusion from both. Each member below says which it is, and so does the row
+ * that prints it.
  *
  * Every member is a boolean, a bounded count or a closed-key record. There is no
  * member here that could carry an origin, a URL or a credential — which matters
@@ -376,17 +381,45 @@ export type SocketRejectionCause = (typeof SOCKET_REJECTION_CAUSES)[number]
  * list's contents never leave the gateway.
  */
 export type SocketGatewayCountersView = {
-  /** Whether the gateway would admit THIS client's origin. One boolean, never the origin. */
+  /**
+   * Whether the gateway would admit THIS client's origin. One boolean, never the
+   * origin. PER REQUEST — neither a counter nor a snapshot — and absent when the
+   * request named no origin at all, which is emphatically not `false`: a no here
+   * is rendered as a conclusive fault with a finding behind it.
+   */
   originAdmitted?: boolean
-  /** How many origins are permitted. A cardinality: zero and non-zero are different fixes. */
+  /**
+   * How many origin RULES admit a client. CONFIGURATION, not a counter.
+   *
+   * Rules rather than allowlist entries, and the difference decides whether the
+   * zero means anything: the same-origin rule is DERIVED rather than listed, so a
+   * deployment serving its own page counts one here while its explicit list is
+   * empty. Counting entries would have read zero on every single container and
+   * called a correct deployment broken.
+   */
   allowedOriginCount?: number
+  /** Whether the derived same-origin rule is on. CONFIGURATION, not a counter. */
   allowsSameOrigin?: boolean
+  /**
+   * Upgrades refused at the door, by closed cause. MONOTONIC SINCE ATTACH.
+   *
+   * Absent — never an empty record — when no cause was admissible, because an
+   * empty record would make this block render all ten of its rows on the strength
+   * of a reading nobody took.
+   */
   rejections?: Readonly<Partial<Record<SocketRejectionCause, number>>>
-  /** Sockets the attached gateway is holding right now. */
+  /** Sockets the attached gateway holds at the instant of capture. WINDOWED — a gauge, never a total. */
   liveSockets?: number
+  /** Sync tickets minted. MONOTONIC SINCE ATTACH. */
   ticketsIssued?: number
+  /**
+   * Mint requests that reached the issuer and produced no ticket. MONOTONIC
+   * SINCE ATTACH, and with a blind spot the row states: a lane that advertises
+   * nothing refuses the mint BEFORE the issuer, so this reads 0 while every
+   * client is being turned away.
+   */
   ticketsRefused?: number
-  /** Handshakes refused AFTER a ticket was accepted at the HTTP leg. */
+  /** Handshakes refused AFTER a ticket was accepted at the HTTP leg. MONOTONIC SINCE ATTACH. */
   handshakeRejected?: number
   /**
    * Whether the gateway could advertise each operation, from the same predicates
@@ -1657,18 +1690,29 @@ function buildFilesBlock(gate: NonNullable<SyncDiagnosticsPayload['gate']> | und
 /* Block 9: gateway admission and traffic                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * *** ALL THREE ARE MONOTONIC SINCE THE GATEWAY ATTACHED, AND ALL THREE GO
+ * ABSENT TOGETHER. ***
+ *
+ * They arrive in one record the server omits entirely when no cause was
+ * admissible, rather than sending an empty one — so these rows read "not
+ * reported" together or carry figures together, and never a mix. Each note says
+ * the lifetime, because a refusal count whose window is unstated cannot be acted
+ * on: three refusals since boot and three in the last minute are the same number
+ * and opposite situations.
+ */
 const REJECTION_ROW: Record<SocketRejectionCause, { label: SafeValue; note: string }> = {
   originNotAllowed: {
-    label: safeConstant('Connections refused: origin not allowed'),
-    note: 'Clients that reached the socket and were turned away at the allowlist. Non-zero with a non-empty allowlist means some origin is connecting that nobody added — read it with the admission row above, which answers the same question for THIS browser.',
+    label: safeConstant('Connections refused since attach: origin not allowed'),
+    note: 'Clients that reached the socket and were turned away at the allowlist. MONOTONIC SINCE THIS GATEWAY ATTACHED. It also counts a refusal on a lane that was never COMPOSED, and that is deliberate rather than a mislabel: the client in that case receives the same 1008 close under the same cause, so counting it anywhere else would make this row disagree with what the browser was actually told. Non-zero with a non-empty rule set means some origin is connecting that nobody added — read it with the admission row above, which answers the same question for THIS browser.',
   },
   queryStringNotPermitted: {
-    label: safeConstant('Connections refused: query string not permitted'),
-    note: 'The ticket travels in a header, never in the URL, and a connection that carries a query string is refused rather than read. Non-zero means something between the client and the gateway is rewriting the URL — or an older client is still presenting its ticket the old way.',
+    label: safeConstant('Connections refused since attach: query string not permitted'),
+    note: 'The ticket travels in a header, never in the URL, and a connection that carries a query string is refused rather than read. MONOTONIC SINCE THIS GATEWAY ATTACHED. Non-zero means something between the client and the gateway is rewriting the URL — or an older client is still presenting its ticket the old way.',
   },
   unavailable: {
-    label: safeConstant('Connections refused: lane unavailable'),
-    note: 'Clients refused because the lane itself was not serving. A consequence of the boot gate and the live refusals above rather than an independent fault, and it is here so that "nobody connects" can be told apart from "everybody is turned away".',
+    label: safeConstant('Connections refused since attach: lane unavailable'),
+    note: 'Clients refused because the lane itself was not serving. MONOTONIC SINCE THIS GATEWAY ATTACHED. A consequence of the boot gate and the live refusals above rather than an independent fault, and it is here so that "nobody connects" can be told apart from "everybody is turned away".',
   },
 }
 
@@ -1698,21 +1742,35 @@ function admissionReported(counters: SocketGatewayCountersView): boolean {
   )
 }
 
-function buildAdmissionBlock(counters: SocketGatewayCountersView): DiagnosticBlock {
+function buildAdmissionBlock(counters: SocketGatewayCountersView, attached: boolean | undefined): DiagnosticBlock {
   /**
-   * ONE SENTENCE RATHER THAN ELEVEN EMPTY ROWS.
+   * ONE SENTENCE RATHER THAN TEN EMPTY ROWS — AND NOW IT SAYS WHICH SILENCE.
    *
-   * No endpoint publishes these counters — the gateway half of this block lands
-   * separately — so on every deployment today each row rendered "not reported",
-   * and eleven of them in a row is a panel that looks broken while saying nothing.
-   * The information content of the eleven is identical to the information content
-   * of the sentence, and the sentence is the half an operator reads. The rows
-   * return the moment anything populates them, member by member.
+   * While nothing published these counters, each of the ten rendered "not
+   * reported", and ten of them in a row is a panel that looks broken while
+   * saying nothing. The information content of the ten was identical to the
+   * information content of the sentence, and the sentence is the half an operator
+   * reads. It also stopped ten `undetermined` rows contributing to this section's
+   * worst verdict, which is correct for the same reason: a block with no producer
+   * established nothing.
    *
-   * It also stops eleven `undetermined` rows contributing to this section's worst
-   * verdict, which is correct for the same reason: a block with no producer
-   * established nothing, and the Lane degradation ledger block below has reported
-   * its own absence this way since it was written.
+   * The gateway publishes them today, ALL OR NOTHING: the whole block is omitted
+   * when no gateway is attached, because a partial fill would be nine rows
+   * reading "not reported" as though they had been measured and found empty. So
+   * silence has two meanings now, and they are two different sentences —
+   *
+   *   - NO GATEWAY IS ATTACHED. There are no sockets to count, which is the
+   *     correct and complete answer, and the gate block above is where that is
+   *     diagnosed. Nothing here is broken by it.
+   *   - A gateway IS attached and the block still did not arrive: a server older
+   *     than it.
+   *
+   * The predicate stays all-or-nothing and reads MEMBER BY MEMBER rather than
+   * from the object's presence, because `buildWebsocketSection` substitutes `{}`
+   * for absent counters — so "the caller passed nothing" and "the caller passed
+   * an empty object" arrive here identically, and both mean nothing was reported.
+   * Loosening it to "the block exists" would render all ten rows off an empty
+   * object, which is the exact shape the server omits the block to avoid.
    */
   if (!admissionReported(counters)) {
     return {
@@ -1721,7 +1779,9 @@ function buildAdmissionBlock(counters: SocketGatewayCountersView): DiagnosticBlo
       rows: [],
       findings: [],
       emptyNote:
-        'Nothing populates these counters on any deployment yet: the gateway half — origins admitted and permitted, same-origin admission, sockets held, tickets issued and refused, handshakes rejected, and the three connection-refusal counts — lands separately, and no endpoint this pane can reach reports one of them today. Every row here appears the moment one is reported. Until then this block claims nothing rather than rendering ten rows that each say "not reported".',
+        attached === false
+          ? 'No gateway is attached, so there are no sockets, tickets or refusals to count and the server omits this block entirely rather than sending ten zeroes. That is the complete answer rather than a gap: a zero here would say "measured none" about a process that is not running. WHY no gateway is attached is the boot-gate block above, which carries the finding and the fix; nothing in this block is broken by it, and every row returns the moment a gateway attaches.'
+          : 'This server reported no admission counters at all — origins admitted and permitted, same-origin admission, sockets held, tickets issued and refused, handshakes rejected, and the three connection-refusal counts. They are published as one block, all or nothing, so a build older than that block sends none of them and this is what that looks like. Every row here appears the moment the block arrives. Until then this block claims nothing rather than rendering ten rows that each say "not reported".',
     }
   }
 
@@ -1742,46 +1802,46 @@ function buildAdmissionBlock(counters: SocketGatewayCountersView): DiagnosticBlo
               'that the gateway would admit the origin this admin request arrived from',
               'that a socket from this origin then authenticates',
             ),
-      note: 'Whether this browser would be let onto the socket at all — the question whose only other evidence is a 1008 close that no screen reads. Admission is necessary and nowhere near sufficient, so a yes is reported as undetermined; a no is conclusive, and it is a different fault from an empty allowlist. The origin itself is never carried into this panel or the copyable report.',
+      note: 'Whether this browser would be let onto the socket at all — the question whose only other evidence is a 1008 close that no screen reads. PER REQUEST: it is the gateway\'s own upgrade predicate run against the origin THIS admin request arrived from, neither a counter nor a snapshot. Admission is necessary and nowhere near sufficient, so a yes is reported as undetermined; a no is conclusive, and it is a different fault from an empty allowlist. "Not reported" here is a request that named no origin at all — a non-browser caller, or a referrer policy that strips both headers — and is NOT a no. The origin itself is never carried into this panel or the copyable report.',
     }),
     diagnosticRow({
-      label: safeConstant('Origins the gateway permits'),
+      label: safeConstant('Origin rules the gateway admits on'),
       value: safeCount(originCount),
       ...absentOr(originCount, originCount === 0 ? 'broken' : 'informational'),
-      note: 'A cardinality, never the list. Zero and non-zero are two different fixes that currently produce identical screens: an empty list refuses every client, and a non-empty list that omits one origin refuses one browser while the rest connect.',
+      note: 'A cardinality, never the list, and it counts RULES rather than allowlist entries: every explicit entry, PLUS one for the same-origin rule when that is on. The difference is what makes the zero mean something. The same-origin rule is DERIVED rather than listed, so a deployment serving its own page admits clients with an empty explicit list — counting entries would read zero there and call a correct single container broken. Zero RULES is the lane\'s own "no allowed origins" condition and refuses every client; a non-empty set that omits one origin refuses one browser while the rest connect, which is a different fix and the row above is where it shows. CONFIGURATION, not a counter.',
     }),
     diagnosticRow({
       label: safeConstant('Same-origin requests permitted'),
       value: safeYesNo(counters.allowsSameOrigin),
       ...absentOr(counters.allowsSameOrigin, 'informational'),
-      note: 'Whether the same-origin entry was derived, which is what PUBLIC_URL does when the explicit allowlist is not maintained by hand. Informational: a deployment can legitimately permit only named origins.',
+      note: 'Whether the same-origin rule was derived, which is what PUBLIC_URL does when the explicit allowlist is not maintained by hand. It is the rule counted as one in the row above, and it is why that count can exceed an empty list. CONFIGURATION, not a counter. Informational: a deployment can legitimately permit only named origins.',
     }),
     diagnosticRow({
       label: safeConstant('Sockets the gateway holds now'),
       value: safeCount(counters.liveSockets),
       ...absentOr(counters.liveSockets, 'informational'),
-      note: 'Live connections on this process at the moment of capture. Zero on a deployment with users is the signature of clients that never arrive, which the rejection counts below separate from clients that arrive and are turned away.',
+      note: 'WINDOWED — a gauge at the instant of capture, not a total since attach like every counter below it. Reading it as a total is the mistake this row is worded to prevent: a deployment that has served a thousand sockets and holds none right now reads zero here and a thousand there, and both are correct. Zero on a deployment with users is the signature of clients that never arrive, which the rejection counts below separate from clients that arrive and are turned away.',
     }),
     diagnosticRow({
-      label: safeConstant('Tickets issued'),
+      label: safeConstant('Tickets issued since attach'),
       value: safeCount(issued),
       ...absentOr(issued, 'informational'),
-      note: 'Tickets minted over the HTTP leg since this gateway attached. Read against the two rows below: tickets issued with no sockets held, or with handshakes rejected, are three different faults that look identical from every other panel.',
+      note: 'Tickets minted over the HTTP leg. MONOTONIC SINCE THIS GATEWAY ATTACHED, and it resets on every restart — so a small number on a busy deployment means the gateway restarted recently, not that nobody asked. Read against the two rows below: tickets issued with no sockets held, or with handshakes rejected, are three different faults that look identical from every other panel.',
     }),
     diagnosticRow({
-      label: safeConstant('Tickets refused'),
+      label: safeConstant('Tickets refused since attach'),
       value: safeCount(counters.ticketsRefused),
       ...absentOr(
         counters.ticketsRefused,
         counters.ticketsRefused !== undefined && counters.ticketsRefused > 0 ? 'degraded' : 'informational',
       ),
-      note: 'Mint requests the gateway declined. Non-zero with a healthy boot gate means the refusal is live rather than structural, and the live refusal reasons above name it.',
+      note: 'Mint requests that reached the gateway\'s issuer and produced no ticket. MONOTONIC SINCE THIS GATEWAY ATTACHED. *** A ZERO HERE IS NOT "NOBODY WAS REFUSED". *** A lane that advertises no capability at all refuses the mint BEFORE it reaches this issuer, so a structurally down lane holds this counter at zero while every client is being turned away with a 503 — the one reading this number cannot see, and the reason it must not be read as reassurance on its own. The live refusal reasons above name that case explicitly; this row is only meaningful once they are empty, and non-zero there means the refusal is live rather than structural.',
     }),
     diagnosticRow({
-      label: safeConstant('Handshakes rejected'),
+      label: safeConstant('Handshakes rejected since attach'),
       value: safeCount(rejected),
       ...absentOr(rejected, rejected !== undefined && rejected > 0 ? 'degraded' : 'informational'),
-      note: 'Sockets that presented a ticket and were refused at the handshake. This is the counter that separates "nobody asks" from "asks and is refused" from "tickets mint and the socket will not take them" — the last being the signature of two replicas that do not share the ticket secret.',
+      note: 'Sockets that presented a ticket and were refused at the handshake. MONOTONIC SINCE THIS GATEWAY ATTACHED. This is the counter that separates "nobody asks" from "asks and is refused" from "tickets mint and the socket will not take them" — the last being the signature of two replicas that do not share the ticket secret.',
     }),
   ]
 
@@ -2240,7 +2300,19 @@ export function buildWebsocketSection(input: WebsocketSectionInput = {}): Sectio
   const payload = input.payload
   const gate = payload?.gate
   const topology = payload?.deployment
-  const counters = input.counters ?? {}
+  /**
+   * The admission half comes off the PAYLOAD, where the gateway publishes it;
+   * `input.counters` survives for `advertisable`, which feeds the capability
+   * block's notes and which nothing publishes.
+   *
+   * Merged rather than chosen between, because they are disjoint halves of one
+   * shape and the alternative is two reads of one subject. The caller's members
+   * win on a collision so a test can still drive this block directly — and the
+   * MEMBER-BY-MEMBER predicate below is what makes the merge safe: an absent
+   * block and an empty object both leave every member undefined, so neither can
+   * resurrect ten rows.
+   */
+  const counters: SocketGatewayCountersView = { ...(payload?.admission ?? {}), ...(input.counters ?? {}) }
   const outcomes = outcomesForSection(input.outcomes ?? [], 'websocket')
 
   const blocks: DiagnosticBlock[] = [
@@ -2252,7 +2324,11 @@ export function buildWebsocketSection(input: WebsocketSectionInput = {}): Sectio
     buildRefusalBlock(payload, topology),
     buildRealtimeBlock(payload?.live?.realtime, topology),
     buildFilesBlock(gate),
-    buildAdmissionBlock(counters),
+    // `gatewayAttached` is passed so the EMPTY note can say which silence this
+    // is: no gateway to count, or a server older than the block. Gated on
+    // `recorded` like every other read of the gate, so an unrecorded block
+    // cannot answer the question either way.
+    buildAdmissionBlock(counters, gate?.recorded === true ? gate.gatewayAttached : undefined),
     buildLedgerBlock(input.ledger),
   ]
 
