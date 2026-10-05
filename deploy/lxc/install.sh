@@ -803,7 +803,7 @@ server {
   }
 
   location / {
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'none'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://\$http_host wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'none'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' blob: https: http://localhost:* http://127.0.0.1:* ws://\$http_host wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
     try_files \$uri \$uri/ /index.html;
   }
 

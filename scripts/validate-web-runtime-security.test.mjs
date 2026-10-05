@@ -149,6 +149,14 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
     const parentConnections = directive(parentPolicy, "connect-src");
     for (const allowed of [
       "'self'",
+      // An object URL the page minted itself is readable only by that origin, so
+      // listing blob: admits no new network destination -- but WITHOUT it every
+      // fetch()/XHR against one (the Moments capture path hands its recorded Blob
+      // to the uploader that way) fails as a connect-src violation in both Gecko
+      // and Blink. `data:` stays OUT on purpose: a blocked data: fetch dumps the
+      // entire payload into the violation report, and a data URL needs no fetch
+      // at all -- decode it in-process (see fetchBoundedSourceBytes.ts).
+      "blob:",
       "https:",
       "http://localhost:*",
       "http://127.0.0.1:*",
@@ -161,6 +169,10 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
       );
     }
     assert.ok(!parentConnections.includes("http:"), relativePath);
+    assert.ok(
+      !parentConnections.includes("data:"),
+      `${relativePath}: a blocked data: fetch reports the whole payload; decode data URLs in-process instead`,
+    );
     assert.ok(
       !parentConnections.includes("ws:"),
       `${relativePath}: bare ws: admits cleartext sockets to any host`,
