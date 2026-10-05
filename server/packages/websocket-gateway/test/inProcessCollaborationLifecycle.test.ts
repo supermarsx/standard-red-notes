@@ -30,6 +30,20 @@ function makeLogger() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }
 
+/**
+ * The `room-presence` lifecycle a connection's socket actually observed, as
+ * action plus (for a terminal event) its reason. Anything else the room
+ * broadcast is ignored.
+ */
+function presenceEvents(conn: Conn<FakeSocket>): Array<{ action: unknown; reason?: unknown }> {
+  return conn.socket.sent
+    .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+    .filter((frame) => frame.t === 'room-presence')
+    .map((frame) =>
+      frame.reason === undefined ? { action: frame.action } : { action: frame.action, reason: frame.reason },
+    )
+}
+
 function setup(startAt = 1_700_000_000_000) {
   let current = startAt
   const now = (): number => current
@@ -574,5 +588,98 @@ describe('InProcessCollaborationLifecycle', () => {
     expect(logger.warn).toHaveBeenCalledWith('[collab-local] lease reservation denied {"cause":"epoch-mismatch"}', {
       cause: 'epoch-mismatch',
     })
+  })
+
+  /**
+   * The revocation window for an ALREADY-JOINED member who loses access is the
+   * lease's own expiry -- the collaboration capability `exp`, 300 s by default
+   * and at most 900 s. Nothing revokes proactively: a `collaborationSecurityEpoch`
+   * change is only noticed at the next reserve. That bound is only hard because a
+   * presence heartbeat refreshes PRESENCE and not the lease. Were that ever to
+   * change, the window would become unbounded for as long as a removed member
+   * keeps heartbeating, and every other test here would still pass.
+   */
+  it('refreshes presence without extending the editor lease, so the revocation window stays bounded', async () => {
+    vi.useFakeTimers()
+    try {
+      const rooms = new RoomRegistry<FakeSocket>()
+      const logger = makeLogger()
+      // The default clock is Date.now, which vitest's fake timers mock, so the
+      // lifecycle's clock and its presence-expiry timer advance together.
+      const lifecycle = new InProcessCollaborationLifecycle<FakeSocket>(rooms, logger)
+      const holder = connection('revoked-member')
+      const bystander = connection('bystander')
+      // Membership is how `broadcastAll` reaches a socket. It is joined with no
+      // expiry of its own so the socket stays observable past the lease deadline.
+      expect(rooms.join(ROOM, holder).joined).toBe(true)
+
+      // A capability lifetime, kept under the 300 s default so the test need not
+      // sit through one. Presence TTL is 45 s, so heartbeats land every 40 s.
+      const leaseWindowMs = 120_000
+      const heartbeatIntervalMs = 40_000
+      const leaseExpiresAt = Date.now() + leaseWindowMs
+      const reservation = await lifecycle.reserveEditorLease(
+        holder,
+        ROOM,
+        'revoked-lease',
+        leaseExpiresAt,
+        3,
+        1,
+        EPOCH,
+        SECURITY_EPOCH,
+        Date.now(),
+      )
+      await lifecycle.activateEditorLease(
+        holder,
+        ROOM,
+        'revoked-lease',
+        leaseExpiresAt,
+        3,
+        1,
+        reservation.bootstrapChallenge,
+        EPOCH,
+        SECURITY_EPOCH,
+        Date.now(),
+      )
+      // Precondition: an activated lease exists, so "no lease" cannot be what
+      // the expiry assertions below are observing.
+      await expect(lifecycle.hasOtherActivatedEditorLease(bystander, ROOM)).resolves.toBe(true)
+
+      await lifecycle.heartbeatPresence(holder, ROOM, 'revoked-lease', EPOCH, 7)
+      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }])
+
+      await vi.advanceTimersByTimeAsync(heartbeatIntervalMs)
+      await lifecycle.heartbeatPresence(holder, ROOM, 'revoked-lease', EPOCH, 7)
+      // Precondition: the heartbeat did something OBSERVABLE. Presence would have
+      // expired 45 s after the first one, and the reaper has now run past that
+      // deadline; no `heartbeat-timeout` means the presence TTL really moved, so
+      // this is not a test passing against a heartbeat that no-ops.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }])
+
+      await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 10_000)
+      await lifecycle.heartbeatPresence(holder, ROOM, 'revoked-lease', EPOCH, 7)
+      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }])
+
+      // One millisecond before the lease's ORIGINAL deadline it is still live --
+      // three heartbeats in, the expiry has not moved backwards either.
+      await vi.advanceTimersByTimeAsync(leaseExpiresAt - 1 - Date.now())
+      expect(Date.now()).toBe(leaseExpiresAt - 1)
+      await expect(lifecycle.hasOtherActivatedEditorLease(bystander, ROOM)).resolves.toBe(true)
+
+      // At that exact deadline it is gone. The three heartbeats bought the lease
+      // nothing: the window a removed member keeps relaying in is the capability
+      // `exp` and no longer.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(Date.now()).toBe(leaseExpiresAt)
+      await expect(lifecycle.hasOtherActivatedEditorLease(bystander, ROOM)).resolves.toBe(false)
+      // And the sweep really evicts it rather than merely reporting it dead --
+      // presence is still live (its own deadline is 125 s), so the terminal
+      // event names the eviction.
+      await lifecycle.refreshLeases()
+      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }, { action: 'left', reason: 'revoked' }])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

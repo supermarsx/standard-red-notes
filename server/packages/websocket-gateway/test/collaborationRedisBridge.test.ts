@@ -400,6 +400,19 @@ function connection(id: string): Conn<SendableSocket> & { send: ReturnType<typeo
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 
+/**
+ * The `room-presence` lifecycle the relay actually carried, as action plus (for a
+ * terminal event) its reason. Anything else published on the channel is ignored.
+ */
+function presenceEvents(redis: FakeRedisNetwork): Array<{ action: unknown; reason?: unknown }> {
+  return redis.published
+    .map(({ message }) => (JSON.parse(message) as { frame: Record<string, unknown> }).frame)
+    .filter((frame) => frame.t === 'room-presence')
+    .map((frame) =>
+      frame.reason === undefined ? { action: frame.action } : { action: frame.action, reason: frame.reason },
+    )
+}
+
 describe('CollaborationRedisBridge multi-replica relay', () => {
   it('emits bounded server-identity presence for two sessions and exactly one clean/abrupt terminal event each', async () => {
     const redis = new FakeRedisNetwork()
@@ -2898,5 +2911,102 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
     expect(collaborationKeyPrefix('ns::')).toBe('ns:')
     expect(collaborationRelayChannel(undefined)).toBe(COLLABORATION_RELAY_CHANNEL)
     expect(collaborationRelayChannel('ns')).toBe(`ns:${COLLABORATION_RELAY_CHANNEL}`)
+  })
+
+  /**
+   * The same bound as the in-process plane, on the fleet-shared one. A member
+   * removed from a shared vault who is ALREADY joined keeps relaying until the
+   * lease hard-expires -- nothing revokes proactively, a security-epoch change is
+   * only noticed at the next reserve -- so the window is the collaboration
+   * capability `exp` (300 s by default, 900 s at most) and nothing else. That is
+   * only true while a presence heartbeat refreshes PRESENCE and leaves both the
+   * local lease expiry and the shared lease key alone.
+   */
+  it('refreshes presence without extending the editor lease or its shared key, bounding revocation', async () => {
+    vi.useFakeTimers()
+    try {
+      const redis = new FakeRedisNetwork()
+      const bridge = new CollaborationRedisBridge(
+        new RoomRegistry<SendableSocket>(),
+        redis.client() as never,
+        redis.client() as never,
+        logger,
+        replicaId('lease-bound'),
+      )
+      const holder = connection('lease-bound')
+      const room = 'lease-bound-room'
+      // A capability lifetime under the 300 s default so the test need not sit
+      // through one. Presence TTL is 45 s, so heartbeats land every 40 s.
+      const leaseWindowMs = 120_000
+      const heartbeatIntervalMs = 40_000
+      const leaseExpiresAt = Date.now() + leaseWindowMs
+
+      const reservation = await bridge.reserveEditorLease(
+        holder,
+        room,
+        'bound-lease',
+        leaseExpiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        Date.now(),
+      )
+      await bridge.activateEditorLease(
+        holder,
+        room,
+        'bound-lease',
+        leaseExpiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        Date.now(),
+      )
+      // Precondition: the shared lease key exists, so "no lease" cannot be what
+      // the expiry assertions below are observing.
+      expect(redis.leases.size).toBe(1)
+      const ttlWritesAfterActivation = redis.leaseTtls.length
+
+      await bridge.heartbeatPresence(holder, room, 'bound-lease', TEST_ROOM_EPOCH, 7)
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+      // A heartbeat writes no lease TTL at all: the shared deadline is untouched,
+      // not merely re-written with the same value.
+      expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
+
+      await vi.advanceTimersByTimeAsync(heartbeatIntervalMs)
+      await bridge.heartbeatPresence(holder, room, 'bound-lease', TEST_ROOM_EPOCH, 7)
+      expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
+      // Precondition: the heartbeat did something OBSERVABLE. Presence would have
+      // expired 45 s after the first one and the reaper has now run past that
+      // deadline; no `heartbeat-timeout` means the presence TTL really moved, so
+      // this is not a test passing against a heartbeat that no-ops.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+
+      await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 10_000)
+      await bridge.heartbeatPresence(holder, room, 'bound-lease', TEST_ROOM_EPOCH, 7)
+      expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+
+      // One millisecond before the lease's ORIGINAL deadline the sweep keeps it:
+      // three heartbeats in, the expiry moved neither forwards nor backwards.
+      await vi.advanceTimersByTimeAsync(leaseExpiresAt - 1 - Date.now())
+      expect(Date.now()).toBe(leaseExpiresAt - 1)
+      await bridge.refreshLeases()
+      expect(redis.leases.size).toBe(1)
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+
+      // At that exact deadline the sweep evicts it and releases the shared key.
+      // The three heartbeats bought the lease nothing.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(Date.now()).toBe(leaseExpiresAt)
+      await bridge.refreshLeases()
+      expect(redis.leases.size).toBe(0)
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }, { action: 'left', reason: 'revoked' }])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
