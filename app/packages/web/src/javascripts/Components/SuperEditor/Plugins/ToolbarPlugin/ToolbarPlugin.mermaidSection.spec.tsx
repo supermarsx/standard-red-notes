@@ -37,6 +37,18 @@ import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import { $createMermaidNode, $isMermaidNode, MermaidNode } from '../../Lexical/Nodes/MermaidNode'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
+// The theme VOCABULARY is declared in MermaidSettings.ts and the control LIST in
+// MermaidSettingsPanel.tsx. Both are imported here rather than retyped, so a mode
+// or a control added there is asserted to appear instead of being asserted away.
+import {
+  DEFAULT_MERMAID_SETTINGS,
+  DEFAULT_MERMAID_THEME_MODE,
+  DEFAULT_MERMAID_VIEW_MODE,
+  MERMAID_THEME_MODE_LABELS,
+  MERMAID_THEME_MODES,
+  MermaidThemeMode,
+} from '../../Lexical/Nodes/MermaidSettings'
+import { MermaidSettingsPanelProps, mermaidSettingsControls } from '../../Lexical/Nodes/MermaidSettingsPanel'
 
 /**
  * Desktop layout — `isMobile` reads the MUTUALLY EXCLUSIVE `sm` query, which is
@@ -224,6 +236,24 @@ const readNode = <T,>(read: (node: MermaidNode) => T): T => {
   return result as T
 }
 
+/**
+ * Props good enough to ENUMERATE the shared control list (its keys and captions).
+ * Deliberately inert — nothing is clicked on the nodes it builds; the real
+ * section's own props object is what the DOM assertions exercise.
+ */
+const probeControlProps = (): MermaidSettingsPanelProps => ({
+  variant: 'panel',
+  settings: DEFAULT_MERMAID_SETTINGS,
+  onSettingsChange: () => undefined,
+  viewMode: DEFAULT_MERMAID_VIEW_MODE,
+  onViewModeChange: () => undefined,
+  width: undefined,
+  onWidthChange: () => undefined,
+  height: undefined,
+  onHeightChange: () => undefined,
+  showWidth: true,
+})
+
 describe('the Mermaid toolbar section is gated on a selected diagram', () => {
   it('offers no Mermaid tab with nothing selected', async () => {
     await mount()
@@ -259,7 +289,7 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     await mount()
     await insertAndSelectMermaid()
     await activateMermaidTab()
-    // The three inline clusters picked out of the shared control list...
+    // The inline clusters picked out of the shared control list...
     expect(segment('View mode')).not.toBeNull()
     expect(segment('Fit mode')).not.toBeNull()
     expect(segment('Diagram alignment')).not.toBeNull()
@@ -270,6 +300,8 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     expect(captions).toContain('Source')
     expect(captions).toContain('Fit')
     expect(captions).toContain('Align')
+    expect(captions).toContain('Theme')
+    expect(captions).toContain('Background')
     expect(captions).toContain('Diagram')
   })
 
@@ -328,7 +360,149 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     // The generic trailing segment's caption comes from the `block` translation
     // key, which is lower-case — asserted as rendered, not as prose.
     expect(captions).toContain('block')
-    expect(captions).toEqual(['Source', 'Fit', 'Align', 'Diagram', 'block'])
+    expect(captions).toEqual(['Source', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
+  })
+})
+
+/**
+ * THEMING, INLINE (t121). The user reported this section as "missing the
+ * theming". It was not missing — Theme and Background were reachable, but only
+ * behind the settings button, and since t119 removed the chart's own bar the
+ * popover is the only other surface there is, so popover-only read as gone.
+ *
+ * They are now captioned segments of their own, beside Source / Fit / Align.
+ * These tests therefore assert the control is in the RIBBON before anything is
+ * clicked — the popover assertions further down are a separate guarantee and
+ * would pass with the inline segment deleted again.
+ *
+ * Nothing here hardcodes a theme NAME. The options are compared against
+ * MERMAID_THEME_MODES / MERMAID_THEME_MODE_LABELS, which is where the theme
+ * vocabulary lives, so a mode added there (an `auto`/`system` mode, say) is
+ * asserted to appear rather than asserted away.
+ */
+describe('the theming controls are inline in the section, not only in its popover', () => {
+  /** The ribbon's captioned segment wrapper, by caption. */
+  const captionedSegment = (caption: string) =>
+    Array.from(container.querySelectorAll('.super-toolbar-group')).find(
+      (group) => group.getAttribute('aria-label') === caption,
+    )
+
+  const openSection = async () => {
+    await mount()
+    await insertAndSelectMermaid()
+    await activateMermaidTab()
+    // No popover: whatever these tests find, they found it on the ribbon.
+    expect(document.querySelector('[data-mermaid-settings="panel"]')).toBeNull()
+  }
+
+  it('puts the theme control on the ribbon itself, under its own caption', async () => {
+    await openSection()
+    const themeSegment = captionedSegment('Theme')
+    expect(themeSegment).toBeDefined()
+    const select = themeSegment!.querySelector('select[aria-label="Diagram theme"]')
+    expect(select).not.toBeNull()
+    // A mapping miss renders `<label>name</label>` instead of a glyph; this
+    // cluster draws no Icon today, and this is what notices if one is added.
+    expect(themeSegment!.querySelector('label')).toBeNull()
+  })
+
+  it('offers exactly the theme vocabulary MermaidSettings declares', async () => {
+    await openSection()
+    const select = captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([...MERMAID_THEME_MODES])
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual(
+      MERMAID_THEME_MODES.map((mode) => MERMAID_THEME_MODE_LABELS[mode]),
+    )
+    // It shows the node's own theme, so the control is not write-only.
+    expect(select.value).toBe(readNode((node) => node.getSettings().themeMode))
+  })
+
+  it('writes a theme chosen on the ribbon to the real node', async () => {
+    await openSection()
+    const select = captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
+    const target = MERMAID_THEME_MODES.find((mode) => mode !== DEFAULT_MERMAID_THEME_MODE) as MermaidThemeMode
+    expect(readNode((node) => node.getSettings().themeMode)).toBe(DEFAULT_MERMAID_THEME_MODE)
+
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(select, target)
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    // A control wired to nothing renders identically to a wired one.
+    expect(readNode((node) => node.getSettings().themeMode)).toBe(target)
+    expect(readNode((node) => node.getKey())).toBe(mermaidKey)
+  })
+
+  it('reflects a theme set on the node back onto the ribbon control', async () => {
+    await openSection()
+    const target = MERMAID_THEME_MODES.find((mode) => mode !== DEFAULT_MERMAID_THEME_MODE) as MermaidThemeMode
+    await act(async () => {
+      ;(editor as LexicalEditor).update(() => {
+        const node = $getRoot()
+          .getChildren()
+          .find((candidate) => $isMermaidNode(candidate)) as MermaidNode
+        node.setSettings({ themeMode: target })
+      })
+      await Promise.resolve()
+    })
+    const select = captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
+    expect(select.value).toBe(target)
+  })
+
+  it('puts the background control on the ribbon too, and it writes to the node', async () => {
+    await openSection()
+    const backgroundSegment = captionedSegment('Background')
+    expect(backgroundSegment).toBeDefined()
+    const toggle = backgroundSegment!.querySelector('button[aria-label="Themed diagram background"]')
+    expect(toggle).not.toBeNull()
+    expect(backgroundSegment!.querySelector('label')).toBeNull()
+
+    expect(readNode((node) => node.getSettings().background)).toBe('transparent')
+    await act(async () => {
+      ;(toggle as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(readNode((node) => node.getSettings().background)).toBe('themed')
+    expect(readNode((node) => node.getSettings().themeMode)).toBe(DEFAULT_MERMAID_THEME_MODE)
+  })
+
+  /**
+   * The REACHABILITY sweep, derived rather than listed: every cluster in the one
+   * shared control list has to be reachable from this section — as an inline
+   * captioned segment, or inside the popover, or both. A control added to
+   * `mermaidSettingsControls` and wired into neither surface is exactly the bug
+   * that was reported, and this is the assertion that fails for it.
+   */
+  it('leaves no control in the shared list unreachable from this section', async () => {
+    await openSection()
+    const inlineCaptions = Array.from(container.querySelectorAll('.super-toolbar-group')).map((group) =>
+      group.getAttribute('aria-label'),
+    )
+    await act(async () => {
+      ;(captionedSegment('Diagram')!.querySelector('button') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    const panel = document.querySelector('[data-mermaid-settings="panel"]')
+    expect(panel).not.toBeNull()
+    const panelCaptions = Array.from(panel!.querySelectorAll('span.text-passive-1')).map((span) => span.textContent)
+
+    const declared = mermaidSettingsControls(probeControlProps())
+    expect(declared.length).toBeGreaterThan(0)
+    for (const control of declared) {
+      expect([
+        control.key,
+        inlineCaptions.includes(control.caption) || panelCaptions.includes(control.caption),
+      ]).toEqual([control.key, true])
+    }
+    // And the two theming controls specifically reached the RIBBON.
+    const themeControl = declared.find((control) => control.key === 'theme')
+    const backgroundControl = declared.find((control) => control.key === 'background')
+    expect(themeControl).toBeDefined()
+    expect(backgroundControl).toBeDefined()
+    expect(inlineCaptions).toContain(themeControl!.caption)
+    expect(inlineCaptions).toContain(backgroundControl!.caption)
   })
 })
 
@@ -462,10 +636,10 @@ describe('the Mermaid section writes to the selected node, not to a copy of its 
  * exists" is no longer enough: each control the chart used to carry has to be
  * reachable HERE, through the real popover, and has to write to the real node.
  *
- * Three of them (Source, Fit, Align) are also inline segments above. The other
- * five — maximum height, theme, background, pan & zoom and the width strip —
- * exist nowhere else in the product, so this is the only thing standing between
- * them and being unreachable.
+ * Five of them (Source, Fit, Align, Theme, Background) are also inline segments
+ * above, as of t121. The other three — maximum height, pan & zoom and the width
+ * strip — exist nowhere else in the product, so this is the only thing standing
+ * between them and being unreachable.
  */
 describe('every setting the chart no longer shows is reachable from this section', () => {
   const diagramGroup = () =>

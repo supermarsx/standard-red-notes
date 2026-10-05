@@ -604,6 +604,26 @@ const ListMarkerSwatch = ({ preset, onClick }: { preset: ListStylePreset; onClic
 // Pseudo-tab id for the element-specific (contextual) ribbon tab.
 const CONTEXTUAL_TAB_ID = 'contextual'
 
+/**
+ * Standard Red Notes (t121) — which of `mermaidSettingsControls`' clusters the
+ * Mermaid section shows INLINE, as its own captioned segment, in the order they
+ * appear on the ribbon. Keys only: the cluster, its caption and its write rule
+ * all still come from that one shared list, so this cannot fork a control.
+ *
+ * It is not "the controls that exist" — the settings popover mounts the whole
+ * list and is the reachability guarantee — it is "the controls that are a
+ * top-level choice", i.e. worth a click rather than two.
+ *
+ * THEME and BACKGROUND are here because the user reported the section as
+ * "missing the theming": both were popover-only, which read as the controls not
+ * existing at all now that the chart's own bar is gone (t119). They are the
+ * diagram's appearance, chosen as often as its fit, and a diagram whose theme
+ * fights the app theme is the thing you notice first. What deliberately stays
+ * condensed is the genuinely advanced half: maximum height, pan & zoom and the
+ * width strip.
+ */
+const MERMAID_INLINE_SEGMENT_KEYS = ['source', 'fit', 'alignment', 'theme', 'background'] as const
+
 const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   const { t } = useTranslation('editor')
   const application = useApplication()
@@ -3149,12 +3169,13 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
       // Since t119 this is the ONLY place a diagram is configured — the chart
       // container used to carry the same panel and the user asked for it to stop.
       // `mermaidSettingsControls` is the single ordered list MermaidSettingsPanel
-      // renders from; the three inline segments pick their clusters out of it by
-      // key, and the button opens that same panel holding every setting, so no
-      // control can go missing by being split across the two.
+      // renders from; the inline segments pick their clusters out of it by key
+      // (MERMAID_INLINE_SEGMENT_KEYS), and the button opens that same panel
+      // holding EVERY setting, so no control can go missing by being split
+      // across the two.
       case ContextualWidgetKind.Mermaid: {
         const mermaidControls = mermaidSettingsControls(mermaidSettingsPanelProps)
-        for (const key of ['source', 'fit', 'alignment']) {
+        for (const key of MERMAID_INLINE_SEGMENT_KEYS) {
           const control = mermaidControls.find((candidate) => candidate.key === key)
           if (control) {
             contextualSegments.push({
@@ -3174,8 +3195,8 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 <>
                   <div className="mb-1 font-semibold">Mermaid settings</div>
                   <div className="max-w-[35ch] text-xs">
-                    Fit, maximum height, alignment, theme, background, pan &amp; zoom, source and width — every setting
-                    for the selected diagram.
+                    Every setting for the selected diagram, the segments beside this one included — plus maximum height,
+                    pan &amp; zoom and width, which live only here.
                   </div>
                 </>
               }
@@ -4880,11 +4901,14 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           />
         </div>
       </Popover>
-      {/* Standard Red Notes — the Mermaid section's settings popover, and since
-          t119 the only home of maximum height, theme, background, pan & zoom and
-          the width strip: the chart container mounts no panel any more. It is
-          handed the same props object the section's inline clusters use, so the
-          condensed and inline halves cannot disagree about a single setting. */}
+      {/* Standard Red Notes — the Mermaid section's settings popover. Since t119
+          the chart container mounts no panel at all, so this is the reachability
+          guarantee: it holds the WHOLE control list, including the clusters the
+          section also shows inline. Theme and background were inlined in t121
+          (the user read popover-only as missing); maximum height, pan & zoom and
+          the width strip exist nowhere else in the product. It is handed the same
+          props object the inline clusters use, so the condensed and inline halves
+          cannot disagree about a single setting. */}
       <Popover
         title="Mermaid settings"
         anchorElement={mermaidSettingsAnchorRef}

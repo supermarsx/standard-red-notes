@@ -318,10 +318,16 @@ describe('1. selecting a diagram activates its ribbon tab', () => {
     expect(segment('View mode')).not.toBeNull()
     expect(segment('Fit mode')).not.toBeNull()
     expect(segment('Diagram alignment')).not.toBeNull()
+    // The theming controls are inline segments as of t121 (the user read
+    // popover-only as "missing the theming"), so they are on screen on that same
+    // first click — a <select>, which is why it is probed by its own label
+    // rather than as a role=group.
+    expect(container.querySelector('select[aria-label="Diagram theme"]')).not.toBeNull()
+    expect(container.querySelector('button[aria-label="Themed diagram background"]')).not.toBeNull()
     const captions = Array.from(container.querySelectorAll('.super-toolbar-group')).map((group) =>
       group.getAttribute('aria-label'),
     )
-    expect(captions).toEqual(['Source', 'Fit', 'Align', 'Diagram', 'block'])
+    expect(captions).toEqual(['Source', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
   })
 
   it('activates again on a second diagram selection, so the latch resets', async () => {
