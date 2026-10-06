@@ -42,22 +42,41 @@ declare global {
   }
 }
 
+import { lazy, Suspense } from 'react'
 import { disableIosTextFieldZoom, getPlatform } from '@/Utils'
 import { IsWebPlatform, WebAppVersion } from '@/Constants/Version'
 import { DesktopManagerInterface, Environment, Platform, SNLog } from '@standardnotes/snjs'
-import ApplicationGroupView from './Components/ApplicationGroupView/ApplicationGroupView'
 import { WebDevice } from './Application/Device/WebDevice'
-import { StartApplication } from './Application/Device/StartApplication'
-import { WebApplicationGroup } from './Application/WebApplicationGroup'
-import { WebOrDesktopDevice } from './Application/Device/WebOrDesktopDevice'
-import { WebApplication } from './Application/WebApplication'
+import type { StartApplication } from './Application/Device/StartApplication'
+import type { WebApplicationGroup } from './Application/WebApplicationGroup'
+import type { WebOrDesktopDevice } from './Application/Device/WebOrDesktopDevice'
+import type { WebApplication } from './Application/WebApplication'
 import { createRoot, Root } from 'react-dom/client'
 import { ElementIds } from './Constants/ElementIDs'
 import { setDefaultMonospaceFont } from './setDefaultMonospaceFont'
 import { RouteParser, RouteType } from '@standardnotes/ui-services'
 import U2FAuthIframe from './Components/U2FAuthIframe/U2FAuthIframe'
-import SharedView from './Components/SharedView/SharedView'
-import EmailConfirmationView from './Components/EmailConfirmationView/EmailConfirmationView'
+
+/*
+ * Standard Red Notes: the four screens this entry can mount are DYNAMIC
+ * imports, so webpack emits one chunk each instead of folding all of them into
+ * the single `app.js` that `index.html` loads.
+ *
+ * The share route is why. A share link is PUBLIC and unauthenticated, and with
+ * a static import of `ApplicationGroupView` the reader of a shared note
+ * downloaded the entire authenticated application — every editor, every
+ * preferences pane, the vault and account UI — before a single word of the
+ * note appeared. Measured on a production build of this tree: `app.js` was
+ * 11 335 189 bytes, all of it eagerly loaded on the share route.
+ *
+ * `WebApplication`, `WebApplicationGroup`, `WebOrDesktopDevice` and
+ * `StartApplication` are used here only in type positions (the `declare global`
+ * block above and this function's signature), so they are `import type` and
+ * contribute no runtime graph at all.
+ */
+const ApplicationGroupView = lazy(() => import('./Components/ApplicationGroupView/ApplicationGroupView'))
+const SharedView = lazy(() => import('./Components/SharedView/SharedView'))
+const EmailConfirmationView = lazy(() => import('./Components/EmailConfirmationView/EmailConfirmationView'))
 
 let keyCount = 0
 const getKey = () => {
@@ -104,7 +123,11 @@ const startApplication: StartApplication = async function startApplication(
     // render with NO WebApplication/session, so we early-return before the authed
     // ApplicationGroupView, mirroring the U2F standalone-screen branch above.
     if (route.type === RouteType.Shared) {
-      root.render(<SharedView shareId={route.sharedParams.shareId} />)
+      root.render(
+        <Suspense fallback={null}>
+          <SharedView shareId={route.sharedParams.shareId} />
+        </Suspense>,
+      )
       return
     }
 
@@ -112,19 +135,25 @@ const startApplication: StartApplication = async function startApplication(
     // the share viewer it renders with NO WebApplication/session, so we early-return
     // before the authed ApplicationGroupView.
     if (route.type === RouteType.EmailConfirmation) {
-      root.render(<EmailConfirmationView token={route.emailConfirmationParams.token} />)
+      root.render(
+        <Suspense fallback={null}>
+          <EmailConfirmationView token={route.emailConfirmationParams.token} />
+        </Suspense>,
+      )
       return
     }
 
     root.render(
-      <ApplicationGroupView
-        key={getKey()}
-        server={defaultSyncServerHost}
-        device={device}
-        enableUnfinished={enableUnfinishedFeatures}
-        websocketUrl={webSocketUrl}
-        onDestroy={onDestroy}
-      />,
+      <Suspense fallback={null}>
+        <ApplicationGroupView
+          key={getKey()}
+          server={defaultSyncServerHost}
+          device={device}
+          enableUnfinished={enableUnfinishedFeatures}
+          websocketUrl={webSocketUrl}
+          onDestroy={onDestroy}
+        />
+      </Suspense>,
     )
 
     if (window.ReactNativeWebView) {

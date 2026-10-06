@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { sanitizeHtmlString } from '@standardnotes/snjs'
-import { markdownToHtml } from '@/Utils/markdownToHtml'
 import { decryptShare, SharePayload, ShareDecryptFailureReason } from './shareCrypto'
+import SharedNoteContent from './SharedNoteContent'
+import { useSharedViewThemeContext } from './useSharedViewThemeContext'
 
 type Props = {
   shareId: string
@@ -54,6 +54,22 @@ export type ShareEnvelope = {
   encryptedPayload: string
   oneTimeView: boolean
   viewExpiresMinutes: number | null
+}
+
+/**
+ * The `NoteType` the share envelope declares, if it declares one.
+ *
+ * Read structurally rather than off `SharePayload`, for two reasons. The first
+ * is historical: every link created before the field existed carries no note
+ * type at all, so the viewer must cope with its absence anyway (it does — see
+ * `resolveSharedNoteFormat`, which recognises Super from the text itself). The
+ * second is ownership: `shareCrypto.ts` belongs to the embedded-assets work
+ * right now, so the viewer consumes the field without requiring a change
+ * there.
+ */
+const sharedNoteType = (payload: unknown): string | undefined => {
+  const declared = (payload as { noteType?: unknown } | null)?.noteType
+  return typeof declared === 'string' ? declared : undefined
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
@@ -134,8 +150,6 @@ export const decryptFailureReason = (error: unknown): FailureReason => {
   }
 }
 
-const renderMarkdown = (text: string): string => sanitizeHtmlString(markdownToHtml(text ?? ''))
-
 /**
  * Standard Red Notes: public, unauthenticated read-only viewer for a shared note
  * or tag bundle.
@@ -160,6 +174,11 @@ const SharedView = ({ shareId }: Props) => {
   // is a deterrent only and is trivially defeated by an OS screenshot of the
   // active window.
   const [obscured, setObscured] = useState(false)
+
+  // A public page has no signed-in user and therefore no installed theme, so it
+  // inherits whatever the base palette happens to be. Declare the page a
+  // theme context of its own instead — see useSharedViewThemeContext.
+  useSharedViewThemeContext()
 
   useEffect(() => {
     let cancelled = false
@@ -342,10 +361,7 @@ const SharedView = ({ shareId }: Props) => {
         {state.status === 'ready' && state.payload.kind === 'note' && (
           <article className="select-none" style={{ WebkitUserSelect: 'none', userSelect: 'none' }}>
             <h1 className="mb-4 text-2xl font-bold">{state.payload.title || t('untitled')}</h1>
-            <div
-              className="markdown-preview font-editor break-words"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(state.payload.text) }}
-            />
+            <SharedNoteContent text={state.payload.text} noteType={sharedNoteType(state.payload)} />
           </article>
         )}
 
@@ -356,10 +372,7 @@ const SharedView = ({ shareId }: Props) => {
             {state.payload.notes.map((note, index) => (
               <section key={index} className="border-border mb-8 border-b border-solid pb-6 last:border-b-0">
                 <h2 className="mb-2 text-xl font-semibold">{note.title || t('untitled')}</h2>
-                <div
-                  className="markdown-preview font-editor break-words"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(note.text) }}
-                />
+                <SharedNoteContent text={note.text} noteType={sharedNoteType(note)} />
               </section>
             ))}
           </article>

@@ -4,6 +4,9 @@
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 
+import { readFileSync } from 'fs'
+import { join } from 'path'
+
 import SharedView, { decryptFailureReason, readShareEnvelope } from './SharedView'
 
 /**
@@ -377,5 +380,119 @@ describe('decryptFailureReason', () => {
     expect(decryptFailureReason({ reason: 'something-new' })).toBe('unexpected')
     expect(decryptFailureReason(null)).toBe('unexpected')
     expect(decryptFailureReason(undefined)).toBe('unexpected')
+  })
+})
+
+/**
+ * The viewer-side half of the note-type wiring, and the bundle shape the
+ * public page depends on.
+ *
+ * `SharedView` reads `noteType` off the decrypted payload STRUCTURALLY
+ * (`shareCrypto.ts` belongs to the embedded-assets work, so the viewer does
+ * not require a change there) and hands it to `SharedNoteContent`. Without
+ * this test a mutation that always returns `undefined` from that reader
+ * survives: every current share envelope omits the field, so nothing else
+ * would notice.
+ */
+describe('the declared note type reaches the renderer', () => {
+  let container: HTMLElement
+  let root: Root
+  let errorSpy: jest.SpyInstance
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    ;(window as unknown as { defaultSyncServer?: string }).defaultSyncServer = 'http://127.0.0.1:3061'
+    window.history.replaceState(null, '', `/?shared=${SHARE_ID}#${KEY_HEX}`)
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    container.remove()
+    errorSpy.mockRestore()
+  })
+
+  const renderShare = async () => {
+    await act(async () => {
+      root.render(createElement(SharedView, { shareId: SHARE_ID }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('renders a declared plaintext note verbatim rather than as markdown', async () => {
+    decryptShare.mockResolvedValue({
+      kind: 'note',
+      title: 'Plain',
+      text: '# NOT A HEADING\n\n**NOT BOLD**',
+      noteType: 'plain-text',
+    })
+    stubFetch({ status: 200, body: gatewayBody() })
+
+    await renderShare()
+
+    const block = container.querySelector('[data-shared-note-format="plain"]')
+    expect(block).not.toBeNull()
+    expect(block?.textContent).toContain('# NOT A HEADING')
+    expect(container.querySelector('article h1')?.textContent).toBe('Plain')
+    expect(container.querySelectorAll('article h1')).toHaveLength(1)
+  })
+
+  it('renders a declared rich-text note as markup rather than printing it', async () => {
+    decryptShare.mockResolvedValue({
+      kind: 'note',
+      title: 'Legacy',
+      text: '<p>REAL PARAGRAPH</p>',
+      noteType: 'rich-text',
+    })
+    stubFetch({ status: 200, body: gatewayBody() })
+
+    await renderShare()
+
+    expect(container.querySelector('[data-shared-note-format="html"] p')?.textContent).toBe('REAL PARAGRAPH')
+    expect(container.textContent).not.toContain('<p>')
+  })
+
+  it('applies the declared note type to every note in a shared tag bundle', async () => {
+    decryptShare.mockResolvedValue({
+      kind: 'tag',
+      title: 'Bundle',
+      notes: [{ title: 'One', text: '# NOT A HEADING', noteType: 'plain-text' }],
+    })
+    stubFetch({ status: 200, body: gatewayBody() })
+
+    await renderShare()
+
+    expect(container.querySelector('[data-shared-note-format="plain"]')?.textContent).toContain('# NOT A HEADING')
+  })
+})
+
+/**
+ * The Super renderer must stay behind a DYNAMIC import. A plain `import` of it
+ * type-checks, passes every test above, and silently moves Lexical plus the
+ * whole node registry — mermaid, excalidraw, katex, prism, the chart nodes —
+ * into the first bytes the public page downloads. Measured on a production
+ * build: splitting the routes took the eagerly loaded `app.js` from 11 335 189
+ * to 3 070 370 bytes, and the whole share page from 12 779 166 to 6 814 262.
+ */
+describe('the Super renderer stays out of the eagerly loaded bundle', () => {
+  const source = readFileSync(join(__dirname, 'SharedNoteContent.tsx'), 'utf8')
+
+  it('is reached through a dynamic import', () => {
+    expect(source).toMatch(/lazy\(\(\)\s*=>\s*import\('\.\/SharedSuperContent'\)\)/)
+  })
+
+  it('is not also imported statically', () => {
+    expect(source).not.toMatch(/^import .*SharedSuperContent/m)
+  })
+
+  it('keeps the share route itself behind a dynamic import', () => {
+    const app = readFileSync(join(__dirname, '..', '..', 'App.tsx'), 'utf8')
+    expect(app).toMatch(/lazy\(\(\)\s*=>\s*import\('\.\/Components\/SharedView\/SharedView'\)\)/)
+    expect(app).toMatch(/lazy\(\(\)\s*=>\s*import\('\.\/Components\/ApplicationGroupView\/ApplicationGroupView'\)\)/)
+    expect(app).not.toMatch(/^import ApplicationGroupView from/m)
   })
 })

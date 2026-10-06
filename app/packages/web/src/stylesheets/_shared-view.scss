@@ -1,0 +1,167 @@
+// Standard Red Notes — the theme context of the PUBLIC share page.
+//
+// `useSharedViewThemeContext` stamps `data-public-share` on <html> while the
+// share viewer is mounted, and removes it on unmount. Nothing else in the app
+// sets that attribute, so every rule here is inert on every authenticated
+// route.
+//
+// WHY THE PALETTE LIVES ON :root AND NOT ON THE VIEW. ThemeManager writes the
+// app palette to `:root` and reads it back with
+// `getComputedStyle(document.documentElement)`; since d3a6469f the mermaid
+// renderer reads it from the same place (`MermaidAppTheme.readMermaidAppTheme`,
+// polarity from `--sn-stylekit-theme-type` cross-checked against the luminance
+// of `--sn-stylekit-background-color`). A palette scoped to a wrapper element
+// would paint the page and still hand every diagram the colours of the
+// palette it replaced.
+//
+// WHAT THE SHARE PAGE RESOLVED BEFORE THIS FILE: the base `:root` palette from
+// `styles/src/Styles/_colors.scss` — theme-type `dark`, background `#16090f` —
+// on every reader, including one whose OS asks for light, because the share
+// route returns before any WebApplication boots and no theme is ever
+// installed. Dark was not wrong; it was simply not a decision.
+//
+// HOW THIS STAYS HONEST. `_shared-view.scss` must redeclare EVERY
+// `--sn-stylekit-*` property the base palette declares. A token left out would
+// keep its dark value on a light page — the half-themed surface that reads as
+// a rendering bug. `SharedViewPalette.spec.ts` parses both files and fails if
+// the two token sets ever diverge.
+//
+// Values are the shipped Standard Notes Blue light theme
+// (`src/components/assets/org.standardnotes.theme-standard-notes-blue/index.css`),
+// which is the light palette this product already ships and tests against.
+
+@media (prefers-color-scheme: light) {
+  :root[data-public-share] {
+    --foreground-color: #19191c;
+    --background-color: #ffffff;
+    --highlight-color: #086dd6;
+    --border-color: #dfe1e4;
+
+    --sn-component-foreground-color: var(--foreground-color);
+    --sn-component-background-color: transparent;
+    --sn-component-foreground-highlight-color: var(--highlight-color);
+    --sn-component-outer-border-color: transparent;
+    --sn-component-inner-border-color: var(--border-color);
+
+    --sn-stylekit-neutral-color: #72767e;
+    --sn-stylekit-neutral-contrast-color: #ffffff;
+
+    --sn-stylekit-info-color: #086dd6;
+    --sn-stylekit-info-color-darkened: #065cb5;
+    --sn-stylekit-info-contrast-color: #ffffff;
+    --sn-stylekit-info-backdrop-color: #2b6fcf0f;
+
+    --sn-stylekit-success-color: #007662;
+    --sn-stylekit-success-contrast-color: #ffffff;
+
+    --sn-stylekit-warning-color: #ebad00;
+    --sn-stylekit-warning-contrast-color: #ffffff;
+
+    --sn-stylekit-danger-color: #cc2128;
+    --sn-stylekit-danger-contrast-color: #ffffff;
+    --sn-stylekit-danger-light-color: #f9e4e5;
+
+    --sn-stylekit-shadow-color: #c8c8c8;
+    --sn-stylekit-background-color: #ffffff;
+    --sn-stylekit-border-color: #dfe1e4;
+    --sn-stylekit-foreground-color: #19191c;
+
+    --sn-stylekit-contrast-background-color: #f4f5f7;
+    --sn-stylekit-contrast-foreground-color: #2e2e2e;
+    --sn-stylekit-contrast-border-color: #e3e3e3;
+
+    --sn-stylekit-secondary-background-color: #eeeff1;
+    --sn-stylekit-secondary-foreground-color: #2e2e2e;
+    --sn-stylekit-secondary-border-color: #e3e3e3;
+
+    --sn-stylekit-secondary-contrast-background-color: #e3e3e3;
+    --sn-stylekit-secondary-contrast-foreground-color: #2e2e2e;
+    --sn-stylekit-secondary-contrast-border-color: #a2a2a2;
+
+    --sn-stylekit-editor-background-color: #ffffff;
+    --sn-stylekit-editor-foreground-color: #19191c;
+
+    --sn-stylekit-paragraph-text-color: #454545;
+
+    --sn-stylekit-input-placeholder-color: #a8a8a8;
+    --sn-stylekit-input-border-color: #e3e3e3;
+
+    --sn-stylekit-scrollbar-thumb-color: #dfdfdf;
+    --sn-stylekit-scrollbar-track-border-color: #e7e7e7;
+
+    // Read by `mermaidAppThemeIsDark()`. It must AGREE with the background
+    // above: `declaredThemeTypeToTrust()` discards a declared type that
+    // disagrees with the luminance of the colour actually painted, so a stale
+    // `dark` here would be ignored rather than obeyed, and the two halves of
+    // the page would disagree about which theme they are in.
+    --sn-stylekit-theme-type: light;
+    --sn-stylekit-theme-name: sn-shared-light;
+
+    --sn-stylekit-passive-color-0: #515357;
+    --sn-stylekit-passive-color-1: #72767e;
+    --sn-stylekit-passive-color-2: #bbbec4;
+    --sn-stylekit-passive-color-3: #dfe1e4;
+    --sn-stylekit-passive-color-4: #eeeff1;
+    --sn-stylekit-passive-color-4-opacity-variant: #bbbec43d;
+    --sn-stylekit-passive-color-5: #f4f5f7;
+    --sn-stylekit-passive-color-6: #e5e5e5;
+    --sn-stylekit-passive-color-super-light: #f9f9f9;
+
+    --sn-stylekit-accessory-tint-color-1: #086dd6;
+    --sn-stylekit-accessory-tint-color-2: #ea6595;
+    --sn-stylekit-accessory-tint-color-3: #ebad00;
+    --sn-stylekit-accessory-tint-color-4: #7049cf;
+    --sn-stylekit-accessory-tint-color-5: #1aa772;
+    --sn-stylekit-accessory-tint-color-6: #f28c52;
+
+    --sn-desktop-titlebar-bg-color: var(--sn-stylekit-secondary-background-color);
+    --sn-desktop-titlebar-border-color: var(--sn-stylekit-secondary-border-color);
+    --sn-desktop-titlebar-ui-color: var(--sn-stylekit-secondary-foreground-color);
+    --sn-desktop-titlebar-ui-hover-color: var(--sn-stylekit-info-color);
+  }
+}
+
+// The read-only Super surface on a share page.
+//
+// `BlocksEditor` wraps its ContentEditable in `#blocks-editor > .editor`, which
+// `Lexical/Theme/editor.scss` sizes and scrolls; the share page mounts the
+// ContentEditable on its own so the page itself scrolls and the note grows to
+// whatever height it needs. These are the few properties that wrapper supplied.
+:root[data-public-share] {
+  .ContentEditable__root.blocks-editor {
+    padding: 0;
+    font-size: var(--font-size, 1rem);
+    line-height: var(--line-height, 1.6);
+    caret-color: transparent;
+  }
+
+  // The content element is `contenteditable="false"` (Lexical renders it that
+  // way for a non-editable editor), so no caret or selection affordance should
+  // suggest otherwise.
+  .ContentEditable__root.blocks-editor:focus,
+  .ContentEditable__root.blocks-editor:focus-visible {
+    outline: none;
+  }
+
+  // `SharedInertControls` stamps `inert` on every form control a decorator
+  // renders (a callout paints colour dots and an editable textarea; mermaid
+  // and gantt paint a source field). `inert` already removes them from hit
+  // testing and the focus order; this says so on screen, so a reader is not
+  // invited to press a control that cannot do anything.
+  [data-shared-note-format='super'] [inert] {
+    cursor: default;
+  }
+
+  [data-shared-note-format='super'] button[inert] {
+    opacity: 0.45;
+  }
+
+  // The body of a callout lives in a textarea. On a read-only page it is a
+  // paragraph that happens to be rendered by a form control, so it should not
+  // carry a field border, a resize grip or a text caret.
+  [data-shared-note-format='super'] textarea[inert] {
+    border: 0;
+    resize: none;
+    caret-color: transparent;
+  }
+}
