@@ -85,7 +85,8 @@ workspace with no eligible source must carry an explicit `emptySourceReason`;
 an undocumented empty workspace fails.
 
 The current app scope is `api`, `encryption`, `features`, `filepicker`, `files`,
-`mobile`, `models`, `responses`, `services`, `snjs`, `ui-services`, `utils`, and `web`.
+`mobile`, `models`, `responses`, `services`, `sncrypto-common`, `snjs`,
+`ui-services`, `utils`, and `web`.
 The current server scope is `analytics`, `api-gateway`, `auth`, `common`,
 `domain-core`, `domain-events`, `domain-events-infra`, `files`, `home-server`,
 `predicates`, `revisions`, `scheduler`, `security`, `settings`, `sncrypto-node`,
@@ -96,9 +97,9 @@ removed. The realtime gateway that actually runs is `websocket-gateway`, hosted
 in-process by the api-gateway and the home-server.
 
 The source denominator excludes non-Jest app workspaces (`clipper`, `desktop`,
-`filepicker/example`, `icons`, `releases`, `sncrypto-common`, `sncrypto-web`,
-`styles`, and `toast`), non-Jest server workspaces (`grpc` and
-`websocket-gateway`), and the root `mcp` and `openclaw` workspaces.
+`filepicker/example`, `icons`, `releases`, `sncrypto-web`, `styles`, and
+`toast`), non-Jest server workspaces (`grpc` and `websocket-gateway`), and the
+root `mcp` and `openclaw` workspaces.
 
 The excluded non-Jest suites are the Playwright suites under `e2e/`; desktop's
 AVA suite; the app and `sncrypto-web` Mocha/Chai browser harnesses; the
@@ -120,6 +121,7 @@ is recorded in `.orchestration/logs/t92/t92-w3-e2.md`.
 | `@standardnotes/home-server` | per path, `src/Server/HomeServer.ts` | already in its `test` script |
 | `@standard-red-notes/websocket-gateway` | per file, `gateway.ts`, `syncCommandHandler.ts`, `inviteEventOutbox.ts` | Vitest `coverage.thresholds` |
 | `@standardnotes/services` | per directory, `src/Domain/Api/`, `src/Domain/Invite/` | `collectCoverage` in `jest.config.js` |
+| `@standardnotes/sncrypto-common` | package-wide `global` at 100/100/100/100, denominator `Common/Utils.ts` | `--coverage` in its `test` script |
 | `@standardnotes/web` | per directory, `Services/SyncTransport/`, `Components/SuperEditor/Collaboration/` | `collectCoverage` in `jest.config.js` |
 
 Jest and Vitest differ on one point that changes what a `global` floor means.
@@ -142,6 +144,17 @@ Two known limits, stated rather than implied. The api-gateway config has no
 `collectCoverageFrom`, so its denominator is only the files its tests load and a
 brand-new untested file does not move the number. Web's denominator is only the
 two realtime directories, by design, so the rest of that workspace has no floor.
+
+`sncrypto-common` inherits the repo-wide 100/100/100/100 from
+`app/common.jest.json`, which most app packages never evaluate because their
+`test` scripts do not pass `--coverage`. Its denominator is the one file in the
+package with behaviour: `collectCoverageFrom` drops the re-export barrels (as
+the base config does repo-wide) and the two constant tables under `src/Types/`,
+an enum and a frozen record of libsodium byte lengths, whose emitted code is
+covered by the act of importing them and so would only pad the denominator.
+Every other source there is type-only and emits nothing. The exclusions are
+exact paths, not a directory glob, so a new file under `src/Types/` is inside
+the floor.
 
 **Every workspace is inside the eslint gate.** `yarn workspaces foreach ... run lint` skips a workspace that defines no `lint`
 script instead of failing on it, which is how an entire package can sit outside
