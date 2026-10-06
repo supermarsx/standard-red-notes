@@ -10197,7 +10197,7 @@ __metadata:
     identity-obj-proxy: "npm:^3.0.0"
     jest: "npm:^30.4.2"
     jest-environment-jsdom: "npm:^30.4.1"
-    katex: "npm:^0.17.0"
+    katex: "npm:^0.18.2"
     lexical: "npm:0.47.0"
     lint-staged: "npm:^17.0.8"
     mammoth: "npm:^1.12.0"
@@ -22214,14 +22214,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"katex@npm:^0.17.0":
-  version: 0.17.0
-  resolution: "katex@npm:0.17.0"
+"katex@npm:^0.18.2":
+  version: 0.18.2
+  resolution: "katex@npm:0.18.2"
   dependencies:
     commander: "npm:^8.3.0"
   bin:
     katex: cli.js
-  checksum: 10/46294c4395d0ffdbdc1b3fa4b85e683438b40e665ca0da920d9f9ad9197785cb0350df714247d392ceb7d52acb317bc51d94bc903d3a2dfb97da1fabf1e41e6b
+  checksum: 10/13c4c65ba80135d84fb2d34840092d191f3737a8d0623aadf70bd5d1cbcc091aa0e3e423123aa06ae8c518c35eb7c939461ff3740f9425998392d919f65bd063
   languageName: node
   linkType: hard
 
