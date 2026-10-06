@@ -16,6 +16,69 @@ const baseline = Object.freeze({
   readme: readFileSync(path.join(root, "deploy/lxc/README.md"), "utf8"),
 });
 
+/**
+ * `release_link_target` opens with `[ -L "${link}" ]`, so the two release-link tests below
+ * can only mean anything in a shell that can actually create a symbolic link. Git Bash on a
+ * Windows host without the symlink privilege silently *copies* the directory for `ln -s`
+ * (the probe observes a plain directory where the link should be) and answers
+ * `Operation not permitted` under `MSYS=winsymlinks:nativestrict`. So probe the capability
+ * in the same shell, working directory and filesystem the tests use, prefer the strict mode
+ * when the host grants it so the assertions really run, and skip with the named
+ * incapability only once the host has proven it cannot link at all. The assertions
+ * themselves are never relaxed: a release link that is a copy rather than a symlink is
+ * precisely the deployment defect these tests exist to catch, so passing over a copied
+ * directory would be worse than not running.
+ */
+function probeShellSymlinkSupport() {
+  const probe = [
+    "set -euo pipefail",
+    'sandbox="${PWD}/.tmp-srn-symlink-probe-$$"',
+    'case "${sandbox}" in "${PWD}"/.tmp-srn-symlink-probe-*) ;; *) exit 97 ;; esac',
+    'mkdir "${sandbox}"',
+    "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+    'mkdir "${sandbox}/target"',
+    'ln -s -- "${sandbox}/target" "${sandbox}/link"',
+    'if [ ! -L "${sandbox}/link" ]; then',
+    '  observed="regular file"',
+    '  if [ -d "${sandbox}/link" ]; then observed=directory; fi',
+    '  echo "ln -s exited 0 but [ -L ] is false: it produced a ${observed}, i.e. a copy" >&2',
+    "  exit 1",
+    "fi",
+    'test "$(readlink -f -- "${sandbox}/link")" = "$(readlink -f -- "${sandbox}/target")"',
+  ].join("\n");
+  const candidates = [
+    { label: "default shell", env: process.env },
+    {
+      label: "MSYS=winsymlinks:nativestrict",
+      env: { ...process.env, MSYS: "winsymlinks:nativestrict" },
+    },
+  ];
+  const refusals = [];
+
+  for (const candidate of candidates) {
+    const result = spawnSync("bash", ["-s"], {
+      input: probe,
+      cwd: root,
+      encoding: "utf8",
+      env: candidate.env,
+    });
+    if (result.status === 0) {
+      return { env: candidate.env, label: candidate.label };
+    }
+    const diagnostic =
+      (result.stderr || result.stdout || "").trim().split(/\r?\n/).at(-1) ||
+      `exit ${result.status}`;
+    refusals.push(`${candidate.label}: ${diagnostic}`);
+  }
+
+  return {
+    env: process.env,
+    skip: `this host cannot create a symbolic link, so release_link_target's [ -L ] test can never hold and the assertion could only ever be made against a copied directory (${refusals.join("; ")})`,
+  };
+}
+
+const shellSymlinks = probeShellSymlinkSupport();
+
 function occurrences(source, fragment) {
   return source.split(fragment).length - 1;
 }
@@ -774,60 +837,70 @@ test("LXC requires the full WebSocket, download deadline, and proxy matrix", () 
   }
 });
 
-test("LXC release links activate and roll back to the retained target", () => {
-  const result = spawnSync("bash", ["-s"], {
-    input: [
-      "set -euo pipefail",
-      "source deploy/lxc/release.sh",
-      'sandbox="${PWD}/.tmp-srn-lxc-test-$$"',
-      'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-test-*) ;; *) exit 97 ;; esac',
-      'mkdir "${sandbox}"',
-      "trap 'rm -rf -- \"${sandbox}\"' EXIT",
-      'releases="${sandbox}/releases"',
-      'mkdir -p "${releases}/one" "${releases}/two"',
-      ': > "${releases}/one/.srn-release"',
-      ': > "${releases}/two/.srn-release"',
-      'release_atomic_link "${releases}/one" "${sandbox}/current"',
-      'release_activate "${releases}/two" "${sandbox}/current" "${sandbox}/previous" "${releases}"',
-      'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
-      'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
-      'release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"',
-      'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/one")"',
-      'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/two")"',
-    ].join("\n"),
-    cwd: root,
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-});
+test(
+  "LXC release links activate and roll back to the retained target",
+  { skip: shellSymlinks.skip },
+  () => {
+    const result = spawnSync("bash", ["-s"], {
+      input: [
+        "set -euo pipefail",
+        "source deploy/lxc/release.sh",
+        'sandbox="${PWD}/.tmp-srn-lxc-test-$$"',
+        'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-test-*) ;; *) exit 97 ;; esac',
+        'mkdir "${sandbox}"',
+        "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+        'releases="${sandbox}/releases"',
+        'mkdir -p "${releases}/one" "${releases}/two"',
+        ': > "${releases}/one/.srn-release"',
+        ': > "${releases}/two/.srn-release"',
+        'release_atomic_link "${releases}/one" "${sandbox}/current"',
+        'release_activate "${releases}/two" "${sandbox}/current" "${sandbox}/previous" "${releases}"',
+        'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
+        'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
+        'release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"',
+        'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/one")"',
+        'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/two")"',
+      ].join("\n"),
+      cwd: root,
+      encoding: "utf8",
+      env: shellSymlinks.env,
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  },
+);
 
-test("LXC rollback restores both links when the second rename fails", () => {
-  const result = spawnSync("bash", ["-s"], {
-    input: [
-      "set -euo pipefail",
-      "source deploy/lxc/release.sh",
-      'sandbox="${PWD}/.tmp-srn-lxc-failure-$$"',
-      'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-failure-*) ;; *) exit 97 ;; esac',
-      'mkdir "${sandbox}"',
-      "trap 'rm -rf -- \"${sandbox}\"' EXIT",
-      'releases="${sandbox}/releases"',
-      'mkdir -p "${releases}/one" "${releases}/two"',
-      ': > "${releases}/one/.srn-release"',
-      ': > "${releases}/two/.srn-release"',
-      'release_atomic_link "${releases}/two" "${sandbox}/current"',
-      'release_atomic_link "${releases}/one" "${sandbox}/previous"',
-      "mv_calls=0",
-      'mv() { mv_calls=$((mv_calls + 1)); [ "${mv_calls}" -ne 2 ] || return 1; command mv "$@"; }',
-      'if release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"; then exit 98; fi',
-      "unset -f mv",
-      'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
-      'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
-    ].join("\n"),
-    cwd: root,
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-});
+test(
+  "LXC rollback restores both links when the second rename fails",
+  { skip: shellSymlinks.skip },
+  () => {
+    const result = spawnSync("bash", ["-s"], {
+      input: [
+        "set -euo pipefail",
+        "source deploy/lxc/release.sh",
+        'sandbox="${PWD}/.tmp-srn-lxc-failure-$$"',
+        'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-failure-*) ;; *) exit 97 ;; esac',
+        'mkdir "${sandbox}"',
+        "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+        'releases="${sandbox}/releases"',
+        'mkdir -p "${releases}/one" "${releases}/two"',
+        ': > "${releases}/one/.srn-release"',
+        ': > "${releases}/two/.srn-release"',
+        'release_atomic_link "${releases}/two" "${sandbox}/current"',
+        'release_atomic_link "${releases}/one" "${sandbox}/previous"',
+        "mv_calls=0",
+        'mv() { mv_calls=$((mv_calls + 1)); [ "${mv_calls}" -ne 2 ] || return 1; command mv "$@"; }',
+        'if release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"; then exit 98; fi',
+        "unset -f mv",
+        'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
+        'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
+      ].join("\n"),
+      cwd: root,
+      encoding: "utf8",
+      env: shellSymlinks.env,
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  },
+);
 
 test("LXC recovery preserves disabled and inactive service state", () => {
   const result = spawnSync("bash", ["-s"], {
