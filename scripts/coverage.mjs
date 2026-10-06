@@ -87,6 +87,10 @@ export const EXPECTED_COVERAGE_WORKSPACES = Object.freeze({
     { location: "packages/models", name: "@standardnotes/models" },
     { location: "packages/responses", name: "@standardnotes/responses" },
     { location: "packages/services", name: "@standardnotes/services" },
+    {
+      location: "packages/sncrypto-common",
+      name: "@standardnotes/sncrypto-common",
+    },
     { location: "packages/snjs", name: "@standardnotes/snjs" },
     { location: "packages/ui-services", name: "@standardnotes/ui-services" },
     { location: "packages/utils", name: "@standardnotes/utils" },

@@ -1421,16 +1421,16 @@ test("merges the complete app-core, app-web, and server manifest union without a
   });
   const metrics = computeCoverageMetrics(coverageMap);
 
-  assert.equal(appCore.manifest.selected.length, 12);
+  assert.equal(appCore.manifest.selected.length, 13);
   assert.equal(appWeb.manifest.selected.length, 1);
   assert.equal(server.manifest.selected.length, 18);
-  assert.equal(reportCount, 31);
-  assert.equal(coverageMap.files().length, 31);
+  assert.equal(reportCount, 32);
+  assert.equal(coverageMap.files().length, 32);
   assert.deepEqual(scopes, ["app", "server"]);
-  assert.deepEqual(metrics.statements, { covered: 4, total: 62, pct: 6.5 });
-  assert.deepEqual(metrics.lines, { covered: 4, total: 62, pct: 6.5 });
-  assert.deepEqual(metrics.functions, { covered: 2, total: 31, pct: 6.5 });
-  assert.deepEqual(metrics.branches, { covered: 3, total: 62, pct: 4.8 });
+  assert.deepEqual(metrics.statements, { covered: 4, total: 64, pct: 6.3 });
+  assert.deepEqual(metrics.lines, { covered: 4, total: 64, pct: 6.3 });
+  assert.deepEqual(metrics.functions, { covered: 2, total: 32, pct: 6.3 });
+  assert.deepEqual(metrics.branches, { covered: 3, total: 64, pct: 4.7 });
 });
 
 test("rejects a workspace missing from the selected manifest union", async (t) => {
