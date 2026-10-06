@@ -7,6 +7,12 @@ import { fallbackCopyTextToClipboard } from '@/Utils/copyTextToClipboard'
 import Modal from '../Modal/Modal'
 import ModalOverlay from '../Modal/ModalOverlay'
 import { encryptShare } from '../SharedView/shareCrypto'
+import {
+  createApplicationShareAssetSource,
+  inlineShareAssets,
+  shareAssetPlaceholderText,
+  ShareAssetOmission,
+} from '../SharedView/shareAssets'
 
 type Props = {
   application: WebApplication
@@ -49,6 +55,10 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
   const [expiryMinutes, setExpiryMinutes] = useState('15')
   const [submitting, setSubmitting] = useState(false)
   const [createdLink, setCreatedLink] = useState<string | null>(null)
+  // What actually travelled with the link. A share that quietly dropped an
+  // image leaves the author believing the reader can see it, so the counts and
+  // the per-file reasons are reported here as well as on the reader's page.
+  const [assetReport, setAssetReport] = useState<{ inlined: number; omitted: ShareAssetOmission[] } | null>(null)
   // Whether the link genuinely reached the clipboard. The panel below used to
   // assert it unconditionally, which is false whenever the copy did not happen.
   const [copied, setCopied] = useState(false)
@@ -59,10 +69,18 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
   const onCreate = useCallback(async () => {
     setSubmitting(true)
     try {
+      // A share link has no session, so an embedded file's bytes are
+      // unreachable from the reader's browser (both `/v1/files` and the
+      // valet-token mint answer 401 without one) and its key was never in the
+      // envelope. Inline the images HERE, while the owner still holds both, and
+      // leave a visible placeholder for anything that could not come along.
+      const assets = await inlineShareAssets(note.text, createApplicationShareAssetSource(application))
+      setAssetReport({ inlined: assets.inlined, omitted: assets.omitted })
+
       const { encryptedPayload, keyHex } = await encryptShare({
         kind: 'note',
         title: note.title,
-        text: note.text,
+        text: assets.text,
       })
 
       const viewExpiresMinutes = useExpiry ? parsedMinutes : null
@@ -140,6 +158,10 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
                 ciphertext and never sees the key (it stays in the link fragment). Anyone who obtains the full link can
                 read it.
               </p>
+              <p className="mt-1">
+                Images embedded in this note are <strong>copied into the link</strong> so they display without an
+                account. Other attachments are not, and the reader is shown a note saying so where each one sits.
+              </p>
             </div>
 
             <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -189,6 +211,25 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
               </div>
             )}
           </>
+        )}
+
+        {createdLink && assetReport !== null && (assetReport.inlined > 0 || assetReport.omitted.length > 0) && (
+          <div
+            className="border-border rounded border border-solid p-3 text-xs"
+            data-share-asset-report={`${assetReport.inlined}/${assetReport.omitted.length}`}
+          >
+            <div className="font-semibold">
+              {assetReport.inlined} embedded {assetReport.inlined === 1 ? 'image' : 'images'} travelled with this link
+              {assetReport.omitted.length > 0 ? `; ${assetReport.omitted.length} did not` : ''}.
+            </div>
+            {assetReport.omitted.length > 0 && (
+              <ul className="mt-1 list-disc pl-5">
+                {assetReport.omitted.map((omission, index) => (
+                  <li key={`${omission.fileUuid}-${index}`}>{shareAssetPlaceholderText(omission)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
 
         {createdLink && (

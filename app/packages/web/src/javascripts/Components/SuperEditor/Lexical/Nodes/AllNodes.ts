@@ -46,6 +46,10 @@ import { BookmarkAnchorNode } from './BookmarkAnchorNode'
 import { TableOfContentsNode } from './TableOfContentsNode'
 import { PageBreakNode } from './PageBreakNode'
 import { ShipmentTrackingNode } from './ShipmentTrackingNode'
+// Standard Red Notes: the inert image/placeholder node a public share link uses.
+// Registered here because a share link is parsed by the SAME node registry the
+// editor uses, and Lexical refuses to parse an unregistered node type.
+import { SharedImageNode } from './SharedImageNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -99,6 +103,7 @@ const CommonNodes = [
   TableOfContentsNode,
   PageBreakNode,
   ShipmentTrackingNode,
+  SharedImageNode,
 ]
 
 // Standard Red Notes: register the styled paragraph/heading/quote overrides so
