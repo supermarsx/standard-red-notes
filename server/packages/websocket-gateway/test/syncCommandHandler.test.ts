@@ -18,8 +18,10 @@ import {
   type SyncSocket,
   type SyncInviteEventsAdapter,
 } from '../src/syncCommandHandler.js'
+import { MAX_FILE_BINARY_FRAME_BYTES, MAX_FILE_TRANSFER_CREDIT_BYTES } from '../src/filesProtocol.js'
 import {
   MAX_SYNC_BUFFERED_BYTES,
+  MAX_SYNC_EGRESS_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_RESUME_SEQUENCE,
   SYNC_API_RPC_REFUSAL_ERROR_NAME,
@@ -2762,12 +2764,54 @@ describe('SyncCommandHandler', () => {
   })
 
   it('closes a slow consumer without retaining more egress', async () => {
-    const { handler, socket } = await authenticatedHandler()
+    // The threshold is chosen here rather than read from production, so this
+    // keeps asserting the GUARD (a full buffer closes 1013 and retains nothing)
+    // independently of what the shipped number happens to be. The shipped
+    // number has its own test below.
+    const { handler, socket } = await authenticatedHandler({ maxBufferedBytes: MAX_SYNC_BUFFERED_BYTES })
     const frameCount = socket.frames.length
     socket.bufferedAmount = MAX_SYNC_BUFFERED_BYTES
     enqueue(handler, pingFrame(1))
     await vi.waitFor(() => expect(socket.closes.at(-1)?.code).toBe(1013))
     expect(socket.frames).toHaveLength(frameCount)
+  })
+
+  /**
+   * The SHIPPED threshold, and why it is not `MAX_SYNC_BUFFERED_BYTES`.
+   *
+   * 256 KiB is smaller than one FILES_V1 download frame (a 256 KiB chunk plus
+   * its header and prefix), so with the old figure the slow-consumer guard
+   * fired on a transfer that was working: measured live, a socket download
+   * delivered zero bytes for every file at or above 262,144 bytes, and once the
+   * binary frames did flow the `FILES_COMPLETE` that ends the transfer was
+   * itself refused and escalated to a 1013 close.
+   *
+   * So the default must clear the buffering the download protocol authorises —
+   * the largest grantable credit plus a frame — and must still be finite.
+   */
+  it('defaults the slow-consumer threshold to what a file download is allowed to buffer', async () => {
+    expect(MAX_SYNC_EGRESS_BUFFERED_BYTES).toBe(MAX_FILE_TRANSFER_CREDIT_BYTES + MAX_FILE_BINARY_FRAME_BYTES)
+    expect(MAX_SYNC_EGRESS_BUFFERED_BYTES).toBeGreaterThan(MAX_SYNC_BUFFERED_BYTES)
+    expect(MAX_SYNC_EGRESS_BUFFERED_BYTES).toBeGreaterThan(MAX_FILE_BINARY_FRAME_BYTES)
+
+    // A handler with NO override tolerates everything below the constant and
+    // closes 1013 at it, so the constant is the live threshold and not decoration.
+    const tolerated = await authenticatedHandler()
+    const toleratedFrames = tolerated.socket.frames.length
+    tolerated.socket.bufferedAmount = MAX_SYNC_EGRESS_BUFFERED_BYTES - 1024
+    enqueue(tolerated.handler, pingFrame(1))
+    await vi.waitFor(() => expect(tolerated.socket.frames.at(-1)?.type).toBe('PONG'))
+    expect(tolerated.socket.frames.length).toBe(toleratedFrames + 1)
+    expect(tolerated.socket.closes).toHaveLength(0)
+    await tolerated.handler.stop()
+
+    const refused = await authenticatedHandler()
+    const refusedFrames = refused.socket.frames.length
+    refused.socket.bufferedAmount = MAX_SYNC_EGRESS_BUFFERED_BYTES
+    enqueue(refused.handler, pingFrame(1))
+    await vi.waitFor(() => expect(refused.socket.closes.at(-1)?.code).toBe(1013))
+    expect(refused.socket.frames).toHaveLength(refusedFrames)
+    await refused.handler.stop()
   })
 
   // -------------------------------------------------------------------------
@@ -2879,7 +2923,9 @@ describe('SyncCommandHandler', () => {
   })
 
   it('uses exact predicted bufferedAmount accounting at the boundary', async () => {
-    const { handler, socket } = await authenticatedHandler()
+    // Boundary arithmetic, against a threshold this test chooses. See the
+    // slow-consumer test above for why the shipped default is larger.
+    const { handler, socket } = await authenticatedHandler({ maxBufferedBytes: MAX_SYNC_BUFFERED_BYTES })
     const firstPong = JSON.stringify(
       createSyncServerFrame({
         type: 'PONG',

@@ -115,6 +115,46 @@ export const DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLim
   byteRefillPerSecond: 512 * 1024,
 })
 
+/**
+ * The FILES_V1 BINARY plane's own ingress budget, kept separate from the JSON
+ * command budget above.
+ *
+ * WHY THIS EXISTS. Every message on `/sockets/sync` used to be charged to
+ * {@link DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS}, whose numbers describe a
+ * command plane: 2 MiB of burst and 512 KiB/s sustained is roomy for `SYNC_ITEMS`
+ * frames and nowhere near a file. An upload re-slices the encrypted stream into
+ * 256 KiB frames (`MAX_FILE_CHUNK_BYTES`), so the 2 MiB bucket is empty after
+ * EIGHT of them and the ninth or tenth is refused -- closing the whole socket
+ * 1008. Measured on a single container built from `main`: 2,097,152 bytes (8
+ * frames) uploaded every time, 2,359,297 bytes and above failed, and an ordinary
+ * 2,971,413-byte photo failed on every attempt with `SOCKET_CLOSED` on the
+ * client. The cap was never a file-size policy; it was the command plane's rate
+ * limit applied to bulk bytes.
+ *
+ * WHAT THE NUMBERS MEAN. A token bucket's capacity is the burst it absorbs and
+ * its refill is the sustained rate it allows. 64 MiB of burst clears the web
+ * client's own 50 MB ceiling (`ClassicFileReader.maximumFileSize`) in one go, so
+ * a normal attachment never stalls mid-transfer; 16 MiB/s is the finite
+ * per-socket sustained ceiling that keeps this a rate limit rather than an open
+ * door. The frame bucket is deliberately NOT the binding constraint (64 MiB of
+ * 256 KiB frames is 256 frames, well under `frameCapacity`), because a hidden
+ * frame wall is exactly the failure this replaces.
+ *
+ * WHAT THIS DOES NOT CHANGE. The limiter only counts; it retains nothing. What a
+ * socket can hold in memory is bounded elsewhere and independently -- `ws`'s
+ * `maxPayload` (`MAX_WEBSOCKET_MESSAGE_BYTES`), the per-frame ceiling
+ * (`MAX_FILE_BINARY_FRAME_BYTES`) and the handler's ingress queue
+ * (`MAX_SYNC_QUEUED_FRAMES` frames / `maxQueuedBytes` bytes). A transfer is
+ * still bounded end to end by `declaredSize <= MAX_FILE_TRANSFER_BYTES`, by the
+ * upload having been opened and authorized, and by the account's storage quota.
+ */
+export const DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> = Object.freeze({
+  frameCapacity: 512,
+  frameRefillPerSecond: 256,
+  byteCapacity: 64 * 1024 * 1024,
+  byteRefillPerSecond: 16 * 1024 * 1024,
+})
+
 export const SYNC_SOCKET_PATH = '/sockets/sync'
 /**
  * The only path the legacy `?authToken=` lane upgrades on. It used to accept
@@ -208,6 +248,13 @@ export interface SyncGatewayOptions {
   maxSocketsPerUser?: number
   metrics?: SyncCommandMetrics
   ingressLimits?: Partial<WebSocketIngressLimits>
+  /**
+   * Optional override for the FILES_V1 binary plane's own ingress budget
+   * ({@link DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS}). Separate from
+   * `ingressLimits` on purpose: the two planes carry completely different
+   * traffic, and tightening the command plane must not silently cap file size.
+   */
+  fileIngressLimits?: Partial<WebSocketIngressLimits>
   authDeadlineMs?: number
   backendTimeoutMs?: number
   leaseRenewIntervalMs?: number
@@ -1315,6 +1362,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     ...syncOptions?.ingressLimits,
   }
   assertValidIngressLimits(syncIngressLimits)
+  // The binary file plane has its own bucket. See
+  // DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS for why sharing one was a bug.
+  const syncFileIngressLimits: WebSocketIngressLimits = {
+    ...DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS,
+    ...syncOptions?.fileIngressLimits,
+  }
+  assertValidIngressLimits(syncFileIngressLimits)
   let stopping = false
   const ticketOperations = new Set<Promise<unknown>>()
   // One evaluation, one list of causes. `syncAvailable()` is derived from this
@@ -1549,6 +1603,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
       alive.set(socket, true)
       const ingressLimiter = new WebSocketIngressLimiter(syncIngressLimits)
+      const fileIngressLimiter = new WebSocketIngressLimiter(syncFileIngressLimits)
       const handlerOptions = {
         socket,
         ownerId: randomUUID(),
@@ -1611,10 +1666,17 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           socket.close(1009, isBinary ? 'file frame too large' : 'sync frame too large')
           return
         }
-        if (!ingressLimiter.tryConsume(rawBytes)) {
-          syncOptions!.metrics?.increment('rate_limit', 'ingress')
+        // Two planes, two buckets. A 256 KiB file frame is bulk payload and must
+        // not be charged to the command plane's 2 MiB/512 KiB-per-second budget,
+        // which emptied after eight frames and killed the socket mid-upload. The
+        // close reason and the metric code name WHICH plane overran, so an
+        // operator reading the panel is not left guessing between a chatty client
+        // and a file transfer.
+        const planeLimiter = isBinary ? fileIngressLimiter : ingressLimiter
+        if (!planeLimiter.tryConsume(rawBytes)) {
+          syncOptions!.metrics?.increment('rate_limit', isBinary ? 'file_ingress' : 'ingress')
           stopHandler()
-          socket.close(1008, 'sync rate limit exceeded')
+          socket.close(1008, isBinary ? 'file rate limit exceeded' : 'sync rate limit exceeded')
           return
         }
         alive.set(socket, true)

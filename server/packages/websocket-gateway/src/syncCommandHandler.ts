@@ -9,7 +9,7 @@ import type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
 import { SyncFilesSession, type SyncFilesAdapter } from './filesSession.js'
 import {
-  MAX_SYNC_BUFFERED_BYTES,
+  MAX_SYNC_EGRESS_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_QUEUED_BYTES,
   MAX_SYNC_QUEUED_FRAMES,
@@ -442,6 +442,12 @@ export interface SyncCommandHandlerOptions {
   backendTimeoutMs?: number
   maxQueuedFrames?: number
   maxQueuedBytes?: number
+  /**
+   * Overrides {@link MAX_SYNC_EGRESS_BUFFERED_BYTES}, the socket-level
+   * slow-consumer threshold. An explicit value wins outright; no host passes
+   * one, so production uses the constant. Tests set it to choose the exact
+   * boundary they assert.
+   */
   maxBufferedBytes?: number
   leaseRenewIntervalMs?: number
   socketBudgetRenewIntervalMs?: number
@@ -579,7 +585,46 @@ export class SyncCommandHandler {
   private readonly backendTimeoutMs: number
   private readonly maxQueuedFrames: number
   private readonly maxQueuedBytes: number
-  private readonly maxBufferedBytes: number
+  /**
+   * How much this socket may have waiting to be written before the gateway
+   * treats the peer as not consuming. One number for every outbound frame,
+   * because `bufferedAmount` is one number and does not say which plane put the
+   * bytes there.
+   *
+   * WHAT WAS WRONG. This was `MAX_SYNC_BUFFERED_BYTES`, 256 KiB -- a figure that
+   * describes JSON command answers. The FILES_V1 binary plane shares the socket,
+   * and it broke against that figure in three separate places, all measured on a
+   * single container rather than reasoned about:
+   *
+   *   1. A full download frame is a 256 KiB chunk (`MAX_FILE_CHUNK_BYTES`) plus
+   *      its header and 8-byte prefix, so it is ALWAYS larger than 256 KiB.
+   *      `bufferedAmount(0) + frame > 256 KiB` held on the VERY FIRST frame:
+   *      a download of a 2,296,263-byte file answered `FILES_ACCEPTED` with the
+   *      right `declaredSize`, delivered ZERO bytes and then ERROR, for every
+   *      file at or above 262,144 bytes.
+   *   2. `FILES_DOWNLOAD_OPEN`/`FILES_CREDIT` let a client grant up to
+   *      `MAX_FILE_TRANSFER_CREDIT_BYTES` and `pumpDownload` then sends until
+   *      that credit is spent -- it cannot pause and resume. An allowance below
+   *      the credit the gateway accepted makes the credit a promise the sender
+   *      breaks.
+   *   3. The CONTROL frame that ends a transfer is charged the same way. With a
+   *      download's own bytes still in the socket buffer, `FILES_COMPLETE` was
+   *      refused and `send` escalated that to `failAndClose('BACKPRESSURE', …,
+   *      1013)` -- a working download closing the socket at the moment it
+   *      finished. Observed: all ten binary frames delivered, no completion.
+   *
+   * WHY THIS NUMBER. `MAX_SYNC_EGRESS_BUFFERED_BYTES` is the largest credit a
+   * client may grant plus one whole frame (the one being flushed while the rest
+   * queue behind it). That is exactly the buffering the protocol already
+   * authorises, so the guard can no longer fire on a transfer the gateway itself
+   * agreed to. It remains a hard per-socket bound: a client that grants credit
+   * and then stops reading still ends in `FILE_BACKPRESSURE`, and a
+   * command-plane client that will not consume its answers is still closed 1013
+   * -- just at a threshold a legitimate file transfer cannot trip. Per-FRAME
+   * limits are untouched: `MAX_SYNC_FRAME_BYTES` for JSON,
+   * `MAX_FILE_BINARY_FRAME_BYTES` for binary.
+   */
+  private readonly maxEgressBufferedBytes: number
   private readonly leaseRenewIntervalMs: number
   private readonly socketBudgetRenewIntervalMs: number
   private readonly socketBudgetRenewRetryDelayMs: number
@@ -594,7 +639,9 @@ export class SyncCommandHandler {
     this.backendTimeoutMs = options.backendTimeoutMs ?? SYNC_BACKEND_TIMEOUT_MS
     this.maxQueuedFrames = options.maxQueuedFrames ?? MAX_SYNC_QUEUED_FRAMES
     this.maxQueuedBytes = options.maxQueuedBytes ?? MAX_SYNC_QUEUED_BYTES
-    this.maxBufferedBytes = options.maxBufferedBytes ?? MAX_SYNC_BUFFERED_BYTES
+    // An explicit choice wins outright, so a test can pick the exact boundary it
+    // is asserting. No host passes one; production gets the constant.
+    this.maxEgressBufferedBytes = options.maxBufferedBytes ?? MAX_SYNC_EGRESS_BUFFERED_BYTES
     this.leaseRenewIntervalMs = options.leaseRenewIntervalMs ?? 10_000
     this.socketBudgetRenewIntervalMs = options.socketBudgetRenewIntervalMs ?? 20_000
     this.socketBudgetRenewRetryDelayMs = options.socketBudgetRenewRetryDelayMs ?? this.socketBudgetRenewIntervalMs
@@ -2049,7 +2096,7 @@ export class SyncCommandHandler {
       this.sendError(requestId, commandId, 'RESULT_TOO_LARGE')
       return false
     }
-    if (this.options.socket.bufferedAmount + bytes > this.maxBufferedBytes) {
+    if (this.options.socket.bufferedAmount + bytes > this.maxEgressBufferedBytes) {
       this.options.metrics?.increment('backpressure', 'egress')
       this.failAndClose('BACKPRESSURE', 'Sync client is not consuming responses.', 1013)
       return false
@@ -2077,7 +2124,7 @@ export class SyncCommandHandler {
     })
     const serialized = JSON.stringify(frame)
     const bytes = Buffer.byteLength(serialized, 'utf8')
-    if (bytes > MAX_SYNC_FRAME_BYTES || this.options.socket.bufferedAmount + bytes > this.maxBufferedBytes) {
+    if (bytes > MAX_SYNC_FRAME_BYTES || this.options.socket.bufferedAmount + bytes > this.maxEgressBufferedBytes) {
       return false
     }
     try {
@@ -2094,7 +2141,7 @@ export class SyncCommandHandler {
     if (this.closed || bytes.byteLength > MAX_FILE_BINARY_FRAME_BYTES) {
       return false
     }
-    if (this.options.socket.bufferedAmount + bytes.byteLength > this.maxBufferedBytes) {
+    if (this.options.socket.bufferedAmount + bytes.byteLength > this.maxEgressBufferedBytes) {
       this.options.metrics?.increment('backpressure', 'files_egress')
       return false
     }

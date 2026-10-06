@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import {
   DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
   DEFAULT_FILE_TRANSFER_DEADLINE_MS,
+  MAX_FILE_BINARY_FRAME_BYTES,
   MAX_FILE_METADATA_ENTRIES,
   MAX_FILE_TRANSFER_BYTES,
   MAX_FILE_TRANSFER_CREDIT_BYTES,
@@ -22,6 +23,19 @@ export const MAX_SYNC_FRAME_BYTES = 512 * 1024
 export const SYNC_AUTH_DEADLINE_MS = 5_000
 export const SYNC_BACKEND_TIMEOUT_MS = 15_000
 export const MAX_SYNC_BUFFERED_BYTES = 256 * 1024
+/**
+ * How much one sync socket may have waiting to be written before the gateway
+ * treats the peer as not consuming. See `SyncCommandHandler`'s
+ * `maxEgressBufferedBytes` for the three ways the old 256 KiB figure broke the
+ * FILES_V1 binary plane that shares this socket; in short, it is smaller than a
+ * single download frame, so a working transfer tripped the slow-consumer guard.
+ *
+ * The number is the largest credit a client may grant
+ * (`MAX_FILE_TRANSFER_CREDIT_BYTES`) plus one whole frame — exactly the
+ * buffering the download protocol already authorises, so the guard cannot fire
+ * on a transfer the gateway itself agreed to, and no more than that.
+ */
+export const MAX_SYNC_EGRESS_BUFFERED_BYTES = MAX_FILE_TRANSFER_CREDIT_BYTES + MAX_FILE_BINARY_FRAME_BYTES
 export const MAX_SYNC_QUEUED_FRAMES = 8
 export const MAX_SYNC_QUEUED_BYTES = MAX_SYNC_FRAME_BYTES
 /** Unsigned 32-bit sequence space leaves no unsafe-integer increment edge. */

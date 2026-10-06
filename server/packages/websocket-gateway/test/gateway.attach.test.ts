@@ -63,6 +63,8 @@ import {
   attachWebSocketGateway,
   createLoggerSyncCommandMetrics,
   defaultRoomJoinAuthorizer,
+  DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS,
+  DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS,
   DEFAULT_WEBSOCKET_INGRESS_LIMITS,
   DEFAULT_WEBSOCKET_RELAY_BACKLOG_LIMITS,
   MAX_WEBSOCKET_MESSAGE_BYTES,
@@ -74,7 +76,13 @@ import {
   type SyncFilesAdapter,
   type SyncGatewayOptions,
 } from '../src/gateway.js'
-import { decodeFileBinaryFrame, encodeFileBinaryFrame, sha256Hex } from '../src/filesProtocol.js'
+import {
+  decodeFileBinaryFrame,
+  encodeFileBinaryFrame,
+  MAX_FILE_BINARY_FRAME_BYTES,
+  MAX_FILE_CHUNK_BYTES,
+  sha256Hex,
+} from '../src/filesProtocol.js'
 import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
 import { digestSyncCommandBody } from '../src/syncProtocol.js'
 import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
@@ -2607,6 +2615,419 @@ describe('authenticated /sockets/sync command plane', () => {
     const received = Buffer.concat(binaries.map((frame) => Buffer.from(decodeFileBinaryFrame(frame).bytes)))
     expect(new Uint8Array(received)).toEqual(payload)
     socket.close()
+  })
+
+  /**
+   * A byte-accurate storage double for a file of any size, so a round trip can
+   * be driven at REAL attachment sizes rather than the 700 bytes the original
+   * round-trip test used. 700 bytes is one frame; every bound that actually
+   * broke uploads lives above the first frame.
+   */
+  const sizedFilesAdapter = (stored: Map<string, Uint8Array>): SyncFilesAdapter => {
+    const staged = new Map<string, Uint8Array[]>()
+    const targets = new Map<string, string>()
+    return {
+      ready: () => true,
+      metadata: async ({ resources }) =>
+        resources.map((resource) => {
+          const bytes = stored.get(resource.remoteIdentifier)
+          return bytes
+            ? { resource, exists: true, encryptedSize: bytes.byteLength }
+            : { resource, exists: false as const }
+        }),
+      openUpload: async ({ descriptor }) => {
+        staged.set('transfer-up', [])
+        targets.set('transfer-up', descriptor.remoteIdentifier)
+        return {
+          transferId: 'transfer-up',
+          generation: 1,
+          resumeId: 'resume-up',
+          nextIndex: 0,
+          nextOffset: 0,
+          declaredSize: descriptor.declaredSize,
+        }
+      },
+      uploadChunk: async ({ header, bytes }) => {
+        const parts = staged.get(header.transferId) as Uint8Array[]
+        // Copy: the transport hands over a view onto a reusable frame buffer.
+        parts[header.index] = Uint8Array.from(bytes)
+        return {
+          duplicate: false,
+          nextIndex: header.index + 1,
+          nextOffset: header.offset + bytes.byteLength,
+          resumeId: 'resume-up',
+        }
+      },
+      finishUpload: async ({ transferId, sha256 }) => {
+        const parts = staged.get(transferId) as Uint8Array[]
+        const joined = Buffer.concat(parts.map((part) => Buffer.from(part)))
+        if (sha256Hex(joined) !== sha256) {
+          throw new Error('digest mismatch')
+        }
+        stored.set(targets.get(transferId) as string, new Uint8Array(joined))
+        return { sha256 }
+      },
+      openDownload: async ({ resource }) => ({
+        transferId: 'transfer-down',
+        generation: 1,
+        resumeId: 'resume-down',
+        declaredSize: (stored.get(resource.remoteIdentifier) as Uint8Array).byteLength,
+        nextIndex: 0,
+        nextOffset: 0,
+      }),
+      readDownloadChunk: async ({ index, offset, maxBytes }) => {
+        const bytes = stored.get('remote-sized') as Uint8Array
+        const slice = bytes.slice(offset, Math.min(bytes.byteLength, offset + maxBytes))
+        return {
+          index,
+          offset,
+          declaredSize: bytes.byteLength,
+          bytes: slice,
+          final: offset + slice.byteLength >= bytes.byteLength,
+        }
+      },
+      cancel: async () => undefined,
+    }
+  }
+
+  /**
+   * THE SHIPPED DEFECT, at the exact size it was measured at.
+   *
+   * Every message on this socket used to be charged to ONE token bucket whose
+   * numbers describe the JSON command plane (2 MiB burst, 512 KiB/s). A file is
+   * re-sliced into 256 KiB frames, so the bucket emptied after eight of them and
+   * the gateway closed the socket 1008 -- which the browser reports as
+   * `SOCKET_CLOSED`. Live on a single container built from `main`: 2,097,152
+   * bytes (8 frames) uploaded every time and 2,359,297 bytes did not, and an
+   * ordinary 2,971,413-byte photo failed on every attempt.
+   *
+   * 2,359,297 is therefore the size this test uses, and it asserts the
+   * relationship rather than only the number, so the test still means what it
+   * says if the command plane's budget is ever retuned.
+   *
+   * The read-back is part of the same regression: a full 256 KiB DOWNLOAD frame
+   * is larger than `MAX_SYNC_BUFFERED_BYTES`, so `sendBinary` refused the very
+   * first one and the download answered `FILE_BACKPRESSURE` having delivered
+   * zero bytes, for every file at or above 262,144 bytes.
+   */
+  it('carries a multi-frame file over the default budgets and reads it back byte for byte', async () => {
+    const stored = new Map<string, Uint8Array>()
+    const payload = new Uint8Array(MAX_FILE_CHUNK_BYTES * 9 + 1)
+    for (let index = 0; index < payload.byteLength; index++) {
+      payload[index] = (index * 31) % 251
+    }
+    // The point of the size: it is past what the COMMAND plane would ever allow.
+    expect(payload.byteLength).toBeGreaterThan(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity)
+    expect(payload.byteLength).toBe(2_359_297)
+
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      // No limit overrides anywhere: the shipped defaults are what is on trial.
+      sync: { ...syncOptions(), files: sizedFilesAdapter(stored) },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-sized',
+      sessionUuid: 'session-sized',
+      deviceId: 'device-sized',
+      authorization: 'Bearer server-only-credential',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    const controls: Array<Record<string, unknown>> = []
+    const binaries: Uint8Array[] = []
+    socket.on('message', (data, isBinary) => {
+      if (isBinary) {
+        binaries.push(new Uint8Array(data as Buffer))
+        return
+      }
+      controls.push(JSON.parse(data.toString()) as Record<string, unknown>)
+    })
+
+    let sequence = 0
+    const send = (type: string, framePayload: Record<string, unknown>): void => {
+      const requestId = `${type.toLowerCase()}-${sequence}`
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          channel: 'sync',
+          type,
+          requestId,
+          commandId: requestId,
+          sequence: sequence++,
+          payloadLength: Buffer.byteLength(JSON.stringify(framePayload), 'utf8'),
+          payload: framePayload,
+        }),
+      )
+    }
+    const awaitControl = async (type: string): Promise<Record<string, unknown>> => {
+      let frame: Record<string, unknown> | undefined
+      await vi.waitFor(
+        () => {
+          frame = controls.find((candidate) => candidate.type === type)
+          expect(
+            frame,
+            `waiting for ${type}; saw ${controls.map((seen) => seen.type).join(', ')}; binaries=${binaries.length}`,
+          ).toBeDefined()
+        },
+        { timeout: 30_000, interval: 20 },
+      )
+      return frame as Record<string, unknown>
+    }
+
+    send('AUTH', { ticket: issued.ticket, deviceId: 'device-sized' })
+    expect(await awaitControl('AUTHENTICATED')).toMatchObject({
+      payload: { operations: expect.arrayContaining(['FILES_V1']) },
+    })
+
+    const resource = { ownershipType: 'user' as const, remoteIdentifier: 'remote-sized', fileUuid: 'file-sized' }
+    send('FILES_UPLOAD_OPEN', {
+      resource,
+      decryptedSize: payload.byteLength,
+      declaredSize: payload.byteLength,
+      mimeType: 'application/octet-stream',
+      deadlineMs: 30_000,
+    })
+    expect(await awaitControl('FILES_ACCEPTED')).toMatchObject({ payload: { mode: 'upload' } })
+
+    // Strictly sequential, one outstanding write, exactly as SocketUploadDriver
+    // schedules it: the gateway's chunk acks carry no client correlation id.
+    const frameCount = Math.ceil(payload.byteLength / MAX_FILE_CHUNK_BYTES)
+    expect(frameCount).toBe(10)
+    for (let index = 0; index < frameCount; index++) {
+      const offset = index * MAX_FILE_CHUNK_BYTES
+      const slice = payload.slice(offset, Math.min(offset + MAX_FILE_CHUNK_BYTES, payload.byteLength))
+      socket.send(
+        Buffer.from(
+          encodeFileBinaryFrame(
+            {
+              kind: 'UPLOAD_CHUNK',
+              requestId: 'upload-sized',
+              transferId: 'transfer-up',
+              generation: 1,
+              index,
+              offset,
+              declaredSize: payload.byteLength,
+              byteLength: slice.byteLength,
+              sha256: sha256Hex(slice),
+              final: offset + slice.byteLength === payload.byteLength,
+            },
+            slice,
+          ),
+        ),
+        { binary: true },
+      )
+      await vi.waitFor(
+        () =>
+          expect(
+            controls.filter((frame) => frame.type === 'FILES_CHUNK_ACK'),
+            `chunk ${index}; saw ${controls.map((seen) => seen.type).join(', ')}`,
+          ).toHaveLength(index + 1),
+        { timeout: 30_000, interval: 20 },
+      )
+    }
+    // Not one frame was refused, and the socket that carried them is still up.
+    expect(controls.filter((frame) => frame.type === 'ERROR')).toEqual([])
+    expect(socket.readyState).toBe(WebSocket.OPEN)
+
+    send('FILES_UPLOAD_FINISH', {
+      transferId: 'transfer-up',
+      generation: 1,
+      declaredSize: payload.byteLength,
+      sha256: sha256Hex(payload),
+      deadlineMs: 30_000,
+    })
+    expect(await awaitControl('FILES_COMPLETE')).toMatchObject({
+      payload: { mode: 'upload', sha256: sha256Hex(payload) },
+    })
+    expect(stored.get('remote-sized')).toEqual(payload)
+
+    controls.length = 0
+    send('FILES_DOWNLOAD_OPEN', {
+      resource,
+      offset: 0,
+      initialCreditBytes: 4 * 1024 * 1024,
+      deadlineMs: 30_000,
+    })
+    expect(await awaitControl('FILES_ACCEPTED')).toMatchObject({
+      payload: { mode: 'download', declaredSize: payload.byteLength },
+    })
+    expect(await awaitControl('FILES_COMPLETE')).toMatchObject({
+      payload: { mode: 'download', sha256: sha256Hex(payload) },
+    })
+    expect(controls.filter((frame) => frame.type === 'ERROR')).toEqual([])
+    const received = Buffer.concat(binaries.map((frame) => Buffer.from(decodeFileBinaryFrame(frame).bytes)))
+    expect(new Uint8Array(received)).toEqual(payload)
+    socket.close()
+    // 2.36 MB over a loopback socket, with a SHA-256 over every frame on both
+    // ends, does not fit the suite's 5 s default.
+  }, 60_000)
+
+  /**
+   * Separating the planes must not remove the limit. A client that streams
+   * binary frames past the FILE plane's own budget is still cut off -- and the
+   * close reason and the metric name THAT plane, so an operator reading a 1008
+   * is not left choosing between a chatty client and a file transfer.
+   */
+  it('closes a socket whose file frames overrun the file plane, naming that plane', async () => {
+    const stored = new Map<string, Uint8Array>()
+    const payload = Uint8Array.from({ length: MAX_FILE_CHUNK_BYTES }, (_value, index) => index % 251)
+    const metrics = { increment: vi.fn() }
+
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...syncOptions(),
+        files: sizedFilesAdapter(stored),
+        metrics,
+        // One frame's worth of credit and effectively no refill.
+        fileIngressLimits: {
+          frameCapacity: 100,
+          frameRefillPerSecond: 100,
+          byteCapacity: 1024,
+          byteRefillPerSecond: 0.000_001,
+        },
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-file-rate',
+      sessionUuid: 'session-file-rate',
+      deviceId: 'device-file-rate',
+      authorization: 'Bearer server-only-credential',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    const controls: Array<Record<string, unknown>> = []
+    socket.on('message', (data, isBinary) => {
+      if (!isBinary) {
+        controls.push(JSON.parse(data.toString()) as Record<string, unknown>)
+      }
+    })
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-0',
+        commandId: 'auth-0',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(
+          JSON.stringify({ ticket: issued.ticket, deviceId: 'device-file-rate' }),
+          'utf8',
+        ),
+        payload: { ticket: issued.ticket, deviceId: 'device-file-rate' },
+      }),
+    )
+    await vi.waitFor(() => expect(controls.some((frame) => frame.type === 'AUTHENTICATED')).toBe(true))
+
+    const closed = closedWithReason(socket)
+    socket.send(
+      Buffer.from(
+        encodeFileBinaryFrame(
+          {
+            kind: 'UPLOAD_CHUNK',
+            requestId: 'upload-rate',
+            transferId: 'transfer-up',
+            generation: 1,
+            index: 0,
+            offset: 0,
+            declaredSize: payload.byteLength,
+            byteLength: payload.byteLength,
+            sha256: sha256Hex(payload),
+            final: true,
+          },
+          payload,
+        ),
+      ),
+      { binary: true },
+    )
+
+    expect(await closed).toEqual({ code: 1008, reason: 'file rate limit exceeded' })
+    expect(metrics.increment).toHaveBeenCalledWith('rate_limit', 'file_ingress')
+    expect(metrics.increment).not.toHaveBeenCalledWith('rate_limit', 'ingress')
+  })
+
+  /**
+   * The other half of the separation: a tiny COMMAND budget still cuts off a
+   * JSON frame train, and still says `sync`. Without this, "give the files plane
+   * its own bucket" could have been implemented as "stop metering anything".
+   */
+  it('keeps metering JSON command frames against the command plane', async () => {
+    const metrics = { increment: vi.fn() }
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...syncOptions(),
+        filesUnsupported: true,
+        metrics,
+        ingressLimits: {
+          frameCapacity: 100,
+          frameRefillPerSecond: 100,
+          byteCapacity: 1024,
+          byteRefillPerSecond: 0.000_001,
+        },
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-json-rate',
+      sessionUuid: 'session-json-rate',
+      deviceId: 'device-json-rate',
+      authorization: 'Bearer server-only-credential',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    const closed = closedWithReason(socket)
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-0',
+        commandId: 'auth-0',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify({ ticket: issued.ticket, deviceId: 'x'.repeat(2048) }), 'utf8'),
+        payload: { ticket: issued.ticket, deviceId: 'x'.repeat(2048) },
+      }),
+    )
+
+    expect(await closed).toEqual({ code: 1008, reason: 'sync rate limit exceeded' })
+    expect(metrics.increment).toHaveBeenCalledWith('rate_limit', 'ingress')
+    expect(metrics.increment).not.toHaveBeenCalledWith('rate_limit', 'file_ingress')
+  })
+
+  /**
+   * The defaults themselves, with the relationships that make them right. A
+   * number alone cannot say whether it is big enough; these say what it has to
+   * clear.
+   */
+  it('budgets the file plane for a real attachment rather than for command frames', () => {
+    // The command plane keeps the numbers it was designed with.
+    expect(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity).toBe(2 * 1024 * 1024)
+    expect(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteRefillPerSecond).toBe(512 * 1024)
+
+    // The web client hands over files up to 50 MB (ClassicFileReader
+    // .maximumFileSize, app/packages/filepicker). A burst smaller than that is a
+    // file-size cap wearing a rate limit's clothes, which is what shipped.
+    expect(DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS.byteCapacity).toBeGreaterThanOrEqual(50 * 1_000_000)
+    // Still finite: a bucket is a rate limit only if it has a sustained rate.
+    expect(DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS.byteRefillPerSecond).toBeGreaterThanOrEqual(8 * 1024 * 1024)
+    expect(Number.isFinite(DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS.byteCapacity)).toBe(true)
+    // The BYTE bucket must bind first. A frame bucket that runs out sooner is
+    // the same bug in a different unit: an invisible ceiling on file size.
+    expect(DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS.frameCapacity).toBeGreaterThan(
+      DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS.byteCapacity / MAX_FILE_BINARY_FRAME_BYTES,
+    )
   })
 })
 

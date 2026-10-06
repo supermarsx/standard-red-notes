@@ -64,6 +64,7 @@ import {
   SocketFileUploadPosition,
   SocketFileUploadSession,
   SocketUploadDriver,
+  socketUploadFailureText,
   UploadSizePlan,
 } from '@standardnotes/files'
 import { AlertService, ButtonType } from '../Alert/AlertService'
@@ -639,7 +640,7 @@ export class FileService extends AbstractService implements FilesClientInterface
       const pushed = await operation.pushBytes(bytes, chunkId, isFinalChunk)
 
       if (pushed.outcome === 'failed') {
-        return new ClientDisplayableError(`Failed to push file bytes to server (${pushed.code})`)
+        return new ClientDisplayableError(socketUploadFailureText(pushed.code, pushed.safeToFallback))
       }
 
       return undefined
