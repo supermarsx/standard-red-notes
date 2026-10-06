@@ -16,6 +16,7 @@ import { CheckForTrafficAbuse } from '../../Domain/UseCase/Syncing/CheckForTraff
 import { Logger } from 'winston'
 import { ExecuteSyncCommand } from '../../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../../Domain/SyncCommand/GetSyncCommandStatus'
+import { GetUserStorageUsage } from '../../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
 
 @controller('/items', TYPES.Sync_AuthMiddleware)
 export class AnnotatedItemsController extends BaseItemsController {
@@ -42,6 +43,7 @@ export class AnnotatedItemsController extends BaseItemsController {
     override authorizeCollaborationAccess: AuthorizeCollaborationAccess,
     @inject(TYPES.Sync_ExecuteSyncCommand) override executeSyncCommand: ExecuteSyncCommand,
     @inject(TYPES.Sync_GetSyncCommandStatus) override getSyncCommandStatusUseCase: GetSyncCommandStatus,
+    @inject(TYPES.Sync_GetUserStorageUsage) override getUserStorageUsage: GetUserStorageUsage,
   ) {
     super(
       checkForTrafficAbuse,
@@ -62,6 +64,7 @@ export class AnnotatedItemsController extends BaseItemsController {
       authorizeCollaborationAccess,
       executeSyncCommand,
       getSyncCommandStatusUseCase,
+      getUserStorageUsage,
     )
   }
 
@@ -78,6 +81,16 @@ export class AnnotatedItemsController extends BaseItemsController {
   @httpGet('/sync-command/:commandId')
   override async getSyncCommandStatus(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getSyncCommandStatus(request, response)
+  }
+
+  // Standard Red Notes: DECLARED BEFORE `/:uuid`. inversify-express-utils
+  // registers routes in decorator order, so a bare `/:uuid` above this line would
+  // swallow `/storage-usage` as an item uuid and answer 404 "Item not found" —
+  // which is exactly what the Space block would then report as an unreadable
+  // server. `/sync-command/:commandId` sits above `/:uuid` for the same reason.
+  @httpGet('/storage-usage')
+  override async getStorageUsage(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getStorageUsage(request, response)
   }
 
   @httpGet('/:uuid')

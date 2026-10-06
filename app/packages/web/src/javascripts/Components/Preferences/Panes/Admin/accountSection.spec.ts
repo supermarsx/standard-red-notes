@@ -1,15 +1,20 @@
 import {
   ACCOUNT_FLAG_READINGS,
   ACCOUNT_ROLES,
+  accountStorageTotal,
   ADMIN_READINGS,
   buildAccountSection,
   describeAdminReading,
   describeFileQuota,
+  describeSoftCapComparison,
   describeSubscription,
   FILE_ALLOWANCE_ORIGINS,
   FILE_QUOTA_NEAR_FRACTION,
   fileQuotaFraction,
+  ITEM_USAGE_READINGS,
+  SOFT_CAP_COMPARISONS,
   SPACE_FIGURE_SOURCES,
+  STORAGE_TOTAL_COVERAGE,
   SUBSCRIPTION_PLANS,
   unconsumableOperationCount,
   unrecognisedRoleCount,
@@ -96,6 +101,9 @@ const healthyObservations = (overrides: Partial<AccountObservations> = {}): Acco
   offlineSubscription: false,
   fileUploadBytesUsed: 100 * MB,
   fileUploadBytesLimit: 1000 * MB,
+  itemBytesUsed: 40 * MB,
+  itemBytesComplete: true,
+  itemUsageReading: 'reported',
   localUsageBytes: 50 * MB,
   localSoftCapBytes: 500 * MB,
   protocolVersion: 3,
@@ -183,6 +191,11 @@ describe('buildAccountSection never discloses an account identifier', () => {
         // path the privacy suite does not cover, and every one of this pane's four
         // leaks got in through a field nobody had swept.
         fileCensus: PLANTED_SESSION_UUID,
+        // The item-usage reading is the newest wide `string` member, and it is
+        // planted with the DEVICE id rather than an arbitrary marker: it is a
+        // CLIENT-produced reading about a request, and the fields adjacent to a
+        // request on this client are the ones that carry a device identity.
+        itemUsageReading: PLANTED_DEVICE_ID,
         // The allowance provenance is a SERVER enum, and the server that sends it
         // is the same one that holds this account's subscription uuid — exactly the
         // adjacency that puts an identifier in the wrong field. Planted with the
@@ -221,7 +234,14 @@ describe('buildAccountSection never discloses an account identifier', () => {
       expect(serialisedInput).toContain(planted)
     }
 
-    for (const field of ['roles', 'subscriptionPlan', 'serverOperations', 'fileCensus', 'fileAllowanceOrigin']) {
+    for (const field of [
+      'roles',
+      'subscriptionPlan',
+      'serverOperations',
+      'fileCensus',
+      'fileAllowanceOrigin',
+      'itemUsageReading',
+    ]) {
       expect({
         field,
         poisoned: PLANTED_IDENTIFIERS.some((planted) => JSON.stringify(observations[field]).includes(planted)),
@@ -281,6 +301,30 @@ describe('buildAccountSection never discloses an account identifier', () => {
         expect(output).not.toContain(fragment)
       }
     }
+  })
+
+  /**
+   * *** THE COMPANION TO THE SWEEP, AND WITHOUT IT THE SWEEP IS HALF A TEST. ***
+   *
+   * Every refusal above is satisfied by a model that does not render the row at
+   * all, so each poisoned field's row is asserted to EXIST and to carry the
+   * refusal rather than merely to be free of the plant. `rowOf` throws on a
+   * missing label, so a renamed or deleted row fails here instead of quietly
+   * making the scan vacuous from the other end.
+   */
+  it('renders every row a poisoned field feeds, carrying a refusal rather than nothing', () => {
+    const model = plantedSection()
+
+    expect(rowOf(model, 'Subscription plan').value).toBe('other (unrecognised)')
+    expect(rowOf(model, 'Uploaded files in this account').value).toBe('other (unrecognised)')
+    expect(rowOf(model, 'Where the file allowance comes from').value).toBe('other (unrecognised)')
+    expect(rowOf(model, 'Item usage read').value).toBe('other (unrecognised)')
+    expect(rowOf(model, UNRECOGNISED_ROLES_LABEL).value).toBe('3')
+    expect(rowOf(model, 'Operations this client cannot consume').value).toBe('2')
+    // And the figures those fields sit beside are still reported, so the scan is
+    // not passing over a Space block that rendered nothing at all.
+    expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('40')
+    expect(rowOf(model, 'Total account storage, whole MB').value).toBe('140')
   })
 
   it('counts an unrecognised role rather than naming it', () => {
@@ -350,6 +394,9 @@ describe('buildAccountSection never discloses an account identifier', () => {
     expect(report).toContain('- Byte figures: reduced to closed buckets and whole megabytes before they are reported')
     expect(report).toContain('- Uploaded files: reported as present, none or not loaded; never counted and never named')
     expect(report).toContain(
+      '- Stored items: reported as whole megabytes and a completeness boolean; never counted and never named',
+    )
+    expect(report).toContain(
       '- Per-account feature flags: not reported by any server build; only a refusal observed on the sync lane evidences them',
     )
   })
@@ -359,15 +406,49 @@ describe('buildAccountSection never discloses an account identifier', () => {
       observations: healthyObservations({
         fileUploadBytesUsed: 123_456_789,
         fileUploadBytesLimit: 987_654_321,
+        itemBytesUsed: 55_555_555,
+        localUsageBytes: 44_444_444,
       }),
     })
     const report = model.reportLines.join('\n')
 
     expect(report).not.toContain('123456789')
     expect(report).not.toContain('987654321')
+    // The two figures that arrived with the account total, scanned the same way:
+    // each row reduces to whole megabytes and no exact byte count reaches the
+    // report.
+    expect(report).not.toContain('55555555')
+    expect(report).not.toContain('44444444')
+    // And the TOTAL is composed from the RAW bytes and only then reduced, so the
+    // exact sum of the two components is not in the report either.
+    expect(report).not.toContain(String(123_456_789 + 55_555_555))
     expect(rowOf(model, 'Server file bytes used, whole MB').value).toBe('117')
     expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('941')
     expect(rowOf(model, 'Server file allowance used').value).toBe('0-25%')
+    expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('52')
+    expect(rowOf(model, 'Total account storage, whole MB').value).toBe('170')
+    expect(rowOf(model, 'Local usage, whole MB').value).toBe('42')
+  })
+
+  /**
+   * *** THE ONE FIGURE A STORAGE REPORT MUST NOT CARRY. *** The server has to send
+   * the item COUNTS in order to say whether its sum covers every item, and the
+   * caller reduces them to a boolean before they reach this module — there is no
+   * member of `AccountObservations` that could carry one. This asserts the
+   * CONSEQUENCE rather than the type: a population handed in anyway, through a
+   * cast, reaches no row, no note, no finding and no report line.
+   */
+  it('cannot be made to print how many items or files the account holds', () => {
+    const model = buildAccountSection({
+      observations: {
+        ...healthyObservations({ itemBytesUsed: 8 * MB }),
+        ...({ itemsMeasured: 4812, itemsUnmeasured: 17, fileCount: 93 } as Record<string, unknown>),
+      } as unknown as AccountObservations,
+    })
+
+    for (const population of ['4812', '93']) {
+      expect(everything(model)).not.toContain(population)
+    }
   })
 })
 
@@ -860,14 +941,76 @@ describe('the account file allowance', () => {
     expect(codesOf(model)).toEqual([])
   })
 
-  it('reads a zero soft cap as no cap rather than as a cap of zero', () => {
+  /**
+   * *** THE ROW THAT COULD NEVER FILL, IN BOTH OF ITS EMPTY STATES. ***
+   *
+   * `0` is this preference's documented default, so "no cap" is the commonest
+   * reading in the fleet — and the comparison row used to answer "not reported"
+   * over it, which invites a hunt for a read that did not fail. It now says so,
+   * from the cap alone. The absence that REMAINS is a cap that IS set beside a
+   * local usage nobody measured, and that one must stay absent: "within the cap"
+   * is the flattering answer and the dangerous one.
+   */
+  it('reads a zero soft cap as no cap, and says so in the comparison rather than leaving it blank', () => {
     const model = buildAccountSection({
       observations: healthyObservations({ localSoftCapBytes: 0, localUsageBytes: 900 * MB }),
     })
 
     expect(rowOf(model, 'Local usage soft cap').value).toBe('no cap')
+    expect(rowOf(model, 'Local usage against the soft cap').value).toBe('no cap to exceed')
+    expect(rowOf(model, 'Local usage against the soft cap').evidence.kind).toBe('direct')
+    expect(rowOf(model, 'Local usage against the soft cap').verdict).toBe('informational')
+  })
+
+  it('says no cap to exceed even when the local usage was never measured, because the cap alone settles it', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ localSoftCapBytes: 0, localUsageBytes: undefined }),
+    })
+
+    expect(rowOf(model, 'Local usage against the soft cap').value).toBe('no cap to exceed')
+    expect(rowOf(model, 'Local usage, whole MB').value).toBe('not reported')
+    expect(rowOf(model, 'Local usage, whole MB').evidence.kind).toBe('absent')
+  })
+
+  it('leaves the comparison undetermined when a cap IS set and nothing measured the usage', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ localSoftCapBytes: 500 * MB, localUsageBytes: undefined }),
+    })
+
     expect(rowOf(model, 'Local usage against the soft cap').value).toBe('not reported')
     expect(rowOf(model, 'Local usage against the soft cap').evidence.kind).toBe('absent')
+    expect(rowOf(model, 'Local usage against the soft cap').verdict).toBe('undetermined')
+  })
+
+  it('reduces the local usage to whole megabytes, and 0 means under one rather than unmeasured', () => {
+    const model = buildAccountSection({
+      observations: healthyObservations({ localUsageBytes: 900_000, localSoftCapBytes: 500 * MB }),
+    })
+
+    expect(rowOf(model, 'Local usage, whole MB').value).toBe('0')
+    expect(rowOf(model, 'Local usage, whole MB').evidence.kind).toBe('direct')
+    expect(rowOf(model, 'Local usage against the soft cap').value).toBe('within the cap')
+  })
+
+  it('reduces every soft-cap input to one of the three declared comparisons', () => {
+    expect(describeSoftCapComparison(900 * MB, 10 * MB)).toBe('over')
+    expect(describeSoftCapComparison(1 * MB, 10 * MB)).toBe('within')
+    // Exactly AT the cap is within it: the cap is a budget, not a ceiling, and
+    // "over" is what the row's word means.
+    expect(describeSoftCapComparison(10 * MB, 10 * MB)).toBe('within')
+    expect(describeSoftCapComparison(900 * MB, 0)).toBe('no-cap')
+    expect(describeSoftCapComparison(undefined, 0)).toBe('no-cap')
+    expect(describeSoftCapComparison(900 * MB, -5)).toBe('no-cap')
+    expect(describeSoftCapComparison(undefined, 10 * MB)).toBeUndefined()
+    expect(describeSoftCapComparison(900 * MB, undefined)).toBeUndefined()
+    expect(describeSoftCapComparison(900 * MB, Number.NaN)).toBeUndefined()
+    // A usage that arrives malformed is not a measurement.
+    expect(describeSoftCapComparison(-1, 10 * MB)).toBeUndefined()
+    expect(describeSoftCapComparison(Number.POSITIVE_INFINITY, 10 * MB)).toBeUndefined()
+  })
+
+  it('covers every declared soft-cap comparison in the loop above', () => {
+    expect([...SOFT_CAP_COMPARISONS]).toEqual(['no-cap', 'over', 'within'])
   })
 
   /* ------------------------------------------------------------------------ */
@@ -1073,6 +1216,308 @@ describe('the account file allowance', () => {
    * spot-checked: every space-figure source, every census, both usage states and
    * all three allowance states.
    */
+  /* ------------------------------------------------------------------------ */
+  /* The ITEM half of the account's storage, and the total                   */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE FIGURE THE WHOLE SECTION WAS MISSING. ***
+   *
+   * The Space block reported uploaded-FILE bytes and nothing else, so an account
+   * whose storage is notes — which is most accounts — read 0 MB at best and
+   * nothing at all at worst, and the operator asked twice for a pane that
+   * actually reports user storage usage. The notes ARE the storage.
+   */
+  describe('the account storage total', () => {
+    const totalOf = (overrides: Partial<AccountObservations>) =>
+      buildAccountSection({ observations: healthyObservations(overrides) })
+
+    it('adds the item half and the file half, and says it did', () => {
+      const model = totalOf({ itemBytesUsed: 40 * MB, fileUploadBytesUsed: 100 * MB })
+
+      expect(rowOf(model, 'Total account storage, whole MB').value).toBe('140')
+      expect(rowOf(model, 'What the total counts').value).toBe('items-and-files')
+      expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('40')
+    })
+
+    /**
+     * *** THE ONE CASE IN WHICH AN ABSENT FILE FIGURE IS A ZERO. *** The usage
+     * setting comes into existence on the first successful upload, so a server
+     * that ANSWERED carrying nothing for an account with no file item is saying
+     * there is nothing to count. That is a measurement, and it is the state the
+     * note-only account the operator is looking at is actually in.
+     */
+    it('counts an account with no file at all as a complete total, not a partial one', () => {
+      const model = totalOf({
+        itemBytesUsed: 7 * MB,
+        fileUploadBytesUsed: undefined,
+        fileCensus: 'none',
+        spaceFigureSource: 'read-carried-no-figure',
+      })
+
+      expect(rowOf(model, 'Total account storage, whole MB').value).toBe('7')
+      expect(rowOf(model, 'What the total counts').value).toBe('items-and-no-files')
+    })
+
+    /**
+     * And the flattering direction, refused: a file read that merely FAILED
+     * establishes nothing, so the total is published as items-only rather than
+     * silently treating the missing half as a zero.
+     */
+    it('refuses to read a FAILED file read as a file half of zero', () => {
+      const model = totalOf({
+        itemBytesUsed: 7 * MB,
+        fileUploadBytesUsed: undefined,
+        fileCensus: 'none',
+        spaceFigureSource: 'read-threw',
+      })
+
+      expect(rowOf(model, 'What the total counts').value).toBe('items-only')
+      expect(rowOf(model, 'Total account storage, whole MB').value).toBe('7')
+    })
+
+    it('publishes an items-only total when the account HAS files and their total is missing', () => {
+      const model = totalOf({
+        itemBytesUsed: 7 * MB,
+        fileUploadBytesUsed: undefined,
+        fileCensus: 'present',
+        spaceFigureSource: 'read-carried-no-figure',
+      })
+
+      expect(rowOf(model, 'What the total counts').value).toBe('items-only')
+      // And the file-side degradation is still reported, because the two halves
+      // are different subjects and one must never silence the other.
+      expect(codesOf(model)).toContain('ACCOUNT_SPACE_USAGE_UNRECORDED')
+    })
+
+    /**
+     * *** NO TOTAL AT ALL WITHOUT THE ITEM HALF. *** A "total" that quietly
+     * contained only attachments would read as an answer and be wrong by most of
+     * the account, which is precisely the defect being fixed.
+     */
+    it('publishes NO total when the item half is missing, however good the file half is', () => {
+      const model = totalOf({
+        itemBytesUsed: undefined,
+        itemUsageReading: 'endpoint-absent',
+        fileUploadBytesUsed: 100 * MB,
+      })
+
+      expect(rowOf(model, 'Total account storage, whole MB').value).toBe('not reported')
+      expect(rowOf(model, 'Total account storage, whole MB').evidence.kind).toBe('absent')
+      expect(rowOf(model, 'What the total counts').value).toBe('not reported')
+      // The file figure beside it is untouched: the absence is about the total.
+      expect(rowOf(model, 'Server file bytes used, whole MB').value).toBe('100')
+    })
+
+    it('reduces every input to a declared coverage, and to none at all without the item half', () => {
+      expect(
+        accountStorageTotal({
+          itemBytes: 10,
+          fileBytes: 5,
+          fileCensus: 'present',
+          spaceFigureSource: 'read-carried-no-figure',
+        }),
+      ).toEqual({ bytes: 15, coverage: 'items-and-files' })
+      expect(
+        accountStorageTotal({
+          itemBytes: 10,
+          fileBytes: undefined,
+          fileCensus: 'none',
+          spaceFigureSource: 'read-carried-no-figure',
+        }),
+      ).toEqual({ bytes: 10, coverage: 'items-and-no-files' })
+      expect(
+        accountStorageTotal({
+          itemBytes: 10,
+          fileBytes: undefined,
+          fileCensus: 'none',
+          spaceFigureSource: 'not-attempted',
+        }),
+      ).toEqual({ bytes: 10, coverage: 'items-only' })
+      expect(
+        accountStorageTotal({
+          itemBytes: 10,
+          fileBytes: undefined,
+          fileCensus: 'not-loaded',
+          spaceFigureSource: 'read-carried-no-figure',
+        }),
+      ).toEqual({ bytes: 10, coverage: 'items-only' })
+      expect(
+        accountStorageTotal({
+          itemBytes: undefined,
+          fileBytes: 5,
+          fileCensus: 'present',
+          spaceFigureSource: 'read-carried-no-figure',
+        }),
+      ).toBeUndefined()
+      // A malformed item figure is not a measurement and produces no total at all.
+      expect(
+        accountStorageTotal({
+          itemBytes: -1,
+          fileBytes: 5,
+          fileCensus: 'present',
+          spaceFigureSource: 'read-carried-no-figure',
+        }),
+      ).toBeUndefined()
+      // A malformed FILE figure is an unestablished half, not a zero half.
+      expect(
+        accountStorageTotal({
+          itemBytes: 10,
+          fileBytes: Number.NaN,
+          fileCensus: 'none',
+          spaceFigureSource: 'read-carried-no-figure',
+        }),
+      ).toEqual({ bytes: 10, coverage: 'items-and-no-files' })
+    })
+
+    it('covers every declared coverage value in the loop above', () => {
+      expect([...STORAGE_TOTAL_COVERAGE]).toEqual(['items-and-files', 'items-and-no-files', 'items-only'])
+    })
+
+    /**
+     * *** A MEASURED ZERO IS A FIGURE. *** An account that really is storing
+     * nothing reads 0 MB and "every item measured", and that is a completely
+     * different row from "the read did not arrive" — which is the whole reason the
+     * reading is carried beside the figure.
+     */
+    it('reports an empty account as a measured zero, not as an absence', () => {
+      const model = totalOf({
+        itemBytesUsed: 0,
+        itemBytesComplete: true,
+        itemUsageReading: 'reported',
+        fileUploadBytesUsed: undefined,
+        fileCensus: 'none',
+        spaceFigureSource: 'read-carried-no-figure',
+      })
+
+      expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('0')
+      expect(rowOf(model, 'Server item bytes used, whole MB').evidence.kind).toBe('direct')
+      expect(rowOf(model, 'Total account storage, whole MB').value).toBe('0')
+      expect(rowOf(model, 'Item byte total completeness').value).toBe('every item measured')
+      expect(codesOf(model)).not.toContain('ACCOUNT_STORAGE_READ_FAILED')
+      expect(codesOf(model)).not.toContain('ACCOUNT_STORAGE_TOTAL_PARTIAL')
+    })
+
+    it.each([
+      ['endpoint-absent', 'not answered by this server build', 'ACCOUNT_STORAGE_ENDPOINT_ABSENT', 'undetermined'],
+      ['read-threw', 'the read did not arrive', 'ACCOUNT_STORAGE_READ_FAILED', 'broken'],
+      ['not-attempted', 'not read by this caller', 'ACCOUNT_STORAGE_NOT_READ', 'undetermined'],
+    ])('renders an absent item total as %p rather than as a zero, and raises %s', (reading, printed, code, verdict) => {
+      const model = totalOf({
+        itemBytesUsed: undefined,
+        itemBytesComplete: undefined,
+        itemUsageReading: reading,
+      })
+
+      expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe(printed)
+      expect(rowOf(model, 'Server item bytes used, whole MB').evidence.kind).toBe('absent')
+      expect(rowOf(model, 'Item usage read').value).toBe(reading)
+      expect(rowOf(model, 'Total account storage, whole MB').value).toBe('not reported')
+      expect(findingOf(model, code)?.verdict).toBe(verdict)
+    })
+
+    it('covers every declared item-usage reading in the loop above', () => {
+      expect([...ITEM_USAGE_READINGS]).toEqual(['not-attempted', 'endpoint-absent', 'read-threw', 'reported'])
+    })
+
+    /**
+     * The 404 arm is the one that answers "would a redeploy fix this", so its
+     * detail is asserted to say so rather than reading as a deployment fault.
+     */
+    it('reads a 404 as a server older than the figure, not as a broken deployment', () => {
+      const model = totalOf({ itemBytesUsed: undefined, itemUsageReading: 'endpoint-absent' })
+      const finding = findingOf(model, 'ACCOUNT_STORAGE_ENDPOINT_ABSENT')
+
+      expect(finding?.verdict).toBe('undetermined')
+      expect(finding?.detail).toContain('Upgrading the server')
+      expect(codesOf(model)).not.toContain('ACCOUNT_STORAGE_READ_FAILED')
+    })
+
+    it('claims nothing at all when the caller did not say why the item total is absent', () => {
+      const model = totalOf({ itemBytesUsed: undefined, itemUsageReading: undefined })
+
+      expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('not reported')
+      expect(rowOf(model, 'Item usage read').value).toBe('not reported')
+      expect(rowOf(model, 'Item usage read').evidence.kind).toBe('absent')
+      for (const code of [
+        'ACCOUNT_STORAGE_ENDPOINT_ABSENT',
+        'ACCOUNT_STORAGE_READ_FAILED',
+        'ACCOUNT_STORAGE_NOT_READ',
+        'ACCOUNT_STORAGE_TOTAL_PARTIAL',
+      ]) {
+        expect(codesOf(model)).not.toContain(code)
+      }
+    })
+
+    it('refuses an item-usage reading outside its closed set rather than echoing it', () => {
+      const model = totalOf({ itemBytesUsed: undefined, itemUsageReading: 'something-the-server-made-up' })
+
+      expect(rowOf(model, 'Item usage read').value).toBe('other (unrecognised)')
+      expect(everything(model)).not.toContain('something-the-server-made-up')
+    })
+
+    /**
+     * *** A SUM OVER UNMEASURED ROWS IS A FLOOR, NOT A TOTAL. *** The size column
+     * is nullable, so an account can hold items the server cannot size. The figure
+     * is still published — it is a real lower bound — and the block says out loud
+     * that it is one.
+     */
+    it('reports a partially measured total as a degradation, and still publishes the floor', () => {
+      const model = totalOf({ itemBytesUsed: 9 * MB, itemBytesComplete: false })
+
+      expect(rowOf(model, 'Item byte total completeness').value).toBe('some items unmeasured')
+      expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('9')
+      expect(findingOf(model, 'ACCOUNT_STORAGE_TOTAL_PARTIAL')?.verdict).toBe('degraded')
+      expect(findingOf(model, 'ACCOUNT_STORAGE_TOTAL_PARTIAL')?.evidence.kind).toBe('direct')
+    })
+
+    it('does not claim the total is complete when the server did not say whether it is', () => {
+      const model = totalOf({ itemBytesUsed: 9 * MB, itemBytesComplete: undefined })
+
+      expect(rowOf(model, 'Item byte total completeness').value).toBe('not reported')
+      expect(rowOf(model, 'Item byte total completeness').evidence.kind).toBe('absent')
+      expect(codesOf(model)).not.toContain('ACCOUNT_STORAGE_TOTAL_PARTIAL')
+    })
+
+    /**
+     * The item family emits at most ONE finding, swept over every combination of
+     * its two inputs. It is a separate family from the file arms on purpose — the
+     * two halves are different subjects and a file-side finding must never silence
+     * an item-side one — so the invariant is one finding PER SUBJECT, asserted
+     * here and, for the file half, in its own sweep below.
+     */
+    it('emits at most one storage-total finding whatever the reading and the figures say', () => {
+      const codes = [
+        'ACCOUNT_STORAGE_ENDPOINT_ABSENT',
+        'ACCOUNT_STORAGE_READ_FAILED',
+        'ACCOUNT_STORAGE_NOT_READ',
+        'ACCOUNT_STORAGE_TOTAL_PARTIAL',
+      ]
+
+      for (const reading of [...ITEM_USAGE_READINGS, undefined, 'nonsense']) {
+        for (const bytes of [undefined, 0, 9 * MB]) {
+          for (const complete of [undefined, true, false]) {
+            const model = buildAccountSection({
+              observations: healthyObservations({
+                itemBytesUsed: bytes,
+                itemBytesComplete: complete,
+                ...(reading === undefined ? {} : { itemUsageReading: reading }),
+              }),
+            })
+            const fired = codesOf(model).filter((code) => codes.includes(code))
+
+            expect({ reading, bytes, complete, count: fired.length }).toEqual({
+              reading,
+              bytes,
+              complete,
+              count: Math.min(fired.length, 1),
+            })
+          }
+        }
+      }
+    })
+  })
+
   it('emits at most one Space finding whatever the two figures and the census say', () => {
     const spaceCodes = [
       'ACCOUNT_SPACE_READ_FAILED',
@@ -1113,7 +1558,25 @@ describe('the account file allowance', () => {
   it('carries no verdict anywhere in the Space block, because the verdict is a requirement row', () => {
     const space = healthySection().blocks.find((block) => String(block.heading) === 'Space')
 
-    expect(space?.rows.length).toBe(7)
+    // Asserted as the full ORDERED label list rather than as a count. A count is
+    // satisfied by any seven rows, so a renamed or swapped row kept it green;
+    // this fails on a rename, a reorder, a deletion and an unannounced addition,
+    // which is what a row inventory is for.
+    expect((space?.rows ?? []).map((row) => String(row.label))).toEqual([
+      'Server file allowance used',
+      'Server file allowance, whole MB',
+      'Where the file allowance comes from',
+      'Server file bytes used, whole MB',
+      'Server item bytes used, whole MB',
+      'Item usage read',
+      'Item byte total completeness',
+      'Total account storage, whole MB',
+      'What the total counts',
+      'Local usage, whole MB',
+      'Local usage soft cap',
+      'Local usage against the soft cap',
+      'Uploaded files in this account',
+    ])
     for (const row of space?.rows ?? []) {
       // Two Space rows can be absent on a healthy model — `healthyObservations`
       // supplies neither `fileCensus` nor `fileAllowanceOrigin` — and `absentOr`
@@ -1487,7 +1950,11 @@ describe('buildAccountSection with nothing observed', () => {
     const model = buildAccountSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(22)
+    // A TRIPWIRE, not the assertion: the loop below is what proves every row
+    // claims nothing, and the count is here so a row added without being given
+    // its absent reading fails this test rather than slipping through a loop that
+    // never sees it. Six rows arrived with the account storage total.
+    expect(rows).toHaveLength(28)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),

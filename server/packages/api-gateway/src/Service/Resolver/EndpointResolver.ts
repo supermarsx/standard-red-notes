@@ -151,6 +151,11 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[POST]:items/sync', 'sync.items.sync'],
     ['[POST]:items/check-integrity', 'sync.items.check_integrity'],
     ['[GET]:items/sync-command/:commandId', 'sync.items.sync_command_status'],
+    // Standard Red Notes: the account's own stored item-payload total. Declared
+    // ABOVE the bare ':uuid' read for the same reason as the sync-command status
+    // above it — a literal path that sorts after a parameterised one is a path the
+    // parameterised one eats.
+    ['[GET]:items/storage-usage', 'sync.items.storage_usage'],
     ['[GET]:items/:uuid', 'sync.items.get_item'],
     ['[POST]:items/collaboration-authorization', 'sync.items.authorize_collaboration'],
     // Revisions Controller V2

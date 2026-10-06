@@ -34,6 +34,7 @@ import { SyncResponseFactoryResolver } from '../Domain/Item/SyncResponse/SyncRes
 import { SyncResponseFactoryResolverInterface } from '../Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
 import { CheckIntegrity } from '../Domain/UseCase/Syncing/CheckIntegrity/CheckIntegrity'
 import { GetItem } from '../Domain/UseCase/Syncing/GetItem/GetItem'
+import { GetUserStorageUsage } from '../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
 import { AuthorizeCollaborationAccess } from '../Domain/UseCase/Syncing/AuthorizeCollaborationAccess/AuthorizeCollaborationAccess'
 import { SyncItems } from '../Domain/UseCase/Syncing/SyncItems/SyncItems'
 import { InversifyExpressAuthMiddleware } from '../Infra/InversifyExpressUtils/Middleware/InversifyExpressAuthMiddleware'
@@ -1029,6 +1030,9 @@ export class ContainerConfigLoader {
     container.bind<GetItem>(TYPES.Sync_GetItem).toDynamicValue((context: ResolutionContext) => {
       return new GetItem(context.get(TYPES.Sync_SQLItemRepository))
     })
+    container.bind<GetUserStorageUsage>(TYPES.Sync_GetUserStorageUsage).toDynamicValue((context: ResolutionContext) => {
+      return new GetUserStorageUsage(context.get(TYPES.Sync_SQLItemRepository))
+    })
     container
       .bind<AuthorizeCollaborationAccess>(TYPES.Sync_AuthorizeCollaborationAccess)
       .toDynamicValue((context: ResolutionContext) => {
@@ -1523,6 +1527,7 @@ export class ContainerConfigLoader {
             container.get<AuthorizeCollaborationAccess>(TYPES.Sync_AuthorizeCollaborationAccess),
             container.get<ExecuteSyncCommand>(TYPES.Sync_ExecuteSyncCommand),
             container.get<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus),
+            container.get<GetUserStorageUsage>(TYPES.Sync_GetUserStorageUsage),
           ),
         )
       container

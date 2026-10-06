@@ -6,6 +6,7 @@ import { Item } from '../../Domain/Item/Item'
 import { ItemContentSizeDescriptor } from '../../Domain/Item/ItemContentSizeDescriptor'
 import { ItemQuery } from '../../Domain/Item/ItemQuery'
 import { ItemRepositoryInterface } from '../../Domain/Item/ItemRepositoryInterface'
+import { ItemStorageUsage } from '../../Domain/Item/ItemStorageUsage'
 import { SQLItem } from './SQLItem'
 import { SQLItemRepository } from './SQLItemRepository'
 import { SyncCommandTransactionContext } from './SyncCommandTransactionContext'
@@ -46,6 +47,10 @@ export class TransactionAwareItemRepository implements ItemRepositoryInterface {
 
   sumContentSizeForComputingTransferLimit(query: ItemQuery): Promise<number> {
     return this.repository.sumContentSizeForComputingTransferLimit(query)
+  }
+
+  getStorageUsageForUser(userUuid: Uuid): Promise<ItemStorageUsage> {
+    return this.repository.getStorageUsageForUser(userUuid)
   }
 
   findDatesForComputingIntegrityHash(userUuid: string): Promise<Array<{ updated_at_timestamp: number }>> {

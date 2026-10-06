@@ -115,7 +115,13 @@ import { CLIENT_RECOGNIZED_ONLY_OPERATIONS, CLIENT_SYNC_OPERATIONS } from './syn
  *     succeeds.
  *   - Origin storage, eviction and the browser's own quota are
  *     **`browserSection.ts`**'s. The storage angle HERE is the account's
- *     server-side allowance, which is a different number with a different failure.
+ *     server-side TOTAL — the item payload plus the uploaded files — which is a
+ *     different number with a different failure. One local figure does appear in
+ *     the Space block, the origin's own usage in whole megabytes, and it is here
+ *     rather than there for one reason: it is the only thing the user's advisory
+ *     soft cap is about, and that cap is this section's. The origin's QUOTA and
+ *     the eviction risk that comes with it stay with the Browser section and are
+ *     not restated.
  *   - Deployment configuration and identity are **Environment & setup**'s.
  *   - The database and internal transport are **Database & internal comms**'.
  *
@@ -462,6 +468,75 @@ const SESSION_READING: Record<AdminReading, ReadingVerdict> = {
  */
 export const SPACE_FIGURE_SOURCES = ['not-attempted', 'read-threw', 'read-carried-no-figure'] as const
 
+/**
+ * What happened to the read of this account's own STORED ITEM BYTES, as a closed
+ * set.
+ *
+ * *** THE ROW THIS FIELD EXISTS FOR IS THE OPERATOR'S ACTUAL COMPLAINT. *** The
+ * Space block reported uploaded-FILE bytes and nothing else, so an account whose
+ * storage is ten thousand notes and no attachments read "0 MB" — or, more often,
+ * nothing at all. Notes are the storage. The server now answers them from
+ * `GET /v1/items/storage-usage`, and this set is why an empty row still says
+ * something.
+ *
+ * `not-attempted` — nothing in this build asked. A gap in the CALLER.
+ * `endpoint-absent` — the request completed as a 404. That is a SERVER too old to
+ * carry the endpoint, which is a real and common state while a fleet is being
+ * upgraded and is not a fault in the deployment that is running.
+ * `read-threw` — no answer arrived, or one arrived as an error. A symptom.
+ * `reported` — the figure is in hand. The rows carry it.
+ *
+ * `endpoint-absent` is kept apart from `read-threw` for the same reason
+ * `read-carried-no-figure` is kept apart from it above: "this build does not have
+ * it yet" and "this deployment is failing" send an operator to two completely
+ * different places, and merging them sends half of them to the wrong one.
+ */
+export const ITEM_USAGE_READINGS = ['not-attempted', 'endpoint-absent', 'read-threw', 'reported'] as const
+
+export type ItemUsageReading = (typeof ITEM_USAGE_READINGS)[number]
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What the item-bytes row prints when no
+ * figure arrived, and whether that is a claim about anything.
+ *
+ * Every member reads as an absence, never as a zero: not one of these states
+ * establishes that the account stores nothing, and a `0` here would be the single
+ * most misleading value this block could print — it is the answer the operator
+ * was already given by a pane that was not measuring notes at all.
+ */
+const ITEM_USAGE_ABSENCE: Record<ItemUsageReading, SafeValue> = {
+  'not-attempted': safeConstant('not read by this caller'),
+  'endpoint-absent': safeConstant('not answered by this server build'),
+  'read-threw': safeConstant('the read did not arrive'),
+  reported: safeConstant('not reported'),
+}
+
+/**
+ * WHICH HALVES of this account's storage the published total actually contains,
+ * as a closed set.
+ *
+ * A total is only worth printing beside a statement of what it covers, because
+ * the two halves come from two different services and either can be missing while
+ * the other is perfect.
+ *
+ * `items-and-files` — both measured from a server figure. The complete answer.
+ * `items-and-no-files` — the item total is measured and this account holds NO
+ *   file, so the file half contributes nothing. It is derived from the census and
+ *   from a server that ANSWERED carrying no usage figure, never from a file read
+ *   that merely failed: the first establishes that there is nothing to count, the
+ *   second establishes nothing at all.
+ * `items-only` — the item total is measured and the file total is NOT established.
+ *   The figure is a FLOOR and the row says so; it is still published because an
+ *   account's note payload is the larger half for most people and withholding it
+ *   over a missing attachment figure reports nothing twice.
+ *
+ * There is deliberately no `files-only`: a total that omits the item half is not
+ * a total of anything, and the item rows above already say why it is absent.
+ */
+export const STORAGE_TOTAL_COVERAGE = ['items-and-files', 'items-and-no-files', 'items-only'] as const
+
+export type StorageTotalCoverage = (typeof STORAGE_TOTAL_COVERAGE)[number]
+
 export type SpaceFigureSource = (typeof SPACE_FIGURE_SOURCES)[number]
 
 /**
@@ -553,6 +628,37 @@ export type AccountObservations = {
   /** `FileUploadBytesLimit`. `-1` is the only unlimited sentinel; `0` refuses every upload. */
   fileUploadBytesLimit?: number
   /**
+   * The bytes of SYNCED ITEM payload this account holds on the server, from
+   * `GET /v1/items/storage-usage`. A capacity fact and the larger half of most
+   * accounts' storage.
+   *
+   * DERIVED SERVER-SIDE from `items.content_size` at read time — not a counter
+   * kept beside the items, so there is nothing to drift. Absent means the read did
+   * not produce one, and `itemUsageReading` says why; it NEVER means zero. A
+   * measured zero arrives as `0` and is a figure.
+   */
+  itemBytesUsed?: number
+  /**
+   * Whether `itemBytesUsed` covers EVERY item this account holds.
+   *
+   * `items.content_size` is nullable — it was added by migration over a table that
+   * already had rows — so an account can hold items whose size was never recorded.
+   * The server counts those separately and the caller reduces the count to this
+   * boolean, because the number of unmeasured items is a fact about the size of
+   * one person's vault and the diagnosis needs only "is the figure whole".
+   * `false` makes the total a FLOOR, which the block says out loud rather than
+   * printing a number that is quietly too small.
+   */
+  itemBytesComplete?: boolean
+  /**
+   * WHY `itemBytesUsed` is absent, when it is, as one of `ITEM_USAGE_READINGS`.
+   *
+   * Typed wide so an unrecognised value collapses through `safeEnum` rather than
+   * printing, exactly like the census, plan and allowance-origin fields. Absent
+   * means not even this is known.
+   */
+  itemUsageReading?: string
+  /**
    * WHERE `fileUploadBytesLimit` came from, as one of `FILE_ALLOWANCE_ORIGINS`.
    *
    * Typed wide so an unrecognised value collapses through `safeEnum` rather than
@@ -561,7 +667,20 @@ export type AccountObservations = {
    * does, and which is reported as such rather than guessed at.
    */
   fileAllowanceOrigin?: string
-  /** Local origin bytes in use, read ONLY to compare against the user's own cap below. */
+  /**
+   * Local origin bytes in use, from `navigator.storage.estimate().usage`.
+   *
+   * *** THIS FIELD HAD NO PRODUCER AND THE ROW IT FEEDS COULD NEVER FILL. *** It
+   * was declared here and supplied by nothing, so "Local usage against the soft
+   * cap" read "not reported" on every deployment forever while the row beside it
+   * reported the cap perfectly — the exact shape of a gate that is present,
+   * passing and incapable of firing. The caller now reads the estimate it was
+   * already making for the Browser section's quota rows and hands the usage here.
+   *
+   * ORIGIN bytes, not account bytes: this is what the BROWSER is storing for this
+   * origin on this machine, which is a different number from the server-side
+   * total above and is compared only against the user's own advisory cap.
+   */
   localUsageBytes?: number
   /** `PrefKey.StorageMaxUsageBytes`. `0` means the user set no cap. ADVISORY: never blocks a write. */
   localSoftCapBytes?: number
@@ -685,6 +804,96 @@ export function describeFileQuota(used: number | undefined, limit: number | unde
     return 'exhausted'
   }
   return fraction >= FILE_QUOTA_NEAR_FRACTION ? 'nearly-full' : 'room-available'
+}
+
+/**
+ * How the origin's local usage stands against the user's OWN advisory cap, as a
+ * closed three-state answer.
+ *
+ * *** THE THIRD STATE IS WHY THIS IS A FUNCTION. *** The row was a two-way
+ * boolean, so `0` — which is this preference's documented default and means "no
+ * cap" — produced neither answer and the row read "not reported" on every
+ * deployment where nobody had set one. That is the commonest case by far, and
+ * "not reported" invites the operator to go looking for a read that failed. There
+ * is nothing to look for: a cap of zero IS an answer, and it is established by
+ * the cap alone, so it is given whether or not the usage was measured.
+ *
+ * `undefined` stays reserved for the one honest absence: a cap IS set and the
+ * browser's usage was not measured. A missing usage figure must never read
+ * "within the cap", which is the flattering direction.
+ */
+export const SOFT_CAP_COMPARISONS = ['no-cap', 'over', 'within'] as const
+
+export type SoftCapComparison = (typeof SOFT_CAP_COMPARISONS)[number]
+
+const SOFT_CAP_VALUE: Record<SoftCapComparison, SafeValue> = {
+  'no-cap': safeConstant('no cap to exceed'),
+  over: safeConstant('over the cap'),
+  within: safeConstant('within the cap'),
+}
+
+export function describeSoftCapComparison(
+  usageBytes: number | undefined,
+  capBytes: number | undefined,
+): SoftCapComparison | undefined {
+  if (capBytes === undefined || !Number.isFinite(capBytes)) {
+    return undefined
+  }
+  if (capBytes <= 0) {
+    return 'no-cap'
+  }
+
+  const usage = wholeBytes(usageBytes)
+  if (usage === undefined) {
+    return undefined
+  }
+  return usage > capBytes ? 'over' : 'within'
+}
+
+/**
+ * This account's TOTAL server storage, and which halves went into it.
+ *
+ * *** THE FIGURE THE WHOLE PANE WAS MISSING. *** Space reported uploaded-file
+ * bytes and nothing else, so the answer to "how much is this account storing" was
+ * at best the smaller half of it and at worst nothing at all.
+ *
+ * THE ITEM HALF IS LOAD-BEARING: with no item figure there is no total, and this
+ * returns `undefined` rather than publishing the file half under a name that
+ * claims to be everything. A total that is secretly one component is worse than
+ * no total, because it reads as an answer.
+ *
+ * THE FILE HALF IS ZERO IN EXACTLY ONE CASE, and it is a measured one: the server
+ * ANSWERED carrying no usage figure AND this account holds no file item. That is
+ * the state `ACCOUNT_SPACE_NOTHING_TO_REPORT` already describes — the usage
+ * setting comes into existence on the first successful upload and not before — so
+ * "no figure" there is not an unknown, it is the server saying there is nothing to
+ * have a figure about. Every other absence leaves the file half OUT and says so
+ * through `items-only`. A read that merely threw never produces a zero here: that
+ * is the flattering direction and therefore the dangerous one.
+ *
+ * Both inputs are BYTES; the caller reduces the result to whole megabytes.
+ */
+export function accountStorageTotal(input: {
+  itemBytes: number | undefined
+  fileBytes: number | undefined
+  fileCensus: AccountFileCensus | undefined
+  spaceFigureSource: SpaceFigureSource | undefined
+}): { bytes: number; coverage: StorageTotalCoverage } | undefined {
+  const items = wholeBytes(input.itemBytes)
+  if (items === undefined) {
+    return undefined
+  }
+
+  const files = wholeBytes(input.fileBytes)
+  if (files !== undefined) {
+    return { bytes: items + files, coverage: 'items-and-files' }
+  }
+
+  if (input.fileCensus === 'none' && input.spaceFigureSource === 'read-carried-no-figure') {
+    return { bytes: items, coverage: 'items-and-no-files' }
+  }
+
+  return { bytes: items, coverage: 'items-only' }
 }
 
 /**
@@ -1068,8 +1277,18 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
 
   const cap = observed.localSoftCapBytes
   const capSet = cap === undefined ? undefined : cap > 0
-  const overCap =
-    cap === undefined || cap <= 0 || observed.localUsageBytes === undefined ? undefined : observed.localUsageBytes > cap
+  const capComparison = describeSoftCapComparison(observed.localUsageBytes, cap)
+  const localUsedMb = wholeMegabytes(observed.localUsageBytes)
+
+  const itemReading = ITEM_USAGE_READINGS.find((candidate) => candidate === observed.itemUsageReading)
+  const itemMb = wholeMegabytes(observed.itemBytesUsed)
+  const total = accountStorageTotal({
+    itemBytes: observed.itemBytesUsed,
+    fileBytes: observed.fileUploadBytesUsed,
+    fileCensus: census,
+    spaceFigureSource: observed.spaceFigureSource,
+  })
+  const totalMb = total === undefined ? undefined : wholeMegabytes(total.bytes)
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -1102,6 +1321,47 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
       note: 'Uploaded file bytes for this account, rounded down to whole megabytes. Note content is not counted here, which is why a large vault with no attachments reads 0.',
     }),
     diagnosticRow({
+      label: safeConstant('Server item bytes used, whole MB'),
+      value:
+        observed.itemBytesUsed === undefined
+          ? itemReading === undefined
+            ? safeCount(undefined)
+            : ITEM_USAGE_ABSENCE[itemReading]
+          : safeCount(itemMb),
+      ...absentOr(observed.itemBytesUsed, 'informational'),
+      note: 'The NOTES. Every synced item this account owns — notes, tags, editor state, keys — summed from the stored payload size of each one, rounded down to whole megabytes. For most accounts this is the larger half of their storage and the row above it is the smaller, which is why a pane that reported only uploaded files answered "0 MB" to an operator holding a full vault. Derived on the server from the item table itself rather than from any running total, so there is no counter to drift: a note that is created, edited or deleted changes the figure because the figure is recomputed from the items, and a deleted item is excluded twice over — its recorded size is zeroed on deletion AND deleted items are outside the sum. NOT counted here: revisions (note history lives in a different service with its own pruning) and uploaded files (the row above). 0 means under one megabyte, and an empty row is never a zero — the next row says which kind of empty it was.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Item usage read'),
+      value: safeEnum(observed.itemUsageReading, ITEM_USAGE_READINGS),
+      ...absentOr(itemReading, 'informational'),
+      note: 'What happened when this client asked the server for the figure above, as a closed set. It is the row that keeps an empty item total honest: "not answered by this server build" is a deployment that predates the endpoint and will report the moment it is upgraded, "the read did not arrive" is a symptom worth chasing, and "not read by this caller" is a gap in this panel and not in the deployment. None of them is a zero, and none of them means the account is storing nothing.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Item byte total completeness'),
+      value: safeState(observed.itemBytesComplete, 'every item measured', 'some items unmeasured'),
+      ...absentOr(observed.itemBytesComplete, 'informational'),
+      note: 'Whether the item figure covers every item this account holds. The stored size column is nullable — it was added by a migration over a table that already had rows — so an account can hold items whose size was never recorded, and a sum that silently skipped them would be a FLOOR printed as a total. A BOOLEAN rather than a count of unmeasured items, because how many items one person keeps is a fact about that person and the diagnosis needs only whether the figure is whole. The server heals this itself: there is an admin recalculation that rewrites the missing sizes from the items.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Total account storage, whole MB'),
+      value: safeCount(totalMb),
+      ...absentOr(total, 'informational'),
+      note: 'Everything this ACCOUNT is storing on this server: the item payload plus the uploaded files, rounded down to whole megabytes. This is the one figure the Space block exists to answer and it is composed here rather than on the server, because its two halves are held by two different services and either can be missing while the other is perfect. Absent whenever the ITEM half is — a "total" that quietly contained only attachments would read as an answer and be wrong by most of the account. What it contains is the next row, and that row is not optional reading.',
+    }),
+    diagnosticRow({
+      label: safeConstant('What the total counts'),
+      value: safeEnum(total?.coverage, STORAGE_TOTAL_COVERAGE),
+      ...absentOr(total?.coverage, 'informational'),
+      note: 'Which halves went into the total above, as a closed set. "items and files" is the complete answer. "items and no files" means the account holds no file at all, so the file half contributes nothing and the total is still complete — that is read from the file census and from a server that ANSWERED carrying no usage figure, never from a file read that merely failed. "items only" means the file total is NOT established and the figure is a floor; the file rows above say why, and nothing short of fixing that makes the total whole.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Local usage, whole MB'),
+      value: safeCount(localUsedMb),
+      ...absentOr(observed.localUsageBytes, 'informational'),
+      note: 'What the BROWSER is storing for this origin on this machine, from the same storage estimate the Browser section reports a quota share from. A different number from the server total above and not comparable with it: it is one device’s cache of a vault that may be larger, it includes anything else this origin has written, and the browser rounds it for privacy. It is here because it is the only figure the user’s own soft cap below is about.',
+    }),
+    diagnosticRow({
       label: safeConstant('Local usage soft cap'),
       value: safeState(capSet, 'set', 'no cap'),
       ...absentOr(capSet, 'informational'),
@@ -1109,9 +1369,12 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
     }),
     diagnosticRow({
       label: safeConstant('Local usage against the soft cap'),
-      value: safeState(overCap, 'over the cap', 'within the cap'),
-      ...absentOr(overCap, 'informational'),
-      note: 'ADVISORY, and informational even when it reads over: this cap NEVER blocks a save or a sync. It exists so a user who set a budget hears about it, and a row that gave it a tone would read as a fault and send someone looking for a failure that cannot happen.',
+      value:
+        capComparison === undefined
+          ? safeState(undefined, 'over the cap', 'within the cap')
+          : SOFT_CAP_VALUE[capComparison],
+      ...absentOr(capComparison, 'informational'),
+      note: 'ADVISORY, and informational even when it reads over: this cap NEVER blocks a save or a sync. It exists so a user who set a budget hears about it, and a row that gave it a tone would read as a fault and send someone looking for a failure that cannot happen. THREE answers, not two: a cap of zero is this preference’s default and means there is no cap, which is established by the cap alone and is said rather than left blank — that emptiness was the commonest reading on every deployment and it invited a hunt for a read that had not failed. "not reported" is now reserved for the one honest absence, a cap that IS set beside a local usage this browser would not report.',
     }),
     diagnosticRow({
       label: safeConstant('Uploaded files in this account'),
@@ -1301,10 +1564,79 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
     )
   }
 
+  /**
+   * *** THE ITEM TOTAL'S OWN ARMS, AND WHY THIS BLOCK NOW EMITS UP TO TWO. ***
+   *
+   * The arms above are about the FILE figures and emit at most one between them.
+   * These four are about the ITEM figure, they emit at most one between them, and
+   * they are deliberately not merged with the file arms: the two halves come from
+   * two different services and either can be perfect while the other is missing.
+   * Folding them would mean a file-side finding silencing an item-side one, which
+   * is the exact defect recorded above — an arm that is present, passing and
+   * incapable of firing, because some other figure arrived.
+   *
+   * So the invariant this block holds is one finding PER SUBJECT rather than one
+   * finding outright, and the subjects are disjoint by construction: these four
+   * key on `itemBytesUsed` and `itemUsageReading`, which no file arm reads, and
+   * the first three require the item figure to be ABSENT while the fourth
+   * requires it to be present.
+   *
+   * NOTHING IS SYNTHESISED HERE EITHER. There is no arm that turns a failed read
+   * into a zero, and the completeness arm exists precisely because a sum that
+   * skipped unmeasured rows is a floor rather than a figure.
+   */
+  const itemFigureAbsent = observed.itemBytesUsed === undefined
+
+  if (itemFigureAbsent && itemReading === 'endpoint-absent') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_STORAGE_ENDPOINT_ABSENT'),
+        title: 'This server build does not report how much this account has stored',
+        detail:
+          'The item-usage request completed and the server answered that it has no such route. That is a DEPLOYMENT OLDER THAN THE FIGURE, not a fault in the one that is running: nothing is broken, nothing is refused, and sync, uploads and every other row on this screen are unaffected. What is missing is the answer to "how much is this account storing", which is most of what a storage report is for — the file rows above cover attachments only, so on this build an account whose storage is entirely notes reads as holding nothing at all. Upgrading the server fills it with no migration and no configuration: the total is computed from the item table on each request rather than from anything that has to be built up first, so the first read after the upgrade is already correct and already covers everything stored before it.',
+        verdict: 'undetermined',
+        evidence: EVIDENCE_ABSENT,
+      }),
+    )
+  } else if (itemFigureAbsent && itemReading === 'read-threw') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_STORAGE_READ_FAILED'),
+        title: 'The stored-item total for this account could not be read',
+        detail:
+          'The rows above are empty because the read FAILED, not because this build does not look and not because the server lacks the route — a server that lacks it answers, and that answer is reported separately. No answer arrived at all: a request that never completed, or one this client re-threw. The figure is served by the SYNCING server on the session’s own credentials, so a read that will not produce it points at that service or at the session, and not at the files service, which neither stores nor serves it. Do not read this as evidence about the notes themselves: syncing can be entirely healthy while this one read fails, and a deployment whose syncing is broken has louder symptoms than an empty row here. Treat the total as unread, never as zero.',
+        verdict: 'broken',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  } else if (itemFigureAbsent && itemReading === 'not-attempted') {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_STORAGE_NOT_READ'),
+        title: 'This caller did not ask how much this account has stored',
+        detail:
+          'The item rows above are empty because nothing asked, and that is said here rather than left to look like an account with nothing in it. It is a gap in the CALLER, not in the deployment: the diagnostics tab reads the figure from the requesting session’s own items, carrying no account identifier in either direction. A model built without it — a test, or a future caller — reports this instead of a figure it never looked for.',
+        verdict: 'undetermined',
+        evidence: EVIDENCE_ABSENT,
+      }),
+    )
+  } else if (!itemFigureAbsent && observed.itemBytesComplete === false) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('ACCOUNT_STORAGE_TOTAL_PARTIAL'),
+        title: 'The stored-item total is a floor: some of this account’s items carry no recorded size',
+        detail:
+          'The read completed and produced a figure, and the server also reported that some of this account’s items have no recorded payload size — the column is nullable and was added by a migration over a table that already had rows, so items written before it carry none. Those items are REAL STORAGE that the sum cannot see, so every figure derived from it, including the account total, is a lower bound rather than a measurement. Degraded rather than down: nothing is refused and no data is at risk, and the only thing that is wrong is the number. The server can re-derive the missing sizes from the items themselves — the admin quota recalculation for this account does it — after which this row reads "every item measured" and the total becomes exact.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+      }),
+    )
+  }
+
   return {
     heading: safeConstant('Space'),
     description:
-      'What room this ACCOUNT has, which is a different number with a different failure from the browser’s own quota: this one refuses uploads at the server, that one evicts the local database. Every row here is a measurement; the verdict about whether an upload will succeed is one row, in the requirements block below.',
+      'How much this ACCOUNT is storing and what room it has — the item payload, the uploaded files, and the total of the two — plus the browser’s own usage on this machine, which is a different number with a different failure: the server-side allowance refuses uploads, the local one evicts the local database. Every row here is a measurement; the verdict about whether an upload will succeed is one row, in the requirements block below.',
     rows,
     findings,
   }
@@ -1497,6 +1829,21 @@ const REPORT_FILE_CENSUS = reportLine(
 )
 
 /**
+ * The item total is BYTES and never a population.
+ *
+ * The obvious next edit to a storage figure is to print how many things make it
+ * up, and "this account holds 4,812 notes" is a fact about a person that no
+ * diagnosis needs. The server does report the counts — it has to, in order to say
+ * whether the sum covers every item — and the caller reduces them to one boolean
+ * before they reach this module. Written down so that a later reader has to argue
+ * with it rather than overlook it, exactly like the file census above.
+ */
+const REPORT_ITEM_COUNTS = reportLine(
+  safeConstant('Stored items'),
+  safeConstant('reported as whole megabytes and a completeness boolean; never counted and never named'),
+)
+
+/**
  * Build the Account, space & requirements section.
  *
  * Pure and synchronous. Every input is optional and an absent one produces rows
@@ -1531,6 +1878,12 @@ export function buildAccountSection(input: AccountSectionInput = {}): SectionMod
   return buildSectionModel({
     id: 'account',
     blocks,
-    extraReportLines: [REPORT_NO_IDENTIFIERS, REPORT_BYTES_REDUCED, REPORT_FILE_CENSUS, REPORT_ACCOUNT_FLAGS],
+    extraReportLines: [
+      REPORT_NO_IDENTIFIERS,
+      REPORT_BYTES_REDUCED,
+      REPORT_FILE_CENSUS,
+      REPORT_ITEM_COUNTS,
+      REPORT_ACCOUNT_FLAGS,
+    ],
   })
 }

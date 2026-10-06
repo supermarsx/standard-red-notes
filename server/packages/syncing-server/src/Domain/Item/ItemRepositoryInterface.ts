@@ -4,6 +4,7 @@ import { Item } from './Item'
 import { ItemQuery } from './ItemQuery'
 import { ExtendedIntegrityPayload } from './ExtendedIntegrityPayload'
 import { ItemContentSizeDescriptor } from './ItemContentSizeDescriptor'
+import { ItemStorageUsage } from './ItemStorageUsage'
 
 export interface ItemRepositoryInterface {
   deleteByUserUuidAndNotInSharedVault(userUuid: Uuid): Promise<void>
@@ -12,6 +13,17 @@ export interface ItemRepositoryInterface {
   countAll(query: ItemQuery): Promise<number>
   findContentSizeForComputingTransferLimit(query: ItemQuery): Promise<Array<ItemContentSizeDescriptor>>
   sumContentSizeForComputingTransferLimit(query: ItemQuery): Promise<number>
+  /**
+   * Standard Red Notes: the account's own stored item payload, DERIVED from
+   * `content_size` at read time rather than kept in a counter beside it.
+   *
+   * Deliberately NOT expressed through `sumContentSizeForComputingTransferLimit`:
+   * that one answers `0` both for an empty account and for an account whose rows
+   * all predate the `content_size` column, and a storage report must never merge
+   * those. This one reports the measured bytes, how many rows produced them and
+   * how many rows carry no size at all, so the caller can say which it was.
+   */
+  getStorageUsageForUser(userUuid: Uuid): Promise<ItemStorageUsage>
   findDatesForComputingIntegrityHash(userUuid: string): Promise<Array<{ updated_at_timestamp: number }>>
   findItemsForComputingIntegrityPayloads(userUuid: string): Promise<ExtendedIntegrityPayload[]>
   findByUuidAndUserUuid(uuid: string, userUuid: string): Promise<Item | null>

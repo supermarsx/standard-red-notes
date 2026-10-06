@@ -53,6 +53,7 @@ import {
   type AccountFlagReading,
   type AccountObservations,
   type SpaceFigureSource,
+  type ItemUsageReading,
 } from './accountSection'
 import {
   buildBrowserSection,
@@ -62,6 +63,7 @@ import {
   type BrowserRuntime,
 } from './browserSection'
 import { buildDiagnosticsReport } from './diagnosticsReport'
+import { estimateStorage } from '@/Utils/StorageQuota'
 
 type Props = {
   application: WebApplication
@@ -103,6 +105,24 @@ type AccountFlagsReading = {
   reading: AccountFlagReading
   liveSync?: boolean
   collaboration?: boolean
+}
+
+/**
+ * One reading of this account's STORED ITEM BYTES — the notes, which are the
+ * larger half of most accounts' storage and which this pane reported nothing
+ * about at all until now.
+ *
+ * `reading` is the closed value the Account section needs in order to tell a
+ * server that does not carry the route (an ordinary state mid-upgrade, and the
+ * answer to "would a redeploy fix this") from a read that never arrived from one
+ * nobody attempted. `bytes` is present only on a 200, and `complete` is the
+ * server's two item counts reduced to the one boolean the section is allowed to
+ * see: how many items a person keeps is a fact about that person.
+ */
+type AccountItemUsageReading = {
+  reading: ItemUsageReading
+  bytes?: number
+  complete?: boolean
 }
 
 type AccountSpaceReading = {
@@ -330,6 +350,28 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * be the same conflation the block's finding exists to end, one frame early.
    */
   const [spaceReading, setSpaceReading] = useState<AccountSpaceReading | undefined>(undefined)
+  /**
+   * This account's stored-item total, and WHY it is absent when it is.
+   * `undefined` while the read is in flight, for the same reason as
+   * `spaceReading`: an in-flight read reported as "nobody asked" is a claim.
+   */
+  const [itemUsage, setItemUsage] = useState<AccountItemUsageReading | undefined>(undefined)
+  /**
+   * The origin's own storage usage in BYTES, for the soft-cap comparison.
+   *
+   * *** THE FIELD THE SECTION DECLARED AND NOTHING EVER SUPPLIED. *** The Account
+   * section has carried `localUsageBytes` and a row comparing it against the
+   * user's advisory cap since the block was written, and no caller has ever filled
+   * it — so that row read "not reported" on every deployment while the row above
+   * it reported the cap perfectly. The Browser section's own collection run
+   * already calls `navigator.storage.estimate()`, but it reduces the answer to a
+   * share of quota and a whole-gigabyte quota before anything else can see it, and
+   * that section is not this one's to widen. So the estimate is taken here too,
+   * through the app's own helper, which answers `undefined` on a browser with no
+   * StorageManager and on a call that throws — both of which must stay absent
+   * rather than arriving as a flattering zero.
+   */
+  const [localUsageBytes, setLocalUsageBytes] = useState<number | undefined>(undefined)
   /**
    * This account's per-account feature flags, and WHY they are absent when they
    * are. `undefined` while the read is in flight, for the same reason as
@@ -575,6 +617,147 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       cancelled = true
     }
   }, [application])
+
+  /**
+   * This account's STORED ITEM BYTES, read on mount.
+   *
+   * *** THIS IS THE FIGURE THE OPERATOR ASKED FOR. *** The Space block reported
+   * uploaded-FILE bytes and nothing else, so an account whose storage is notes —
+   * which is most accounts — read "0 MB" at best and "not reported" at worst. The
+   * notes are the storage. `GET /v1/items/storage-usage` answers them from the
+   * item table itself, scoped to the requesting session and carrying no account
+   * identifier in either direction.
+   *
+   * *** 404 IS NOT A FAILURE AND IS NOT MERGED WITH ONE. *** A deployment that
+   * predates the route answers 404, and that is the commonest reading while a
+   * fleet is being upgraded. Reported as `endpoint-absent`, which the Space block
+   * renders as "not answered by this server build" and explains in its own
+   * finding, because sending that operator to debug their syncing service is a
+   * guaranteed dead end — the answer is a redeploy, and the first read after one
+   * is already correct for everything stored before it.
+   *
+   * Only NUMBERS cross this boundary, and the two item COUNTS are reduced to one
+   * boolean here rather than passed on: the section has nowhere to put a
+   * population and must not acquire one. `itemsUnmeasured` is what makes the
+   * total a floor, and `complete` is the whole of what the rows need to say so.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    type StorageUsageBody = { itemBytesUsed?: unknown; itemsMeasured?: unknown; itemsUnmeasured?: unknown }
+
+    const read = async (): Promise<AccountItemUsageReading> => {
+      /**
+       * *** `httpOnlyJsonRequest`, AND THE ORDINARY HELPER CANNOT BE USED HERE. ***
+       *
+       * `serverGetJsonRequest` tries the websocket control-plane lane first, and
+       * `/v1/items` is a forbidden FAMILY on that lane by design: durable item sync
+       * owns its own idempotency and must never be re-entered over the transport it
+       * established. The refusal arrives as an error the transport worker marks
+       * unsafe to fall back from, so it is re-thrown rather than retried over HTTP —
+       * and this pane then reported "the read did not arrive" for a route that
+       * answered perfectly over HTTP. Measured live on a single container.
+       *
+       * Mounting the figure OUTSIDE the family was tried and is worse: the lane then
+       * accepts the path, re-enters the gateway over its own loopback, and the
+       * request stalls until the 30-second RPC deadline before failing the same way.
+       * Also measured live.
+       *
+       * So this read goes straight to HTTP, through the helper this codebase already
+       * keeps for the case — the socket-handshake probes in this very tab use it for
+       * the same reason, and its own comment records why. HTTP is the correct lane
+       * for a diagnostic read regardless: a figure that is wrong exactly when the
+       * socket is healthiest is worse than no figure.
+       */
+      const response = await application.httpOnlyJsonRequest<StorageUsageBody & { data?: StorageUsageBody }>(
+        'GET',
+        '/v1/items/storage-usage',
+      )
+
+      if (response.status === 404) {
+        return { reading: 'endpoint-absent' }
+      }
+      if (!response.ok) {
+        return { reading: 'read-threw' }
+      }
+
+      /**
+       * *** THE GATEWAY WRAPS EVERY PROXIED SERVICE RESPONSE. *** Both the HTTP
+       * proxy and the single-container direct-call proxy send
+       * `{ meta: {...}, data: <the service's body> }`, and `serverGetJsonRequest`
+       * hands back the whole thing — the admin endpoints this tab also reads are
+       * answered BY the gateway and are not wrapped, which is why the difference
+       * is easy to miss. Read through the envelope when there is one and off the
+       * body when there is not, so neither topology nor a future unwrapping
+       * silently turns a real figure into "the read did not arrive".
+       */
+      const body: StorageUsageBody =
+        response.data?.data !== undefined && response.data?.data !== null ? response.data.data : (response.data ?? {})
+
+      const bytes = body.itemBytesUsed
+      const unmeasured = body.itemsUnmeasured
+      // A 200 whose body carries no usable figure is still a read that did not
+      // produce one. It reports `read-threw` rather than `reported` with an empty
+      // figure, because "the server answered and said nothing" on THIS endpoint is
+      // not an ordinary state the way it is for the file settings: the route
+      // either computes the sum or it does not exist.
+      if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+        return { reading: 'read-threw' }
+      }
+
+      return {
+        reading: 'reported',
+        bytes,
+        // ABSENT rather than `true` when the server did not send the count: a
+        // fabricated "every item measured" would present a floor as a measurement,
+        // which is the flattering direction and therefore the dangerous one.
+        ...(typeof unmeasured === 'number' && Number.isFinite(unmeasured) && unmeasured >= 0
+          ? { complete: unmeasured === 0 }
+          : {}),
+      }
+    }
+
+    void read()
+      .catch((): AccountItemUsageReading => ({ reading: 'read-threw' }))
+      .then((result) => {
+        if (!cancelled) {
+          setItemUsage(result)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [application])
+
+  /**
+   * The origin's own storage usage, for the soft-cap row that has never had a
+   * figure to compare against.
+   *
+   * `estimateStorage` answers `undefined` for a browser with no StorageManager and
+   * for a call that throws, and both of those must stay ABSENT: a zero here would
+   * read as "this device is storing nothing" and would put the soft-cap row on
+   * "within the cap" for a machine nobody measured.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    void estimateStorage()
+      .catch(() => undefined)
+      .then((estimate) => {
+        if (cancelled || estimate === undefined) {
+          return
+        }
+        const usage = estimate.usage
+        if (typeof usage === 'number' && Number.isFinite(usage) && usage >= 0) {
+          setLocalUsageBytes(usage)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   /**
    * This account's own per-account feature flags, read on mount.
@@ -964,6 +1147,27 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             ...(spaceReading.limitOrigin === undefined ? {} : { fileAllowanceOrigin: spaceReading.limitOrigin }),
           }),
       /**
+       * The account's stored-item total. Spread for the same reason as the file
+       * figures: an absent figure must stay absent rather than arriving as a zero,
+       * because a zero is an answer and this one would be the most misleading
+       * answer on the screen. `itemUsageReading` is carried only once the read has
+       * resolved, so the block says neither kind of empty for the one frame before
+       * it knows which.
+       */
+      ...(itemUsage === undefined
+        ? {}
+        : {
+            itemUsageReading: itemUsage.reading,
+            ...(itemUsage.bytes === undefined ? {} : { itemBytesUsed: itemUsage.bytes }),
+            ...(itemUsage.complete === undefined ? {} : { itemBytesComplete: itemUsage.complete }),
+          }),
+      /**
+       * The origin's own usage, which is what the user's advisory soft cap is
+       * about. Spread rather than assigned: a browser that cannot be asked must
+       * leave the comparison undetermined, not "within the cap".
+       */
+      ...(localUsageBytes === undefined ? {} : { localUsageBytes }),
+      /**
        * The per-account flags, from the admin feature-flags read above. Spread
        * rather than assigned so an unreadable flag stays ABSENT instead of
        * arriving as a `false` — the flattering direction here is the dangerous
@@ -985,7 +1189,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         : { serverOperations: payload.protocol.serverOperations }),
       ...(transport?.fallbackReason === undefined ? {} : { fallbackReason: transport.fallbackReason }),
     }
-  }, [application, payload, transport, spaceReading, flagsReading])
+  }, [application, payload, transport, spaceReading, flagsReading, itemUsage, localUsageBytes])
 
   const websocketModel = useMemo(
     // `counters` is still NOT passed, and it no longer carries the admission half:

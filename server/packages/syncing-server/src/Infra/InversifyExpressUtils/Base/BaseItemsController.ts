@@ -24,6 +24,7 @@ import { Logger } from 'winston'
 import { ResponseLocals } from '../ResponseLocals'
 import { ExecuteSyncCommand } from '../../../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../../../Domain/SyncCommand/GetSyncCommandStatus'
+import { GetUserStorageUsage } from '../../../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
 import { SyncCommandMetadata, SyncCommandProtocolError } from '../../../Domain/SyncCommand/SyncCommandTypes'
 import { SyncResponse20200115 } from '../../../Domain/Item/SyncResponse/SyncResponse20200115'
 
@@ -50,6 +51,11 @@ export class BaseItemsController extends BaseHttpController {
     protected authorizeCollaborationAccess?: AuthorizeCollaborationAccess,
     protected executeSyncCommand?: ExecuteSyncCommand,
     protected getSyncCommandStatusUseCase?: GetSyncCommandStatus,
+    // Standard Red Notes: optional for the same reason as the three above — every
+    // existing construction and spec keeps its arity. The storage-usage endpoint
+    // answers 503 rather than a fabricated figure when it is absent, because an
+    // unwired dependency must never look like an account holding nothing.
+    protected getUserStorageUsage?: GetUserStorageUsage,
   ) {
     super()
 
@@ -59,6 +65,12 @@ export class BaseItemsController extends BaseHttpController {
       this.controllerContainer.register('sync.items.get_item', this.getSingleItem.bind(this))
       this.controllerContainer.register('sync.items.sync_command_status', this.getSyncCommandStatus.bind(this))
       this.controllerContainer.register('sync.items.authorize_collaboration', this.authorizeCollaboration.bind(this))
+      // Standard Red Notes: WITHOUT THIS LINE the endpoint is dead on every
+      // single-container deployment while the build, the route table and the HTTP
+      // topology all stay green — the gateway resolves a method identifier the
+      // container has never heard of and answers "Method not found". This repo has
+      // shipped that exact gap before.
+      this.controllerContainer.register('sync.items.storage_usage', this.getStorageUsage.bind(this))
     }
   }
 
@@ -310,6 +322,56 @@ export class BaseItemsController extends BaseHttpController {
     return this.json({
       mismatches: result.getValue(),
     })
+  }
+
+  /**
+   * Standard Red Notes: this account's own stored item payload, in bytes.
+   *
+   * Scoped to `response.locals.user.uuid` and to nothing else — there is no
+   * parameter on this route and no body is read, so no session can ask about
+   * another account. The answer carries the measured bytes plus the two counts
+   * that say whether the figure is COMPLETE, because a sum over rows that carry no
+   * size is a floor and not a total, and a client handed only the number would
+   * print it as one.
+   *
+   * Answers 503, never a zero, when the use case is not wired or the read fails:
+   * "we could not measure it" and "there is nothing stored" are different facts and
+   * the pane that consumes this is built entirely around keeping them apart.
+   */
+  async getStorageUsage(_request: Request, response: Response): Promise<results.JsonResult> {
+    const locals = response.locals as ResponseLocals
+
+    if (this.getUserStorageUsage === undefined) {
+      return this.json(
+        { error: { message: 'Storage usage is not available on this server.' } },
+        // 503 as a literal: the server's pinned @standardnotes/responses has no
+        // ServiceUnavailable member, and `SyncCommandProtocolError` in this same
+        // file already carries its 503 the same way.
+        503,
+      )
+    }
+
+    try {
+      const result = await this.getUserStorageUsage.execute({ userUuid: locals.user.uuid })
+      if (result.isFailed()) {
+        return this.json({ error: { message: result.getError() } }, HttpStatusCode.BadRequest)
+      }
+
+      const usage = result.getValue()
+
+      return this.json({
+        itemBytesUsed: usage.sizedBytes,
+        itemsMeasured: usage.sizedItems,
+        itemsUnmeasured: usage.unsizedItems,
+      })
+    } catch (error) {
+      this.logger.error('Storage usage lookup failed.', {
+        ...safeErrorLogMetadata(error),
+        userId: locals.user?.uuid,
+      })
+
+      return this.json({ error: { message: 'Storage usage could not be read.' } }, HttpStatusCode.InternalServerError)
+    }
   }
 
   async getSingleItem(request: Request, response: Response): Promise<results.JsonResult> {

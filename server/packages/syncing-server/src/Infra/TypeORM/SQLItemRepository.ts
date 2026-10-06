@@ -7,6 +7,7 @@ import { ItemQuery } from '../../Domain/Item/ItemQuery'
 import { ItemRepositoryInterface } from '../../Domain/Item/ItemRepositoryInterface'
 import { ExtendedIntegrityPayload } from '../../Domain/Item/ExtendedIntegrityPayload'
 import { ItemContentSizeDescriptor } from '../../Domain/Item/ItemContentSizeDescriptor'
+import { ItemStorageUsage } from '../../Domain/Item/ItemStorageUsage'
 import { ConcurrentItemUpdateError } from '../../Domain/Item/ConcurrentItemUpdateError'
 import { SQLItem } from './SQLItem'
 
@@ -190,6 +191,64 @@ export class SQLItemRepository implements ItemRepositoryInterface {
     }
 
     return +result.total
+  }
+
+  /**
+   * Standard Red Notes: the account's stored item payload, in ONE aggregate pass.
+   *
+   * *** THE TWO COUNTS ARE THE WHOLE POINT, AND THE SUM IS NOT. *** A bare
+   * `SUM(content_size)` cannot tell "this account stores nothing" from "every one
+   * of this account's rows predates the content_size column", because SQL answers
+   * NULL for both an empty set and a set of NULLs. Counting the sized and the
+   * unsized rows separately in the same statement makes those two different
+   * answers, at no extra round trip, and it is the difference between reporting a
+   * true `0 MB` and inventing one.
+   *
+   * The sum itself needs no `CASE`: SUM already skips NULLs, so guarding them
+   * would be a branch that cannot change the answer. One was written here and a
+   * mutation proved it inert — present, passing and incapable of being wrong,
+   * which is the shape this pane spends its whole existence refusing. It is gone,
+   * and the discrimination lives entirely in the two counts beside it.
+   *
+   * Scope is the user's OWN non-deleted items: no `includeSharedVaultUuids`, so a
+   * vault another account owns is that account's storage and not this one's, and
+   * `deleted = false` so a soft-deleted row is out (its `content_size` is zeroed
+   * on deletion as well, which is why deletion shows up here twice over).
+   *
+   * Both `CASE` forms and `COALESCE` are standard SQL and behave identically on
+   * the two dialects this server ships with (MySQL and SQLite).
+   */
+  async getStorageUsageForUser(userUuid: Uuid): Promise<ItemStorageUsage> {
+    const raw = await this.ormRepository
+      .createQueryBuilder('item')
+      .select('COALESCE(SUM(item.content_size), 0)', 'sizedBytes')
+      .addSelect('COALESCE(SUM(CASE WHEN item.content_size IS NULL THEN 0 ELSE 1 END), 0)', 'sizedItems')
+      .addSelect('COALESCE(SUM(CASE WHEN item.content_size IS NULL THEN 1 ELSE 0 END), 0)', 'unsizedItems')
+      .where('item.user_uuid = :userUuid', { userUuid: userUuid.value })
+      .andWhere('item.deleted = :deleted', { deleted: false })
+      .getRawOne<{
+        sizedBytes: string | number | null
+        sizedItems: string | number | null
+        unsizedItems: string | number | null
+      }>()
+
+    return {
+      sizedBytes: this.wholeNonNegative(raw?.sizedBytes),
+      sizedItems: this.wholeNonNegative(raw?.sizedItems),
+      unsizedItems: this.wholeNonNegative(raw?.unsizedItems),
+    }
+  }
+
+  /**
+   * A driver's aggregate comes back as a string on MySQL and a number on SQLite,
+   * and as `null`/`undefined` for an empty set. Anything that is not a finite,
+   * non-negative number becomes 0 — which is correct here and only here, because
+   * every one of these three fields is a COUNT or a COALESCEd sum over a scope
+   * whose emptiness is itself reported by `sizedItems`/`unsizedItems`.
+   */
+  private wholeNonNegative(value: string | number | null | undefined): number {
+    const parsed = typeof value === 'string' ? Number.parseFloat(value) : value
+    return typeof parsed === 'number' && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
   }
 
   async findByUuid(uuid: Uuid): Promise<Item | null> {

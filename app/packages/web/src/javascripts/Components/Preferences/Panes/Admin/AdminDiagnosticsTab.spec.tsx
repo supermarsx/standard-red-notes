@@ -197,8 +197,49 @@ const serverStatusPayload = {
   health: { gateway: { redis: true }, auth: { reachable: true, checks: { db: true, redis: true } } },
 }
 
+/**
+ * The account's own stored-item total, as the GATEWAY sends it: wrapped in the
+ * `{ meta, data }` envelope that both the HTTP proxy and the single-container
+ * direct-call proxy put around every proxied service response. Wrapped on purpose
+ * — reading the figure off the bare body is what made the pane report "the read
+ * did not arrive" over a 200 on a live deployment.
+ */
+const storageUsagePayload = {
+  meta: { auth: {}, server: {} },
+  data: { itemBytesUsed: 41_943_040, itemsMeasured: 12, itemsUnmeasured: 0 },
+}
+
+/**
+ * Every GET path this tab is allowed to reach, and the body each one answers.
+ *
+ * A single `mockResolvedValue` for all of them answered the diagnostics payload
+ * to the storage read as well, which is a 200 carrying no figure — so the Space
+ * block raised a failed-read finding in every test in this file that had nothing
+ * to do with storage. Path-aware here, and the inventory below asserts the tab
+ * reaches no path this map does not name.
+ */
+const GET_PATHS = {
+  '/v1/admin/sync-diagnostics': { status: 200, ok: true, data: unavailablePayload },
+} as const
+
+/**
+ * The paths this tab reads over PLAIN HTTP, bypassing the websocket control-plane
+ * lane. `/v1/sockets/*` is refused on that lane and `/v1/items/*` is too, and in
+ * both cases the refusal is not safe to fall back from — so a lane-first helper
+ * fails exactly when the deployment is healthiest.
+ */
+const HTTP_ONLY_PATHS = {
+  '/v1/sockets/sync/ticket': { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } },
+  '/v1/sockets/sync/capabilities': { status: 200, ok: true, data: { capabilities: [] } },
+  '/v1/items/storage-usage': { status: 200, ok: true, data: storageUsagePayload },
+} as const
+
 const makeApplication = (overrides: Record<string, unknown> = {}) => ({
-  serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 200, ok: true, data: unavailablePayload }),
+  serverGetJsonRequest: jest.fn().mockImplementation(async (path: string) => {
+    return Object.hasOwn(GET_PATHS, path)
+      ? GET_PATHS[path as keyof typeof GET_PATHS]
+      : { status: 404, ok: false, data: {} }
+  }),
   serverJsonRequest: jest
     .fn()
     .mockResolvedValue({ status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }),
@@ -207,10 +248,9 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   // helpers throw when a socket is live. This double answers only the ticket and
   // capability paths, and the tests below pin which helper each probe reaches for.
   httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
-    if (path === '/v1/sockets/sync/ticket') {
-      return { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }
-    }
-    return { status: 200, ok: true, data: { capabilities: [] } }
+    return Object.hasOwn(HTTP_ONLY_PATHS, path)
+      ? HTTP_ONLY_PATHS[path as keyof typeof HTTP_ONLY_PATHS]
+      : { status: 404, ok: false, data: {} }
   }),
   // The SAME method the Server pane calls, read additively for the Database
   // section. Nothing is migrated out of that pane and no new route exists.
@@ -1148,14 +1188,41 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     expect(sectionRow('Co-resident queue consumers')[1]).toBe('not reported')
   })
 
-  it('calls the same endpoint the Server pane calls, exactly once, and adds no route of its own', async () => {
+  /**
+   * The GET paths this tab reaches, as a CLOSED inventory.
+   *
+   * It used to assert a single path, which was both the inventory and the only
+   * entry. A second read now exists — the account's stored-item total, which is
+   * the figure the Space block was missing entirely — so the assertion names
+   * both and nothing else. Still a tripwire against a route invented here rather
+   * than reused: a path outside this list fails, and so does one that is in the
+   * list but never actually called, because a dead entry would quietly widen it.
+   */
+  /**
+   * The GET paths this tab reaches, as a CLOSED inventory per helper.
+   *
+   * It used to assert a single path, which was both the inventory and the only
+   * entry. A second read now exists — the account's stored-item total, which is
+   * the figure the Space block was missing entirely — and it goes over the
+   * HTTP-only helper because its path is refused on the websocket lane. Asserted
+   * per HELPER rather than as one list, because WHICH helper a read uses is the
+   * thing that broke: the ordinary one fails on this path exactly when the socket
+   * is healthy.
+   */
+  it('reaches only the reads it declares, over the helper each one needs', async () => {
     const application = makeApplication()
     await renderTab(application)
 
     expect(application.legacyApi.adminGetServerStatus).toHaveBeenCalledTimes(1)
-    for (const [path] of application.serverGetJsonRequest.mock.calls) {
-      expect(path).toBe('/v1/admin/sync-diagnostics')
-    }
+
+    const overLane = new Set(application.serverGetJsonRequest.mock.calls.map(([path]: [string]) => path))
+    const overHttp = new Set(application.httpOnlyJsonRequest.mock.calls.map(([, path]: [string, string]) => path))
+
+    expect([...overLane].sort()).toEqual(['/v1/admin/sync-diagnostics'])
+    expect(overHttp.has('/v1/items/storage-usage')).toBe(true)
+    // And the lane-first helper must NEVER be the one that asks for it: that is
+    // the regression, and it is invisible in any assertion over a merged list.
+    expect(overLane.has('/v1/items/storage-usage')).toBe(false)
   })
 
   /**
@@ -1412,6 +1479,246 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
 
     expect(sectionRow('Server file allowance, whole MB')[1]).toBe('10')
     expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('not reported')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The account's own STORED-ITEM total, which is most of its storage         */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** THE OPERATOR ASKED TWICE FOR THIS FIGURE. ***
+   *
+   * The Space block reported uploaded-FILE bytes and nothing else, so an account
+   * whose storage is notes read 0 MB at best and nothing at all at worst. These
+   * tests drive the real component against the real section builder, so a wiring
+   * gap — a reader that never ran, an envelope read off the wrong level, a 404
+   * rendered as a failure — fails here rather than on the operator's screen.
+   */
+  const withGetPaths = (paths: Record<string, unknown>) => ({
+    httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
+      if (Object.hasOwn(paths, path)) {
+        return paths[path]
+      }
+      return Object.hasOwn(HTTP_ONLY_PATHS, path)
+        ? HTTP_ONLY_PATHS[path as keyof typeof HTTP_ONLY_PATHS]
+        : { status: 404, ok: false, data: {} }
+    }),
+  })
+
+  it('reports the account total from the item figure and the file figure together', async () => {
+    await openAccount()
+
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('40')
+    expect(sectionRow('Item usage read')[1]).toBe('reported')
+    expect(sectionRow('Item byte total completeness')[1]).toBe('every item measured')
+    // 40 MB of items + the fixture's 1 MB of file bytes, reduced AFTER the sum.
+    expect(sectionRow('Total account storage, whole MB')[1]).toBe('41')
+    expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('1')
+    expect(sectionRow('What the total counts')[1]).toBe('items-and-files')
+  })
+
+  /**
+   * *** THE ENVELOPE, ASSERTED AT BOTH LEVELS. ***
+   *
+   * The gateway wraps every proxied service response in `{ meta, data }`, and the
+   * admin endpoints this same tab reads are answered BY the gateway and are NOT
+   * wrapped — so a reader written against either shape alone works in testing and
+   * reports "the read did not arrive" against the other. It was measured doing
+   * exactly that on a live container.
+   */
+  it('reads the figure through the gateway envelope and off a bare body alike', async () => {
+    await openAccount(
+      makeApplication(
+        withGetPaths({
+          '/v1/items/storage-usage': {
+            status: 200,
+            ok: true,
+            data: { itemBytesUsed: 8_388_608, itemsMeasured: 3, itemsUnmeasured: 0 },
+          },
+        }),
+      ),
+    )
+
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('8')
+    expect(sectionRow('Item usage read')[1]).toBe('reported')
+  })
+
+  /**
+   * *** 404 IS A SERVER OLDER THAN THE FIGURE, NOT A FAULT. *** It is the
+   * commonest reading while a fleet is being upgraded, and it is the reading that
+   * answers "would a redeploy fix this". Rendering it as a failed read sends that
+   * operator to debug a syncing service that is working.
+   */
+  it('reports a 404 as a server that does not carry the figure, not as a failed read', async () => {
+    const text = await openAccount(
+      makeApplication(withGetPaths({ '/v1/items/storage-usage': { status: 404, ok: false, data: {} } })),
+    )
+
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('not answered by this server build')
+    expect(sectionRow('Item usage read')[1]).toBe('endpoint-absent')
+    expect(sectionRow('Total account storage, whole MB')[1]).toBe('not reported')
+    expect(text).toContain('This server build does not report how much this account has stored')
+    expect(text).not.toContain('The stored-item total for this account could not be read')
+  })
+
+  it('reports a refused read as a failed read, which a 404 is not', async () => {
+    const text = await openAccount(
+      makeApplication(withGetPaths({ '/v1/items/storage-usage': { status: 500, ok: false, data: {} } })),
+    )
+
+    expect(sectionRow('Item usage read')[1]).toBe('read-threw')
+    expect(text).toContain('The stored-item total for this account could not be read')
+    expect(text).not.toContain('This server build does not report how much this account has stored')
+  })
+
+  /**
+   * A 200 carrying no usable figure is still a read that produced none, and it
+   * must never become a zero: 0 MB is the exact answer the operator was already
+   * given by a pane that was not measuring notes at all.
+   */
+  it('does not let a 200 carrying no figure become a zero', async () => {
+    await openAccount(
+      makeApplication(withGetPaths({ '/v1/items/storage-usage': { status: 200, ok: true, data: { data: {} } } })),
+    )
+
+    expect(sectionRow('Server item bytes used, whole MB')[1]).not.toBe('0')
+    expect(sectionRow('Item usage read')[1]).toBe('read-threw')
+    expect(sectionRow('Total account storage, whole MB')[1]).toBe('not reported')
+  })
+
+  it('does not let an unparseable item figure become a byte count', async () => {
+    await openAccount(
+      makeApplication(
+        withGetPaths({
+          '/v1/items/storage-usage': {
+            status: 200,
+            ok: true,
+            data: { data: { itemBytesUsed: 'quite a lot', itemsUnmeasured: 0 } },
+          },
+        }),
+      ),
+    )
+
+    expect(sectionRow('Item usage read')[1]).toBe('read-threw')
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('the read did not arrive')
+  })
+
+  /**
+   * *** A MEASURED ZERO SURVIVES THE WHOLE WIRING. *** An empty account really is
+   * storing nothing and the row must say `0`, which is the one assertion that
+   * fails if a reader ever starts treating `0` as "nothing arrived".
+   */
+  it('reports a genuinely empty account as a measured zero', async () => {
+    await openAccount(
+      makeApplication(
+        withGetPaths({
+          '/v1/items/storage-usage': {
+            status: 200,
+            ok: true,
+            data: { data: { itemBytesUsed: 0, itemsMeasured: 0, itemsUnmeasured: 0 } },
+          },
+        }),
+      ),
+    )
+
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('0')
+    expect(sectionRow('Item usage read')[1]).toBe('reported')
+    expect(sectionRow('Item byte total completeness')[1]).toBe('every item measured')
+  })
+
+  /**
+   * The unmeasured COUNT is reduced to a boolean at this boundary, because the
+   * section has nowhere to put a population and must not acquire one. Both halves
+   * are asserted: the boolean is derived, and the count itself never appears.
+   */
+  it('reduces the unmeasured item count to a boolean and never prints the count', async () => {
+    const text = await openAccount(
+      makeApplication(
+        withGetPaths({
+          '/v1/items/storage-usage': {
+            status: 200,
+            ok: true,
+            data: { data: { itemBytesUsed: 9_437_184, itemsMeasured: 4812, itemsUnmeasured: 17 } },
+          },
+        }),
+      ),
+    )
+
+    expect(sectionRow('Item byte total completeness')[1]).toBe('some items unmeasured')
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('9')
+    expect(text).toContain('some of this account’s items carry no recorded size')
+    expect(text).not.toContain('4812')
+    expect(text).not.toContain(' 17 ')
+  })
+
+  it('claims nothing about completeness when the server sent no counts', async () => {
+    await openAccount(
+      makeApplication(
+        withGetPaths({
+          '/v1/items/storage-usage': { status: 200, ok: true, data: { data: { itemBytesUsed: 9_437_184 } } },
+        }),
+      ),
+    )
+
+    expect(sectionRow('Item byte total completeness')[1]).toBe('not reported')
+    expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('9')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The local usage figure, for the soft-cap row that could never fill        */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * *** A FIELD THE SECTION DECLARED AND NOTHING EVER SUPPLIED. ***
+   *
+   * `localUsageBytes` and the row comparing it against the user's advisory cap
+   * have existed since the block was written, and no caller filled it — so that
+   * row read "not reported" on every deployment while the row above it reported
+   * the cap perfectly. jsdom has no `navigator.storage`, so the estimate is
+   * installed here; the test immediately below asserts the absent case, which is
+   * what an unsupported browser really does.
+   */
+  it('fills the local usage figure and the soft-cap comparison from the storage estimate', async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'storage')
+    Object.defineProperty(navigator, 'storage', {
+      value: { estimate: async () => ({ usage: 62_914_560, quota: 1_073_741_824 }) },
+      configurable: true,
+    })
+
+    try {
+      await openAccount(makeApplication({ getPreference: jest.fn().mockReturnValue(10 * 1_048_576) }))
+
+      expect(sectionRow('Local usage, whole MB')[1]).toBe('60')
+      expect(sectionRow('Local usage soft cap')[1]).toBe('set')
+      expect(sectionRow('Local usage against the soft cap')[1]).toBe('over the cap')
+    } finally {
+      if (original) {
+        Object.defineProperty(navigator, 'storage', original)
+      } else {
+        delete (navigator as unknown as Record<string, unknown>).storage
+      }
+    }
+  })
+
+  it('leaves the local usage absent rather than zero on a browser that cannot be asked', async () => {
+    await openAccount(makeApplication({ getPreference: jest.fn().mockReturnValue(10 * 1_048_576) }))
+
+    expect(sectionRow('Local usage, whole MB')[1]).toBe('not reported')
+    expect(sectionRow('Local usage, whole MB')[1]).not.toBe('0')
+    expect(sectionRow('Local usage against the soft cap')[1]).toBe('not reported')
+  })
+
+  /**
+   * And with the preference at its documented default — `0`, meaning no cap —
+   * the comparison says so from the cap alone rather than leaving the row blank.
+   * That emptiness was the commonest reading in the fleet and it invited a hunt
+   * for a read that had not failed.
+   */
+  it('says there is no cap to exceed when the user set none, even with no usage figure', async () => {
+    await openAccount()
+
+    expect(sectionRow('Local usage soft cap')[1]).toBe('no cap')
+    expect(sectionRow('Local usage against the soft cap')[1]).toBe('no cap to exceed')
   })
 
   /* ------------------------------------------------------------------------ */
@@ -1806,6 +2113,18 @@ describe('AdminDiagnosticsTab — Checks', () => {
     }
     for (const [path] of application.serverGetJsonRequest.mock.calls) {
       expect(path).toBe('/v1/admin/sync-diagnostics')
+    }
+    // The HTTP-only helper's calls, as an exact (method, path) allow-list. The
+    // METHOD belongs in it: this helper accepts POST, the socket-ticket probe
+    // legitimately uses one — minting a one-use ticket for this session is the
+    // single write this whole tab performs and the paragraph on screen says so —
+    // and a path-only assertion would admit any other write added here later.
+    for (const [method, path] of application.httpOnlyJsonRequest.mock.calls) {
+      expect([
+        ['GET', '/v1/sockets/sync/capabilities'],
+        ['POST', '/v1/sockets/sync/ticket'],
+        ['GET', '/v1/items/storage-usage'],
+      ]).toContainEqual([method, path])
     }
     expect(application.serverJsonRequest).not.toHaveBeenCalled()
   })

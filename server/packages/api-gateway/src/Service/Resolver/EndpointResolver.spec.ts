@@ -97,6 +97,35 @@ describe('EndpointResolver', () => {
       expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'items/:uuid')).toEqual('sync.items.get_item')
     })
 
+    /**
+     * Standard Red Notes: the storage-usage route, and the ORDER that keeps it
+     * reachable.
+     *
+     * The literal path and the bare `:uuid` read both start `items/`, so the one
+     * declared first wins. Asserting only that the literal resolves would pass
+     * with the two entries swapped — the map is keyed on the exact string, so the
+     * lookup is right either way — while the EXPRESS route table built from the
+     * same ordering would have `/:uuid` swallow `storage-usage` and answer "Item
+     * not found". So the relative position in the declaration is asserted too.
+     */
+    it('maps the storage-usage route, and declares it ahead of the bare item read', () => {
+      const resolver = createResolver(true)
+
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'items/storage-usage')).toEqual(
+        'sync.items.storage_usage',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'items/:uuid')).toEqual('sync.items.get_item')
+
+      const declared = [
+        ...(
+          (resolver as unknown as { endpointToIdentifierMap: Map<string, string> }).endpointToIdentifierMap ?? new Map()
+        ).keys(),
+      ]
+
+      expect(declared).toContain('[GET]:items/storage-usage')
+      expect(declared.indexOf('[GET]:items/storage-usage')).toBeLessThan(declared.indexOf('[GET]:items/:uuid'))
+    })
+
     it('maps legacy websocket token minting to the in-process provider', () => {
       const resolver = createResolver(true)
       expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'sockets/tokens')).toBe('websockets.tokens.create')
