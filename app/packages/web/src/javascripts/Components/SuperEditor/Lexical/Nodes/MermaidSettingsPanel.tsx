@@ -3,6 +3,15 @@ import { useCallback } from 'react'
 import Icon from '@/Components/Icon/Icon'
 import { MermaidWidthSection } from './MermaidBlockControls'
 import {
+  analyzeMermaidSource,
+  appendGraphEdge,
+  appendGraphNode,
+  buildFlowchartSource,
+  MERMAID_DIAGRAM_TYPE_LABELS,
+  MERMAID_GRAPH_DIRECTIONS,
+  MermaidGraphDirection,
+} from './MermaidGraphBuilder'
+import {
   MERMAID_ALIGNMENT_LABELS,
   MERMAID_ALIGNMENTS,
   MERMAID_BACKGROUND_LABELS,
@@ -12,6 +21,7 @@ import {
   MERMAID_MAX_HEIGHT_NONE,
   MERMAID_THEME_MODE_LABELS,
   MERMAID_THEME_MODES,
+  MERMAID_VIEW_MODE_LABELS,
   MERMAID_VIEW_MODES,
   MermaidAlignment,
   MermaidBackground,
@@ -84,12 +94,12 @@ export const MermaidViewModeGroup: React.FunctionComponent<{
       <button
         key={mode}
         type="button"
-        className={segmentClass(viewMode === mode) + ' capitalize'}
+        className={segmentClass(viewMode === mode)}
         aria-pressed={viewMode === mode}
         onMouseDown={keepFocus}
         onClick={() => onChange(mode)}
       >
-        {mode}
+        {MERMAID_VIEW_MODE_LABELS[mode]}
       </button>
     ))}
   </div>
@@ -290,6 +300,107 @@ export const MermaidZoomPanToggle: React.FunctionComponent<{
   </button>
 )
 
+/**
+ * THE BUILD ACTIONS — the operator asked to build a diagram visually "using the
+ * editor bar", so adding a node, adding a link and setting the direction are
+ * ribbon controls, not controls buried inside the chart.
+ *
+ * It is a cluster like every other one here: state in, callback out, no editor
+ * and no Lexical. The mermaid SOURCE is the state, and the whole write is
+ * `analyze -> mutate the model -> regenerate`, which is the same pure pipeline
+ * the chart's own builder pane runs. There is no second code path that could
+ * emit different source.
+ *
+ * It DEGRADES VISIBLY rather than silently: when the source is not a flowchart
+ * the builder can model, every action is disabled and says why in its tooltip.
+ * An enabled "+ Node" over a sequence diagram is how a diagram gets destroyed in
+ * one click.
+ */
+export const MermaidBuildActions: React.FunctionComponent<{
+  code: string
+  onCodeChange: (next: string) => void
+  viewMode: MermaidViewMode
+  onViewModeChange: (next: MermaidViewMode) => void
+}> = ({ code, onCodeChange, viewMode, onViewModeChange }) => {
+  const analysis = analyzeMermaidSource(code)
+  const model = analysis.model
+  const blockedReason =
+    model == null
+      ? `The visual builder models flowcharts. This is a ${
+          MERMAID_DIAGRAM_TYPE_LABELS[analysis.type] ?? 'diagram'
+        } — edit it in the code pane.`
+      : null
+
+  /** One write path: mutate the parsed model, regenerate, hand the source back. */
+  const apply = useCallback(
+    (mutate: (current: NonNullable<typeof model>) => NonNullable<typeof model>) => {
+      if (!model) {
+        return
+      }
+      onCodeChange(buildFlowchartSource(mutate(model)))
+      // Building is only meaningful where the result is visible, and the builder
+      // pane is the surface that shows both halves. Switching for the user is
+      // the difference between "the button did nothing" and "the button built
+      // something", since an un-opened builder shows neither the new node nor
+      // the diagram beside it.
+      if (viewMode !== 'graphical') {
+        onViewModeChange('graphical')
+      }
+    },
+    [model, onCodeChange, viewMode, onViewModeChange],
+  )
+
+  return (
+    <div className="flex items-center gap-1" data-mermaid-build-actions="true">
+      <button
+        type="button"
+        className="border-border hover:bg-contrast rounded border px-1.5 py-0.5 text-xs disabled:opacity-50"
+        onMouseDown={keepFocus}
+        onClick={() => apply(appendGraphNode)}
+        disabled={blockedReason !== null}
+        title={blockedReason ?? 'Add a node to the diagram'}
+        aria-label="Add a diagram node"
+      >
+        <span className="flex items-center gap-1">
+          <Icon type="add" size="small" />
+          Node
+        </span>
+      </button>
+      <button
+        type="button"
+        className="border-border hover:bg-contrast rounded border px-1.5 py-0.5 text-xs disabled:opacity-50"
+        onMouseDown={keepFocus}
+        onClick={() => apply(appendGraphEdge)}
+        disabled={blockedReason !== null || (model?.nodes.length ?? 0) === 0}
+        title={blockedReason ?? 'Link the two most recent nodes'}
+        aria-label="Add a diagram link"
+      >
+        <span className="flex items-center gap-1">
+          <Icon type="link" size="small" />
+          Link
+        </span>
+      </button>
+      <select
+        className={SELECT_CLASS}
+        value={model?.direction ?? MERMAID_GRAPH_DIRECTIONS[0]}
+        disabled={blockedReason !== null}
+        aria-label="Diagram flow direction"
+        title={blockedReason ?? 'Which way the flowchart runs'}
+        onChange={(event) => {
+          const direction = event.target.value as MermaidGraphDirection
+          apply((current) => ({ ...current, direction }))
+        }}
+      >
+        {MERMAID_GRAPH_DIRECTIONS.map((direction) => (
+          <option key={direction} value={direction}>
+            {direction}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 export type MermaidSettingsPanelProps = {
   /** Arrangement only — never which controls exist. */
   variant: 'bar' | 'panel'
@@ -300,6 +411,14 @@ export type MermaidSettingsPanelProps = {
   /** The split-pane view mode, i.e. whether the source is shown. */
   viewMode: MermaidViewMode
   onViewModeChange: (next: MermaidViewMode) => void
+  /**
+   * The diagram's mermaid SOURCE, and the one way to change it. The build
+   * actions need it: "add a node" is a change to the source, and routing it
+   * through the same props object keeps the ribbon from growing its own write
+   * path into the node.
+   */
+  code: string
+  onCodeChange: (next: string) => void
   /** The block's stored width, already normalized, or undefined for "fit". */
   width: string | undefined
   onWidthChange: (next: string | undefined) => void
@@ -325,12 +444,24 @@ export function mermaidSettingsControls(props: MermaidSettingsPanelProps): {
   caption: string
   node: React.ReactNode
 }[] {
-  const { settings, onSettingsChange, viewMode, onViewModeChange } = props
+  const { settings, onSettingsChange, viewMode, onViewModeChange, code, onCodeChange } = props
   return [
     {
       key: 'source',
       caption: 'Source',
       node: <MermaidViewModeGroup viewMode={viewMode} onChange={onViewModeChange} />,
+    },
+    {
+      key: 'builder',
+      caption: 'Build',
+      node: (
+        <MermaidBuildActions
+          code={code}
+          onCodeChange={onCodeChange}
+          viewMode={viewMode}
+          onViewModeChange={onViewModeChange}
+        />
+      ),
     },
     {
       key: 'fit',

@@ -746,7 +746,21 @@ export function mermaidAlignmentStyle(alignment: MermaidAlignment): {
   return { marginLeft: undefined, marginRight: undefined }
 }
 
-/** Human-readable labels, shared by every control so they cannot drift. */
+/**
+ * Human-readable labels, shared by every control so they cannot drift.
+ *
+ * The view modes get one too, because `graphical` is a stored VALUE and
+ * "Graphical" is not what the control is for. It is the BUILDER, and it sits on
+ * the ribbon beside a Build cluster that writes into it; naming it after what it
+ * does is the difference between a user finding the visual builder and not.
+ */
+export const MERMAID_VIEW_MODE_LABELS: Record<MermaidViewMode, string> = {
+  split: 'Split',
+  code: 'Code',
+  preview: 'Preview',
+  graphical: 'Builder',
+}
+
 export const MERMAID_FIT_MODE_LABELS: Record<MermaidFitMode, string> = {
   fitWidth: 'Fit width',
   fitBoth: 'Fit both',

@@ -31,6 +31,7 @@ import {
   MERMAID_BACKGROUND_LABELS,
   MERMAID_BACKGROUNDS,
   MERMAID_MAX_HEIGHT_NONE,
+  MERMAID_VIEW_MODE_LABELS,
   MermaidSettings,
 } from './MermaidSettings'
 
@@ -41,6 +42,10 @@ let root: Root
 let patches: Partial<MermaidSettings>[]
 let viewModes: string[]
 let widths: (string | undefined)[]
+let sources: string[]
+
+/** A two-node flowchart the Build cluster can actually model. */
+const BUILDER_SOURCE = 'graph TD\n  A["Start"]\n  B["End"]\n  A --> B'
 
 const baseProps = (overrides: Partial<MermaidSettingsPanelProps> = {}): MermaidSettingsPanelProps => ({
   variant: 'bar',
@@ -48,6 +53,8 @@ const baseProps = (overrides: Partial<MermaidSettingsPanelProps> = {}): MermaidS
   onSettingsChange: (patch) => patches.push(patch),
   viewMode: 'split',
   onViewModeChange: (next) => viewModes.push(next),
+  code: BUILDER_SOURCE,
+  onCodeChange: (next) => sources.push(next),
   width: undefined,
   onWidthChange: (next) => widths.push(next),
   height: undefined,
@@ -63,6 +70,7 @@ beforeEach(() => {
   patches = []
   viewModes = []
   widths = []
+  sources = []
 })
 
 afterEach(() => {
@@ -79,7 +87,7 @@ const render = (props: MermaidSettingsPanelProps) => {
 const group = (label: string) => container.querySelector(`[role="group"][aria-label="${label}"]`) as HTMLElement | null
 const byLabel = (label: string) => container.querySelector(`[aria-label="${label}"]`) as HTMLElement | null
 
-const CONTROL_KEYS = ['source', 'fit', 'maxHeight', 'alignment', 'theme', 'background', 'zoomPan']
+const CONTROL_KEYS = ['source', 'builder', 'fit', 'maxHeight', 'alignment', 'theme', 'background', 'zoomPan']
 
 /**
  * Set an input's value the way a user does. Assigning `.value` directly is seen
@@ -125,6 +133,11 @@ describe('both variants render the same controls — only the arrangement differ
     expect(byLabel('Diagram theme')).not.toBeNull()
     expect(byLabel('Diagram background')).not.toBeNull()
     expect(byLabel('Pan and zoom over the diagram')).not.toBeNull()
+    // The BUILD cluster — the one that writes the diagram's source rather than
+    // its appearance. It is the control the user reported as missing.
+    expect(byLabel('Add a diagram node')).not.toBeNull()
+    expect(byLabel('Add a diagram link')).not.toBeNull()
+    expect(byLabel('Diagram flow direction')).not.toBeNull()
     // The width strip is delegated, not reimplemented.
     expect(container.querySelector('[data-mermaid-width-section="true"]')).not.toBeNull()
   })
@@ -230,8 +243,11 @@ describe('every control writes, and writes only its own field', () => {
 
   it('the view mode', () => {
     render(baseProps())
+    // Found by the LABEL the shared vocabulary gives the mode, not by the stored
+    // value: the control prints MERMAID_VIEW_MODE_LABELS, so hardcoding the raw
+    // value here would assert the label away the next time one is reworded.
     const button = Array.from(group('View mode')!.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent === 'code',
+      (candidate) => candidate.textContent === MERMAID_VIEW_MODE_LABELS.code,
     ) as HTMLButtonElement
     act(() => button.click())
     expect(viewModes).toEqual(['code'])

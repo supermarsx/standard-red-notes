@@ -327,7 +327,7 @@ describe('1. selecting a diagram activates its ribbon tab', () => {
     const captions = Array.from(container.querySelectorAll('.super-toolbar-group')).map((group) =>
       group.getAttribute('aria-label'),
     )
-    expect(captions).toEqual(['Source', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
+    expect(captions).toEqual(['Source', 'Build', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
   })
 
   it('activates again on a second diagram selection, so the latch resets', async () => {

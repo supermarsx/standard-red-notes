@@ -57,6 +57,7 @@ import {
   resolveMermaidSurfaceColor,
   APP_SURFACE_CSS_VAR,
   MERMAID_BACKGROUND_LABELS,
+  MERMAID_VIEW_MODE_LABELS,
   MERMAID_BACKGROUNDS,
   mermaidViewportBackgroundStyle,
   type MermaidAppTheme,
@@ -112,6 +113,13 @@ describe('the default settings are the ones the component actually uses', () => 
     expect(MERMAID_FIT_MODES).toEqual(['fitWidth', 'fitBoth', 'actual'])
     expect(MERMAID_ALIGNMENTS).toEqual(['left', 'center', 'right'])
     expect(MERMAID_VIEW_MODES).toEqual(['split', 'code', 'preview', 'graphical'])
+    // Every mode is LABELLED, so no control can print a stored value at the
+    // user. `graphical` in particular reads as "Builder" on the ribbon.
+    expect(Object.keys(MERMAID_VIEW_MODE_LABELS).sort()).toEqual([...MERMAID_VIEW_MODES].sort())
+    for (const mode of MERMAID_VIEW_MODES) {
+      expect([mode, MERMAID_VIEW_MODE_LABELS[mode].length > 0]).toEqual([mode, true])
+    }
+    expect(MERMAID_VIEW_MODE_LABELS.graphical).toBe('Builder')
     // Every mermaid built-in, plus the app-following mode, and `app` first.
     expect(MERMAID_THEME_MODES).toEqual(['app', ...MERMAID_BUILTIN_THEMES])
   })

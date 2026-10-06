@@ -614,6 +614,11 @@ const CONTEXTUAL_TAB_ID = 'contextual'
  * list and is the reachability guarantee — it is "the controls that are a
  * top-level choice", i.e. worth a click rather than two.
  *
+ * BUILD is here because the user reported that building a diagram visually was
+ * missing from the editor bar. It is the only cluster that writes the diagram's
+ * SOURCE rather than its appearance, and it is the most top-level choice of all:
+ * a chart with no nodes cannot be themed or fitted into anything.
+ *
  * THEME and BACKGROUND are here because the user reported the section as
  * "missing the theming": both were popover-only, which read as the controls not
  * existing at all now that the chart's own bar is gone (t119). They are the
@@ -622,7 +627,7 @@ const CONTEXTUAL_TAB_ID = 'contextual'
  * condensed is the genuinely advanced half: maximum height, pan & zoom and the
  * width strip.
  */
-const MERMAID_INLINE_SEGMENT_KEYS = ['source', 'fit', 'alignment', 'theme', 'background'] as const
+const MERMAID_INLINE_SEGMENT_KEYS = ['source', 'builder', 'fit', 'alignment', 'theme', 'background'] as const
 
 const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   const { t } = useTranslation('editor')
@@ -681,6 +686,8 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     nodeKey: string
     settings: MermaidSettings
     viewMode: MermaidViewMode
+    /** The diagram's mermaid source, which the Build cluster reads and rewrites. */
+    code: string
     width: string | undefined
     height: number | undefined
   } | null>(null)
@@ -1370,6 +1377,10 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
               nodeKey: node.getKey(),
               settings: node.getSettings(),
               viewMode: node.getViewMode(),
+              // Part of the published signature below, so a source change — the
+              // user's own typing, or this section's own Build actions —
+              // re-publishes and the cluster reads the diagram it just changed.
+              code: node.getCode(),
               width: node.getWidth(),
               height: node.getHeight(),
             }
@@ -3004,6 +3015,8 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     onSettingsChange: (patch) => updateMermaidNode((node) => node.setSettings(patch)),
     viewMode: mermaidSelection?.viewMode ?? DEFAULT_MERMAID_VIEW_MODE,
     onViewModeChange: (next) => updateMermaidNode((node) => node.setViewMode(next)),
+    code: mermaidSelection?.code ?? '',
+    onCodeChange: (next) => updateMermaidNode((node) => node.setCode(next)),
     width: mermaidSelection?.width,
     onWidthChange: (next) => updateMermaidNode((node) => node.setWidth(next)),
     height: mermaidSelection?.height,

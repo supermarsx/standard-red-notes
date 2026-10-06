@@ -48,6 +48,7 @@ import {
   MERMAID_BACKGROUNDS,
   MERMAID_THEME_MODE_LABELS,
   MERMAID_THEME_MODES,
+  MERMAID_VIEW_MODE_LABELS,
   MermaidBackground,
   MermaidThemeMode,
 } from '../../Lexical/Nodes/MermaidSettings'
@@ -264,6 +265,8 @@ const probeControlProps = (): MermaidSettingsPanelProps => ({
   onSettingsChange: () => undefined,
   viewMode: DEFAULT_MERMAID_VIEW_MODE,
   onViewModeChange: () => undefined,
+  code: 'graph TD\n  A["A"]',
+  onCodeChange: () => undefined,
   width: undefined,
   onWidthChange: () => undefined,
   height: undefined,
@@ -377,7 +380,7 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     // The generic trailing segment's caption comes from the `block` translation
     // key, which is lower-case — asserted as rendered, not as prose.
     expect(captions).toContain('block')
-    expect(captions).toEqual(['Source', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
+    expect(captions).toEqual(['Source', 'Build', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
   })
 })
 
@@ -552,6 +555,123 @@ describe('the theming controls are inline in the section, not only in its popove
   })
 })
 
+/**
+ * THE BUILD CLUSTER — the operator's actual report: building a mermaid chart
+ * VISUALLY, from the editor bar, was missing. The mode switch was on the ribbon;
+ * no action that builds anything was.
+ *
+ * Every assertion is on the ribbon's own DOM and on the SELECTED NODE's source,
+ * because this cluster is the one that writes the diagram rather than its
+ * appearance. A cluster that renders and writes nothing, and a cluster that
+ * writes to a copy of the state, both look identical to tsc.
+ */
+describe('the Mermaid section can BUILD the diagram, not only configure it', () => {
+  const captionedSegment = (caption: string) =>
+    Array.from(container.querySelectorAll('.super-toolbar-group')).find(
+      (group) => group.getAttribute('aria-label') === caption,
+    )
+
+  const openSection = async () => {
+    await mount()
+    await insertAndSelectMermaid()
+    await activateMermaidTab()
+  }
+
+  const buildSegment = () => captionedSegment('Build')
+  const buildButton = (label: string) =>
+    buildSegment()?.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement | null
+
+  const clickButton = async (button: HTMLButtonElement | null) => {
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button!.click()
+      await Promise.resolve()
+    })
+  }
+
+  it('puts the build actions on the ribbon itself, under their own caption', async () => {
+    await openSection()
+    expect(buildSegment()).toBeDefined()
+    expect(buildButton('Add a diagram node')).not.toBeNull()
+    expect(buildButton('Add a diagram link')).not.toBeNull()
+    expect(buildSegment()!.querySelector('select[aria-label="Diagram flow direction"]')).not.toBeNull()
+    // A mapping miss renders `<label>name</label>` in place of the glyph. Both
+    // buttons draw one, so this is the probe that notices.
+    expect(Array.from(buildSegment()!.querySelectorAll('label')).map((label) => label.textContent)).toEqual([])
+    expect(buildButton('Add a diagram node')!.querySelector('svg')).not.toBeNull()
+    expect(buildButton('Add a diagram link')!.querySelector('svg')).not.toBeNull()
+  })
+
+  it('adds a node to the SELECTED diagram from the ribbon', async () => {
+    await openSection()
+    expect(readNode((node) => node.getCode())).toBe('graph TD' + String.fromCharCode(10) + '  A --> B')
+    await clickButton(buildButton('Add a diagram node'))
+    const code = readNode((node) => node.getCode())
+    expect(code).toContain('C["C"]')
+    expect(code).toContain('A --> B')
+  })
+
+  it('adds a link to the SELECTED diagram from the ribbon', async () => {
+    await openSection()
+    await clickButton(buildButton('Add a diagram node'))
+    await clickButton(buildButton('Add a diagram link'))
+    expect(readNode((node) => node.getCode())).toContain('B --> C')
+  })
+
+  it('changes the flow direction from the ribbon', async () => {
+    await openSection()
+    const select = buildSegment()!.querySelector('select[aria-label="Diagram flow direction"]') as HTMLSelectElement
+    await setSelectValue(select, 'LR')
+    expect(readNode((node) => node.getCode()).split(String.fromCharCode(10))[0]).toBe('graph LR')
+  })
+
+  /**
+   * Building is only meaningful where the result is visible. A click that writes
+   * a node into a diagram the user is looking at in `preview` mode would look
+   * like a button that did nothing.
+   */
+  it('opens the builder pane so the user sees what was built', async () => {
+    await openSection()
+    expect(readNode((node) => node.getViewMode())).not.toBe('graphical')
+    await clickButton(buildButton('Add a diagram node'))
+    expect(readNode((node) => node.getViewMode())).toBe('graphical')
+  })
+
+  /**
+   * DEGRADE VISIBLY. An enabled "+ Node" over a sequence diagram is how a whole
+   * diagram gets replaced in one click — which is exactly what the chart's own
+   * builder used to do.
+   */
+  it('disables every build action over a diagram it cannot model, and says why', async () => {
+    await openSection()
+    await act(async () => {
+      ;(editor as LexicalEditor).update(() => {
+        const node = $getRoot()
+          .getChildren()
+          .find((candidate) => $isMermaidNode(candidate)) as MermaidNode
+        node.setCode('sequenceDiagram' + String.fromCharCode(10) + '  U->>S: Request')
+      })
+      await Promise.resolve()
+    })
+
+    const addNode = buildButton('Add a diagram node')
+    const addLink = buildButton('Add a diagram link')
+    expect(addNode!.disabled).toBe(true)
+    expect(addLink!.disabled).toBe(true)
+    expect(
+      (buildSegment()!.querySelector('select[aria-label="Diagram flow direction"]') as HTMLSelectElement).disabled,
+    ).toBe(true)
+    expect(addNode!.getAttribute('title')).toContain('sequence diagram')
+
+    // And a click on the disabled control changes nothing.
+    await act(async () => {
+      addNode!.click()
+      await Promise.resolve()
+    })
+    expect(readNode((node) => node.getCode())).toBe('sequenceDiagram' + String.fromCharCode(10) + '  U->>S: Request')
+  })
+})
+
 describe('the Insert tab draws the Mermaid catalog entry with the diagram glyph', () => {
   const activateTab = async (label: string) => {
     const tab = Array.from(container.querySelectorAll('[role="tablist"] [role="tab"]')).find(
@@ -645,7 +765,7 @@ describe('the Mermaid section writes to the selected node, not to a copy of its 
     await activateMermaidTab()
     expect(readNode((node) => node.getViewMode())).toBe('split')
     const preview = Array.from(segment('View mode')!.querySelectorAll('button')).find(
-      (button) => button.textContent === 'preview',
+      (button) => button.textContent === MERMAID_VIEW_MODE_LABELS.preview,
     ) as HTMLButtonElement
     await act(async () => {
       preview.click()

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   $getNodeByKey,
   CLICK_COMMAND,
@@ -17,16 +17,29 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import Icon from '@/Components/Icon/Icon'
 import {
+  analyzeMermaidSource,
+  appendGraphEdge,
+  appendGraphNode,
   buildFlowchartSource,
   createEmptyGraphModel,
+  danglingExtras,
+  DEFAULT_MERMAID_EDGE_KIND,
+  DEFAULT_MERMAID_NODE_SHAPE,
+  MERMAID_DIAGRAM_TYPE_LABELS,
+  MERMAID_EDGE_KIND_LABELS,
+  MERMAID_EDGE_KINDS,
   MERMAID_GRAPH_DIRECTIONS,
+  MERMAID_NODE_SHAPE_LABELS,
+  MERMAID_NODE_SHAPES,
   MERMAID_TEMPLATES,
+  MermaidEdgeKind,
   MermaidGraphDirection,
   MermaidGraphEdge,
   MermaidGraphModel,
   MermaidGraphNode,
-  nextNodeId,
-  parseFlowchartSource,
+  MermaidNodeShape,
+  removeGraphNode,
+  renameGraphNode,
 } from './MermaidGraphBuilder'
 import MermaidSvgViewport from './MermaidSvgViewport'
 import { MermaidResizeHandle } from './MermaidBlockControls'
@@ -84,11 +97,27 @@ function loadMermaid(): Promise<typeof import('mermaid').default> {
 let renderSeq = 0
 
 /**
- * The GRAPHICAL flowchart builder: a small form to add/remove nodes and edges
- * that regenerates flowchart mermaid source as it changes. It seeds its model
- * from the current code (best-effort parse of simple `graph TD` flowcharts);
- * if the code isn't a simple flowchart it starts from an empty model and notes
- * that hand-edited code isn't reverse-parsed.
+ * The VISUAL flowchart builder: a form over the diagram's NODES and LINKS that
+ * regenerates mermaid source as it changes, shown beside the live diagram (the
+ * `graphical` view mode is a two-pane layout exactly as `split` is — a builder
+ * you cannot see the result of is not a visual builder, and that is what this
+ * pane used to be).
+ *
+ * THREE RULES, because the thing that goes wrong here is destroying someone's
+ * diagram:
+ *
+ *  1. NOTHING IS DROPPED SILENTLY. Frontmatter, comments and styling statements
+ *     round-trip verbatim through the model's `preamble`/`extras`; node shapes
+ *     and link kinds are modelled rather than flattened. What is being preserved
+ *     is listed in the pane, so the user can see it survived.
+ *  2. WHAT IT CANNOT MODEL, IT REFUSES TO TOUCH. A sequence diagram, a subgraph,
+ *     an unreadable statement — the builder renders no editing control at all,
+ *     names the diagram type and the exact blocking lines, and offers one
+ *     explicitly confirmed "replace" action. It used to start from an empty
+ *     model, so a single click on "Add node" replaced a whole sequence diagram.
+ *  3. A RENAME RENAMES EVERY REFERENCE. Renaming a node used to leave its links
+ *     pointing at an id that no longer existed, and unknown links are dropped on
+ *     generation — so correcting a name silently deleted the connections.
  */
 function GraphicalBuilder({
   code,
@@ -97,27 +126,30 @@ function GraphicalBuilder({
   code: string
   onCodeChange: (next: string) => void
 }): React.JSX.Element {
-  // Parse once on mount (and whenever a parseable code arrives), then keep a
-  // local model the form edits. We do not continuously re-parse outgoing code
-  // to avoid fighting the user's typing in the builder.
-  const [model, setModel] = useState<MermaidGraphModel>(() => parseFlowchartSource(code) ?? createEmptyGraphModel())
-  const [parsedFromCode, setParsedFromCode] = useState<boolean>(() => parseFlowchartSource(code) != null)
-  const lastEmittedRef = useRef<string>('')
+  // What the CURRENT source is, and whether it can be modelled at all. Derived
+  // from the code on every change, so the blocked state can never be stale.
+  const analysis = useMemo(() => analyzeMermaidSource(code), [code])
 
-  // If external code changes to something parseable and we didn't emit it,
-  // re-seed the form so undo/redo and template selection stay reflected.
+  // The form's own model. Derived from the source, but held locally while the
+  // user types: regenerating the source on every keystroke and re-seeding from
+  // it would fight the fields (an emptied label is re-filled from the id on
+  // generation, so it could never be cleared).
+  const [model, setModel] = useState<MermaidGraphModel>(() => analysis.model ?? createEmptyGraphModel())
+  const lastEmittedRef = useRef<string>('')
+  const [confirmingReplace, setConfirmingReplace] = useState(false)
+
+  // Re-seed when the source changes from the OUTSIDE — undo/redo, a template, a
+  // hand edit in the code pane, a collaborative change. This is the source ->
+  // builder half of the round trip.
   useEffect(() => {
     if (code === lastEmittedRef.current) {
       return
     }
-    const parsed = parseFlowchartSource(code)
-    if (parsed) {
-      setModel(parsed)
-      setParsedFromCode(true)
-    } else {
-      setParsedFromCode(false)
+    if (analysis.model) {
+      setModel(analysis.model)
     }
-  }, [code])
+    setConfirmingReplace(false)
+  }, [code, analysis])
 
   const commit = useCallback(
     (next: MermaidGraphModel) => {
@@ -129,39 +161,28 @@ function GraphicalBuilder({
     [onCodeChange],
   )
 
-  const addNode = useCallback(() => {
-    const id = nextNodeId(model.nodes)
-    commit({ ...model, nodes: [...model.nodes, { id, label: id }] })
-  }, [model, commit])
+  const addNode = useCallback(() => commit(appendGraphNode(model)), [model, commit])
 
   const updateNode = useCallback(
     (index: number, patch: Partial<MermaidGraphNode>) => {
-      const nodes = model.nodes.map((n, i) => (i === index ? { ...n, ...patch } : n))
-      commit({ ...model, nodes })
+      // An id change is a RENAME, not a field write: every link that referenced
+      // the old id has to follow it, or generation drops the link.
+      const renamed = typeof patch.id === 'string' ? renameGraphNode(model, index, patch.id) : model
+      const rest: Partial<MermaidGraphNode> = { ...patch }
+      delete rest.id
+      const nodes = renamed.nodes.map((node, i) => (i === index ? { ...node, ...rest } : node))
+      commit({ ...renamed, nodes })
     },
     [model, commit],
   )
 
-  const removeNode = useCallback(
-    (index: number) => {
-      const removedId = model.nodes[index]?.id
-      const nodes = model.nodes.filter((_, i) => i !== index)
-      const edges = model.edges.filter((e) => e.from !== removedId && e.to !== removedId)
-      commit({ ...model, nodes, edges })
-    },
-    [model, commit],
-  )
+  const removeNode = useCallback((index: number) => commit(removeGraphNode(model, index)), [model, commit])
 
-  const addEdge = useCallback(() => {
-    const first = model.nodes[0]?.id ?? ''
-    const second = model.nodes[1]?.id ?? first
-    commit({ ...model, edges: [...model.edges, { from: first, to: second, label: '' }] })
-  }, [model, commit])
+  const addEdge = useCallback(() => commit(appendGraphEdge(model)), [model, commit])
 
   const updateEdge = useCallback(
     (index: number, patch: Partial<MermaidGraphEdge>) => {
-      const edges = model.edges.map((e, i) => (i === index ? { ...e, ...patch } : e))
-      commit({ ...model, edges })
+      commit({ ...model, edges: model.edges.map((e, i) => (i === index ? { ...e, ...patch } : e)) })
     },
     [model, commit],
   )
@@ -180,23 +201,79 @@ function GraphicalBuilder({
     [model, commit],
   )
 
+  const replaceWithFlowchart = useCallback(() => {
+    setConfirmingReplace(false)
+    commit(appendGraphNode(createEmptyGraphModel()))
+  }, [commit])
+
   const inputClass =
     'min-w-0 flex-1 rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
   const selectClass =
     'rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
 
+  // RULE 2 — the source cannot be modelled, so the builder renders no editing
+  // control whatsoever. There is nothing here that can overwrite the diagram by
+  // accident; the only way forward is the confirmed replace below.
+  if (analysis.model == null) {
+    const typeLabel = MERMAID_DIAGRAM_TYPE_LABELS[analysis.type] ?? 'diagram'
+    return (
+      <div className="w-full p-2 text-sm" data-mermaid-graphical="blocked" data-srn-print-exclude="true">
+        <div className="border-warning bg-contrast text-foreground mb-2 flex items-start gap-2 rounded border p-2 text-xs">
+          <span aria-hidden="true" className="mt-px flex">
+            <Icon type="warning" size="small" />
+          </span>
+          <div className="min-w-0">
+            <div className="font-semibold">The visual builder cannot edit this diagram</div>
+            <p className="mt-1">
+              It models <strong>flowcharts</strong> — nodes, links, shapes and direction. This source is a{' '}
+              <strong>{typeLabel}</strong>, so nothing here will touch it. Switch the Source control to{' '}
+              <strong>code</strong> or <strong>split</strong> to edit it by hand.
+            </p>
+            <ul className="mt-1 list-disc pl-4" data-mermaid-blockers="true">
+              {analysis.blockers.map((blocker, index) => (
+                <li key={index}>{blocker}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        {confirmingReplace ? (
+          <div className="border-danger bg-contrast flex flex-wrap items-center gap-2 rounded border p-2 text-xs">
+            <span>
+              This <strong>discards the current source</strong> and starts an empty flowchart. Undo restores it.
+            </span>
+            <button
+              type="button"
+              className="border-danger text-danger hover:bg-contrast rounded border px-2 py-0.5"
+              onClick={replaceWithFlowchart}
+            >
+              Discard and start a flowchart
+            </button>
+            <button
+              type="button"
+              className="border-border hover:bg-contrast rounded border px-2 py-0.5"
+              onClick={() => setConfirmingReplace(false)}
+            >
+              Keep my diagram
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="border-border hover:bg-contrast rounded border px-2 py-0.5 text-xs"
+            onClick={() => setConfirmingReplace(true)}
+          >
+            Replace it with a new flowchart…
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  const preserved = [...(model.preamble ?? []), ...(model.extras ?? [])].filter((line) => line.trim().length > 0)
+  const dangling = danglingExtras(model)
+
   return (
     <div className="w-full p-2 text-sm" data-mermaid-graphical="true">
-      {!parsedFromCode ? (
-        <div
-          className="border-warning bg-contrast text-foreground mb-2 rounded border p-1.5 text-xs"
-          data-srn-print-exclude="true"
-        >
-          The current source isn’t a simple flowchart, so it can’t be loaded into the builder. Editing here will replace
-          the source with a generated flowchart.
-        </div>
-      ) : null}
-
       <label className="mb-2 flex items-center gap-1">
         Direction
         <select
@@ -247,6 +324,20 @@ function GraphicalBuilder({
                 placeholder="Label"
                 aria-label={`Node ${index + 1} label`}
               />
+              {/* The SHAPE, which the builder used to flatten to a box on the
+                  first edit — a decision rhombus silently became a rectangle. */}
+              <select
+                className={selectClass}
+                value={node.shape ?? DEFAULT_MERMAID_NODE_SHAPE}
+                onChange={(e) => updateNode(index, { shape: e.target.value as MermaidNodeShape })}
+                aria-label={`Node ${index + 1} shape`}
+              >
+                {MERMAID_NODE_SHAPES.map((shape) => (
+                  <option key={shape} value={shape}>
+                    {MERMAID_NODE_SHAPE_LABELS[shape]}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
                 className="text-danger hover:bg-contrast flex rounded px-1.5 py-1"
@@ -266,19 +357,19 @@ function GraphicalBuilder({
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <span className="font-semibold">Edges</span>
+          <span className="font-semibold">Links</span>
           <button
             type="button"
             className="border-border hover:bg-contrast rounded border px-2 py-0.5 disabled:opacity-50"
             onClick={addEdge}
             disabled={model.nodes.length === 0}
           >
-            + Add edge
+            + Add link
           </button>
         </div>
         {model.edges.length === 0 ? (
           <div className="text-passive-1 text-xs" data-srn-print-exclude="true">
-            No edges yet.
+            No links yet.
           </div>
         ) : null}
         <div className="flex flex-col gap-1">
@@ -296,12 +387,21 @@ function GraphicalBuilder({
                   </option>
                 ))}
               </select>
-              {/* Purely decorative — the two selects it sits between are both
-                  labelled "from"/"to", so this conveys no state and stays hidden
-                  from assistive technology, as the character it replaces was. */}
-              <span aria-hidden="true" className="flex">
-                <Icon type="arrow-right" size="small" />
-              </span>
+              {/* The link KIND — the half of the connector the builder used to
+                  normalize to a plain arrow, turning a dotted or thick link into
+                  a solid one on the first edit. */}
+              <select
+                className={selectClass}
+                value={edge.kind ?? DEFAULT_MERMAID_EDGE_KIND}
+                onChange={(e) => updateEdge(index, { kind: e.target.value as MermaidEdgeKind })}
+                aria-label={`Edge ${index + 1} style`}
+              >
+                {MERMAID_EDGE_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {MERMAID_EDGE_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
               <select
                 className={selectClass}
                 value={edge.to}
@@ -334,6 +434,32 @@ function GraphicalBuilder({
           ))}
         </div>
       </div>
+
+      {/* RULE 1, made visible: the lines the builder keeps but does not model.
+          Showing them is the difference between "preserved" and "you have to
+          take our word for it". */}
+      {preserved.length > 0 ? (
+        <details
+          className="border-border text-passive-1 mt-3 rounded border p-1.5 text-xs"
+          data-mermaid-preserved="true"
+        >
+          <summary className="cursor-pointer">
+            {preserved.length} line{preserved.length === 1 ? '' : 's'} kept exactly as written (comments, frontmatter,
+            styling)
+          </summary>
+          <pre className="text-foreground mt-1 overflow-x-auto font-mono whitespace-pre">{preserved.join('\n')}</pre>
+          {dangling.length > 0 ? (
+            <p className="text-danger mt-1" data-mermaid-dangling="true">
+              {dangling.length} of them name a node id that no longer exists. They are kept as written — rename the node
+              back, or edit them in the code pane.
+            </p>
+          ) : null}
+        </details>
+      ) : null}
+
+      <p className="text-passive-1 mt-2 text-xs" data-srn-print-exclude="true">
+        Builds flowcharts. Other diagram types open read-only here — use the code pane for those.
+      </p>
     </div>
   )
 }
@@ -546,8 +672,14 @@ function MermaidComponent({
   )
 
   const showCode = viewMode === 'split' || viewMode === 'code'
-  const showPreview = viewMode === 'split' || viewMode === 'preview'
+  // The BUILDER SHOWS THE DIAGRAM. `graphical` used to be the one mode with no
+  // preview at all, so the "visual" builder was a blind form: you edited nodes
+  // and links and saw nothing until you switched modes. It is a two-pane layout
+  // exactly as `split` is — the editing surface on one side, the live diagram on
+  // the other.
+  const showPreview = viewMode === 'split' || viewMode === 'preview' || viewMode === 'graphical'
   const showGraphical = viewMode === 'graphical'
+  const isTwoPane = viewMode === 'split' || viewMode === 'graphical'
 
   return (
     <div
@@ -609,17 +741,19 @@ function MermaidComponent({
         </div>
       </div>
 
-      <div className={'flex ' + (viewMode === 'split' ? 'flex-col md:flex-row' : 'flex-col')}>
+      <div className={'flex ' + (isTwoPane ? 'flex-col md:flex-row' : 'flex-col')}>
         {showGraphical ? (
-          <div className="border-border w-full border-b md:border-b-0">
+          <div
+            className={
+              'border-border flex flex-col border-b md:border-b-0 ' + (isTwoPane ? 'md:w-1/2 md:border-r' : 'w-full')
+            }
+          >
             <GraphicalBuilder code={draft} onCodeChange={onCodeChange} />
           </div>
         ) : null}
 
         {showCode ? (
-          <div
-            className={'flex flex-col ' + (viewMode === 'split' ? 'md:border-border md:w-1/2 md:border-r' : 'w-full')}
-          >
+          <div className={'flex flex-col ' + (isTwoPane ? 'md:border-border md:w-1/2 md:border-r' : 'w-full')}>
             <textarea
               className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
               rows={Math.max(6, draft.split('\n').length + 1)}
@@ -633,7 +767,7 @@ function MermaidComponent({
         ) : null}
 
         {showPreview ? (
-          <div className={'p-2 ' + (viewMode === 'split' ? 'md:w-1/2' : 'w-full')}>
+          <div className={'min-w-0 p-2 ' + (isTwoPane ? 'md:w-1/2' : 'w-full')}>
             {svg ? (
               // An unpadded wrapper so its measured height IS the preview box's
               // height; the resize handle's live feedback and the persisted
