@@ -1,12 +1,12 @@
 import { useCallback, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { SNNote, isErrorResponse } from '@standardnotes/snjs'
+import { NoteType, SNNote, isErrorResponse } from '@standardnotes/snjs'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { WebApplication } from '@/Application/WebApplication'
 import { fallbackCopyTextToClipboard } from '@/Utils/copyTextToClipboard'
 import Modal from '../Modal/Modal'
 import ModalOverlay from '../Modal/ModalOverlay'
-import { encryptShare } from '../SharedView/shareCrypto'
+import { encryptShare, SharedNotePayload } from '../SharedView/shareCrypto'
 import {
   createApplicationShareAssetSource,
   inlineShareAssets,
@@ -77,11 +77,31 @@ const ShareLinkModalContent = observer(({ application, note, close }: Omit<Props
       const assets = await inlineShareAssets(note.text, createApplicationShareAssetSource(application))
       setAssetReport({ inlined: assets.inlined, omitted: assets.omitted })
 
-      const { encryptedPayload, keyHex } = await encryptShare({
+      // Say WHICH kind of note this is. Without it the reader's viewer has only
+      // the text to go on, so a plaintext note was markdown-interpreted (a
+      // literal `*` came out italic), a legacy rich-text note had its markup
+      // printed as text, and a code note was reflowed into a paragraph. The
+      // vocabulary is `NoteType`'s own string values, which is what
+      // `resolveSharedNoteFormat` keys on.
+      //
+      // It is a DISAMBIGUATOR, never a gate: a Super note is recognised from its
+      // own bytes (`looksLikeSuperText`), so every link created before this field
+      // existed still renders through the Super editor, and `JSON.stringify`
+      // omits an `undefined` `noteType` entirely rather than writing a null the
+      // viewer would have to special-case.
+      //
+      // Typed here rather than on `SharedNotePayload` because `shareCrypto.ts` is
+      // the shared envelope module: the viewer already reads this field
+      // structurally (`SharedView.sharedNoteType`) and tolerates its absence, so
+      // neither side needs the envelope type widened to carry it.
+      const payload: SharedNotePayload & { noteType?: NoteType } = {
         kind: 'note',
         title: note.title,
         text: assets.text,
-      })
+        noteType: note.noteType,
+      }
+
+      const { encryptedPayload, keyHex } = await encryptShare(payload)
 
       const viewExpiresMinutes = useExpiry ? parsedMinutes : null
 

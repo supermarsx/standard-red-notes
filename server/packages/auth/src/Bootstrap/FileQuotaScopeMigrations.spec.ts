@@ -14,6 +14,16 @@ const CONSTRAINT = 'FK_ad2907de2850d8b531ff23329f3'
  * container build. Adding a types package to satisfy one spec would put a
  * lockfile change in front of the contract gates for no behavioural gain, so the
  * four methods actually called are described here instead.
+ *
+ * Measured, not assumed: `import Database from 'better-sqlite3'` against this
+ * exact tree is TS7016 ("Could not find a declaration file for module
+ * 'better-sqlite3'", resolving
+ * `.yarn/unplugged/better-sqlite3-npm-12.11.1-.../lib/index.js`). The shorthand
+ * `declare module 'better-sqlite3'` escape hatch would make the constructor
+ * `any` for every importer, which is strictly worse than the two interfaces
+ * above. So the `require()` below is deliberate, and it is typed rather than
+ * untyped — it is the only form that gives this spec a CHECKED `Database`
+ * without a dependency change.
  */
 type SqliteStatement = {
   reader: boolean
@@ -29,7 +39,16 @@ type SqliteDatabase = {
   close(): unknown
 }
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+/*
+ * `@typescript-eslint/no-require-imports` is suppressed for exactly this line,
+ * for the reason recorded immediately above: the ESM import it asks for does not
+ * compile against an untyped package. The previous directive named
+ * `@typescript-eslint/no-var-requires`, a rule typescript-eslint REMOVED in v8,
+ * so it suppressed nothing and was itself reported as an unused directive while
+ * the real `no-require-imports` error stood — a suppression that had stopped
+ * suppressing.
+ */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require('better-sqlite3') as new (filename: string) => SqliteDatabase
 
 /**

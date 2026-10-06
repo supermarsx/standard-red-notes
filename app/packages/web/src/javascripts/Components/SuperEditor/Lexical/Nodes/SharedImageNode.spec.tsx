@@ -1,8 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import type { JSX } from 'react'
-import { act } from 'react'
+import { act, type JSX } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import { createHeadlessEditor } from '@lexical/headless'
 import type { LexicalEditor } from 'lexical'

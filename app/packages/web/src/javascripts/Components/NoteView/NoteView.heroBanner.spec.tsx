@@ -156,9 +156,9 @@ beforeEach(() => {
     // covers gate is under test here. Keying on the pinned literal also means a
     // change to that key string makes these tests fail rather than silently
     // reading `undefined` forever.
-    getPreference: jest.fn((key: unknown, defaultValue: unknown) =>
-      key === NOTE_COVERS_ENABLED_PREF_KEY ? coversEnabledPref : defaultValue,
-    ),
+    getPreference: jest.fn((key: unknown, defaultValue: unknown) => {
+      return key === NOTE_COVERS_ENABLED_PREF_KEY ? coversEnabledPref : defaultValue
+    }),
     setPreference: jest.fn().mockResolvedValue(undefined),
   } as unknown as WebApplication
 })
