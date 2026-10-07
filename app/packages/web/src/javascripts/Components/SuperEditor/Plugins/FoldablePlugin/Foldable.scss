@@ -1,11 +1,27 @@
 /**
  * Styles for heading / list-item folding (FoldablePlugin).
  *
- * The draggable-block handle is a portal in the editor's physical LEFT rail.
- * Fold controls therefore own an explicit, reserved RIGHT action rail inside
- * their host block. Keeping those rails structurally separate prevents either
- * hit target from covering the other, including for nested lists and RTL text.
- * RTL checklists reserve one extra right-side slot for their checkbox.
+ * The disclosure is a LEADING control: it sits immediately before the block's
+ * own text, one step of the spacing scale (gap-1, 0.25rem) away from it. It used
+ * to be pinned to the block's physical right edge, which put the arrow nowhere
+ * near the text it folds; that reserved right rail is reclaimed here.
+ *
+ * It is still ABSOLUTELY POSITIONED rather than moved to the front of the DOM:
+ * `syncFoldControl` appends it AFTER Lexical's managed text children so Home /
+ * click-at-column-zero can never seat the caret around a non-editable child.
+ * Taking it out of flow is also what makes the hover reveal free of reflow — the
+ * rail below is reserved permanently, so fading the control in cannot move text.
+ *
+ * The editor's left GUTTER is not available: DraggableBlockPlugin portals its
+ * reorder handle to the editor container's physical left edge. The fold rail is
+ * therefore reserved INSIDE the host block, so the two hit targets can never
+ * cover one another.
+ *
+ * Everything positional here is LOGICAL (`inset-inline-start`,
+ * `padding-inline-start`), so an RTL block mirrors the control to its own
+ * leading (physical right) edge with no direction-specific rule. Only the
+ * collapsed chevron's rotation is physical, because "point at the hidden
+ * content" is a physical direction.
  */
 
 .Lexical__folded {
@@ -13,30 +29,134 @@
   user-select: none;
 }
 
-.Lexical__foldable {
+/**
+ * One rail, shared by the control's hit area and by every reservation below, so
+ * a target that grows (narrow screens, coarse pointers) can never drift apart
+ * from the space reserved for it.
+ *
+ * 24px, 32px on coarse pointers, matching the leading todo-row control. The gap
+ * is gap-1 (0.25rem) from the app's spacing scale. Declared at the document
+ * root because non-foldable blocks reserve the same slot and therefore have to
+ * read the same numbers; `--checkbox-size` / `--lexical-list-left-margin` live
+ * there for the same reason.
+ */
+:root {
   --sn-fold-control-size: 1.5rem;
   --sn-fold-control-gap: 0.25rem;
+  --sn-fold-rail: calc(var(--sn-fold-control-size) + var(--sn-fold-control-gap));
+}
+
+.Lexical__foldable {
   position: relative;
   box-sizing: border-box;
 }
 
-// Reserve an in-block right rail instead of pulling the disclosure into the
-// editor's left gutter, where the portal-based reorder handle lives.
-.Lexical__foldable.Lexical__foldable--heading,
-.Lexical__foldable.Lexical__foldable--list,
-.Lexical__foldable.Lexical__foldable--checklist {
-  padding-right: calc(var(--sn-fold-control-size) + var(--sn-fold-control-gap));
+// Reserve the rail inside the foldable block itself, so the control is never on
+// top of the text it belongs to even on a surface the rules below do not reach.
+.Lexical__foldable.Lexical__foldable--heading {
+  padding-inline-start: var(--sn-fold-rail);
 }
 
-.Lexical__foldToggle[data-fold-control-rail='opposite-drag-handle'] {
+/**
+ * ...and reserve the SAME slot on every other top-level heading of a surface
+ * that has fold controls, whether or not that heading is foldable. Without this
+ * a heading's text would shift by one rail depending on whether it happens to
+ * have content under it, and headings would stop lining up down the page.
+ *
+ * Keyed off a foldable heading actually being present, so a read-only surface
+ * that never mounts FoldablePlugin (the public share viewer) keeps its headings
+ * flush and reserves nothing for a control it does not draw. The child
+ * combinators are deliberate: only root-level blocks can be heading-foldable, so
+ * a heading nested in a quote, table cell or collapsible keeps its container's
+ * own text column.
+ */
+.ContentEditable__root:has(> .Lexical__foldable--heading) > :is(h1, h2, h3, h4, h5, h6) {
+  padding-inline-start: var(--sn-fold-rail);
+}
+
+/**
+ * A list fold is hosted by Lexical's STRUCTURAL wrapper item — the textless
+ * `<li>` that `$handleIndent` creates to hold a nested list. The two kinds of
+ * list reserve the rail differently because their nested block's own indent
+ * means different things, both measured in headless Chrome:
+ *
+ *   - a bulleted/numbered list draws its marker OUTSIDE its content box, in the
+ *     space immediately before it, so that indent is the MARKER column and the
+ *     rail has to be reserved ON TOP of it. Netting it off drew the chevron and
+ *     the first bullet on top of one another; reserving the whole rail leaves
+ *     ~11px of clear space between the two glyphs. The cost is a wider indent
+ *     per nesting level, which is what a leading control that must clear an
+ *     outside marker costs.
+ *   - a checklist draws its checkbox INSIDE the content box (lists.scss gives
+ *     the item a `padding-left`), so its flat 1rem nested indent really is
+ *     spare room and only the remainder of the rail is reserved.
+ *
+ * The three-class selectors are not redundant: lists.scss is emitted AFTER this
+ * file (lexical.scss imports `custom` before `editor`), so a two-class rule here
+ * loses to `.Lexical__nestedListItem.Lexical__listItemUnchecked { padding-left: 0 }`.
+ */
+.Lexical__foldable.Lexical__foldable--list,
+.Lexical__foldable.Lexical__foldable--list.Lexical__nestedListItem {
+  padding-inline-start: var(--sn-fold-rail);
+}
+
+.Lexical__foldable.Lexical__foldable--checklist,
+.Lexical__foldable.Lexical__foldable--checklist.Lexical__nestedListItem {
+  padding-inline-start: max(0px, var(--sn-fold-rail) - 1rem);
+}
+
+/**
+ * A collapsed list fold hides the wrapper's ONLY child, so the wrapper itself
+ * becomes a zero-height row and its control — which stays visible precisely
+ * because the block is collapsed — paints on top of the row below it, landing
+ * on the next item's bullet or checkbox. Give the collapsed wrapper the
+ * control's own height back so the disclosure keeps a row to be clicked in.
+ * Headings never need this: a collapsed heading still renders its own text.
+ */
+.Lexical__foldCollapsed.Lexical__foldable--list,
+.Lexical__foldCollapsed.Lexical__foldable--checklist {
+  min-height: var(--sn-fold-control-size);
+}
+
+/**
+ * Fail-safe for a checklist item that is foldable AND draws its own checkbox.
+ * Lexical's editing path cannot produce `li > [text, list]` (it always lifts the
+ * nested list into a wrapper item), but an import can, and there the leading
+ * control would land exactly on the checkbox and make it unclickable. Reserve
+ * both slots and push the checkbox/checkmark past the rail. Logical insets with
+ * an explicit `auto` end, because lists.scss positions those pseudo-elements
+ * physically and flips them for `[dir='rtl']`.
+ */
+.Lexical__foldable.Lexical__foldable--checklist:not(.Lexical__nestedListItem) {
+  padding-inline-start: calc(var(--checkbox-size) + 0.5rem + var(--sn-fold-rail));
+
+  &::before,
+  &::after {
+    inset-inline-start: var(--sn-fold-rail);
+    inset-inline-end: auto;
+  }
+}
+
+/**
+ * The control itself.
+ *
+ * Its box tracks the host's FIRST LINE BOX (`1lh`) with the finger-sized square
+ * as a floor, so the chevron stays optically centred on the text at every
+ * heading size (h1 26px/39px line through h5 15px/22.5px) instead of sitting
+ * near the top of a tall line. Because it is out of flow, that taller box is
+ * padded INSIDE the line and cannot make the row taller. `1lh` is a progressive
+ * enhancement: a browser without it keeps the square from the line above.
+ */
+.Lexical__foldToggle[data-fold-control-rail='inline-start'] {
   position: absolute;
-  right: 0;
-  left: auto;
+  inset-inline-start: 0;
+  inset-inline-end: auto;
   top: 0;
   z-index: 1;
   box-sizing: border-box;
   width: var(--sn-fold-control-size);
   height: var(--sn-fold-control-size);
+  height: max(var(--sn-fold-control-size), 1lh);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -57,28 +177,23 @@
   }
 }
 
-// A checklist whose inherited direction is RTL draws its checkbox at physical
-// right: 0. Move the disclosure one slot inward and reserve both independent
-// hit areas. `:dir()` covers direction inherited from a parent editor/list;
-// the class/attribute forms cover Lexical's explicit direction markers.
-.Lexical__foldable.Lexical__foldable--checklist:dir(rtl),
-.Lexical__foldable.Lexical__foldable--checklist.Lexical__rtl,
-.Lexical__foldable.Lexical__foldable--checklist[dir='rtl'] {
-  padding-right: calc(
-    var(--checkbox-size) + var(--sn-fold-control-size) + var(--sn-fold-control-gap) + var(--sn-fold-control-gap)
-  );
-
-  > .Lexical__foldToggle {
-    right: calc(var(--checkbox-size) + var(--sn-fold-control-gap));
-  }
-}
-
-// Show the chevron while its block is hovered, whenever it is collapsed, or
-// while the editor is moving focus through the block.
+// Show the chevron while its block is hovered, whenever it is collapsed, while
+// the editor is moving focus through the block, and whenever the control itself
+// is keyboard-focused. Opacity only: the rail above is reserved permanently, so
+// revealing the control never reflows the line.
 .Lexical__foldable:hover > .Lexical__foldToggle,
 .Lexical__foldable:focus-within > .Lexical__foldToggle,
-.Lexical__foldCollapsed > .Lexical__foldToggle {
+.Lexical__foldCollapsed > .Lexical__foldToggle,
+.Lexical__foldToggle:focus-visible {
   opacity: 1;
+}
+
+// It is a real button, so it gets a real focus ring. Inset, so the ring stays
+// inside the reserved rail rather than reaching into the text.
+.Lexical__foldToggle:focus-visible {
+  outline: 2px solid var(--sn-stylekit-info-color);
+  outline-offset: -2px;
+  border-radius: 0.25rem;
 }
 
 // Collapsed LTR/default: point toward the hidden content on the right.
@@ -86,8 +201,9 @@
   transform: rotate(-90deg);
 }
 
-// Collapsed RTL: mirror the directional affordance. The control remains in the
-// physical right action rail so it never crosses into the left drag rail.
+// Collapsed RTL: mirror the directional affordance. `:dir()` covers direction
+// inherited from a parent editor/list; the class/attribute forms cover Lexical's
+// explicit direction markers.
 .Lexical__foldCollapsed:dir(rtl) > .Lexical__foldToggle::before,
 .Lexical__foldCollapsed.Lexical__rtl > .Lexical__foldToggle::before,
 .Lexical__foldCollapsed[dir='rtl'] > .Lexical__foldToggle::before {
@@ -98,9 +214,8 @@
 // separate from pointer capability because a narrow window can still use a
 // mouse or stylus.
 @media screen and (max-width: 450px) {
-  .Lexical__foldable {
+  :root {
     --sn-fold-control-size: 1.75rem;
-    --sn-fold-control-gap: 0.125rem;
   }
 
   .Lexical__foldToggle {
@@ -108,13 +223,12 @@
   }
 }
 
-// Coarse pointers get an always-visible 32px target; the host's variable-driven
-// reservation grows with it, so the larger control still cannot cover text,
+// Coarse pointers get an always-visible 32px target; every reservation above is
+// driven by the same variable, so the larger control still cannot cover text,
 // checkbox, or reorder affordances.
 @media (pointer: coarse) {
-  .Lexical__foldable {
+  :root {
     --sn-fold-control-size: 2rem;
-    --sn-fold-control-gap: 0.25rem;
   }
 
   .Lexical__foldToggle {

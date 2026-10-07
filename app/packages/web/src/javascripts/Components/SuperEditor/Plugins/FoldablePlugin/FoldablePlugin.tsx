@@ -36,6 +36,16 @@ const TOGGLE_ATTR = 'data-fold-toggle'
 const KEY_ATTR = 'data-fold-key'
 const TOGGLE_KIND_ATTR = 'data-fold-kind'
 const TOGGLE_RAIL_ATTR = 'data-fold-control-rail'
+/**
+ * The rail the stylesheet positions the control in. `inline-start` is LOGICAL:
+ * the disclosure sits immediately before the block's own text (physical left in
+ * LTR, physical right in RTL) inside a rail reserved by the host's
+ * `padding-inline-start`. It used to read `opposite-drag-handle`, from when the
+ * control was pinned to the block's physical right edge to stay clear of the
+ * portal-positioned reorder handle; that handle lives in the editor's GUTTER,
+ * outside the block, so an in-block leading rail clears it just as well.
+ */
+const TOGGLE_RAIL_VALUE = 'inline-start'
 const PRINT_EXCLUDE_ATTR = 'data-srn-print-exclude'
 
 export type FoldControlKind = 'heading' | 'list' | 'checklist'
@@ -67,16 +77,17 @@ export function createFoldToggle(kind: FoldControlKind = 'heading'): HTMLElement
   const toggle = document.createElement('span')
   toggle.setAttribute(TOGGLE_ATTR, 'true')
   toggle.setAttribute(TOGGLE_KIND_ATTR, kind)
-  toggle.setAttribute(TOGGLE_RAIL_ATTR, 'opposite-drag-handle')
+  toggle.setAttribute(TOGGLE_RAIL_ATTR, TOGGLE_RAIL_VALUE)
   toggle.setAttribute(PRINT_EXCLUDE_ATTR, 'true')
   toggle.setAttribute('contenteditable', 'false')
   toggle.setAttribute('role', 'button')
   toggle.setAttribute('aria-label', 'Toggle fold')
   toggle.setAttribute('aria-expanded', 'true')
-  // Keep the injected control out of the editor's keyboard/caret order. It is
-  // deliberately click-only so Home/End/arrow selection remains owned by
-  // Lexical, just as it was before the action rail was introduced.
-  toggle.tabIndex = -1
+  // A real control: focusable, with `aria-expanded` above reporting its state.
+  // Enter/Space activate it (see `onKeyDown`) and its mousedown is swallowed so
+  // focusing it cannot pull the caret out of the editable. `contenteditable=false`
+  // — not the tabindex — is what keeps Home/End/arrow selection owned by Lexical.
+  toggle.tabIndex = 0
   toggle.className = `${TOGGLE_CLASS} ${TOGGLE_KIND_CLASSES[kind]}`
   // CRITICAL (no-hang fix): mark this externally-injected span as
   // Lexical-UNMANAGED before it is inserted so Lexical's MutationObserver skips
@@ -90,10 +101,10 @@ export function createFoldToggle(kind: FoldControlKind = 'heading'): HTMLElement
 
 /**
  * Synchronize the externally injected control and its host's semantic layout
- * markers. The modifier classes are intentionally explicit: CSS can reserve a
- * checklist's checkbox rail separately from the fold-control rail, including
- * for inherited RTL direction, without inspecting or rearranging Lexical's
- * managed text children.
+ * markers. The modifier classes are intentionally explicit: a heading, a plain
+ * list wrapper and a checklist wrapper each start their content at a different
+ * inset, so CSS reserves the leading fold rail per kind — without inspecting or
+ * rearranging Lexical's managed text children.
  */
 export function syncFoldControl(
   element: HTMLElement,
@@ -117,19 +128,20 @@ export function syncFoldControl(
   toggle.classList.remove(...Object.values(TOGGLE_KIND_CLASSES))
   toggle.classList.add(TOGGLE_CLASS, TOGGLE_KIND_CLASSES[kind])
   toggle.setAttribute(TOGGLE_KIND_ATTR, kind)
-  toggle.setAttribute(TOGGLE_RAIL_ATTR, 'opposite-drag-handle')
+  toggle.setAttribute(TOGGLE_RAIL_ATTR, TOGGLE_RAIL_VALUE)
   toggle.setAttribute(PRINT_EXCLUDE_ATTR, 'true')
   toggle.setAttribute('contenteditable', 'false')
   toggle.setAttribute('role', 'button')
   toggle.setAttribute('aria-label', 'Toggle fold')
   toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
-  toggle.tabIndex = -1
+  toggle.tabIndex = 0
 
   if (!existing) {
     // APPEND the control rather than inserting it before the managed text.
-    // Although it is visually placed in its own action rail, keeping it last
-    // prevents Home/click-at-column-zero from seating the caret around a
-    // non-editable child.
+    // It is drawn in the block's LEADING rail, but it gets there by absolute
+    // positioning, not by DOM order: keeping it last prevents
+    // Home/click-at-column-zero from seating the caret around a non-editable
+    // child.
     element.appendChild(toggle)
   }
 
@@ -301,10 +313,43 @@ export default function FoldablePlugin(): null {
       applyFolds()
     }
 
-    const onClick = (event: MouseEvent) => {
+    const toggleFromEvent = (event: Event): HTMLElement | null => {
       const target = event.target as HTMLElement | null
-      const toggle = target?.closest<HTMLElement>(`[${TOGGLE_ATTR}]`)
+      return target?.closest<HTMLElement>(`[${TOGGLE_ATTR}]`) ?? null
+    }
+
+    const onClick = (event: MouseEvent) => {
+      const toggle = toggleFromEvent(event)
       if (!toggle) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      toggleFoldForElement(toggle)
+    }
+
+    /**
+     * The control is focusable, so without this a plain mousedown would move
+     * focus off the contenteditable, fire the editor's blur handler (which is
+     * the lifecycle flush path) and drop the caret — on every fold click.
+     * Swallowing mousedown keeps focus and selection exactly where they were;
+     * the click handler above still runs.
+     */
+    const onMouseDown = (event: MouseEvent) => {
+      if (!toggleFromEvent(event)) {
+        return
+      }
+      event.preventDefault()
+    }
+
+    /**
+     * Enter/Space activate it like any button. Both are stopped before Lexical
+     * sees them: Enter would otherwise split the block behind the control and
+     * Space would type into it.
+     */
+    const onKeyDown = (event: KeyboardEvent) => {
+      const toggle = toggleFromEvent(event)
+      if (!toggle || (event.key !== 'Enter' && event.key !== ' ')) {
         return
       }
       event.preventDefault()
@@ -317,10 +362,14 @@ export default function FoldablePlugin(): null {
       editor.registerUpdateListener(() => {
         applyFolds()
       }),
-      // (Re)bind the click handler whenever the root element changes.
+      // (Re)bind the control's handlers whenever the root element changes.
       editor.registerRootListener((nextRoot, prevRoot) => {
         prevRoot?.removeEventListener('click', onClick)
+        prevRoot?.removeEventListener('mousedown', onMouseDown)
+        prevRoot?.removeEventListener('keydown', onKeyDown)
         nextRoot?.addEventListener('click', onClick)
+        nextRoot?.addEventListener('mousedown', onMouseDown)
+        nextRoot?.addEventListener('keydown', onKeyDown)
       }),
     )
 
