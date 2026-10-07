@@ -4,7 +4,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useApplication } from '../ApplicationProvider'
 import Icon from '../Icon/Icon'
 import { useContextMenuEvent } from '@/Hooks/useContextMenuEvent'
-import { Table as TableType, TableRow as TableRowType } from './CommonTypes'
+import { Table as TableType, TableDensity, TableRow as TableRowType } from './CommonTypes'
 
 const InteractiveEventTargetSelector = [
   'a[href]',
@@ -52,10 +52,25 @@ const InteractiveEventTargetSelector = [
 export const isInteractiveTableEventTarget = (target: EventTarget | null): boolean =>
   target instanceof Element && target.closest(InteractiveEventTargetSelector) !== null
 
+/**
+ * Padding per density. Horizontal padding is identical in both: density is
+ * about how many rows fit on a screen, and narrowing the gutters would only
+ * crowd the text against the cell edge.
+ */
+const CellPaddingForDensity: Record<TableDensity, string> = {
+  comfortable: 'px-3 py-4',
+  compact: 'px-3 py-1.5',
+}
+const HeaderPaddingForDensity: Record<TableDensity, string> = {
+  comfortable: 'px-3 pt-3 pb-2',
+  compact: 'px-3 pt-2 pb-1.5',
+}
+
 function TableRow<Data>({
   row,
   index: rowIndex,
   canSelectRows,
+  density,
   handleRowClick,
   handleRowContextMenu,
   handleActivateRow,
@@ -63,6 +78,7 @@ function TableRow<Data>({
   row: TableRowType<Data>
   index: number
   canSelectRows: TableType<Data>['canSelectRows']
+  density: TableDensity
   handleRowClick: (event: React.MouseEvent<HTMLDivElement, MouseEvent>, id: string) => void
   handleRowContextMenu: TableType<Data>['handleRowContextMenu']
   handleActivateRow: TableType<Data>['handleActivateRow']
@@ -129,7 +145,8 @@ function TableRow<Data>({
             aria-colindex={cell.colIndex + 1}
             key={index}
             className={classNames(
-              'border-border focus:border-info relative flex items-center overflow-hidden border-b px-3 py-4',
+              'border-border focus:border-info relative flex items-center overflow-hidden border-b',
+              CellPaddingForDensity[density],
               row.isSelected && 'bg-info-backdrop',
               canSelectRows && 'cursor-pointer',
               canSelectRows && isHoveredOrFocused && 'bg-contrast',
@@ -198,6 +215,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
     canSelectRows,
     canSelectMultipleRows,
     showSelectionActions,
+    density,
   } = table
 
   const focusedRowIndex = useRef<number>(0)
@@ -500,7 +518,8 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
                   aria-colindex={header.colIndex + 1}
                   aria-sort={header.isSorting ? (header.sortReversed ? 'descending' : 'ascending') : 'none'}
                   className={classNames(
-                    'border-border text-passive-0 border-b px-3 pt-3 pb-2 text-left text-sm font-medium',
+                    'border-border text-passive-0 border-b text-left text-sm font-medium',
+                    HeaderPaddingForDensity[density],
                     header.sortBy &&
                       'hover:bg-info-backdrop focus:border-info focus:bg-info-backdrop cursor-pointer hover:underline',
                   )}
@@ -533,6 +552,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
               key={row.id}
               index={row.rowIndex}
               canSelectRows={canSelectRows}
+              density={density}
               handleRowClick={handleRowClick}
               handleRowContextMenu={handleRowContextMenu}
               handleActivateRow={handleActivateRow}

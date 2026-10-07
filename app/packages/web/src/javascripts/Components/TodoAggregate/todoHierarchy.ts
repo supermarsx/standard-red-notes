@@ -202,7 +202,7 @@ export function isCountableTodoItem(item: TodoItemKindFields): boolean {
 /**
  * The depth a row renders at.
  *
- * Two inputs, in this order of authority:
+ * Three inputs, in this order of authority:
  *
  *  - **The parent chain.** A row whose parent is itself a visible row sits one
  *    level deeper than it, so the indentation always agrees with the links the
@@ -214,9 +214,23 @@ export function isCountableTodoItem(item: TodoItemKindFields): boolean {
  *    that skips a heading level (`#` straight to `###`) must not have its `h3`
  *    flattened to depth 1 — the heading states its own level, and a child is
  *    never shallower than its parent.
+ *  - **The structural floor.** The nesting the DOCUMENT actually holds, counted
+ *    by the parser. Also a floor, and the one that keeps the view honest when no
+ *    parent row can be resolved at all: a task the user indented four times is
+ *    drawn four levels in, even if every one of its ancestors was a blank item.
+ *    Without it a broken link does not merely lose a tree edge, it silently
+ *    flattens real nesting to the top level and the user is told their document
+ *    has no structure.
  */
-export function todoRowDepth(parentDepth: number | undefined, sectionDepth: number | undefined): number {
-  const floor = sectionDepth !== undefined && Number.isFinite(sectionDepth) ? Math.max(sectionDepth, 0) : 0
+export function todoRowDepth(
+  parentDepth: number | undefined,
+  sectionDepth: number | undefined,
+  structuralDepth?: number,
+): number {
+  const finiteFloor = (value: number | undefined): number => {
+    return value !== undefined && Number.isFinite(value) ? Math.max(value, 0) : 0
+  }
+  const floor = Math.max(finiteFloor(sectionDepth), finiteFloor(structuralDepth))
   if (parentDepth === undefined) {
     return floor
   }

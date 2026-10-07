@@ -36,6 +36,17 @@ export type TableHeader = {
   colIndex: number
 }
 
+/**
+ * How much vertical air a row gets.
+ *
+ * `comfortable` is the default and is what every existing table renders at;
+ * `compact` is for lists whose value is scanning many short rows at once (the
+ * Todos view), where the comfortable padding is more than half the row height.
+ * It shrinks the PADDING only — the controls inside a row keep their own
+ * finger-sized hit areas, so a compact row is still touchable.
+ */
+export type TableDensity = 'comfortable' | 'compact'
+
 export type Table<Data> = {
   id: string
   headers: TableHeader[]
@@ -58,4 +69,5 @@ export type Table<Data> = {
   selectedRows: string[]
   selectionActions: ReactNode | undefined
   showSelectionActions: boolean
+  density: TableDensity
 }

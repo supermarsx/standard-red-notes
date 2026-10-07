@@ -83,6 +83,7 @@ const createTable = (hasMoreRows = false): TableContract<Row> => ({
   selectedRows: [],
   selectionActions: undefined,
   showSelectionActions: false,
+  density: 'comfortable',
 })
 
 let container: HTMLElement
@@ -333,5 +334,31 @@ describe('Table terminal pagination', () => {
     act(() => scroller.dispatchEvent(new Event('scroll', { bubbles: true })))
 
     expect(loadMoreRows).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Table density', () => {
+  const renderAt = (density: TableContract<Row>['density']) => {
+    act(() => root.render(createElement(Table<Row>, { table: { ...createTable(), density } })))
+    return {
+      cell: container.querySelector('[role="gridcell"]') as HTMLElement,
+      header: container.querySelector('[role="columnheader"]') as HTMLElement,
+    }
+  }
+
+  it('keeps the comfortable padding every existing table renders at', () => {
+    const { cell, header } = renderAt('comfortable')
+    expect(cell.className).toContain('py-4')
+    expect(header.className).toContain('pt-3')
+  })
+
+  it('tightens the row, and only vertically, when a view asks for compact', () => {
+    const { cell, header } = renderAt('compact')
+    expect(cell.className).toContain('py-1.5')
+    expect(cell.className).not.toContain('py-4')
+    expect(header.className).toContain('pt-2')
+    // Horizontal gutters are untouched: density is about rows per screen, not
+    // about crowding the text against the cell edge.
+    expect(cell.className).toContain('px-3')
   })
 })

@@ -212,6 +212,26 @@ function collectCandidates(parsed: unknown, options: TodoHierarchyOptions): Todo
     const children = Array.isArray(record.children) ? record.children : []
 
     if (record.type === 'list' && record.listType === 'check') {
+      /**
+       * The locator of the most recent child of THIS list that will actually
+       * become a row.
+       *
+       * Lexical does not nest a sublist inside the task it belongs to. Pressing
+       * Tab runs `$handleIndent`, which builds a brand-new, TEXTLESS listitem to
+       * hold the nested list and inserts it as the SIBLING right after the task
+       * that was indented (`previousSibling.insertAfter(newListItem)` in
+       * @lexical/list). So the real shape is
+       *
+       *   listitem "Parent"                     <- the task
+       *   listitem [ list [ listitem "Child" ]] <- a structural wrapper, no text
+       *
+       * The wrapper never becomes a row (it has no text), so pointing the
+       * nested tasks at it strands every one of them: their parent row does not
+       * exist, the tree links break, and the view flattens the whole checklist
+       * to the top level. The preceding real row is the task the user actually
+       * indented under, so that is what the children are parented on.
+       */
+      let lastRowLocator: string | undefined
       for (
         let index = 0;
         index < children.length && candidates.length < MAX_TODOS && budget.remaining > 0;
@@ -251,8 +271,22 @@ function collectCandidates(parsed: unknown, options: TodoHierarchyOptions): Todo
           ...(occurrenceSummary ? { occurrenceSummary } : {}),
         })
 
+        // Whether this listitem survives the emptiness filter in
+        // `parseSuperChecklistDocument` — i.e. whether it is a real task rather
+        // than one of Lexical's structural wrappers. Kept in step with that
+        // filter on purpose: a locator no row will carry is not a parent.
+        const isRow = text.length > 0 || occurrenceSummary !== undefined
+
         // A task can own nested checklists. Traverse only nested list children,
         // not ordinary text descendants already consumed as its label.
+        //
+        // The nested tasks belong to this item when this item is itself a task,
+        // and otherwise to the nearest preceding task of the same list — the one
+        // the wrapper was created behind. With neither (a list whose very first
+        // child is a wrapper), they inherit the task enclosing the whole list, so
+        // they stay inside their branch instead of being stranded at the root;
+        // their own indentation is then carried by `depth`, which is structural.
+        const nestedParentLocator = isRow ? locator : (lastRowLocator ?? current.parentLocator)
         const itemChildren = Array.isArray(item.children) ? item.children : []
         for (let childIndex = itemChildren.length - 1; childIndex >= 0; childIndex -= 1) {
           const nested = itemChildren[childIndex]
@@ -262,11 +296,14 @@ function collectCandidates(parsed: unknown, options: TodoHierarchyOptions): Todo
               path: [...itemPath, childIndex],
               depth: current.depth + 1,
               level: current.level + 1,
-              parentLocator: locator,
+              parentLocator: nestedParentLocator,
               sectionLocator: current.sectionLocator,
               sectionDepth: current.sectionDepth,
             })
           }
+        }
+        if (isRow) {
+          lastRowLocator = locator
         }
       }
       continue

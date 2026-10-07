@@ -1,6 +1,6 @@
 import { UuidGenerator } from '@standardnotes/snjs'
 import { ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Table, TableColumn, TableHeader, TableRow, TableSortBy } from './CommonTypes'
+import { Table, TableColumn, TableDensity, TableHeader, TableRow, TableSortBy } from './CommonTypes'
 
 type TableSortOptions =
   | {
@@ -42,6 +42,8 @@ type TableRowOptions<Data> = {
 export type UseTableOptions<Data> = {
   data: Data[]
   columns: TableColumn<Data>[]
+  /** Row padding. Omitted means `comfortable`, which is what every table had. */
+  density?: TableDensity
 } & TableRowOptions<Data> &
   TableSortOptions &
   TableSelectionOptions
@@ -80,6 +82,7 @@ export function useTable<Data>({
   rowActions,
   selectionActions,
   showSelectionActions,
+  density,
 }: UseTableOptions<Data>): Table<Data> {
   const [uncontrolledSelectedRows, setUncontrolledSelectedRows] = useState<string[]>([])
   const uncontrolledSelectedRowsRef = useRef(uncontrolledSelectedRows)
@@ -311,6 +314,7 @@ export function useTable<Data>({
       canSelectMultipleRows: enableMultipleRowSelection || false,
       selectionActions: selectionActions ? selectionActions(selectedRows) : undefined,
       showSelectionActions: showSelectionActions || false,
+      density: density ?? 'comfortable',
     }),
     [
       headers,
@@ -330,6 +334,7 @@ export function useTable<Data>({
       enableMultipleRowSelection,
       selectionActions,
       showSelectionActions,
+      density,
     ],
   )
 

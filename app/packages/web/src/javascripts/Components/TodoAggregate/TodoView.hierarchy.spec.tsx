@@ -29,20 +29,26 @@ class ImmediateResizeObserver {
 
 type TaskSpec = { text: string; children?: TaskSpec[] }
 
-const listItem = (task: TaskSpec): unknown => ({
-  type: 'listitem',
-  checked: false,
-  children: [
-    { type: 'text', text: task.text },
-    ...(task.children && task.children.length > 0 ? [checkList(task.children)] : []),
-  ],
-})
-
-const checkList = (tasks: TaskSpec[]): unknown => ({
-  type: 'list',
-  listType: 'check',
-  children: tasks.map(listItem),
-})
+/**
+ * The shape the EDITOR actually writes.
+ *
+ * Lexical does not nest a sublist inside the task it belongs to: pressing Tab
+ * runs `$handleIndent`, which builds a brand-new TEXTLESS listitem to hold the
+ * nested list and inserts it as the SIBLING right after the task that was
+ * indented. Fixtures shaped `listitem > [text, list]` are not something this
+ * editor can produce, and building them here is what let a total flattening of
+ * the Todos view sit green under these very assertions.
+ */
+const checkList = (tasks: TaskSpec[]): unknown => {
+  const children: unknown[] = []
+  for (const task of tasks) {
+    children.push({ type: 'listitem', checked: false, children: [{ type: 'text', text: task.text }] })
+    if (task.children && task.children.length > 0) {
+      children.push({ type: 'listitem', checked: false, children: [checkList(task.children)] })
+    }
+  }
+  return { type: 'list', listType: 'check', children }
+}
 
 const noteText = (tasks: TaskSpec[]): string => JSON.stringify({ root: { type: 'root', children: [checkList(tasks)] } })
 
@@ -331,8 +337,12 @@ describe('Todos heading sections', () => {
   it('offers no checkbox, no completion toggle and no schedule on a section', () => {
     // A section is a title. Every control here would offer to do something to it,
     // and the selection checkbox would write a todo identity into the document.
+    // The ONE control a section does get is the disclosure, which acts on the
+    // view and never on the document.
     const project = sectionRow('Project')?.cell
-    expect(project?.querySelectorAll('input, button')).toHaveLength(0)
+    expect(project?.querySelectorAll('input')).toHaveLength(0)
+    const buttons = Array.from(project?.querySelectorAll('button') ?? [])
+    expect(buttons.map((button) => button.getAttribute('data-todo-disclosure'))).toEqual(['expanded'])
     expect(container.querySelector('[aria-label="Select Project"]')).toBeNull()
     expect(container.querySelector('[aria-label="Mark Project complete"]')).toBeNull()
 

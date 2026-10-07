@@ -269,9 +269,10 @@ export function todoRowsFromGroups(groups: NoteTodos[], tagsForNote: (note: SNNo
     const rowIdFor = (locator: string) => `${group.note.uuid}:${locator}`
     const present = new Set(group.items.map((item) => item.locator ?? item.id))
     // Depth comes from the parent chain, so it always agrees with the links the
-    // tree is actually drawn from, with the enclosing heading section as a FLOOR —
-    // see {@link todoRowDepth} for why a floor and not an override. Items arrive in
-    // document order, so a parent is always seen before its children.
+    // tree is actually drawn from, with the enclosing heading section AND the
+    // document's own nesting as FLOORS — see {@link todoRowDepth} for why floors
+    // and not overrides. Items arrive in document order, so a parent is always
+    // seen before its children.
     const depthById = new Map<string, number>()
     for (const item of group.items) {
       // A parent whose own text was empty never became a row; such a task falls
@@ -279,7 +280,11 @@ export function todoRowsFromGroups(groups: NoteTodos[], tagsForNote: (note: SNNo
       const parentLocator = item.parentLocator && present.has(item.parentLocator) ? item.parentLocator : undefined
       const parentId = parentLocator === undefined ? undefined : rowIdFor(parentLocator)
       const id = rowIdFor(item.locator ?? item.id)
-      const depth = todoRowDepth(parentId === undefined ? undefined : (depthById.get(parentId) ?? 0), item.sectionDepth)
+      const depth = todoRowDepth(
+        parentId === undefined ? undefined : (depthById.get(parentId) ?? 0),
+        item.sectionDepth,
+        item.depth,
+      )
       depthById.set(id, depth)
       rows.push({ id, group, item, noteTitle, tags, depth, parentId, isMatch: true })
     }
@@ -620,4 +625,58 @@ function todoRowComparator(filters: TodoFilters): (a: TodoRow, b: TodoRow) => nu
 /** Filter then sort, in the order the view renders. */
 export function visibleTodoRows(rows: TodoRow[], filters: TodoFilters, now: number): TodoRow[] {
   return sortTodoRows(filterTodoRows(rows, filters, now), filters)
+}
+
+// ---------------------------------------------------------------------------
+// Collapsing
+// ---------------------------------------------------------------------------
+
+/**
+ * The ids of rows that own at least one other row IN THIS LIST.
+ *
+ * Computed from the rows actually on screen rather than from the document, so a
+ * row whose only children were filtered away offers no disclosure control — a
+ * control that expands to nothing is worse than no control.
+ */
+export function todoRowsWithChildren(rows: TodoRow[]): Set<string> {
+  const present = new Set(rows.map((row) => row.id))
+  const parents = new Set<string>()
+  for (const row of rows) {
+    if (row.parentId !== undefined && present.has(row.parentId)) {
+      parents.add(row.parentId)
+    }
+  }
+  return parents
+}
+
+/**
+ * Drop every row that has a COLLAPSED ancestor.
+ *
+ * Collapsing hides a whole subtree, not just its immediate children, so the
+ * walk goes up the parent chain rather than checking the parent alone. `rows`
+ * is expected in tree order (see {@link sortTodoRows}), but this does not rely
+ * on that: each row resolves its own ancestry, so an out-of-order list still
+ * hides exactly the same set.
+ *
+ * Unknown ids in `collapsed` are inert — a collapsed row can disappear when the
+ * note changes, and a stale id must not hide anything.
+ */
+export function collapseTodoRows(rows: TodoRow[], collapsed: ReadonlySet<string>): TodoRow[] {
+  if (collapsed.size === 0) {
+    return rows
+  }
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  return rows.filter((row) => {
+    let parentId = row.parentId
+    // Bounded by the row count: a cycle cannot outlast visiting each row once.
+    let guard = rows.length
+    while (parentId !== undefined && guard > 0) {
+      if (collapsed.has(parentId)) {
+        return false
+      }
+      parentId = byId.get(parentId)?.parentId
+      guard -= 1
+    }
+    return true
+  })
 }

@@ -20,6 +20,8 @@ import {
   todoFiltersAreDefault,
   todoRowIndentLevel,
   todoRowsFromGroups,
+  todoRowsWithChildren,
+  collapseTodoRows,
   visibleTodoRows,
   type TodoFilters,
   type TodoTag,
@@ -455,13 +457,24 @@ describe('todo hierarchy', () => {
     expect(byText.get('Parent task')?.parentId).toBeUndefined()
   })
 
-  it('treats a task whose parent never became a row as top level', () => {
+  it('keeps a task at its real nesting depth when its parent never became a row', () => {
+    // The parent link is gone, so there is no chain to count from — but the
+    // document still holds one level of nesting, and flattening the row to the
+    // top would tell the user their checklist has no structure. The structural
+    // depth is a floor for exactly this case.
     const orphaned = group('n-orphan', 'Orphan', [
       todo('c', 'Child of a blank parent', { locator: '0.0.0', depth: 1, parentLocator: 'missing' }),
     ])
     const [row] = todoRowsFromGroups([orphaned], () => [])
-    expect(row.depth).toBe(0)
+    expect(row.depth).toBe(1)
     expect(row.parentId).toBeUndefined()
+  })
+
+  it('still lands a genuinely top-level task at zero', () => {
+    // The floor must not invent an indent: a task the document holds at the top
+    // and that has no parent link renders flush left.
+    const flat = group('n-flat', 'Flat', [todo('a', 'Top task', { locator: '0', depth: 0 })])
+    expect(todoRowsFromGroups([flat], () => [])[0]).toMatchObject({ depth: 0, parentId: undefined })
   })
 
   it('clamps the rendered indent at ten levels without clamping the real depth', () => {
@@ -579,13 +592,17 @@ describe('heading sections as rows', () => {
 
   it('keeps a task inside its section even when its own parent row is absent', () => {
     // A blank checklist item never becomes a row; its child must stay in the
-    // section it was authored in rather than jumping to the top of the list.
+    // section it was authored in rather than jumping to the top of the list —
+    // and at the depth the document actually nests it to, which here is the
+    // section's own level plus one step of checklist nesting.
     const orphanInSection = group('n-orphan-section', 'Project', [
       todo('s0', 'Project', { locator: '0', depth: 0, sectionDepth: 0, headingLevel: 1 }),
       todo('t', 'Child of a blank task', { locator: '1.0.0.0', depth: 2, sectionDepth: 1, parentLocator: 'gone' }),
     ])
     const rows = todoRowsFromGroups([orphanInSection], () => [])
-    expect(rows[1]).toMatchObject({ depth: 1, parentId: undefined })
+    expect(rows[1]).toMatchObject({ depth: 2, parentId: undefined })
+    // Never shallower than the section that encloses it, whatever happens above.
+    expect(rows[1].depth).toBeGreaterThanOrEqual(1)
   })
 
   it('never counts a section as a match, so it reaches the screen only as context', () => {
@@ -706,5 +723,71 @@ describe('the occurrence-summary record as a row', () => {
   it('reads as unscheduled, because it carries no deadline by construction', () => {
     const [, record] = recorded().items
     expect(todoDueBucket(record, NOW)).toBe('unscheduled')
+  })
+})
+
+describe('collapsing a branch', () => {
+  /** `Parent > Child > Grandchild`, plus a leaf sibling and an unrelated root. */
+  const tree = () =>
+    todoRowsFromGroups(
+      [
+        group('n-collapse', 'Project', [
+          todo('p', 'Parent', { locator: '0' }),
+          todo('c', 'Child', { locator: '0.0.0', depth: 1, parentLocator: '0' }),
+          todo('g', 'Grandchild', { locator: '0.0.0.0.0', depth: 2, parentLocator: '0.0.0' }),
+          todo('l', 'Leaf sibling', { locator: '0.0.1', depth: 1, parentLocator: '0' }),
+          todo('o', 'Other root', { locator: '1' }),
+        ]),
+      ],
+      () => [],
+    )
+  const idOf = (rows: ReturnType<typeof tree>, text: string) => rows.find((row) => row.item.text === text)?.id as string
+
+  it('names exactly the rows that own another row ON SCREEN', () => {
+    const rows = tree()
+    expect([...todoRowsWithChildren(rows)].sort()).toEqual([idOf(rows, 'Child'), idOf(rows, 'Parent')].sort())
+  })
+
+  it('offers no control for a parent whose children were all filtered away', () => {
+    // A disclosure that expands to nothing is worse than no disclosure, so this
+    // reads the rows on screen rather than the document.
+    const rows = tree().filter((row) => row.item.text === 'Parent' || row.item.text === 'Other root')
+    expect(todoRowsWithChildren(rows).size).toBe(0)
+  })
+
+  it('never names a row that is not on screen', () => {
+    // `Parent` is filtered away while its descendants stay. Dropping the
+    // presence check would put `Parent`'s id in the set — an id no rendered row
+    // carries — and the function would stop meaning what its name says. The
+    // exact-set assertion is what makes that observable: a superset still
+    // happens to render the same chevrons today, so a `size`/`has` check alone
+    // would pass over it.
+    const rows = tree().filter((row) => row.item.text !== 'Parent')
+    const onScreen = new Set(rows.map((row) => row.id))
+    const expandable = todoRowsWithChildren(rows)
+    expect([...expandable]).toEqual([idOf(rows, 'Child')])
+    for (const id of expandable) {
+      expect(onScreen.has(id)).toBe(true)
+    }
+  })
+
+  it('hides a whole subtree, not just the immediate children', () => {
+    const rows = tree()
+    const visible = collapseTodoRows(rows, new Set([idOf(rows, 'Parent')]))
+    expect(visible.map((row) => row.item.text)).toEqual(['Parent', 'Other root'])
+  })
+
+  it('collapses a middle of the chain without touching what sits above it', () => {
+    const rows = tree()
+    const visible = collapseTodoRows(rows, new Set([idOf(rows, 'Child')]))
+    expect(visible.map((row) => row.item.text)).toEqual(['Parent', 'Child', 'Leaf sibling', 'Other root'])
+  })
+
+  it('is inert for an id that no longer names a row', () => {
+    const rows = tree()
+    expect(collapseTodoRows(rows, new Set(['gone'])).map((row) => row.item.text)).toEqual(
+      rows.map((row) => row.item.text),
+    )
+    expect(collapseTodoRows(rows, new Set())).toBe(rows)
   })
 })

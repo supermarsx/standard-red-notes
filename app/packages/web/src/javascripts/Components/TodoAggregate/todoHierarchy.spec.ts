@@ -183,6 +183,24 @@ describe('todoRowDepth', () => {
     expect(todoRowDepth(undefined, Number.NaN)).toBe(0)
     expect(todoRowDepth(0, Number.POSITIVE_INFINITY)).toBe(1)
   })
+
+  it('treats the document’s own nesting as a floor too', () => {
+    // The case that matters: no parent row could be resolved at all. Without the
+    // structural floor a four-level checklist renders flush left and the user is
+    // told their document has no structure.
+    expect(todoRowDepth(undefined, undefined, 3)).toBe(3)
+    expect(todoRowDepth(undefined, 1, 3)).toBe(3)
+    // A floor, not an override: the chain still wins when it is deeper…
+    expect(todoRowDepth(5, 0, 2)).toBe(6)
+    // …and a structural depth of zero never pulls a nested row back up.
+    expect(todoRowDepth(2, 0, 0)).toBe(3)
+  })
+
+  it('refuses a corrupted structural depth rather than indenting on it', () => {
+    expect(todoRowDepth(undefined, undefined, -3)).toBe(0)
+    expect(todoRowDepth(undefined, undefined, Number.NaN)).toBe(0)
+    expect(todoRowDepth(undefined, 2, Number.NaN)).toBe(2)
+  })
 })
 
 describe('scanTodoHeadingSections', () => {

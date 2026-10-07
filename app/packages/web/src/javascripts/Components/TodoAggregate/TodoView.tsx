@@ -12,6 +12,7 @@ import { useTable } from '../Table/useTable'
 import type { TableColumn } from '../Table/CommonTypes'
 import TodoFilterBar from './TodoFilterBar'
 import {
+  collapseTodoRows,
   collectTodoGroupOptions,
   collectTodoTagOptions,
   countTodoMatches,
@@ -22,6 +23,7 @@ import {
   TODO_MAX_INDENT_LEVEL,
   todoRowIndentLevel,
   todoRowsFromGroups,
+  todoRowsWithChildren,
   todoTagLabel,
   visibleTodoRows,
   type TodoFilters,
@@ -290,7 +292,9 @@ export function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoS
   }
 
   return (
-    <div className="mt-1">
+    // No top margin: the trigger sits on the row's own line beside the date, so
+    // a margin here would push the whole row taller again.
+    <div className="flex-shrink-0">
       <button
         ref={triggerRef}
         type="button"
@@ -437,6 +441,19 @@ export function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoS
     </div>
   )
 }
+
+/**
+ * One leading control slot: 24px square on a mouse, 32px on a coarse pointer.
+ *
+ * Every control in the leading cluster — the disclosure, the selection
+ * checkbox's label, the completion toggle — wears this, for two reasons. The
+ * hit area is the padding INSIDE the slot, so the row can be tight without the
+ * targets becoming unhittable; and because every slot is the same size, the
+ * checkboxes of one level form a straight vertical line whether or not a given
+ * row happens to be expandable.
+ */
+const TODO_HIT_TARGET =
+  'flex h-6 w-6 flex-shrink-0 items-center justify-center [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:w-8'
 
 function todoTarget(item: TodoItem): SuperChecklistTodoTarget | undefined {
   if (!item.locator) {
@@ -1075,7 +1092,26 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
   // rows (no debounce, no index), like Bookmarks and Templates. Selection and
   // bulk actions stay bound to the UNFILTERED groups, so narrowing the view
   // never silently drops what the user already selected.
-  const visibleRows = useMemo(() => visibleTodoRows(rows, filters, now), [filters, now, rows])
+  const matchingRows = useMemo(() => visibleTodoRows(rows, filters, now), [filters, now, rows])
+
+  /**
+   * Which rows the user has folded shut. Deliberately NOT persisted and
+   * deliberately keyed by row id: a collapsed branch is a reading position, not
+   * a property of the document, and an id that no longer resolves is inert (see
+   * {@link collapseTodoRows}) so a note edited elsewhere cannot hide rows.
+   */
+  const [collapsedRowIds, setCollapsedRowIds] = useState<ReadonlySet<string>>(() => new Set<string>())
+  const expandableRowIds = useMemo(() => todoRowsWithChildren(matchingRows), [matchingRows])
+  const visibleRows = useMemo(() => collapseTodoRows(matchingRows, collapsedRowIds), [collapsedRowIds, matchingRows])
+  const toggleRowCollapsed = useCallback((rowId: string) => {
+    setCollapsedRowIds((current) => {
+      const next = new Set(current)
+      if (!next.delete(rowId)) {
+        next.add(rowId)
+      }
+      return next
+    })
+  }, [])
 
   /** Rows that are actually todos — heading sections and records are neither. */
   const totalTodoRowCount = useMemo(() => countTodoRows(rows), [rows])
@@ -1370,80 +1406,116 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
               </span>
             ) : null
 
+          /**
+           * The fold control, FIRST in the row and inside the indent, so the
+           * cluster reads chevron → checkbox → text at every level.
+           *
+           * A leaf renders the same-sized slot with nothing in it rather than
+           * nothing at all: without the reserved slot, a leaf's checkbox would
+           * sit where an expandable sibling's chevron sits, and the column of
+           * checkboxes inside one level would zig-zag depending on which rows
+           * happen to have children.
+           */
+          const expandable = expandableRowIds.has(row.id)
+          const expanded = !collapsedRowIds.has(row.id)
+          const label = todoRowLabel(item)
+          const disclosure = expandable ? (
+            <button
+              type="button"
+              // A real control, not a decorative glyph: focusable, labelled, and
+              // carrying its own state. `HIT_TARGET` keeps it finger-sized while
+              // the row itself stays tight — the padding is inside the control.
+              className={classNames(TODO_HIT_TARGET, 'text-passive-1 hover:text-text rounded')}
+              aria-expanded={expanded}
+              aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+              title={expanded ? 'Collapse' : 'Expand'}
+              data-todo-disclosure={expanded ? 'expanded' : 'collapsed'}
+              onClick={() => toggleRowCollapsed(row.id)}
+            >
+              <Icon type={expanded ? 'chevron-down' : 'chevron-right'} size="small" />
+            </button>
+          ) : (
+            <span aria-hidden="true" className={TODO_HIT_TARGET} data-todo-disclosure-slot="empty" />
+          )
+
           if (isTodoHeadingItem(item)) {
             // A heading section is the document's own structure: no checkbox, no
             // completion control, no schedule. It is not work, so offering any
-            // action on it would be offering to do something to a title.
+            // action on it would be offering to do something to a title. The
+            // disclosure is the one exception: folding a section acts on the
+            // VIEW, never on the document.
             return (
               <div
-                className="flex min-w-0 flex-col gap-0.5"
+                className="flex min-w-0 items-start gap-1"
                 style={{ paddingInlineStart }}
                 data-todo-depth={row.depth}
                 data-todo-heading-level={item.headingLevel}
               >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span
-                    className="text-text truncate text-sm font-semibold"
-                    title={`Section · heading level ${item.headingLevel}`}
-                  >
-                    {item.text}
+                {disclosure}
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="text-text truncate text-sm font-semibold"
+                      title={`Section · heading level ${item.headingLevel}`}
+                    >
+                      {item.text}
+                    </span>
+                    {levelBadge}
                   </span>
-                  {levelBadge}
-                </span>
-                {/* Nothing at all when the section has no description: an em dash
-                    or a blank line would claim the user wrote one. */}
-                {item.description && (
-                  <span className="text-passive-1 truncate text-xs" title={item.description}>
-                    {item.description}
-                  </span>
-                )}
+                  {/* Nothing at all when the section has no description: an em dash
+                      or a blank line would claim the user wrote one. */}
+                  {item.description && (
+                    <span className="text-passive-1 truncate text-xs" title={item.description}>
+                      {item.description}
+                    </span>
+                  )}
+                </div>
               </div>
             )
           }
 
           const isRecord = !isCountableTodoItem(item)
-          const label = todoRowLabel(item)
           return (
             <div
-              className="flex min-w-0 items-center gap-2"
+              className="flex min-w-0 items-center gap-1"
               style={{ paddingInlineStart }}
               data-todo-depth={row.depth}
               {...(isRecord ? { 'data-todo-record': 'occurrence-summary' } : {})}
             >
-              {row.depth > 0 && (
-                <span
-                  aria-hidden="true"
-                  className="text-passive-2 flex-shrink-0 text-xs select-none"
-                  title={`Subtask, level ${row.depth}`}
-                >
-                  &#8226;
-                </span>
-              )}
+              {disclosure}
               {/* An occurrence-summary record is not selectable — `selectableTodoKey`
                   refuses it — so it gets no checkbox either, rather than one that
                   silently does nothing or, worse, writes an identity into the
                   document to make itself selectable. It stays tickable below: that
                   is the "I have seen this" dismissal, and it is safe because the
-                  record carries no schedule to advance. */}
+                  record carries no schedule to advance.
+
+                  The <label> is the hit area: the native box is ~13px, far under
+                  any usable touch target, and growing the box itself would grow
+                  the row. Clicking anywhere in the slot toggles the input, and
+                  `Table`'s interactive-target list already counts a label as a
+                  control, so the click never doubles as a row selection. */}
               {manageable && !isRecord ? (
-                <input
-                  type="checkbox"
-                  className="flex-shrink-0"
-                  checked={selectionKey ? selectedKeys.has(selectionKey) : false}
-                  disabled={busy}
-                  aria-label={`Select ${label}`}
-                  onChange={(event) => {
-                    const checked = event.currentTarget.checked
-                    void toggleSelection(group, item, checked)
-                  }}
-                />
+                <label className={classNames(TODO_HIT_TARGET, 'cursor-pointer')}>
+                  <input
+                    type="checkbox"
+                    className="flex-shrink-0"
+                    checked={selectionKey ? selectedKeys.has(selectionKey) : false}
+                    disabled={busy}
+                    aria-label={`Select ${label}`}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked
+                      void toggleSelection(group, item, checked)
+                    }}
+                  />
+                </label>
               ) : (
-                <span className="w-3.5 flex-shrink-0" />
+                <span className={TODO_HIT_TARGET} />
               )}
               {manageable ? (
                 <button
                   type="button"
-                  className="flex-shrink-0 rounded focus-visible:outline focus-visible:outline-2"
+                  className={classNames(TODO_HIT_TARGET, 'rounded focus-visible:outline focus-visible:outline-2')}
                   disabled={busy}
                   aria-label={item.checked ? `Reopen ${label}` : `Mark ${label} complete`}
                   onClick={() => void applyOne(group, item, { checked: !item.checked })}
@@ -1455,15 +1527,18 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                   />
                 </button>
               ) : (
-                <Icon
-                  type={item.checked ? 'check-circle-filled' : 'check-circle'}
-                  size="small"
-                  className={classNames('flex-shrink-0', item.checked ? 'text-success' : 'text-neutral')}
-                />
+                <span className={TODO_HIT_TARGET}>
+                  <Icon
+                    type={item.checked ? 'check-circle-filled' : 'check-circle'}
+                    size="small"
+                    className={classNames('flex-shrink-0', item.checked ? 'text-success' : 'text-neutral')}
+                  />
+                </span>
               )}
               <span
+                data-todo-label="true"
                 className={classNames(
-                  'truncate text-sm',
+                  'ms-1 truncate text-sm',
                   item.checked ? 'text-passive-1 line-through' : 'text-text',
                   // A row kept only because a descendant matched is context,
                   // not a result; muting it keeps the two readable apart.
@@ -1494,8 +1569,12 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           const due = item.dueAt ? formatChecklistDue(item.dueAt, item.checked, now) : undefined
           const recurrence = item.recurrence ? checklistRecurrenceSummary(item.recurrence, true) : undefined
           const scheduleTarget = manageable ? todoTarget(item) : undefined
+          // One line, not two. Stacking the schedule button under the date was
+          // the single biggest contributor to the row height — it alone made
+          // every row taller than its own content — and the two belong side by
+          // side anyway: the button acts on the date next to it.
           return (
-            <div className="flex min-w-0 flex-col gap-0.5">
+            <div className="flex min-w-0 items-center gap-2">
               {due ? (
                 <span
                   className={classNames(
@@ -1508,7 +1587,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                   {recurrence ? ` · ${recurrence}` : ''}
                 </span>
               ) : (
-                <span className="text-passive-2 text-xs">No due date</span>
+                <span className="text-passive-2 truncate text-xs">No due date</span>
               )}
               {scheduleTarget && (
                 <TodoScheduleEditor
@@ -1567,21 +1646,39 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         },
       },
     ]
-  }, [application, applyOne, bulkBusy, busyKeys, now, openNote, prepareSchedule, selectedKeys, toggleSelection])
+  }, [
+    application,
+    applyOne,
+    bulkBusy,
+    busyKeys,
+    collapsedRowIds,
+    expandableRowIds,
+    now,
+    openNote,
+    prepareSchedule,
+    selectedKeys,
+    toggleRowCollapsed,
+    toggleSelection,
+  ])
 
   const table = useTable<TodoRow>({
     data: visibleRows,
     columns,
+    // A todo list is read by scanning many short rows; the comfortable padding
+    // the other tables use is more than half the height of a row here.
+    density: 'compact',
     getRowId: (row) => row.id,
     onRowActivate: (row) => openNote(row.group.note.uuid),
   })
 
   // Printing resolves its target from the note editor, which this view replaces,
   // so it used to refuse with "Open a note before printing". Register a
-  // projection of the rows currently being rendered — the filtered, sorted set,
-  // not the whole data — so what prints is what is on screen. Re-registered
-  // whenever that set changes, and dropped on unmount so a closed Todos tab can
-  // never decide what a later print produces.
+  // projection of the FILTERED, SORTED rows — not the whole data, and not the
+  // collapsed subset either: the printed page states every omission and names
+  // the filter that caused it, and a folded branch is not a filter, so dropping
+  // it would omit rows with nothing to say about why. Re-registered whenever
+  // that set changes, and dropped on unmount so a closed Todos tab can never
+  // decide what a later print produces.
   useEffect(() => {
     const root = rootRef.current
     if (!root) {
@@ -1589,10 +1686,10 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     }
     registerPrintableView(root, () => ({
       title: TODO_PRINT_TITLE,
-      body: buildTodoPrintBody({ rows: visibleRows, filters, tagOptions, totalCount: totalTodoRowCount, now }),
+      body: buildTodoPrintBody({ rows: matchingRows, filters, tagOptions, totalCount: totalTodoRowCount, now }),
     }))
     return () => unregisterPrintableView(root)
-  }, [filters, now, tagOptions, totalTodoRowCount, visibleRows])
+  }, [filters, matchingRows, now, tagOptions, totalTodoRowCount])
 
   return (
     <div
@@ -1619,7 +1716,10 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         filters={filters}
         tagOptions={tagOptions}
         groupOptions={groupOptions}
-        visibleCount={countTodoMatches(visibleRows)}
+        // The MATCHING rows, not the rows physically on screen. Folding a branch
+        // shut is a reading position, not a filter, so it must not change what
+        // the view claims is there.
+        visibleCount={countTodoMatches(matchingRows)}
         // Both numbers count WORK, so "showing N of M" cannot be read as a claim
         // that a section header or an occurrence record is a todo.
         totalCount={totalTodoRowCount}

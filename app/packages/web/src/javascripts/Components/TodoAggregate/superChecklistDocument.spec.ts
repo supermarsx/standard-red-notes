@@ -157,6 +157,119 @@ describe('Super checklist persisted document parsing', () => {
     ])
   })
 
+  /**
+   * The shape the EDITOR actually writes.
+   *
+   * Pressing Tab runs `$handleIndent` (@lexical/list), which creates a brand-new
+   * TEXTLESS listitem to hold the nested list and inserts it as the sibling
+   * right after the task that was indented — it does NOT nest the sublist inside
+   * that task. Every fixture in this file other than these tests uses the
+   * idealized `listitem > [text, list]` shape, which is why a parser that
+   * stranded every nested task on a wrapper locator looked correct for months.
+   *
+   * Verified against @lexical/list 0.47 by building the list in headless Lexical
+   * and serializing it.
+   */
+  const wrapperShapeDocument = (): string => {
+    const text = (value: string) => ({ type: 'text', text: value })
+    const item = (value: string, checked: boolean) => ({ type: 'listitem', checked, children: [text(value)] })
+    const wrap = (children: unknown[]) => ({
+      type: 'listitem',
+      checked: false,
+      children: [{ type: 'list', listType: 'check', children }],
+    })
+    return JSON.stringify({
+      root: {
+        type: 'root',
+        children: [
+          {
+            type: 'list',
+            listType: 'check',
+            children: [
+              item('Level 0', false),
+              wrap([item('Level 1', true), wrap([item('Level 2', false), wrap([item('Level 3', true)])])]),
+            ],
+          },
+        ],
+      },
+    })
+  }
+
+  it('parents a Tab-indented task on the task above it, not on Lexical’s structural wrapper', () => {
+    const parsed = parseSuperChecklistDocument(wrapperShapeDocument())
+    const byText = new Map(parsed.map((todo) => [todo.text, todo]))
+
+    expect(parsed.map((todo) => [todo.text, todo.depth])).toEqual([
+      ['Level 0', 0],
+      ['Level 1', 1],
+      ['Level 2', 2],
+      ['Level 3', 3],
+    ])
+    // Each link names a row that EXISTS. A wrapper locator would name a row the
+    // emptiness filter drops, and the whole checklist would flatten.
+    const locators = new Set(parsed.map((todo) => todo.locator))
+    for (const todo of parsed) {
+      if (todo.parentLocator !== undefined) {
+        expect(locators.has(todo.parentLocator)).toBe(true)
+      }
+    }
+    expect(byText.get('Level 0')?.parentLocator).toBeUndefined()
+    expect(byText.get('Level 1')?.parentLocator).toBe(byText.get('Level 0')?.locator)
+    expect(byText.get('Level 2')?.parentLocator).toBe(byText.get('Level 1')?.locator)
+    expect(byText.get('Level 3')?.parentLocator).toBe(byText.get('Level 2')?.locator)
+    expect(byText.get('Level 1')?.checked).toBe(true)
+    expect(byText.get('Level 2')?.checked).toBe(false)
+  })
+
+  it('leaves a sublist with no preceding task parented on the task enclosing its list', () => {
+    // Indenting the FIRST item of a list produces a wrapper with no task before
+    // it. There is no sibling to attach to, so the children belong to whatever
+    // task owns the list — and never to the wrapper, which is not a row.
+    const text = (value: string) => ({ type: 'text', text: value })
+    const document = JSON.stringify({
+      root: {
+        type: 'root',
+        children: [
+          {
+            type: 'list',
+            listType: 'check',
+            children: [
+              {
+                type: 'listitem',
+                checked: false,
+                children: [
+                  text('Owner'),
+                  {
+                    type: 'list',
+                    listType: 'check',
+                    children: [
+                      {
+                        type: 'listitem',
+                        checked: false,
+                        children: [
+                          {
+                            type: 'list',
+                            listType: 'check',
+                            children: [{ type: 'listitem', checked: false, children: [text('Deep')] }],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    })
+    const parsed = parseSuperChecklistDocument(document)
+    const byText = new Map(parsed.map((todo) => [todo.text, todo]))
+    expect(byText.get('Deep')?.parentLocator).toBe(byText.get('Owner')?.locator)
+    // …and the real nesting is still reported, so the view can indent it there.
+    expect(byText.get('Deep')?.depth).toBe(2)
+  })
+
   it('does not let metadata on an empty structural wrapper poison a semantic child identity', () => {
     const nested = JSON.stringify({
       root: {
