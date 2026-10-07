@@ -18,6 +18,7 @@ import {
   removePrintSnapshot,
 } from '../NoteView/Print/PrintNote'
 import { TODO_MAX_INDENT_LEVEL } from './todoFilters'
+import { checklistChain, checklistListNode, superChecklistNoteText, type ChecklistTaskSpec } from './todoLexicalFixture'
 
 /**
  * Render-path coverage for printing the Todos view.
@@ -47,40 +48,20 @@ class ImmediateResizeObserver {
   disconnect() {}
 }
 
-type TaskSpec = { text: string; checked?: boolean; children?: TaskSpec[] }
-
+// The REAL serialized shape, shared with the other Todos render specs — see
+// `todoLexicalFixture`. A fixture nesting the sublist inside its own task is
+// something this editor cannot produce, so the print path's depth assertions
+// would be running against a document that cannot exist.
 let todoId = 0
-
-const listItem = (task: TaskSpec): unknown => {
+/** A distinct persisted identity per task, so selection keys stay unique. */
+const withTodoId = (): Record<string, unknown> => {
   todoId += 1
-  return {
-    type: 'listitem',
-    checked: task.checked === true,
-    $: { [CHECKLIST_TODO_ID_STATE_KEY]: `todo-${todoId}` },
-    children: [
-      { type: 'text', text: task.text },
-      ...(task.children && task.children.length > 0 ? [checkList(task.children)] : []),
-    ],
-  }
+  return { [CHECKLIST_TODO_ID_STATE_KEY]: `todo-${todoId}` }
 }
 
-const checkList = (tasks: TaskSpec[]): unknown => ({
-  type: 'list',
-  listType: 'check',
-  children: tasks.map(listItem),
-})
+const checkList = (tasks: ChecklistTaskSpec[]): unknown => checklistListNode(tasks, withTodoId)
 
-const superNoteText = (tasks: TaskSpec[]): string =>
-  JSON.stringify({ root: { type: 'root', children: [checkList(tasks)] } })
-
-/** A single chain `Level 0` → … → `Level n-1`, one task per level. */
-const chain = (levels: number): TaskSpec => {
-  let deepest: TaskSpec = { text: `Level ${levels - 1}` }
-  for (let level = levels - 2; level >= 0; level -= 1) {
-    deepest = { text: `Level ${level}`, children: [deepest] }
-  }
-  return deepest
-}
+const superNoteText = (tasks: ChecklistTaskSpec[]): string => superChecklistNoteText(tasks, { stateFor: withTodoId })
 
 const makeNote = (uuid: string, title: string, text: string, noteType: NoteType): SNNote =>
   ({ uuid, title, text, trashed: false, locked: false, noteType, payload: {} }) as unknown as SNNote
@@ -107,7 +88,7 @@ const notes: SNNote[] = [
     }),
     NoteType.Task,
   ),
-  makeNote('deep', 'Deep note', superNoteText([chain(14)]), NoteType.Super),
+  makeNote('deep', 'Deep note', superNoteText([checklistChain(14)]), NoteType.Super),
 ]
 
 const noteTags: Record<string, SNTag[]> = {

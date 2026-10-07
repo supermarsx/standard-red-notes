@@ -7,6 +7,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import TodoView from './TodoView'
+import { superChecklistNoteText, type ChecklistTaskSpec } from './todoLexicalFixture'
 
 /**
  * The Todos view against the note shape the EDITOR actually writes.
@@ -33,24 +34,11 @@ class ImmediateResizeObserver {
   disconnect() {}
 }
 
-type TaskSpec = { text: string; checked?: boolean; children?: TaskSpec[] }
+type TaskSpec = ChecklistTaskSpec
 
 const textNode = (value: string) => ({ type: 'text', text: value })
 
-/** `$handleIndent`'s output: the sublist lives in a sibling wrapper listitem. */
-const wrapperList = (tasks: TaskSpec[]): unknown => {
-  const children: unknown[] = []
-  for (const task of tasks) {
-    children.push({ type: 'listitem', checked: task.checked === true, children: [textNode(task.text)] })
-    if (task.children && task.children.length > 0) {
-      children.push({ type: 'listitem', checked: false, children: [wrapperList(task.children)] })
-    }
-  }
-  return { type: 'list', listType: 'check', children }
-}
-
-const noteText = (tasks: TaskSpec[], extra: unknown[] = []): string =>
-  JSON.stringify({ root: { type: 'root', children: [...extra, wrapperList(tasks)] } })
+const noteText = (tasks: TaskSpec[], extra: unknown[] = []): string => superChecklistNoteText(tasks, { before: extra })
 
 /** Four levels, mixed completion, and a leaf beside a parent at every level. */
 const FOUR_DEEP: TaskSpec[] = [

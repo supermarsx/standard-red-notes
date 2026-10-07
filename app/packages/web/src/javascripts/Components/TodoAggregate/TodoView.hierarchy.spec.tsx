@@ -8,6 +8,7 @@ import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import TodoView from './TodoView'
 import { TODO_MAX_INDENT_LEVEL } from './todoFilters'
+import { checklistChain, checklistListNode, type ChecklistTaskSpec } from './todoLexicalFixture'
 
 /**
  * Render-path coverage for nested todos. The filter module proves the tree is
@@ -27,39 +28,13 @@ class ImmediateResizeObserver {
   disconnect() {}
 }
 
-type TaskSpec = { text: string; children?: TaskSpec[] }
-
-/**
- * The shape the EDITOR actually writes.
- *
- * Lexical does not nest a sublist inside the task it belongs to: pressing Tab
- * runs `$handleIndent`, which builds a brand-new TEXTLESS listitem to hold the
- * nested list and inserts it as the SIBLING right after the task that was
- * indented. Fixtures shaped `listitem > [text, list]` are not something this
- * editor can produce, and building them here is what let a total flattening of
- * the Todos view sit green under these very assertions.
- */
-const checkList = (tasks: TaskSpec[]): unknown => {
-  const children: unknown[] = []
-  for (const task of tasks) {
-    children.push({ type: 'listitem', checked: false, children: [{ type: 'text', text: task.text }] })
-    if (task.children && task.children.length > 0) {
-      children.push({ type: 'listitem', checked: false, children: [checkList(task.children)] })
-    }
-  }
-  return { type: 'list', listType: 'check', children }
-}
+// The REAL serialized shape, shared with the other Todos render specs — see
+// `todoLexicalFixture` for why a fixture that nests the sublist inside its own
+// task cannot occur, and therefore cannot fail the way the product did.
+type TaskSpec = ChecklistTaskSpec
+const checkList = (tasks: TaskSpec[]): unknown => checklistListNode(tasks)
 
 const noteText = (tasks: TaskSpec[]): string => JSON.stringify({ root: { type: 'root', children: [checkList(tasks)] } })
-
-/** A single chain `Level 0` → … → `Level n-1`, one task per level. */
-const chain = (levels: number): TaskSpec => {
-  let deepest: TaskSpec = { text: `Level ${levels - 1}` }
-  for (let level = levels - 2; level >= 0; level -= 1) {
-    deepest = { text: `Level ${level}`, children: [deepest] }
-  }
-  return deepest
-}
 
 const textNode = (value: string) => ({ type: 'text', text: value })
 const headingNode = (tag: string, label: string, type = 'heading') => ({ type, tag, children: [textNode(label)] })
@@ -106,7 +81,7 @@ const notes: SNNote[] = [
     locked: false,
     noteType: NoteType.Super,
     payload: {},
-    text: noteText([chain(14)]),
+    text: noteText([checklistChain(14)]),
   } as unknown as SNNote,
 ]
 
