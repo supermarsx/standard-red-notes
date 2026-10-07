@@ -200,9 +200,12 @@ const comprehensiveModel = (): DocBlock[] => [
       ordered: false,
       check: false,
       items: [
-        { inlines: [{ kind: 'text', text: 'BulletItem' }] },
+        // The nested branch hangs off the row above it, which is both what the
+        // Lexical walk now produces and what DOCX/ODT express natively. The
+        // text-less wrapper Lexical uses internally is covered, with its
+        // `wrapper` flag, by the nested-checklist fidelity suite below.
         {
-          inlines: [],
+          inlines: [{ kind: 'text', text: 'BulletItem' }],
           children: {
             ordered: true,
             check: false,
@@ -619,5 +622,307 @@ describe('buildPlainTextDocModel', () => {
     const xml = await files['word/document.xml'].text()
     expect(xml).toContain('line one')
     expect(xml).toContain('line two')
+  })
+})
+
+/**
+ * Nested-checklist fidelity, asserted on the REAL package contents.
+ *
+ * Two things make this suite different from the ones above, and both are the
+ * reason the defect it covers survived:
+ *
+ *  1. The input is built through the real `ListItemNode.setIndent`, so the tree
+ *     has the shape Lexical actually produces — an indented row lives inside a
+ *     TEXT-LESS WRAPPER list item that `$handleIndent` copied from it. A fixture
+ *     that appends a nested list to the row itself (`listitem: [text, list]`) is
+ *     a shape Lexical never emits, and a generator can pass against it while
+ *     printing an empty checkbox per nesting level in every real export.
+ *  2. The assertions read the unzipped `word/document.xml` and `content.xml`,
+ *     not the intermediate model. The stray checkbox WAS in the XML.
+ */
+describe('nested checklist fidelity (real Lexical indent → real package XML)', () => {
+  /** A single list whose rows sit at `depths`, indented through the real API. */
+  const buildIndentedListSuperString = (
+    listType: 'check' | 'bullet' | 'number',
+    rows: { depth: number; checked?: boolean; text: string }[],
+  ): string => {
+    const editor = createHeadlessEditor({
+      namespace: 'BlocksEditor',
+      theme: BlocksEditorTheme,
+      editable: false,
+      onError: (e: Error) => {
+        throw e
+      },
+      nodes: SuperExportNodes,
+    })
+
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        const list = $createListNode(listType)
+        const items = rows.map((row) => {
+          const item = $createListItemNode(listType === 'check' ? row.checked === true : undefined)
+          item.append($createTextNode(row.text))
+          return item
+        })
+        list.append(...items)
+        root.append(list)
+        // Indent only once ATTACHED and shallowest-first, exactly as the editor
+        // does: `setIndent` reads the live tree and rewrites it.
+        items.forEach((item, index) => {
+          if (rows[index].depth > 0) {
+            item.setIndent(rows[index].depth)
+          }
+        })
+      },
+      { discrete: true },
+    )
+
+    return JSON.stringify(editor.getEditorState())
+  }
+
+  const FOUR_LEVELS = [
+    { depth: 0, checked: true, text: 'Level0Done' },
+    { depth: 1, checked: false, text: 'Level1Open' },
+    { depth: 2, checked: true, text: 'Level2Done' },
+    { depth: 3, checked: false, text: 'Level3Open' },
+  ]
+
+  /** Every DOCX body paragraph as `{ indent, text }`, in document order. */
+  const docxParagraphs = (documentXml: string): { indent: string; text: string }[] => {
+    const doc = assertWellFormedXml(documentXml)
+    return Array.from(doc.getElementsByTagName('w:p')).map((paragraph) => {
+      const ind = paragraph.getElementsByTagName('w:ind')[0]
+      return {
+        indent: ind?.getAttribute('w:left') ?? '',
+        text: Array.from(paragraph.getElementsByTagName('w:t'))
+          .map((run) => run.textContent ?? '')
+          .join(''),
+      }
+    })
+  }
+
+  /** Every ODT list-item paragraph as `{ depth, text }`, in document order. */
+  const odtListRows = (contentXml: string): { depth: number; text: string }[] => {
+    const doc = assertWellFormedXml(contentXml)
+    const rows: { depth: number; text: string }[] = []
+    const walk = (element: Element, depth: number): void => {
+      for (const child of Array.from(element.children)) {
+        if (child.tagName === 'text:list') {
+          walk(child, depth + 1)
+        } else if (child.tagName === 'text:list-item') {
+          for (const grandChild of Array.from(child.children)) {
+            if (grandChild.tagName === 'text:p') {
+              rows.push({ depth, text: grandChild.textContent ?? '' })
+            } else if (grandChild.tagName === 'text:list') {
+              walk(grandChild, depth + 1)
+            }
+          }
+        } else {
+          walk(child, depth)
+        }
+      }
+    }
+    const body = doc.getElementsByTagName('office:text')[0]
+    expect(body).toBeDefined()
+    walk(body, -1)
+    return rows
+  }
+
+  it('DOCX: four levels keep their depth and their state, with no stray checkbox', async () => {
+    const blocks = await superStringToDocModel(buildIndentedListSuperString('check', FOUR_LEVELS), {})
+    const files = await unzip(await buildDocxBlob(blocks))
+    const paragraphs = docxParagraphs(await files['word/document.xml'].text())
+
+    // Exactly four rows — one per task. Five (or seven) means the text-less
+    // wrapper got rendered as a task again.
+    expect(paragraphs).toEqual([
+      { indent: '360', text: '☑ Level0Done' },
+      { indent: '720', text: '☐ Level1Open' },
+      { indent: '1080', text: '☑ Level2Done' },
+      { indent: '1440', text: '☐ Level3Open' },
+    ])
+    // Said directly, because this is the defect: no paragraph is a checkbox and
+    // nothing else.
+    expect(paragraphs.filter((paragraph) => paragraph.text.trim() === '☐')).toEqual([])
+    expect(paragraphs.filter((paragraph) => paragraph.text.trim() === '☑')).toEqual([])
+  })
+
+  it('ODT: four levels keep their depth and their state, with no stray checkbox', async () => {
+    const blocks = await superStringToDocModel(buildIndentedListSuperString('check', FOUR_LEVELS), {})
+    const files = await unzip(await buildOdtBlob(blocks))
+    const contentXml = await files['content.xml'].text()
+
+    expect(odtListRows(contentXml)).toEqual([
+      { depth: 0, text: '☑ Level0Done' },
+      { depth: 1, text: '☐ Level1Open' },
+      { depth: 2, text: '☑ Level2Done' },
+      { depth: 3, text: '☐ Level3Open' },
+    ])
+    // The wrapper's paragraph was literally `<text:p>[box] </text:p>`.
+    expect(contentXml).not.toContain('<text:p>☐ </text:p>')
+    expect(contentXml).not.toContain('<text:p>☑ </text:p>')
+  })
+
+  it('DOCX + ODT: a four-level BULLET nest gets no stray empty bullet either', async () => {
+    const rows = [0, 1, 2, 3].map((depth) => ({ depth, text: `Bullet${depth}` }))
+    const blocks = await superStringToDocModel(buildIndentedListSuperString('bullet', rows), {})
+
+    const docxFiles = await unzip(await buildDocxBlob(blocks))
+    const paragraphs = docxParagraphs(await docxFiles['word/document.xml'].text())
+    expect(paragraphs.map((paragraph) => paragraph.text)).toEqual(['Bullet0', 'Bullet1', 'Bullet2', 'Bullet3'])
+
+    const odtFiles = await unzip(await buildOdtBlob(blocks))
+    expect(odtListRows(await odtFiles['content.xml'].text())).toEqual([
+      { depth: 0, text: 'Bullet0' },
+      { depth: 1, text: 'Bullet1' },
+      { depth: 2, text: 'Bullet2' },
+      { depth: 3, text: 'Bullet3' },
+    ])
+  })
+
+  it('keeps the branch when there is no row to hoist it onto — the FIRST row, indented', async () => {
+    // `$handleIndent` has no previous sibling to put the wrapper after here, so
+    // the list's only child IS the wrapper. The branch must survive at its real
+    // depth, and still without a row of its own.
+    const superString = buildIndentedListSuperString('check', [{ depth: 1, checked: false, text: 'OnlyRow' }])
+    const blocks = await superStringToDocModel(superString, {})
+
+    const top = blocks.find((block) => block.kind === 'list')
+    expect(top?.kind).toBe('list')
+    if (top?.kind !== 'list') {
+      return
+    }
+    expect(top.list.items).toHaveLength(1)
+    expect(top.list.items[0].wrapper).toBe(true)
+    expect(top.list.items[0].inlines).toEqual([])
+
+    const docxFiles = await unzip(await buildDocxBlob(blocks))
+    expect(docxParagraphs(await docxFiles['word/document.xml'].text())).toEqual([{ indent: '720', text: '☐ OnlyRow' }])
+
+    const odtFiles = await unzip(await buildOdtBlob(blocks))
+    const contentXml = await odtFiles['content.xml'].text()
+    expect(odtListRows(contentXml)).toEqual([{ depth: 1, text: '☐ OnlyRow' }])
+    expect(contentXml).not.toContain('<text:p>☐ </text:p>')
+  })
+
+  it('still prints an EMPTY row the user typed, which is a task and not a wrapper', async () => {
+    // The discriminator is structural (every child is a nested list), not "has no
+    // text": a list item with no children at all is a real row somebody can tick,
+    // and dropping it would lose a line of the document.
+    const blocks = await superStringToDocModel(
+      buildIndentedListSuperString('check', [
+        { depth: 0, checked: false, text: '' },
+        { depth: 1, checked: true, text: 'UnderAnEmptyRow' },
+      ]),
+      {},
+    )
+    const files = await unzip(await buildDocxBlob(blocks))
+    expect(docxParagraphs(await files['word/document.xml'].text())).toEqual([
+      { indent: '360', text: '☐ ' },
+      { indent: '720', text: '☑ UnderAnEmptyRow' },
+    ])
+  })
+
+  it('carries a due date on the ROW, never on the wrapper copied from it', async () => {
+    // `$copyNode` hands the wrapper the row's NodeState, deadline included, so a
+    // wrapper rendered as a task would print a second, text-less deadline.
+    const editor = createHeadlessEditor({
+      namespace: 'BlocksEditor',
+      theme: BlocksEditorTheme,
+      editable: false,
+      onError: (e: Error) => {
+        throw e
+      },
+      nodes: SuperExportNodes,
+    })
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('ParentTask'))
+        const child = $createListItemNode(false)
+        child.append($createTextNode('ChildTask'))
+        list.append(parent, child)
+        root.append(list)
+        $setChecklistDueAt(child, '2099-08-12T12:00:00.000Z')
+        child.setIndent(1)
+      },
+      { discrete: true },
+    )
+
+    const blocks = await superStringToDocModel(JSON.stringify(editor.getEditorState()), {
+      now: Date.parse('2099-08-12T11:00:00.000Z'),
+    })
+    const files = await unzip(await buildDocxBlob(blocks))
+    const paragraphs = docxParagraphs(await files['word/document.xml'].text())
+
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0].text).toBe('☐ ParentTask')
+    expect(paragraphs[1].text).toContain('ChildTask')
+    expect(paragraphs[1].text).toContain('2099-08-12T12:00:00.000Z')
+  })
+
+  it('ODT: hangs the branch INSIDE the row list item, so nothing extra takes a marker', async () => {
+    const blocks = await superStringToDocModel(buildIndentedListSuperString('check', FOUR_LEVELS), {})
+    const files = await unzip(await buildOdtBlob(blocks))
+    const contentXml = await files['content.xml'].text()
+
+    // Canonical ODF nesting: the nested list is a child of the row's OWN list
+    // item, not a sibling list item carrying it. A sibling is a list item too,
+    // so it takes a bullet of its own and, in an ordered list, a number.
+    expect(contentXml).toContain('<text:p>☑ Level0Done</text:p><text:list text:style-name="Lb">')
+    // Four rows, four list items. Seven means each branch brought its own.
+    expect(contentXml.match(/<text:list-item>/g)).toHaveLength(4)
+  })
+
+  it('ODT: a nested NUMBERED list adds no extra numbered item', async () => {
+    const blocks = await superStringToDocModel(
+      buildIndentedListSuperString('number', [
+        { depth: 0, text: 'FirstOrdered' },
+        { depth: 1, text: 'NestedOrdered' },
+      ]),
+      {},
+    )
+    const files = await unzip(await buildOdtBlob(blocks))
+    const contentXml = await files['content.xml'].text()
+
+    expect(contentXml).toContain('<text:p>FirstOrdered</text:p><text:list text:style-name="Ln">')
+    expect(contentXml.match(/<text:list-item>/g)).toHaveLength(2)
+  })
+
+  it('emits nothing for a wrapper whose branch came back empty, rather than empty ODF', async () => {
+    // The shape a truncated walk leaves at `MAX_WALK_DEPTH`: a flagged wrapper
+    // whose nested list has no items. A `<text:list-item/>` with no content, or a
+    // `<text:list/>` with no items, is not valid ODF — and in DOCX it would be a
+    // blank paragraph.
+    const model: DocBlock[] = [
+      {
+        kind: 'list',
+        list: {
+          ordered: false,
+          check: true,
+          items: [
+            { inlines: [{ kind: 'text', text: 'TruncatedRow' }], checked: false },
+            { inlines: [], wrapper: true, children: { ordered: false, check: true, items: [] } },
+          ],
+        },
+      },
+    ]
+
+    const odtFiles = await unzip(await buildOdtBlob(model))
+    const contentXml = await odtFiles['content.xml'].text()
+    expect(contentXml).toContain('TruncatedRow')
+    expect(contentXml).not.toContain('<text:list-item></text:list-item>')
+    expect(contentXml).not.toContain('<text:list text:style-name="Lb"></text:list>')
+    assertWellFormedXml(contentXml)
+
+    const docxFiles = await unzip(await buildDocxBlob(model))
+    expect(docxParagraphs(await docxFiles['word/document.xml'].text())).toEqual([
+      { indent: '360', text: '☐ TruncatedRow' },
+    ])
   })
 })

@@ -25,6 +25,8 @@ import { $isFileNode } from '../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
 import { $generateNodesFromSerializedNodes, $insertGeneratedNodes } from '@lexical/clipboard'
 import type { PageLayoutOptions } from '../Lexical/Utils/DocExport/PageLayoutOptions'
 import { $projectChecklistDueDatesForPortableExport } from '../Checklist/ChecklistPortableExport'
+import { $generatePlainTextFromRoot } from '../Lexical/Utils/PlainTextExport'
+import { normalizeMarkdownListIndentation } from '../Lexical/Utils/MarkdownListIndent'
 
 type SuperConversionConfig = {
   embedBehavior?: PrefValue[PrefKey.SuperNoteExportEmbedBehavior]
@@ -223,9 +225,11 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
         }
         switch (toFormat) {
           case 'txt': {
-            // Plain text stripped of ALL formatting: just the document's text
-            // content, no Markdown syntax, no HTML — newlines between blocks.
-            content = $getRoot().getTextContent()
+            // Plain text stripped of all FORMATTING, but not of the facts a
+            // checklist carries: `[x]`/`[ ]` and one indent step per nesting
+            // level both survive, because an exported todo list that cannot say
+            // what is done is not an export of a todo list. See PlainTextExport.
+            content = $generatePlainTextFromRoot()
             resolve()
             break
           }
@@ -328,7 +332,15 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       this.importEditor.update(
         () => {
           try {
-            $convertFromMarkdownString(otherFormatString, MarkdownTransformers, undefined, true)
+            // The transformer reads one nesting level as four spaces; most
+            // generators emit two. Restate the document's own unit first or a
+            // 0,1,2,3 list imports as 0,0,1,1.
+            $convertFromMarkdownString(
+              normalizeMarkdownListIndentation(otherFormatString),
+              MarkdownTransformers,
+              undefined,
+              true,
+            )
           } catch (error) {
             console.error(error)
             didThrow = true

@@ -92,6 +92,23 @@ export interface ListItemModel {
   inlines: Inline[]
   checked?: boolean
   children?: ListModel
+  /**
+   * TRUE for Lexical's text-less nesting wrapper, which is structure rather than
+   * a row of the document.
+   *
+   * Lexical represents an indented row by wrapping it: `$handleIndent` copies the
+   * indented list item, appends a new ListNode to the COPY, and moves the real
+   * row inside it. The copy therefore has no text and no meaning of its own — but
+   * it is a copy, so in a check list `getChecked()` reads `false` on it, and a
+   * generator that renders every item emitted one empty `☐` per nesting level.
+   *
+   * A wrapper is hoisted into the preceding row's `children` wherever there is
+   * one, so the usual document carries no wrapper item at all. It survives only
+   * where there is no preceding row to carry the branch (indenting the FIRST row
+   * of a list produces exactly that), and then this flag says: emit the nested
+   * list, never a row.
+   */
+  wrapper?: true
 }
 
 export interface ListModel {
@@ -482,14 +499,37 @@ const listNodeToModel = (listNode: ListNode, now: number, depth = 0): ListModel 
       continue
     }
     const item = child as ListItemNode
+    const grandChildren = item.getChildren()
+    // Lexical's own nesting wrapper: a list item whose every child is a nested
+    // list holds no row of its own. This is the same discriminator
+    // `$isChecklistItemNode` uses, widened to bullet and numbered lists, which
+    // get the identical wrapper from `$handleIndent`. An EMPTY list item (no
+    // children at all) is a real row the user can still type into.
+    const isNestingWrapper = grandChildren.length > 0 && grandChildren.every($isListNode)
     const inlines: Inline[] = []
     let sublist: ListModel | undefined
-    for (const grandChild of item.getChildren()) {
+    for (const grandChild of grandChildren) {
       if ($isListNode(grandChild)) {
         sublist = listNodeToModel(grandChild, now, depth + 1)
       } else {
         inlines.push(...nodeToInlines(grandChild, depth))
       }
+    }
+    if (isNestingWrapper) {
+      // A wrapper contributes its branch and never a row, so this `continue` is
+      // unconditional. The branch is hoisted onto the row it was created behind,
+      // which is what the user sees on screen and what both DOCX and ODT express
+      // natively; only a wrapper with no row to hoist onto — the FIRST item of a
+      // list, indented — stays in the model, flagged so nothing renders it.
+      if (sublist) {
+        const previous = model.items[model.items.length - 1]
+        if (previous && !previous.children && !previous.wrapper) {
+          previous.children = sublist
+        } else {
+          model.items.push({ inlines: [], children: sublist, wrapper: true })
+        }
+      }
+      continue
     }
     const checked = item.getChecked()
     const dueAt = $isChecklistItemNode(item) ? $getChecklistDueAt(item) : undefined

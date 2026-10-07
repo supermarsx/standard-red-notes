@@ -3,7 +3,13 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { SNNote } from '@standardnotes/snjs'
-import { DEFAULT_TODO_FILTERS, type TodoFilters, type TodoRow, type TodoTag } from './todoFilters'
+import {
+  DEFAULT_TODO_FILTERS,
+  TODO_MAX_INDENT_LEVEL,
+  type TodoFilters,
+  type TodoRow,
+  type TodoTag,
+} from './todoFilters'
 import type { NoteTodos, TodoItem } from './allTodos'
 import {
   buildTodoPrintBody,
@@ -269,5 +275,73 @@ describe('the print stylesheet', () => {
     expect(stylesheet).toMatch(/#srn-print-body \.srn-print-todo\s*\{[^}]*page-break-inside: avoid !important;/s)
     // The projection relies on the existing marker rule rather than a new one.
     expect(stylesheet).toContain('#srn-print-body .srn-print-checkbox')
+  })
+})
+
+/**
+ * Nested-checklist depth on paper.
+ *
+ * This exists because "the printed Todos view is flat" could mean two very
+ * different things: the projection losing the depth, or the rows arriving flat.
+ * It is the second — the projection consumes `TodoRow.depth` and reproduces it
+ * three ways (a data attribute, the shared indent formula, and a level label past
+ * the indent ceiling). These tests feed it CORRECT depths and pin all three, so
+ * the print path can never be blamed for, or quietly start causing, a flattening
+ * that belongs upstream.
+ */
+describe('buildTodoPrintBody depth fidelity', () => {
+  const build = (rows: TodoRow[]) =>
+    buildTodoPrintBody({
+      rows,
+      filters: DEFAULT_TODO_FILTERS,
+      tagOptions: [],
+      totalCount: rows.length,
+      now: Date.now(),
+    })
+
+  it('reproduces four distinct levels, with the state of each row', () => {
+    const rows = [
+      row({ id: 'r0', item: { id: 'r0', text: 'Pack', checked: true }, depth: 0 }),
+      row({ id: 'r1', item: { id: 'r1', text: 'Socks', checked: false }, depth: 1 }),
+      row({ id: 'r2', item: { id: 'r2', text: 'Wool', checked: true }, depth: 2 }),
+      row({ id: 'r3', item: { id: 'r3', text: 'Thick', checked: false }, depth: 3 }),
+    ]
+
+    const entries = Array.from(build(rows).querySelectorAll<HTMLElement>('.srn-print-todo'))
+    expect(
+      entries.map((entry) => [
+        entry.querySelector('.srn-print-todo-text')?.textContent,
+        entry.getAttribute('data-todo-depth'),
+        parseFloat(entry.style.marginInlineStart),
+        entry.querySelector('.srn-print-checkbox')?.textContent,
+      ]),
+    ).toEqual([
+      ['Pack', '0', 0, '☒'],
+      ['Socks', '1', todoPrintIndentRem(1), '☐'],
+      ['Wool', '2', todoPrintIndentRem(2), '☒'],
+      ['Thick', '3', todoPrintIndentRem(3), '☐'],
+    ])
+    // Four different indents: the margins strictly increase, so a reader can see
+    // the tree rather than having to trust the data attribute.
+    const margins = entries.map((entry) => parseFloat(entry.style.marginInlineStart))
+    expect(margins).toEqual([...margins].sort((a, b) => a - b))
+    expect(new Set(margins).size).toBe(4)
+  })
+
+  it('states a depth past the indent ceiling in words, since the indent stops moving', () => {
+    const deep = TODO_MAX_INDENT_LEVEL + 3
+    const entries = Array.from(
+      build([
+        row({ id: 'ceiling', item: { id: 'ceiling', text: 'At ceiling' }, depth: TODO_MAX_INDENT_LEVEL }),
+        row({ id: 'past', item: { id: 'past', text: 'Past it' }, depth: deep }),
+      ]).querySelectorAll<HTMLElement>('.srn-print-todo'),
+    )
+
+    expect(entries[0].getAttribute('data-todo-depth')).toBe(String(TODO_MAX_INDENT_LEVEL))
+    expect(entries[1].getAttribute('data-todo-depth')).toBe(String(deep))
+    // The indent is clamped — so the real depth has to be said instead.
+    expect(parseFloat(entries[1].style.marginInlineStart)).toBe(parseFloat(entries[0].style.marginInlineStart))
+    expect(entries[1].querySelector('.srn-print-todo-level')?.textContent).toBe(` L${deep}`)
+    expect(entries[0].querySelector('.srn-print-todo-level')).toBeNull()
   })
 })

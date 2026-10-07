@@ -205,6 +205,14 @@ const emitList = (ctx: Ctx, list: ListModel, level: number, inheritedOrderedRef?
   }
   const paragraphs: DocxParagraph[] = []
   for (const item of list.items) {
+    if (item.wrapper) {
+      // Lexical's nesting wrapper carries a branch, not a row. Rendering it put
+      // one empty `☐` (or one empty bullet) in the document per nesting level.
+      if (item.children) {
+        paragraphs.push(...emitList(ctx, item.children, level + 1, list.ordered ? ref : undefined))
+      }
+      continue
+    }
     const runs = inlinesToRuns(ctx, item.inlines)
     if (list.check) {
       const box = item.checked ? '☑ ' : '☐ '

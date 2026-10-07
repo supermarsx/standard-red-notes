@@ -152,3 +152,76 @@ describe('HeadlessSuperConverter concurrent export isolation', () => {
     expect(betaExport).not.toContain(alphaSecret)
   })
 })
+
+/**
+ * The two round-trip ends the converter itself owns: the TXT bytes a note
+ * downloads as, and the depth a markdown note arrives with.
+ *
+ * Both fixtures are built through the real `ListItemNode.setIndent` / the real
+ * `@lexical/markdown` conversion, so the tree has the shape Lexical actually
+ * produces — an indented row inside a text-less WRAPPER list item.
+ */
+describe('HeadlessSuperConverter nested-checklist round trip', () => {
+  const indentedChecklist = (rows: { depth: number; checked: boolean; text: string }[]): string => {
+    const editor = createHeadlessEditor({
+      namespace: 'BlocksEditor',
+      theme: BlocksEditorTheme,
+      editable: false,
+      onError: (error: Error) => {
+        throw error
+      },
+      nodes: SuperExportNodes,
+    })
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        const list = $createListNode('check')
+        const items = rows.map((row) => $createListItemNode(row.checked).append($createTextNode(row.text)))
+        list.append(...items)
+        root.append(list)
+        items.forEach((item, index) => {
+          if (rows[index].depth > 0) {
+            item.setIndent(rows[index].depth)
+          }
+        })
+      },
+      { discrete: true },
+    )
+    return JSON.stringify(editor.getEditorState())
+  }
+
+  it('exports the exact TXT bytes for a four-level list with mixed state', async () => {
+    const converter = new HeadlessSuperConverter()
+
+    const txt = await converter.convertSuperStringToOtherFormat(
+      indentedChecklist([
+        { depth: 0, checked: true, text: 'Pack' },
+        { depth: 1, checked: false, text: 'Socks' },
+        { depth: 2, checked: true, text: 'Wool' },
+        { depth: 3, checked: false, text: 'Thick' },
+      ]),
+      'txt',
+    )
+
+    // Exact bytes: TXT is the format people grep and diff, and the whole point
+    // is that `[x]`/`[ ]` and the depth are now in them.
+    expect(txt).toBe('[x] Pack\n  [ ] Socks\n    [x] Wool\n      [ ] Thick')
+  })
+
+  it('imports two-space nested markdown at full depth', async () => {
+    const converter = new HeadlessSuperConverter()
+    const superString = converter.convertOtherFormatToSuperString(
+      ['- [ ] a', '  - [x] b', '    - [ ] c', '      - [x] d', ''].join('\n'),
+      'md',
+    )
+
+    // Round-tripped back out through TXT, which now carries both facts, so the
+    // assertion is on bytes a human can read rather than on a tree shape. The
+    // trailing blank is the empty paragraph the markdown import always leaves
+    // behind; it is unrelated to the list and is pinned here rather than trimmed.
+    await expect(converter.convertSuperStringToOtherFormat(superString, 'txt')).resolves.toBe(
+      '[ ] a\n  [x] b\n    [ ] c\n      [x] d\n\n',
+    )
+  })
+})

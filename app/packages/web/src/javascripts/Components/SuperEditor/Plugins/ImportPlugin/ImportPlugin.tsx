@@ -6,6 +6,7 @@ import { SuperNotePreviewCharLimit } from '../../SuperEditor'
 import { $generateNodesFromDOM } from '@lexical/html'
 import { MarkdownTransformers } from '../../MarkdownTransformers'
 import { $convertFromMarkdownString } from '@lexical/markdown'
+import { normalizeMarkdownListIndentation } from '../../Lexical/Utils/MarkdownListIndent'
 
 /** Note that markdown conversion does not insert new lines. See: https://github.com/facebook/lexical/issues/2815 */
 export default function ImportPlugin({
@@ -34,7 +35,9 @@ export default function ImportPlugin({
 
     editor.update(() => {
       if (format === 'md') {
-        $convertFromMarkdownString(text, MarkdownTransformers, undefined, true)
+        // See MarkdownListIndent: the transformer's nesting unit is four spaces,
+        // so two-space input has to be restated or it half-flattens.
+        $convertFromMarkdownString(normalizeMarkdownListIndentation(text), MarkdownTransformers, undefined, true)
       } else {
         const parser = new DOMParser()
         const dom = parser.parseFromString(text, 'text/html')

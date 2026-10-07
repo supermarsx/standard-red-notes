@@ -235,13 +235,21 @@ class OdtBuilder {
     const styleName = list.ordered ? 'Ln' : 'Lb'
     const items = list.items
       .map((item) => {
+        const sub = item.children ? this.listToXml(item.children) : ''
+        if (item.wrapper) {
+          // Lexical's nesting wrapper carries a branch, not a row: it gets the
+          // list item ODF needs to hold the nested list, and NO paragraph. The
+          // paragraph used to print one empty `☐` per nesting level. An item
+          // with nothing in it at all would be invalid ODF, so a wrapper whose
+          // branch came back empty (a truncated walk) emits nothing.
+          return sub ? `<text:list-item>${sub}</text:list-item>` : ''
+        }
         const box = list.check ? (item.checked ? '☑ ' : '☐ ') : ''
         const para = `<text:p>${xmlEscape(box)}${this.inlinesToXml(item.inlines)}</text:p>`
-        const sub = item.children ? this.listToXml(item.children) : ''
         return `<text:list-item>${para}${sub}</text:list-item>`
       })
       .join('')
-    return `<text:list text:style-name="${styleName}">${items}</text:list>`
+    return items ? `<text:list text:style-name="${styleName}">${items}</text:list>` : ''
   }
 
   blockToXml(block: DocBlock): string {
