@@ -4,6 +4,7 @@ import { $getRoot } from 'lexical'
 import { BlockEditorNodes } from '@/Components/SuperEditor/Lexical/Nodes/AllNodes'
 import BlocksEditorTheme from '@/Components/SuperEditor/Lexical/Theme/Theme'
 import { sanitizeUrl } from '@/Components/SuperEditor/Lexical/Utils/sanitizeUrl'
+import { normalizeMarkdownListIndentation } from '@/Components/SuperEditor/Lexical/Utils/MarkdownListIndent'
 import { MarkdownTransformers } from '@/Components/SuperEditor/MarkdownTransformers'
 
 type JsonObject = Record<string, unknown>
@@ -314,7 +315,21 @@ function sanitizeImportedNode(node: JsonObject, parentListType: unknown, createT
   }
 }
 
-/** Parse a canonical Markdown fragment through the same Lexical importer as Super notes. */
+/**
+ * Parse a canonical Markdown fragment through the same Lexical importer as Super
+ * notes.
+ *
+ * `markdown` is always a COMPLETE document, never a stream chunk, which is what
+ * makes the indent normalisation below safe: the unit it detects is the smallest
+ * indentation in the whole fragment, and a later chunk could otherwise reveal a
+ * smaller one and invalidate a normalisation already applied. The guarantee is
+ * two-deep — `DirectProvider` accumulates a tool call's argument deltas across
+ * the stream and only emits the call once the stream reports `tool_calls` AND
+ * `parseFunctionArguments` has parsed the whole JSON (a partial argument string
+ * is refused as malformed), and `agent.ts` refuses to execute tool calls at all
+ * unless the turn stopped on `tool_use`. STREAM_ASSISTANT carries those deltas
+ * and the assistant's readable text; neither reaches this function.
+ */
 export function createAssistantMarkdownFragmentNodes(markdown: string, createTodoId: () => string): JsonObject[] {
   assertText(markdown, 'Markdown fragment')
   if (!markdown.trim()) {
@@ -333,7 +348,10 @@ export function createAssistantMarkdownFragmentNodes(markdown: string, createTod
   editor.update(
     () => {
       $getRoot().clear()
-      $convertFromMarkdownString(markdown, MarkdownTransformers, undefined, true)
+      // A language model nests lists with two spaces by default, and the
+      // transformer reads one level as four, so an assistant-written four-level
+      // plan arrives as 0,1,1,2 unless the fragment's own unit is restated.
+      $convertFromMarkdownString(normalizeMarkdownListIndentation(markdown), MarkdownTransformers, undefined, true)
     },
     { discrete: true },
   )
