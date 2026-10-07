@@ -12,7 +12,7 @@
  * same-type sibling transform, so any fixture that needs two distinct checklists
  * must separate them with a paragraph — exactly as a real note would.
  */
-import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
+import { $createListItemNode, $createListNode, $isListNode, ListItemNode, ListNode } from '@lexical/list'
 import { createHeadlessEditor } from '@lexical/headless'
 import { createEmptyHistoryState, registerHistory } from '@lexical/history'
 import {
@@ -22,6 +22,7 @@ import {
   $getRoot,
   ElementNode,
   LexicalEditor,
+  LexicalNode,
   RangeSelection,
 } from 'lexical'
 import {
@@ -104,19 +105,45 @@ const $caretIn = (row: ElementNode): RangeSelection => {
   return selection
 }
 
-/** Indent a subtask under `parent`: a nested check list holding one new row. */
+/** True for one of Lexical's text-less indent wrappers. */
+const isIndentWrapper = (node: LexicalNode | null): boolean =>
+  node instanceof ListItemNode && node.getChildrenSize() > 0 && node.getChildren().every((c) => $isListNode(c))
+
+/**
+ * Indent a subtask under `parent`, the way the EDITOR really does it.
+ *
+ * A new row is appended to the list `parent` already lives in — after `parent`
+ * and after anything already indented beneath it — and then pushed one level
+ * down with `ListItemNode.setIndent`, which is what Tab, the toolbar's indent
+ * command and the markdown importer all call. Lexical's `$handleIndent` moves
+ * the row into a new list inside a new TEXT-LESS listitem and inserts that
+ * wrapper as a SIBLING of `parent`, so the sub-list is NOT a child of `parent`.
+ *
+ * Hand-building `{ listitem: [text, nestedList] }` is forbidden here: Lexical
+ * does not emit it, so a test written against it keeps passing while the code
+ * under test is dead on every real document.
+ */
 const $appendSubtask = (parent: ListItemNode, text: string): ListItemNode => {
-  const list = $createListNode('check')
   const item = $createListItemNode(false)
   item.append($createTextNode(text))
-  list.append(item)
-  parent.append(list)
+  let anchor: ListItemNode = parent
+  while (isIndentWrapper(anchor.getNextSibling())) {
+    anchor = anchor.getNextSibling() as ListItemNode
+  }
+  anchor.insertAfter(item)
+  item.setIndent(parent.getIndent() + 1)
   return item
 }
 
-/** The single subtask indented under `row`. */
-const $subtaskOf = (row: ListItemNode): ListItemNode =>
-  (row.getLastChild() as ListNode).getChildren()[0] as ListItemNode
+/**
+ * The single subtask indented under `row` — read straight out of the real
+ * structure (the wrapper sibling's list) rather than through the production
+ * helper, so the fixture cannot agree with a broken walk.
+ */
+const $subtaskOf = (row: ListItemNode): ListItemNode => {
+  const wrapper = row.getNextSibling() as ListItemNode
+  return (wrapper.getFirstChild() as ListNode).getFirstChild() as ListItemNode
+}
 
 const checkedStates = (list: ListNode): boolean[] =>
   list.getChildren().map((child) => Boolean((child as ListItemNode).getChecked()))
@@ -208,10 +235,41 @@ describe('checklist bulk completion — mark all items completed', () => {
     )
   })
 
-  it('descends into the sub-list hanging off a row that also has its own text', () => {
-    // The common shape once a user indents under a task: the parent row keeps
-    // its text AND gains a nested list, so it is a real task with subtasks
-    // rather than one of Lexical's structural wrapper rows.
+  it('descends into the wrapper sibling a real indent leaves behind', () => {
+    // The shape the editor actually produces: the parent row keeps its text and
+    // the sub-list is parked in a text-less wrapper listitem AFTER it.
+    const editor = createEditor()
+    editor.update(
+      () => {
+        const outer = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('parent'))
+        outer.append(parent)
+        $getRoot().append(outer)
+        $appendSubtask(parent, 'child')
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        const [parent, wrapper] = $rows(0)
+        expect(isIndentWrapper(wrapper)).toBe(true)
+        expect($setCheckedForAllInSelectedLists($caretIn(parent), true)).toBe(2)
+        expect(parent.getChecked()).toBe(true)
+        expect($subtaskOf(parent).getChecked()).toBe(true)
+        // The wrapper is structure and is never completed.
+        expect(wrapper.getChecked()).toBeFalsy()
+      },
+      { discrete: true },
+    )
+  })
+
+  it('descends into a legacy sub-list that is a direct CHILD of a row with text', () => {
+    // Not a shape Lexical emits today — `$normalizeChildren` moves a pasted
+    // `<li>text<ul>…</ul></li>` into a wrapper sibling, and `setIndent` never
+    // builds it — but an older saved note or a hand-written import can still
+    // carry it, and the walk must not lose those rows.
     const editor = createEditor()
     editor.update(
       () => {
@@ -581,11 +639,7 @@ describe('checklist bulk completion — selection scoped actions', () => {
         $getRoot().append(outer)
         $setChecklistSchedule(parent, DAILY_DUE_AT, dailyRule())
 
-        const inner = $createListNode('check')
-        const child = $createListItemNode(false)
-        child.append($createTextNode('child'))
-        inner.append(child)
-        parent.append(inner)
+        const child = $appendSubtask(parent, 'child')
         $setChecklistSchedule(child, DAILY_DUE_AT, dailyRule())
       },
       { discrete: true },
@@ -595,7 +649,7 @@ describe('checklist bulk completion — selection scoped actions', () => {
       () => {
         $setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, COMPLETED_AT)
         const parent = $rows(0)[0]
-        const child = (parent.getLastChild() as ListNode).getChildren()[0] as ListItemNode
+        const child = $subtaskOf(parent)
         expect($getChecklistDueAt(parent)).toBe(NEXT_DUE_AT)
         expect($getChecklistDueAt(child)).toBe(NEXT_DUE_AT)
         // A rolled occurrence stays OPEN — nothing in the tree ends up checked.
@@ -617,12 +671,7 @@ describe('checklist bulk completion — selection scoped actions', () => {
         parent.append($createTextNode('parent'))
         outer.append(parent)
         $getRoot().append(outer)
-
-        const inner = $createListNode('check')
-        const child = $createListItemNode(false)
-        child.append($createTextNode('child'))
-        inner.append(child)
-        parent.append(inner)
+        $appendSubtask(parent, 'child')
       },
       { discrete: true },
     )
@@ -631,7 +680,7 @@ describe('checklist bulk completion — selection scoped actions', () => {
       () => {
         expect($setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, COMPLETED_AT)).toBe(2)
         const parent = $rows(0)[0]
-        const child = (parent.getLastChild() as ListNode).getChildren()[0] as ListItemNode
+        const child = $subtaskOf(parent)
         expect(parent.getChecked()).toBe(true)
         expect(child.getChecked()).toBe(true)
       },

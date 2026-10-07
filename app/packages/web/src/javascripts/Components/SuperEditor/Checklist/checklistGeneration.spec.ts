@@ -13,9 +13,9 @@
  * that re-offers itself), the record of what the cap left out is updated in place
  * rather than appended, and only the live row's roll reproduces a subtree.
  */
-import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
+import { $createListItemNode, $createListNode, $isListNode, ListItemNode, ListNode } from '@lexical/list'
 import { createHeadlessEditor } from '@lexical/headless'
-import { $createTextNode, $getRoot } from 'lexical'
+import { $createTextNode, $getRoot, LexicalNode } from 'lexical'
 import {
   $getChecklistDueAt,
   $getChecklistOccurrenceSummary,
@@ -80,14 +80,46 @@ const $seedRecurringRow = (dueAt: string, label = 'pay the rent', checked = fals
   return row
 }
 
-/** Indent one subtask under `parent`, as Lexical represents indentation. */
+/** True for one of Lexical's text-less indent wrappers. */
+const isIndentWrapper = (node: LexicalNode | null): boolean =>
+  node instanceof ListItemNode && node.getChildrenSize() > 0 && node.getChildren().every((c) => $isListNode(c))
+
+/**
+ * Indent one subtask under `parent`, as the EDITOR really represents
+ * indentation: a new row is appended to `parent`'s own list, after `parent` and
+ * anything already indented beneath it, and then pushed down with
+ * `ListItemNode.setIndent`. Lexical's `$handleIndent` parks the sub-list in a
+ * text-less wrapper listitem that is a SIBLING of `parent`, never a child of it.
+ *
+ * Hand-building `{ listitem: [text, nestedList] }` is forbidden: Lexical does
+ * not emit it, so a test using it passes while the generation pass's subtree
+ * handling is dead on every real document.
+ */
 const $appendSubtask = (parent: ListItemNode, text: string): ListItemNode => {
-  const list = $createListNode('check')
   const item = $createListItemNode(false)
   item.append($createTextNode(text))
-  list.append(item)
-  parent.append(list)
+  let anchor: ListItemNode = parent
+  while (isIndentWrapper(anchor.getNextSibling())) {
+    anchor = anchor.getNextSibling() as ListItemNode
+  }
+  anchor.insertAfter(item)
+  item.setIndent(parent.getIndent() + 1)
   return item
+}
+
+/** The rows indented directly under `row`, read straight out of the structure. */
+const $subtasksOf = (row: ListItemNode): ListItemNode[] => {
+  const subtasks: ListItemNode[] = []
+  let sibling = row.getNextSibling()
+  while (isIndentWrapper(sibling)) {
+    for (const list of (sibling as ListItemNode).getChildren()) {
+      if ($isListNode(list)) {
+        subtasks.push(...(list.getChildren() as ListItemNode[]))
+      }
+    }
+    sibling = (sibling as ListItemNode).getNextSibling()
+  }
+  return subtasks
 }
 
 const $list = (index = 0): ListNode => $getRoot().getChildren()[index] as ListNode
@@ -362,16 +394,21 @@ describe('generating the occurrences a recurring checklist task owed', () => {
         $generateMissedChecklistOccurrences(settings(), NOW, LOCALE)
         const rows = $rows()
         // The live row keeps its subtree; it is the occurrence the task is on.
-        const nested = rows[0].getChildren().filter((child) => child.getType() === 'list')
-        expect(nested).toHaveLength(1)
-        const subtask = (nested[0] as ListNode).getChildren()[0] as ListItemNode
-        expect(subtask.getChecked()).toBe(false)
-        expect($getChecklistDueAt(subtask)).toBe('2027-04-15T09:00:00.000Z')
+        // The wrapper holding that subtree sits straight after the live row, and
+        // the generated occurrences come AFTER it — a generated row inserted
+        // between the two would take the subtree over.
+        expect(isIndentWrapper(rows[1])).toBe(true)
+        const subtasks = $subtasksOf(rows[0])
+        expect(subtasks).toHaveLength(1)
+        expect(subtasks[0].getChecked()).toBe(false)
+        expect($getChecklistDueAt(subtasks[0])).toBe('2027-04-15T09:00:00.000Z')
 
         // Generated occurrences are bare: a past occurrence is not an invitation
         // to redo a whole subtree, and copying one would multiply the work.
-        for (const row of rows.slice(1)) {
-          expect(row.getChildren().filter((child) => child.getType() === 'list')).toHaveLength(0)
+        for (const row of rows.slice(2)) {
+          expect(isIndentWrapper(row)).toBe(false)
+          expect(row.getChildren().filter((child) => $isListNode(child))).toHaveLength(0)
+          expect($subtasksOf(row)).toHaveLength(0)
         }
       },
       { discrete: true },
@@ -398,12 +435,10 @@ describe('generating the occurrences a recurring checklist task owed', () => {
         // One task considered and one acted on: the subtask was carried by its
         // ancestor's roll, so the pass never considered it in its own right.
         expect(result).toEqual({ examined: 1, tasks: 1, generated: 3, summaries: 0, advanced: 1 })
-        expect($rows()).toHaveLength(4)
+        // Live row + the wrapper holding its subtask + three written occurrences.
+        expect($rows()).toHaveLength(5)
 
-        const nested = $rows()[0]
-          .getChildren()
-          .filter((child) => child.getType() === 'list')
-        const subtasks = (nested[0] as ListNode).getChildren() as ListItemNode[]
+        const subtasks = $subtasksOf($rows()[0])
         expect(subtasks).toHaveLength(1)
         expect($getChecklistDueAt(subtasks[0])).toBe('2027-04-15T09:00:00.000Z')
       },

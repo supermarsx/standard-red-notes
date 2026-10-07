@@ -2,9 +2,12 @@ import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@l
 import { createHeadlessEditor } from '@lexical/headless'
 import { $createTextNode, $getRoot, $isTextNode } from 'lexical'
 import {
+  $getChecklistAncestorItems,
+  $getChecklistDescendantItems,
   $getChecklistDueAt,
   $getChecklistRecurrence,
   $getChecklistTodoId,
+  $isChecklistIndentWrapper,
   $normalizeChecklistItemMetadata,
   $setChecklistTodoId,
   $setChecklistDueAt,
@@ -215,12 +218,17 @@ describe('active checklist editor mutations', () => {
         const rootList = $createListNode('check')
         const parent = $createListItemNode(false)
         parent.append($createTextNode('Parent'))
+        // A legacy sub-list that is a direct CHILD of the row. `setIndent` does
+        // not build this and `$normalizeChildren` moves a pasted one out, but an
+        // older saved note can still carry it, so both shapes are covered here.
         const childList = $createListNode('check')
         const child = $createListItemNode(false)
         child.append($createTextNode('Child'))
         childList.append(child)
         parent.append(childList)
 
+        // The shape a REAL indent leaves: a text-less wrapper listitem that is a
+        // SIBLING of the task above it, holding the sub-list.
         const wrapper = $createListItemNode()
         const wrappedList = $createListNode('check')
         const wrappedChild = $createListItemNode(true)
@@ -231,6 +239,14 @@ describe('active checklist editor mutations', () => {
         $getRoot().append(rootList)
 
         expect($getChecklistItems()).toEqual([parent, child, wrappedChild])
+        // `Wrapped child` is indented under `Parent` through the wrapper, and
+        // `Child` through the row's own list — both are its descendants, and the
+        // wrapper itself is never one.
+        expect($getChecklistDescendantItems(parent)).toEqual([child, wrappedChild])
+        expect($getChecklistAncestorItems(wrappedChild)).toEqual([parent])
+        expect($getChecklistAncestorItems(child)).toEqual([parent])
+        expect($isChecklistIndentWrapper(wrapper)).toBe(true)
+        expect($getChecklistDescendantItems(wrapper)).toEqual([wrappedChild])
         expect(
           $applyChecklistEditorMutation(
             { locator: '0.0', text: 'Parent', checked: false },

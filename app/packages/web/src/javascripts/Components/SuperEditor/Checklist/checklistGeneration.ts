@@ -50,6 +50,7 @@ import {
   $getChecklistItemText,
   $getChecklistOccurrenceSummary,
   $getChecklistRecurrence,
+  $getChecklistRowSubtreeEnd,
   $ensureChecklistTodoId,
   $findChecklistOccurrenceSummaryItem,
   $isChecklistItemNode,
@@ -179,7 +180,8 @@ function $insertChecklistRowAfter(after: ListItemNode, text: string): ListItemNo
 }
 
 /**
- * Generate the occurrences `item` owes, in occurrence order, immediately after it.
+ * Generate the occurrences `item` owes, in occurrence order, immediately after
+ * `item` and everything indented under it.
  *
  * Returns a zero result for anything that owes nothing — not a recurring dated
  * task, already completed, not yet due, a schedule that cannot be resolved, or
@@ -221,7 +223,16 @@ export function $generateMissedChecklistOccurrencesForItem(
 
   const todoId = $ensureChecklistTodoId(item)
   const label = $getChecklistItemText(item)
-  let anchorRow = item
+  // AFTER the live row's whole subtree, not after the row. Lexical holds an
+  // indented sub-checklist in a wrapper listitem that is the row's next
+  // SIBLING, so a plain row inserted directly after `item` lands between the
+  // row and its wrapper — and a row in that position owns the wrapper. The
+  // user's subtasks would silently re-parent onto a generated occurrence, and
+  // `item` would be left with no descendants at all (which is also why
+  // "generated occurrences get no subtree of their own" has to be enforced
+  // here rather than assumed). The generated occurrences therefore sit below
+  // the subtree, still siblings of `item` at its own indent level.
+  let anchorRow = $getChecklistRowSubtreeEnd(item)
   let generated = 0
   for (const occurrenceAt of decision.occurrences) {
     const row = $insertChecklistRowAfter(anchorRow, label)

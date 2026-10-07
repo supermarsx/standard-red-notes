@@ -33,7 +33,11 @@
  */
 import { $isListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $isElementNode, BaseSelection, LexicalNode } from 'lexical'
-import { $isChecklistItemNode, CHECKLIST_MAX_DESCENDANT_NODES } from '../Lexical/Nodes/ChecklistItemNode'
+import {
+  $getChecklistAncestorItems,
+  $isChecklistItemNode,
+  CHECKLIST_MAX_DESCENDANT_NODES,
+} from '../Lexical/Nodes/ChecklistItemNode'
 import { $applyChecklistItemChecked } from './ChecklistEditorMutations'
 
 /** Walk up from `node` (inclusive) to the nearest checkable checklist row. */
@@ -82,16 +86,19 @@ function $checkableItemsInList(listNode: ListNode): ListItemNode[] {
   return items
 }
 
-/** True when some ancestor row of `item` is one of `keys`. */
+/**
+ * True when some task `item` is indented under is one of `keys`.
+ *
+ * This deliberately does NOT walk `getParent()`. On the tree Lexical actually
+ * builds, a subtask's sub-list hangs off a text-less wrapper listitem that is a
+ * SIBLING of the parent task, so the node-ancestor chain of a subtask contains
+ * the wrapper and the lists and never the parent task itself. The only correct
+ * answer comes from `$getChecklistAncestorItems`, which is the exact inverse of
+ * the descendant walk the propagation uses — so "was carried forward" and "is
+ * beneath something that was carried forward" cannot disagree.
+ */
 function $hasAncestorIn(item: ListItemNode, keys: ReadonlySet<string>): boolean {
-  let current: LexicalNode | null = item.getParent()
-  while (current) {
-    if ($isChecklistItemNode(current) && keys.has(current.getKey())) {
-      return true
-    }
-    current = current.getParent()
-  }
-  return false
+  return $getChecklistAncestorItems(item).some((ancestor) => keys.has(ancestor.getKey()))
 }
 
 /** Dedupe by node key while preserving the given (document) order. */

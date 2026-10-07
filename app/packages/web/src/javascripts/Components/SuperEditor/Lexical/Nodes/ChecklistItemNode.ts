@@ -1,4 +1,4 @@
-import { $isListItemNode, $isListNode, ListItemNode } from '@lexical/list'
+import { $isListItemNode, $isListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $getRoot, $getState, $isElementNode, $isTextNode, $setState, createState, LexicalNode } from 'lexical'
 import { normalizeChecklistDueAt } from '../../Checklist/checklistDueDate'
 import {
@@ -434,61 +434,254 @@ export const CHECKLIST_MAX_NESTING_DEPTH = 128
 export const CHECKLIST_MAX_DESCENDANT_NODES = 50_000
 
 /**
+ * True for an INDENT WRAPPER: the text-less `listitem` Lexical creates to carry
+ * an indented sub-list.
+ *
+ * This is the exact structural complement of the wrapper rule inside
+ * {@link $isChecklistItemNode} — a `listitem` with children, all of which are
+ * `ListNode`s. The two are written against the same condition on purpose: a row
+ * is either a task or structure, never both and never neither, so the descendant
+ * walk below and the task predicate cannot drift apart.
+ *
+ * A wrapper is NEVER a task: it is descended through, it is never collected by
+ * {@link $getChecklistDescendantItems}, and it never receives identity,
+ * deadlines or completion.
+ *
+ * Deliberately a plain boolean rather than a `node is ListItemNode` predicate,
+ * for the same reason as {@link $isChecklistOccurrenceSummaryItem}: being a
+ * wrapper is a PROPERTY of a row, so a type predicate would narrow an already
+ * known `ListItemNode` to `never` in the negative branch — which is where every
+ * caller below does its real work. Callers that start from a `LexicalNode` pair
+ * it with `$isListItemNode`.
+ */
+export function $isChecklistIndentWrapper(node: LexicalNode | null | undefined): boolean {
+  if (!$isListItemNode(node)) {
+    return false
+  }
+  const children = node.getChildren()
+  return children.length > 0 && children.every((child) => $isListNode(child))
+}
+
+/** The sub-lists a row carries directly, in document order. */
+function $nestedListsOfRow(row: ListItemNode): ListNode[] {
+  const lists: ListNode[] = []
+  for (const child of row.getChildren()) {
+    if ($isListNode(child)) {
+      lists.push(child)
+    }
+  }
+  return lists
+}
+
+/**
+ * The indent wrappers that belong to `row`: the contiguous run of wrapper
+ * siblings immediately following it.
+ *
+ * THIS IS THE SHAPE LEXICAL ACTUALLY BUILDS. `ListItemNode.setIndent` →
+ * `$handleIndent` wraps an indented row in a new `ListNode` inside a new
+ * text-less `listitem`, and inserts that wrapper as a SIBLING of the row being
+ * indented under — never as its child (verified against @lexical/list 0.47's
+ * `formatList.ts` and by rendering a real tree). Markdown import calls the same
+ * `setIndent`, and HTML paste's `$normalizeChildren` moves a nested list out of
+ * its `<li>` into a wrapper sibling too.
+ *
+ * The run is contiguous and stops at the first non-wrapper row, because that row
+ * is the next task at this level and owns whatever follows it. A wrapper carries
+ * only its own sub-lists and claims no run of its own, which is what keeps a
+ * sub-list from being reached twice.
+ */
+function $indentWrappersOwnedBy(row: ListItemNode): ListItemNode[] {
+  if ($isChecklistIndentWrapper(row)) {
+    return []
+  }
+  const wrappers: ListItemNode[] = []
+  let sibling = row.getNextSibling()
+  while ($isListItemNode(sibling) && $isChecklistIndentWrapper(sibling)) {
+    wrappers.push(sibling)
+    sibling = sibling.getNextSibling()
+  }
+  return wrappers
+}
+
+/**
+ * The rows of `list` that hang off whatever owns `list`, in document order.
+ *
+ * Every non-wrapper row qualifies. A wrapper qualifies only while no non-wrapper
+ * row has been seen yet: a LEADING wrapper is indented under nothing inside
+ * `list` (pressing Tab twice on a row leaves exactly that), so it belongs to
+ * `list`'s owner, whereas a wrapper after a row is that row's own and is reached
+ * through {@link $indentWrappersOwnedBy} instead.
+ */
+function $rowsOwningList(list: ListNode): ListItemNode[] {
+  const rows: ListItemNode[] = []
+  let sawTaskRow = false
+  for (const child of list.getChildren()) {
+    if (!$isListItemNode(child)) {
+      continue
+    }
+    if ($isChecklistIndentWrapper(child)) {
+      if (!sawTaskRow) {
+        rows.push(child)
+      }
+      continue
+    }
+    rows.push(child)
+    sawTaskRow = true
+  }
+  return rows
+}
+
+/** The rows exactly one indent level below `row`, in document order. */
+function $childRowsOf(row: ListItemNode): ListItemNode[] {
+  const rows: ListItemNode[] = []
+  for (const list of $nestedListsOfRow(row)) {
+    rows.push(...$rowsOwningList(list))
+  }
+  for (const wrapper of $indentWrappersOwnedBy(row)) {
+    for (const list of $nestedListsOfRow(wrapper)) {
+      rows.push(...$rowsOwningList(list))
+    }
+  }
+  return rows
+}
+
+/**
  * Every nested task beneath `item`, in document order.
  *
- * The walk is iterative and bounded: nesting reaches 128 levels in the parser,
- * and a recursive descent over a document that deep has already been shown to
- * exhaust the stack elsewhere in this editor.
+ * DESCENDANT means: a row the user sees indented under `item`, at any depth.
+ * Concretely, a row reached by repeatedly taking the sub-lists a row carries —
+ * both the wrapper siblings that own them (what Lexical builds) and a sub-list
+ * that is a direct child of the row (what an `<li>` holding nothing but a nested
+ * list imports as) — and reading those lists' rows. `maxDepth` counts levels
+ * below `item`, so `1` is the immediate children.
+ *
+ * Indent wrappers are STRUCTURE: they are walked through to reach the rows they
+ * carry and are never returned. Only rows that satisfy
+ * {@link $isChecklistItemNode} come back, so a caller can treat every element as
+ * a real task.
+ *
+ * The walk is iterative and bounded on BOTH axes — depth and node count:
+ * nesting reaches 128 levels in the parser, and a recursive descent over a
+ * document that deep has already been shown to exhaust the stack elsewhere in
+ * this editor.
  */
 export function $getChecklistDescendantItems(
   item: ListItemNode,
   maxDepth = CHECKLIST_MAX_NESTING_DEPTH,
 ): ListItemNode[] {
   const descendants: ListItemNode[] = []
+  if (maxDepth < 1) {
+    return descendants
+  }
   const visited = new Set<string>([item.getKey()])
-  const stack: Array<{ node: LexicalNode; depth: number }> = []
-
-  const pushNestedLists = (parent: ListItemNode, depth: number): void => {
-    if (depth > maxDepth) {
-      return
-    }
-    const children = parent.getChildren()
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      const child = children[index]
-      if ($isListNode(child)) {
-        stack.push({ node: child, depth })
-      }
+  // Pre-order, LIFO: a level's rows are pushed in reverse so they pop back in
+  // document order, and a row's own children are expanded before its next
+  // sibling — which is exactly the order the rows appear on screen.
+  const stack: Array<{ row: ListItemNode; depth: number }> = []
+  const pushLevel = (rows: ListItemNode[], depth: number): void => {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      stack.push({ row: rows[index], depth })
     }
   }
 
-  pushNestedLists(item, 1)
+  pushLevel($childRowsOf(item), 1)
   let budget = CHECKLIST_MAX_DESCENDANT_NODES
   while (stack.length > 0 && budget > 0) {
     budget -= 1
     const current = stack.pop()
-    if (!current || current.depth > maxDepth || visited.has(current.node.getKey())) {
+    if (!current || current.depth > maxDepth || visited.has(current.row.getKey())) {
       continue
     }
-    visited.add(current.node.getKey())
-    if ($isListNode(current.node)) {
-      const rows = current.node.getChildren()
-      for (let index = rows.length - 1; index >= 0; index -= 1) {
-        stack.push({ node: rows[index], depth: current.depth })
-      }
-      continue
+    visited.add(current.row.getKey())
+    if ($isChecklistItemNode(current.row)) {
+      descendants.push(current.row)
     }
-    if (!$isListItemNode(current.node)) {
-      continue
-    }
-    const row = current.node
-    if ($isChecklistItemNode(row)) {
-      descendants.push(row)
-    }
-    // Indentation wrappers hold no task of their own but still carry the
-    // nested list underneath them, so both kinds of row are descended.
-    pushNestedLists(row, current.depth + 1)
+    pushLevel($childRowsOf(current.row), current.depth + 1)
   }
   return descendants
+}
+
+/**
+ * The tasks `item` is indented under, NEAREST FIRST.
+ *
+ * The exact inverse of {@link $getChecklistDescendantItems}: for the same
+ * `maxDepth`, `t` appears here for `r` if and only if `r` appears in the
+ * descendants of `t`. Both are needed because a parent task is not an ANCESTOR
+ * NODE of its subtasks on the real shape — the sub-list hangs off a wrapper
+ * SIBLING, so walking `getParent()` finds the wrapper and the lists, never the
+ * parent task.
+ *
+ * `maxDepth` counts INDENT LEVELS above `item`, exactly as the descendant walk
+ * counts levels below, so the cap means the same thing on both sides. That
+ * matters for real behaviour: a subtask too deep for the propagation's cap was
+ * never carried forward, so it must not be reported as sitting beneath
+ * something that was. A level that holds only an indent wrapper (an orphan
+ * indent, from pressing Tab twice) consumes a level and contributes no ancestor,
+ * which is also what the descendant walk does with it.
+ *
+ * Climbing is strictly upward (each step leaves the list it entered through), so
+ * the loop terminates on structure; the budget is belt-and-braces for a
+ * malformed tree.
+ */
+export function $getChecklistAncestorItems(item: ListItemNode, maxDepth = CHECKLIST_MAX_NESTING_DEPTH): ListItemNode[] {
+  const ancestors: ListItemNode[] = []
+  let row: ListItemNode = item
+  let level = 0
+  let budget = CHECKLIST_MAX_DESCENDANT_NODES
+
+  while (budget > 0) {
+    budget -= 1
+    level += 1
+    if (level > maxDepth) {
+      return ancestors
+    }
+    const list = row.getParent()
+    if (!$isListNode(list)) {
+      return ancestors
+    }
+    const carrier = list.getParent()
+    if (!$isListItemNode(carrier)) {
+      // A top-level list: nothing above this row.
+      return ancestors
+    }
+    if (!$isChecklistIndentWrapper(carrier)) {
+      // A sub-list that is a direct child of its own task.
+      if ($isChecklistItemNode(carrier)) {
+        ancestors.push(carrier)
+      }
+      row = carrier
+      continue
+    }
+    // A wrapper: its owner is the nearest preceding non-wrapper sibling. None
+    // means this subtree is indented under nothing at that level, so the climb
+    // continues from the wrapper itself.
+    let sibling = carrier.getPreviousSibling()
+    while ($isListItemNode(sibling) && $isChecklistIndentWrapper(sibling)) {
+      sibling = sibling.getPreviousSibling()
+    }
+    if ($isListItemNode(sibling)) {
+      if ($isChecklistItemNode(sibling)) {
+        ancestors.push(sibling)
+      }
+      row = sibling
+      continue
+    }
+    row = carrier
+  }
+  return ancestors
+}
+
+/**
+ * The last row of `item` together with everything indented under it — the node a
+ * new SIBLING row of `item` must be inserted after.
+ *
+ * Inserting straight after `item` would land BETWEEN the row and the wrapper
+ * holding its subtree, and a task row between a row and its wrapper STEALS that
+ * wrapper: the subtree would silently re-parent onto the inserted row.
+ */
+export function $getChecklistRowSubtreeEnd(item: ListItemNode): ListItemNode {
+  const wrappers = $indentWrappersOwnedBy(item)
+  return wrappers.length > 0 ? wrappers[wrappers.length - 1] : item
 }
 
 /**
@@ -514,7 +707,16 @@ export function $propagateChecklistRecurrenceToDescendants(
     return 0
   }
 
-  const descendants = $getChecklistDescendantItems(item, maxDepth)
+  // An occurrence-summary row is a RECORD of occurrences that were never
+  // written, not work to be carried forward. It owes its "structurally
+  // incapable of being mistaken for an occurrence" property to having neither a
+  // deadline nor a rule, so giving it this occurrence's schedule — and
+  // reopening it — would turn the record into a task. A user can indent one
+  // under a recurring row, so this is reachable; `$applyChecklistItemChecked`
+  // refuses summary rows for the same reason.
+  const descendants = $getChecklistDescendantItems(item, maxDepth).filter(
+    (descendant) => !$isChecklistOccurrenceSummaryItem(descendant),
+  )
   const resolved = descendants.map((descendant) => ({
     descendant,
     schedule: propagatedChecklistDescendantSchedule(
