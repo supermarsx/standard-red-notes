@@ -28,6 +28,13 @@ export class InviteEventOutboxDispatcher {
   private consecutiveFailures = 0
   private running = false
   private stopped = false
+  /**
+   * Whether `start()` has been called and `stop()` has not. Separate from
+   * `stopped`, which is `false` on a dispatcher that was CONSTRUCTED and never
+   * started — a container loaded for CLI work binds this class and never arms
+   * the poller, and `!stopped` would report that one as draining.
+   */
+  private armed = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private inFlight: Promise<void> | undefined
   private maintenanceInterval = 1_000
@@ -49,7 +56,25 @@ export class InviteEventOutboxDispatcher {
   start(maintenanceInterval = 1_000): void {
     this.maintenanceInterval = maintenanceInterval
     this.stopped = false
+    this.armed = true
     this.wake()
+  }
+
+  /**
+   * Standard Red Notes: whether this process group would drain the outbox,
+   * for the admin Diagnostics pane's dead-row census.
+   *
+   * It is the second half of "can a dead row be requeued": the repository owns
+   * the transition, and this owns whether anything is left to pick the row up
+   * afterwards. A requeue into a queue nobody polls looks like a fix and is not
+   * one, so the pane is told both.
+   *
+   * A BOOLEAN ABOUT THIS PROCESS, never a cadence, a backlog or a failure
+   * count. Read live rather than remembered: a dispatcher stopped for shutdown
+   * is not armed.
+   */
+  isDrainArmed(): boolean {
+    return this.armed && !this.stopped
   }
 
   /**
@@ -60,6 +85,7 @@ export class InviteEventOutboxDispatcher {
    */
   async stop(): Promise<void> {
     this.stopped = true
+    this.armed = false
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = undefined

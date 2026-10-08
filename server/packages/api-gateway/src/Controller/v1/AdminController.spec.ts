@@ -439,6 +439,10 @@ describe('AdminController server-status', () => {
         status: 'ok',
         detail: 'liveness only',
         responseTimeMs: expect.any(Number),
+        // The pane refuses to read `detail` — free-form server text is where a
+        // probe failure puts an address — so the same distinction is published
+        // as a closed value beside it.
+        probeDepth: 'liveness',
       })
     })
 
@@ -476,7 +480,13 @@ describe('AdminController server-status', () => {
     it('omits response time for a "not configured" service (no probe ran)', async () => {
       const controller = makeController()
       const entry = await (controller as unknown as ProbeSpyTarget).probeServiceReadiness('files', undefined)
-      expect(entry).toEqual({ name: 'files', reachable: false, status: 'unknown', detail: 'not configured' })
+      expect(entry).toEqual({
+        name: 'files',
+        reachable: false,
+        status: 'unknown',
+        detail: 'not configured',
+        probeDepth: 'unknown',
+      })
       expect((entry as { responseTimeMs?: number }).responseTimeMs).toBeUndefined()
     })
 

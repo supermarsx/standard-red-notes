@@ -52,7 +52,12 @@ import type { SyncFilesAdapter } from './filesSession.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
 import { InviteRealtimeDomainEventHandler } from './inviteEventDomainEventHandler.js'
 import type { InviteEventOutboxDispatcher } from './inviteEventOutbox.js'
-import { MAX_SYNC_FRAME_BYTES, SYNC_BACKEND_TIMEOUT_MS, SYNC_PROTOCOL_VERSION } from './syncProtocol.js'
+import {
+  MAX_SYNC_FRAME_BYTES,
+  SYNC_BACKEND_TIMEOUT_MS,
+  SYNC_PROTOCOL_VERSION,
+  type SyncNegotiatedOperation,
+} from './syncProtocol.js'
 
 // ---------------------------------------------------------------------------
 // Shared gateway logic.
@@ -505,6 +510,105 @@ export const MAX_REPORTED_LIVE_SOCKETS = 1_000_000
 export const MAX_REPORTED_ADMISSION_EVENTS = 1_000_000_000
 
 /**
+ * Every operation this protocol can negotiate, as a runtime tuple, purely so
+ * the advertisable COUNT has a declared ceiling that cannot be larger than the
+ * number of operations that exist.
+ *
+ * `AssertNever` below makes a new member of `SyncNegotiatedOperation` a COMPILE
+ * ERROR here rather than a silently short ceiling -- the `satisfies` clause
+ * alone would catch a misspelling and miss an omission, which is the failure
+ * mode that matters for a bound.
+ *
+ * The tuple is never emitted and never read by the admission block. Only its
+ * LENGTH is used: operation names are server-chosen strings, this report is
+ * pasted in public, and a name is the one value here with an address-shaped
+ * future.
+ */
+export const NEGOTIABLE_OPERATIONS = [
+  'SYNC_ITEMS',
+  'AUTHORIZE_COLLABORATION',
+  'API_RPC',
+  'STREAM_ASSISTANT',
+  'INVITE_EVENTS',
+  'FILES_V1',
+] as const satisfies readonly SyncNegotiatedOperation[]
+
+type AssertNever<T extends never> = T
+export type EveryNegotiableOperationIsListed = AssertNever<
+  Exclude<SyncNegotiatedOperation, (typeof NEGOTIABLE_OPERATIONS)[number]>
+>
+
+/**
+ * The ceiling on the advertisable-operation count: the number of operations
+ * this protocol defines. A figure above it is malformed by this contract rather
+ * than merely large, because no handshake can advertise an operation that does
+ * not exist.
+ */
+export const MAX_REPORTED_ADVERTISABLE_OPERATIONS = NEGOTIABLE_OPERATIONS.length
+
+/**
+ * What the advertisable count reads: the adapters, structurally, so the
+ * function below can be driven directly by a test over every combination.
+ *
+ * Narrower than `SyncGatewayOptions` on purpose — it names exactly the members
+ * the AUTHENTICATED frame consults and nothing else, so a reader can check this
+ * against the handshake by eye.
+ */
+export type AdvertisableOperationInputs = {
+  backend: { ready(): boolean }
+  collaborationAuthorization?: { collaborationAuthorizationReady(): boolean }
+  apiRpc?: { ready(): boolean; operations(): readonly unknown[] }
+  inviteEvents?: { ready(): boolean; readonly distribution: 'process' | 'shared' }
+  files?: { ready(): boolean }
+  requireSharedState?: boolean
+}
+
+/**
+ * How many operations the next AUTHENTICATED frame would advertise.
+ *
+ * THE SAME PREDICATES THE HANDSHAKE ASKS, clause for clause and in the same
+ * order, because the list itself is built in the command handler and a second
+ * opinion about it is worse than no figure at all: an operator reading "5
+ * advertisable" on a lane advertising 3 has been told something false by the
+ * one screen that exists to tell them the truth. A gateway test pins this
+ * function's answer against a REAL handshake's operation list across every
+ * configuration a gateway can attach in, so the two cannot drift silently.
+ *
+ * Evaluated per question, never cached: every clause is a readiness call whose
+ * answer changes while the process runs.
+ *
+ * `apiRpc.operations().length` rather than `1`, because that one adapter
+ * advertises TWO operations (`API_RPC` and `STREAM_ASSISTANT`) and advertises
+ * them independently — counting it as one would under-report exactly the
+ * deployment whose assistant stream is the missing thing.
+ *
+ * The invite clause carries the handler's shared-distribution condition. On an
+ * attached gateway that condition is additionally guaranteed by `attach()`,
+ * which refuses a `requireSharedState` lane whose invite bus is process-local;
+ * it is mirrored anyway because the handler is the authority on what gets
+ * advertised, and a count that agrees with the handler only because of a guard
+ * three hundred lines away is a count that breaks when the guard moves.
+ *
+ * A COUNT ONLY. Nothing here reads, returns or so much as names an operation.
+ */
+export function countAdvertisableOperations(sync: AdvertisableOperationInputs | undefined): number {
+  if (!sync) {
+    return 0
+  }
+
+  const count =
+    (sync.backend.ready() ? 1 : 0) +
+    (sync.collaborationAuthorization?.collaborationAuthorizationReady() === true ? 1 : 0) +
+    (sync.apiRpc?.ready() === true ? sync.apiRpc.operations().length : 0) +
+    (sync.inviteEvents?.ready() === true && (!sync.requireSharedState || sync.inviteEvents.distribution === 'shared')
+      ? 1
+      : 0) +
+    (sync.files?.ready() === true ? 1 : 0)
+
+  return boundedAdmissionCount(count, MAX_REPORTED_ADVERTISABLE_OPERATIONS)
+}
+
+/**
  * What an upgrade (or a diagnostics question ABOUT one) carries that the origin
  * decision reads. A struct rather than an `IncomingMessage` so the admission
  * question can be asked by a caller that holds an ordinary HTTP request -- the
@@ -615,6 +719,31 @@ export interface GatewayAdmission {
   handshakeRejected: number
   /** Upgrades refused at the door, by closed cause. MONOTONIC SINCE ATTACH. */
   rejections: Readonly<Record<SocketRejectionCounter, number>>
+  /**
+   * How many operations a socket authenticating RIGHT NOW would be advertised.
+   * CONFIGURATION-AND-READINESS, read per question; neither a counter nor a
+   * total.
+   *
+   * A COUNT AND NEVER THE NAMES. The names are server-chosen strings and the
+   * report this feeds is written to be pasted in public; a count answers the
+   * question the panel asks ("is this lane advertising anything, and is it
+   * advertising less than the protocol defines") without putting a
+   * server-chosen string on the wire. The ceiling is the number of operations
+   * this protocol defines, so a figure above it is malformed rather than large.
+   *
+   * ZERO IS A REAL READING and the one that matters: a lane whose socket opens
+   * and advertises nothing refuses every mint BEFORE the issuer, which is why
+   * `ticketsRefused` stays at 0 while every client is turned away. The panel's
+   * capability block had no producer for this at all and rendered its own empty
+   * note.
+   *
+   * It is derived from the SAME predicates the AUTHENTICATED frame asks, in the
+   * same order, so the figure is what the next handshake would actually
+   * advertise rather than a second opinion about it. A gateway test pins it
+   * against a real handshake's operation list, because the list itself is built
+   * in the command handler and the two must not drift.
+   */
+  advertisableOperationCount: number
 }
 
 /** Thrown by `SyncGatewayAccess.issueTicket` so the HTTP layer can name the cause. */
@@ -2019,6 +2148,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       ),
       unavailable: boundedAdmissionCount(admissionRejections.unavailable, MAX_REPORTED_ADMISSION_EVENTS),
     },
+    // Asked fresh, from the handshake's own predicates. See the member's doc for
+    // why a count and never the names, and why zero is the reading that matters.
+    advertisableOperationCount: countAdvertisableOperations(syncOptions),
   })
 
   let stopPromise: Promise<void> | undefined

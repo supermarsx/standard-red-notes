@@ -11,7 +11,11 @@ import {
   DB_PROBE_TIMEOUT_MS,
   observeAuthRuntime,
 } from '../../Domain/Diagnostics/AuthRuntimeDiagnostics'
+import { InviteEventOutboxDispatcher } from '../../Domain/Invite/InviteEventOutboxDispatcher'
+import { InviteEventOutboxRepositoryInterface } from '../../Domain/Invite/InviteEventOutboxRepositoryInterface'
 import { createTypeORMDatastoreProbe } from '../TypeORM/TypeORMDatastoreProbe'
+import { TypeORMInviteEventOutbox } from '../TypeORM/TypeORMInviteEventOutbox'
+import { createTypeORMOutboxProbe } from '../TypeORM/TypeORMOutboxProbe'
 
 /**
  * Standard Red Notes: how long a `/healthcheck/diagnostics` answer may be
@@ -51,6 +55,24 @@ export class AnnotatedHealthCheckController {
     // `E2E_TESTING === 'true'`, as this process resolved it. A boolean binding
     // that already exists; never re-derived here.
     @inject(TYPES.Auth_FORCE_LEGACY_SESSIONS) @optional() private forceLegacySessions?: boolean,
+    // Standard Red Notes: the three bindings the DEAD-OUTBOX census needs, all
+    // @optional so the controller still constructs on a container that predates
+    // them and on one that binds no outbox at all — the census is then omitted
+    // rather than reported as zero rows.
+    //
+    // The entity repository does the counting; the domain repository is asked
+    // only whether it implements the requeue transition; the dispatcher is asked
+    // only whether a drain loop is armed. None of the three is used for anything
+    // else here, and no row, identifier or error code is read off any of them.
+    @inject(TYPES.Auth_ORMInviteEventOutboxRepository)
+    @optional()
+    private inviteEventOutboxEntityRepository?: Repository<TypeORMInviteEventOutbox>,
+    @inject(TYPES.Auth_InviteEventOutboxRepository)
+    @optional()
+    private inviteEventOutboxRepository?: InviteEventOutboxRepositoryInterface,
+    @inject(TYPES.Auth_InviteEventOutboxDispatcher)
+    @optional()
+    private inviteEventOutboxDispatcher?: InviteEventOutboxDispatcher,
   ) {}
 
   // Cheap liveness: the process is up and the event loop is responsive. Kept
@@ -93,8 +115,11 @@ export class AnnotatedHealthCheckController {
   /**
    * Standard Red Notes: the facts about THIS process that the admin Diagnostics
    * pane needs and that the gateway cannot answer — the effective session-cookie
-   * attributes, the legacy-session switch, and the state of the durable store
-   * this service owns a handle on.
+   * attributes, the legacy-session switch, the state of the durable store this
+   * service owns a handle on, and the count of TERMINAL invite-event outbox rows
+   * (a row no dispatcher will claim again, carrying a realtime invalidation some
+   * client is still waiting for) beside whether anything here could put one
+   * back on the queue.
    *
    * SEPARATE FROM `/readiness` ON PURPOSE. Readiness is polled by the
    * orchestrator every few seconds and must stay cheap; this route runs a write
@@ -130,6 +155,19 @@ export class AnnotatedHealthCheckController {
       cookies: this.cookieFactory ?? { createCookieHeaderValue: (): string[] => [] },
       e2eTesting: this.forceLegacySessions === true,
       datastore: createTypeORMDatastoreProbe(this.roleRepository.manager.connection),
+      // Absent when no outbox entity repository is bound, which omits the queue
+      // block entirely. A zero-row census over a store this process cannot count
+      // would read as an empty outbox, and an empty outbox is the healthy answer
+      // an operator stops looking at.
+      ...(this.inviteEventOutboxEntityRepository === undefined
+        ? {}
+        : {
+            outbox: createTypeORMOutboxProbe(
+              this.inviteEventOutboxEntityRepository,
+              this.inviteEventOutboxRepository,
+              this.inviteEventOutboxDispatcher,
+            ),
+          }),
       timeoutMs: DB_PROBE_TIMEOUT_MS,
     })
 

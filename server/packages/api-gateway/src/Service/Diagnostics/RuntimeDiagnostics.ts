@@ -137,6 +137,17 @@ export type QueueSeparation = (typeof QUEUE_SEPARATIONS)[number]
  */
 export const MAX_REPORTED_CONSUMERS = 64
 
+/**
+ * The ceiling on the dead-outbox census, mirroring auth's own
+ * `MAX_REPORTED_DEAD_LETTER_ROWS`.
+ *
+ * Checked AGAIN on this side rather than trusted, for the reason this whole
+ * reader exists: the producer is another process. A figure above it is DROPPED,
+ * not clamped — a clamped backlog is a number on an operator's screen that
+ * nothing counted.
+ */
+export const MAX_REPORTED_DEAD_LETTER_ROWS = 1_000_000
+
 /*
  * NO SECRET-THRESHOLD FIELD LIVES HERE, deliberately.
  *
@@ -214,6 +225,33 @@ export type QueueDiagnosticsView = {
    * half and `separation` combines them once, here, where they cannot drift.
    */
   consumerCount?: number
+  /**
+   * How many rows of the realtime invite-event outbox are in the TERMINAL state:
+   * attempts exhausted, never claimed again, carrying an invalidation some
+   * client is still waiting for. Reported by the service that owns the handle.
+   *
+   * ABSENT IS NOT ZERO. Zero dead rows is the healthy reading an operator stops
+   * looking at, so a census that was never taken — no auth answer, a store that
+   * did not respond, a table a worker has not migrated yet — is published as
+   * nothing at all. The pane's own report has stated for as long as it has
+   * existed that no endpoint reports this count; this is that endpoint.
+   *
+   * A COUNT, never a row. A dead row names affected users and carries an error
+   * code written by whatever threw; neither has a field to travel in here.
+   */
+  deadLetterRows?: number
+  /**
+   * Whether a counted row can be put back on the queue by this deployment: the
+   * store implements the requeue transition AND a drain loop is armed in the
+   * process group that owns the outbox.
+   *
+   * Published BESIDE the count because it decides what the count means. `false`
+   * says the rows are a backlog nothing is going to drain, and the remedy is to
+   * re-trigger whatever produced the events rather than to retry them. Absent
+   * whenever the count is absent: a claim about requeueing rows nobody counted
+   * is noise.
+   */
+  deadLetterRequeueable?: boolean
 }
 
 /* -------------------------------------------------------------------------- */
@@ -266,12 +304,26 @@ const admitCount = (value: unknown, max: number): number | undefined => {
 /* Reading the auth runtime body                                              */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The dead-outbox half of an auth answer, as this build admits it.
+ *
+ * Both members or neither. A count with no requeue verdict leaves the panel
+ * unable to say what the count means, and a verdict with no count is a statement
+ * about rows nobody counted — so a body carrying only one of the two is read as
+ * carrying neither.
+ */
+export type OutboxCensusReading = {
+  deadLetterRows: number
+  deadLetterRequeueable: boolean
+}
+
 export type AuthRuntimeReading = {
   authProcessUptimeSeconds?: number
   cookieSecure?: boolean
   cookiePartitioned?: boolean
   e2eTesting?: boolean
   datastore?: DatastoreDiagnosticsView
+  queue?: OutboxCensusReading
 }
 
 /**
@@ -348,6 +400,17 @@ export function readAuthRuntimeBody(body: unknown): AuthRuntimeReading | undefin
     }
 
     reading.datastore = view
+  }
+
+  const queue = isRecord(body.queue) ? body.queue : undefined
+  if (queue !== undefined) {
+    const deadLetterRows = admitCount(queue.deadLetterRows, MAX_REPORTED_DEAD_LETTER_ROWS)
+    const deadLetterRequeueable = admitBoolean(queue.deadLetterRequeueable)
+    // All or nothing, per `OutboxCensusReading`: a count whose meaning is
+    // unstated, or a verdict about rows nobody counted, is read as neither.
+    if (deadLetterRows !== undefined && deadLetterRequeueable !== undefined) {
+      reading.queue = { deadLetterRows, deadLetterRequeueable }
+    }
   }
 
   return reading

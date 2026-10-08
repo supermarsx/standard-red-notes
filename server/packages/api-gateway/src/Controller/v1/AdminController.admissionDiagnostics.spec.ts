@@ -12,6 +12,7 @@ import { webSocketGatewayAccessService } from '../../Service/Sync/SyncWebSocketR
 import { deploymentDiagnostics } from '../../Service/Diagnostics/DeploymentDiagnostics'
 import {
   MAX_REPORTED_ADMISSION_EVENTS,
+  MAX_REPORTED_ADVERTISABLE_OPERATIONS,
   MAX_REPORTED_LIVE_SOCKETS,
   MAX_REPORTED_ORIGIN_RULES,
 } from '../../Service/Diagnostics/AdmissionDiagnostics'
@@ -70,7 +71,7 @@ describe('AdminController admission diagnostics', () => {
     } as unknown as AttachedGateway)
   }
 
-  /** The eight members a conforming gateway reports. */
+  /** The nine members a conforming gateway reports. */
   const FULL = {
     originAdmitted: true,
     allowedOriginCount: 2,
@@ -80,6 +81,7 @@ describe('AdminController admission diagnostics', () => {
     ticketsRefused: 1,
     handshakeRejected: 4,
     rejections: { originNotAllowed: 6, queryStringNotPermitted: 1, unavailable: 2 },
+    advertisableOperationCount: 3,
   }
 
   beforeEach(() => {
@@ -115,9 +117,12 @@ describe('AdminController admission diagnostics', () => {
 
     await makeController().getSyncDiagnostics(requestWith({ origin: 'https://app.example.test' }), adminResponse())
 
-    // The same eight members the panel's predicate reads, so the ten rows it
-    // renders are ten rows that were measured.
+    // The same members the panel's predicate reads, so the rows it renders are
+    // rows that were measured. `advertisableOperationCount` is the ninth: it
+    // feeds the CAPABILITY block's notes, which had no producer at all and
+    // rendered their own empty note.
     expect(Object.keys(admissionBlock() ?? {}).sort()).toEqual([
+      'advertisableOperationCount',
       'allowedOriginCount',
       'allowsSameOrigin',
       'handshakeRejected',
@@ -254,6 +259,7 @@ describe('AdminController admission diagnostics', () => {
     ticketsIssued: { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
     ticketsRefused: { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
     handshakeRejected: { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
+    advertisableOperationCount: { kind: 'bound', max: MAX_REPORTED_ADVERTISABLE_OPERATIONS },
     'rejections.originNotAllowed': { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
     'rejections.queryStringNotPermitted': { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
     'rejections.unavailable': { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
@@ -305,7 +311,7 @@ describe('AdminController admission diagnostics', () => {
 
     await makeController().getSyncDiagnostics(requestWith({ origin: 'https://app.example.test' }), adminResponse())
 
-    expect(assertContract(admissionBlock())).toHaveLength(10)
+    expect(assertContract(admissionBlock())).toHaveLength(11)
   })
 
   it('emits nothing but contract-conformant values from a gateway answer whose every leaf is a disclosure', async () => {
@@ -323,6 +329,11 @@ describe('AdminController admission diagnostics', () => {
       ticketsIssued: Number.NaN,
       ticketsRefused: -1,
       handshakeRejected: 'many',
+      // An operation NAME in the field that is declared a count. This report is
+      // pasted in public and a name is a server-chosen string, so the value is
+      // not read and the sibling key that lists them is not read either.
+      advertisableOperationCount: ['SYNC_ITEMS', 'FILES_V1', 'STREAM_ASSISTANT'],
+      advertisableOperations: { SYNC_ITEMS: true, FILES_V1: false },
       rejections: {
         originNotAllowed: 'https://evil.example refused 4 times',
         queryStringNotPermitted: 3,
@@ -368,6 +379,15 @@ describe('AdminController admission diagnostics', () => {
       '8443',
     ]) {
       expect(serialized).not.toContain(planted)
+    }
+    // Operation NAMES are checked against the admission block rather than the
+    // whole payload, because `protocol.serverOperations` publishes this build's
+    // own compile-time list on purpose — a tuple of literals this server
+    // compiled in, not a value off any wire. What must never appear is a name
+    // that arrived from the GATEWAY, in a field declared to be a count.
+    const admissionOnly = JSON.stringify(admissionBlock())
+    for (const name of ['SYNC_ITEMS', 'FILES_V1', 'STREAM_ASSISTANT']) {
+      expect(admissionOnly).not.toContain(name)
     }
   })
 })

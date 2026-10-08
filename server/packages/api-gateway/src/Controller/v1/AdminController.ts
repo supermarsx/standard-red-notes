@@ -97,6 +97,35 @@ export type AdminUserUsageResponse = {
  * itself never 5xxs: 'ok' (readiness 200), 'degraded' (readiness 503 / partial),
  * 'down' (unreachable / unexpected), 'unknown' (service URL not configured).
  */
+/**
+ * Standard Red Notes: WHICH ROUTE established a service entry's status, as a
+ * closed union.
+ *
+ * `status: 'ok'` carries two very different claims and used to be impossible to
+ * tell apart: a service whose READINESS route answered 200 has reported that its
+ * own dependencies are up, while a service that only answered the plain
+ * LIVENESS route has reported that a process is listening and nothing more. The
+ * distinction existed already — but only inside the free-form `detail` string
+ * (`'liveness only'`), which the admin pane deliberately refuses to read,
+ * because free-form server text is exactly where a probe failure puts a host and
+ * a port. A reader with no depth therefore counted every service that ANSWERED
+ * as a service that ANSWERED SOMETHING MEANINGFUL.
+ *
+ *   - `readiness`: the service's `/healthcheck/readiness` route answered with its
+ *     own verdict (200 ready, or 503 unavailable — both are that route
+ *     reporting). The status below is as deep as this endpoint can see.
+ *   - `liveness`: readiness 404'd (a build predating the route) and only the
+ *     plain `/healthcheck` liveness route confirmed the service. An `ok` beside
+ *     this is "a process is answering", NOT "its dependencies are up".
+ *   - `unknown`: no route confirmed anything — nothing was probed (the gateway's
+ *     own entry, a service with no URL configured), the dial did not complete, or
+ *     the answer was a status neither route is supposed to give.
+ *
+ * It is derived from WHICH ROUTE WAS CALLED and what it returned, never from
+ * `detail`.
+ */
+export type ServiceProbeDepth = 'readiness' | 'liveness' | 'unknown'
+
 export type ServiceStatusEntry = {
   name: string
   reachable: boolean
@@ -106,6 +135,10 @@ export type ServiceStatusEntry = {
   // Present whenever a probe actually ran (omitted for the gateway itself, which
   // is not probed, and for 'not configured' services with no URL to probe).
   responseTimeMs?: number
+  // Standard Red Notes: which route backed `status`. Present on EVERY entry,
+  // including the ones nothing was probed for — an absent value has to keep
+  // meaning "a server too old to say", and `'unknown'` is this build saying it.
+  probeDepth?: ServiceProbeDepth
 }
 
 type AuthReadiness = { reachable: boolean; status?: string; checks?: Record<string, boolean>; responseTimeMs?: number }
@@ -941,9 +974,10 @@ export class AdminController extends BaseHttpController {
       ),
     ])
     // Split rather than spread whole: the datastore is its own top-level block
-    // (the Backend section owns it), and a blind spread would also plant it
-    // inside `runtime`, where a second copy would start drifting.
-    const { datastore, ...authSession } = authRuntime.reading ?? {}
+    // (the Backend section owns it) and the outbox census belongs under
+    // `queues`, so a blind spread would also plant both inside `runtime`, where
+    // a second copy would start drifting.
+    const { datastore, queue, ...authSession } = authRuntime.reading ?? {}
 
     response.json({
       capturedAt: new Date().toISOString(),
@@ -986,6 +1020,16 @@ export class AdminController extends BaseHttpController {
       // Both are omitted rather than guessed when the control channel did not
       // answer. ABSENT IS NOT `1`: a census that was never taken must not read as
       // "I am the only consumer" on the deployment whose workers are elsewhere.
+      //
+      // The DEAD-ROW CENSUS rides along here, from the service that owns the
+      // handle. A terminal outbox row is the one queue fact with no observer
+      // anywhere: the dispatcher's claim predicate never matches it again, so
+      // the realtime invalidation it carries is retried by nothing, nothing logs
+      // a second time, and the pane has stated in its own report that no
+      // endpoint reports a count. `deadLetterRequeueable` is published beside it
+      // because it decides what the count means — rows a drain loop could still
+      // take, or a backlog whose remedy is to re-trigger the source event.
+      // Both are ABSENT, never zero, when the census was not taken.
       queues: {
         separation: deriveQueueSeparation({
           ownPrefixedQueuePresent: deployment.presence['API_GATEWAY_SQS_QUEUE_URL'] === true,
@@ -994,6 +1038,11 @@ export class AdminController extends BaseHttpController {
           consumerCount,
         }),
         consumerCount,
+        // Named field by field rather than spread: the reading is reconstructed
+        // by the allowlist, and naming the two members here keeps the block's
+        // shape a statement this file makes rather than one it inherits.
+        deadLetterRows: queue?.deadLetterRows,
+        deadLetterRequeueable: queue?.deadLetterRequeueable,
       },
       // Standard Red Notes: GATEWAY ADMISSION AND TRAFFIC — whether clients
       // arrive at the socket at all, and whether they are being turned away.
@@ -2571,7 +2620,15 @@ export class AdminController extends BaseHttpController {
 
     const probed = await Promise.all(targets.map(([name, url]) => this.probeServiceReadiness(name, url)))
 
-    return [{ name: 'api-gateway', reachable: true, status: 'ok' }, this.authServiceEntry(auth), ...probed]
+    return [
+      // The gateway is not probed: it is the process answering this request, so
+      // its `ok` is self-reported rather than established by a route. That is
+      // exactly what `'unknown'` says, and saying it keeps a reader from
+      // counting this entry as a readiness verdict it never was.
+      { name: 'api-gateway', reachable: true, status: 'ok', probeDepth: 'unknown' },
+      this.authServiceEntry(auth),
+      ...probed,
+    ]
   }
 
   /**
@@ -2586,6 +2643,9 @@ export class AdminController extends BaseHttpController {
         status: 'down',
         detail: 'unreachable',
         responseTimeMs: auth.responseTimeMs,
+        // Nothing was established: the auth probe treats any status but 200/503
+        // as unreachable, so there is no route verdict behind this entry.
+        probeDepth: 'unknown',
       }
     }
 
@@ -2598,6 +2658,10 @@ export class AdminController extends BaseHttpController {
       reachable: true,
       status: ready && allChecksOk ? 'ok' : 'degraded',
       responseTimeMs: auth.responseTimeMs,
+      // Auth is reachable only via its READINESS route here — the probe reads
+      // the per-check body and accepts nothing but 200/503 — so a reachable auth
+      // is always a readiness verdict and never a liveness fallback.
+      probeDepth: 'readiness',
     }
   }
 
@@ -2611,7 +2675,10 @@ export class AdminController extends BaseHttpController {
     fetchFn: ReadinessFetchLike = globalThis.fetch.bind(globalThis) as unknown as ReadinessFetchLike,
   ): Promise<ServiceStatusEntry> {
     if (!url) {
-      return { name, reachable: false, status: 'unknown', detail: 'not configured' }
+      // No probe ran at all, so no route established anything. Reported as
+      // `'unknown'` rather than omitted: an absent `probeDepth` has to keep
+      // meaning "a server too old to publish one".
+      return { name, reachable: false, status: 'unknown', detail: 'not configured', probeDepth: 'unknown' }
     }
 
     // Standard Red Notes (task #66): time the readiness probe. The probe already
@@ -2628,7 +2695,7 @@ export class AdminController extends BaseHttpController {
         signal: controller.signal,
       })
       if (readinessResponse.status === 200) {
-        return { name, reachable: true, status: 'ok', responseTimeMs: elapsed() }
+        return { name, reachable: true, status: 'ok', responseTimeMs: elapsed(), probeDepth: 'readiness' }
       }
       if (readinessResponse.status === 503) {
         return {
@@ -2637,6 +2704,10 @@ export class AdminController extends BaseHttpController {
           status: 'degraded',
           detail: 'readiness reported unavailable',
           responseTimeMs: elapsed(),
+          // A 503 IS the readiness route reporting: it answered, with its own
+          // verdict. The depth is about which route spoke, not about whether the
+          // news was good.
+          probeDepth: 'readiness',
         }
       }
       if (readinessResponse.status === 404) {
@@ -2650,7 +2721,18 @@ export class AdminController extends BaseHttpController {
           signal: controller.signal,
         })
         if (livenessResponse.status === 200) {
-          return { name, reachable: true, status: 'ok', detail: 'liveness only', responseTimeMs: elapsed() }
+          return {
+            name,
+            reachable: true,
+            status: 'ok',
+            detail: 'liveness only',
+            responseTimeMs: elapsed(),
+            // THE ENTRY THIS FIELD EXISTS FOR. An `ok` that only the liveness
+            // route backs; the same `ok` a fully-ready service reports, and the
+            // one a reader with no depth counted as the same claim. The panel
+            // cannot learn it from `detail`, which it refuses to read.
+            probeDepth: 'liveness',
+          }
         }
 
         return {
@@ -2659,6 +2741,8 @@ export class AdminController extends BaseHttpController {
           status: 'down',
           detail: `unexpected status ${livenessResponse.status}`,
           responseTimeMs: elapsed(),
+          // Both routes were asked and neither confirmed the service.
+          probeDepth: 'unknown',
         }
       }
 
@@ -2668,9 +2752,20 @@ export class AdminController extends BaseHttpController {
         status: 'down',
         detail: `unexpected status ${readinessResponse.status}`,
         responseTimeMs: elapsed(),
+        // A status neither route is supposed to give — a proxy answering in the
+        // service's place, a 500 out of a half-started process. Something
+        // answered; nothing was established.
+        probeDepth: 'unknown',
       }
     } catch {
-      return { name, reachable: false, status: 'down', detail: 'unreachable', responseTimeMs: elapsed() }
+      return {
+        name,
+        reachable: false,
+        status: 'down',
+        detail: 'unreachable',
+        responseTimeMs: elapsed(),
+        probeDepth: 'unknown',
+      }
     } finally {
       clearTimeout(timer)
     }

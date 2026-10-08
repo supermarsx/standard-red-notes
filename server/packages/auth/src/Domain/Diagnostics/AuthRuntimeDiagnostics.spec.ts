@@ -1,9 +1,12 @@
 import {
   DatastoreProbe,
+  MAX_REPORTED_DEAD_LETTER_ROWS,
   MAX_REPORTED_POOL,
   observeAuthRuntime,
   observeDatastore,
+  observeOutbox,
   readCookieAttributes,
+  type OutboxProbe,
 } from './AuthRuntimeDiagnostics'
 import { CookieFactory } from '../Auth/Cookies/CookieFactory'
 
@@ -301,5 +304,189 @@ describe('observeAuthRuntime', () => {
     // The domain this factory was built with never reaches the report, even
     // though the header the attributes were read from carried it.
     expect(JSON.stringify(report)).not.toContain('notes.example.com')
+  })
+})
+
+/**
+ * Standard Red Notes: the DEAD-OUTBOX census.
+ *
+ * THE PROPERTY THIS BLOCK EXISTS FOR is that `0` is a measurement and absence is
+ * not. Zero dead rows is the healthy reading an operator stops looking at, so
+ * every arm that did not actually take a count has to publish NOTHING — not a
+ * zero, and not a figure clamped into a plausible backlog.
+ *
+ * The second is that `deadLetterRequeueable` is a CONJUNCTION. A store with the
+ * transition and no drain loop holds rows a requeue would move to pending and
+ * nothing would then pick up, which looks like a fix and is not one.
+ */
+describe('observeOutbox', () => {
+  const probeWith = (overrides: Partial<OutboxProbe> = {}): OutboxProbe => ({
+    deadRows: async (): Promise<number> => 0,
+    requeueTransitionAvailable: true,
+    drainArmed: (): boolean => true,
+    ...overrides,
+  })
+
+  it('reports a healthy outbox as a measured zero, which is not the same as silence', async () => {
+    await expect(observeOutbox(probeWith())).resolves.toEqual({
+      deadLetterRows: 0,
+      deadLetterRequeueable: true,
+    })
+  })
+
+  it('reports a real backlog as a count', async () => {
+    await expect(observeOutbox(probeWith({ deadRows: async () => 7 }))).resolves.toEqual({
+      deadLetterRows: 7,
+      deadLetterRequeueable: true,
+    })
+  })
+
+  it('publishes NOTHING rather than zero when the count could not be taken', async () => {
+    // The un-migrated worker: the table does not exist yet. A zero here would
+    // read as an empty outbox on a deployment that cannot see its outbox at all.
+    const report = await observeOutbox(
+      probeWith({
+        deadRows: async () => {
+          throw new Error("Table 'standard_notes_db.invite_event_outbox' doesn't exist")
+        },
+      }),
+    )
+
+    expect(report).toBeUndefined()
+  })
+
+  it('never reads the rejection, so a statement failure carries no address out', async () => {
+    const report = await observeOutbox(
+      probeWith({
+        deadRows: async () => {
+          throw new Error('connect ECONNREFUSED 10.0.3.14:3306')
+        },
+      }),
+    )
+
+    expect(JSON.stringify(report ?? null)).not.toContain('10.0.3.14')
+  })
+
+  it('drops a malformed figure rather than rounding it into a reassuring one', async () => {
+    for (const malformed of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      await expect(observeOutbox(probeWith({ deadRows: async () => malformed }))).resolves.toBeUndefined()
+    }
+  })
+
+  it('reports the ceiling for a store holding more rows than the bound admits', async () => {
+    await expect(
+      observeOutbox(probeWith({ deadRows: async () => MAX_REPORTED_DEAD_LETTER_ROWS + 5_000 })),
+    ).resolves.toEqual({
+      deadLetterRows: MAX_REPORTED_DEAD_LETTER_ROWS,
+      deadLetterRequeueable: true,
+    })
+  })
+
+  it('abandons a count that outlives the deadline and publishes nothing', async () => {
+    const report = await observeOutbox(probeWith({ deadRows: () => new Promise<number>(() => undefined) }), {
+      timeoutMs: 5,
+    })
+
+    expect(report).toBeUndefined()
+  })
+
+  it('needs BOTH halves for a requeueable verdict', async () => {
+    // A store with no way back: the rows are lost, and the remedy is to
+    // re-trigger whatever produced the event rather than to retry it.
+    await expect(observeOutbox(probeWith({ requeueTransitionAvailable: false }))).resolves.toEqual({
+      deadLetterRows: 0,
+      deadLetterRequeueable: false,
+    })
+    // A store with the transition and nothing polling: a requeue moves the row
+    // to pending and no pass ever claims it.
+    await expect(observeOutbox(probeWith({ drainArmed: () => false }))).resolves.toEqual({
+      deadLetterRows: 0,
+      deadLetterRequeueable: false,
+    })
+  })
+
+  it('treats a dispatcher that cannot answer as not armed, and keeps the count', async () => {
+    const report = await observeOutbox(
+      probeWith({
+        deadRows: async () => 3,
+        drainArmed: () => {
+          throw new Error('dispatcher is mid-teardown')
+        },
+      }),
+    )
+
+    expect(report).toEqual({ deadLetterRows: 3, deadLetterRequeueable: false })
+  })
+})
+
+describe('observeAuthRuntime — the queue block', () => {
+  const healthyDatastore: DatastoreProbe = {
+    initialized: true,
+    read: async (): Promise<void> => undefined,
+    write: async (): Promise<void> => undefined,
+    pendingMigrations: async (): Promise<number> => 0,
+    pool: () => ({ inUse: 1, size: 20 }),
+  }
+
+  const runtimeWith = (
+    datastore: DatastoreProbe,
+    outbox?: OutboxProbe,
+  ): Promise<Awaited<ReturnType<typeof observeAuthRuntime>>> =>
+    observeAuthRuntime({
+      uptimeSeconds: 10,
+      cookies: new CookieFactory('Lax', '', false, false),
+      e2eTesting: false,
+      datastore,
+      ...(outbox === undefined ? {} : { outbox }),
+    })
+
+  it('carries the census when an outbox is bound and the store answers', async () => {
+    const report = await runtimeWith(healthyDatastore, {
+      deadRows: async () => 2,
+      requeueTransitionAvailable: true,
+      drainArmed: () => true,
+    })
+
+    expect(report.queue).toEqual({ deadLetterRows: 2, deadLetterRequeueable: true })
+  })
+
+  it('omits the block entirely on a container that binds no outbox', async () => {
+    const report = await runtimeWith(healthyDatastore)
+
+    expect(report.queue).toBeUndefined()
+    expect(Object.keys(report).sort()).toEqual(['datastore', 'processUptimeSeconds', 'session'])
+  })
+
+  it('does not count against a store that just failed its read probe', async () => {
+    // Two reasons, and the second is the one that bites: a count against a store
+    // that did not answer a `SELECT 1` adds no information, and it adds one more
+    // deadline to an admin request made on a deployment that is already sick.
+    const deadRows = jest.fn(async () => 4)
+    const report = await runtimeWith(
+      {
+        ...healthyDatastore,
+        read: async (): Promise<void> => {
+          throw new Error('store is not answering')
+        },
+      },
+      { deadRows, requeueTransitionAvailable: true, drainArmed: () => true },
+    )
+
+    expect(report.datastore.connectionState).toBe('handle-only')
+    expect(report.queue).toBeUndefined()
+    expect(deadRows).not.toHaveBeenCalled()
+  })
+
+  it('adds no string-valued leaf to the report', async () => {
+    const report = await runtimeWith(healthyDatastore, {
+      deadRows: async () => 9,
+      requeueTransitionAvailable: true,
+      drainArmed: () => true,
+    })
+
+    const queue = report.queue as unknown as Record<string, unknown>
+    expect(Object.keys(queue).sort()).toEqual(['deadLetterRequeueable', 'deadLetterRows'])
+    expect(typeof queue.deadLetterRows).toBe('number')
+    expect(typeof queue.deadLetterRequeueable).toBe('boolean')
   })
 })

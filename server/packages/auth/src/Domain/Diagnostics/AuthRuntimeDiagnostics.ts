@@ -56,6 +56,16 @@ export const MAX_REPORTED_MIGRATIONS = 9_999
 export const MAX_REPORTED_POOL = 9_999
 
 /**
+ * The ceiling on the dead-outbox census.
+ *
+ * A million terminal rows is not a backlog an operator reads a figure for, it is
+ * an incident; the bound is what makes the field a BOUNDED count rather than
+ * `SELECT COUNT(*)` straight onto a screen, and a store that somehow holds more
+ * reports the ceiling rather than an unbounded number.
+ */
+export const MAX_REPORTED_DEAD_LETTER_ROWS = 1_000_000
+
+/**
  * The states a durable service's `DataSource` handle can be in.
  *
  * `handle-only` is the one that matters and the one no readiness probe can see:
@@ -109,11 +119,61 @@ export type AuthRuntimeSessionReport = {
   e2eTesting: boolean
 }
 
+/**
+ * Standard Red Notes: the DEAD-OUTBOX census, for the pane's one remaining row
+ * with no producer anywhere in the tree.
+ *
+ * WHAT A DEAD ROW IS. The invite-event outbox moves a record to a TERMINAL state
+ * when its delivery attempts are exhausted. A terminal row is never claimed
+ * again: the dispatcher's claim predicate matches only pending and
+ * stale-dispatching rows, so the event it carries — a realtime invalidation some
+ * client is waiting for — is not retried by anything and the row sits there
+ * until retention cleanup removes it. Nothing logs a second time, no endpoint
+ * reports it, and the pane states in its own report that no count exists.
+ *
+ * WHY IT LIVES HERE. The same reason the datastore block does: the gateway holds
+ * no database handle, and this is a row count in a table this service owns.
+ *
+ * SECRECY. A count and a boolean. No row identifier, no event identifier, no
+ * affected user, no error code and no timestamp — a dead row's `last_error_code`
+ * is free-form-adjacent server text and its payload names users, so neither has
+ * a field here to travel in.
+ */
+export type AuthRuntimeQueueReport = {
+  /**
+   * How many rows are in the terminal state, bounded. `0` is a real and healthy
+   * reading. The whole block is OMITTED when the count could not be taken, so an
+   * uncountable store never reads as an empty one.
+   */
+  deadLetterRows: number
+  /**
+   * Whether a counted row can be put back on the queue by this deployment: the
+   * store implements the requeue transition AND a drain loop for that outbox is
+   * armed in this process group.
+   *
+   * BOTH HALVES MATTER and neither is sufficient. A store with no requeue
+   * transition holds rows that are lost for good — the remedy is to re-trigger
+   * whatever produced the event, not to retry it. A store that HAS the
+   * transition but whose dispatcher is not running holds rows a requeue would
+   * move back to pending and nothing would then pick up, which looks like a fix
+   * and is not one. `false` is therefore the signal that the count beside it is
+   * a backlog nobody is going to drain.
+   */
+  deadLetterRequeueable: boolean
+}
+
 export type AuthRuntimeDiagnosticsReport = {
   /** How long THIS process has been up, in whole seconds. A duration, never an instant. */
   processUptimeSeconds: number
   session: AuthRuntimeSessionReport
   datastore: AuthRuntimeDatastoreReport
+  /**
+   * Absent when the census could not be taken: no outbox probe bound, a store
+   * that is not answering, or a count that failed (the un-migrated worker, whose
+   * table does not exist yet). ABSENT IS NOT ZERO — zero dead rows is the
+   * healthy reading an operator acts on.
+   */
+  queue?: AuthRuntimeQueueReport
 }
 
 /**
@@ -136,6 +196,34 @@ export type DatastoreProbe = {
   pendingMigrations(): Promise<number>
   /** Pool census, or `undefined` where the driver keeps no pool (SQLite). */
   pool(): { inUse: number; size: number } | undefined
+}
+
+/**
+ * The outbox seam.
+ *
+ * A narrow structural type for the same reason `DatastoreProbe` is one: nothing
+ * in this module can then reach a connection option, a table name or a row. The
+ * count either resolves or REJECTS, and the rejection is never inspected.
+ */
+export type OutboxProbe = {
+  /**
+   * How many rows are in the terminal state. Rejects when the count cannot be
+   * taken — a table that does not exist on a worker that has not migrated, a
+   * statement the store refused.
+   */
+  deadRows(): Promise<number>
+  /**
+   * Whether this store implements the requeue transition for a terminal row.
+   * A property of the build, read from the repository rather than assumed.
+   */
+  requeueTransitionAvailable: boolean
+  /**
+   * Whether a drain loop for this outbox is armed in this process group, so a
+   * requeued row would actually be picked up. Read live: a dispatcher that has
+   * been stopped for shutdown is not armed, and a container started for CLI work
+   * never arms one.
+   */
+  drainArmed(): boolean
 }
 
 /**
@@ -313,19 +401,80 @@ export async function observeDatastore(
   return report
 }
 
+/**
+ * Take the dead-outbox census, or report nothing.
+ *
+ * `undefined` for every arm that did not produce a figure, which is the whole
+ * discipline this block needs: a count nobody took must not reach a screen as
+ * `0`, because `0` is the healthy reading and the one an operator stops looking
+ * at. A malformed figure is treated the same way — not clamped into a plausible
+ * backlog no process counted.
+ *
+ * The rejection is never inspected. A store refusing a `COUNT(*)` reports its
+ * table, its schema and sometimes its host in the error.
+ */
+export async function observeOutbox(
+  probe: OutboxProbe,
+  options: { timeoutMs?: number; now?: Clock } = {},
+): Promise<AuthRuntimeQueueReport | undefined> {
+  const timeoutMs = options.timeoutMs ?? DB_PROBE_TIMEOUT_MS
+
+  let counted: number
+  try {
+    counted = await withTimeout(probe.deadRows(), timeoutMs)
+  } catch {
+    return undefined
+  }
+
+  const deadLetterRows = boundedCount(counted, MAX_REPORTED_DEAD_LETTER_ROWS)
+  if (deadLetterRows === undefined) {
+    return undefined
+  }
+
+  let drainArmed = false
+  try {
+    drainArmed = probe.drainArmed()
+  } catch {
+    // A dispatcher that cannot answer is not an armed one. The count still
+    // stands; what is unknown is whether anything would drain a requeue.
+    drainArmed = false
+  }
+
+  return {
+    deadLetterRows,
+    deadLetterRequeueable: probe.requeueTransitionAvailable && drainArmed,
+  }
+}
+
 export async function observeAuthRuntime(input: {
   uptimeSeconds: number
   cookies: CookieHeaderSource
   e2eTesting: boolean
   datastore: DatastoreProbe
+  /** Absent on a container with no outbox bound; the queue block is then omitted. */
+  outbox?: OutboxProbe
   timeoutMs?: number
   now?: Clock
 }): Promise<AuthRuntimeDiagnosticsReport> {
   const { cookieSecure, cookiePartitioned } = readCookieAttributes(input.cookies)
+  const datastore = await observeDatastore(input.datastore, { timeoutMs: input.timeoutMs, now: input.now })
 
-  return {
+  const report: AuthRuntimeDiagnosticsReport = {
     processUptimeSeconds: boundedCount(input.uptimeSeconds, Number.MAX_SAFE_INTEGER) ?? 0,
     session: { cookieSecure, cookiePartitioned, e2eTesting: input.e2eTesting },
-    datastore: await observeDatastore(input.datastore, { timeoutMs: input.timeoutMs, now: input.now }),
+    datastore,
   }
+
+  // NOT ATTEMPTED over a store that just failed its read probe, for the reason
+  // the datastore block stops there itself: a count against a store that did not
+  // answer a `SELECT 1` adds no information and one more timeout to an admin
+  // request. The block is then absent, which is the honest reading.
+  if (input.outbox !== undefined && datastore.connectionState === 'connected') {
+    const queue = await observeOutbox(input.outbox, { timeoutMs: input.timeoutMs, now: input.now })
+    if (queue !== undefined) {
+      report.queue = queue
+    }
+  }
+
+  return report
 }

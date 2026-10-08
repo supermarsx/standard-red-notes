@@ -59,6 +59,20 @@ export const MAX_REPORTED_LIVE_SOCKETS = 1_000_000
 /** The ceiling on every since-attach event counter, mirroring the gateway's. */
 export const MAX_REPORTED_ADMISSION_EVENTS = 1_000_000_000
 
+/**
+ * The ceiling on the advertisable-operation count: the number of operations the
+ * sync protocol defines, mirroring the gateway's own
+ * `MAX_REPORTED_ADVERTISABLE_OPERATIONS`. No handshake can advertise an
+ * operation that does not exist, so a figure above this is malformed by the
+ * contract rather than merely large, and is DROPPED.
+ *
+ * Mirrored rather than imported, like every bound above it, so this module
+ * stays a pure reader with no reach into the gateway package — and pinned to
+ * the gateway's own constant by a spec, because a mirror nobody compares is a
+ * bound that drifts.
+ */
+export const MAX_REPORTED_ADVERTISABLE_OPERATIONS = 6
+
 /* -------------------------------------------------------------------------- */
 /* Closed vocabulary                                                          */
 /* -------------------------------------------------------------------------- */
@@ -129,6 +143,22 @@ export type AdmissionDiagnosticsView = {
    * panel render all ten rows on the strength of a block that reported nothing.
    */
   rejections?: Partial<Record<SocketRejectionCounterKey, number>>
+  /**
+   * How many operations a socket authenticating right now would be advertised.
+   * CONFIGURATION-AND-READINESS, read per question — neither a counter nor a
+   * total.
+   *
+   * A COUNT AND NEVER THE NAMES. The panel's capability block had no producer
+   * for this at all and rendered its own empty note; an operation NAME is a
+   * server-chosen string and this report is written to be pasted in public, so
+   * what travels is a cardinality the client compares against the operation
+   * list it already holds.
+   *
+   * ZERO IS A REAL READING and the one worth having: a lane whose socket opens
+   * and advertises nothing refuses every mint before the gateway's issuer, so
+   * `ticketsRefused` above reads 0 while every client is being turned away.
+   */
+  advertisableOperationCount?: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -219,6 +249,11 @@ export function readGatewayAdmission(value: unknown): AdmissionDiagnosticsView |
   const handshakeRejected = admitCount(value.handshakeRejected, MAX_REPORTED_ADMISSION_EVENTS)
   if (handshakeRejected !== undefined) {
     view.handshakeRejected = handshakeRejected
+  }
+
+  const advertisableOperationCount = admitCount(value.advertisableOperationCount, MAX_REPORTED_ADVERTISABLE_OPERATIONS)
+  if (advertisableOperationCount !== undefined) {
+    view.advertisableOperationCount = advertisableOperationCount
   }
 
   const rejections = isRecord(value.rejections) ? value.rejections : {}

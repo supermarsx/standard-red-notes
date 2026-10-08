@@ -13,6 +13,7 @@ import {
   AUTH_RUNTIME_PROBE_OUTCOMES,
   DATABASE_CONNECTION_STATES,
   MAX_REPORTED_CONSUMERS,
+  MAX_REPORTED_DEAD_LETTER_ROWS,
   MAX_REPORTED_MIGRATIONS,
   MAX_REPORTED_POOL,
   MAX_ROUND_TRIP_MS,
@@ -68,7 +69,11 @@ describe('AdminController runtime diagnostics', () => {
       readRoundTripMs: 3,
       writeRoundTripMs: 5,
     },
+    queue: { deadLetterRows: 2, deadLetterRequeueable: true },
   }
+
+  /** The same answer from an auth that took no dead-row census. */
+  const { queue: _censusOmitted, ...HEALTHY_AUTH_BODY_WITHOUT_QUEUE } = HEALTHY_AUTH_BODY
 
   type FetchStub = { status: number; body?: unknown; reject?: boolean }
 
@@ -207,6 +212,8 @@ describe('AdminController runtime diagnostics', () => {
     // queues
     separation: { kind: 'closed', allowed: QUEUE_SEPARATIONS },
     consumerCount: { kind: 'bound', max: MAX_REPORTED_CONSUMERS },
+    deadLetterRows: { kind: 'bound', max: MAX_REPORTED_DEAD_LETTER_ROWS },
+    deadLetterRequeueable: { kind: 'boolean' },
   }
 
   /** Assert a block against the contract and return the leaves it inspected. */
@@ -455,6 +462,120 @@ describe('AdminController runtime diagnostics', () => {
   })
 
   /* ------------------------------------------------------------------------ */
+  /* The dead-outbox census                                                   */
+  /* ------------------------------------------------------------------------ */
+
+  it('publishes the dead-row count the pane said no endpoint reported', async () => {
+    recordDeployment({ SQS_QUEUE_URL: 'queue' })
+    stubAuthFetch({ status: 200, body: HEALTHY_AUTH_BODY })
+
+    await makeController({
+      serviceProbeUrls: { auth: AUTH_PROBE_BASE },
+      serviceControlService: supervisordWith({ 'auth-worker': 'RUNNING' }),
+    }).getSyncDiagnostics({} as Request, adminResponse())
+
+    expect(payload().queues).toMatchObject({ deadLetterRows: 2, deadLetterRequeueable: true })
+  })
+
+  it('carries a measured zero, which the pane must be able to tell from silence', async () => {
+    recordDeployment({ SQS_QUEUE_URL: 'queue' })
+    stubAuthFetch({
+      status: 200,
+      body: { ...HEALTHY_AUTH_BODY, queue: { deadLetterRows: 0, deadLetterRequeueable: false } },
+    })
+
+    await makeController({ serviceProbeUrls: { auth: AUTH_PROBE_BASE } }).getSyncDiagnostics(
+      {} as Request,
+      adminResponse(),
+    )
+
+    // Zero rows AND no drain: an empty outbox on a deployment where a future
+    // dead row would be stuck. Both halves survive, because together they are
+    // the remedy the pane picks.
+    expect(payload().queues).toMatchObject({ deadLetterRows: 0, deadLetterRequeueable: false })
+  })
+
+  it('reports nothing rather than zero when auth took no census', async () => {
+    recordDeployment({ SQS_QUEUE_URL: 'queue' })
+    stubAuthFetch({ status: 200, body: HEALTHY_AUTH_BODY_WITHOUT_QUEUE })
+
+    await makeController({ serviceProbeUrls: { auth: AUTH_PROBE_BASE } }).getSyncDiagnostics(
+      {} as Request,
+      adminResponse(),
+    )
+
+    // An un-migrated worker, a store that did not answer, an auth older than
+    // the block. Zero dead rows is the healthy reading an operator stops
+    // looking at, so absence must stay absence.
+    const serialized = JSON.stringify(payload())
+    expect(serialized).not.toContain('deadLetterRows')
+    expect(serialized).not.toContain('deadLetterRequeueable')
+  })
+
+  it('needs both halves: a count whose meaning is unstated is read as no count', async () => {
+    recordDeployment({ SQS_QUEUE_URL: 'queue' })
+    for (const half of [{ deadLetterRows: 9 }, { deadLetterRequeueable: true }]) {
+      stubAuthFetch({ status: 200, body: { ...HEALTHY_AUTH_BODY_WITHOUT_QUEUE, queue: half } })
+
+      await makeController({ serviceProbeUrls: { auth: AUTH_PROBE_BASE } }).getSyncDiagnostics(
+        {} as Request,
+        adminResponse(),
+      )
+
+      const serialized = JSON.stringify(payload())
+      expect(serialized).not.toContain('deadLetterRows')
+      expect(serialized).not.toContain('deadLetterRequeueable')
+    }
+  })
+
+  it('drops a count outside its declared bound rather than clamping it', async () => {
+    recordDeployment({ SQS_QUEUE_URL: 'queue' })
+    stubAuthFetch({
+      status: 200,
+      body: {
+        ...HEALTHY_AUTH_BODY_WITHOUT_QUEUE,
+        queue: { deadLetterRows: MAX_REPORTED_DEAD_LETTER_ROWS + 1, deadLetterRequeueable: true },
+      },
+    })
+
+    await makeController({ serviceProbeUrls: { auth: AUTH_PROBE_BASE } }).getSyncDiagnostics(
+      {} as Request,
+      adminResponse(),
+    )
+
+    // Clamping would put a backlog figure on an operator's screen that no
+    // process counted. The ceiling itself IS admitted, because that is what a
+    // saturating auth reports.
+    expect(JSON.stringify(payload())).not.toContain('deadLetterRows')
+
+    stubAuthFetch({
+      status: 200,
+      body: {
+        ...HEALTHY_AUTH_BODY_WITHOUT_QUEUE,
+        queue: { deadLetterRows: MAX_REPORTED_DEAD_LETTER_ROWS, deadLetterRequeueable: true },
+      },
+    })
+    await makeController({ serviceProbeUrls: { auth: AUTH_PROBE_BASE } }).getSyncDiagnostics(
+      {} as Request,
+      adminResponse(),
+    )
+    expect(payload().queues).toMatchObject({ deadLetterRows: MAX_REPORTED_DEAD_LETTER_ROWS })
+  })
+
+  it('keeps the census out of the runtime block, where a second copy would drift', async () => {
+    recordDeployment({ SQS_QUEUE_URL: 'queue' })
+    stubAuthFetch({ status: 200, body: HEALTHY_AUTH_BODY })
+
+    await makeController({ serviceProbeUrls: { auth: AUTH_PROBE_BASE } }).getSyncDiagnostics(
+      {} as Request,
+      adminResponse(),
+    )
+
+    expect(payload().runtime).not.toHaveProperty('queue')
+    expect(payload().runtime).not.toHaveProperty('deadLetterRows')
+  })
+
+  /* ------------------------------------------------------------------------ */
   /* The structural secrecy sweep                                             */
   /* ------------------------------------------------------------------------ */
 
@@ -478,9 +599,10 @@ describe('AdminController runtime diagnostics', () => {
       ...assertBlock(body.queues, 'queues'),
     ]
 
-    // 6 runtime + 8 datastore + 2 queues. If a block silently stopped reporting,
-    // this count falls and the test fails rather than passing on absence.
-    expect(checked).toHaveLength(16)
+    // 6 runtime + 8 datastore + 4 queues. If a block silently stopped
+    // reporting, this count falls and the test fails rather than passing on
+    // absence.
+    expect(checked).toHaveLength(18)
   })
 
   it('emits nothing but contract-conformant values from an auth answer whose every leaf is a disclosure', async () => {
@@ -512,6 +634,13 @@ describe('AdminController runtime diagnostics', () => {
           lastError: 'connect ECONNREFUSED 10.0.3.14:3306',
           schemaName: 'standard_notes_db',
           migrationNames: ['1700000000000-AddSharedVaultUsers'],
+        },
+        queue: {
+          // A count shaped as a row dump, and a requeue verdict shaped as an
+          // operator instruction naming a host. Neither is read.
+          deadLetterRows: [{ uuid: '00000000-0000-0000-0000-000000000009', lastErrorCode: 'ECONNREFUSED' }],
+          deadLetterRequeueable: 'retry against sqs.eu-west-1.amazonaws.com',
+          deadLetterOldestEventId: '00000000-0000-0000-0000-000000000009',
         },
         queueUrl: 'https://sqs.eu-west-1.amazonaws.com/123456789012/srn-events',
       },
@@ -580,6 +709,11 @@ describe('AdminController runtime diagnostics', () => {
 
     expect(statusMock).not.toHaveBeenCalled()
     expect(payload().runtime.authRuntimeProbe).toBe('unreachable')
-    expect(payload().queues).toEqual({ separation: undefined, consumerCount: undefined })
+    expect(payload().queues).toEqual({
+      separation: undefined,
+      consumerCount: undefined,
+      deadLetterRows: undefined,
+      deadLetterRequeueable: undefined,
+    })
   })
 })

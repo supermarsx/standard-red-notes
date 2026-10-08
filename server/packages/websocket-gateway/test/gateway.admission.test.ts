@@ -21,11 +21,15 @@ vi.mock('ioredis', () => ({
 
 import {
   attachWebSocketGateway,
+  countAdvertisableOperations,
   MAX_REPORTED_ADMISSION_EVENTS,
+  MAX_REPORTED_ADVERTISABLE_OPERATIONS,
   MAX_REPORTED_LIVE_SOCKETS,
   MAX_REPORTED_ORIGIN_RULES,
+  NEGOTIABLE_OPERATIONS,
   SOCKET_REJECTION_COUNTERS,
   type AdmissionProbe,
+  type AdvertisableOperationInputs,
   type GatewayAdmission,
   type GatewayConfig,
   type SyncGatewayOptions,
@@ -455,6 +459,7 @@ describe('admission(): the emitted contract', () => {
     ticketsIssued: { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
     ticketsRefused: { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
     handshakeRejected: { kind: 'bound', max: MAX_REPORTED_ADMISSION_EVENTS },
+    advertisableOperationCount: { kind: 'bound', max: MAX_REPORTED_ADVERTISABLE_OPERATIONS },
   }
 
   const assertLeaf = (key: string, value: unknown): void => {
@@ -518,9 +523,9 @@ describe('admission(): the emitted contract', () => {
       checked.push(key)
     }
 
-    // 7 scalars + 3 causes. If a member silently stopped reporting, this falls
+    // 8 scalars + 3 causes. If a member silently stopped reporting, this falls
     // and the test fails rather than passing on absence.
-    expect(checked).toHaveLength(10)
+    expect(checked).toHaveLength(11)
 
     // Corroborating only, and deliberately second: this is the denylist arm,
     // here to document the shapes rather than to be the boundary.
@@ -552,5 +557,237 @@ describe('admission(): the emitted contract', () => {
     await attach({ allowedOrigins: many, allowSameOrigin: true })
 
     expect(admission().allowedOriginCount).toBe(MAX_REPORTED_ORIGIN_RULES)
+  })
+})
+
+/**
+ * Standard Red Notes: the ADVERTISABLE OPERATION COUNT.
+ *
+ * The panel's capability block had no producer for this at all and rendered its
+ * own empty note. The figure is a COUNT and never the names: an operation name
+ * is a server-chosen string and the report it feeds is written to be pasted in
+ * public.
+ *
+ * THE TEST THAT MATTERS is the first one below. The operation LIST is built in
+ * the command handler, at AUTHENTICATED time, and this count is built in the
+ * gateway -- two places, one fact. So the count is pinned against what a REAL
+ * handshake actually advertises, configuration by configuration, rather than
+ * against a second reading of the same predicates. A count that disagrees with
+ * the handshake is worse than no count: it is the one screen that exists to
+ * tell an operator the truth, telling them something false.
+ */
+describe('admission(): the advertisable operation count', () => {
+  const collaboration = { collaborationAuthorizationReady: () => true, authorizeCollaboration: vi.fn() }
+  const apiRpc = {
+    idempotencyScope: 'shared-durable' as const,
+    ready: () => true,
+    operations: () => ['API_RPC', 'STREAM_ASSISTANT'] as const,
+    execute: vi.fn(),
+  }
+  const inviteEvents = {
+    distribution: 'process' as const,
+    ready: () => true,
+    tail: vi.fn(async () => '0'),
+    readAfter: vi.fn(async () => ({ previousCursor: '0', events: [] })),
+    subscribeAvailability: () => (): void => undefined,
+  }
+  const files = { ready: () => true }
+
+  /** Open a socket, authenticate it for real, and return what it was advertised. */
+  const negotiatedOperations = async (): Promise<readonly string[]> => {
+    const issued = await attached!.sync.issueTicket({
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      deviceId: 'device-1',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: APP_ORIGIN })
+    await opened(socket)
+    const answer = nextJson(socket)
+    socket.send(authFrame(issued.ticket, 'device-1'))
+    const frame = await answer
+    expect(frame.type).toBe('AUTHENTICATED')
+    socket.close()
+
+    return ((frame.payload as { operations?: readonly string[] }).operations ?? []) as readonly string[]
+  }
+
+  it('agrees with what a real handshake advertises, configuration by configuration', async () => {
+    const configurations: Array<Partial<SyncGatewayOptions>> = [
+      // Only the durable backend: the shipped single container before any of the
+      // other adapters composed.
+      {},
+      // The deployment with no durable command port, which advertises SYNC_ITEMS
+      // to nobody and is the state a self-host runs in permanently.
+      { backend: { ready: () => false } as unknown as SyncGatewayOptions['backend'] },
+      { collaborationAuthorization: collaboration as unknown as SyncGatewayOptions['collaborationAuthorization'] },
+      // TWO operations from one adapter. A count that treated this adapter as
+      // one would under-report exactly the deployment whose assistant stream is
+      // the missing thing.
+      { apiRpc: apiRpc as unknown as SyncGatewayOptions['apiRpc'] },
+      { inviteEvents: inviteEvents as unknown as SyncGatewayOptions['inviteEvents'] },
+      { files: files as unknown as SyncGatewayOptions['files'] },
+      // Everything at once, which is the only configuration where a wrong
+      // addition would still produce a plausible figure.
+      {
+        collaborationAuthorization: collaboration as unknown as SyncGatewayOptions['collaborationAuthorization'],
+        apiRpc: apiRpc as unknown as SyncGatewayOptions['apiRpc'],
+        inviteEvents: inviteEvents as unknown as SyncGatewayOptions['inviteEvents'],
+        files: files as unknown as SyncGatewayOptions['files'],
+      },
+    ]
+
+    const observed: Array<{ advertised: number; reported: number }> = []
+    for (const configuration of configurations) {
+      await attach(configuration)
+      const advertised = await negotiatedOperations()
+      observed.push({ advertised: advertised.length, reported: admission().advertisableOperationCount })
+      await attached!.stop()
+      attached = undefined
+      if (httpServer?.listening) {
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+      }
+    }
+
+    for (const { advertised, reported } of observed) {
+      expect(reported).toBe(advertised)
+    }
+    // The counts actually DIFFER across the configurations, so the agreement
+    // above is not seven copies of one number.
+    expect(observed.map((entry) => entry.advertised)).toEqual([1, 0, 2, 3, 2, 2, 6])
+  })
+
+  it('reports zero for a lane that opens and advertises nothing, which no other member shows', async () => {
+    // A socket that opens and negotiates no operation refuses every mint BEFORE
+    // the gateway's issuer, so `ticketsRefused` stays at 0 while every client is
+    // turned away. Zero here is the reading that makes that state visible.
+    await attach({ backend: { ready: () => false } as unknown as SyncGatewayOptions['backend'] })
+
+    expect(await negotiatedOperations()).toEqual([])
+    expect(admission()).toMatchObject({ advertisableOperationCount: 0, ticketsRefused: 0 })
+  })
+
+  it('tracks a readiness that changes while the process runs', async () => {
+    let ready = false
+    await attach({ files: { ready: () => ready } as unknown as SyncGatewayOptions['files'] })
+
+    expect(admission().advertisableOperationCount).toBe(1)
+    ready = true
+    // Asked fresh per question. A figure cached at attach would describe a lane
+    // that no longer exists.
+    expect(admission().advertisableOperationCount).toBe(2)
+  })
+
+  it('emits a count and never a name, on a gateway advertising everything', async () => {
+    await attach({
+      collaborationAuthorization: collaboration as unknown as SyncGatewayOptions['collaborationAuthorization'],
+      apiRpc: apiRpc as unknown as SyncGatewayOptions['apiRpc'],
+      inviteEvents: inviteEvents as unknown as SyncGatewayOptions['inviteEvents'],
+      files: files as unknown as SyncGatewayOptions['files'],
+    })
+
+    const serialized = JSON.stringify(admission())
+    for (const operation of NEGOTIABLE_OPERATIONS) {
+      expect(serialized).not.toContain(operation)
+    }
+    expect(admission().advertisableOperationCount).toBe(NEGOTIABLE_OPERATIONS.length)
+  })
+})
+
+describe('countAdvertisableOperations', () => {
+  /**
+   * The clause-by-clause half, driven directly, because one clause cannot be
+   * reached through `attach()` at all: a `requireSharedState` lane whose invite
+   * bus is process-local is REFUSED at attach, so the handler's own
+   * shared-distribution condition would never be exercised through a socket.
+   * Mirroring it is still right -- the handler decides what is advertised -- and
+   * a mirrored clause no test reaches is a clause that can be deleted without
+   * anything failing.
+   */
+  const inputs = (overrides: Partial<AdvertisableOperationInputs> = {}): AdvertisableOperationInputs => ({
+    backend: { ready: () => true },
+    ...overrides,
+  })
+
+  it('counts nothing for a host that configured no sync lane at all', () => {
+    expect(countAdvertisableOperations(undefined)).toBe(0)
+  })
+
+  it('counts each adapter once, and the RPC adapter by its own operation list', () => {
+    expect(countAdvertisableOperations(inputs())).toBe(1)
+    expect(countAdvertisableOperations(inputs({ backend: { ready: () => false } }))).toBe(0)
+    expect(
+      countAdvertisableOperations(
+        inputs({ collaborationAuthorization: { collaborationAuthorizationReady: () => true } }),
+      ),
+    ).toBe(2)
+    expect(
+      countAdvertisableOperations(
+        inputs({ collaborationAuthorization: { collaborationAuthorizationReady: () => false } }),
+      ),
+    ).toBe(1)
+    expect(countAdvertisableOperations(inputs({ apiRpc: { ready: () => true, operations: () => ['API_RPC'] } }))).toBe(
+      2,
+    )
+    expect(
+      countAdvertisableOperations(
+        inputs({ apiRpc: { ready: () => true, operations: () => ['API_RPC', 'STREAM_ASSISTANT'] } }),
+      ),
+    ).toBe(3)
+    // Not ready: its operation list is not consulted at all, so an adapter that
+    // lists two while refusing to serve them counts for nothing.
+    expect(
+      countAdvertisableOperations(
+        inputs({ apiRpc: { ready: () => false, operations: () => ['API_RPC', 'STREAM_ASSISTANT'] } }),
+      ),
+    ).toBe(1)
+    expect(countAdvertisableOperations(inputs({ files: { ready: () => true } }))).toBe(2)
+    expect(countAdvertisableOperations(inputs({ files: { ready: () => false } }))).toBe(1)
+  })
+
+  it('does not count a process-local invite bus on a lane that requires fleet-shared state', () => {
+    // The clause `attach()` makes unreachable. A process-local bus on a fleet
+    // deployment advertises INVITE_EVENTS to nobody, and the handler says so.
+    expect(
+      countAdvertisableOperations(
+        inputs({ inviteEvents: { ready: () => true, distribution: 'process' }, requireSharedState: true }),
+      ),
+    ).toBe(1)
+    expect(
+      countAdvertisableOperations(
+        inputs({ inviteEvents: { ready: () => true, distribution: 'shared' }, requireSharedState: true }),
+      ),
+    ).toBe(2)
+    // A single-process deployment does not require shared state, so its
+    // process-local bus IS advertised -- which is correct rather than missing.
+    expect(
+      countAdvertisableOperations(
+        inputs({ inviteEvents: { ready: () => true, distribution: 'process' }, requireSharedState: false }),
+      ),
+    ).toBe(2)
+    expect(
+      countAdvertisableOperations(
+        inputs({ inviteEvents: { ready: () => false, distribution: 'shared' }, requireSharedState: true }),
+      ),
+    ).toBe(1)
+  })
+
+  it('cannot exceed the number of operations this protocol defines', () => {
+    const everything = countAdvertisableOperations(
+      inputs({
+        collaborationAuthorization: { collaborationAuthorizationReady: () => true },
+        apiRpc: { ready: () => true, operations: () => ['API_RPC', 'STREAM_ASSISTANT'] },
+        inviteEvents: { ready: () => true, distribution: 'shared' },
+        files: { ready: () => true },
+      }),
+    )
+    expect(everything).toBe(MAX_REPORTED_ADVERTISABLE_OPERATIONS)
+
+    // An adapter reporting more operations than the protocol has saturates at
+    // the ceiling rather than emitting an open number.
+    expect(
+      countAdvertisableOperations(
+        inputs({ apiRpc: { ready: () => true, operations: () => Array.from({ length: 500 }, () => 'API_RPC') } }),
+      ),
+    ).toBe(MAX_REPORTED_ADVERTISABLE_OPERATIONS)
   })
 })

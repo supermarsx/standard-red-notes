@@ -388,6 +388,35 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
     )
   })
 
+  /**
+   * Standard Red Notes: the admin Diagnostics pane publishes a count of TERMINAL
+   * outbox rows beside whether anything could put one back on the queue, and
+   * this is the second half of that verdict. A requeue into a queue nothing
+   * polls looks like a fix and is not one.
+   *
+   * The case that drove a separate `armed` flag is the FIRST assertion: a
+   * container loaded for CLI work binds this class and never starts the poller,
+   * and `stopped` is `false` on a dispatcher that was only constructed — so a
+   * verdict read off `stopped` alone would report that container as draining.
+   */
+  it('reports whether a drain loop is armed, which a constructed-but-unstarted dispatcher is not', async () => {
+    const dispatcher = new InviteEventOutboxDispatcher(repository, publisher)
+
+    expect(dispatcher.isDrainArmed()).toBe(false)
+
+    dispatcher.start(50)
+    expect(dispatcher.isDrainArmed()).toBe(true)
+
+    await dispatcher.stop()
+    expect(dispatcher.isDrainArmed()).toBe(false)
+
+    // A restart re-arms it, so the verdict tracks the live state rather than a
+    // once-per-process decision.
+    dispatcher.start(50)
+    expect(dispatcher.isDrainArmed()).toBe(true)
+    await dispatcher.stop()
+  })
+
   it('ignores wake() after stop but resumes on a fresh start', async () => {
     const dispatcher = new InviteEventOutboxDispatcher(repository, publisher)
 

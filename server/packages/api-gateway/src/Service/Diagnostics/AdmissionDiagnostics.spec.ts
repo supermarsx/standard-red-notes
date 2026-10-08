@@ -1,5 +1,8 @@
+import { MAX_REPORTED_ADVERTISABLE_OPERATIONS as GATEWAY_MAX_REPORTED_ADVERTISABLE_OPERATIONS } from '@standard-red-notes/websocket-gateway'
+
 import {
   MAX_REPORTED_ADMISSION_EVENTS,
+  MAX_REPORTED_ADVERTISABLE_OPERATIONS,
   MAX_REPORTED_LIVE_SOCKETS,
   MAX_REPORTED_ORIGIN_RULES,
   SOCKET_REJECTION_COUNTER_KEYS,
@@ -28,6 +31,7 @@ describe('readGatewayAdmission', () => {
     ticketsRefused: 2,
     handshakeRejected: 1,
     rejections: { originNotAllowed: 4, queryStringNotPermitted: 0, unavailable: 5 },
+    advertisableOperationCount: 4,
   }
 
   it('carries every member a conforming gateway reported', () => {
@@ -75,6 +79,9 @@ describe('readGatewayAdmission', () => {
       ticketsRefused: -3,
       handshakeRejected: Number.NaN,
       rejections: { originNotAllowed: Number.POSITIVE_INFINITY, queryStringNotPermitted: 1, unavailable: 10 ** 15 },
+      // No handshake can advertise more operations than the protocol defines, so
+      // a figure above the ceiling is malformed by this contract.
+      advertisableOperationCount: MAX_REPORTED_ADVERTISABLE_OPERATIONS + 1,
     })
 
     expect(Object.keys(outOfBounds ?? {}).sort()).toEqual(['allowsSameOrigin', 'originAdmitted', 'rejections'])
@@ -87,12 +94,14 @@ describe('readGatewayAdmission', () => {
       allowedOriginCount: MAX_REPORTED_ORIGIN_RULES,
       liveSockets: MAX_REPORTED_LIVE_SOCKETS,
       ticketsIssued: MAX_REPORTED_ADMISSION_EVENTS,
+      advertisableOperationCount: MAX_REPORTED_ADVERTISABLE_OPERATIONS,
     })
 
     expect(saturated).toMatchObject({
       allowedOriginCount: MAX_REPORTED_ORIGIN_RULES,
       liveSockets: MAX_REPORTED_LIVE_SOCKETS,
       ticketsIssued: MAX_REPORTED_ADMISSION_EVENTS,
+      advertisableOperationCount: MAX_REPORTED_ADVERTISABLE_OPERATIONS,
     })
   })
 
@@ -123,6 +132,7 @@ describe('readGatewayAdmission', () => {
     })
 
     expect(Object.keys(emitted ?? {}).sort()).toEqual([
+      'advertisableOperationCount',
       'allowedOriginCount',
       'allowsSameOrigin',
       'handshakeRejected',
@@ -151,6 +161,45 @@ describe('readGatewayAdmission', () => {
     // of a block that reported no count at all.
     expect(readGatewayAdmission({ ...healthy, rejections: {} })).not.toHaveProperty('rejections')
     expect(readGatewayAdmission({ ...healthy, rejections: 'none' })).not.toHaveProperty('rejections')
+  })
+
+  /* ------------------------------------------------------------------------ */
+  /* The advertisable operation count                                         */
+  /* ------------------------------------------------------------------------ */
+
+  it('carries the advertisable count, including the zero that matters most', () => {
+    expect(readGatewayAdmission(healthy)?.advertisableOperationCount).toBe(4)
+    // A lane whose socket opens and advertises nothing refuses every mint
+    // BEFORE the gateway's issuer, so `ticketsRefused` reads 0 while every
+    // client is turned away. This zero is the reading that shows it, so it has
+    // to survive the reader rather than being smoothed into absence.
+    expect(readGatewayAdmission({ ...healthy, advertisableOperationCount: 0 })?.advertisableOperationCount).toBe(0)
+  })
+
+  it('never admits an operation NAME, whatever shape the gateway sent it in', () => {
+    // A name is a server-chosen string and this block is pasted in public. The
+    // field is a count; a list, a record or a string in its place is not read at
+    // all, and no sibling key carrying names is read either.
+    for (const shaped of [['SYNC_ITEMS', 'FILES_V1'], { SYNC_ITEMS: true }, 'SYNC_ITEMS,FILES_V1', 4.5e300]) {
+      const emitted = readGatewayAdmission({
+        ...healthy,
+        advertisableOperationCount: shaped,
+        advertisableOperations: ['SYNC_ITEMS', 'STREAM_ASSISTANT'],
+      })
+      expect(emitted).not.toHaveProperty('advertisableOperations')
+      expect(JSON.stringify(emitted)).not.toContain('SYNC_ITEMS')
+      expect(JSON.stringify(emitted)).not.toContain('STREAM_ASSISTANT')
+    }
+    // A float is floored like every other count here, not rejected: `4.5`
+    // operations is a producer rounding error, not a disclosure.
+    expect(readGatewayAdmission({ ...healthy, advertisableOperationCount: 4.5 })?.advertisableOperationCount).toBe(4)
+  })
+
+  it('declares the same ceiling the gateway saturates at', () => {
+    // A mirror nobody compares is a bound that drifts: this module stays a pure
+    // reader with no import of the gateway package, so the comparison lives
+    // here instead.
+    expect(MAX_REPORTED_ADVERTISABLE_OPERATIONS).toBe(GATEWAY_MAX_REPORTED_ADVERTISABLE_OPERATIONS)
   })
 })
 
