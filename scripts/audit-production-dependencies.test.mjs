@@ -9,6 +9,7 @@ import {
   enforceableAdvisories,
   parseNpmAudit,
   parseYarnAudit,
+  runProductionAudit,
   trackedLockfilesFromGitOutput,
   validateAllowlist,
   validateAppSecurityGraph,
@@ -696,5 +697,53 @@ test("the official SheetJS distribution stays source- and checksum-pinned", () =
       ),
     ).join("\n"),
     /checksum failures must remain fatal/,
+  );
+});
+
+test("a failed structural contract never suppresses the per-domain vulnerability scan", () => {
+  // Regression guard. The structural assertions used to `throw` before
+  // `runAudit` was reached, so a single declared-version mismatch stopped
+  // `npm audit`/`yarn npm audit` from running for EVERY domain -- a security
+  // gate that could not even start. The scan must now run regardless, and a
+  // domain reporting nothing is indistinguishable from a domain never scanned
+  // unless we record the invocations, so record them.
+  const scannedDirectories = [];
+  const runner = (command, args, options) => {
+    const argv = Array.isArray(args) ? args.join(" ") : String(args ?? "");
+    if (argv.includes("ls-files")) {
+      // A deliberately bogus inventory, so the FIRST structural stage fails
+      // and we are genuinely testing suppression rather than a green run.
+      return {
+        status: 0,
+        stdout: "yarn.lock\0not/a/real/package-lock.json\0",
+        stderr: "",
+      };
+    }
+    scannedDirectories.push(
+      path.relative(repositoryRoot, options.cwd).replaceAll("\\", "/") || ".",
+    );
+    return {
+      status: 0,
+      stdout: argv.includes("yarn npm audit") ? "" : "{}",
+      stderr: "",
+    };
+  };
+
+  let thrown;
+  assert.throws(
+    () => runProductionAudit(repositoryRoot, runner),
+    (error) => {
+      thrown = error;
+      return true;
+    },
+  );
+  // Precondition: prove the structural failure we are testing against is
+  // actually present. Without this the assertion below could pass on a run
+  // where nothing failed and nothing was suppressed.
+  assert.match(thrown.message, /production dependency audit inventory failed/);
+
+  assert.deepEqual(
+    [...scannedDirectories].sort(),
+    auditDomains.map((domain) => domain.directory).sort(),
   );
 });

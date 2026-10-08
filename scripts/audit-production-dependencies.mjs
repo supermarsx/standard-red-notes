@@ -849,86 +849,128 @@ export function runProductionAudit(root = repositoryRoot, runner = spawnSync) {
     );
   }
 
-  const inventoryErrors = validateLockfileInventory(
-    trackedLockfilesFromGitOutput(git.stdout),
-  );
-  if (inventoryErrors.length > 0) {
-    throw new Error(
-      `production dependency audit inventory failed:\n- ${inventoryErrors.join("\n- ")}`,
-    );
-  }
+  // Every structural assertion below is COLLECTED rather than thrown, because
+  // throwing here used to make the per-domain vulnerability scan unreachable:
+  // one declared-version mismatch aborted the run before `runAudit` executed for
+  // any domain at all, so `npm audit`/`yarn npm audit` silently stopped running
+  // for the whole repository while the contract red stood. Report everything,
+  // fail on anything, and never let a declaration mismatch suppress a
+  // vulnerability finding.
+  const failures = [];
+  const collectFailures = (label, errors) => {
+    if (errors.length > 0) {
+      failures.push(`${label}:\n- ${errors.join("\n- ")}`);
+    }
+  };
 
-  const appLockfile = fs.readFileSync(
-    path.join(root, "app", "yarn.lock"),
-    "utf8",
+  collectFailures(
+    "production dependency audit inventory failed",
+    validateLockfileInventory(trackedLockfilesFromGitOutput(git.stdout)),
   );
-  const graphErrors = [
-    ...validateSecurityManifestDeclarations(
+
+  let graphErrors = [];
+  try {
+    const appLockfile = fs.readFileSync(
+      path.join(root, "app", "yarn.lock"),
+      "utf8",
+    );
+    graphErrors = [
+      ...validateSecurityManifestDeclarations(
+        Object.fromEntries(
+          securityManifestDeclarations.map((requirement) => [
+            requirement.file,
+            fs.readFileSync(path.join(root, requirement.file), "utf8"),
+          ]),
+        ),
+      ),
+      ...validateAppSecurityGraph(
+        fs.readFileSync(path.join(root, "app", "package.json"), "utf8"),
+        appLockfile,
+      ),
+      ...validateSheetJsDistribution(
+        fs.readFileSync(
+          path.join(root, "app", "packages", "web", "package.json"),
+          "utf8",
+        ),
+        appLockfile,
+        fs.readFileSync(path.join(root, "app", ".yarnrc.yml"), "utf8"),
+      ),
+      ...validateMobileRubySecurityGraph(
+        fs.readFileSync(
+          path.join(root, "app", "packages", "mobile", "Gemfile"),
+          "utf8",
+        ),
+        fs.readFileSync(
+          path.join(root, "app", "packages", "mobile", "Gemfile.lock"),
+          "utf8",
+        ),
+      ),
+    ];
+  } catch (error) {
+    graphErrors = [
+      `could not evaluate the declared dependency graph: ${error instanceof Error ? error.message : error}`,
+    ];
+  }
+  collectFailures("production dependency graph contract failed", graphErrors);
+
+  let yarnGraphErrors = [];
+  try {
+    yarnGraphErrors = validateYarnSecurityGraph(
       Object.fromEntries(
-        securityManifestDeclarations.map((requirement) => [
-          requirement.file,
-          fs.readFileSync(path.join(root, requirement.file), "utf8"),
-        ]),
+        auditDomains
+          .filter((domain) => domain.manager === "yarn")
+          .map((domain) => [
+            domain.lockfile,
+            fs.readFileSync(path.join(root, domain.lockfile), "utf8"),
+          ]),
       ),
-    ),
-    ...validateAppSecurityGraph(
-      fs.readFileSync(path.join(root, "app", "package.json"), "utf8"),
-      appLockfile,
-    ),
-    ...validateSheetJsDistribution(
-      fs.readFileSync(
-        path.join(root, "app", "packages", "web", "package.json"),
-        "utf8",
-      ),
-      appLockfile,
-      fs.readFileSync(path.join(root, "app", ".yarnrc.yml"), "utf8"),
-    ),
-    ...validateMobileRubySecurityGraph(
-      fs.readFileSync(
-        path.join(root, "app", "packages", "mobile", "Gemfile"),
-        "utf8",
-      ),
-      fs.readFileSync(
-        path.join(root, "app", "packages", "mobile", "Gemfile.lock"),
-        "utf8",
-      ),
-    ),
-  ];
-  if (graphErrors.length > 0) {
-    throw new Error(
-      `production dependency graph contract failed:\n- ${graphErrors.join("\n- ")}`,
     );
+  } catch (error) {
+    yarnGraphErrors = [
+      `could not evaluate the committed Yarn dependency graph: ${error instanceof Error ? error.message : error}`,
+    ];
   }
-
-  const yarnGraphErrors = validateYarnSecurityGraph(
-    Object.fromEntries(
-      auditDomains
-        .filter((domain) => domain.manager === "yarn")
-        .map((domain) => [
-          domain.lockfile,
-          fs.readFileSync(path.join(root, domain.lockfile), "utf8"),
-        ]),
-    ),
+  collectFailures(
+    "production Yarn dependency graph contract failed",
+    yarnGraphErrors,
   );
-  if (yarnGraphErrors.length > 0) {
-    throw new Error(
-      `production Yarn dependency graph contract failed:\n- ${yarnGraphErrors.join("\n- ")}`,
-    );
+
+  // The vulnerability scan runs for EVERY domain regardless of the assertions
+  // above, and one domain's failure must not hide the remaining domains'
+  // findings, so each is isolated.
+  const advisories = [];
+  const auditErrors = [];
+  const scannedDomains = [];
+  for (const domain of auditDomains) {
+    try {
+      advisories.push(...runAudit(domain, root, runner));
+      scannedDomains.push(domain.id);
+    } catch (error) {
+      auditErrors.push(error instanceof Error ? error.message : String(error));
+    }
   }
-
-  const advisories = auditDomains.flatMap((domain) =>
-    runAudit(domain, root, runner),
+  collectFailures(
+    "production dependency audit could not complete",
+    auditErrors,
   );
+
   const allowlist = JSON.parse(fs.readFileSync(allowlistPath, "utf8"));
   const today = new Date().toISOString().slice(0, 10);
-  const allowlistErrors = validateAllowlist(advisories, allowlist, today);
-  if (allowlistErrors.length > 0) {
-    throw new Error(
-      `production dependency audit failed:\n- ${allowlistErrors.join("\n- ")}`,
-    );
+  collectFailures(
+    "production dependency audit failed",
+    validateAllowlist(advisories, allowlist, today),
+  );
+
+  if (failures.length > 0) {
+    throw new Error(failures.join("\n\n"));
   }
 
-  return { domains: auditDomains.length, advisories, allowlist };
+  return {
+    domains: auditDomains.length,
+    scannedDomains,
+    advisories,
+    allowlist,
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
