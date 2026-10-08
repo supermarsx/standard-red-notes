@@ -167,6 +167,31 @@ const NEGOTIABLE_OPERATIONS: ReadonlySet<SyncNegotiatedOperation> = new Set([
   'FILES_V1',
 ])
 
+/**
+ * What a close actually carries.
+ *
+ * *** THE REASON USED TO BE DISCARDED AT THE TYPE LEVEL. *** This was declared
+ * `{ code?: number }`, the wiring read `event.code ?? 0`, and the spec double
+ * mirrored the narrow type — so no client test could even express a server that
+ * states its cause, and about a dozen distinct gateway causes reached the user as
+ * a bare `SOCKET_CLOSED`. A native `WebSocket` has carried `reason` and `wasClean`
+ * all along; the gateway's `failAndClose` puts its message in `reason` and
+ * `gateway.attach.test.ts` asserts `{ code: 1008, reason: 'sync rate limit
+ * exceeded' }` on the wire.
+ *
+ * `reason` is read ONLY to pick a `SyncFallbackReason` from a closed set (see
+ * `syncCloseFallbackReason`). Server text never reaches the ledger, the pane or a
+ * log line — a close reason is attacker-influenceable in principle and the ledger
+ * is written to be pasted in public.
+ */
+export type SyncSocketCloseEvent = {
+  readonly code?: number
+  /** The server's stated cause. Classified, never stored or rendered verbatim. */
+  readonly reason?: string
+  /** False when no close frame arrived, so there is no server statement to trust. */
+  readonly wasClean?: boolean
+}
+
 export interface SyncSocketLike {
   readonly readyState: number
   readonly bufferedAmount: number
@@ -180,7 +205,7 @@ export interface SyncSocketLike {
   onopen: (() => void) | null
   onmessage: ((event: { data: unknown }) => void) | null
   onerror: (() => void) | null
-  onclose: ((event: { code?: number }) => void) | null
+  onclose: ((event: SyncSocketCloseEvent) => void) | null
   send(data: string): void
   /**
    * Writes a binary FILES_V1 frame. Separate from {@link send} so a socket double
@@ -1715,7 +1740,7 @@ export class SyncTransportWorkerRuntime {
     socket.onopen = () => this.onOpen(socket)
     socket.onmessage = (event) => void this.onMessage(socket, event.data)
     socket.onerror = () => undefined
-    socket.onclose = (event) => void this.onClose(socket, event.code ?? 0)
+    socket.onclose = (event) => void this.onClose(socket, event)
   }
 
   private onOpen(socket: SyncSocketLike): void {
@@ -3105,10 +3130,11 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
-  private async onClose(socket: SyncSocketLike, code: number): Promise<void> {
+  private async onClose(socket: SyncSocketLike, event: SyncSocketCloseEvent): Promise<void> {
     if (this.socket !== socket) {
       return
     }
+    const code = event.code ?? 0
     this.socket = undefined
     this.clearAckDeadline()
     this.clearHeartbeat()

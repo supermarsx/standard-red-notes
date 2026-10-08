@@ -1,6 +1,6 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import { SyncOutboxRecord, SyncOutboxStore, SyncOutboxUnavailableError } from './SyncTransportOutbox'
-import { SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
+import { SyncSocketCloseEvent, SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
 import {
   CollaborationAuthorizationTransportRequest,
   MainToSyncWorkerMessage,
@@ -127,8 +127,10 @@ class FakeSocket implements SyncSocketLike {
   onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
   onerror: (() => void) | null = null
-  onclose: ((event: { code?: number }) => void) | null = null
+  onclose: ((event: SyncSocketCloseEvent) => void) | null = null
   sent: string[] = []
+  /** What `close()` was asked for locally, so a test can assert the client's own close. */
+  closes: { code?: number; reason?: string }[] = []
 
   open(): void {
     this.readyState = 1
@@ -153,12 +155,40 @@ class FakeSocket implements SyncSocketLike {
     this.onmessage?.({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) })
   }
 
-  close(code = 1000): void {
+  /**
+   * A LOCAL close, which is the only thing `SyncSocketLike` exposes. Echoed back
+   * through `onclose` with the code AND reason it was asked for, like a browser.
+   */
+  close(code = 1000, reason = ''): void {
+    this.closes.push({ code, reason })
+    this.finishClose(code, reason, true)
+  }
+
+  /**
+   * The gateway closing with a stated cause — a close frame arrived, so the close
+   * is clean and its reason is the server's own word.
+   *
+   * *** THIS DOUBLE USED TO BE PART OF THE BUG. *** It mirrored a narrow
+   * `{ code?: number }` close type, so no test in this file could express
+   * `{ code: 1008, reason: 'sync rate limit exceeded' }` — which is exactly what
+   * `gateway.attach.test.ts` asserts the gateway sends. A test that cannot see a
+   * close reason proves nothing about attribution.
+   */
+  serverClose(code: number, reason = ''): void {
+    this.finishClose(code, reason, true)
+  }
+
+  /** The connection died with no close frame: what a browser reports as 1006. */
+  abort(): void {
+    this.finishClose(1006, '', false)
+  }
+
+  private finishClose(code: number, reason: string, wasClean: boolean): void {
     if (this.readyState === 3) {
       return
     }
     this.readyState = 3
-    this.onclose?.({ code })
+    this.onclose?.({ code, reason, wasClean })
   }
 }
 

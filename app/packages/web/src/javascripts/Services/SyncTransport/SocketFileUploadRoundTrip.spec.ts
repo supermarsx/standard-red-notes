@@ -394,14 +394,20 @@ const inlineWorker = (outbox: MemoryOutbox) => {
         onclose: null,
         send: (data: string) => socket.send(data),
         sendBinary: (data: Uint8Array) => socket.send(Buffer.from(data), { binary: true }),
-        close: (code?: number) => socket.close(code),
+        close: (code?: number, reason?: string) => socket.close(code, reason),
       }
       socket.on('open', () => adapted.onopen?.())
       socket.on('message', (data: RawData | string) =>
         adapted.onmessage?.({ data: typeof data === 'string' ? data : new Uint8Array(data as Buffer) }),
       )
       socket.on('error', () => adapted.onerror?.())
-      socket.on('close', (code: number) => adapted.onclose?.({ code }))
+      // The REASON is carried here too, not just the code: `ws` hands it over as a
+      // Buffer and the gateway's own `failAndClose` is what writes it. A close code
+      // alone cannot tell a rate limit from an auth rejection — both are 1008.
+      // `ws` reports no `wasClean`, and 1006 is precisely "no close frame arrived".
+      socket.on('close', (code: number, reason: Buffer) =>
+        adapted.onclose?.({ code, reason: reason.toString('utf8'), wasClean: code !== 1006 }),
+      )
       return adapted
     },
   })
