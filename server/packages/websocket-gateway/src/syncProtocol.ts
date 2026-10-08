@@ -38,6 +38,45 @@ export const MAX_SYNC_BUFFERED_BYTES = 256 * 1024
 export const MAX_SYNC_EGRESS_BUFFERED_BYTES = MAX_FILE_TRANSFER_CREDIT_BYTES + MAX_FILE_BINARY_FRAME_BYTES
 export const MAX_SYNC_QUEUED_FRAMES = 8
 export const MAX_SYNC_QUEUED_BYTES = MAX_SYNC_FRAME_BYTES
+/**
+ * The FILES_V1 BINARY plane's own ingress-queue budget, kept separate from the
+ * JSON command plane's {@link MAX_SYNC_QUEUED_BYTES} above.
+ *
+ * WHY THIS EXISTS. The ingress queue admits `MAX_SYNC_QUEUED_FRAMES` frames,
+ * but every frame of either plane used to be charged against one 512 KiB
+ * allowance -- `MAX_SYNC_FRAME_BYTES`, which is the largest single JSON frame.
+ * A binary frame is `MAX_FILE_BINARY_FRAME_BYTES` (266,248 bytes), so TWO of
+ * them are 532,496 and the second one was refused: `failAndClose('BACKPRESSURE',
+ * 'File transfer queue is full.', 1013)`. The 8-frame allowance was therefore
+ * unreachable on the binary plane -- the real figure was ONE -- and exceeding
+ * it closed the socket rather than pausing it.
+ *
+ * Measured on a single container built from `main`, uploading 4,194,304 bytes
+ * (16 frames) over `/sockets/sync`: with one frame outstanding at a time every
+ * run completed (3.47 MB/s on loopback); with TWO outstanding the socket closed
+ * `1013 File transfer queue is full.` after exactly two frames, every run. The
+ * shipped browser client reaches this on its own pacing policy --
+ * `sendBinaryWithBackpressure` waits only while `bufferedAmount` exceeds its own
+ * 256 KiB figure, which a flushed send buffer clears long before the gateway has
+ * processed the frame -- and that probe closed 3/3.
+ *
+ * WHAT THE NUMBER MEANS. Exactly the 8 frames the queue already advertises, at
+ * the binary plane's own frame size, so the FRAME count is the binding
+ * constraint on this plane instead of an invisible byte wall. It is still a hard
+ * per-socket bound on un-processed ingress (~2.03 MiB), and the per-FRAME
+ * ceilings are untouched: `MAX_SYNC_FRAME_BYTES` for JSON,
+ * `MAX_FILE_BINARY_FRAME_BYTES` for binary, `MAX_WEBSOCKET_MESSAGE_BYTES` in
+ * `ws` itself. The rate at which bytes may arrive remains
+ * `DEFAULT_SYNC_WEBSOCKET_FILE_INGRESS_LIMITS`, which this does not touch.
+ *
+ * The two planes are counted SEPARATELY rather than sharing one larger
+ * allowance. Sharing one was the other half of the same defect: a JSON command
+ * frame arriving while a binary frame was still queued was charged the binary
+ * frame's bytes, so an ordinary sync command sent during a file transfer could
+ * close the socket 1013 on its own. Separate counters leave the JSON plane's
+ * admission byte-identical to what it always was.
+ */
+export const MAX_SYNC_QUEUED_BINARY_BYTES = MAX_SYNC_QUEUED_FRAMES * MAX_FILE_BINARY_FRAME_BYTES
 /** Unsigned 32-bit sequence space leaves no unsafe-integer increment edge. */
 export const MAX_SYNC_SEQUENCE = 0xffff_ffff
 export const MAX_SYNC_RESUME_SEQUENCE = MAX_SYNC_SEQUENCE - 1

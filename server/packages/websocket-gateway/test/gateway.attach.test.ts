@@ -84,7 +84,12 @@ import {
   sha256Hex,
 } from '../src/filesProtocol.js'
 import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
-import { digestSyncCommandBody } from '../src/syncProtocol.js'
+import {
+  digestSyncCommandBody,
+  MAX_SYNC_QUEUED_BINARY_BYTES,
+  MAX_SYNC_QUEUED_BYTES,
+  MAX_SYNC_QUEUED_FRAMES,
+} from '../src/syncProtocol.js'
 import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
 import { COLLABORATION_PROTOCOL_VERSION, type RoomJoinAuthorization } from '../src/rooms.js'
 
@@ -2864,6 +2869,191 @@ describe('authenticated /sockets/sync command plane', () => {
     socket.close()
     // 2.36 MB over a loopback socket, with a SHA-256 over every frame on both
     // ends, does not fit the suite's 5 s default.
+  }, 60_000)
+
+  /**
+   * THE QUEUE DEPTH THE QUEUE ADVERTISES.
+   *
+   * `MAX_SYNC_QUEUED_FRAMES` is 8, but every frame of either plane used to be
+   * charged against ONE 512 KiB allowance -- `MAX_SYNC_QUEUED_BYTES`, which is
+   * `MAX_SYNC_FRAME_BYTES`, the largest single JSON frame. A binary frame is
+   * `MAX_FILE_BINARY_FRAME_BYTES` = 266,248 bytes, so TWO of them are 532,496
+   * and the SECOND one was refused: `failAndClose('BACKPRESSURE', 'File transfer
+   * queue is full.', 1013)`. The advertised depth on the binary plane was
+   * therefore really ONE, and overrunning it closed the socket rather than
+   * pausing it -- so an upload could only ever be strictly lock-step, one frame
+   * per server round trip.
+   *
+   * Measured on a single container built from `main`, 4,194,304 bytes over
+   * `/sockets/sync`: one frame outstanding completed every run at 3.47 MB/s on
+   * loopback; TWO outstanding closed `1013 File transfer queue is full.` after
+   * exactly two frames, every run. The SHIPPED browser client reaches it on its
+   * own pacing policy -- `sendBinaryWithBackpressure` waits only while
+   * `bufferedAmount` exceeds its own 256 KiB figure, which a flushed send buffer
+   * clears long before the gateway has processed the frame -- and a probe using
+   * exactly that policy closed 3/3.
+   *
+   * WHAT THIS TEST CAN AND CANNOT SHOW. It writes every frame back to back with
+   * NO ack awaited, which is what the shipped round-trip test above deliberately
+   * never does ("strictly sequential, one outstanding write"). Instrumented, the
+   * in-process harness NEVER actually stacks two frames: client and server share
+   * one event loop and `ws` hands over one 262,402-byte message at a time, so the
+   * measured queue depth stayed at 1 for all six frames even with a 250 ms stall
+   * injected into the storage double. So the close cannot be reproduced here, and
+   * this case does NOT stand in for the defect: what it holds is the end-to-end
+   * round trip under a pipelining client plus the BYTE RELATIONSHIP that caused
+   * it. The deterministic behavioural proof is
+   * `syncCommandHandler.test.ts` -> "admits a second whole binary frame while the
+   * first is still queued", which calls `enqueueBinary` twice with no event loop
+   * in between; the live proof is the container probe quoted above.
+   *
+   * The relationship is exact and not a near miss: a full binary frame carries a
+   * 262,144-byte chunk, and TWO chunks are 524,288 bytes -- byte for byte the
+   * whole of `MAX_SYNC_QUEUED_BYTES` -- so any header at all puts two frames over
+   * it. There was never a header short enough for two frames to fit.
+   */
+  it('carries a whole file whose binary frames are pipelined, without closing the socket', async () => {
+    // The relationship the defect was: the JSON plane's allowance cannot hold
+    // two binary frames, and the binary plane's own allowance holds the depth
+    // the queue advertises.
+    expect(MAX_SYNC_QUEUED_BYTES).toBeLessThan(2 * MAX_FILE_BINARY_FRAME_BYTES)
+    expect(MAX_SYNC_QUEUED_BINARY_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_FILE_BINARY_FRAME_BYTES)
+
+    const stored = new Map<string, Uint8Array>()
+    const payload = new Uint8Array(MAX_FILE_CHUNK_BYTES * 6)
+    for (let index = 0; index < payload.byteLength; index++) {
+      payload[index] = (index * 17) % 253
+    }
+
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      // No limit overrides: the shipped defaults are what is on trial. The 8 ms
+      // is the storage double's per-chunk work (see sizedFilesAdapter) -- without
+      // it the queue drains in the same microtask batch the frames arrive in and
+      // never holds two, which is precisely what hid this.
+      sync: { ...syncOptions(), files: sizedFilesAdapter(stored) },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-pipelined',
+      sessionUuid: 'session-pipelined',
+      deviceId: 'device-pipelined',
+      authorization: 'Bearer server-only-credential',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    const controls: Array<Record<string, unknown>> = []
+    const closes: Array<{ code: number; reason: string }> = []
+    socket.on('message', (data, isBinary) => {
+      if (isBinary) {
+        return
+      }
+      controls.push(JSON.parse(data.toString()) as Record<string, unknown>)
+    })
+    socket.on('close', (code, reason) => closes.push({ code, reason: reason.toString() }))
+
+    let sequence = 0
+    const send = (type: string, framePayload: Record<string, unknown>): void => {
+      const requestId = `${type.toLowerCase()}-${sequence}`
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          channel: 'sync',
+          type,
+          requestId,
+          commandId: requestId,
+          sequence: sequence++,
+          payloadLength: Buffer.byteLength(JSON.stringify(framePayload), 'utf8'),
+          payload: framePayload,
+        }),
+      )
+    }
+    const awaitControl = async (type: string): Promise<Record<string, unknown>> => {
+      let frame: Record<string, unknown> | undefined
+      await vi.waitFor(
+        () => {
+          frame = controls.find((candidate) => candidate.type === type)
+          expect(
+            frame,
+            `waiting for ${type}; saw ${controls.map((seen) => seen.type).join(', ')}; closes=${JSON.stringify(closes)}`,
+          ).toBeDefined()
+        },
+        { timeout: 30_000, interval: 20 },
+      )
+      return frame as Record<string, unknown>
+    }
+
+    send('AUTH', { ticket: issued.ticket, deviceId: 'device-pipelined' })
+    await awaitControl('AUTHENTICATED')
+
+    const resource = { ownershipType: 'user' as const, remoteIdentifier: 'remote-pipelined', fileUuid: 'file-pipe' }
+    send('FILES_UPLOAD_OPEN', {
+      resource,
+      decryptedSize: payload.byteLength,
+      declaredSize: payload.byteLength,
+      mimeType: 'application/octet-stream',
+      deadlineMs: 30_000,
+    })
+    await awaitControl('FILES_ACCEPTED')
+
+    const frameCount = Math.ceil(payload.byteLength / MAX_FILE_CHUNK_BYTES)
+    expect(frameCount).toBe(6)
+    // Every frame on the wire before a single ack is read back. This is the one
+    // thing the sequential round-trip test above never does.
+    for (let index = 0; index < frameCount; index++) {
+      const offset = index * MAX_FILE_CHUNK_BYTES
+      const slice = payload.slice(offset, Math.min(offset + MAX_FILE_CHUNK_BYTES, payload.byteLength))
+      socket.send(
+        Buffer.from(
+          encodeFileBinaryFrame(
+            {
+              kind: 'UPLOAD_CHUNK',
+              requestId: 'upload-pipelined',
+              transferId: 'transfer-up',
+              generation: 1,
+              index,
+              offset,
+              declaredSize: payload.byteLength,
+              byteLength: slice.byteLength,
+              sha256: sha256Hex(slice),
+              final: offset + slice.byteLength === payload.byteLength,
+            },
+            slice,
+          ),
+        ),
+        { binary: true },
+      )
+    }
+    expect(controls.filter((frame) => frame.type === 'FILES_CHUNK_ACK')).toEqual([])
+
+    await vi.waitFor(
+      () =>
+        expect(
+          controls.filter((frame) => frame.type === 'FILES_CHUNK_ACK'),
+          `closes=${JSON.stringify(closes)}; saw ${controls.map((seen) => seen.type).join(', ')}`,
+        ).toHaveLength(frameCount),
+      { timeout: 30_000, interval: 20 },
+    )
+    // Not one frame was refused, and the socket that carried them is still up.
+    expect(closes).toEqual([])
+    expect(controls.filter((frame) => frame.type === 'ERROR')).toEqual([])
+    expect(socket.readyState).toBe(WebSocket.OPEN)
+
+    send('FILES_UPLOAD_FINISH', {
+      transferId: 'transfer-up',
+      generation: 1,
+      declaredSize: payload.byteLength,
+      sha256: sha256Hex(payload),
+      deadlineMs: 30_000,
+    })
+    expect(await awaitControl('FILES_COMPLETE')).toMatchObject({
+      payload: { mode: 'upload', sha256: sha256Hex(payload) },
+    })
+    expect(stored.get('remote-pipelined')).toEqual(payload)
+    socket.close()
   }, 60_000)
 
   /**

@@ -11,6 +11,7 @@ import { SyncFilesSession, type SyncFilesAdapter } from './filesSession.js'
 import {
   MAX_SYNC_EGRESS_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
+  MAX_SYNC_QUEUED_BINARY_BYTES,
   MAX_SYNC_QUEUED_BYTES,
   MAX_SYNC_QUEUED_FRAMES,
   MAX_SYNC_SEQUENCE,
@@ -443,6 +444,13 @@ export interface SyncCommandHandlerOptions {
   maxQueuedFrames?: number
   maxQueuedBytes?: number
   /**
+   * Overrides {@link MAX_SYNC_QUEUED_BINARY_BYTES}, the FILES_V1 binary plane's
+   * own ingress-queue allowance. Separate from {@link maxQueuedBytes}, which is
+   * the JSON command plane's; see that constant for why one shared figure was
+   * the bug. No host passes either, so production uses the constants.
+   */
+  maxQueuedBinaryBytes?: number
+  /**
    * Overrides {@link MAX_SYNC_EGRESS_BUFFERED_BYTES}, the socket-level
    * slow-consumer threshold. An explicit value wins outright; no host passes
    * one, so production uses the constant. Tests set it to choose the exact
@@ -567,7 +575,10 @@ export class SyncCommandHandler {
   private serverSequence = 0
   private closed = false
   private queuedFrames = 0
+  /** JSON command-plane bytes awaiting `process`. Charged only by {@link enqueue}. */
   private queuedBytes = 0
+  /** FILES_V1 binary-plane bytes awaiting `processBinary`. Charged only by {@link enqueueBinary}. */
+  private queuedBinaryBytes = 0
   private queue: Promise<void> = Promise.resolve()
   private activeAbort?: AbortController
   private readonly activeRpcs = new Map<string, ActiveRpc>()
@@ -585,6 +596,14 @@ export class SyncCommandHandler {
   private readonly backendTimeoutMs: number
   private readonly maxQueuedFrames: number
   private readonly maxQueuedBytes: number
+  /**
+   * The binary plane's own ingress-queue allowance. See
+   * {@link MAX_SYNC_QUEUED_BINARY_BYTES}: charging a 266,248-byte binary frame
+   * against the JSON plane's 512 KiB figure made the queue's advertised 8-frame
+   * depth actually ONE on this plane, and the second outstanding frame closed
+   * the socket 1013 instead of waiting.
+   */
+  private readonly maxQueuedBinaryBytes: number
   /**
    * How much this socket may have waiting to be written before the gateway
    * treats the peer as not consuming. One number for every outbound frame,
@@ -639,6 +658,7 @@ export class SyncCommandHandler {
     this.backendTimeoutMs = options.backendTimeoutMs ?? SYNC_BACKEND_TIMEOUT_MS
     this.maxQueuedFrames = options.maxQueuedFrames ?? MAX_SYNC_QUEUED_FRAMES
     this.maxQueuedBytes = options.maxQueuedBytes ?? MAX_SYNC_QUEUED_BYTES
+    this.maxQueuedBinaryBytes = options.maxQueuedBinaryBytes ?? MAX_SYNC_QUEUED_BINARY_BYTES
     // An explicit choice wins outright, so a test can pick the exact boundary it
     // is asserting. No host passes one; production gets the constant.
     this.maxEgressBufferedBytes = options.maxBufferedBytes ?? MAX_SYNC_EGRESS_BUFFERED_BYTES
@@ -721,7 +741,12 @@ export class SyncCommandHandler {
       rawBytes !== raw.byteLength ||
       rawBytes > MAX_FILE_BINARY_FRAME_BYTES ||
       this.queuedFrames >= this.maxQueuedFrames ||
-      this.queuedBytes + rawBytes > Math.max(this.maxQueuedBytes, MAX_FILE_BINARY_FRAME_BYTES)
+      // The BINARY plane's own allowance. Never the JSON plane's: one 512 KiB
+      // figure shared by both made two 266,248-byte frames overrun it, so the
+      // queue's 8-frame depth was really one frame and the second one closed the
+      // socket. `Math.max(.., MAX_FILE_BINARY_FRAME_BYTES)` guarantees the floor
+      // of one whole frame even if an override is set below a frame's size.
+      this.queuedBinaryBytes + rawBytes > Math.max(this.maxQueuedBinaryBytes, MAX_FILE_BINARY_FRAME_BYTES)
     ) {
       raw.fill(0)
       this.options.metrics?.increment('backpressure', 'files_ingress')
@@ -729,7 +754,7 @@ export class SyncCommandHandler {
       return
     }
     this.queuedFrames += 1
-    this.queuedBytes += rawBytes
+    this.queuedBinaryBytes += rawBytes
     this.queue = this.queue
       .then(() => this.processBinary(raw))
       .catch(() => {
@@ -741,7 +766,7 @@ export class SyncCommandHandler {
       .finally(() => {
         raw.fill(0)
         this.queuedFrames = Math.max(0, this.queuedFrames - 1)
-        this.queuedBytes = Math.max(0, this.queuedBytes - rawBytes)
+        this.queuedBinaryBytes = Math.max(0, this.queuedBinaryBytes - rawBytes)
       })
   }
 

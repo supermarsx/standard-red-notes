@@ -18,10 +18,20 @@ import {
   type SyncSocket,
   type SyncInviteEventsAdapter,
 } from '../src/syncCommandHandler.js'
-import { MAX_FILE_BINARY_FRAME_BYTES, MAX_FILE_TRANSFER_CREDIT_BYTES } from '../src/filesProtocol.js'
+import { type SyncFilesAdapter } from '../src/filesSession.js'
+import {
+  encodeFileBinaryFrame,
+  sha256Hex,
+  MAX_FILE_BINARY_FRAME_BYTES,
+  MAX_FILE_CHUNK_BYTES,
+  MAX_FILE_TRANSFER_CREDIT_BYTES,
+} from '../src/filesProtocol.js'
 import {
   MAX_SYNC_BUFFERED_BYTES,
   MAX_SYNC_EGRESS_BUFFERED_BYTES,
+  MAX_SYNC_QUEUED_BINARY_BYTES,
+  MAX_SYNC_QUEUED_BYTES,
+  MAX_SYNC_QUEUED_FRAMES,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_RESUME_SEQUENCE,
   SYNC_API_RPC_REFUSAL_ERROR_NAME,
@@ -301,6 +311,7 @@ async function authenticatedHandler(
     logRefusal?: SyncCommandHandlerOptions['logRefusal']
     collaborationRoomEpochResolver?: SyncCommandHandlerOptions['collaborationRoomEpochResolver']
     collaborationRoomEpochResolverTimeoutMs?: number
+    files?: SyncFilesAdapter
   } = {},
 ): Promise<{ handler: SyncCommandHandler; socket: FakeSocket; tickets: InMemorySyncAuthTicketStore }> {
   const tickets = options.tickets ?? new InMemorySyncAuthTicketStore()
@@ -334,6 +345,7 @@ async function authenticatedHandler(
     logRefusal: options.logRefusal,
     collaborationRoomEpochResolver: options.collaborationRoomEpochResolver,
     collaborationRoomEpochResolverTimeoutMs: options.collaborationRoomEpochResolverTimeoutMs,
+    ...(options.files ? { files: options.files } : {}),
   })
   enqueue(handler, authFrame(issued.ticket, deviceId, options.resumeSequence))
   await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('AUTHENTICATED'))
@@ -3487,6 +3499,230 @@ describe('SyncCommandHandler', () => {
     await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
     expect(metrics.increment).not.toHaveBeenCalledWith('rpc', 'backpressure_wait')
     expect(metrics.observe).not.toHaveBeenCalled()
+    handler.disconnect()
+  })
+})
+
+/**
+ * The ingress queue, with the FILES_V1 binary plane on it.
+ *
+ * `MAX_SYNC_QUEUED_FRAMES` is 8, but every frame of either plane used to be
+ * charged against ONE allowance -- `MAX_SYNC_QUEUED_BYTES`, which is
+ * `MAX_SYNC_FRAME_BYTES`, the largest single JSON frame. A full binary frame
+ * carries a 262,144-byte chunk, so TWO chunks are 524,288 bytes, byte for byte
+ * the WHOLE of that allowance, and any header at all puts the pair over it.
+ * There was never a header short enough for two frames to fit: the advertised
+ * depth on this plane was really ONE, and the second outstanding frame was not
+ * paused but closed -- `failAndClose('BACKPRESSURE', 'File transfer queue is
+ * full.', 1013)`.
+ *
+ * Measured on a single container built from `main`, uploading 4,194,304 bytes
+ * over `/sockets/sync`: one frame outstanding completed every run (3.47 MB/s on
+ * loopback); two outstanding closed `1013 File transfer queue is full.` after
+ * exactly two frames, 3/3 -- including a probe pacing itself exactly the way the
+ * shipped browser client's `sendBinaryWithBackpressure` does.
+ *
+ * These cases drive `enqueueBinary` directly, with no event loop turn between
+ * the two calls, because that is the only way to hold two frames in the queue
+ * deterministically: the in-process socket harness in `gateway.attach.test.ts`
+ * was instrumented and never stacked two frames, even with a 250 ms stall in the
+ * storage double.
+ */
+describe('sync files ingress queue', () => {
+  const FULL_CHUNK = new Uint8Array(MAX_FILE_CHUNK_BYTES)
+  for (let index = 0; index < FULL_CHUNK.byteLength; index++) {
+    FULL_CHUNK[index] = index % 251
+  }
+
+  const UPLOAD_OPEN_PAYLOAD = {
+    resource: { ownershipType: 'user', remoteIdentifier: 'remote-queue', fileUuid: 'file-queue' },
+    decryptedSize: 64 * MAX_FILE_CHUNK_BYTES,
+    declaredSize: 64 * MAX_FILE_CHUNK_BYTES,
+    mimeType: 'application/octet-stream',
+    deadlineMs: 30_000,
+  }
+
+  /** A full-size UPLOAD_CHUNK frame for the transfer the double hands out. */
+  function uploadFrame(index: number): Uint8Array {
+    return new Uint8Array(
+      encodeFileBinaryFrame(
+        {
+          kind: 'UPLOAD_CHUNK',
+          requestId: 'files-upload',
+          transferId: 'transfer-queue',
+          generation: 1,
+          index,
+          offset: index * MAX_FILE_CHUNK_BYTES,
+          declaredSize: 64 * MAX_FILE_CHUNK_BYTES,
+          byteLength: FULL_CHUNK.byteLength,
+          sha256: sha256Hex(FULL_CHUNK),
+          final: false,
+        },
+        FULL_CHUNK,
+      ),
+    )
+  }
+
+  /**
+   * A storage double whose `uploadChunk` does not return until the test says so,
+   * so a frame provably stays IN the queue while the next ones are offered.
+   */
+  function stallingFilesAdapter(): { adapter: SyncFilesAdapter; release: () => void; started: () => number } {
+    let releaseAll = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      releaseAll = resolve
+    })
+    let started = 0
+    const adapter: SyncFilesAdapter = {
+      ready: () => true,
+      metadata: async ({ resources }) => resources.map((resource) => ({ resource, exists: false as const })),
+      openUpload: async ({ descriptor }) => ({
+        transferId: 'transfer-queue',
+        generation: 1,
+        resumeId: 'resume-queue',
+        nextIndex: 0,
+        nextOffset: 0,
+        declaredSize: descriptor.declaredSize,
+      }),
+      uploadChunk: async ({ header }) => {
+        started += 1
+        await gate
+        return {
+          duplicate: false,
+          nextIndex: header.index + 1,
+          nextOffset: header.offset + header.byteLength,
+          resumeId: 'resume-queue',
+        }
+      },
+      finishUpload: async () => ({ sha256: sha256Hex(FULL_CHUNK) }),
+      openDownload: async () => ({
+        transferId: 'transfer-queue-down',
+        generation: 1,
+        resumeId: 'resume-queue-down',
+        declaredSize: FULL_CHUNK.byteLength,
+        nextIndex: 0,
+        nextOffset: 0,
+      }),
+      readDownloadChunk: async ({ index, offset }) => ({
+        index,
+        offset,
+        declaredSize: FULL_CHUNK.byteLength,
+        bytes: FULL_CHUNK.slice(),
+        final: true,
+      }),
+      cancel: async () => undefined,
+    }
+    return { adapter, release: () => releaseAll(), started: () => started }
+  }
+
+  async function uploadReady(files: SyncFilesAdapter): Promise<{ handler: SyncCommandHandler; socket: FakeSocket }> {
+    const { handler, socket } = await authenticatedHandler({ files })
+    enqueue(handler, {
+      version: 1,
+      channel: 'sync',
+      type: 'FILES_UPLOAD_OPEN',
+      requestId: 'files-upload',
+      commandId: 'files-upload',
+      sequence: 1,
+      payloadLength: syncPayloadLength(UPLOAD_OPEN_PAYLOAD),
+      payload: UPLOAD_OPEN_PAYLOAD,
+    })
+    await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('FILES_ACCEPTED'))
+    return { handler, socket }
+  }
+
+  it('admits a second whole binary frame while the first is still queued', async () => {
+    const { adapter, release, started } = stallingFilesAdapter()
+    const { handler, socket } = await uploadReady(adapter)
+
+    const first = uploadFrame(0)
+    const second = uploadFrame(1)
+    // The exact arithmetic that used to refuse the second frame: two chunks are
+    // the whole JSON allowance, so the pair cannot fit under it whatever the
+    // header costs.
+    expect(first.byteLength + second.byteLength).toBeGreaterThan(MAX_SYNC_QUEUED_BYTES)
+    expect(first.byteLength + second.byteLength).toBeLessThanOrEqual(MAX_SYNC_QUEUED_BINARY_BYTES)
+
+    // No event loop turn between these two: the first is provably still queued.
+    handler.enqueueBinary(first, first.byteLength)
+    handler.enqueueBinary(second, second.byteLength)
+
+    expect(socket.closes).toEqual([])
+    release()
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'FILES_CHUNK_ACK')).toHaveLength(2))
+    expect(started()).toBe(2)
+    expect(socket.closes).toEqual([])
+    handler.disconnect()
+  })
+
+  it('admits the whole advertised depth, then refuses on the FRAME count and names the file plane', async () => {
+    const metrics = { increment: vi.fn() }
+    const { adapter, release } = stallingFilesAdapter()
+    const { handler, socket } = await authenticatedHandler({ files: adapter, metrics })
+    enqueue(handler, {
+      version: 1,
+      channel: 'sync',
+      type: 'FILES_UPLOAD_OPEN',
+      requestId: 'files-upload',
+      commandId: 'files-upload',
+      sequence: 1,
+      payloadLength: syncPayloadLength(UPLOAD_OPEN_PAYLOAD),
+      payload: UPLOAD_OPEN_PAYLOAD,
+    })
+    await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('FILES_ACCEPTED'))
+
+    // Every one of the frames the queue says it holds, with nothing draining.
+    for (let index = 0; index < MAX_SYNC_QUEUED_FRAMES; index++) {
+      const frame = uploadFrame(index)
+      handler.enqueueBinary(frame, frame.byteLength)
+    }
+    expect(socket.closes).toEqual([])
+    expect(metrics.increment).not.toHaveBeenCalledWith('backpressure', 'files_ingress')
+
+    // The limit is still a limit, and the refusal still names THIS plane.
+    const overrun = uploadFrame(MAX_SYNC_QUEUED_FRAMES)
+    handler.enqueueBinary(overrun, overrun.byteLength)
+    expect(metrics.increment).toHaveBeenCalledWith('backpressure', 'files_ingress')
+    expect(socket.closes).toEqual([{ code: 1013, reason: 'File transfer queue is full.' }])
+    release()
+    handler.disconnect()
+  })
+
+  it('does not charge a binary frame against the JSON command plane', async () => {
+    const { adapter, release } = stallingFilesAdapter()
+    const { handler, socket } = await uploadReady(adapter)
+
+    // One binary frame is queued and stuck. A JSON command frame whose own size
+    // is legal for its own plane must still be admitted: charging it the binary
+    // frame's bytes is how an ordinary sync command sent DURING a file transfer
+    // used to close the socket on its own.
+    const frame = uploadFrame(0)
+    handler.enqueueBinary(frame, frame.byteLength)
+    // A PING's payload must be EMPTY (`parseSyncClientFrame`), so the size is
+    // DECLARED rather than padded: `enqueue(raw, rawBytes)` is charged its
+    // `rawBytes` argument, which is exactly the wire size the gateway passes in.
+    // The whole JSON allowance is legal for the JSON plane; under one shared
+    // counter the queued binary frame made it a close.
+    const ping = JSON.stringify({
+      version: 1,
+      channel: 'sync',
+      type: 'PING',
+      requestId: 'ping-during-transfer',
+      commandId: 'ping-during-transfer',
+      sequence: 2,
+      payloadLength: syncPayloadLength({}),
+      payload: {},
+    })
+    handler.enqueue(ping, MAX_SYNC_QUEUED_BYTES)
+
+    // Admission is synchronous, so the old shared counter closed the socket on
+    // this line. The ingress queue is one serialized chain, so the PONG cannot
+    // be ANSWERED until the stalled binary frame lets go -- which is why the
+    // release comes first and the PONG is awaited after it.
+    expect(socket.closes).toEqual([])
+    release()
+    await vi.waitFor(() => expect(socket.frames.map((candidate) => candidate.type)).toContain('PONG'))
+    expect(socket.closes).toEqual([])
     handler.disconnect()
   })
 })

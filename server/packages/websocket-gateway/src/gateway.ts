@@ -144,7 +144,8 @@ export const DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLim
  * socket can hold in memory is bounded elsewhere and independently -- `ws`'s
  * `maxPayload` (`MAX_WEBSOCKET_MESSAGE_BYTES`), the per-frame ceiling
  * (`MAX_FILE_BINARY_FRAME_BYTES`) and the handler's ingress queue
- * (`MAX_SYNC_QUEUED_FRAMES` frames / `maxQueuedBytes` bytes). A transfer is
+ * (`MAX_SYNC_QUEUED_FRAMES` frames / `MAX_SYNC_QUEUED_BINARY_BYTES` bytes on
+ * this plane). A transfer is
  * still bounded end to end by `declaredSize <= MAX_FILE_TRANSFER_BYTES`, by the
  * upload having been opened and authorized, and by the account's storage quota.
  */
