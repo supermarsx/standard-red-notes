@@ -41,6 +41,12 @@ export const auditDomains = Object.freeze([
     lockfile: "cli/srn-server/package-lock.json",
   },
   {
+    id: "e2e",
+    directory: "e2e",
+    manager: "npm",
+    lockfile: "e2e/package-lock.json",
+  },
+  {
     id: "release-policy",
     directory: "scripts",
     manager: "npm",

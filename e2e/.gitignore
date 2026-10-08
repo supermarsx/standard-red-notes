@@ -3,5 +3,10 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+# Nested npm projects under e2e/ (if any) stay unlocked, but THIS project's
+# lockfile is committed: `@playwright/test` floated on every CI install
+# without it, and `scripts/audit-production-dependencies.mjs` only scans
+# domains whose lockfile is tracked.
 package-lock.json
+!/package-lock.json
 artifacts/

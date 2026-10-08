@@ -746,4 +746,22 @@ test("a failed structural contract never suppresses the per-domain vulnerability
     [...scannedDirectories].sort(),
     auditDomains.map((domain) => domain.directory).sort(),
   );
+  // The comparison above is self-referential: it would still pass if a domain
+  // were dropped from `auditDomains` entirely. Pin the literal count and the
+  // literal directories so adding a lock domain without scanning it -- or
+  // silently losing one -- fails here instead of going unnoticed. `e2e` is
+  // named explicitly because it was the domain this coverage gap hid: it had
+  // no committed lockfile, so it was never a domain at all.
+  assert.equal(auditDomains.length, 8);
+  assert.equal(scannedDirectories.length, 8);
+  assert.deepEqual([...scannedDirectories].sort(), [
+    ".",
+    "app",
+    "app/packages/filepicker/example",
+    "cli/srn-client",
+    "cli/srn-server",
+    "e2e",
+    "scripts",
+    "server",
+  ]);
 });
