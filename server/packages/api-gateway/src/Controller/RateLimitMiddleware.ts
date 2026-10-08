@@ -204,6 +204,62 @@ export const sessionRefreshLimit = (loginMax: number): number =>
   Math.max(SESSION_REFRESH_MIN_LIMIT, loginMax * SESSION_REFRESH_LIMIT_MULTIPLIER)
 
 /**
+ * Standard Red Notes: the ceiling for the `realtime-tokens` bucket, which covers
+ * the two per-socket mints in {@link REALTIME_TOKEN_PATHS}.
+ *
+ * WHY IT IS NOT THE LOGIN CEILING. It was `loginMax` — 10 per 60 s at stock
+ * settings — on the reading that "a legitimate client mints once per socket, so
+ * the login ceiling is ample". Both halves of that are true and the conclusion
+ * still does not follow, because this is the endpoint a client must call to COME
+ * BACK. Measured on compose: after a gateway restart, recovery took 60,557 ms —
+ * the eleventh mint answered 429 with `Retry-After: 60`, so the socket stayed
+ * down for the rest of the window. A brief outage became a minute of downtime,
+ * caused by the limiter rather than by the outage.
+ *
+ * The login tier exists to slow down GUESSING an unknown secret. Nothing is
+ * guessed here: both paths sit behind `RequiredCrossServiceTokenMiddleware`, so
+ * the caller already holds a valid session, and what comes back is single-use
+ * with a 30-second TTL. A ticket is worth less than the bearer that bought it.
+ * So the login ceiling is not "ample" for this endpoint, it is the wrong
+ * dimension — it is sized for an attacker's patience, and this endpoint's load
+ * is set by how often healthy clients reconnect.
+ *
+ * WHAT IT STILL PROTECTS. Exactly what a 30-second single-use ticket does not
+ * already cover: the unmetered HMAC/JWT signature and the Redis ticket-store
+ * write that an AUTHENTICATED caller can otherwise drive at line rate. That is
+ * the whole of the cost, and it stays bounded — 2 mints per second per session
+ * at stock settings is a three-orders-of-magnitude reduction from line rate, the
+ * bucket is still per-session so the cost is attributed to whoever causes it,
+ * and a session that trips it still feeds the throttle telemetry and the
+ * adaptive-escalation signal.
+ *
+ * WHY TWELVE, WITH A FLOOR. Same shape as {@link sessionRefreshLimit} and for
+ * the same reasons: the multiplier so an operator who raises the login tier has
+ * a busy server and gets headroom here too, the floor so an operator who HARDENS
+ * the login tier (loginMax 3, say) cannot accidentally make recovery the thing
+ * that breaks. At stock settings that is 120 per 60 seconds per session. The
+ * figure has to clear the worst HEALTHY case — every socket a session is allowed
+ * to hold re-tickets at once when a gateway restarts, and the gateway's own
+ * per-user socket ceiling is 1,024 by default (4 as the single container's
+ * entrypoint projects it) — and it also has to clear a client that is redialling
+ * badly: a reconnect loop at roughly 1 Hz consumes half of this allowance and
+ * therefore cannot lock the session out, which matters because the bucket is
+ * keyed per session and shared across tabs.
+ *
+ * WHY THE KEY IS STILL THE SESSION. Keying per socket or per `deviceId` would
+ * isolate one looping tab from the others, but `deviceId` is the caller's own
+ * field, so a client that rotated it would have no ceiling at all — and the
+ * caller is already authenticated, so that is a real bypass rather than a
+ * theoretical one. Per-session keying is right for attributing the cost; the
+ * cross-tab lockout is fixed by the ceiling being out of a healthy session's
+ * reach, not by subdividing the key.
+ */
+export const REALTIME_RECONNECT_LIMIT_MULTIPLIER = 12
+export const REALTIME_RECONNECT_MIN_LIMIT = 120
+export const realtimeReconnectLimit = (loginMax: number): number =>
+  Math.max(REALTIME_RECONNECT_MIN_LIMIT, loginMax * REALTIME_RECONNECT_LIMIT_MULTIPLIER)
+
+/**
  * Per-session subject for the realtime-token bucket: a digest of the presented
  * bearer credential (never the credential itself — it is a Redis key). A rotated
  * bogus bearer only buys 401s from the cross-service token middleware, never a
@@ -334,10 +390,14 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
       // Standard Red Notes (N41): the realtime control plane. Minting a
       // connection token and issuing a sync ticket each sign a JWT/HMAC and, on
       // the sync lane, touch Redis, and neither sat inside any bucket before. A
-      // legitimate client mints once per socket, so the login ceiling is ample;
-      // a reconnect storm is charged to the session that causes it.
+      // reconnect storm is charged to the session that causes it.
+      //
+      // The CEILING is this bucket's own, not the login tier's: see
+      // realtimeReconnectLimit for why "a legitimate client mints once per
+      // socket, so the login ceiling is ample" was the wrong reading of a
+      // RECOVERY endpoint.
       bucket: 'realtime-tokens',
-      limit: limits.loginMax,
+      limit: realtimeReconnectLimit(limits.loginMax),
       windowSeconds: limits.windowSeconds,
       match: postTo([...REALTIME_TOKEN_PATHS]),
       subject: realtimeTokenSubject,

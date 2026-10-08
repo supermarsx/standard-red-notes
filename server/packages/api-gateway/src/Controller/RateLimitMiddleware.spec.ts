@@ -5,6 +5,9 @@ import {
   isWithinRateLimit,
   normalizeRateLimitPath,
   RateLimitRedis,
+  realtimeReconnectLimit,
+  REALTIME_RECONNECT_LIMIT_MULTIPLIER,
+  REALTIME_RECONNECT_MIN_LIMIT,
   SECOND_FACTOR_PATHS,
   SESSION_REFRESH_PATHS,
 } from './RateLimitMiddleware'
@@ -437,7 +440,8 @@ describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
       expect(realtime?.match('GET', path)).toBe(false)
     }
     expect(realtime?.match('POST', '/v1/sockets/sync/capabilities')).toBe(false)
-    expect(realtime?.limit).toBe(limits.loginMax)
+    // The CEILING is asserted in the reconnection-ceiling describe below; this
+    // case owns path/verb matching only.
     expect(realtime?.windowSeconds).toBe(limits.windowSeconds)
   })
 
@@ -478,12 +482,16 @@ describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
       return { next, status }
     }
 
-    await call('Bearer a')
-    await call('Bearer a')
-    const third = await call('Bearer a')
+    // Drive session `a` to its own ceiling (no longer the login tier's -- see
+    // realtimeReconnectLimit), then one past it.
+    const allowance = realtimeReconnectLimit(limits.loginMax)
+    for (let attempt = 0; attempt < allowance; attempt++) {
+      await call('Bearer a')
+    }
+    const overrun = await call('Bearer a')
     const other = await call('Bearer b')
 
-    expect(third.status).toHaveBeenCalledWith(429)
+    expect(overrun.status).toHaveBeenCalledWith(429)
     expect(other.next).toHaveBeenCalled()
   })
 
@@ -499,5 +507,65 @@ describe('RateLimitMiddleware realtime-tokens bucket (N41)', () => {
     await flush()
 
     expect((redis.incr as jest.Mock).mock.calls[0][0]).toBe('rl:realtime-tokens:1.2.3.4')
+  })
+})
+
+// The ceiling for that bucket is its OWN, not the login tier's. It was
+// `loginMax`, and on compose that made the RECOVERY endpoint the thing that
+// broke: measured after a gateway restart, the eleventh mint answered 429 with
+// `Retry-After: 60` and the socket stayed down 60,557 ms. See
+// realtimeReconnectLimit for why the login dimension is the wrong one here and
+// what the new figure still protects.
+describe('RateLimitMiddleware realtime reconnection ceiling', () => {
+  const rules = buildDefaultRateLimitRules(limits)
+  const realtime = rules.find((rule) => rule.bucket === 'realtime-tokens')
+
+  it("gives the bucket its own ceiling rather than the login tier's", () => {
+    expect(realtime?.limit).toBe(realtimeReconnectLimit(limits.loginMax))
+    expect(realtime?.limit).toBeGreaterThan(limits.loginMax)
+    expect(realtime?.windowSeconds).toBe(limits.windowSeconds)
+  })
+
+  it('floors the ceiling so hardening the login tier cannot break recovery, and scales when it is raised', () => {
+    // An operator who hardens login must not thereby make reconnection the thing
+    // that fails; one who raises it has a busy server and gets headroom here too.
+    expect(realtimeReconnectLimit(3)).toBe(REALTIME_RECONNECT_MIN_LIMIT)
+    expect(realtimeReconnectLimit(1)).toBe(REALTIME_RECONNECT_MIN_LIMIT)
+    expect(realtimeReconnectLimit(50)).toBe(50 * REALTIME_RECONNECT_LIMIT_MULTIPLIER)
+    expect(realtimeReconnectLimit(50)).toBeGreaterThan(REALTIME_RECONNECT_MIN_LIMIT)
+  })
+
+  it('lets one session re-ticket far past the login ceiling without a 429', async () => {
+    const redis = buildRedis()
+    const middleware = createRateLimitMiddleware({
+      redis,
+      config: { enabled: true, rules },
+      logger: { warn: jest.fn() },
+    })
+    const mint = async (authorization: string) => {
+      const next: NextFunction = jest.fn()
+      const { response, status } = buildResponse()
+      middleware(buildRequest({ path: '/v1/sockets/sync/ticket', headers: { authorization } as never }), response, next)
+      await flush()
+      return { next, status }
+    }
+
+    // The old ceiling was `loginMax`. A reconnect round that re-tickets every
+    // socket a session may hold has to clear it by a wide margin, so walk the
+    // whole allowance and assert nothing was refused on the way.
+    const allowance = realtimeReconnectLimit(limits.loginMax)
+    for (let attempt = 0; attempt < allowance; attempt++) {
+      const result = await mint('Bearer recovering')
+      expect(result.status).not.toHaveBeenCalledWith(429)
+      expect(result.next).toHaveBeenCalled()
+    }
+
+    // Still a limit, and still per session: the next mint is refused and a
+    // different session on the same address is untouched.
+    const overrun = await mint('Bearer recovering')
+    expect(overrun.status).toHaveBeenCalledWith(429)
+    const other = await mint('Bearer someone-else')
+    expect(other.next).toHaveBeenCalled()
+    expect(other.status).not.toHaveBeenCalledWith(429)
   })
 })
