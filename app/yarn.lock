@@ -2840,6 +2840,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@chevrotain/cst-dts-gen@npm:13.2.0":
+  version: 13.2.0
+  resolution: "@chevrotain/cst-dts-gen@npm:13.2.0"
+  dependencies:
+    "@chevrotain/gast": "npm:13.2.0"
+    "@chevrotain/types": "npm:13.2.0"
+  checksum: 10/363344e9fe4964ac3a20da092190e9933f7fe1541a629b14da6c9dbb8ee2f8d1fc52ad27c4b122c1501d337d5570abd45bd3bd35e6f7fa4a8b06cb8773267146
+  languageName: node
+  linkType: hard
+
 "@chevrotain/gast@npm:11.0.3":
   version: 11.0.3
   resolution: "@chevrotain/gast@npm:11.0.3"
@@ -2850,6 +2860,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@chevrotain/gast@npm:13.2.0":
+  version: 13.2.0
+  resolution: "@chevrotain/gast@npm:13.2.0"
+  dependencies:
+    "@chevrotain/types": "npm:13.2.0"
+  checksum: 10/4db282031568a9c6fa3df1d3b83edae7837f51de274b94ea754555abd5c510940eeb865b5fe03d1b03c8e4be4baecb2eba943e65f0b49c777b945a4d8deb9bf3
+  languageName: node
+  linkType: hard
+
 "@chevrotain/regexp-to-ast@npm:11.0.3":
   version: 11.0.3
   resolution: "@chevrotain/regexp-to-ast@npm:11.0.3"
@@ -2857,10 +2876,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@chevrotain/regexp-to-ast@npm:13.2.0":
+  version: 13.2.0
+  resolution: "@chevrotain/regexp-to-ast@npm:13.2.0"
+  checksum: 10/22f222fe4ba2ea518987b13cad758a737edf3800615d877d836910fad6c309446efe8b86e6084fc31a5d1d3a9ce5d441f4237e3b19874ebb148d419ace55b75b
+  languageName: node
+  linkType: hard
+
 "@chevrotain/types@npm:11.0.3":
   version: 11.0.3
   resolution: "@chevrotain/types@npm:11.0.3"
   checksum: 10/49a82b71d2de8ceb2383ff2709fa61d245f2ab2e42790b70c57102c80846edaa318d0b3645aedc904d23ea7bd9be8a58f2397b1341760a15eb5aa95a1336e2a9
+  languageName: node
+  linkType: hard
+
+"@chevrotain/types@npm:13.2.0, @chevrotain/types@npm:~13.2.0":
+  version: 13.2.0
+  resolution: "@chevrotain/types@npm:13.2.0"
+  checksum: 10/e392db58554e30913dce08e4b62b8b75f064a7388239e9d0263dbb084218f0c06102142fe283c3ad6654ad653923b7c4459c725bc8b6ac0a4dff038996b73a90
   languageName: node
   linkType: hard
 
@@ -2875,6 +2908,13 @@ __metadata:
   version: 11.0.3
   resolution: "@chevrotain/utils@npm:11.0.3"
   checksum: 10/29b5d84373a7761ad055c53e2f540a67b5b56550d5be1c473149f6b8923eef87ff391ce021c06ac7653843b0149f6ff0cf30b5e48c3f825d295eb06a6c517bd3
+  languageName: node
+  linkType: hard
+
+"@chevrotain/utils@npm:13.2.0":
+  version: 13.2.0
+  resolution: "@chevrotain/utils@npm:13.2.0"
+  checksum: 10/6f0a59e349a03f8da88354bb0c6769c7356a5e5a4b2295c57db6a43eb0fe041a0819f7e2daaf0a57ebbf596b1d61a3c5dc15cdece798583893fcae6d033555dc
   languageName: node
   linkType: hard
 
@@ -5888,12 +5928,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mermaid-js/parser@npm:^1.2.1":
-  version: 1.2.1
-  resolution: "@mermaid-js/parser@npm:1.2.1"
+"@mermaid-js/parser@npm:^2.0.1":
+  version: 2.0.1
+  resolution: "@mermaid-js/parser@npm:2.0.1"
   dependencies:
-    "@chevrotain/types": "npm:~11.1.2"
-  checksum: 10/54c0de01f9d260d83f43921a9c739604fbe05e45b26ac645f5965ac6652d54cb28dae4021d4660b7bffcb455e9162c87a2cde91325c6cd5f698017178e052238
+    "@chevrotain/types": "npm:~13.2.0"
+  checksum: 10/cf68b26e6b0547c402e2e2f1ce0809c95deb775bab9cab1e94f5a2990998353b1ca95d4ca229fd9cedecb0cdc7ea64a816b7b7e8a78427615f0ad4bffde9fac2
   languageName: node
   linkType: hard
 
@@ -10495,7 +10535,7 @@ __metadata:
     lexical: "npm:0.47.0"
     lint-staged: "npm:^17.6.0"
     mammoth: "npm:^1.13.0"
-    mermaid: "npm:^11.17.2"
+    mermaid: "npm:^12.1.0"
     mini-css-extract-plugin: "npm:^2.10.2"
     minimatch: "npm:^10.2.6"
     mobx: "npm:^6.16.1"
@@ -14676,6 +14716,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"chevrotain@npm:~13.2.0":
+  version: 13.2.0
+  resolution: "chevrotain@npm:13.2.0"
+  dependencies:
+    "@chevrotain/cst-dts-gen": "npm:13.2.0"
+    "@chevrotain/gast": "npm:13.2.0"
+    "@chevrotain/regexp-to-ast": "npm:13.2.0"
+    "@chevrotain/types": "npm:13.2.0"
+    "@chevrotain/utils": "npm:13.2.0"
+  checksum: 10/3427db5a7aea882dd91d0ff454cd0b22ccac9dd3d5c2eb22eb62545a688a3ea8c75d94df1d604f6829da00d919b95200cccbb19a2d5884d0260220af5e669b9a
+  languageName: node
+  linkType: hard
+
 "chokidar@npm:>=3.0.0 <4.0.0, chokidar@npm:^3.5.3, chokidar@npm:^3.6.0":
   version: 3.6.0
   resolution: "chokidar@npm:3.6.0"
@@ -16917,7 +16970,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dompurify@npm:^3.4.16":
+"dompurify@npm:^3.4.12, dompurify@npm:^3.4.16":
   version: 3.4.16
   resolution: "dompurify@npm:3.4.16"
   dependencies:
@@ -17201,6 +17254,13 @@ __metadata:
     electron: cli.js
     install-electron: install.js
   checksum: 10/a8b9ee78a6faee3fc2f18af3a9ddbc76f2a0dea44d8e8ae0527eb36d371492aff2ddd08a36257a68a36cdde71c53767be2d5c135b4009fa58efcd9dd84c4b49a
+  languageName: node
+  linkType: hard
+
+"elkjs@npm:^0.9.3":
+  version: 0.9.3
+  resolution: "elkjs@npm:0.9.3"
+  checksum: 10/397986e271827a5e13d2722b1883aea3557006d2777be8c34568f8fe743e81f4f71210e4e81b9958f597b0af8e96afaa883d2705eba84a3d5d0973bcb02fa59e
   languageName: node
   linkType: hard
 
@@ -18669,15 +18729,6 @@ __metadata:
   bin:
     fxparser: src/cli/cli.js
   checksum: 10/0167d17d5275c95e005639f8fca7b4d88fec3fd013063725280f4e982313b1c798e4565d5ced7f61ce10e8f0d876a1976492cc8ac27da3080915ff549fd00705
-  languageName: node
-  linkType: hard
-
-"fastdom@npm:1.0.12":
-  version: 1.0.12
-  resolution: "fastdom@npm:1.0.12"
-  dependencies:
-    strictdom: "npm:^1.0.1"
-  checksum: 10/e87d67aaed413de24680c9ec735231b6568b62e2b7740f320c3c9f0bc57ed8079ed16aaf8c83a1c27e14948f1a87a7dab98d83a375b85bf77f8bffc2ae55777f
   languageName: node
   linkType: hard
 
@@ -23728,15 +23779,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mermaid@npm:^11.17.2":
-  version: 11.17.2
-  resolution: "mermaid@npm:11.17.2"
+"mermaid@npm:^12.1.0":
+  version: 12.1.0
+  resolution: "mermaid@npm:12.1.0"
   dependencies:
     "@braintree/sanitize-url": "npm:^7.1.2"
     "@iconify/utils": "npm:^3.0.2"
-    "@mermaid-js/parser": "npm:^1.2.1"
+    "@mermaid-js/parser": "npm:^2.0.1"
     "@types/d3": "npm:^7.4.3"
     "@upsetjs/venn.js": "npm:^2.0.0"
+    chevrotain: "npm:~13.2.0"
     cytoscape: "npm:^3.34.0"
     cytoscape-cose-bilkent: "npm:^4.1.0"
     cytoscape-fcose: "npm:^2.2.0"
@@ -23744,9 +23796,9 @@ __metadata:
     d3-sankey: "npm:^0.12.3"
     dagre-d3-es: "npm:7.0.14"
     dayjs: "npm:^1.11.21"
-    dompurify: "npm:^3.3.3"
+    dompurify: "npm:^3.4.12"
+    elkjs: "npm:^0.9.3"
     es-toolkit: "npm:^1.45.1"
-    fastdom: "npm:1.0.12"
     katex: "npm:^0.16.47"
     khroma: "npm:^2.1.0"
     marked: "npm:^16.3.0"
@@ -23754,7 +23806,7 @@ __metadata:
     stylis: "npm:^4.3.6"
     ts-dedent: "npm:^2.2.0"
     uuid: "npm:^11.1.0 || ^12 || ^13 || ^14.0.0"
-  checksum: 10/4a6930587ebc4027357de00a960bf9c963d4a5d290b3b70bc5ff7a8259eeb5d4ae7f4609d73dcbab8f533ad0b772ff8b35b5683c287bb23fafc21f4e6d766508
+  checksum: 10/eb2a61522ebe9ec0dd5e6cb197fc35411aeffdfc6c68a98bc6fc21f1198350411d534b9372f7b994811ae6d6515b9d0bf1132450d9fdc54c20fd0a875da29697
   languageName: node
   linkType: hard
 
@@ -29036,13 +29088,6 @@ __metadata:
   version: 1.1.0
   resolution: "streamsearch@npm:1.1.0"
   checksum: 10/612c2b2a7dbcc859f74597112f80a42cbe4d448d03da790d5b7b39673c1197dd3789e91cd67210353e58857395d32c1e955a9041c4e6d5bae723436b3ed9ed14
-  languageName: node
-  linkType: hard
-
-"strictdom@npm:^1.0.1":
-  version: 1.0.1
-  resolution: "strictdom@npm:1.0.1"
-  checksum: 10/e9e030dd9b14eaee81e698044e405aaaceec6e09f32c920fa24c2ee9fe8153bf30780a06028b6c185dc6348b54cc803addb4bfa498246b9d26583b23b359b9fa
   languageName: node
   linkType: hard
 

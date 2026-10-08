@@ -513,11 +513,11 @@ function MermaidComponent({
           securityLevel: 'strict',
           theme: activeTheme.theme,
           // The APPLICATION's own design tokens, not mermaid's generic palette.
-          // Absent for a pinned built-in theme: measured against mermaid
-          // 11.16.1, `initialize` rebuilds its config from the defaults rather
-          // than accumulating, so a pinned diagram rendered after an app-themed
-          // one gets mermaid's own clean palette (`mainBkg` back to `#ECECFF`)
-          // and not the previous diagram's overrides.
+          // Absent for a pinned built-in theme: measured against mermaid 11.16.1
+          // and re-measured against 12.1.0, `initialize` rebuilds its config from
+          // the defaults rather than accumulating, so a pinned diagram rendered
+          // after an app-themed one gets mermaid's own clean palette (`mainBkg`
+          // back to `#ECECFF`) and not the previous diagram's overrides.
           themeVariables: activeTheme.themeVariables,
           fontFamily: 'inherit',
         })
