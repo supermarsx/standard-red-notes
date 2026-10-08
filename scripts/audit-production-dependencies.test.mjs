@@ -491,7 +491,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "@babel/runtime",
-      '"@babel/runtime@npm:8.0.7, @babel/runtime@npm:^8.0.7":',
+      '"@babel/runtime@npm:8.0.7":',
       "8.0.7",
       "8.0.0-rc.5",
     ],
