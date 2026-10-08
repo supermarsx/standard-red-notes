@@ -75,6 +75,7 @@ import {
   RateLimitStore,
 } from '../src/Controller/RateLimitMiddleware'
 import { IpAccessListStore } from '../src/Controller/IpAccessList'
+import { createIpEscalationRecorder } from '../src/Controller/IpEscalationSignal'
 import { RateLimitMetricsStore } from '../src/Controller/RateLimitMetrics'
 import { ServerSettingsResolver } from '../src/Service/ServerSettings/ServerSettingsResolver'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
@@ -257,37 +258,22 @@ void container
       const rateLimitMetrics = container.isBound(TYPES.ApiGateway_RateLimitMetricsStore)
         ? container.get<RateLimitMetricsStore>(TYPES.ApiGateway_RateLimitMetricsStore)
         : undefined
-      // Item 5: when adaptive escalation is enabled, flag an IP that trips a tier in
-      // Redis (short TTL) so downstream adaptive anti-bot logic can require a
-      // proof-of-work challenge on that address's next attempts. Best-effort.
+      // Standard Red Notes: when adaptive escalation is enabled, flag an address
+      // that trips a tier so auth's adaptive proof-of-work gate challenges it on
+      // its next attempts. ONE MODULE with its own spec (`IpEscalationSignal`)
+      // rather than this inline hook and a byte-identical copy in the bundled
+      // home-server: both were keyed off the ioredis client, and the home-server
+      // copy was therefore never installed on the arm that bundle always runs.
+      // Best-effort; it never throws into the limiter's refusal branch.
       //
-      // Standard Red Notes: `undefined` when there is no Redis client, and the hook
-      // is then NOT INSTALLED (below) rather than installed and dereferencing it.
-      // Reading `.set` off `undefined` throws a TypeError out of the limiter's 429
-      // branch, which its fail-open catch turns into next() -- a refusal silently
-      // spent. That was unreachable only while the no-Redis arm never throttled.
-      // The reader for this signal (auth's RedisIpEscalationChecker) is itself bound
-      // only when the shared Redis cache exists, so there is nothing to write for.
-      const escalationRedis = rateLimitRedis as unknown as
-        | {
-            set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
-          }
-        | undefined
-      const recordEscalation =
-        escalationRedis?.set === undefined
-          ? undefined
-          : (clientIp: string): void => {
-              void (async (): Promise<void> => {
-                try {
-                  const resolved = await rateLimitResolver.resolveRateLimitConfig()
-                  if (resolved.adaptiveEscalation && escalationRedis.set) {
-                    await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
-                  }
-                } catch {
-                  // best-effort escalation signal.
-                }
-              })()
-            }
+      // On THIS entry point the cache client is the only backend: a standalone
+      // gateway with no cache has no database of its own to write the flag to, and
+      // no reader on the other side either.
+      const recordEscalation = createIpEscalationRecorder({
+        resolveConfig: () => rateLimitResolver.resolveRateLimitConfig(),
+        redis: rateLimitRedis as unknown as
+          { set?(key: string, value: string, mode: string, seconds: number): Promise<unknown> } | undefined,
+      })
       app.use(
         createRateLimitMiddleware({
           redis: rateLimitStore,

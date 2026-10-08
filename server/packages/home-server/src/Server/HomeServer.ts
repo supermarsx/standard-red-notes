@@ -23,6 +23,8 @@ import {
   createRateLimitMiddleware,
   parseClientIpHeaderName,
   stampResolvedClientIp,
+  createIpEscalationRecorder,
+  IpEscalationWriter,
   IpAccessListStore,
   RateLimitConfig,
   RateLimitMetricsStore,
@@ -659,66 +661,37 @@ export class HomeServer implements HomeServerInterface {
         const rateLimitMetrics = container.isBound(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
           ? container.get<RateLimitMetricsStore>(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
           : undefined
-        // Standard Red Notes: `undefined` whenever this bundle runs without Redis,
-        // which is its normal shape -- so the ioredis hook is NOT INSTALLED rather
-        // than installed and dereferencing it. `escalationRedis.set` on `undefined`
-        // throws a TypeError out of the limiter's 429 branch, and the limiter's
-        // fail-open catch turns that into next(): the refusal is silently spent and
-        // the request is allowed. It was unreachable only while this arm had no
-        // counter and therefore never throttled; measured once it did, every 11th
-        // login answered 401 carrying a correct `Retry-After: 49`.
-        const escalationRedis = rateLimitRedis as unknown as
-          | {
-              set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
-            }
-          | undefined
         /**
-         * Standard Red Notes: WITHOUT REDIS THIS HOOK WAS SIMPLY NOT THERE, and
-         * neither was its reader -- so the proof-of-work IP ramp did not exist on
-         * the shape most self-hosters run.
+         * Standard Red Notes: THE PER-IP ESCALATE SIGNAL, which this bundle used
+         * not to write at all.
          *
-         * What the ramp is for: the adaptive sign-in gate otherwise only escalates
-         * once ONE account has absorbed a run of failures, so a guesser spreading
-         * attempts thinly across many accounts never trips it. The per-address flag
-         * is what charges them for the spread. Measured on a healthy single
-         * container before this change: two 429s on the auth-login tier, then the
-         * very next /v2/login-params from that same address answered 200 with no
-         * challenge.
+         * The hook was keyed off the ioredis client, and `CACHE_TYPE=memory` --
+         * which this bundle always runs under -- leaves that unbound, so it was
+         * never installed; auth's reader was bound under the same condition, so the
+         * proof-of-work IP ramp did not exist at EITHER end on the shape most
+         * self-hosters run. Measured before the fix, on a healthy container: two
+         * 429s on the auth-login tier, then the very next /v2/login-params from
+         * that same address answered 200 with no challenge.
          *
-         * Auth binds `TypeORMIpEscalationStore` over `auth_cache_entries` on this
-         * arm and we resolve THAT OBJECT as the writer, so the key format has one
-         * owner rather than a copy at each end. Resolved LAZILY (auth's container
-         * is loaded into this one after the gateway's) and treated as absent if it
-         * is not bound, which keeps the standalone-gateway case unchanged.
+         * It is now one module with its own spec (`IpEscalationSignal`) rather than
+         * a copy here and a byte-identical copy in the standalone gateway's
+         * bin/server.ts -- two copies of one hook is how one gets fixed and its
+         * twin does not, which is exactly what happened here. With a cache client
+         * it writes `SET rl:escalate:<ip> 1 EX <ttl>` as before; without one it
+         * writes through the SAME `auth_cache_entries`-backed store auth reads,
+         * resolved lazily because auth's container is loaded into this one after
+         * the gateway's.
          */
-        const resolveIpEscalationStore = ():
-          { escalate(clientIp: string, ttlSeconds: number): Promise<void> } | undefined => {
-          const symbol = Symbol.for('Auth_IpEscalationStore')
-          if (!container.isBound(symbol)) {
-            return undefined
-          }
+        const recordEscalation = createIpEscalationRecorder({
+          resolveConfig: () => rateLimitResolver.resolveRateLimitConfig(),
+          redis: rateLimitRedis as unknown as
+            { set?(key: string, value: string, mode: string, seconds: number): Promise<unknown> } | undefined,
+          resolveStore: (): IpEscalationWriter | undefined => {
+            const symbol = Symbol.for('Auth_IpEscalationStore')
 
-          return container.get<{ escalate(clientIp: string, ttlSeconds: number): Promise<void> }>(symbol)
-        }
-        const recordEscalation = (clientIp: string): void => {
-          void (async (): Promise<void> => {
-            try {
-              const resolved = await rateLimitResolver.resolveRateLimitConfig()
-              if (!resolved.adaptiveEscalation) {
-                return
-              }
-              const ttlSeconds = resolved.windowSeconds * 5
-              if (escalationRedis?.set !== undefined) {
-                await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', ttlSeconds)
-
-                return
-              }
-              await resolveIpEscalationStore()?.escalate(clientIp, ttlSeconds)
-            } catch {
-              // best-effort escalation signal.
-            }
-          })()
-        }
+            return container.isBound(symbol) ? container.get<IpEscalationWriter>(symbol) : undefined
+          },
+        })
         app.use(
           createRateLimitMiddleware({
             redis: rateLimitStore,
