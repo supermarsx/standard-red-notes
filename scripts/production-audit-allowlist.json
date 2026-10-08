@@ -1,5 +1,15 @@
 [
   {
+    "advisoryId": "1120252",
+    "package": "@opentelemetry/sdk-node",
+    "domain": "app",
+    "vulnerableVersions": "<0.217.0",
+    "versions": ["0.46.0"],
+    "dependents": ["@standardnotes/domain-events-infra@npm:1.23.4"],
+    "rationale": "Re-verified 2026-10-08 structurally rather than by intent: the advisory is a crash in the Prometheus exporter's HTTP listener, and @opentelemetry/exporter-prometheus appears zero times in app/yarn.lock because sdk-node 0.46.0 does not depend on it, so the vulnerable module is absent from the installed graph and the listener cannot be constructed; the telemetry wiring supplies an explicit OTLP PeriodicExportingMetricReader instead. The patched 0.217.0 line needs @opentelemetry/api >= 1.9 while 0.46.0 pins the peer to < 1.8, so it is a family migration in the app lock domain, not a resolution.",
+    "expiry": "2026-11-08"
+  },
+  {
     "advisoryId": "1124011",
     "package": "@opentelemetry/propagator-jaeger",
     "domain": "app",
@@ -12,13 +22,23 @@
     "expiry": "2026-11-08"
   },
   {
-    "advisoryId": "1120252",
-    "package": "@opentelemetry/sdk-node",
+    "advisoryId": "1239766",
+    "package": "image-size",
     "domain": "app",
-    "vulnerableVersions": "<0.217.0",
-    "versions": ["0.46.0"],
-    "dependents": ["@standardnotes/domain-events-infra@npm:1.23.4"],
-    "rationale": "Re-verified 2026-10-08 structurally rather than by intent: the advisory is a crash in the Prometheus exporter's HTTP listener, and @opentelemetry/exporter-prometheus appears zero times in app/yarn.lock because sdk-node 0.46.0 does not depend on it, so the vulnerable module is absent from the installed graph and the listener cannot be constructed; the telemetry wiring supplies an explicit OTLP PeriodicExportingMetricReader instead. The patched 0.217.0 line needs @opentelemetry/api >= 1.9 while 0.46.0 pins the peer to < 1.8, so it is a family migration in the app lock domain, not a resolution.",
+    "vulnerableVersions": ">=0.6.3 <=2.0.2",
+    "versions": ["1.0.2"],
+    "dependents": ["metro@npm:0.84.4"],
+    "rationale": "Re-verified 2026-10-08, and the previous entry for this package was wrong about why: a patched image-size now exists (2.0.3, 2.0.4), but it cannot be adopted here. Metro 0.84.4 getAssetData calls the image-size default export with a FILE PATH (src/Assets.js, isImageInput is assetInfo.files[0] unless the asset sits inside a .zip), and image-size 2.x moved path input to a separate fromFile entry point, so a 2.x pin makes that call throw a TypeError. Verified by packing 2.0.4 and calling it: a Buffer returns dimensions, a path string throws. Metro is repository-controlled mobile bundler tooling that never parses third-party images, and no shipped application or server runtime includes this parser. Revisit when Metro adopts fromFile.",
+    "expiry": "2026-11-08"
+  },
+  {
+    "advisoryId": "1240992",
+    "package": "braces",
+    "domain": "app",
+    "vulnerableVersions": "<=3.0.3",
+    "versions": ["3.0.3"],
+    "dependents": ["chokidar@npm:3.6.0"],
+    "rationale": "Verified 2026-10-08: there is NO patched braces release to move to. The advisory covers <=3.0.3 and 3.0.3 is the newest version npm has ever published, so no resolution, floor or dedupe can clear it and a pin would only relabel the same bytes. The single dependent is chokidar 3.6.0, a development-time file watcher used by the bundler and test runners; it expands only glob patterns that this repository authors, never request data, and it is absent from every shipped runtime bundle. Short horizon so the first published fix gets picked up rather than sitting behind a long exception.",
     "expiry": "2026-11-08"
   }
 ]

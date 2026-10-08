@@ -359,11 +359,11 @@ test("the app security graph preserves the patched dependency graph", () => {
     validateAppSecurityGraph(
       appPackage,
       appLock.replace(
-        '"axios@npm:^1.18.1, axios@npm:^1.6.7":\n  version: 1.18.1',
-        '"axios@npm:^1.18.1, axios@npm:^1.6.7":\n  version: 1.17.9',
+        '"axios@npm:1.20.0":\n  version: 1.20.0',
+        '"axios@npm:1.20.0":\n  version: 1.19.0',
       ),
     ).join("\n"),
-    /axios must resolve exactly to patched graph 1\.18\.1, 1\.19\.0/,
+    /axios must resolve exactly to patched graph 1\.20\.0/,
   );
   for (const [descriptor, safeVersion, vulnerableVersion, packageName] of [
     ['"ajv@npm:^6.12.5, ajv@npm:^6.14.0":', "6.15.0", "6.13.0", "ajv"],
@@ -570,8 +570,8 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "mermaid",
-      '"mermaid@npm:^11.12.1, mermaid@npm:^11.16.1":',
-      "11.16.1",
+      '"mermaid@npm:^11.16.1":',
+      "11.17.2",
       "11.16.0",
     ],
     ["app/yarn.lock", "qs", '"qs@npm:~6.15.1":', "6.15.2", "6.14.1"],
@@ -583,14 +583,8 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "5.49.2",
       "5.14.1",
     ],
-    ["app/yarn.lock", "undici", '"undici@npm:^6.25.0":', "6.28.0", "6.26.0"],
-    [
-      "app/yarn.lock",
-      "undici",
-      '"undici@npm:^7.19.0, undici@npm:^7.24.4, undici@npm:^7.25.0":',
-      "7.29.0",
-      "7.27.0",
-    ],
+    ["app/yarn.lock", "undici", '"undici@npm:6.28.1":', "6.28.1", "6.26.0"],
+    ["app/yarn.lock", "undici", '"undici@npm:7.29.1":', "7.29.1", "7.27.0"],
     ["yarn.lock", "undici", '"undici@npm:^8.4.1":', "8.10.0", "8.7.0"],
     [
       "app/packages/filepicker/example/yarn.lock",
@@ -609,7 +603,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "tar",
-      '"tar@npm:^7.4.0, tar@npm:^7.4.3, tar@npm:^7.5.10, tar@npm:^7.5.19, tar@npm:^7.5.4, tar@npm:^7.5.7":',
+      '"tar@npm:^7.4.0, tar@npm:^7.4.3, tar@npm:^7.5.10, tar@npm:^7.5.22, tar@npm:^7.5.4, tar@npm:^7.5.7":',
       "7.5.22",
       "7.5.20",
     ],
@@ -635,8 +629,8 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
   const prerelease = {
     ...yarnLockfiles,
     "app/yarn.lock": yarnLockfiles["app/yarn.lock"].replace(
-      '"undici@npm:^6.25.0":\n  version: 6.28.0',
-      '"undici@npm:^6.25.0":\n  version: 6.28.0-rc.1',
+      '"undici@npm:6.28.1":\n  version: 6.28.1',
+      '"undici@npm:6.28.1":\n  version: 6.28.0-rc.1',
     ),
   };
   assert.match(
@@ -647,8 +641,8 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
   const buildMetadata = {
     ...yarnLockfiles,
     "app/yarn.lock": yarnLockfiles["app/yarn.lock"].replace(
-      '"undici@npm:^6.25.0":\n  version: 6.28.0',
-      '"undici@npm:^6.25.0":\n  version: 6.28.0+build.1',
+      '"undici@npm:6.28.1":\n  version: 6.28.1',
+      '"undici@npm:6.28.1":\n  version: 6.28.0+build.1',
     ),
   };
   assert.deepEqual(validateYarnSecurityGraph(buildMetadata), []);

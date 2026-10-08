@@ -662,9 +662,9 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
   const errors = [];
   const packageJson = JSON.parse(packageJsonText);
   const expectedResolutions = {
-    "@grpc/grpc-js@npm:^1.7.1": "1.14.4",
-    "@grpc/grpc-js@npm:^1.9.13": "1.14.4",
-    "axios@npm:^1.6.1": "1.19.0",
+    "@grpc/grpc-js@npm:^1.7.1": "1.14.5",
+    "@grpc/grpc-js@npm:^1.9.13": "1.14.5",
+    "axios@npm:^1.6.1": "1.20.0",
     "body-parser@npm:1.20.1": "1.20.6",
     "form-data": "4.0.6",
     "jws@npm:^3.2.2": "3.2.3",
@@ -676,7 +676,7 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "path-to-regexp@npm:~0.1.12": "0.1.13",
     protobufjs: "7.6.5",
     "sha.js": "2.4.12",
-    "shell-quote": "1.10.0",
+    "shell-quote": "1.11.0",
     "sqlite3@npm:^5.1.6": "6.0.1",
     "typeorm@npm:^0.3.17": "0.3.31",
     "uuid@npm:^8.3.2": "11.1.1",
@@ -692,9 +692,9 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
   }
 
   for (const [name, expected] of Object.entries({
-    "@grpc/grpc-js": ["1.14.4"],
+    "@grpc/grpc-js": ["1.14.5"],
     ajv: ["6.15.0", "8.20.0"],
-    axios: ["1.18.1", "1.19.0"],
+    axios: ["1.20.0"],
     "body-parser": ["1.20.6", "2.3.0"],
     "fast-xml-parser": ["5.8.0"],
     "follow-redirects": ["1.16.0"],
@@ -705,7 +705,7 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "path-to-regexp": ["0.1.13"],
     protobufjs: ["7.6.5"],
     "sha.js": ["2.4.12"],
-    "shell-quote": ["1.10.0"],
+    "shell-quote": ["1.11.0"],
     sqlite3: ["6.0.1"],
     typeorm: ["0.3.31"],
     uuid: ["11.1.1", "14.0.0", "14.0.1"],
