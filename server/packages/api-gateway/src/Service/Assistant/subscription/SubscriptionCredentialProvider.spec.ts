@@ -39,6 +39,38 @@ function mockFetch(body: unknown, status = 200, headers?: Record<string, string>
   return fetchMock
 }
 
+/**
+ * Standard Red Notes: wait on a WALL-CLOCK deadline, not on an attempt count.
+ *
+ * These races were polled with a fixed attempt budget -- `attempt < 100` at 1 ms
+ * for "both halves have reached fetch", and `attempt < 500` at 5 ms for "the
+ * winner's record has landed in the encrypted token store". That is a 100 ms and
+ * a 2.5 s budget for genuinely asynchronous work (two promises racing, and a
+ * file write through an encrypt-then-rename store). Under `yarn test`, which
+ * runs all twenty server packages in parallel, the budget expires and the
+ * assertion AFTER the loop fails -- a red gate on a machine that is merely
+ * busy. Reproduced twice in an isolated worktree at HEAD; the same package run
+ * on its own passes 3403/3403.
+ *
+ * The deadline below borrows from the timeout the enclosing test already
+ * carries (20 s by default from server/jest.config.js, 40 s where set
+ * explicitly), so it is strictly a LONGER wait, never a weaker check: a
+ * condition that never becomes true still reaches the assertion and still
+ * fails. Only the stopwatch moves.
+ */
+async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (await condition()) {
+      return
+    }
+    if (Date.now() >= deadline) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 function record(overrides: Partial<SubscriptionTokenRecord> = {}): SubscriptionTokenRecord {
   return {
     accessToken: 'access-old',
@@ -230,18 +262,11 @@ describe('SubscriptionCredentialProvider', () => {
       )
       const winnerResult = winner.getFreshCredential()
       const loserResult = loser.getFreshCredential()
-      for (let attempt = 0; attempt < 100 && fetchMock.mock.calls.length < 2; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1))
-      }
+      await waitUntil(() => fetchMock.mock.calls.length >= 2)
       expect(fetchMock).toHaveBeenCalledTimes(2)
 
       resolveSuccess(jsonResponse({ access_token: 'fresh-winner', refresh_token: 'rotated', expires_in: 3600 }))
-      for (let attempt = 0; attempt < 500; attempt += 1) {
-        if ((await store.load())?.accessToken === 'fresh-winner') {
-          break
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5))
-      }
+      await waitUntil(async () => (await store.load())?.accessToken === 'fresh-winner', 20_000)
       expect((await store.load())?.accessToken).toBe('fresh-winner')
       resolveFailure(jsonResponse({ error: 'invalid_grant' }, 400))
 
@@ -282,15 +307,11 @@ describe('SubscriptionCredentialProvider', () => {
         )
 
         const successfulResult = successfulProcess.getFreshCredential()
-        for (let attempt = 0; attempt < 100 && fetchMock.mock.calls.length < 1; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1))
-        }
+        await waitUntil(() => fetchMock.mock.calls.length >= 1)
         expect(fetchMock).toHaveBeenCalledTimes(1)
 
         const failingResult = failingProcess.getFreshCredential()
-        for (let attempt = 0; attempt < 100 && fetchMock.mock.calls.length < 2; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1))
-        }
+        await waitUntil(() => fetchMock.mock.calls.length >= 2)
         expect(fetchMock).toHaveBeenCalledTimes(2)
 
         resolveFailure(failureResponse)
@@ -328,9 +349,7 @@ describe('SubscriptionCredentialProvider', () => {
       const oldProcess = new SubscriptionCredentialProvider(store, config, undefined, () => now)
 
       const oldRefreshResult = oldProcess.getFreshCredential()
-      for (let attempt = 0; attempt < 100 && fetchMock.mock.calls.length < 1; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1))
-      }
+      await waitUntil(() => fetchMock.mock.calls.length >= 1)
       expect(fetchMock).toHaveBeenCalledTimes(1)
 
       const rePaired = record({
