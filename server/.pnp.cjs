@@ -10180,7 +10180,7 @@ const RAW_RUNTIME_STATE =
           ["cosmiconfig", "virtual:2935d8d494f2d99ee9f3755065f30fc3a3f7739760c1c9779dca1aa07c6027fb2ed4512f0c8db45cca255caac73890639393e9b10d03f99324fdb3ec3b767281#npm:9.0.1"],\
           ["env-paths", "npm:2.2.1"],\
           ["import-fresh", "npm:3.3.1"],\
-          ["js-yaml", "npm:4.3.1"],\
+          ["js-yaml", "npm:4.3.2"],\
           ["parse-json", "npm:5.2.0"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"]\
         ],\
@@ -12943,11 +12943,11 @@ const RAW_RUNTIME_STATE =
         ],\
         "linkType": "HARD"\
       }],\
-      ["npm:4.3.1", {\
-        "packageLocation": "./.yarn/cache/js-yaml-npm-4.3.1-6383f7fb93-2ce71b5d63.zip/node_modules/js-yaml/",\
+      ["npm:4.3.2", {\
+        "packageLocation": "./.yarn/cache/js-yaml-npm-4.3.2-d3b0efff68-05c44b9c73.zip/node_modules/js-yaml/",\
         "packageDependencies": [\
           ["argparse", "npm:2.0.1"],\
-          ["js-yaml", "npm:4.3.1"]\
+          ["js-yaml", "npm:4.3.2"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -14137,7 +14137,7 @@ const RAW_RUNTIME_STATE =
           ["semver", "npm:7.8.5"],\
           ["tar", "npm:7.5.22"],\
           ["tinyglobby", "npm:0.2.17"],\
-          ["undici", "npm:6.28.0"],\
+          ["undici", "npm:6.28.1"],\
           ["which", "npm:6.0.1"]\
         ],\
         "linkType": "HARD"\
@@ -16523,10 +16523,10 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["undici", [\
-      ["npm:6.28.0", {\
-        "packageLocation": "./.yarn/cache/undici-npm-6.28.0-8aca65475d-672a7a53bd.zip/node_modules/undici/",\
+      ["npm:6.28.1", {\
+        "packageLocation": "./.yarn/cache/undici-npm-6.28.1-db55889786-a64d597205.zip/node_modules/undici/",\
         "packageDependencies": [\
-          ["undici", "npm:6.28.0"]\
+          ["undici", "npm:6.28.1"]\
         ],\
         "linkType": "HARD"\
       }],\

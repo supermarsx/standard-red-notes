@@ -585,7 +585,13 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     ],
     ["app/yarn.lock", "undici", '"undici@npm:6.28.1":', "6.28.1", "6.26.0"],
     ["app/yarn.lock", "undici", '"undici@npm:7.29.1":', "7.29.1", "7.27.0"],
-    ["yarn.lock", "undici", '"undici@npm:^8.4.1":', "8.10.0", "8.7.0"],
+    [
+      "yarn.lock",
+      "undici",
+      '"undici@npm:8.11.2, undici@npm:^8.11.2":',
+      "8.11.2",
+      "8.7.0",
+    ],
     [
       "app/packages/filepicker/example/yarn.lock",
       "uuid",

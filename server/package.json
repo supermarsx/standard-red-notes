@@ -59,8 +59,10 @@
     "glob": "npm:13.0.6",
     "handlebars": "npm:4.7.10",
     "js-yaml@npm:^3.13.1": "npm:3.15.2",
+    "js-yaml@npm:^4.1.0": "npm:4.3.2",
     "proxy-addr@npm:^2.0.7": "npm:2.0.8",
     "source-map-js@npm:^1.2.1": "npm:1.2.2",
+    "undici@npm:^6.25.0": "npm:6.28.1",
     "undici@npm:^8.4.1": "npm:8.10.2"
   },
   "dependenciesMeta": {
