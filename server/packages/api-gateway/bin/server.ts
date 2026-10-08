@@ -72,6 +72,7 @@ import {
   createRateLimitMiddleware,
   RateLimitConfig,
   RateLimitRedis,
+  RateLimitStore,
 } from '../src/Controller/RateLimitMiddleware'
 import { IpAccessListStore } from '../src/Controller/IpAccessList'
 import { RateLimitMetricsStore } from '../src/Controller/RateLimitMetrics'
@@ -231,6 +232,16 @@ void container
       // cache outage never locks users out of auth. Keyed by req.ip, which honors
       // the configured TRUST_PROXY (set above), so a direct client cannot spoof it.
       // Tunable via RATE_LIMIT_* env; disable entirely with RATE_LIMIT_ENABLED=false.
+      // Standard Red Notes: the COUNTER STORE, which is the ioredis client on every
+      // Redis topology and `CacheEntryRateLimitStore` on the no-Redis home-server
+      // arm, where the tier used to be a pass-through. See the binding in
+      // Bootstrap/Container.ts.
+      const rateLimitStore = container.isBound(TYPES.ApiGateway_RateLimitStore)
+        ? container.get<RateLimitStore>(TYPES.ApiGateway_RateLimitStore)
+        : undefined
+      // The ESCALATION signal is a Redis-only side channel: auth reads
+      // `rl:escalate:<ip>` off the SAME shared cache, so it stays unavailable
+      // wherever that cache is (keep it keyed off the client, not the store).
       const rateLimitRedis = container.isBound(TYPES.ApiGateway_Redis)
         ? (container.get(TYPES.ApiGateway_Redis) as RateLimitRedis)
         : undefined
@@ -249,12 +260,37 @@ void container
       // Item 5: when adaptive escalation is enabled, flag an IP that trips a tier in
       // Redis (short TTL) so downstream adaptive anti-bot logic can require a
       // proof-of-work challenge on that address's next attempts. Best-effort.
-      const escalationRedis = rateLimitRedis as unknown as {
-        set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
-      }
+      //
+      // Standard Red Notes: `undefined` when there is no Redis client, and the hook
+      // is then NOT INSTALLED (below) rather than installed and dereferencing it.
+      // Reading `.set` off `undefined` throws a TypeError out of the limiter's 429
+      // branch, which its fail-open catch turns into next() -- a refusal silently
+      // spent. That was unreachable only while the no-Redis arm never throttled.
+      // The reader for this signal (auth's RedisIpEscalationChecker) is itself bound
+      // only when the shared Redis cache exists, so there is nothing to write for.
+      const escalationRedis = rateLimitRedis as unknown as
+        | {
+            set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
+          }
+        | undefined
+      const recordEscalation =
+        escalationRedis?.set === undefined
+          ? undefined
+          : (clientIp: string): void => {
+              void (async (): Promise<void> => {
+                try {
+                  const resolved = await rateLimitResolver.resolveRateLimitConfig()
+                  if (resolved.adaptiveEscalation && escalationRedis.set) {
+                    await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
+                  }
+                } catch {
+                  // best-effort escalation signal.
+                }
+              })()
+            }
       app.use(
         createRateLimitMiddleware({
-          redis: rateLimitRedis,
+          redis: rateLimitStore,
           logger: {
             warn: (message: string, metadata?: Record<string, unknown>) => logger.warn(message, metadata),
           },
@@ -273,21 +309,7 @@ void container
           ipAccessList,
           metrics: rateLimitMetrics,
           clientIpHeader,
-          onThrottle: (clientIp: string): void => {
-            if (escalationRedis.set === undefined) {
-              return
-            }
-            void (async (): Promise<void> => {
-              try {
-                const resolved = await rateLimitResolver.resolveRateLimitConfig()
-                if (resolved.adaptiveEscalation && escalationRedis.set) {
-                  await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
-                }
-              } catch {
-                // best-effort escalation signal.
-              }
-            })()
-          },
+          onThrottle: recordEscalation,
         }),
       )
 

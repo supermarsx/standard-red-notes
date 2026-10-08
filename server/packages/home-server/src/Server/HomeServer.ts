@@ -26,6 +26,7 @@ import {
   RateLimitConfig,
   RateLimitMetricsStore,
   RateLimitRedis,
+  RateLimitStore,
   RequiredCrossServiceTokenMiddleware,
   createAdminEmailDeliveryRouter,
   CollaborationAuthorizationService,
@@ -585,6 +586,21 @@ export class HomeServer implements HomeServerInterface {
         // factory returns a pass-through when redis is undefined). Keyed by
         // req.ip, which honors the TRUST_PROXY set above so a direct client cannot
         // spoof it. Tunable via RATE_LIMIT_* env; disable with RATE_LIMIT_ENABLED=false.
+        // Standard Red Notes: THE COUNTER STORE. This used to read the ioredis
+        // client directly, so with CACHE_TYPE=memory -- which this bundle always
+        // runs under -- the limiter got `undefined` and the whole tier was a
+        // pass-through: no ceiling on login, the second-factor gate, registration,
+        // magic-link request, account recovery, MCP-token authenticate, session
+        // refresh or the realtime mints. ApiGateway_RateLimitStore is that same
+        // client when Redis IS configured and a `CacheEntryRateLimitStore` over
+        // `auth_cache_entries` when it is not. See the binding in the gateway's
+        // Bootstrap/Container.ts.
+        const rateLimitStore = container.isBound(ApiGatewayTypes.ApiGateway_RateLimitStore)
+          ? container.get<RateLimitStore>(ApiGatewayTypes.ApiGateway_RateLimitStore)
+          : undefined
+        // The ESCALATION signal stays keyed off the Redis client specifically: auth
+        // reads `rl:escalate:<ip>` from the SAME shared cache, so without that cache
+        // there is no reader and nothing to write for.
         const rateLimitRedis = container.isBound(ApiGatewayTypes.ApiGateway_Redis)
           ? (container.get(ApiGatewayTypes.ApiGateway_Redis) as RateLimitRedis)
           : undefined
@@ -608,12 +624,39 @@ export class HomeServer implements HomeServerInterface {
         const rateLimitMetrics = container.isBound(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
           ? container.get<RateLimitMetricsStore>(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
           : undefined
-        const escalationRedis = rateLimitRedis as unknown as {
-          set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
-        }
+        // Standard Red Notes: `undefined` whenever this bundle runs without Redis,
+        // which is its normal shape -- so the hook is NOT INSTALLED below rather
+        // than installed and dereferencing it. `escalationRedis.set` on `undefined`
+        // throws a TypeError out of the limiter's 429 branch, and the limiter's
+        // fail-open catch turns that into next(): the refusal is silently spent and
+        // the request is allowed. It was unreachable only while this arm had no
+        // counter and therefore never throttled; measured once it did, every 11th
+        // login answered 401 carrying a correct `Retry-After: 49`. The reader for
+        // this signal (auth's RedisIpEscalationChecker) is likewise bound only when
+        // the shared Redis cache exists, so there is nothing to write for here.
+        const escalationRedis = rateLimitRedis as unknown as
+          | {
+              set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
+            }
+          | undefined
+        const recordEscalation =
+          escalationRedis?.set === undefined
+            ? undefined
+            : (clientIp: string): void => {
+                void (async (): Promise<void> => {
+                  try {
+                    const resolved = await rateLimitResolver.resolveRateLimitConfig()
+                    if (resolved.adaptiveEscalation && escalationRedis.set) {
+                      await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
+                    }
+                  } catch {
+                    // best-effort escalation signal.
+                  }
+                })()
+              }
         app.use(
           createRateLimitMiddleware({
-            redis: rateLimitRedis,
+            redis: rateLimitStore,
             logger: {
               warn: (message: string, metadata?: Record<string, unknown>) =>
                 winston.loggers.get('home-server').warn(message, metadata),
@@ -633,21 +676,7 @@ export class HomeServer implements HomeServerInterface {
             ipAccessList: rateLimitIpAccessList,
             metrics: rateLimitMetrics,
             clientIpHeader,
-            onThrottle: (clientIp: string): void => {
-              if (escalationRedis.set === undefined) {
-                return
-              }
-              void (async (): Promise<void> => {
-                try {
-                  const resolved = await rateLimitResolver.resolveRateLimitConfig()
-                  if (resolved.adaptiveEscalation && escalationRedis.set) {
-                    await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
-                  }
-                } catch {
-                  // best-effort escalation signal.
-                }
-              })()
-            },
+            onThrottle: recordEscalation,
           }),
         )
 

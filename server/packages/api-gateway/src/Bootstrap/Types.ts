@@ -1,6 +1,7 @@
 export const TYPES = {
   ApiGateway_Logger: Symbol.for('ApiGateway_Logger'),
   ApiGateway_Redis: Symbol.for('ApiGateway_Redis'),
+  ApiGateway_RateLimitStore: Symbol.for('ApiGateway_RateLimitStore'),
   ApiGateway_AggregateReadinessService: Symbol.for('ApiGateway_AggregateReadinessService'),
   ApiGateway_ReadinessState: Symbol.for('ApiGateway_ReadinessState'),
   ApiGateway_HTTPClient: Symbol.for('ApiGateway_HTTPClient'),

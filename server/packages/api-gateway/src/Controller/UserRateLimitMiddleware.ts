@@ -6,7 +6,7 @@ import { Logger } from 'winston'
 import { TYPES } from '../Bootstrap/Types'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
 import { RateLimitMetricsStore } from './RateLimitMetrics'
-import { createUserRateLimitMiddleware, RateLimitRedis, UserRateLimitConfig } from './RateLimitMiddleware'
+import { createUserRateLimitMiddleware, RateLimitStore, UserRateLimitConfig } from './RateLimitMiddleware'
 
 /**
  * Standard Red Notes: the PER-USER rate tier (anti-abuse item 4), mounted as an
@@ -21,9 +21,11 @@ import { createUserRateLimitMiddleware, RateLimitRedis, UserRateLimitConfig } fr
  * userMax=0). A max of 0 (the default) makes the wrapped limiter a pure
  * pass-through, so mounting it is behavior-preserving until an admin opts in.
  *
- * FAIL-OPEN: when Redis is absent (in-memory cache deployment) the wrapped
- * limiter is a no-op, and any Redis/overlay error inside it degrades to next()
- * rather than blocking a legitimate request.
+ * FAIL-OPEN: any store/overlay error inside the wrapped limiter degrades to
+ * next() rather than blocking a legitimate request. It is a no-op only where no
+ * counter store exists at all; the no-Redis home-server arm now has one
+ * (`CacheEntryRateLimitStore`), so an admin who raises `userMax` there gets a real
+ * ceiling instead of a silently ignored setting.
  */
 @injectable()
 export class UserRateLimitMiddleware extends BaseMiddleware {
@@ -32,10 +34,11 @@ export class UserRateLimitMiddleware extends BaseMiddleware {
   constructor(
     @inject(TYPES.ApiGateway_ServerSettingsResolver) serverSettingsResolver: ServerSettingsResolver,
     @inject(TYPES.ApiGateway_Logger) logger: Logger,
-    // Redis is only bound when a Redis cache is configured; without it the
-    // wrapped limiter is a pass-through (createUserRateLimitMiddleware no-ops on
-    // an undefined client).
-    @inject(TYPES.ApiGateway_Redis) @optional() redis?: RateLimitRedis,
+    // Standard Red Notes: the COUNTER STORE, not the ioredis client. It is that
+    // client on every Redis topology and a `CacheEntryRateLimitStore` on the
+    // no-Redis home-server arm; it is unbound (and the wrapped limiter is a
+    // pass-through) only where neither counter exists.
+    @inject(TYPES.ApiGateway_RateLimitStore) @optional() redis?: RateLimitStore,
     @inject(TYPES.ApiGateway_RateLimitMetricsStore) @optional() metrics?: RateLimitMetricsStore,
     @inject(TYPES.ApiGateway_CLIENT_IP_HEADER) @optional() clientIpHeader = '',
   ) {

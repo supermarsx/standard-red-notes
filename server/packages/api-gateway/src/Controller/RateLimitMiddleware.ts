@@ -47,6 +47,55 @@ export interface RateLimitRedis {
   ttl(key: string): Promise<number>
 }
 
+/**
+ * Standard Red Notes: the counter contract for a store that can increment AND arm
+ * the window in ONE step.
+ *
+ * `INCR` + (first hit only) `EXPIRE` is two round trips, which is fine against
+ * Redis because a key with no TTL is still a key this process will re-`EXPIRE` on
+ * its next first-hit. It is NOT fine against a store where the horizon lives in
+ * the row itself (see {@link CacheEntryRateLimitStore}): a row written by the
+ * `incr` half and never reached by the `expire` half has a wrong or missing
+ * horizon, and a rate-limit counter that never expires is a PERMANENT LOCKOUT --
+ * worse than no limit at all.
+ *
+ * So a store may offer this instead, and the limiter prefers it whenever it is
+ * present. ioredis has no such method, so the Redis topologies keep taking the
+ * `incr`/`expire` path byte for byte.
+ */
+export interface RateLimitWindowStore {
+  incrementInWindow(key: string, windowSeconds: number): Promise<number>
+  ttl(key: string): Promise<number>
+}
+
+/** Either counter backend. `undefined` at a call site means pass-through. */
+export type RateLimitStore = RateLimitRedis | RateLimitWindowStore
+
+const isWindowStore = (store: RateLimitStore): store is RateLimitWindowStore =>
+  typeof (store as RateLimitWindowStore).incrementInWindow === 'function'
+
+/**
+ * Bump the fixed-window counter for `key` and return the post-increment count,
+ * using whichever contract the store offers.
+ */
+const incrementRateLimitCounter = async (
+  store: RateLimitStore,
+  key: string,
+  windowSeconds: number,
+): Promise<number> => {
+  if (isWindowStore(store)) {
+    return store.incrementInWindow(key, windowSeconds)
+  }
+
+  const count = await store.incr(key)
+  // First hit in this window: attach the TTL so the counter self-resets.
+  if (count === 1) {
+    await store.expire(key, windowSeconds)
+  }
+
+  return count
+}
+
 export interface RateLimitLogger {
   warn(message: string, metadata?: Record<string, unknown>): void
 }
@@ -445,7 +494,12 @@ const setRateLimitHeaders = (
  * is available, so installing it unconditionally is safe.
  */
 export const createRateLimitMiddleware = (options: {
-  redis: RateLimitRedis | undefined
+  /**
+   * The counter store: an ioredis client on the Redis topologies, a
+   * {@link RateLimitWindowStore} ({@link CacheEntryRateLimitStore}) on the
+   * no-Redis arm, `undefined` when neither exists (pass-through).
+   */
+  redis: RateLimitStore | undefined
   config: RateLimitConfigProvider
   logger: RateLimitLogger
   ipAccessList?: IpAccessListLike
@@ -513,11 +567,7 @@ export const createRateLimitMiddleware = (options: {
 
       const key = `rl:${rule.bucket}:${rule.subject?.(request) ?? ip}`
       try {
-        const count = await redis.incr(key)
-        // First hit in this window: attach the TTL so the counter self-resets.
-        if (count === 1) {
-          await redis.expire(key, rule.windowSeconds)
-        }
+        const count = await incrementRateLimitCounter(redis, key, rule.windowSeconds)
 
         if (isWithinRateLimit(count, rule.limit)) {
           setRateLimitHeaders(response, rule.limit, count)
@@ -537,8 +587,28 @@ export const createRateLimitMiddleware = (options: {
         response.setHeader('Retry-After', String(retryAfterSeconds))
         setRateLimitHeaders(response, rule.limit, count, Math.floor(now() / 1000) + retryAfterSeconds)
 
-        void metrics?.recordThrottle({ bucket: rule.bucket, ip, method: request.method, path })
-        onThrottle?.(ip, rule.bucket)
+        // Standard Red Notes: THE REFUSAL MUST NOT DEPEND ON THE TELEMETRY.
+        //
+        // These two are a metrics sink and an escalation hook, both best-effort and
+        // both supplied by the caller. A synchronous throw from either used to
+        // escape into the fail-open catch below, which calls next() -- so a broken
+        // hook silently converted a 429 into an ALLOWED request, and the limiter
+        // reported itself as "failed open" while looking entirely healthy.
+        //
+        // That was unreachable only for as long as nothing ever throttled: the
+        // no-Redis arm was a pass-through, and `onThrottle` there dereferences an
+        // undefined escalation client. Giving that arm a real counter made the
+        // latent throw reachable on the very first refusal (measured: every 11th
+        // login answered 401 with a correct `Retry-After: 49` on the same
+        // response). The install sites no longer pass a hook they cannot serve, and
+        // this catch makes it structurally impossible for any future hook to spend
+        // a refusal.
+        try {
+          void metrics?.recordThrottle({ bucket: rule.bucket, ip, method: request.method, path })
+          onThrottle?.(ip, rule.bucket)
+        } catch (error) {
+          logger.warn('Rate-limit throttle telemetry failed.', safeErrorLogMetadata(error))
+        }
 
         response.status(429).send(TOO_MANY_REQUESTS)
       } catch (error) {
@@ -567,7 +637,8 @@ export interface UserRateLimitConfig {
 export type UserRateLimitConfigProvider = UserRateLimitConfig | (() => Promise<UserRateLimitConfig>)
 
 export const createUserRateLimitMiddleware = (options: {
-  redis: RateLimitRedis | undefined
+  /** Same contract as {@link createRateLimitMiddleware}'s `redis`. */
+  redis: RateLimitStore | undefined
   config: UserRateLimitConfigProvider
   logger: RateLimitLogger
   metrics?: RateLimitMetricsLike
@@ -612,10 +683,7 @@ export const createUserRateLimitMiddleware = (options: {
 
       const key = `rl:user:${resolved.bucket}:${uuid}`
       try {
-        const count = await redis.incr(key)
-        if (count === 1) {
-          await redis.expire(key, resolved.windowSeconds)
-        }
+        const count = await incrementRateLimitCounter(redis, key, resolved.windowSeconds)
 
         if (isWithinRateLimit(count, resolved.max)) {
           setRateLimitHeaders(response, resolved.max, count)

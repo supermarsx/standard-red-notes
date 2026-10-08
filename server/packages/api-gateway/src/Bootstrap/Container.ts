@@ -24,6 +24,7 @@ import {
 } from '../Service/Diagnostics/DeploymentDiagnostics'
 import { createSafeLogFormat } from '../Service/Logging/SafeLog'
 import {
+  CacheEntryRepositoryInterface,
   MapperInterface,
   EmailDeliveryConfig,
   RedisEncryptedEmailQueueProducer,
@@ -78,6 +79,8 @@ import { DockerServiceControlService } from '../Service/ServiceControl/DockerSer
 import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
 import { parseClientIpHeaderName } from '../Controller/ClientIp'
 import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/RateLimitMetrics'
+import { CacheEntryRateLimitStore } from '../Controller/CacheEntryRateLimitStore'
+import { RateLimitStore } from '../Controller/RateLimitMiddleware'
 import { AggregateReadinessService } from '../Service/Readiness/AggregateReadinessService'
 import { DEFAULT_DEPLOYMENT_MARKER_PATH, readDeploymentMarker } from '../Service/Readiness/DeploymentIdentity'
 import { ReadinessState } from '../Service/Readiness/ReadinessState'
@@ -1029,6 +1032,47 @@ export class ContainerConfigLoader {
 
     // Services
     container.bind<TimerInterface>(TYPES.ApiGateway_Timer).toConstantValue(new Timer())
+
+    // Standard Red Notes: THE RATE-LIMIT COUNTER STORE, bound separately from the
+    // ioredis client it used to be read straight out of.
+    //
+    // `RateLimitMiddleware` returns a pass-through when it has no store, and
+    // `CACHE_TYPE=memory` leaves ApiGateway_Redis unbound -- so on the single
+    // container (and the LXC install, which is the same arm) the ENTIRE rate-limit
+    // tier was inert: login, the second-factor gate, registration, magic-link
+    // request, account recovery, MCP-token authenticate, session refresh and the
+    // realtime mints all had no per-address ceiling. Measured: 13/13 logins and
+    // 63/63 session refreshes with no 429 and no X-RateLimit-* header at all.
+    //
+    // WITH Redis the store IS that client, so every Redis topology keeps the exact
+    // object and the exact INCR/EXPIRE path it had. Without it, the home-server
+    // bundle (the single container) runs auth in THIS process and container, so the
+    // `auth_cache_entries` table is reachable and `CacheEntryRateLimitStore` uses it
+    // the way 77061ddc's session-token cooldown and the seven sibling repositories
+    // in that same arm already do.
+    //
+    // The repository is resolved LAZILY: auth's container is loaded into this one
+    // AFTER the gateway's (see HomeServer.ts), so Auth_CacheEntryRepository does not
+    // exist yet at this line -- only by the time a request arrives.
+    //
+    // A standalone gateway with CACHE_TYPE=memory gets no store and keeps the
+    // pass-through, because that process has no database of its own to count in.
+    // The shipped composes never pair those two (docker-compose.yml is CACHE_TYPE
+    // =redis; the memory arm is the home-server single container).
+    if (container.isBound(TYPES.ApiGateway_Redis)) {
+      container
+        .bind<RateLimitStore>(TYPES.ApiGateway_RateLimitStore)
+        .toConstantValue(container.get<RateLimitStore>(TYPES.ApiGateway_Redis))
+    } else if (isConfiguredForHomeServer) {
+      container
+        .bind<RateLimitStore>(TYPES.ApiGateway_RateLimitStore)
+        .toConstantValue(
+          new CacheEntryRateLimitStore(
+            () => container.get<CacheEntryRepositoryInterface>(Symbol.for('Auth_CacheEntryRepository')),
+            container.get<TimerInterface>(TYPES.ApiGateway_Timer),
+          ),
+        )
+    }
 
     if (isConfiguredForHomeServer) {
       container
