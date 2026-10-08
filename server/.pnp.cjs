@@ -3201,10 +3201,10 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["@ioredis/commands", [\
-      ["npm:1.10.0", {\
-        "packageLocation": "./.yarn/cache/@ioredis-commands-npm-1.10.0-0ecb8bcb37-2b0322f99d.zip/node_modules/@ioredis/commands/",\
+      ["npm:2.0.0", {\
+        "packageLocation": "./.yarn/cache/@ioredis-commands-npm-2.0.0-d3a65b0c9e-03c0e0735a.zip/node_modules/@ioredis/commands/",\
         "packageDependencies": [\
-          ["@ioredis/commands", "npm:1.10.0"]\
+          ["@ioredis/commands", "npm:2.0.0"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -6640,7 +6640,7 @@ const RAW_RUNTIME_STATE =
           ["@types/node", "npm:26.6.4"],\
           ["@types/ws", "npm:8.18.2"],\
           ["@vitest/coverage-v8", "virtual:77a49aca117c4c3e1e22b974cd7484dc1de8d05693ad84d7386fe9f6044a94e8d1732dc5875be31321a765677c5484a09ef0db0935317635aecdd9a5ae3d0172#npm:5.0.3"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jsonwebtoken", "npm:9.0.3"],\
           ["playwright", "npm:1.64.0"],\
           ["prettier", "npm:3.9.9"],\
@@ -6675,7 +6675,7 @@ const RAW_RUNTIME_STATE =
           ["dayjs", "npm:1.11.23"],\
           ["dotenv", "npm:18.0.6"],\
           ["inversify", "npm:8.2.3"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["mixpanel", "npm:0.24.0"],\
@@ -6737,7 +6737,7 @@ const RAW_RUNTIME_STATE =
           ["helmet", "npm:8.3.0"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
@@ -6801,7 +6801,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\
@@ -6899,7 +6899,7 @@ const RAW_RUNTIME_STATE =
           ["@swc/jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:0.2.39"],\
           ["@types/jest", "npm:30.0.0"],\
           ["@types/node", "npm:26.6.4"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["reflect-metadata", "npm:0.2.2"],\
@@ -6966,7 +6966,7 @@ const RAW_RUNTIME_STATE =
           ["helmet", "npm:8.3.0"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
@@ -7026,7 +7026,7 @@ const RAW_RUNTIME_STATE =
           ["helmet", "npm:8.3.0"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
@@ -7107,7 +7107,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\
@@ -7139,7 +7139,7 @@ const RAW_RUNTIME_STATE =
           ["dayjs", "npm:1.11.23"],\
           ["dotenv", "npm:18.0.6"],\
           ["inversify", "npm:8.2.3"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\
@@ -7256,7 +7256,7 @@ const RAW_RUNTIME_STATE =
           ["helmet", "npm:8.3.0"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
@@ -7329,7 +7329,7 @@ const RAW_RUNTIME_STATE =
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\
@@ -12081,16 +12081,15 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["ioredis", [\
-      ["npm:5.11.1", {\
-        "packageLocation": "./.yarn/cache/ioredis-npm-5.11.1-0ce2bc576f-f27653075b.zip/node_modules/ioredis/",\
+      ["npm:6.0.0", {\
+        "packageLocation": "./.yarn/cache/ioredis-npm-6.0.0-ca28410308-afd383b034.zip/node_modules/ioredis/",\
         "packageDependencies": [\
-          ["@ioredis/commands", "npm:1.10.0"],\
+          ["@ioredis/commands", "npm:2.0.0"],\
           ["cluster-key-slot", "npm:1.1.1"],\
           ["debug", "virtual:e5a68e66e61c28ba8fcce7f8ce38ef829d42728b97243d64a06e24fd15823e9bcb3f5a81a0473d2019bc3e22ca5c6a8f3cf8f4ab53bb42dc8844e39b4517e226#npm:4.4.3"],\
           ["denque", "npm:2.1.0"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["redis-errors", "npm:1.2.0"],\
-          ["redis-parser", "npm:3.0.0"],\
           ["standard-as-callback", "npm:2.1.0"]\
         ],\
         "linkType": "HARD"\
@@ -15144,16 +15143,6 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
-    ["redis-parser", [\
-      ["npm:3.0.0", {\
-        "packageLocation": "./.yarn/cache/redis-parser-npm-3.0.0-7ebe40abcb-b10846844b.zip/node_modules/redis-parser/",\
-        "packageDependencies": [\
-          ["redis-errors", "npm:1.2.0"],\
-          ["redis-parser", "npm:3.0.0"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
     ["reflect-metadata", [\
       ["npm:0.1.13", {\
         "packageLocation": "./.yarn/cache/reflect-metadata-npm-0.1.13-c525998e20-732570da35.zip/node_modules/reflect-metadata/",\
@@ -16355,7 +16344,7 @@ const RAW_RUNTIME_STATE =
           ["dayjs", "npm:1.11.23"],\
           ["debug", "virtual:e5a68e66e61c28ba8fcce7f8ce38ef829d42728b97243d64a06e24fd15823e9bcb3f5a81a0473d2019bc3e22ca5c6a8f3cf8f4ab53bb42dc8844e39b4517e226#npm:4.4.3"],\
           ["dedent", "virtual:f39ee4ffd4cc274d869c05eb5cf2fcfa87540204057c0f0486bd12d06d0df6e2ffcbe9c5cd8b392f13185bd5b8f32d0399e8589ce35179ab42680b18de7cf93c#npm:1.7.2"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["mongodb", null],\
           ["mssql", null],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\
@@ -16434,7 +16423,7 @@ const RAW_RUNTIME_STATE =
           ["dayjs", "npm:1.11.23"],\
           ["debug", "virtual:e5a68e66e61c28ba8fcce7f8ce38ef829d42728b97243d64a06e24fd15823e9bcb3f5a81a0473d2019bc3e22ca5c6a8f3cf8f4ab53bb42dc8844e39b4517e226#npm:4.4.3"],\
           ["dedent", "virtual:f39ee4ffd4cc274d869c05eb5cf2fcfa87540204057c0f0486bd12d06d0df6e2ffcbe9c5cd8b392f13185bd5b8f32d0399e8589ce35179ab42680b18de7cf93c#npm:1.7.2"],\
-          ["ioredis", "npm:5.11.1"],\
+          ["ioredis", "npm:6.0.0"],\
           ["mongodb", null],\
           ["mssql", null],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\

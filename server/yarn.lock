@@ -2088,10 +2088,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@ioredis/commands@npm:1.10.0":
-  version: 1.10.0
-  resolution: "@ioredis/commands@npm:1.10.0"
-  checksum: 10/2b0322f99d24f11d99ae279b59d977bb129f95f973ed3a31cbee68376e8fad41f974d23d7f9a06151b3d9c140038ef312e0b45d4577048ab0797aa9a6839213d
+"@ioredis/commands@npm:2.0.0":
+  version: 2.0.0
+  resolution: "@ioredis/commands@npm:2.0.0"
+  checksum: 10/03c0e0735ac75dae14380a153e6b330391d3c7fcef47de13d0bfbe7de1f83ad8d617c6629c25b478eb3d4013a95f0b602840acfd047981d8796438f5e7ddffbb
   languageName: node
   linkType: hard
 
@@ -4619,7 +4619,7 @@ __metadata:
     "@types/node": "npm:^26.6.4"
     "@types/ws": "npm:^8.18.2"
     "@vitest/coverage-v8": "npm:^5.0.3"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jsonwebtoken: "npm:^9.0.3"
     playwright: "npm:^1.64.0"
     prettier: "npm:^3.9.9"
@@ -4652,7 +4652,7 @@ __metadata:
     dayjs: "npm:^1.11.23"
     dotenv: "npm:^18.0.6"
     inversify: "npm:^8.2.3"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     mixpanel: "npm:^0.24.0"
@@ -4697,7 +4697,7 @@ __metadata:
     helmet: "npm:^8.3.0"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     jsonwebtoken: "npm:^9.0.3"
@@ -4773,7 +4773,7 @@ __metadata:
     express: "npm:^5.2.1"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     mysql2: "npm:^3.24.5"
@@ -4847,7 +4847,7 @@ __metadata:
     "@swc/jest": "npm:^0.2.39"
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^26.6.4"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     reflect-metadata: "npm:^0.2.2"
@@ -4928,7 +4928,7 @@ __metadata:
     helmet: "npm:^8.3.0"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     jsonwebtoken: "npm:^9.0.3"
@@ -4984,7 +4984,7 @@ __metadata:
     helmet: "npm:^8.3.0"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     reflect-metadata: "npm:^0.2.2"
     typescript: "npm:6.0.3"
@@ -5059,7 +5059,7 @@ __metadata:
     express: "npm:^5.2.1"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     mysql2: "npm:^3.24.5"
@@ -5089,7 +5089,7 @@ __metadata:
     dayjs: "npm:^1.11.23"
     dotenv: "npm:^18.0.6"
     inversify: "npm:^8.2.3"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     mysql2: "npm:^3.24.5"
@@ -5197,7 +5197,7 @@ __metadata:
     helmet: "npm:^8.3.0"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     jsonwebtoken: "npm:^9.0.3"
@@ -5265,7 +5265,7 @@ __metadata:
     express: "npm:^5.2.1"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
-    ioredis: "npm:^5.11.1"
+    ioredis: "npm:^6.0.0"
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     mysql2: "npm:^3.24.5"
@@ -9277,18 +9277,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ioredis@npm:^5.11.1":
-  version: 5.11.1
-  resolution: "ioredis@npm:5.11.1"
+"ioredis@npm:^6.0.0":
+  version: 6.0.0
+  resolution: "ioredis@npm:6.0.0"
   dependencies:
-    "@ioredis/commands": "npm:1.10.0"
+    "@ioredis/commands": "npm:2.0.0"
     cluster-key-slot: "npm:1.1.1"
     debug: "npm:4.4.3"
     denque: "npm:2.1.0"
     redis-errors: "npm:1.2.0"
-    redis-parser: "npm:3.0.0"
     standard-as-callback: "npm:2.1.0"
-  checksum: 10/f27653075b0599a9e8886b28a59bb2e232ca7d91b4a81de699e932cb55dcdcec791fe571fb7d4ebc81fc26f44667a76cf165162ecea57285548190ea0d58f734
+  checksum: 10/afd383b034ff8fdf9d1fed0b4b4524e7d73bc0d0f5cad9ad93d2787d0b70f025ed0170eceab19a4d37f460eb7f2edfc544e86936492779149f1e5ec0e94f0910
   languageName: node
   linkType: hard
 
@@ -11923,19 +11922,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"redis-errors@npm:1.2.0, redis-errors@npm:^1.0.0":
+"redis-errors@npm:1.2.0":
   version: 1.2.0
   resolution: "redis-errors@npm:1.2.0"
   checksum: 10/001c11f63ddd52d7c80eb4f4ede3a9433d29a458a7eea06b9154cb37c9802a218d93b7988247aa8c958d4b5d274b18354e8853c148f1096fda87c6e675cfd3ee
-  languageName: node
-  linkType: hard
-
-"redis-parser@npm:3.0.0":
-  version: 3.0.0
-  resolution: "redis-parser@npm:3.0.0"
-  dependencies:
-    redis-errors: "npm:^1.0.0"
-  checksum: 10/b10846844b4267f19ce1a6529465819c3d78c3e89db7eb0c3bb4eb19f83784797ec411274d15a77dbe08038b48f95f76014b83ca366dc955a016a3a0a0234650
   languageName: node
   linkType: hard
 

@@ -72,7 +72,7 @@
     "express": "^5.2.1",
     "inversify": "^8.2.3",
     "inversify-express-utils": "workspace:*",
-    "ioredis": "^5.11.1",
+    "ioredis": "^6.0.0",
     "mysql2": "^3.24.5",
     "nodemailer": "^10.0.16",
     "otplib": "^13.5.0",
