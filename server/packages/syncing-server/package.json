@@ -47,7 +47,7 @@
     "@standardnotes/settings": "workspace:*",
     "@standardnotes/sncrypto-node": "workspace:*",
     "@standardnotes/time": "workspace:*",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "cors": "2.8.6",
     "dotenv": "^18.0.6",
     "express": "^5.2.1",
