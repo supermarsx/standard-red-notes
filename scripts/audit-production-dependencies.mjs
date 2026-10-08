@@ -150,11 +150,18 @@ const securityManifestDeclarations = Object.freeze([
     packageName: "uuid@npm:^8.3.2",
     expected: "11.1.1",
   }),
+  // Raised from npm:3.4.13 to npm:3.4.16 on 2026-10-08: 6389a4b8 ("chore(server):
+  // bump every patch and minor dependency to latest") moved the server sanitizer
+  // pin forward without hand-editing this strict-equality declaration, and the
+  // resulting structural red is what kept the whole vulnerability scan dark until
+  // 9e5dcb10. dompurify here is the production HTML sanitizer behind
+  // @standardnotes/utils, so the declaration follows the manifest upward; it is
+  // never lowered to make this gate pass.
   Object.freeze({
     file: "server/package.json",
     section: "resolutions",
     packageName: "dompurify",
-    expected: "npm:3.4.13",
+    expected: "npm:3.4.16",
   }),
 ]);
 

@@ -8,8 +8,8 @@
     "dependents": [
       "@opentelemetry/sdk-trace-node@virtual:a84ed6132578ddc74117561c3d24886f0e13f22a111a95cadb2664ed8640456323a0e58348830c2cb38f062f9bfe9a34f0c2a6c8f8a0222f557ef1189dbc9455#npm:1.19.0"
     ],
-    "rationale": "The bundled desktop home server explicitly supplies AWSXRayPropagator and never constructs JaegerPropagator; this exact unused transitive path remains only for upstream compatibility.",
-    "expiry": "2026-09-11"
+    "rationale": "Re-verified 2026-10-08: the vulnerable JaegerPropagator.extract is only reachable once the propagator is registered, and the telemetry wiring this transitive copy serves (OpenTelemetrySDK.ts, the source of the published domain-events-infra the bundled home server depends on) passes a single explicit textMapPropagator of AWSXRayPropagator, which replaces the default propagator set; no OTEL_PROPAGATORS value exists anywhere in the repository to re-add jaeger. The patched 2.9.0 line requires migrating the whole pinned OpenTelemetry 1.19.x family, inside a published patched dependency of the app lock domain, so it cannot be a resolution here.",
+    "expiry": "2026-11-08"
   },
   {
     "advisoryId": "1120252",
@@ -18,27 +18,7 @@
     "vulnerableVersions": "<0.217.0",
     "versions": ["0.46.0"],
     "dependents": ["@standardnotes/domain-events-infra@npm:1.23.4"],
-    "rationale": "The bundled desktop home server supplies an explicit OTLP metric reader and does not install the Prometheus exporter, so the vulnerable built-in Prometheus listener is unreachable.",
-    "expiry": "2026-09-11"
-  },
-  {
-    "advisoryId": "1138808",
-    "package": "image-size",
-    "domain": "app",
-    "vulnerableVersions": "<=2.0.2",
-    "versions": ["1.0.2"],
-    "dependents": ["metro@npm:0.84.4"],
-    "rationale": "Metro is repository-controlled mobile build tooling; shipped application and server runtimes do not include or invoke this parser, and no patched image-size release currently exists.",
-    "expiry": "2026-09-11"
-  },
-  {
-    "advisoryId": "1138809",
-    "package": "image-size",
-    "domain": "app",
-    "vulnerableVersions": "<=2.0.2",
-    "versions": ["1.0.2"],
-    "dependents": ["metro@npm:0.84.4"],
-    "rationale": "Metro is repository-controlled mobile build tooling; shipped application and server runtimes do not include or invoke this parser, and no patched image-size release currently exists.",
-    "expiry": "2026-09-11"
+    "rationale": "Re-verified 2026-10-08 structurally rather than by intent: the advisory is a crash in the Prometheus exporter's HTTP listener, and @opentelemetry/exporter-prometheus appears zero times in app/yarn.lock because sdk-node 0.46.0 does not depend on it, so the vulnerable module is absent from the installed graph and the listener cannot be constructed; the telemetry wiring supplies an explicit OTLP PeriodicExportingMetricReader instead. The patched 0.217.0 line needs @opentelemetry/api >= 1.9 while 0.46.0 pins the peer to < 1.8, so it is a family migration in the app lock domain, not a resolution.",
+    "expiry": "2026-11-08"
   }
 ]

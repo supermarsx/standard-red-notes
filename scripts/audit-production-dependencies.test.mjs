@@ -144,9 +144,9 @@ test("owned security manifests preserve supported direct dependency floors", () 
     ],
     [
       "server/package.json",
-      '"dompurify": "npm:3.4.13"',
+      '"dompurify": "npm:3.4.16"',
       '"dompurify": "npm:3.4.12"',
-      /resolutions\.dompurify must remain npm:3\.4\.13/,
+      /resolutions\.dompurify must remain npm:3\.4\.16/,
     ],
   ]) {
     const mutatedText = securityManifests[file].replace(current, vulnerable);
@@ -566,7 +566,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "4.0.5",
       "4.0.3",
     ],
-    ["yarn.lock", "postcss", '"postcss@npm:^8.5.15":', "8.5.26", "8.5.17"],
+    ["yarn.lock", "postcss", '"postcss@npm:^8.5.28":', "8.5.29", "8.5.17"],
     [
       "app/yarn.lock",
       "mermaid",
