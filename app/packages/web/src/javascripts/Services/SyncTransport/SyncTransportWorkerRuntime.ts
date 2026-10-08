@@ -2948,6 +2948,68 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  /**
+   * Tell an invite subscription's owner that the lane is not carrying it right now.
+   *
+   * *** ONE PLACE, BECAUSE THERE ARE TWO RIGHT ANSWERS AND THE TEARDOWN PATH HAD
+   * NEITHER. ***
+   *
+   *   - A `deferred` cause is not a failure: another tab of this account holds the
+   *     lane and will hand it back. The subscription stays REGISTERED so the
+   *     `AUTHENTICATED` handler re-sends it the moment any lane wins the lease, and
+   *     the owner is told to park. Reported as a retryable `INVITE_ERROR` this drove
+   *     one reconnect, one console failure line and one DEGRADED transition per
+   *     coordinator backoff tick, forever — and `surrenderOwnership` closes the
+   *     socket for exactly that cause, so a teardown reaching for the error shape
+   *     would have brought it straight back.
+   *   - Anything else is an `INVITE_ERROR`, and `retryable` decides between the
+   *     coordinator's backoff and a permanent stand-down. A structurally absent
+   *     capability must not be retryable; a socket that was simply torn down must be.
+   *
+   * `INVITE_ERROR` is also the ONLY signal that disposes the subscription on the main
+   * thread: `handleTransportError` is the one path in the coordinator that clears its
+   * `session.connection` symbol, and until that happens `hasLiveSubscription()`
+   * answers true and the re-arm on `online` / `visibilitychange` returns at its first
+   * line.
+   *
+   * Idempotent through `settled`, so a caller that has already answered for this
+   * subscription is never spoken over by the teardown that follows it.
+   */
+  private settleInviteSubscription(
+    subscription: ActiveInviteSubscription,
+    reason: SyncFallbackReason | undefined,
+  ): void {
+    if (subscription.settled === true) {
+      return
+    }
+    subscription.settled = true
+    subscription.sent = false
+    const disposition = reason === undefined ? 'retryable' : syncFallbackDisposition(reason)
+    if (disposition === 'deferred' && reason !== undefined) {
+      this.dependencies.postMessage({
+        type: 'INVITE_DEFERRED',
+        clientRequestId: subscription.clientRequestId,
+        reason,
+        resumeAfterMilliseconds: OWNER_LEASE_TTL_MS,
+      })
+      this.beginDeferredInviteWatch()
+      return
+    }
+    const retryable = disposition === 'retryable'
+    this.dependencies.postMessage({
+      type: 'INVITE_ERROR',
+      clientRequestId: subscription.clientRequestId,
+      // No reason means the socket went away without one naming it, which is what
+      // every teardown that is not a fallback looks like.
+      code: reason === undefined ? 'SOCKET_CLOSED' : reason.toUpperCase().replaceAll('-', '_'),
+      retryable,
+    })
+    if (!retryable && this.inviteSubscription === subscription) {
+      this.inviteSubscription = undefined
+      this.cancelDeferredInviteWatch()
+    }
+  }
+
   private failInviteSubscription(subscription: ActiveInviteSubscription, code: string, retryable: boolean): void {
     subscription.settled = true
     this.dependencies.postMessage({
@@ -3814,7 +3876,7 @@ export class SyncTransportWorkerRuntime {
       return
     }
     this.transition(this.nonRecoveringState(reason), reason)
-    await this.closeSocketAndReleaseOwner()
+    await this.closeSocketAndReleaseOwner({ reason })
   }
 
   /**
@@ -3920,51 +3982,19 @@ export class SyncTransportWorkerRuntime {
       this.active = undefined
       this.transition('HTTP_FALLBACK', reason, preserveHealthySocket)
       if (!preserveHealthySocket) {
-        await this.closeSocketAndReleaseOwner()
+        await this.closeSocketAndReleaseOwner({ reason })
       }
       return
     }
     if (active.mode === 'invite-bootstrap') {
       const subscription = this.inviteSubscription
-      const disposition = syncFallbackDisposition(reason)
       if (subscription?.clientRequestId === active.clientRequestId) {
-        if (disposition === 'deferred') {
-          // Nothing failed: another tab of this account holds the lane. The
-          // subscription stays registered so the AUTHENTICATED handler re-sends it
-          // the moment any lane wins the lease back, and the main thread is told to
-          // park instead of reconnecting — reported as a retryable INVITE_ERROR this
-          // drove one reconnect, one console failure line and one DEGRADED
-          // transition per coordinator backoff tick, forever.
-          subscription.sent = false
-          subscription.settled = true
-          this.dependencies.postMessage({
-            type: 'INVITE_DEFERRED',
-            clientRequestId: active.clientRequestId,
-            reason,
-            resumeAfterMilliseconds: OWNER_LEASE_TTL_MS,
-          })
-          this.beginDeferredInviteWatch()
-        } else {
-          // A structurally absent capability is not a transient fault. Reporting it as retryable
-          // makes the durable invite coordinator reconnect against it for the life of the tab.
-          const retryable = disposition === 'retryable'
-          subscription.settled = true
-          this.dependencies.postMessage({
-            type: 'INVITE_ERROR',
-            clientRequestId: active.clientRequestId,
-            code: reason.toUpperCase().replaceAll('-', '_'),
-            retryable,
-          })
-          subscription.sent = false
-          if (!retryable) {
-            this.inviteSubscription = undefined
-          }
-        }
+        this.settleInviteSubscription(subscription, reason)
       }
       this.active = undefined
       this.transition(this.nonRecoveringState(reason), reason, preserveHealthySocket)
       if (!preserveHealthySocket) {
-        await this.closeSocketAndReleaseOwner()
+        await this.closeSocketAndReleaseOwner({ reason })
       }
       return
     }
@@ -4013,7 +4043,7 @@ export class SyncTransportWorkerRuntime {
     this.accepted = false
     this.commandSent = false
     if (!preserveHealthySocket) {
-      await this.closeSocketAndReleaseOwner()
+      await this.closeSocketAndReleaseOwner({ reason })
     } else {
       this.transition('READY')
     }
@@ -4032,7 +4062,7 @@ export class SyncTransportWorkerRuntime {
     // in DEGRADED (every entry point demands READY) and the next recovery dials
     // a new one, so a preserved socket was an authenticated orphan holding one of
     // the account's per-user socket slots until the tab closed.
-    await this.closeSocketAndReleaseOwner()
+    await this.closeSocketAndReleaseOwner({ reason })
     this.transition('DEGRADED', reason)
   }
 
@@ -4047,7 +4077,7 @@ export class SyncTransportWorkerRuntime {
     this.dependencies.postMessage({ type: 'COLLABORATION_FALLBACK', clientRequestId, reason })
     if (!preserveHealthySocket) {
       this.transition('HTTP_FALLBACK', reason)
-      await this.closeSocketAndReleaseOwner()
+      await this.closeSocketAndReleaseOwner({ reason })
     } else {
       this.transition('READY')
     }
@@ -4081,8 +4111,17 @@ export class SyncTransportWorkerRuntime {
    * it immediately: `reticket`. Its new handshake re-sends the invite subscription,
    * so telling the subscription's owner the lane is gone would make it dispose and
    * re-subscribe underneath a worker that is already doing exactly that.
+   *
+   * `reason` is the CAUSE, and it is not decoration: a `deferred` cause
+   * (`multi-tab-not-owner`) must reach the invite subscription as a park and never as
+   * a retryable error. `surrenderOwnership` closes the socket for precisely that
+   * cause with no active request, so a teardown that assumed "the socket went away,
+   * retry" would tell the coordinator to re-dial against a lease another tab holds.
    */
-  private async closeSocketAndReleaseOwner({ redialling = false }: { redialling?: boolean } = {}): Promise<void> {
+  private async closeSocketAndReleaseOwner({
+    redialling = false,
+    reason,
+  }: { redialling?: boolean; reason?: SyncFallbackReason } = {}): Promise<void> {
     this.clearAckDeadline()
     this.cancelCommandRetry()
     this.clearHeartbeat()
@@ -4132,14 +4171,8 @@ export class SyncTransportWorkerRuntime {
        * is what decides between its backoff and a permanent stand-down. A socket
        * torn down is retryable by construction: the next dial gets a fresh one.
        */
-      if (!this.shuttingDown && !redialling && subscription.settled !== true) {
-        subscription.settled = true
-        this.dependencies.postMessage({
-          type: 'INVITE_ERROR',
-          clientRequestId: subscription.clientRequestId,
-          code: 'SOCKET_CLOSED',
-          retryable: true,
-        })
+      if (!this.shuttingDown && !redialling) {
+        this.settleInviteSubscription(subscription, reason)
       }
     }
   }

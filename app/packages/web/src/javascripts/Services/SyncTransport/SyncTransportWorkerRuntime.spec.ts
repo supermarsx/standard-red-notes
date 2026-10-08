@@ -4708,6 +4708,70 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
 
       expect(socket.readyState).toBe(3)
+      // ...and it is told WHY, not merely that something happened: the teardown
+      // carries the cause that produced it.
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-1',
+        code: 'SERVER_KILL',
+        retryable: true,
+      })
+    })
+
+    /**
+     * *** THE TEARDOWN MUST NOT SPEAK IN THE WRONG SHAPE. ***
+     *
+     * `surrenderOwnership('multi-tab-not-owner')` closes the socket for a cause that
+     * is NOT a fault: a sibling tab took the lease and will hand it back. Reported as
+     * a retryable INVITE_ERROR that drove one dispose, one re-dial and one logged
+     * failure per coordinator backoff tick, forever — so a teardown that reached for
+     * the error shape would have brought that straight back.
+     */
+    it('parks the subscription instead of failing it when a sibling tab takes the lease', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+      await subscribe(harness, socket)
+
+      // Another tab of this account now holds every lease this worker renews.
+      for (const [scope, lease] of harness.outbox.owners) {
+        harness.outbox.owners.set(scope, { ...lease, ownerId: 'another-tab' })
+      }
+      jest.advanceTimersByTime(5_000)
+      await flush()
+      await flush()
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_DEFERRED',
+        clientRequestId: 'invite-1',
+        reason: 'multi-tab-not-owner',
+        resumeAfterMilliseconds: 15_000,
+      })
+      expect(harness.messages.some((message) => message.type === 'INVITE_ERROR')).toBe(false)
+    })
+
+    it('reports a teardown with no stated cause as a plain closed socket', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+      await subscribe(harness, socket)
+      const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+        commandId: string
+        digest: string
+      }
+      // Settle the command so the pagehide teardown is not refused for work in flight.
+      socket.receive(serverFrame('COMMITTED', command.commandId, { status: 'COMMITTED', result: {} }, command.digest))
+      await flush()
+      await harness.runtime.handle({
+        type: 'CHECKPOINT_DURABLE',
+        requestId: 'checkpoint-1',
+        sessionScope: SESSION_A,
+        commandId: command.commandId,
+      })
+      await flush()
+
+      await harness.runtime.handle({ type: 'RELEASE_OWNER' })
+      await flush()
+
       expect(harness.messages).toContainEqual({
         type: 'INVITE_ERROR',
         clientRequestId: 'invite-1',
