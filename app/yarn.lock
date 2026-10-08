@@ -9528,7 +9528,7 @@ __metadata:
     compare-versions: "npm:^6.1.1"
     copy-webpack-plugin: "npm:^14.0.0"
     decrypt: "https://github.com/standardnotes/decrypt/archive/83e11f45c1461a7a1bde5a8bbc1ada4c4c712797.tar.gz"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     electron: "npm:43.7.9"
     electron-builder: "npm:^26.17.0"
     electron-log: "npm:^5.4.4"
@@ -10517,7 +10517,7 @@ __metadata:
     css-loader: "npm:^7.1.4"
     dayjs: "npm:^1.11.23"
     docx: "npm:^9.9.0"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     echarts: "npm:^6.1.0"
     esbuild-loader: "npm:^4.5.0"
     eslint: "npm:^10.12.0"
@@ -17061,6 +17061,15 @@ __metadata:
   version: 17.4.2
   resolution: "dotenv@npm:17.4.2"
   checksum: 10/ca1b6f54d58e39914901e1518958e86083aca8deb5aa2e7f2a51acd53291d97852479b0ab26ed949b6a45a0e9adcc7b0d1c3c72375e8ea670f7005e341c6daba
+  languageName: node
+  linkType: hard
+
+"dotenv@npm:^18.0.6":
+  version: 18.0.6
+  resolution: "dotenv@npm:18.0.6"
+  bin:
+    dotenv: dist/index.cjs
+  checksum: 10/67f9d106d75db66c61a7257fe83da05a89fab1e78fce00e8ed066c95758e7cde5f6cdcc00fa00cc11bbe3d636d4aa9d3453fc805bf27060743844c04f967b284
   languageName: node
   linkType: hard
 
