@@ -3920,6 +3920,40 @@ describe('SyncTransportWorkerRuntime', () => {
     })
 
     /**
+     * The collaboration lane reported `reconnect-gap` for EVERY close, including the
+     * ones the gateway named. `reconnect-gap` is the honest floor for a connection
+     * that simply went away; it is a lie for a rate limit, and it is the only thing
+     * the caller of `AUTHORIZE_COLLABORATION` is handed.
+     */
+    it('tells a collaboration caller which close ended its grant', async () => {
+      const harness = setup()
+      const { socket } = await startCollaborationHandshake(harness)
+
+      socket.serverClose(1008, 'sync rate limit exceeded')
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'COLLABORATION_FALLBACK',
+        clientRequestId: 'collaboration-client-1',
+        reason: 'rate-limited',
+      })
+    })
+
+    it('still reports a bare connection loss to a collaboration caller as a gap', async () => {
+      const harness = setup()
+      const { socket } = await startCollaborationHandshake(harness)
+
+      socket.abort()
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'COLLABORATION_FALLBACK',
+        clientRequestId: 'collaboration-client-1',
+        reason: 'reconnect-gap',
+      })
+    })
+
+    /**
      * *** THE LEDGER COULD NOT COUNT A SINGLE SERVER-INITIATED CLOSE. ***
      *
      * `recordTransition` increments `fallbackCounts` only when the reason is
