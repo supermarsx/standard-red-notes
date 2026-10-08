@@ -9,6 +9,7 @@ import {
   MAX_FILE_CHUNK_BYTES,
   normalizeSyncRequestForWire,
   SYNC_FALLBACK_REASON_EXPLANATIONS,
+  syncCloseFallbackReason,
   syncFallbackDisposition,
   type SocketFileBinaryHeader,
   type SyncFallbackReason,
@@ -246,5 +247,195 @@ describe('FILES_V1 binary frames', () => {
     const claimed = await header(bytes, { declaredSize: 10, final: true })
 
     expect(() => encodeFileBinaryFrame(claimed, bytes)).toThrow('FILE_FRAME_MALFORMED')
+  })
+})
+
+/**
+ * *** THE OPERATOR'S COMPLAINT, AS A TABLE. ***
+ *
+ * A `1008 'sync rate limit exceeded'` used to reach the user as a bare
+ * `SOCKET_CLOSED`, and so did about a dozen other distinct gateway decisions,
+ * because the only thing the close site ever asked was `code >= 4000` — a test no
+ * server close in this repo passes. Every case below is a close the gateway
+ * actually performs, named with the code and the reason string it writes.
+ */
+describe('syncCloseFallbackReason', () => {
+  /** `gateway.attach.test.ts` asserts this exact pair on the wire. */
+  it('names the rate limit the gateway states, instead of reporting nothing', () => {
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'sync rate limit exceeded', wasClean: true })).toBe(
+      'rate-limited',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'file rate limit exceeded', wasClean: true })).toBe(
+      'rate-limited',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'message rate limit exceeded', wasClean: true })).toBe(
+      'rate-limited',
+    )
+  })
+
+  it('separates the eleven causes the gateway sends as 1008', () => {
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'per-user connection limit exceeded', wasClean: true })).toBe(
+      'socket-limit',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'missing authToken', wasClean: true })).toBe('auth-failed')
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'invalid authToken', wasClean: true })).toBe('auth-failed')
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'origin-not-allowed', wasClean: true })).toBe('server-policy')
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'query-string-not-permitted', wasClean: true })).toBe(
+      'proxy-failed',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'unknown path', wasClean: true })).toBe('proxy-failed')
+    // A 1008 whose reason this build does not recognise is still a policy refusal,
+    // and must NOT collapse to "no cause reported".
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'something-added-next-release', wasClean: true })).toBe(
+      'server-policy',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, wasClean: true })).toBe('server-policy')
+  })
+
+  it('maps the other codes the gateway closes with', () => {
+    expect(syncCloseFallbackReason({ code: 1009, reason: 'sync frame too large', wasClean: true })).toBe(
+      'frame-too-large',
+    )
+    expect(syncCloseFallbackReason({ code: 1012, reason: 'WebSocket sync is unavailable.', wasClean: true })).toBe(
+      'server-unavailable',
+    )
+    expect(syncCloseFallbackReason({ code: 1013, reason: 'sync-unavailable:redis', wasClean: true })).toBe(
+      'server-unavailable',
+    )
+    expect(syncCloseFallbackReason({ code: 1013, reason: 'draining', wasClean: true })).toBe('server-unavailable')
+    expect(syncCloseFallbackReason({ code: 1001, reason: 'server shutting down', wasClean: true })).toBe(
+      'reconnect-gap',
+    )
+  })
+
+  /**
+   * *** THE INVERSION THIS REPLACES. *** `code >= 4000 ? 'server-kill' : undefined`
+   * reported `server-kill` for the ONLY three closes the server does not perform —
+   * this client's own ack timeout, pong timeout and failed invite acknowledgement.
+   */
+  it('reports the client-side timeout as its own cause, never as a server kill', () => {
+    expect(syncCloseFallbackReason({ code: 4000, reason: 'ack-timeout', wasClean: true })).toBe('ack-timeout')
+    expect(syncCloseFallbackReason({ code: 4000, reason: 'pong-timeout', wasClean: true })).toBe('ack-timeout')
+    expect(syncCloseFallbackReason({ code: 4000, reason: 'invite acknowledgement failed', wasClean: true })).toBe(
+      'ack-timeout',
+    )
+    expect(syncCloseFallbackReason({ code: 4000, reason: 'ack-timeout', wasClean: true })).not.toBe('server-kill')
+  })
+
+  it('treats a connection that died without a close frame as a gap, not a verdict', () => {
+    expect(syncCloseFallbackReason({ code: 1006, reason: '', wasClean: false })).toBe('reconnect-gap')
+    // A close frame never arrived, so there is no server statement to classify and
+    // whatever text came with it is not the server's word.
+    expect(syncCloseFallbackReason({ code: 1008, reason: 'sync rate limit exceeded', wasClean: false })).toBe(
+      'reconnect-gap',
+    )
+  })
+
+  it('reports nothing for an ordinary close, so a clean teardown is not a degradation', () => {
+    expect(syncCloseFallbackReason({ code: 1000, reason: 'transport-fallback', wasClean: true })).toBeUndefined()
+    expect(syncCloseFallbackReason({ code: 0 })).toBeUndefined()
+  })
+
+  /**
+   * The specific half. `failAndClose` sends ONE ERROR frame addressed to
+   * `'protocol'` and then closes, and the close code it picks collapses eleven
+   * causes onto 1008 or 1013 — so the frame's own code is the better answer and
+   * must win.
+   */
+  it('prefers the gateway protocol ERROR code over the close code', () => {
+    expect(
+      syncCloseFallbackReason({
+        code: 1013,
+        reason: 'Sync command queue is full.',
+        wasClean: true,
+        protocolErrorCode: 'BACKPRESSURE',
+      }),
+    ).toBe('backpressure')
+    expect(syncCloseFallbackReason({ code: 1013, wasClean: true, protocolErrorCode: 'SOCKET_LIMIT' })).toBe(
+      'socket-limit',
+    )
+    expect(syncCloseFallbackReason({ code: 1013, wasClean: true, protocolErrorCode: 'SOCKET_BUDGET_LOST' })).toBe(
+      'socket-limit',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'AUTH_TIMEOUT' })).toBe(
+      'auth-failed',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'OUT_OF_ORDER' })).toBe(
+      'server-policy',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'SEQUENCE_EXHAUSTED' })).toBe(
+      'server-policy',
+    )
+    expect(syncCloseFallbackReason({ code: 1008, wasClean: true, protocolErrorCode: 'INVITE_ACK_INVALID' })).toBe(
+      'server-policy',
+    )
+    expect(syncCloseFallbackReason({ code: 1012, wasClean: true, protocolErrorCode: 'SYNC_DISABLED' })).toBe(
+      'server-unavailable',
+    )
+    // The gateway named a cause and then the connection died before its close
+    // frame arrived. The cause it named is still the truth.
+    expect(syncCloseFallbackReason({ code: 1006, wasClean: false, protocolErrorCode: 'BACKPRESSURE' })).toBe(
+      'backpressure',
+    )
+  })
+
+  it('falls through to the close code for a protocol code this build cannot name', () => {
+    expect(
+      syncCloseFallbackReason({
+        code: 1008,
+        reason: 'sync rate limit exceeded',
+        wasClean: true,
+        protocolErrorCode: 'A_CODE_FROM_A_NEWER_GATEWAY',
+      }),
+    ).toBe('rate-limited')
+  })
+
+  /**
+   * Every answer is a member of the declared set — which is what lets the ledger
+   * and the admin pane key counters on it. A reason string from the network must
+   * never be able to leave this function.
+   */
+  it('only ever answers with a declared fallback reason', () => {
+    const declared = new Set(Object.keys(SYNC_FALLBACK_REASON_EXPLANATIONS))
+    const codes = [0, 1000, 1001, 1005, 1006, 1008, 1009, 1011, 1012, 1013, 3000, 4000, 4999]
+    const reasons = ['', 'sync rate limit exceeded', 'origin-not-allowed', 'hunter2 https://sync.internal:8443']
+    const protocolCodes = [
+      undefined,
+      'BACKPRESSURE',
+      'SOCKET_LIMIT',
+      'SYNC_DISABLED',
+      'NOT_AUTHORIZED',
+      'REAUTH_REJECTED',
+      'ALREADY_AUTHENTICATED',
+      'INVALID_ENVELOPE',
+      'AUTH_REQUIRED',
+      'AUTH_REJECTED',
+      'SOCKET_BUDGET_LOST',
+      'UNKNOWN_TO_THIS_BUILD',
+    ]
+
+    for (const code of codes) {
+      for (const reason of reasons) {
+        for (const wasClean of [true, false, undefined]) {
+          for (const protocolErrorCode of protocolCodes) {
+            const answer = syncCloseFallbackReason({
+              code,
+              reason,
+              ...(wasClean === undefined ? {} : { wasClean }),
+              ...(protocolErrorCode === undefined ? {} : { protocolErrorCode }),
+            })
+            expect(answer === undefined || declared.has(answer)).toBe(true)
+          }
+        }
+      }
+    }
+  })
+
+  it('leaves every new reason retryable, so no consumer stands down on a transient server close', () => {
+    expect(syncFallbackDisposition('rate-limited')).toBe('retryable')
+    expect(syncFallbackDisposition('server-policy')).toBe('retryable')
+    expect(syncFallbackDisposition('server-unavailable')).toBe('retryable')
+    expect(syncFallbackDisposition('socket-limit')).toBe('retryable')
+    expect(isPermanentSyncFallbackReason('server-unavailable')).toBe(false)
   })
 })

@@ -38,6 +38,7 @@ import {
   SyncClientFrame,
   SyncFallbackReason,
   isPermanentSyncFallbackReason,
+  syncCloseFallbackReason,
   syncFallbackDisposition,
   SyncServerFrame,
   SyncNegotiatedOperation,
@@ -157,6 +158,22 @@ const RETRYABLE_FILE_ERROR_CODES = new Set([
   'FILE_DEADLINE_EXCEEDED',
   'FILE_BACKPRESSURE',
 ])
+
+/**
+ * The local send buffer never drained inside the deadline.
+ *
+ * *** WHY THIS CLASS EXISTS: `'backpressure'` WAS A REASON NOTHING COULD EMIT. ***
+ * It has been a declared `SyncFallbackReason` with its own explanation sentence and
+ * its own counter in the admin pane since the lane was written, and every throw out
+ * of `sendWithBackpressure` was a plain `Error` that the command path's catch
+ * collapsed onto `'outbox-unavailable'` — a reason about IndexedDB. So the pane
+ * showed a structurally dead counter, and a client genuinely outrunning its socket
+ * was reported as a broken local database.
+ *
+ * Thrown ONLY for the drain deadline. "The socket is gone" and "the socket changed
+ * underneath us" are not backpressure and keep their existing reasons.
+ */
+class SyncBackpressureError extends Error {}
 
 const NEGOTIABLE_OPERATIONS: ReadonlySet<SyncNegotiatedOperation> = new Set([
   'SYNC_ITEMS',
@@ -490,6 +507,18 @@ export class SyncTransportWorkerRuntime {
    * and spend another one-use ticket to be told the same thing.
    */
   private sessionRefreshUnsupported = false
+
+  /**
+   * The `code` of the protocol-addressed ERROR frame this socket's gateway sent, if
+   * it sent one.
+   *
+   * Cleared where a socket is CREATED, and deliberately nowhere else. Clearing it
+   * after a close as well would look tidier and would make the one reset that
+   * matters unobservable: several teardown paths drop the socket reference before
+   * closing it, so their `onClose` returns at the identity guard and never runs. One
+   * reset, at the only moment a new connection can begin, covers all of them.
+   */
+  private protocolErrorCode?: string
 
   constructor(private readonly dependencies: SyncWorkerRuntimeDependencies) {
     this.outbox = dependencies.outbox ?? new IndexedDbSyncOutbox()
@@ -1730,6 +1759,7 @@ export class SyncTransportWorkerRuntime {
     }
     this.socket = socket
     this.socketGeneration += 1
+    this.protocolErrorCode = undefined
     try {
       // Must be set before the socket opens, or FILES_V1 chunks would arrive as
       // Blobs. Guarded because the setter does not exist on every socket double.
@@ -1861,6 +1891,12 @@ export class SyncTransportWorkerRuntime {
     // request, and the socket-level refusal is addressed to `'protocol'`, which no
     // lane would recognise and which would otherwise fall through unnoticed.
     if (await this.handleSessionRefreshFrame(frame)) {
+      return
+    }
+    // And before every other lane lookup, for the same reason and one more: the
+    // gateway's LAST word before it closes is addressed to `'protocol'`, and a
+    // lane lookup cannot match it. See `handleProtocolError`.
+    if (await this.handleProtocolError(frame)) {
       return
     }
     const rpc = this.rpcByCommandId(frame.commandId)
@@ -2297,6 +2333,51 @@ export class SyncTransportWorkerRuntime {
       }
     }
     return false
+  }
+
+  /**
+   * The gateway's LAST WORD before it closes the socket.
+   *
+   * `failAndClose` sends exactly one ERROR frame addressed `requestId = commandId =
+   * 'protocol'` — it belongs to the connection, not to any command — and then
+   * closes. The frame router matched that against no lane, fell through to the
+   * outbox-commandId guard and returned, so the frame was consumed ONLY while
+   * AUTHENTICATING or while a credential refresh was outstanding. At every other
+   * moment `AUTH_TIMEOUT`, `BACKPRESSURE`, `SOCKET_LIMIT`, `OUT_OF_ORDER`,
+   * `SEQUENCE_EXHAUSTED`, `SOCKET_BUDGET_LOST`, `INVITE_ACK_INVALID`,
+   * `SYNC_DISABLED`, `INVALID_ENVELOPE` and `ALREADY_AUTHENTICATED` all vanished —
+   * and the close that followed carried no cause either, so a dozen distinct
+   * server decisions reached the user as a bare `SOCKET_CLOSED`.
+   *
+   * RECORDED rather than acted on, deliberately. The close is already on its way
+   * and the close path already owns every lane riding this socket: it fails each
+   * one and then either reconnects or falls back. What was missing was only the
+   * CAUSE, and `syncCloseFallbackReason` prefers this code over the close code
+   * precisely because 1008 collapses eleven causes onto one number.
+   *
+   * Ordered AFTER `handleSessionRefreshFrame`, which must keep first claim on a
+   * protocol-addressed `NOT_AUTHORIZED`/`REAUTH_REJECTED` while its own REAUTH is
+   * outstanding — that is the one case where the frame is a verdict about the
+   * session and not merely an epitaph for the socket.
+   */
+  private async handleProtocolError(frame: SyncServerFrame): Promise<boolean> {
+    if (
+      frame.type !== 'ERROR' ||
+      frame.commandId !== SYNC_PROTOCOL_FRAME_ID ||
+      frame.requestId !== SYNC_PROTOCOL_FRAME_ID
+    ) {
+      return false
+    }
+    if (typeof frame.payload.code === 'string') {
+      this.protocolErrorCode = frame.payload.code
+    }
+    if (this.state === 'AUTHENTICATING') {
+      // The handshake's own refusal, which already had a path: the ticket is spent
+      // and the request belongs on HTTP. Behaviour unchanged on purpose — only the
+      // close attribution that follows it is new.
+      await this.fallback('auth-failed', this.outboxRecord)
+    }
+    return true
   }
 
   /**
@@ -3032,8 +3113,15 @@ export class SyncTransportWorkerRuntime {
       this.commandSent = true
       await this.sendWithBackpressure(dispatchingRecord.bytes)
       this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
-    } catch {
-      await this.fallback('outbox-unavailable', this.outboxRecord)
+    } catch (error) {
+      // Two different faults used to arrive here as one. An outbox write that fails
+      // is `outbox-unavailable`; a send buffer that will not drain is the client
+      // outrunning its socket, which is what `'backpressure'` is for and what
+      // nothing in this build was able to report.
+      await this.fallback(
+        error instanceof SyncBackpressureError ? 'backpressure' : 'outbox-unavailable',
+        this.outboxRecord,
+      )
     }
   }
 
@@ -3062,7 +3150,7 @@ export class SyncTransportWorkerRuntime {
     const deadline = this.now() + COMMAND_ACK_TIMEOUT_MS
     while (socket.bufferedAmount > MAX_SYNC_BUFFERED_BYTES) {
       if (this.now() >= deadline) {
-        throw new Error('Sync socket backpressure deadline exceeded before write.')
+        throw new SyncBackpressureError('Sync socket backpressure deadline exceeded before write.')
       }
       await new Promise<void>((resolve) => this.scheduleTimeout(resolve, 10))
       if (this.socket !== socket) {
@@ -3160,11 +3248,29 @@ export class SyncTransportWorkerRuntime {
     if (this.shuttingDown) {
       return
     }
+    // *** WHAT THE SERVER ACTUALLY SAID. ***
+    //
+    // This used to be `code >= 4000 ? 'server-kill' : undefined`, and both arms were
+    // wrong. No server close code anywhere in this stack is >= 4000 — the only three
+    // 4000-closes are this client's own ack timeout, pong timeout and failed invite
+    // acknowledgement — so `server-kill` was reported EXACTLY when the server had
+    // killed nothing, and every genuine server close reported no cause at all. The
+    // ledger only counts a transition that carries a reason, so the pane's
+    // "degradations with cause X" sat at zero while the lane flapped.
+    const closedReason = syncCloseFallbackReason({
+      code,
+      ...(event.reason === undefined ? {} : { reason: event.reason }),
+      ...(event.wasClean === undefined ? {} : { wasClean: event.wasClean }),
+      ...(this.protocolErrorCode === undefined ? {} : { protocolErrorCode: this.protocolErrorCode }),
+    })
     if (this.active?.mode === 'collaboration' && this.active.socketGeneration !== undefined) {
-      await this.fallbackCollaboration('reconnect-gap', false)
+      // `reconnect-gap` only as the FLOOR. A collaboration grant lost to a rate
+      // limit or a draining gateway said so in its close, and reporting the generic
+      // gap for it discards the one fact the caller could act on.
+      await this.fallbackCollaboration(closedReason ?? 'reconnect-gap', false)
       return
     }
-    this.transition('DEGRADED', code >= 4000 ? 'server-kill' : undefined)
+    this.transition('DEGRADED', closedReason)
     if (!this.active) {
       const unsent = this.rpcRequests.values().next().value as ActiveRpcRequest | undefined
       if (unsent) {

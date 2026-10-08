@@ -1,9 +1,11 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
+import { LaneDegradationLedger } from './LaneDegradationLedger'
 import { SyncOutboxRecord, SyncOutboxStore, SyncOutboxUnavailableError } from './SyncTransportOutbox'
 import { SyncSocketCloseEvent, SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
 import {
   CollaborationAuthorizationTransportRequest,
   MainToSyncWorkerMessage,
+  MAX_SYNC_BUFFERED_BYTES,
   payloadByteLength,
   SyncServerFrame,
   SyncWorkerToMainMessage,
@@ -3741,6 +3743,273 @@ describe('SyncTransportWorkerRuntime', () => {
         reason: 'proxy-failed',
       })
       expect(socket.sent.filter((entry) => JSON.parse(entry).type === 'COLLABORATION_AUTHORIZE')).toHaveLength(1)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // *** WHAT THE SERVER SAID, AND WHETHER ANYONE HEARD IT. ***
+  //
+  // Three independent layers each discarded the gateway's stated cause, which is
+  // why a `1008 'sync rate limit exceeded'` reached the user as a bare
+  // `SOCKET_CLOSED` — and that was the GENERIC behaviour for about a dozen
+  // distinct server causes, not one bug:
+  //
+  //   1. the close type declared `{ code?: number }`, so `reason` and `wasClean`
+  //      could not be read at all — and this file's own socket double mirrored it,
+  //      so no test here could even express a server that states its cause;
+  //   2. the only code the close site tested for was `>= 4000`, which NO server
+  //      close in the repo uses — so `server-kill` was reported exactly when the
+  //      client timed itself out, and every real server close reported nothing;
+  //   3. the gateway's protocol-addressed ERROR frame — its last word, carrying
+  //      the specific code — was dropped by the frame router.
+  //
+  // Every test below drives a close the gateway actually performs and asserts the
+  // REASON that comes out, not that a handler ran.
+  // ---------------------------------------------------------------------------
+  describe('close attribution', () => {
+    const protocolError = (code: string): SyncServerFrame => ({
+      version: 1,
+      channel: 'sync',
+      type: 'ERROR',
+      requestId: 'protocol',
+      commandId: 'protocol',
+      sequence: 2,
+      payloadLength: payloadByteLength({ code, retryable: true }),
+      payload: { code, retryable: true },
+    })
+
+    const degradations = (harness: ReturnType<typeof setup>) =>
+      harness.messages.filter(
+        (message): message is Extract<SyncWorkerToMainMessage, { type: 'STATE' }> =>
+          message.type === 'STATE' && message.state === 'DEGRADED',
+      )
+
+    it('names the rate limit the gateway stated instead of reporting no cause at all', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      socket.serverClose(1008, 'sync rate limit exceeded')
+      await flush()
+
+      // BEFORE: `[{ state: 'DEGRADED' }]` — no reason, for the one close the
+      // operator opened the diagnostics pane to understand.
+      expect(degradations(harness)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason: 'rate-limited' }])
+    })
+
+    it('separates a per-user socket limit from a rate limit, though both close 1008', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      socket.serverClose(1008, 'per-user connection limit exceeded')
+      await flush()
+
+      expect(degradations(harness)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason: 'socket-limit' }])
+    })
+
+    it('reports a draining or restarting gateway as unavailable rather than as a kill', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      socket.serverClose(1013, 'draining')
+      await flush()
+
+      expect(degradations(harness)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason: 'server-unavailable' }])
+    })
+
+    it('reports a connection that died with no close frame as a reconnect gap', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      socket.abort()
+      await flush()
+
+      expect(degradations(harness)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason: 'reconnect-gap' }])
+    })
+
+    /**
+     * *** THE INVERSION, DRIVEN END TO END. *** `code >= 4000 ? 'server-kill'` is
+     * reachable only from this client's own `socket.close(4000, 'ack-timeout')`, so
+     * the ONE close that used to report "the gateway closed the socket deliberately"
+     * is the one the gateway had nothing to do with.
+     */
+    it("reports the client's own ack timeout as its own, never as a server kill", async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      jest.advanceTimersByTime(20_000)
+      await flush()
+      await flush()
+
+      expect(socket.closes).toContainEqual({ code: 4000, reason: 'ack-timeout' })
+      expect(degradations(harness).map((message) => message.reason)).toEqual(['ack-timeout'])
+      expect(degradations(harness).map((message) => message.reason)).not.toContain('server-kill')
+    })
+
+    /**
+     * The gateway's `failAndClose` sends ONE ERROR addressed `requestId = commandId
+     * = 'protocol'` and then closes. The frame router matched it against no lane,
+     * fell through to the outbox-commandId guard and returned — so it was consumed
+     * only while AUTHENTICATING or during a credential refresh, and at every other
+     * moment the specific code vanished.
+     */
+    it('consumes the gateway protocol ERROR frame and attributes the close it precedes', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      socket.receive(protocolError('BACKPRESSURE'))
+      await flush()
+      socket.serverClose(1013, 'Sync command queue is full.')
+      await flush()
+
+      // `'backpressure'` reaching the ledger at all is new: it was a declared
+      // reason with a pane counter and no code path able to emit it.
+      expect(degradations(harness)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason: 'backpressure' }])
+    })
+
+    it.each([
+      ['SOCKET_LIMIT', 'socket-limit'],
+      ['SOCKET_BUDGET_LOST', 'socket-limit'],
+      ['OUT_OF_ORDER', 'server-policy'],
+      ['SEQUENCE_EXHAUSTED', 'server-policy'],
+      ['INVITE_ACK_INVALID', 'server-policy'],
+      ['INVALID_ENVELOPE', 'server-policy'],
+      ['SYNC_DISABLED', 'server-unavailable'],
+      ['AUTH_TIMEOUT', 'auth-failed'],
+    ])('carries the gateway %s through to the fallback reason %s', async (code, reason) => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      socket.receive(protocolError(code))
+      await flush()
+      socket.serverClose(1008, 'policy')
+      await flush()
+
+      expect(degradations(harness)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason }])
+    })
+
+    it('does not carry one connection cause onto the next, even on an unattributable close', async () => {
+      const harness = setup()
+      const first = await authorize(harness)
+
+      first.receive(protocolError('SOCKET_LIMIT'))
+      await flush()
+      first.abort()
+      await flush()
+      // The reconnect dials a fresh socket; the previous gateway's verdict must not
+      // follow it, or one bad connection would mis-attribute the rest of the tab.
+      jest.advanceTimersByTime(5_000)
+      await flush()
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'client-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 'r'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const second = harness.sockets.at(-1) as FakeSocket
+      expect(second).not.toBe(first)
+      second.open()
+      second.abort()
+      await flush()
+
+      expect(degradations(harness).map((message) => message.reason)).toEqual(['socket-limit', 'reconnect-gap'])
+    })
+
+    /**
+     * *** THE LEDGER COULD NOT COUNT A SINGLE SERVER-INITIATED CLOSE. ***
+     *
+     * `recordTransition` increments `fallbackCounts` only when the reason is
+     * defined, and every raw close arrived `undefined` — so the admin pane's
+     * "degradations with cause X" sat at zero through every flap. This drives the
+     * real worker and feeds its real posted transitions into the real ledger, which
+     * is the seam the two audits found disagreeing.
+     */
+    it('moves the ledger counter the admin pane reads, for a close the gateway caused', async () => {
+      const harness = setup()
+      const ledger = new LaneDegradationLedger({ now: () => 0, baselineState: 'HTTP_ONLY' })
+      const socket = await authorize(harness)
+
+      socket.serverClose(1008, 'sync rate limit exceeded')
+      await flush()
+
+      for (const message of harness.messages) {
+        if (message.type === 'STATE') {
+          ledger.recordTransition(message.state, message.reason, message.socketPreserved === true)
+        }
+      }
+
+      expect(ledger.view().fallbackCounts).toEqual({ 'rate-limited': 1 })
+      expect(ledger.view().transitions.map((entry) => [entry.state, entry.reason])).toContainEqual([
+        'DEGRADED',
+        'rate-limited',
+      ])
+    })
+
+    it('reports the client outrunning its socket as backpressure, not as a broken database', async () => {
+      // `'backpressure'` had an explanation sentence, a pane counter and NO emitter:
+      // every throw out of `sendWithBackpressure` was a plain `Error`, and the
+      // command path's catch collapsed all of them onto `'outbox-unavailable'` — a
+      // reason about IndexedDB.
+      const messages: SyncWorkerToMainMessage[] = []
+      const sockets: FakeSocket[] = []
+      let uuid = 0
+      let clock = 1_700_000_000_000
+      const runtime = new SyncTransportWorkerRuntime({
+        outbox: new FakeOutbox(),
+        postMessage: (message) => messages.push(message),
+        socketFactory: () => {
+          const socket = new FakeSocket()
+          sockets.push(socket)
+          return socket
+        },
+        uuid: () => `backpressure-id-${++uuid}`,
+        random: () => 0,
+        // Each read advances an hour, so the drain deadline is already behind us the
+        // first time the loop looks and no timer has to be pumped to reach it.
+        now: () => (clock += 3_600_000),
+        subtle: {
+          digest: jest.fn().mockResolvedValue(Uint8Array.from({ length: 32 }, () => 0xab).buffer),
+        } as unknown as SubtleCrypto,
+      })
+
+      await runtime.handle({ type: 'EXECUTE', clientRequestId: 'client-1', body: body(), sessionScope: SESSION_A })
+      await runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'client-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: clock + 3_600_000_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = sockets.at(-1) as FakeSocket
+      socket.open()
+      // A send buffer the peer is not draining: the condition `'backpressure'` names.
+      socket.bufferedAmount = MAX_SYNC_BUFFERED_BYTES + 1
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      await flush()
+      await flush()
+
+      const states = messages.filter(
+        (message): message is Extract<SyncWorkerToMainMessage, { type: 'STATE' }> => message.type === 'STATE',
+      )
+      expect(states.map((message) => message.reason)).toContain('backpressure')
+      expect(states.map((message) => message.reason)).not.toContain('outbox-unavailable')
     })
   })
 })

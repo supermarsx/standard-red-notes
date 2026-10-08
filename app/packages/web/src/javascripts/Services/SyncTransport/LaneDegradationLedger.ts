@@ -61,7 +61,7 @@ import {
  * a working day, and small enough that the whole ring fits in a pasted report.
  *
  * *** THE RING IS THE ONLY THING THAT ELIDES. *** The counters below are keyed by a
- * CLOSED set — nineteen reasons, two statuses — so they are bounded by construction
+ * CLOSED set — twenty-three reasons, two statuses — so they are bounded by construction
  * and never drop anything. What overflowing the ring costs is therefore the ORDER of
  * the oldest transitions, never the fact that they happened; `transitionsDropped`
  * carries how many lost their place, so the elision is a reported number rather than
@@ -141,7 +141,7 @@ export type LaneLedgerReading = {
  * Asked against `SYNC_FALLBACK_REASON_EXPLANATIONS` rather than a tuple written out
  * again here, because that Record is `Record<SyncFallbackReason, string>` and is
  * therefore kept exhaustive by the compiler. A second hand-maintained list of the
- * same eighteen members is a list that goes stale.
+ * same twenty-two members is a list that goes stale.
  */
 function isKnownReason(reason: string): reason is SyncFallbackReason {
   return Object.hasOwn(SYNC_FALLBACK_REASON_EXPLANATIONS, reason)

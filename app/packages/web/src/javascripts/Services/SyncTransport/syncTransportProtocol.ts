@@ -681,6 +681,36 @@ export type SyncFallbackReason =
    * lanes (invites, RPC, collaboration, files) stay up on the same socket.
    */
   | 'live-sync-disabled'
+  /**
+   * The gateway closed the socket because this client exceeded an ingress rate
+   * limit (`1008 sync rate limit exceeded`, and its file and message siblings).
+   *
+   * *** THE REASON THIS WHOLE GROUP EXISTS. *** Before it, the close code was the
+   * only thing read and the only code it tested for was `>= 4000` — which no
+   * server close in the repo uses — so a rate limit reached the user as a bare
+   * `SOCKET_CLOSED` with no cause at all, and so did every other server close.
+   */
+  | 'rate-limited'
+  /**
+   * The gateway refused the socket on policy grounds and named the cause in the
+   * close reason: a disallowed origin, a repeated or out-of-order frame, an
+   * exhausted response sequence, an invite acknowledgement that did not match.
+   * Distinct from `auth-failed`, which is the credential being rejected.
+   */
+  | 'server-policy'
+  /**
+   * The gateway is restarting, draining, or one of the stores it needs to admit a
+   * socket was not ready (`1012`/`1013`). Retryable and usually short-lived — the
+   * close reason names which, and the gateway's own metrics carry the detail.
+   */
+  | 'server-unavailable'
+  /**
+   * This account already holds as many sync sockets as the deployment allows, or
+   * this socket's own reservation was lost to another claimant. Distinct from
+   * `multi-tab-not-owner`, which is this client standing down for a sibling TAB:
+   * here the limit is the server's and other devices count toward it.
+   */
+  | 'socket-limit'
 
 /**
  * One plain-language sentence per fallback reason, in terms of what the reader can
@@ -713,6 +743,151 @@ export const SYNC_FALLBACK_REASON_EXPLANATIONS: Record<SyncFallbackReason, strin
   // account's switch off. Named with the flag so the reader can find it.
   'live-sync-disabled':
     'An administrator turned Live sync (LIVE_SYNC_ENABLED) off for this account, so note syncing stays on HTTP. Invites, API RPC, collaboration and files are unaffected.',
+  'rate-limited':
+    'The gateway closed the socket because this client sent frames faster than its ingress rate limit allows. Retryable after a backoff.',
+  'server-policy':
+    'The gateway refused the socket on policy grounds — a disallowed origin, or a frame it would not accept. Not a credential failure.',
+  'server-unavailable':
+    'The gateway is restarting, draining, or a store it needs to admit a socket was not ready. Retryable, and usually short-lived.',
+  'socket-limit':
+    'This account already holds as many sync sockets as the deployment allows, counting its other devices, or this socket lost its reservation.',
+}
+
+/**
+ * Standard Red Notes: what the gateway's close actually MEANT.
+ *
+ * -------------------------------------------------------------------------------
+ * WHY THIS IS A FUNCTION AND NOT AN `if` AT THE CLOSE SITE
+ * -------------------------------------------------------------------------------
+ *
+ * The close site used to answer the question with `code >= 4000 ? 'server-kill' :
+ * undefined`, and that expression is wrong in both arms:
+ *
+ *   - NO server close code in the repo is >= 4000. All three 4000-closes are this
+ *     client's own (`ack-timeout`, `pong-timeout`, a failed invite acknowledgement),
+ *     so `server-kill` was reported EXACTLY when the server had not killed anything.
+ *   - every genuine server close — 1008, 1009, 1012, 1013, 1001 — fell into the
+ *     `undefined` arm, and the ledger only counts a transition that carries a
+ *     reason. So "degradations with cause X" sat at zero through every flap, and
+ *     a `1008 'sync rate limit exceeded'` reached the user as a bare
+ *     `SOCKET_CLOSED`.
+ *
+ * Pure and exported so the mapping is tested against the codes and reason strings
+ * the gateway actually writes, rather than only through a socket double.
+ *
+ * -------------------------------------------------------------------------------
+ * SECURITY: THE REASON STRING IS CLASSIFIED, NEVER CARRIED
+ * -------------------------------------------------------------------------------
+ *
+ * A close reason is bytes from the network. It is read here ONLY to choose one
+ * member of a closed enum; the string itself never reaches the ledger, the
+ * diagnostics report or a log line. That is the same rule the ledger states for
+ * itself — the report it feeds is written to be pasted in public.
+ */
+export function syncCloseFallbackReason(close: {
+  /** The WebSocket close code. 0 when the transport supplied none. */
+  readonly code: number
+  /** The server's stated cause, if a close frame carried one. */
+  readonly reason?: string
+  /** False when no close frame arrived at all, so no server statement exists. */
+  readonly wasClean?: boolean
+  /**
+   * The `code` of the gateway's protocol-addressed ERROR frame, if one arrived on
+   * this socket. `failAndClose` sends exactly one and then closes, so a recorded
+   * code always belongs to the close that follows — and it is far more specific
+   * than the close code, which collapses eleven distinct causes onto 1008.
+   */
+  readonly protocolErrorCode?: string
+}): SyncFallbackReason | undefined {
+  const named =
+    close.protocolErrorCode === undefined ? undefined : SERVER_PROTOCOL_ERROR_REASONS[close.protocolErrorCode]
+  if (named !== undefined) {
+    return named
+  }
+  // The client's own closes, and the only codes >= 4000 anywhere in this stack.
+  if (close.code >= 4000) {
+    return 'ack-timeout'
+  }
+  // No close frame arrived, so there is no server statement to classify and any
+  // reason text is not the server's word. In a browser this coincides with 1006;
+  // the clause is written against `wasClean` rather than the code so a transport
+  // that reports an unclean close with some other code cannot have it attributed
+  // to a server policy it never stated.
+  if (close.wasClean === false) {
+    return 'reconnect-gap'
+  }
+  switch (close.code) {
+    case 1008:
+      return policyCloseReason(close.reason)
+    case 1009:
+      return 'frame-too-large'
+    case 1012:
+    case 1013:
+      return 'server-unavailable'
+    case 1001:
+    case 1006:
+      return 'reconnect-gap'
+    default:
+      // 1000 included: a normal close is this client's own teardown, and inventing
+      // a degradation for it would report one on every clean sign-out.
+      return undefined
+  }
+}
+
+/**
+ * The gateway's protocol-addressed ERROR codes, which are the specific half of a
+ * close. Every one of these is sent by `failAndClose`, which then closes the
+ * socket — and every one of them used to be dropped on the floor by the client's
+ * frame router, so the cause was lost even though the server had just named it.
+ *
+ * Mirrored rather than imported: the worker bundle takes no server dependency.
+ * An unlisted code falls through to the close code, which is always present.
+ */
+const SERVER_PROTOCOL_ERROR_REASONS: Readonly<Record<string, SyncFallbackReason>> = {
+  AUTH_TIMEOUT: 'auth-failed',
+  AUTH_REQUIRED: 'auth-failed',
+  AUTH_REJECTED: 'auth-failed',
+  ALREADY_AUTHENTICATED: 'auth-failed',
+  NOT_AUTHORIZED: 'auth-failed',
+  REAUTH_REJECTED: 'auth-failed',
+  BACKPRESSURE: 'backpressure',
+  SOCKET_LIMIT: 'socket-limit',
+  SOCKET_BUDGET_LOST: 'socket-limit',
+  SYNC_DISABLED: 'server-unavailable',
+  INVALID_ENVELOPE: 'server-policy',
+  OUT_OF_ORDER: 'server-policy',
+  SEQUENCE_EXHAUSTED: 'server-policy',
+  INVITE_ACK_INVALID: 'server-policy',
+}
+
+/**
+ * Which 1008 this is.
+ *
+ * 1008 is "policy violation" and the gateway uses it for eleven different things,
+ * so the reason string is the only discriminator — `sync rate limit exceeded` and
+ * `invalid authToken` are the same close code and want opposite responses from the
+ * client. Matched on SUBSTRINGS of a lowercased reason rather than on an exact
+ * table of the server's current wording: a table of sentences from another package
+ * goes stale silently, and every clause here is a phrase the cause is named by.
+ */
+function policyCloseReason(reason: string | undefined): SyncFallbackReason {
+  const text = (reason ?? '').toLowerCase()
+  if (text.includes('rate limit')) {
+    return 'rate-limited'
+  }
+  if (text.includes('connection limit') || text.includes('socket limit')) {
+    return 'socket-limit'
+  }
+  if (text.includes('auth')) {
+    return 'auth-failed'
+  }
+  // A query string the client never sent, or a path the gateway does not serve:
+  // both describe something between this client and the gateway rewriting the
+  // request, which is what `proxy-failed` is for.
+  if (text.includes('query-string') || text.includes('unknown path')) {
+    return 'proxy-failed'
+  }
+  return 'server-policy'
 }
 
 /**
