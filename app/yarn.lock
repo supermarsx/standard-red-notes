@@ -9075,10 +9075,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@simplewebauthn/browser@npm:^13.3.0":
-  version: 13.3.0
-  resolution: "@simplewebauthn/browser@npm:13.3.0"
-  checksum: 10/1490c566017145f705e06f7f4d08822d19a616ce1ce8a152fcad1e4d88b418df3a4fa5c1f24e4ce142f41079ecbe3f9b77f3f3889e0cc1a4655e6f2ef2756228
+"@simplewebauthn/browser@npm:^14.0.0":
+  version: 14.0.0
+  resolution: "@simplewebauthn/browser@npm:14.0.0"
+  checksum: 10/b27c5ff04c35ba2491aea4b59d5852f2ef7ffa58bcc58c71dc17f86573223e71ae82fdc3ed232dc1864f2a0aa12d71548715a6ba01298f7ff8d92b53db24153f
   languageName: node
   linkType: hard
 
@@ -10437,7 +10437,7 @@ __metadata:
     "@pmmmwh/react-refresh-webpack-plugin": "npm:^0.6.3"
     "@radix-ui/react-slot": "npm:^1.4.0"
     "@react-pdf/renderer": "npm:^4.9.0"
-    "@simplewebauthn/browser": "npm:^13.3.0"
+    "@simplewebauthn/browser": "npm:^14.0.0"
     "@standardnotes/authenticator": "npm:^2.4.14"
     "@standardnotes/autobiography-theme": "npm:^1.2.7"
     "@standardnotes/bold-editor": "npm:^1.7.14"
