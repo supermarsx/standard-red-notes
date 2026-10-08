@@ -38,7 +38,10 @@ describe('CreateValetToken', () => {
 
   beforeEach(() => {
     tokenEncoder = {} as jest.Mocked<TokenEncoderInterface<ValetTokenData>>
-    tokenEncoder.encodeExpirableToken = jest.fn().mockReturnValue('foobar')
+    tokenEncoder.encodeUniqueExpirableToken = jest.fn().mockReturnValue('foobar')
+    // Present AND watched: a valet credential is spent once, so minting it
+    // through the non-unique encoder is the defect, not a stylistic choice.
+    tokenEncoder.encodeExpirableToken = jest.fn().mockReturnValue('non-unique')
 
     getSubscriptionSetting = {} as jest.Mocked<GetSubscriptionSetting>
     getSubscriptionSetting.execute = jest.fn().mockReturnValue(
@@ -160,6 +163,18 @@ describe('CreateValetToken', () => {
     })
   })
 
+  it('never mints a valet credential through the NON-unique encoder', async () => {
+    const response = await createUseCase().execute({
+      operation: ValetTokenOperation.Write,
+      resources: [{ remoteIdentifier: '2-3-4', unencryptedFileSize: 123 }],
+      userUuid: '1-2-3',
+    })
+
+    expect(response.success).toBeTruthy()
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalled()
+    expect(tokenEncoder.encodeExpirableToken).not.toHaveBeenCalled()
+  })
+
   it('should create a write valet token', async () => {
     const response = await createUseCase().execute({
       operation: ValetTokenOperation.Write,
@@ -172,7 +187,7 @@ describe('CreateValetToken', () => {
       userUuid: '1-2-3',
     })
 
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalledWith(
       {
         sharedSubscriptionUuid: undefined,
         regularSubscriptionUuid: '1-2-3',
@@ -210,7 +225,7 @@ describe('CreateValetToken', () => {
       userUuid: '1-2-3',
     })
 
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalledWith(
       {
         sharedSubscriptionUuid: '2-3-4',
         regularSubscriptionUuid: '1-2-3',
@@ -275,7 +290,7 @@ describe('CreateValetToken', () => {
       subscriptionId: undefined,
     })
 
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalledWith(
       {
         sharedSubscriptionUuid: '2-3-4',
         regularSubscriptionUuid: '1-2-3',
@@ -340,7 +355,7 @@ describe('CreateValetToken', () => {
       userUuid: '1-2-3',
       subscriptionId: undefined,
     })
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sharedSubscriptionUuid: undefined,
         regularSubscriptionUuid: '1-2-3',
@@ -506,7 +521,7 @@ describe('CreateValetToken', () => {
       success: true,
       valetToken: 'foobar',
     })
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sharedSubscriptionUuid: '2-3-4',
         regularSubscriptionUuid: 'shared-owner-regular',
@@ -529,7 +544,7 @@ describe('CreateValetToken', () => {
       ],
     })
 
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+    expect(tokenEncoder.encodeUniqueExpirableToken).toHaveBeenCalledWith(
       {
         sharedSubscriptionUuid: undefined,
         regularSubscriptionUuid: '1-2-3',

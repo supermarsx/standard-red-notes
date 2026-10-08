@@ -138,7 +138,10 @@ export class CreateSharedVaultFileValetToken implements UseCaseInterface<string>
       },
     }
 
-    const valetToken = this.tokenEncoder.encodeExpirableToken(tokenData, this.valetTokenTTL)
+    // UNIQUE per mint: a valet credential is single use at the files service
+    // and at the multi-container adapter, so two mints of these identical
+    // claims inside one second must not be the same string.
+    const valetToken = this.tokenEncoder.encodeUniqueExpirableToken(tokenData, this.valetTokenTTL)
 
     return Result.ok(valetToken)
   }

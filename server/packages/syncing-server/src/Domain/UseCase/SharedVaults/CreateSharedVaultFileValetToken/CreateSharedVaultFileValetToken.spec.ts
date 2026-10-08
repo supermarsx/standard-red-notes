@@ -38,7 +38,9 @@ describe('CreateSharedVaultFileValetToken', () => {
     sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(sharedVaultUser)
 
     tokenEncoder = {} as jest.Mocked<TokenEncoderInterface<SharedVaultValetTokenData>>
-    tokenEncoder.encodeExpirableToken = jest.fn().mockReturnValue('encoded-token')
+    tokenEncoder.encodeUniqueExpirableToken = jest.fn().mockReturnValue('encoded-token')
+    // Present AND watched -- see the auth-side mint spec for why.
+    tokenEncoder.encodeExpirableToken = jest.fn().mockReturnValue('non-unique')
   })
 
   it('should return error when shared vault uuid is invalid', async () => {

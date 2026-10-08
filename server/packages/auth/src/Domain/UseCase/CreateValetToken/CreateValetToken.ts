@@ -72,7 +72,10 @@ export class CreateValetToken implements UseCaseInterface {
       }
       return {
         success: true,
-        valetToken: this.tokenEncoder.encodeExpirableToken(freeTokenData, this.valetTokenTTL),
+        // UNIQUE per mint: a valet credential is single use at the files
+        // service and at the multi-container adapter, so two mints of these
+        // identical claims inside one second must not be the same string.
+        valetToken: this.tokenEncoder.encodeUniqueExpirableToken(freeTokenData, this.valetTokenTTL),
       }
     }
 
@@ -115,7 +118,8 @@ export class CreateValetToken implements UseCaseInterface {
       regularSubscriptionUuid: regularSubscription.uuid,
     }
 
-    const valetToken = this.tokenEncoder.encodeExpirableToken(tokenData, this.valetTokenTTL)
+    // UNIQUE per mint -- see the free branch above.
+    const valetToken = this.tokenEncoder.encodeUniqueExpirableToken(tokenData, this.valetTokenTTL)
 
     return { success: true, valetToken }
   }
