@@ -24,7 +24,7 @@
     "@standardnotes/styles": "workspace:*",
     "@standardnotes/toast": "workspace:*",
     "@standardnotes/utils": "workspace:*",
-    "mobx": "^6.16.1"
+    "mobx": "^7.0.6"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

@@ -1,12 +1,12 @@
 import { ItemManagerInterface, SNTag } from '@standardnotes/snjs'
-import { action, makeAutoObservable, observable } from 'mobx'
+import { action, makeAutoObservable, observable, observableRef } from 'mobx'
 
 export class TagsCountsState {
   public counts: { [uuid: string]: number } = {}
 
   public constructor(private items: ItemManagerInterface) {
     makeAutoObservable(this, {
-      counts: observable.ref,
+      counts: observableRef,
       update: action,
     })
   }

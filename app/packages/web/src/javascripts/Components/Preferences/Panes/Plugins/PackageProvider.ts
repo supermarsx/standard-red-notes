@@ -1,5 +1,5 @@
 import { GetFeatures } from '@standardnotes/snjs'
-import { makeAutoObservable, observable } from 'mobx'
+import { makeAutoObservable, observable, observableRef } from 'mobx'
 import { AnyPackageType } from './AnyPackageType'
 
 export class PackageProvider {
@@ -15,7 +15,7 @@ export class PackageProvider {
 
   constructor(private readonly latestVersionsMap: Map<string, string>) {
     makeAutoObservable<PackageProvider, 'latestVersionsMap'>(this, {
-      latestVersionsMap: observable.ref,
+      latestVersionsMap: observableRef,
     })
   }
 

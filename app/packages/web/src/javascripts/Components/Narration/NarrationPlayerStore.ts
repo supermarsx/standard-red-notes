@@ -4,7 +4,7 @@
 // once at the app root) renders/controls it. Keeping the player out of the modal
 // means playback (and its controls) survive after the Narrate dialog is closed.
 
-import { action, makeObservable, observable } from 'mobx'
+import { action, makeObservable, observable, observableRef } from 'mobx'
 import { TtsHandle, TtsState } from '@/Assistant/tts'
 
 export interface NarrationPlaybackMeta {
@@ -32,7 +32,7 @@ export class NarrationPlayerStore {
     makeObservable(this, {
       active: observable,
       state: observable,
-      meta: observable.ref,
+      meta: observableRef,
       currentTime: observable,
       duration: observable,
       errorMessage: observable,

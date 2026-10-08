@@ -46,7 +46,7 @@ import {
   // EncryptionService initialises is the snjs one, so reading through any other copy is unreliable.
   UuidGenerator,
 } from '@standardnotes/snjs'
-import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
+import { action, computed, makeObservable, observable, observableRef, reaction, runInAction } from 'mobx'
 import { FeaturesController } from '../FeaturesController'
 import { debounce, destroyAllObjectProperties } from '@/Utils'
 import { isValidFutureSiblings, rootTags, tagSiblings } from './Utils'
@@ -169,17 +169,17 @@ export class NavigationController
       tags: observable,
       folders: observable,
       starredTags: observable,
-      smartViews: observable.ref,
+      smartViews: observableRef,
 
-      selectedFolder_: observable.ref,
+      selectedFolder_: observableRef,
       selectedFolder: computed,
       setSelectedFolder: action,
-      editingFolder_: observable.ref,
+      editingFolder_: observableRef,
       editingFolder: computed,
       setEditingFolder: action,
-      addingSubfolderTo: observable.ref,
+      addingSubfolderTo: observableRef,
       setAddingSubfolderTo: action,
-      contextMenuFolder: observable.ref,
+      contextMenuFolder: observableRef,
       setContextMenuFolder: action,
       createFolder: action,
       removeFolder: action,
@@ -190,9 +190,9 @@ export class NavigationController
 
       selected_: observable,
       selectedLocation: observable,
-      previouslySelected_: observable.ref,
+      previouslySelected_: observableRef,
       previouslySelected: computed,
-      editing_: observable.ref,
+      editing_: observableRef,
       selected: computed,
       selectedUuid: observable,
       editingTag: computed,
@@ -214,8 +214,8 @@ export class NavigationController
       hiddenTagsCount: computed,
       hiddenFoldersCount: computed,
 
-      customFoldersOrder_: observable.ref,
-      customTagsOrder_: observable.ref,
+      customFoldersOrder_: observableRef,
+      customTagsOrder_: observableRef,
       reloadCustomOrders: action,
 
       createNewTemplate: action,

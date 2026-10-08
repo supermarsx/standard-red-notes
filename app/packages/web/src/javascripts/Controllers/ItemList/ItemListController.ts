@@ -68,7 +68,7 @@ import {
   VaultLockServiceEventPayload,
 } from '@standardnotes/snjs'
 import { getFullNoteText } from '@/Utils/Items/rehydrateLazyDecryptedNote'
-import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
+import { action, computed, makeObservable, observable, observableStruct, reaction, runInAction } from 'mobx'
 import { WebDisplayOptions } from './WebDisplayOptions'
 import { NavigationController } from '../Navigation/NavigationController'
 import { CrossControllerEvent } from '../CrossControllerEvent'
@@ -373,8 +373,8 @@ export class ItemListController
 
     makeObservable(this, {
       completedFullSync: observable,
-      displayOptions: observable.struct,
-      webDisplayOptions: observable.struct,
+      displayOptions: observableStruct,
+      webDisplayOptions: observableStruct,
       noteFilterText: observable,
       notes: observable,
       panelTitle: observable,

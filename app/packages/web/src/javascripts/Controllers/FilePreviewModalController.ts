@@ -8,7 +8,7 @@ import {
   VaultLockServiceInterface,
   VaultServiceInterface,
 } from '@standardnotes/snjs'
-import { action, makeObservable, observable } from 'mobx'
+import { action, makeObservable, observable, observableRef } from 'mobx'
 import { PdfDeepLinkTarget } from '@/Components/FilePreview/PdfDeepLink'
 
 export class FilePreviewModalController {
@@ -25,7 +25,7 @@ export class FilePreviewModalController {
       isOpen: observable,
       currentFile: observable,
       otherFiles: observable,
-      pdfTarget: observable.ref,
+      pdfTarget: observableRef,
 
       activate: action,
       dismiss: action,

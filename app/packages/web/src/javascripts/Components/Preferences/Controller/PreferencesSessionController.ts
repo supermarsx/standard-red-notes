@@ -1,4 +1,4 @@
-import { action, makeAutoObservable, observable } from 'mobx'
+import { action, makeAutoObservable, observable, observableRef } from 'mobx'
 import { WebApplication } from '@/Application/WebApplication'
 import { PackageProvider } from '../Panes/Plugins/PackageProvider'
 import { securityPrefsHasBubble } from '../Panes/Security/securityPrefsHasBubble'
@@ -112,8 +112,8 @@ export class PreferencesSessionController {
     >(this, {
       _twoFactorAuth: observable,
       _selectedPane: observable,
-      _extensionPanes: observable.ref,
-      _extensionLatestVersions: observable.ref,
+      _extensionPanes: observableRef,
+      _extensionLatestVersions: observableRef,
       _showWhatsNew: observable,
       loadLatestVersions: action,
       loadSelfServeInvites: action,

@@ -1,6 +1,6 @@
 import { ApplicationEvent } from '@standardnotes/snjs'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
-import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
+import { action, computed, makeObservable, observable, observableShallow, reaction, runInAction } from 'mobx'
 import type { ReactNode } from 'react'
 import { WebApplication } from '@/Application/WebApplication'
 import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
@@ -107,7 +107,7 @@ export class NotificationsController extends AbstractViewController {
       // would convert that element's props — React then freezes the style object
       // while rendering it, which MobX rejects ("observable objects cannot be
       // frozen"), taking the whole notifications surface down with it.
-      notifications: observable.shallow,
+      notifications: observableShallow,
       settings: observable,
       count: computed,
       unreadCount: computed,
