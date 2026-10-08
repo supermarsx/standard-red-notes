@@ -31,12 +31,12 @@
     "test": "jest --coverage --no-cache --passWithNoTests --maxWorkers=2"
   },
   "devDependencies": {
-    "@swc/core": "^1.15.43",
+    "@swc/core": "^1.16.13",
     "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.1.1",
-    "jest": "^30.4.2",
-    "jest-util": "^30.4.1",
+    "@types/node": "^26.6.4",
+    "jest": "^30.5.2",
+    "jest-util": "^30.5.1",
     "typescript": "6.0.3"
   }
 }

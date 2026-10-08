@@ -29,9 +29,9 @@
     "worker": "yarn node dist/bin/worker.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1088.0",
-    "@aws-sdk/client-sns": "^3.1088.0",
-    "@aws-sdk/client-sqs": "^3.1088.0",
+    "@aws-sdk/client-s3": "^3.1147.0",
+    "@aws-sdk/client-sns": "^3.1147.0",
+    "@aws-sdk/client-sqs": "^3.1147.0",
     "@standardnotes/api": "^1.26.95",
     "@standardnotes/common": "workspace:^",
     "@standardnotes/domain-core": "workspace:^",
@@ -44,23 +44,23 @@
     "cors": "2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "inversify": "^8.1.3",
+    "inversify": "^8.2.3",
     "inversify-express-utils": "workspace:*",
     "ioredis": "^5.11.1",
-    "mysql2": "^3.23.0",
+    "mysql2": "^3.24.5",
     "reflect-metadata": "^0.2.2",
-    "typeorm": "^1.1.0",
+    "typeorm": "^1.1.2",
     "winston": "^3.19.0"
   },
   "devDependencies": {
-    "@swc/core": "^1.15.43",
+    "@swc/core": "^1.16.13",
     "@swc/jest": "^0.2.39",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.1.1",
-    "jest": "^30.4.2",
-    "jest-util": "^30.4.1",
+    "@types/node": "^26.6.4",
+    "jest": "^30.5.2",
+    "jest-util": "^30.5.1",
     "typescript": "6.0.3"
   }
 }
