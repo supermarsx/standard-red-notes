@@ -180,6 +180,16 @@ let artifactRendererPromise: Promise<ArtifactRenderer> | undefined
 
 const ARTIFACT_FILENAME = path.join(__dirname, 'ChecklistDuePDF.artifact-runtime.cjs')
 
+/**
+ * The two tests that render a REAL PDF do three expensive things inside the test
+ * body: esbuild-bundle the whole @react-pdf/renderer runtime, render PDFs through
+ * it, and spawn a Node subprocess to extract their text with PDF.js. Jest's 5 s
+ * default is not a budget any of that fits, and the suite only passed under it by
+ * luck of machine load — it timed out once the bundled runtime grew (pdfkit 0.20.1).
+ * The two projection-only tests above keep the default.
+ */
+const REAL_RENDER_TIMEOUT_MS = 180_000
+
 const loadArtifactRenderer = (): Promise<ArtifactRenderer> => {
   artifactRendererPromise ??= build({
     stdin: {
@@ -273,69 +283,77 @@ describe('checklist due date PDF projection', () => {
     expect(countCheckboxes(projected)).toBe(1)
   })
 
-  it('renders a real PDF Blob whose extracted text keeps the parent and due inline above the child', async () => {
-    const editor = createNestedChecklistEditor()
-    const artifactRenderer = await loadArtifactRenderer()
+  it(
+    'renders a real PDF Blob whose extracted text keeps the parent and due inline above the child',
+    async () => {
+      const editor = createNestedChecklistEditor()
+      const artifactRenderer = await loadArtifactRenderer()
 
-    const blob = await $generatePDFFromNodes(editor, 'A4', undefined, EXPORT_NOW, artifactRenderer)
-    const bytes = await blobBytes(blob)
+      const blob = await $generatePDFFromNodes(editor, 'A4', undefined, EXPORT_NOW, artifactRenderer)
+      const bytes = await blobBytes(blob)
 
-    expect(blob.type).toBe('application/pdf')
-    expect(blob.size).toBeGreaterThan(100)
-    expect(Buffer.from(bytes.subarray(0, 5)).toString('ascii')).toBe('%PDF-')
+      expect(blob.type).toBe('application/pdf')
+      expect(blob.size).toBeGreaterThan(100)
+      expect(Buffer.from(bytes.subarray(0, 5)).toString('ascii')).toBe('%PDF-')
 
-    expect(standardFontDataUrl).toMatch(/\/standard_fonts\/$/)
-    expect(standardFontDataUrl).not.toContain('\\')
-    const extracted = await extractPDFText(bytes)
-    expect(extracted.pages).toBe(1)
-    const { items } = extracted
-    const allText = items.map(({ str }) => str).join(' ')
-    expect(allText).toContain('Parent task')
-    expect(allText).toContain('Due ')
-    expect(allText).toContain(`[${DUE_AT}]`)
-    expect(allText).toContain('(1h left)')
-    expect(allText).toContain('Repeats weekly')
-    expect(allText).toContain('UTC wall time')
-    expect(allText).toContain('Child task')
+      expect(standardFontDataUrl).toMatch(/\/standard_fonts\/$/)
+      expect(standardFontDataUrl).not.toContain('\\')
+      const extracted = await extractPDFText(bytes)
+      expect(extracted.pages).toBe(1)
+      const { items } = extracted
+      const allText = items.map(({ str }) => str).join(' ')
+      expect(allText).toContain('Parent task')
+      expect(allText).toContain('Due ')
+      expect(allText).toContain(`[${DUE_AT}]`)
+      expect(allText).toContain('(1h left)')
+      expect(allText).toContain('Repeats weekly')
+      expect(allText).toContain('UTC wall time')
+      expect(allText).toContain('Child task')
 
-    const parent = items.find(({ str }) => str.includes('Parent task'))
-    const due = items.find(({ str }) => str.includes('Due ')) ?? parent
-    const child = items.find(({ str }) => str.includes('Child task'))
-    expect(parent).toBeDefined()
-    expect(due).toBeDefined()
-    expect(child).toBeDefined()
-    expect(due?.transform[5]).toBeCloseTo(parent?.transform[5] ?? Number.NaN, 1)
-    expect(parent?.transform[5]).toBeGreaterThan(child?.transform[5] ?? Number.POSITIVE_INFINITY)
-  })
+      const parent = items.find(({ str }) => str.includes('Parent task'))
+      const due = items.find(({ str }) => str.includes('Due ')) ?? parent
+      const child = items.find(({ str }) => str.includes('Child task'))
+      expect(parent).toBeDefined()
+      expect(due).toBeDefined()
+      expect(child).toBeDefined()
+      expect(due?.transform[5]).toBeCloseTo(parent?.transform[5] ?? Number.NaN, 1)
+      expect(parent?.transform[5]).toBeGreaterThan(child?.transform[5] ?? Number.POSITIVE_INFINITY)
+    },
+    REAL_RENDER_TIMEOUT_MS,
+  )
 
-  it('renders wrapper-only nesting at the top baseline with horizontal indentation and no blank row', async () => {
-    const artifactRenderer = await loadArtifactRenderer()
-    const nestedBlob = await $generatePDFFromNodes(
-      createSingleChecklistEditor('Nested task', true),
-      'A4',
-      undefined,
-      EXPORT_NOW,
-      artifactRenderer,
-    )
-    const topLevelBlob = await $generatePDFFromNodes(
-      createSingleChecklistEditor('Top task', false),
-      'A4',
-      undefined,
-      EXPORT_NOW,
-      artifactRenderer,
-    )
+  it(
+    'renders wrapper-only nesting at the top baseline with horizontal indentation and no blank row',
+    async () => {
+      const artifactRenderer = await loadArtifactRenderer()
+      const nestedBlob = await $generatePDFFromNodes(
+        createSingleChecklistEditor('Nested task', true),
+        'A4',
+        undefined,
+        EXPORT_NOW,
+        artifactRenderer,
+      )
+      const topLevelBlob = await $generatePDFFromNodes(
+        createSingleChecklistEditor('Top task', false),
+        'A4',
+        undefined,
+        EXPORT_NOW,
+        artifactRenderer,
+      )
 
-    const [nestedPDF, topLevelPDF] = await Promise.all([
-      extractPDFText(await blobBytes(nestedBlob)),
-      extractPDFText(await blobBytes(topLevelBlob)),
-    ])
-    expect(nestedPDF.pages).toBe(1)
-    expect(topLevelPDF.pages).toBe(1)
-    const nested = nestedPDF.items.find(({ str }) => str.includes('Nested task'))
-    const topLevel = topLevelPDF.items.find(({ str }) => str.includes('Top task'))
-    expect(nested).toBeDefined()
-    expect(topLevel).toBeDefined()
-    expect(nested?.transform[4]).toBeGreaterThan(topLevel?.transform[4] ?? Number.POSITIVE_INFINITY)
-    expect(nested?.transform[5]).toBeCloseTo(topLevel?.transform[5] ?? Number.NaN, 1)
-  })
+      const [nestedPDF, topLevelPDF] = await Promise.all([
+        extractPDFText(await blobBytes(nestedBlob)),
+        extractPDFText(await blobBytes(topLevelBlob)),
+      ])
+      expect(nestedPDF.pages).toBe(1)
+      expect(topLevelPDF.pages).toBe(1)
+      const nested = nestedPDF.items.find(({ str }) => str.includes('Nested task'))
+      const topLevel = topLevelPDF.items.find(({ str }) => str.includes('Top task'))
+      expect(nested).toBeDefined()
+      expect(topLevel).toBeDefined()
+      expect(nested?.transform[4]).toBeGreaterThan(topLevel?.transform[4] ?? Number.POSITIVE_INFINITY)
+      expect(nested?.transform[5]).toBeCloseTo(topLevel?.transform[5] ?? Number.NaN, 1)
+    },
+    REAL_RENDER_TIMEOUT_MS,
+  )
 })
