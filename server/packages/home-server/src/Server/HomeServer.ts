@@ -22,6 +22,7 @@ import {
   buildDefaultRateLimitRules,
   createRateLimitMiddleware,
   parseClientIpHeaderName,
+  stampResolvedClientIp,
   IpAccessListStore,
   RateLimitConfig,
   RateLimitMetricsStore,
@@ -576,6 +577,40 @@ export class HomeServer implements HomeServerInterface {
         // empty = off), fed into every IP consumer via the canonical resolveClientIp
         // so the rate limiter, IP allow/block list and auth session IP all agree.
         const clientIpHeader = parseClientIpHeaderName(env.get('CLIENT_IP_HEADER', true))
+
+        /**
+         * Standard Red Notes: STAMP `x-origin-ip` ON EVERY REQUEST, because on this
+         * topology nothing else does.
+         *
+         * `x-origin-ip` is how the gateway hands auth the resolved client address,
+         * and auth keys real decisions on it: the proof-of-work IP escalation ramp,
+         * the per-IP signup cap, the address recorded on a session, the
+         * trusted-source lock exemption. `HttpServiceProxy` and `GRPCServiceProxy`
+         * both BUILD the header from `resolveClientIp`, but `DirectCallServiceProxy`
+         * hands the Express request to the controller untouched -- so on the single
+         * container the header was whatever the CLIENT sent. Two measured
+         * consequences, on a healthy container:
+         *
+         *   - absent by default, so `Register.ipAddress` was null and the per-IP
+         *     signup cap could not apply however it was configured;
+         *   - and `curl -H 'x-origin-ip: 203.0.113.55'` wrote
+         *     `signup-limit:signup:ip:203.0.113.55` -- an address of the caller's
+         *     choosing, which is a per-address limit an attacker rotates for free,
+         *     and a session row attributed to an address that never connected.
+         *
+         * ClientIp.ts states the rule this restores: every consumer of "the
+         * client's IP" must route through `resolveClientIp`, because divergence
+         * lets one consumer be spoofed while another sees the truth. Runs AFTER
+         * `configureTrustProxy` so `request.ip` is already the trust-proxy-correct
+         * value, and OVERWRITES rather than defaults -- an inbound copy of the
+         * header is never honoured. When resolution yields nothing the header is
+         * REMOVED, so an unresolvable address degrades to "unknown" instead of
+         * leaving the caller's own claim standing.
+         */
+        app.use((request: Request, _response: Response, next: NextFunction) => {
+          stampResolvedClientIp(request, clientIpHeader)
+          next()
+        })
 
         // Standard Red Notes: Redis-backed IP rate limiting on the unauthenticated,
         // auth-adjacent endpoints (login, registration, MCP-token authenticate,

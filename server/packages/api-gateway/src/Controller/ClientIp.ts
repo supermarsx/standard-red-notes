@@ -99,3 +99,39 @@ export const resolveClientIp = (request: ClientIpResolvable, clientIpHeader?: st
 /** Convenience overload for callers holding a full Express Request. */
 export const resolveClientIpFromRequest = (request: Request, clientIpHeader?: string): string =>
   resolveClientIp(request as unknown as ClientIpResolvable, clientIpHeader)
+
+/** The header the gateway hands the resolved client address to auth under. */
+export const ORIGIN_IP_HEADER = 'x-origin-ip'
+
+/**
+ * Standard Red Notes: put the RESOLVED address into `x-origin-ip` on a request
+ * that is about to be handed to a service IN-PROCESS.
+ *
+ * `HttpServiceProxy` and `GRPCServiceProxy` build a fresh header set and set this
+ * from `resolveClientIp`, so a client-supplied copy can never reach auth on a
+ * distributed deployment. `DirectCallServiceProxy` passes the Express request
+ * straight through, so on a single-container deployment the header was whatever
+ * the CALLER sent -- absent by default (auth then has no address at all: no per-IP
+ * signup cap, no proof-of-work IP escalation, a session row with a null address)
+ * and trivially forgeable when sent (a per-address limit the caller rotates for
+ * free, and a session attributed to an address that never connected).
+ *
+ * OVERWRITE, NEVER DEFAULT: an inbound copy is discarded whatever it says. When
+ * resolution yields nothing the header is REMOVED, so an unresolvable address
+ * degrades to "unknown" rather than leaving the caller's own claim standing --
+ * `undefined` is what every consumer already handles.
+ *
+ * Returns the stamped value ('' when the header was removed) so a caller can log
+ * or assert it.
+ */
+export const stampResolvedClientIp = (request: ClientIpResolvable, clientIpHeader?: string): string => {
+  const resolved = resolveClientIp(request, clientIpHeader)
+  if (resolved === '') {
+    delete request.headers[ORIGIN_IP_HEADER]
+
+    return ''
+  }
+  request.headers[ORIGIN_IP_HEADER] = resolved
+
+  return resolved
+}
