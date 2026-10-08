@@ -199,8 +199,12 @@ describe('DOCX export honours the policy', () => {
 
   it('emits a percentage column width as an OOXML pct width', async () => {
     const xml = await documentXmlFor({ method: 'fixed', columns: { 0: ['percent', 40] } })
-    // docx serializes a PERCENTAGE size with its unit.
-    expect(xml).toContain('<w:tcW w:type="pct" w:w="40%"/>')
+    // docx serializes a PERCENTAGE size in OOXML's native pct unit, which is
+    // fiftieths of a percent: 40% is 2000, the same scale as the table-level
+    // <w:tblW w:type="pct" w:w="5000"/> this export already emits for 100%.
+    expect(xml).toContain('<w:tcW w:type="pct" w:w="2000"/>')
+    // Guard the scale: the bare "40%" string form must not come back.
+    expect(xml).not.toContain('w:w="40%"')
   })
 
   it('lets the content method shrink-wrap instead of filling the measure', async () => {

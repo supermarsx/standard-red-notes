@@ -4,6 +4,7 @@
 import path from 'path'
 import vm from 'vm'
 import { createRequire } from 'module'
+import { pathToFileURL } from 'url'
 import { spawn } from 'child_process'
 import { build } from 'esbuild'
 import type { ListItemNode as ListItemNodeType, ListNode as ListNodeType } from '@lexical/list'
@@ -177,6 +178,8 @@ type ArtifactRenderer = PDFWorkerInterface['renderPDF']
 
 let artifactRendererPromise: Promise<ArtifactRenderer> | undefined
 
+const ARTIFACT_FILENAME = path.join(__dirname, 'ChecklistDuePDF.artifact-runtime.cjs')
+
 const loadArtifactRenderer = (): Promise<ArtifactRenderer> => {
   artifactRendererPromise ??= build({
     stdin: {
@@ -190,8 +193,19 @@ const loadArtifactRenderer = (): Promise<ArtifactRenderer> => {
     format: 'cjs',
     write: false,
     logLevel: 'silent',
+    // The bundle is executed as CommonJS inside a vm wrapper, where `import.meta`
+    // does not exist; esbuild therefore shims it to an empty object. The PDF
+    // runtime resolves its PDF/A ICC profile eagerly at module load with
+    // `new URL('./data/...', import.meta.url)`, which throws `TypeError: Invalid
+    // URL` against that empty shim. Give the bundle the artifact's own file URL so
+    // the expression has a real base. The resulting path is never dereferenced
+    // here: the profile is only read when PDF/A output is requested, and these
+    // tests render plain PDFs.
+    define: {
+      'import.meta.url': JSON.stringify(pathToFileURL(ARTIFACT_FILENAME).href),
+    },
   }).then(({ outputFiles }) => {
-    const filename = path.join(__dirname, 'ChecklistDuePDF.artifact-runtime.cjs')
+    const filename = ARTIFACT_FILENAME
     const artifactModule: { exports: { render?: ArtifactRenderer } } = { exports: {} }
     const wrapper = vm.runInThisContext(
       `(function (exports, require, module, __filename, __dirname) { ${outputFiles[0].text}\n})`,

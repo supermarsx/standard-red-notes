@@ -28,17 +28,17 @@
     "@types/wicg-file-system-access": "^2023.10.7",
     "babel-loader": "^10.1.1",
     "eslint": "^9.39.5",
-    "html-webpack-plugin": "^5.6.7",
+    "html-webpack-plugin": "^5.6.8",
     "ts-loader": "^9.6.2",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.64.0",
+    "typescript-eslint": "8.71.0",
     "webpack": "^5.108.4",
-    "webpack-cli": "^7.2.1",
+    "webpack-cli": "^7.2.3",
     "webpack-dev-server": "^5.2.6"
   },
   "dependencies": {
     "@standardnotes/sncrypto-web": "^1.14.11",
-    "@standardnotes/snjs": "^2.211.6",
+    "@standardnotes/snjs": "^2.212.4",
     "regenerator-runtime": "^0.14.1"
   }
 }

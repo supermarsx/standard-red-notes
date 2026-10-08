@@ -100,6 +100,11 @@ module.exports = {
     '@standardnotes/styles': 'identity-obj-proxy',
     '@simplewebauthn/browser': 'identity-obj-proxy',
     '^@lexical/headless$': '<rootDir>/../../node_modules/@lexical/headless/dist/LexicalHeadless.js',
+    // pdfkit (bundled inside @react-pdf/renderer) loads its standard font metrics
+    // through the Node package-`imports` specifier `#standard-fonts/<Face>`, which
+    // jest-resolve does not implement. The PDF artifact suite executes that runtime
+    // for real, so point the specifier at pdfkit's own CommonJS metric modules.
+    '^#standard-fonts/(.*)$': '<rootDir>/../../node_modules/pdfkit/js/standard-fonts/$1.cjs',
   },
   globals: {
     __WEB_VERSION__: '1.0.0',
