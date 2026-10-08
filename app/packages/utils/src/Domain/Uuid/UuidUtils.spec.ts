@@ -59,12 +59,23 @@ describe('UuidGenerator', () => {
     })
 
     it('should keep the time-ordered prefix so a fallback id sorts with the generated ones', () => {
+      /**
+       * A version 7 id carries the millisecond clock in its FIRST SIX bytes, which in
+       * the formatted string is the first eight hex digits plus the four after the
+       * first dash. Comparing only the first eight digits compares bits 47..16 of
+       * that clock, and the +60 000 ms below (0xEA60) reaches bit 16 only by carry —
+       * so that comparison held for roughly 92% of wall-clock instants and failed
+       * for the rest, which is a flake rather than a claim. Compare the whole 48-bit
+       * prefix, which is what "the time-ordered prefix" means.
+       */
+      const timestampPrefix = (uuid: string): string => uuid.slice(0, 8) + uuid.slice(9, 13)
+
       const before = UuidGenerator.GenerateUuid()
       jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
       const after = UuidGenerator.GenerateUuid()
       jest.restoreAllMocks()
 
-      expect(after.slice(0, 8) > before.slice(0, 8)).toBe(true)
+      expect(timestampPrefix(after) > timestampPrefix(before)).toBe(true)
     })
 
     it('should work without randomUUID, which insecure browser contexts do not expose', () => {
