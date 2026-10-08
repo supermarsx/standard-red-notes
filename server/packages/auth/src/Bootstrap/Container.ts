@@ -521,6 +521,7 @@ import {
 } from '../Infra/Registration/EnvSignupLimitsConfigResolver'
 import { SignupRateLimiterInterface } from '../Domain/Registration/SignupRateLimiterInterface'
 import { RedisSignupRateLimiter } from '../Infra/Registration/RedisSignupRateLimiter'
+import { TypeORMSignupRateLimiter } from '../Infra/Registration/TypeORMSignupRateLimiter'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -537,6 +538,9 @@ import { CookieFactoryInterface } from '../Domain/Auth/Cookies/CookieFactoryInte
 import { CookieFactory } from '../Domain/Auth/Cookies/CookieFactory'
 import { RedisLockRepository } from '../Infra/Redis/RedisLockRepository'
 import { RedisIpEscalationChecker } from '../Infra/Redis/RedisIpEscalationChecker'
+import { IpEscalationCheckerInterface } from '../Domain/ProofOfWork/IpEscalationCheckerInterface'
+import { TypeORMIpEscalationStore } from '../Infra/TypeORM/TypeORMIpEscalationStore'
+import { TypeORMAntiAbuseStore } from '../Infra/TypeORM/TypeORMAntiAbuseStore'
 import { RedisMfaSecretRepository } from '../Infra/Redis/RedisMfaSecretRepository'
 import { TypeORMMfaSecretRepository } from '../Infra/TypeORM/TypeORMMfaSecretRepository'
 import { MfaSecretRepositoryInterface } from '../Domain/Mfa/MfaSecretRepositoryInterface'
@@ -1619,6 +1623,24 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_Timer),
           ),
         )
+      // Standard Red Notes: the IP allow/block lists and the throttle telemetry
+      // are read and written BY THE GATEWAY, which binds them off its own ioredis
+      // client and therefore had neither on this arm -- an operator's explicit
+      // block list did nothing, and `POST /v1/admin/anti-abuse/ip-block` and
+      // `srn-admin ip block` both said so out loud (503 / "Redis is not
+      // configured on this deployment"). This store answers the small Redis
+      // surface those two consumers need (see TypeORMAntiAbuseStore) out of
+      // `auth_cache_entries`, so neither of them changes. It lives HERE rather
+      // than in the gateway because `srn-admin` is a separate process from the
+      // server and the table is the only state the two share.
+      container
+        .bind<TypeORMAntiAbuseStore>(TYPES.Auth_AntiAbuseStore)
+        .toConstantValue(
+          new TypeORMAntiAbuseStore(
+            container.get<CacheEntryRepositoryInterface>(TYPES.Auth_CacheEntryRepository),
+            container.get<TimerInterface>(TYPES.Auth_Timer),
+          ),
+        )
     } else {
       container.bind<PKCERepositoryInterface>(TYPES.Auth_PKCERepository).to(RedisPKCERepository)
       container
@@ -1752,13 +1774,37 @@ export class ContainerConfigLoader {
       env.get('SERVER_SETTINGS_PATH', true) || undefined,
     )
     const adaptiveEscalationEnvBaseline = env.get('RATE_LIMIT_ADAPTIVE_ESCALATION', true) === 'true'
-    const ipEscalationChecker = container.isBound(TYPES.Auth_Redis)
-      ? new RedisIpEscalationChecker(container.get<Redis>(TYPES.Auth_Redis), async (): Promise<boolean> => {
-          const overlay = await rateLimitEscalationOverlayReader.rateLimitAdaptiveEscalation()
+    const adaptiveEscalationEnabled = async (): Promise<boolean> => {
+      const overlay = await rateLimitEscalationOverlayReader.rateLimitAdaptiveEscalation()
 
-          return overlay ?? adaptiveEscalationEnvBaseline
-        })
-      : undefined
+      return overlay ?? adaptiveEscalationEnvBaseline
+    }
+    // Standard Red Notes: WITHOUT a shared Redis cache the ramp was absent at BOTH
+    // ends -- this reader was undefined, and the gateway's writer hook is keyed off
+    // the same client, so nothing wrote the flag either. Measured on a healthy
+    // single container: two 429s on the auth-login tier, then the very next
+    // /v2/login-params from that same address answered 200 with no challenge.
+    // Bind the same signal to `auth_cache_entries` instead, the way 23a87ae4's
+    // rate-limit counter and 77061ddc's session-token cooldown already are in this
+    // arm, and hand THE SAME OBJECT to the gateway as the writer (see
+    // TYPES.Auth_IpEscalationStore) so one class owns the key format.
+    let ipEscalationChecker: IpEscalationCheckerInterface
+    if (container.isBound(TYPES.Auth_Redis)) {
+      ipEscalationChecker = new RedisIpEscalationChecker(
+        container.get<Redis>(TYPES.Auth_Redis),
+        adaptiveEscalationEnabled,
+      )
+    } else {
+      const ipEscalationStore = new TypeORMIpEscalationStore(
+        container.get<CacheEntryRepositoryInterface>(TYPES.Auth_CacheEntryRepository),
+        container.get<TimerInterface>(TYPES.Auth_Timer),
+        adaptiveEscalationEnabled,
+      )
+      // Also bound, so the gateway's throttle hook can resolve THIS object as the
+      // writer instead of owning a second copy of the key format.
+      container.bind<TypeORMIpEscalationStore>(TYPES.Auth_IpEscalationStore).toConstantValue(ipEscalationStore)
+      ipEscalationChecker = ipEscalationStore
+    }
     container
       .bind<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate)
       .toConstantValue(
@@ -2677,13 +2723,27 @@ export class ContainerConfigLoader {
       signupLimitsBaseline,
       () => signupLimitsOverlayReader.signupLimits(),
     )
-    // Redis-backed counter for the per-IP + per-device SOFT caps. Bound only when
-    // Auth_Redis is present (same topology guard as the IP escalation checker);
-    // absent under the in-memory/TypeORM cache, where those two caps simply do not
-    // apply. The per-week cap is DB-backed and always available regardless.
-    const signupRateLimiter: SignupRateLimiterInterface | undefined = container.isBound(TYPES.Auth_Redis)
+    // Standard Red Notes: the counter behind the per-IP + per-device SOFT caps.
+    //
+    // This was the Redis limiter OR `undefined`, and `Register` skips both caps
+    // when it is undefined -- so on the `CACHE_TYPE=memory` arm (the single
+    // container and the LXC install) `REGISTRATION_SIGNUPS_PER_IP_MAX` and
+    // `REGISTRATION_SIGNUPS_PER_DEVICE_MAX` did NOTHING, while
+    // docker-compose.single.yml and .env.single.example advertised all five knobs.
+    // Measured on a healthy single container with perIpMax=2 and perDeviceMax=1:
+    // 4 of 4 signups from one address and 3 of 3 under one device id all returned
+    // 200. The per-week cap is DB-backed and was the only one that ever applied
+    // there -- and it is global, so an operator cannot use it to stop one bot
+    // without also stopping their own users.
+    //
+    // Bound to `auth_cache_entries` instead, the way 23a87ae4's rate-limit counter
+    // and 77061ddc's session-token cooldown already are in this arm. No migration.
+    const signupRateLimiter: SignupRateLimiterInterface = container.isBound(TYPES.Auth_Redis)
       ? new RedisSignupRateLimiter(container.get<Redis>(TYPES.Auth_Redis))
-      : undefined
+      : new TypeORMSignupRateLimiter(
+          container.get<CacheEntryRepositoryInterface>(TYPES.Auth_CacheEntryRepository),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+        )
     // Standard Red Notes: SIGNUP INVITE LINKS use cases.
     container.bind<ConsumeSignupInvite>(TYPES.Auth_ConsumeSignupInvite).toConstantValue(
       new ConsumeSignupInvite(

@@ -1074,6 +1074,49 @@ export class ContainerConfigLoader {
         )
     }
 
+    // Standard Red Notes: THE IP ALLOW/BLOCK LISTS AND THROTTLE TELEMETRY on the
+    // no-Redis arm. The binding above (line ~620) is keyed off the ioredis client,
+    // so with `CACHE_TYPE=memory` the middleware got `undefined` for both: an
+    // operator's explicit block list did nothing, `POST
+    // /v1/admin/anti-abuse/ip-block` answered 503 "IP access lists are not
+    // available on this deployment", and `GET /v1/admin/anti-abuse` reported
+    // `available: false` with every counter at zero -- so the panel could not tell
+    // "nothing is attacking this instance" from "nothing is being recorded".
+    //
+    // `IpAccessListStore` and `RateLimitMetricsStore` take a MINIMAL slice of
+    // ioredis rather than the client, so auth's `TypeORMAntiAbuseStore` (over
+    // `auth_cache_entries`) drops in and NEITHER of those two classes changes --
+    // every Redis topology keeps the exact client and commands it had. The store
+    // lives in auth because `srn-admin` manages these lists from a SEPARATE
+    // PROCESS and the table is the only state the two share.
+    //
+    // Resolved LAZILY, exactly like the rate-limit counter above: auth's container
+    // is loaded into this one AFTER the gateway's (see HomeServer.ts), so
+    // Auth_AntiAbuseStore does not exist at this line -- only by the time a request
+    // or an admin call arrives.
+    if (!container.isBound(TYPES.ApiGateway_IpAccessListStore) && isConfiguredForHomeServer) {
+      const resolveAntiAbuseStore = (): IpAccessListRedis & RateLimitMetricsRedis =>
+        container.get<IpAccessListRedis & RateLimitMetricsRedis>(Symbol.for('Auth_AntiAbuseStore'))
+      const lazyAntiAbuseStore: IpAccessListRedis & RateLimitMetricsRedis = {
+        sadd: (key: string, member: string) => resolveAntiAbuseStore().sadd(key, member),
+        srem: (key: string, member: string) => resolveAntiAbuseStore().srem(key, member),
+        smembers: (key: string) => resolveAntiAbuseStore().smembers(key),
+        hincrby: (key: string, field: string, increment: number) =>
+          resolveAntiAbuseStore().hincrby(key, field, increment),
+        hgetall: (key: string) => resolveAntiAbuseStore().hgetall(key),
+        lpush: (key: string, value: string) => resolveAntiAbuseStore().lpush(key, value),
+        ltrim: (key: string, start: number, stop: number) => resolveAntiAbuseStore().ltrim(key, start, stop),
+        lrange: (key: string, start: number, stop: number) => resolveAntiAbuseStore().lrange(key, start, stop),
+        expire: (key: string, seconds: number) => resolveAntiAbuseStore().expire(key, seconds),
+      }
+      container
+        .bind<IpAccessListStore>(TYPES.ApiGateway_IpAccessListStore)
+        .toConstantValue(new IpAccessListStore(lazyAntiAbuseStore))
+      container
+        .bind<RateLimitMetricsStore>(TYPES.ApiGateway_RateLimitMetricsStore)
+        .toConstantValue(new RateLimitMetricsStore(lazyAntiAbuseStore))
+    }
+
     if (isConfiguredForHomeServer) {
       container
         .bind<CrossServiceTokenCacheInterface>(TYPES.ApiGateway_CrossServiceTokenCache)

@@ -33,11 +33,36 @@ export class RedisLockRepository implements LockRepositoryInterface {
     await pipeline.exec()
   }
 
+  /**
+   * Standard Red Notes: A FIXED WINDOW. THE HORIZON IS ARMED ON THE FIRST FAILURE
+   * AND NEVER AGAIN.
+   *
+   * `SETEX` re-armed the TTL on every increment, which made the failed-login
+   * counter a SLIDING window on this topology exactly as it was on the TypeORM
+   * one (measured there with FAILED_LOGIN_LOCKOUT=20 and three failures eight
+   * seconds apart: the horizon moved 18:30:43 -> 18:30:53 -> 18:31:04, so sixteen
+   * seconds of attempts never closed a twenty-second window). A counter that
+   * cannot decay while the client keeps knocking punishes the HONEST client -- a
+   * desktop or CLI client holding a stale password retries on a schedule and
+   * accumulates failures across days until the account crosses the hard lock,
+   * after which the owner cannot sign in even with the right password, because the
+   * lock is checked before the credential. An attacker simply backs off and gets a
+   * clean window either way.
+   *
+   * `SET ... KEEPTTL` keeps the horizon the first failure armed; `EXPIRE ... NX`
+   * sets one only when the key has none. In a MULTI, so the pair is atomic: split
+   * across two round trips, a death between them would leave a key with NO TTL,
+   * and a lockout row that never expires is a PERMANENT lockout -- strictly worse
+   * than no lockout at all. The `NX` also self-heals such a key on its next hit
+   * (the same reason `RedisSignupRateLimiter` re-arms with `NX` rather than
+   * unconditionally), so even a MULTI that somehow half-applied cannot strand one.
+   */
   async updateLockCounter(userIdentifier: string, counter: number, mode: 'captcha' | 'non-captcha'): Promise<void> {
     const prefix = mode === 'captcha' ? this.CAPTCHA_PREFIX : this.PREFIX
     const lockTTL = mode === 'captcha' ? this.captchaLockTTL : this.nonCaptchaLockTTL
+    const key = `${prefix}:${userIdentifier}`
 
-    await this.redisClient.setex(`${prefix}:${userIdentifier}`, lockTTL, counter)
+    await this.redisClient.multi().set(key, counter, 'KEEPTTL').expire(key, lockTTL, 'NX').exec()
   }
 
   async getLockCounter(userIdentifier: string, mode: 'captcha' | 'non-captcha'): Promise<number> {

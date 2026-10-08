@@ -67,6 +67,13 @@ const TYPES = {
   Auth_OfflineUserSubscriptionRepository: Symbol.for('Auth_OfflineUserSubscriptionRepository'),
   Auth_SubscriptionTokenRepository: Symbol.for('Auth_SubscriptionTokenRepository'),
   Auth_SessionTokensCooldownRepository: Symbol.for('Auth_SessionTokensCooldownRepository'),
+  // Standard Red Notes: the two no-Redis abuse-protection stores the API GATEWAY
+  // resolves out of this container at request time (the home-server loads both
+  // containers into one). Bound ONLY on the in-memory cache arm -- every Redis
+  // topology keeps the ioredis client it already had, so nothing resolves these.
+  // See Infra/TypeORM/TypeORMIpEscalationStore.ts and TypeORMAntiAbuseStore.ts.
+  Auth_IpEscalationStore: Symbol.for('Auth_IpEscalationStore'),
+  Auth_AntiAbuseStore: Symbol.for('Auth_AntiAbuseStore'),
   Auth_OfflineSubscriptionTokenRepository: Symbol.for('Auth_OfflineSubscriptionTokenRepository'),
   Auth_SharedSubscriptionInvitationRepository: Symbol.for('Auth_SharedSubscriptionInvitationRepository'),
   Auth_PKCERepository: Symbol.for('Auth_PKCERepository'),

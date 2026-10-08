@@ -1513,13 +1513,29 @@ type RedisSetClient = {
 }
 
 /**
- * Get the shared Redis client bound by the auth container (Auth_Redis). Returns
- * undefined when Redis is not configured (in-memory cache mode) — the anti-abuse
- * layer no-ops there just as it does at the gateway, so we report that honestly.
+ * Standard Red Notes: the store the IP lists live in.
+ *
+ * The shared Redis client (Auth_Redis) wherever one is configured; otherwise the
+ * `auth_cache_entries`-backed `TypeORMAntiAbuseStore` the container binds on the
+ * in-memory cache arm, which answers the same sadd/srem/smembers surface. This
+ * used to return `undefined` in that second case and every IP command refused
+ * with "Redis is not configured on this deployment" — on the single container and
+ * the LXC install, i.e. the two deployments where this CLI is the operator's
+ * PRIMARY path to the lists, because the admin HTTP route needs a signed-in admin
+ * session and the panel reported the feature unavailable anyway.
+ *
+ * Still `undefined` when neither is bound, so the honest refusal survives for a
+ * topology that has neither store.
  */
 async function getRedisSetClient(container: ContainerLike): Promise<RedisSetClient | undefined> {
   try {
     return container.get<RedisSetClient>(TYPES.Auth_Redis)
+  } catch {
+    // No Redis on this deployment — fall through to the table-backed store.
+  }
+
+  try {
+    return container.get<RedisSetClient>(TYPES.Auth_AntiAbuseStore)
   } catch {
     return undefined
   }

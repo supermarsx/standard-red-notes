@@ -625,35 +625,65 @@ export class HomeServer implements HomeServerInterface {
           ? container.get<RateLimitMetricsStore>(ApiGatewayTypes.ApiGateway_RateLimitMetricsStore)
           : undefined
         // Standard Red Notes: `undefined` whenever this bundle runs without Redis,
-        // which is its normal shape -- so the hook is NOT INSTALLED below rather
+        // which is its normal shape -- so the ioredis hook is NOT INSTALLED rather
         // than installed and dereferencing it. `escalationRedis.set` on `undefined`
         // throws a TypeError out of the limiter's 429 branch, and the limiter's
         // fail-open catch turns that into next(): the refusal is silently spent and
         // the request is allowed. It was unreachable only while this arm had no
         // counter and therefore never throttled; measured once it did, every 11th
-        // login answered 401 carrying a correct `Retry-After: 49`. The reader for
-        // this signal (auth's RedisIpEscalationChecker) is likewise bound only when
-        // the shared Redis cache exists, so there is nothing to write for here.
+        // login answered 401 carrying a correct `Retry-After: 49`.
         const escalationRedis = rateLimitRedis as unknown as
           | {
               set?(key: string, value: string, mode: string, seconds: number): Promise<unknown>
             }
           | undefined
-        const recordEscalation =
-          escalationRedis?.set === undefined
-            ? undefined
-            : (clientIp: string): void => {
-                void (async (): Promise<void> => {
-                  try {
-                    const resolved = await rateLimitResolver.resolveRateLimitConfig()
-                    if (resolved.adaptiveEscalation && escalationRedis.set) {
-                      await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', resolved.windowSeconds * 5)
-                    }
-                  } catch {
-                    // best-effort escalation signal.
-                  }
-                })()
+        /**
+         * Standard Red Notes: WITHOUT REDIS THIS HOOK WAS SIMPLY NOT THERE, and
+         * neither was its reader -- so the proof-of-work IP ramp did not exist on
+         * the shape most self-hosters run.
+         *
+         * What the ramp is for: the adaptive sign-in gate otherwise only escalates
+         * once ONE account has absorbed a run of failures, so a guesser spreading
+         * attempts thinly across many accounts never trips it. The per-address flag
+         * is what charges them for the spread. Measured on a healthy single
+         * container before this change: two 429s on the auth-login tier, then the
+         * very next /v2/login-params from that same address answered 200 with no
+         * challenge.
+         *
+         * Auth binds `TypeORMIpEscalationStore` over `auth_cache_entries` on this
+         * arm and we resolve THAT OBJECT as the writer, so the key format has one
+         * owner rather than a copy at each end. Resolved LAZILY (auth's container
+         * is loaded into this one after the gateway's) and treated as absent if it
+         * is not bound, which keeps the standalone-gateway case unchanged.
+         */
+        const resolveIpEscalationStore = ():
+          { escalate(clientIp: string, ttlSeconds: number): Promise<void> } | undefined => {
+          const symbol = Symbol.for('Auth_IpEscalationStore')
+          if (!container.isBound(symbol)) {
+            return undefined
+          }
+
+          return container.get<{ escalate(clientIp: string, ttlSeconds: number): Promise<void> }>(symbol)
+        }
+        const recordEscalation = (clientIp: string): void => {
+          void (async (): Promise<void> => {
+            try {
+              const resolved = await rateLimitResolver.resolveRateLimitConfig()
+              if (!resolved.adaptiveEscalation) {
+                return
               }
+              const ttlSeconds = resolved.windowSeconds * 5
+              if (escalationRedis?.set !== undefined) {
+                await escalationRedis.set(`rl:escalate:${clientIp}`, '1', 'EX', ttlSeconds)
+
+                return
+              }
+              await resolveIpEscalationStore()?.escalate(clientIp, ttlSeconds)
+            } catch {
+              // best-effort escalation signal.
+            }
+          })()
+        }
         app.use(
           createRateLimitMiddleware({
             redis: rateLimitStore,
