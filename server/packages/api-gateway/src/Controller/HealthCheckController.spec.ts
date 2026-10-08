@@ -1,6 +1,11 @@
 import { Request, Response } from 'express'
 
-import { HealthCheckController, isLoopbackReadinessCaller, publicReadinessBody } from './HealthCheckController'
+import {
+  HealthCheckController,
+  isLoopbackReadinessCaller,
+  publicReadinessBody,
+  resolveReadinessAnswer,
+} from './HealthCheckController'
 import { AggregateReadinessService } from '../Service/Readiness/AggregateReadinessService'
 
 const report = {
@@ -80,5 +85,64 @@ describe('HealthCheckController', () => {
 
   it('keeps only status and deployment in the public body', () => {
     expect(Object.keys(publicReadinessBody(report)).sort()).toEqual(['deployment', 'status'])
+  })
+})
+
+/**
+ * Standard Red Notes: `resolveReadinessAnswer` is the ONE composition of this
+ * route's answer, and it exists because the route has two entry points — this
+ * controller on a multi-process deployment, and a direct registration on the
+ * bundled home-server's public app (which has to win a precedence race against
+ * four other `@controller('/healthcheck')` classes). That direct registration
+ * held its own copy of the 200/503 rule and no copy at all of the withholding
+ * rule, so on the single container the front door published `checks.services`
+ * and `checks.gateway.realtime` while the multi-container twin withheld them.
+ */
+describe('resolveReadinessAnswer', () => {
+  it('hands the full report to an in-container loopback caller', () => {
+    expect(resolveReadinessAnswer(requestFrom('127.0.0.1'), report)).toEqual({ statusCode: 503, body: report })
+  })
+
+  it('narrows the body for a caller that came through the reverse proxy', () => {
+    const answer = resolveReadinessAnswer(requestFrom('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }), report)
+
+    expect(answer.body).toEqual({ status: 'unavailable', deployment: report.deployment })
+    expect(answer.body).not.toHaveProperty('checks')
+  })
+
+  it('narrows the body for a remote peer that sent no forwarding header', () => {
+    const answer = resolveReadinessAnswer(requestFrom('198.51.100.7'), report)
+
+    expect(answer.body).toEqual({ status: 'unavailable', deployment: report.deployment })
+  })
+
+  // The container healthcheck discards the body and scores the status line, so
+  // the status code must not depend on who is asking. If it did, withholding the
+  // body would be able to turn a healthy container unhealthy.
+  it.each([
+    ['ready', 200],
+    ['unavailable', 503],
+  ] as const)('derives %s as %i for every caller class', (status, statusCode) => {
+    const subject = { ...report, status }
+
+    expect(resolveReadinessAnswer(requestFrom('127.0.0.1'), subject).statusCode).toBe(statusCode)
+    expect(
+      resolveReadinessAnswer(requestFrom('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }), subject).statusCode,
+    ).toBe(statusCode)
+    expect(resolveReadinessAnswer(requestFrom('198.51.100.7'), subject).statusCode).toBe(statusCode)
+  })
+
+  it('does not copy the report when the caller may see all of it', () => {
+    expect(resolveReadinessAnswer(requestFrom('::1'), report).body).toBe(report)
+  })
+
+  it('serialises nothing about the internals for a public caller', () => {
+    const serialised = JSON.stringify(
+      resolveReadinessAnswer(requestFrom('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }), report).body,
+    )
+
+    for (const token of ['checks', 'gateway', 'services', 'realtime', 'auth', 'redis', 'runtime']) {
+      expect(serialised).not.toContain(token)
+    }
   })
 })

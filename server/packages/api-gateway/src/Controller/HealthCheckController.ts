@@ -33,6 +33,49 @@ export function publicReadinessBody(
   return { status: report.status, deployment: report.deployment }
 }
 
+/** What a readiness caller is answered with: the status line and the body it may see. */
+export type ReadinessAnswer = {
+  statusCode: 200 | 503
+  body: AggregateReadinessReport | Pick<AggregateReadinessReport, 'status' | 'deployment'>
+}
+
+/**
+ * Standard Red Notes: the ONE composition of the readiness answer — the
+ * 200/503 rule AND the body-withholding rule, decided together.
+ *
+ * It exists because `/healthcheck/readiness` has TWO entry points. The
+ * standalone api-gateway answers it from the controller below. The bundled
+ * home-server CANNOT: every service it bundles declares its own
+ * `@controller('/healthcheck')` with a `/readiness` route, so which one
+ * `server.build()` mounts depends on controller discovery order — it therefore
+ * registers the aggregate route directly on the public app, ahead of the
+ * controller router, and `validateReadinessBootContract` in
+ * `scripts/validate-docker-hardening.mjs` pins that ordering.
+ *
+ * That direct registration reached PAST `publicReadinessBody` and served the
+ * whole `AggregateReadinessReport` — `checks.services` and
+ * `checks.gateway.realtime`, the internal service topology and which internal
+ * dependency is up — to every unauthenticated caller on the front door, while
+ * the same deployment's multi-container twin withheld it. A second copy of the
+ * answer rule is how one entry point gets the control and its twin does not,
+ * so there is no second copy: both call this.
+ *
+ * The status code is deliberately caller-INDEPENDENT. The container healthcheck
+ * (`curl -fsS http://127.0.0.1:8080/healthcheck/readiness >/dev/null`) arrives
+ * through nginx, which sets `X-Forwarded-For` on every proxied request, so it is
+ * classified public — and it discards the body entirely and scores only the
+ * status. Narrowing the body therefore cannot affect `Up (healthy)`.
+ */
+export function resolveReadinessAnswer(
+  req: Pick<Request, 'socket' | 'headers'>,
+  report: AggregateReadinessReport,
+): ReadinessAnswer {
+  return {
+    statusCode: report.status === 'ready' ? 200 : 503,
+    body: isLoopbackReadinessCaller(req) ? report : publicReadinessBody(report),
+  }
+}
+
 @controller('/healthcheck')
 export class HealthCheckController {
   constructor(
@@ -54,8 +97,7 @@ export class HealthCheckController {
   // for callers that did not come from inside the container (see above).
   @httpGet('/readiness')
   public async readiness(req: Request, res: Response): Promise<void> {
-    const report = await this.aggregateReadinessService.check()
-    const body = isLoopbackReadinessCaller(req) ? report : publicReadinessBody(report)
-    res.status(report.status === 'ready' ? 200 : 503).json(body)
+    const answer = resolveReadinessAnswer(req, await this.aggregateReadinessService.check())
+    res.status(answer.statusCode).json(answer.body)
   }
 }

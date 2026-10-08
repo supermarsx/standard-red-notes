@@ -23,6 +23,7 @@ import {
   createRateLimitMiddleware,
   parseClientIpHeaderName,
   stampResolvedClientIp,
+  resolveReadinessAnswer,
   createIpEscalationRecorder,
   IpEscalationWriter,
   IpAccessListStore,
@@ -44,6 +45,7 @@ import {
   SyncWebSocketRuntime,
   SYNC_HOST_REMEDIES,
   TYPES as ApiGatewayTypes,
+  type AggregateReadinessService,
   type SyncGateUnmetPrecondition,
   type SyncHostUnmetCondition,
   type SyncPreconditionState,
@@ -304,6 +306,37 @@ export interface HomeServerListener {
  */
 export function listenHomeServer(app: HomeServerListener, port: number, bindAddress?: string): http.Server {
   return bindAddress ? app.listen(port, bindAddress) : app.listen(port)
+}
+
+/**
+ * Standard Red Notes: the public app's aggregate readiness handler.
+ *
+ * Exported as a factory so the ANSWER this route gives can be exercised against
+ * a REAL Express request on a REAL socket. A hand-built `{ socket, headers }`
+ * literal would let the withholding decision be proven on a shape the route
+ * never sees, and a fabricated `Response` has no `status().json()` chain — both
+ * are how a control passes its test and leaks in production.
+ *
+ * `resolveService` is a thunk, and is called INSIDE the handler, because the
+ * binding is read off the inversify container per request: resolving it at
+ * registration time would capture a service built before the bundled
+ * containers finished loading. A throw from the thunk propagates synchronously
+ * out of the handler, exactly as the inline `container.get` call did, so an
+ * unbound readiness service still reaches the error config rather than
+ * answering.
+ */
+export function aggregateReadinessRequestHandler(
+  resolveService: () => Pick<AggregateReadinessService, 'check'>,
+): (request: Request, response: Response, next: NextFunction) => void {
+  return (request: Request, response: Response, next: NextFunction): void => {
+    void resolveService()
+      .check()
+      .then((report) => {
+        const answer = resolveReadinessAnswer(request, report)
+        response.status(answer.statusCode).json(answer.body)
+      })
+      .catch(next)
+  }
 }
 
 /**
@@ -958,25 +991,36 @@ export class HomeServer implements HomeServerInterface {
         )
         app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
 
-        // Every bundled service declares the same healthcheck controller path.
-        // Register the aggregate route before server.build() mounts those
-        // controllers so home-server readiness is deterministic rather than
-        // depending on controller discovery order. It stays after the standard
-        // security middleware; the shared-key middleware explicitly exempts the
-        // healthcheck path for container probes.
-        app.get('/healthcheck/readiness', (_request: Request, response: Response, next: NextFunction) => {
-          const readiness = container.get<{
-            check(): Promise<{
-              status: 'ready' | 'unavailable'
-              deployment: { revision: string | null; version: string | null }
-              checks: Record<string, unknown>
-            }>
-          }>(ApiGatewayTypes.ApiGateway_AggregateReadinessService)
-          void readiness
-            .check()
-            .then((report) => response.status(report.status === 'ready' ? 200 : 503).json(report))
-            .catch(next)
-        })
+        // Every bundled service declares the same healthcheck controller path
+        // (auth, syncing-server, files and revisions each hold an
+        // `@controller('/healthcheck')` with its own `/readiness`), so which one
+        // `server.build()` mounts depends on controller discovery order.
+        // Register the aggregate route before build() so home-server readiness is
+        // deterministic instead — `validateReadinessBootContract` in
+        // `scripts/validate-docker-hardening.mjs` pins this ordering by asserting
+        // this registration appears ahead of the awaited build() call below. (It
+        // matches on that literal, so do not quote the call here.) It stays after
+        // the standard security middleware; the shared-key middleware explicitly
+        // exempts the healthcheck path for container probes.
+        //
+        // Standard Red Notes: WINNING PRECEDENCE DOES NOT MEAN ANSWERING RAW.
+        // This handler used to serve the whole `AggregateReadinessReport`, so on
+        // the ONE topology where it is the live route the front door published
+        // `checks.services` and `checks.gateway.realtime` — the internal service
+        // topology and which internal dependency is up — to every
+        // unauthenticated caller, while the multi-container twin withheld exactly
+        // that through `publicReadinessBody`. The withholding layer was reached
+        // past, not absent. It now answers through `resolveReadinessAnswer`, the
+        // SAME composition the gateway's controller calls, so neither the 200/503
+        // rule nor the public shape exists here in a second copy.
+        //
+        // The container healthcheck is unaffected: it arrives through nginx,
+        // which sets `X-Forwarded-For` on every proxied request, so it is
+        // classified public — and `curl -fsS … >/dev/null` discards the body and
+        // scores only the status code, which is caller-independent.
+        const resolveAggregateReadiness = (): AggregateReadinessService =>
+          container.get<AggregateReadinessService>(ApiGatewayTypes.ApiGateway_AggregateReadinessService)
+        app.get('/healthcheck/readiness', aggregateReadinessRequestHandler(resolveAggregateReadiness))
 
         if (env.get('E2E_TESTING', true) === 'true') {
           app.post('/e2e/activate-premium', (request: Request, response: Response) => {

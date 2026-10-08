@@ -1084,6 +1084,7 @@ export function validateReadinessBootContract({
   homeServerSource,
   homeServerRuntimeSource,
   aggregateReadinessSource,
+  gatewayHealthControllerSource,
   filesContainerSource,
   filesHealthControllerSource,
 }) {
@@ -1113,6 +1114,49 @@ export function validateReadinessBootContract({
   if (aggregateRoute < 0 || controllerBuild < aggregateRoute) {
     errors.push(
       "home-server: aggregate readiness route must be deterministic before controller discovery",
+    );
+  }
+
+  // The home-server's readiness route is registered AHEAD of the controller
+  // router on purpose (above), which means the gateway's annotated
+  // HealthCheckController never runs on that topology — and with it, neither did
+  // `publicReadinessBody`. The route served the whole AggregateReadinessReport,
+  // so the public front door published `checks.services` and
+  // `checks.gateway.realtime` to unauthenticated callers on the one deployment
+  // shape most self-hosters run, while the multi-container twin withheld them.
+  // Winning precedence must not mean answering raw: BOTH entry points have to
+  // compose their answer with `resolveReadinessAnswer`, and neither may hold its
+  // own copy of the 200/503 rule or serve the report unnarrowed.
+  const gatewayHealthController = String(gatewayHealthControllerSource);
+  const rawStatusRule = "report.status === 'ready' ? 200 : 503";
+  for (const [label, source] of [
+    ["home-server", homeServer],
+    ["api-gateway health controller", gatewayHealthController],
+  ]) {
+    if (!source.includes("resolveReadinessAnswer")) {
+      errors.push(
+        `${label}: the readiness route must answer through resolveReadinessAnswer so the public body stays withheld`,
+      );
+    }
+    if (
+      source.includes(rawStatusRule) &&
+      !source.includes("export function resolveReadinessAnswer")
+    ) {
+      errors.push(
+        `${label}: the readiness route must not hold a second copy of the readiness status rule`,
+      );
+    }
+    if (/\.json\(\s*report\s*\)/.test(source)) {
+      errors.push(
+        `${label}: the readiness route must not serve the raw aggregate report`,
+      );
+    }
+  }
+  if (
+    !gatewayHealthController.includes("export function publicReadinessBody")
+  ) {
+    errors.push(
+      "api-gateway health controller: the public readiness body must stay a named, exported withholding layer",
     );
   }
 
@@ -2099,6 +2143,18 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     ),
     "utf8",
   );
+  const gatewayHealthControllerSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "api-gateway",
+      "src",
+      "Controller",
+      "HealthCheckController.ts",
+    ),
+    "utf8",
+  );
   const filesHealthControllerSource = readFileSync(
     path.join(
       repositoryRoot,
@@ -2286,6 +2342,7 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       homeServerSource,
       homeServerRuntimeSource,
       aggregateReadinessSource,
+      gatewayHealthControllerSource,
       filesContainerSource: serviceContainerSources.files,
       filesHealthControllerSource,
     }),

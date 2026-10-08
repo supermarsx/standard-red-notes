@@ -15,6 +15,13 @@ export * from './Service/Sync/SyncWebSocketPreconditions'
 // admin Diagnostics panel works on a single-container deployment too.
 export * from './Service/Sync/SyncGateDiagnostics'
 export * from './Service/Diagnostics/DeploymentDiagnostics'
+// Standard Red Notes: exported so the bundled HomeServer's directly-registered
+// `/healthcheck/readiness` route names the REAL report and service types rather
+// than a structural copy of them. It has to call the same `resolveReadinessAnswer`
+// the standalone gateway's controller calls, and a hand-written copy of the
+// report shape here is what let that route hand the full per-service and
+// gateway check maps to the public front door.
+export * from './Service/Readiness/AggregateReadinessService'
 export * from './Service/Sync/SyncWebSocketCommandAdapter'
 // The one header sink for a controller entered in-process. Public because the
 // home server's file-resource authorizer enters controllers the same way; a

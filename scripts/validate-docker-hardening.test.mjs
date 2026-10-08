@@ -309,7 +309,8 @@ test("pins the single-container backend to loopback without changing the standal
 test("locks aggregate readiness to startup lifecycle, service, worker, and storage signals", () => {
   const valid = {
     homeServerSource: `
-      app.get('/healthcheck/readiness', handler)
+      app.get('/healthcheck/readiness', aggregateReadinessRequestHandler(resolve))
+      resolveReadinessAnswer(request, report)
       await server.build()
     `,
     homeServerRuntimeSource: `
@@ -324,6 +325,13 @@ test("locks aggregate readiness to startup lifecycle, service, worker, and stora
       this.options.serviceControlService.getProgramStatuses()
       this.options.state.isReady()
     `,
+    gatewayHealthControllerSource: `
+      export function publicReadinessBody(report) {}
+      export function resolveReadinessAnswer(req, report) {
+        return { statusCode: report.status === 'ready' ? 200 : 503, body: publicReadinessBody(report) }
+      }
+      res.status(answer.statusCode).json(answer.body)
+    `,
     filesContainerSource:
       "bind(new S3StorageReadiness())\nbind(new FSStorageReadiness())",
     filesHealthControllerSource:
@@ -333,7 +341,7 @@ test("locks aggregate readiness to startup lifecycle, service, worker, and stora
 
   const broken = structuredClone(valid);
   broken.homeServerSource = broken.homeServerSource.replace(
-    "app.get('/healthcheck/readiness', handler)",
+    "app.get('/healthcheck/readiness', aggregateReadinessRequestHandler(resolve))",
     "",
   );
   broken.homeServerRuntimeSource = broken.homeServerRuntimeSource.replace(
@@ -356,6 +364,71 @@ test("locks aggregate readiness to startup lifecycle, service, worker, and stora
     "api-gateway readiness: missing aggregate requirement getProgramStatuses()",
     "files readiness: missing S3StorageReadiness binding",
     "files readiness: controller must require the storage probe",
+  ]);
+});
+
+// The home-server's readiness route is registered AHEAD of the controller router,
+// so the gateway's annotated HealthCheckController — and `publicReadinessBody`
+// with it — never runs on the single container. Served raw, that route published
+// `checks.services` and `checks.gateway.realtime` to every unauthenticated
+// caller on the public front door. This is the EXACT pre-fix shape.
+test("rejects a readiness route that reaches past the public body withholding layer", () => {
+  const leaking = {
+    homeServerSource: `
+      app.get('/healthcheck/readiness', (request, response, next) => {
+        const readiness = container.get(ApiGatewayTypes.ApiGateway_AggregateReadinessService)
+        void readiness
+          .check()
+          .then((report) => response.status(report.status === 'ready' ? 200 : 503).json(report))
+          .catch(next)
+      })
+      await server.build()
+    `,
+    homeServerRuntimeSource: `
+      this.scheduler = options.startScheduler()
+      options.readinessState.markReady()
+      readinessState?.markUnavailable()
+      scheduler?.stop()
+    `,
+    aggregateReadinessSource: `
+      const required = ['auth', 'syncing-server', 'files', 'revisions']
+      DEFAULT_CONTROLLABLE_PROGRAMS
+      this.options.serviceControlService.getProgramStatuses()
+      this.options.state.isReady()
+    `,
+    gatewayHealthControllerSource: `
+      export function publicReadinessBody(report) {}
+      export function resolveReadinessAnswer(req, report) {
+        return { statusCode: report.status === 'ready' ? 200 : 503, body: publicReadinessBody(report) }
+      }
+      res.status(answer.statusCode).json(answer.body)
+    `,
+    filesContainerSource:
+      "bind(new S3StorageReadiness())\nbind(new FSStorageReadiness())",
+    filesHealthControllerSource:
+      "@inject(TYPES.Files_StorageReadiness) storage",
+  };
+
+  assert.deepEqual(validateReadinessBootContract(leaking), [
+    "home-server: the readiness route must answer through resolveReadinessAnswer so the public body stays withheld",
+    "home-server: the readiness route must not hold a second copy of the readiness status rule",
+    "home-server: the readiness route must not serve the raw aggregate report",
+  ]);
+
+  // And the withholding layer itself may not be quietly unexported or deleted:
+  // the gateway controller is the module both entry points read it from.
+  const unexported = structuredClone(leaking);
+  unexported.homeServerSource = `
+    app.get('/healthcheck/readiness', aggregateReadinessRequestHandler(resolve))
+    resolveReadinessAnswer(request, report)
+    await server.build()
+  `;
+  unexported.gatewayHealthControllerSource =
+    "const body = isLoopbackReadinessCaller(req) ? report : { status: report.status }";
+
+  assert.deepEqual(validateReadinessBootContract(unexported), [
+    "api-gateway health controller: the readiness route must answer through resolveReadinessAnswer so the public body stays withheld",
+    "api-gateway health controller: the public readiness body must stay a named, exported withholding layer",
   ]);
 });
 
