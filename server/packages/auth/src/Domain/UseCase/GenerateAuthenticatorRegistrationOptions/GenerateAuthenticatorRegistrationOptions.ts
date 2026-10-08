@@ -1,6 +1,6 @@
 import { Result, UseCaseInterface, Username, Uuid } from '@standardnotes/domain-core'
 import {
-  type AuthenticatorTransportFuture,
+  type AuthenticatorTransport,
   type PublicKeyCredentialCreationOptionsJSON,
   generateRegistrationOptions,
 } from '@simplewebauthn/server'
@@ -70,7 +70,7 @@ export class GenerateAuthenticatorRegistrationOptions implements UseCaseInterfac
       },
       excludeCredentials: authenticators.map((authenticator) => ({
         id: Buffer.from(authenticator.props.credentialId).toString('base64url'),
-        transports: authenticator.props.transports as AuthenticatorTransportFuture[],
+        transports: authenticator.props.transports as AuthenticatorTransport[],
       })),
     })
 

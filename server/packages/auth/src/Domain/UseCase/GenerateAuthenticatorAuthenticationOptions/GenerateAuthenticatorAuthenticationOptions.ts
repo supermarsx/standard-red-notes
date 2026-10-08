@@ -1,7 +1,7 @@
 import * as crypto from 'crypto'
 import { Result, UseCaseInterface, Username, Uuid } from '@standardnotes/domain-core'
 import {
-  type AuthenticatorTransportFuture,
+  type AuthenticatorTransport,
   type PublicKeyCredentialRequestOptionsJSON,
   generateAuthenticationOptions,
 } from '@simplewebauthn/server'
@@ -62,7 +62,7 @@ export class GenerateAuthenticatorAuthenticationOptions implements UseCaseInterf
       rpID: this.relyingPartyId,
       allowCredentials: authenticators.map((authenticator) => ({
         id: Buffer.from(authenticator.props.credentialId).toString('base64url'),
-        transports: authenticator.props.transports as AuthenticatorTransportFuture[],
+        transports: authenticator.props.transports as AuthenticatorTransport[],
       })),
       userVerification: 'preferred',
     })
