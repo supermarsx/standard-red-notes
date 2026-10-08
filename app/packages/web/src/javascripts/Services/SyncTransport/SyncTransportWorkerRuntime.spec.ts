@@ -2248,7 +2248,7 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(harness.messages).toContainEqual({ type: 'RPC_END', clientRequestId: 'rpc-1' })
     })
 
-    it('never retries a mutating API_RPC request and delivers its refusal untouched', async () => {
+    it('never retries a mutating API_RPC request, delivers its refusal, and still repairs the socket', async () => {
       const harness = setup()
       await harness.runtime.handle({
         type: 'OPEN_RPC',
@@ -2295,11 +2295,9 @@ describe('SyncTransportWorkerRuntime', () => {
       socket.receive(serverFrame('RPC_RESPONSE', request.commandId, { status: 401, headers: {}, stream: false }))
       await flush()
 
-      // No refresh, no replay, no second frame: the client cannot establish whether
-      // the mutation was applied, so the refusal is the answer.
-      expect(refreshRequests(harness)).toHaveLength(0)
+      // No replay and no second frame: the client cannot establish whether the
+      // mutation was applied, so the refusal is the answer it is given.
       expect(framesOfType(socket, 'RPC_REQUEST')).toHaveLength(1)
-      expect(framesOfType(socket, 'REAUTH')).toHaveLength(0)
       expect(harness.messages).toContainEqual({
         type: 'RPC_RESPONSE',
         clientRequestId: 'rpc-mutation',
@@ -2307,6 +2305,20 @@ describe('SyncTransportWorkerRuntime', () => {
         headers: {},
         stream: false,
       })
+      /**
+       * ...but the CREDENTIAL IS STILL REPAIRED. This used to assert no refresh at
+       * all, which conflated two different things: whether THIS request may be
+       * replayed, and whether the SOCKET is replaying a credential the server has
+       * started refusing. Measured live, the second one left the lane answering 498
+       * forever after a `POST /v1/sessions/refresh` while the REAUTH that fixes it
+       * takes 21-30 ms — and the four lanes that never see an RPC status were
+       * stranded on it with no way to notice.
+       *
+       * No REAUTH frame yet: the worker asks the main thread for a ticket and this
+       * test never answers, so nothing is presented on the socket.
+       */
+      expect(refreshRequests(harness)).toHaveLength(1)
+      expect(framesOfType(socket, 'REAUTH')).toHaveLength(0)
     })
 
     it('delivers the withheld API_RPC refusal verbatim when the refresh does not succeed', async () => {
@@ -4327,6 +4339,433 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
 
       expect(errorFor(harness)?.safeToFallback).toBe(false)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // *** THE CREDENTIAL BELONGS TO THE SOCKET, NOT TO THE LANE THAT NOTICED. ***
+  //
+  // The gateway invented `SESSION_STALE` so a client could repair a frozen
+  // credential in place, and `requestSessionRefresh` was wired to two of five lanes.
+  // Collaboration tore the socket down on exactly that signal; the file lanes did not
+  // even list it as retryable; and an RPC refusal that could not be replayed asked
+  // for no repair at all, so the four lanes that never see an RPC status stayed
+  // stranded on a credential the server had already started refusing.
+  // ---------------------------------------------------------------------------
+  describe('a stale credential on a live socket', () => {
+    const framesSent = (socket: FakeSocket) =>
+      socket.sent.map(
+        (entry) => JSON.parse(entry) as { type: string; commandId: string; payload: Record<string, unknown> },
+      )
+    const typed = (socket: FakeSocket, type: string) => framesSent(socket).filter((frame) => frame.type === type)
+    const refreshAsks = (harness: ReturnType<typeof setup>) =>
+      harness.messages.filter((message) => message.type === 'NEED_SESSION_REFRESH') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'NEED_SESSION_REFRESH' }
+      >[]
+
+    const answerRefresh = async (harness: ReturnType<typeof setup>, index = 0) => {
+      const ask = refreshAsks(harness)[index]
+      expect(ask).toBeDefined()
+      await harness.runtime.handle({
+        type: 'SESSION_REFRESH_TICKET',
+        refreshId: ask.refreshId,
+        ticket: 'f'.repeat(40),
+        deviceId: 'device-1',
+      })
+      await flush()
+    }
+
+    it('refreshes in place for a collaboration SESSION_STALE instead of closing the socket', async () => {
+      const harness = setup()
+      const { socket, discovery } = await startCollaborationHandshake(harness)
+
+      socket.receive({
+        ...serverFrame('ERROR', discovery.commandId, { code: 'SESSION_STALE', retryable: true }),
+        requestId: discovery.requestId,
+      })
+      await flush()
+
+      // BEFORE: `fallbackCollaboration('server-kill', false)` — a closed socket, the
+      // owner lease released and the rooms gone, to fix one stale credential field.
+      expect(socket.readyState).toBe(1)
+      expect(socket.closes).toEqual([])
+      expect(harness.messages.some((message) => message.type === 'COLLABORATION_FALLBACK')).toBe(false)
+      expect(refreshAsks(harness)).toHaveLength(1)
+
+      await answerRefresh(harness)
+      const reauth = typed(socket, 'REAUTH')
+      expect(reauth).toHaveLength(1)
+      socket.receive(serverFrame('REAUTHENTICATED', reauth[0].commandId, { refreshed: true }))
+      await flush()
+      await flush()
+
+      // One more authorization on the SAME socket, from the phase the refusal
+      // interrupted, with a fresh command id so the frames stay unambiguous.
+      const authorizations = typed(socket, 'COLLABORATION_AUTHORIZE')
+      expect(authorizations).toHaveLength(2)
+      expect(authorizations[1].commandId).not.toBe(discovery.commandId)
+      expect(socket.readyState).toBe(1)
+    })
+
+    it('falls back for a collaboration SESSION_STALE the refresh could not repair', async () => {
+      const harness = setup()
+      const { socket, discovery } = await startCollaborationHandshake(harness)
+
+      socket.receive({
+        ...serverFrame('ERROR', discovery.commandId, { code: 'SESSION_STALE', retryable: true }),
+        requestId: discovery.requestId,
+      })
+      await flush()
+      const ask = refreshAsks(harness)[0]
+      await harness.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: ask.refreshId })
+      await flush()
+      await flush()
+
+      // The behaviour that existed before an in-place refresh was possible.
+      expect(harness.messages).toContainEqual({
+        type: 'COLLABORATION_FALLBACK',
+        clientRequestId: 'collaboration-client-1',
+        reason: 'server-kill',
+      })
+      expect(socket.readyState).toBe(3)
+    })
+
+    it('still denies a collaboration request the gateway refused on policy, with no refresh', async () => {
+      const harness = setup()
+      const { socket, discovery } = await startCollaborationHandshake(harness)
+
+      socket.receive({
+        ...serverFrame('ERROR', discovery.commandId, { code: 'NOT_AUTHORIZED', retryable: false }),
+        requestId: discovery.requestId,
+      })
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'COLLABORATION_DENIED',
+        clientRequestId: 'collaboration-client-1',
+      })
+      expect(refreshAsks(harness)).toHaveLength(0)
+    })
+
+    it('reports a file SESSION_STALE as retryable and asks for the repair the gateway offered', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await harness.runtime.handle({
+        type: 'OPEN_FILE_DOWNLOAD',
+        clientRequestId: 'file-1',
+        sessionScope: SESSION_A,
+        request: {
+          resource: { ownershipType: 'user', remoteIdentifier: REMOTE_IDENTIFIER, fileUuid: FILE_UUID },
+          declaredSize: 16,
+          initialCreditBytes: 512 * 1024,
+          deadlineMs: 30_000,
+        },
+      })
+      await flush()
+      const open = typed(socket, 'FILES_DOWNLOAD_OPEN')[0]
+      expect(open).toBeDefined()
+
+      socket.receive(serverFrame('ERROR', open.commandId, { code: 'SESSION_STALE', retryable: true }))
+      await flush()
+
+      // `RETRYABLE_FILE_ERROR_CODES` simply did not list it, so the one refusal the
+      // gateway made repairable was reported as a stable condition.
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({
+          type: 'FILE_DOWNLOAD_ERROR',
+          clientRequestId: 'file-1',
+          code: 'SESSION_STALE',
+          retryable: true,
+        }),
+      )
+      expect(refreshAsks(harness)).toHaveLength(1)
+      expect(socket.readyState).toBe(1)
+    })
+
+    it('leaves a stable file refusal non-retryable and asks for nothing', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await harness.runtime.handle({
+        type: 'OPEN_FILE_DOWNLOAD',
+        clientRequestId: 'file-1',
+        sessionScope: SESSION_A,
+        request: {
+          resource: { ownershipType: 'user', remoteIdentifier: REMOTE_IDENTIFIER, fileUuid: FILE_UUID },
+          declaredSize: 16,
+          initialCreditBytes: 512 * 1024,
+          deadlineMs: 30_000,
+        },
+      })
+      await flush()
+      const open = typed(socket, 'FILES_DOWNLOAD_OPEN')[0]
+
+      socket.receive(serverFrame('ERROR', open.commandId, { code: 'FILE_NOT_FOUND', retryable: false }))
+      await flush()
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'FILE_NOT_FOUND', retryable: false }),
+      )
+      expect(refreshAsks(harness)).toHaveLength(0)
+    })
+
+    /**
+     * *** A SUCCESS-SHAPED FRAME CARRYING A FAILURE STATUS. ***
+     *
+     * A 498 arrives inside an ostensibly successful `RPC_RESPONSE`, so no error
+     * handling sees it. Where the response can be withheld the lane already refreshed
+     * and retried; where it cannot — a stream, a mutation — nothing asked for a
+     * repair, and the gateway kept answering 498 for the life of the socket.
+     */
+    it('repairs the socket for a 498 inside a streaming response it cannot withhold', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc-stream',
+        sessionScope: SESSION_A,
+        request: {
+          method: 'GET',
+          path: '/v1/assistant/stream',
+          headers: { accept: 'text/event-stream' },
+          deadlineMs: 30_000,
+          initialCreditBytes: 4_096,
+          stream: true,
+        },
+      })
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'rpc-stream',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = harness.sockets.at(-1) as FakeSocket
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS', 'API_RPC'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      const request = typed(socket, 'RPC_REQUEST')[0]
+      socket.receive(serverFrame('RPC_ACCEPTED', request.commandId, { accepted: true }))
+      socket.receive(serverFrame('RPC_RESPONSE', request.commandId, { status: 498, headers: {}, stream: true }))
+      await flush()
+
+      // The answer still reaches the caller untouched: `controlPlaneRpc` degrades a
+      // 401/498 read to HTTP on purpose and that net must keep working.
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'RPC_RESPONSE', clientRequestId: 'rpc-stream', status: 498 }),
+      )
+      // ...and the socket gets repaired, which is what nothing used to do.
+      expect(refreshAsks(harness)).toHaveLength(1)
+      expect(typed(socket, 'RPC_REQUEST')).toHaveLength(1)
+    })
+
+    it('asks for no repair when the response status is not a credential refusal', async () => {
+      const harness = setup()
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc-ok',
+        sessionScope: SESSION_A,
+        request: {
+          method: 'GET',
+          path: '/v1/admin/sync-diagnostics',
+          headers: { accept: 'application/json' },
+          deadlineMs: 30_000,
+          initialCreditBytes: 4_096,
+          stream: false,
+        },
+      })
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'rpc-ok',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = harness.sockets.at(-1) as FakeSocket
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS', 'API_RPC'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      const request = typed(socket, 'RPC_REQUEST')[0]
+      socket.receive(serverFrame('RPC_ACCEPTED', request.commandId, { accepted: true }))
+      socket.receive(serverFrame('RPC_RESPONSE', request.commandId, { status: 403, headers: {}, stream: false }))
+      await flush()
+
+      expect(refreshAsks(harness)).toHaveLength(0)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // *** A SOCKET TEARDOWN ORPHANED THE INVITE SUBSCRIPTION PERMANENTLY. ***
+  //
+  // `closeSocketAndReleaseOwner` cleared `sent` and posted nothing, so the
+  // coordinator's `session.connection` symbol stayed set, `hasLiveSubscription()`
+  // answered true forever, and the `online` / `visibilitychange` re-arm in
+  // `WebApplication` returned at its first line for the rest of the tab's life. Only
+  // an `INVITE_ERROR` reaches `handleTransportError`, which is the one path in the
+  // coordinator that disposes the subscription and clears that symbol.
+  // ---------------------------------------------------------------------------
+  describe('an invite subscription whose socket is torn down', () => {
+    const subscribe = async (harness: ReturnType<typeof setup>, socket: FakeSocket) => {
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 100,
+      })
+      await flush()
+      expect(socket.sent.some((entry) => JSON.parse(entry).type === 'INVITE_SUBSCRIBE')).toBe(true)
+    }
+
+    const inviteMessages = (harness: ReturnType<typeof setup>) =>
+      harness.messages.filter((message) => message.type === 'INVITE_ERROR' || message.type === 'INVITE_DEFERRED')
+
+    it('tells the subscription owner the lane is gone when a command tears the socket down', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+      await subscribe(harness, socket)
+      const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+        commandId: string
+        digest: string
+      }
+
+      // A durable-recovery teardown: the socket closes and nothing re-dials it.
+      socket.receive(serverFrame('ERROR', command.commandId, { code: 'READ_ONLY', retryable: false }, command.digest))
+      await flush()
+      await flush()
+
+      expect(socket.readyState).toBe(3)
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-1',
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+      })
+    })
+
+    it('says it exactly once, however many teardowns run', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+      await subscribe(harness, socket)
+      const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+        commandId: string
+        digest: string
+      }
+
+      socket.receive(serverFrame('ERROR', command.commandId, { code: 'READ_ONLY', retryable: false }, command.digest))
+      await flush()
+      await flush()
+      await harness.runtime.handle({ type: 'RELEASE_OWNER' })
+      await flush()
+
+      expect(inviteMessages(harness)).toHaveLength(1)
+    })
+
+    it('stays silent while shutting down, which already answers every lane', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+      await subscribe(harness, socket)
+
+      await harness.runtime.handle({ type: 'SHUTDOWN' })
+      await flush()
+
+      expect(inviteMessages(harness)).toEqual([])
+    })
+
+    /**
+     * The one teardown that is a REPLACEMENT. `reticket` drops a socket in order to
+     * dial another immediately, and its handshake re-sends the subscription — so
+     * telling the owner the lane is gone would make it dispose and re-subscribe
+     * underneath a worker already doing exactly that.
+     */
+    it('stays silent for a re-ticket, which re-arms the subscription itself', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+      await subscribe(harness, socket)
+      const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+        commandId: string
+        digest: string
+      }
+
+      // SESSION_STALE with no refresh available is the re-ticket path.
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'SESSION_STALE', retryable: true }, command.digest),
+      )
+      await flush()
+      const refresh = harness.messages.find((message) => message.type === 'NEED_SESSION_REFRESH') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'NEED_SESSION_REFRESH' }
+      >
+      await harness.runtime.handle({ type: 'SESSION_REFRESH_UNAVAILABLE', refreshId: refresh.refreshId })
+      await flush()
+      await flush()
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'NEED_TICKET', clientRequestId: 'client-1', reconnect: true }),
+      )
+      expect(inviteMessages(harness)).toEqual([])
+    })
+
+    it('does not speak over a deferral that already parked the subscription', async () => {
+      // `multi-tab-not-owner` posts INVITE_DEFERRED and keeps the subscription
+      // registered; an INVITE_ERROR after it would un-park the coordinator and drive
+      // one dispose, one re-dial and one logged failure per backoff tick, forever.
+      const harness = setup()
+      harness.outbox.owners.set('other-scope', {
+        sessionScope: SESSION_A,
+        ownerId: 'another-tab',
+        expiresAt: Date.now() + 60_000,
+      })
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 100,
+      })
+      await flush()
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      await flush()
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({
+          type: 'INVITE_DEFERRED',
+          clientRequestId: 'invite-1',
+          reason: 'multi-tab-not-owner',
+        }),
+      )
+      expect(inviteMessages(harness)).toHaveLength(1)
     })
   })
 })

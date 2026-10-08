@@ -384,6 +384,20 @@ type ParkedRefreshOperation =
   | { kind: 'command' }
   /** A GET RPC with no idempotency key; see `parkRpcForSessionRefresh`. */
   | { kind: 'rpc'; clientRequestId: string }
+  /** A collaboration authorization the gateway refused `SESSION_STALE`. */
+  | { kind: 'collaboration'; clientRequestId: string }
+  /**
+   * Nothing to resume: repair the SOCKET's credential and stop.
+   *
+   * *** THE CREDENTIAL BELONGS TO THE SOCKET, NOT TO THE REQUEST THAT NOTICED. ***
+   * A refusal only one lane can replay must still repair the connection, or the four
+   * lanes that cannot see that refusal stay stranded on a credential the server has
+   * already started refusing — which is exactly how an admin read could 401 while
+   * sync looked healthy. Used by the file lanes (whose transfers are resumed by
+   * their caller, not here) and by an RPC refusal that is not safe to retry in
+   * place.
+   */
+  | { kind: 'socket' }
 
 type ActiveSessionRefresh = {
   /** Correlates the main thread's ticket answer; a mismatched answer is discarded. */
@@ -407,6 +421,17 @@ type ActiveInviteSubscription = {
   sent: boolean
   awaitingAck?: string
   ackReady?: boolean
+  /**
+   * True once this subscription's owner has been told the lane is not carrying it
+   * right now — an `INVITE_ERROR` or an `INVITE_DEFERRED` went out.
+   *
+   * It exists so the teardown path can speak for an orphaned subscription without
+   * speaking over a caller that already settled it: posting an `INVITE_ERROR` after
+   * an `INVITE_DEFERRED` would un-park the coordinator and drive exactly the
+   * reconnect-per-backoff-tick loop the deferral was written to stop. Cleared when
+   * the subscription is actually on the wire again.
+   */
+  settled?: boolean
 }
 
 /**
@@ -1304,7 +1329,7 @@ export class SyncTransportWorkerRuntime {
   private handleFilesServerFrame(download: ActiveFileDownload, frame: SyncServerFrame): void {
     if (frame.type === 'ERROR') {
       const code = typeof frame.payload.code === 'string' ? frame.payload.code : 'FILE_BACKEND_ERROR'
-      this.failFileDownload(download, code, RETRYABLE_FILE_ERROR_CODES.has(code))
+      this.failFileDownload(download, code, this.fileRefusalIsRetryable(code))
       return
     }
     if (frame.type === 'FILES_ACCEPTED') {
@@ -1416,6 +1441,32 @@ export class SyncTransportWorkerRuntime {
       bytes: decoded.bytes.slice(),
       offset: decoded.header.offset,
     })
+  }
+
+  /**
+   * Is a gateway file refusal worth another attempt — and does it also mean the
+   * SOCKET needs repairing?
+   *
+   * `SESSION_STALE` was simply absent from `RETRYABLE_FILE_ERROR_CODES`, so the one
+   * refusal the gateway invented specifically to be repairable was reported to the
+   * caller as a stable condition with no refresh asked for and no retry suggested.
+   * The authorizers for both file lanes throw it, so a token rotation stranded every
+   * transfer on the socket until something unrelated forced a reconnect.
+   *
+   * The transfer itself is NOT resumed here: an upload may have written bytes the
+   * server kept and only the main thread knows what that means for replay, which is
+   * why `safeToFallback` exists. Saying "retryable" and repairing the credential is
+   * what makes the caller's own retry able to succeed.
+   */
+  private fileRefusalIsRetryable(code: string): boolean {
+    if (code !== 'SESSION_STALE') {
+      return RETRYABLE_FILE_ERROR_CODES.has(code)
+    }
+    this.refreshSocketCredential()
+    // Retryable whether or not a refresh could be started: with one, this socket is
+    // repaired; without one, the ordinary reconnect mints a fresh credential anyway.
+    // Reporting it as stable was the defect, and it was stable in neither case.
+    return true
   }
 
   private failFileDownload(download: ActiveFileDownload, code: string, retryable: boolean): void {
@@ -1668,7 +1719,7 @@ export class SyncTransportWorkerRuntime {
   private handleFileUploadServerFrame(upload: ActiveFileUpload, frame: SyncServerFrame): void {
     if (frame.type === 'ERROR') {
       const code = typeof frame.payload.code === 'string' ? frame.payload.code : 'FILE_BACKEND_ERROR'
-      this.failFileUpload(upload, code, RETRYABLE_FILE_ERROR_CODES.has(code))
+      this.failFileUpload(upload, code, this.fileRefusalIsRetryable(code))
       return
     }
     if (frame.type === 'FILES_ACCEPTED') {
@@ -2070,6 +2121,24 @@ export class SyncTransportWorkerRuntime {
           await this.sendCollaborationAuthorization()
           return
         }
+        if (
+          frame.payload.code === 'SESSION_STALE' &&
+          this.requestSessionRefresh({ kind: 'collaboration', clientRequestId: active.clientRequestId })
+        ) {
+          // *** THE GATEWAY ADDED THIS CODE SO THE CLIENT COULD REPAIR IN PLACE. ***
+          // It distinguishes `SESSION_STALE` from `NOT_AUTHORIZED` precisely to say
+          // "the credential is old, not wrong". This lane answered everything but
+          // NOT_AUTHORIZED/CHALLENGE_EXPIRED/OPERATION_UNAVAILABLE with
+          // `fallbackCollaboration('server-kill', false)`: the socket closed, the
+          // owner lease released, the rooms gone — to fix one stale field that a
+          // REAUTH on the socket we already hold repairs in milliseconds.
+          //
+          // The ack deadline is cleared because the refresh owns the timeout now;
+          // left armed it would close the healthy socket mid-refresh, which is the
+          // very teardown being avoided.
+          this.clearAckDeadline()
+          return
+        }
         if (frame.payload.code === 'NOT_AUTHORIZED') {
           const clientRequestId = active.clientRequestId
           this.active = undefined
@@ -2199,7 +2268,7 @@ export class SyncTransportWorkerRuntime {
       return
     }
     this.clearAckDeadline()
-    await this.closeSocketAndReleaseOwner()
+    await this.closeSocketAndReleaseOwner({ redialling: true })
     await this.requestTicket(active.clientRequestId, active.sessionScope, true)
   }
 
@@ -2486,9 +2555,13 @@ export class SyncTransportWorkerRuntime {
     for (const parked of refresh.parked) {
       if (parked.kind === 'rpc') {
         await this.resumeRefreshedRpc(parked.clientRequestId, outcome)
-      } else {
+      } else if (parked.kind === 'collaboration') {
+        await this.resumeRefreshedCollaboration(parked.clientRequestId, outcome)
+      } else if (parked.kind === 'command') {
         await this.resumeRefreshedCommand(outcome)
       }
+      // `socket` parks nothing to resume: the credential was the whole point, and
+      // the operation that asked was already answered on its own path.
     }
   }
 
@@ -2576,6 +2649,56 @@ export class SyncTransportWorkerRuntime {
     // the identity-bearing HTTP replay. Inventing a reason here would only change
     // the diagnostic wording while both of those stay the same.
     await this.fallback('server-kill', this.outboxRecord)
+  }
+
+  /**
+   * Resume the collaboration authorization the gateway refused `SESSION_STALE`.
+   *
+   * A fresh `commandId` and one more `AUTHORIZE_COLLABORATION` on the SAME socket,
+   * from whichever phase the refusal interrupted — exactly what the
+   * `CHALLENGE_EXPIRED` retry beside it already does, and for the same reason: the
+   * refusal was a verdict on the credential, not on the request.
+   *
+   * There is no idempotency question here. Collaboration authorization is a grant
+   * query, not a mutation: a discovery challenge is one-use and a grant that was
+   * refused granted nothing, so re-asking cannot apply anything twice.
+   */
+  private async resumeRefreshedCollaboration(
+    clientRequestId: string,
+    outcome: 'refreshed' | 'failed' | 'revoked',
+  ): Promise<void> {
+    const active = this.active
+    if (!active || active.mode !== 'collaboration' || active.clientRequestId !== clientRequestId) {
+      // Cancelled or settled while parked; whatever did that already answered it.
+      return
+    }
+    if (outcome === 'refreshed' && this.state === 'READY' && this.socket?.readyState === 1) {
+      active.commandId = this.uuid()
+      await this.sendCollaborationAuthorization()
+      return
+    }
+    // The pre-existing behaviour, unchanged: the caller is told to use HTTP and the
+    // socket goes, because a credential this socket cannot repair is one only a new
+    // ticket can replace.
+    await this.fallbackCollaboration('server-kill', false)
+  }
+
+  /**
+   * Repair the socket's credential with nothing parked on the outcome.
+   *
+   * *** ONE MECHANISM, NOT THREE NEAR-DUPLICATES. *** Four lanes ride one socket and
+   * only two of them can replay their own refusal. The rest — the file transfers,
+   * and an RPC whose refusal is not safe to retry in place — must still be able to
+   * say "the credential this connection is replaying is stale", or the next request
+   * on every lane is refused the same way and the only cure is a reconnect that
+   * discards the rooms, the invite subscription, the command lease, the socket budget
+   * and every in-flight transfer.
+   *
+   * Returns whether a refresh is now running, which callers use only to decide how to
+   * describe the refusal they are about to report — never to withhold it.
+   */
+  private refreshSocketCredential(): boolean {
+    return this.requestSessionRefresh({ kind: 'socket' })
   }
 
   /**
@@ -2741,6 +2864,7 @@ export class SyncTransportWorkerRuntime {
       await this.sendWithBackpressure(JSON.stringify(frame))
       if (this.inviteSubscription === subscription) {
         subscription.sent = true
+        subscription.settled = false
         // The lane is open again: whatever ownership the watch was waiting for has
         // transferred, so stop looking.
         this.cancelDeferredInviteWatch()
@@ -2825,6 +2949,7 @@ export class SyncTransportWorkerRuntime {
   }
 
   private failInviteSubscription(subscription: ActiveInviteSubscription, code: string, retryable: boolean): void {
+    subscription.settled = true
     this.dependencies.postMessage({
       type: 'INVITE_ERROR',
       clientRequestId: subscription.clientRequestId,
@@ -2915,6 +3040,28 @@ export class SyncTransportWorkerRuntime {
         // provably safe; delivered untouched where it is not.
         if (this.parkRpcForSessionRefresh(rpc, frame)) {
           return
+        }
+        // *** A SUCCESS-SHAPED FRAME CARRYING A FAILURE STATUS. ***
+        //
+        // The park above withholds and retries a 401/498 only where that is provably
+        // safe: a non-streaming keyless GET whose answer has not started. Everything
+        // else — a stream (and the gateway streams whenever its adapter hands back a
+        // stream, whatever the request asked for), a mutation, a second refusal for
+        // the same request — was delivered verbatim and NOTHING asked for a refresh.
+        // Measured live: after `POST /v1/sessions/refresh` the lane answered 498
+        // forever in 4/4 runs, while the REAUTH that repairs it takes 21-30 ms.
+        //
+        // The status is a statement about the SOCKET's frozen credential, not about
+        // the one request that happened to see it, so the connection is repaired even
+        // when this request cannot be replayed — otherwise the four lanes that never
+        // see an RPC status at all stay stranded on it. The response is still
+        // delivered unchanged: `WebApplication.controlPlaneRpc` degrades a 401/498 GET
+        // to HTTP on purpose, and that net must keep working while the repair runs.
+        //
+        // It cannot spin: the refresh budget is per socket and nothing but a new
+        // handshake replenishes it.
+        if (Number.isSafeInteger(frame.payload.status) && REFRESHABLE_RPC_STATUSES.has(Number(frame.payload.status))) {
+          this.refreshSocketCredential()
         }
         rpc.responseStarted = true
         this.dependencies.postMessage({
@@ -3783,6 +3930,7 @@ export class SyncTransportWorkerRuntime {
           // drove one reconnect, one console failure line and one DEGRADED
           // transition per coordinator backoff tick, forever.
           subscription.sent = false
+          subscription.settled = true
           this.dependencies.postMessage({
             type: 'INVITE_DEFERRED',
             clientRequestId: active.clientRequestId,
@@ -3794,6 +3942,7 @@ export class SyncTransportWorkerRuntime {
           // A structurally absent capability is not a transient fault. Reporting it as retryable
           // makes the durable invite coordinator reconnect against it for the life of the tab.
           const retryable = disposition === 'retryable'
+          subscription.settled = true
           this.dependencies.postMessage({
             type: 'INVITE_ERROR',
             clientRequestId: active.clientRequestId,
@@ -3919,7 +4068,15 @@ export class SyncTransportWorkerRuntime {
     })
   }
 
-  private async closeSocketAndReleaseOwner(): Promise<void> {
+  /**
+   * Drop this socket, release the owner lease, and settle every lane riding it.
+   *
+   * `redialling` is passed by the ONE caller that drops a socket in order to replace
+   * it immediately: `reticket`. Its new handshake re-sends the invite subscription,
+   * so telling the subscription's owner the lane is gone would make it dispose and
+   * re-subscribe underneath a worker that is already doing exactly that.
+   */
+  private async closeSocketAndReleaseOwner({ redialling = false }: { redialling?: boolean } = {}): Promise<void> {
     this.clearAckDeadline()
     this.cancelCommandRetry()
     this.clearHeartbeat()
@@ -3952,8 +4109,32 @@ export class SyncTransportWorkerRuntime {
     this.transportScope = undefined
     this.authorization = undefined
     this.negotiatedOperations.clear()
-    if (this.inviteSubscription) {
-      this.inviteSubscription.sent = false
+    const subscription = this.inviteSubscription
+    if (subscription) {
+      subscription.sent = false
+      /**
+       * *** A TEARDOWN USED TO ORPHAN THIS SUBSCRIPTION PERMANENTLY. ***
+       *
+       * Clearing `sent` and posting NOTHING left the coordinator's
+       * `session.connection` symbol set, so `hasLiveSubscription()` answered true
+       * forever: the `online` and `visibilitychange` re-arm in `WebApplication`
+       * returned at its first line for the rest of the tab's life, and the durable
+       * invite stream was silently dead with every diagnostic claiming it was live.
+       *
+       * Only an `INVITE_ERROR` clears that symbol — `handleTransportError` is the
+       * one path in the coordinator that disposes the subscription — and `retryable`
+       * is what decides between its backoff and a permanent stand-down. A socket
+       * torn down is retryable by construction: the next dial gets a fresh one.
+       */
+      if (!this.shuttingDown && !redialling && subscription.settled !== true) {
+        subscription.settled = true
+        this.dependencies.postMessage({
+          type: 'INVITE_ERROR',
+          clientRequestId: subscription.clientRequestId,
+          code: 'SOCKET_CLOSED',
+          retryable: true,
+        })
+      }
     }
   }
 
