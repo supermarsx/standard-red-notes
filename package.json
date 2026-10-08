@@ -34,12 +34,12 @@
     "coverage:openclaw": "yarn workspace @standard-red-notes/openclaw coverage",
     "coverage:report": "node scripts/coverage.mjs report --input coverage/raw --expect app --expect server --output docs/assets/coverage.svg --summary coverage/summary.json",
     "deps:audit": "yarn deps:audit:owned && yarn deps:audit:app && yarn deps:audit:server",
-    "deps:audit:app": "npx npm-check-updates@22.2.9 --workspaces --root --format group --target latest --cwd app",
-    "deps:audit:cli-client": "npx npm-check-updates@22.2.9 --packageFile cli/srn-client/package.json --format group --target latest",
-    "deps:audit:cli-server": "npx npm-check-updates@22.2.9 --packageFile cli/srn-server/package.json --format group --target latest",
-    "deps:audit:e2e": "npx npm-check-updates@22.2.9 --packageFile e2e/package.json --format group --target latest",
-    "deps:audit:owned": "npx npm-check-updates@22.2.9 --workspaces --root --format group --target latest && yarn deps:audit:cli-client && yarn deps:audit:cli-server && yarn deps:audit:e2e",
-    "deps:audit:server": "npx npm-check-updates@22.2.9 --workspaces --root --format group --target latest --cwd server",
+    "deps:audit:app": "npx npm-check-updates@23.1.0 --workspaces --root --format group --target latest --cwd app",
+    "deps:audit:cli-client": "npx npm-check-updates@23.1.0 --packageFile cli/srn-client/package.json --format group --target latest",
+    "deps:audit:cli-server": "npx npm-check-updates@23.1.0 --packageFile cli/srn-server/package.json --format group --target latest",
+    "deps:audit:e2e": "npx npm-check-updates@23.1.0 --packageFile e2e/package.json --format group --target latest",
+    "deps:audit:owned": "npx npm-check-updates@23.1.0 --workspaces --root --format group --target latest && yarn deps:audit:cli-client && yarn deps:audit:cli-server && yarn deps:audit:e2e",
+    "deps:audit:server": "npx npm-check-updates@23.1.0 --workspaces --root --format group --target latest --cwd server",
     "deps:security:owned": "yarn npm audit --all --recursive",
     "deps:security:production": "node scripts/audit-production-dependencies.mjs",
     "docker:config": "docker compose config",
@@ -110,7 +110,7 @@
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-instrument": "^6.0.3",
     "jsdom": "^30.1.2",
-    "npm-check-updates": "^22.2.9",
+    "npm-check-updates": "^23.1.0",
     "turbo": "^2.11.7"
   }
 }
