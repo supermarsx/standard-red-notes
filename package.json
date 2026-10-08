@@ -13,7 +13,7 @@
     "openclaw"
   ],
   "resolutions": {
-    "uuid": "14.0.1"
+    "uuid": "14.0.2"
   },
   "scripts": {
     "build": "yarn build:mcp && yarn build:openclaw && yarn build:app && yarn build:server",
@@ -111,6 +111,6 @@
     "istanbul-lib-instrument": "^6.0.3",
     "jsdom": "^29.1.1",
     "npm-check-updates": "^22.2.9",
-    "turbo": "^2.10.5"
+    "turbo": "^2.11.7"
   }
 }
