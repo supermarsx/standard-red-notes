@@ -44,6 +44,7 @@
     "upgrade:snjs": "ncu -u '@standardnotes/*' && yarn workspaces foreach -A --verbose run upgrade:snjs"
   },
   "resolutions": {
+    "@babel/runtime@npm:8.0.5": "8.0.7",
     "@babel/runtime@npm:^7.13.10": "7.29.10",
     "@babel/runtime@npm:^7.20.13": "7.29.10",
     "@babel/runtime@npm:^7.23.2": "7.29.10",
@@ -82,8 +83,8 @@
     "@standardnotes/snjs": "workspace:*"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
-    "@babel/preset-env": "^7.29.7",
+    "@babel/core": "^8.0.7",
+    "@babel/preset-env": "^8.0.7",
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",
     "@eslint/js": "^10.0.1",

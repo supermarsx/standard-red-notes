@@ -39,8 +39,8 @@
     "test:debug": "node --inspect-brk node_modules/.bin/jest --runInBand"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
-    "@babel/preset-env": "^7.29.7",
+    "@babel/core": "^8.0.7",
+    "@babel/preset-env": "^8.0.7",
     "@standardnotes/api": "workspace:*",
     "@standardnotes/common": "^1.52.4",
     "@standardnotes/domain-core": "^1.41.3",
