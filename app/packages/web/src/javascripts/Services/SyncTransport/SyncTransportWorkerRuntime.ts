@@ -3413,8 +3413,7 @@ export class SyncTransportWorkerRuntime {
     if (typeof code !== 'string') {
       return false
     }
-    const resend = RESENDABLE_COMMAND_REFUSAL_CODES.has(code)
-    if (!resend && !RESTATABLE_COMMAND_REFUSAL_CODES.has(code)) {
+    if (!RESENDABLE_COMMAND_REFUSAL_CODES.has(code) && !RESTATABLE_COMMAND_REFUSAL_CODES.has(code)) {
       return false
     }
     const active = this.active
@@ -3431,6 +3430,13 @@ export class SyncTransportWorkerRuntime {
     ) {
       return false
     }
+    // *** `recover` NEVER RE-SENDS A COMMAND. *** That mode only ever put a STATUS on
+    // the wire, so a resend would introduce a command frame for an operation already
+    // in durable recovery — the one move that could apply a mutation twice. The
+    // gateway takes no lease for a STATUS and so cannot answer it BUSY, which makes
+    // this a local guarantee rather than a reachable branch; it is written out so the
+    // property does not depend on reading another package's control flow.
+    const resend = RESENDABLE_COMMAND_REFUSAL_CODES.has(code) && active.mode === 'execute'
     this.commandRefusalRetries += 1
     const attempt = this.commandRefusalRetries
     // The refusal arrived instead of the ack this deadline was waiting for, and the

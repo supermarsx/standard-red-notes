@@ -4172,6 +4172,57 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(harness.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
     })
 
+    /**
+     * A command in DURABLE RECOVERY only ever put a STATUS on the wire, so a resend
+     * would introduce a COMMAND frame for an operation whose effect is already
+     * unknown — the one move in this file that could apply a mutation twice.
+     */
+    it('never re-sends a COMMAND for a recovered command, whatever the refusal', async () => {
+      const shared = new FakeOutbox()
+      const first = setup(shared)
+      const firstSocket = await authorize(first)
+      const persisted = JSON.parse(
+        firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string,
+      ) as { commandId: string; digest: string }
+      await first.runtime.handle({ type: 'SHUTDOWN' })
+
+      const second = setup(shared)
+      await second.runtime.handle({ type: 'RECOVER', clientRequestId: 'recover-a', sessionScope: SESSION_A })
+      await second.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'recover-a',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 'n'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = second.sockets[0]
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS'],
+          nextClientSequence: 2,
+        }),
+      )
+      await flush()
+      expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'STATUS'])
+
+      socket.receive(serverFrame('ERROR', persisted.commandId, { code: 'BUSY', retryable: true }, persisted.digest))
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+      await flush()
+
+      expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'STATUS', 'STATUS'])
+      expect(socket.readyState).toBe(1)
+    })
+
     it('still tears the socket down for a stable policy refusal, which a retry cannot change', async () => {
       // Not a blanket "never close": READ_ONLY, CONTENT_LIMIT,
       // SHARED_VAULT_FORBIDDEN, NOT_AUTHORIZED, LEASE_LOST, BACKEND_ERROR and
