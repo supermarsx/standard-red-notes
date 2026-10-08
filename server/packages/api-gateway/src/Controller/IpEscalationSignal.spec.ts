@@ -146,6 +146,30 @@ describe('createIpEscalationRecorder', () => {
     expect(store.escalate).toHaveBeenCalledWith('203.0.113.7', 50)
   })
 
+  it('RESOLVES THE STORE PER REFUSAL, not once at creation: the container holding it is loaded later', async () => {
+    const store: IpEscalationWriter = { escalate: jest.fn().mockResolvedValue(undefined) }
+    // What `container.isBound(...) ? container.get(...) : undefined` does across a
+    // boot: absent while the recorder is being built, present by the time a
+    // refusal happens. A recorder that captured the answer once would hold
+    // `undefined` forever and the whole ramp would stay inert.
+    const resolveStore = jest.fn().mockReturnValueOnce(undefined).mockReturnValue(store)
+    const recorder = createIpEscalationRecorder({
+      resolveConfig: jest.fn().mockResolvedValue({ adaptiveEscalation: true, windowSeconds: 10 }),
+      resolveStore,
+    })
+
+    // Two refusals. Correct: the first asks and gets nothing, the second asks
+    // again and writes. Cached at creation: the creation-time answer (nothing) is
+    // all it will ever have, and neither refusal writes.
+    recorder('203.0.113.7')
+    await new Promise((resolve) => setImmediate(resolve))
+    recorder('203.0.113.7')
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(store.escalate).toHaveBeenCalledTimes(1)
+    expect(store.escalate).toHaveBeenCalledWith('203.0.113.7', 50)
+  })
+
   it('does not throw out of the refusal branch when everything underneath fails', async () => {
     const recorder = createIpEscalationRecorder({
       resolveConfig: jest.fn().mockRejectedValue(new Error('nope')),
