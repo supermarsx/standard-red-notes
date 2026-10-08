@@ -889,7 +889,7 @@ export class ComponentViewer implements ComponentViewerInterface {
       async () => {
         const itemsData = items
         const noun = itemsData.length === 1 ? 'item' : 'items'
-        let reply = null
+        let reply: { deleted: boolean }
         const didConfirm = await this.services.alerts.confirm(
           `Are you sure you want to delete ${itemsData.length} ${noun}?`,
         )

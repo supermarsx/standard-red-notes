@@ -68,7 +68,7 @@
     "crypto-js": "^4.2.0",
     "docdash": "^2.0.2",
     "dom-storage": "^2.1.0",
-    "eslint": "^9.39.5",
+    "eslint": "^10.12.0",
     "eslint-plugin-prettier": "^5.5.6",
     "exports-loader": "^5.0.0",
     "jest": "^30.5.2",

@@ -699,7 +699,7 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     dsl: string,
     vault?: VaultListingInterface,
   ): Promise<SmartView> {
-    let components = null
+    let components
     try {
       components = JSON.parse(dsl.substring(1, dsl.length))
     } catch {

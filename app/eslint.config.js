@@ -104,6 +104,23 @@ module.exports = tseslint.config(
       'no-throw-literal': 'off',
       'no-trailing-spaces': 'error',
       'no-unmodified-loop-condition': 'error',
+      // Three rules ESLint 10 added to `eslint:configs.recommended`. They report 39
+      // findings in code that predates the ESLint 9 -> 10 bump, so they are carried
+      // as warnings here rather than silenced: the bump does not break anything,
+      // and fixing the findings is its own change, not a dependency change.
+      //
+      // Of those 39, 36 are behaviour-neutral (a `let x = <value>` initializer that
+      // is provably overwritten before any read, or a rethrow that drops the caught
+      // error's `cause`). THREE ARE REAL BUGS and must not be mistaken for noise:
+      // `no-unassigned-vars` catches `debounceTimeout` in Hooks/useDocumentRect.ts
+      // and `windowResizeDebounceTimeout` twice in Hooks/useElementRect.ts, where
+      // `window.setTimeout(...)`'s handle is never captured, so the paired
+      // `window.clearTimeout(...)` clears nothing and those resize handlers do not
+      // actually debounce. Capturing the handle changes runtime behaviour, so it is
+      // deliberately left out of the ESLint 10 bump.
+      'no-useless-assignment': 'warn',
+      'no-unassigned-vars': 'warn',
+      'preserve-caught-error': 'warn',
       'no-unused-private-class-members': 'error',
       'object-curly-spacing': ['error', 'always'],
       'sort-imports': 'off',
