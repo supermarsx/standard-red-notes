@@ -1009,6 +1009,7 @@ export class AssistantTools implements ToolSession {
     } catch (error) {
       throw new Error(
         `Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       )
     }
 
@@ -1068,6 +1069,7 @@ export class AssistantTools implements ToolSession {
       } catch (error) {
         throw new Error(
           `Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
         )
       }
     }
@@ -1134,6 +1136,7 @@ export class AssistantTools implements ToolSession {
     } catch (error) {
       throw new Error(
         `Could not read the Super note as markdown: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       )
     }
   }
@@ -1478,8 +1481,8 @@ export class AssistantTools implements ToolSession {
             throw new Error(
               `Could not save the reminder, cancel its email delivery, or restore its local provenance: ${
                 compensationError instanceof Error ? compensationError.message : String(compensationError)
-              }`,
-              { cause: error },
+              } (the initial save failed with: ${error instanceof Error ? error.message : String(error)})`,
+              { cause: compensationError },
             )
           }
           return {

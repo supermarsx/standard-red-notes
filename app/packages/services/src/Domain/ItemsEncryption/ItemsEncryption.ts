@@ -155,7 +155,7 @@ export class ItemsEncryptionService extends AbstractService {
 
     const defaultKey = this.getDefaultItemsKey()
 
-    let result: ItemsKeyInterface | undefined = undefined
+    let result: ItemsKeyInterface | undefined
 
     if (this.userVersion && this.userVersion !== defaultKey?.keyVersion) {
       /**

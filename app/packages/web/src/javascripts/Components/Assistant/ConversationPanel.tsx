@@ -502,7 +502,7 @@ function ConversationPanelImpl({
 
       if (message.kind === 'assistant' && message.tools.length > 0) {
         const includesNoteChanges = message.tools.some((tool) => tool.noteChange)
-        let confirmed = false
+        let confirmed: boolean
         try {
           confirmed = await confirmDialog({
             title: 'Remove assistant message?',

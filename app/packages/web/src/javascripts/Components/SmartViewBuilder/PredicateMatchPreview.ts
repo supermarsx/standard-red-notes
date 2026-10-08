@@ -110,7 +110,7 @@ export const evaluatePredicateMatches = (
   const sampleTitles: string[] = []
 
   for (const item of scanItems) {
-    let matched = false
+    let matched: boolean
     try {
       if (referencesTags) {
         const itemWithTags = ItemWithTags.Create(item.payload, item as never, resolveTags(item))

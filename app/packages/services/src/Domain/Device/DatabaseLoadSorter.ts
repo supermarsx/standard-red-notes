@@ -15,11 +15,8 @@ function SortPayloadsByRecentAndContentPriority<T extends DatabaseItemMetadata =
   return payloads.sort((a, b) => {
     const dateResult = new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
 
-    let aPriority = 0
-    let bPriority = 0
-
-    aPriority = contentTypePriorityList.indexOf(a.content_type)
-    bPriority = contentTypePriorityList.indexOf(b.content_type)
+    let aPriority = contentTypePriorityList.indexOf(a.content_type)
+    let bPriority = contentTypePriorityList.indexOf(b.content_type)
 
     if (aPriority === -1) {
       aPriority = contentTypePriorityList.length
@@ -53,11 +50,8 @@ function SortPayloadsByRecentAndUuidPriority<T extends DatabaseItemMetadata = Da
   return payloads.sort((a, b) => {
     const dateResult = new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
 
-    let aPriority = 0
-    let bPriority = 0
-
-    aPriority = uuidPriorityList.indexOf(a.uuid)
-    bPriority = uuidPriorityList.indexOf(b.uuid)
+    let aPriority = uuidPriorityList.indexOf(a.uuid)
+    let bPriority = uuidPriorityList.indexOf(b.uuid)
 
     if (aPriority === -1) {
       aPriority = uuidPriorityList.length

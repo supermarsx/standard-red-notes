@@ -1001,7 +1001,7 @@ export class NotesController
     let durableMutations: NoteCommentMutationRecord[] | undefined
     let durableClocks: NoteCommentActorClock[] | undefined
     let durableWritePrepared = false
-    let mutationWritten = false
+    let mutationWritten: boolean
     try {
       await this.application.mutator.changeItem<NoteMutator>(
         note,

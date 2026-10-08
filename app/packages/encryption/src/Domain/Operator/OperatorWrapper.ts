@@ -25,7 +25,7 @@ export async function encryptPayload(
   signingKeyPair: PkcKeyPair | undefined,
 ): Promise<EncryptedOutputParameters> {
   const operator = operatorManager.operatorForVersion(key.keyVersion)
-  let result: EncryptedOutputParameters | undefined = undefined
+  let result: EncryptedOutputParameters | undefined
 
   if (isAsyncOperator(operator)) {
     result = await operator.generateEncryptedParametersAsync(payload, key)

@@ -2510,7 +2510,7 @@ export class ItemListController
     const lastSelectedItemIndex = startingIndex ?? items.findIndex((item) => item.uuid == this.lastSelectedItem?.uuid)
     const selectedItemIndex = endingIndex ?? items.findIndex((item) => item.uuid == selectedItem?.uuid)
 
-    let itemsToSelect: ListableContentItem[] = []
+    let itemsToSelect: ListableContentItem[]
     if (lastSelectedItemIndex < 0 || selectedItemIndex < 0) {
       // The shift-range anchor (lastSelectedItem) can be removed by a delta sync
       // between clicks; then findIndex returns -1 and `items.slice(-1, n)` selects a

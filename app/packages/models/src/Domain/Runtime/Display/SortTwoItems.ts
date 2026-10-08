@@ -102,7 +102,7 @@ export function sortTwoItems(
   const bValue = b[sortBy as keyof DisplayItem] || ''
   const smallerNaturallyComesFirst = sortDirection === 'asc'
 
-  let compareResult = KeepSameOrder
+  let compareResult: number
 
   /**
    * Check for string length due to issue on React Native 0.65.1

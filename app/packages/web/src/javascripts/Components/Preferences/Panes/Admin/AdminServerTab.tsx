@@ -359,7 +359,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setHealthReportCopied(false)
     // The marker is a same-origin static file beside the bundle, not an API route,
     // so it is fetched directly rather than through the authenticated helpers.
-    let deploymentMarker: unknown = undefined
+    let deploymentMarker: unknown
     try {
       const markerResponse = await fetch('/.well-known/srn-deployment.json', {
         headers: { Accept: 'application/json' },

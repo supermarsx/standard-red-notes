@@ -18,16 +18,16 @@ export class AndroidBackHandler {
   }
 
   notifyEvent() {
-    let handled = false
+    // Most-recently-registered listener first. The first one that claims the
+    // event ends the dispatch; the fallback runs only when nobody claimed it.
+    // The `handled` flag this used to carry was written and then immediately
+    // abandoned by the `return`, so it never reached the fallback test.
     for (const listener of Array.from(this.listeners).reverse()) {
       if (listener()) {
-        handled = true
         return
-      } else {
-        handled = false
       }
     }
-    if (!handled && this.fallbackListener) {
+    if (this.fallbackListener) {
       this.fallbackListener()
     }
   }

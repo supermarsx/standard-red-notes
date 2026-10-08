@@ -15,7 +15,7 @@ function isValidPassword(password: string) {
 export function generatePassword(length: number): string {
   const buffer = new Uint8Array(length)
 
-  let generatedPassword = ''
+  let generatedPassword: string
 
   do {
     window.crypto.getRandomValues(buffer)

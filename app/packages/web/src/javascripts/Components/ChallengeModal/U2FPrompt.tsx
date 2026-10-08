@@ -49,7 +49,7 @@ const U2FPrompt = ({ application, onValueChange, prompt, buttonRef, contextData 
             }
             const username = usernameOrError.getValue()
 
-            let authenticatorResponse: Record<string, unknown> | null = null
+            let authenticatorResponse: Record<string, unknown> | null
             if (isAndroid()) {
               const authenticatorOptionsOrError = await application.getAuthenticatorAuthenticationOptions.execute({
                 username: username.value,

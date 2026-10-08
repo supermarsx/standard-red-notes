@@ -16,14 +16,14 @@ export function getDailyWritingStreak(
 
   const startDay = todayItem.date
   let checkingDayOffsetFromToday = -1
-  let keepLooping = true
   let streak = 0
 
-  while (keepLooping) {
+  // The only exit is the first day with no entries, so the loop needs no flag:
+  // the `keepLooping = false` that used to sit beside this `break` was dead.
+  for (;;) {
     const checkingDay = addDaysToDate(startDay, checkingDayOffsetFromToday)
     const items = itemsByDateMapping[dateToDailyDayIdentifier(checkingDay)]
     if (!items || items?.length === 0) {
-      keepLooping = false
       break
     }
 

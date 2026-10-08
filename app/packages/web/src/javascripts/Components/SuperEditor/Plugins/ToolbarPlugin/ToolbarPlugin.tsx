@@ -1458,7 +1458,6 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
               textNode.setFormat(0)
               $getNearestBlockElementAncestorOrThrow(textNode).setFormat('')
             }
-            node = textNode
           } else if ($isHeadingNode(node) || $isQuoteNode(node)) {
             node.replace($createParagraphNode(), true)
           } else if ($isDecoratorBlockNode(node)) {

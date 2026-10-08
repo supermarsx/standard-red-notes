@@ -301,7 +301,7 @@ function resolveLocator(root: JsonObject, locator: AssistantBlockLocator): NodeR
   }
 
   const records = collectRecords(root)
-  let matches: NodeRecord[] = []
+  let matches: NodeRecord[]
   if ('nodeKey' in locator) {
     matches = records.filter((record) => nodeIdentifier(record.node, 'key') === locator.nodeKey)
   } else if ('nodeUuid' in locator) {

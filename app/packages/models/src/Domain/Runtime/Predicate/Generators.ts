@@ -81,6 +81,11 @@ export function predicateFromDSLString<T extends PredicateTarget>(dsl: string): 
     const predicateJson = predicateDSLArrayToJsonPredicate(components as RawPredicateInArrayForm)
     return predicateFromJson(predicateJson)
   } catch (e) {
+    // The caught value is serialised into the message rather than attached as a
+    // `cause`: this package compiles against the ES6 lib (tsconfig.base.json sets
+    // target es6 and no `lib`), where `Error` takes no second `options` argument,
+    // so `{ cause: e }` is a TS2554 compile error here. Proven by probe, not assumed.
+    // eslint-disable-next-line preserve-caught-error -- Error(message, { cause }) needs the ES2022 lib; this package targets ES6
     throw Error(`Invalid smart view syntax ${JSON.stringify(e)}`)
   }
 }

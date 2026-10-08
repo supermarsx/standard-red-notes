@@ -17,7 +17,7 @@ export type FilesSortDirection = 'asc' | 'dsc'
 export const sortFiles = (files: FileItem[], sortBy: FilesSortBy, direction: FilesSortDirection): FileItem[] => {
   const factor = direction === 'asc' ? 1 : -1
   return [...files].sort((a, b) => {
-    let comparison = 0
+    let comparison: number
     if (sortBy === 'name') {
       comparison = (a.name ?? '').localeCompare(b.name ?? '')
     } else if (sortBy === 'size') {

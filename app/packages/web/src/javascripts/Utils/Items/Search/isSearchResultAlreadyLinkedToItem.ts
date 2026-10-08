@@ -1,7 +1,7 @@
 import { LinkableItem } from './LinkableItem'
 
 export function isSearchResultAlreadyLinkedToItem(searchResult: LinkableItem, item: LinkableItem): boolean {
-  let isAlreadyLinked = false
+  let isAlreadyLinked: boolean
 
   const isItemReferencedByActiveItem = item.references.some((ref) => ref.uuid === searchResult.uuid)
   const isActiveItemReferencedByItem = searchResult.references.some((ref) => ref.uuid === item?.uuid)

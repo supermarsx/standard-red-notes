@@ -104,20 +104,27 @@ module.exports = tseslint.config(
       'no-throw-literal': 'off',
       'no-trailing-spaces': 'error',
       'no-unmodified-loop-condition': 'error',
-      // Three rules ESLint 10 added to `eslint:configs.recommended`. They report 39
-      // findings in code that predates the ESLint 9 -> 10 bump, so they are carried
-      // as warnings here rather than silenced: the bump does not break anything,
-      // and fixing the findings is its own change, not a dependency change.
+      // Three rules ESLint 10 added to `eslint:configs.recommended`. The bump
+      // carried 41 findings in pre-existing code as warnings rather than
+      // mass-editing during a dependency change; that backlog has since been
+      // triaged to zero and these rules now report NOTHING across `app/`.
       //
-      // Of those 39, 36 are behaviour-neutral (a `let x = <value>` initializer that
-      // is provably overwritten before any read, or a rethrow that drops the caught
-      // error's `cause`). THREE ARE REAL BUGS and must not be mistaken for noise:
-      // `no-unassigned-vars` catches `debounceTimeout` in Hooks/useDocumentRect.ts
-      // and `windowResizeDebounceTimeout` twice in Hooks/useElementRect.ts, where
-      // `window.setTimeout(...)`'s handle is never captured, so the paired
-      // `window.clearTimeout(...)` clears nothing and those resize handlers do not
-      // actually debounce. Capturing the handle changes runtime behaviour, so it is
-      // deliberately left out of the ESLint 10 bump.
+      // They earned their keep: all three `no-unassigned-vars` findings were real
+      // bugs. `debounceTimeout` in Hooks/useDocumentRect.ts and
+      // `windowResizeDebounceTimeout` in BOTH hooks of Hooks/useElementRect.ts
+      // never captured `window.setTimeout(...)`'s handle, so the paired
+      // `window.clearTimeout(...)` cleared nothing: every resize event of a window
+      // drag queued its own layout read and re-render instead of one per burst,
+      // and a pending timer outlived unmount. Fixed, with the debounce and the
+      // unmount clear each covered by a test that fails without them.
+      //
+      // The other 38 were triaged one by one: the dead initializers and dead
+      // pre-exit assignments were removed, the rethrows now carry `cause`, and the
+      // two deliberate exceptions carry a per-line disable with its reason
+      // (models/.../Predicate/Generators.ts, services/.../MoveItemsToVault.ts).
+      // Kept at `warn` rather than promoted to `error` only so a peer's in-flight
+      // work cannot be turned red by a rule it never saw; there is no backlog left
+      // behind them.
       'no-useless-assignment': 'warn',
       'no-unassigned-vars': 'warn',
       'preserve-caught-error': 'warn',

@@ -145,7 +145,7 @@ export function readChecklistBackfillSettings(
   source: ChecklistBackfillPreferenceSource | undefined,
   forceGenerate = false,
 ): ChecklistBackfillSettings {
-  let raw: { autoGenerate?: unknown; cap?: unknown } = {}
+  let raw: { autoGenerate?: unknown; cap?: unknown }
   try {
     raw = {
       autoGenerate: source?.getPreference(CHECKLIST_AUTO_GENERATE_RECURRENCES_PREF),

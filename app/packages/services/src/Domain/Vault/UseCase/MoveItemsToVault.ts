@@ -42,6 +42,11 @@ export class MoveItemsToVault {
         if (pendingSyncError) {
           return pendingSyncError
         }
+        // Dead as written (the `= true` below is unconditional), but kept so the
+        // flushed/pending invariant holds at every statement of this
+        // non-transactional move-then-sync retry protocol: the destructive move
+        // between here and there may grow an early return.
+        // eslint-disable-next-line no-useless-assignment -- keeps the flushed/pending invariant exact across the destructive move
         metadataNeedsSync = false
 
         const originalFile = item as FileItem

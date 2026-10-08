@@ -179,7 +179,7 @@ export async function scheduleRetrievedSyncAfterPreservation(input: {
   schedule(): void
 }): Promise<boolean> {
   const preserved = await input.work
-  let valid = false
+  let valid: boolean
   try {
     valid = input.validate()
   } catch {
@@ -414,7 +414,7 @@ export function applyRetrievedEditorContent(input: {
   /** Assistant replacements must remain a distinct undo step. */
   history?: 'push'
 }): boolean {
-  let current = false
+  let current: boolean
   try {
     current = input.isLifetimeCurrent()
   } catch {
@@ -431,7 +431,7 @@ export function applyRetrievedEditorContent(input: {
       if (input.ignoreNextChangeRef.current !== token) {
         return
       }
-      let lifetimeIsCurrent = false
+      let lifetimeIsCurrent: boolean
       try {
         lifetimeIsCurrent = input.isLifetimeCurrent()
       } catch {

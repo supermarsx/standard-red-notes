@@ -30,11 +30,10 @@ const DatabaseConfiguration = ({ setHomeServerConfigurationChangedCallback, home
 
     setIsMySQLSelected(selectedDatabaseEngine === 'mysql')
 
-    let mysqlConfigurationChanged = false
     if (selectedDatabaseEngine === 'mysql') {
       const allMysqlInputsFilled = !!mysqlDatabase && !!mysqlHost && !!mysqlPassword && !!mysqlPort && !!mysqlUsername
 
-      mysqlConfigurationChanged =
+      const mysqlConfigurationChanged =
         allMysqlInputsFilled &&
         (homeServerConfiguration.mysqlConfiguration?.username !== mysqlUsername ||
           homeServerConfiguration.mysqlConfiguration?.password !== mysqlPassword ||

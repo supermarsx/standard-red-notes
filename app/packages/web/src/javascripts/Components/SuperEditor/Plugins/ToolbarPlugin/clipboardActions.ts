@@ -288,7 +288,7 @@ export async function pasteAsImage(editor: LexicalEditor): Promise<void> {
   if (!blob) {
     return
   }
-  let dataUrl = ''
+  let dataUrl: string
   try {
     dataUrl = await blobToDataURL(blob)
   } catch {

@@ -405,7 +405,7 @@ export class LinkingController extends AbstractViewController implements Interna
       return true
     }
 
-    let didLink = false
+    let didLink: boolean
 
     if (isNote(item)) {
       if (isNote(itemToLink) && !this.isEntitledToNoteLinking) {

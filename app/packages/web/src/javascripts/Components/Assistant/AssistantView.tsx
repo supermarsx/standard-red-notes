@@ -447,7 +447,7 @@ const AssistantView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       let retainForCleanup = false
       if (claim?.durable && workspacePersistence === 'durable') {
         let deletionDurable = false
-        let retired = false
+        let retired: boolean
         try {
           retired = await claim.retirePersistence(tabId, async () => {
             deletionDurable = await deleteAssistantChatHistory(application.storage, loadedChatAccountScope, tabId)

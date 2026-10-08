@@ -333,7 +333,7 @@ export class EncryptedYjsProvider implements Provider {
     if (!this.options) {
       return true
     }
-    let valid = false
+    let valid: boolean
     try {
       valid = this.options.validateAttachment()
     } catch {
@@ -378,7 +378,7 @@ export class EncryptedYjsProvider implements Provider {
       return
     }
     if (this.options) {
-      let valid = false
+      let valid: boolean
       try {
         valid = this.options.validateAttachment()
       } catch {

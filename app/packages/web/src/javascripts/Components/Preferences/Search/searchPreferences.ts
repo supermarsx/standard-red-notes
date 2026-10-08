@@ -74,7 +74,7 @@ const scoreCandidate = (query: string, candidate: string): number => {
     return 100
   }
 
-  let score = 0
+  let score: number
 
   if (target.startsWith(query)) {
     score = 20 + WORD_START_BONUS

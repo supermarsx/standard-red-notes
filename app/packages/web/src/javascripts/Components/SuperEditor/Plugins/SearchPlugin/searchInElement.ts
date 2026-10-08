@@ -67,7 +67,7 @@ export function searchInElement(element: HTMLElement, searchQuery: string, isCas
 
     for (; textCharIndex < nodeTextLength; textCharIndex++) {
       const textChar = nodeText[textCharIndex]
-      let queryChar = query[queryCharIndex]
+      const queryChar = query[queryCharIndex]
 
       const didMatchCharacters = textChar === queryChar
       if (!didMatchCharacters) {
@@ -83,7 +83,6 @@ export function searchInElement(element: HTMLElement, searchQuery: string, isCas
         const prevQueryChar = currentQueryIndex > 0 ? query[currentQueryIndex - 1] : null
         if (textChar === prevQueryChar) {
           queryCharIndex = currentQueryIndex - 1
-          queryChar = prevQueryChar
         } else {
           continue
         }
