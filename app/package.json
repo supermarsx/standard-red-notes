@@ -57,6 +57,8 @@
     "@standardnotes/editor-kit": "2.3.1",
     "axios@npm:^1.6.1": "1.19.0",
     "body-parser@npm:1.20.1": "1.20.6",
+    "dompurify@npm:^3.3.3": "3.4.16",
+    "express@npm:^4.22.1": "4.22.2",
     "follow-redirects@npm:^1.0.0": "1.16.0",
     "form-data": "4.0.6",
     "jws@npm:^3.2.2": "3.2.3",
