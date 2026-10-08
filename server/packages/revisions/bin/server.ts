@@ -17,6 +17,18 @@ const container = new ContainerConfigLoader()
 void container.load().then(async (container) => {
   const env: Env = container.get(TYPES.Revisions_Env)
 
+  // Standard Red Notes: honour the operator's configured body limit, as every
+  // other service does. `json()` with no `limit` is body-parser's own 100 KB
+  // default, so HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES read as enforced here and was
+  // not. Inert in practice today — this service exposes no POST/PUT/PATCH route at
+  // all (revisions are written by the worker from domain events, not over HTTP) —
+  // and that is exactly why it is worth setting rather than leaving: the first
+  // write route added here would otherwise inherit a 100 KB ceiling nobody chose,
+  // on a service whose payloads are whole note snapshots.
+  const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
+    ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
+    : '50mb'
+
   const server = new InversifyExpressServer(container)
 
   server.setConfig((app) => {
@@ -24,8 +36,8 @@ void container.load().then(async (container) => {
       response.setHeader('X-Revisions-Version', container.get(TYPES.Revisions_VERSION))
       next()
     })
-    app.use(json())
-    app.use(urlencoded({ extended: true }))
+    app.use(json({ limit: requestPayloadLimit }))
+    app.use(urlencoded({ extended: true, limit: requestPayloadLimit }))
     app.use(cors())
   })
 

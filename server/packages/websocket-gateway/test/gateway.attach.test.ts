@@ -86,6 +86,7 @@ import {
 import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
 import {
   digestSyncCommandBody,
+  MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_QUEUED_BINARY_BYTES,
   MAX_SYNC_QUEUED_BYTES,
   MAX_SYNC_QUEUED_FRAMES,
@@ -2909,15 +2910,21 @@ describe('authenticated /sockets/sync command plane', () => {
    *
    * The relationship is exact and not a near miss: a full binary frame carries a
    * 262,144-byte chunk, and TWO chunks are 524,288 bytes -- byte for byte the
-   * whole of `MAX_SYNC_QUEUED_BYTES` -- so any header at all puts two frames over
-   * it. There was never a header short enough for two frames to fit.
+   * whole of the old ceiling, one `MAX_SYNC_FRAME_BYTES` -- so any header at all
+   * puts two frames over it. There was never a header short enough for two frames
+   * to fit. (The JSON plane's own allowance has since been widened the same way,
+   * so `MAX_SYNC_QUEUED_BYTES` no longer names that figure.)
    */
   it('carries a whole file whose binary frames are pipelined, without closing the socket', async () => {
-    // The relationship the defect was: the JSON plane's allowance cannot hold
-    // two binary frames, and the binary plane's own allowance holds the depth
-    // the queue advertises.
-    expect(MAX_SYNC_QUEUED_BYTES).toBeLessThan(2 * MAX_FILE_BINARY_FRAME_BYTES)
+    // The relationship the defect was. The old ceiling for BOTH planes was ONE
+    // `MAX_SYNC_FRAME_BYTES`, which cannot hold two binary frames; the binary
+    // plane's own allowance now holds the depth the queue advertises. The old
+    // ceiling is named as the per-frame constant it was rather than as
+    // `MAX_SYNC_QUEUED_BYTES`, because that one has since been widened the same
+    // way (it was one frame on the JSON plane too).
+    expect(MAX_SYNC_FRAME_BYTES).toBeLessThan(2 * MAX_FILE_BINARY_FRAME_BYTES)
     expect(MAX_SYNC_QUEUED_BINARY_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_FILE_BINARY_FRAME_BYTES)
+    expect(MAX_SYNC_QUEUED_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_SYNC_FRAME_BYTES)
 
     const stored = new Map<string, Uint8Array>()
     const payload = new Uint8Array(MAX_FILE_CHUNK_BYTES * 6)

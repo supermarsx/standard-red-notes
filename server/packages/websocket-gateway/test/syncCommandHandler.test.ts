@@ -18,6 +18,7 @@ import {
   type SyncSocket,
   type SyncInviteEventsAdapter,
 } from '../src/syncCommandHandler.js'
+import { DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS } from '../src/gateway.js'
 import { type SyncFilesAdapter } from '../src/filesSession.js'
 import {
   encodeFileBinaryFrame,
@@ -3637,10 +3638,14 @@ describe('sync files ingress queue', () => {
 
     const first = uploadFrame(0)
     const second = uploadFrame(1)
-    // The exact arithmetic that used to refuse the second frame: two chunks are
-    // the whole JSON allowance, so the pair cannot fit under it whatever the
-    // header costs.
-    expect(first.byteLength + second.byteLength).toBeGreaterThan(MAX_SYNC_QUEUED_BYTES)
+    // The exact arithmetic that used to refuse the second frame. The old ceiling
+    // was ONE `MAX_SYNC_FRAME_BYTES`, and two chunks are that figure exactly
+    // (2 x 262,144 = 524,288), so the pair could not fit under it whatever the
+    // header cost -- and now it fits in this plane's own allowance. The old
+    // ceiling is named as the per-frame constant it was, not as
+    // `MAX_SYNC_QUEUED_BYTES`, because that one has since moved.
+    expect(2 * MAX_FILE_CHUNK_BYTES).toBe(MAX_SYNC_FRAME_BYTES)
+    expect(first.byteLength + second.byteLength).toBeGreaterThan(MAX_SYNC_FRAME_BYTES)
     expect(first.byteLength + second.byteLength).toBeLessThanOrEqual(MAX_SYNC_QUEUED_BINARY_BYTES)
 
     // No event loop turn between these two: the first is provably still queued.
@@ -3688,21 +3693,30 @@ describe('sync files ingress queue', () => {
     handler.disconnect()
   })
 
-  it('does not charge a binary frame against the JSON command plane', async () => {
+  /**
+   * The two planes are counted separately, and this is the direction in which
+   * that still decides an outcome.
+   *
+   * The JSON plane's allowance is now 8 x `MAX_SYNC_FRAME_BYTES` = 4,194,304,
+   * which is LARGER than the file plane's 8 x `MAX_FILE_BINARY_FRAME_BYTES` =
+   * 2,129,984. So the original direction -- a queued binary frame pushing a
+   * command frame over the JSON allowance -- is no longer reachable with legal
+   * frames at all (the whole 8-frame depth, in any mix, is at most 4,194,304 and
+   * only ever exactly that when every frame is a maximum JSON frame). Asserting
+   * it would be asserting something that cannot fail, so this case tests the
+   * direction that CAN: a queued command frame must not eat into the file plane's
+   * allowance, which is the smaller of the two and therefore the one a shared
+   * counter would overrun.
+   */
+  it('does not charge a queued command frame against the file plane', async () => {
     const { adapter, release } = stallingFilesAdapter()
     const { handler, socket } = await uploadReady(adapter)
 
-    // One binary frame is queued and stuck. A JSON command frame whose own size
-    // is legal for its own plane must still be admitted: charging it the binary
-    // frame's bytes is how an ordinary sync command sent DURING a file transfer
-    // used to close the socket on its own.
-    const frame = uploadFrame(0)
-    handler.enqueueBinary(frame, frame.byteLength)
-    // A PING's payload must be EMPTY (`parseSyncClientFrame`), so the size is
+    // A PING's payload must be EMPTY (`parseSyncClientFrame`), so its size is
     // DECLARED rather than padded: `enqueue(raw, rawBytes)` is charged its
-    // `rawBytes` argument, which is exactly the wire size the gateway passes in.
-    // The whole JSON allowance is legal for the JSON plane; under one shared
-    // counter the queued binary frame made it a close.
+    // `rawBytes` argument, which is exactly the wire size the gateway passes in
+    // (`gateway.ts` -> `rawDataByteLength(data)`), and one maximum frame is the
+    // worst case the JSON plane has to admit.
     const ping = JSON.stringify({
       version: 1,
       channel: 'sync',
@@ -3713,16 +3727,144 @@ describe('sync files ingress queue', () => {
       payloadLength: syncPayloadLength({}),
       payload: {},
     })
-    handler.enqueue(ping, MAX_SYNC_QUEUED_BYTES)
+    const binaryFrameCount = MAX_SYNC_QUEUED_FRAMES - 1
+    const binaryFrameBytes = uploadFrame(0).byteLength
+    // The arithmetic a shared counter would refuse: the binary frames alone fit
+    // this plane's allowance, and the command frame's bytes on top of them do not.
+    expect(binaryFrameCount * binaryFrameBytes).toBeLessThanOrEqual(MAX_SYNC_QUEUED_BINARY_BYTES)
+    expect(MAX_SYNC_FRAME_BYTES + binaryFrameCount * binaryFrameBytes).toBeGreaterThan(MAX_SYNC_QUEUED_BINARY_BYTES)
 
-    // Admission is synchronous, so the old shared counter closed the socket on
-    // this line. The ingress queue is one serialized chain, so the PONG cannot
-    // be ANSWERED until the stalled binary frame lets go -- which is why the
-    // release comes first and the PONG is awaited after it.
+    // One tick, no microtask in between, so the command frame is provably still
+    // charged when the last binary frame is offered.
+    handler.enqueue(ping, MAX_SYNC_FRAME_BYTES)
+    for (let index = 0; index < binaryFrameCount; index++) {
+      const frame = uploadFrame(index)
+      handler.enqueueBinary(frame, frame.byteLength)
+    }
+
+    // Admission is synchronous, so a shared counter closed the socket above.
     expect(socket.closes).toEqual([])
     release()
-    await vi.waitFor(() => expect(socket.frames.map((candidate) => candidate.type)).toContain('PONG'))
+    await vi.waitFor(() =>
+      expect(socket.frames.filter((frame) => frame.type === 'FILES_CHUNK_ACK')).toHaveLength(binaryFrameCount),
+    )
+    expect(socket.frames.map((candidate) => candidate.type)).toContain('PONG')
     expect(socket.closes).toEqual([])
+    handler.disconnect()
+  })
+})
+
+/**
+ * The ingress queue again, on the JSON COMMAND plane.
+ *
+ * `MAX_SYNC_QUEUED_FRAMES` is 8 here too, and `MAX_SYNC_QUEUED_BYTES` used to be
+ * `MAX_SYNC_FRAME_BYTES` -- ONE frame. So the advertised depth was really one on
+ * this plane as well, and the arithmetic is the same shape as the binary plane's:
+ * a ceiling equal to one frame means one frame of concurrency, and overrunning it
+ * closed the socket 1013 rather than pausing it.
+ *
+ * The window is long. `queuedBytes` is released only once a frame is FULLY
+ * processed, and `process` awaits `handleCommand`, which awaits TWO
+ * `authorizeCommand` calls, the durable `backend.execute` and the lease release --
+ * bounded only by `SYNC_BACKEND_TIMEOUT_MS` (15 s). Measured live on a single
+ * container, an ordinary SYNC_ITEMS COMMAND takes 47 ms from write to COMMITTED,
+ * and for all of it a 400 KB command holds 409,902 of the old 524,288 bytes, so
+ * any further frame above 114,386 bytes was refused -- and refused means
+ * `failAndClose`, not a wait, so one more ordinary frame took every lane on the
+ * socket down. Both frames are individually legal (each under
+ * `MAX_SYNC_FRAME_BYTES`) and together far under the command plane's token bucket
+ * (`DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity`, 2 MiB), so nothing else
+ * in the stack objected.
+ *
+ * WHAT IS PROVEN WHERE. The refusal is proven HERE, deterministically. It could
+ * NOT be reproduced live on a single container -- the gateway did not read the
+ * second frame until the first was released, at gaps of 0, 1, 2, 5, 10 and 20 ms
+ * inside that 47 ms window -- because a DirectCall backend over synchronous
+ * better-sqlite3 resolves through microtasks alone and never returns libuv to the
+ * poll phase, so no socket read is delivered. The binary plane's overlap WAS
+ * reproduced live, and the difference is that a file chunk's `fs` write is real
+ * I/O. On compose the same await is a real gRPC round trip; that the window is
+ * open there is an inference from those measurements, not a measurement of
+ * compose.
+ *
+ * Nothing in the suite ran two lanes concurrently, which is why no existing case
+ * saw it. These drive `enqueue` directly, with no event loop turn between the
+ * calls, for the same reason the binary cases do: the in-process socket harness in
+ * `gateway.attach.test.ts` cannot hold a queue depth above one.
+ */
+describe('sync command ingress queue', () => {
+  it('admits two ordinary command frames whose combined size exceeds one frame', async () => {
+    // The relationship: the queue's byte allowance now covers the frame depth it
+    // advertises, so the FRAME count is what binds.
+    expect(MAX_SYNC_QUEUED_BYTES).toBeGreaterThanOrEqual(MAX_SYNC_QUEUED_FRAMES * MAX_SYNC_FRAME_BYTES)
+
+    const { handler, socket } = await authenticatedHandler()
+    const first = commandFrame('command-inflight', 1, {
+      api: '20200115',
+      items: [],
+      padding: 'x'.repeat(400 * 1024),
+    })
+    const second = commandFrame('command-concurrent', 2, {
+      api: '20200115',
+      items: [],
+      padding: 'x'.repeat(150 * 1024),
+    })
+    const firstBytes = Buffer.byteLength(rawFrame(first))
+    const secondBytes = Buffer.byteLength(rawFrame(second))
+    // Each is legal on its own, and the pair is nowhere near the plane's token
+    // bucket -- only the queue ever objected.
+    expect(firstBytes).toBeLessThanOrEqual(MAX_SYNC_FRAME_BYTES)
+    expect(secondBytes).toBeLessThanOrEqual(MAX_SYNC_FRAME_BYTES)
+    expect(firstBytes + secondBytes).toBeGreaterThan(MAX_SYNC_FRAME_BYTES)
+    expect(firstBytes + secondBytes).toBeLessThan(DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS.byteCapacity)
+
+    // No event loop turn between these two: the first is provably still queued,
+    // because admission is synchronous and release waits for full processing.
+    enqueue(handler, first)
+    enqueue(handler, second)
+
+    expect(socket.closes).toEqual([])
+    await vi.waitFor(() =>
+      expect(socket.frames.filter((frame) => frame.type === 'COMMITTED').map((frame) => frame.commandId)).toEqual([
+        'command-inflight',
+        'command-concurrent',
+      ]),
+    )
+    expect(socket.closes).toEqual([])
+    handler.disconnect()
+  })
+
+  it('admits the whole advertised depth, then refuses on the FRAME count and names the command plane', async () => {
+    const metrics = { increment: vi.fn() }
+    const { handler, socket } = await authenticatedHandler({ metrics })
+
+    // A PING's payload must be EMPTY (`parseSyncClientFrame`), so each frame's
+    // size is DECLARED rather than padded: `enqueue(raw, rawBytes)` is charged its
+    // `rawBytes` argument, which is exactly the wire size the gateway passes in
+    // (`gateway.ts` -> `rawDataByteLength(data)`). Declaring the per-frame maximum
+    // is the worst case the queue has to admit.
+    const pingAt = (sequence: number): string =>
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'PING',
+        requestId: `ping-depth-${sequence}`,
+        commandId: `ping-depth-${sequence}`,
+        sequence,
+        payloadLength: syncPayloadLength({}),
+        payload: {},
+      })
+
+    for (let index = 0; index < MAX_SYNC_QUEUED_FRAMES; index++) {
+      handler.enqueue(pingAt(index + 1), MAX_SYNC_FRAME_BYTES)
+    }
+    expect(socket.closes).toEqual([])
+    expect(metrics.increment).not.toHaveBeenCalledWith('backpressure', 'ingress')
+
+    // The limit is still a limit, and the refusal still names THIS plane.
+    handler.enqueue(pingAt(MAX_SYNC_QUEUED_FRAMES + 1), MAX_SYNC_FRAME_BYTES)
+    expect(metrics.increment).toHaveBeenCalledWith('backpressure', 'ingress')
+    expect(socket.closes).toEqual([{ code: 1013, reason: 'Sync command queue is full.' }])
     handler.disconnect()
   })
 })

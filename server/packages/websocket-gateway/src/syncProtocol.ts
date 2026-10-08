@@ -37,14 +37,69 @@ export const MAX_SYNC_BUFFERED_BYTES = 256 * 1024
  */
 export const MAX_SYNC_EGRESS_BUFFERED_BYTES = MAX_FILE_TRANSFER_CREDIT_BYTES + MAX_FILE_BINARY_FRAME_BYTES
 export const MAX_SYNC_QUEUED_FRAMES = 8
-export const MAX_SYNC_QUEUED_BYTES = MAX_SYNC_FRAME_BYTES
+/**
+ * The JSON command plane's ingress-queue budget: the frame depth the queue
+ * advertises, at this plane's own per-frame ceiling.
+ *
+ * WHY NOT ONE FRAME. This was `MAX_SYNC_FRAME_BYTES` — exactly ONE maximum frame
+ * — while `MAX_SYNC_QUEUED_FRAMES` advertised eight. A ceiling equal to one frame
+ * means one frame of concurrency, so the advertised depth was a fiction here for
+ * the same arithmetic reason it was on the binary plane, and overrunning it did
+ * not pause the socket, it closed it 1013.
+ *
+ * HOW LONG THE WINDOW IS. `queuedBytes` is released only once a frame is FULLY
+ * processed, and `process` awaits `handleCommand`, which awaits TWO
+ * `authorizeCommand` calls, the durable `backend.execute` and the lease release —
+ * bounded only by {@link SYNC_BACKEND_TIMEOUT_MS} (15 s). Measured live on a
+ * single container, an ordinary `SYNC_ITEMS` COMMAND took 47 ms from write to
+ * COMMITTED. For every millisecond of that, a 400 KB command held 409,902 of the
+ * 524,288 bytes, so any further frame above 114,386 bytes was refused — and the
+ * refusal is `failAndClose`, not a wait, so one more ordinary frame took EVERY
+ * lane on the socket down (SYNC_ITEMS, API_RPC, collaboration, invites, files,
+ * status) on a healthy connection. Each frame was individually legal (under
+ * `MAX_SYNC_FRAME_BYTES`, so `ws` and the frame check passed it) and the pair was
+ * nowhere near this plane's token bucket, so nothing else objected.
+ *
+ * WHERE THAT WINDOW IS ACTUALLY OPEN, measured rather than assumed. The refusal is
+ * proven at this layer: `syncCommandHandler.test.ts` ->
+ * 'admits two ordinary command frames whose combined size exceeds one frame'
+ * closes 1013 without this widening. It could NOT be reproduced live on a SINGLE
+ * container: a 400 KB COMMAND followed by a 153,904-byte one at gaps of 0, 1, 2,
+ * 5, 10 and 20 ms inside that 47 ms window survived every time, because the
+ * gateway did not READ the second frame until the first was released (admission is
+ * synchronous, so a read would have closed the socket at once and never did). The
+ * difference from the binary plane, where the overlap WAS reproduced live, is that
+ * a file chunk's `fs` write is real I/O and a DirectCall backend over synchronous
+ * better-sqlite3 is not: an await that resolves through microtasks alone never
+ * returns libuv to the poll phase, so no socket read is delivered. On compose the
+ * same await is a real gRPC round trip, which does reach the poll phase — so the
+ * window is expected to be open there. That last step is an inference from the
+ * three measurements above, not a measurement of compose itself.
+ *
+ * WHAT STILL PROTECTS THIS PLANE at the new figure, in the order a client meets
+ * them: the per-frame ceiling `MAX_SYNC_FRAME_BYTES` is unchanged, and `ws`'s
+ * `maxPayload` above it; then the plane's own token bucket,
+ * `DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS` — 2 MiB of burst and 512 KiB/s
+ * sustained, with 32 frames / 16 per second. That bucket is now the BINDING
+ * protection against bulk JSON, because 2 MiB of burst is less than this
+ * allowance: a client cannot fill the queue by volume before the bucket refuses
+ * it, and a bucket refusal is the better-named outcome (metric
+ * `rate_limit/ingress`, close 1008 naming the plane) than a queue kill. What
+ * remains is a hard bound on UN-PROCESSED ingress a socket can make the gateway
+ * retain, and the FRAME count is what binds it — which is what the queue says.
+ * Overrunning it still ends in `backpressure/ingress` and 1013 'Sync command
+ * queue is full.', naming this plane and no other.
+ */
+export const MAX_SYNC_QUEUED_BYTES = MAX_SYNC_QUEUED_FRAMES * MAX_SYNC_FRAME_BYTES
 /**
  * The FILES_V1 BINARY plane's own ingress-queue budget, kept separate from the
  * JSON command plane's {@link MAX_SYNC_QUEUED_BYTES} above.
  *
  * WHY THIS EXISTS. The ingress queue admits `MAX_SYNC_QUEUED_FRAMES` frames,
  * but every frame of either plane used to be charged against one 512 KiB
- * allowance -- `MAX_SYNC_FRAME_BYTES`, which is the largest single JSON frame.
+ * allowance -- `MAX_SYNC_QUEUED_BYTES` as it then was, a single
+ * `MAX_SYNC_FRAME_BYTES`, i.e. the largest single JSON frame. (That plane's own
+ * allowance has since been widened the same way; see it above.)
  * A binary frame is `MAX_FILE_BINARY_FRAME_BYTES` (266,248 bytes), so TWO of
  * them are 532,496 and the second one was refused: `failAndClose('BACKPRESSURE',
  * 'File transfer queue is full.', 1013)`. The 8-frame allowance was therefore

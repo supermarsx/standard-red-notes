@@ -80,6 +80,22 @@ void container
     const env: Env = new Env()
     env.load()
 
+    // Standard Red Notes: honour the operator's configured body limit here too.
+    // `json()` with no `limit` uses body-parser's own default of 100 KB, so
+    // HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES read as enforced on this service and was
+    // not: api-gateway, syncing-server, files and home-server all pass it and auth
+    // alone silently kept 100 KB, making auth the narrowest link in a chain whose
+    // other links (nginx `client_max_body_size 0`, the api-gateway's own 50 MB
+    // `json`) all pass far more. Nothing requests it: no auth POST/PUT/PATCH route
+    // is designed to carry more than a few KB — the largest is `PUT /v1/settings`,
+    // whose values are tokens and flags, and the typed domain objects cap labels,
+    // names and URLs at 255-2048 characters — so this is the knob taking effect
+    // rather than a new allowance anybody asked for. Request RATE is governed
+    // upstream by the api-gateway's rate limiter, not by this parser.
+    const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
+      ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
+      : '50mb'
+
     const server = new InversifyExpressServer(container)
 
     server.setConfig((app) => {
@@ -87,8 +103,8 @@ void container
         response.setHeader('X-Auth-Version', container.get(TYPES.Auth_VERSION))
         next()
       })
-      app.use(json())
-      app.use(urlencoded({ extended: true }))
+      app.use(json({ limit: requestPayloadLimit }))
+      app.use(urlencoded({ extended: true, limit: requestPayloadLimit }))
       app.use(cookieParser() as never)
       app.use(cors() as never)
     })
