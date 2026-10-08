@@ -980,7 +980,7 @@ describe('buildBrowserSection output discipline', () => {
     expect(report).toContain('- User agent string: withheld from this report on purpose')
     expect(report).toContain('- Local database open test: operator-triggered on the Checks sub-tab')
     expect(report).toContain('## Browser')
-    expect(report).toContain('- Engine: chromium')
+    expect(report).toContain('- [v] Engine: chromium')
   })
 
   it('builds the five blocks it always builds, in order', () => {

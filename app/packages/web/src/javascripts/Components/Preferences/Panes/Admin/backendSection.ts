@@ -1003,6 +1003,53 @@ const READ_FAILURE_STEPS: Record<BackendReadFailure, string[]> = {
   ],
 }
 
+/**
+ * *** THE TWO REMEDIES THIS SECTION'S FINDINGS SHIPPED WITHOUT. ***
+ *
+ * The report now prints the remedy as the WHOLE of what a finding says to
+ * someone reading a paste, so a finding with none is indistinguishable from one
+ * nobody has advice for. Neither of these is a configuration fault, and both say
+ * so: one is an unverified claim that is closed by attempting the thing, the
+ * other by stamping the image.
+ */
+function remedyForUnverifiedFileTransfer(): Remedy {
+  return {
+    code: 'FILE_TRANSFER_UNVERIFIED',
+    summary:
+      'Nothing here is misconfigured as far as this screen can see, and nothing here establishes that a transfer works either. One real upload and read-back settles it, and no row on this screen can.',
+    steps: [
+      'Attach a small file to a note in this app and open it again. That exercises the whole authorized path — a valet token minted at auth, presented to the files service, accepted, and a ranged read completed — which is the part no probe on this screen touches.',
+      'If that fails, read the files rows above as "the process is up and its storage answered" and nothing more. A credential the far end refuses and a stalled range request are both invisible to an unauthenticated readiness probe.',
+      'Check VALET_TOKEN_SECRET and AUTH_JWT_SECRET agree across auth and the files service only where those services are configured SEPARATELY. On the images this repo ships the entrypoint exports both keys once, unprefixed, before supervisord starts, so a disagreement cannot arise there and chasing one is a dead end.',
+    ],
+    effort: 'device',
+    basis: 'verified',
+    because: [
+      'The files readiness route answered, which rules out the process being down and its storage or Redis being unreachable — and establishes nothing about an authorized transfer.',
+      'This finding is raised whenever the files probe is reported at all, including when it reads perfectly. It is the absence of a stronger test, not a symptom.',
+    ],
+  }
+}
+
+function remedyForUnverifiableProbeDepth(): Remedy {
+  return {
+    code: 'PROBE_DEPTH_UNVERIFIABLE',
+    summary:
+      'Stamp the image with its revision and this resolves itself. It cannot be fixed on the running container: the identity is only published when the baked marker and the runtime value agree, so setting the variable now changes nothing.',
+    steps: [
+      'Rebuild AND restart with the revision in the environment for the whole command: SRN_DEPLOY_REVISION=$(git rev-parse HEAD) docker compose up -d --build. The Environment & setup section carries the same instruction against the identity row it belongs to, and this finding clears with it.',
+      'Until then, read every "answering" on this screen as "answered something". A service whose readiness route 404s is re-probed for liveness and still reports ok, with the distinction in a free-form field this pane refuses to read because it can carry an address.',
+      'Do not treat this as a service fault. Nothing is reported down by it: it is the pane saying it cannot establish how deep its own probes went.',
+    ],
+    effort: 'rebuild',
+    basis: 'verified',
+    because: [
+      'This build recorded no revision, so nothing here establishes that the running image is new enough for the shallow probe path to be impossible.',
+      'The two unknowns compound: an unverifiable probe depth on an unidentifiable build. Either one alone would be reportable; together they are not.',
+    ],
+  }
+}
+
 function remedyForUnreadableStatus(kind: BackendReadFailure): Remedy {
   return {
     code: 'BACKEND_STATUS_UNREADABLE',
@@ -1870,6 +1917,7 @@ function buildCommunicationBlock(
           cannotConfirm: PROBE_CANNOT_CONFIRM,
           necessaryCondition: true,
         }),
+        remedy: remedyForUnverifiedFileTransfer(),
       }),
     )
   }
@@ -1903,6 +1951,7 @@ function buildCommunicationBlock(
           cannotConfirm: 'whether any given probe verified readiness or only liveness',
           necessaryCondition: false,
         }),
+        remedy: remedyForUnverifiableProbeDepth(),
       }),
     )
   }

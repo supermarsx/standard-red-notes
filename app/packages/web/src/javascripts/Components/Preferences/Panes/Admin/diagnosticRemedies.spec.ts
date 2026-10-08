@@ -541,8 +541,10 @@ describe('RemedyEffort', () => {
     'peer-service',
     'device',
     'client-update',
+    'upgrade-server',
     'none',
     'wait',
+    'no-action',
   ] as const satisfies readonly RemedyEffort[]
 
   it('labels and tones every member, with no two members sharing a label', () => {
@@ -574,6 +576,35 @@ describe('RemedyEffort', () => {
     // the other two the reader can act on without leaving the app.
     expect(EFFORT_TONE['account-setting']).toBe('good')
     expect(EFFORT_TONE['account-setting']).not.toBe(EFFORT_TONE.none)
+  })
+
+  /**
+   * t-diagux. Two members were added so that every finding in the pane could say
+   * what to DO: the ranked action list prints the remedy as the whole of what a
+   * finding says to someone reading a paste, and 17 findings carried none.
+   *
+   * `upgrade-server` had to borrow `client-update`, whose label sends the
+   * operator after a client release that would change nothing —
+   * `ACCOUNT_STORAGE_ENDPOINT_ABSENT` is a route the running SERVER does not
+   * have. `no-action` had to borrow `none` ("Not fixable here", `bad`) or `wait`
+   * ("Transient"), and neither is right for a finding reporting a state that is
+   * correct: an account that has never uploaded a file has nothing to fix and
+   * nothing to look at again.
+   */
+  it('separates a newer-server fix from a client release, and "nothing to do" from a dead end', () => {
+    expect(EFFORT_LABEL['upgrade-server']).toBe('Newer server')
+    expect(EFFORT_LABEL['upgrade-server']).not.toBe(EFFORT_LABEL['client-update'])
+    expect(EFFORT_LABEL['upgrade-server']).not.toBe(EFFORT_LABEL.rebuild)
+    // A build the reader has to deploy, like the other two of its kind.
+    expect(EFFORT_TONE['upgrade-server']).toBe('warn')
+
+    expect(EFFORT_LABEL['no-action']).toBe('Nothing to do')
+    expect(EFFORT_LABEL['no-action']).not.toBe(EFFORT_LABEL.none)
+    expect(EFFORT_LABEL['no-action']).not.toBe(EFFORT_LABEL.wait)
+    // NOT the dead-end tone and NOT the look-again tone: there is nothing wrong.
+    expect(EFFORT_TONE['no-action']).toBe('good')
+    expect(EFFORT_TONE['no-action']).not.toBe(EFFORT_TONE.none)
+    expect(EFFORT_TONE['no-action']).not.toBe(EFFORT_TONE.wait)
   })
 })
 

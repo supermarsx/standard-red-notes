@@ -4,6 +4,7 @@ import { join } from 'path'
 import {
   blockWorstVerdict,
   buildSectionModel,
+  describeCensus,
   diagnosticFinding,
   diagnosticRow,
   ENV_NAME,
@@ -12,10 +13,18 @@ import {
   evidenceProxy,
   isBlockEmpty,
   LANE_REJECTION_STATUSES,
+  NOT_PUBLISHED,
   outcomesForSection,
   PERCENT_BUCKETS,
   PROXY_RELATIONS,
+  readingCensus,
+  readingOf,
+  READING_MARKER,
+  READING_MEANING,
+  READING_TAG,
   reportLine,
+  reportRow,
+  ROW_READINGS,
   safeConstant,
   safeCount,
   safeDuration,
@@ -38,6 +47,7 @@ import {
   type DiagnosticBlock,
   type DiagnosticRow,
   type Evidence,
+  type SafeValue,
   type SectionTaggedOutcome,
   type Verdict,
 } from './diagnosticsSections'
@@ -796,7 +806,7 @@ describe('buildSectionModel', () => {
     expect(report).toContain('## WebSocket')
     expect(report).toContain('- Worst verdict: broken')
     expect(report).toContain('### Lane')
-    expect(report).toContain('- Gateway: attached')
+    expect(report).toContain('- [v] Gateway: attached')
     expect(report).toContain('- Finding: PUSH_BRIDGE_UNBOUND broken')
     expect(report).toContain('- Protocol version: 1')
     // Prose stays on screen. `note`, `title` and `detail` are the three fields a
@@ -864,6 +874,225 @@ describe('buildSectionModel', () => {
  * sections. A renamed file, a moved directory or a `.tsx` section would otherwise
  * drop silently out of the corpus and leave this reading green.
  */
+/**
+ * *** THE THREE SILENCES, AS A CLOSED VALUE. ***
+ *
+ * "We asked and got a value", "we asked and got nothing" and "nothing publishes
+ * this" are three different facts. The pane already modelled all three carefully
+ * and then printed them as two sentences a reader had to parse — on a realistic
+ * deployment, 49 of 239 report rows read exactly `not reported` with nothing in
+ * the line saying which silence it was or why.
+ *
+ * The derivation is from the row's own already-safe VALUE, which is why these
+ * tests drive it through the constructors rather than by passing strings: a
+ * reading stored separately from the value is a reading that can disagree with
+ * what the row prints.
+ */
+describe('readingOf', () => {
+  it('reads a value as answered', () => {
+    expect(readingOf(safeYesNo(true))).toBe('answered')
+    expect(readingOf(safeYesNo(false))).toBe('answered')
+    expect(readingOf(safeCount(0))).toBe('answered')
+    expect(readingOf(safeState(true, 'attached', 'not attached'))).toBe('answered')
+  })
+
+  it('reads an absent field as asked-and-nothing-came-back', () => {
+    expect(readingOf(safeYesNo(undefined))).toBe('unanswered')
+    expect(readingOf(safeCount(undefined))).toBe('unanswered')
+    expect(readingOf(safePresence(undefined))).toBe('unanswered')
+    expect(readingOf(safeEnum(undefined, ['a']))).toBe('unanswered')
+    expect(readingOf(safeDuration(undefined))).toBe('unanswered')
+  })
+
+  it('reads a field with no producer as its own third state', () => {
+    expect(readingOf(NOT_PUBLISHED)).toBe('unpublished')
+    expect(readingOf(NOT_PUBLISHED)).not.toBe('unanswered')
+  })
+
+  /**
+   * *** A REFUSED VALUE IS A READING, NOT A SILENCE. *** The server answered and
+   * the answer was refused on the way out. Counting it as a silence would report a
+   * misbehaving server as a quiet one, which is the flattering direction.
+   */
+  it('reads a refused or unrecognised value as answered', () => {
+    expect(readingOf(safeEnum('redis://admin:hunter2@host:6379', ['grpc']))).toBe('answered')
+    expect(readingOf(safeEnvName('not a variable name'))).toBe('answered')
+    expect(readingOf(safeToken('nope', DEPLOY_REVISION))).toBe('answered')
+  })
+
+  /**
+   * *** MATCHED BY PREFIX, ANCHORED AT THE START. *** Several real rows join a
+   * qualifier to a sentinel, and at least one real row CONTAINS the words "not
+   * reported" inside a value that is itself a reading — the internal-secret row's
+   * `not set (threshold not established: no lane decision reported)`. A substring
+   * match would call that a silence.
+   */
+  it('does not call a value a silence because it mentions one', () => {
+    expect(readingOf(safeTokens(safePresence(false), safeConstant('(threshold not reported)')))).toBe('answered')
+    expect(readingOf(safeTokens(safeConstant('no endpoint publishes this'), safeConstant('(yet)')))).toBe('unpublished')
+    expect(readingOf(safeTokens(safeConstant('not reported'), safeConstant('(by this build)')))).toBe('unanswered')
+  })
+})
+
+describe('readingCensus and describeCensus', () => {
+  const rowsOf = (...values: SafeValue[]) =>
+    values.map((value, index) =>
+      diagnosticRow({
+        label: safeConstant(`Row ${index}` as 'Row'),
+        value,
+        verdict: 'informational',
+        evidence: EVIDENCE_DIRECT,
+        note: 'n',
+      }),
+    )
+
+  it('always carries all three keys, so a zero is a reading', () => {
+    const census = readingCensus(rowsOf(safeYesNo(true)))
+
+    expect(census).toEqual({ answered: 1, unanswered: 0, unpublished: 0 })
+  })
+
+  it('counts a mixed block correctly', () => {
+    const census = readingCensus(rowsOf(safeYesNo(true), safeCount(undefined), safeCount(undefined), NOT_PUBLISHED))
+
+    expect(census).toEqual({ answered: 1, unanswered: 2, unpublished: 1 })
+  })
+
+  /**
+   * The per-block census omits readings at zero — it is read beside the rows
+   * themselves, where an absent group is visible. The REPORT's census names all
+   * three, zeros included, because nobody reading a paste can see what is absent.
+   */
+  it('names only the readings present, and says so when there are no rows', () => {
+    expect(describeCensus(readingCensus(rowsOf(safeYesNo(true))))).toBe('1 answered')
+    expect(describeCensus(readingCensus(rowsOf(safeYesNo(true), safeCount(undefined))))).toBe(
+      '1 answered · 1 no answer',
+    )
+    expect(describeCensus(readingCensus([]))).toBe('no rows')
+  })
+})
+
+describe('reportRow', () => {
+  const row = (value: SafeValue) =>
+    diagnosticRow({
+      label: safeConstant('Ticket minting right now'),
+      value,
+      verdict: 'informational',
+      evidence: EVIDENCE_DIRECT,
+      note: 'n',
+    })
+
+  it('marks each of the three readings with its own marker', () => {
+    expect(String(reportRow(row(safeState(true, 'issuing', 'refusing'))))).toBe(
+      '- [v] Ticket minting right now: issuing',
+    )
+    expect(String(reportRow(row(safeCount(undefined))))).toBe('- [?] Ticket minting right now: not reported')
+    expect(String(reportRow(row(NOT_PUBLISHED)))).toBe('- [n] Ticket minting right now: no endpoint publishes this')
+  })
+
+  it('draws every marker from the exhaustive Record, and uses three distinct ones', () => {
+    expect(Object.keys(READING_MARKER).sort()).toEqual([...ROW_READINGS].sort())
+    expect(new Set(Object.values(READING_MARKER)).size).toBe(ROW_READINGS.length)
+    for (const reading of ROW_READINGS) {
+      expect(READING_MARKER[reading].length).toBeGreaterThan(0)
+      expect(READING_TAG[reading].length).toBeGreaterThan(0)
+      expect(READING_MEANING[reading].length).toBeGreaterThan(0)
+    }
+    expect(new Set(Object.values(READING_TAG)).size).toBe(ROW_READINGS.length)
+  })
+
+  /**
+   * A hand-written report line is a statement ABOUT the section, not a reading of
+   * a field, so it has no reading to mark. Keeping the two constructors apart is
+   * what makes the marker column mean exactly one thing.
+   */
+  it('leaves a hand-written extra line unmarked', () => {
+    expect(String(reportLine(safeConstant('Allowed origin list'), safeConstant('never collected')))).toBe(
+      '- Allowed origin list: never collected',
+    )
+  })
+})
+
+describe('buildSectionModel — the row census in the report', () => {
+  const model = (values: SafeValue[]) =>
+    buildSectionModel({
+      id: 'websocket',
+      blocks: [
+        {
+          heading: safeConstant('Lane'),
+          description: 'd',
+          rows: values.map((value, index) =>
+            diagnosticRow({
+              label: safeConstant(`Row ${index}` as 'Row'),
+              value,
+              verdict: 'informational',
+              evidence: EVIDENCE_DIRECT,
+              note: 'n',
+            }),
+          ),
+          findings: [],
+        },
+      ],
+    })
+
+  it('states how many rows the section produced and what they were', () => {
+    const report = model([safeYesNo(true), safeCount(undefined), NOT_PUBLISHED]).reportLines.join('\n')
+
+    expect(report).toContain('- Rows: 3 (1 answered · 1 no answer · 1 no source)')
+  })
+
+  /**
+   * Counted across EVERY block, not per block: the line sits beside the section's
+   * worst verdict and answers "how much of this section is a reading".
+   */
+  it('counts across every block in the section', () => {
+    const across = buildSectionModel({
+      id: 'browser',
+      blocks: [
+        {
+          heading: safeConstant('One'),
+          description: 'd',
+          rows: [
+            diagnosticRow({
+              label: safeConstant('A'),
+              value: safeYesNo(true),
+              verdict: 'healthy',
+              evidence: EVIDENCE_DIRECT,
+              note: 'n',
+            }),
+          ],
+          findings: [],
+        },
+        {
+          heading: safeConstant('Two'),
+          description: 'd',
+          rows: [
+            diagnosticRow({
+              label: safeConstant('B'),
+              value: safeCount(undefined),
+              verdict: 'healthy',
+              evidence: EVIDENCE_ABSENT,
+              note: 'n',
+            }),
+          ],
+          findings: [],
+        },
+      ],
+    })
+
+    expect(across.reportLines.join('\n')).toContain('- Rows: 2 (1 answered · 1 no answer)')
+  })
+
+  it('reports a section with no rows as none rather than as zero answered', () => {
+    const empty = buildSectionModel({
+      id: 'account',
+      blocks: [{ heading: safeConstant('Block'), description: 'd', rows: [], findings: [] }],
+    })
+
+    expect(empty.reportLines.join('\n')).toContain('- Rows: 0 (no rows)')
+  })
+})
+
 describe('no section module bypasses the SafeValue brand', () => {
   const directory = __dirname
 

@@ -1565,7 +1565,7 @@ describe('a healthy deployment', () => {
     expect(report).toContain('### Shared cache')
     expect(report).toContain('### Internal service communication')
     expect(report).toContain('### Event delivery and queues')
-    expect(report).toContain('- Auth database round trip: answering')
+    expect(report).toContain('- [v] Auth database round trip: answering')
     expect(report).toContain('- Addresses: never collected')
     expect(report).toContain('- Per-service failure detail: read by nothing here')
   })
@@ -1803,8 +1803,8 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
 
     expect(report).toContain('## Database & internal comms')
     expect(report).toContain('- Worst verdict: broken')
-    expect(report).toContain('- Queue separation: other (unrecognised)')
-    expect(unreadable).toContain('- Why the read failed: unreachable')
+    expect(report).toContain('- [v] Queue separation: other (unrecognised)')
+    expect(unreadable).toContain('- [v] Why the read failed: unreachable')
     expect(unreadable).toContain('- Status-read error text: never stored or printed')
   })
 

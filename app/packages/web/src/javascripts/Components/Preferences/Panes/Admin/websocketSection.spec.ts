@@ -527,7 +527,23 @@ describe('the empty unmet-condition list', () => {
     expect(model.worstVerdict).toBe('degraded')
   })
 
-  it('leaves the remedy to the condition list for the two causes that already carry one', () => {
+  /**
+   * *** DEFERS TO THE CONDITION LIST WITHOUT GOING SILENT. ***
+   *
+   * These two causes used to produce a finding with `remedy: undefined`, on the
+   * reasonable ground that the condition entry already carries the
+   * topology-conditional advice and printing it twice is worse than printing it
+   * once. That reasoning survived the usability pass; the silence did not. The
+   * ranked action list in the copyable report prints the remedy as the WHOLE of
+   * what a finding says to somebody reading a paste, so an entry with nothing
+   * under it is indistinguishable from one nobody has advice for.
+   *
+   * So each cause now carries a remedy that POINTS at the condition and restates
+   * none of its steps — which is what the second half of this test pins: the
+   * topology-conditional instruction must still appear exactly once, on the
+   * condition's own entry.
+   */
+  it('points at the condition list for the two causes it defers to, without restating its advice', () => {
     for (const cause of ['LANE_PRECONDITION_UNMET', 'DURABLE_BACKEND_UNBOUND']) {
       const model = build({
         payload: payload({
@@ -540,7 +556,13 @@ describe('the empty unmet-condition list', () => {
         transport: transport(),
       })
 
-      expect(findingOf(model, 'SYNC_ITEMS_WITHHELD')?.remedy).toBeUndefined()
+      const deferring = findingOf(model, 'SYNC_ITEMS_WITHHELD')?.remedy
+      expect(deferring).toBeDefined()
+      expect(`${deferring?.summary} ${deferring?.steps.join(' ')}`).toContain('condition')
+      // It must NOT carry the condition's own instruction: that advice is
+      // topology-conditional, it belongs to the condition entry, and two copies
+      // of it is the duplication the silence was protecting against.
+      expect(`${deferring?.summary} ${deferring?.steps.join(' ')}`).not.toContain('SERVICE_PROXY_TYPE=grpc')
       // And the condition itself still carries the topology-conditional advice.
       expect(findingOf(model, 'SYNCING_SERVER_GRPC_UNBOUND')?.remedy).toBeDefined()
     }
@@ -2124,13 +2146,13 @@ describe('the lane-degradation ledger', () => {
     // carries that sentence for the two blocks nothing populates yet.
     expect(blockOf(model, 'Lane degradation ledger').emptyNote).toBeUndefined()
     expect(blockOf(model, 'Lane degradation ledger').rows.length).toBeGreaterThan(10)
-    expect(report).toContain('- Where the lane ended up: recovered')
-    expect(report).toContain('- Degradations recorded: 1')
-    expect(report).toContain('- Recoveries recorded: 1')
-    expect(report).toContain('- Degradations with cause server-kill: 1')
-    expect(report).toContain('- Transition 1: HTTP_FALLBACK server-kill socket torn down 1s')
-    expect(report).toContain('- Transition 2: READY not reported socket torn down 2s')
-    expect(report).toContain('- Control-plane reads refused with 401: 1')
+    expect(report).toContain('- [v] Where the lane ended up: recovered')
+    expect(report).toContain('- [v] Degradations recorded: 1')
+    expect(report).toContain('- [v] Recoveries recorded: 1')
+    expect(report).toContain('- [v] Degradations with cause server-kill: 1')
+    expect(report).toContain('- [v] Transition 1: HTTP_FALLBACK server-kill socket torn down 1s')
+    expect(report).toContain('- [v] Transition 2: READY not reported socket torn down 2s')
+    expect(report).toContain('- [v] Control-plane reads refused with 401: 1')
   })
 })
 

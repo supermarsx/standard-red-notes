@@ -53,7 +53,12 @@ jest.mock('@standardnotes/ui-services', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }))
 
-import AdminDiagnosticsTab, { clockReadingFor, DIAGNOSIS_CHIP_LABEL } from './AdminDiagnosticsTab'
+import AdminDiagnosticsTab, {
+  clockReadingFor,
+  DIAGNOSIS_CHIP_LABEL,
+  mergeOutcomes,
+  type DiagnosticProbe,
+} from './AdminDiagnosticsTab'
 // TONE_CHIP is imported from the module that DEFINES it. It used to be declared
 // twice — here and in `diagnosticsPresentation.tsx` — and the tab's copy was
 // deleted rather than re-exported: a re-export would leave the tab looking like a
@@ -61,7 +66,7 @@ import AdminDiagnosticsTab, { clockReadingFor, DIAGNOSIS_CHIP_LABEL } from './Ad
 // gaining members, which is the drift hazard rather than a cure for it.
 import { TONE_CHIP } from './diagnosticsPresentation'
 import { SYNC_ITEMS_CAUSES, TONES } from './syncDiagnostics'
-import { SECTION_IDS, SECTION_TITLE } from './diagnosticsSections'
+import { SECTION_IDS, SECTION_TITLE, type SectionTaggedOutcome } from './diagnosticsSections'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
@@ -2214,18 +2219,53 @@ describe('AdminDiagnosticsTab — Copyable report', () => {
     expect(report).toContain('[FAIL] Ticket issuance')
   })
 
-  it('copies it to the clipboard and confirms', async () => {
+  it('copies the whole report to the clipboard and confirms', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     await renderTab(makeApplication())
     await openSubtab('Copyable report')
 
-    await clickButton('Copy report')
+    await clickButton('Copy whole report')
 
     expect(writeText).toHaveBeenCalledTimes(1)
     expect(writeText.mock.calls[0][0]).toContain('## Topology')
     expect(writeText.mock.calls[0][0]).toContain('## Browser')
-    expect(container.textContent).toContain('Copied')
+    expect(container.textContent).toContain('Report copied')
+  })
+
+  /**
+   * *** THE SUMMARY BUTTON, AND WHAT MAKES IT WORTH A SECOND BUTTON. ***
+   *
+   * The whole report is tens of kilobytes and what somebody wants in a chat
+   * message is the verdict and the ranked list of what to fix. So the assertions
+   * are two-sided: the summary must carry the ANSWER, and it must NOT carry the
+   * evidence — a "summary" that happened to be the whole document would satisfy
+   * every `toContain` on its own, which is the exact trap a `toContain`-only test
+   * walks into.
+   */
+  it('copies a summary that carries the answer and not the evidence', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await renderTab(makeApplication())
+    await openSubtab('Copyable report')
+
+    await clickButton('Copy summary')
+
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const summary = writeText.mock.calls[0][0] as string
+    expect(summary).toContain('## Verdict')
+    expect(summary).toContain('## What to fix, in order')
+    expect(summary).toContain('## How to read this')
+    expect(summary).toContain('- Overall:')
+    expect(summary).toContain('- Fix first:')
+    // The evidence is what it leaves out, and these are the five sections plus the
+    // three payload blocks the full report carries.
+    for (const absent of ['## Topology', '## Boot gate', '## Configuration presence', '## Browser', '## WebSocket']) {
+      expect(summary).not.toContain(absent)
+    }
+    expect(summary.length).toBeLessThan(reportText().length)
+    expect(container.textContent).toContain('Summary copied')
+    expect(container.textContent).not.toContain('Report copied')
   })
 })
 
@@ -2584,5 +2624,243 @@ describe('AdminDiagnosticsTab — the diagnosis chip mapping', () => {
     expect(DIAGNOSIS_CHIP_LABEL.neutral).toBe('Unknown')
     expect(DIAGNOSIS_CHIP_LABEL.neutral).not.toBe(DIAGNOSIS_CHIP_LABEL.bad)
     expect(DIAGNOSIS_CHIP_LABEL.neutral).not.toBe(DIAGNOSIS_CHIP_LABEL.warn)
+  })
+})
+
+/**
+ * *** ONE CHECK AT A TIME. ***
+ *
+ * The five probes were inline in a single `runTests` that always ran all of them
+ * and then re-read the diagnostics endpoint, the server-status endpoint and the
+ * transport — so narrowing one failing check meant regenerating the whole report,
+ * and an operator watching a flapping ticket mint had no way to ask that one
+ * question twice. The registry is what fixed it, and the two properties that make
+ * it worth having are pinned separately: a single run must REPLACE only its own
+ * result, and it must not re-read anything else.
+ */
+describe('AdminDiagnosticsTab — running one check', () => {
+  const probeItem = (id: string): HTMLElement => {
+    const element = activePanel().querySelector(`[data-diagnostics-probe="${id}"]`)
+    expect(element).not.toBeNull()
+
+    return element as HTMLElement
+  }
+
+  const clickProbe = async (id: string) => {
+    const button = probeItem(id).querySelector('button')
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await settle()
+  }
+
+  it('lists every check with its own control before anything has been run', async () => {
+    await renderTab(makeApplication())
+    await openSubtab('Checks')
+
+    const items = [...activePanel().querySelectorAll('[data-diagnostics-probe]')]
+    expect(items).toHaveLength(5)
+    for (const item of items) {
+      expect(item.textContent).toContain('Not run')
+      expect(item.querySelector('button')?.textContent).toBe('Run this check')
+    }
+    // A check that has never run says so rather than being absent.
+    expect(activePanel().textContent).toContain('Running this one check re-reads nothing else')
+  })
+
+  it('runs one check and reports only that one, leaving the others not run', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await openSubtab('Checks')
+
+    await clickProbe('ticket')
+
+    expect(probeItem('ticket').textContent).toContain('SYNC_DISABLED')
+    expect(probeItem('ticket').querySelector('button')?.textContent).toBe('Re-run this check')
+    expect(probeItem('capabilities').textContent).toContain('Not run')
+    // And it reached exactly the one endpoint its own probe needs.
+    const paths = application.httpOnlyJsonRequest.mock.calls.map(([, path]) => path)
+    expect(paths.filter((path: string) => path === '/v1/sockets/sync/ticket')).toHaveLength(1)
+    expect(paths).not.toContain('/v1/sockets/sync/capabilities')
+  })
+
+  /**
+   * *** THE MERGE, AND THE REASON IT IS NOT A REPLACE. *** Returning only the
+   * fresh outcome would blank the other four, which makes "re-run one check"
+   * strictly worse than the full run it exists to avoid.
+   */
+  it('re-runs one check without discarding the other four results', async () => {
+    const ticket = { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }
+    const responses: Record<string, unknown> = {
+      '/v1/sockets/sync/ticket': ticket,
+      '/v1/sockets/sync/capabilities': { status: 200, ok: true, data: { capabilities: [] } },
+      '/v1/items/storage-usage': { status: 200, ok: true, data: storageUsagePayload },
+    }
+    const application = makeApplication({
+      httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
+        return Object.hasOwn(responses, path) ? responses[path] : { status: 404, ok: false, data: {} }
+      }),
+    })
+    await renderTab(application)
+    await clickButton('Test all capabilities')
+    await openSubtab('Checks')
+
+    expect(probeItem('capabilities').textContent).toContain('advertises an EMPTY capability list')
+    expect(probeItem('ticket').textContent).toContain('SYNC_DISABLED')
+
+    // The deployment is repaired; only the ticket check is asked again.
+    responses['/v1/sockets/sync/ticket'] = { status: 200, ok: true, data: {} }
+    await clickProbe('ticket')
+
+    expect(probeItem('ticket').textContent).toContain('A short-lived single-use ticket was issued')
+    // The other four survive untouched rather than reverting to "Not run".
+    expect(probeItem('capabilities').textContent).toContain('advertises an EMPTY capability list')
+    for (const id of ['capabilities', 'control-plane', 'negotiation', 'marker']) {
+      expect(probeItem(id).textContent).not.toContain('Not run')
+    }
+  })
+
+  /**
+   * A single run must not regenerate the report. The server-status read is the
+   * cleanest witness: it is reached once on mount, again after a FULL run, and
+   * never by a single probe.
+   */
+  it('does not re-read the payload or the server status for a single check', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await openSubtab('Checks')
+
+    const statusCallsBefore = application.legacyApi.adminGetServerStatus.mock.calls.length
+    const diagnosticsCallsBefore = application.serverGetJsonRequest.mock.calls.filter(
+      ([path]: [string]) => path === '/v1/admin/sync-diagnostics',
+    ).length
+
+    await clickProbe('ticket')
+
+    expect(application.legacyApi.adminGetServerStatus.mock.calls).toHaveLength(statusCallsBefore)
+    expect(
+      application.serverGetJsonRequest.mock.calls.filter(([path]: [string]) => path === '/v1/admin/sync-diagnostics'),
+    ).toHaveLength(diagnosticsCallsBefore)
+
+    // A FULL run still does re-read both: several of its probes change what they
+    // answer, so leaving them stale would be the opposite defect.
+    await clickButton('Test all capabilities')
+    expect(application.legacyApi.adminGetServerStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore)
+  })
+
+  it('keeps the results in the registry’s order however they were run', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await openSubtab('Checks')
+
+    await clickProbe('marker')
+    await clickProbe('capabilities')
+    await openSubtab('Copyable report')
+
+    const report = reportText()
+    expect(report.indexOf('Capability descriptor')).toBeLessThan(report.indexOf('Deployment marker'))
+  })
+})
+
+describe('mergeOutcomes', () => {
+  const probe = (id: string, name: string): DiagnosticProbe => ({
+    id,
+    section: 'websocket',
+    name,
+    run: async () => ({ section: 'websocket', name, passed: true, detail: 'd', reportDetail: 'r' }),
+  })
+  const outcome = (name: string, detail: string): SectionTaggedOutcome => ({
+    section: 'websocket',
+    name,
+    passed: true,
+    detail,
+    reportDetail: detail,
+  })
+  const probes = [probe('a', 'A'), probe('b', 'B'), probe('c', 'C')]
+
+  it('replaces by name and keeps the rest', () => {
+    const merged = mergeOutcomes([outcome('A', 'old'), outcome('B', 'old')], [outcome('B', 'new')], probes)
+
+    expect(merged.map((item) => [item.name, item.detail])).toEqual([
+      ['A', 'old'],
+      ['B', 'new'],
+    ])
+  })
+
+  it('orders by the registry, not by arrival', () => {
+    const merged = mergeOutcomes([outcome('C', 'c')], [outcome('A', 'a')], probes)
+
+    expect(merged.map((item) => item.name)).toEqual(['A', 'C'])
+  })
+
+  it('drops an outcome from a probe that no longer exists', () => {
+    const merged = mergeOutcomes([outcome('GONE', 'x'), outcome('A', 'a')], [], probes)
+
+    expect(merged.map((item) => item.name)).toEqual(['A'])
+  })
+
+  it('returns nothing when nothing has run', () => {
+    expect(mergeOutcomes([], [], probes)).toEqual([])
+  })
+})
+
+/**
+ * *** IDENTITY AND CAPTURE TIME, ON THE PANE. ***
+ *
+ * "Which commit is live" and "how old is this reading" are the first two questions
+ * of every incident, and both used to be reachable only by opening the Environment
+ * section or scrolling the report. They are on the header now, under the same
+ * admission rules the report uses — which is the half that matters: a screen that
+ * printed something the report refuses would be a second, looser rule.
+ */
+describe('AdminDiagnosticsTab — identity on the header', () => {
+  const identity = (): string => container.querySelector('[data-diagnostics-identity]')?.textContent ?? ''
+
+  it('names the build and the capture instant beside the verdict chips', async () => {
+    await renderTab(makeApplication())
+
+    expect(identity()).toContain('Build: unstamped (not stamped)')
+    expect(identity()).toContain(`captured ${CAPTURED_AT}`)
+  })
+
+  it('prints a real revision and version when the marker carries them', async () => {
+    const revision = 'ab3f90'.repeat(6) + 'cdef'
+    ;(globalThis as { fetch?: unknown }).fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ revision, version: 'rel-1.2.3' }) })
+    await renderTab(makeApplication())
+
+    expect(identity()).toContain(revision)
+    expect(identity()).toContain('version rel-1.2.3')
+  })
+
+  /**
+   * The marker is served by whatever fronts the bundle, and this header is on a
+   * screen operators photograph. It is admitted by the SAME shape rule the report
+   * uses — not the denylist the marker used to go through, which printed
+   * `token-sk-live-…` verbatim because it has no address shape.
+   */
+  it('refuses a marker that does not match the shape the Dockerfile validates', async () => {
+    ;(globalThis as { fetch?: unknown }).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ revision: 'token-sk-live-abcdef0123456789', version: 'v1.2.3-build@ci.internal.example' }),
+    })
+    await renderTab(makeApplication())
+
+    expect(identity()).not.toContain('token-sk-live')
+    expect(identity()).not.toContain('v1.2.3-build')
+    expect(identity()).not.toContain('internal.example')
+    // NOT vacuous: the row the marker feeds is really rendered.
+    expect(identity()).toContain('withheld (unrecognised format)')
+  })
+
+  it('says the capture instant was not reported rather than inventing one', async () => {
+    const application = makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 200, ok: true, data: { gate: {} } }),
+    })
+    await renderTab(application)
+
+    expect(identity()).toContain('captured not reported')
   })
 })

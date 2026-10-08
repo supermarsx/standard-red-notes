@@ -1,4 +1,4 @@
-import { buildDiagnosticsReport, type DiagnosticsReportInput } from './diagnosticsReport'
+import { buildDiagnosticsReport, buildDiagnosticsSummary, type DiagnosticsReportInput } from './diagnosticsReport'
 import { CLIENT_KNOWN_OPERATIONS, type SyncDiagnosticsPayload } from './syncDiagnostics'
 import { SECTION_IDS, SECTION_TITLE, type SectionId, type SectionModel } from './diagnosticsSections'
 import { buildWebsocketSection } from './websocketSection'
@@ -727,5 +727,346 @@ describe('buildDiagnosticsReport — what it withholds', () => {
       '- Version: rel-1.2.3',
     )
     expect(buildDiagnosticsReport(input())).toContain('- Revision: unstamped')
+  })
+})
+
+/**
+ * *** THE ANSWER, BEFORE THE EVIDENCE. ***
+ *
+ * Measured on a realistic self-hosted deployment, the previous report was 445
+ * lines over 12 sections and 39 blocks; the first `broken` finding sat at line
+ * 171 under three healthy blocks and the last at line 331 under about forty more,
+ * and every one of the thirteen findings reached the document as exactly
+ * `- Finding: CODE verdict` — no title, no detail and no remedy, because
+ * `buildSectionModel` dropped `finding.remedy` on the floor. Nine fully-written
+ * remedies existed in the model and none of them was in the document the operator
+ * pastes.
+ *
+ * These tests pin the four properties that fixed it, and each one is written so
+ * that a restructure which merely moved text around would fail: the ordering is
+ * asserted on POSITIONS, the de-duplication on OCCURRENCE COUNTS, and the summary
+ * on what it does NOT carry.
+ */
+describe('buildDiagnosticsReport — leading with the answer', () => {
+  const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1
+
+  it('carries the generated instant, the capture instant and the build identity in its first lines', () => {
+    const head = buildDiagnosticsReport(input({ sections: sections() }))
+      .split('\n')
+      .slice(0, 8)
+      .join('\n')
+
+    expect(head).toContain('Generated: 2026-08-27T12:00:00.000Z')
+    expect(head).toContain('Server captured: 2026-08-27T00:00:00.000Z')
+    // *** IDENTITY AT THE TOP. *** A paste that gets trimmed is trimmed from the
+    // bottom, and "which commit is live" is the first question anyone asks.
+    expect(head).toContain('Build: revision unstamped')
+    expect(head).toContain('stamped no')
+    expect(head).toContain('Transport in use:')
+  })
+
+  it('answers "is this healthy", "what is wrong" and "what first" before any evidence', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const verdict = report.indexOf('## Verdict')
+    const actions = report.indexOf('## What to fix, in order')
+
+    expect(verdict).toBeGreaterThan(-1)
+    expect(actions).toBeGreaterThan(verdict)
+    // Every detail block comes after the answer.
+    for (const heading of ['## Deployment', '## Topology', '## Boot gate', '## Capabilities', '## Checks']) {
+      expect(report.indexOf(heading)).toBeGreaterThan(actions)
+    }
+    expect(report).toContain('- Overall: BROKEN')
+    expect(report).toContain('- Fix first: ')
+    expect(report).toContain('- Findings needing action: ')
+    expect(report).toContain('- Evidence below: ')
+    expect(report).toContain('- Operator checks: ')
+    expect(report).toContain('- Ranked findings this build has no fix for: 0')
+  })
+
+  it('ranks the broken findings above the degraded ones, and numbers them', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const first = report.indexOf('### 1. ')
+    const broken = report.indexOf('BROKEN — ')
+    const degraded = report.indexOf('DEGRADED — ')
+    const unknown = report.indexOf('UNKNOWN — ')
+
+    expect(first).toBeGreaterThan(-1)
+    expect(broken).toBeGreaterThan(-1)
+    expect(degraded).toBeGreaterThan(broken)
+    expect(unknown).toBeGreaterThan(degraded)
+    // The first entry IS the one the Verdict block named.
+    const fixFirst = /- Fix first: ([^,]+),/.exec(report)?.[1]
+    expect(fixFirst).toBeDefined()
+    expect(report.slice(first, first + 120)).toContain(fixFirst as string)
+  })
+
+  /**
+   * *** EVERY RANKED ENTRY SAYS WHAT TO DO. *** The 17 findings in this tree that
+   * carried no remedy now carry one, and the count in the Verdict block is the
+   * guard: a finding added later without advice turns that zero into a number
+   * rather than passing silently.
+   */
+  it('prints a fix under every ranked entry', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const entries = occurrences(report, '- Seen in: ')
+
+    expect(entries).toBeGreaterThan(0)
+    expect(occurrences(report, '  - Fix (')).toBe(entries)
+    expect(report).not.toContain('No fix is recorded in this client build')
+  })
+
+  /**
+   * *** ONE FACT, ONE ENTRY. *** `SYNCING_SERVER_GRPC_UNBOUND` is printed by the
+   * boot-gate block AND raised as a WebSocket finding, `DEPLOYMENT_UNSTAMPED` by
+   * the deployment marker AND by Environment & setup, and `CLIENT_GAP` by two
+   * sections. All three used to print their remedy twice.
+   */
+  it('prints one fact once, naming every place it was observed', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+
+    for (const code of ['SYNCING_SERVER_GRPC_UNBOUND', 'DEPLOYMENT_UNSTAMPED', 'CLIENT_GAP']) {
+      expect(occurrences(report, `— ${code}\n`)).toBe(1)
+    }
+    // And the topology-conditional instruction appears exactly once, not twice.
+    expect(occurrences(report, 'Set SERVICE_PROXY_TYPE=grpc.')).toBe(1)
+    expect(occurrences(report, 'docker compose up -d --build')).toBe(1)
+    // The folded entry names both observers rather than dropping one. The gate
+    // condition is the case that always folds in this fixture: the WebSocket
+    // section raises it AND the boot-gate block contributes the same code.
+    expect(report).toContain('- Seen in: WebSocket · Boot gate')
+    // The marker's own entry is contributed by this file, and folds with the
+    // Environment section's wherever that section was given a marker to read.
+    expect(report).toContain('- Seen in: Deployment')
+  })
+
+  /**
+   * The fold across a SECTION and this file, driven directly: the Environment
+   * section raises `DEPLOYMENT_UNSTAMPED` only when it is given a marker to read,
+   * and the boot-gate block of this file contributes the same code regardless. One
+   * entry, two sources, one copy of the rebuild instruction.
+   */
+  it('folds a section finding together with this file’s own observation of the same fact', () => {
+    const report = buildDiagnosticsReport(
+      input({
+        sections: {
+          ...sections(),
+          environment: buildEnvironmentSection({
+            topology: payload.deployment,
+            deploymentMarker: { revision: 'unstamped', version: 'unstamped' },
+          }),
+        },
+      }),
+    )
+
+    expect(report).toContain(`- Seen in: ${SECTION_TITLE.environment} · Deployment`)
+    expect(report.split(`— DEPLOYMENT_UNSTAMPED${String.fromCharCode(10)}`).length - 1).toBe(1)
+    expect(report.split('docker compose up -d --build').length - 1).toBe(1)
+  })
+
+  it('tells the reader how to read the severities and the three row markers', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const legend = report.slice(report.indexOf('## How to read this'))
+
+    expect(legend).toContain('BROKEN (it is not working)')
+    expect(legend).toContain('NOT a pass')
+    expect(legend).toContain('[v] a value arrived')
+    expect(legend).toContain('[?] this build asked and nothing came back')
+    expect(legend).toContain('[n] nothing publishes this field yet')
+    expect(legend).toContain('no URL, host, port, token or key')
+  })
+
+  /**
+   * *** THE NOISE IS COLLAPSED AND NEVER DROPPED. *** The operator pastes this to
+   * reason about their deployment and several of the quietest rows are themselves
+   * diagnostic, so the test is two-sided: the detail is inside a collapsible
+   * region AND still present as text.
+   */
+  it('collapses every detail block without removing a line of it', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+
+    expect(occurrences(report, '<details>')).toBe(occurrences(report, '</details>'))
+    expect(occurrences(report, '<details>')).toBe(occurrences(report, '<summary>'))
+    // One per top-level detail block plus one per section plus the context list.
+    expect(occurrences(report, '<details>')).toBeGreaterThanOrEqual(6 + SECTION_IDS.length)
+    // Nothing is omitted: the rows are still in the text.
+    expect(report).toContain('- REDIS_URL: set (required)')
+    expect(report).toContain('| SYNC_ITEMS |')
+    expect(report).toContain('- [v] Boot gate recorded: yes')
+    // And each section's summary names it with its own verdict, so a collapsed
+    // document is still an index.
+    for (const id of SECTION_IDS) {
+      expect(report).toContain(`<summary>${SECTION_TITLE[id]} — `)
+    }
+  })
+
+  /**
+   * The ONLY markup permitted. The report is markdown that must stay readable as
+   * plain text, so a restructure that reached for a table or a div would fail
+   * here rather than in somebody's issue tracker.
+   */
+  it('uses no markup beyond the disclosure tags', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const tags = report.match(/<[^>]+>/g) ?? []
+
+    expect(tags.length).toBeGreaterThan(0)
+    for (const tag of tags) {
+      expect(['<details>', '</details>', '<summary>', '</summary>']).toContain(tag)
+    }
+  })
+
+  it('marks every section row with one of exactly three readings', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const rows = report.split('\n').filter((line) => /^- \[/.test(line))
+
+    expect(rows.length).toBeGreaterThan(20)
+    for (const row of rows) {
+      expect(['[v]', '[?]', '[n]']).toContain(row.slice(2, 5))
+    }
+    expect(rows.some((row) => row.startsWith('- [v] '))).toBe(true)
+    expect(rows.some((row) => row.startsWith('- [?] '))).toBe(true)
+  })
+
+  it('says a healthy deployment has nothing to act on, rather than printing an empty list', () => {
+    const healthy = buildDiagnosticsReport({
+      payload: undefined,
+      transport: { state: 'READY', operations: ['SYNC_ITEMS'] },
+      deploymentMarker: { revision: 'ab3f90'.repeat(6) + 'cdef', version: 'rel-1.2.3' },
+      outcomes: [],
+      loadError: null,
+      generatedAt: '2026-08-27T12:00:00.000Z',
+      sections: {
+        websocket: buildWebsocketSection(),
+        environment: buildEnvironmentSection(),
+        backend: buildBackendSection(),
+        account: buildAccountSection(),
+        browser: buildBrowserSection(),
+      },
+    })
+
+    expect(healthy).toContain('## What to fix, in order')
+    expect(healthy).toContain('- Fix first: nothing.')
+    expect(healthy).toContain('- Findings needing action: 0')
+    expect(healthy).toContain('Nothing needs action.')
+  })
+
+  /**
+   * *** AND A PANE THAT READ NOTHING IS NOT HEALTHY. *** The counterpart to the
+   * test above, and the more important of the two: a report opening with HEALTHY
+   * over sections nobody supplied would be the single most expensive line in this
+   * project.
+   */
+  it('opens with UNKNOWN, never HEALTHY, when no sections were supplied', () => {
+    const report = buildDiagnosticsReport(input())
+
+    expect(report).toContain('- Overall: UNKNOWN')
+    expect(report).not.toContain('- Overall: HEALTHY')
+    expect(report).toContain('- Coverage: the five topic sections were not supplied')
+    expect(report).toContain('five topic sections were not supplied')
+  })
+})
+
+describe('buildDiagnosticsSummary', () => {
+  /**
+   * The server made to misbehave in every string-bearing field the summary's own
+   * ranked list reads: the gate's precondition code and its remedy, the live
+   * refusal reason, and the SYNC_ITEMS verdict the WebSocket section turns into a
+   * finding.
+   */
+  const summaryPoison: SyncDiagnosticsPayload = {
+    ...payload,
+    capturedAt: 'redis://admin:hunter2@redis.internal.example:6379',
+    gate: {
+      ...payload.gate,
+      syncItems: {
+        state: 'WITHHELD',
+        cause: 'DURABLE_BACKEND_NOT_READY',
+        remedy: 'the durable backend at syncing.internal.example:50051 refused',
+        probe: 'NOT_READY',
+      },
+      unmetPreconditions: [
+        { code: 'REDIS_UNBOUND', remedy: 'set REDIS_URL to redis://admin:hunter2@redis.internal.example:6379' },
+        { code: PLANTED_OPAQUE, remedy: PLANTED_SHAPED },
+      ],
+      unmetCodes: ['REDIS_UNBOUND', PLANTED_OPAQUE],
+      files: { advertised: false, unmetCondition: PLANTED_SHAPED, remedy: 'https://notes.internal.example' },
+    },
+    live: { capabilities: [], unavailabilityReasons: ['no-allowed-origins', PLANTED_OPAQUE], ticketAvailable: false },
+  }
+
+  /**
+   * The summary carries the ANSWER and not the evidence. Both halves are asserted,
+   * because a "summary" that happened to be the whole document would satisfy every
+   * `toContain` on its own — a `toContain` assertion cannot forbid more content.
+   */
+  it('carries the verdict, the ranked list and the legend, and no evidence', () => {
+    const summary = buildDiagnosticsSummary(input({ sections: sections() }))
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+
+    expect(summary).toContain('# Standard Red Notes — capability diagnostics')
+    expect(summary).toContain('Build: revision unstamped')
+    expect(summary).toContain('## Verdict')
+    expect(summary).toContain('## What to fix, in order')
+    expect(summary).toContain('### 1. ')
+    expect(summary).toContain('## How to read this')
+    expect(summary).toContain('This is the SUMMARY only.')
+
+    for (const absent of [
+      '## Deployment',
+      '## Topology',
+      '## Boot gate',
+      '## Capabilities',
+      '## Configuration presence',
+      '## Checks',
+      '| Operation |',
+      '- REDIS_URL: set (required)',
+    ]) {
+      expect(summary).not.toContain(absent)
+    }
+    for (const id of SECTION_IDS) {
+      expect(summary).not.toContain(`## ${SECTION_TITLE[id]}`)
+    }
+    // Shorter, but the real test is the structural absence above: a ratio is
+    // prose-sensitive and the eight headings are not.
+    expect(summary.length).toBeLessThan(report.length)
+  })
+
+  /** One derivation, two renderers: the two cannot disagree about the answer. */
+  it('agrees with the report line for line about the answer', () => {
+    const summary = buildDiagnosticsSummary(input({ sections: sections() }))
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const answer = summary.slice(0, summary.indexOf('## How to read this'))
+
+    expect(report).toContain(answer)
+  })
+
+  /**
+   * The summary is pasted too, so it is held to the same rule — and it carries the
+   * ranked remedies, which is the part of the document a server string would most
+   * plausibly have reached through.
+   */
+  it('cannot carry a value, an address or a credential either', () => {
+    const summary = buildDiagnosticsSummary(
+      input({
+        payload: summaryPoison,
+        sections: { ...sections(), websocket: buildWebsocketSection({ payload: summaryPoison }) },
+        deploymentMarker: {
+          revision: 'token-sk-live-abcdef0123456789',
+          version: 'v1.2.3-build@ci.internal.example.com',
+        },
+      }),
+    )
+
+    for (const fragment of ['hunter2', 'internal.example', 'token-sk-live', 'v1.2.3-build', '10.4.2.9']) {
+      expect(summary).not.toContain(fragment)
+    }
+    expect(summary).not.toMatch(/https?:\/\//)
+    expect(summary).not.toMatch(/redis:\/\//)
+    expect(summary).not.toContain('[address withheld]')
+    // NOT vacuous: the ranked entries the poisoned fields feed are really here.
+    expect(summary).toContain('## What to fix, in order')
+    expect(summary).toContain('### 1. ')
+    expect(summary).toContain('- Seen in: ')
+    expect(summary).toContain('  - Fix (')
   })
 })

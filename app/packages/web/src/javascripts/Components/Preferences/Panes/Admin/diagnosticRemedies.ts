@@ -149,6 +149,31 @@ export type DeploymentTopology = {
  * an explicit `actor` field was considered and NOT done unilaterally, because
  * every `Record<RemedyEffort, …>` is exhaustive and three section modules now
  * key off these literals.
+ *
+ * *** TWO MEMBERS ADDED SO THAT EVERY FINDING CAN SAY WHAT TO DO. ***
+ *
+ * The usability complaint that produced the ranked action list found 17 findings
+ * in this tree carrying no remedy at all, and the report now prints the remedy as
+ * the whole of what a finding says to an operator. Two of those 17 could not
+ * honestly borrow an existing member:
+ *
+ * `upgrade-server` is a fix that needs a newer SERVER image. It is on the axis
+ * between `rebuild` (this deployment's own image, which the reader controls) and
+ * `peer-service` (another service in this deployment, which they may not): the
+ * route simply does not exist on the build that is running, no setting on it
+ * reaches the gap, and the fix is a deployment of a later build.
+ * `ACCOUNT_STORAGE_ENDPOINT_ABSENT` is the motivating case, and it had to borrow
+ * `client-update` — whose LABEL sends the operator after a client release that
+ * would change nothing.
+ *
+ * `no-action` is the third no-actor member, and it is the one the residual pair
+ * cannot express: `none` renders "Not fixable here" with a `bad` tone, which is a
+ * dead end, and `wait` renders "Transient", which says to look again. Neither is
+ * right for a finding reporting a state that is CORRECT —
+ * `ACCOUNT_SPACE_NOTHING_TO_REPORT` is an account that has never uploaded a file
+ * — where the action is none and the reason is that nothing is wrong. Printing
+ * "Not fixable here" over that is exactly the confidently-wrong kind of advice
+ * the header of this file is about.
  */
 export type RemedyEffort =
   | 'account-setting' /** A per-account switch an administrator changes in this app; applies at once. */
@@ -157,8 +182,10 @@ export type RemedyEffort =
   | 'peer-service' /** Repair a DIFFERENT service in this deployment; nothing here helps. */
   | 'device' /** A setting, version or condition on the machine in front of the operator. */
   | 'client-update' /** Needs a newer client build; no server change helps. */
+  | 'upgrade-server' /** A newer SERVER build; no setting on this one reaches it. */
   | 'none' /** Nothing configuration can do in this topology. */
   | 'wait' /** Transient or mid-boot; re-read rather than change anything. */
+  | 'no-action' /** Correct as it stands. The finding is context, not a fault. */
 
 export const EFFORT_LABEL: Record<RemedyEffort, string> = {
   'account-setting': 'Admin setting',
@@ -167,8 +194,10 @@ export const EFFORT_LABEL: Record<RemedyEffort, string> = {
   'peer-service': 'Another service',
   device: 'On this device',
   'client-update': 'Client update',
+  'upgrade-server': 'Newer server',
   none: 'Not fixable here',
   wait: 'Transient',
+  'no-action': 'Nothing to do',
 }
 
 export type Remedy = {

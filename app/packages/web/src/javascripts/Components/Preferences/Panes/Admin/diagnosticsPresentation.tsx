@@ -64,16 +64,26 @@ export const Chip: FunctionComponent<{ tone: Tone; children: string }> = ({ tone
  * `account-setting` is the most reachable member of all — a toggle on this very
  * screen's sibling tab, applying immediately with no restart — so it takes
  * `good` alongside the other two the reader can act on without leaving the app.
+ *
+ * `upgrade-server` sits with `rebuild` and `client-update` on `warn`: a build the
+ * reader has to deploy rather than a setting they can change. `no-action` takes
+ * `good` and NOT `wait`'s neutral — neutral is the tone of "look again", and a
+ * finding whose correct action is none has nothing to look at. It is also
+ * deliberately not `none`'s `bad`: "Not fixable here" over a state that is
+ * working reads as a defect the reader cannot reach, which is the opposite of
+ * what the finding says.
  */
 export const EFFORT_TONE: Record<RemedyEffort, Tone> = {
   'account-setting': 'good',
   restart: 'good',
   rebuild: 'warn',
   'client-update': 'warn',
+  'upgrade-server': 'warn',
   device: 'good',
   'peer-service': 'warn',
   none: 'bad',
   wait: 'neutral',
+  'no-action': 'good',
 }
 
 /**

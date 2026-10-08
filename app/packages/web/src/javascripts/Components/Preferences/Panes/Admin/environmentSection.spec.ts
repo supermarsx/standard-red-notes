@@ -1689,7 +1689,7 @@ describe('deployment identity', () => {
     expect(row.evidence.kind).toBe('direct')
     // It reaches the copyable report through the ordinary row path, with no
     // hand-written line and no second admission rule.
-    expect(model.reportLines.join('\n')).toContain(`- Build revision: ${'a'.repeat(40)}`)
+    expect(model.reportLines.join('\n')).toContain(`- [v] Build revision: ${'a'.repeat(40)}`)
     // The verdict still belongs to the state row; this one is context.
     expect(rowOf(model, 'Deployment identity').verdict).toBe('healthy')
   })
@@ -1889,7 +1889,7 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     // The three unnameable keys survive as a count. A refusal sentinel in that
     // position is asserted ABSENT: it would mean a wire key had reached a label
     // and been scrubbed there rather than never arriving.
-    expect(report).toContain('- Variables this build does not recognise: 3')
+    expect(report).toContain('- [v] Variables this build does not recognise: 3')
     expect(report).not.toContain(`- ${WITHHELD}: set`)
     expect(report).not.toContain('[address withheld]')
   })

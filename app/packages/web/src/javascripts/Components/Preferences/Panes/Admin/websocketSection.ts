@@ -62,8 +62,10 @@ import {
   SYNC_ITEMS_STATES,
   type CapabilityRow,
   type CapabilityStatus,
+  type KnownFilesUnmetCondition,
   type KnownPreconditionCode,
   type SyncDiagnosticsPayload,
+  type SyncItemsCause,
   type SyncItemsState,
   type TransportStatusInput,
 } from './syncDiagnostics'
@@ -226,6 +228,17 @@ export const SOCKET_FALLBACK_REASONS = [
   'worker-error',
   'operation-unavailable',
   'live-sync-disabled',
+  // The four the transport gained when the gateway's close CODE stopped being the
+  // only thing read. Listed here because `EveryFallbackReasonIsListed` below
+  // requires it — a reason the transport can report and this tuple omits would
+  // render as "other (unrecognised)" on the row that is supposed to explain why
+  // the lane stood down, which is the one row in this block that has to name its
+  // cause. The disposition each one carries is the transport's own and is read
+  // through `syncFallbackDisposition`, never re-derived here.
+  'rate-limited',
+  'server-policy',
+  'server-unavailable',
+  'socket-limit',
 ] as const satisfies readonly SyncFallbackReason[]
 
 type UnlistedFallbackReason = Exclude<SyncFallbackReason, (typeof SOCKET_FALLBACK_REASONS)[number]>
@@ -667,6 +680,292 @@ function remedyForRefusedControlPlaneReads(stranded: boolean): Remedy {
   }
 }
 
+/**
+ * *** THE FIVE REMEDIES THIS SECTION'S FINDINGS SHIPPED WITHOUT. ***
+ *
+ * The usability pass that produced `diagnosticsTriage.ts` found 17 findings in
+ * this directory carrying no remedy at all, five of them here — and the report
+ * now prints the remedy as the WHOLE of what a finding says to someone reading a
+ * paste. An entry with nothing under it cannot be told apart from an entry
+ * nobody has advice for, and those are opposite conclusions.
+ *
+ * Each one below states WHERE the fix lives, which is the field an operator reads
+ * first, and none of them claims a cause this section did not observe. Two use
+ * `none` on purpose: a consequence of the boot gate is not separately fixable,
+ * and saying "Not fixable here" with the gate named is the honest answer rather
+ * than inventing a setting.
+ */
+function remedyForRefusedCapabilityDescriptor(): Remedy {
+  return {
+    code: 'SOCKET_CAPABILITY_REFUSED',
+    summary:
+      'The descriptor was read and offered no sync capability, so this client stood down. Nothing here is the fix: the lane-gating condition or the kill switch is, and both are in the boot gate.',
+    steps: [
+      'Work through the boot-gate block in this section. Every condition it names is ranked in this report with the fix for THIS topology, and this reason is a consequence of them rather than a separate problem.',
+      'If the boot gate names nothing at all, read the realtime sync switch in Environment & setup. Only the exact string "false" disables the lane, and a lane disabled that way is a correct configuration refusing correctly.',
+    ],
+    effort: 'none',
+    basis: 'verified',
+    because: [
+      'The capability descriptor answered and advertised no sync capability, which is a decision the gateway took at boot rather than a failure at read time.',
+      'A client that stood down on an empty descriptor is behaving correctly: retrying it forever would turn a configuration state into load.',
+    ],
+  }
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** Where the fix lives for each cause the
+ * gate can give for withholding SYNC_ITEMS.
+ *
+ * `DURABLE_BACKEND_NOT_READY` is the one cause that already had a remedy of its
+ * own (`remedyForWithheldSyncItems`) and it keeps it — this map is consulted only
+ * for the other six, so the one remedy written for the readiness case cannot be
+ * shadowed by a generic sentence.
+ *
+ * The map is over the cause rather than a single sentence because the six are not
+ * the same problem: three defer to the gate, two defer to the probe, and one is a
+ * server too old to have recorded a gate at all. One sentence covering all of
+ * them would have to be vague enough to be useless, which is the failure mode
+ * `diagnosticRemedies.ts` opens by describing.
+ */
+const SYNC_ITEMS_CAUSE_REMEDY: Record<SyncItemsCause, Remedy> = {
+  LANE_PRECONDITION_UNMET: {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'The socket lane itself did not come up, so SYNC_ITEMS was never on offer. The unmet boot conditions are the finding; this is their consequence.',
+    steps: [
+      'Work through the unmet conditions ranked in this report. Each carries the fix for THIS deployment’s topology, which is not always the fix the condition’s own name suggests.',
+      'Do not change anything about the durable backend on account of this row. The lane is the blocker and the backend is not reached until it is up.',
+    ],
+    effort: 'none',
+    basis: 'verified',
+    because: ['The gate reported at least one unmet lane precondition, which outranks every later reading.'],
+  },
+  SYNC_LANE_NOT_BUILT: {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'The sync lane was not built when this process started, so nothing on the socket offers note syncing. The boot gate says which condition stopped it.',
+    steps: [
+      'Read the boot-gate block in this section and act on the conditions ranked in this report.',
+      'Check the realtime sync switch in Environment & setup. A lane switched off by configuration reports exactly this, and that is a correct refusal rather than a fault.',
+    ],
+    effort: 'none',
+    basis: 'verified',
+    because: ['The gate recorded that the lane was not built, which is a decision taken once at boot.'],
+  },
+  DURABLE_BACKEND_UNBOUND: {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'No durable command port is bound, so the handshake has nothing to carry note-syncing commands to. The condition that binds it is in the boot gate and is ranked in this report. Restart only — no rebuild.',
+    steps: [
+      'Act on the unmet boot condition ranked in this report, not on this row. On a multi-container stack the switch is SERVICE_PROXY_TYPE rather than the URL, because the gateway reads the URL only inside the gRPC branch.',
+      'Do not set SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET expecting this to clear. That secret is what the readiness check tests once a port IS bound; with nothing bound there is no connection for it to authenticate.',
+      'Expect notes to keep syncing over HTTP throughout. The socket stays up and keeps carrying collaboration, API RPC, invite events and files, which is why every other block here looks healthy.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The gate reported the durable command port unbound, which is a different state from a bound port that failed its readiness check.',
+      'Note syncing falls back to HTTP transparently, so no user-visible error accompanies this.',
+    ],
+  },
+  // The one cause with its own remedy. Present so the `Record` is exhaustive and
+  // a cause added server-side cannot fall through to a neighbour's sentence; the
+  // builder consults `remedyForWithheldSyncItems` for this member instead.
+  DURABLE_BACKEND_NOT_READY: remedyForWithheldSyncItems(),
+  NEVER_PROBED: {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'The handshake predicate was never asked, so there is no reading to act on. Re-read this pane after the gate has had a connection to record, and act on whatever it then names.',
+    steps: [
+      'Press Refresh on this pane. The predicate is evaluated when a handshake is attempted, so a gate captured before any client connected has nothing to report.',
+      'Run the checks on the Checks sub-tab. The ticket probe attempts a real handshake, which is what gives the gate something to record.',
+    ],
+    effort: 'wait',
+    basis: 'verified',
+    because: [
+      'The gate reported that the readiness predicate was never probed, which is an absence of evidence rather than a negative reading.',
+    ],
+  },
+  PROBE_FAILED: {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'The readiness probe itself did not complete, so whether the durable backend would have answered is unknown. The backend, or the path to it, is where this is repaired.',
+    steps: [
+      'Read the Database & internal comms section. A durable service that is not answering its own readiness route reports there, and that is the same far end this probe could not reach.',
+      'Re-read this pane after repairing it. The probe is taken fresh on each capture; nothing is cached and nothing here needs a restart.',
+      'Do not conclude the operation is withheld by configuration. A probe that did not complete establishes nothing in either direction, which is why no stronger verdict is claimed.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      'The gate reported the probe as failed rather than as answered-not-ready, and those are different facts with different fixes.',
+    ],
+  },
+  GATE_NOT_RECORDED: {
+    code: 'SYNC_ITEMS_WITHHELD',
+    summary:
+      'This server build records no boot gate, so nothing here can say why SYNC_ITEMS is absent. A newer server reports the gate, after which this row answers for itself.',
+    steps: [
+      'Deploy a server build that reports its boot gate. Nothing on the running one exposes the decision, so no setting changes what this row can read.',
+      'Until then, treat the socket rows in this section as the only evidence. The transport row is a direct measurement on this client and does not depend on the gate at all.',
+    ],
+    effort: 'upgrade-server',
+    basis: 'verified',
+    because: [
+      'No gate was recorded, so the cause is a gap in what the server publishes rather than a deployment fault.',
+    ],
+  },
+}
+
+function remedyForUnconsumedOperation(): Remedy {
+  return {
+    code: 'RECOGNIZED_BUT_UNCONSUMED',
+    summary:
+      'This client tolerates the operation at the handshake and has no handler for it, so its traffic stays on HTTP while the socket looks healthy. Only a client release closes it; no server setting does.',
+    steps: [
+      'Update the client. The operation is negotiated and then dropped on this side, so nothing on the server changes the outcome.',
+      'Do not read the healthy handshake as the lane working. This is the single row most often misread that way: the operation appears in the negotiated set and carries nothing.',
+      'Expect no user-visible error in the meantime. The traffic falls back to HTTP, which is slower and correct.',
+    ],
+    effort: 'client-update',
+    basis: 'verified',
+    because: [
+      'The operation is in the negotiated set and this build declares no consumer for it, which is a disagreement only a client release can close.',
+    ],
+  }
+}
+
+function remedyForAbsentPushBridge(): Remedy {
+  return {
+    code: 'PUSH_BRIDGE_ABSENT',
+    summary:
+      'This process was asked for a Redis-backed push plane and has no reachable Redis, so nothing carries change notifications to connected clients. Point it at a reachable Redis, or let it use its in-process plane. Restart only — no rebuild.',
+    steps: [
+      'Set REDIS_URL to a Redis this container can actually reach, and check CACHE_TYPE is not selecting the memory cache — that suppresses the binding entirely. The Shared state rows in Environment & setup report which of the two is set.',
+      'On a single container, having no Redis at all is a correct configuration: it reports an in-process bridge and is healthy. Only "none" is a fault, and it means a Redis plane was requested and not obtained.',
+      'If the configuration is right, the other way to reach this state is a server build older than the in-process plane. That is an upgrade rather than a setting.',
+      'Restart, then confirm by saving on one device and watching the change arrive on another. The row reports the bridge; delivery is what you are checking.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The attached gateway reported a push bridge of "none" while accepting clients, which is a request for a Redis plane that was not satisfied.',
+      'Clients stay connected and sync on their own schedule, so this presents as "changes are slow to appear" and never as an error.',
+    ],
+  }
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The FILES_V1 sub-gate, one remedy per
+ * condition it can name, plus one for a condition outside this build's four.
+ *
+ * Keyed on the ADMITTED condition — `isKnownFilesUnmetCondition` has already run
+ * — so a server-chosen string cannot select a sentence here, and a condition
+ * added server-side gets the counted arm rather than inheriting a neighbour's
+ * advice about a variable that has nothing to do with it.
+ */
+const FILES_CONDITION_REMEDY: Record<KnownFilesUnmetCondition, Remedy> = {
+  FILES_INTERNAL_URL: {
+    code: 'FILES_V1_WITHHELD',
+    summary:
+      'No INTERNAL files service URL is configured, so the socket waived the realtime file transport at boot. Configure it and restart — no rebuild.',
+    steps: [
+      'Set the internal files service URL this gateway dials. On the bundled compose stack the entrypoint projects it; on a split stack it is yours to set, and it must be the address reachable from THIS container rather than the public one.',
+      'Restart the container. The sub-gate is evaluated once when the lane is composed, so a value that arrives afterwards is not read.',
+      'Expect attachments to keep working throughout. File transfers fall back to ordinary HTTP requests; what is lost is the realtime transport, not the feature.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The sub-gate named the internal files URL as the condition it could not satisfy, which is a presence check taken at composition time.',
+    ],
+  },
+  AUTH_JWT_SECRET: {
+    code: 'FILES_V1_WITHHELD',
+    summary:
+      'AUTH_JWT_SECRET is not usable here, so the files lane cannot revalidate the session behind a transfer and was waived. Set it to the same value the auth server holds, and restart — no rebuild.',
+    steps: [
+      'Set AUTH_JWT_SECRET to the value the auth server uses. A secret that DISAGREES fails exactly like an absent one, and this sub-gate cannot tell you which of the two it hit.',
+      'Use one value across the whole stack. On the images this repo ships the entrypoint exports it once, unprefixed, before supervisord starts, so every co-resident service reads the same key; a split stack has to be kept in step by hand.',
+      'Restart, then re-read this pane. Attachments keep working over HTTP in the meantime.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The sub-gate named the session signing key as its unmet condition, and the files lane revalidates the session behind every transfer before it runs.',
+    ],
+  },
+  VALET_TOKEN_SECRET: {
+    code: 'FILES_V1_WITHHELD',
+    summary:
+      'VALET_TOKEN_SECRET is not usable here, so no upload or download token can be minted for the realtime lane and it was waived. Set it — the same value on auth and on the files service — and restart.',
+    steps: [
+      'Set VALET_TOKEN_SECRET to one value shared by the auth service that mints the token and the files service that accepts it. Two non-empty values that disagree satisfy every presence check on this screen and refuse every transfer.',
+      'Restart, then confirm with a real upload and read-back rather than by re-reading this row. The row reports the sub-gate; the transfer is what you are checking.',
+      'Expect attachments to keep working over HTTP while this holds. The realtime transport is what was waived.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The sub-gate named the valet token secret as its unmet condition, and that key is what authorizes a transfer at all.',
+    ],
+  },
+  TRANSPORT_CONSTRUCTION: {
+    code: 'FILES_V1_WITHHELD',
+    summary:
+      'The files transport itself could not be constructed, which is not a missing variable — the configuration was present and the construction failed. The server log for this boot is the only place that says why.',
+    steps: [
+      'Read the gateway log from the boot that produced this gate. The construction failure is logged there and nowhere else; no row on this screen narrows it.',
+      'Do not set the three files variables again. The sub-gate reports them separately, and it named construction rather than any of them.',
+      'Restart after fixing whatever the log names, then re-read this pane.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The sub-gate named transport construction rather than one of the three presence conditions, so the configuration it needs was there.',
+    ],
+  },
+}
+
+function remedyForUnnameableFilesCondition(): Remedy {
+  return {
+    code: 'FILES_V1_WITHHELD',
+    summary:
+      'The gate named a condition outside the closed set this build knows, so neither it nor the server’s advice for it is reproduced. A client update restores the explanation; the condition itself is unaffected by one.',
+    steps: [
+      'Update the client. That is what restores the sentence — it does not clear the condition, and reading it as a fix for the deployment would be the wrong conclusion.',
+      'Read the gateway log for this boot in the meantime. The condition and the server’s own advice for it are both there.',
+      'Expect attachments to keep working over HTTP. The realtime file transport is what was waived.',
+    ],
+    effort: 'client-update',
+    basis: 'verified',
+    because: [
+      'The condition is a string the server chose and is outside this build’s closed set, so it is counted and never reproduced: this screen and the report it generates are written to be pasted in public.',
+    ],
+  }
+}
+
+function remedyForFlappingLane(): Remedy {
+  return {
+    code: 'SOCKET_LANE_FLAPPING',
+    summary:
+      'The lane has left the socket and come back several times over one page. Every individual reading is healthy, so the cost is paid in the gaps rather than in any row — and the per-cause counters above are what narrows it.',
+    steps: [
+      'Read the per-cause counters above this finding. They say whether the socket was closed from the far end, timed out, or stood down for a cause the lane classifies as deferred — and a deferred cause, such as another tab of this account holding the lane, is expected and is not this.',
+      'Check whatever terminates TLS in front of the gateway for an idle or read timeout shorter than the socket’s own keepalive. A proxy closing an idle websocket is the commonest cause of a lane that recovers every time and never stays up.',
+      'Check whether the gateway process itself is restarting. The uptime row in Environment & setup is the one that answers it: a process whose uptime keeps resetting takes every socket with it on each restart.',
+      'Expect no user-visible error. Saves become one HTTP request each while the lane is off, collaboration rooms are rebuilt and the invite stream re-subscribes from its checkpoint.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      'This client recorded at least three degradations and two recoveries on one page, which no ordinary session reaches: a reconnect after a sleep or a network change is one pair.',
+      'Nothing else in this pane can report it. Each reading is taken at an instant and the lane is healthy at almost every instant.',
+    ],
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Block 1: this client's own transport                                       */
 /* -------------------------------------------------------------------------- */
@@ -768,6 +1067,7 @@ function buildTransportBlock(transport: TransportStatusInput | undefined): Diagn
           'This is not a timeout or a guess: the capability descriptor was read and it offered no sync capability, so the client stood down rather than retrying forever. The boot gate block below is where the reason lives — a lane-gating condition unmet, or the kill switch set — and the fix is there, not here.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForRefusedCapabilityDescriptor(),
       }),
     )
   }
@@ -1099,7 +1399,17 @@ function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined): Diagn
   // inventing a finding for it would make every pre-verdict server build read as
   // degraded on no evidence — the same error in the other direction.
   if (verdict.state === 'WITHHELD') {
-    const remedy = verdict.cause === 'DURABLE_BACKEND_NOT_READY' ? remedyForWithheldSyncItems() : undefined
+    // *** ONE REMEDY PER CAUSE, AND NO FALL-THROUGH. ***
+    //
+    // This used to be `cause === 'DURABLE_BACKEND_NOT_READY' ? … : undefined`, so
+    // six of the seven causes produced a finding with no advice at all — and the
+    // report now prints the remedy as the whole of what a finding says to someone
+    // reading a paste. `verdict.cause` is already admitted against this build's
+    // own `SYNC_ITEMS_CAUSES` by `describeSyncItems`, so the lookup below cannot
+    // be driven by a server-chosen string: an unrecognised cause arrives as `null`
+    // and keeps the undefined arm rather than selecting a neighbour's sentence
+    // about a variable that has nothing to do with it.
+    const remedy = verdict.cause === null ? undefined : SYNC_ITEMS_CAUSE_REMEDY[verdict.cause]
 
     findings.push(
       diagnosticFinding({
@@ -1279,6 +1589,7 @@ function buildCapabilityBlock(
           'This client tolerates the operation at the handshake, which is what stops its advertisement costing the entire socket, but it has no handler for it — so the lane appears in a healthy handshake and its traffic stays on HTTP. It is the single row an operator is most likely to misread as working, and it needs a client change rather than configuration.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForUnconsumedOperation(),
       }),
     )
   }
@@ -1599,6 +1910,7 @@ function buildRealtimeBlock(
           'The lane accepts clients, but nothing carries server-side change notifications to them, so a save on one device never reaches another until that device syncs on its own. This is a misconfiguration rather than a topology: a process that was asked for a Redis-backed plane without a reachable Redis host. A deployment that simply has no Redis reports an in-process bridge instead and is healthy, and a multi-container one reports redis — only "none" is a fault. The other way to reach it is a server build older than the in-process plane, which an upgrade fixes rather than any setting.',
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForAbsentPushBridge(),
       }),
     )
   }
@@ -1673,6 +1985,7 @@ function buildFilesBlock(gate: NonNullable<SyncDiagnosticsPayload['gate']> | und
             : FILES_CONDITION_MEANING[named],
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
+        remedy: named === undefined ? remedyForUnnameableFilesCondition() : FILES_CONDITION_REMEDY[named],
       }),
     )
   }
@@ -2260,6 +2573,7 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
           'This client has watched the lane leave the socket and come back several times over one page. Every individual reading is healthy — it recovers each time — so nothing else in this pane can report it, and the cost is paid in the gaps: while the lane is off the socket every save is one HTTP request, collaboration rooms are rebuilt and the invite stream re-subscribes from its checkpoint. The causes are the per-cause counters above; a deferred cause such as another tab holding the lane is expected and not this.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForFlappingLane(),
       }),
     )
   }

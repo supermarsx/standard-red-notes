@@ -368,6 +368,127 @@ export function reportLine(label: SafeValue, value: SafeValue): SafeValue {
   return mint(`- ${label}: ${value}`)
 }
 
+/**
+ * One ROW as a report line, carrying its reading marker.
+ *
+ * Separate from `reportLine` on purpose: `reportLine` also mints the handful of
+ * lines a section writes by hand (`extraReportLines`), which are statements about
+ * the section rather than readings of a field and have no reading to mark. Only a
+ * real row gets a marker, so the marker column means exactly one thing.
+ *
+ * The marker comes from an exhaustive `Record` over `RowReading`, keyed by the
+ * reading derived from the row's own already-safe value, so it is a literal of
+ * this build whatever the server sent.
+ */
+export function reportRow(row: { readonly label: SafeValue; readonly value: SafeValue }): SafeValue {
+  return mint(`- ${READING_MARKER[readingOf(row.value)]} ${row.label}: ${row.value}`)
+}
+
+/* -------------------------------------------------------------------------- */
+/* The three silences                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * *** THREE DIFFERENT FACTS, AND THEY USED TO READ ALIKE. ***
+ *
+ * The pane already models all three carefully — `safeYesNo` and friends are
+ * three-valued so an absent field cannot read as `false`, and `NOT_PUBLISHED`
+ * exists so a field with no producer does not send an operator looking for a
+ * defect — and then prints them as two sentences a reader has to parse. On a
+ * realistic deployment 49 of 239 report rows read exactly `not reported`, with
+ * nothing in the line saying which of the two silences it is or why.
+ *
+ * So the distinction is a CLOSED value derived from the row, once, here:
+ *
+ *   - `answered`    — the server (or the browser) produced a value. This includes
+ *     a value that was refused on the way out: `withheld (unrecognised format)`
+ *     and `other (unrecognised)` are both readings, and a reading is not a
+ *     silence. That matters for the report's census, which would otherwise count
+ *     a misbehaving server as a quiet one.
+ *   - `unanswered`  — this build asked and nothing came back. The question "why
+ *     not?" is open, and this is the state where it is worth asking.
+ *   - `unpublished` — nothing in the system publishes the field yet. The same
+ *     question has no answer, and that is precisely why `NOT_PUBLISHED` exists.
+ *
+ * Derived from the VALUE rather than stored on the row, deliberately: the value
+ * is minted by the constructors above, which are the only things that can produce
+ * `NOT_REPORTED` or `NOT_PUBLISHED`, so there is no second place for a builder to
+ * state a reading that disagrees with what its row actually prints.
+ */
+export const ROW_READINGS = ['answered', 'unanswered', 'unpublished'] as const
+
+export type RowReading = (typeof ROW_READINGS)[number]
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The marker the copyable report puts at
+ * the head of every row, so the three are separable by eye in a document the
+ * operator pastes somewhere else. Three characters each, all literals of this
+ * build, and the legend is printed once in the report's own `How to read this`.
+ */
+export const READING_MARKER: Record<RowReading, string> = {
+  answered: '[v]',
+  unanswered: '[?]',
+  unpublished: '[n]',
+}
+
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** The on-screen tag for the two silences. */
+export const READING_TAG: Record<RowReading, string> = {
+  answered: 'answered',
+  unanswered: 'no answer',
+  unpublished: 'no source',
+}
+
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** What each reading MEANS, in one line. */
+export const READING_MEANING: Record<RowReading, string> = {
+  answered: 'a value arrived',
+  unanswered: 'this build asked and nothing came back',
+  unpublished: 'nothing publishes this field yet, so there is nothing to wait for',
+}
+
+/**
+ * Which silence — or none — a value represents.
+ *
+ * Matched by PREFIX rather than equality, because several rows join a sentinel to
+ * a qualifier (`no endpoint publishes this (…)`), and anchored at the start so a
+ * row whose value merely CONTAINS the words — `not set (threshold not established:
+ * no lane decision reported)` is a real one — stays `answered`, which it is.
+ */
+export function readingOf(value: string): RowReading {
+  if (value === NOT_PUBLISHED || value.startsWith(`${NOT_PUBLISHED} `)) {
+    return 'unpublished'
+  }
+  if (value === NOT_REPORTED || value.startsWith(`${NOT_REPORTED} `)) {
+    return 'unanswered'
+  }
+  return 'answered'
+}
+
+/** How many rows of each reading. Always all three keys, so a zero is a reading. */
+export function readingCensus(rows: readonly { readonly value: SafeValue }[]): Record<RowReading, number> {
+  const census: Record<RowReading, number> = { answered: 0, unanswered: 0, unpublished: 0 }
+  for (const row of rows) {
+    census[readingOf(row.value)] += 1
+  }
+
+  return census
+}
+
+/**
+ * The census as one sentence, for a block header and for the report.
+ *
+ * Every non-zero reading is named with its count; a reading at zero is omitted
+ * because the sentence is read beside the rows themselves, where an absent group
+ * is visible. A block with no rows at all says so instead — `isBlockEmpty` and
+ * `emptyNote` already own that case and it must not come out as "0 answered".
+ */
+export function describeCensus(census: Record<RowReading, number>): string {
+  const parts = ROW_READINGS.filter((reading) => census[reading] > 0).map(
+    (reading) => `${census[reading]} ${READING_TAG[reading]}`,
+  )
+
+  return parts.length === 0 ? 'no rows' : parts.join(' · ')
+}
+
 /* -------------------------------------------------------------------------- */
 /* Verdicts, evidence and tone                                                */
 /* -------------------------------------------------------------------------- */
@@ -782,7 +903,21 @@ export type SectionModelInput = {
 
 const LABEL_WORST = safeConstant('Worst verdict')
 const LABEL_FINDING = safeConstant('Finding')
+const LABEL_ROWS = safeConstant('Rows')
 const NOTHING_REPORTED = safeConstant('- Nothing was reported for this block.')
+
+/**
+ * The row census as a value.
+ *
+ * Minted rather than built from a constructor because it is two permitted
+ * categories spliced together — bounded counts and literals of this build, and
+ * nothing else can reach it: `describeCensus` reads only `READING_TAG` and the
+ * integers `readingCensus` counted. It exists so a reader of the pasted report
+ * can tell "this section reported 22 facts" from "this section reported 3 facts
+ * and 19 silences" without counting the lines themselves.
+ */
+const censusValue = (rows: readonly DiagnosticRow[]): SafeValue =>
+  mint(`${rows.length} (${describeCensus(readingCensus(rows))})`)
 
 export function buildSectionModel(input: SectionModelInput): SectionModel {
   const { id, blocks } = input
@@ -809,10 +944,13 @@ export function buildSectionModel(input: SectionModelInput): SectionModel {
     }
   }
 
+  const everyRow = blocks.flatMap((block) => [...block.rows])
+
   const reportLines: SafeValue[] = [
     mint(`## ${title}`),
     mint(''),
     reportLine(LABEL_WORST, safeEnum(worstVerdict, VERDICTS)),
+    reportLine(LABEL_ROWS, censusValue(everyRow)),
     mint(''),
   ]
 
@@ -822,7 +960,7 @@ export function buildSectionModel(input: SectionModelInput): SectionModel {
       reportLines.push(NOTHING_REPORTED)
     }
     for (const row of block.rows) {
-      reportLines.push(reportLine(row.label, row.value))
+      reportLines.push(reportRow(row))
     }
     for (const finding of block.findings) {
       reportLines.push(reportLine(LABEL_FINDING, safeTokens(finding.code, safeEnum(finding.verdict, VERDICTS))))

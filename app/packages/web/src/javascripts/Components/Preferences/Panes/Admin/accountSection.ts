@@ -1060,6 +1060,202 @@ function remedyForRefusedAdminRole(): Remedy {
   }
 }
 
+/**
+ * *** THE TEN REMEDIES THIS SECTION'S FINDINGS SHIPPED WITHOUT. ***
+ *
+ * Ten of the 17 remedy-less findings in this directory were here, which is not a
+ * coincidence: the Space block's whole design is to keep the KINDS of empty apart,
+ * and an arm whose only job is to name a kind of empty reads as though there were
+ * nothing to say. There is, and the ten sentences differ from each other far more
+ * than the findings do — a server too old to answer, a read that never arrived, a
+ * caller that never asked and an account that has never uploaded anything need a
+ * newer server, a repaired service, a client release and nothing at all
+ * respectively.
+ *
+ * Two of them are the reason `diagnosticRemedies.ts` gained members:
+ * `upgrade-server`, because `client-update` sends the operator after a client
+ * release that would change nothing, and `no-action`, because `none` renders
+ * "Not fixable here" over an account that is working perfectly.
+ */
+function remedyForFailedSpaceRead(): Remedy {
+  return {
+    code: 'ACCOUNT_SPACE_READ_FAILED',
+    summary:
+      'No answer arrived for this account’s file figures. These two numbers are per-account settings served by the AUTH service, so a read that will not produce them points at that service or at this session — not at the files service, which neither stores nor serves them.',
+    steps: [
+      'Read the Database & internal comms section. An auth service that is not answering, or whose own database is not, reports there and is the same far end this read could not reach.',
+      'Check this session. The Account and access block above reports whether it is signed in and whether the server accepted it; a session the server will not accept cannot read its own settings either.',
+      'Do not go looking at the files lane on account of this. A deployment whose transfers are completely broken reports these figures perfectly, and one that cannot report them may transfer files without trouble.',
+      'Treat the Space rows as unread, never as zero. Re-read this pane after repairing whichever of the two it was.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      'The read was attempted and no answer arrived — a request that never completed, or one this client re-threw. A server that answers carrying no figure is a different state and is reported separately.',
+    ],
+  }
+}
+
+function remedyForUnrecordedSpaceUsage(): Remedy {
+  return {
+    code: 'ACCOUNT_SPACE_USAGE_UNRECORDED',
+    summary:
+      'The request path is fine and the bookkeeping is missing. FILE_UPLOAD_BYTES_USED is written by the auth worker on a successful upload, so an account holding files with no figure means those writes did not land — most often a worker that is not consuming its queue.',
+    steps: [
+      'Check the event queue first. The Database & internal comms section reports whether the in-process gateway is consuming the same queue the workers read; where it is, each message goes to one of them and roughly four in five pushes and bookkeeping writes are lost to the wrong consumer.',
+      'Confirm the auth worker is running and consuming. A worker that is up but not consuming looks identical from here to one that is down.',
+      'Recalculate this account’s usage from Admin → Users once the writes are landing again. The figure is a running total, so a gap in it does not fill itself.',
+      'Expect uploads to keep working throughout. A missing figure refuses nothing; what is lost is the quota, which cannot be enforced or warned about from a total nobody is keeping.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      'Two facts are measured: this account holds at least one file, and the server answered carrying no usage figure.',
+      'WHY it is missing — never written, or written and later lost — is not established by anything on this screen, which is why the steps above start by checking the commonest cause rather than asserting it.',
+    ],
+  }
+}
+
+function remedyForNothingToReport(): Remedy {
+  return {
+    code: 'ACCOUNT_SPACE_NOTHING_TO_REPORT',
+    summary:
+      'Nothing to do. This account has never uploaded a file, so there is no usage figure for it to have — FILE_UPLOAD_BYTES_USED comes into existence on the first successful upload and not before.',
+    steps: [],
+    effort: 'no-action',
+    basis: 'verified',
+    because: [
+      'The read completed, the server carried no figure, and this client’s own item collection reports no file item for this account.',
+      'It is reported at all only so the empty rows above are not mistaken for a failed read. It is not a fault in the deployment, the session or the files lane.',
+    ],
+  }
+}
+
+function remedyForUnexplainedSpaceFigure(): Remedy {
+  return {
+    code: 'ACCOUNT_SPACE_FIGURE_UNEXPLAINED',
+    summary:
+      'Re-read this pane once the app has finished loading. Whether an absent figure is ordinary depends on whether this account has ever uploaded a file, and this client cannot say yet: its item collection is still loading, so an empty file list means "not read" rather than "none".',
+    steps: [
+      'Wait for the app to finish its cold load, then press Refresh on this pane. This resolves itself into one of the two answers with no action at all.',
+      'Do not change anything on the strength of this row. It is left undetermined rather than guessed because guessing the quiet one is how a real loss of upload bookkeeping would be reported as nothing.',
+    ],
+    effort: 'wait',
+    basis: 'verified',
+    because: [
+      'The read completed and carried no figure, and the file census reported "not loaded" rather than present or none.',
+    ],
+  }
+}
+
+function remedyForUnreportedAllowance(): Remedy {
+  return {
+    code: 'ACCOUNT_SPACE_ALLOWANCE_UNREPORTED',
+    summary:
+      'This server does not derive the EFFECTIVE file allowance, so there is no ceiling to measure the usage total against. A newer server answers it; nothing on this one does, and nothing is refused by it.',
+    steps: [
+      'Deploy a server build that derives the effective allowance. The per-account FILE_UPLOAD_BYTES_LIMIT row is legitimately absent on most accounts, and a server that reports only the row reports nothing.',
+      'Do not set a per-account limit to make this row fill in. That changes the policy for this account rather than fixing the reading, and the upload-token minter is already applying the plan default — or unlimited where there is no live subscription.',
+      'Until then, the headroom verdict in the requirements block stays undetermined. Nothing short of attempting an upload establishes it in this state.',
+    ],
+    effort: 'upgrade-server',
+    basis: 'verified',
+    because: [
+      'The read completed, carried a usage total and carried no allowance, which is a server that does not derive the effective figure rather than an account with no allowance.',
+    ],
+  }
+}
+
+function remedyForUnaskedSpaceRead(): Remedy {
+  return {
+    code: 'ACCOUNT_SPACE_NOT_READ',
+    summary:
+      'Nothing asked for these figures. That is a gap in the CALLER, not in the deployment — and not the state the diagnostics tab is in, which reads both from the requesting session’s own subscription settings.',
+    steps: [
+      'Treat the Space rows as unread, never as zero. Nothing about this deployment is established by them.',
+      'If this is the diagnostics tab rather than a test or a future caller, it is a client defect: the tab supplies both figures, so seeing this means the read did not reach the section. Update the client.',
+    ],
+    effort: 'client-update',
+    basis: 'verified',
+    because: [
+      'The caller stated `not-attempted` explicitly rather than leaving the field absent, so this is a report about the caller and not an inference from silence.',
+    ],
+  }
+}
+
+function remedyForAbsentStorageEndpoint(): Remedy {
+  return {
+    code: 'ACCOUNT_STORAGE_ENDPOINT_ABSENT',
+    summary:
+      'This server build has no route for the stored-item total. Upgrading the server fills it with no migration and no configuration — the total is computed from the item table on each request, so the first read after the upgrade is already correct for everything stored before it.',
+    steps: [
+      'Deploy a newer server build. Nothing is broken on the running one, nothing is refused, and sync, uploads and every other row on this screen are unaffected.',
+      'Do not read the empty rows as an empty account. On this build the file rows cover attachments only, so an account whose storage is entirely notes — which is most accounts — reads as holding nothing at all.',
+      'There is nothing to configure and nothing to restart for this. The route either exists in the image or it does not.',
+    ],
+    effort: 'upgrade-server',
+    basis: 'verified',
+    because: [
+      'The item-usage request completed and the server answered that it has no such route, which is a deployment older than the figure rather than a fault in the one running.',
+    ],
+  }
+}
+
+function remedyForFailedStorageRead(): Remedy {
+  return {
+    code: 'ACCOUNT_STORAGE_READ_FAILED',
+    summary:
+      'No answer arrived for the stored-item total. The figure is served by the SYNCING server on this session’s own credentials, so a read that will not produce it points at that service or at this session.',
+    steps: [
+      'Read the Database & internal comms section. A syncing service that is not answering reports there and is the same far end this read could not reach.',
+      'Check this session in the Account and access block. A session the server will not accept cannot read its own items either.',
+      'Do not read this as evidence about the notes themselves. Syncing can be entirely healthy while this one read fails, and a deployment whose syncing is broken has far louder symptoms than an empty row here.',
+      'Treat the total as unread, never as zero.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      'No answer arrived at all — a request that never completed, or one this client re-threw. A server that lacks the route answers, and that answer is reported separately.',
+    ],
+  }
+}
+
+function remedyForUnaskedStorageRead(): Remedy {
+  return {
+    code: 'ACCOUNT_STORAGE_NOT_READ',
+    summary:
+      'Nothing asked how much this account has stored. That is a gap in the CALLER, not in the deployment: the diagnostics tab reads the figure from the requesting session’s own items, carrying no account identifier in either direction.',
+    steps: [
+      'Treat the item rows as unread, never as zero. Nothing about this deployment is established by them.',
+      'If this is the diagnostics tab rather than a test or a future caller, it is a client defect: the tab supplies the figure, so seeing this means the read did not reach the section. Update the client.',
+    ],
+    effort: 'client-update',
+    basis: 'verified',
+    because: [
+      'The caller stated `not-attempted` explicitly rather than leaving the field absent, so this is a report about the caller and not an inference from silence.',
+    ],
+  }
+}
+
+function remedyForPartialStorageTotal(): Remedy {
+  return {
+    code: 'ACCOUNT_STORAGE_TOTAL_PARTIAL',
+    summary:
+      'Some of this account’s items carry no recorded size, so every figure derived from the sum — the account total included — is a lower bound rather than a measurement. Recalculating this account’s usage re-derives the missing sizes and makes it exact.',
+    steps: [
+      'Run the quota recalculation for this account from Admin → Users. It re-derives the missing sizes from the items themselves, applies immediately and needs no restart.',
+      'Expect the row above to read "every item measured" afterwards, and the total to move. It will move UP: the items the sum could not see are real storage.',
+      'Nothing is refused and no data is at risk in the meantime. The only thing that is wrong is the number.',
+    ],
+    effort: 'account-setting',
+    basis: 'verified',
+    because: [
+      'The read completed and produced a figure, and the server also reported that some of this account’s items have no recorded payload size.',
+      'The size column is nullable and was added by a migration over a table that already had rows, so items written before it carry none. That is the ordinary cause and it is not a fault.',
+    ],
+  }
+}
+
 function remedyForFileQuota(exhausted: boolean): Remedy {
   return {
     code: 'ACCOUNT_FILE_QUOTA_NEARLY_FULL',
@@ -1468,6 +1664,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The rows above are empty because the read FAILED, not because this build does not look. No answer arrived at all — a request that never completed, or one the client re-threw — which is a different state from a server that answered carrying no figure, and that one is reported separately. These two numbers are per-account SETTINGS served by the auth service, so a read that will not produce them points at the session or at auth — not at the files service, which neither stores nor serves them. Do not read this as evidence about attachments: a deployment whose file transfers are completely broken reports these figures perfectly, and a deployment that cannot report them may transfer files without trouble. If attachments are the symptom, the files rows in the Database & internal comms section are the place, together with the finding there saying that nothing on that screen establishes an authorized transfer.',
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForFailedSpaceRead(),
       }),
     )
   }
@@ -1491,6 +1688,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           // claim on proxy evidence caps to `undetermined` and this finding would
           // then report a measured bookkeeping gap as "could not tell".
           evidence: EVIDENCE_DIRECT,
+          remedy: remedyForUnrecordedSpaceUsage(),
         }),
       )
     } else if (census === 'none') {
@@ -1502,6 +1700,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
             'The read completed and the server carried no figure, and this account holds no file — so there is nothing for it to have a figure about. FILE_UPLOAD_BYTES_USED comes into existence on the first successful upload and not before. This is the ordinary state of an account that has never uploaded anything, it is reported here only so the empty rows above are not mistaken for a failed read, and it is not a fault in the deployment, the session or the files lane.',
           verdict: 'informational',
           evidence: EVIDENCE_DIRECT,
+          remedy: remedyForNothingToReport(),
         }),
       )
     } else {
@@ -1513,6 +1712,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
             'The read completed and carried nothing. Whether that is ordinary depends on whether this account has ever uploaded a file, and this client cannot say: its item collection has not finished loading, so an empty file list means "not read yet" rather than "none". Re-run these diagnostics once the app has finished loading and this resolves itself into one of the two answers. It is left undetermined rather than guessed because guessing the quiet one is how a real loss of upload bookkeeping would be reported as nothing at all.',
           verdict: 'undetermined',
           evidence: EVIDENCE_ABSENT,
+          remedy: remedyForUnexplainedSpaceFigure(),
         }),
       )
     }
@@ -1542,6 +1742,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The read completed, carried a usage total and carried no allowance. That is a SERVER that does not derive the effective allowance — the per-account FILE_UPLOAD_BYTES_LIMIT row is legitimately absent on most accounts, and a server that reports only the row reports nothing. It is not a fault and nothing is refused by it: the upload-token minter still falls back to the plan default, and to unlimited where there is no live subscription, so uploads go through at a ceiling this client is simply not told. What it costs is the headroom verdict in the requirements block below, which has a usage total and nothing to measure it against and therefore stays undetermined. Nothing short of attempting an upload establishes the headroom in this state.',
         verdict: 'undetermined',
         evidence: EVIDENCE_ABSENT,
+        remedy: remedyForUnreportedAllowance(),
       }),
     )
   }
@@ -1560,6 +1761,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The rows above are empty because nothing asked, and that is said here rather than left to look like a quiet deployment with nothing stored. It is a gap in the CALLER, not in the deployment, and it is no longer the state the diagnostics tab is in: it reads both figures from the requesting session’s own subscription settings, which carry no account identifier in either direction. A model built without them — a test, or a future caller — reports this instead of a figure it never looked for. Treat the Space rows as unread, never as zero.',
         verdict: 'undetermined',
         evidence: EVIDENCE_ABSENT,
+        remedy: remedyForUnaskedSpaceRead(),
       }),
     )
   }
@@ -1596,6 +1798,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The item-usage request completed and the server answered that it has no such route. That is a DEPLOYMENT OLDER THAN THE FIGURE, not a fault in the one that is running: nothing is broken, nothing is refused, and sync, uploads and every other row on this screen are unaffected. What is missing is the answer to "how much is this account storing", which is most of what a storage report is for — the file rows above cover attachments only, so on this build an account whose storage is entirely notes reads as holding nothing at all. Upgrading the server fills it with no migration and no configuration: the total is computed from the item table on each request rather than from anything that has to be built up first, so the first read after the upgrade is already correct and already covers everything stored before it.',
         verdict: 'undetermined',
         evidence: EVIDENCE_ABSENT,
+        remedy: remedyForAbsentStorageEndpoint(),
       }),
     )
   } else if (itemFigureAbsent && itemReading === 'read-threw') {
@@ -1607,6 +1810,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The rows above are empty because the read FAILED, not because this build does not look and not because the server lacks the route — a server that lacks it answers, and that answer is reported separately. No answer arrived at all: a request that never completed, or one this client re-threw. The figure is served by the SYNCING server on the session’s own credentials, so a read that will not produce it points at that service or at the session, and not at the files service, which neither stores nor serves it. Do not read this as evidence about the notes themselves: syncing can be entirely healthy while this one read fails, and a deployment whose syncing is broken has louder symptoms than an empty row here. Treat the total as unread, never as zero.',
         verdict: 'broken',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForFailedStorageRead(),
       }),
     )
   } else if (itemFigureAbsent && itemReading === 'not-attempted') {
@@ -1618,6 +1822,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The item rows above are empty because nothing asked, and that is said here rather than left to look like an account with nothing in it. It is a gap in the CALLER, not in the deployment: the diagnostics tab reads the figure from the requesting session’s own items, carrying no account identifier in either direction. A model built without it — a test, or a future caller — reports this instead of a figure it never looked for.',
         verdict: 'undetermined',
         evidence: EVIDENCE_ABSENT,
+        remedy: remedyForUnaskedStorageRead(),
       }),
     )
   } else if (!itemFigureAbsent && observed.itemBytesComplete === false) {
@@ -1629,6 +1834,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
           'The read completed and produced a figure, and the server also reported that some of this account’s items have no recorded payload size — the column is nullable and was added by a migration over a table that already had rows, so items written before it carry none. Those items are REAL STORAGE that the sum cannot see, so every figure derived from it, including the account total, is a lower bound rather than a measurement. Degraded rather than down: nothing is refused and no data is at risk, and the only thing that is wrong is the number. The server can re-derive the missing sizes from the items themselves — the admin quota recalculation for this account does it — after which this row reads "every item measured" and the total becomes exact.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
+        remedy: remedyForPartialStorageTotal(),
       }),
     )
   }
