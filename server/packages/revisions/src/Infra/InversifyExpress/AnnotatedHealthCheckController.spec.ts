@@ -48,4 +48,29 @@ describe('AnnotatedHealthCheckController', () => {
 
     expect(statusMock).toHaveBeenCalledWith(200)
   })
+
+  // The DB probe is raced against a 2 s deadline and nothing drove the
+  // deadline itself: the `setTimeout` callback that rejects was an uncovered
+  // function, so the failure mode the timeout is FOR — a database that accepts
+  // the connection and then never answers `SELECT 1`, which is what a
+  // saturated or wedged DB looks like — had no test. A wedged DB must read 503
+  // so the orchestrator stops routing here, not hang the readiness request.
+  // Fake timers rather than a 2 s sleep, but the real `withTimeout`, the real
+  // `Promise.race` and the real callback.
+  it('reports unavailable (503) when the DB accepts the query and never answers', async () => {
+    jest.useFakeTimers()
+    try {
+      const query = jest.fn().mockReturnValue(new Promise<unknown>(() => undefined))
+      const response = makeResponse()
+
+      const pending = new AnnotatedHealthCheckController(makeRepository(query)).readiness(response)
+      await jest.advanceTimersByTimeAsync(2000)
+      await pending
+
+      expect(statusMock).toHaveBeenCalledWith(503)
+      expect(jsonMock).toHaveBeenCalledWith({ status: 'unavailable', checks: { db: false } })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
 })
