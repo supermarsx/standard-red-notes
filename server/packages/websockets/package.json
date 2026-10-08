@@ -36,7 +36,7 @@
     "@standardnotes/security": "workspace:^",
     "@standardnotes/time": "workspace:^",
     "cors": "2.8.6",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.6",
     "express": "^5.2.1",
     "inversify": "^8.2.3",
     "inversify-express-utils": "workspace:*",

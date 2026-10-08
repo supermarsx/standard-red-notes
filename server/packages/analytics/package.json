@@ -49,7 +49,7 @@
     "@standardnotes/domain-events-infra": "workspace:*",
     "@standardnotes/time": "workspace:*",
     "dayjs": "^1.11.23",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.6",
     "inversify": "^8.2.3",
     "ioredis": "^5.11.1",
     "mixpanel": "^0.24.0",

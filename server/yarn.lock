@@ -4653,7 +4653,7 @@ __metadata:
     "@types/mixpanel": "npm:^2.14.9"
     "@types/node": "npm:^26.6.4"
     dayjs: "npm:^1.11.23"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     inversify: "npm:^8.2.3"
     ioredis: "npm:^5.11.1"
     jest: "npm:^30.5.2"
@@ -4695,7 +4695,7 @@ __metadata:
     axios: "npm:^1.20.0"
     cookie-parser: "npm:^1.4.7"
     cors: "npm:2.8.6"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     express: "npm:^5.2.1"
     helmet: "npm:^8.3.0"
     inversify: "npm:^8.2.3"
@@ -4771,7 +4771,7 @@ __metadata:
     cookie-parser: "npm:^1.4.7"
     cors: "npm:2.8.6"
     dayjs: "npm:^1.11.23"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     esbuild: "npm:^0.28.2"
     express: "npm:^5.2.1"
     inversify: "npm:^8.2.3"
@@ -4925,7 +4925,7 @@ __metadata:
     connect-busboy: "npm:^1.0.0"
     cors: "npm:^2.8.6"
     dayjs: "npm:^1.11.23"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     express: "npm:^5.2.1"
     express-winston: "npm:^4.2.0"
     helmet: "npm:^8.3.0"
@@ -4981,7 +4981,7 @@ __metadata:
     "@yarnpkg/esbuild-plugin-pnp": "npm:^3.0.0-rc.15"
     cookie-parser: "npm:^1.4.7"
     cors: "npm:2.8.6"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     esbuild: "npm:^0.28.2"
     express: "npm:^5.2.1"
     helmet: "npm:^8.3.0"
@@ -5058,7 +5058,7 @@ __metadata:
     "@types/node": "npm:^26.6.4"
     better-sqlite3: "npm:^12.11.1"
     cors: "npm:2.8.6"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     express: "npm:^5.2.1"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
@@ -5090,7 +5090,7 @@ __metadata:
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^26.6.4"
     dayjs: "npm:^1.11.23"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     inversify: "npm:^8.2.3"
     ioredis: "npm:^5.11.1"
     jest: "npm:^30.5.2"
@@ -5195,7 +5195,7 @@ __metadata:
     "@types/semver": "npm:^7.8.0"
     better-sqlite3: "npm:^12.11.1"
     cors: "npm:2.8.6"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     express: "npm:^5.2.1"
     helmet: "npm:^8.3.0"
     inversify: "npm:^8.2.3"
@@ -5264,7 +5264,7 @@ __metadata:
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^26.6.4"
     cors: "npm:2.8.6"
-    dotenv: "npm:^17.4.2"
+    dotenv: "npm:^18.0.6"
     express: "npm:^5.2.1"
     inversify: "npm:^8.2.3"
     inversify-express-utils: "workspace:*"
@@ -7891,6 +7891,15 @@ __metadata:
   version: 17.4.2
   resolution: "dotenv@npm:17.4.2"
   checksum: 10/ca1b6f54d58e39914901e1518958e86083aca8deb5aa2e7f2a51acd53291d97852479b0ab26ed949b6a45a0e9adcc7b0d1c3c72375e8ea670f7005e341c6daba
+  languageName: node
+  linkType: hard
+
+"dotenv@npm:^18.0.6":
+  version: 18.0.6
+  resolution: "dotenv@npm:18.0.6"
+  bin:
+    dotenv: dist/index.cjs
+  checksum: 10/67f9d106d75db66c61a7257fe83da05a89fab1e78fce00e8ed066c95758e7cde5f6cdcc00fa00cc11bbe3d636d4aa9d3453fc805bf27060743844c04f967b284
   languageName: node
   linkType: hard
 

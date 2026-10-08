@@ -6677,7 +6677,7 @@ const RAW_RUNTIME_STATE =
           ["@types/mixpanel", "npm:2.14.9"],\
           ["@types/node", "npm:26.6.4"],\
           ["dayjs", "npm:1.11.23"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["inversify", "npm:8.2.3"],\
           ["ioredis", "npm:5.11.1"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
@@ -6736,7 +6736,7 @@ const RAW_RUNTIME_STATE =
           ["axios", "npm:1.20.0"],\
           ["cookie-parser", "npm:1.4.7"],\
           ["cors", "npm:2.8.6"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.3.0"],\
           ["inversify", "npm:8.2.3"],\
@@ -6800,7 +6800,7 @@ const RAW_RUNTIME_STATE =
           ["cookie-parser", "npm:1.4.7"],\
           ["cors", "npm:2.8.6"],\
           ["dayjs", "npm:1.11.23"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["esbuild", "npm:0.28.2"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.2.3"],\
@@ -6964,7 +6964,7 @@ const RAW_RUNTIME_STATE =
           ["connect-busboy", "npm:1.0.0"],\
           ["cors", "npm:2.8.6"],\
           ["dayjs", "npm:1.11.23"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["express", "npm:5.2.1"],\
           ["express-winston", "virtual:b442cf0427cc365d1c137f7340f9b81f9b204561afe791a8564ae9590c3a7fc4b5f793aaf8817b946f75a3cb64d03ef8790eb847f8b576b41e700da7b00c240c#npm:4.2.0"],\
           ["helmet", "npm:8.3.0"],\
@@ -7024,7 +7024,7 @@ const RAW_RUNTIME_STATE =
           ["@yarnpkg/esbuild-plugin-pnp", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:3.0.0-rc.15"],\
           ["cookie-parser", "npm:1.4.7"],\
           ["cors", "npm:2.8.6"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["esbuild", "npm:0.28.2"],\
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.3.0"],\
@@ -7107,7 +7107,7 @@ const RAW_RUNTIME_STATE =
           ["@types/node", "npm:26.6.4"],\
           ["better-sqlite3", "npm:12.11.1"],\
           ["cors", "npm:2.8.6"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
@@ -7141,7 +7141,7 @@ const RAW_RUNTIME_STATE =
           ["@types/jest", "npm:30.0.0"],\
           ["@types/node", "npm:26.6.4"],\
           ["dayjs", "npm:1.11.23"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["inversify", "npm:8.2.3"],\
           ["ioredis", "npm:5.11.1"],\
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
@@ -7255,7 +7255,7 @@ const RAW_RUNTIME_STATE =
           ["@types/semver", "npm:7.8.0"],\
           ["better-sqlite3", "npm:12.11.1"],\
           ["cors", "npm:2.8.6"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["express", "npm:5.2.1"],\
           ["helmet", "npm:8.3.0"],\
           ["inversify", "npm:8.2.3"],\
@@ -7329,7 +7329,7 @@ const RAW_RUNTIME_STATE =
           ["@types/jest", "npm:30.0.0"],\
           ["@types/node", "npm:26.6.4"],\
           ["cors", "npm:2.8.6"],\
-          ["dotenv", "npm:17.4.2"],\
+          ["dotenv", "npm:18.0.6"],\
           ["express", "npm:5.2.1"],\
           ["inversify", "npm:8.2.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
@@ -10590,6 +10590,13 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/dotenv-npm-17.4.2-46ee0c966e-ca1b6f54d5.zip/node_modules/dotenv/",\
         "packageDependencies": [\
           ["dotenv", "npm:17.4.2"]\
+        ],\
+        "linkType": "HARD"\
+      }],\
+      ["npm:18.0.6", {\
+        "packageLocation": "./.yarn/cache/dotenv-npm-18.0.6-ff9fcc9ba0-67f9d106d7.zip/node_modules/dotenv/",\
+        "packageDependencies": [\
+          ["dotenv", "npm:18.0.6"]\
         ],\
         "linkType": "HARD"\
       }]\
