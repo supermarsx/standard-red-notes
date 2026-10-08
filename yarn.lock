@@ -975,7 +975,7 @@ __metadata:
     "@modelcontextprotocol/sdk": "npm:^1.32.1"
     "@standardnotes/domain-core": "npm:^1.41.8"
     "@standardnotes/sncrypto-web": "npm:1.14.11"
-    "@standardnotes/snjs": "npm:2.211.6"
+    "@standardnotes/snjs": "npm:2.212.4"
     "@types/node": "npm:^26.6.4"
     "@vitest/coverage-v8": "npm:^4.1.10"
     esbuild: "npm:^0.28.2"
@@ -1046,15 +1046,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@standardnotes/snjs@npm:2.211.6":
-  version: 2.211.6
-  resolution: "@standardnotes/snjs@npm:2.211.6"
+"@standardnotes/snjs@npm:2.212.4":
+  version: 2.212.4
+  resolution: "@standardnotes/snjs@npm:2.212.4"
   dependencies:
     connect: "npm:^3.7.0"
     serve-static: "npm:^1.15.0"
+    ttag: "npm:^1.8.12"
   bin:
     snjs: e2e-server.js
-  checksum: 10c0/60855f037895c2d247ca7f1ed4f4b1d378eff2dfc2f0e50dc22538f375a3ab9818535f2b0649425c3c52aa347114b38b0500b69e326d856ce6cec7595c9ab575
+  checksum: 10c0/065d23fce5274e8afc66718725688b5304b5d4ff6ca97c4eb6e700b0841b3ab956b8884932f3ca8542b1cc5b3c8f61bcfd8e924d3c249b448168490895d0fff4
   languageName: node
   linkType: hard
 
@@ -1698,6 +1699,18 @@ __metadata:
   version: 10.6.0
   resolution: "decimal.js@npm:10.6.0"
   checksum: 10c0/07d69fbcc54167a340d2d97de95f546f9ff1f69d2b45a02fd7a5292412df3cd9eb7e23065e532a318f5474a2e1bccf8392fdf0443ef467f97f3bf8cb0477e5aa
+  languageName: node
+  linkType: hard
+
+"dedent@npm:1.5.1":
+  version: 1.5.1
+  resolution: "dedent@npm:1.5.1"
+  peerDependencies:
+    babel-plugin-macros: ^3.1.0
+  peerDependenciesMeta:
+    babel-plugin-macros:
+      optional: true
+  checksum: 10c0/f8612cd5b00aab58b18bb95572dca08dc2d49720bfa7201a444c3dae430291e8a06d4928614a6ec8764d713927f44bce9c990d3b8238fca2f430990ddc17c070
   languageName: node
   linkType: hard
 
@@ -3003,6 +3016,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"plural-forms@npm:^0.5.3":
+  version: 0.5.5
+  resolution: "plural-forms@npm:0.5.5"
+  checksum: 10c0/2707a508924692290c14d277525f232d13ab90d2b0c9b52681e94140a2dd3264aba7066bc370629327a13e882fe57835fd38a805a8bdf554238c0043d0964782
+  languageName: node
+  linkType: hard
+
 "postcss@npm:^8.5.15":
   version: 8.5.26
   resolution: "postcss@npm:8.5.26"
@@ -3561,6 +3581,16 @@ __metadata:
   bin:
     tsx: dist/cli.mjs
   checksum: 10c0/3c5fc53e578da87d3a63565286b1ecbb0e01b9bb646daec1957294ef890d14f22cc67bb4b09b5daffab0e7ce0217b1e7645393feb0f524b1ddf26ae9595d7e75
+  languageName: node
+  linkType: hard
+
+"ttag@npm:^1.8.12":
+  version: 1.8.12
+  resolution: "ttag@npm:1.8.12"
+  dependencies:
+    dedent: "npm:1.5.1"
+    plural-forms: "npm:^0.5.3"
+  checksum: 10c0/6b8f6968174bf599e02a66bddcf3d8e6c478cee0e831044ec5a2518b73b8649b6584d94973cb248fdaa34b5f81636eafdc9513109138c512e3749d611691d7fa
   languageName: node
   linkType: hard
 
