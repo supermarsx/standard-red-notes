@@ -396,9 +396,16 @@ describe('buildAccountSection never discloses an account identifier', () => {
     expect(report).toContain(
       '- Stored items: reported as whole megabytes and a completeness boolean; never counted and never named',
     )
+    // *** AND IT MUST NOT CLAIM A FACT THE ROWS BESIDE IT JUST REPORTED. *** This
+    // line read "not reported by any server build" long after the tab started
+    // reading the admin feature-flags endpoint, so the report asserted the opposite
+    // of the two rows above it. Both halves are asserted: what the line now says,
+    // and that the stale claim is gone.
     expect(report).toContain(
-      '- Per-account feature flags: not reported by any server build; only a refusal observed on the sync lane evidences them',
+      '- Per-account feature flags: read for the requesting session from the admin feature-flags endpoint',
     )
+    expect(report).toContain('admin-gated, so a non-admin session reads them as unavailable rather than as off')
+    expect(report).not.toContain('not reported by any server build')
   })
 
   it('reports no byte figure more precise than a whole megabyte or a bucket', () => {

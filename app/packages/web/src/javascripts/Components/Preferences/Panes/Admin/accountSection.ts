@@ -2018,9 +2018,28 @@ const REPORT_BYTES_REDUCED = reportLine(
   safeConstant('reduced to closed buckets and whole megabytes before they are reported'),
 )
 
+/**
+ * *** THIS LINE WAS STALE, AND IT WAS STALE IN THE DIRECTION THAT MATTERS. ***
+ *
+ * It read "not reported by any server build; only a refusal observed on the sync
+ * lane evidences them" — written when nothing fetched the flags. Something does:
+ * the diagnostics tab reads `GET /v1/admin/users/:userUuid/feature-flags` for the
+ * REQUESTING session, which is the route the admin Users tab has always used, and
+ * the two flag rows above carry the EFFECTIVE values from it. A pasteable report
+ * asserting that no server reports a fact the rows beside it just reported is the
+ * one kind of error this pane cannot afford, because its only asset is that it can
+ * be believed.
+ *
+ * What survives of the old sentence is the part that is still true and is the
+ * reason the rows can read empty: the endpoint is admin-gated, so a non-admin
+ * session is refused on authorization and the rows say so rather than claiming the
+ * flags are off.
+ */
 const REPORT_ACCOUNT_FLAGS = reportLine(
   safeConstant('Per-account feature flags'),
-  safeConstant('not reported by any server build; only a refusal observed on the sync lane evidences them'),
+  safeConstant(
+    'read for the requesting session from the admin feature-flags endpoint, as EFFECTIVE booleans; the endpoint is admin-gated, so a non-admin session reads them as unavailable rather than as off',
+  ),
 )
 
 /**
