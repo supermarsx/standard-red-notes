@@ -3428,6 +3428,21 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@electron/asar@npm:4.3.1":
+  version: 4.3.1
+  resolution: "@electron/asar@npm:4.3.1"
+  dependencies:
+    glob: "npm:^13.0.2"
+    minimatch: "npm:^10.0.1"
+  dependenciesMeta:
+    electron:
+      built: true
+  bin:
+    asar: bin/asar.mjs
+  checksum: 10/8664c1efb8bac8efde8c992057da0e4510cca3561f66afea18dde00f3031105d9cb765b1f71e36aef6dc3a4b89003b21c8c1081b40200e28fd4efd78aa3e380d
+  languageName: node
+  linkType: hard
+
 "@electron/fuses@npm:^1.8.0":
   version: 1.8.0
   resolution: "@electron/fuses@npm:1.8.0"
@@ -9508,7 +9523,7 @@ __metadata:
   dependencies:
     "@babel/core": "npm:^7.29.7"
     "@babel/preset-env": "npm:^7.29.7"
-    "@electron/asar": "npm:3.4.1"
+    "@electron/asar": "npm:4.3.1"
     "@electron/notarize": "npm:^3.1.1"
     "@electron/rebuild": "npm:4.2.1"
     "@standardnotes/domain-core": "npm:^1.41.3"
@@ -19601,7 +19616,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"glob@npm:^13.0.0, glob@npm:^13.0.3, glob@npm:^13.0.6":
+"glob@npm:^13.0.0, glob@npm:^13.0.2, glob@npm:^13.0.3, glob@npm:^13.0.6":
   version: 13.0.6
   resolution: "glob@npm:13.0.6"
   dependencies:
@@ -24177,7 +24192,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"minimatch@npm:^10.0.3, minimatch@npm:^10.1.1, minimatch@npm:^10.2.2, minimatch@npm:^10.2.4, minimatch@npm:^10.2.5, minimatch@npm:^10.2.6":
+"minimatch@npm:^10.0.1, minimatch@npm:^10.0.3, minimatch@npm:^10.1.1, minimatch@npm:^10.2.2, minimatch@npm:^10.2.4, minimatch@npm:^10.2.5, minimatch@npm:^10.2.6":
   version: 10.2.6
   resolution: "minimatch@npm:10.2.6"
   dependencies:
