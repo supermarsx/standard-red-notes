@@ -47,7 +47,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\" \"scripts/**/*.mjs\" README.md package.json"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.111.0",
+    "@anthropic-ai/sdk": "^0.131.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "openai": "^7.30.0",
     "toml": "^5.0.0",

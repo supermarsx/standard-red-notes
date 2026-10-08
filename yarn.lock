@@ -5,9 +5,9 @@ __metadata:
   version: 10
   cacheKey: 10c0
 
-"@anthropic-ai/sdk@npm:^0.111.0":
-  version: 0.111.0
-  resolution: "@anthropic-ai/sdk@npm:0.111.0"
+"@anthropic-ai/sdk@npm:^0.131.0":
+  version: 0.131.0
+  resolution: "@anthropic-ai/sdk@npm:0.131.0"
   dependencies:
     json-schema-to-ts: "npm:^3.1.1"
     standardwebhooks: "npm:^1.0.0"
@@ -18,7 +18,7 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/0d252f991db31ec94c63d1dc549261b7fea1f1e96a211c5602b6b9621375ed49e5d378d2cd4ab2fdb92d752cb41970d9df77cf64ff049ec09b21865e5e5790c8
+  checksum: 10c0/c5fd5746285aaa1d609e0758ebe10f431cb14eeff978d40531e9e38ce9cf59f3b839e68b1e65d28f1a5bb43f5eb02cb510304f2462f02d2dd1a6e6c500133a0c
   languageName: node
   linkType: hard
 
@@ -944,7 +944,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@standard-red-notes/openclaw@workspace:openclaw"
   dependencies:
-    "@anthropic-ai/sdk": "npm:^0.111.0"
+    "@anthropic-ai/sdk": "npm:^0.131.0"
     "@modelcontextprotocol/sdk": "npm:^1.32.1"
     "@types/node": "npm:^26.6.4"
     "@vitest/coverage-v8": "npm:^5.0.3"
