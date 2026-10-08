@@ -292,6 +292,37 @@ describe('syncCloseFallbackReason', () => {
     expect(syncCloseFallbackReason({ code: 1008, wasClean: true })).toBe('server-policy')
   })
 
+  /**
+   * Every string below was captured off the wire by a live probe against both
+   * topologies, and every one of them used to report NO reason at all on the client.
+   */
+  it('separates the four things the gateway sends as 1013', () => {
+    expect(
+      syncCloseFallbackReason({ code: 1013, reason: 'Per-user sync socket limit exceeded.', wasClean: true }),
+    ).toBe('socket-limit')
+    expect(syncCloseFallbackReason({ code: 1013, reason: 'Sync socket reservation was lost.', wasClean: true })).toBe(
+      'socket-limit',
+    )
+    expect(syncCloseFallbackReason({ code: 1013, reason: 'File transfer queue is full.', wasClean: true })).toBe(
+      'backpressure',
+    )
+    expect(syncCloseFallbackReason({ code: 1013, reason: 'Sync command queue is full.', wasClean: true })).toBe(
+      'backpressure',
+    )
+    expect(
+      syncCloseFallbackReason({ code: 1013, reason: 'Sync client is not consuming responses.', wasClean: true }),
+    ).toBe('backpressure')
+    // ...and only this one actually means "come back later".
+    expect(syncCloseFallbackReason({ code: 1013, reason: 'draining', wasClean: true })).toBe('server-unavailable')
+  })
+
+  it('reads the live capture of a kill -9 and of a graceful restart', () => {
+    expect(syncCloseFallbackReason({ code: 1006, reason: '', wasClean: false })).toBe('reconnect-gap')
+    expect(syncCloseFallbackReason({ code: 1001, reason: 'server shutting down', wasClean: true })).toBe(
+      'reconnect-gap',
+    )
+  })
+
   it('maps the other codes the gateway closes with', () => {
     expect(syncCloseFallbackReason({ code: 1009, reason: 'sync frame too large', wasClean: true })).toBe(
       'frame-too-large',

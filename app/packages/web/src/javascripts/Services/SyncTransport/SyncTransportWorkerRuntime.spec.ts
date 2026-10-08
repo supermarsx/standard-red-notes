@@ -4046,4 +4046,287 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(states.map((message) => message.reason)).not.toContain('outbox-unavailable')
     })
   })
+
+  // ---------------------------------------------------------------------------
+  // *** A RETRYABLE REFUSAL MUST NOT COST THE SOCKET. ***
+  //
+  // Nine gateway refusals — BUSY, LEASE_LOST, BACKEND_TIMEOUT, BACKEND_ERROR,
+  // COMMAND_ID_CONFLICT, READ_ONLY, CONTENT_LIMIT, SHARED_VAULT_FORBIDDEN and
+  // NOT_AUTHORIZED — all fell through one ERROR default to `fallback('server-kill')`,
+  // which means durable recovery, a closed socket, and all six lanes lost. Two of
+  // them describe a connection the gateway itself expects the client to keep using.
+  // ---------------------------------------------------------------------------
+  describe('a refusal on a healthy socket', () => {
+    const frames = (socket: FakeSocket) =>
+      socket.sent.map(
+        (entry) =>
+          JSON.parse(entry) as {
+            type: string
+            requestId: string
+            commandId: string
+            sequence: number
+            digest?: string
+            payload: Record<string, unknown>
+          },
+      )
+    const framesOf = (socket: FakeSocket, type: string) => frames(socket).filter((frame) => frame.type === type)
+    const refuse = (socket: FakeSocket, code: string) => {
+      const command = framesOf(socket, 'COMMAND')[0]
+      socket.receive(serverFrame('ERROR', command.commandId, { code, retryable: true }, command.digest))
+    }
+
+    it('retries a BUSY command on the same socket instead of tearing six lanes down', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const first = framesOf(socket, 'COMMAND')[0]
+
+      refuse(socket, 'BUSY')
+      await flush()
+
+      // BEFORE: RECOVERY_REQUIRED, a 1000 close, and the collaboration rooms,
+      // invite subscription, socket budget and file transfers riding this socket
+      // gone — over a lease another command of this device was holding for a moment.
+      expect(harness.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
+      expect(socket.readyState).toBe(1)
+      expect(socket.closes).toEqual([])
+
+      jest.advanceTimersByTime(1_000)
+      await flush()
+      await flush()
+
+      const commands = framesOf(socket, 'COMMAND')
+      expect(commands).toHaveLength(2)
+      // The journal's idempotency identity is reused verbatim, which is the whole
+      // reason a resend cannot apply anything twice.
+      expect(commands[1].commandId).toBe(first.commandId)
+      expect(commands[1].digest).toBe(first.digest)
+      expect(commands[1].payload).toEqual(first.payload)
+      // ...and the SEQUENCE must move, or the gateway closes the socket OUT_OF_ORDER
+      // and the retry destroys exactly what it was written to keep.
+      expect(commands[1].sequence).toBeGreaterThan(first.sequence)
+      expect(socket.readyState).toBe(1)
+    })
+
+    it('spends a bounded budget and then falls back exactly as it did before', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      refuse(socket, 'BUSY')
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+      await flush()
+      refuse(socket, 'BUSY')
+      await flush()
+      jest.advanceTimersByTime(2_000)
+      await flush()
+      await flush()
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(3)
+      expect(harness.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
+
+      // Third refusal: the budget is spent, so the pre-existing path runs.
+      refuse(socket, 'BUSY')
+      await flush()
+      await flush()
+
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(socket.readyState).toBe(3)
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(3)
+    })
+
+    /**
+     * `BACKEND_TIMEOUT` is sent from the `catch` around `backend.execute`, so the
+     * durable write MAY have landed. It keeps the socket like BUSY does, and unlike
+     * BUSY it may only ASK — never re-send the COMMAND, which is the one move that
+     * could apply a mutation twice.
+     */
+    it('re-asks STATUS for an ambiguous BACKEND_TIMEOUT and never re-sends the command', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const command = framesOf(socket, 'COMMAND')[0]
+
+      refuse(socket, 'BACKEND_TIMEOUT')
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+      await flush()
+
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
+      const statuses = framesOf(socket, 'STATUS')
+      expect(statuses).toHaveLength(1)
+      expect(statuses[0].commandId).toBe(command.commandId)
+      expect(statuses[0].digest).toBe(command.digest)
+      expect(socket.readyState).toBe(1)
+      expect(harness.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
+    })
+
+    it('still tears the socket down for a stable policy refusal, which a retry cannot change', async () => {
+      // Not a blanket "never close": READ_ONLY, CONTENT_LIMIT,
+      // SHARED_VAULT_FORBIDDEN, NOT_AUTHORIZED, LEASE_LOST, BACKEND_ERROR and
+      // COMMAND_ID_CONFLICT all describe a condition a retry would only reproduce.
+      for (const code of ['READ_ONLY', 'NOT_AUTHORIZED', 'CONTENT_LIMIT', 'LEASE_LOST', 'COMMAND_ID_CONFLICT']) {
+        const harness = setup()
+        const socket = await authorize(harness)
+
+        refuse(socket, code)
+        await flush()
+        await flush()
+
+        expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+        expect(socket.readyState).toBe(3)
+        expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
+      }
+    })
+
+    it('abandons a scheduled retry when the socket dies before the backoff elapses', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+
+      refuse(socket, 'BUSY')
+      await flush()
+      socket.abort()
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+
+      // The close path owns the command from here; a retry writing to a dead socket
+      // would be a second owner for one operation.
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // *** `safeToFallback: false` FOR EVERY SERVER RPC ERROR. ***
+  //
+  // `WebApplication.controlPlaneRpc` swallows an `AuthenticatedRpcError` and retries
+  // over HTTP only when `safeToFallback` proves no request bytes took effect. Every
+  // server ERROR frame reported `false`, so `BUSY` — the gateway refusing the ninth
+  // concurrent RPC at an admission check, before any dispatch — threw at the caller
+  // where HTTP would have answered, and so did `RESULT_TOO_LARGE`, whose cause is the
+  // one limit HTTP does not have.
+  // ---------------------------------------------------------------------------
+  describe('an API_RPC refusal HTTP could answer', () => {
+    const rpcRequest = (method: 'GET' | 'POST') => ({
+      method,
+      path: '/v1/admin/sync-diagnostics',
+      headers: { accept: 'application/json' },
+      deadlineMs: 30_000,
+      initialCreditBytes: 4_096,
+      stream: false,
+      ...(method === 'GET' ? {} : { body: { a: 1 }, idempotencyKey: 'key-1' }),
+    })
+
+    const openRpc = async (harness: ReturnType<typeof setup>, method: 'GET' | 'POST' = 'GET') => {
+      await harness.runtime.handle({
+        type: 'OPEN_RPC',
+        clientRequestId: 'rpc-1',
+        sessionScope: SESSION_A,
+        request: rpcRequest(method),
+      })
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'rpc-1',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = harness.sockets.at(-1) as FakeSocket
+      socket.open()
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS', 'API_RPC'],
+          nextClientSequence: 1,
+        }),
+      )
+      await flush()
+      const request = socket.sent
+        .map((entry) => JSON.parse(entry) as { type: string; commandId: string })
+        .find((frame) => frame.type === 'RPC_REQUEST') as { commandId: string }
+      return { socket, commandId: request.commandId }
+    }
+
+    const errorFor = (harness: ReturnType<typeof setup>) =>
+      harness.messages.find((message) => message.type === 'RPC_ERROR') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'RPC_ERROR' }
+      >
+
+    it.each(['BUSY', 'OPERATION_UNAVAILABLE', 'IDEMPOTENCY_KEY_REQUIRED', 'SOCKET_LIMIT', 'SYNC_DISABLED'])(
+      'lets HTTP answer a pre-dispatch %s, which provably ran no handler',
+      async (code) => {
+        const harness = setup()
+        const { socket, commandId } = await openRpc(harness)
+
+        socket.receive(serverFrame('ERROR', commandId, { code, retryable: true }))
+        await flush()
+
+        expect(errorFor(harness)).toEqual({
+          type: 'RPC_ERROR',
+          clientRequestId: 'rpc-1',
+          code,
+          retryable: true,
+          safeToFallback: true,
+        })
+      },
+    )
+
+    it('lets HTTP answer a read the socket frame cap refused', async () => {
+      const harness = setup()
+      const { socket, commandId } = await openRpc(harness, 'GET')
+
+      socket.receive(serverFrame('ERROR', commandId, { code: 'RESULT_TOO_LARGE', retryable: true }))
+      await flush()
+
+      expect(errorFor(harness)?.safeToFallback).toBe(true)
+    })
+
+    it('refuses to re-ask a MUTATION whose effect the client cannot establish', async () => {
+      const harness = setup()
+      const { socket, commandId } = await openRpc(harness, 'POST')
+
+      socket.receive(serverFrame('ERROR', commandId, { code: 'RESULT_TOO_LARGE', retryable: true }))
+      await flush()
+
+      expect(errorFor(harness)?.safeToFallback).toBe(false)
+    })
+
+    it.each(['RPC_PATH_FORBIDDEN', 'DUPLICATE_REQUEST', 'NOT_AUTHORIZED', 'CANCELLED'])(
+      'leaves %s surfaced to its caller, exactly as before',
+      async (code) => {
+        const harness = setup()
+        const { socket, commandId } = await openRpc(harness)
+
+        socket.receive(serverFrame('ERROR', commandId, { code, retryable: false }))
+        await flush()
+
+        expect(errorFor(harness)?.safeToFallback).toBe(false)
+      },
+    )
+
+    it('never calls a refusal safe once the answer has started crossing to the caller', async () => {
+      const harness = setup()
+      const { socket, commandId } = await openRpc(harness)
+
+      socket.receive(serverFrame('RPC_ACCEPTED', commandId, { accepted: true }))
+      socket.receive(
+        serverFrame('RPC_RESPONSE', commandId, {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+          stream: true,
+        }),
+      )
+      await flush()
+      socket.receive(serverFrame('ERROR', commandId, { code: 'BUSY', retryable: true }))
+      await flush()
+
+      expect(errorFor(harness)?.safeToFallback).toBe(false)
+    })
+  })
 })

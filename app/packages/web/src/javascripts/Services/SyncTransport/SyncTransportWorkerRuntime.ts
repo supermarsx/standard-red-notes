@@ -160,6 +160,73 @@ const RETRYABLE_FILE_ERROR_CODES = new Set([
 ])
 
 /**
+ * Command refusals the gateway raises INSTEAD of dispatching, so no durable write
+ * can have happened and the identical COMMAND may be sent again.
+ *
+ * `BUSY` is the whole set and it is a lease verdict, not a fault: the command lease
+ * is keyed on (user, device), so BUSY means another command of this device holds it
+ * and will hand it back — or, once, that the lease store did not answer. The gateway
+ * says so in terms ("answer BUSY, which the client retries after backoff") and the
+ * client did the opposite: it took the ERROR default, demanded durable recovery, and
+ * closed a perfectly healthy socket, losing collaboration rooms, the invite
+ * subscription, the socket budget and any in-flight file transfer with it.
+ */
+const RESENDABLE_COMMAND_REFUSAL_CODES = new Set(['BUSY'])
+
+/**
+ * API_RPC refusals the gateway raises BEFORE it dispatches the request, so no
+ * handler ran and HTTP may be asked the same question.
+ *
+ * `safeToFallback` is read by `WebApplication.controlPlaneRpc` and means exactly
+ * "this request provably had no effect, so retrying it over HTTP cannot apply
+ * anything twice". Every server ERROR frame used to be reported `safeToFallback:
+ * false`, so `BUSY` — which is the gateway refusing the NINTH concurrent RPC at an
+ * admission check, before any dispatch — threw at the caller where HTTP would have
+ * answered immediately.
+ *
+ * `RPC_PATH_FORBIDDEN` is deliberately NOT here even though it is also pre-dispatch:
+ * `WebApplication.httpOnlyJsonRequest` exists and is documented to exist because
+ * that refusal throws, and changing it is a decision for that file's owner.
+ */
+const PRE_DISPATCH_RPC_REFUSAL_CODES = new Set([
+  'BUSY',
+  'OPERATION_UNAVAILABLE',
+  'IDEMPOTENCY_KEY_REQUIRED',
+  'SOCKET_LIMIT',
+  'SOCKET_BUDGET_LOST',
+  'SYNC_DISABLED',
+])
+
+/**
+ * Refusals raised after the request ran. The answer the lane could not carry is
+ * still available over HTTP, but only a READ may be asked again: for a mutation the
+ * client cannot establish whether it applied, which is the same line
+ * `parkRpcForSessionRefresh` draws and for the same reason.
+ *
+ * `RESULT_TOO_LARGE` is the case that motivated this: the socket frame cap is the
+ * one limit HTTP does not have, so the lane refusing on size is precisely when HTTP
+ * is the right answer — and the client was throwing instead.
+ */
+const POST_DISPATCH_READ_RETRYABLE_RPC_CODES = new Set(['RESULT_TOO_LARGE', 'BACKEND_TIMEOUT', 'BACKEND_ERROR'])
+
+/**
+ * Refusals raised AFTER the backend was called, so the durable write MAY have
+ * landed. Resolved by re-asking STATUS and NEVER by re-sending the COMMAND — which
+ * is the same rule the credential refresh follows, and for the same reason: STATUS
+ * is a query, and the only replay it can lead to is on an explicit `UNKNOWN`.
+ *
+ * `BACKEND_TIMEOUT` is sent from the `catch` around `backend.execute`, so it is
+ * ambiguous by construction. It is NOT a pre-write refusal, whatever the close code
+ * suggests, and treating it as one would be the single move that could apply a
+ * mutation twice.
+ */
+const RESTATABLE_COMMAND_REFUSAL_CODES = new Set(['BACKEND_TIMEOUT'])
+
+/** Two, then the pre-existing fallback. Bounded so a stuck lease cannot spin. */
+const MAX_COMMAND_REFUSAL_RETRIES = 2
+const COMMAND_REFUSAL_RETRY_DELAY_MS = 1_000
+
+/**
  * The local send buffer never drained inside the deadline.
  *
  * *** WHY THIS CLASS EXISTS: `'backpressure'` WAS A REASON NOTHING COULD EMIT. ***
@@ -466,6 +533,8 @@ export class SyncTransportWorkerRuntime {
   private reconnectAttempts = 0
   /** One re-ticket per request after the gateway reports the ticket's bearer stale. */
   private reticketedForStaleSession = false
+  /** Retries spent on a retryable command refusal, per command. */
+  private commandRefusalRetries = 0
   /**
    * Set once the server answers `LIVE_SYNC_DISABLED`: item sync is refused for this
    * account for the rest of the worker's life, so later commands go to HTTP without
@@ -481,6 +550,8 @@ export class SyncTransportWorkerRuntime {
   private ackTimeout?: ReturnType<typeof setTimeout>
   private pongTimeout?: ReturnType<typeof setTimeout>
   private reconnectTimeout?: ReturnType<typeof setTimeout>
+  /** Live only between a retryable command refusal and the retry it schedules. */
+  private commandRetryTimeout?: ReturnType<typeof setTimeout>
   private heartbeatInterval?: ReturnType<typeof setInterval>
   private ownerRenewInterval?: ReturnType<typeof setInterval>
   /** Live only while an invite subscription is parked on a `deferred` fallback reason. */
@@ -671,6 +742,7 @@ export class SyncTransportWorkerRuntime {
       this.commandSent = record.dispatchedAt !== undefined
       this.resultDelivered = false
       this.reticketedForStaleSession = false
+      this.commandRefusalRetries = 0
       this.dependencies.postMessage({
         type: 'COMMAND_PERSISTED',
         clientRequestId,
@@ -746,6 +818,7 @@ export class SyncTransportWorkerRuntime {
     this.commandSent = false
     this.resultDelivered = false
     this.reticketedForStaleSession = false
+    this.commandRefusalRetries = 0
 
     if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
       await this.prepareActiveRequest()
@@ -2085,6 +2158,13 @@ export class SyncTransportWorkerRuntime {
           await this.fallback('live-sync-disabled', this.outboxRecord, true, true)
           break
         }
+        // A REFUSAL IS NOT A DEAD SOCKET. `BUSY` and `BACKEND_TIMEOUT` arrive on a
+        // connection that is working and that the gateway itself expects the client
+        // to use again; routing them to the ERROR default closed it and took the
+        // other five lanes down with it.
+        if (this.retryRefusedCommand(frame.payload.code)) {
+          break
+        }
         // ERROR RESULT_TOO_LARGE now means only "your COMMAND frame was too large
         // to ingest"; a committed result the socket cannot carry arrives as
         // STATUS COMMITTED + code instead (see replayOversizedResultOverHttp).
@@ -2881,17 +2961,38 @@ export class SyncTransportWorkerRuntime {
         this.dependencies.postMessage({ type: 'RPC_END', clientRequestId: rpc.clientRequestId })
         this.finishRpc(rpc)
         break
-      case 'ERROR':
-        this.failRpc(
-          rpc,
-          typeof frame.payload.code === 'string' ? frame.payload.code : 'RPC_ERROR',
-          frame.payload.retryable === true,
-          false,
-        )
+      case 'ERROR': {
+        const code = typeof frame.payload.code === 'string' ? frame.payload.code : 'RPC_ERROR'
+        // NOT a flat `false`. That answered "never fall back" for a refusal the
+        // gateway raised before dispatching anything, so a control-plane read the
+        // HTTP leg would have served threw at its caller instead.
+        this.failRpc(rpc, code, frame.payload.retryable === true, this.rpcRefusalIsSafeToFallback(rpc, code))
         break
+      }
       default:
         break
     }
+  }
+
+  /**
+   * May HTTP be asked the same question?
+   *
+   * Two tiers, and the line between them is whether the request reached a handler.
+   * A pre-dispatch refusal provably had no effect. A post-dispatch one may have, so
+   * it is answered for a GET and nothing else — the gateway requires an idempotency
+   * key on every other method precisely because their effect is not knowable from
+   * the client, and `isValidWorkerRpcRequest` enforces that this lane only ever
+   * carries a keyless request when it is a GET.
+   */
+  private rpcRefusalIsSafeToFallback(rpc: ActiveRpcRequest, code: string): boolean {
+    if (rpc.responseStarted) {
+      // Bytes already crossed to the main thread; a second answer is not a fallback.
+      return false
+    }
+    if (PRE_DISPATCH_RPC_REFUSAL_CODES.has(code)) {
+      return true
+    }
+    return rpc.request.method === 'GET' && POST_DISPATCH_READ_RETRYABLE_RPC_CODES.has(code)
   }
 
   private rpcByCommandId(commandId: string): ActiveRpcRequest | undefined {
@@ -3125,6 +3226,134 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  /**
+   * Standard Red Notes: a retryable refusal must not cost the socket.
+   *
+   * -------------------------------------------------------------------------------
+   * WHAT THIS REPLACES
+   * -------------------------------------------------------------------------------
+   *
+   * Nine distinct gateway refusals — BUSY, LEASE_LOST, BACKEND_TIMEOUT,
+   * BACKEND_ERROR, COMMAND_ID_CONFLICT, READ_ONLY, CONTENT_LIMIT,
+   * SHARED_VAULT_FORBIDDEN and NOT_AUTHORIZED — all fell through to one ERROR
+   * default: `fallback('server-kill')`, which means durable recovery, a closed
+   * socket, and all six lanes lost. Two of them describe a HEALTHY socket the
+   * gateway expects to be used again, and those two are handled here. The other
+   * seven are stable policy answers that a retry would only reproduce, so they keep
+   * the existing path.
+   *
+   * -------------------------------------------------------------------------------
+   * TWO TIERS, AND THE LINE BETWEEN THEM IS THE DURABLE WRITE
+   * -------------------------------------------------------------------------------
+   *
+   * `BUSY` is sent INSTEAD of dispatching, so the identical COMMAND frame may be
+   * sent again. `BACKEND_TIMEOUT` comes out of the `catch` around `backend.execute`,
+   * so the write may have landed and only STATUS may be asked. Both reuse the SAME
+   * command id and digest, which are the server journal's idempotency identity, so
+   * neither tier can apply anything twice.
+   *
+   * *** THE SEQUENCE NUMBER IS WHY THE FRAME IS REBUILT. *** The stored outbox bytes
+   * carry the sequence the frame was first sent with, and the gateway closes the
+   * socket `OUT_OF_ORDER` on any frame whose sequence is not the next one it expects.
+   * Replaying the stored bytes verbatim would therefore destroy the very socket this
+   * exists to keep.
+   *
+   * Synchronous on purpose: it only arms a timer, and an `await` here would add a
+   * microtask to the frame handler, which is enough to push a later `postMessage`
+   * past what a caller's flush is waiting for.
+   */
+  private retryRefusedCommand(code: unknown): boolean {
+    if (typeof code !== 'string') {
+      return false
+    }
+    const resend = RESENDABLE_COMMAND_REFUSAL_CODES.has(code)
+    if (!resend && !RESTATABLE_COMMAND_REFUSAL_CODES.has(code)) {
+      return false
+    }
+    const active = this.active
+    const record = this.outboxRecord
+    if (
+      !active ||
+      (active.mode !== 'execute' && active.mode !== 'recover') ||
+      !record ||
+      record.sessionScope !== active.sessionScope ||
+      record.revoked === true ||
+      this.state !== 'READY' ||
+      this.socket?.readyState !== 1 ||
+      this.commandRefusalRetries >= MAX_COMMAND_REFUSAL_RETRIES
+    ) {
+      return false
+    }
+    this.commandRefusalRetries += 1
+    const attempt = this.commandRefusalRetries
+    // The refusal arrived instead of the ack this deadline was waiting for, and the
+    // retry owns the next one. Left armed it would close the healthy socket at the
+    // first refusal, which is the behaviour being removed.
+    this.clearAckDeadline()
+    const generation = this.socketGeneration
+    this.commandRetryTimeout = this.scheduleTimeout(() => {
+      this.commandRetryTimeout = undefined
+      void this.sendRefusedCommandAgain(record, resend, generation)
+    }, COMMAND_REFUSAL_RETRY_DELAY_MS * attempt)
+    return true
+  }
+
+  /**
+   * Put the refused command back on the SAME socket.
+   *
+   * Every guard is a refusal to act, not a precondition to arrange: anything that
+   * moved the socket or the command while the backoff ran already owns the command
+   * and settles it on a path that existed before this did.
+   */
+  private async sendRefusedCommandAgain(
+    record: SyncOutboxRecord,
+    resend: boolean,
+    socketGeneration: number,
+  ): Promise<void> {
+    if (
+      this.shuttingDown ||
+      this.socketGeneration !== socketGeneration ||
+      this.state !== 'READY' ||
+      this.socket?.readyState !== 1 ||
+      this.outboxRecord?.commandId !== record.commandId ||
+      this.active === undefined
+    ) {
+      return
+    }
+    try {
+      if (resend) {
+        await this.sendWithBackpressure(this.resequencedCommand(record))
+        this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+      } else {
+        await this.sendStatus(record)
+      }
+    } catch {
+      // The socket died under the retry. `fallback` routes a dispatched command to
+      // durable recovery, which is exactly where it would have gone without any of
+      // this, so nothing is lost by the attempt.
+      await this.fallback('server-kill', record)
+    }
+  }
+
+  /**
+   * The stored COMMAND frame with a fresh sequence and request id, and the same
+   * command id, digest and payload.
+   *
+   * The sequence MUST move: the gateway refuses a frame whose sequence is not the
+   * one it expects and closes the socket `OUT_OF_ORDER`. The command id and digest
+   * MUST NOT: they are the journal's idempotency identity, and the whole claim that
+   * a resend cannot apply anything twice rests on them being byte-identical.
+   *
+   * The outbox record is deliberately NOT rewritten with the new bytes. Nothing reads
+   * the stored sequence — `parseStoredBody` takes the body and the HTTP replay takes
+   * the id and digest — so a write here would add an IndexedDB failure mode to a
+   * retry whose point is to avoid losing anything.
+   */
+  private resequencedCommand(record: SyncOutboxRecord): string {
+    const frame = JSON.parse(record.bytes) as SyncClientFrame
+    return JSON.stringify({ ...frame, requestId: this.uuid(), sequence: this.sequence++ })
+  }
+
   private async sendStatus(record: SyncOutboxRecord): Promise<void> {
     const payload = {}
     const frame: SyncClientFrame = {
@@ -3211,6 +3440,7 @@ export class SyncTransportWorkerRuntime {
         this.commandSent = false
         this.resultDelivered = false
         this.reconnectAttempts = 0
+        this.cancelCommandRetry()
       }
       this.dependencies.postMessage({ type: 'CHECKPOINT_CLEARED', requestId, sessionScope, commandId })
     } catch {
@@ -3225,6 +3455,7 @@ export class SyncTransportWorkerRuntime {
     const code = event.code ?? 0
     this.socket = undefined
     this.clearAckDeadline()
+    this.cancelCommandRetry()
     this.clearHeartbeat()
     // The credential refresh belonged to THIS socket. Abandon it and let the close
     // path below own every operation that was parked on it, which it already does
@@ -3327,6 +3558,18 @@ export class SyncTransportWorkerRuntime {
     if (this.ackTimeout) {
       this.cancelTimeout(this.ackTimeout)
       this.ackTimeout = undefined
+    }
+  }
+
+  /**
+   * Drop a pending command retry. Called wherever the socket or the command it
+   * belongs to goes away; the retry's own guards would refuse to act anyway, so this
+   * is about not leaving a timer behind rather than about correctness.
+   */
+  private cancelCommandRetry(): void {
+    if (this.commandRetryTimeout) {
+      this.cancelTimeout(this.commandRetryTimeout)
+      this.commandRetryTimeout = undefined
     }
   }
 
@@ -3678,6 +3921,7 @@ export class SyncTransportWorkerRuntime {
 
   private async closeSocketAndReleaseOwner(): Promise<void> {
     this.clearAckDeadline()
+    this.cancelCommandRetry()
     this.clearHeartbeat()
     this.discardSessionRefresh()
     if (this.reconnectTimeout) {

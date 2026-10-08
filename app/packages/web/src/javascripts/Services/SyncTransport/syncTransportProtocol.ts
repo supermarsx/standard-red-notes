@@ -818,12 +818,19 @@ export function syncCloseFallbackReason(close: {
   }
   switch (close.code) {
     case 1008:
-      return policyCloseReason(close.reason)
+      return statedCloseReason(close.reason) ?? 'server-policy'
     case 1009:
       return 'frame-too-large'
     case 1012:
     case 1013:
-      return 'server-unavailable'
+      // The reason is consulted for 1013 as well as 1008, because the gateway sends
+      // FOUR different things as 1013 and a live probe caught every one of them:
+      // `Per-user sync socket limit exceeded.`, `Sync socket reservation was lost.`,
+      // `File transfer queue is full.` and `draining`. Only the last is actually
+      // "come back later", and the protocol ERROR frame that names the other three
+      // can be lost — dropped by an ingress limiter, or simply never read because the
+      // close won the race.
+      return statedCloseReason(close.reason) ?? 'server-unavailable'
     case 1001:
     case 1006:
       return 'reconnect-gap'
@@ -861,22 +868,33 @@ const SERVER_PROTOCOL_ERROR_REASONS: Readonly<Record<string, SyncFallbackReason>
 }
 
 /**
- * Which 1008 this is.
+ * What the close reason itself names, or `undefined` when it names nothing this
+ * build recognises — in which case the caller supplies the code's own default.
  *
- * 1008 is "policy violation" and the gateway uses it for eleven different things,
- * so the reason string is the only discriminator — `sync rate limit exceeded` and
- * `invalid authToken` are the same close code and want opposite responses from the
- * client. Matched on SUBSTRINGS of a lowercased reason rather than on an exact
- * table of the server's current wording: a table of sentences from another package
- * goes stale silently, and every clause here is a phrase the cause is named by.
+ * *** THE REASON STRING IS THE ONLY DISCRIMINATOR FOR 1008 AND 1013. *** The gateway
+ * sends eleven different things as 1008 and four as 1013; `sync rate limit exceeded`
+ * and `invalid authToken` are the same close code and want opposite responses from
+ * the client.
+ *
+ * Matched on SUBSTRINGS of a lowercased reason rather than against an exact table of
+ * the server's current sentences: a table of wording copied out of another package
+ * goes stale silently, while every clause below is a phrase the cause is named by.
+ * Each is a string a live probe actually captured off the wire.
  */
-function policyCloseReason(reason: string | undefined): SyncFallbackReason {
+function statedCloseReason(reason: string | undefined): SyncFallbackReason | undefined {
   const text = (reason ?? '').toLowerCase()
   if (text.includes('rate limit')) {
     return 'rate-limited'
   }
-  if (text.includes('connection limit') || text.includes('socket limit')) {
+  // `per-user connection limit exceeded` (1008), `Per-user sync socket limit
+  // exceeded.` and `Sync socket reservation was lost.` (both 1013).
+  if (text.includes('connection limit') || text.includes('socket limit') || text.includes('reservation was lost')) {
     return 'socket-limit'
+  }
+  // `Sync command queue is full.`, `File transfer queue is full.`, `Sync client is
+  // not consuming responses.` — the gateway's three BACKPRESSURE closes.
+  if (text.includes('queue is full') || text.includes('not consuming')) {
+    return 'backpressure'
   }
   if (text.includes('auth')) {
     return 'auth-failed'
@@ -887,7 +905,7 @@ function policyCloseReason(reason: string | undefined): SyncFallbackReason {
   if (text.includes('query-string') || text.includes('unknown path')) {
     return 'proxy-failed'
   }
-  return 'server-policy'
+  return undefined
 }
 
 /**
