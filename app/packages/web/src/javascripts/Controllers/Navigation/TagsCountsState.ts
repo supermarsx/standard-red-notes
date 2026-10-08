@@ -1,5 +1,5 @@
 import { ItemManagerInterface, SNTag } from '@standardnotes/snjs'
-import { action, makeAutoObservable, observable, observableRef } from 'mobx'
+import { action, makeAutoObservable, observableRef } from 'mobx'
 
 export class TagsCountsState {
   public counts: { [uuid: string]: number } = {}

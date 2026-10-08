@@ -1,5 +1,5 @@
 import { GetFeatures } from '@standardnotes/snjs'
-import { makeAutoObservable, observable, observableRef } from 'mobx'
+import { makeAutoObservable, observableRef } from 'mobx'
 import { AnyPackageType } from './AnyPackageType'
 
 export class PackageProvider {
