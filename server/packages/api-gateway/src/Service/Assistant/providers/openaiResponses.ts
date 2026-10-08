@@ -471,8 +471,13 @@ export class OpenAIResponsesProvider implements Provider {
           break
         }
         case 'response.function_call_arguments.done': {
+          // openai 7 removed `name` from this event: it now carries only item_id,
+          // output_index, sequence_number and the finished arguments. The tool
+          // name therefore comes solely from the response.output_item.added /
+          // .done events, which mergeFunctionItem records under the same item id
+          // (and takeCompletedToolCall refuses to emit until a name is known, so
+          // an out-of-order stream still joins correctly).
           const pending = pendingToolCalls.get(event.item_id) ?? { emitted: false }
-          pending.name = event.name
           if (pending.arguments === undefined) {
             pending.arguments = event.arguments
           }

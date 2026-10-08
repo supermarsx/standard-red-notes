@@ -4705,7 +4705,7 @@ __metadata:
     jest-util: "npm:^30.5.1"
     jsonwebtoken: "npm:^9.0.3"
     nodemailer: "npm:^10.0.16"
-    openai: "npm:^6.47.0"
+    openai: "npm:^7.30.1"
     prettyjson: "npm:^1.2.5"
     reflect-metadata: "npm:^0.2.2"
     tesseract.js: "npm:^7.0.0"
@@ -11486,14 +11486,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"openai@npm:^6.47.0":
-  version: 6.47.0
-  resolution: "openai@npm:6.47.0"
+"openai@npm:^7.30.1":
+  version: 7.30.1
+  resolution: "openai@npm:7.30.1"
   peerDependencies:
     "@aws-sdk/credential-provider-node": ">=3.972.0 <4"
     "@smithy/hash-node": ">=4.3.0 <5"
     "@smithy/signature-v4": ">=5.4.0 <6"
-    ws: ^8.18.0
+    undici: ">=5 <9"
+    ws: ^8.21.0
     zod: ^3.25 || ^4.0
   peerDependenciesMeta:
     "@aws-sdk/credential-provider-node":
@@ -11502,11 +11503,13 @@ __metadata:
       optional: true
     "@smithy/signature-v4":
       optional: true
+    undici:
+      optional: true
     ws:
       optional: true
     zod:
       optional: true
-  checksum: 10/09cfccd0285d43468b2aa7350d9ee281bfc0640a544d54cc8cd5c4174cf27b2ebf7a3b305aafedf555fed6734204574ba11a5c1bd010e1b0f11244a2103d2a13
+  checksum: 10/c39b456fc0546ca4c7bf78834bba78bd2f5d7a3b71c37dde31cac8e90f23c4e5350747cfb5e278b65326d17e945267b785a57342ec276606d586c82330a5c64f
   languageName: node
   linkType: hard
 

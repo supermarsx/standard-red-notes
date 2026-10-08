@@ -92,7 +92,6 @@ describe('OpenAIResponsesProvider', () => {
         {
           type: 'response.function_call_arguments.done',
           item_id: 'fc_item_2',
-          name: wireName,
           arguments: '{"q":"y"}',
         },
         {
@@ -235,7 +234,6 @@ describe('OpenAIResponsesProvider', () => {
         {
           type: 'response.function_call_arguments.done',
           item_id: 'fc_out_of_order',
-          name: wireName,
           arguments: '{"q":"late"}',
         },
         {
@@ -293,7 +291,6 @@ describe('OpenAIResponsesProvider', () => {
         {
           type: 'response.function_call_arguments.done',
           item_id: functionItem.id,
-          name: wireName,
           arguments: '{"query":"notes","limit":2}',
         },
         { type: 'response.completed', response: { output: [functionItem] } },
@@ -332,7 +329,6 @@ describe('OpenAIResponsesProvider', () => {
         {
           type: 'response.function_call_arguments.done',
           item_id: functionItem.id,
-          name: wireName,
           arguments: '{"query":"streamed"}',
         },
         { type: 'response.completed', response: { output: [functionItem], usage: { total_tokens: 9 } } },
@@ -363,7 +359,6 @@ describe('OpenAIResponsesProvider', () => {
         {
           type: 'response.function_call_arguments.done',
           item_id: functionItem.id,
-          name: wireName,
           arguments: functionItem.arguments,
         },
         { type: 'response.incomplete', response: { output: [functionItem], usage: { total_tokens: 9 } } },

@@ -6746,7 +6746,7 @@ const RAW_RUNTIME_STATE =
           ["jest-util", "npm:30.5.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
           ["nodemailer", "npm:10.0.16"],\
-          ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.47.0"],\
+          ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:7.30.1"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["tesseract.js", "npm:7.0.0"],\
@@ -14628,15 +14628,15 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["openai", [\
-      ["npm:6.47.0", {\
-        "packageLocation": "./.yarn/cache/openai-npm-6.47.0-8b392e99a5-09cfccd028.zip/node_modules/openai/",\
+      ["npm:7.30.1", {\
+        "packageLocation": "./.yarn/cache/openai-npm-7.30.1-d402e75382-c39b456fc0.zip/node_modules/openai/",\
         "packageDependencies": [\
-          ["openai", "npm:6.47.0"]\
+          ["openai", "npm:7.30.1"]\
         ],\
         "linkType": "SOFT"\
       }],\
-      ["virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.47.0", {\
-        "packageLocation": "./.yarn/__virtual__/openai-virtual-aec8c61f09/0/cache/openai-npm-6.47.0-8b392e99a5-09cfccd028.zip/node_modules/openai/",\
+      ["virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:7.30.1", {\
+        "packageLocation": "./.yarn/__virtual__/openai-virtual-eeb3e212e9/0/cache/openai-npm-7.30.1-d402e75382-c39b456fc0.zip/node_modules/openai/",\
         "packageDependencies": [\
           ["@aws-sdk/credential-provider-node", null],\
           ["@smithy/hash-node", null],\
@@ -14644,9 +14644,11 @@ const RAW_RUNTIME_STATE =
           ["@types/aws-sdk__credential-provider-node", null],\
           ["@types/smithy__hash-node", null],\
           ["@types/smithy__signature-v4", null],\
+          ["@types/undici", null],\
           ["@types/ws", null],\
           ["@types/zod", null],\
-          ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.47.0"],\
+          ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:7.30.1"],\
+          ["undici", null],\
           ["ws", null],\
           ["zod", null]\
         ],\
@@ -14657,8 +14659,10 @@ const RAW_RUNTIME_STATE =
           "@types/aws-sdk__credential-provider-node",\
           "@types/smithy__hash-node",\
           "@types/smithy__signature-v4",\
+          "@types/undici",\
           "@types/ws",\
           "@types/zod",\
+          "undici",\
           "ws",\
           "zod"\
         ],\
