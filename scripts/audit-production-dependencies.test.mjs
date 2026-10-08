@@ -369,7 +369,7 @@ test("the app security graph preserves the patched dependency graph", () => {
     ['"ajv@npm:^6.12.5, ajv@npm:^6.14.0":', "6.15.0", "6.13.0", "ajv"],
     ['"fast-xml-parser@npm:^5.3.6":', "5.8.0", "5.6.9", "fast-xml-parser"],
     [
-      '"follow-redirects@npm:^1.0.0, follow-redirects@npm:^1.16.0":',
+      '"follow-redirects@npm:1.16.0, follow-redirects@npm:^1.16.0":',
       "1.16.0",
       "1.15.11",
       "follow-redirects",
@@ -380,7 +380,7 @@ test("the app security graph preserves the patched dependency graph", () => {
       "4.0.7",
       "micromatch",
     ],
-    ['"nanoid@npm:5.1.16, nanoid@npm:^5.1.3":', "5.1.16", "5.1.15", "nanoid"],
+    ['"nanoid@npm:5.1.16":', "5.1.16", "5.1.15", "nanoid"],
     ['"uuid@npm:11.1.1, uuid@npm:^11.1.1":', "11.1.1", "11.1.0", "uuid"],
     ['"sqlite3@npm:6.0.1":', "6.0.1", "5.1.7", "sqlite3"],
   ]) {
@@ -484,15 +484,15 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "@babel/runtime",
-      '"@babel/runtime@npm:^7.13.10, @babel/runtime@npm:^7.20.13, @babel/runtime@npm:^7.23.2, @babel/runtime@npm:^7.25.0, @babel/runtime@npm:^7.29.2, @babel/runtime@npm:^7.29.7, @babel/runtime@npm:^7.8.4":',
-      "7.29.7",
+      '"@babel/runtime@npm:7.29.10, @babel/runtime@npm:^7.29.10":',
+      "7.29.10",
       "7.26.9",
     ],
     [
       "app/yarn.lock",
       "@babel/runtime",
-      '"@babel/runtime@npm:8.0.0":',
-      "8.0.0",
+      '"@babel/runtime@npm:8.0.7, @babel/runtime@npm:^8.0.7":',
+      "8.0.7",
       "8.0.0-rc.5",
     ],
     [
@@ -527,8 +527,8 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "dompurify",
-      '"dompurify@npm:^3.3.3, dompurify@npm:^3.4.13":',
-      "3.4.13",
+      '"dompurify@npm:3.4.16, dompurify@npm:^3.4.13":',
+      "3.4.16",
       "3.4.12",
     ],
     [
@@ -541,7 +541,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "express",
-      '"express@npm:^4.17.1, express@npm:^4.18.2, express@npm:^4.22.1":',
+      '"express@npm:4.22.2, express@npm:^4.17.1, express@npm:^4.18.2":',
       "4.22.2",
       "4.19.2",
     ],
