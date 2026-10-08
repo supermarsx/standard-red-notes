@@ -77,7 +77,13 @@ import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-inf
 import {
   Service as AuthService,
   AuthServiceInterface,
+  type AuthReadinessSources,
+  type AuthRuntimeDiagnosticsSources,
+  authReadinessStatusCode,
+  authReadinessUnavailableReport,
+  readAuthReadinessSources,
   readAuthRuntimeDiagnosticsSources,
+  resolveAuthReadinessReport,
   resolveAuthRuntimeDiagnosticsReport,
 } from '@standardnotes/auth-server'
 import { Service as SyncingService } from '@standardnotes/syncing-server'
@@ -103,6 +109,11 @@ import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerR
 import { HomeServerSyncFilesAdapter } from './HomeServerSyncFilesAdapter'
 import {
   INTERNAL_DIAGNOSTICS_BIND_ADDRESS,
+  INTERNAL_DIAGNOSTICS_PATH,
+  INTERNAL_READINESS_PATH,
+  type InternalDiagnosticsLogger,
+  type InternalRoute,
+  type InternalRouteTable,
   parseInternalDiagnosticsPort,
   startInternalDiagnosticsListener,
 } from './InternalDiagnosticsListener'
@@ -132,6 +143,68 @@ export function resolveConfiguredAuthProbeBase(
   return undefined
 }
 
+/**
+ * Standard Red Notes: the internal auth routes this process can honestly serve.
+ *
+ * One route per composition auth exposed sources for, and NO route at all for a
+ * composition whose sources are absent. The asymmetry that matters is in what a
+ * missing route costs versus what a fabricated answer costs:
+ *
+ *   - no route -> the gateway's probe gets a 404, scores auth `unreachable` and
+ *     the pane says so. That is exactly what it said before this listener
+ *     existed, and it is true;
+ *   - a route served without sources -> `db: false`, which the pane renders as
+ *     "the auth database is not answering". On a container that simply has no
+ *     auth in it that is a fabrication, and a far more alarming one than silence.
+ *
+ * Each route carries its own failure answer, in its own vocabulary. For
+ * readiness that is auth's `{status: 'unavailable', checks: {db: false, redis:
+ * false}}` and never a generic error body: the gateway reads `status` and
+ * `checks` out of a 503, and a body carrying neither is scored `'ok'` — a
+ * crashed probe published as a healthy service.
+ */
+export function buildInternalAuthRoutes(sources: {
+  diagnostics: AuthRuntimeDiagnosticsSources | undefined
+  readiness: AuthReadinessSources | undefined
+  logger: InternalDiagnosticsLogger
+}): InternalRouteTable {
+  const routes = new Map<string, InternalRoute>()
+
+  if (sources.diagnostics === undefined) {
+    sources.logger.warn(
+      'Auth runtime diagnostics are not available in this container; the admin Diagnostics pane will report the auth runtime probe as unreachable.',
+    )
+  } else {
+    const diagnosticsSources = sources.diagnostics
+    routes.set(INTERNAL_DIAGNOSTICS_PATH, {
+      answer: async () => ({ status: 200, body: await resolveAuthRuntimeDiagnosticsReport(diagnosticsSources) }),
+      // The diagnostics route answers 200 with a degraded body rather than
+      // failing, so this is reached only if the composition itself rejects. The
+      // gateway treats any non-200 here as "unreadable" and reads nothing out of
+      // the body, so a bounded error shape is the whole requirement.
+      onFailure: { status: 503, body: { error: { message: 'Diagnostics unavailable' } } },
+    })
+  }
+
+  if (sources.readiness === undefined) {
+    sources.logger.warn(
+      'Auth readiness is not available in this container; the admin Diagnostics pane will report the auth readiness probe as unreachable.',
+    )
+  } else {
+    const readinessSources = sources.readiness
+    routes.set(INTERNAL_READINESS_PATH, {
+      answer: async () => {
+        const report = await resolveAuthReadinessReport(readinessSources)
+
+        return { status: authReadinessStatusCode(report), body: report }
+      },
+      onFailure: { status: 503, body: authReadinessUnavailableReport() },
+    })
+  }
+
+  return routes
+}
+
 export function buildHomeServerEnvironmentOverrides(
   dataDirectoryPath: string,
   configuredEnvironment: { [name: string]: string } | undefined,
@@ -159,18 +232,27 @@ export function buildHomeServerEnvironmentOverrides(
     // REMINDER_DELIVERY_ENABLED=true.
     REMINDER_DELIVERY_DATA_PATH: `${dataDirectoryPath}/reminder-delivery`,
     /**
-     * Standard Red Notes: where the gateway's auth RUNTIME probe should dial on
+     * Standard Red Notes: where the gateway's two auth probes should dial on
      * this topology.
      *
      * `AdminController.probeAuthRuntime()` fetches
-     * `${SERVICE_PROBE_URLS.auth}/healthcheck/diagnostics`, and that map's auth
-     * entry defaults to `http://localhost:${AUTH_SERVER_PORT || 3103}` — a
-     * supervisord sibling port that does not exist in a one-process bundle.
-     * `InternalDiagnosticsListener` now answers that route on exactly this
-     * address, so the probe is pointed at it by LITERAL loopback rather than
+     * `${SERVICE_PROBE_URLS.auth}/healthcheck/diagnostics` and
+     * `probeAuthReadiness()` fetches `${SERVICE_PROBE_URLS.auth}/healthcheck/readiness`
+     * — ONE base for both — and that map's auth entry defaults to
+     * `http://localhost:${AUTH_SERVER_PORT || 3103}`, a supervisord sibling port
+     * that does not exist in a one-process bundle.
+     * `InternalDiagnosticsListener` now answers both routes on exactly this
+     * address, so the probes are pointed at it by LITERAL loopback rather than
      * the name `localhost`: the listener binds one address, and `localhost`
      * resolves to both families on a dual-stack host, which is a probe that
      * fails on the resolver's whim.
+     *
+     * That ONE base is also why this cannot be pointed at the home-server's own
+     * public port instead, however well the route there were gated: the
+     * readiness probe would then display the deployment's AGGREGATE readiness
+     * (the gateway's `HealthCheckController`, which serves that same path) as
+     * auth's own `{db, redis}` verdict — a reading that is not auth's and that
+     * reads "ready" whenever the deployment as a whole does.
      *
      * Not set at all when the operator named an auth probe base themselves, by
      * EITHER of the two variables the gateway resolves in order
@@ -485,9 +567,10 @@ export class HomeServer implements HomeServerInterface {
   private readonly runtime = new HomeServerRuntime()
   private authService: AuthServiceInterface | undefined
   /**
-   * The loopback-only listener that serves auth's `/healthcheck/diagnostics` on
-   * this topology. `undefined` when the port could not be bound or the auth
-   * container exposed nothing to report — never a reason to fail a boot.
+   * The loopback-only listener that serves auth's `/healthcheck/diagnostics` and
+   * `/healthcheck/readiness` on this topology. `undefined` when the port could
+   * not be bound or the auth container exposed sources for neither — never a
+   * reason to fail a boot.
    */
   private internalDiagnosticsServer: http.Server | undefined
   private logStream: PassThrough | undefined
@@ -1370,33 +1453,41 @@ export class HomeServer implements HomeServerInterface {
       })
 
       /**
-       * Standard Red Notes: make the three auth-owned Diagnostics blocks
-       * reachable on THIS topology.
+       * Standard Red Notes: make auth's own internal health routes reachable on
+       * THIS topology — the three auth-owned Diagnostics blocks AND auth's
+       * readiness verdict.
        *
-       * The gateway's admin pane reads them by HTTP-probing auth's internal
-       * `/healthcheck/diagnostics`. In a one-process bundle auth has no HTTP
-       * port, and mounting its annotated controllers on the shared app is not an
-       * option — they declare unprefixed bases (`/auth`, `/sessions`,
-       * `/internal`) that the front-door nginx proxies straight through. So the
-       * route is served from a listener bound to loopback ONLY, which keeps the
-       * multi-container property exactly: reachable by this process's own probe,
-       * 404 at the public front door — there by route absence, since nothing is
-       * registered for it on the public app at all.
+       * The gateway's admin pane reads both by HTTP-probing auth's internal
+       * `/healthcheck/diagnostics` and `/healthcheck/readiness`. In a one-process
+       * bundle auth has no HTTP port, and mounting its annotated controllers on
+       * the shared app is not an option — they declare unprefixed bases
+       * (`/auth`, `/sessions`, `/internal`) that the front-door nginx proxies
+       * straight through. So the routes are served from a listener bound to
+       * loopback ONLY, which keeps the multi-container property exactly:
+       * reachable by this process's own probe, 404 at the public front door —
+       * there by route absence, since nothing is registered for either path on
+       * the public app at all.
        *
-       * The report comes from auth's own single composition module, not a copy.
-       * Absent sources (no auth bindings in this container) mount no listener,
-       * because a route that answers without them would publish a fabricated
-       * reading rather than nothing.
+       * Both answers come from auth's own single composition modules, not from
+       * copies. In particular the readiness route must NOT be pointed at this
+       * app's own aggregate `/healthcheck/readiness`: `SERVICE_PROBE_URLS.auth`
+       * feeds both auth probes, so the pane would then display the deployment's
+       * aggregate verdict as auth's `{db, redis}` checks.
+       *
+       * Absent sources (no auth bindings in this container) mount no route,
+       * because a route that answered without them would publish a fabricated
+       * reading rather than nothing — and for readiness a fabricated reading is
+       * the word "ready".
        */
-      const diagnosticsSources = readAuthRuntimeDiagnosticsSources(container)
-      if (diagnosticsSources === undefined) {
-        logger.warn(
-          'Auth runtime diagnostics are not available in this container; the admin Diagnostics pane will report the auth runtime probe as unreachable.',
-        )
-      } else {
+      const internalAuthRoutes = buildInternalAuthRoutes({
+        diagnostics: readAuthRuntimeDiagnosticsSources(container),
+        readiness: readAuthReadinessSources(container),
+        logger,
+      })
+      if (internalAuthRoutes.size > 0) {
         this.internalDiagnosticsServer = await startInternalDiagnosticsListener({
           port: parseInternalDiagnosticsPort(env.get('AUTH_SERVER_PORT', true) || undefined),
-          report: () => resolveAuthRuntimeDiagnosticsReport(diagnosticsSources),
+          routes: internalAuthRoutes,
           logger,
         })
       }

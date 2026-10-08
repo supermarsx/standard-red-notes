@@ -350,21 +350,44 @@ jest.mock('@standardnotes/domain-core', () => ({
 }))
 
 /**
- * Standard Red Notes: the two auth exports the bundled home-server consumes to
- * answer `/healthcheck/diagnostics` from its own loopback listener. Mocked here
- * because this suite doubles the whole auth container; the composition itself is
- * covered in auth's `AuthRuntimeDiagnosticsEndpoint.spec.ts`.
+ * Standard Red Notes: the auth exports the bundled home-server consumes to
+ * answer `/healthcheck/diagnostics` and `/healthcheck/readiness` from its own
+ * loopback listener. Mocked here because this suite doubles the whole auth
+ * container; the compositions themselves are covered in auth's
+ * `AuthRuntimeDiagnosticsEndpoint.spec.ts` and `AuthReadinessEndpoint.spec.ts`.
  */
 const mockReadAuthRuntimeDiagnosticsSources = jest.fn<Record<string, unknown> | undefined, [unknown]>(() => undefined)
 const mockResolveAuthRuntimeDiagnosticsReport = jest.fn(async () => ({ processUptimeSeconds: 7 }))
+const mockReadAuthReadinessSources = jest.fn<Record<string, unknown> | undefined, [unknown]>(() => undefined)
+const mockResolveAuthReadinessReport = jest.fn(async () => ({ status: 'ready', checks: { db: true, redis: true } }))
+/**
+ * A SENTINEL status, not 200 or 503. The wiring's job is to serve whatever auth's
+ * own function says, so a test that expected 200 here would also pass against a
+ * hardcoded 200 — and a hardcoded 200 keeps a deployment whose database is gone
+ * in the orchestrator's rotation. What 'ready' and 'unavailable' map to is auth's
+ * decision and is tested in `AuthReadinessEndpoint.spec.ts`.
+ */
+const mockAuthReadinessStatusCode = jest.fn<number, [{ status: string }]>(() => 418)
+const mockAuthReadinessUnavailableReport = jest.fn(() => ({
+  status: 'unavailable',
+  checks: { db: false, redis: false },
+}))
 jest.mock('@standardnotes/auth-server', () => ({
   Service: ServiceDouble,
   readAuthRuntimeDiagnosticsSources: mockReadAuthRuntimeDiagnosticsSources,
   resolveAuthRuntimeDiagnosticsReport: mockResolveAuthRuntimeDiagnosticsReport,
+  readAuthReadinessSources: mockReadAuthReadinessSources,
+  resolveAuthReadinessReport: mockResolveAuthReadinessReport,
+  // Doubles, because requiring the real barrel here would load the whole auth
+  // Bootstrap this suite exists to avoid. Their real behaviour is covered in
+  // auth's `AuthReadinessEndpoint.spec.ts`; what is asserted here is only that
+  // this wiring consults them and serves what they return.
+  authReadinessStatusCode: mockAuthReadinessStatusCode,
+  authReadinessUnavailableReport: mockAuthReadinessUnavailableReport,
 }))
 
 // The listener opens a real socket; this suite asserts the COMPOSITION (which
-// port, which report, closed on stop). Its own behaviour — the loopback gate in
+// port, which answers, closed on stop). Its own behaviour — the loopback gate in
 // both directions — is covered in InternalDiagnosticsListener.spec.ts.
 const mockInternalDiagnosticsClose = jest.fn((callback?: () => void) => callback?.())
 const mockInternalDiagnosticsCloseAllConnections = jest.fn()
@@ -419,6 +442,15 @@ jest.mock('./WebSocketRedisBridge', () => ({ WebSocketRedisBridge: WebSocketRedi
 const { HomeServer, IN_PROCESS_PUSH_BRIDGE_REASON } = require('./HomeServer') as typeof import('./HomeServer')
 type HomeServerInstance = InstanceType<typeof HomeServer>
 
+// The real path constants and route type, reached through the partial mock above
+// (which spreads `requireActual`). Asserting against a literal here would let a
+// listener that serves a path the gateway never dials pass.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const internalDiagnosticsListener = require('./InternalDiagnosticsListener')
+const { INTERNAL_DIAGNOSTICS_PATH, INTERNAL_READINESS_PATH } =
+  internalDiagnosticsListener as typeof import('./InternalDiagnosticsListener')
+type InternalRoute = import('./InternalDiagnosticsListener').InternalRoute
+
 const configuration = {
   dataDirectoryPath: 'test-data',
   environment: {
@@ -464,6 +496,7 @@ describe('HomeServer invite realtime composition', () => {
     mockInviteBridgeClose.mockResolvedValue(undefined)
     mockAvailabilityClose.mockResolvedValue(undefined)
     mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockReadAuthReadinessSources.mockReturnValue(undefined)
     mockInternalDiagnosticsClose.mockImplementation((callback?: () => void) => callback?.())
     mockStartInternalDiagnosticsListener.mockImplementation(async () => ({
       close: mockInternalDiagnosticsClose,
@@ -768,6 +801,7 @@ describe('HomeServer FILES_V1 composition', () => {
     mockInviteBridgeClose.mockResolvedValue(undefined)
     mockAvailabilityClose.mockResolvedValue(undefined)
     mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockReadAuthReadinessSources.mockReturnValue(undefined)
     mockInternalDiagnosticsClose.mockImplementation((callback?: () => void) => callback?.())
     mockStartInternalDiagnosticsListener.mockImplementation(async () => ({
       close: mockInternalDiagnosticsClose,
@@ -1028,14 +1062,15 @@ describe('HomeServer FILES_V1 composition', () => {
 })
 
 /**
- * Standard Red Notes: the auth-owned Diagnostics blocks on THIS topology.
+ * Standard Red Notes: the auth-owned health routes on THIS topology.
  *
  * The admin pane reads them by HTTP-probing auth's internal
- * `/healthcheck/diagnostics`, which in a one-process bundle nothing answered:
- * the gateway's probe map defaults to the supervisord sibling port and no auth
- * process exists. These tests pin the composition that closes that — the route
- * is served from a loopback-only listener on exactly the port the probe dials,
- * from auth's own single report composition, and it is closed with the server.
+ * `/healthcheck/diagnostics` and `/healthcheck/readiness`, which in a one-process
+ * bundle nothing answered: the gateway's probe map defaults to the supervisord
+ * sibling port and no auth process exists. These tests pin the composition that
+ * closes that — both routes served from a loopback-only listener on exactly the
+ * port the probes dial, from auth's own single compositions, closed with the
+ * server.
  */
 describe('HomeServer auth diagnostics listener', () => {
   beforeEach(() => {
@@ -1043,6 +1078,7 @@ describe('HomeServer auth diagnostics listener', () => {
     mockHomeRuntimeInstances.length = 0
     mockHttpServers.length = 0
     mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockReadAuthReadinessSources.mockReturnValue(undefined)
     mockInternalDiagnosticsClose.mockImplementation((callback?: () => void) => callback?.())
     mockStartInternalDiagnosticsListener.mockImplementation(async () => ({
       close: mockInternalDiagnosticsClose,
@@ -1055,6 +1091,9 @@ describe('HomeServer auth diagnostics listener', () => {
     })
   })
 
+  const listenerOptions = (): { port: number; routes: Map<string, InternalRoute> } =>
+    mockStartInternalDiagnosticsListener.mock.calls[0][0] as { port: number; routes: Map<string, InternalRoute> }
+
   it('serves auth diagnostics on the port the gateway probe dials', async () => {
     const sources = { dataSource: {} }
     mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(sources)
@@ -1066,16 +1105,63 @@ describe('HomeServer auth diagnostics listener', () => {
     })
 
     expect(result.isFailed()).toBe(false)
-    const options = mockStartInternalDiagnosticsListener.mock.calls[0][0] as {
-      port: number
-      report: () => Promise<unknown>
-    }
-    expect(options.port).toBe(3645)
+    expect(listenerOptions().port).toBe(3645)
 
     // The report comes from auth's one composition, handed the sources read off
     // the shared container — not a second copy built here.
-    await expect(options.report()).resolves.toEqual({ processUptimeSeconds: 7 })
+    const route = listenerOptions().routes.get(INTERNAL_DIAGNOSTICS_PATH) as InternalRoute
+    await expect(route.answer()).resolves.toEqual({ status: 200, body: { processUptimeSeconds: 7 } })
     expect(mockResolveAuthRuntimeDiagnosticsReport).toHaveBeenCalledWith(sources)
+
+    await server.stop()
+  })
+
+  it('serves auth READINESS on the same listener, from auth own composition', async () => {
+    const readinessSources = { database: {} }
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue({ dataSource: {} })
+    mockReadAuthReadinessSources.mockReturnValue(readinessSources)
+    const server = createServer()
+
+    const result = await server.start(configuration)
+
+    expect(result.isFailed()).toBe(false)
+    const route = listenerOptions().routes.get(INTERNAL_READINESS_PATH) as InternalRoute
+
+    // The readiness verdict is auth's OWN `{db, redis}` answer. Pointing this at
+    // the home-server's aggregate readiness would publish the deployment-wide
+    // verdict as auth's, because `SERVICE_PROBE_URLS.auth` feeds both probes.
+    //
+    // The status is auth's `authReadinessStatusCode` answer VERBATIM — here a
+    // sentinel, so no hardcoded 200 or 503 can satisfy this.
+    await expect(route.answer()).resolves.toEqual({
+      status: 418,
+      body: { status: 'ready', checks: { db: true, redis: true } },
+    })
+    expect(mockResolveAuthReadinessReport).toHaveBeenCalledWith(readinessSources)
+    expect(mockAuthReadinessStatusCode).toHaveBeenCalledWith({ status: 'ready', checks: { db: true, redis: true } })
+
+    // The failure answer is auth's own report, never a generic error body: the
+    // gateway reads `status`/`checks` out of a 503 and scores a body carrying
+    // neither as a healthy auth.
+    expect(mockAuthReadinessUnavailableReport).toHaveBeenCalled()
+    expect(route.onFailure).toEqual({
+      status: 503,
+      body: { status: 'unavailable', checks: { db: false, redis: false } },
+    })
+
+    await server.stop()
+  })
+
+  it('serves the readiness route even on a container with no diagnostics sources', async () => {
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockReadAuthReadinessSources.mockReturnValue({ database: {} })
+    const server = createServer()
+
+    const result = await server.start(configuration)
+
+    expect(result.isFailed()).toBe(false)
+    // One absent composition must not take the other route down with it.
+    expect([...listenerOptions().routes.keys()]).toEqual([INTERNAL_READINESS_PATH])
 
     await server.stop()
   })
@@ -1107,6 +1193,7 @@ describe('HomeServer auth diagnostics listener', () => {
 
   it('mounts NO listener, and says so, when the container exposes nothing to report', async () => {
     mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockReadAuthReadinessSources.mockReturnValue(undefined)
     const server = createServer()
 
     const result = await server.start(configuration)
@@ -1115,6 +1202,9 @@ describe('HomeServer auth diagnostics listener', () => {
     expect(mockStartInternalDiagnosticsListener).not.toHaveBeenCalled()
     expect(mockLogger.warn).toHaveBeenCalledWith(
       'Auth runtime diagnostics are not available in this container; the admin Diagnostics pane will report the auth runtime probe as unreachable.',
+    )
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Auth readiness is not available in this container; the admin Diagnostics pane will report the auth readiness probe as unreachable.',
     )
 
     await server.stop()

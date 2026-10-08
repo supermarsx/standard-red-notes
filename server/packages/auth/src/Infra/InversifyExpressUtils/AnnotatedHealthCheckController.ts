@@ -8,6 +8,7 @@ import { Role } from '../../Domain/Role/Role'
 import { CookieFactoryInterface } from '../../Domain/Auth/Cookies/CookieFactoryInterface'
 import { InviteEventOutboxDispatcher } from '../../Domain/Invite/InviteEventOutboxDispatcher'
 import { InviteEventOutboxRepositoryInterface } from '../../Domain/Invite/InviteEventOutboxRepositoryInterface'
+import { authReadinessStatusCode, resolveAuthReadinessReport } from '../Diagnostics/AuthReadinessEndpoint'
 import { resolveAuthRuntimeDiagnosticsReport } from '../Diagnostics/AuthRuntimeDiagnosticsEndpoint'
 import { TypeORMInviteEventOutbox } from '../TypeORM/TypeORMInviteEventOutbox'
 
@@ -22,6 +23,14 @@ export {
   DIAGNOSTICS_CACHE_TTL_MS,
   clearAuthRuntimeDiagnosticsCache,
 } from '../Diagnostics/AuthRuntimeDiagnosticsEndpoint'
+
+/**
+ * Standard Red Notes: likewise for the readiness probe budget and the 200/503
+ * decision — the home-server serves `/healthcheck/readiness` from that same
+ * internal listener, so both live in `AuthReadinessEndpoint` and neither entry
+ * point holds a copy. Imported, not re-exported: the module is on auth's public
+ * barrel, which is where the other entry point reads it from.
+ */
 
 @controller('/healthcheck')
 export class AnnotatedHealthCheckController {
@@ -69,30 +78,21 @@ export class AnnotatedHealthCheckController {
   // hard dependencies (DB `SELECT 1` + Redis PING) under a short timeout, and
   // returns 503 when any dependency is down so the orchestrator stops routing to
   // us until it recovers. Cheap and bounded — no heavy work.
+  //
+  // Standard Red Notes: the composition itself lives in `AuthReadinessEndpoint`,
+  // because the bundled home-server serves this same route from a loopback-only
+  // internal listener — auth has no HTTP port on that topology, and its
+  // annotated controllers are deliberately never mounted there. This method is
+  // the HTTP shell: read the sources off the injected bindings, hand them over,
+  // answer with the status the report dictates.
   @httpGet('/readiness')
   public async readiness(@response() res: Response): Promise<void> {
-    const checks = { db: false, redis: false }
+    const report = await resolveAuthReadinessReport({
+      database: this.roleRepository.manager,
+      redis: this.redis,
+    })
 
-    try {
-      await this.withTimeout(this.roleRepository.manager.query('SELECT 1'), 2000)
-      checks.db = true
-    } catch {
-      checks.db = false
-    }
-
-    if (this.redis) {
-      try {
-        await this.withTimeout(this.redis.ping(), 2000)
-        checks.redis = true
-      } catch {
-        checks.redis = false
-      }
-    } else {
-      checks.redis = true
-    }
-
-    const healthy = checks.db && checks.redis
-    res.status(healthy ? 200 : 503).json({ status: healthy ? 'ready' : 'unavailable', checks })
+    res.status(authReadinessStatusCode(report)).json(report)
   }
 
   /**
@@ -129,21 +129,5 @@ export class AnnotatedHealthCheckController {
     })
 
     res.status(200).json(report)
-  }
-
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-    let timer: NodeJS.Timeout | undefined
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<T>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error('readiness check timed out')), timeoutMs)
-        }),
-      ])
-    } finally {
-      if (timer) {
-        clearTimeout(timer)
-      }
-    }
   }
 }

@@ -3,18 +3,24 @@ import { isLoopbackReadinessCaller } from '@standardnotes/api-gateway'
 import type { Request } from 'express'
 
 /**
- * Standard Red Notes: the auth `/healthcheck/diagnostics` route, served on the
- * ONE topology where auth has no HTTP port of its own.
+ * Standard Red Notes: auth's INTERNAL health routes — `/healthcheck/diagnostics`
+ * and `/healthcheck/readiness` — served on the ONE topology where auth has no
+ * HTTP port of its own.
  *
  * *** THE PROBLEM ***
- * `AdminController.probeAuthRuntime()` fetches
- * `${SERVICE_PROBE_URLS.auth}/healthcheck/diagnostics` over HTTP, and that map
- * defaults to the supervisord sibling port (`AUTH_SERVER_PORT`, 3103). On the
- * single container there is one process on one port and nothing at all listens
- * on 3103, so the probe failed and THREE whole blocks of the admin Diagnostics
- * pane — the auth half of `runtime`, the entire `datastore` block and the
- * dead-outbox census — read as unreachable on the shape most self-hosters
- * deploy.
+ * `AdminController` reaches both over HTTP at `${SERVICE_PROBE_URLS.auth}/...`,
+ * and that map defaults to the supervisord sibling port (`AUTH_SERVER_PORT`,
+ * 3103). On the single container there is one process on one port and nothing at
+ * all listens on 3103, so neither probe got an answer:
+ *
+ *   - `probeAuthRuntime` lost THREE whole blocks of the admin Diagnostics pane —
+ *     the auth half of `runtime`, the entire `datastore` block and the
+ *     dead-outbox census;
+ *   - `probeAuthReadiness` lost `health.auth` and the whole `auth` entry of the
+ *     `services` array, so the pane reported auth as `down` / `unreachable` with
+ *     no `probeDepth` while auth was running in the very same process, and the
+ *     "Auth readiness round trip" and "Auth database round trip" rows had
+ *     nothing to print.
  *
  * *** WHY NOT MOUNT AUTH'S ANNOTATED CONTROLLER ***
  * Because auth's annotated controllers declare UNPREFIXED bases — `/auth`,
@@ -26,12 +32,18 @@ import type { Request } from 'express'
  * and bypass the gateway's middleware. Their absence from the home-server graph
  * (auth's package barrel exports no annotated controller) is deliberate.
  *
+ * Nor is pointing the probe at this app's own `:3000` an option, however gated
+ * the route: `serviceProbeUrls.auth` feeds BOTH auth probes, so the gateway's
+ * own aggregate readiness would then be displayed as auth's `{db, redis}`
+ * verdict — a reading that is not auth's at all, and one that is "ready"
+ * whenever the deployment as a whole is.
+ *
  * *** THE EXPOSURE BOUNDARY ***
- * On multi-container the route answers on auth's internal port and 404s at the
+ * On multi-container both routes answer on auth's internal port and 404 at the
  * public front door, and that property is load-bearing. This listener keeps it
  * EXACTLY, in two independent ways:
  *
- *   1. The route is not registered on the public :3000 app at all, so the front
+ *   1. Neither route is registered on the public :3000 app at all, so the front
  *      door 404s by ROUTE ABSENCE — the strongest form, and one no middleware
  *      ordering mistake can undo.
  *   2. This socket is bound to loopback only, and a request is additionally
@@ -45,11 +57,19 @@ import type { Request } from 'express'
  *      admitted, so the header can only ever cost a caller access.
  *
  * A refusal is byte-identical to the no-such-route answer, so a caller cannot
- * learn from the response that the route exists at all.
+ * learn from the response that either route exists at all.
  */
 
-/** The path the gateway's probe asks for, and the only one served here. */
+/** The diagnostics path the gateway's runtime probe asks for. */
 export const INTERNAL_DIAGNOSTICS_PATH = '/healthcheck/diagnostics'
+
+/**
+ * The readiness path the gateway's auth readiness probe asks for. Note that the
+ * gateway accepts only a 200 or a 503 here and reads `{ status, checks }` out of
+ * either, which is why a served route must answer in that vocabulary even when
+ * it fails — see `InternalRoute.onFailure`.
+ */
+export const INTERNAL_READINESS_PATH = '/healthcheck/readiness'
 
 /**
  * The port the gateway's probe map defaults to for auth. Mirrors
@@ -96,6 +116,45 @@ export function readRequestPath(url: string | undefined): string {
   return path
 }
 
+/** A status code and a JSON body: everything a served route decides. */
+export type InternalRouteAnswer = {
+  status: number
+  body: unknown
+}
+
+/** One served route. */
+export type InternalRoute = {
+  /** Produce the answer. */
+  answer: () => Promise<InternalRouteAnswer>
+  /**
+   * The answer to serve when `answer()` rejects.
+   *
+   * IT BELONGS TO THE ROUTE, NOT TO THIS LISTENER, because a fallback in the
+   * wrong vocabulary is read as a verdict rather than as a failure. Concretely:
+   * the gateway's auth readiness probe accepts a 503 and then reads `status` and
+   * `checks` out of the body, and a body carrying neither — a generic
+   * `{ error: { message } }`, say — leaves it with `status: undefined` and
+   * `checks: {}`, which `authServiceEntry` scores as `'ok'`. A generic failure
+   * answer here would therefore publish a crashed readiness probe as a HEALTHY
+   * auth service. Each route states its own, in its own vocabulary.
+   *
+   * It is a value rather than a second thunk on purpose: whatever it is, it must
+   * be producible without running any of the code that just failed.
+   */
+  onFailure: InternalRouteAnswer
+}
+
+/**
+ * The served routes, keyed by EXACT path.
+ *
+ * A `Map` rather than an object literal because the key is caller-supplied: an
+ * object lookup for `__proto__`, `constructor` or `toString` returns an
+ * inherited member, and `routes['constructor']` would hand this handler
+ * `Object` — a callable whose result has neither a status nor a body. A `Map`
+ * has no inherited keys, so an unmatched path is unmatched whatever it spells.
+ */
+export type InternalRouteTable = ReadonlyMap<string, InternalRoute>
+
 export type InternalDiagnosticsRequest = Pick<http.IncomingMessage, 'method' | 'url' | 'headers' | 'socket'>
 
 export type InternalDiagnosticsResponse = {
@@ -112,53 +171,51 @@ export type InternalDiagnosticsLogger = {
  * Serve one request.
  *
  * Exported separately from the server so the gate and the routing are testable
- * without opening a socket. Never throws: a report that rejects answers 503
- * with the same bounded body shape, because an admin probe must not be able to
- * take this listener down and a stack trace must never reach a response.
+ * without opening a socket. Never throws: a route whose answer rejects serves
+ * that route's own `onFailure`, because an admin probe must not be able to take
+ * this listener down and a stack trace must never reach a response.
  */
 export async function handleInternalDiagnosticsRequest(
   request: InternalDiagnosticsRequest,
   response: InternalDiagnosticsResponse,
-  report: () => Promise<unknown>,
+  routes: InternalRouteTable,
 ): Promise<void> {
   const notFound = (): void => {
     response.writeHead(404, { 'content-type': 'application/json' })
     response.end(NOT_FOUND_BODY)
   }
 
-  if (request.method !== 'GET' || readRequestPath(request.url) !== INTERNAL_DIAGNOSTICS_PATH) {
+  const route = request.method === 'GET' ? routes.get(readRequestPath(request.url)) : undefined
+  if (route === undefined) {
     notFound()
 
     return
   }
 
   // The gate. Identical answer to an unmatched path, so a refused caller cannot
-  // tell the route apart from one that does not exist.
+  // tell a served route apart from one that does not exist.
   if (!isLoopbackReadinessCaller(request as unknown as Pick<Request, 'socket' | 'headers'>)) {
     notFound()
 
     return
   }
 
-  let body: string
+  let answer: InternalRouteAnswer
   try {
-    body = JSON.stringify(await report())
+    answer = await route.answer()
   } catch {
     // Deliberately blind: a probe rejection is exactly where a driver puts a
     // host, a port and a database name, so nothing from it is read or echoed.
-    response.writeHead(503, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ error: { message: 'Diagnostics unavailable' } }))
-
-    return
+    answer = route.onFailure
   }
 
-  response.writeHead(200, { 'content-type': 'application/json' })
-  response.end(body)
+  response.writeHead(answer.status, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(answer.body))
 }
 
 export type InternalDiagnosticsListenerOptions = {
   port: number
-  report: () => Promise<unknown>
+  routes: InternalRouteTable
   logger: InternalDiagnosticsLogger
   /** Test seam. Defaults to a real `http.Server`. */
   createServer?: (handler: (request: http.IncomingMessage, response: http.ServerResponse) => void) => http.Server
@@ -168,9 +225,10 @@ export type InternalDiagnosticsListenerOptions = {
  * Open the loopback listener, or report that it could not be opened.
  *
  * `undefined` on ANY listen failure (a port already taken by a co-located
- * process is the realistic one), logged as a warning. A diagnostics listener
- * must never be able to fail a boot: the pane simply keeps reporting the probe
- * as unreachable, which is what it reported before this listener existed.
+ * process is the realistic one), logged as a warning. An internal health
+ * listener must never be able to fail a boot: the pane simply keeps reporting
+ * the auth probes as unreachable, which is what it reported before this
+ * listener existed.
  */
 export async function startInternalDiagnosticsListener(
   options: InternalDiagnosticsListenerOptions,
@@ -178,7 +236,7 @@ export async function startInternalDiagnosticsListener(
   const createServer = options.createServer ?? http.createServer
 
   const server = createServer((request: http.IncomingMessage, response: http.ServerResponse) => {
-    void handleInternalDiagnosticsRequest(request, response, options.report)
+    void handleInternalDiagnosticsRequest(request, response, options.routes)
   })
 
   return new Promise<http.Server | undefined>((resolve) => {
@@ -193,7 +251,7 @@ export async function startInternalDiagnosticsListener(
 
     server.once('error', (error: NodeJS.ErrnoException) => {
       options.logger.warn(
-        'Internal auth diagnostics listener could not be opened; the admin Diagnostics pane will keep reporting the auth runtime probe as unreachable.',
+        'Internal auth diagnostics listener could not be opened; the admin Diagnostics pane will keep reporting the auth runtime and readiness probes as unreachable.',
         { port: options.port, code: error.code },
       )
       // A server that failed to listen holds no handle, and closing one that
@@ -203,7 +261,9 @@ export async function startInternalDiagnosticsListener(
 
     server.listen(options.port, INTERNAL_DIAGNOSTICS_BIND_ADDRESS, () => {
       options.logger.info(
-        `Internal auth diagnostics listener bound on ${INTERNAL_DIAGNOSTICS_BIND_ADDRESS}:${options.port} (${INTERNAL_DIAGNOSTICS_PATH}; loopback callers only, never the public front door).`,
+        `Internal auth diagnostics listener bound on ${INTERNAL_DIAGNOSTICS_BIND_ADDRESS}:${
+          options.port
+        } (${[...options.routes.keys()].join(', ')}; loopback callers only, never the public front door).`,
       )
       settle(server)
     })

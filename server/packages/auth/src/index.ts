@@ -7,3 +7,9 @@ export * from './Bootstrap'
 // route: auth's annotated controllers are deliberately absent from this barrel
 // (they declare unprefixed bases such as `/auth`, `/sessions` and `/internal`).
 export * from './Infra/Diagnostics/AuthRuntimeDiagnosticsEndpoint'
+// Standard Red Notes: and the one composition of the `/healthcheck/readiness`
+// answer, exported for the same reason and read by the same loopback-only
+// listener. Without it the gateway's `probeAuthReadiness()` got no answer on a
+// one-process bundle, and the admin pane reported auth unreachable while auth
+// was running in the very same process.
+export * from './Infra/Diagnostics/AuthReadinessEndpoint'
