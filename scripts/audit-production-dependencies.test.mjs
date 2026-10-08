@@ -113,15 +113,15 @@ test("owned security manifests preserve supported direct dependency floors", () 
   for (const [file, current, vulnerable, expectedError] of [
     [
       "mcp/package.json",
-      '"@modelcontextprotocol/sdk": "^1.30.0"',
+      '"@modelcontextprotocol/sdk": "^1.32.1"',
       '"@modelcontextprotocol/sdk": "^1.29.0"',
-      /dependencies\.@modelcontextprotocol\/sdk must remain \^1\.30\.0/,
+      /dependencies\.@modelcontextprotocol\/sdk must remain \^1\.32\.1/,
     ],
     [
       "openclaw/package.json",
-      '"@modelcontextprotocol/sdk": "^1.30.0"',
+      '"@modelcontextprotocol/sdk": "^1.32.1"',
       '"@modelcontextprotocol/sdk": "^1.29.0"',
-      /dependencies\.@modelcontextprotocol\/sdk must remain \^1\.30\.0/,
+      /dependencies\.@modelcontextprotocol\/sdk must remain \^1\.32\.1/,
     ],
     [
       "app/packages/utils/package.json",
@@ -148,10 +148,13 @@ test("owned security manifests preserve supported direct dependency floors", () 
       /resolutions\.dompurify must remain npm:3\.4\.13/,
     ],
   ]) {
-    const mutated = {
-      ...securityManifests,
-      [file]: securityManifests[file].replace(current, vulnerable),
-    };
+    const mutatedText = securityManifests[file].replace(current, vulnerable);
+    assert.notEqual(
+      mutatedText,
+      securityManifests[file],
+      `${file}: fixture no longer contains ${current}, so this mutation is a silent no-op and the assertion below would prove nothing`,
+    );
+    const mutated = { ...securityManifests, [file]: mutatedText };
     assert.match(
       validateSecurityManifestDeclarations(mutated).join("\n"),
       expectedError,
@@ -494,8 +497,8 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "yarn.lock",
       "@modelcontextprotocol/sdk",
-      '"@modelcontextprotocol/sdk@npm:^1.30.0":',
-      "1.30.0",
+      '"@modelcontextprotocol/sdk@npm:^1.32.1":',
+      "1.32.1",
       "1.29.0",
     ],
     [
@@ -610,13 +613,16 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "7.5.20",
     ],
   ]) {
-    const vulnerable = {
-      ...yarnLockfiles,
-      [lockfile]: yarnLockfiles[lockfile].replace(
-        `${descriptor}\n  version: ${safeVersion}`,
-        `${descriptor}\n  version: ${vulnerableVersion}`,
-      ),
-    };
+    const mutatedLockfile = yarnLockfiles[lockfile].replace(
+      `${descriptor}\n  version: ${safeVersion}`,
+      `${descriptor}\n  version: ${vulnerableVersion}`,
+    );
+    assert.notEqual(
+      mutatedLockfile,
+      yarnLockfiles[lockfile],
+      `${lockfile}: fixture no longer contains ${descriptor} at version ${safeVersion}, so this mutation is a silent no-op and the assertion below would prove nothing`,
+    );
+    const vulnerable = { ...yarnLockfiles, [lockfile]: mutatedLockfile };
     assert.match(
       validateYarnSecurityGraph(vulnerable).join("\n"),
       new RegExp(

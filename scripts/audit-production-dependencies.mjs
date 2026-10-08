@@ -118,13 +118,13 @@ const securityManifestDeclarations = Object.freeze([
     file: "mcp/package.json",
     section: "dependencies",
     packageName: "@modelcontextprotocol/sdk",
-    expected: "^1.30.0",
+    expected: "^1.32.1",
   }),
   Object.freeze({
     file: "openclaw/package.json",
     section: "dependencies",
     packageName: "@modelcontextprotocol/sdk",
-    expected: "^1.30.0",
+    expected: "^1.32.1",
   }),
   Object.freeze({
     file: "app/packages/utils/package.json",
