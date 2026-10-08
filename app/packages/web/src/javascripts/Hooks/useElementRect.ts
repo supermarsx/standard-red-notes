@@ -17,6 +17,9 @@ export const useAutoElementRect = (
   const [rect, setRect] = useState<DOMRect>()
 
   useEffect(() => {
+    // The handle MUST be captured: `clearTimeout` of an unassigned variable
+    // clears nothing, so every resize event of a window drag would queue its own
+    // getBoundingClientRect() and re-render instead of one read after the burst.
     let windowResizeDebounceTimeout: number | undefined
     let windowResizeHandler: () => void
 
@@ -30,7 +33,7 @@ export const useAutoElementRect = (
         windowResizeHandler = () => {
           window.clearTimeout(windowResizeDebounceTimeout)
 
-          window.setTimeout(() => {
+          windowResizeDebounceTimeout = window.setTimeout(() => {
             setRect(element.getBoundingClientRect())
           }, DebounceTimeInMs)
         }
@@ -42,6 +45,9 @@ export const useAutoElementRect = (
         if (windowResizeHandler) {
           window.removeEventListener('resize', windowResizeHandler)
         }
+        // A pending deadline must not outlive the effect: it would read layout
+        // and set state after unmount, or against a replaced element.
+        window.clearTimeout(windowResizeDebounceTimeout)
       }
     } else {
       setRect(undefined)
@@ -54,6 +60,8 @@ export const useAutoElementRect = (
 
 export const useElementResize = (element: HTMLElement | null | undefined, callback: () => void) => {
   useEffect(() => {
+    // Same capture requirement as above: without the handle the window-resize
+    // branch invokes `callback` once per resize event rather than once per burst.
     let windowResizeDebounceTimeout: number | undefined
     let windowResizeHandler: () => void
 
@@ -66,7 +74,7 @@ export const useElementResize = (element: HTMLElement | null | undefined, callba
       windowResizeHandler = () => {
         window.clearTimeout(windowResizeDebounceTimeout)
 
-        window.setTimeout(() => {
+        windowResizeDebounceTimeout = window.setTimeout(() => {
           callback()
         }, DebounceTimeInMs)
       }
@@ -75,6 +83,9 @@ export const useElementResize = (element: HTMLElement | null | undefined, callba
       return () => {
         resizeObserver.unobserve(element)
         window.removeEventListener('resize', windowResizeHandler)
+        // A pending deadline must not outlive the effect and call a stale
+        // callback after unmount or after the element/callback changed.
+        window.clearTimeout(windowResizeDebounceTimeout)
       }
     } else {
       return
