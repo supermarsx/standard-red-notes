@@ -918,9 +918,43 @@ export function validateCiContract(files) {
   for (const [pattern, description] of [
     [/continue-on-error\s*:/, "continue-on-error"],
     [/\|\|\s*true/, "silent shell success fallback"],
+    // An inline version pin is how CI silently ended up testing
+    // @playwright/test@1.61.1 while the manifest said ^1.64.0 and the committed
+    // e2e lockfile resolved 1.64.0: three versions of the truth that nothing
+    // related to one another. The lockfile is the single source of truth, so a
+    // hand-written version here is forbidden outright -- that leaves one
+    // number instead of two that have to be kept equal.
+    [
+      /@playwright\/test@\d/,
+      "inline Playwright version pin (install from the committed e2e lockfile instead)",
+    ],
+    [
+      /\bnpm\s+(?:--prefix\s+e2e\s+)?install\b[^\r\n]*\be2e\b|\bnpm\s+--prefix\s+e2e\s+install\b/,
+      "mutating npm install for e2e (use npm --prefix e2e ci)",
+    ],
   ]) {
     if (pattern.test(workflow)) {
       errors.push(`${file}: forbidden ${description}`);
+    }
+  }
+
+  // Every e2e dependency install must come from the committed lockfile, in
+  // every job that has one, so a future job cannot reintroduce the drift.
+  const e2eInstallSteps = (
+    workflow.match(/^[^\r\n]*\bnpm\s+--prefix\s+e2e\s+\S+[^\r\n]*$/gmu) ?? []
+  ).filter((line) => !line.includes("npm --prefix e2e exec"));
+  if (e2eInstallSteps.length === 0) {
+    errors.push(`${file}: missing an e2e dependency install step`);
+  }
+  for (const step of e2eInstallSteps) {
+    if (
+      !step.includes(
+        "npm --prefix e2e ci --no-audit --no-fund --ignore-scripts",
+      )
+    ) {
+      errors.push(
+        `${file}: e2e dependencies must be installed with "npm --prefix e2e ci --no-audit --no-fund --ignore-scripts", found: ${step.trim()}`,
+      );
     }
   }
 
@@ -1132,8 +1166,8 @@ export function validateCiContract(files) {
       "isolated project name",
     ],
     [
-      "--save=false @playwright/test@1.61.1",
-      "non-mutating pinned Playwright install",
+      "npm --prefix e2e ci --no-audit --no-fund --ignore-scripts",
+      "non-mutating Playwright install from the committed e2e lockfile",
     ],
     [
       "docker compose up -d --no-build --wait --wait-timeout 900",
@@ -1470,7 +1504,8 @@ export function validateCiContract(files) {
   const stackSecretLoop =
     "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; do";
   const stackSecretLoops = workflow.split(stackSecretLoop).length - 1;
-  const stackConfigurations = workflow.split("Configure isolated stack").length - 1;
+  const stackConfigurations =
+    workflow.split("Configure isolated stack").length - 1;
   if (stackSecretLoops !== stackConfigurations) {
     errors.push(
       `${file}: every disposable stack must mint SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET; ${stackConfigurations} stack configurations but ${stackSecretLoops} mint it`,
@@ -2057,7 +2092,8 @@ export function validateCiContract(files) {
   // shared anchor would let the sign-in leg be dropped while the register leg kept
   // the rule green, which is precisely how presence rules in this file have lost
   // their teeth before.
-  const socketLaneSignIn = files.get("e2e/tests/grpc-auth-session.spec.ts") ?? "";
+  const socketLaneSignIn =
+    files.get("e2e/tests/grpc-auth-session.spec.ts") ?? "";
   for (const [fragment, expectedCount, description] of [
     [
       "expectCookieBasedSession(",

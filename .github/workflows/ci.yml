@@ -297,12 +297,12 @@ jobs:
           path: |
             .yarn/cache
             ~/.npm
-          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json') }}
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json', 'e2e/package-lock.json') }}
           restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
       - name: Install root dependencies immutably
         run: yarn install --immutable
       - name: Install pinned Playwright test runner
-        run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
+        run: npm --prefix e2e ci --no-audit --no-fund --ignore-scripts
       - name: Install Chromium
         run: npm --prefix e2e exec -- playwright install --with-deps chromium
       - name: Lint tracked Dockerfiles
@@ -658,12 +658,12 @@ jobs:
           path: |
             .yarn/cache
             ~/.npm
-          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json') }}
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json', 'e2e/package-lock.json') }}
           restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
       - name: Install root dependencies immutably
         run: yarn install --immutable
       - name: Install pinned Playwright test runner
-        run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
+        run: npm --prefix e2e ci --no-audit --no-fund --ignore-scripts
       - name: Install Chromium
         run: npm --prefix e2e exec -- playwright install --with-deps chromium
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -787,12 +787,12 @@ jobs:
           path: |
             .yarn/cache
             ~/.npm
-          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json') }}
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json', 'e2e/package-lock.json') }}
           restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
       - name: Install root dependencies immutably
         run: yarn install --immutable
       - name: Install pinned Playwright test runner
-        run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
+        run: npm --prefix e2e ci --no-audit --no-fund --ignore-scripts
       - name: Install browser matrix
         run: npm --prefix e2e exec -- playwright install --with-deps chromium firefox webkit
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0

@@ -1999,3 +1999,45 @@ test("the eslint aggregates themselves cannot be narrowed", () => {
     assert.match(validateCiContract(narrowed).join("\n"), expected);
   }
 });
+
+test("CI installs the e2e Playwright runner from the committed lockfile only", () => {
+  const ciFile = ".github/workflows/ci.yml";
+  const lockInstall =
+    "npm --prefix e2e ci --no-audit --no-fund --ignore-scripts";
+
+  // CI used to install `@playwright/test@1.61.1` inline with
+  // --no-package-lock, so CI tested 1.61.1 while e2e/package.json said ^1.64.0
+  // and the committed e2e lockfile resolved 1.64.0 -- three versions of the
+  // truth that nothing compared. Installing from the lockfile leaves one
+  // number; these guards keep it that way.
+  assert.deepEqual(validateCiContract(baseline), []);
+  assert.ok(
+    baseline.get(ciFile).includes(lockInstall),
+    "ci.yml must install e2e dependencies from the committed lockfile",
+  );
+
+  for (const [replacement, expectedError] of [
+    [
+      "npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1",
+      /forbidden inline Playwright version pin/,
+    ],
+    [
+      "npm --prefix e2e install --no-audit --no-fund --ignore-scripts",
+      /forbidden mutating npm install for e2e/,
+    ],
+    ["npm --prefix e2e ci", /e2e dependencies must be installed with/],
+  ]) {
+    const regressed = withFileChanged(ciFile, (content) => {
+      const mutated = content.replaceAll(lockInstall, replacement);
+      // Precondition: without this, a drifted fixture would make the mutation a
+      // silent no-op and the assertion below would pass over an unguarded CI.
+      assert.notEqual(
+        mutated,
+        content,
+        `ci.yml no longer contains ${lockInstall}, so this mutation proves nothing`,
+      );
+      return mutated;
+    });
+    assert.match(validateCiContract(regressed).join("\n"), expectedError);
+  }
+});
