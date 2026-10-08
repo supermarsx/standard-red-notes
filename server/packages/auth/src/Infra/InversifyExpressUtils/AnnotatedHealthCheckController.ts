@@ -6,39 +6,22 @@ import { Repository } from 'typeorm'
 import TYPES from '../../Bootstrap/Types'
 import { Role } from '../../Domain/Role/Role'
 import { CookieFactoryInterface } from '../../Domain/Auth/Cookies/CookieFactoryInterface'
-import {
-  AuthRuntimeDiagnosticsReport,
-  DB_PROBE_TIMEOUT_MS,
-  observeAuthRuntime,
-} from '../../Domain/Diagnostics/AuthRuntimeDiagnostics'
 import { InviteEventOutboxDispatcher } from '../../Domain/Invite/InviteEventOutboxDispatcher'
 import { InviteEventOutboxRepositoryInterface } from '../../Domain/Invite/InviteEventOutboxRepositoryInterface'
-import { createTypeORMDatastoreProbe } from '../TypeORM/TypeORMDatastoreProbe'
+import { resolveAuthRuntimeDiagnosticsReport } from '../Diagnostics/AuthRuntimeDiagnosticsEndpoint'
 import { TypeORMInviteEventOutbox } from '../TypeORM/TypeORMInviteEventOutbox'
-import { createTypeORMOutboxProbe } from '../TypeORM/TypeORMOutboxProbe'
 
 /**
- * Standard Red Notes: how long a `/healthcheck/diagnostics` answer may be
- * re-served before the probes run again.
- *
- * The route performs real database work — a read, a zero-row write and a
- * migration read — and it is reachable by anything that can reach this service
- * on the internal network. A short shared answer bounds that to one probe set
- * per window however often it is asked, and costs the pane nothing: the admin
- * screen reads it once per load, and the facts it carries (a schema's migration
- * state, a pool census) do not change between two clicks.
- *
- * Module-level rather than per-instance because inversify-express-utils builds a
- * fresh controller per request, so instance state would never be reused.
+ * Standard Red Notes: the answer window and its test seam live in the shared
+ * endpoint module, because the bundled home-server answers the SAME route from
+ * a loopback-only internal listener and the two entry points must share one
+ * window rather than hold one each. Re-exported here so this module stays the
+ * one import a reader of the route needs.
  */
-export const DIAGNOSTICS_CACHE_TTL_MS = 5_000
-
-let cachedDiagnostics: { at: number; report: AuthRuntimeDiagnosticsReport } | undefined
-
-/** Test seam: drop the shared answer so a spec can observe a fresh probe. */
-export const clearAuthRuntimeDiagnosticsCache = (): void => {
-  cachedDiagnostics = undefined
-}
+export {
+  DIAGNOSTICS_CACHE_TTL_MS,
+  clearAuthRuntimeDiagnosticsCache,
+} from '../Diagnostics/AuthRuntimeDiagnosticsEndpoint'
 
 @controller('/healthcheck')
 export class AnnotatedHealthCheckController {
@@ -136,42 +119,14 @@ export class AnnotatedHealthCheckController {
    */
   @httpGet('/diagnostics')
   public async diagnostics(@response() res: Response): Promise<void> {
-    const now = Date.now()
-    if (cachedDiagnostics !== undefined && now - cachedDiagnostics.at < DIAGNOSTICS_CACHE_TTL_MS) {
-      res.status(200).json(cachedDiagnostics.report)
-
-      return
-    }
-
-    const report = await observeAuthRuntime({
-      uptimeSeconds: process.uptime(),
-      // A container that predates the cookie binding reports both attributes
-      // OFF rather than failing the route; the gateway's reader carries the
-      // distinction no further, because the attributes default to ON when the
-      // variables are unset and a fabricated reading here would invert the
-      // diagnosis. An absent factory is impossible on a booted auth server —
-      // `Auth_CookieFactory` is bound unconditionally — so this arm exists only
-      // for construction without a container.
-      cookies: this.cookieFactory ?? { createCookieHeaderValue: (): string[] => [] },
-      e2eTesting: this.forceLegacySessions === true,
-      datastore: createTypeORMDatastoreProbe(this.roleRepository.manager.connection),
-      // Absent when no outbox entity repository is bound, which omits the queue
-      // block entirely. A zero-row census over a store this process cannot count
-      // would read as an empty outbox, and an empty outbox is the healthy answer
-      // an operator stops looking at.
-      ...(this.inviteEventOutboxEntityRepository === undefined
-        ? {}
-        : {
-            outbox: createTypeORMOutboxProbe(
-              this.inviteEventOutboxEntityRepository,
-              this.inviteEventOutboxRepository,
-              this.inviteEventOutboxDispatcher,
-            ),
-          }),
-      timeoutMs: DB_PROBE_TIMEOUT_MS,
+    const report = await resolveAuthRuntimeDiagnosticsReport({
+      dataSource: this.roleRepository.manager.connection,
+      cookieFactory: this.cookieFactory,
+      forceLegacySessions: this.forceLegacySessions,
+      outboxEntityRepository: this.inviteEventOutboxEntityRepository,
+      outboxRepository: this.inviteEventOutboxRepository,
+      outboxDispatcher: this.inviteEventOutboxDispatcher,
     })
-
-    cachedDiagnostics = { at: now, report }
 
     res.status(200).json(report)
   }

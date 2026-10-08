@@ -9,6 +9,12 @@ module.exports = {
     // the file could lose every test and this workspace would still read 100 %.
     'src/Server/HomeServer.ts',
     'src/Server/HomeServerRuntime.ts',
+    // The loopback-only listener that serves auth's `/healthcheck/diagnostics`
+    // on this topology. Named explicitly because it carries one half of an
+    // EXPOSURE boundary — an internal route that must not answer the public
+    // front door — and a file outside the denominator can lose every test
+    // without this workspace noticing.
+    'src/Server/InternalDiagnosticsListener.ts',
     // A glob, not two literal paths: the realtime bridge is swapped per
     // topology (Redis today, in-process for the single container), and a new
     // bridge nobody remembered to list here would be invisible to this gate.

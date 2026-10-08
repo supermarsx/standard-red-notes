@@ -6,7 +6,14 @@ jest.mock('@standardnotes/auth-server', () => ({
 
 import * as http from 'http'
 
-import { buildHomeServerEnvironmentOverrides, HomeServer, HomeServerListener, listenHomeServer } from './HomeServer'
+import {
+  buildHomeServerEnvironmentOverrides,
+  HomeServer,
+  HomeServerListener,
+  listenHomeServer,
+  resolveConfiguredAuthProbeBase,
+} from './HomeServer'
+import { DEFAULT_AUTH_PROBE_PORT } from './InternalDiagnosticsListener'
 
 describe('listenHomeServer', () => {
   it('passes an explicit bind address to the HTTP listener', () => {
@@ -158,5 +165,113 @@ describe('buildHomeServerEnvironmentOverrides', () => {
 
     expect(environment.SRN_DEPLOY_REVISION).toBe('0123456789abcdef0123456789abcdef01234567')
     expect(environment.SRN_DEPLOY_VERSION).toBe('v26.8.11')
+  })
+
+  /**
+   * Standard Red Notes: the auth RUNTIME probe has to dial the loopback
+   * listener this process opens, not the supervisord sibling port that does not
+   * exist here — that unanswered dial is what left three whole Diagnostics
+   * blocks reading "unreachable" on the topology most self-hosters run.
+   */
+  describe('auth runtime probe base', () => {
+    const savedEnvironment = { ...process.env }
+
+    afterEach(() => {
+      process.env = { ...savedEnvironment }
+    })
+
+    it('points the probe at the loopback diagnostics listener by default', () => {
+      delete process.env.AUTH_SERVER_PROBE_URL
+      delete process.env.AUTH_SERVER_URL
+      delete process.env.AUTH_SERVER_PORT
+
+      const environment = buildHomeServerEnvironmentOverrides('data', {})
+
+      expect(environment.AUTH_SERVER_PROBE_URL).toBe(`http://127.0.0.1:${DEFAULT_AUTH_PROBE_PORT}`)
+    })
+
+    it('follows the configured sibling port, so the listener and the probe cannot drift', () => {
+      delete process.env.AUTH_SERVER_PROBE_URL
+      delete process.env.AUTH_SERVER_URL
+
+      const environment = buildHomeServerEnvironmentOverrides('data', { AUTH_SERVER_PORT: '3203' })
+
+      expect(environment.AUTH_SERVER_PROBE_URL).toBe('http://127.0.0.1:3203')
+    })
+
+    it('uses a LITERAL loopback address, never the name `localhost`', () => {
+      delete process.env.AUTH_SERVER_PROBE_URL
+      delete process.env.AUTH_SERVER_URL
+
+      // The listener binds ONE address; `localhost` resolves to both families on
+      // a dual-stack host, which is a probe that fails on the resolver's whim.
+      expect(buildHomeServerEnvironmentOverrides('data', {}).AUTH_SERVER_PROBE_URL).not.toContain('localhost')
+    })
+
+    it('leaves an explicitly configured probe base alone', () => {
+      const environment = buildHomeServerEnvironmentOverrides('data', {
+        AUTH_SERVER_PROBE_URL: 'http://auth.internal:3000',
+      })
+
+      expect(environment.AUTH_SERVER_PROBE_URL).toBe('http://auth.internal:3000')
+    })
+
+    it('does not shadow an operator who configured only AUTH_SERVER_URL', () => {
+      delete process.env.AUTH_SERVER_PROBE_URL
+      delete process.env.AUTH_SERVER_URL
+
+      // The gateway resolves AUTH_SERVER_PROBE_URL first, so writing a default
+      // into it would silently beat this explicit setting.
+      const environment = buildHomeServerEnvironmentOverrides('data', { AUTH_SERVER_URL: 'http://auth.internal:3000' })
+
+      expect(environment.AUTH_SERVER_PROBE_URL).toBeUndefined()
+      expect(environment.AUTH_SERVER_URL).toBe('http://auth.internal:3000')
+    })
+
+    it('reads a probe base the operator exported into the process environment', () => {
+      process.env.AUTH_SERVER_URL = 'http://auth.internal:3000'
+      delete process.env.AUTH_SERVER_PROBE_URL
+
+      expect(buildHomeServerEnvironmentOverrides('data', {}).AUTH_SERVER_PROBE_URL).toBeUndefined()
+    })
+
+    it('treats a blank setting as no setting, exactly as the env reader does', () => {
+      delete process.env.AUTH_SERVER_PROBE_URL
+      delete process.env.AUTH_SERVER_URL
+
+      const environment = buildHomeServerEnvironmentOverrides('data', { AUTH_SERVER_URL: '' })
+
+      expect(environment.AUTH_SERVER_PROBE_URL).toBe(`http://127.0.0.1:${DEFAULT_AUTH_PROBE_PORT}`)
+    })
+  })
+})
+
+describe('resolveConfiguredAuthProbeBase', () => {
+  const savedEnvironment = { ...process.env }
+
+  afterEach(() => {
+    process.env = { ...savedEnvironment }
+  })
+
+  it('prefers the variable the gateway resolves first', () => {
+    expect(
+      resolveConfiguredAuthProbeBase({
+        AUTH_SERVER_PROBE_URL: 'http://probe:1',
+        AUTH_SERVER_URL: 'http://url:2',
+      }),
+    ).toBe('http://probe:1')
+  })
+
+  it('falls through to the second variable', () => {
+    delete process.env.AUTH_SERVER_PROBE_URL
+
+    expect(resolveConfiguredAuthProbeBase({ AUTH_SERVER_URL: 'http://url:2' })).toBe('http://url:2')
+  })
+
+  it('reports nothing configured when neither variable is set anywhere', () => {
+    delete process.env.AUTH_SERVER_PROBE_URL
+    delete process.env.AUTH_SERVER_URL
+
+    expect(resolveConfiguredAuthProbeBase(undefined)).toBeUndefined()
   })
 })

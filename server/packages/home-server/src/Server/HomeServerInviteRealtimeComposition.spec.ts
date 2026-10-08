@@ -349,7 +349,33 @@ jest.mock('@standardnotes/domain-core', () => ({
   ServiceContainer: ServiceContainerDouble,
 }))
 
-jest.mock('@standardnotes/auth-server', () => ({ Service: ServiceDouble }))
+/**
+ * Standard Red Notes: the two auth exports the bundled home-server consumes to
+ * answer `/healthcheck/diagnostics` from its own loopback listener. Mocked here
+ * because this suite doubles the whole auth container; the composition itself is
+ * covered in auth's `AuthRuntimeDiagnosticsEndpoint.spec.ts`.
+ */
+const mockReadAuthRuntimeDiagnosticsSources = jest.fn<Record<string, unknown> | undefined, [unknown]>(() => undefined)
+const mockResolveAuthRuntimeDiagnosticsReport = jest.fn(async () => ({ processUptimeSeconds: 7 }))
+jest.mock('@standardnotes/auth-server', () => ({
+  Service: ServiceDouble,
+  readAuthRuntimeDiagnosticsSources: mockReadAuthRuntimeDiagnosticsSources,
+  resolveAuthRuntimeDiagnosticsReport: mockResolveAuthRuntimeDiagnosticsReport,
+}))
+
+// The listener opens a real socket; this suite asserts the COMPOSITION (which
+// port, which report, closed on stop). Its own behaviour — the loopback gate in
+// both directions — is covered in InternalDiagnosticsListener.spec.ts.
+const mockInternalDiagnosticsClose = jest.fn((callback?: () => void) => callback?.())
+const mockInternalDiagnosticsCloseAllConnections = jest.fn()
+const mockStartInternalDiagnosticsListener = jest.fn<Promise<unknown>, [unknown]>(async () => ({
+  close: mockInternalDiagnosticsClose,
+  closeAllConnections: mockInternalDiagnosticsCloseAllConnections,
+}))
+jest.mock('./InternalDiagnosticsListener', () => ({
+  ...jest.requireActual<typeof import('./InternalDiagnosticsListener')>('./InternalDiagnosticsListener'),
+  startInternalDiagnosticsListener: mockStartInternalDiagnosticsListener,
+}))
 jest.mock('@standardnotes/files-server', () => ({ Service: ServiceDouble }))
 jest.mock('@standardnotes/revisions-server', () => ({ Service: ServiceDouble }))
 jest.mock('@standardnotes/syncing-server', () => ({ Service: ServiceDouble }))
@@ -437,6 +463,12 @@ describe('HomeServer invite realtime composition', () => {
     mockWebSocketRuntimeInstances.length = 0
     mockInviteBridgeClose.mockResolvedValue(undefined)
     mockAvailabilityClose.mockResolvedValue(undefined)
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockInternalDiagnosticsClose.mockImplementation((callback?: () => void) => callback?.())
+    mockStartInternalDiagnosticsListener.mockImplementation(async () => ({
+      close: mockInternalDiagnosticsClose,
+      closeAllConnections: mockInternalDiagnosticsCloseAllConnections,
+    }))
     mockCreateHttpServer.mockImplementation(() => {
       const server = {
         keepAliveTimeout: 0,
@@ -735,6 +767,12 @@ describe('HomeServer FILES_V1 composition', () => {
     mockWebSocketRuntimeInstances.length = 0
     mockInviteBridgeClose.mockResolvedValue(undefined)
     mockAvailabilityClose.mockResolvedValue(undefined)
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockInternalDiagnosticsClose.mockImplementation((callback?: () => void) => callback?.())
+    mockStartInternalDiagnosticsListener.mockImplementation(async () => ({
+      close: mockInternalDiagnosticsClose,
+      closeAllConnections: mockInternalDiagnosticsCloseAllConnections,
+    }))
     mockCreateHttpServer.mockImplementation(() => {
       const httpServer = { keepAliveTimeout: 0, listen: jest.fn().mockReturnThis() }
       mockHttpServers.push(httpServer)
@@ -986,5 +1024,112 @@ describe('HomeServer FILES_V1 composition', () => {
     )
 
     await server.stop()
+  })
+})
+
+/**
+ * Standard Red Notes: the auth-owned Diagnostics blocks on THIS topology.
+ *
+ * The admin pane reads them by HTTP-probing auth's internal
+ * `/healthcheck/diagnostics`, which in a one-process bundle nothing answered:
+ * the gateway's probe map defaults to the supervisord sibling port and no auth
+ * process exists. These tests pin the composition that closes that — the route
+ * is served from a loopback-only listener on exactly the port the probe dials,
+ * from auth's own single report composition, and it is closed with the server.
+ */
+describe('HomeServer auth diagnostics listener', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockHomeRuntimeInstances.length = 0
+    mockHttpServers.length = 0
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    mockInternalDiagnosticsClose.mockImplementation((callback?: () => void) => callback?.())
+    mockStartInternalDiagnosticsListener.mockImplementation(async () => ({
+      close: mockInternalDiagnosticsClose,
+      closeAllConnections: mockInternalDiagnosticsCloseAllConnections,
+    }))
+    mockCreateHttpServer.mockImplementation(() => {
+      const server = { keepAliveTimeout: 0, listen: jest.fn().mockReturnThis() }
+      mockHttpServers.push(server)
+      return server
+    })
+  })
+
+  it('serves auth diagnostics on the port the gateway probe dials', async () => {
+    const sources = { dataSource: {} }
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(sources)
+    const server = createServer()
+
+    const result = await server.start({
+      ...configuration,
+      environment: { ...configuration.environment, AUTH_SERVER_PORT: '3645' },
+    })
+
+    expect(result.isFailed()).toBe(false)
+    const options = mockStartInternalDiagnosticsListener.mock.calls[0][0] as {
+      port: number
+      report: () => Promise<unknown>
+    }
+    expect(options.port).toBe(3645)
+
+    // The report comes from auth's one composition, handed the sources read off
+    // the shared container — not a second copy built here.
+    await expect(options.report()).resolves.toEqual({ processUptimeSeconds: 7 })
+    expect(mockResolveAuthRuntimeDiagnosticsReport).toHaveBeenCalledWith(sources)
+
+    await server.stop()
+  })
+
+  it('closes the diagnostics listener with the server, so a restart can rebind the port', async () => {
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue({ dataSource: {} })
+    const server = createServer()
+    await server.start(configuration)
+
+    await server.stop()
+
+    expect(mockInternalDiagnosticsClose).toHaveBeenCalledTimes(1)
+    expect(mockInternalDiagnosticsCloseAllConnections).toHaveBeenCalledTimes(1)
+  })
+
+  it('collects a close failure into the stop result instead of throwing out of teardown', async () => {
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue({ dataSource: {} })
+    mockInternalDiagnosticsClose.mockImplementation(() => {
+      throw new Error('close refused')
+    })
+    const server = createServer()
+    await server.start(configuration)
+
+    const result = await server.stop()
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('close refused')
+  })
+
+  it('mounts NO listener, and says so, when the container exposes nothing to report', async () => {
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue(undefined)
+    const server = createServer()
+
+    const result = await server.start(configuration)
+
+    expect(result.isFailed()).toBe(false)
+    expect(mockStartInternalDiagnosticsListener).not.toHaveBeenCalled()
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Auth runtime diagnostics are not available in this container; the admin Diagnostics pane will report the auth runtime probe as unreachable.',
+    )
+
+    await server.stop()
+  })
+
+  it('starts cleanly when the listener could not bind its port', async () => {
+    mockReadAuthRuntimeDiagnosticsSources.mockReturnValue({ dataSource: {} })
+    mockStartInternalDiagnosticsListener.mockImplementation(async () => undefined)
+    const server = createServer()
+
+    const result = await server.start(configuration)
+
+    expect(result.isFailed()).toBe(false)
+
+    await expect(server.stop()).resolves.toMatchObject({})
+    expect(mockInternalDiagnosticsClose).not.toHaveBeenCalled()
   })
 })

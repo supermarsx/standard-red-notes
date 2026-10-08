@@ -74,7 +74,12 @@ import {
 } from '@standard-red-notes/websocket-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
-import { Service as AuthService, AuthServiceInterface } from '@standardnotes/auth-server'
+import {
+  Service as AuthService,
+  AuthServiceInterface,
+  readAuthRuntimeDiagnosticsSources,
+  resolveAuthRuntimeDiagnosticsReport,
+} from '@standardnotes/auth-server'
 import { Service as SyncingService } from '@standardnotes/syncing-server'
 import { Service as RevisionsService } from '@standardnotes/revisions-server'
 import { Container } from 'inversify'
@@ -97,12 +102,35 @@ import { WebSocketInProcessBridge } from './WebSocketInProcessBridge'
 import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerRuntime'
 import { HomeServerSyncFilesAdapter } from './HomeServerSyncFilesAdapter'
 import {
+  INTERNAL_DIAGNOSTICS_BIND_ADDRESS,
+  parseInternalDiagnosticsPort,
+  startInternalDiagnosticsListener,
+} from './InternalDiagnosticsListener'
+import {
   CanonicalHomeServerFileResourceAuthorizer,
   type HomeServerCrossServiceToken,
   type HomeServerPersonalValetToken,
   type HomeServerSharedVaultValetToken,
   type HomeServerSessionValidationPort,
 } from './CanonicalHomeServerFileResourceAuthorizer'
+
+/**
+ * The auth probe base an operator configured, by either variable the gateway
+ * resolves, or `undefined` when they configured neither. A blank value is not a
+ * setting: `AbstractEnv.get` treats the empty string as absent.
+ */
+export function resolveConfiguredAuthProbeBase(
+  configuredEnvironment: { [name: string]: string } | undefined,
+): string | undefined {
+  for (const name of ['AUTH_SERVER_PROBE_URL', 'AUTH_SERVER_URL']) {
+    const configured = configuredEnvironment?.[name] || process.env[name]
+    if (configured !== undefined && configured !== '') {
+      return configured
+    }
+  }
+
+  return undefined
+}
 
 export function buildHomeServerEnvironmentOverrides(
   dataDirectoryPath: string,
@@ -130,6 +158,34 @@ export function buildHomeServerEnvironmentOverrides(
     // with the rest of the instance. The feature stays OFF until
     // REMINDER_DELIVERY_ENABLED=true.
     REMINDER_DELIVERY_DATA_PATH: `${dataDirectoryPath}/reminder-delivery`,
+    /**
+     * Standard Red Notes: where the gateway's auth RUNTIME probe should dial on
+     * this topology.
+     *
+     * `AdminController.probeAuthRuntime()` fetches
+     * `${SERVICE_PROBE_URLS.auth}/healthcheck/diagnostics`, and that map's auth
+     * entry defaults to `http://localhost:${AUTH_SERVER_PORT || 3103}` — a
+     * supervisord sibling port that does not exist in a one-process bundle.
+     * `InternalDiagnosticsListener` now answers that route on exactly this
+     * address, so the probe is pointed at it by LITERAL loopback rather than
+     * the name `localhost`: the listener binds one address, and `localhost`
+     * resolves to both families on a dual-stack host, which is a probe that
+     * fails on the resolver's whim.
+     *
+     * Not set at all when the operator named an auth probe base themselves, by
+     * EITHER of the two variables the gateway resolves in order
+     * (`AUTH_SERVER_PROBE_URL`, then `AUTH_SERVER_URL`) — overriding the first
+     * would silently shadow the second, which is how a default comes to beat an
+     * explicit setting. The port goes through the same parser the listener uses,
+     * so the two cannot drift.
+     */
+    ...(resolveConfiguredAuthProbeBase(configuredEnvironment) === undefined
+      ? {
+          AUTH_SERVER_PROBE_URL: `http://${INTERNAL_DIAGNOSTICS_BIND_ADDRESS}:${parseInternalDiagnosticsPort(
+            configuredEnvironment?.AUTH_SERVER_PORT ?? process.env.AUTH_SERVER_PORT,
+          )}`,
+        }
+      : {}),
     ...configuredEnvironment,
     MODE: 'home-server',
   }
@@ -428,6 +484,12 @@ export function boundedBootFailureText(message: string): string {
 export class HomeServer implements HomeServerInterface {
   private readonly runtime = new HomeServerRuntime()
   private authService: AuthServiceInterface | undefined
+  /**
+   * The loopback-only listener that serves auth's `/healthcheck/diagnostics` on
+   * this topology. `undefined` when the port could not be bound or the auth
+   * container exposed nothing to report — never a reason to fail a boot.
+   */
+  private internalDiagnosticsServer: http.Server | undefined
   private logStream: PassThrough | undefined
   private runtimeLogLevelApplier: RuntimeLogLevelApplier | undefined
   private starting = false
@@ -1307,6 +1369,38 @@ export class HomeServer implements HomeServerInterface {
         },
       })
 
+      /**
+       * Standard Red Notes: make the three auth-owned Diagnostics blocks
+       * reachable on THIS topology.
+       *
+       * The gateway's admin pane reads them by HTTP-probing auth's internal
+       * `/healthcheck/diagnostics`. In a one-process bundle auth has no HTTP
+       * port, and mounting its annotated controllers on the shared app is not an
+       * option — they declare unprefixed bases (`/auth`, `/sessions`,
+       * `/internal`) that the front-door nginx proxies straight through. So the
+       * route is served from a listener bound to loopback ONLY, which keeps the
+       * multi-container property exactly: reachable by this process's own probe,
+       * 404 at the public front door — there by route absence, since nothing is
+       * registered for it on the public app at all.
+       *
+       * The report comes from auth's own single composition module, not a copy.
+       * Absent sources (no auth bindings in this container) mount no listener,
+       * because a route that answers without them would publish a fabricated
+       * reading rather than nothing.
+       */
+      const diagnosticsSources = readAuthRuntimeDiagnosticsSources(container)
+      if (diagnosticsSources === undefined) {
+        logger.warn(
+          'Auth runtime diagnostics are not available in this container; the admin Diagnostics pane will report the auth runtime probe as unreachable.',
+        )
+      } else {
+        this.internalDiagnosticsServer = await startInternalDiagnosticsListener({
+          port: parseInternalDiagnosticsPort(env.get('AUTH_SERVER_PORT', true) || undefined),
+          report: () => resolveAuthRuntimeDiagnosticsReport(diagnosticsSources),
+          logger,
+        })
+      }
+
       this.authService = authService
       logger.info(`Server started on port ${port}. Log level: ${env.get('LOG_LEVEL', true)}.`)
 
@@ -1419,6 +1513,23 @@ export class HomeServer implements HomeServerInterface {
       await this.runtime.stop()
     } catch (error) {
       errors.push(error as Error)
+    }
+
+    // The loopback diagnostics listener is closed on the same path as the public
+    // one, so a restart can rebind its port. A close failure is collected rather
+    // than thrown: it must not be the reason a stop reports failure.
+    try {
+      const internalDiagnosticsServer = this.internalDiagnosticsServer
+      if (internalDiagnosticsServer !== undefined) {
+        await new Promise<void>((resolve) => {
+          internalDiagnosticsServer.close(() => resolve())
+          internalDiagnosticsServer.closeAllConnections?.()
+        })
+      }
+    } catch (error) {
+      errors.push(error as Error)
+    } finally {
+      this.internalDiagnosticsServer = undefined
     }
 
     try {
