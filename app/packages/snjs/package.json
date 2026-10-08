@@ -75,7 +75,7 @@
     "jest-environment-jsdom": "^30.5.2",
     "jsdom": "^30.1.2",
     "libsodium-wrappers-sumo": "0.8.4",
-    "nock": "^14.0.17",
+    "nock": "^15.0.1",
     "otplib": "^13.5.0",
     "prettier": "3.9.9",
     "reflect-metadata": "^0.2.2",
