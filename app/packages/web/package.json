@@ -83,7 +83,7 @@
     "minimatch": "^10.2.6",
     "mobx": "^7.0.6",
     "mobx-react-lite": "^5.1.0",
-    "npm-check-updates": "^22.2.9",
+    "npm-check-updates": "^23.1.0",
     "postcss": "^8.5.19",
     "postcss-loader": "^8.2.1",
     "postcss-scss": "^4.0.9",

@@ -9316,7 +9316,7 @@ __metadata:
     eslint-plugin-react-hooks: "npm:^7.1.1"
     globals: "npm:^17.13.0"
     lint-staged: "npm:^17.6.0"
-    npm-check-updates: "npm:^22.2.9"
+    npm-check-updates: "npm:^23.1.0"
     prettier: "npm:3.9.9"
     prettier-plugin-tailwindcss: "npm:^0.8.1"
     sass-loader: "npm:^17.0.1"
@@ -9944,7 +9944,7 @@ __metadata:
     eslint-plugin-prettier: "npm:^5.5.6"
     get-yarn-workspaces: "npm:^1.0.2"
     jest: "npm:^30.5.2"
-    npm-check-updates: "npm:^22.2.9"
+    npm-check-updates: "npm:^23.1.0"
     pod-install: "npm:^1.2.1"
     prettier: "npm:3.9.9"
     prettier-plugin-organize-imports: "npm:^4.3.0"
@@ -10540,7 +10540,7 @@ __metadata:
     minimatch: "npm:^10.2.6"
     mobx: "npm:^7.0.6"
     mobx-react-lite: "npm:^5.1.0"
-    npm-check-updates: "npm:^22.2.9"
+    npm-check-updates: "npm:^23.1.0"
     pdfjs-dist: "npm:6.2.108"
     postcss: "npm:^8.5.19"
     postcss-loader: "npm:^8.2.1"
@@ -24973,13 +24973,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"npm-check-updates@npm:^22.2.9":
-  version: 22.2.9
-  resolution: "npm-check-updates@npm:22.2.9"
+"npm-check-updates@npm:^23.1.0":
+  version: 23.1.0
+  resolution: "npm-check-updates@npm:23.1.0"
   bin:
     ncu: build/cli.js
     npm-check-updates: build/cli.js
-  checksum: 10/278372e9b72c3ab09f5f0d162c318ce5e461daf8640852fd7cde55118e8b4b257245f906313f1fe0dbf0f2eb8e5c9775bcf6ad39377fc157ddc1134372ffabbb
+  checksum: 10/f6c0c83363b922cc1596a5e6834c9f578af2d9752734a3f287cddf0d18954512b20f23335f52ddc42b7f4547fb571ac092390adfb24109638ed83ae09dc22cd3
   languageName: node
   linkType: hard
 

@@ -52,7 +52,7 @@
     "eslint-plugin-prettier": "^5.5.6",
     "get-yarn-workspaces": "^1.0.2",
     "jest": "^30.5.2",
-    "npm-check-updates": "^22.2.9",
+    "npm-check-updates": "^23.1.0",
     "pod-install": "^1.2.1",
     "prettier": "3.9.9",
     "prettier-plugin-organize-imports": "^4.3.0",
