@@ -4690,7 +4690,6 @@ __metadata:
     "@types/jest": "npm:^30.0.0"
     "@types/jsonwebtoken": "npm:^9.0.10"
     "@types/node": "npm:^26.6.4"
-    "@types/nodemailer": "npm:^8.0.2"
     "@types/prettyjson": "npm:^0.0.33"
     agentkeepalive: "npm:^4.6.0"
     axios: "npm:^1.20.0"
@@ -4705,7 +4704,7 @@ __metadata:
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     jsonwebtoken: "npm:^9.0.3"
-    nodemailer: "npm:^9.0.3"
+    nodemailer: "npm:^10.0.16"
     openai: "npm:^6.47.0"
     prettyjson: "npm:^1.2.5"
     reflect-metadata: "npm:^0.2.2"
@@ -4762,7 +4761,6 @@ __metadata:
     "@types/express": "npm:^5.0.6"
     "@types/jest": "npm:^30.0.0"
     "@types/node": "npm:^26.6.4"
-    "@types/nodemailer": "npm:^8.0.2"
     "@types/prettyjson": "npm:^0.0.33"
     "@types/semver": "npm:^7.8.0"
     "@yarnpkg/esbuild-plugin-pnp": "npm:^3.0.0-rc.15"
@@ -4782,7 +4780,7 @@ __metadata:
     jest: "npm:^30.5.2"
     jest-util: "npm:^30.5.1"
     mysql2: "npm:^3.24.5"
-    nodemailer: "npm:^9.0.3"
+    nodemailer: "npm:^10.0.16"
     otplib: "npm:^13.5.0"
     prettyjson: "npm:^1.2.5"
     reflect-metadata: "npm:^0.2.2"
@@ -5810,15 +5808,6 @@ __metadata:
   dependencies:
     undici-types: "npm:~8.9.0"
   checksum: 10/649173a03497020b8d3624a5149e0286bd175baf6d1df070c538637ccb256ce5554a76c5b63b454bda2cdb1821fa457e074477a75c3c78fc8f562d5c4a31cba8
-  languageName: node
-  linkType: hard
-
-"@types/nodemailer@npm:^8.0.2":
-  version: 8.0.2
-  resolution: "@types/nodemailer@npm:8.0.2"
-  dependencies:
-    "@types/node": "npm:*"
-  checksum: 10/e9a5df9af188d4f64666fc4fcff62159bbfcd050b7ec7ed539bf6acf9bdd180571bcd5fc19dce5b31b71cde9ff5ae82a2c68533651ddca56b3fbe5bd67668c9f
   languageName: node
   linkType: hard
 
@@ -11309,10 +11298,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nodemailer@npm:^9.0.3":
-  version: 9.0.3
-  resolution: "nodemailer@npm:9.0.3"
-  checksum: 10/0118b6fc1e2f459b2b953c4827167a8c8422e1df2fb5055df3af307f4eff4fc71e7c19eb5aff923a6dcc26242e9c1008d63595117b4519a2698591dac64ee82c
+"nodemailer@npm:^10.0.16":
+  version: 10.0.16
+  resolution: "nodemailer@npm:10.0.16"
+  checksum: 10/b06180f1d63b71c0ef5013fbb29aca787be8bfcad23eaa6dc96b4e8b4008773607662d64f366e9e4dcf38640e9f7eaa433db8008371e0a9827a4be6df1272e51
   languageName: node
   linkType: hard
 

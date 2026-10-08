@@ -6731,7 +6731,6 @@ const RAW_RUNTIME_STATE =
           ["@types/jest", "npm:30.0.0"],\
           ["@types/jsonwebtoken", "npm:9.0.10"],\
           ["@types/node", "npm:26.6.4"],\
-          ["@types/nodemailer", "npm:8.0.2"],\
           ["@types/prettyjson", "npm:0.0.33"],\
           ["agentkeepalive", "npm:4.6.0"],\
           ["axios", "npm:1.20.0"],\
@@ -6746,7 +6745,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
-          ["nodemailer", "npm:9.0.3"],\
+          ["nodemailer", "npm:10.0.16"],\
           ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.47.0"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
@@ -6791,7 +6790,6 @@ const RAW_RUNTIME_STATE =
           ["@types/express", "npm:5.0.6"],\
           ["@types/jest", "npm:30.0.0"],\
           ["@types/node", "npm:26.6.4"],\
-          ["@types/nodemailer", "npm:8.0.2"],\
           ["@types/prettyjson", "npm:0.0.33"],\
           ["@types/semver", "npm:7.8.0"],\
           ["@yarnpkg/esbuild-plugin-pnp", "virtual:31b5a94a105c89c9294c3d524a7f8929fe63ee5a2efadf21951ca4c0cfd2ecf02e8f4ef5a066bbda091f1e3a56e57c6749069a080618c96b22e51131a330fc4a#npm:3.0.0-rc.15"],\
@@ -6811,7 +6809,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.5.2"],\
           ["jest-util", "npm:30.5.1"],\
           ["mysql2", "virtual:c66bf20e88479ada0172094776519a9f51acc4731d22079b60a295bcec7ea42d5545cbce58a77a50d932bf953298799135e99707486e343da6d99ba1d167bdbd#npm:3.24.5"],\
-          ["nodemailer", "npm:9.0.3"],\
+          ["nodemailer", "npm:10.0.16"],\
           ["otplib", "npm:13.5.0"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\
@@ -7955,16 +7953,6 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["@types/node", "npm:26.6.4"],\
           ["undici-types", "npm:8.9.0"]\
-        ],\
-        "linkType": "HARD"\
-      }]\
-    ]],\
-    ["@types/nodemailer", [\
-      ["npm:8.0.2", {\
-        "packageLocation": "./.yarn/cache/@types-nodemailer-npm-8.0.2-ff5ce51f00-e9a5df9af1.zip/node_modules/@types/nodemailer/",\
-        "packageDependencies": [\
-          ["@types/node", "npm:20.2.5"],\
-          ["@types/nodemailer", "npm:8.0.2"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -14436,10 +14424,10 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["nodemailer", [\
-      ["npm:9.0.3", {\
-        "packageLocation": "./.yarn/cache/nodemailer-npm-9.0.3-898bcbd706-0118b6fc1e.zip/node_modules/nodemailer/",\
+      ["npm:10.0.16", {\
+        "packageLocation": "./.yarn/cache/nodemailer-npm-10.0.16-d999c108e1-b06180f1d6.zip/node_modules/nodemailer/",\
         "packageDependencies": [\
-          ["nodemailer", "npm:9.0.3"]\
+          ["nodemailer", "npm:10.0.16"]\
         ],\
         "linkType": "HARD"\
       }]\
