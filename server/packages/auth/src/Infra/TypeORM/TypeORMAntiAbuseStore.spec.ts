@@ -306,9 +306,7 @@ describe('TypeORMAntiAbuseStore', () => {
 
   describe('a row of the wrong shape', () => {
     const plant = async (key: string, value: string): Promise<void> => {
-      await cacheEntryRepository.save(
-        CacheEntry.create({ key, value, expiresAt: new Date(now + 600_000) }).getValue(),
-      )
+      await cacheEntryRepository.save(CacheEntry.create({ key, value, expiresAt: new Date(now + 600_000) }).getValue())
     }
 
     it('degrades to empty rather than coercing junk into a list of blocked addresses', async () => {
