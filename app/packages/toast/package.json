@@ -9,7 +9,7 @@
     "lint": "eslint ./src"
   },
   "dependencies": {
-    "@nanostores/react": "^1.1.0",
+    "@nanostores/react": "^2.0.1",
     "@standardnotes/icons": "workspace:*",
     "nanoid": "^6.0.0",
     "nanostores": "^1.5.5",
