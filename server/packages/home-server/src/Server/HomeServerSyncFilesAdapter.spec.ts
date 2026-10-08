@@ -108,6 +108,88 @@ describe('HomeServerSyncFilesAdapter', () => {
   })
 
   /**
+   * The release hook `SyncFilesSession.disconnect()` calls. It is OPTIONAL on
+   * `SyncFilesAdapter` so the many in-tree doubles keep working, which means
+   * nothing in the type system makes a shipped adapter provide it -- so this
+   * asserts it, here, in the adapter's own suite.
+   */
+  describe('releaseSession', () => {
+    it('is implemented, because the session calls it on every socket close', async () => {
+      const { adapter } = await createAdapter()
+
+      expect(typeof adapter.releaseSession).toBe('function')
+    })
+
+    it('frees the in-memory slot of a closing socket', async () => {
+      const { adapter } = await createAdapter({ maxActiveTransfers: 1 })
+      await adapter.openUpload({ identity, descriptor }, new AbortController().signal)
+      await expect(
+        adapter.openUpload(
+          { identity, descriptor: { ...descriptor, remoteIdentifier: 'remote-2' } },
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({ code: 'FILE_TRANSFER_CAPACITY' })
+
+      await adapter.releaseSession(identity)
+
+      const admitted = await adapter.openUpload(
+        { identity, descriptor: { ...descriptor, remoteIdentifier: 'remote-2' } },
+        new AbortController().signal,
+      )
+      expect(admitted.transferId).toBeTruthy()
+    })
+
+    it('keeps the durable manifest, so the released upload still resumes', async () => {
+      const { adapter, root } = await createAdapter()
+      const opened = await adapter.openUpload({ identity, descriptor }, new AbortController().signal)
+
+      await adapter.releaseSession(identity)
+
+      // Unlike the multi-container twin, this adapter's partial and manifest are
+      // on disk, so releasing the in-memory entry must NOT delete them.
+      await expect(fs.readdir(join(root, '.sync-files-v1'))).resolves.toEqual(
+        expect.arrayContaining([`${opened.resumeId}.json`, `${opened.resumeId}.partial`]),
+      )
+      const resumed = await adapter.openUpload(
+        { identity, descriptor: { ...descriptor, resumeId: opened.resumeId } },
+        new AbortController().signal,
+      )
+      expect(resumed.transferId).toBe(opened.transferId)
+      expect(resumed.generation).toBe(opened.generation + 1)
+    })
+
+    it('leaves another session of the same user alone', async () => {
+      const { adapter } = await createAdapter()
+      const kept = await adapter.openUpload({ identity, descriptor }, new AbortController().signal)
+      const otherDevice = { ...identity, sessionUuid: 'session-9', deviceId: 'device-9' }
+
+      await adapter.releaseSession(otherDevice)
+
+      const payload = new Uint8Array([1, 2, 3, 4, 5])
+      const accepted = await adapter.uploadChunk(
+        {
+          identity,
+          header: {
+            kind: 'UPLOAD_CHUNK',
+            requestId: 'request-1',
+            transferId: kept.transferId,
+            generation: kept.generation,
+            index: 0,
+            offset: 0,
+            declaredSize: payload.byteLength,
+            byteLength: payload.byteLength,
+            sha256: digest(payload),
+            final: true,
+          },
+          bytes: payload,
+        },
+        new AbortController().signal,
+      )
+      expect(accepted.nextOffset).toBe(payload.byteLength)
+    })
+  })
+
+  /**
    * The default `createResumeId` (no injected override -- every other test in
    * this file injects one, see `createAdapter` above) encodes
    * `randomBytes(24)` as base64url. That alphabet has 64 symbols including

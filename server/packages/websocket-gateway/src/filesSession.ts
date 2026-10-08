@@ -116,6 +116,25 @@ export interface SyncFilesAdapter {
     signal: AbortSignal,
   ): Promise<SyncFileDownloadChunk>
   cancel(input: { identity: SyncTicketIdentity; transferId: string; generation: number; reason: string }): Promise<void>
+  /**
+   * Release whatever in-process capacity this socket's transfers hold, because
+   * the socket is closing and nothing else will.
+   *
+   * Without it an adapter's transfer slots -- and, in the multi-container
+   * adapter, the coalescing buffers its upload ceiling exists to bound -- were
+   * held until the idle TTL expired, so sixteen abandoned uploads denied the
+   * file lane to EVERY user for a quarter of an hour. The session cannot do this
+   * itself: it tracks downloads only, and an adapter's upload state is entirely
+   * its own.
+   *
+   * Resumability must survive: an implementation releases the slot and the
+   * memory, not the resume id. OPTIONAL only so that the many in-tree adapter
+   * doubles keep working -- which means the type system does NOT make a shipped
+   * adapter provide it, so each shipped adapter's own suite asserts that it
+   * does (`MultiContainerSyncFilesAdapter.spec.ts`,
+   * `HomeServerSyncFilesAdapter.spec.ts`).
+   */
+  releaseSession?(identity: SyncTicketIdentity): void | Promise<void>
 }
 
 export interface SyncFilesSessionMetrics {
@@ -177,6 +196,11 @@ type ActiveDownload = {
   controller: AbortController
   digest: ReturnType<typeof createHash>
   pumping: boolean
+  /**
+   * Armed whenever the pump stops for want of credit; see
+   * {@link SyncFilesSession.armStarvationDeadline}.
+   */
+  starvationTimer?: ReturnType<typeof setTimeout>
 }
 
 export class SyncFilesSession {
@@ -186,6 +210,7 @@ export class SyncFilesSession {
   constructor(private readonly options: SyncFilesSessionOptions) {}
 
   async handleControl(frame: SyncFilesControlFrame, identity: SyncTicketIdentity): Promise<void> {
+    this.identity = identity
     if (this.disconnected || !this.options.adapter.ready()) {
       this.options.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
       return
@@ -286,7 +311,11 @@ export class SyncFilesSession {
         }
         case 'FILES_CREDIT': {
           const active = this.currentDownload(frame.payload.transferId, frame.payload.generation)
+          // Credit is an OUTSTANDING window, not a running total: a client that
+          // grants a cumulative figure is clamped here and starves itself. That
+          // used to be an unbounded hang; it is now answered by the deadline.
           active.creditBytes = Math.min(MAX_FILE_TRANSFER_CREDIT_BYTES, active.creditBytes + frame.payload.creditBytes)
+          this.clearStarvationDeadline(active)
           void this.pumpDownload(active)
           return
         }
@@ -308,6 +337,7 @@ export class SyncFilesSession {
   }
 
   async handleBinary(raw: Uint8Array, identity: SyncTicketIdentity): Promise<void> {
+    this.identity = identity
     let decoded: ReturnType<typeof decodeFileBinaryFrame> | undefined
     try {
       if (this.disconnected || !this.options.adapter.ready()) {
@@ -348,11 +378,28 @@ export class SyncFilesSession {
       return
     }
     this.disconnected = true
+    let identity: SyncTicketIdentity | undefined
     for (const active of this.downloads.values()) {
+      identity ??= active.identity
+      this.clearStarvationDeadline(active)
       active.controller.abort(new Error('socket-disconnected'))
     }
     this.downloads.clear()
+    // The adapter owns upload state this session never sees, so the release has
+    // to reach it even when no download was open. `identity` is only available
+    // from a live transfer, so it is taken from the session's own record of the
+    // authenticated socket when there is one.
+    const releasing = identity ?? this.identity
+    if (releasing) {
+      void Promise.resolve(this.options.adapter.releaseSession?.(releasing)).catch(() => undefined)
+    }
   }
+
+  /**
+   * Remember the authenticated identity of this socket, so `disconnect()` can
+   * release adapter-side transfers even when no download is open.
+   */
+  private identity?: SyncTicketIdentity
 
   private async pumpDownload(active: ActiveDownload): Promise<void> {
     if (active.pumping || active.controller.signal.aborted || this.disconnected) {
@@ -421,6 +468,7 @@ export class SyncFilesSession {
           if (!this.deleteCurrentDownload(active)) {
             return
           }
+          this.clearStarvationDeadline(active)
           this.options.sendControl('FILES_COMPLETE', active.requestId, active.commandId, {
             mode: 'download',
             transferId: active.transferId,
@@ -433,9 +481,16 @@ export class SyncFilesSession {
           return
         }
       }
+      // Out of credit with bytes still owed. The transfer is NOT finished and
+      // nothing here will move it again until the client grants more, so the
+      // declared deadline has to be enforced on that silence.
+      if (!active.controller.signal.aborted && !this.disconnected && this.isCurrentDownload(active)) {
+        this.armStarvationDeadline(active)
+      }
       this.options.metrics?.increment('files', 'backpressure_wait')
     } catch (error) {
       const wasCurrent = this.deleteCurrentDownload(active)
+      this.clearStarvationDeadline(active)
       active.controller.abort(error)
       if (wasCurrent && !this.disconnected) {
         const normalized = normalizeFilesError(error)
@@ -451,6 +506,56 @@ export class SyncFilesSession {
       }
     } finally {
       active.pumping = false
+    }
+  }
+
+  /**
+   * Bound how long a download may sit with no credit before it is given up on.
+   *
+   * `deadlineMs` was applied to each individual chunk READ and to nothing else,
+   * so a download that ran out of credit delivered what it had and then went
+   * permanently silent: no frames, no FILES_COMPLETE, no ERROR, no close, and
+   * the transfer slot retained. Measured with a declared 120 s deadline watched
+   * for 150 s, and with 5 s watched for 40 s. The RPC lane answers
+   * DEADLINE_EXCEEDED at 3,005 ms for a 3,000 ms deadline, so the deadline
+   * existed on one lane of this socket and was simply unenforced on the other.
+   *
+   * It bounds SILENCE, not total duration. A healthy download of a large file
+   * legitimately outlives its per-operation deadline, and killing that would be
+   * a different bug; what no client can justify is granting credit and then
+   * never granting more. So the clock starts when the pump starves and is
+   * cleared by any credit or any progress -- which is exactly the semantics
+   * `deadlineMs` already had on a chunk read, extended to the gap BETWEEN reads.
+   */
+  private armStarvationDeadline(active: ActiveDownload): void {
+    if (active.starvationTimer !== undefined) {
+      return
+    }
+    const timer = setTimeout(() => {
+      active.starvationTimer = undefined
+      if (this.disconnected || !this.deleteCurrentDownload(active)) {
+        return
+      }
+      active.controller.abort(new SyncFilesError('FILE_DEADLINE_EXCEEDED', true))
+      this.options.metrics?.increment('files', 'file_deadline_exceeded')
+      this.options.sendError(active.requestId, active.commandId, 'FILE_DEADLINE_EXCEEDED')
+      void this.options.adapter
+        .cancel({
+          identity: active.identity,
+          transferId: active.transferId,
+          generation: active.generation,
+          reason: 'download-deadline-exceeded',
+        })
+        .catch(() => undefined)
+    }, active.deadlineMs)
+    timer.unref?.()
+    active.starvationTimer = timer
+  }
+
+  private clearStarvationDeadline(active: ActiveDownload): void {
+    if (active.starvationTimer !== undefined) {
+      clearTimeout(active.starvationTimer)
+      active.starvationTimer = undefined
     }
   }
 
@@ -485,6 +590,7 @@ export class SyncFilesSession {
       if (active.generation !== generation) {
         throw new SyncFilesError('FILE_STALE_GENERATION', false)
       }
+      this.clearStarvationDeadline(active)
       active.controller.abort(new Error(reason))
       this.downloads.delete(transferId)
     }

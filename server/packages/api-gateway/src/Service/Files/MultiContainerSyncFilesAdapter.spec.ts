@@ -1277,6 +1277,284 @@ describe('MultiContainerSyncFilesAdapter', () => {
     })
   })
 
+  /**
+   * The compose file-lane denial of service: `maxActiveUploads` was process-wide
+   * and nothing released a slot, so ONE account's abandoned transfers refused
+   * every other account for the whole TTL. Proven live on compose before the fix:
+   * account A opened 16, closed its socket, and a brand-new account B was
+   * answered FILE_TRANSFER_CAPACITY on its first upload open.
+   */
+  describe('capacity is per user, and a released slot is actually released', () => {
+    const OTHER: Identity = {
+      userUuid: 'user-2',
+      sessionUuid: 'session-2',
+      deviceId: 'device-2',
+      authorization: 'Bearer other-credential',
+    }
+
+    const openFor = async (
+      adapter: MultiContainerSyncFilesAdapter,
+      identity: Identity,
+      remoteIdentifier: string,
+      declaredSize = 10,
+    ) =>
+      adapter.openUpload(
+        {
+          identity,
+          descriptor: {
+            ownershipType: 'user',
+            remoteIdentifier,
+            decryptedSize: declaredSize,
+            declaredSize,
+            mimeType: 'application/octet-stream',
+          },
+        },
+        signal(),
+      )
+
+    /**
+     * `releaseSession` is OPTIONAL on `SyncFilesAdapter` so the many in-tree
+     * doubles keep working, which means nothing in the type system makes a
+     * shipped adapter provide it -- so this asserts it, here, in the adapter's
+     * own suite.
+     */
+    it('implements the release hook the session calls on every socket close', () => {
+      const { adapter } = build()
+
+      expect(typeof adapter.releaseSession).toBe('function')
+    })
+
+    it('refuses a user past ITS OWN share while the process-wide pool is still open', async () => {
+      const { adapter } = build({ maxActiveUploads: 8, maxActiveTransfers: 16, maxActiveUploadsPerUser: 2 })
+      await openFor(adapter, IDENTITY, 'resource-a')
+      await openFor(adapter, IDENTITY, 'resource-b')
+
+      expect(await codeOf(openFor(adapter, IDENTITY, 'resource-c'))).toBe('FILE_TRANSFER_CAPACITY')
+    })
+
+    it('still admits a DIFFERENT user once one has taken its whole share', async () => {
+      const { adapter } = build({ maxActiveUploads: 8, maxActiveTransfers: 16, maxActiveUploadsPerUser: 2 })
+      await openFor(adapter, IDENTITY, 'resource-a')
+      await openFor(adapter, IDENTITY, 'resource-b')
+      await codeOf(openFor(adapter, IDENTITY, 'resource-c'))
+
+      const admitted = await openFor(adapter, OTHER, 'resource-d')
+      expect(admitted.transferId).toBeTruthy()
+    })
+
+    it('one user cannot exhaust the process-wide upload pool alone', async () => {
+      const { adapter } = build({ maxActiveUploads: 4, maxActiveTransfers: 16, maxActiveUploadsPerUser: 2 })
+      await openFor(adapter, IDENTITY, 'resource-a')
+      await openFor(adapter, IDENTITY, 'resource-b')
+      await codeOf(openFor(adapter, IDENTITY, 'resource-c'))
+      await codeOf(openFor(adapter, IDENTITY, 'resource-d'))
+
+      // Two slots of four are still free, and two other accounts can take them.
+      expect((await openFor(adapter, OTHER, 'resource-e')).transferId).toBeTruthy()
+      const third: Identity = { userUuid: 'user-3', sessionUuid: 'session-3', deviceId: 'device-3' }
+      expect((await openFor(adapter, third, 'resource-f')).transferId).toBeTruthy()
+    })
+
+    it('releases every slot a CLOSING socket held, so another user is admitted again', async () => {
+      const { adapter } = build({ maxActiveUploads: 2, maxActiveTransfers: 8, maxActiveUploadsPerUser: 2 })
+      await openFor(adapter, IDENTITY, 'resource-a')
+      await openFor(adapter, IDENTITY, 'resource-b')
+      expect(await codeOf(openFor(adapter, OTHER, 'resource-c'))).toBe('FILE_TRANSFER_CAPACITY')
+
+      await adapter.releaseSession(IDENTITY)
+
+      expect((await openFor(adapter, OTHER, 'resource-c')).transferId).toBeTruthy()
+    })
+
+    it('releases only the closing socket, never another session of the same user', async () => {
+      const { adapter } = build({ maxActiveUploads: 4, maxActiveTransfers: 8, maxActiveUploadsPerUser: 4 })
+      const kept = await openFor(adapter, IDENTITY, 'resource-a')
+      const otherDevice: Identity = { ...IDENTITY, sessionUuid: 'session-9', deviceId: 'device-9' }
+      await openFor(adapter, otherDevice, 'resource-b')
+
+      await adapter.releaseSession(otherDevice)
+
+      // The surviving transfer is still ATTACHED: its chunk is accepted, which a
+      // parked or removed transfer could not be asked to do.
+      const accepted = await sendChunk(adapter, kept, {
+        index: 0,
+        offset: 0,
+        declaredSize: 10,
+        bytes: Buffer.alloc(10, 3),
+      })
+      expect(accepted.nextOffset).toBe(10)
+    })
+
+    it('a released upload is still RESUMABLE, and re-attaching takes a slot again', async () => {
+      const { adapter } = build({ maxActiveUploads: 4, maxActiveTransfers: 8, maxActiveUploadsPerUser: 2 })
+      const declaredSize = 64
+      const opened = await openFor(adapter, IDENTITY, 'resource-a', declaredSize)
+
+      await adapter.releaseSession(IDENTITY)
+
+      const resumed = await adapter.openUpload(
+        {
+          identity: IDENTITY,
+          descriptor: {
+            ownershipType: 'user',
+            remoteIdentifier: 'resource-a',
+            decryptedSize: declaredSize,
+            declaredSize,
+            mimeType: 'application/octet-stream',
+            resumeId: opened.resumeId,
+          },
+        },
+        signal(),
+      )
+      expect(resumed.transferId).toBe(opened.transferId)
+      expect(resumed.generation).toBe(opened.generation + 1)
+      // Re-ATTACHED, so it is counted again: one more open fits this user's share
+      // of two, and the one after that does not.
+      expect((await openFor(adapter, IDENTITY, 'resource-b', declaredSize)).transferId).toBeTruthy()
+      expect(await codeOf(openFor(adapter, IDENTITY, 'resource-c', declaredSize))).toBe('FILE_TRANSFER_CAPACITY')
+    })
+
+    it('refuses work on a RELEASED transfer until a resume re-attaches it', async () => {
+      const { adapter, storage } = build({ maxActiveUploads: 4, maxActiveTransfers: 8, maxActiveUploadsPerUser: 4 })
+      const declaredSize = MAX_CHUNK_BYTES * 2
+      const opened = await openFor(adapter, IDENTITY, 'resource-a', declaredSize)
+      const first = Buffer.alloc(MAX_CHUNK_BYTES, 7)
+      await sendChunk(adapter, opened, { index: 0, offset: 0, declaredSize, bytes: first })
+      // Nothing is flushed yet: a 256 KiB chunk is well under the 5 MiB part size,
+      // so the whole of it is in the coalescing buffer that parking discards.
+      expect(storage.callsOfKind('uploadPart')).toHaveLength(0)
+
+      await adapter.releaseSession(IDENTITY)
+
+      // The second chunk must NOT be accepted onto the parked transfer: the bytes
+      // behind `nextOffset` are gone while the digest still covers them, so
+      // continuing here would publish an object with a hole whose sha256 matched.
+      expect(
+        await codeOf(
+          sendChunk(adapter, opened, {
+            index: 1,
+            offset: MAX_CHUNK_BYTES,
+            declaredSize,
+            bytes: Buffer.alloc(MAX_CHUNK_BYTES, 8),
+          }),
+        ),
+      ).toBe('FILE_TRANSFER_NOT_FOUND')
+      // Nor may it be published straight from where it was left.
+      expect(
+        await codeOf(
+          adapter.finishUpload(
+            {
+              identity: IDENTITY,
+              transferId: opened.transferId,
+              generation: opened.generation,
+              declaredSize,
+              sha256: sha256(Buffer.alloc(declaredSize, 7)),
+            },
+            signal(),
+          ),
+        ),
+      ).toBe('FILE_TRANSFER_NOT_FOUND')
+
+      // The resume is what repairs it: rewound to the last flushed boundary, which
+      // is zero here, so the client re-sends everything that was never stored.
+      const resumed = await adapter.openUpload(
+        {
+          identity: IDENTITY,
+          descriptor: {
+            ownershipType: 'user',
+            remoteIdentifier: 'resource-a',
+            decryptedSize: declaredSize,
+            declaredSize,
+            mimeType: 'application/octet-stream',
+            resumeId: opened.resumeId,
+          },
+        },
+        signal(),
+      )
+      expect(resumed.nextOffset).toBe(0)
+      expect(resumed.nextIndex).toBe(0)
+      const accepted = await sendChunk(adapter, resumed, { index: 0, offset: 0, declaredSize, bytes: first })
+      expect(accepted.nextOffset).toBe(MAX_CHUNK_BYTES)
+    })
+
+    it('bounds how many released transfers one user may leave behind', async () => {
+      let clock = 1_000_000
+      const { adapter } = build({
+        maxActiveUploads: 8,
+        maxActiveTransfers: 16,
+        maxActiveUploadsPerUser: 8,
+        maxParkedTransfersPerUser: 2,
+        now: () => clock,
+      })
+      const oldest = await openFor(adapter, IDENTITY, 'resource-a')
+      clock += 1_000
+      const middle = await openFor(adapter, IDENTITY, 'resource-b')
+      clock += 1_000
+      const newest = await openFor(adapter, IDENTITY, 'resource-c')
+
+      await adapter.releaseSession(IDENTITY)
+
+      const resume = (remoteIdentifier: string, resumeId: string) =>
+        adapter.openUpload(
+          {
+            identity: IDENTITY,
+            descriptor: {
+              ownershipType: 'user',
+              remoteIdentifier,
+              decryptedSize: 10,
+              declaredSize: 10,
+              mimeType: 'application/octet-stream',
+              resumeId,
+            },
+          },
+          signal(),
+        )
+
+      // Only the OLDEST is evicted: the bound is 2, and three were parked.
+      expect(await codeOf(resume('resource-a', oldest.resumeId))).toBe('FILE_RESUME_INVALID')
+      expect((await resume('resource-b', middle.resumeId)).transferId).toBe(middle.transferId)
+      expect((await resume('resource-c', newest.resumeId)).transferId).toBe(newest.transferId)
+    })
+
+    it('a terminal refusal on a chunk releases the transfer instead of holding it to the ttl', async () => {
+      const { adapter, authorizer } = build({ maxActiveUploads: 1, maxActiveTransfers: 8, maxActiveUploadsPerUser: 1 })
+      const opened = await openFor(adapter, IDENTITY, 'resource-a')
+      // Exactly the live compose failure: the per-operation credential is refused.
+      authorizer.decide = () => undefined
+
+      expect(
+        await codeOf(sendChunk(adapter, opened, { index: 0, offset: 0, declaredSize: 10, bytes: Buffer.alloc(10, 1) })),
+      ).toBe('FILE_ACCESS_DENIED')
+
+      authorizer.decide = undefined
+      // The dead transfer no longer occupies the single slot.
+      expect((await openFor(adapter, IDENTITY, 'resource-b')).transferId).toBeTruthy()
+    })
+
+    it('a refusal whose documented recovery IS a resume keeps the transfer', async () => {
+      const { adapter } = build({ maxActiveUploads: 1, maxActiveTransfers: 8, maxActiveUploadsPerUser: 1 })
+      const declaredSize = 20
+      const opened = await openFor(adapter, IDENTITY, 'resource-a', declaredSize)
+
+      // Out of order: the client's recovery is a resume, so the transfer must
+      // survive its own refusal.
+      expect(
+        await codeOf(sendChunk(adapter, opened, { index: 3, offset: 12, declaredSize, bytes: Buffer.alloc(8, 1) })),
+      ).toBe('FILE_CHUNK_OUT_OF_ORDER')
+
+      // Still attached and still the owner of the single slot...
+      expect(await codeOf(openFor(adapter, IDENTITY, 'resource-b', declaredSize))).toBe('FILE_TRANSFER_CAPACITY')
+      // ...and genuinely still usable, not merely still counted.
+      const accepted = await sendChunk(adapter, opened, {
+        index: 0,
+        offset: 0,
+        declaredSize,
+        bytes: Buffer.alloc(declaredSize, 2),
+      })
+      expect(accepted.nextOffset).toBe(declaredSize)
+    })
+  })
+
   describe('expiry', () => {
     it('reclaims a transfer that has outlived its ttl', async () => {
       let clock = 5_000_000

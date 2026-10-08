@@ -986,6 +986,38 @@ export class HomeServerSyncFilesAdapter implements SyncFilesAdapter {
     }
   }
 
+  /**
+   * Release the in-process slots the transfers of a CLOSING socket hold.
+   *
+   * The multi-container twin has to PARK its uploads, because its resume state
+   * lives only in this process. Here an in-progress upload is already durable --
+   * a manifest plus a partial file under the staging root, and
+   * `loadUploadByResumeId` rehydrates from them when the transfer is not in
+   * memory. So forgetting the in-memory entry releases the slot and loses
+   * nothing: the resume id keeps working, out of the manifest, for the whole TTL.
+   *
+   * It must therefore NOT be `removeState`, which deletes the manifest and the
+   * partial. Downloads hold no durable state at all and are simply forgotten.
+   */
+  async releaseSession(identity: SyncTicketIdentity): Promise<void> {
+    for (const state of [...this.transfers.values()]) {
+      if (
+        state.identity.userUuid !== identity.userUuid ||
+        state.identity.sessionUuid !== identity.sessionUuid ||
+        state.identity.deviceId !== identity.deviceId
+      ) {
+        continue
+      }
+      await this.withTransferLock(state.resumeId, async () => {
+        if (this.transfers.get(state.transferId) !== state) {
+          return
+        }
+        this.transfers.delete(state.transferId)
+        this.resumeIndex.delete(state.resumeId)
+      })
+    }
+  }
+
   private async removeState(state: TransferState): Promise<void> {
     this.transfers.delete(state.transferId)
     this.resumeIndex.delete(state.resumeId)

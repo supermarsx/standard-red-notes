@@ -89,6 +89,9 @@ export type MultiContainerSyncFilesAdapterOptions = {
   storage: MultiContainerFileStoragePort
   maxActiveTransfers?: number
   maxActiveUploads?: number
+  maxActiveTransfersPerUser?: number
+  maxActiveUploadsPerUser?: number
+  maxParkedTransfersPerUser?: number
   storagePartBytes?: number
   transferTtlMs?: number
   duplicateHistoryChunks?: number
@@ -129,6 +132,8 @@ type UploadState = {
   flushedDigest: Hash
   chunkLedger: Map<number, ChunkLedgerEntry>
   updatedAt: number
+  /** See {@link MultiContainerSyncFilesAdapter.releaseSession}. */
+  parked: boolean
   completedSha256?: string
 }
 
@@ -144,6 +149,8 @@ type DownloadState = {
   nextIndex: number
   nextOffset: number
   updatedAt: number
+  /** See {@link MultiContainerSyncFilesAdapter.releaseSession}. */
+  parked: boolean
 }
 
 type TransferState = UploadState | DownloadState
@@ -162,9 +169,77 @@ const MAX_STORAGE_PART_BYTES = 64 * 1024 * 1024
 const DEFAULT_STORAGE_PART_BYTES = MIN_STORAGE_PART_BYTES
 const DEFAULT_MAX_ACTIVE_TRANSFERS = 64
 const DEFAULT_MAX_ACTIVE_UPLOADS = 16
-const DEFAULT_TRANSFER_TTL_MS = 15 * 60 * 1_000
+/**
+ * One user's share of the two process-wide pools above.
+ *
+ * The process-wide figures are MEMORY bounds and nothing else, so on their own
+ * they said nothing about who may consume them: `maxActiveUploads` was reached
+ * by ONE account's sixteen abandoned transfers and every other user on the
+ * deployment then got FILE_TRANSFER_CAPACITY for the whole TTL. These two make
+ * the pools shareable -- it now takes four distinct accounts to fill the upload
+ * pool, and no single account can -- without raising either memory bound.
+ */
+const DEFAULT_MAX_ACTIVE_TRANSFERS_PER_USER = 16
+const DEFAULT_MAX_ACTIVE_UPLOADS_PER_USER = 4
+/**
+ * How many socket-detached (parked) transfers one user may leave resumable.
+ *
+ * A parked transfer holds no coalescing buffer and no active slot, so it is not
+ * bounded by either pool above -- which means it needs its own bound, or a
+ * client that opens and drops transfers in a loop would grow this process's
+ * bookkeeping without limit. Each parked entry is resume bookkeeping only
+ * (identifiers, offsets, two digests), so this is deliberately generous.
+ */
+const DEFAULT_MAX_PARKED_TRANSFERS_PER_USER = 8
+/**
+ * Idle lifetime of a transfer, and the window in which a resume id still works.
+ *
+ * Was 15 minutes, which was the single longest-lived consequence of a failed
+ * transfer: nothing reclaimed a slot before it, so sixteen failures took the
+ * file lane down for a quarter of an hour. Socket close and terminal failure
+ * now both reclaim, so this is only the backstop for a transfer whose socket is
+ * still open and whose client has gone quiet. At the 256 KiB wire chunk size,
+ * five minutes of silence is under 900 B/s -- far below any usable transfer
+ * rate -- and it is still a generous reconnect-and-resume window.
+ */
+const DEFAULT_TRANSFER_TTL_MS = 5 * 60 * 1_000
 const DEFAULT_DUPLICATE_HISTORY_CHUNKS = 512
 const DEFAULT_PRESENTED_TOKEN_HISTORY = 4_096
+
+/**
+ * Refusals after which the transfer they were raised on is DEAD, so holding its
+ * slot until the TTL protects nothing.
+ *
+ * Each one is unrecoverable BY A RESUME specifically, which is the only way a
+ * client can continue an opened transfer:
+ *
+ *  - FILE_ACCESS_DENIED: a resume re-authorizes and is refused identically.
+ *  - FILE_DESTINATION_CONFLICT: the destination already holds encrypted data of
+ *    a different size; rewinding and re-sending cannot change that.
+ *  - FILE_TRUNCATED: the stored object's size no longer matches the
+ *    `declaredSize` pinned on the download state, and that field is frozen.
+ *
+ * Deliberately NOT here: FILE_BACKEND_ERROR and SESSION_STALE (both retryable
+ * by contract), FILE_CHUNK_OUT_OF_ORDER and FILE_INCOMPLETE (a resume is the
+ * documented recovery), and a chunk's FILE_INTEGRITY_MISMATCH, which is raised
+ * BEFORE the bytes are accepted and so leaves the transfer intact.
+ */
+const TERMINAL_TRANSFER_ERROR_CODES: ReadonlySet<string> = new Set([
+  'FILE_ACCESS_DENIED',
+  'FILE_DESTINATION_CONFLICT',
+  'FILE_TRUNCATED',
+])
+
+/**
+ * Additionally terminal at PUBLICATION. Every chunk was individually digest
+ * checked on the way in, so a whole-file mismatch at finish means the sha256 the
+ * client declared is wrong -- a resume re-sends the same bytes and mismatches
+ * again.
+ */
+const TERMINAL_PUBLICATION_ERROR_CODES: ReadonlySet<string> = new Set([
+  ...TERMINAL_TRANSFER_ERROR_CODES,
+  'FILE_INTEGRITY_MISMATCH',
+])
 
 /**
  * Bounded FILES_V1 adapter for the MULTI-CONTAINER deployment.
@@ -197,6 +272,9 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
   private allocationQueue: Promise<void> = Promise.resolve()
   private readonly maxActiveTransfers: number
   private readonly maxActiveUploads: number
+  private readonly maxActiveTransfersPerUser: number
+  private readonly maxActiveUploadsPerUser: number
+  private readonly maxParkedTransfersPerUser: number
   private readonly storagePartBytes: number
   private readonly transferTtlMs: number
   private readonly duplicateHistoryChunks: number
@@ -208,6 +286,14 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
   constructor(private readonly options: MultiContainerSyncFilesAdapterOptions) {
     this.maxActiveTransfers = options.maxActiveTransfers ?? DEFAULT_MAX_ACTIVE_TRANSFERS
     this.maxActiveUploads = options.maxActiveUploads ?? DEFAULT_MAX_ACTIVE_UPLOADS
+    // Clamped to the pool it divides, so a caller that lowers only the
+    // process-wide figure (every test that pins a capacity boundary does) is not
+    // refused for a per-user default it never asked for.
+    this.maxActiveTransfersPerUser =
+      options.maxActiveTransfersPerUser ?? Math.min(DEFAULT_MAX_ACTIVE_TRANSFERS_PER_USER, this.maxActiveTransfers)
+    this.maxActiveUploadsPerUser =
+      options.maxActiveUploadsPerUser ?? Math.min(DEFAULT_MAX_ACTIVE_UPLOADS_PER_USER, this.maxActiveUploads)
+    this.maxParkedTransfersPerUser = options.maxParkedTransfersPerUser ?? DEFAULT_MAX_PARKED_TRANSFERS_PER_USER
     this.storagePartBytes = options.storagePartBytes ?? DEFAULT_STORAGE_PART_BYTES
     this.transferTtlMs = options.transferTtlMs ?? DEFAULT_TRANSFER_TTL_MS
     this.duplicateHistoryChunks = options.duplicateHistoryChunks ?? DEFAULT_DUPLICATE_HISTORY_CHUNKS
@@ -226,6 +312,23 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
       this.maxActiveUploads > this.maxActiveTransfers
     ) {
       throw new Error('maxActiveUploads must be a positive safe integer no greater than maxActiveTransfers.')
+    }
+    if (
+      !Number.isSafeInteger(this.maxActiveTransfersPerUser) ||
+      this.maxActiveTransfersPerUser < 1 ||
+      this.maxActiveTransfersPerUser > this.maxActiveTransfers
+    ) {
+      throw new Error('maxActiveTransfersPerUser must be a positive safe integer no greater than maxActiveTransfers.')
+    }
+    if (
+      !Number.isSafeInteger(this.maxActiveUploadsPerUser) ||
+      this.maxActiveUploadsPerUser < 1 ||
+      this.maxActiveUploadsPerUser > this.maxActiveUploads
+    ) {
+      throw new Error('maxActiveUploadsPerUser must be a positive safe integer no greater than maxActiveUploads.')
+    }
+    if (!Number.isSafeInteger(this.maxParkedTransfersPerUser) || this.maxParkedTransfersPerUser < 1) {
+      throw new Error('maxParkedTransfersPerUser must be a positive safe integer.')
     }
     if (
       !Number.isSafeInteger(this.storagePartBytes) ||
@@ -303,6 +406,13 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
         resumed.digest = resumed.flushedDigest.copy()
         resumed.chunkLedger.clear()
         resumed.updatedAt = this.now()
+        // A resume RE-ATTACHES a parked transfer to a live socket, so it takes
+        // an active slot again -- which is also where the per-user ceiling has
+        // to be re-checked, since parking released one.
+        if (resumed.parked) {
+          this.assertUploadCapacity(input.identity, resumed)
+          resumed.parked = false
+        }
         this.remember(resumed)
         return this.uploadOpenResult(resumed)
       })
@@ -317,8 +427,8 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     )
     return this.withAllocationLock(async () => {
       signal.throwIfAborted()
-      this.assertCapacity()
-      this.assertUploadCapacity()
+      this.assertCapacity(input.identity)
+      this.assertUploadCapacity(input.identity)
       const transferId = this.validGeneratedIdentifier(this.createTransferId(), 'transfer')
       const resumeId = this.validGeneratedIdentifier(this.createResumeId(), 'resume')
       const resource = this.copyResource(input.descriptor)
@@ -346,6 +456,7 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
         flushedDigest: digest.copy(),
         chunkLedger: new Map(),
         updatedAt: this.now(),
+        parked: false,
       }
       this.remember(state)
       return this.uploadOpenResult(state)
@@ -362,49 +473,54 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     return this.withTransferLock(lockKey, async () => {
       signal.throwIfAborted()
       const state = this.currentUpload(input.identity, input.header.transferId, input.header.generation)
-      const authorized = await this.authorize(
-        input.identity,
-        state.resource,
-        'upload',
-        signal,
-        state.descriptor.decryptedSize,
-      )
-      this.assertStableStorageOwner(state, authorized)
-      this.assertUploadHeader(state, input.header, input.bytes)
+      try {
+        const authorized = await this.authorize(
+          input.identity,
+          state.resource,
+          'upload',
+          signal,
+          state.descriptor.decryptedSize,
+        )
+        this.assertStableStorageOwner(state, authorized)
+        this.assertUploadHeader(state, input.header, input.bytes)
 
-      if (input.header.index < state.nextIndex) {
-        this.verifyDuplicateChunk(state, input.header)
+        if (input.header.index < state.nextIndex) {
+          this.verifyDuplicateChunk(state, input.header)
+          state.updatedAt = this.now()
+          return {
+            duplicate: true,
+            nextIndex: state.nextIndex,
+            nextOffset: state.nextOffset,
+            resumeId: state.resumeId,
+          }
+        }
+        if (input.header.index !== state.nextIndex || input.header.offset !== state.nextOffset) {
+          throw new MultiContainerSyncFilesAdapterError('FILE_CHUNK_OUT_OF_ORDER')
+        }
+
+        // The session zeroes the decoded frame once this resolves, so the bytes
+        // must be copied out before they can be coalesced into a storage part.
+        state.pending.push(Buffer.from(input.bytes))
+        state.pendingBytes += input.bytes.byteLength
+        state.digest.update(input.bytes)
+        this.rememberChunkDigest(state, input.header)
+        state.nextIndex += 1
+        state.nextOffset += input.bytes.byteLength
+
+        const complete = state.nextOffset === state.descriptor.declaredSize
+        if (state.pendingBytes >= this.storagePartBytes || complete) {
+          await this.flushPending(state, authorized, signal)
+        }
         state.updatedAt = this.now()
         return {
-          duplicate: true,
+          duplicate: false,
           nextIndex: state.nextIndex,
           nextOffset: state.nextOffset,
           resumeId: state.resumeId,
         }
-      }
-      if (input.header.index !== state.nextIndex || input.header.offset !== state.nextOffset) {
-        throw new MultiContainerSyncFilesAdapterError('FILE_CHUNK_OUT_OF_ORDER')
-      }
-
-      // The session zeroes the decoded frame once this resolves, so the bytes
-      // must be copied out before they can be coalesced into a storage part.
-      state.pending.push(Buffer.from(input.bytes))
-      state.pendingBytes += input.bytes.byteLength
-      state.digest.update(input.bytes)
-      this.rememberChunkDigest(state, input.header)
-      state.nextIndex += 1
-      state.nextOffset += input.bytes.byteLength
-
-      const complete = state.nextOffset === state.descriptor.declaredSize
-      if (state.pendingBytes >= this.storagePartBytes || complete) {
-        await this.flushPending(state, authorized, signal)
-      }
-      state.updatedAt = this.now()
-      return {
-        duplicate: false,
-        nextIndex: state.nextIndex,
-        nextOffset: state.nextOffset,
-        resumeId: state.resumeId,
+      } catch (error) {
+        this.releaseOnTerminalFailure(state, error, TERMINAL_TRANSFER_ERROR_CODES)
+        throw error
       }
     })
   }
@@ -425,6 +541,25 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     return this.withTransferLock(lockKey, async () => {
       signal.throwIfAborted()
       const state = this.currentUploadForFinish(input.identity, input.transferId, input.generation)
+      try {
+        return await this.publishUpload(state, input, signal)
+      } catch (error) {
+        this.releaseOnTerminalFailure(state, error, TERMINAL_PUBLICATION_ERROR_CODES)
+        throw error
+      }
+    })
+  }
+
+  /**
+   * The body of `finishUpload`, lifted so the terminal-failure release above can
+   * wrap the whole publication without re-indenting it.
+   */
+  private async publishUpload(
+    state: UploadState,
+    input: { identity: SyncTicketIdentity; declaredSize: number; sha256: string },
+    signal: AbortSignal,
+  ): Promise<{ sha256: string }> {
+    {
       const authorized = await this.authorize(
         input.identity,
         state.resource,
@@ -478,7 +613,7 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
       this.discardPending(state)
       this.rememberCompletedUpload(state as CompletedUploadState)
       return { sha256: actualSha256 }
-    })
+    }
   }
 
   async openDownload(
@@ -525,11 +660,15 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
         existing.nextIndex = 0
         existing.nextOffset = input.offset
         existing.updatedAt = this.now()
+        if (existing.parked) {
+          this.assertCapacity(input.identity, existing)
+          existing.parked = false
+        }
         state = existing
       } else {
         state = await this.withAllocationLock(async () => {
           signal.throwIfAborted()
-          this.assertCapacity()
+          this.assertCapacity(input.identity)
           const allocated: DownloadState = {
             kind: 'download',
             identity: this.transferIdentity(input.identity),
@@ -542,6 +681,7 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
             nextIndex: 0,
             nextOffset: input.offset,
             updatedAt: this.now(),
+            parked: false,
           }
           this.remember(allocated)
           return allocated
@@ -582,6 +722,25 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     return this.withTransferLock(lockKey, async () => {
       signal.throwIfAborted()
       const state = this.currentDownload(input.identity, input.transferId, input.generation)
+      try {
+        return await this.readDownloadChunkFor(state, input, signal)
+      } catch (error) {
+        this.releaseOnTerminalFailure(state, error, TERMINAL_TRANSFER_ERROR_CODES)
+        throw error
+      }
+    })
+  }
+
+  /**
+   * The body of `readDownloadChunk`, lifted for the same reason as
+   * `publishUpload` above.
+   */
+  private async readDownloadChunkFor(
+    state: DownloadState,
+    input: { identity: SyncTicketIdentity; index: number; offset: number; maxBytes: number },
+    signal: AbortSignal,
+  ) {
+    {
       const authorized = await this.authorize(input.identity, state.resource, 'download', signal)
       this.assertStableStorageOwner(state, authorized)
       if (
@@ -624,7 +783,7 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
         this.removeState(state)
       }
       return result
-    })
+    }
   }
 
   async cancel(input: {
@@ -892,26 +1051,116 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     }
   }
 
-  private assertCapacity(): void {
-    if (this.transfers.size >= this.maxActiveTransfers) {
+  /**
+   * Counts ATTACHED transfers only -- a parked one holds no coalescing buffer
+   * and no socket, so counting it against either ceiling is what let abandoned
+   * transfers deny the lane to everybody. `excluding` is the state a resume is
+   * re-attaching, which must not be counted against its own re-admission.
+   */
+  private countActive(
+    userUuid: string,
+    kind: TransferState['kind'] | undefined,
+    excluding: TransferState | undefined,
+  ): { total: number; forUser: number } {
+    let total = 0
+    let forUser = 0
+    for (const state of this.transfers.values()) {
+      if (state.parked || state === excluding || (kind !== undefined && state.kind !== kind)) {
+        continue
+      }
+      total += 1
+      if (state.identity.userUuid === userUuid) {
+        forUser += 1
+      }
+    }
+    return { total, forUser }
+  }
+
+  /**
+   * The process-wide transfer ceiling bounds this adapter's resume bookkeeping;
+   * the per-user one stops a single account reaching that ceiling alone.
+   */
+  private assertCapacity(identity: SyncTicketIdentity, excluding?: TransferState): void {
+    const active = this.countActive(identity.userUuid, undefined, excluding)
+    if (active.total >= this.maxActiveTransfers || active.forUser >= this.maxActiveTransfersPerUser) {
       throw new MultiContainerSyncFilesAdapterError('FILE_TRANSFER_CAPACITY')
     }
   }
 
   /**
-   * Uploads are capped separately from downloads because each one owns a
-   * coalescing buffer; this bound is what keeps this process's file memory
-   * predictable in a deployment that cannot stage bytes on disk.
+   * Uploads are capped separately from downloads because each ATTACHED one owns
+   * a coalescing buffer. The process-wide bound is what keeps this deployment's
+   * file memory predictable when it cannot stage bytes on disk
+   * (`maxActiveUploads * (storagePartBytes + MAX_CHUNK_BYTES)`); the per-user
+   * bound is what keeps that memory SHAREABLE.
    */
-  private assertUploadCapacity(): void {
-    let uploads = 0
-    for (const state of this.transfers.values()) {
-      if (state.kind === 'upload') {
-        uploads += 1
-      }
-    }
-    if (uploads >= this.maxActiveUploads) {
+  private assertUploadCapacity(identity: SyncTicketIdentity, excluding?: TransferState): void {
+    const active = this.countActive(identity.userUuid, 'upload', excluding)
+    if (active.total >= this.maxActiveUploads || active.forUser >= this.maxActiveUploadsPerUser) {
       throw new MultiContainerSyncFilesAdapterError('FILE_TRANSFER_CAPACITY')
+    }
+  }
+
+  /**
+   * Release the in-process slots the transfers of a CLOSING socket hold.
+   *
+   * Socket close used to release nothing here, so a transfer whose client was
+   * gone kept its active slot -- and its coalescing buffer -- for the whole TTL.
+   * Parking IS the release: the byte buffers and the duplicate-chunk ledger are
+   * dropped (the only memory either ceiling exists to bound) and the transfer
+   * stops counting as active, while the small resume bookkeeping stays so a
+   * reconnecting client can still resume by `resumeId`. Dropping the buffers
+   * costs a resume nothing -- the resume path rewinds to the last storage part
+   * boundary and discards them anyway.
+   *
+   * Taken per transfer under that transfer's own lock, so an operation still in
+   * flight when the socket closed finishes against consistent state.
+   */
+  async releaseSession(identity: SyncTicketIdentity): Promise<void> {
+    for (const state of [...this.transfers.values()]) {
+      if (
+        state.identity.userUuid !== identity.userUuid ||
+        state.identity.sessionUuid !== identity.sessionUuid ||
+        state.identity.deviceId !== identity.deviceId
+      ) {
+        continue
+      }
+      await this.withTransferLock(state.resumeId, async () => {
+        const current = this.transfers.get(state.transferId)
+        if (current !== state || current.parked) {
+          return
+        }
+        current.parked = true
+        if (current.kind === 'upload') {
+          this.discardPending(current)
+          current.chunkLedger.clear()
+        }
+      })
+    }
+    this.evictExcessParkedTransfers(identity.userUuid)
+  }
+
+  /** Keeps per-user parked bookkeeping bounded, oldest first. */
+  private evictExcessParkedTransfers(userUuid: string): void {
+    const parked = [...this.transfers.values()]
+      .filter((state) => state.parked && state.identity.userUuid === userUuid)
+      .sort((left, right) => left.updatedAt - right.updatedAt)
+    while (parked.length > this.maxParkedTransfersPerUser) {
+      const oldest = parked.shift()
+      if (!oldest) {
+        break
+      }
+      this.removeState(oldest)
+    }
+  }
+
+  /**
+   * Drops a transfer the refusal just killed, so its slot is not held until the
+   * TTL. See {@link TERMINAL_TRANSFER_ERROR_CODES} for why each code qualifies.
+   */
+  private releaseOnTerminalFailure(state: TransferState, error: unknown, terminal: ReadonlySet<string>): void {
+    if (error instanceof MultiContainerSyncFilesAdapterError && terminal.has(error.code)) {
+      this.removeState(state)
     }
   }
 
@@ -987,11 +1236,36 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     }
   }
 
+  /**
+   * A PARKED transfer is not addressable by transfer id, and this is a
+   * correctness rule, not tidiness.
+   *
+   * Parking discards the coalescing buffer but leaves `nextOffset`, `nextIndex`
+   * and the running digest where they were. A chunk accepted straight onto a
+   * parked upload would therefore continue a byte stream whose unflushed tail is
+   * gone, and because the digest still COVERS those bytes, publication would
+   * compare the client's sha256 against a digest that matches while storage held
+   * an object with a hole -- silent corruption that passes its own integrity
+   * check. The resume path is what repairs this: it rewinds to the last flushed
+   * part boundary and restores the flushed digest.
+   *
+   * So the only handle on a parked transfer is its resume id, which is also what
+   * the home-server adapter does by construction (it drops the in-memory entry on
+   * release and rehydrates from the manifest), making the two adapters answer the
+   * same way.
+   */
+  private assertAttached(state: TransferState): void {
+    if (state.parked) {
+      throw new MultiContainerSyncFilesAdapterError('FILE_TRANSFER_NOT_FOUND')
+    }
+  }
+
   private currentUpload(identity: SyncTicketIdentity, transferId: string, generation: number): UploadState {
     const state = this.transfers.get(transferId)
     if (!state || state.kind !== 'upload') {
       throw new MultiContainerSyncFilesAdapterError('FILE_TRANSFER_NOT_FOUND')
     }
+    this.assertAttached(state)
     this.assertIdentity(state.identity, identity)
     if (state.generation !== generation) {
       throw new MultiContainerSyncFilesAdapterError('FILE_STALE_GENERATION')
@@ -1004,6 +1278,7 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     if (!state || state.kind !== 'upload') {
       throw new MultiContainerSyncFilesAdapterError('FILE_TRANSFER_NOT_FOUND')
     }
+    this.assertAttached(state)
     this.assertIdentity(state.identity, identity)
     if (state.generation !== generation) {
       throw new MultiContainerSyncFilesAdapterError('FILE_STALE_GENERATION')
@@ -1016,6 +1291,7 @@ export class MultiContainerSyncFilesAdapter implements SyncFilesAdapter {
     if (!state || state.kind !== 'download') {
       throw new MultiContainerSyncFilesAdapterError('FILE_TRANSFER_NOT_FOUND')
     }
+    this.assertAttached(state)
     this.assertIdentity(state.identity, identity)
     if (state.generation !== generation) {
       throw new MultiContainerSyncFilesAdapterError('FILE_STALE_GENERATION')

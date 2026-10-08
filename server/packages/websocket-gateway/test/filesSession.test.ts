@@ -596,6 +596,219 @@ describe('SyncFilesSession', () => {
   })
 })
 
+/**
+ * Finding 4: a download that ran out of credit went PERMANENTLY silent.
+ *
+ * Measured live before the fix, on both shipped topologies: a declared 5,000 ms
+ * deadline watched for 40,000 ms produced no frames, no FILES_COMPLETE, no
+ * ERROR and no close, having delivered 65,536 of 716,800 bytes, and the transfer
+ * slot stayed held. After: the same probe is answered
+ * `ERROR FILE_DEADLINE_EXCEEDED` at 5,081 ms (compose) and 5,029 ms (single
+ * container).
+ *
+ * Driven here through the real timer wheel at a small deadline rather than a
+ * socket harness, because this is a timing contract and the in-process socket
+ * harness cannot hold the state a starved pump needs.
+ */
+describe('SyncFilesSession download deadline', () => {
+  const declaredSize = 12
+  const chunkBytes = 4
+
+  /** Serves `chunkBytes` at a time out of a `declaredSize`-byte resource. */
+  function creditedAdapter(overrides: Partial<SyncFilesAdapter> = {}): SyncFilesAdapter {
+    return adapter({
+      openDownload: vi.fn(async () => ({
+        transferId: 'download-1',
+        generation: 4,
+        resumeId: 'download-resume-1',
+        declaredSize,
+        nextIndex: 0,
+        nextOffset: 0,
+      })),
+      readDownloadChunk: vi.fn(async ({ index, offset, maxBytes }): Promise<SyncFileDownloadChunk> => {
+        const byteLength = Math.min(maxBytes, declaredSize - offset)
+        return {
+          index,
+          offset,
+          declaredSize,
+          bytes: new Uint8Array(byteLength).fill(index + 1),
+          final: offset + byteLength === declaredSize,
+        }
+      }),
+      ...overrides,
+    })
+  }
+
+  const downloadFrame = (deadlineMs: number, initialCreditBytes: number) =>
+    envelope('FILES_DOWNLOAD_OPEN', {
+      resource,
+      offset: 0,
+      initialCreditBytes,
+      deadlineMs,
+    }) satisfies SyncFilesDownloadOpenFrame
+
+  it('answers an under-credited download with FILE_DEADLINE_EXCEEDED instead of silence', async () => {
+    const filesAdapter = creditedAdapter()
+    const { session, errors, binaries } = harness(filesAdapter)
+
+    await session.handleControl(downloadFrame(60, chunkBytes), identity)
+
+    await vi.waitFor(() => expect(errors.at(-1)?.code).toBe('FILE_DEADLINE_EXCEEDED'), { timeout: 2_000 })
+    // It delivered what it was credited for and then named its refusal, rather
+    // than delivering that much and nothing else ever.
+    expect(binaries).toHaveLength(1)
+    expect(decodeFileBinaryFrame(binaries[0]!).bytes.byteLength).toBe(chunkBytes)
+  })
+
+  it('releases the transfer when the deadline fires, rather than holding the slot', async () => {
+    const filesAdapter = creditedAdapter()
+    const { session, errors } = harness(filesAdapter)
+
+    await session.handleControl(downloadFrame(60, chunkBytes), identity)
+    await vi.waitFor(() => expect(errors.at(-1)?.code).toBe('FILE_DEADLINE_EXCEEDED'), { timeout: 2_000 })
+
+    expect(filesAdapter.cancel).toHaveBeenCalledWith({
+      identity,
+      transferId: 'download-1',
+      generation: 4,
+      reason: 'download-deadline-exceeded',
+    })
+    // The slot is gone, so late credit for it is a stale generation, not a resume
+    // of a transfer the session still believes in.
+    const credit = envelope('FILES_CREDIT', {
+      transferId: 'download-1',
+      generation: 4,
+      creditBytes: chunkBytes,
+    }) satisfies SyncFilesCreditFrame
+    await session.handleControl(credit, identity)
+    expect(errors.at(-1)?.code).toBe('FILE_STALE_GENERATION')
+  })
+
+  it('counts the refusal under its own code', async () => {
+    const { session, errors, metrics } = harness(creditedAdapter())
+
+    await session.handleControl(downloadFrame(60, chunkBytes), identity)
+    await vi.waitFor(() => expect(errors.at(-1)?.code).toBe('FILE_DEADLINE_EXCEEDED'), { timeout: 2_000 })
+
+    expect(metrics).toContainEqual({ event: 'files', code: 'file_deadline_exceeded' })
+  })
+
+  it('bounds SILENCE, not duration: credit that keeps arriving carries a transfer past its deadline', async () => {
+    const filesAdapter = creditedAdapter()
+    const { session, errors, controls, binaries } = harness(filesAdapter)
+    const deadlineMs = 120
+
+    await session.handleControl(downloadFrame(deadlineMs, chunkBytes), identity)
+
+    // Grant the remaining headroom in two late instalments, each arriving after a
+    // starvation gap. A whole-transfer deadline would have killed this; a
+    // starvation deadline must not.
+    for (let granted = 0; granted < 2; granted++) {
+      await new Promise((resolve) => setTimeout(resolve, deadlineMs / 2))
+      await session.handleControl(
+        envelope('FILES_CREDIT', {
+          transferId: 'download-1',
+          generation: 4,
+          creditBytes: chunkBytes,
+        }) satisfies SyncFilesCreditFrame,
+        identity,
+      )
+    }
+
+    await vi.waitFor(() => expect(controls.some((control) => control.type === 'FILES_COMPLETE')).toBe(true), {
+      timeout: 2_000,
+    })
+    expect(errors).toEqual([])
+    expect(binaries).toHaveLength(declaredSize / chunkBytes)
+    expect(Buffer.concat(binaries.map((frame) => Buffer.from(decodeFileBinaryFrame(frame).bytes))).byteLength).toBe(
+      declaredSize,
+    )
+  })
+
+  it('does not fire after the download has completed', async () => {
+    const { session, errors, controls } = harness(creditedAdapter())
+
+    await session.handleControl(downloadFrame(40, declaredSize), identity)
+
+    await vi.waitFor(() => expect(controls.some((control) => control.type === 'FILES_COMPLETE')).toBe(true), {
+      timeout: 2_000,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(errors).toEqual([])
+  })
+
+  it('does not fire after the socket has gone', async () => {
+    const { session, errors } = harness(creditedAdapter())
+
+    await session.handleControl(downloadFrame(40, chunkBytes), identity)
+    session.disconnect()
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    expect(errors).toEqual([])
+  })
+})
+
+/**
+ * Finding 1b: socket close released nothing adapter-side, so one account's
+ * sixteen abandoned uploads answered FILE_TRANSFER_CAPACITY to every other
+ * account for fifteen minutes. The session cannot release those itself -- it
+ * tracks downloads only -- so it has to tell the adapter.
+ */
+describe('SyncFilesSession release on socket close', () => {
+  it('tells the adapter which session is closing, even with no download open', async () => {
+    const releaseSession = vi.fn(async () => undefined)
+    const filesAdapter = adapter({ releaseSession })
+    const { session } = harness(filesAdapter)
+
+    await session.handleControl(
+      envelope('FILES_UPLOAD_OPEN', {
+        resource,
+        decryptedSize: 2,
+        declaredSize: 3,
+        mimeType: 'application/octet-stream',
+        deadlineMs: 1_000,
+      }) satisfies SyncFilesUploadOpenFrame,
+      identity,
+    )
+    session.disconnect()
+
+    expect(releaseSession).toHaveBeenCalledTimes(1)
+    expect(releaseSession).toHaveBeenCalledWith(identity)
+  })
+
+  it('releases for a socket that only ever sent an upload CHUNK', async () => {
+    const releaseSession = vi.fn(async () => undefined)
+    const { session } = harness(adapter({ releaseSession }))
+
+    await session.handleBinary(uploadFrame(new Uint8Array([1, 2, 3])), identity)
+    session.disconnect()
+
+    expect(releaseSession).toHaveBeenCalledWith(identity)
+  })
+
+  it('releases exactly once, and never for a socket that never touched the lane', async () => {
+    const releaseSession = vi.fn(async () => undefined)
+    const { session } = harness(adapter({ releaseSession }))
+
+    session.disconnect()
+    session.disconnect()
+
+    expect(releaseSession).not.toHaveBeenCalled()
+  })
+
+  it('survives an adapter whose release rejects', async () => {
+    const releaseSession = vi.fn(async () => {
+      throw new Error('release failed')
+    })
+    const { session } = harness(adapter({ releaseSession }))
+
+    await session.handleBinary(uploadFrame(new Uint8Array([1, 2, 3])), identity)
+
+    expect(() => session.disconnect()).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+})
+
 describe('createSyncFilesTokenDecoder', () => {
   it('accepts an HS256 token signed with the same secret and rejects everything else', () => {
     const decoder = createSyncFilesTokenDecoder<{ userUuid: string }>('files-secret')
