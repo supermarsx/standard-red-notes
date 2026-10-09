@@ -649,6 +649,8 @@ export class SyncTransportWorkerRuntime {
   private lastShortLivedHandshakeAt?: number
   /** While this is in the future no ticket is asked for; the lane stays on HTTP. */
   private handshakeLoopHeldUntil?: number
+  /** Live only for the span of a hold, to announce its end. Never gates the hold. */
+  private handshakeLoopHoldTimer?: ReturnType<typeof setTimeout>
   /** One re-ticket per request after the gateway reports the ticket's bearer stale. */
   private reticketedForStaleSession = false
   /** Retries spent on a retryable command refusal, per command. */
@@ -3945,7 +3947,44 @@ export class SyncTransportWorkerRuntime {
       this.handshakeLoopHeldUntil = now + HANDSHAKE_LOOP_HOLD_MS
       this.shortLivedHandshakes = 0
       this.lastShortLivedHandshakeAt = undefined
+      // *** A CONTROL THAT SIDELINES THE TAB FOR A MINUTE MUST NOT BE SILENT. ***
+      //
+      // Every refusal the hold produces is reported as `reconnect-gap`, which is
+      // honest about the one request and says nothing about the tab having withdrawn
+      // itself. Announced here in its own right, so the operator looking at the
+      // console can tell a transient gap from a deliberate stand-down and knows how
+      // long it lasts.
+      this.dependencies.postMessage({
+        type: 'DIAL_HOLD_ARMED',
+        holdForMilliseconds: HANDSHAKE_LOOP_HOLD_MS,
+        handshakes: MAX_SHORT_LIVED_HANDSHAKES,
+      })
+      this.announceHandshakeLoopHoldExpiry()
     }
+  }
+
+  /**
+   * Say when the hold ends, at the moment it ends.
+   *
+   * NARRATION AND TIDYING ONLY. `handshakeLoopHeld()` reads the deadline itself, so
+   * a timer that never runs — a throttled worker, a tab the browser froze — cannot
+   * extend the hold by a millisecond, and one that runs early cannot shorten it
+   * either (it re-checks before clearing). It exists because the operator who saw
+   * the lane take itself out of service is owed the line saying it is back, and
+   * nothing else here would ever say so while the tab sits idle.
+   */
+  private announceHandshakeLoopHoldExpiry(): void {
+    if (this.handshakeLoopHoldTimer) {
+      this.cancelTimeout(this.handshakeLoopHoldTimer)
+    }
+    this.handshakeLoopHoldTimer = this.scheduleTimeout(() => {
+      this.handshakeLoopHoldTimer = undefined
+      if (this.handshakeLoopHeld() || this.shuttingDown) {
+        return
+      }
+      this.handshakeLoopHeldUntil = undefined
+      this.dependencies.postMessage({ type: 'DIAL_HOLD_ENDED' })
+    }, HANDSHAKE_LOOP_HOLD_MS)
   }
 
   /** True while this client is holding on HTTP rather than dialling into a loop. */
@@ -4441,6 +4480,10 @@ export class SyncTransportWorkerRuntime {
     this.active = undefined
     this.inviteSubscription = undefined
     this.cancelDeferredInviteWatch()
+    if (this.handshakeLoopHoldTimer) {
+      this.cancelTimeout(this.handshakeLoopHoldTimer)
+      this.handshakeLoopHoldTimer = undefined
+    }
     this.outboxRecord = undefined
     this.outbox.close()
     this.transition('HTTP_ONLY')

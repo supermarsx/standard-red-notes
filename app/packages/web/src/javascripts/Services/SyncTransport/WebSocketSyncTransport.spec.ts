@@ -1755,6 +1755,70 @@ describe('WebSocketSyncTransport', () => {
       return transport
     }
 
+    /**
+     * *** A CONTROL THAT SIDELINES THE TAB FOR A MINUTE WAS GOING TO BE SILENT. ***
+     *
+     * The worker stops dialling when several handshakes in a row authenticate and then
+     * die within seconds. Every refusal it then produces is reported as
+     * `reconnect-gap` — the truth about one request, and no account at all of a tab
+     * that has withdrawn itself. An operator reading the console would see saves on
+     * HTTP, a plausible transient cause, and nothing saying what was holding the lane
+     * down or when it lifts.
+     */
+    it('says plainly when the tab stops dialling, and when it starts again', async () => {
+      await connectWorker()
+
+      worker.emit({ type: 'DIAL_HOLD_ARMED', holdForMilliseconds: 60_000, handshakes: 3 })
+      await flush()
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      const armed = String(warn.mock.calls[0][0])
+      expect(armed).toContain('[sync-transport]')
+      // What happened, for how long, and on what evidence.
+      expect(armed).toContain('STOPPED dialling')
+      expect(armed).toContain('60s')
+      expect(armed).toContain('3 connections in a row')
+      // ...and what it means for the reader: nothing is broken and nothing is retrying.
+      expect(armed).toContain('stay on HTTP')
+      expect(armed).toContain('no ticket is being spent')
+      expect(armed).toContain('dials again by itself')
+
+      worker.emit({ type: 'DIAL_HOLD_ENDED' })
+      await flush()
+
+      expect(info).toHaveBeenCalledTimes(1)
+      const lifted = String(info.mock.calls[0][0])
+      expect(lifted).toContain('[sync-transport]')
+      expect(lifted).toContain('dial hold has lifted')
+      expect(lifted).toContain('next sync')
+    })
+
+    /**
+     * The whole point of the pair above: the hold must not read as the transient gap
+     * its own refusals are reported as. Both lines are emitted here and the one that
+     * describes a minute-long stand-down is the only one that says so.
+     */
+    it('does not let the hold hide behind the reconnect-gap line its refusals carry', async () => {
+      await connectWorker()
+
+      worker.emit({ type: 'STATE', state: 'HTTP_FALLBACK', reason: 'reconnect-gap' })
+      worker.emit({ type: 'DIAL_HOLD_ARMED', holdForMilliseconds: 60_000, handshakes: 3 })
+      await flush()
+
+      expect(warn).toHaveBeenCalledTimes(2)
+      const gap = String(warn.mock.calls[0][0])
+      const hold = String(warn.mock.calls[1][0])
+
+      // The ordinary fallback line says a socket went away. It does not and must not
+      // claim to know that this tab has taken itself out of service.
+      expect(gap).toContain('reconnect-gap')
+      expect(gap).not.toContain('STOPPED dialling')
+      // The hold line is the one that names the stand-down and its span.
+      expect(hold).toContain('STOPPED dialling')
+      expect(hold).toContain('60s')
+      expect(hold).not.toBe(gap)
+    })
+
     it('names the state and the reason when saves fall back to HTTP', async () => {
       await connectWorker()
 

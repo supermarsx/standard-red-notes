@@ -1508,6 +1508,49 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     )
   }
 
+  /**
+   * *** THE ONE LINE THAT SAYS THIS TAB TOOK ITSELF OUT OF SERVICE. ***
+   *
+   * The worker stops dialling for a minute when several handshakes in a row
+   * authenticate and then die within seconds, because that loop re-dials at the
+   * backoff rate for as long as the tab is open and each cycle spends a ticket out of
+   * a bucket keyed on the session — so one looping tab starves every other tab of
+   * the account.
+   *
+   * Every refusal the hold then produces is reported as `reconnect-gap`, and that is
+   * the truth about each request and no account at all of the tab having withdrawn
+   * itself: "the socket was gone long enough that the session could not be resumed"
+   * reads as a passing network event, not as a minute of deliberate stand-down.
+   * Without this line the operator sees saves on HTTP, a plausible transient cause,
+   * and nothing anywhere saying what is actually holding the lane down or when it
+   * lifts.
+   *
+   * `console.warn`, unlike the invite deferral above: a tab standing down for a
+   * sibling is an expected steady state, whereas sockets dying seconds after a
+   * successful handshake means something between this browser and the gateway is
+   * tearing them down, and that is worth a reader's attention.
+   */
+  private announceDialHold(holdForMilliseconds: number, handshakes: number): void {
+    const seconds = Math.max(1, Math.round(holdForMilliseconds / 1000))
+    console.warn(
+      `[sync-transport] This tab has STOPPED dialling the websocket for ${seconds}s:` +
+        ` ${handshakes} connections in a row authenticated and then died within seconds.` +
+        ' Saves and every other lane stay on HTTP and keep working, no ticket is being spent,' +
+        ' and nothing is retrying — the tab dials again by itself when the hold lifts.' +
+        ' A repeat means something between this browser and the gateway is closing sockets' +
+        ' straight after the handshake.',
+    )
+  }
+
+  /** The counterpart, so the stand-down above has a stated end rather than a silence. */
+  private announceDialHoldEnded(): void {
+    // eslint-disable-next-line no-console
+    console.info(
+      '[sync-transport] The websocket dial hold has lifted; this tab tries the socket again on' +
+        ' its next sync. Nothing was lost while it stood down.',
+    )
+  }
+
   /** The counterpart: a successful negotiation, with what the socket actually carries. */
   private announceNegotiation(operations: readonly SyncNegotiatedOperation[]): void {
     const signature = `NEGOTIATED:${[...operations].join(',')}`
@@ -1530,6 +1573,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private async onWorkerMessage(message: SyncWorkerToMainMessage): Promise<void> {
     if (message.type === 'SHUTDOWN_COMPLETE') {
       this.shutdownBarrier?.()
+      return
+    }
+    if (message.type === 'DIAL_HOLD_ARMED') {
+      this.announceDialHold(message.holdForMilliseconds, message.handshakes)
+      return
+    }
+    if (message.type === 'DIAL_HOLD_ENDED') {
+      this.announceDialHoldEnded()
       return
     }
     if (message.type === 'STATE') {

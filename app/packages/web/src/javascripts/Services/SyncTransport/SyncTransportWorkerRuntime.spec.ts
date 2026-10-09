@@ -4944,7 +4944,9 @@ describe('SyncTransportWorkerRuntime', () => {
      * case a MEASUREMENT of the shipped scheduling rather than of a re-implementation
      * of the formula beside it.
      */
-    const resilienceSetup = (options: { random?: () => number; outbox?: SyncOutboxStore } = {}): ResilienceHarness => {
+    const resilienceSetup = (
+      options: { random?: () => number; outbox?: SyncOutboxStore; now?: () => number } = {},
+    ): ResilienceHarness => {
       const messages: SyncWorkerToMainMessage[] = []
       const sockets: FakeSocket[] = []
       const timers: number[] = []
@@ -4962,6 +4964,7 @@ describe('SyncTransportWorkerRuntime', () => {
         },
         uuid: () => `tab-${tab}-id-${++uuid}`,
         random: options.random ?? (() => 0),
+        ...(options.now ? { now: options.now } : {}),
         setTimeout: ((handler: () => void, delay?: number) => {
           timers.push(delay ?? 0)
           return globalThis.setTimeout(handler, delay)
@@ -5572,6 +5575,15 @@ describe('SyncTransportWorkerRuntime', () => {
       })
       expect(outbox.owners.has(TRANSPORT_SCOPE)).toBe(false)
 
+      // *** THE HOLD IS ANNOUNCED IN ITS OWN RIGHT. *** Every refusal it causes is a
+      // `reconnect-gap`, which is the truth about one request and no account at all
+      // of a tab that has withdrawn itself for a minute. Once, with the span, so the
+      // operator can tell a transient gap from a deliberate stand-down.
+      expect(harness.messages.filter((message) => message.type === 'DIAL_HOLD_ARMED')).toEqual([
+        { type: 'DIAL_HOLD_ARMED', holdForMilliseconds: 60_000, handshakes: 3 },
+      ])
+      expect(harness.messages.filter((message) => message.type === 'DIAL_HOLD_ENDED')).toHaveLength(0)
+
       // The consumer does what a retryable error tells it to and re-subscribes.
       // BEFORE, that is the loop; now it is answered without minting a ticket.
       await harness.runtime.handle({
@@ -5590,8 +5602,87 @@ describe('SyncTransportWorkerRuntime', () => {
         retryable: true,
       })
 
-      // ...and the hold DECAYS rather than standing the lane down for good.
+      // Still one announcement: the hold is not re-armed by requests it refuses.
+      expect(harness.messages.filter((message) => message.type === 'DIAL_HOLD_ARMED')).toHaveLength(1)
+
+      // ...and the hold DECAYS rather than standing the lane down for good, with the
+      // end stated at the moment it happens rather than left as a silence. Nothing
+      // else in this worker would ever say so while the tab sits idle.
       jest.advanceTimersByTime(HANDSHAKE_LOOP_HOLD_MS)
+      await flush()
+      expect(harness.messages.filter((message) => message.type === 'DIAL_HOLD_ENDED')).toEqual([
+        { type: 'DIAL_HOLD_ENDED' },
+      ])
+
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-3',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+      expect(ticketsFor(harness, 'invite-3')).toHaveLength(1)
+    })
+
+    /**
+     * The hold's end is ANNOUNCED by a timer and ENFORCED by the deadline, and those
+     * are deliberately two different things. A worker's timer is not a reliable clock
+     * — a throttled or frozen tab runs it late, and a tab whose timer fires a hair
+     * early would, if the announcement were trusted, clear the deadline and cut the
+     * hold short. So the timer re-reads the clock before clearing anything.
+     *
+     * Driven with a clock that lags the timer rather than asserted on an internal:
+     * the timer really does fire, and the hold really does still stand afterwards.
+     */
+    it('does not let an early timer cut the dial hold short, or extend it when none runs', async () => {
+      let lagMilliseconds = 0
+      const harness = resilienceSetup({ now: () => Date.now() - lagMilliseconds })
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const socket = await connectOn(harness, 'invite-1')
+        socket.open()
+        handshakeOn(socket, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+        await flush()
+        socket.abort()
+        await flush()
+        jest.advanceTimersByTime(PAST_ANY_BACKOFF_MS)
+        await flush()
+      }
+      expect(harness.messages.filter((message) => message.type === 'DIAL_HOLD_ARMED')).toHaveLength(1)
+      const dialsWhenHeld = harness.sockets.length
+
+      // The clock now lags the timer, so the announcement fires while the deadline it
+      // was armed for has NOT passed. Advanced to exactly the timer's due instant —
+      // the hold was armed one backoff advance before the loop ended, so that is a
+      // whole hold span minus one — because advancing further would carry the lagging
+      // clock past the deadline too and stop testing anything.
+      lagMilliseconds = 3_000
+      jest.advanceTimersByTime(HANDSHAKE_LOOP_HOLD_MS - PAST_ANY_BACKOFF_MS)
+      await flush()
+
+      // Nothing is announced, and nothing is dialled: the hold still stands.
+      expect(harness.messages.filter((message) => message.type === 'DIAL_HOLD_ENDED')).toHaveLength(0)
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-2',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+      expect(ticketsFor(harness, 'invite-2')).toHaveLength(0)
+      expect(harness.sockets).toHaveLength(dialsWhenHeld)
+
+      // And the other half of the same design: with the timer spent and no second one
+      // armed, the deadline alone lifts the hold. A missing announcement costs the
+      // operator a line; it cannot cost the tab its socket.
+      lagMilliseconds = 0
       await harness.runtime.handle({
         type: 'SUBSCRIBE_INVITE_EVENTS',
         clientRequestId: 'invite-3',

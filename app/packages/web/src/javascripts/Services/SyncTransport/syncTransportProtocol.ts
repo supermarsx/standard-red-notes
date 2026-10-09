@@ -1131,6 +1131,27 @@ export type SyncWorkerToMainMessage =
   | { type: 'SESSION_REVOKED_ACK'; requestId: string; sessionScope: string }
   | { type: 'SESSION_REVOKED_FAILED'; requestId: string; sessionScope: string }
   /**
+   * *** THIS CLIENT HAS SIDELINED ITSELF, AND NOTHING ELSE WOULD SAY SO. ***
+   *
+   * The worker stops dialling for a stated span when several handshakes in a row
+   * authenticate and then die within seconds — an otherwise unbounded ~1 Hz loop
+   * that spends the whole session's ticket allowance. Every refusal while the hold
+   * stands is reported as an ordinary `reconnect-gap`, which reads as a transient
+   * gap and is exactly right for one request and exactly wrong as the account of a
+   * minute-long self-imposed withdrawal.
+   *
+   * So the hold is announced in its own right. Without this the operator sees a
+   * tab on HTTP, a plausible transient reason, and nothing anywhere saying the tab
+   * has taken itself out of service or when it will come back.
+   *
+   * `holdForMilliseconds` is a DURATION, never an instant, for the reason the
+   * degradation ledger gives at length: these lines are read and pasted, and an
+   * absolute time lines one deployment's logs up against another's for no gain.
+   */
+  | { type: 'DIAL_HOLD_ARMED'; holdForMilliseconds: number; handshakes: number }
+  /** The hold elapsed; the next request dials again. The counterpart line. */
+  | { type: 'DIAL_HOLD_ENDED' }
+  /**
    * SHUTDOWN finished, owner lease included. The main thread waits a bounded
    * moment for this before `terminate()`, because terminating in the same tick
    * killed the release and left the lease to expire on its TTL.
