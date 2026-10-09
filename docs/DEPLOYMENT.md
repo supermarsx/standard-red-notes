@@ -151,6 +151,17 @@ After registering the intended administrator, persist the server-controlled role
 docker compose -f docker-compose.single.yml exec app srn-admin roles grant <user> ADMIN_USER
 ```
 
+Every other `srn-admin` command works the same way here. Two cannot complete
+from the CLI on this topology, and say so rather than failing obscurely:
+`fix-quota` and `delete-user`. Both work by publishing a domain event that
+another service acts on, and this deployment delivers events by direct call
+inside the one server process — which `srn-admin` is not. Run those two from the
+web console (**Settings → Admin**, see [Administration](administration.md))
+instead, where they execute inside that process. Everything that only touches
+the database — users, roles, groups,
+flags, bans, registration policy, webhooks, IP lists, locks, audit — runs from
+the CLI.
+
 **Manage:**
 
 ```sh

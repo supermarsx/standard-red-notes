@@ -561,6 +561,7 @@ import {
   isValidDedicatedNextcloudBackupTopicArn,
   UnavailableNextcloudBackupDomainEventPublisher,
 } from './NextcloudBackupDomainEventPublisher'
+import { selectCliDomainEventPublisher } from './UndeliverableDomainEventPublisher'
 
 export class ContainerConfigLoader {
   // Standard Red Notes: 'cli' is an additive lean-boot mode for the srn-admin
@@ -733,8 +734,19 @@ export class ContainerConfigLoader {
     if (isConfiguredForHomeServer) {
       domainEventPublisher = directCallDomainEventPublisher
     } else if (isConfiguredForCli) {
-      domainEventPublisher = new LazyDomainEventPublisher(() =>
-        buildSnsDomainEventPublisher(new SNSClient(buildSnsClientConfig(env)), env.get('SNS_TOPIC_ARN', true), env),
+      // Standard Red Notes: a bundled deployment (single container, LXC) runs
+      // NO broker — it delivers events by direct call inside the one server
+      // process, which this CLI is not. Building an SNS client there produced
+      // `Region is missing` on the first publish, which is why `roles grant`
+      // was unusable on a single container; refuse in the deployment's own
+      // terms instead, so a caller can tell "nowhere to send this" apart from
+      // a transport that failed. See UndeliverableDomainEventPublisher.
+      domainEventPublisher = selectCliDomainEventPublisher(
+        env.get('SNS_TOPIC_ARN', true),
+        () =>
+          new LazyDomainEventPublisher(() =>
+            buildSnsDomainEventPublisher(new SNSClient(buildSnsClientConfig(env)), env.get('SNS_TOPIC_ARN', true), env),
+          ),
       )
     } else {
       domainEventPublisher = buildSnsDomainEventPublisher(
