@@ -46,6 +46,51 @@ export function isSyncOutboxUnavailable(error: unknown): boolean {
 /** How long one tab's claim on a transport scope stands without renewal. */
 export const OWNER_LEASE_TTL_MS = 15_000
 
+/**
+ * What happened to a renewal attempt.
+ *
+ * *** THIS USED TO BE A BOOLEAN, AND THE BOOLEAN CONFLATED TWO DIFFERENT FACTS. ***
+ *
+ * `renewOwner` answered `false` both when another tab had taken the lane and when
+ * the caller's OWN row had merely aged out — and a tab's own row ages out for the
+ * most ordinary reason there is: the tab was frozen or backgrounded, so its 5 s
+ * renewal interval did not run. The caller mapped every `false` onto
+ * `multi-tab-not-owner`, a `deferred` disposition, which the main thread then
+ * suppresses for a whole lease TTL. A single tab with no sibling anywhere therefore
+ * reported a sibling tab that did not exist and parked itself behind it.
+ *
+ * - `renewed` — the lease is ours and now stands for another TTL.
+ * - `lapsed` — NO live lease stands for this scope. Ours aged out, or it was
+ *   released, and nothing has claimed it since. Nobody owns the lane: the caller
+ *   may take it back, and the right answer is to dial again rather than to wait.
+ * - `taken` — a DIFFERENT owner holds a live lease. The caller must stand down
+ *   until that lease ends, which is the one condition `multi-tab-not-owner`
+ *   describes.
+ */
+export type OwnerRenewalOutcome = 'renewed' | 'lapsed' | 'taken'
+
+/**
+ * The renewal verdict, as a pure function of the stored row.
+ *
+ * Exported and shared so a test double cannot drift from the store it stands in
+ * for: a fake that answered `renewed` where the real store answers `lapsed` would
+ * make the surrender path untestable while every spec passed.
+ */
+export function ownerRenewalOutcome(
+  current: { sessionScope: string; ownerId: string; expiresAt: number } | undefined,
+  sessionScope: string,
+  ownerId: string,
+  now: number,
+): OwnerRenewalOutcome {
+  if (current === undefined || current.sessionScope !== sessionScope || current.expiresAt <= now) {
+    // No row, a row belonging to another session, or an expired row — including
+    // our own. `acquireOwner` treats all three as claimable, so they are not a
+    // sibling tab and must not be reported as one.
+    return 'lapsed'
+  }
+  return current.ownerId === ownerId ? 'renewed' : 'taken'
+}
+
 export interface SyncOutboxStore {
   put(record: SyncOutboxRecord): Promise<void>
   oldest(sessionScope: string): Promise<SyncOutboxRecord | undefined>
@@ -72,13 +117,18 @@ export interface SyncOutboxStore {
     now: number,
     ttlMs: number,
   ): Promise<boolean>
+  /**
+   * Extends this owner's lease, and says WHY it could not when it could not. See
+   * `OwnerRenewalOutcome`: a caller handed a bare `false` cannot tell a sibling tab
+   * from its own clock.
+   */
   renewOwner(
     transportScope: string,
     sessionScope: string,
     ownerId: string,
     now: number,
     ttlMs: number,
-  ): Promise<boolean>
+  ): Promise<OwnerRenewalOutcome>
   releaseOwner(transportScope: string, sessionScope: string, ownerId: string): Promise<void>
   close(): void
 }
@@ -216,17 +266,17 @@ export class IndexedDbSyncOutbox implements SyncOutboxStore {
     ownerId: string,
     now: number,
     ttlMs: number,
-  ): Promise<boolean> {
+  ): Promise<OwnerRenewalOutcome> {
     const database = await this.database()
     const transaction = database.transaction(LEASE_STORE, 'readwrite')
     const store = transaction.objectStore(LEASE_STORE)
     const current = (await requestResult(store.get(transportScope))) as OwnerLease | undefined
-    const owned = current?.sessionScope === sessionScope && current.ownerId === ownerId && current.expiresAt > now
-    if (owned) {
+    const outcome = ownerRenewalOutcome(current, sessionScope, ownerId, now)
+    if (outcome === 'renewed') {
       store.put({ transportScope, sessionScope, ownerId, expiresAt: now + ttlMs } satisfies OwnerLease)
     }
     await transactionDone(transaction)
-    return owned
+    return outcome
   }
 
   async releaseOwner(transportScope: string, sessionScope: string, ownerId: string): Promise<void> {

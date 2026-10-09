@@ -1,6 +1,14 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import { LaneDegradationLedger } from './LaneDegradationLedger'
-import { SyncOutboxRecord, SyncOutboxStore, SyncOutboxUnavailableError } from './SyncTransportOutbox'
+import {
+  IndexedDbSyncOutbox,
+  OWNER_LEASE_TTL_MS,
+  OwnerRenewalOutcome,
+  SyncOutboxRecord,
+  SyncOutboxStore,
+  SyncOutboxUnavailableError,
+  ownerRenewalOutcome,
+} from './SyncTransportOutbox'
 import { SyncSocketCloseEvent, SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
 import {
   CollaborationAuthorizationTransportRequest,
@@ -10,6 +18,7 @@ import {
   SyncServerFrame,
   SyncWorkerToMainMessage,
   decodeFileBinaryFrame,
+  syncFallbackDisposition,
   utf8Bytes,
 } from './syncTransportProtocol'
 
@@ -97,19 +106,24 @@ class FakeOutbox implements SyncOutboxStore {
     return true
   }
 
+  /**
+   * Delegates the verdict to the store's own `ownerRenewalOutcome` rather than
+   * re-deciding it. A fake that answered `renewed` or `taken` where the real store
+   * answers `lapsed` would make the surrender path untestable with every spec green,
+   * which is the shape of the defect this double is here to catch.
+   */
   async renewOwner(
     transportScope: string,
     sessionScope: string,
     ownerId: string,
     now: number,
     ttlMs: number,
-  ): Promise<boolean> {
-    const current = this.owners.get(transportScope)
-    if (current?.sessionScope !== sessionScope || current.ownerId !== ownerId || current.expiresAt <= now) {
-      return false
+  ): Promise<OwnerRenewalOutcome> {
+    const outcome = ownerRenewalOutcome(this.owners.get(transportScope), sessionScope, ownerId, now)
+    if (outcome === 'renewed') {
+      this.owners.set(transportScope, { sessionScope, ownerId, expiresAt: now + ttlMs })
     }
-    this.owners.set(transportScope, { sessionScope, ownerId, expiresAt: now + ttlMs })
-    return true
+    return outcome
   }
 
   async releaseOwner(transportScope: string, sessionScope: string, ownerId: string): Promise<void> {
@@ -2971,8 +2985,8 @@ describe('SyncTransportWorkerRuntime', () => {
     })
     expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE'])
 
-    // The reconnect backoff has a 1 s floor (R24), so nothing is dialled sooner.
-    jest.advanceTimersByTime(1_000)
+    // Nothing is dialled until the backoff elapses; 5 s is the cap on it.
+    jest.advanceTimersByTime(5_000)
     await flush()
     expect(harness.messages).toContainEqual({
       type: 'NEED_TICKET',
@@ -3206,7 +3220,14 @@ describe('SyncTransportWorkerRuntime', () => {
         socket.open()
         socket.close(1006)
         await flush()
-        jest.advanceTimersByTime(1_000)
+        // One whole backoff window per attempt, not a flat second: the delay now
+        // GROWS (1 s, 2 s, 4 s windows, jittered into their upper halves), so a
+        // fixed 1 s advance stopped firing the third reconnect. 5 s is the cap on
+        // the window, so it fires whichever attempt this is and the case stays
+        // about the BUDGET, which is what it is here to pin. The delays themselves
+        // are asserted numerically in 'spreads its three reconnect delays across
+        // widening, jittered windows' below.
+        jest.advanceTimersByTime(5_000)
         await flush()
       }
 
@@ -3227,7 +3248,7 @@ describe('SyncTransportWorkerRuntime', () => {
         socket.open()
         socket.close(1006)
         await flush()
-        jest.advanceTimersByTime(1_000)
+        jest.advanceTimersByTime(5_000)
         await flush()
       }
       expect(fallbacks(harness, 'c1')).toHaveLength(1)
@@ -4881,6 +4902,837 @@ describe('SyncTransportWorkerRuntime', () => {
         }),
       )
       expect(inviteMessages(harness)).toHaveLength(1)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // *** RESILIENCE: THE LEASE, THE BACKOFF AND THE DIAL LOOP. ***
+  //
+  // Four defects from the t90 websocket audit that share one property: every gate
+  // in this repo was green over all of them, because each is a behaviour over TIME
+  // rather than a wrong answer to one call. A case that asserts a function was
+  // called, or that a number was scheduled, passes against every one of them.
+  //
+  // The operator's console showed what they add up to:
+  // `HTTP_FALLBACK (reason multi-tab-not-owner)` on a browser with ONE tab open.
+  // ---------------------------------------------------------------------------
+  describe('reconnect and lease resilience', () => {
+    const ENDPOINT = 'wss://sync.example.test/sockets/sync'
+    const TRANSPORT_SCOPE = `${SESSION_A}|${ENDPOINT}|device-1`
+    /** `HANDSHAKE_LOOP_HOLD_MS`. Mirrored: these cases assert the figure, not a symbol. */
+    const HANDSHAKE_LOOP_HOLD_MS = 60_000
+    /** `MAX_RECONNECT_DELAY_MS` — enough to fire whichever backoff window is armed. */
+    const PAST_ANY_BACKOFF_MS = 5_000
+
+    let tabNumber = 0
+
+    beforeEach(() => {
+      tabNumber = 0
+    })
+
+    type ResilienceHarness = {
+      runtime: SyncTransportWorkerRuntime
+      messages: SyncWorkerToMainMessage[]
+      sockets: FakeSocket[]
+      /** Every delay the runtime asked `setTimeout` for, in order. */
+      timers: number[]
+    }
+
+    /**
+     * A runtime with two things `setup` does not offer: a seedable `random`, and a
+     * record of what it asked `setTimeout` for. The second is what makes the backoff
+     * case a MEASUREMENT of the shipped scheduling rather than of a re-implementation
+     * of the formula beside it.
+     */
+    const resilienceSetup = (options: { random?: () => number; outbox?: SyncOutboxStore } = {}): ResilienceHarness => {
+      const messages: SyncWorkerToMainMessage[] = []
+      const sockets: FakeSocket[] = []
+      const timers: number[] = []
+      // Distinct per tab, because `ownerId` is the FIRST uuid the runtime draws and
+      // two tabs sharing one would make every lease look like their own.
+      const tab = ++tabNumber
+      let uuid = 0
+      const runtime = new SyncTransportWorkerRuntime({
+        outbox: options.outbox ?? new FakeOutbox(),
+        postMessage: (message) => messages.push(message),
+        socketFactory: () => {
+          const socket = new FakeSocket()
+          sockets.push(socket)
+          return socket
+        },
+        uuid: () => `tab-${tab}-id-${++uuid}`,
+        random: options.random ?? (() => 0),
+        setTimeout: ((handler: () => void, delay?: number) => {
+          timers.push(delay ?? 0)
+          return globalThis.setTimeout(handler, delay)
+        }) as unknown as typeof globalThis.setTimeout,
+        subtle: {
+          digest: jest.fn().mockResolvedValue(Uint8Array.from({ length: 32 }, () => 0xab).buffer),
+        } as unknown as SubtleCrypto,
+      })
+      return { runtime, messages, sockets, timers }
+    }
+
+    const connectOn = async (harness: ResilienceHarness, clientRequestId: string) => {
+      await harness.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId,
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: ENDPOINT,
+          ticket: 't'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      return harness.sockets.at(-1) as FakeSocket
+    }
+
+    const handshakeOn = (socket: FakeSocket, operations: string[] = ['SYNC_ITEMS']) => {
+      const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations,
+          nextClientSequence: 1,
+        }),
+      )
+    }
+
+    const ticketsFor = (harness: ResilienceHarness, clientRequestId?: string) =>
+      harness.messages.filter(
+        (message): message is Extract<SyncWorkerToMainMessage, { type: 'NEED_TICKET' }> =>
+          message.type === 'NEED_TICKET' &&
+          (clientRequestId === undefined || message.clientRequestId === clientRequestId),
+      )
+
+    // -------------------------------------------------------------------------
+    // An `IDBFactory` double, so the REAL `IndexedDbSyncOutbox` runs below.
+    //
+    // Deliberately NOT a fifth `SyncOutboxStore` fake: the lease arithmetic, the
+    // transaction plumbing and `ownerRenewalOutcome` are the shipped ones here, and
+    // a fake outbox is precisely where a lease defect hides. Only the browser's
+    // store is replaced, by a Map, because jsdom has no IndexedDB.
+    // -------------------------------------------------------------------------
+    const LEASE_STORE_NAME = 'leases-v2'
+
+    type IdbRow = Record<string, unknown>
+    type LeaseRow = { transportScope: string; sessionScope: string; ownerId: string; expiresAt: number }
+
+    const idbKey = (key: unknown): string => (Array.isArray(key) ? JSON.stringify(key) : String(key))
+
+    /**
+     * A request that settles on a microtask, like a real `IDBRequest`.
+     *
+     * `Promise.resolve().then` and NOT `queueMicrotask`: jest's modern fake timers
+     * fake `queueMicrotask` too, so a callback queued with it does not run until the
+     * clock is ticked — and these cases must settle under a plain `await`, with the
+     * clock held still, or they could not assert what happens at a given moment.
+     */
+    const microtask = (run: () => void) => {
+      void Promise.resolve().then(run)
+    }
+
+    const idbRequest = <T>(compute: () => T) => {
+      const request: { onsuccess: (() => void) | null; onerror: (() => void) | null; result?: T } = {
+        onsuccess: null,
+        onerror: null,
+      }
+      microtask(() => {
+        request.result = compute()
+        request.onsuccess?.()
+      })
+      return request
+    }
+
+    class MemoryIdbStore {
+      constructor(
+        private readonly rows: Map<string, IdbRow>,
+        private readonly keyPath: string | string[],
+      ) {}
+
+      get(key: unknown) {
+        return idbRequest(() => this.rows.get(idbKey(key)))
+      }
+
+      getAll() {
+        return idbRequest(() => [...this.rows.values()])
+      }
+
+      put(value: IdbRow) {
+        // Applied at once, so a read later in the SAME transaction sees it, which is
+        // what a real object store does.
+        const path = this.keyPath
+        this.rows.set(idbKey(Array.isArray(path) ? path.map((part) => value[part]) : value[path]), { ...value })
+        return idbRequest(() => undefined)
+      }
+
+      delete(key: unknown) {
+        this.rows.delete(idbKey(key))
+        return idbRequest(() => undefined)
+      }
+
+      index(name: string) {
+        return {
+          getAll: (value: unknown) => idbRequest(() => [...this.rows.values()].filter((row) => row[name] === value)),
+        }
+      }
+    }
+
+    class MemoryIdbTransaction {
+      onerror: (() => void) | null = null
+      onabort: (() => void) | null = null
+      private completion: (() => void) | null = null
+
+      constructor(private readonly database: MemoryIdbDatabase) {}
+
+      objectStore(name: string): MemoryIdbStore {
+        return this.database.store(name)
+      }
+
+      /**
+       * A real transaction completes once its last request has settled, and
+       * `transactionDone` attaches this handler as the final step of every
+       * operation. Completing two microtasks after it is ASSIGNED reproduces that
+       * ordering and nothing here touches the clock, which matters because this
+       * suite runs on fake timers and a macrotask would simply never fire.
+       */
+      set oncomplete(handler: (() => void) | null) {
+        this.completion = handler
+        if (handler) {
+          microtask(() => microtask(() => handler()))
+        }
+      }
+
+      get oncomplete(): (() => void) | null {
+        return this.completion
+      }
+    }
+
+    class MemoryIdbDatabase {
+      closed = false
+      onversionchange: (() => void) | null = null
+
+      constructor(
+        private readonly stores: Map<string, Map<string, IdbRow>>,
+        private readonly keyPaths: Map<string, string | string[]>,
+      ) {}
+
+      get objectStoreNames() {
+        return { contains: (name: string) => this.stores.has(name) }
+      }
+
+      createObjectStore(name: string, options: { keyPath: string | string[] }) {
+        if (!this.stores.has(name)) {
+          this.stores.set(name, new Map())
+        }
+        this.keyPaths.set(name, options.keyPath)
+        return { createIndex: () => undefined }
+      }
+
+      transaction(): MemoryIdbTransaction {
+        if (this.closed) {
+          throw new Error('InvalidStateError')
+        }
+        return new MemoryIdbTransaction(this)
+      }
+
+      store(name: string): MemoryIdbStore {
+        return new MemoryIdbStore(
+          this.stores.get(name) as Map<string, IdbRow>,
+          this.keyPaths.get(name) as string | string[],
+        )
+      }
+
+      close(): void {
+        this.closed = true
+      }
+    }
+
+    class MemoryIdbFactory {
+      readonly stores = new Map<string, Map<string, IdbRow>>()
+      readonly keyPaths = new Map<string, string | string[]>()
+
+      open() {
+        const request: {
+          onsuccess: (() => void) | null
+          onerror: (() => void) | null
+          onblocked: (() => void) | null
+          onupgradeneeded: (() => void) | null
+          result?: MemoryIdbDatabase
+          error: { message: string } | null
+        } = { onsuccess: null, onerror: null, onblocked: null, onupgradeneeded: null, error: null }
+        microtask(() => {
+          request.result = new MemoryIdbDatabase(this.stores, this.keyPaths)
+          // A real factory raises this only on a version bump. Raising it on every
+          // open is harmless because the handler is a create-if-absent, and it keeps
+          // the double from needing a version ledger of its own.
+          request.onupgradeneeded?.()
+          request.onsuccess?.()
+        })
+        return request
+      }
+
+      /** The lease rows as the shipped store actually wrote them. */
+      leases(): LeaseRow[] {
+        const rows = this.stores.get(LEASE_STORE_NAME)
+        if (!rows) {
+          throw new Error(`the outbox created no '${LEASE_STORE_NAME}' object store`)
+        }
+        return [...rows.values()] as unknown as LeaseRow[]
+      }
+    }
+
+    const realOutbox = (factory: MemoryIdbFactory) => new IndexedDbSyncOutbox(factory as unknown as IDBFactory)
+
+    /**
+     * Drain enough microtask generations for the real outbox's round trips. Each
+     * operation is an open, a request and a transaction completion, every one of them
+     * a microtask hop, and `flush()`'s three are not always enough for two of them
+     * back to back.
+     */
+    const settle = async () => {
+      for (let generation = 0; generation < 40; generation++) {
+        await Promise.resolve()
+      }
+    }
+
+    /**
+     * *** THE BACKOFF WAS A CONSTANT, AND THE ARITHMETIC SAID SO. ***
+     *
+     * `max(1000, random() * min(5000, 250 * 2 ** attempts))` with `attempts` in
+     * {0, 1, 2} drew from windows of 250 ms, 500 ms and 1 000 ms — every one of them
+     * at or below the 1 000 ms floor the `max` imposed. The delay was therefore
+     * EXACTLY 1 000 ms on all three attempts, for every value `random()` can return:
+     * no backoff and no de-synchronisation, so a fleet re-dialled in lockstep after
+     * a gateway restart and spent its whole budget inside 3 s.
+     *
+     * The delays are read off the runtime's own `setTimeout` over several seeded
+     * draws and asserted numerically. Every weaker assertion — that a timer was
+     * armed, that the delay was a number, that it was at least a second — passed
+     * against the constant.
+     */
+    it('spreads its three reconnect delays across widening, jittered windows', async () => {
+      const draws = [0, 0.25, 0.5, 0.75, 0.999]
+      // window = min(5 000, 1 000 * 2 ** attempt), and the delay is its upper half.
+      const bands: [number, number][] = [
+        [500, 1_000],
+        [1_000, 2_000],
+        [2_000, 4_000],
+      ]
+      const observed: number[][] = []
+
+      for (const draw of draws) {
+        const harness = resilienceSetup({ random: () => draw })
+        await harness.runtime.handle({
+          type: 'EXECUTE',
+          clientRequestId: 'c1',
+          body: body(),
+          sessionScope: SESSION_A,
+        })
+        const delays: number[] = []
+        for (let attempt = 0; attempt < bands.length; attempt++) {
+          const socket = await connectOn(harness, 'c1')
+          socket.open()
+          const before = harness.timers.length
+          socket.close(1006)
+          await flush()
+          // The reconnect is the ONLY timer this close arms: the ack deadline was
+          // armed back at `open` and the close itself cleared it.
+          expect(harness.timers.slice(before)).toHaveLength(1)
+          delays.push(harness.timers[before])
+          jest.advanceTimersByTime(PAST_ANY_BACKOFF_MS)
+          await flush()
+        }
+        observed.push(delays)
+      }
+
+      for (const delays of observed) {
+        delays.forEach((delay, attempt) => {
+          expect(delay).toBeGreaterThanOrEqual(bands[attempt][0])
+          expect(delay).toBeLessThanOrEqual(bands[attempt][1])
+        })
+        // Strictly widening, which a constant never is.
+        expect(delays[1]).toBeGreaterThan(delays[0])
+        expect(delays[2]).toBeGreaterThan(delays[1])
+        expect(new Set(delays).size).toBe(delays.length)
+      }
+
+      // ...and jittered: the SAME attempt lands somewhere different for every draw,
+      // across more than 40 % of its window. Under the old expression every one of
+      // these fifteen numbers was 1 000.
+      for (let attempt = 0; attempt < bands.length; attempt++) {
+        const atAttempt = observed.map((delays) => delays[attempt])
+        expect(new Set(atAttempt).size).toBe(draws.length)
+        expect(Math.max(...atAttempt) - Math.min(...atAttempt)).toBeGreaterThan(bands[attempt][1] * 0.4)
+      }
+    })
+
+    /**
+     * *** AN IDLE TAB USED TO HOLD THE WHOLE ACCOUNT'S LANE WITH NO SOCKET. ***
+     *
+     * `onClose` with nothing in flight returned without cancelling the 5 s owner
+     * renewal and without releasing the lease, so the IDB row outlived the socket by
+     * the whole life of the tab. Every sibling read `heldByAnotherOwner === true`,
+     * stood down on `multi-tab-not-owner` — a `deferred` reason the main thread
+     * caches for a lease TTL — and NOBODY held a socket. Self-correction took up to
+     * five minutes under auto-sync and never happened at all under manual sync.
+     *
+     * Two runtimes, one shared store, and the real `IndexedDbSyncOutbox` on both.
+     * The assertion is that the SECOND TAB ACQUIRES; that some function was called
+     * would prove nothing here.
+     */
+    it('hands the owner lease back when an idle socket dies, so a sibling tab takes the lane', async () => {
+      const factory = new MemoryIdbFactory()
+      const tabA = resilienceSetup({ outbox: realOutbox(factory) })
+      const tabB = resilienceSetup({ outbox: realOutbox(factory) })
+
+      // Tab A takes the lane and settles its command, so nothing is in flight.
+      await tabA.runtime.handle({ type: 'EXECUTE', clientRequestId: 'a1', body: body(), sessionScope: SESSION_A })
+      await settle()
+      const socketA = await connectOn(tabA, 'a1')
+      socketA.open()
+      handshakeOn(socketA)
+      await settle()
+      const command = JSON.parse(socketA.sent[1]) as { commandId: string; digest: string }
+      socketA.receive(serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest))
+      await settle()
+      await tabA.runtime.handle({
+        type: 'CHECKPOINT_DURABLE',
+        requestId: 'checkpoint-a',
+        sessionScope: SESSION_A,
+        commandId: command.commandId,
+      })
+      await settle()
+
+      const held = factory.leases()
+      expect(held).toHaveLength(1)
+      expect(held[0].transportScope).toBe(TRANSPORT_SCOPE)
+      const tabAOwner = held[0].ownerId
+
+      // The connection then dies with no close frame — a dropped TCP session, which
+      // is what a browser reports as 1006 and what the operator's console was full
+      // of. Tab A has nothing in flight, so nothing reconnects, and that is correct.
+      socketA.abort()
+      await settle()
+
+      // BEFORE: this row stayed, renewed every 5 s, with no socket behind it.
+      expect(factory.leases()).toHaveLength(0)
+
+      // A whole lease TTL and three renewal ticks later it is still gone, and tab A
+      // has said nothing further — the interval went with the lease.
+      const quiet = tabA.messages.length
+      jest.advanceTimersByTime(OWNER_LEASE_TTL_MS)
+      await settle()
+      expect(factory.leases()).toHaveLength(0)
+      expect(tabA.messages).toHaveLength(quiet)
+
+      // Tab B now takes the lane: it asks for a ticket, nothing is deferred, and the
+      // lease that comes back is its OWN.
+      await tabB.runtime.handle({ type: 'EXECUTE', clientRequestId: 'b1', body: body('b'), sessionScope: SESSION_A })
+      await settle()
+      expect(ticketsFor(tabB, 'b1')).toHaveLength(1)
+      expect(tabB.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toHaveLength(0)
+
+      const socketB = await connectOn(tabB, 'b1')
+      socketB.open()
+      handshakeOn(socketB)
+      await settle()
+
+      expect((JSON.parse(socketB.sent[0]) as { type: string }).type).toBe('AUTH')
+      const takenOver = factory.leases()
+      expect(takenOver).toHaveLength(1)
+      expect(takenOver[0].transportScope).toBe(TRANSPORT_SCOPE)
+      expect(takenOver[0].ownerId).not.toBe(tabAOwner)
+    })
+
+    /**
+     * The other half of the same guarantee, and the reason the release above may not
+     * be widened: a sibling that is genuinely holding a LIVE lane must still park.
+     * Same two runtimes, same real store, tab A's socket never closes.
+     */
+    it('still stands a sibling down while the owning tab actually holds a socket', async () => {
+      const factory = new MemoryIdbFactory()
+      const tabA = resilienceSetup({ outbox: realOutbox(factory) })
+      const tabB = resilienceSetup({ outbox: realOutbox(factory) })
+
+      await tabA.runtime.handle({ type: 'EXECUTE', clientRequestId: 'a1', body: body(), sessionScope: SESSION_A })
+      await settle()
+      const socketA = await connectOn(tabA, 'a1')
+      socketA.open()
+      handshakeOn(socketA)
+      await settle()
+      // Settled, so tab B's own `execute` is not answered by the outbox record this
+      // command would otherwise have left for it to recover.
+      const command = JSON.parse(socketA.sent[1]) as { commandId: string; digest: string }
+      socketA.receive(serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest))
+      await settle()
+      await tabA.runtime.handle({
+        type: 'CHECKPOINT_DURABLE',
+        requestId: 'checkpoint-a',
+        sessionScope: SESSION_A,
+        commandId: command.commandId,
+      })
+      await settle()
+      expect(socketA.readyState).toBe(1)
+      expect(factory.leases()).toHaveLength(1)
+
+      await tabB.runtime.handle({ type: 'EXECUTE', clientRequestId: 'b1', body: body('b'), sessionScope: SESSION_A })
+      await settle()
+
+      expect(ticketsFor(tabB, 'b1')).toHaveLength(0)
+      expect(tabB.sockets).toHaveLength(0)
+      expect(
+        tabB.messages
+          .filter((message) => message.type === 'HTTP_FALLBACK')
+          .map((message) => (message as { reason: string }).reason),
+      ).toEqual(['multi-tab-not-owner'])
+    })
+
+    /**
+     * *** `renewOwner` ANSWERED `false` FOR TWO DIFFERENT FACTS. ***
+     *
+     * Against the real store, because this is the arithmetic the whole surrender
+     * decision rests on.
+     */
+    it('tells a lease that lapsed apart from one another tab holds', async () => {
+      const factory = new MemoryIdbFactory()
+      const outbox = realOutbox(factory)
+
+      await expect(outbox.acquireOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 0, OWNER_LEASE_TTL_MS)).resolves.toBe(true)
+      await expect(outbox.renewOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 5_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        'renewed',
+      )
+
+      // THE CASE THE BOOLEAN COULD NOT EXPRESS: our OWN row, aged out because this
+      // tab was frozen and its 5 s interval did not run. Nobody else holds the lane.
+      await expect(outbox.renewOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 100_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        'lapsed',
+      )
+      // A lapse is reported, never papered over: the row is NOT extended.
+      expect(factory.leases()[0].expiresAt).toBe(5_000 + OWNER_LEASE_TTL_MS)
+
+      await expect(outbox.acquireOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-b', 100_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        true,
+      )
+      await expect(outbox.renewOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 101_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        'taken',
+      )
+      // ...and that tab's lease aging out is a lapse too, not a standing claim.
+      await expect(outbox.renewOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 200_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        'lapsed',
+      )
+
+      await outbox.releaseOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-b')
+      await expect(outbox.renewOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 201_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        'lapsed',
+      )
+
+      // A row belonging to ANOTHER session never answers for this one.
+      await outbox.acquireOwner(TRANSPORT_SCOPE, SESSION_B, 'tab-c', 201_000, OWNER_LEASE_TTL_MS)
+      await expect(outbox.renewOwner(TRANSPORT_SCOPE, SESSION_A, 'tab-a', 202_000, OWNER_LEASE_TTL_MS)).resolves.toBe(
+        'lapsed',
+      )
+
+      // The shared verdict the fakes in this file delegate to, so none of them can
+      // drift from the store above.
+      const lapsed: OwnerRenewalOutcome = 'lapsed'
+      expect(ownerRenewalOutcome(undefined, SESSION_A, 'tab-a', 0)).toBe(lapsed)
+      expect(
+        ownerRenewalOutcome({ sessionScope: SESSION_A, ownerId: 'tab-a', expiresAt: 10 }, SESSION_A, 'tab-a', 5),
+      ).toBe('renewed')
+      expect(
+        ownerRenewalOutcome({ sessionScope: SESSION_A, ownerId: 'tab-b', expiresAt: 10 }, SESSION_A, 'tab-a', 5),
+      ).toBe('taken')
+    })
+
+    /**
+     * *** A FROZEN SINGLE TAB REPORTED A SIBLING THAT DID NOT EXIST. ***
+     *
+     * `beginOwnerRenewal` mapped every falsy renewal onto `multi-tab-not-owner`, and
+     * that reason is `deferred`: `WebSocketSyncTransport` caches it for a whole lease
+     * TTL on the strength of "another tab holds the lane and will hand it back". With
+     * the lapse being this tab's own clock, there was no other tab to wait for — so
+     * the lane suppressed its own recovery for 15 s at a time, repeatedly.
+     */
+    it('re-dials when its own lease lapsed, instead of standing down for a tab that does not exist', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const command = JSON.parse(socket.sent[1]) as { commandId: string; digest: string }
+      socket.receive(serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest))
+      await flush()
+      await harness.runtime.handle({
+        type: 'CHECKPOINT_DURABLE',
+        requestId: 'checkpoint-1',
+        sessionScope: SESSION_A,
+        commandId: command.commandId,
+      })
+      await flush()
+      expect(socket.readyState).toBe(1)
+
+      // The freeze, exactly as the store sees it: the row is still OURS and it has
+      // aged out, because the renewal interval did not run while the page was
+      // backgrounded. Nothing else has claimed the scope.
+      const own = harness.outbox.owners.get(TRANSPORT_SCOPE) as {
+        sessionScope: string
+        ownerId: string
+        expiresAt: number
+      }
+      expect(own).toBeDefined()
+      harness.outbox.owners.set(TRANSPORT_SCOPE, { ...own, expiresAt: Date.now() - 1 })
+
+      const before = harness.messages.length
+      jest.advanceTimersByTime(5_100)
+      await flush()
+      await flush()
+
+      // BEFORE: `{ state: 'HTTP_FALLBACK', reason: 'multi-tab-not-owner' }`.
+      expect(harness.messages.slice(before)).toEqual([{ type: 'STATE', state: 'DEGRADED', reason: 'reconnect-gap' }])
+      // The disposition is the load-bearing half: `deferred` is what the main thread
+      // turns into a 15 s suppression, and `retryable` is what makes it dial.
+      expect(syncFallbackDisposition('reconnect-gap')).toBe('retryable')
+      expect(syncFallbackDisposition('multi-tab-not-owner')).toBe('deferred')
+      expect(socket.readyState).toBe(3)
+
+      // The renewal went with the socket, so no second verdict arrives...
+      const afterSurrender = harness.messages.length
+      jest.advanceTimersByTime(20_000)
+      await flush()
+      expect(harness.messages).toHaveLength(afterSurrender)
+
+      // ...and the next command dials rather than parking behind the phantom.
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c2',
+        body: body('b'),
+        sessionScope: SESSION_A,
+      })
+      await flush()
+      expect(harness.messages).toContainEqual({ type: 'NEED_TICKET', clientRequestId: 'c2', reconnect: false })
+    })
+
+    /**
+     * *** AN UNBOUNDED ~1 Hz DIAL LOOP WAS REACHABLE. ***
+     *
+     * `AUTHENTICATED` resets `reconnectAttempts` to zero, so any condition that kills
+     * the socket shortly AFTER the handshake never exhausted the budget: the loop's
+     * only pacing was the backoff. Each cycle mints a ticket, and that bucket is keyed
+     * on the bearer digest — shared by every tab of the session — so one looping tab
+     * spends the whole account's allowance and the other tabs are refused a socket
+     * they could have used.
+     *
+     * The invite lane drives it because it is the real-world shape: a long-lived
+     * consumer that re-arms `active` on every close and so keeps asking forever.
+     */
+    it('bounds the dial loop when handshakes keep dying young, and dials again once the hold decays', async () => {
+      const outbox = new FakeOutbox()
+      const harness = resilienceSetup({ outbox })
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+      expect(ticketsFor(harness, 'invite-1')).toHaveLength(1)
+
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const socket = await connectOn(harness, 'invite-1')
+        socket.open()
+        handshakeOn(socket, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+        await flush()
+        expect(socket.sent.map((entry) => (JSON.parse(entry) as { type: string }).type)).toEqual([
+          'AUTH',
+          'INVITE_SUBSCRIBE',
+        ])
+        socket.abort()
+        await flush()
+        if (cycle < 2) {
+          // The lease is RETAINED across a reconnect — this tab is still the owner
+          // and is actively dialling. The idle-close release is only for a close
+          // with nothing left to reconnect for.
+          expect(outbox.owners.has(TRANSPORT_SCOPE)).toBe(true)
+        }
+        jest.advanceTimersByTime(PAST_ANY_BACKOFF_MS)
+        await flush()
+      }
+
+      // Three dials and no more: the first, plus the two reconnects the budget
+      // allows. BEFORE, the third handshake reset the budget and this went on for as
+      // long as the tab was open.
+      expect(harness.sockets).toHaveLength(3)
+      expect(ticketsFor(harness)).toHaveLength(3)
+      expect(harness.messages).toContainEqual({ type: 'STATE', state: 'DEGRADED', reason: 'reconnect-gap' })
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-1',
+        code: 'RECONNECT_GAP',
+        retryable: true,
+      })
+      expect(outbox.owners.has(TRANSPORT_SCOPE)).toBe(false)
+
+      // The consumer does what a retryable error tells it to and re-subscribes.
+      // BEFORE, that is the loop; now it is answered without minting a ticket.
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-2',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+      expect(ticketsFor(harness)).toHaveLength(3)
+      expect(harness.sockets).toHaveLength(3)
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-2',
+        code: 'RECONNECT_GAP',
+        retryable: true,
+      })
+
+      // ...and the hold DECAYS rather than standing the lane down for good.
+      jest.advanceTimersByTime(HANDSHAKE_LOOP_HOLD_MS)
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-3',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+      expect(ticketsFor(harness, 'invite-3')).toHaveLength(1)
+    })
+
+    /**
+     * *** THE HOLD AND THE RECONNECT BUDGET ARE NOT THE SAME BOUND. ***
+     *
+     * The hold counts handshakes that died young; the budget counts dials. A failure
+     * pattern that ALTERNATES — a handshake that dies young, then a socket refused
+     * before it ever authenticates — accrues the hold's counter at half rate, so it
+     * is the BUDGET that has to stop the dialling, and the budget can only bite if a
+     * handshake inside such a run does not hand it back.
+     *
+     * This is the case the first draft of these tests did not have, and a mutation
+     * that deleted the `shortLivedHandshakes === 0` guard survived all of them: with
+     * the hold's cap and MAX_RECONNECT_ATTEMPTS both at three, a run of PURE young
+     * deaths reaches each bound on the same cycle and cannot tell them apart.
+     */
+    it('does not hand the reconnect budget back to a handshake inside a run of young deaths', async () => {
+      const harness = resilienceSetup()
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+      expect(ticketsFor(harness)).toHaveLength(1)
+
+      // Handshake-then-die, refused-before-auth, handshake-then-die,
+      // refused-before-auth. Only two of the four deaths are young ones, so the
+      // hold's counter reaches two and never arms.
+      for (const authenticates of [true, false, true, false]) {
+        const socket = await connectOn(harness, 'invite-1')
+        socket.open()
+        if (authenticates) {
+          handshakeOn(socket, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+          await flush()
+        }
+        socket.abort()
+        await flush()
+        jest.advanceTimersByTime(PAST_ANY_BACKOFF_MS)
+        await flush()
+      }
+
+      // Four dials and no fifth ticket: one dial plus the three reconnects the budget
+      // allows, spent and NOT replenished by the handshake in the middle of the run.
+      // With it replenished, the fourth close asked for a fifth ticket and the lane
+      // kept dialling until the slower young-death counter caught up.
+      expect(harness.sockets).toHaveLength(4)
+      expect(ticketsFor(harness)).toHaveLength(4)
+      // `proxy-failed` and not `reconnect-gap`, because the close that spent the last
+      // reconnect was a socket refused before it authenticated, which is what that
+      // reason says.
+      expect(harness.messages).toContainEqual({
+        type: 'INVITE_ERROR',
+        clientRequestId: 'invite-1',
+        code: 'PROXY_FAILED',
+        retryable: true,
+      })
+    })
+
+    /**
+     * A socket that LIVES past MIN_HEALTHY_SOCKET_LIFETIME_MS is not evidence of a
+     * loop, so it must keep replenishing the budget. Without this the hold would be
+     * reachable by three ordinary network interruptions spread over a minute, and a
+     * tab on a flaky connection would put itself on HTTP for no reason.
+     */
+    it('keeps replenishing the reconnect budget for handshakes that survive', async () => {
+      const harness = resilienceSetup()
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-1',
+        sessionScope: SESSION_A,
+        limit: 50,
+      })
+      await flush()
+
+      for (let cycle = 0; cycle < 5; cycle++) {
+        const socket = await connectOn(harness, 'invite-1')
+        socket.open()
+        handshakeOn(socket, ['SYNC_ITEMS', 'INVITE_EVENTS'])
+        await flush()
+        // Long enough to be a working socket, and under one heartbeat period.
+        jest.advanceTimersByTime(11_000)
+        await flush()
+        socket.abort()
+        await flush()
+        jest.advanceTimersByTime(PAST_ANY_BACKOFF_MS)
+        await flush()
+      }
+
+      // Five dials and a sixth reconnect ticket still being offered, with no hold in
+      // sight: every one of these sockets did its job before the network took it
+      // away, so the budget was replenished each time.
+      expect(harness.sockets).toHaveLength(5)
+      expect(ticketsFor(harness)).toHaveLength(6)
+      expect(harness.messages.filter((message) => message.type === 'INVITE_ERROR')).toHaveLength(0)
+    })
+
+    /**
+     * *** THE CLIENT'S AUTH DEADLINE USED TO EQUAL THE SERVER'S. ***
+     *
+     * `AUTH_ACK_TIMEOUT_MS` was 5 000 and the gateway's `SYNC_AUTH_DEADLINE_MS` is
+     * 5 000, which is precisely the race the file's own comment says the +5 000 margin
+     * on COMMAND exists to prevent. AUTH never got one. In practice the gateway's
+     * timer starts earlier, so it usually won and its close arrived with no cause this
+     * client could attribute; when the client won it blamed its own ack timeout for a
+     * handshake the server was answering.
+     */
+    it('gives the gateway its whole auth deadline before calling a handshake unanswered', async () => {
+      const harness = resilienceSetup()
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'c1',
+        body: body(),
+        sessionScope: SESSION_A,
+      })
+      const socket = await connectOn(harness, 'c1')
+      socket.open()
+      expect((JSON.parse(socket.sent[0]) as { type: string }).type).toBe('AUTH')
+      // The deadline the runtime actually armed, read off its own schedule: the
+      // gateway's 5 000 ms plus a 2 000 ms margin.
+      expect(harness.timers.at(-1)).toBe(7_000)
+
+      // At the server's own deadline the client is still waiting, so the gateway's
+      // verdict — and the cause it states in the close — arrives first.
+      jest.advanceTimersByTime(5_000)
+      await flush()
+      expect(socket.readyState).toBe(1)
+      expect(socket.closes).toEqual([])
+
+      jest.advanceTimersByTime(2_000)
+      await flush()
+      expect(socket.closes).toContainEqual({ code: 4000, reason: 'ack-timeout' })
     })
   })
 })

@@ -80,7 +80,7 @@ import {
 import type { PureCryptoInterface, StreamDecryptorResult, StreamEncryptor } from '@standardnotes/sncrypto-common'
 import { SodiumTag } from '@standardnotes/sncrypto-common'
 
-import { SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
+import { OwnerRenewalOutcome, SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
 import { SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
 import { MainToSyncWorkerMessage, SyncWorkerToMainMessage } from './syncTransportProtocol'
 import { WebSocketSyncTransport } from './WebSocketSyncTransport'
@@ -189,8 +189,8 @@ class MemoryOutbox implements SyncOutboxStore {
     this.leases.set(transportScope, { sessionScope, ownerId, expiresAt: now + ttlMs })
     return true
   }
-  async renewOwner(): Promise<boolean> {
-    return true
+  async renewOwner(): Promise<OwnerRenewalOutcome> {
+    return 'renewed'
   }
   async releaseOwner(): Promise<void> {}
   close(): void {}

@@ -56,7 +56,32 @@ import {
   SyncOutboxStore,
 } from './SyncTransportOutbox'
 
-const AUTH_ACK_TIMEOUT_MS = 5_000
+/**
+ * The gateway's own budget for authenticating a fresh socket
+ * (`wg/syncProtocol.ts` SYNC_AUTH_DEADLINE_MS). Mirrored, not imported, exactly
+ * as SYNC_BACKEND_TIMEOUT_MS below is: the worker bundle takes no server
+ * dependency.
+ */
+const SYNC_AUTH_DEADLINE_MS = 5_000
+/**
+ * Deliberately later than the server's own auth deadline, for the same reason
+ * COMMAND_ACK_TIMEOUT_MS is later than the backend timeout.
+ *
+ * *** AUTH NEVER GOT THE MARGIN COMMAND WAS GIVEN. *** Both numbers were 5 000, so
+ * the two verdicts raced on every handshake. In practice the gateway's timer starts
+ * earlier (it is armed when the socket is accepted, this one when the AUTH frame is
+ * written) so the server usually won — and the close it sent arrived with no stated
+ * cause this client could attribute, reporting `DEGRADED` with no reason at all.
+ * When the client won instead it blamed its own ack timeout for a handshake the
+ * server was in the middle of answering. Wrong either way, and invisible either way,
+ * because a tie is not a failure anyone can see in a log.
+ *
+ * Two seconds rather than five: a handshake is one round trip against a deadline
+ * the gateway enforces itself, so the margin only has to outlast the gateway's own
+ * close, not a backend call. A socket that is genuinely dead still falls to
+ * PONG_DEADLINE_MS or to this, whichever the lane reaches first.
+ */
+const AUTH_ACK_TIMEOUT_MS = SYNC_AUTH_DEADLINE_MS + 2_000
 /**
  * The gateway's own budget for a durable sync command (`wg/syncProtocol.ts`
  * SYNC_BACKEND_TIMEOUT_MS). Mirrored, not imported: the worker bundle does not
@@ -86,8 +111,62 @@ const OWNER_RENEW_INTERVAL_MS = 5_000
  * with zero reconnects.
  */
 const MAX_RECONNECT_ATTEMPTS = 3
-/** No reconnect dials faster than this, however small the backoff window is. */
-const MIN_RECONNECT_DELAY_MS = 1_000
+/**
+ * The first reconnect window. Doubled per attempt spent and capped at
+ * MAX_RECONNECT_DELAY_MS, so the three attempts this client is allowed draw their
+ * delay from windows of 1 s, 2 s and 4 s.
+ *
+ * *** THE OLD EXPRESSION WAS A CONSTANT WITH NO JITTER. *** It read
+ * `max(1000, random() * min(5000, 250 * 2 ** attempts))`, and `attempts` can only
+ * be 0, 1 or 2, so the windows were 250 ms, 500 ms and 1 000 ms — every one of them
+ * at or below the 1 000 ms floor the `max` imposed. The delay was therefore exactly
+ * 1 000 ms on all three attempts whatever `random()` returned: no backoff, and no
+ * de-synchronisation. Every client in a fleet re-dialled in the same second after a
+ * gateway restart, three times, and the third attempt was spent 3 s after the first.
+ */
+const RECONNECT_BACKOFF_BASE_MS = 1_000
+/** No backoff window grows past this, however many attempts have been spent. */
+const MAX_RECONNECT_DELAY_MS = 5_000
+/**
+ * The delay is drawn from the UPPER half of the window:
+ * `window * (0.5 + random() * 0.5)`.
+ *
+ * Jitter is applied to the whole delay rather than to a window the floor then
+ * swallows, which is what made the old expression constant. Half the window is
+ * enough spread to break a fleet-wide thundering herd — a restarting gateway sees
+ * its clients arrive across a 500 ms, then 1 s, then 2 s band instead of three
+ * single seconds — while keeping the lower bound a definite fraction of the window
+ * rather than letting a draw near zero re-dial immediately.
+ */
+const RECONNECT_JITTER_FLOOR = 0.5
+/**
+ * How long a socket must survive its own handshake to count as having worked.
+ *
+ * Longer than any dial plus handshake (a ticket mint and one round trip) and
+ * shorter than one HEARTBEAT_INTERVAL_MS, so a socket that lived long enough to
+ * exchange a single PING/PONG is never counted against this client.
+ */
+const MIN_HEALTHY_SOCKET_LIFETIME_MS = 10_000
+/**
+ * Handshakes that died inside MIN_HEALTHY_SOCKET_LIFETIME_MS tolerated in a row
+ * before this client stops dialling and stays on HTTP.
+ */
+const MAX_SHORT_LIVED_HANDSHAKES = 3
+/**
+ * How long the lane stays on HTTP once that many handshakes have died young — and,
+ * equally, how long without one before the counter decays back to zero.
+ *
+ * *** WHY A SEPARATE COUNTER EXISTS AT ALL. *** `AUTHENTICATED` resets
+ * `reconnectAttempts` to zero, because the budget is per connected session rather
+ * than a lifetime quota. Read on its own that is right; read against a condition
+ * that kills the socket moments AFTER the handshake it is a loop with no bound, and
+ * the backoff above is its only pacing. Each cycle mints a ticket, and the ticket
+ * bucket is keyed on the bearer digest — shared by every tab of the session — so one
+ * looping tab spends the whole account's allowance and the other tabs are refused a
+ * socket they could have used. A handshake that immediately dies is not evidence the
+ * lane works, so it must not replenish the budget that bounds the dialling.
+ */
+const HANDSHAKE_LOOP_HOLD_MS = 60_000
 const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
 
 /**
@@ -556,6 +635,20 @@ export class SyncTransportWorkerRuntime {
   private commandSent = false
   private resultDelivered = false
   private reconnectAttempts = 0
+  /**
+   * When THIS socket's `AUTHENTICATED` landed, or undefined if it never did.
+   *
+   * Cleared on every close, so a socket that was refused before it authenticated
+   * can never be charged with dying young — the dial loop this measures is
+   * specifically the one that gets past the handshake and then loses the socket.
+   */
+  private socketAuthenticatedAt?: number
+  /** Consecutive handshakes that died inside MIN_HEALTHY_SOCKET_LIFETIME_MS. */
+  private shortLivedHandshakes = 0
+  /** When the most recent one died, so the run above decays instead of accruing. */
+  private lastShortLivedHandshakeAt?: number
+  /** While this is in the future no ticket is asked for; the lane stays on HTTP. */
+  private handshakeLoopHeldUntil?: number
   /** One re-ticket per request after the gateway reports the ticket's bearer stale. */
   private reticketedForStaleSession = false
   /** Retries spent on a retryable command refusal, per command. */
@@ -878,6 +971,15 @@ export class SyncTransportWorkerRuntime {
    * cheap read answers it first.
    */
   private async requestTicket(clientRequestId: string, sessionScope: string, reconnect: boolean): Promise<void> {
+    // The dial loop's actual bound. The reconnect budget alone cannot be one,
+    // because `AUTHENTICATED` replenishes it; this hold is armed by handshakes that
+    // died young and is not replenished by anything but the clock, so while it
+    // stands no ticket is minted however the request arrived — a reconnect, a new
+    // command, an RPC or an invite subscription.
+    if (this.handshakeLoopHeld()) {
+      await this.fallback('reconnect-gap')
+      return
+    }
     if (await this.socketOwnedByAnotherTab(sessionScope)) {
       await this.fallback('multi-tab-not-owner')
       return
@@ -1884,6 +1986,12 @@ export class SyncTransportWorkerRuntime {
     this.socket = socket
     this.socketGeneration += 1
     this.protocolErrorCode = undefined
+    // Cleared at the one moment a new connection can begin, for the same reason
+    // `protocolErrorCode` is: several teardown paths drop the socket reference
+    // before closing it, so their `onClose` returns at the identity guard and never
+    // runs. Left over from a previous socket, this would charge THIS socket's close
+    // against a handshake that belonged to another one.
+    this.socketAuthenticatedAt = undefined
     try {
       // Must be set before the socket opens, or FILES_V1 chunks would arrive as
       // Blobs. Guarded because the setter does not exist on every socket double.
@@ -1986,10 +2094,22 @@ export class SyncTransportWorkerRuntime {
       // would refresh for as long as the tab is open. `sessionRefreshUnsupported`
       // is deliberately NOT cleared — the two refusals that set it are structural.
       this.sessionRefreshAttempts = 0
+      this.socketAuthenticatedAt = this.now()
       // The reconnect budget is per connected session, not per tab. Without this
       // reset one bad patch of network spent it permanently, and every command
       // for the rest of the tab's life fell back to HTTP on its first close.
-      this.reconnectAttempts = 0
+      //
+      // ...but NOT while this client is in a run of handshakes that died young.
+      // Replenishing the budget on a handshake is replenishing it on the strength
+      // of a socket that has not yet survived anything, and a condition that kills
+      // the socket moments after AUTH turns that into an unbounded ~1 Hz dial loop
+      // (see HANDSHAKE_LOOP_HOLD_MS). The run decays on its own, so a genuine
+      // patch of bad network still gets its budget back; what it cannot do is keep
+      // handing one back to a loop that is spending the whole session's ticket
+      // allowance.
+      if (this.shortLivedHandshakes === 0) {
+        this.reconnectAttempts = 0
+      }
       this.transition('READY')
       this.dependencies.postMessage({
         type: 'NEGOTIATED',
@@ -3669,6 +3789,8 @@ export class SyncTransportWorkerRuntime {
     }
     const code = event.code ?? 0
     this.socket = undefined
+    const authenticatedAt = this.socketAuthenticatedAt
+    this.socketAuthenticatedAt = undefined
     this.clearAckDeadline()
     this.cancelCommandRetry()
     this.clearHeartbeat()
@@ -3693,6 +3815,11 @@ export class SyncTransportWorkerRuntime {
     }
     if (this.shuttingDown) {
       return
+    }
+    // Charged before anything decides whether to dial again, because that decision
+    // reads the run this records.
+    if (authenticatedAt !== undefined && this.now() - authenticatedAt < MIN_HEALTHY_SOCKET_LIFETIME_MS) {
+      this.noteShortLivedHandshake()
     }
     // *** WHAT THE SERVER ACTUALLY SAID. ***
     //
@@ -3736,16 +3863,48 @@ export class SyncTransportWorkerRuntime {
       }
     }
     if (!this.active) {
+      /**
+       * *** AN IDLE TAB USED TO HOLD THE WHOLE ACCOUNT'S LANE WITH NO SOCKET. ***
+       *
+       * This return is the common case, not an edge: a tab whose last command
+       * settled has no active request, and its socket then goes whenever the
+       * network blips, a proxy times the connection out, or the heartbeat closes a
+       * half-open one. Nothing here is in flight, so nothing reconnects — correct,
+       * and the next command dials for itself.
+       *
+       * What was NOT correct is what it left running. `ownerRenewInterval` renews
+       * the multi-tab owner lease every 5 s against a 15 s TTL, and this path
+       * cancelled neither the interval nor the lease. The IDB row therefore stayed
+       * alive for the life of the tab with no socket behind it: every sibling tab
+       * read `heldByAnotherOwner === true`, stood down on `multi-tab-not-owner`
+       * (a `deferred` reason the main thread caches for a lease TTL), and NOBODY
+       * held a socket. Self-correction took up to five minutes under auto-sync —
+       * whenever this tab's own next sync happened to dial — and never at all
+       * under manual-sync mode.
+       *
+       * `closeSocketAndReleaseOwner` is exactly the right teardown and is reached
+       * here with no work to settle: the socket reference is already gone, every
+       * sent RPC and every file transfer was failed above, and an invite
+       * subscription or an unsent RPC would have made `this.active` set and never
+       * reached this line. A second tab now acquires inside one lease TTL.
+       */
+      await this.closeSocketAndReleaseOwner({ ...(closedReason ? { reason: closedReason } : {}) })
+      return
+    }
+    if (this.handshakeLoopHeld()) {
+      // Deliberately NOT the `proxy-failed` the budget-exhausted arm below reports
+      // for a connection with no record: these sockets were not refused before
+      // authenticating, they authenticated and then vanished, three times in a row.
+      // `reconnect-gap` says that and is retryable, so when the hold decays the lane
+      // tries again rather than standing down for good.
+      await this.fallback('reconnect-gap', this.outboxRecord)
       return
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       await this.fallback(this.outboxRecord ? 'reconnect-gap' : 'proxy-failed', this.outboxRecord)
       return
     }
-    // Floored: the un-floored window put both retries inside 750 ms, which is
-    // shorter than most of the interruptions worth retrying and spent the whole
-    // budget before the network came back.
-    const delay = Math.max(MIN_RECONNECT_DELAY_MS, this.random() * Math.min(5_000, 250 * 2 ** this.reconnectAttempts))
+    const delay = this.nextReconnectDelayMs()
     this.reconnectAttempts += 1
     this.reconnectTimeout = this.scheduleTimeout(() => {
       this.reconnectTimeout = undefined
@@ -3754,6 +3913,44 @@ export class SyncTransportWorkerRuntime {
         void this.requestTicket(active.clientRequestId, active.sessionScope, true)
       }
     }, delay)
+  }
+
+  /**
+   * The backoff for the attempt about to be spent: an exponential window, capped,
+   * with the delay drawn from its upper half. See RECONNECT_BACKOFF_BASE_MS for
+   * what the previous expression actually computed.
+   */
+  private nextReconnectDelayMs(): number {
+    const window = Math.min(MAX_RECONNECT_DELAY_MS, RECONNECT_BACKOFF_BASE_MS * 2 ** this.reconnectAttempts)
+    return window * (RECONNECT_JITTER_FLOOR + this.random() * (1 - RECONNECT_JITTER_FLOOR))
+  }
+
+  /**
+   * Record a handshake that did not survive MIN_HEALTHY_SOCKET_LIFETIME_MS, and arm
+   * the HTTP hold once enough of them have happened in a row.
+   *
+   * The run DECAYS rather than accruing: a young death more than
+   * HANDSHAKE_LOOP_HOLD_MS after the previous one starts the count again, so a tab
+   * that is merely unlucky twice an hour never reaches the cap. Arming the hold also
+   * clears the run, so each hold is paid for by its own fresh evidence instead of a
+   * single historic trio keeping the lane on HTTP for the life of the tab.
+   */
+  private noteShortLivedHandshake(): void {
+    const now = this.now()
+    const previous = this.lastShortLivedHandshakeAt
+    this.shortLivedHandshakes =
+      previous !== undefined && now - previous <= HANDSHAKE_LOOP_HOLD_MS ? this.shortLivedHandshakes + 1 : 1
+    this.lastShortLivedHandshakeAt = now
+    if (this.shortLivedHandshakes >= MAX_SHORT_LIVED_HANDSHAKES) {
+      this.handshakeLoopHeldUntil = now + HANDSHAKE_LOOP_HOLD_MS
+      this.shortLivedHandshakes = 0
+      this.lastShortLivedHandshakeAt = undefined
+    }
+  }
+
+  /** True while this client is holding on HTTP rather than dialling into a loop. */
+  private handshakeLoopHeld(): boolean {
+    return this.handshakeLoopHeldUntil !== undefined && this.now() < this.handshakeLoopHeldUntil
   }
 
   private startAckDeadline(timeoutMs: number): void {
@@ -3854,10 +4051,31 @@ export class SyncTransportWorkerRuntime {
       }
       void this.outbox
         .renewOwner(this.transportScope, this.sessionScope, this.ownerId, this.now(), OWNER_LEASE_TTL_MS)
-        .then((owned) => {
-          if (!owned) {
-            void this.surrenderOwnership('multi-tab-not-owner')
+        .then((outcome) => {
+          if (outcome === 'renewed') {
+            return
           }
+          /**
+           * *** ONE REASON USED TO STAND FOR TWO DIFFERENT FACTS. ***
+           *
+           * Every falsy renewal mapped to `multi-tab-not-owner`, and that reason is
+           * `deferred`: the main thread suppresses a further dial for a whole lease
+           * TTL on the strength of it (`WebSocketSyncTransport.ticketFailureCache`),
+           * because the condition it names clears by itself when the OTHER tab
+           * closes. But `renewOwner` also answered falsy for this tab's own row
+           * having aged out — which is what happens to a frozen or backgrounded tab,
+           * whose 5 s interval simply did not run. A single tab with no sibling
+           * anywhere therefore reported a sibling that did not exist and then parked
+           * itself behind the phantom for a lease TTL at a time.
+           *
+           * `lapsed` means no live lease stands for this scope at all, so the lane
+           * is free and the answer is to re-dial: `reconnect-gap` is `retryable`,
+           * which is what makes the next command and the invite coordinator try
+           * again instead of waiting. (A dedicated `owner-lease-lapsed` member would
+           * name the cause more precisely on the diagnostics pane; it is not added
+           * here because the pane's closed set lives in another owner's file.)
+           */
+          void this.surrenderOwnership(outcome === 'taken' ? 'multi-tab-not-owner' : 'reconnect-gap')
         })
         .catch(() => this.surrenderOwnership('outbox-unavailable'))
     }, OWNER_RENEW_INTERVAL_MS)
