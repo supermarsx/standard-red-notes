@@ -10,6 +10,7 @@ import { ContentType } from '@standardnotes/domain-core'
 import { HistoryMap } from '../History'
 import { ServerSyncPushContextualPayload } from '../../Abstract/Contextual/ServerSyncPush'
 import { payloadByFinalizingSyncState } from './Utilities/ApplyDirtyState'
+import { isStaleSelfEchoOfBase } from './Utilities/StaleSelfEcho'
 import { ItemsKeyDelta } from './ItemsKeyDelta'
 import { extendSyncDelta, SyncDeltaEmit } from './Abstract/DeltaEmit'
 import { SyncDeltaInterface } from './Abstract/SyncDeltaInterface'
@@ -61,6 +62,31 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
 
       const base = this.baseCollection.find(apply.uuid)
       if (base?.dirty && !isErrorDecryptingPayload(base)) {
+        /**
+         * SELF-ECHO, NOT A CONFLICT.
+         *
+         * A retrieval that does not advance the row's server timestamp is this client's own
+         * older state coming back — the server has not been written by anyone since our last
+         * acknowledged save of this item (see isStaleSelfEchoOfBase for why that is exact and
+         * not a heuristic). There is nothing to resolve: the dirty local payload already
+         * contains everything the echo carries, plus the edit the user has not pushed yet.
+         *
+         * Routing it into `conflicted` anyway is a visible regression, not a no-op. The
+         * strategy only compares *content*, so once the user's edit has settled past
+         * GenericItem's twenty-second `userModifiedDate` window and no history revision
+         * matches the incoming content, it answers DuplicateBaseKeepApply: the echoed older
+         * content takes the original uuid and the newer edit is exiled to a conflict copy. The
+         * note the user is looking at reverts. Nothing is lost on disk, but the operator sees
+         * their work vanish from under the cursor and a stray "conflicted copy" appear.
+         *
+         * This cannot swallow a genuine two-device conflict: a peer's write raises the row's
+         * timestamp strictly above the value our base holds, so it compares strictly greater
+         * and falls through to the conflict path below unchanged.
+         */
+        if (isStaleSelfEchoOfBase(apply, base)) {
+          continue
+        }
+
         conflicted.push(apply)
 
         continue
