@@ -53,6 +53,18 @@ export class AuthServer implements IAuthServer {
         sessionUuid: token.sessionUuid,
       })
       if (resultOrError.isFailed()) {
+        // Standard Red Notes: RECORDED, not implied by silence. This branch had
+        // no log at all, and the mint it guards used to answer a token with no
+        // `session` claim and no error when the connection token's session no
+        // longer resolved — losing the attribution that `items.updated_with_session`
+        // is derived from, and turning `session?.readonly_access ?? false` into
+        // read-write for a session that had been revoked or was read-only.
+        // `CreateCrossServiceToken` now refuses instead, and the refusal is
+        // stated here. No uuid and no error text from the token is logged.
+        this.logger.warn(
+          '[SessionsServer] Refused to validate a websocket connection: the connection token named a session that is no longer active, or the user could not be resolved',
+        )
+
         const metadata = new grpc.Metadata()
         metadata.set('x-auth-error-message', resultOrError.getError())
         metadata.set('x-auth-error-response-code', '400')

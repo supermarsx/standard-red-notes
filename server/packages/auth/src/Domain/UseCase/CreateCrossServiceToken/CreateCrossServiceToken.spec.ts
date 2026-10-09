@@ -515,46 +515,62 @@ describe('CreateCrossServiceToken', () => {
     )
   })
 
-  it('should create a cross service token for a user and specific session if the session is missing', async () => {
+  // Standard Red Notes: this used to assert the OPPOSITE -- that a named
+  // session which does not resolve still mints a token, just without a
+  // `session` claim. That shape is the defect: the claim is the head of the
+  // chain `locals.session?.uuid` -> `SyncItemsDTO.sessionUuid` ->
+  // `items.updated_with_session`, so a save made on such a connection carried
+  // no attribution, and every consumer reads read-only access as
+  // `session?.readonly_access ?? false`, so an absent claim silently upgraded a
+  // revoked or read-only session to read-write. The branch is reached from one
+  // caller, `AuthServer.validateWebsocket`, whose connection token always names
+  // a live session, so there is no legitimate caller to keep minting for.
+  it('should refuse to create a cross service token when a named session is not active', async () => {
     getActiveSessionsForUser.execute = jest.fn().mockReturnValue({ sessions: [] })
 
-    await createUseCase().execute({
+    const result = await createUseCase().execute({
       userUuid: '00000000-0000-0000-0000-000000000000',
       sessionUuid: '00000000-0000-0000-0000-000000000000',
     })
 
-    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
-      {
-        roles: [
-          {
-            name: 'role1',
-            uuid: '1-3-4',
-          },
-          {
-            name: 'PRO_USER',
-            uuid: 'singletier-PRO_USER',
-          },
-        ],
-        shared_vault_owner_context: undefined,
-        belongs_to_shared_vaults: [
-          {
-            shared_vault_uuid: '00000000-0000-0000-0000-000000000000',
-            permission: 'read',
-          },
-        ],
-        user: {
-          email: 'test@test.te',
-          uuid: '00000000-0000-0000-0000-000000000000',
-        },
-        hasContentLimit: false,
-        collaboration_enabled: true,
-        live_sync_enabled: true,
-        ai_enabled: true,
-        ai_request_limit: undefined,
-        version: 1,
-      },
-      60,
-    )
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not find an active session for the supplied session uuid')
+    expect(tokenEncoder.encodeExpirableToken).not.toHaveBeenCalled()
+  })
+
+  it('should not name the session or the user in the refusal, which reaches a client', async () => {
+    getActiveSessionsForUser.execute = jest.fn().mockReturnValue({ sessions: [] })
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      sessionUuid: 'f1e2d3c4-b5a6-4789-8abc-def012345678',
+    })
+
+    expect(result.getError()).not.toContain('f1e2d3c4-b5a6-4789-8abc-def012345678')
+    expect(result.getError()).not.toContain('00000000-0000-0000-0000-000000000000')
+  })
+
+  it('should carry the resolved session as the token session claim when the named session IS active', async () => {
+    const activeSession = {} as jest.Mocked<Session>
+    getActiveSessionsForUser.execute = jest.fn().mockReturnValue({ sessions: [activeSession] })
+    sessionProjector.projectSimple = jest.fn().mockReturnValue({ uuid: '2-3-4', readonly_access: true })
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      sessionUuid: '2-3-4',
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(getActiveSessionsForUser.execute).toHaveBeenCalledWith({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      sessionUuid: '2-3-4',
+    })
+    expect(sessionProjector.projectSimple).toHaveBeenCalledWith(activeSession)
+    // The claim the whole chain hangs off: attribution AND read-only access.
+    expect((tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0].session).toEqual({
+      uuid: '2-3-4',
+      readonly_access: true,
+    })
   })
 
   describe('RBAC group-conferred roles', () => {

@@ -240,10 +240,37 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
         userUuid: user.uuid,
         sessionUuid: dto.sessionUuid,
       })
-      if (activeSessionsResponse.sessions.length) {
-        resolvedSession = activeSessionsResponse.sessions[0]
-        authTokenData.session = this.projectSession(activeSessionsResponse.sessions[0])
+      // Standard Red Notes: a NAMED session that does not resolve is an error,
+      // never a token without a `session` claim.
+      //
+      // This branch is reached from one place: `AuthServer.validateWebsocket`,
+      // which carries a websocket connection token. Such a token ALWAYS names a
+      // live session — `WebSocketConnectionTokenData.sessionUuid` is required,
+      // and both mints read it off an already-authenticated session (the
+      // websockets controller off `locals.session.uuid`, the websocket-gateway's
+      // `/sockets/tokens` off a cross-service token's `session.uuid`). The one
+      // authentication kind with genuinely no session row — a legacy JWT —
+      // therefore cannot obtain a connection token at all. So an empty result
+      // here means the session is REVOKED, refresh-expired, evicted from the
+      // ephemeral cache, or belongs to somebody else; there is no connection
+      // kind that legitimately has none.
+      //
+      // Minting anyway was a control that looked present and did nothing, in
+      // two directions at once. Attribution: the `session` claim is the head of
+      // the chain `locals.session?.uuid` -> `SyncItemsDTO.sessionUuid` ->
+      // `items.updated_with_session`, so every save made on such a connection
+      // was written with no attribution. Authorization: every consumer derives
+      // read-only access as `session?.readonly_access ?? false` (api-gateway
+      // `AuthMiddleware`, auth's `ApiGatewayAuthMiddleware`), so an absent claim
+      // silently upgraded a read-only session to read-write.
+      //
+      // The message names no uuid: it reaches a client as a gRPC status message
+      // and as `x-auth-error-message`.
+      if (activeSessionsResponse.sessions.length === 0) {
+        return Result.fail('Could not find an active session for the supplied session uuid')
       }
+      resolvedSession = activeSessionsResponse.sessions[0]
+      authTokenData.session = this.projectSession(activeSessionsResponse.sessions[0])
     }
 
     // Standard Red Notes: thread MCP scope from the session into the
