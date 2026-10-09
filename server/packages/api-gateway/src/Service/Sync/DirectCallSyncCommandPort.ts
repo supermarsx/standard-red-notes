@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import { ServiceContainerInterface, ServiceIdentifier, ServiceInterface } from '@standardnotes/domain-core'
 
+import { createDirectCallRequest } from './DirectCallRequest'
 import { DurableSyncCommandPort } from './SyncWebSocketCommandAdapter'
 
 interface DirectJsonResult {
@@ -12,6 +13,14 @@ interface DirectJsonResult {
  * Durable command adapter for the bundled HomeServer. It enters the exact
  * syncing-server controller methods backed by the same transaction/journal as
  * HTTP and gRPC; it is not an alternate executor and opens no loopback socket.
+ *
+ * Both methods re-shape the request they were handed (a command's body and
+ * headers, a status call's `commandId` param) through `createDirectCallRequest`
+ * rather than `{ ...request, ... } as unknown as Request`. An object spread
+ * copies own enumerable properties only, so it silently strips `get`, `header`
+ * and anything else living on a real request's PROTOTYPE -- which is how a
+ * genuine Express request, handed here by a future caller, would have arrived
+ * at the controller missing the methods it had on the way in.
  */
 export class DirectCallSyncCommandPort implements DurableSyncCommandPort {
   constructor(private readonly services: ServiceContainerInterface) {}
@@ -28,14 +37,11 @@ export class DirectCallSyncCommandPort implements DurableSyncCommandPort {
   ): Promise<{ status: number; data: unknown; replayed?: boolean }> {
     const command = this.commandMetadata(payload)
     const result = await this.execute(
-      {
-        ...request,
+      createDirectCallRequest({
+        from: request,
         body: payload,
-        headers: {
-          ...request.headers,
-          ...(command ? { 'x-sync-command-id': command.id, 'x-sync-command-digest': command.digest } : undefined),
-        },
-      } as unknown as Request,
+        headers: command ? { 'x-sync-command-id': command.id, 'x-sync-command-digest': command.digest } : {},
+      }),
       response,
       'sync.items.sync',
     )
@@ -60,14 +66,11 @@ export class DirectCallSyncCommandPort implements DurableSyncCommandPort {
     }
   }> {
     const result = await this.execute(
-      {
-        ...request,
+      createDirectCallRequest({
+        from: request,
         params: { ...request.params, commandId },
-        headers: {
-          ...request.headers,
-          ...(digest ? { 'x-sync-command-digest': digest } : undefined),
-        },
-      } as unknown as Request,
+        headers: digest ? { 'x-sync-command-digest': digest } : {},
+      }),
       response,
       'sync.items.sync_command_status',
     )

@@ -737,7 +737,10 @@ describe('websocket connection lifecycle', () => {
     await vi.waitFor(() => expect(attached!.registry.get('user-tabs')).toHaveLength(2))
 
     const rejected = connect(`?authToken=${token}`)
-    expect(await closedWith(rejected)).toBe(1008)
+    // 1013 "try again later", NOT 1008 "policy violation": closing one of the
+    // two live connections makes this exact attempt succeed, so it is a
+    // capacity refusal. The sync lane's twin condition always answered 1013.
+    expect(await closedWith(rejected)).toBe(1013)
     expect(attached!.registry.get('user-tabs')).toHaveLength(2)
     expect(logger.warn).toHaveBeenCalledWith(
       '[ws] connection rejected: per-user limit',
@@ -898,7 +901,8 @@ describe('websocket connection lifecycle', () => {
 
     const closed = closedWith(socket)
     socket.send('ping')
-    expect(await closed).toBe(1008)
+    // A token bucket refills, so the refusal is transient: 1013, not 1008.
+    expect(await closed).toBe(1013)
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
     expect(logger.warn).toHaveBeenCalledWith('[ws] ingress rate exceeded', expect.stringContaining('"conn":'))
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('user-frames')
@@ -929,7 +933,7 @@ describe('websocket connection lifecycle', () => {
 
     const closed = closedWith(socket)
     socket.send('ping')
-    expect(await closed).toBe(1008)
+    expect(await closed).toBe(1013)
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
     expect(logger.warn).toHaveBeenCalledWith('[ws] ingress rate exceeded', expect.stringContaining('"conn":'))
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('user-bytes')
@@ -1548,6 +1552,69 @@ describe('authenticated /sockets/sync command plane', () => {
       socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })),
     )
   }
+
+  /**
+   * Item 2, through the real socket rather than the handler.
+   *
+   * A sync socket used to prove its session exactly ONCE, at the handshake, and
+   * then hold an invite subscription and a per-user socket slot for as long as
+   * it liked: nothing in the package revalidated a live socket or bounded its
+   * lifetime. The handler-level cases live in `syncFrameLanes.test.ts`; this one
+   * exists because the interval is a GATEWAY option, and an option that never
+   * reaches the handler configures nothing. A composition root passing a figure
+   * into a parameter the gateway drops on the floor is exactly the shape of
+   * gate that reads as armed and is not.
+   */
+  it('revalidates a live sync socket and ends it when the session plane reports a revocation', async () => {
+    const refreshSession = vi.fn(async () => ({ refreshed: false as const, code: 'SESSION_REVOKED' as const }))
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...syncOptions(),
+        filesUnsupported: true,
+        sessionRevalidationIntervalMs: 20,
+        authorization: {
+          ready: () => true,
+          authorize: vi.fn(async () => ({ authorized: true as const })),
+          refreshSession,
+        },
+      },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-revoked',
+      sessionUuid: 'session-revoked',
+      deviceId: 'device-revoked',
+      authorization: 'Bearer server-only-credential',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    const authPayload = { ticket: issued.ticket, deviceId: 'device-revoked' }
+    const authenticated = nextJson(socket)
+    const closure = closedWithReason(socket)
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-0',
+        commandId: 'auth-0',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify(authPayload)),
+        payload: authPayload,
+      }),
+    )
+    expect(await authenticated).toMatchObject({ type: 'AUTHENTICATED' })
+
+    expect(await closure).toEqual({ code: 1008, reason: 'Sync session is no longer authorized.' })
+    expect(refreshSession).toHaveBeenCalledWith(
+      { identity: expect.objectContaining({ userUuid: 'user-revoked', sessionUuid: 'session-revoked' }) },
+      expect.any(AbortSignal),
+    )
+  })
 
   it('advertises no capability unless every adapter and kill switch is ready', async () => {
     await listen()
@@ -3146,7 +3213,7 @@ describe('authenticated /sockets/sync command plane', () => {
       { binary: true },
     )
 
-    expect(await closed).toEqual({ code: 1008, reason: 'file rate limit exceeded' })
+    expect(await closed).toEqual({ code: 1013, reason: 'file rate limit exceeded' })
     expect(metrics.increment).toHaveBeenCalledWith('rate_limit', 'file_ingress')
     expect(metrics.increment).not.toHaveBeenCalledWith('rate_limit', 'ingress')
   })
@@ -3198,7 +3265,7 @@ describe('authenticated /sockets/sync command plane', () => {
       }),
     )
 
-    expect(await closed).toEqual({ code: 1008, reason: 'sync rate limit exceeded' })
+    expect(await closed).toEqual({ code: 1013, reason: 'sync rate limit exceeded' })
     expect(metrics.increment).toHaveBeenCalledWith('rate_limit', 'ingress')
     expect(metrics.increment).not.toHaveBeenCalledWith('rate_limit', 'file_ingress')
   })

@@ -21,6 +21,7 @@ import {
 } from '@standard-red-notes/websocket-gateway'
 
 import { ResponseLocals } from '../../Controller/ResponseLocals'
+import { createDirectCallRequest } from './DirectCallRequest'
 import { createDirectCallResponse } from './DirectCallResponse'
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { sessionCookiesToMap } from './sessionCookies'
@@ -63,6 +64,22 @@ type ValidatedSession = {
  * delay, not a cache lifetime.
  */
 export const SUPPLIED_SESSION_MAX_AGE_MS = 5_000
+
+/**
+ * The syncing-server routes the three socket lanes stand in for, exactly as
+ * `AnnotatedItemsController` declares them (`@controller('/items')` plus
+ * `@httpPost('/sync')`, `@httpGet('/sync-command/:commandId')` and
+ * `@httpPost('/collaboration-authorization')`).
+ *
+ * A direct call never routes on these -- it names a handler by identifier --
+ * but `HttpServiceProxy` forwards `request.method` to axios and `request.url`
+ * as `x-origin-url`, so a lane that leaves them unstated is dispatched as a GET
+ * to whatever route the identifier resolved to. Keyed by lane rather than
+ * inlined so the method and the handler a lane enters cannot drift apart.
+ */
+const SYNC_ITEMS_ROUTE = { method: 'POST', url: '/items/sync' } as const
+const SYNC_COMMAND_STATUS_ROUTE = { method: 'GET', url: '/items/sync-command' } as const
+const COLLABORATION_AUTHORIZATION_ROUTE = { method: 'POST', url: '/items/collaboration-authorization' } as const
 
 /**
  * Why a session could not be validated. Carries TWO independent answers, because
@@ -181,7 +198,13 @@ export class SyncWebSocketCommandAdapter
       }
     }
 
-    if (input.operation === 'STATUS') {
+    // The two SESSION-ONLY operations. Neither writes anything, so neither runs
+    // the command policy below: a read-only or over-content-limit account may
+    // still ask what the status of its own command is, and must still be told
+    // that one of its invites changed. INVITE_SUBSCRIBE asked nothing at all
+    // until now, which is the defect this answers -- the point is that it asks
+    // the session plane, not that it be refused for a policy about writes.
+    if (input.operation === 'STATUS' || input.operation === 'INVITE_EVENTS') {
       return { authorized: true, session: validated }
     }
     if (validated.locals.readOnlyAccess) {
@@ -210,7 +233,7 @@ export class SyncWebSocketCommandAdapter
     const durableSync = this.requireDurableSync()
     const validated = this.reusableSession(session, input.identity) ?? (await this.validate(input.identity, signal))
     const body = this.commandBody(input.payload)
-    const { request, response } = this.httpContext(validated.locals, body)
+    const { request, response } = this.httpContext(validated.locals, body, SYNC_ITEMS_ROUTE)
     const result = await abortable(
       durableSync.sync(request, response, {
         ...body,
@@ -234,7 +257,7 @@ export class SyncWebSocketCommandAdapter
   ): Promise<SyncBackendStatus> {
     const durableSync = this.requireDurableSync()
     const validated = this.reusableSession(session, input.identity) ?? (await this.validate(input.identity, signal))
-    const { request, response } = this.httpContext(validated.locals, {})
+    const { request, response } = this.httpContext(validated.locals, {}, SYNC_COMMAND_STATUS_ROUTE)
     const result = await abortable(
       durableSync.getSyncCommandStatus(request, response, input.commandId, input.digest),
       signal,
@@ -385,7 +408,7 @@ export class SyncWebSocketCommandAdapter
       const stale = !signal.aborted && error instanceof SessionValidationError && error.credential === 'stale'
       return stale ? { authorized: false, code: 'SESSION_STALE' } : { authorized: false }
     }
-    const { request } = this.httpContext(validated.locals, {})
+    const { request } = this.httpContext(validated.locals, {}, COLLABORATION_AUTHORIZATION_ROUTE)
     return this.collaborationAuthorization.authorize(request, validated.locals, input.request, signal)
   }
 
@@ -563,10 +586,44 @@ export class SyncWebSocketCommandAdapter
     return payload.body
   }
 
-  private httpContext(locals: ResponseLocals, body: JsonObject): { request: Request; response: Response } {
+  /**
+   * The direct-call `{ request, response }` pair for one socket-driven entry
+   * into a controller or a service proxy.
+   *
+   * `route` is NOT decoration. The request used to be
+   * `{ headers: { 'x-snjs-version': api } } as unknown as Request`, and
+   * `HttpServiceProxy.getServerResponse` -- which the COLLABORATION_AUTHORIZE
+   * lane reaches on every multi-container deployment -- dispatches with
+   * `method: request.method`. `undefined` there is axios's default, GET, so a
+   * `POST items/collaboration-authorization` went out as a GET, missed the
+   * route, and the access check read the non-2xx as "not authorized". See
+   * `createDirectCallRequest` for the whole account; the point here is that
+   * each lane must state the route it is standing in for, because something
+   * downstream reads it.
+   *
+   * No client-supplied value is interpolated into `url`: it becomes the
+   * `x-origin-url` header on the HTTP proxy path, and a header is not a place
+   * to put frame input. The command id travels in `params`, where the
+   * controller reads it from.
+   *
+   * There is deliberately no `ip`. A socket lane has no HTTP request to resolve
+   * one from, and `resolveClientIp` answers `''` for an absent one either way --
+   * so this states the same nothing it always stated, rather than inventing a
+   * loopback address that auth would persist on a session row.
+   */
+  private httpContext(
+    locals: ResponseLocals,
+    body: JsonObject,
+    route: { method: 'GET' | 'POST'; url: string },
+  ): { request: Request; response: Response } {
     const api = typeof body.api === 'string' ? body.api : undefined
     return {
-      request: { headers: { 'x-snjs-version': api } } as unknown as Request,
+      request: createDirectCallRequest({
+        method: route.method,
+        url: route.url,
+        headers: { 'x-snjs-version': api },
+        body,
+      }),
       response: createDirectCallResponse(locals),
     }
   }

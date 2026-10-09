@@ -84,7 +84,7 @@ export const MAX_SYNC_QUEUED_FRAMES = 8
  * protection against bulk JSON, because 2 MiB of burst is less than this
  * allowance: a client cannot fill the queue by volume before the bucket refuses
  * it, and a bucket refusal is the better-named outcome (metric
- * `rate_limit/ingress`, close 1008 naming the plane) than a queue kill. What
+ * `rate_limit/ingress`, close 1013 naming the plane) than a queue kill. What
  * remains is a hard bound on UN-PROCESSED ingress a socket can make the gateway
  * retain, and the FRAME count is what binds it — which is what the queue says.
  * Overrunning it still ends in `backpressure/ingress` and 1013 'Sync command

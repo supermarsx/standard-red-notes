@@ -897,14 +897,20 @@ describe('SyncCommandHandler', () => {
       expect(malformed.socket.frames.at(-1)?.payload).toEqual({ code: 'MALFORMED_JSON', retryable: false }),
     )
 
+    // 1013 "try again later", not 1012 "service restart": nothing is
+    // restarting. The lane is switched off, or one of the fleet-shared stores
+    // it needs to ADMIT a socket was not ready, and the client's move is to
+    // re-ticket later. The reason string and the SYNC_DISABLED error frame are
+    // unchanged, and `syncCloseFallbackReason` handles 1012 and 1013 in one
+    // arm, so this is a truthfulness fix with no client-visible change.
     const disabled = build(false)
     enqueue(disabled.handler, pingFrame(0))
-    await vi.waitFor(() => expect(disabled.socket.closes.at(-1)?.code).toBe(1012))
+    await vi.waitFor(() => expect(disabled.socket.closes.at(-1)?.code).toBe(1013))
     expect(disabled.socket.frames.at(-1)?.payload).toEqual({ code: 'SYNC_DISABLED', retryable: true })
 
     const adapterNotReady = build(true, { ready: () => false, authorize: vi.fn() })
     enqueue(adapterNotReady.handler, pingFrame(0))
-    await vi.waitFor(() => expect(adapterNotReady.socket.closes.at(-1)?.code).toBe(1012))
+    await vi.waitFor(() => expect(adapterNotReady.socket.closes.at(-1)?.code).toBe(1013))
   })
 
   it('fails over with a retryable signal when shared authentication state disappears mid-frame', async () => {

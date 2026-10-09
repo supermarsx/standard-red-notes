@@ -36,15 +36,143 @@ import {
   type SyncRpcRequestFrame,
   type SyncServerFrameType,
   type SyncStatusRequestFrame,
-  type SyncFilesCancelFrame,
-  type SyncFilesCreditFrame,
-  type SyncFilesDownloadOpenFrame,
-  type SyncFilesMetadataFrame,
-  type SyncFilesUploadFinishFrame,
-  type SyncFilesUploadOpenFrame,
   type SyncInviteAckFrame,
   type SyncInviteSubscribeFrame,
+  type SyncClientFrame,
+  type SyncClientFrameType,
 } from './syncProtocol.js'
+
+/**
+ * The ordering domains a socket's frames fall into. Frames in the SAME lane are
+ * handled strictly in arrival order; different lanes run concurrently.
+ *
+ * ------------------------------------------------------------------------------
+ * WHY THIS EXISTS: ONE SERIAL CHAIN STALLED FIVE LANES
+ * ------------------------------------------------------------------------------
+ *
+ * Every frame used to be appended to a single promise chain, so a `SYNC_ITEMS`
+ * command waiting out its backend timeout held `FILES_CREDIT`,
+ * `RPC_CREDIT`/`RPC_CANCEL`, `INVITE_ACK`, `REAUTH` and `PING` behind it. `PING`
+ * was the dangerous one: the gateway's heartbeat sweep `terminate()`s a socket
+ * that has not answered a ping since the previous sweep, and a terminate sends
+ * no close frame -- so a slow BACKEND could cause the 1006 disconnect its own
+ * client was waiting through, and the answer it was waiting for died with the
+ * socket.
+ *
+ * ------------------------------------------------------------------------------
+ * WHAT WAS ESTABLISHED BEFORE SPLITTING, lane by lane
+ * ------------------------------------------------------------------------------
+ *
+ * The frames are NOT simply "mutating" vs "not". Three of the five the audit
+ * named do have an ordering constraint -- just never against a durable command:
+ *
+ *   - `'control'` (PING) -- `send('PONG')` is synchronous and touches only
+ *     `serverSequence`, which every other `send` touches too and which is
+ *     advanced atomically inside one synchronous call. Nothing to order.
+ *   - `'durable'` (COMMAND, STATUS) -- COMMAND holds `activeLease`, a single
+ *     slot, and takes a FLEET-SHARED command lease per `(user, device)`, so two
+ *     at once is not a thing this handler may do. STATUS stays with it
+ *     deliberately: a STATUS asking about the command id that is executing
+ *     right now would, on its own lane, race its own command and answer
+ *     ACCEPTED/UNKNOWN for a write that was about to commit. The audit did not
+ *     ask for STATUS to be unblocked and it is not.
+ *   - `'credential'` (REAUTH) -- `handleReauth` replaces `this.identity`, so two
+ *     REAUTHs at once could adopt in either order; it keeps its own lane rather
+ *     than becoming immediate. Against a COMMAND there is no constraint: a
+ *     command captures `identity` into a local the moment it starts and
+ *     re-authorizes with THAT credential, exactly as it did when the two were
+ *     serialized.
+ *   - `'collaboration'` (COLLABORATION_AUTHORIZE) -- the epoch-discovery
+ *     challenge lives in the single `collaborationEpochDiscovery` slot and is
+ *     consumed by the NEXT authorize frame, so the two halves must stay ordered
+ *     against each other. Nothing in them touches a durable command.
+ *   - `'invite'` (INVITE_SUBSCRIBE, INVITE_ACK) -- INVITE_ACK is matched against
+ *     `activeInviteSubscription.awaitingAck` and CLOSES THE SOCKET
+ *     (`INVITE_ACK_INVALID`) when it does not match. Making it immediate would
+ *     let an ack overtake the subscribe that creates the subscription, or the
+ *     pump that sets `awaitingAck`, and close a healthy socket. So it is
+ *     unblocked from durable commands by sharing the invite lane, not by
+ *     jumping every queue.
+ *   - `'files'` (every FILES_V1 control frame and every binary chunk) --
+ *     `FILES_CREDIT` resolves `transferId`/`generation` through
+ *     `currentDownload`, which THROWS for a transfer that does not exist yet, so
+ *     a credit that overtook its own `FILES_DOWNLOAD_OPEN` would be answered
+ *     with an error instead of granting credit. Binary chunks are only
+ *     interpretable against the transfer their `FILES_UPLOAD_OPEN` created. One
+ *     lane for the whole plane preserves both, and takes the plane out from
+ *     behind the command plane.
+ *   - `'rpc'` (RPC_REQUEST, RPC_CANCEL, RPC_CREDIT) -- all three handlers are
+ *     SYNCHRONOUS (`startRpc` only arms the background call), and a cancel or a
+ *     credit is keyed by the `requestId` its request registered in
+ *     `activeRpcs`. Keeping them on one lane means a credit can never arrive
+ *     before the request it credits; because none of them awaits anything, the
+ *     lane is never actually occupied.
+ */
+type SyncFrameLane = 'control' | 'durable' | 'credential' | 'collaboration' | 'invite' | 'files' | 'rpc'
+
+/** The ordering domain one frame type belongs to. See {@link SyncFrameLane}. */
+function syncFrameLane(type: SyncClientFrameType): SyncFrameLane {
+  switch (type) {
+    case 'PING':
+      return 'control'
+    case 'REAUTH':
+      return 'credential'
+    case 'COLLABORATION_AUTHORIZE':
+      return 'collaboration'
+    case 'INVITE_SUBSCRIBE':
+    case 'INVITE_ACK':
+      return 'invite'
+    case 'RPC_REQUEST':
+    case 'RPC_CANCEL':
+    case 'RPC_CREDIT':
+      return 'rpc'
+    case 'FILES_METADATA':
+    case 'FILES_UPLOAD_OPEN':
+    case 'FILES_UPLOAD_FINISH':
+    case 'FILES_DOWNLOAD_OPEN':
+    case 'FILES_CREDIT':
+    case 'FILES_CANCEL':
+      return 'files'
+    // COMMAND, STATUS -- and AUTH, which never reaches a lane because the gate
+    // handles the handshake itself. A frame type added to the protocol without
+    // a lane of its own lands on the durable one, which is the conservative
+    // answer: it keeps today's ordering rather than silently gaining
+    // concurrency nobody reasoned about.
+    default:
+      return 'durable'
+  }
+}
+
+/**
+ * How often a LIVE, already-authenticated socket re-presents its credential to
+ * the session plane.
+ *
+ * Nothing in this package used to do this at all: a ticket proved a session
+ * once, at the handshake, and after that the only lanes that asked the session
+ * plane anything were the ones that asked per operation (COMMAND, STATUS, the
+ * FILES_V1 authorizers). A socket that did nothing but hold an invite
+ * subscription therefore survived a sign-out or a remote revocation
+ * indefinitely -- streaming invalidations and holding a per-user socket slot --
+ * and there was no maximum socket lifetime either.
+ *
+ * One minute, not one second and not one hour. The cost is one
+ * `validateSession` per socket per minute, which is small beside what a single
+ * `SYNC_ITEMS` command already spends; the benefit is that "signed out" becomes
+ * true of the socket within a bounded, stated time. A revocation is not an
+ * emergency that justifies polling, but it is also not something a socket may
+ * outlive for an afternoon.
+ */
+export const SYNC_SESSION_REVALIDATION_INTERVAL_MS = 60_000
+
+/**
+ * The bound on a socket whose authorization adapter cannot revalidate at all
+ * (no `refreshSession`). There is then no way to ASK whether the session still
+ * exists, so the socket is given a finite life instead and the client
+ * re-tickets -- which goes through real authenticated HTTP, so a revoked
+ * session cannot come back. A gate that is only armed for adapters that happen
+ * to support it is not a gate.
+ */
+export const SYNC_SOCKET_MAX_LIFETIME_MS = 15 * 60_000
 
 export interface SyncSocket {
   readonly bufferedAmount: number
@@ -76,7 +204,20 @@ export type SyncAuthorizationCode =
 
 export interface SyncAuthorizationInput {
   identity: SyncTicketIdentity
-  operation: 'COMMAND' | 'STATUS'
+  /**
+   * What the socket is asking to do with this session.
+   *
+   * `'COMMAND'` is the only one that carries a mutation, and it is the only one
+   * an adapter runs its read-only / content-limit / live-sync / shared-vault
+   * policy for. `'STATUS'` and `'INVITE_EVENTS'` ask the SESSION question
+   * alone -- "does this credential still authenticate?" -- because neither
+   * writes anything and neither may be withheld from an account that is merely
+   * read-only or over its content limit. `'INVITE_EVENTS'` exists because
+   * INVITE_SUBSCRIBE used to present no credential at all: the lane took
+   * `userUuid` off the ticket and streamed invalidations for the life of the
+   * socket without ever asking the session plane a single question.
+   */
+  operation: 'COMMAND' | 'STATUS' | 'INVITE_EVENTS'
   commandId: string
   digest: string
   payloadLength: number
@@ -441,6 +582,14 @@ export interface SyncCommandHandlerOptions {
   collaborationRoomEpochResolverTimeoutMs?: number
   authDeadlineMs?: number
   backendTimeoutMs?: number
+  /**
+   * Overrides {@link SYNC_SESSION_REVALIDATION_INTERVAL_MS}. No host passes
+   * one, so production uses the constant; a probe or a test shortens it to
+   * observe the revocation it is asserting.
+   */
+  sessionRevalidationIntervalMs?: number
+  /** Overrides {@link SYNC_SOCKET_MAX_LIFETIME_MS}, the no-revalidator fallback bound. */
+  socketMaxLifetimeMs?: number
   maxQueuedFrames?: number
   maxQueuedBytes?: number
   /**
@@ -579,8 +728,43 @@ export class SyncCommandHandler {
   private queuedBytes = 0
   /** FILES_V1 binary-plane bytes awaiting `processBinary`. Charged only by {@link enqueueBinary}. */
   private queuedBinaryBytes = 0
-  private queue: Promise<void> = Promise.resolve()
-  private activeAbort?: AbortController
+  /**
+   * ADMISSION order, and only admission. Every frame passes through this chain
+   * in arrival order so that parsing, the AUTH handshake and the client
+   * sequence check (which increments {@link expectedClientSequence}) observe
+   * frames exactly as the socket delivered them. It is released the instant a
+   * frame has been DISPATCHED, so nothing a backend does can hold it.
+   */
+  private gate: Promise<void> = Promise.resolve()
+  /**
+   * One serial chain per {@link SyncFrameLane}. A lane keeps its own frames
+   * ordered against each other and runs independently of every other lane --
+   * which is the whole fix for item 4: a `SYNC_ITEMS` command that takes the
+   * full backend timeout no longer delays a `PING`, an `INVITE_ACK`, an
+   * `RPC_CREDIT`, a `FILES_CREDIT` or a `REAUTH`.
+   */
+  private readonly lanes = new Map<SyncFrameLane, Promise<void>>()
+  /**
+   * Every frame still being gated or handled, whatever lane it is on.
+   * `drain()`/`stop()` wait on THIS and not on a single chain: with lanes there
+   * is no one promise whose resolution means "nothing is outstanding", and a
+   * shutdown that awaited only the gate would answer a client with nothing
+   * while its command was still running (R1).
+   */
+  private readonly inFlight = new Set<Promise<void>>()
+  /**
+   * Abort controllers for the bounded backend operations running right now.
+   *
+   * A SET, not the single slot this used to be. While every frame ran on one
+   * serial chain there was at most one, so `activeAbort = controller` plus
+   * `if (activeAbort === controller)` was sufficient. With REAUTH, STATUS/
+   * COMMAND and COLLABORATION_AUTHORIZE on separate lanes two can now overlap,
+   * and a single slot loses one of them: the later writer wins, the earlier
+   * operation becomes unreachable, and `disconnect()` -- whose whole job is to
+   * abort what is in flight -- would leave it to run to its own timeout on a
+   * socket that is already gone.
+   */
+  private readonly activeOperations = new Set<AbortController>()
   private readonly activeRpcs = new Map<string, ActiveRpc>()
   private activeInviteSubscription?: ActiveInviteSubscription
   private collaborationEpochDiscovery?: CollaborationEpochDiscovery
@@ -592,8 +776,14 @@ export class SyncCommandHandler {
   private readonly lifecycleAbort = new AbortController()
   private readonly cleanupTasks = new Set<Promise<unknown>>()
   private readonly authTimer: NodeJS.Timeout
+  /** Armed once the handshake succeeds; see {@link revalidateSession}. */
+  private sessionRevalidationTimer?: NodeJS.Timeout
+  /** When the handshake completed, for the no-revalidator lifetime bound. */
+  private authenticatedAt = 0
   private readonly authDeadlineMs: number
   private readonly backendTimeoutMs: number
+  private readonly sessionRevalidationIntervalMs: number
+  private readonly socketMaxLifetimeMs: number
   private readonly maxQueuedFrames: number
   private readonly maxQueuedBytes: number
   /**
@@ -656,6 +846,8 @@ export class SyncCommandHandler {
   constructor(private readonly options: SyncCommandHandlerOptions) {
     this.authDeadlineMs = options.authDeadlineMs ?? SYNC_AUTH_DEADLINE_MS
     this.backendTimeoutMs = options.backendTimeoutMs ?? SYNC_BACKEND_TIMEOUT_MS
+    this.sessionRevalidationIntervalMs = options.sessionRevalidationIntervalMs ?? SYNC_SESSION_REVALIDATION_INTERVAL_MS
+    this.socketMaxLifetimeMs = options.socketMaxLifetimeMs ?? SYNC_SOCKET_MAX_LIFETIME_MS
     this.maxQueuedFrames = options.maxQueuedFrames ?? MAX_SYNC_QUEUED_FRAMES
     this.maxQueuedBytes = options.maxQueuedBytes ?? MAX_SYNC_QUEUED_BYTES
     this.maxQueuedBinaryBytes = options.maxQueuedBinaryBytes ?? MAX_SYNC_QUEUED_BINARY_BYTES
@@ -692,6 +884,14 @@ export class SyncCommandHandler {
     ) {
       throw new Error('Invalid collaboration room epoch resolver timeout.')
     }
+    if (
+      !Number.isSafeInteger(this.sessionRevalidationIntervalMs) ||
+      this.sessionRevalidationIntervalMs < 1 ||
+      !Number.isSafeInteger(this.socketMaxLifetimeMs) ||
+      this.socketMaxLifetimeMs < 1
+    ) {
+      throw new Error('Invalid sync session revalidation interval.')
+    }
     this.authTimer = setTimeout(() => {
       if (!this.identity && !this.closed) {
         this.options.metrics?.increment('auth', 'timeout')
@@ -717,18 +917,17 @@ export class SyncCommandHandler {
     }
     this.queuedFrames += 1
     this.queuedBytes += rawBytes
-    this.queue = this.queue
-      .then(() => this.process(raw, rawBytes))
-      .catch(() => {
-        if (!this.closed) {
-          this.options.metrics?.increment('backend', 'transport_unavailable')
-          this.failAndClose('SYNC_DISABLED', 'WebSocket sync became unavailable.', 1013)
-        }
-      })
-      .finally(() => {
+    this.schedule(
+      (release) => this.process(raw, rawBytes, release),
+      () => {
         this.queuedFrames = Math.max(0, this.queuedFrames - 1)
         this.queuedBytes = Math.max(0, this.queuedBytes - rawBytes)
-      })
+      },
+      () => {
+        this.options.metrics?.increment('backend', 'transport_unavailable')
+        this.failAndClose('SYNC_DISABLED', 'WebSocket sync became unavailable.', 1013)
+      },
+    )
   }
 
   enqueueBinary(raw: Uint8Array, rawBytes: number): void {
@@ -755,19 +954,18 @@ export class SyncCommandHandler {
     }
     this.queuedFrames += 1
     this.queuedBinaryBytes += rawBytes
-    this.queue = this.queue
-      .then(() => this.processBinary(raw))
-      .catch(() => {
-        if (!this.closed) {
-          this.options.metrics?.increment('files', 'transport_unavailable')
-          this.failAndClose('SYNC_DISABLED', 'WebSocket files became unavailable.', 1013)
-        }
-      })
-      .finally(() => {
+    this.schedule(
+      (release) => this.processBinary(raw, release),
+      () => {
         raw.fill(0)
         this.queuedFrames = Math.max(0, this.queuedFrames - 1)
         this.queuedBinaryBytes = Math.max(0, this.queuedBinaryBytes - rawBytes)
-      })
+      },
+      () => {
+        this.options.metrics?.increment('files', 'transport_unavailable')
+        this.failAndClose('SYNC_DISABLED', 'WebSocket files became unavailable.', 1013)
+      },
+    )
   }
 
   disconnect(): void {
@@ -776,11 +974,14 @@ export class SyncCommandHandler {
     }
     this.closed = true
     clearTimeout(this.authTimer)
+    if (this.sessionRevalidationTimer) {
+      clearTimeout(this.sessionRevalidationTimer)
+    }
     if (this.socketBudgetRenewTimer) {
       clearTimeout(this.socketBudgetRenewTimer)
     }
     this.lifecycleAbort.abort()
-    this.activeAbort?.abort()
+    this.abortActiveOperations()
     this.abortActiveRpcs('SOCKET_CLOSED')
     this.stopInviteSubscription()
     this.collaborationEpochDiscovery = undefined
@@ -791,43 +992,123 @@ export class SyncCommandHandler {
   }
 
   /**
-   * Resolve once no queued or in-flight command work remains, WITHOUT closing
-   * the socket or aborting anything (R1). `stop()` disconnects first, which
-   * aborts `activeAbort` -- so a shutdown that only called `stop()` cancelled
+   * Put one frame through the gate and then onto its lane.
+   *
+   * `settle` releases the frame's ingress-queue accounting, and it is attached
+   * to the frame's WHOLE lifetime rather than to the gate: the queue depth
+   * `enqueue` enforces means "frames not yet answered", and releasing it when
+   * the gate advanced would make the advertised depth meaningless the moment a
+   * command started running. `onTransportFailure` is the existing
+   * close-the-socket escalation for a frame whose handling rejected outright.
+   */
+  private schedule(
+    run: (release: () => void) => Promise<void>,
+    settle: () => void,
+    onTransportFailure: () => void,
+  ): void {
+    let release = (): void => undefined
+    const gated = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const handled = this.gate
+      .then(() => run(release))
+      .catch(() => {
+        if (!this.closed) {
+          onTransportFailure()
+        }
+      })
+      .finally(settle)
+    // The gate advances at whichever comes first: the frame being dispatched,
+    // or its handling finishing (a frame the gate itself answers -- a refusal,
+    // a protocol close -- never calls `release`). `handled` cannot reject here:
+    // the `.catch` above already absorbed it.
+    this.gate = Promise.race([gated, handled])
+    this.track(handled)
+  }
+
+  /**
+   * Run `operation` after everything already on `lane`, and never before it.
+   *
+   * A lane is chained through `then(run, run)` rather than `then(run)`: a
+   * handler that rejects must not poison the lane for every later frame on it,
+   * which is what a plain `then` would do.
+   */
+  private dispatch(lane: SyncFrameLane, operation: () => Promise<void>): Promise<void> {
+    const previous = this.lanes.get(lane) ?? Promise.resolve()
+    const next = previous.then(operation, operation)
+    this.lanes.set(
+      lane,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    )
+    return next
+  }
+
+  /** Register a frame as outstanding until it settles, for `drain()`/`stop()`. */
+  private track(task: Promise<void>): void {
+    this.inFlight.add(task)
+    void task.then(
+      () => this.inFlight.delete(task),
+      () => this.inFlight.delete(task),
+    )
+  }
+
+  /**
+   * Resolve once no queued or in-flight frame work remains, WITHOUT closing the
+   * socket or aborting anything (R1). `stop()` disconnects first, which aborts
+   * every active operation -- so a shutdown that only called `stop()` cancelled
    * the command a client was waiting on and answered it with nothing. The
    * gateway drains every handler first, bounded, and only then closes 1001.
    *
-   * The queue is re-chained by `enqueue`, so awaiting one snapshot can miss a
-   * frame that arrived while we waited; loop until the chain stops moving.
-   * During a drain the gateway refuses new frames with 1013, so this settles.
+   * Reads the outstanding set afresh each pass, because a frame admitted while
+   * we waited is not in the snapshot we awaited. During a drain the gateway
+   * refuses new frames with 1013, so this settles.
    */
   async drain(): Promise<void> {
-    let awaited: Promise<void> | undefined
-    while (awaited !== this.queue) {
-      awaited = this.queue
-      await awaited.catch(() => undefined)
+    for (;;) {
+      const outstanding = [...this.inFlight]
+      if (outstanding.length === 0) {
+        return
+      }
+      await Promise.allSettled(outstanding)
+      // `track` deletes on a continuation of the same promise, so yield once
+      // before re-reading rather than spinning on a set that is about to empty.
+      await Promise.resolve()
     }
   }
 
   /** Await queued work and distributed cleanup; the gateway bounds this during shutdown. */
   async stop(): Promise<void> {
     this.disconnect()
-    await this.queue.catch(() => undefined)
+    await this.drain()
     await Promise.allSettled([...this.cleanupTasks])
     await Promise.allSettled([this.releaseActiveLease(), this.releaseSocketBudget()])
   }
 
-  private async process(raw: string, rawBytes: number): Promise<void> {
+  private async process(raw: string, rawBytes: number, release: () => void): Promise<void> {
+    try {
+      return await this.gateFrame(raw, rawBytes, release)
+    } finally {
+      // Idempotent, and it covers every early return above: a frame the gate
+      // answered itself must not leave the next frame waiting on a promise
+      // nobody will resolve.
+      release()
+    }
+  }
+
+  private async gateFrame(raw: string, rawBytes: number, release: () => void): Promise<void> {
     if (this.closed) {
       return
     }
     if (!this.options.isEnabled()) {
-      this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1012)
+      this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1013)
       return
     }
     // Admission (the AUTH frame) needs the fleet-shared ticket, lease and
     // socket-budget stores plus the session plane, so a socket that cannot be
-    // admitted is closed 1012 and the client re-tickets later. Once
+    // admitted is closed 1013 and the client re-tickets later. Once
     // AUTHENTICATED, none of those stores gates the socket any more: a Redis
     // ready-flap or one 1.5 s operation timeout used to close every idle sync
     // socket in the fleet within a renewal interval and drop the invite,
@@ -841,7 +1122,7 @@ export class SyncCommandHandler {
         !this.options.socketBudget.ready() ||
         !sessionAuthorizationReady(this.options.authorization))
     ) {
-      this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1012)
+      this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1013)
       return
     }
 
@@ -884,6 +1165,8 @@ export class SyncCommandHandler {
       this.activeSocketBudget = budget
       this.scheduleSocketBudgetRenewal()
       this.identity = consumed
+      this.authenticatedAt = Date.now()
+      this.scheduleSessionRevalidation()
       this.expectedClientSequence = 1
       this.serverSequence = frame.payload.resumeSequence ?? 0
       clearTimeout(this.authTimer)
@@ -921,6 +1204,30 @@ export class SyncCommandHandler {
     }
     this.expectedClientSequence += 1
 
+    // The frame is admitted. Everything above had to happen in arrival order;
+    // nothing below does, beyond the ordering its own lane guarantees -- so the
+    // gate is released here, before a single backend call is made.
+    const lane = syncFrameLane(frame.type)
+    release()
+    await this.dispatch(lane, () => this.handleFrame(frame))
+  }
+
+  /**
+   * Handle ONE admitted frame. Reached from a lane, so it may start long after
+   * the frame was parsed: a socket that closed in between must do nothing, and
+   * an identity withdrawn by a revoked REAUTH is a closed socket.
+   */
+  private async handleFrame(frame: SyncClientFrame): Promise<void> {
+    if (this.closed || !this.identity) {
+      return
+    }
+    if (frame.type === 'AUTH') {
+      // Unreachable: the gate answers the handshake itself and refuses a second
+      // AUTH with ALREADY_AUTHENTICATED before anything is dispatched. Written
+      // as a narrowing guard rather than an assertion so that a frame type
+      // rerouted here later cannot fall through to `handleCommand`.
+      return
+    }
     if (frame.type === 'PING') {
       this.send('PONG', frame.requestId, frame.commandId, {})
       return
@@ -965,16 +1272,7 @@ export class SyncCommandHandler {
       frame.type === 'FILES_CREDIT' ||
       frame.type === 'FILES_CANCEL'
     ) {
-      await this.filesSession?.handleControl(
-        frame as
-          | SyncFilesMetadataFrame
-          | SyncFilesUploadOpenFrame
-          | SyncFilesUploadFinishFrame
-          | SyncFilesDownloadOpenFrame
-          | SyncFilesCreditFrame
-          | SyncFilesCancelFrame,
-        this.identity,
-      )
+      await this.filesSession?.handleControl(frame, this.identity)
       if (!this.filesSession) {
         this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
       }
@@ -983,19 +1281,30 @@ export class SyncCommandHandler {
     await this.handleCommand(frame)
   }
 
-  private async processBinary(raw: Uint8Array): Promise<void> {
-    if (this.closed) {
-      return
+  private async processBinary(raw: Uint8Array, release: () => void): Promise<void> {
+    try {
+      if (this.closed) {
+        return
+      }
+      if (!this.identity) {
+        this.failAndClose('AUTH_REQUIRED', 'File binary frames require authentication.')
+        return
+      }
+      if (!this.options.isEnabled() || !this.filesSession || !this.options.files?.ready()) {
+        this.sendError('files-binary', 'files-binary', 'OPERATION_UNAVAILABLE')
+        return
+      }
+      const identity = this.identity
+      const session = this.filesSession
+      // The SAME lane as the FILES_V1 control frames. A chunk is only
+      // interpretable against the transfer its `FILES_UPLOAD_OPEN` created, so
+      // the binary plane and the files control plane are one ordering domain --
+      // just no longer the same one as a durable sync command.
+      release()
+      await this.dispatch('files', () => session.handleBinary(raw, identity))
+    } finally {
+      release()
     }
-    if (!this.identity) {
-      this.failAndClose('AUTH_REQUIRED', 'File binary frames require authentication.')
-      return
-    }
-    if (!this.options.isEnabled() || !this.filesSession || !this.options.files?.ready()) {
-      this.sendError('files-binary', 'files-binary', 'OPERATION_UNAVAILABLE')
-      return
-    }
-    await this.filesSession.handleBinary(raw, this.identity)
   }
 
   /**
@@ -1093,7 +1402,7 @@ export class SyncCommandHandler {
     }
 
     const controller = new AbortController()
-    this.activeAbort = controller
+    this.activeOperations.add(controller)
     let decision: SyncSessionRefreshDecision
     try {
       decision = await this.withTimeout((signal) => revalidate({ identity: refreshed }, signal), controller)
@@ -1105,6 +1414,7 @@ export class SyncCommandHandler {
       this.sendError(frame.requestId, frame.commandId, 'SESSION_STALE')
       return
     } finally {
+      this.activeOperations.delete(controller)
       controller.abort()
     }
     if (this.closed) {
@@ -1165,7 +1475,7 @@ export class SyncCommandHandler {
     }
 
     const controller = new AbortController()
-    this.activeAbort = controller
+    this.activeOperations.add(controller)
     try {
       const result = await this.withTimeout(
         (signal) => adapter.authorizeCollaboration({ identity, request: frame.payload }, signal),
@@ -1260,9 +1570,7 @@ export class SyncCommandHandler {
       this.options.metrics?.increment('collaboration_authorization', controller.signal.aborted ? 'timeout' : 'error')
       this.sendError(frame.requestId, frame.commandId, controller.signal.aborted ? 'BACKEND_TIMEOUT' : 'BACKEND_ERROR')
     } finally {
-      if (this.activeAbort === controller) {
-        this.activeAbort = undefined
-      }
+      this.activeOperations.delete(controller)
     }
   }
 
@@ -1333,6 +1641,29 @@ export class SyncCommandHandler {
     return timingSafeEqual(discovery.challengeDigest, supplied) ? { discovery } : { rejection: 'invalid' }
   }
 
+  /**
+   * Standard Red Notes: subscribe to the durable invite-invalidation stream.
+   *
+   * THIS LANE PRESENTED NO CREDENTIAL. `SyncInviteEventsAdapter` is handed a
+   * `userUuid` and nothing else, and this method never called `authorize` or
+   * `refreshSession`: the ticket proved a session ONCE, at the handshake, and
+   * from then on a socket whose session had been signed out or remotely revoked
+   * kept receiving invite invalidations -- metadata only, since the client's
+   * follow-up HTTP fetch 401s, but still a stream of "something about your
+   * invites changed" to a credential that no longer exists, plus a held
+   * per-user socket slot, until some other lane happened to revalidate or the
+   * socket closed. The cookie plumbing for asking was already here and already
+   * used per-operation by the FILES_V1 authorizer
+   * (`SyncTicketIdentity.sessionCookies`); the lane simply never asked.
+   *
+   * It asks now, with `operation: 'INVITE_EVENTS'` -- the session question, not
+   * the command one, because an invite invalidation is not a mutation and must
+   * not be withheld from a read-only or over-limit account. A refusal is a
+   * per-operation error, never a close: `SESSION_STALE` tells the client to
+   * re-ticket and subscribe again, and that is a recovery a close would delete.
+   * The socket-wide revalidation in {@link revalidateSession} is what ends a
+   * socket whose session is actually gone.
+   */
   private async handleInviteSubscribe(frame: SyncInviteSubscribeFrame): Promise<void> {
     const adapter = this.options.inviteEvents
     if (!adapter || !this.inviteEventsReady()) {
@@ -1340,9 +1671,58 @@ export class SyncCommandHandler {
       this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
       return
     }
+    if (!sessionAuthorizationReady(this.options.authorization)) {
+      this.options.metrics?.increment('invite_events', 'unavailable')
+      this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
+      return
+    }
 
-    this.stopInviteSubscription()
     const identity = this.identity as SyncTicketIdentity
+    const authorizationController = new AbortController()
+    this.activeOperations.add(authorizationController)
+    let authorization: SyncAuthorizationDecision
+    try {
+      authorization = await this.withTimeout(
+        (signal) =>
+          this.options.authorization.authorize(
+            {
+              identity,
+              operation: 'INVITE_EVENTS',
+              commandId: frame.commandId,
+              digest: '',
+              payloadLength: frame.payloadLength,
+            },
+            signal,
+          ),
+        authorizationController,
+      )
+    } catch {
+      this.options.metrics?.increment(
+        'invite_events',
+        authorizationController.signal.aborted ? 'authorization_timeout' : 'authorization_error',
+      )
+      this.sendError(
+        frame.requestId,
+        frame.commandId,
+        authorizationController.signal.aborted ? 'BACKEND_TIMEOUT' : 'SESSION_STALE',
+      )
+      return
+    } finally {
+      this.activeOperations.delete(authorizationController)
+      authorizationController.abort()
+    }
+    if (this.closed) {
+      return
+    }
+    if (!authorization.authorized) {
+      this.options.metrics?.increment('authorization', authorization.code)
+      this.sendError(frame.requestId, frame.commandId, publicAuthorizationCode(authorization.code))
+      return
+    }
+
+    // AFTER the credential is accepted. A refused subscribe must not be able to
+    // tear down the subscription the socket already holds.
+    this.stopInviteSubscription()
     if (frame.payload.cursor === undefined) {
       const controller = new AbortController()
       try {
@@ -1780,6 +2160,19 @@ export class SyncCommandHandler {
     }
   }
 
+  /**
+   * Abort every bounded backend operation this socket has in flight. One
+   * `abort()` per registered controller, because with per-lane concurrency
+   * there is no single "current" one -- and an operation left unaborted on a
+   * closed socket runs to its own backend timeout holding whatever it holds.
+   */
+  private abortActiveOperations(): void {
+    for (const controller of this.activeOperations) {
+      controller.abort()
+    }
+    this.activeOperations.clear()
+  }
+
   private abortActiveRpcs(code: string): void {
     for (const active of this.activeRpcs.values()) {
       active.abortCode = code
@@ -1800,7 +2193,7 @@ export class SyncCommandHandler {
     }
     const identity = this.identity as SyncTicketIdentity
     const controller = new AbortController()
-    this.activeAbort = controller
+    this.activeOperations.add(controller)
     try {
       const authorization = await this.withTimeout(
         (signal) =>
@@ -1849,9 +2242,7 @@ export class SyncCommandHandler {
       this.options.metrics?.increment('backend', controller.signal.aborted ? 'timeout' : 'error')
       this.sendError(frame.requestId, frame.commandId, controller.signal.aborted ? 'BACKEND_TIMEOUT' : 'BACKEND_ERROR')
     } finally {
-      if (this.activeAbort === controller) {
-        this.activeAbort = undefined
-      }
+      this.activeOperations.delete(controller)
     }
   }
 
@@ -1913,7 +2304,7 @@ export class SyncCommandHandler {
     }
     this.activeLease = leaseInput
     const controller = new AbortController()
-    this.activeAbort = controller
+    this.activeOperations.add(controller)
 
     try {
       await this.withLeaseRenewal(controller, async () => {
@@ -1978,9 +2369,7 @@ export class SyncCommandHandler {
         leaseLost ? 'LEASE_LOST' : timedOut ? 'BACKEND_TIMEOUT' : 'BACKEND_ERROR',
       )
     } finally {
-      if (this.activeAbort === controller) {
-        this.activeAbort = undefined
-      }
+      this.activeOperations.delete(controller)
       await this.releaseActiveLease()
     }
   }
@@ -2179,6 +2568,27 @@ export class SyncCommandHandler {
     }
   }
 
+  /**
+   * Send the protocol-addressed ERROR, release everything this socket holds and
+   * close it.
+   *
+   * THE CLOSE CODE IS PART OF THE ANSWER, and `1008` is the default only
+   * because the majority of these refusals genuinely are policy violations:
+   * the client authenticated late, repeated its AUTH, sent an unparseable or
+   * out-of-order frame, acknowledged a batch it was not offered, or presented a
+   * credential the session plane says is gone. Every one of those tells a
+   * client "stop, this will not work" -- which is what 1008 means and what a
+   * generic client does with it.
+   *
+   * A caller whose cause is TRANSIENT must pass `1013` instead, and the three
+   * families that do are the ones a client should come back from: backpressure
+   * (a queue or an egress buffer that drains), a capacity refusal (the
+   * per-user socket limit, a lost reservation), and the lane being switched off
+   * or its admission stores being unready. `1012` ("service restart") used to
+   * carry that last one and was simply untrue -- nothing restarts -- so it is
+   * now 1013 like its siblings. `1009` stays with the frame-size ceiling, where
+   * "message too big" is exactly the fact.
+   */
   private failAndClose(code: string, message: string, closeCode = 1008): void {
     if (this.closed) {
       return
@@ -2186,11 +2596,14 @@ export class SyncCommandHandler {
     this.sendError('protocol', 'protocol', code)
     this.closed = true
     clearTimeout(this.authTimer)
+    if (this.sessionRevalidationTimer) {
+      clearTimeout(this.sessionRevalidationTimer)
+    }
     if (this.socketBudgetRenewTimer) {
       clearTimeout(this.socketBudgetRenewTimer)
     }
     this.lifecycleAbort.abort()
-    this.activeAbort?.abort()
+    this.abortActiveOperations()
     this.abortActiveRpcs(code)
     this.stopInviteSubscription()
     this.filesSession?.disconnect()
@@ -2201,6 +2614,103 @@ export class SyncCommandHandler {
     } catch {
       // State is already closed and all reservations are released.
     }
+  }
+
+  private scheduleSessionRevalidation(): void {
+    if (this.closed || !this.identity) {
+      return
+    }
+    this.sessionRevalidationTimer = setTimeout(() => {
+      void this.revalidateSession()
+    }, this.sessionRevalidationIntervalMs)
+    this.sessionRevalidationTimer.unref()
+  }
+
+  /**
+   * Standard Red Notes: re-present this socket's credential to the session
+   * plane, periodically, for the life of the socket.
+   *
+   * WHY A SOCKET NEEDS THIS AT ALL. A ticket proves a session at the handshake
+   * and never again. COMMAND, STATUS and the FILES_V1 authorizers each ask the
+   * session plane per operation, so a revoked session loses them immediately --
+   * but a socket that only holds an INVITE_EVENTS subscription, a collaboration
+   * room or an idle slot asks nothing, forever. There was no periodic
+   * revalidation and no maximum socket lifetime anywhere in this package, so a
+   * signed-out or remotely-revoked session kept a live authenticated socket,
+   * kept receiving invite invalidations on it, and kept one of its user's
+   * socket-budget slots.
+   *
+   * WHAT COUNTS AS REVOKED, and why this is not `authorize`. `authorize`
+   * answers the SYNC lane's question ("what should the client try next?") and
+   * deliberately collapses a transport failure onto `SESSION_REVOKED`, because
+   * on that lane the refusal costs one command. Here a refusal decides whether
+   * a live authenticated socket is TERMINATED, so the only acceptable input is
+   * the session verdict: `refreshSession` -> `classifyPresentedSessionCredential`,
+   * which is keyed on auth's STATUS (401 is a revocation; anything unreachable,
+   * unreadable or merely odd is `SESSION_STALE`) and is the same table REAUTH,
+   * the collaboration lane and the files authorizers already share. A rolling
+   * deploy, an auth blip or a cookie-less credential shape therefore cannot
+   * close a working socket -- it only costs this tick.
+   *
+   * It presents the credential the socket currently HOLDS, so a REAUTH that
+   * adopted a fresh one is revalidated, not the one the socket was admitted
+   * with.
+   */
+  private async revalidateSession(): Promise<void> {
+    this.sessionRevalidationTimer = undefined
+    const identity = this.identity
+    if (this.closed || !identity) {
+      return
+    }
+    const authorization = this.options.authorization
+    const revalidate = authorization.refreshSession?.bind(authorization)
+    if (!revalidate) {
+      // No way to ASK. Bound the socket's life instead of leaving it unbounded:
+      // re-ticketing goes through real authenticated HTTP, so a session that no
+      // longer authenticates cannot obtain the ticket that would bring it back.
+      if (Date.now() - this.authenticatedAt >= this.socketMaxLifetimeMs) {
+        this.options.metrics?.increment('session_revalidation', 'lifetime_elapsed')
+        this.failAndClose('SESSION_LIFETIME', 'Sync socket lifetime elapsed.', 1013)
+        return
+      }
+      this.scheduleSessionRevalidation()
+      return
+    }
+    if (!sessionAuthorizationReady(authorization)) {
+      // The session plane is not answering anything right now. Not evidence.
+      this.options.metrics?.increment('session_revalidation', 'unavailable')
+      this.scheduleSessionRevalidation()
+      return
+    }
+
+    const controller = new AbortController()
+    this.activeOperations.add(controller)
+    let decision: SyncSessionRefreshDecision
+    try {
+      decision = await this.withTimeout((signal) => revalidate({ identity }, signal), controller)
+    } catch {
+      this.options.metrics?.increment('session_revalidation', controller.signal.aborted ? 'timeout' : 'error')
+      this.scheduleSessionRevalidation()
+      return
+    } finally {
+      this.activeOperations.delete(controller)
+      controller.abort()
+    }
+    if (this.closed) {
+      return
+    }
+    if (!decision.refreshed && decision.code === 'SESSION_REVOKED') {
+      this.options.metrics?.increment('session_revalidation', 'revoked')
+      // The same ending, and the same wire code, a REAUTH presenting a revoked
+      // credential already produces: NOT_AUTHORIZED. No new authorization
+      // topology is published, and the invite stream stops because the socket
+      // does -- `failAndClose` runs `stopInviteSubscription`.
+      this.failAndClose('NOT_AUTHORIZED', 'Sync session is no longer authorized.')
+      this.identity = undefined
+      return
+    }
+    this.options.metrics?.increment('session_revalidation', decision.refreshed ? 'ok' : 'stale')
+    this.scheduleSessionRevalidation()
   }
 
   /**

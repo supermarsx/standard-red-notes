@@ -130,7 +130,9 @@ export const DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLim
  * frames and nowhere near a file. An upload re-slices the encrypted stream into
  * 256 KiB frames (`MAX_FILE_CHUNK_BYTES`), so the 2 MiB bucket is empty after
  * EIGHT of them and the ninth or tenth is refused -- closing the whole socket
- * 1008. Measured on a single container built from `main`: 2,097,152 bytes (8
+ * (1008 when this was measured; the ingress refusal now closes 1013, which is
+ * the truthful code for a bucket that refills). Measured on a single container
+ * built from `main`: 2,097,152 bytes (8
  * frames) uploaded every time, 2,359,297 bytes and above failed, and an ordinary
  * 2,971,413-byte photo failed on every attempt with `SOCKET_CLOSED` on the
  * client. The cap was never a file-size policy; it was the command plane's rate
@@ -263,6 +265,14 @@ export interface SyncGatewayOptions {
   fileIngressLimits?: Partial<WebSocketIngressLimits>
   authDeadlineMs?: number
   backendTimeoutMs?: number
+  /**
+   * How often a live, authenticated sync socket re-presents its credential to
+   * the session plane (default {@link SYNC_SESSION_REVALIDATION_INTERVAL_MS}).
+   * No host passes one; a probe shortens it to observe a revocation.
+   */
+  sessionRevalidationIntervalMs?: number
+  /** Bound on a socket whose authorization adapter cannot revalidate at all. */
+  socketMaxLifetimeMs?: number
   leaseRenewIntervalMs?: number
   socketBudgetRenewIntervalMs?: number
 }
@@ -1762,6 +1772,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         metrics: syncOptions!.metrics,
         authDeadlineMs: syncOptions!.authDeadlineMs,
         backendTimeoutMs: syncOptions!.backendTimeoutMs,
+        sessionRevalidationIntervalMs: syncOptions!.sessionRevalidationIntervalMs,
+        socketMaxLifetimeMs: syncOptions!.socketMaxLifetimeMs,
         leaseRenewIntervalMs: syncOptions!.leaseRenewIntervalMs,
         socketBudgetRenewIntervalMs: syncOptions!.socketBudgetRenewIntervalMs,
       }
@@ -1806,7 +1818,19 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         if (!planeLimiter.tryConsume(rawBytes)) {
           syncOptions!.metrics?.increment('rate_limit', isBinary ? 'file_ingress' : 'ingress')
           stopHandler()
-          socket.close(1008, isBinary ? 'file rate limit exceeded' : 'sync rate limit exceeded')
+          // 1013, NOT 1008. A spent token bucket refills; the refusal is
+          // TRANSIENT and the right client response is to back off and come
+          // back. 1008 "policy violation" is what a generic client -- anything
+          // that does not carry the reason string through, which is most
+          // libraries and every browser devtools panel -- reads as a permanent
+          // refusal of this credential or this origin, and the correct response
+          // to that is to stop reconnecting. The bucket sizes themselves are
+          // measured and tuned (`05eda115`/`8f5db2e3`/`1eb89820`); this is only
+          // about what the close TELLS the client. The reason string is
+          // unchanged, so the one consumer that does read it
+          // (`syncCloseFallbackReason`, which keys 'rate limit' before it ever
+          // looks at the code) classifies this exactly as it did before.
+          socket.close(1013, isBinary ? 'file rate limit exceeded' : 'sync rate limit exceeded')
           return
         }
         alive.set(socket, true)
@@ -1859,7 +1883,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       logRefusal('[ws] connection rejected: per-user limit', 'legacy:per-user-limit', {
         limit: maxConnectionsPerUser,
       })
-      socket.close(1008, 'per-user connection limit exceeded')
+      // 1013: a capacity refusal, not a policy one. This user holds as many
+      // legacy connections as the deployment allows RIGHT NOW, and closing one
+      // elsewhere makes the very same attempt succeed. The sync lane's twin
+      // condition (`SOCKET_LIMIT`, 'Per-user sync socket limit exceeded.')
+      // already closed 1013; the two lanes disagreeing about the same fact was
+      // the whole defect.
+      socket.close(1013, 'per-user connection limit exceeded')
       return
     }
 
@@ -1967,7 +1997,10 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       if (!ingressLimiter.tryConsume(rawBytes)) {
         logRefusal('[ws] ingress rate exceeded', 'legacy:ingress-rate', { conn: conn.connectionId })
         cleanup()
-        socket.close(1008, 'message rate limit exceeded')
+        // 1013 for the same reason the sync lane's ingress limiter uses it: the
+        // bucket refills, so this is "slow down and come back", never "this
+        // client is refused".
+        socket.close(1013, 'message rate limit exceeded')
         return
       }
       alive.set(socket, true)
@@ -2267,6 +2300,9 @@ export type { Logger } from './redisBridge.js'
 // authorization, FILES_V1 authorization) shares a single table instead of
 // growing its own.
 export { classifyPresentedSessionCredential, credentialCanAuthenticateSession } from './syncCommandHandler.js'
+// The periodic-revalidation bounds, exported so a host or a live probe can
+// state the figure it is relying on instead of duplicating it.
+export { SYNC_SESSION_REVALIDATION_INTERVAL_MS, SYNC_SOCKET_MAX_LIFETIME_MS } from './syncCommandHandler.js'
 export type {
   PresentedSessionCredentialOutcome,
   SyncAuthorizationCode,
