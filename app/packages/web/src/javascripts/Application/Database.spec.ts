@@ -340,4 +340,151 @@ describe('Database silent-data-loss fixes', () => {
       expect(emitSaved).not.toHaveBeenCalled()
     })
   })
+
+  /**
+   * MULTI-TAB READS. A read whose transaction dies mid-cursor used to leave its promise
+   * unsettled forever, so SyncService.loadDatabasePayloads awaited a value that never came
+   * and the app sat with an empty, still-loading item list. These prove the read now
+   * REJECTS, which the loader already isolates and reports.
+   */
+  describe('a read whose transaction dies settles instead of hanging', () => {
+    const neverSettles = async (promise: Promise<unknown>) => {
+      const sentinel = Symbol('pending')
+      const result = await Promise.race([
+        promise.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        flushMicrotasks().then(() => sentinel),
+      ])
+      return result === sentinel
+    }
+
+    it('rejects getPayloadsForKeys when the transaction aborts before every row answers', async () => {
+      const transaction = new MockTransaction(null)
+      /**
+       * Only the first of three keys answers; the other two requests never fire, which is
+       * what a transaction dying mid-read looks like. Before the fix this promise never
+       * settled at all.
+       */
+      let answered = 0
+      const store = {
+        get: (key: string) => {
+          const request = new MockRequest()
+          if (answered++ === 0) {
+            fireAsync(() => {
+              request.result = { uuid: key }
+              request.onsuccess && request.onsuccess({ target: request })
+            })
+          }
+          return request
+        },
+      } as unknown as MockObjectStore
+      transaction.setStore(store)
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+
+      const readPromise = database.getPayloadsForKeys(['a', 'b', 'c'])
+      const assertion = expect(readPromise).rejects.toThrow('store went away')
+
+      await flushMicrotasks()
+      transaction.abort(new DOMException('store went away', 'InvalidStateError'))
+
+      await assertion
+    })
+
+    it('rejects getAllMetadata when the cursor transaction aborts', async () => {
+      const transaction = new MockTransaction(null)
+      const cursorRequest = new MockRequest()
+      const store = {
+        openCursor: () => cursorRequest,
+      } as unknown as MockObjectStore
+      transaction.setStore(store)
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+
+      const readPromise = database.getAllMetadata()
+      const assertion = expect(readPromise).rejects.toThrow('cursor died')
+
+      await flushMicrotasks()
+      transaction.abort(new DOMException('cursor died', 'InvalidStateError'))
+
+      await assertion
+    })
+
+    it('a cursor read that is still streaming is not settled early', async () => {
+      const transaction = new MockTransaction(null)
+      const cursorRequest = new MockRequest()
+      const store = {
+        openCursor: () => cursorRequest,
+      } as unknown as MockObjectStore
+      transaction.setStore(store)
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+
+      expect(await neverSettles(database.getAllMetadata())).toBe(true)
+    })
+  })
+
+  /**
+   * MULTI-TAB HANDLES. Another tab deleting the database closes this tab's handle. The
+   * cached reference must be dropped, or openDatabase() keeps handing out a CLOSED handle
+   * and every later read and write throws for the rest of the page's life.
+   */
+  describe('a handle closed by another tab is not reused', () => {
+    const installOpenMock = () => {
+      const opened: FakeIDBDatabase[] = []
+      const open = jest.fn(() => {
+        const request: any = { onerror: null, onblocked: null, onsuccess: null, onupgradeneeded: null }
+        const db = new FakeIDBDatabase()
+        opened.push(db)
+        request.result = db
+        fireAsync(() => {
+          request.onsuccess && request.onsuccess({ target: request })
+        })
+        return request
+      })
+      ;(window as any).indexedDB = { open }
+      return { opened, open }
+    }
+
+    it('re-opens after a versionchange closed the previous handle', async () => {
+      const { opened, open } = installOpenMock()
+      const database = new Database('handle-db')
+      database.unlock()
+
+      const first = await database.openDatabase()
+      expect(open).toHaveBeenCalledTimes(1)
+      expect(await database.openDatabase()).toBe(first)
+      expect(open).toHaveBeenCalledTimes(1)
+
+      /** Another tab called deleteDatabase: the browser fires versionchange on ours. */
+      opened[0].onversionchange?.()
+      expect(opened[0].closed).toBe(true)
+
+      const second = await database.openDatabase()
+      expect(open).toHaveBeenCalledTimes(2)
+      expect(second).not.toBe(first)
+    })
+
+    it('re-opens after the browser force-closed the handle', async () => {
+      const { opened, open } = installOpenMock()
+      const database = new Database('handle-db')
+      database.unlock()
+
+      await database.openDatabase()
+      opened[0].onclose?.()
+
+      await database.openDatabase()
+      expect(open).toHaveBeenCalledTimes(2)
+    })
+  })
 })
+
+class FakeIDBDatabase {
+  public closed = false
+  public onversionchange: (() => void) | null = null
+  public onclose: (() => void) | null = null
+  public onerror: ((event: any) => void) | null = null
+
+  close() {
+    this.closed = true
+  }
+}

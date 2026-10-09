@@ -118,9 +118,23 @@ export class Database {
       request.onsuccess = (event) => {
         const target = event.target as IDBOpenDBRequest
         const db = target.result
+        /**
+         * MULTI-TAB: another tab deleting or upgrading this database closes our handle.
+         * Forgetting the cached reference is the load-bearing half — without it
+         * openDatabase() keeps returning a CLOSED handle and every later read and write
+         * throws InvalidStateError for the rest of the page's life, which reads as "the
+         * local database stopped working" rather than "re-open it".
+         */
+        const forget = () => {
+          if (this.db === db) {
+            this.db = undefined
+          }
+        }
         db.onversionchange = () => {
           db.close()
+          forget()
         }
+        db.onclose = forget
         db.onerror = (errorEvent) => {
           const target = errorEvent?.target as any
           throw Error('Database error: ' + target.errorCode)
@@ -149,12 +163,37 @@ export class Database {
     })
   }
 
+  /**
+   * Reject a read whose transaction failed or was aborted. Without this a read promise
+   * NEVER settles when the transaction dies mid-cursor (the database deleted by a peer
+   * tab, a storage error), and the awaiting caller — SyncService.loadDatabasePayloads —
+   * hangs forever with an empty, still-"loading" item list. A rejection is handled: the
+   * loader isolates the failed chunk and its completeness check reports the shortfall.
+   */
+  private rejectReadOnTransactionFailure(
+    transaction: IDBTransaction,
+    settleReject: (error: any) => void,
+    label: string,
+  ): void {
+    const fail = (event: any) => {
+      const target = event?.target as any
+      settleReject(target?.error ?? transaction.error ?? new Error(`IndexedDB ${label} transaction failed`))
+    }
+    transaction.onerror = fail
+    transaction.onabort = fail
+  }
+
   public async getAllPayloads(): Promise<any[]> {
     const db = (await this.openDatabase()) as IDBDatabase
-    return new Promise((resolve) => {
-      const objectStore = db.transaction(STORE_NAME).objectStore(STORE_NAME)
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME)
+      const objectStore = transaction.objectStore(STORE_NAME)
+      this.rejectReadOnTransactionFailure(transaction, reject, 'getAllPayloads')
       const payloads: any = []
       const cursorRequest = objectStore.openCursor()
+      cursorRequest.onerror = () => {
+        reject(cursorRequest.error ?? new Error('IndexedDB getAllPayloads cursor failed'))
+      }
       cursorRequest.onsuccess = (event) => {
         const target = event.target as any
         const cursor = target.result
@@ -178,11 +217,16 @@ export class Database {
    */
   public async getAllMetadata(): Promise<{ uuid: string; content_type: string; updated_at: Date }[]> {
     const db = (await this.openDatabase()) as IDBDatabase
-    return new Promise((resolve) => {
-      const objectStore = db.transaction(STORE_NAME).objectStore(STORE_NAME)
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME)
+      const objectStore = transaction.objectStore(STORE_NAME)
+      this.rejectReadOnTransactionFailure(transaction, reject, 'getAllMetadata')
       const metadata: { uuid: string; content_type: string; updated_at: Date }[] = []
       const skippedUuids: string[] = []
       const cursorRequest = objectStore.openCursor()
+      cursorRequest.onerror = () => {
+        reject(cursorRequest.error ?? new Error('IndexedDB getAllMetadata cursor failed'))
+      }
       cursorRequest.onsuccess = (event) => {
         const target = event.target as any
         const cursor = target.result
@@ -220,8 +264,10 @@ export class Database {
       return []
     }
     const db = (await this.openDatabase()) as IDBDatabase
-    return new Promise((resolve) => {
-      const objectStore = db.transaction(STORE_NAME).objectStore(STORE_NAME)
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME)
+      const objectStore = transaction.objectStore(STORE_NAME)
+      this.rejectReadOnTransactionFailure(transaction, reject, 'getPayloadsForKeys')
       const payloads: any = []
       /**
        * We intentionally skip-and-continue on unreadable (corrupt/partial) rows so a
@@ -271,9 +317,14 @@ export class Database {
   public async getAllKeys(): Promise<string[]> {
     const db = (await this.openDatabase()) as IDBDatabase
 
-    return new Promise((resolve) => {
-      const objectStore = db.transaction(STORE_NAME).objectStore(STORE_NAME)
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME)
+      const objectStore = transaction.objectStore(STORE_NAME)
+      this.rejectReadOnTransactionFailure(transaction, reject, 'getAllKeys')
       const getAllKeysRequest = objectStore.getAllKeys()
+      getAllKeysRequest.onerror = () => {
+        reject(getAllKeysRequest.error ?? new Error('IndexedDB getAllKeys request failed'))
+      }
       getAllKeysRequest.onsuccess = function () {
         const result = getAllKeysRequest.result
 

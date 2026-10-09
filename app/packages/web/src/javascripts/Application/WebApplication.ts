@@ -353,7 +353,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this._saveCrossTabCoordinator = new CrossTabCoordinator({
       namespace: this.identifier,
       callbacks: {
-        onForeignSave: (uuids) => reloadForeignDatabasePayloads(uuids, this.storage, this.payloads),
+        onForeignSave: (uuids) => reloadForeignDatabasePayloads(uuids, this.storage, this.payloads, this.encryption),
       },
     })
 
