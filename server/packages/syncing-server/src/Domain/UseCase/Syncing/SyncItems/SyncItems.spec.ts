@@ -14,6 +14,7 @@ import { GetMessagesSentToUser } from '../../Messaging/GetMessagesSentToUser/Get
 import { GetUserNotifications } from '../../Messaging/GetUserNotifications/GetUserNotifications'
 import { GetSharedVaultInvitesSentToUser } from '../../SharedVaults/GetSharedVaultInvitesSentToUser/GetSharedVaultInvitesSentToUser'
 import { Logger } from 'winston'
+import { decodeSyncTokenExtension, decodeSyncTokenPosition, encodeSyncToken } from '../SyncToken'
 
 describe('SyncItems', () => {
   let getItemsUseCase: GetItems
@@ -505,5 +506,126 @@ describe('SyncItems', () => {
     })
 
     expect(result.isFailed()).toBeTruthy()
+  })
+
+  /**
+   * Standard Red Notes (t99): the response token must never claim a position
+   * the response did not show. See SyncItems.responseSyncToken.
+   */
+  describe('the response sync token', () => {
+    const SESSION = '00000000-0000-0000-0000-0000000000a1'
+    const HORIZON = 1_616_164_630_000_000
+    const SAVE_POSITION = 1_616_164_633_241_312
+
+    const dto = (overrides: Record<string, unknown> = {}) => ({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      itemHashes: [itemHash],
+      computeIntegrityHash: false,
+      readOnlyAccess: false,
+      sessionUuid: SESSION,
+      apiVersion: ApiVersion.v20200115,
+      snjsVersion: '1.2.3',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+      ...overrides,
+    })
+
+    const givenGetItemsHorizon = (horizon: number, scopeDigest?: string) => {
+      getItemsUseCase.execute = jest.fn().mockReturnValue(
+        Result.ok({
+          items: [item1],
+          cursorToken: undefined,
+          lastSyncTime: null,
+          retrievalHorizonMicroseconds: horizon,
+          scopeDigest,
+        }),
+      )
+    }
+
+    const givenSaveItemsPosition = (position: number, savedItems: Item[]) => {
+      saveItemsUseCase.execute = jest.fn().mockReturnValue(
+        Result.ok({
+          savedItems,
+          conflicts: [],
+          syncToken: encodeSyncToken({ positionMicroseconds: position }),
+        }),
+      )
+    }
+
+    const extensionOf = (token: string) =>
+      decodeSyncTokenExtension(Buffer.from(token, 'base64').toString('utf-8').split(':').slice(2))
+
+    it('clamps the position down to the retrieval horizon, never the end of the save loop', async () => {
+      givenGetItemsHorizon(HORIZON)
+      givenSaveItemsPosition(SAVE_POSITION, [item2])
+
+      const result = await createUseCase().execute(dto())
+
+      expect(decodeSyncTokenPosition(result.getValue().syncToken)).toEqual(HORIZON)
+    })
+
+    it('carries the saving session and a ceiling so the next sync skips only these own writes', async () => {
+      givenGetItemsHorizon(HORIZON)
+      givenSaveItemsPosition(SAVE_POSITION, [item2])
+
+      const result = await createUseCase().execute(dto())
+
+      expect(extensionOf(result.getValue().syncToken)).toEqual({
+        ownWriteSessionUuid: SESSION,
+        ownWriteCeilingMicroseconds: SAVE_POSITION,
+        scopeDigest: undefined,
+      })
+    })
+
+    it('skips nothing when the request carried no session, because the column cannot identify the writer', async () => {
+      givenGetItemsHorizon(HORIZON)
+      givenSaveItemsPosition(SAVE_POSITION, [item2])
+
+      const result = await createUseCase().execute(dto({ sessionUuid: null }))
+
+      expect(decodeSyncTokenPosition(result.getValue().syncToken)).toEqual(HORIZON)
+      expect(extensionOf(result.getValue().syncToken)).toEqual({ scopeDigest: undefined })
+    })
+
+    it('skips nothing when this request saved nothing', async () => {
+      givenGetItemsHorizon(HORIZON)
+      givenSaveItemsPosition(SAVE_POSITION, [])
+
+      const result = await createUseCase().execute(dto({ itemHashes: [] }))
+
+      expect(decodeSyncTokenPosition(result.getValue().syncToken)).toEqual(HORIZON)
+      expect(extensionOf(result.getValue().syncToken)).toEqual({ scopeDigest: undefined })
+    })
+
+    it('leaves the position alone when the save half is already at or below the horizon', async () => {
+      givenGetItemsHorizon(SAVE_POSITION + 5_000)
+      givenSaveItemsPosition(SAVE_POSITION, [item2])
+
+      const result = await createUseCase().execute(dto())
+
+      expect(decodeSyncTokenPosition(result.getValue().syncToken)).toEqual(SAVE_POSITION)
+      expect(extensionOf(result.getValue().syncToken)).toEqual({ scopeDigest: undefined })
+    })
+
+    it('marks a vault-exclusive position with its scope so it cannot be replayed as a global one', async () => {
+      givenGetItemsHorizon(HORIZON, '0123456789abcdef')
+      givenSaveItemsPosition(SAVE_POSITION, [item2])
+
+      const result = await createUseCase().execute(dto({ sharedVaultUuids: ['11111111-1111-1111-1111-111111111111'] }))
+
+      expect(extensionOf(result.getValue().syncToken).scopeDigest).toEqual('0123456789abcdef')
+    })
+
+    it('hands back a token it cannot read rather than inventing a position for it', async () => {
+      givenGetItemsHorizon(HORIZON)
+      saveItemsUseCase.execute = jest
+        .fn()
+        .mockReturnValue(Result.ok({ savedItems: [item2], conflicts: [], syncToken: 'not-a-v2-token' }))
+
+      const result = await createUseCase().execute(dto())
+
+      expect(result.getValue().syncToken).toEqual('not-a-v2-token')
+    })
   })
 })

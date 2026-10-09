@@ -12,6 +12,9 @@ import { GetMessagesSentToUser } from '../../Messaging/GetMessagesSentToUser/Get
 import { GetUserNotifications } from '../../Messaging/GetUserNotifications/GetUserNotifications'
 import { Logger } from 'winston'
 import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
+import { GetItemsResult } from '../GetItems/GetItemsResult'
+import { SaveItemsResult } from '../SaveItems/SaveItemsResult'
+import { decodeSyncTokenPosition, encodeSyncToken } from '../SyncToken'
 
 export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
   constructor(
@@ -109,7 +112,7 @@ export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
 
       const syncResponse: SyncItemsResponse = {
         retrievedItems,
-        syncToken: saveItemsResult.syncToken,
+        syncToken: this.responseSyncToken(dto, getItemsResult, saveItemsResult),
         savedItems: saveItemsResult.savedItems,
         conflicts: saveItemsResult.conflicts,
         cursorToken: getItemsResult.cursorToken,
@@ -128,6 +131,68 @@ export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
       )
       throw error
     }
+  }
+
+  /**
+   * Standard Red Notes (t99): THE RESPONSE TOKEN, CLAMPED TO WHAT WAS SHOWN.
+   *
+   * This method exists because of a proven, silent, permanent loss. The token
+   * used to be `saveItemsResult.syncToken`, derived from the END of this
+   * request's save loop, while the rows came from a snapshot taken BEFORE it.
+   * The response therefore told the client "you hold everything up to
+   * T_save_end" having shown it rows only as of T_get, and every row another
+   * device committed in between — measured at 10/10 lost with a 25-item client
+   * batch, with every cursor followed to exhaustion — was skipped for good. The
+   * window is the duration of the client's own save loop, so it is widest
+   * exactly when an idle tab wakes up and flushes a big dirty batch.
+   *
+   * Two halves, and the second one is only an optimisation of the first:
+   *
+   *  (1) THE CLAMP. The position is `min(save token, retrieval horizon)`, so the
+   *      response can only ever claim a position it actually showed. Nothing is
+   *      skipped, at any batch size.
+   *
+   *  (2) THE OWN-WRITE SKIP. Clamping below this request's own saves means the
+   *      next sync would re-deliver what the client just saved. That is SAFE —
+   *      re-delivering beats skipping, always — but not free: a re-delivered own
+   *      write whose local copy has since been edited and left to settle resolves
+   *      through the client's conflict strategy, which moves the newer edit into
+   *      a conflict copy and restores the older content under the original uuid.
+   *      So the clamped token carries the saving session and a CEILING, and the
+   *      next retrieval skips only rows that session wrote at or below it.
+   *
+   *      The ceiling is what keeps this safe. Another tab on the same device
+   *      shares a session uuid, so an open-ended "never deliver my own session's
+   *      writes" would silently withhold a peer tab's later saves — trading this
+   *      defect for a fresh one. Above the ceiling nothing is ever skipped.
+   *
+   *      `updated_with_session` is NULL whenever the session was not propagated
+   *      into the sync context, and the skip then matches nothing: the token is
+   *      still clamped and the own writes are simply re-delivered. The
+   *      conservative direction is the default, not the exception.
+   */
+  private responseSyncToken(
+    dto: SyncItemsDTO,
+    getItemsResult: GetItemsResult,
+    saveItemsResult: SaveItemsResult,
+  ): string {
+    const saveTokenPosition = decodeSyncTokenPosition(saveItemsResult.syncToken)
+    if (saveTokenPosition === undefined) {
+      // SaveItems always emits a v2 token; if that ever stops being true, hand
+      // its token back untouched rather than invent a position for it.
+      return saveItemsResult.syncToken
+    }
+
+    const positionMicroseconds = Math.min(saveTokenPosition, getItemsResult.retrievalHorizonMicroseconds)
+    const clampedBelowOwnWrites = positionMicroseconds < saveTokenPosition
+    const canSkipOwnWrites = clampedBelowOwnWrites && dto.sessionUuid !== null && saveItemsResult.savedItems.length > 0
+
+    return encodeSyncToken({
+      positionMicroseconds,
+      ownWriteSessionUuid: canSkipOwnWrites ? (dto.sessionUuid as string) : undefined,
+      ownWriteCeilingMicroseconds: canSkipOwnWrites ? saveTokenPosition : undefined,
+      scopeDigest: getItemsResult.scopeDigest,
+    })
   }
 
   private isFirstSync(dto: SyncItemsDTO): boolean {

@@ -13,7 +13,7 @@ import { Item } from '../../../Item/Item'
 import { ItemConflict } from '../../../Item/ItemConflict'
 import { ItemHash } from '../../../Item/ItemHash'
 import { ConflictType } from '@standardnotes/responses'
-import { Time, TimerInterface } from '@standardnotes/time'
+import { TimerInterface } from '@standardnotes/time'
 import { Logger } from 'winston'
 import { ItemSaveValidatorInterface } from '../../../Item/SaveValidator/ItemSaveValidatorInterface'
 import { SaveNewItem } from '../SaveNewItem/SaveNewItem'
@@ -26,6 +26,7 @@ import { CheckForContentLimit } from '../CheckForContentLimit/CheckForContentLim
 import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpRepresentation'
 import { DomainEventInterface } from '@standardnotes/domain-events'
 import { ConcurrentItemUpdateError } from '../../../Item/ConcurrentItemUpdateError'
+import { encodeSyncToken } from '../SyncToken'
 
 /**
  * `WEBSOCKET_SYNC_PUSH_ENABLED` parser. Only the exact string 'true' turns the
@@ -56,8 +57,6 @@ const parsePositiveInteger = (value: string | undefined): number | undefined => 
 }
 
 export class SaveItems implements UseCaseInterface<SaveItemsResult> {
-  private readonly SYNC_TOKEN_VERSION = 2
-
   constructor(
     private itemSaveValidator: ItemSaveValidatorInterface,
     private itemRepository: ItemRepositoryInterface,
@@ -457,12 +456,12 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
     const lastUpdatedTimestampWithMicrosecondPreventingSyncDoubles = lastUpdatedTimestamp + 1
 
-    return Buffer.from(
-      `${this.SYNC_TOKEN_VERSION}:${
-        lastUpdatedTimestampWithMicrosecondPreventingSyncDoubles / Time.MicrosecondsInASecond
-      }`,
-      'utf-8',
-    ).toString('base64')
+    // Standard Red Notes (t99): one owner for the wire format (see SyncToken).
+    // NOTE this position is the end of THIS request's save loop, which is later
+    // than the snapshot the retrieved items came from — SyncItems clamps it back
+    // to that snapshot before it reaches the client. On its own it would claim a
+    // position the response never showed.
+    return encodeSyncToken({ positionMicroseconds: lastUpdatedTimestampWithMicrosecondPreventingSyncDoubles })
   }
 
   /**

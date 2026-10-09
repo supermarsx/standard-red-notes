@@ -431,6 +431,25 @@ export class SQLItemRepository implements ItemRepositoryInterface {
         })
       }
     }
+    // Standard Red Notes (t99): the own-write skip. Applied here so the three
+    // reads that share this builder — the content-size descriptors, the page
+    // itself and the more-items count — agree on exactly one page boundary; a
+    // predicate on only one of them would make the cursor and the page disagree.
+    // A NULL `updated_with_session` never matches, so a topology that does not
+    // populate the column re-delivers instead of withholding.
+    if (query.excludeUpdatedWithSession !== undefined && query.excludeUpdatedWithSessionUpToTimestamp !== undefined) {
+      // Spelled out rather than as NOT(...): in SQL a NULL `updated_with_session`
+      // makes the inner conjunction NULL and `NOT NULL` is NULL, so the NOT form
+      // would DROP exactly the rows this skip must never touch.
+      queryBuilder.andWhere(
+        '(item.updated_with_session IS NULL OR item.updated_with_session != :excludeUpdatedWithSession OR ' +
+          'item.updated_at_timestamp > :excludeUpdatedWithSessionUpToTimestamp)',
+        {
+          excludeUpdatedWithSession: query.excludeUpdatedWithSession,
+          excludeUpdatedWithSessionUpToTimestamp: query.excludeUpdatedWithSessionUpToTimestamp,
+        },
+      )
+    }
     if (query.createdBetween !== undefined) {
       queryBuilder.andWhere('item.created_at >= :createdAfter AND item.created_at <= :createdBefore', {
         createdAfter: query.createdBetween[0].toISOString(),

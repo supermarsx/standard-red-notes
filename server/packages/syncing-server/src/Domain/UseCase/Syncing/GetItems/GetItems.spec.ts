@@ -7,6 +7,7 @@ import { ContentType, Dates, Timestamps, UniqueEntityId, Uuid } from '@standardn
 import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
 import { ItemContentSizeDescriptor } from '../../../Item/ItemContentSizeDescriptor'
 import { ItemQuery } from '../../../Item/ItemQuery'
+import { encodeSyncToken, scopeDigestFor, SYNC_POSITION_FUTURE_ALLOWANCE_MICROSECONDS } from '../SyncToken'
 
 describe('GetItems', () => {
   let itemRepository: ItemRepositoryInterface
@@ -84,6 +85,8 @@ describe('GetItems', () => {
       items: [item],
       cursorToken: undefined,
       lastSyncTime: null,
+      retrievalHorizonMicroseconds: 123,
+      scopeDigest: undefined,
     })
   })
 
@@ -104,6 +107,8 @@ describe('GetItems', () => {
       items: [item],
       cursorToken: cursorToken(123, itemUuid),
       lastSyncTime: null,
+      retrievalHorizonMicroseconds: 123,
+      scopeDigest: undefined,
     })
   })
 
@@ -132,6 +137,8 @@ describe('GetItems', () => {
       items: [],
       cursorToken: undefined,
       lastSyncTime: null,
+      retrievalHorizonMicroseconds: 123,
+      scopeDigest: undefined,
     })
   })
 
@@ -150,6 +157,8 @@ describe('GetItems', () => {
       items: [item],
       cursorToken: undefined,
       lastSyncTime: 123,
+      retrievalHorizonMicroseconds: 123,
+      scopeDigest: undefined,
     })
     const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock.calls[0][0]
     expect(itemQuery.syncTimeComparison).toBe('>=')
@@ -311,6 +320,8 @@ describe('GetItems', () => {
       items: [item],
       cursorToken: undefined,
       lastSyncTime: 123,
+      retrievalHorizonMicroseconds: 123,
+      scopeDigest: undefined,
     })
   })
 
@@ -346,6 +357,8 @@ describe('GetItems', () => {
       items: [item],
       cursorToken: undefined,
       lastSyncTime: null,
+      retrievalHorizonMicroseconds: 123,
+      scopeDigest: undefined,
     })
   })
 
@@ -443,6 +456,177 @@ describe('GetItems', () => {
       items: [item],
       cursorToken: undefined,
       lastSyncTime: null,
+      retrievalHorizonMicroseconds: 123,
+      // The EFFECTIVE scope, which is the one vault access was granted for —
+      // the digest is over ['00000000-0000-0000-0000-000000000000'] alone and
+      // not over the two uuids the request asked about.
+      scopeDigest: '12b9377cbe7e5c94',
+    })
+  })
+
+  /**
+   * Standard Red Notes (t99): a position that cannot be honoured is an ERROR.
+   *
+   * Each of these used to be answered `200`, `retrieved_items: []` and a FRESH
+   * token — the one response shape that empties an account in one go while
+   * emitting no signal at all. See GetItems.verifyPositionIsHonourable.
+   */
+  describe('a position that cannot be honoured', () => {
+    const USER = '00000000-0000-0000-0000-000000000000'
+    const VAULT = '11111111-1111-1111-1111-111111111111'
+
+    it('refuses a cursor naming a row this account cannot see, rather than answering an empty success', async () => {
+      itemRepository.countAll = jest.fn().mockResolvedValue(0)
+
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        cursorToken: cursorToken(100, '22222222-2222-2222-2222-222222222222'),
+      })
+
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toEqual('Sync cursor refers to an item this account cannot continue from')
+      // Refused BEFORE any retrieval: an unanswerable position must not look
+      // like a page of nothing.
+      expect(itemRepository.findContentSizeForComputingTransferLimit).not.toHaveBeenCalled()
+    })
+
+    it('checks the cursor row against the same visibility the retrieval uses', async () => {
+      sharedVaultUserRepository.findByUserUuid = jest
+        .fn()
+        .mockResolvedValue([{ props: { sharedVaultUuid: Uuid.create(VAULT).getValue() } }])
+
+      await createUseCase().execute({
+        userUuid: USER,
+        cursorToken: cursorToken(100, '22222222-2222-2222-2222-222222222222'),
+      })
+
+      // A page can legitimately end on a vault row another account owns, so the
+      // check must see the vault scope too or it would reject a valid cursor.
+      expect((itemRepository.countAll as jest.Mock).mock.calls[0][0]).toEqual({
+        uuids: ['22222222-2222-2222-2222-222222222222'],
+        userUuid: USER,
+        includeSharedVaultUuids: [VAULT],
+        exclusiveSharedVaultUuids: undefined,
+      })
+    })
+
+    it('refuses a position ahead of the server clock', async () => {
+      timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(1_000_000)
+      const beyond = 1_000_000 + SYNC_POSITION_FUTURE_ALLOWANCE_MICROSECONDS + 1
+
+      const viaCursor = await createUseCase().execute({ userUuid: USER, cursorToken: cursorToken(beyond, itemUuid) })
+      expect(viaCursor.isFailed()).toBeTruthy()
+      expect(viaCursor.getError()).toEqual('Sync position is ahead of the server clock and cannot be honoured')
+
+      const viaToken = await createUseCase().execute({
+        userUuid: USER,
+        syncToken: encodeSyncToken({ positionMicroseconds: beyond }),
+      })
+      expect(viaToken.isFailed()).toBeTruthy()
+    })
+
+    it('still honours a position inside the skew allowance', async () => {
+      timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(1_000_000)
+      const withinSkew = 1_000_000 + SYNC_POSITION_FUTURE_ALLOWANCE_MICROSECONDS
+
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        syncToken: encodeSyncToken({ positionMicroseconds: withinSkew }),
+      })
+
+      expect(result.isFailed()).toBeFalsy()
+    })
+
+    it('refuses a vault-scoped position presented on a different scope', async () => {
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        syncToken: encodeSyncToken({ positionMicroseconds: 100, scopeDigest: scopeDigestFor([VAULT]) }),
+      })
+
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toEqual('Sync token was issued for a different retrieval scope and cannot be honoured')
+    })
+
+    it('honours a vault-scoped position on the scope it was issued for', async () => {
+      sharedVaultUserRepository.findByUserUuid = jest
+        .fn()
+        .mockResolvedValue([{ props: { sharedVaultUuid: Uuid.create(VAULT).getValue() } }])
+
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        sharedVaultUuids: [VAULT],
+        syncToken: encodeSyncToken({ positionMicroseconds: 100, scopeDigest: scopeDigestFor([VAULT]) }),
+      })
+
+      expect(result.isFailed()).toBeFalsy()
+    })
+
+    it('honours a GLOBAL position on a vault-exclusive sync, which can only over-deliver', async () => {
+      sharedVaultUserRepository.findByUserUuid = jest
+        .fn()
+        .mockResolvedValue([{ props: { sharedVaultUuid: Uuid.create(VAULT).getValue() } }])
+
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        sharedVaultUuids: [VAULT],
+        syncToken: encodeSyncToken({ positionMicroseconds: 100 }),
+      })
+
+      expect(result.isFailed()).toBeFalsy()
+    })
+  })
+
+  describe('a token this server cannot read at all', () => {
+    const USER = '00000000-0000-0000-0000-000000000000'
+
+    it('refuses a v2 token whose position is not a number', async () => {
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        syncToken: Buffer.from('2:not-a-number', 'utf-8').toString('base64'),
+      })
+
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toEqual('Sync token contains an invalid timestamp')
+    })
+
+    it('refuses a v3 cursor that does not carry exactly a position and a uuid', async () => {
+      const result = await createUseCase().execute({
+        userUuid: USER,
+        cursorToken: Buffer.from('3:123', 'utf-8').toString('base64'),
+      })
+
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toEqual('Sync cursor is malformed')
+    })
+  })
+
+  describe('the own-write skip', () => {
+    const USER = '00000000-0000-0000-0000-000000000000'
+    const SESSION = '00000000-0000-0000-0000-0000000000a1'
+
+    it('threads the session and its ceiling into the retrieval query', async () => {
+      await createUseCase().execute({
+        userUuid: USER,
+        syncToken: encodeSyncToken({
+          positionMicroseconds: 100,
+          ownWriteSessionUuid: SESSION,
+          ownWriteCeilingMicroseconds: 200,
+        }),
+      })
+
+      const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock
+        .calls[0][0] as ItemQuery
+      expect(itemQuery.excludeUpdatedWithSession).toEqual(SESSION)
+      expect(itemQuery.excludeUpdatedWithSessionUpToTimestamp).toEqual(200)
+    })
+
+    it('skips nothing for an ordinary token', async () => {
+      await createUseCase().execute({ userUuid: USER, syncToken: encodeSyncToken({ positionMicroseconds: 100 }) })
+
+      const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock
+        .calls[0][0] as ItemQuery
+      expect(itemQuery.excludeUpdatedWithSession).toBeUndefined()
+      expect(itemQuery.excludeUpdatedWithSessionUpToTimestamp).toBeUndefined()
     })
   })
 })
