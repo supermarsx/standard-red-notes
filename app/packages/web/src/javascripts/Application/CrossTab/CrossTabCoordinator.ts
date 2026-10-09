@@ -32,6 +32,15 @@
  *      overwriting it with a stale in-memory copy.
  *
  *   3) Ignore our OWN messages via a per-tab id (single-tab operation is unaffected).
+ *
+ *   4) REACT ONLY TO A REAL ROTATION. The keychain-changed signal is noisy: the blob is
+ *      rewritten wholesale by every read-modify-write in
+ *      WebOrDesktopDevice.setNamespacedKeychainValue, and `localStorage.clear()` raises a
+ *      `key === null` storage event in every sibling tab. Because the host's reaction to a
+ *      keychain change is a page reload, reacting to the noise DESTROYS whatever the sibling
+ *      tab had not yet saved. So every signal (storage event or BroadcastChannel message) is
+ *      verified against the keychain we last observed, and we lock ONLY when the stored
+ *      material actually differs. See `keychainRotatedSinceLastObservation`.
  */
 
 const KEYCHAIN_STORAGE_KEY = 'keychain'
@@ -95,6 +104,15 @@ const defaultChannelFactory: BroadcastChannelFactory = (name) => {
   }
 }
 
+/**
+ * What we know about the keychain blob in storage. `value === null` means "no keychain
+ * material" — an absent key and an empty `{}` map are the same thing to every reader
+ * (WebDevice.getKeychainValue returns `{}` for both), so they canonicalize alike.
+ * `readable: false` means storage could not be consulted at all, which is never treated as
+ * "unchanged".
+ */
+type ObservedKeychain = { readable: true; value: string | null } | { readable: false }
+
 export interface CrossTabCoordinatorOptions {
   /** Per-workspace namespace (the application identifier) so each account gets its own channel. */
   namespace: string
@@ -131,6 +149,15 @@ export class CrossTabCoordinator {
   private storageListener?: (event: any) => void
   private deinited = false
 
+  /**
+   * The keychain material as this tab last saw it. Snapshotted at construction (before any
+   * signal can arrive) and refreshed by noteLocalKeychainWrite() on every LOCAL write, since
+   * a tab receives no 'storage' event for its own mutations. Every incoming signal is diffed
+   * against this, so a re-persist of identical material and a `localStorage.clear()` that did
+   * not take any keychain material away are both recognized as benign.
+   */
+  private observedKeychain: ObservedKeychain
+
   constructor(options: CrossTabCoordinatorOptions) {
     this.callbacks = options.callbacks ?? {}
     this.windowRef =
@@ -138,6 +165,8 @@ export class CrossTabCoordinator {
       (typeof window !== 'undefined'
         ? (window as unknown as NonNullable<CrossTabCoordinatorOptions['windowRef']>)
         : noopWindow())
+
+    this.observedKeychain = this.readStoredKeychain()
 
     const factory = options.channelFactory ?? defaultChannelFactory
     this.channel = factory(CHANNEL_PREFIX + options.namespace)
@@ -174,12 +203,29 @@ export class CrossTabCoordinator {
   /**
    * Emit that this tab changed or cleared the keychain (logout / password rotation). Peers
    * will lock themselves. Safe no-op in degraded mode.
+   *
+   * Callers MUST only reach this after a write that genuinely changed the stored material
+   * (WebDevice.setKeychainValue short-circuits an identical re-persist), because the peer
+   * reaction is a page reload.
    */
   public emitKeychainChanged(): void {
     if (this.deinited) {
       return
     }
+    this.noteLocalKeychainWrite()
     this.post({ type: CrossTabMessageType.KeychainChanged, tabId: this.tabId })
+  }
+
+  /**
+   * Re-snapshot the keychain after a write made by THIS tab. A tab never receives its own
+   * 'storage' events, so without this the snapshot would stay at the pre-write value and the
+   * next (possibly benign) foreign signal would diff against it and read as a rotation.
+   *
+   * Must also be called for local writes that deliberately do NOT notify peers — the lazy
+   * at-rest wrapping migration in WebDevice.getKeychainValue is one.
+   */
+  public noteLocalKeychainWrite(): void {
+    this.observedKeychain = this.readStoredKeychain()
   }
 
   public deinit(): void {
@@ -230,7 +276,7 @@ export class CrossTabCoordinator {
     }
 
     if (data.type === CrossTabMessageType.KeychainChanged) {
-      this.enterKeychainLock()
+      this.handleKeychainSignal()
       return
     }
 
@@ -251,13 +297,75 @@ export class CrossTabCoordinator {
         return
       }
       const key = event?.key
-      // key === null means localStorage.clear() (e.g. full reset / remove-all-data) which
-      // wipes the keychain too, so treat it as a keychain change.
+      // key === null means localStorage.clear() (e.g. full reset / remove-all-data), which
+      // MAY have taken the keychain with it — handleKeychainSignal decides by looking at
+      // what is actually in storage now, because a clear that left no keychain material
+      // behind (a signed-out tab, a share viewer) must not reload this tab.
       if (key === KEYCHAIN_STORAGE_KEY || key === null) {
-        this.enterKeychainLock()
+        this.handleKeychainSignal()
       }
     }
     this.windowRef.addEventListener('storage', this.storageListener)
+  }
+
+  /**
+   * A keychain-change SIGNAL arrived (a 'storage' event on the keychain key, a
+   * `localStorage.clear()` event, or a peer's BroadcastChannel message). Lock only if the
+   * keychain material in storage actually differs from what we last observed.
+   *
+   * This is the whole point of the indirection: the host's reaction to the lock is
+   * `window.location.reload()`, which throws away this tab's unsaved edits. A signal is NOT
+   * evidence of a rotation — the blob is rewritten wholesale by every namespaced keychain
+   * read-modify-write, and `localStorage.clear()` fires in every sibling tab regardless of
+   * what it removed.
+   */
+  private handleKeychainSignal(): void {
+    if (this.keychainLocked) {
+      return
+    }
+    if (!this.keychainRotatedSinceLastObservation()) {
+      return
+    }
+    this.enterKeychainLock()
+  }
+
+  /**
+   * True iff the keychain material now in storage differs from our snapshot. Updates the
+   * snapshot when it does.
+   *
+   * FAIL-SAFE: when storage cannot be consulted (no localStorage on the window ref, a
+   * throwing accessor in a blocked/private context) we report a rotation, which preserves
+   * the pre-existing always-lock behavior. We only ever SUPPRESS the lock on positive
+   * evidence that the blob still canonicalizes to exactly what we already had, which proves
+   * no key material moved.
+   *
+   * The comparison is over the RAW stored blob (order-insensitively), not over decrypted
+   * material: this module stays free of the crypto/snjs layers, and the comparison is
+   * therefore conservative — any change by any writer on the origin, including one this app
+   * does not know about, still locks.
+   */
+  private keychainRotatedSinceLastObservation(): boolean {
+    const current = this.readStoredKeychain()
+
+    if (current.readable && this.observedKeychain.readable && current.value === this.observedKeychain.value) {
+      return false
+    }
+
+    this.observedKeychain = current
+    return true
+  }
+
+  /** Read + canonicalize the keychain blob. Never throws. */
+  private readStoredKeychain(): ObservedKeychain {
+    const storage = this.windowRef.localStorage
+    if (!storage || typeof storage.getItem !== 'function') {
+      return { readable: false }
+    }
+    try {
+      return { readable: true, value: canonicalizeKeychainBlob(storage.getItem(KEYCHAIN_STORAGE_KEY)) }
+    } catch {
+      return { readable: false }
+    }
   }
 
   /**
@@ -305,6 +413,59 @@ export class CrossTabCoordinator {
       console.error('[CrossTabCoordinator] onForeignSave handler threw', error)
     }
   }
+}
+
+/**
+ * Order-insensitive canonical form of a keychain VALUE (a parsed `RawKeychainValue`, or a
+ * parsed at-rest envelope). Returns `null` when there is no material at all — an absent key,
+ * `{}` and `null` are the same thing to every reader, so a write of `{}` over an absent key is
+ * not a change — and otherwise a string with object keys sorted at every depth, so a
+ * read-modify-write that reorders the map is not mistaken for a rotation.
+ *
+ * THROWS for a value JSON cannot represent (a BigInt, a throwing getter, a cycle). It
+ * deliberately has no "could not canonicalize" return value: a sentinel would compare equal to
+ * itself, and two values that could not be canonicalized would then pass as identical. Each
+ * caller catches and says what the failure means to it, and in both cases it means "changed".
+ */
+export function canonicalizeKeychainMaterial(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+  if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0) {
+    return null
+  }
+  return stableStringify(value)
+}
+
+/**
+ * Canonical form of the RAW stored keychain blob. TOTAL: a blob that does not parse as JSON
+ * (truly corrupt storage), or that cannot be canonicalized, is compared VERBATIM rather than
+ * being declared unreadable. Comparing verbatim is order-sensitive, so it can only ever
+ * over-report a change, never miss one — and it means repeated benign signals over the same
+ * corrupt blob still do not reload sibling tabs.
+ */
+export function canonicalizeKeychainBlob(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined || raw === '') {
+    return null
+  }
+  try {
+    return canonicalizeKeychainMaterial(JSON.parse(raw))
+  } catch {
+    return raw
+  }
+}
+
+/** Deterministic JSON with object keys sorted at every depth. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null'
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(',')}]`
+  }
+  const record = value as Record<string, unknown>
+  const keys = Object.keys(record).sort()
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
 }
 
 function isCrossTabMessage(data: unknown): data is CrossTabMessage {

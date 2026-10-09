@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Database } from './Database'
+import { WebDevice } from './Device/WebDevice'
 
 /**
  * jsdom provides no IndexedDB implementation and `fake-indexeddb` is not a
@@ -475,6 +476,123 @@ describe('Database silent-data-loss fixes', () => {
       await database.openDatabase()
       expect(open).toHaveBeenCalledTimes(2)
     })
+  })
+})
+
+/**
+ * `Database.deleteAll` unioned the caller's workspace identifiers with EVERY name
+ * `indexedDB.databases()` returned. That listing is per-ORIGIN, not per-application, so on a
+ * shared origin — this app served under a path alongside anything else on the same host —
+ * "remove all local data" deleted databases belonging to other applications entirely.
+ *
+ * The listing union is only an orphan sweep for workspace databases whose descriptor was
+ * already lost, so it is scoped to this app's own naming scheme: the legacy 'standardnotes'
+ * name and the uuid ApplicationGroup.createNewApplicationDescriptor generates.
+ */
+describe('Database.deleteAll is scoped to this application', () => {
+  const originalIndexedDB = (window as any).indexedDB
+  const originalLockManager = navigator.locks
+
+  /** Names a real shared origin could be hosting next to this app. */
+  const FOREIGN_NAMES = [
+    'vogue-homes-crm',
+    'firebaseLocalStorageDb',
+    'keyval-store',
+    'srn-device-keychain-key',
+    'standardnotes-analytics',
+    'workbox-expiration',
+  ]
+
+  /** This app's own: the legacy first workspace plus two generated workspace identifiers. */
+  const OWN_NAMES = ['standardnotes', '018f3d2c-9a41-7b55-8e0d-6f2a1b3c4d5e', 'A1B2C3D4-1234-4321-ABCD-0123456789AB']
+
+  const installDatabaseListing = (names: string[]) => {
+    const deleted: string[] = []
+    const databases = jest.fn(async () => names.map((name) => ({ name, version: 1 })))
+    const deleteDatabase = jest.fn((name: string) => {
+      const request: any = { onerror: null, onsuccess: null, onblocked: null }
+      fireAsync(() => {
+        deleted.push(name)
+        request.onsuccess && request.onsuccess({ target: request })
+      })
+      return request
+    })
+    ;(window as any).indexedDB = {
+      databases,
+      deleteDatabase,
+      open: jest.fn(() => {
+        throw new Error('no device-key database in this test')
+      }),
+    }
+    return { deleted, databases, deleteDatabase }
+  }
+
+  afterEach(() => {
+    ;(window as any).indexedDB = originalIndexedDB
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: originalLockManager })
+  })
+
+  it('leaves every foreign database on the origin alone', async () => {
+    const { deleted } = installDatabaseListing([...FOREIGN_NAMES, ...OWN_NAMES])
+
+    await Database.deleteAll(['standardnotes'])
+
+    expect(deleted.sort()).toEqual([...OWN_NAMES].sort())
+    for (const foreign of FOREIGN_NAMES) {
+      expect(deleted).not.toContain(foreign)
+    }
+  })
+
+  it('still sweeps an orphaned workspace database the caller did not know about', async () => {
+    const orphan = '018f3d2c-9a41-7b55-8e0d-aaaaaaaaaaaa'
+    const { deleted } = installDatabaseListing(['standardnotes', orphan, 'vogue-homes-crm'])
+
+    await Database.deleteAll(['standardnotes'])
+
+    expect(deleted).toContain(orphan)
+    expect(deleted).not.toContain('vogue-homes-crm')
+  })
+
+  it('deletes every name the caller passed, whatever its shape', async () => {
+    // The caller's list is authoritative: it comes from the descriptor record, so an
+    // identifier that does not look like a uuid is still this app's own database.
+    const { deleted } = installDatabaseListing(['vogue-homes-crm'])
+
+    await Database.deleteAll(['a-legacy-custom-identifier'])
+
+    expect(deleted).toEqual(['a-legacy-custom-identifier'])
+  })
+
+  it('classifies names by the naming scheme this app uses', () => {
+    expect(Database.isOwnDatabaseName('standardnotes')).toBe(true)
+    expect(Database.isOwnDatabaseName('018f3d2c-9a41-7b55-8e0d-6f2a1b3c4d5e')).toBe(true)
+    // Not a bare prefix match, not a substring match, not a near-miss uuid.
+    expect(Database.isOwnDatabaseName('standardnotes-analytics')).toBe(false)
+    expect(Database.isOwnDatabaseName('my-standardnotes')).toBe(false)
+    expect(Database.isOwnDatabaseName('018f3d2c-9a41-7b55-8e0d-6f2a1b3c4d5')).toBe(false)
+    expect(Database.isOwnDatabaseName('018f3d2c9a417b558e0d6f2a1b3c4d5e')).toBe(false)
+    expect(Database.isOwnDatabaseName('zzzzzzzz-9a41-7b55-8e0d-6f2a1b3c4d5e')).toBe(false)
+    expect(Database.isOwnDatabaseName('')).toBe(false)
+  })
+
+  it('spares foreign databases on the real remove-all-data path through WebDevice', async () => {
+    // The production caller: ApplicationGroup -> device.clearAllDataFromDevice(identifiers).
+    const { deleted } = installDatabaseListing([...FOREIGN_NAMES, ...OWN_NAMES])
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: <T>(name: string, _options: LockOptions, callback: LockGrantedCallback<T>): Promise<T> =>
+          Promise.resolve(callback({ name, mode: 'exclusive' } as Lock)),
+      },
+    })
+
+    const device = new WebDevice('test-version')
+    const result = await device.clearAllDataFromDevice(['standardnotes'] as any)
+
+    expect(result).toEqual({ killsApplication: false })
+    expect(deleted.sort()).toEqual([...OWN_NAMES].sort())
+    expect(deleted).not.toContain('vogue-homes-crm')
+    device.deinit()
   })
 })
 

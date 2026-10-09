@@ -75,9 +75,12 @@ const sampleKeychain = {
 const makeDevice = (flagOn: boolean) => {
   const device = new WebDevice('test-version')
   const emitKeychainChanged = jest.fn()
-  jest.spyOn(device as any, 'getCrossTabCoordinator').mockReturnValue({ emitKeychainChanged } as any)
+  const noteLocalKeychainWrite = jest.fn()
+  jest
+    .spyOn(device as any, 'getCrossTabCoordinator')
+    .mockReturnValue({ emitKeychainChanged, noteLocalKeychainWrite, isLocked: () => false } as any)
   jest.spyOn(device as any, 'isWrappingEnabled').mockReturnValue(flagOn)
-  return { device, emitKeychainChanged }
+  return { device, emitKeychainChanged, noteLocalKeychainWrite }
 }
 
 const readStoredParsed = (): any => {

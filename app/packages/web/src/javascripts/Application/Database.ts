@@ -70,12 +70,47 @@ export class Database {
     return rawDatabases.map((db) => db.name).filter((name) => name && name.length > 0) as string[]
   }
 
+  /**
+   * The database name of Standard Notes web/desktop before workspaces existed, still used by
+   * the first workspace of every install (ApplicationGroup.createNewDescriptorRecord).
+   */
+  private static readonly LEGACY_DATABASE_NAME = 'standardnotes'
+
+  /**
+   * Every workspace created since then is named by its ApplicationIdentifier, which is a
+   * canonical 8-4-4-4-12 uuid from ApplicationGroup.createNewApplicationDescriptor
+   * (UuidGenerator.GenerateUuid). Version-agnostic on purpose: the installed generator emits
+   * uuid v7 while the platform-crypto fallback and older installs emit v4.
+   */
+  private static readonly WORKSPACE_DATABASE_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+  /**
+   * Whether an IndexedDB database on this origin belongs to THIS application, by its own
+   * naming scheme. Used to scope the orphan sweep in deleteAll.
+   */
+  public static isOwnDatabaseName(name: string): boolean {
+    return name === Database.LEGACY_DATABASE_NAME || Database.WORKSPACE_DATABASE_NAME.test(name)
+  }
+
   static async deleteAll(databaseNames: string[]): Promise<void> {
+    /**
+     * `databaseNames` is the caller's authoritative list (the workspace identifiers from
+     * ApplicationGroup), so it is deleted as given. The union with indexedDB.databases() is
+     * only an ORPHAN SWEEP, for workspace databases whose descriptor was already lost.
+     *
+     * It MUST be scoped to this application's own naming scheme. indexedDB.databases() is
+     * per-ORIGIN, not per-app: on a shared origin (a reverse proxy serving this app under a
+     * path alongside something else, or any other page on the same host) an unscoped union
+     * reached every database the origin hosts and deleted them all — unrelated applications'
+     * data destroyed by this app's "remove all local data". It also swept
+     * 'srn-device-keychain-key', which is not an items database and is already handled
+     * properly by clearRawKeychainValue -> deleteDeviceKey.
+     */
     if (window.indexedDB.databases != undefined) {
       const idbNames = await this.getAllDatabaseNames()
 
       if (idbNames) {
-        databaseNames = uniqueArray([...idbNames, ...databaseNames])
+        databaseNames = uniqueArray([...idbNames.filter((name) => Database.isOwnDatabaseName(name)), ...databaseNames])
       }
     }
 

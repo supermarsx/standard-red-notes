@@ -1,6 +1,6 @@
 import { Environment, RawKeychainValue } from '@standardnotes/snjs'
 import { WebOrDesktopDevice } from './WebOrDesktopDevice'
-import { CrossTabCoordinator } from '../CrossTab/CrossTabCoordinator'
+import { canonicalizeKeychainMaterial, CrossTabCoordinator } from '../CrossTab/CrossTabCoordinator'
 import {
   decryptKeychain,
   deleteDeviceKey,
@@ -40,7 +40,27 @@ const KEYCHAIN_AT_REST_WRAPPING_ENABLED = false
  * localStorage blob shared by every workspace on this origin, so its coordination
  * channel is global (not per-identifier).
  */
-const KEYCHAIN_CROSSTAB_NAMESPACE = 'keychain'
+export const KEYCHAIN_CROSSTAB_NAMESPACE = 'keychain'
+
+/**
+ * True iff persisting `next` would leave the keychain holding exactly the material `stored`
+ * already holds — i.e. the write is a re-persist and no peer needs to react to it.
+ *
+ * Order-insensitive (the namespaced read-modify-writes rebuild the map with spread, which does
+ * not preserve insertion order across a delete) and treats absent/`{}` alike.
+ *
+ * A value JSON cannot represent makes canonicalization throw, and that is reported as CHANGED,
+ * never as unchanged: the write then proceeds and fails on its own `JSON.stringify` exactly as
+ * it always did. Returning "unchanged" here would swallow it silently, which is the
+ * `undefined === undefined` shape that makes a broken comparison look like a working one.
+ */
+function keychainMaterialIsUnchanged(stored: RawKeychainValue, next: RawKeychainValue): boolean {
+  try {
+    return canonicalizeKeychainMaterial(stored) === canonicalizeKeychainMaterial(next)
+  } catch {
+    return false
+  }
+}
 
 export class WebDevice extends WebOrDesktopDevice {
   environment = Environment.Web
@@ -93,14 +113,24 @@ export class WebDevice extends WebOrDesktopDevice {
    */
   public getCrossTabCoordinator(): CrossTabCoordinator {
     if (!this.crossTabCoordinator) {
-      this.crossTabCoordinator = new CrossTabCoordinator({
-        namespace: KEYCHAIN_CROSSTAB_NAMESPACE,
-        callbacks: {
-          onKeychainInvalidated: () => this.handleForeignKeychainChange(),
-        },
-      })
+      this.crossTabCoordinator = this.createCrossTabCoordinator()
     }
     return this.crossTabCoordinator
+  }
+
+  /**
+   * Construction seam. A faithful multi-tab test needs two devices whose coordinators listen
+   * on SEPARATE window refs (a real browser never delivers a 'storage' event to the tab that
+   * wrote it) while sharing the one origin `localStorage`, which is exactly what the default
+   * single-`window` wiring cannot express.
+   */
+  protected createCrossTabCoordinator(): CrossTabCoordinator {
+    return new CrossTabCoordinator({
+      namespace: KEYCHAIN_CROSSTAB_NAMESPACE,
+      callbacks: {
+        onKeychainInvalidated: () => this.handleForeignKeychainChange(),
+      },
+    })
   }
 
   /**
@@ -118,13 +148,43 @@ export class WebDevice extends WebOrDesktopDevice {
    * either re-locks (passcode) or re-derives state. Reload is the safest universal action;
    * a host that wants a softer UX can surface a "session changed in another tab" screen,
    * but the lock itself (isKeychainLocked) is what actually blocks the unsafe writes.
+   *
+   * NOTHING FLUSHES PENDING EDITS BEFORE THIS RELOAD, and nothing can:
+   *  - A flush path does exist. `useUnsavedChangesWarning`'s beforeunload handler calls
+   *    `NoteViewController.flushEditorSerialize()`, which dirties the item and kicks off its
+   *    local save, and `location.reload()` does fire beforeunload.
+   *  - But the coordinator sets `keychainLocked` BEFORE invoking this callback, and
+   *    `Database.savePayloads` throws while that flag is set. So the save the flush starts is
+   *    refused by construction. That ordering is correct — the in-memory root key is stale, so
+   *    persisting under it would produce permanently undecryptable ciphertext — which means a
+   *    GENUINE rotation cannot be made lossless here at all.
+   *  - The native "Leave site?" confirmation does not rescue it either: this reload happens
+   *    inside a storage/BroadcastChannel event with no user activation in this tab, so browsers
+   *    suppress the beforeunload dialog and reload silently.
+   * The only available remedy is therefore upstream, and that is what the classification in
+   * CrossTabCoordinator.handleKeychainSignal buys: we no longer arrive here for a re-persist
+   * of identical material or for a `localStorage.clear()` that took no keychain away, which is
+   * what made this fire on routine writes. Reaching this point now means the material really
+   * moved, and the lost edit is the price of not corrupting it.
    */
   private handleForeignKeychainChange(): void {
+    // Loud and attributable: this reload is the one that can cost an unsaved edit.
+    console.error(
+      '[WebDevice] Keychain material changed in another tab; reloading. Edits not yet persisted ' +
+        'cannot be saved under the stale key and will be lost.',
+    )
     try {
       // Best-effort: stop scheduling further work before the reload lands.
       // The lock flag (checked by setKeychainValue and Database.savePayloads) is already
       // set by the coordinator before this callback runs, so writes are blocked NOW.
-      window.location.reload()
+      //
+      // Routed through the inherited soft reset (which is `window.location.reload()`) rather
+      // than calling it inline, because jsdom makes `window.location.reload` neither
+      // stubbable nor observable: naming the routine is what lets a test see whether this tab
+      // was reloaded at all.
+      void this.performSoftReset().catch((error) => {
+        console.error('[WebDevice] Failed to reload after foreign keychain change', error)
+      })
     } catch (error) {
       console.error('[WebDevice] Failed to reload after foreign keychain change', error)
     }
@@ -201,6 +261,13 @@ export class WebDevice extends WebOrDesktopDevice {
            */
           if (localStorage.getItem(KEYCHAIN_STORAGE_KEY) === value && !this.isKeychainLocked()) {
             localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(envelope))
+            /**
+             * A representation-only rewrite: the material is unchanged, so peers are NOT
+             * notified. We still must re-snapshot, or our own migration would sit in the
+             * coordinator's diff as an unexplained change and the next benign foreign signal
+             * would read as a rotation and reload this tab.
+             */
+            this.getCrossTabCoordinator().noteLocalKeychainWrite()
           }
         }
       } catch (error) {
@@ -211,6 +278,42 @@ export class WebDevice extends WebOrDesktopDevice {
     return plaintext
   }
 
+  /**
+   * Read the keychain material currently in storage for COMPARISON ONLY: no lazy migration,
+   * no repair side effects, never throws.
+   *
+   * `readable: false` means "present but we cannot tell what it holds" (non-JSON corruption,
+   * or an envelope whose device key is gone). Absent storage is readable and empty, because
+   * an absent key and `{}` are indistinguishable to getKeychainValue.
+   */
+  private async readStoredKeychainMaterial(): Promise<
+    { readable: true; material: RawKeychainValue } | { readable: false }
+  > {
+    const raw = localStorage.getItem(KEYCHAIN_STORAGE_KEY)
+
+    if (!raw) {
+      return { readable: true, material: {} }
+    }
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return { readable: false }
+    }
+
+    if (isEnvelope(parsed)) {
+      try {
+        const key = await getOrCreateDeviceKey()
+        return { readable: true, material: JSON.parse(await decryptKeychain(parsed, key)) as RawKeychainValue }
+      } catch {
+        return { readable: false }
+      }
+    }
+
+    return { readable: true, material: parsed as RawKeychainValue }
+  }
+
   async setKeychainValue(value: RawKeychainValue): Promise<void> {
     // Install the foreign-change listeners before the first write, not after it.
     const crossTabCoordinator = this.getCrossTabCoordinator()
@@ -219,6 +322,35 @@ export class WebDevice extends WebOrDesktopDevice {
     // value was derived from is stale, and writing it would clobber the foreign rotation.
     if (this.isKeychainLocked()) {
       throw new Error('Keychain changed in another tab; refusing to write under a stale key (reloading).')
+    }
+
+    /**
+     * BENIGN RE-PERSIST SHORT-CIRCUIT.
+     *
+     * Every caller of this method hands over the WHOLE keychain blob, not a delta:
+     * WebOrDesktopDevice.setNamespacedKeychainValue / clearNamespacedKeychainValue read the
+     * map, change one entry and write the map back, and RootKeyManager.saveRootKeyToKeychain /
+     * BaseMigration.repairMissingKeychain re-persist the same root key on routine paths. Each
+     * such write used to notify peers, and a peer's reaction is `window.location.reload()` —
+     * so a write that changed NOTHING reloaded every other tab and threw away its unsaved
+     * edits.
+     *
+     * So: decide whether this is a real rotation by comparing MATERIAL, decrypting the stored
+     * blob first if it is wrapped (the envelope's ciphertext differs on every write even for
+     * identical material, so a byte comparison of the blob would be useless here). When the
+     * material is identical, skip the write ENTIRELY rather than writing and staying quiet:
+     * that also suppresses the window 'storage' event, which is the load-bearing signal in
+     * degraded (no-BroadcastChannel) mode, and it keeps the at-rest bytes stable so peers
+     * diffing the raw blob agree with us.
+     *
+     * SAFETY: we only skip on positive evidence. A blob that is present but unreadable
+     * (corrupt JSON, or an envelope we cannot decrypt because the device key is gone) is
+     * never "identical" — it falls through to the write, so keychain repair still overwrites
+     * it and sign-out still clears it.
+     */
+    const storedMaterial = await this.readStoredKeychainMaterial()
+    if (storedMaterial.readable && keychainMaterialIsUnchanged(storedMaterial.material, value)) {
+      return
     }
 
     let stored = false
