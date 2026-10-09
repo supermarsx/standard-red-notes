@@ -17,6 +17,7 @@ import {
   RawStorageKey,
 } from '@standardnotes/snjs'
 import { Database, DatabaseCrossTabHooks } from '../Database'
+import { ownStorageKeysIn } from './OwnedStorageKeys'
 
 const KEYCHAIN_MUTATION_LOCK = 'standard-red-notes-keychain-mutation'
 const KEYCHAIN_MUTATION_LOCK_UNAVAILABLE =
@@ -87,7 +88,7 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
   async clearAllDataFromDevice(workspaceIdentifiers: ApplicationIdentifier[]): Promise<{ killsApplication: boolean }> {
     await this.withKeychainMutationLock(async () => {
       await this.clearRawKeychainValue()
-      await this.removeAllRawStorageValues()
+      await this.removeAllRawStorageValues(workspaceIdentifiers)
     })
 
     await Database.deleteAll(workspaceIdentifiers)
@@ -113,8 +114,31 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
     localStorage.removeItem(key)
   }
 
-  async removeAllRawStorageValues() {
-    localStorage.clear()
+  /**
+   * Remove every raw storage value THIS APPLICATION owns.
+   *
+   * This was `localStorage.clear()`. localStorage is per-ORIGIN, not per-application, so on
+   * a shared origin a last-workspace sign-out erased every other application's localStorage
+   * too — the same defect `Database.deleteAll` had for IndexedDB, in a different storage
+   * area. The sweep is now scoped to this app's own naming schemes (see OwnedStorageKeys).
+   *
+   * MULTI-WORKSPACE RULE. `workspaceIdentifiers` is the caller's authoritative list and is
+   * ADDITIVE, never restrictive: its namespaced raw keys go whatever the identifier's shape,
+   * on top of everything the naming schemes match. Taking "every key this app owns" is the
+   * right scope here because the only caller is clearAllDataFromDevice, which
+   * ApplicationGroup.onApplicationDeinit invokes ONLY when no workspace survives — either
+   * the last descriptor was just removed (`descriptors.length === 0`, which is also why the
+   * list it passes is then EMPTY and the naming-scheme sweep is the only thing doing any
+   * work) or DeinitSource.SignOutAll is destroying all of them. Signing out of ONE workspace
+   * while siblings remain never reaches here: that path is
+   * DiskStorageService.setPersistencePolicy -> removeRawStorageValuesForIdentifier, which
+   * touches only that one identifier's namespaced keys. A surviving sibling's keys are
+   * therefore unreachable from either path.
+   */
+  async removeAllRawStorageValues(workspaceIdentifiers: ApplicationIdentifier[] = []) {
+    for (const key of ownStorageKeysIn(localStorage, workspaceIdentifiers)) {
+      localStorage.removeItem(key)
+    }
   }
 
   async removeRawStorageValuesForIdentifier(identifier: ApplicationIdentifier) {

@@ -105,14 +105,23 @@ if (canRunElectron) {
     )
   })
 
+  /**
+   * `device.removeAllRawStorageValues()` was `localStorage.clear()`, which on a shared
+   * origin erased other applications' data too; it is now scoped to this app's own naming
+   * schemes (see web/.../Device/OwnedStorageKeys.ts). So the probe key has to be one this
+   * app actually owns — and the other half of the contract, that a foreign key SURVIVES,
+   * is asserted here as well.
+   */
   test('clears renderer local storage through the current device API', async (t) => {
-    await t.context.storage.setLocalStorageValue('foo', 'bar')
-    t.is(await t.context.storage.getLocalStorageValue('foo'), 'bar')
+    await t.context.storage.setLocalStorageValue('sn-language', 'en')
+    await t.context.storage.setLocalStorageValue('vogue-homes-crm', 'bar')
+    t.is(await t.context.storage.getLocalStorageValue('sn-language'), 'en')
 
     await timeout(1_000)
     await t.context.window.clearRendererStorage()
     await timeout(1_000)
-    t.is(await t.context.storage.getLocalStorageValue('foo'), null)
+    t.is(await t.context.storage.getLocalStorageValue('sn-language'), null)
+    t.is(await t.context.storage.getLocalStorageValue('vogue-homes-crm'), 'bar')
   })
 } else {
   // Spawns a real Electron process against app/dist/index.js; needs a build + display, not runnable headless.
