@@ -396,6 +396,29 @@ if [ -z "$AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION" ]; then
   export AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION=false
 fi
 
+# NO `AUTH_SERVER_WEB_SOCKET_CONNECTION_TOKEN_SECRET` PROJECTION, DELIBERATELY.
+#
+# Auth's gRPC `validateWebsocket` decodes connection tokens with
+# `TokenDecoder(WEB_SOCKET_CONNECTION_TOKEN_SECRET)` (auth Container.ts), and the
+# anchored projection below only writes `AUTH_SERVER_`-prefixed names, so
+# `auth/.env` carries no such key -- which reads like the decoder gets
+# `undefined`. It does not. `AbstractEnv.get` consults `process.env` BEFORE the
+# dotenv map, docker-compose.yml passes the bare name into this container
+# (`server-env` anchor), and every supervisord program inherits this shell's
+# environment, so the auth process has the operator's value.
+#
+# Measured on this image, not inferred: a connection token signed with the real
+# secret answers INVALID_ARGUMENT from CreateCrossServiceToken (i.e. it DECODED),
+# while one signed with a different secret answers PERMISSION_DENIED "Invalid
+# authorization token." The RPC is live and correctly keyed as shipped.
+#
+# Adding the projection would therefore buy nothing and would write a signing
+# secret to a file on disk that currently exists only in process memory. Keep it
+# out. (`validateWebsocket` does have no in-repo caller -- the AWS-era `$connect`
+# callbacks were deleted, see api-gateway WebSocketsController -- so retiring the
+# RPC is arguable, but that is a change to auth.proto and AuthServer, not here,
+# and it is not forced by any missing variable.)
+
 # Per-service .env: project every <PREFIX>_FOO into FOO for this service only.
 #
 # `sed -n 's/^PREFIX_//p'` both selects and strips, ANCHORED and once. The
