@@ -2536,12 +2536,12 @@ const desktopPackageFile = "app/packages/desktop/package.json";
 
 test("desktop runtime fingerprinting declares its ASAR tool directly", () => {
   const files = withFileChanged(desktopPackageFile, (content) =>
-    content.replace('    "@electron/asar": "3.4.1",\n', ""),
+    content.replace('    "@electron/asar": "4.3.1",\n', ""),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /missing exact direct @electron\/asar 3\.4\.1 devDependency/,
+    /missing exact direct @electron\/asar 4\.3\.1 devDependency/,
   );
 });
 

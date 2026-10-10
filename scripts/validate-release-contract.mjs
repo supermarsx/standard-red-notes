@@ -3449,9 +3449,9 @@ export function validateReleaseContract(files) {
   const rootDesktopEntitlements = files.get(rootDesktopEntitlementsFile) ?? "";
   try {
     const rootDesktopManifest = JSON.parse(rootDesktopPackage);
-    if (rootDesktopManifest.devDependencies?.["@electron/asar"] !== "3.4.1") {
+    if (rootDesktopManifest.devDependencies?.["@electron/asar"] !== "4.3.1") {
       errors.push(
-        `${rootDesktopPackageFile}: missing exact direct @electron/asar 3.4.1 devDependency`,
+        `${rootDesktopPackageFile}: missing exact direct @electron/asar 4.3.1 devDependency`,
       );
     }
     if (rootDesktopManifest.build?.nsis?.buildUniversalInstaller !== false) {
