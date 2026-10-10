@@ -12,6 +12,7 @@ import { createCaldavRouter } from './createCaldavRouter'
 import { CaldavTokensController } from '../Controller/v1/CaldavTokensController'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
+import { CalendarProjectionStore } from '../Service/Caldav/CalendarProjectionStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
 
 interface Harness {
@@ -19,6 +20,7 @@ interface Harness {
   service: CaldavService
   tokenStore: CaldavTokenStore
   publishedStore: PublishedCalendarStore
+  projectionStore: CalendarProjectionStore
   server: http.Server
   dir: string
   basePath: string
@@ -28,7 +30,8 @@ async function startHarness(enabled: boolean, basePath = '/dav'): Promise<Harnes
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'caldav-router-'))
   const tokenStore = new CaldavTokenStore(path.join(dir, 'tokens.json'))
   const publishedStore = new PublishedCalendarStore(path.join(dir, 'published.json'))
-  const service = new CaldavService(enabled, tokenStore, publishedStore)
+  const projectionStore = new CalendarProjectionStore(path.join(dir, 'projection.json'))
+  const service = new CaldavService(enabled, tokenStore, publishedStore, projectionStore)
 
   const app = express()
   app.use(basePath, createCaldavRouter(service, { basePath }))
@@ -39,7 +42,16 @@ async function startHarness(enabled: boolean, basePath = '/dav'): Promise<Harnes
     const instance = app.listen(0, () => resolve(instance))
   })
   const port = (server.address() as AddressInfo).port
-  return { baseUrl: `http://127.0.0.1:${port}`, service, tokenStore, publishedStore, server, dir, basePath }
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    service,
+    tokenStore,
+    publishedStore,
+    projectionStore,
+    server,
+    dir,
+    basePath,
+  }
 }
 
 function basic(token: string, username = 'caldav'): string {

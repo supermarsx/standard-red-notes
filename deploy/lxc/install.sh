@@ -680,6 +680,7 @@ ASSISTANT_SUBSCRIPTION_TOKEN_PATH=${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}
 FILES_SERVER_URL=${PUBLIC_FILES_SERVER_URL:-http://localhost:${HTTP_PORT}/files}
 SERVER_SETTINGS_PATH=${DATA_DIR}/server-settings.json
 CALDAV_DATA_PATH=${DATA_DIR}/caldav
+CALDAV_ENABLED=${CALDAV_ENABLED:-false}
 REMINDER_DELIVERY_DATA_PATH=${DATA_DIR}/reminder-delivery
 COOKIE_DOMAIN=${COOKIE_DOMAIN:-}
 COOKIE_SAME_SITE=${COOKIE_SAME_SITE:-Lax}
@@ -767,6 +768,20 @@ server {
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_read_timeout 86400s;
     proxy_send_timeout 86400s;
+  }
+
+  # Read-only CalDAV feed (VTODO tasks + the opt-in VEVENT due-date calendar).
+  # A stock calendar client speaks PROPFIND/REPORT here; without this location
+  # the SPA fallback answers index.html and the feature is unreachable.
+  location ~ ^/dav(/|\$) {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-For \$remote_addr;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Real-IP \$remote_addr;
+    client_max_body_size 1m;
+    proxy_read_timeout 300s;
   }
 
   location ~ ^/(v1|v2|auth|subscription|healthcheck)(/|\$) {

@@ -2360,6 +2360,16 @@ export class LegacyApiService
     completed?: boolean
     completedAt?: string
     priority?: number
+    /** Labels (source note tags) a calendar client can colour or filter by. */
+    categories?: string[]
+    /** Repeat rule, projected as an RRULE on the due-date event. */
+    recurrence?: {
+      frequency: 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'yearly'
+      interval?: number
+      monthDay?: number
+      month?: number
+      timeZone?: string
+    }
   }): Promise<HttpResponse> {
     return this.tokenRefreshableRequest({
       verb: HttpVerb.Post,
@@ -2377,6 +2387,31 @@ export class LegacyApiService
       url: joinPaths(this.host, Paths.v1.caldavTodo(uid)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to unpublish the CalDAV item.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: read the user's due-date-to-event projection settings.
+   * Available even when the CalDAV gates are off, so the preferences pane can
+   * show the stored choices AND why they are currently inactive.
+   */
+  async getCaldavProjection(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.caldavProjection),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load the calendar projection settings.',
+    })
+  }
+
+  /** Replace the projection settings. The response echoes the EFFECTIVE set. */
+  async putCaldavProjection(projection: Record<string, unknown>): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.caldavProjection),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to save the calendar projection settings.',
+      params: { projection },
     })
   }
 

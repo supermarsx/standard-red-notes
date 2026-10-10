@@ -4,7 +4,13 @@ import { EditorFontSize } from './EditorFontSize'
 import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { EditorLineHeight } from './EditorLineHeight'
 import { EditorLineWidth } from './EditorLineWidth'
-import { CurrentUserAppearancePreferenceVersion, DefaultTodoFiltersPreference, PrefKey, PrefValue } from './PrefKey'
+import {
+  CurrentUserAppearancePreferenceVersion,
+  DefaultTodoCalendarPublicationPreference,
+  DefaultTodoFiltersPreference,
+  PrefKey,
+  PrefValue,
+} from './PrefKey'
 import { NewNoteTitleFormat } from './NewNoteTitleFormat'
 import { DEFAULT_TYPOGRAPHY_PROFILE, DEFAULT_TYPOGRAPHY_PROFILE_ID } from './TypographyProfile'
 
@@ -136,6 +142,9 @@ export const PrefDefaults = {
   // like. Either turned OFF reproduces the flat, description-less behaviour.
   [PrefKey.TodoHeadingLevels]: true,
   [PrefKey.TodoHeadingDescriptions]: true,
+  // Publishes NOTHING until the user picks a scope: see
+  // DefaultTodoCalendarPublicationPreference.
+  [PrefKey.TodoCalendarPublication]: DefaultTodoCalendarPublicationPreference,
   // Standard Red Notes: note covers are OFF by default. Their bytes are stored
   // inline in the note's appData, so every cover is re-encrypted and re-uploaded
   // with every revision of its note — an opt-in cost, not a default one.

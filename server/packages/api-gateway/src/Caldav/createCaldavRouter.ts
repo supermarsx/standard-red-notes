@@ -4,11 +4,25 @@ import { NextFunction, raw, Request, Response, Router } from 'express'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { normalizeCaldavBasePath } from '../Service/Caldav/CaldavBasePath'
 import { CaldavTokenMetadata } from '../Service/Caldav/CaldavTokenStore'
+import { PROJECTED_EVENT_UID_PREFIX, ProjectedEvent, projectTodoToEvent } from '../Service/Caldav/CalendarProjection'
 import { PublishedTodo } from '../Service/Caldav/ICalendarSerializer'
 
 /**
  * Read-only CalDAV surface for the user's explicit plaintext calendar
  * projection. It never reads or decrypts note content.
+ *
+ * TWO collections live under a user's calendar home:
+ *   - `todos/`  — VTODO, the tasks themselves. Always present.
+ *   - `events/` — VEVENT, the opt-in projection of those tasks' DUE DATES onto
+ *     the calendar grid. Present only while the user's projection settings say
+ *     `enabled`; otherwise it is absent from PROPFIND and 404s, so a calendar
+ *     client that still has the URL subscribed stops drawing rather than
+ *     silently showing a stale copy.
+ *
+ * They are separate because RFC 4791 §4.1 allows only ONE component type per
+ * calendar object resource, and because every real client treats a VTODO
+ * collection and a VEVENT collection differently — Google Calendar will not
+ * subscribe to the former at all.
  */
 
 const DAV_HEADER = '1, calendar-access'
@@ -30,17 +44,41 @@ type Resource =
   | { kind: 'calendar-home'; userUuid: string }
   | { kind: 'calendar'; userUuid: string }
   | { kind: 'object'; userUuid: string; uid: string }
+  | { kind: 'events-calendar'; userUuid: string }
+  | { kind: 'events-object'; userUuid: string; uid: string }
 
 type ParsedResource = { resource: Resource | null; malformed: boolean }
 
 function allowHeaderFor(resource: Resource): string {
-  if (resource.kind === 'calendar') {
+  if (resource.kind === 'calendar' || resource.kind === 'events-calendar') {
     return CALENDAR_ALLOW_HEADER
   }
-  if (resource.kind === 'object') {
+  if (resource.kind === 'object' || resource.kind === 'events-object') {
     return 'OPTIONS, GET, HEAD, PROPFIND'
   }
   return 'OPTIONS, PROPFIND'
+}
+
+/**
+ * Recover the published RECORD's uid from a projected event.
+ *
+ * The event's iCalendar UID is deliberately prefixed so the two collections
+ * never collide, while the object href stays the record's uid. Stripping here —
+ * once — keeps that single relationship in one place rather than letting each
+ * handler re-derive it.
+ */
+function eventRecordUid(event: ProjectedEvent): string {
+  return event.uid.startsWith(PROJECTED_EVENT_UID_PREFIX)
+    ? event.uid.slice(PROJECTED_EVENT_UID_PREFIX.length)
+    : event.uid
+}
+
+/** True for a resource that only exists while the projection is enabled. */
+function isProjectionResource(
+  resource: Resource,
+): resource is
+  { kind: 'events-calendar'; userUuid: string } | { kind: 'events-object'; userUuid: string; uid: string } {
+  return resource.kind === 'events-calendar' || resource.kind === 'events-object'
 }
 
 function xmlEscape(value: string): string {
@@ -122,13 +160,32 @@ function parseResource(requestPath: string): ParsedResource {
   if (segments.length === 2) {
     return { resource: { kind: 'calendar-home', userUuid: segments[1] }, malformed: false }
   }
-  if (segments.length === 3 && segments[2] === 'todos') {
-    return { resource: { kind: 'calendar', userUuid: segments[1] }, malformed: false }
+  if (segments.length === 3 && (segments[2] === 'todos' || segments[2] === 'events')) {
+    return {
+      resource:
+        segments[2] === 'todos'
+          ? { kind: 'calendar', userUuid: segments[1] }
+          : { kind: 'events-calendar', userUuid: segments[1] },
+      malformed: false,
+    }
   }
-  if (segments.length === 4 && segments[2] === 'todos' && segments[3].toLowerCase().endsWith('.ics')) {
+  if (
+    segments.length === 4 &&
+    (segments[2] === 'todos' || segments[2] === 'events') &&
+    segments[3].toLowerCase().endsWith('.ics')
+  ) {
     const uid = segments[3].slice(0, -4)
     if (uid.length > 0) {
-      return { resource: { kind: 'object', userUuid: segments[1], uid }, malformed: false }
+      // The object href is the underlying RECORD's uid in both collections, so
+      // the same identifier names the same task whichever view asked for it.
+      // The VEVENT's own iCalendar UID is distinct (see CalendarProjection).
+      return {
+        resource:
+          segments[2] === 'todos'
+            ? { kind: 'object', userUuid: segments[1], uid }
+            : { kind: 'events-object', userUuid: segments[1], uid },
+        malformed: false,
+      }
     }
   }
   return { resource: null, malformed: false }
@@ -389,6 +446,9 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
   const calendarHref = (userUuid: string): string => `${calendarHomeHref(userUuid)}todos/`
   const objectHref = (userUuid: string, uid: string): string =>
     `${calendarHref(userUuid)}${encodeURIComponent(uid)}.ics`
+  const eventCalendarHref = (userUuid: string): string => `${calendarHomeHref(userUuid)}events/`
+  const eventObjectHref = (userUuid: string, uid: string): string =>
+    `${eventCalendarHref(userUuid)}${encodeURIComponent(uid)}.ics`
 
   router.use((_request: Request, response: Response, next: NextFunction) => {
     if (!service.isEnabled()) {
@@ -442,8 +502,45 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
     return parsed.resource
   }
 
-  const handleOptions = (request: Request, response: Response): void => {
+  /**
+   * Resolve the resource AND, for an `events/` resource, confirm the user's
+   * projection is on.
+   *
+   * The gate lives here rather than in a `router.use` because it is per-USER
+   * state: a token-authenticated request knows whose feed it is reading, and
+   * only the events collection is affected. A disabled projection answers 404 —
+   * the resource genuinely does not exist — rather than 403, which would tell a
+   * client to keep the subscription and retry with credentials.
+   */
+  const ownedExistingResource = async (request: Request, response: Response): Promise<Resource | null> => {
     const resource = ownedResource(request, response)
+    if (!resource) {
+      return null
+    }
+    if (isProjectionResource(resource)) {
+      const settings = await service.getProjection(resource.userUuid)
+      if (!settings.enabled) {
+        response.status(404).send('Not found')
+        return null
+      }
+    }
+    return resource
+  }
+
+  /** The projected event for one published record, or null when excluded. */
+  const projectedEventFor = async (userUuid: string, uid: string): Promise<ProjectedEvent | null> => {
+    const todo = await service.getTodo(userUuid, uid)
+    if (!todo) {
+      return null
+    }
+    return projectTodoToEvent(todo, await service.getProjection(userUuid))
+  }
+
+  const handleOptions = async (request: Request, response: Response): Promise<void> => {
+    // The gate applies to OPTIONS as well: a discovery probe that answers "yes,
+    // a calendar collection" for a path whose GET then 404s is worse than a
+    // consistent 404, and some clients cache the positive probe.
+    const resource = await ownedExistingResource(request, response)
     if (!resource) {
       return
     }
@@ -453,8 +550,8 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
     response.status(200).end()
   }
 
-  router.options('/', handleOptions)
-  router.options('/{*splat}', handleOptions)
+  router.options('/', asyncRoute(handleOptions))
+  router.options('/{*splat}', asyncRoute(handleOptions))
 
   const rootProps = (userUuid: string): string =>
     [
@@ -497,8 +594,27 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
       '        <getcontenttype>text/calendar; charset=utf-8; component=VTODO</getcontenttype>',
     ].join('\n')
 
+  const eventCalendarCollectionProps = (userUuid: string, etag: string): string =>
+    [
+      '        <resourcetype><collection/><C:calendar xmlns:C="urn:ietf:params:xml:ns:caldav"/></resourcetype>',
+      '        <displayname>Task Due Dates</displayname>',
+      `        <current-user-principal><href>${xmlEscape(principalHref(userUuid))}</href></current-user-principal>`,
+      '        <C:supported-calendar-component-set xmlns:C="urn:ietf:params:xml:ns:caldav"><C:comp name="VEVENT"/></C:supported-calendar-component-set>',
+      '        <C:calendar-description xmlns:C="urn:ietf:params:xml:ns:caldav">Due dates of published Standard Red Notes tasks</C:calendar-description>',
+      '        <getcontenttype>text/calendar; charset=utf-8; component=VEVENT</getcontenttype>',
+      `        <getetag>${xmlEscape(etag)}</getetag>`,
+      '        <supported-report-set><supported-report><report><C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav"/></report></supported-report><supported-report><report><C:calendar-multiget xmlns:C="urn:ietf:params:xml:ns:caldav"/></report></supported-report></supported-report-set>',
+    ].join('\n')
+
+  const eventObjectProps = (etag: string): string =>
+    [
+      '        <resourcetype/>',
+      `        <getetag>${xmlEscape(etag)}</getetag>`,
+      '        <getcontenttype>text/calendar; charset=utf-8; component=VEVENT</getcontenttype>',
+    ].join('\n')
+
   const handlePropfind = async (request: Request, response: Response): Promise<void> => {
-    const resource = ownedResource(request, response)
+    const resource = await ownedExistingResource(request, response)
     if (!resource) {
       return
     }
@@ -538,8 +654,60 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
         const todos = await service.listTodos(userUuid)
         const calendarEtag = strongEtag(service.serializeCalendar(todos))
         responses.push(propfindResponse(calendarHref(userUuid), calendarCollectionProps(userUuid, calendarEtag)))
+        // The events collection appears in the home listing ONLY while the
+        // projection is on, so a client's periodic re-discovery is what removes
+        // a calendar the user switched off.
+        const projection = await service.getProjection(userUuid)
+        if (projection.enabled) {
+          const events = await service.listEvents(userUuid)
+          responses.push(
+            propfindResponse(
+              eventCalendarHref(userUuid),
+              eventCalendarCollectionProps(userUuid, strongEtag(service.serializeEvents(events))),
+            ),
+          )
+        }
       }
       sendXml(response, 207, buildMultistatus(responses))
+      return
+    }
+    if (resource.kind === 'events-calendar') {
+      const events = await service.listEvents(userUuid)
+      const responses = [
+        propfindResponse(
+          eventCalendarHref(userUuid),
+          eventCalendarCollectionProps(userUuid, strongEtag(service.serializeEvents(events))),
+        ),
+      ]
+      if (depth === '1') {
+        for (const event of events) {
+          responses.push(
+            propfindResponse(
+              eventObjectHref(userUuid, eventRecordUid(event)),
+              eventObjectProps(strongEtag(service.serializeEvents([event]))),
+            ),
+          )
+        }
+      }
+      sendXml(response, 207, buildMultistatus(responses))
+      return
+    }
+    if (resource.kind === 'events-object') {
+      const event = await projectedEventFor(userUuid, resource.uid)
+      if (!event) {
+        response.status(404).send('Not found')
+        return
+      }
+      sendXml(
+        response,
+        207,
+        buildMultistatus([
+          propfindResponse(
+            eventObjectHref(userUuid, resource.uid),
+            eventObjectProps(strongEtag(service.serializeEvents([event]))),
+          ),
+        ]),
+      )
       return
     }
     if (resource.kind === 'calendar') {
@@ -603,12 +771,23 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
     )
   }
 
+  const reportEventResponse = (userUuid: string, event: ProjectedEvent): string => {
+    const ics = service.serializeEvents([event])
+    const etag = strongEtag(ics)
+    return (
+      `  <response>\n    <href>${xmlEscape(eventObjectHref(userUuid, eventRecordUid(event)))}</href>\n` +
+      `    <propstat>\n      <prop>\n        <getetag>${xmlEscape(etag)}</getetag>\n` +
+      `        <C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav">${xmlEscape(ics)}</C:calendar-data>\n` +
+      '      </prop>\n      <status>HTTP/1.1 200 OK</status>\n    </propstat>\n  </response>'
+    )
+  }
+
   const handleReport = async (request: Request, response: Response): Promise<void> => {
-    const resource = ownedResource(request, response)
+    const resource = await ownedExistingResource(request, response)
     if (!resource) {
       return
     }
-    if (resource.kind !== 'calendar') {
+    if (resource.kind !== 'calendar' && resource.kind !== 'events-calendar') {
       response.status(405).setHeader('Allow', allowHeaderFor(resource))
       response.end()
       return
@@ -632,17 +811,26 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
     }
 
     const userUuid = tokenFor(response).userUuid
+    const wantsEvents = resource.kind === 'events-calendar'
+    // The component this collection actually holds. A query naming the other
+    // one is answered with an empty multistatus, not with the wrong component.
+    const ownComponent = wantsEvents ? 'VEVENT' : 'VTODO'
     const allTodos = await service.listTodos(userUuid)
+    const allEvents = wantsEvents ? await service.listEvents(userUuid) : []
     if (kind === 'calendar-query') {
       const requestedComponents = Array.from(
         body.matchAll(/<(?:[A-Za-z_][\w.-]*:)?comp-filter\b[^>]*\bname\s*=\s*["']([^"']+)["']/gi),
         (match) => match[1].toUpperCase(),
       )
-      const includeTodos =
+      const includeOwn =
         requestedComponents.length === 0 ||
-        requestedComponents.includes('VTODO') ||
+        requestedComponents.includes(ownComponent) ||
         (requestedComponents.length === 1 && requestedComponents[0] === 'VCALENDAR')
-      const responses = includeTodos ? allTodos.map((todo) => reportTodoResponse(userUuid, todo)) : []
+      const responses = !includeOwn
+        ? []
+        : wantsEvents
+          ? allEvents.map((event) => reportEventResponse(userUuid, event))
+          : allTodos.map((todo) => reportTodoResponse(userUuid, todo))
       sendXml(response, 207, buildMultistatus(responses))
       return
     }
@@ -652,12 +840,21 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
       response.status(400).send('A calendar-multiget report requires at least one valid href')
       return
     }
-    const byUid = new Map(allTodos.map((todo) => [todo.uid, todo]))
+    const expectedKind = wantsEvents ? 'events-object' : 'object'
+    const byUid: Map<string, PublishedTodo | ProjectedEvent> = wantsEvents
+      ? new Map(allEvents.map((event) => [eventRecordUid(event), event]))
+      : new Map(allTodos.map((todo) => [todo.uid, todo]))
     const seenResponses = new Set<string>()
     const responses: string[] = []
     for (const href of hrefs) {
       const requested = resourceFromMultigetHref(href)
-      if (!requested || requested.kind !== 'object' || requested.userUuid !== userUuid || !byUid.has(requested.uid)) {
+      if (
+        !requested ||
+        requested.kind !== expectedKind ||
+        !('uid' in requested) ||
+        requested.userUuid !== userUuid ||
+        !byUid.has(requested.uid)
+      ) {
         const key = `missing:${href}`
         if (!seenResponses.has(key)) {
           seenResponses.add(key)
@@ -668,7 +865,11 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
       const key = `object:${requested.uid}`
       if (!seenResponses.has(key)) {
         seenResponses.add(key)
-        responses.push(reportTodoResponse(userUuid, byUid.get(requested.uid) as PublishedTodo))
+        responses.push(
+          wantsEvents
+            ? reportEventResponse(userUuid, byUid.get(requested.uid) as ProjectedEvent)
+            : reportTodoResponse(userUuid, byUid.get(requested.uid) as PublishedTodo),
+        )
       }
     }
     sendXml(response, 207, buildMultistatus(responses))
@@ -678,7 +879,7 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
   router.report('/{*splat}', asyncRoute(handleReport))
 
   const handleGetOrHead = async (request: Request, response: Response, headOnly: boolean): Promise<void> => {
-    const resource = ownedResource(request, response)
+    const resource = await ownedExistingResource(request, response)
     if (!resource) {
       return
     }
@@ -693,6 +894,18 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
       ics = service.serializeCalendar([todo])
     } else if (resource.kind === 'calendar') {
       ics = service.serializeCalendar(await service.listTodos(userUuid))
+    } else if (resource.kind === 'events-object') {
+      // A record the settings exclude (completed and hidden, repeating and
+      // ignored, no deadline at all) has no event resource to serve. 404 is the
+      // truthful answer and it is what makes a client drop its copy.
+      const event = await projectedEventFor(userUuid, resource.uid)
+      if (!event) {
+        response.status(404).send('Not found')
+        return
+      }
+      ics = service.serializeEvents([event])
+    } else if (resource.kind === 'events-calendar') {
+      ics = service.serializeEvents(await service.listEvents(userUuid))
     } else {
       response.status(405).setHeader('Allow', 'OPTIONS, PROPFIND')
       response.end()
@@ -733,16 +946,16 @@ export function createCaldavRouter(service: CaldavService, options: CaldavRouter
     asyncRoute((request, response) => handleGetOrHead(request, response, false)),
   )
 
-  const handleUnsupported = (request: Request, response: Response): void => {
-    const resource = ownedResource(request, response)
+  const handleUnsupported = async (request: Request, response: Response): Promise<void> => {
+    const resource = await ownedExistingResource(request, response)
     if (!resource) {
       return
     }
     response.setHeader('Allow', allowHeaderFor(resource))
     response.status(405).send('Method not allowed')
   }
-  router.all('/', handleUnsupported)
-  router.all('/{*splat}', handleUnsupported)
+  router.all('/', asyncRoute(handleUnsupported))
+  router.all('/{*splat}', asyncRoute(handleUnsupported))
 
   // Express decodes wildcard parameters before invoking a handler. Contain a
   // malformed percent-encoding here so it is a client-path error, not a 500.

@@ -13,6 +13,7 @@ import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Spinner from '@/Components/Spinner/Spinner'
 import Switch from '@/Components/Switch/Switch'
 import CopyButton from '../TwoFactorAuth/CopyButton'
+import CalDavDueDateEvents from './CalDavDueDateEvents'
 import {
   DATE_ONLY_PATTERN,
   convertTemporalInputMode,
@@ -573,6 +574,8 @@ const CalDavTokens: FunctionComponent<Props> = ({ application }: Props) => {
           </div>
         ))}
       </PreferencesSegment>
+
+      <CalDavDueDateEvents application={application} canWrite={canAddData} onPublished={() => void loadTodos()} />
 
       <HorizontalSeparator classes="my-4" />
       <PreferencesSegment>

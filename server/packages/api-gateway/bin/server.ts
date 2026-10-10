@@ -78,6 +78,7 @@ import { IpAccessListStore } from '../src/Controller/IpAccessList'
 import { createIpEscalationRecorder } from '../src/Controller/IpEscalationSignal'
 import { RateLimitMetricsStore } from '../src/Controller/RateLimitMetrics'
 import { ServerSettingsResolver } from '../src/Service/ServerSettings/ServerSettingsResolver'
+import { createCaldavCorsBypass } from '../src/Caldav/createCaldavCorsBypass'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
@@ -339,33 +340,40 @@ void container
       // CORS_ORIGIN_STRICT_MODE_ENABLED=false to restore the legacy permissive
       // "reflect any Origin" behavior. See CorsOriginResolver for the full model.
       const corsStrictMode = resolveCorsStrictMode(env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true))
+      // The CalDAV mount is exempted: see createCaldavCorsBypass — `cors()`
+      // answers every OPTIONS with 204 and ends it, which hides the router's
+      // DAV/Allow discovery response from every real calendar client.
+      const caldavCorsBasePath = container.get<string>(TYPES.ApiGateway_CALDAV_BASE_PATH)
       app.use(
-        cors({
-          credentials: true,
-          exposedHeaders: ['x-captcha-required'],
-          origin: (
-            requestOrigin: string | undefined,
-            callback: (err: Error | null, origin?: boolean | string | string[]) => void,
-          ) => {
-            const decision = decideCorsOrigin(requestOrigin, {
-              strictMode: corsStrictMode,
-              allowedOrigins: corsAllowedOrigins,
-            })
+        createCaldavCorsBypass(
+          cors({
+            credentials: true,
+            exposedHeaders: ['x-captcha-required'],
+            origin: (
+              requestOrigin: string | undefined,
+              callback: (err: Error | null, origin?: boolean | string | string[]) => void,
+            ) => {
+              const decision = decideCorsOrigin(requestOrigin, {
+                strictMode: corsStrictMode,
+                allowedOrigins: corsAllowedOrigins,
+              })
 
-            if (decision.allow) {
-              callback(null, [requestOrigin as string])
-              return
-            }
+              if (decision.allow) {
+                callback(null, [requestOrigin as string])
+                return
+              }
 
-            // Disallowed CROSS-origin request: emit NO Access-Control-Allow-Origin
-            // header (the cors package treats a falsy origin as "no CORS headers,
-            // continue"). The browser then blocks the cross-origin RESPONSE, while
-            // SAME-ORIGIN requests — which need no ACAO — keep working on any
-            // custom domain. We deliberately do NOT throw here (throwing would 500
-            // the request and break same-origin deployments).
-            callback(null, false)
-          },
-        }),
+              // Disallowed CROSS-origin request: emit NO Access-Control-Allow-Origin
+              // header (the cors package treats a falsy origin as "no CORS headers,
+              // continue"). The browser then blocks the cross-origin RESPONSE, while
+              // SAME-ORIGIN requests — which need no ACAO — keep working on any
+              // custom domain. We deliberately do NOT throw here (throwing would 500
+              // the request and break same-origin deployments).
+              callback(null, false)
+            },
+          }),
+          caldavCorsBasePath,
+        ),
       )
       app.use((req: Request, res: Response, next: NextFunction) => {
         if (req.path === '/robots.txt') {
@@ -698,6 +706,13 @@ void container
               container.get(TYPES.ApiGateway_EndpointResolver),
               container.get(TYPES.ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET),
               container.get(TYPES.ApiGateway_COLLABORATION_CAPABILITY_TTL),
+              // The SAME gap HomeServer had, on the OTHER topology. This is the
+              // authorizer the multi-container sync lane uses, and it is the one
+              // `0a6897b3`'s GET-instead-of-POST silently refused through: the
+              // access check answered 404 and that was read as
+              // `{ authorized: false }` with nothing logged anywhere.
+              // `access-check-http-status` is now an ERROR line that names it.
+              logger,
             ),
           )
           const redisClient = container.get(TYPES.ApiGateway_Redis) as SyncRedisClient &

@@ -239,6 +239,8 @@ const CaldavTokenPaths = {
   caldavToken: (tokenUuid: string) => `/v1/caldav/tokens/${tokenUuid}`,
   caldavTodos: '/v1/caldav/todos',
   caldavTodo: (uid: string) => `/v1/caldav/todos/${encodeURIComponent(uid)}`,
+  // Per-user settings for the due-date-to-event projection (VEVENT feed).
+  caldavProjection: '/v1/caldav/projection',
 }
 
 const SubscriptionPaths = {

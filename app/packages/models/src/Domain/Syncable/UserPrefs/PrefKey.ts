@@ -248,6 +248,12 @@ export enum PrefKey {
   // rather than a single "new parser" flag.
   TodoHeadingLevels = 'todoHeadingLevels',
   TodoHeadingDescriptions = 'todoHeadingDescriptions',
+  // Standard Red Notes: which task deadlines are published as calendar
+  // EVENTS through CalDAV, and in what plaintext shape. A pref rather than a
+  // local setting because it is a scope the user chose, and it must follow
+  // them to every device that could publish — otherwise a second device
+  // republishes a wider set than the first one agreed to.
+  TodoCalendarPublication = 'todoCalendarPublication',
   // Standard Red Notes: gates note cover images (the hero header). Default OFF
   // because the cover's bytes live INLINE in the note's appData and are
   // therefore re-encrypted and re-uploaded with every note revision. Turning it
@@ -291,6 +297,39 @@ export type ConflictResolutionStrategyValue = 'ask' | 'keepBoth' | 'keepLocal' |
 export type RecentNoteEntry = {
   uuid: string
   openedAt: number
+}
+
+export const CurrentTodoCalendarPublicationVersion = 1
+
+/**
+ * Standard Red Notes: the persisted scope of the task-deadline-to-calendar-event
+ * publication.
+ *
+ * This value SYNCS and is therefore untrusted on read. It is deliberately
+ * NARROW by default (`scope: 'tags'` with no tags selected publishes nothing),
+ * because turning the feature on must not be the same action as copying every
+ * deadline in the vault into the server's plaintext store.
+ */
+export type TodoCalendarPublicationPreference = {
+  version: typeof CurrentTodoCalendarPublicationVersion
+  scope: 'all' | 'tags' | 'notes'
+  tagUuids: string[]
+  noteUuids: string[]
+  includeCompleted: boolean
+  dateOnlyAtLocalMidnight: boolean
+  includeTagsAsCategories: boolean
+  maximumItems: number
+}
+
+export const DefaultTodoCalendarPublicationPreference: TodoCalendarPublicationPreference = {
+  version: CurrentTodoCalendarPublicationVersion,
+  scope: 'tags',
+  tagUuids: [],
+  noteUuids: [],
+  includeCompleted: false,
+  dateOnlyAtLocalMidnight: true,
+  includeTagsAsCategories: true,
+  maximumItems: 200,
 }
 
 export const CurrentTodoFiltersPreferenceVersion = 1
@@ -471,6 +510,12 @@ export type PrefValue = {
   [PrefKey.TodoHeadingLevels]: boolean
   /** Paragraphs following a heading become that section's description. */
   [PrefKey.TodoHeadingDescriptions]: boolean
+  /**
+   * Which task deadlines leave the device as CalDAV calendar events.
+   * See `todoCalendarPublication.ts`; every field is untrusted and normalized
+   * before use, and every added field must default to "publishes nothing new".
+   */
+  [PrefKey.TodoCalendarPublication]: TodoCalendarPublicationPreference
   /** Note cover images (hero header) are allowed. OFF hides, never deletes. */
   [PrefKey.NoteCoversEnabled]: boolean
   /** Missed recurring-checklist occurrences are generated instead of skipped. */

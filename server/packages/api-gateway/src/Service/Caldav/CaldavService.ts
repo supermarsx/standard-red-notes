@@ -1,6 +1,8 @@
 import { CaldavTokenStore, CaldavTokenMetadata, CreatedCaldavToken } from './CaldavTokenStore'
+import { CalendarProjectionSettings, ProjectedEvent, projectTodosToEvents } from './CalendarProjection'
+import { CalendarProjectionStore } from './CalendarProjectionStore'
 import { PublishedCalendarStore } from './PublishedCalendarStore'
-import { PublishedTodo, serializeCalendar } from './ICalendarSerializer'
+import { PublishedTodo, serializeCalendar, serializeEventCalendar } from './ICalendarSerializer'
 
 /**
  * Standard Red Notes: facade tying together the CalDAV token store and the
@@ -20,6 +22,7 @@ export class CaldavService {
     private readonly enabled: boolean,
     private readonly tokenStore: CaldavTokenStore,
     private readonly publishedStore: PublishedCalendarStore,
+    private readonly projectionStore: CalendarProjectionStore,
   ) {}
 
   isEnabled(): boolean {
@@ -65,5 +68,36 @@ export class CaldavService {
 
   serializeCalendar(todos: PublishedTodo[]): string {
     return serializeCalendar(todos)
+  }
+
+  /**
+   * The user's due-date-to-event projection settings. Always a complete set,
+   * defaulting to OFF, so the DAV router can ask on every request without a
+   * guard and an unreadable store means "no events".
+   */
+  async getProjection(userUuid: string): Promise<CalendarProjectionSettings> {
+    return this.projectionStore.getForUser(userUuid)
+  }
+
+  /** Store projection settings and return the EFFECTIVE (normalized) set. */
+  async setProjection(userUuid: string, settings: unknown): Promise<CalendarProjectionSettings> {
+    return this.projectionStore.setForUser(userUuid, settings)
+  }
+
+  async resetProjection(userUuid: string): Promise<boolean> {
+    return this.projectionStore.resetForUser(userUuid)
+  }
+
+  /** The user's published tasks projected onto events under their settings. */
+  async listEvents(userUuid: string): Promise<ProjectedEvent[]> {
+    const settings = await this.projectionStore.getForUser(userUuid)
+    if (!settings.enabled) {
+      return []
+    }
+    return projectTodosToEvents(await this.publishedStore.listForUser(userUuid), settings)
+  }
+
+  serializeEvents(events: ProjectedEvent[]): string {
+    return serializeEventCalendar(events)
   }
 }

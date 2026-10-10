@@ -62,6 +62,13 @@ x-server-env: &server-env
   # Shared persisted admin overlay read by every supervisord process. A custom
   # in-container path also needs a matching persistent volume mount.
   SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/opt/server/packages/api-gateway/data/server-settings.json}
+  # Read-only CalDAV feed, OFF unless the operator asks for it. When on, the
+  # gateway serves a VTODO task collection plus (per user) a VEVENT calendar of
+  # task DUE DATES, so deadlines land on a calendar grid. nginx proxies the
+  # DEFAULT base path only; a custom CALDAV_BASE_PATH needs a matching nginx
+  # location, and pointing it at an existing API prefix would shadow the API.
+  CALDAV_ENABLED: ${CALDAV_ENABLED:-false}
+  CALDAV_BASE_PATH: ${CALDAV_BASE_PATH:-/dav}
   # Optional analytics report recipients. This does not grant authorization;
   # administrator access is a persisted ADMIN_USER role managed with srn-admin.
   ADMIN_EMAILS: ${ADMIN_EMAILS:-}

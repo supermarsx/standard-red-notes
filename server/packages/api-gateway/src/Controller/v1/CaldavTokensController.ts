@@ -1,13 +1,14 @@
 import { Request, Response } from 'express'
 import { randomUUID } from 'crypto'
 import { inject } from 'inversify'
-import { BaseHttpController, controller, httpDelete, httpGet, httpPost } from 'inversify-express-utils'
+import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
 import { SettingName } from '@standardnotes/domain-core'
 
 import { TYPES } from '../../Bootstrap/Types'
 import { CaldavInputError } from '../../Service/Caldav/CaldavInputError'
 import { normalizeCaldavBasePath } from '../../Service/Caldav/CaldavBasePath'
 import { CaldavService } from '../../Service/Caldav/CaldavService'
+import { normalizePublishedTodoRecurrence } from '../../Service/Caldav/CalendarProjection'
 import { PublishedTodo } from '../../Service/Caldav/ICalendarSerializer'
 
 function userUuidFrom(response: Response): string {
@@ -165,6 +166,10 @@ export class CaldavTodosController extends BaseHttpController {
       return
     }
     const body = (request.body ?? {}) as Record<string, unknown>
+    // Every field this controller forwards must be named HERE. A field added to
+    // the store's schema but not to this list is accepted by the client, stored
+    // as nothing, and then behaves like a record that never had it — which is
+    // how `recurrence` and `categories` first shipped as silent no-ops.
     const todo: PublishedTodo = {
       uid: typeof body.uid === 'string' && body.uid.length > 0 ? body.uid : randomUUID(),
       summary: typeof body.summary === 'string' ? body.summary : '',
@@ -178,6 +183,23 @@ export class CaldavTodosController extends BaseHttpController {
     if (todo.summary.trim().length === 0) {
       response.status(400).json({ error: { message: 'A summary is required to publish a calendar item.' } })
       return
+    }
+    if (body.categories !== undefined) {
+      // Rejected rather than filtered: a client that sent a malformed list has
+      // a bug, and quietly publishing a record with no categories would hide it.
+      if (!Array.isArray(body.categories) || body.categories.some((entry) => typeof entry !== 'string')) {
+        response.status(400).json({ error: { message: 'Calendar categories must be a list of strings.' } })
+        return
+      }
+      todo.categories = body.categories as string[]
+    }
+    if (body.recurrence !== undefined) {
+      const recurrence = normalizePublishedTodoRecurrence(body.recurrence)
+      if (!recurrence) {
+        response.status(400).json({ error: { message: 'Refusing to publish an unrecognized repeat rule.' } })
+        return
+      }
+      todo.recurrence = recurrence
     }
     try {
       const stored = await this.caldavService.publishTodo(userUuidFrom(response), todo)
@@ -198,5 +220,57 @@ export class CaldavTodosController extends BaseHttpController {
       return
     }
     response.status(200).json({ unpublished: true })
+  }
+}
+
+/**
+ * Authenticated settings for the due-date-to-event projection: whether a
+ * published task's deadline also appears as a calendar EVENT, and in what shape.
+ *
+ * It is a settings endpoint, not a data endpoint — it stores no task content.
+ * GET is deliberately available even when the feature gates are off, because the
+ * client needs the stored values to render the pane and tell the user WHY the
+ * projection is inactive; PUT requires both gates, like every other write here.
+ *
+ * The response always echoes the EFFECTIVE, normalized settings rather than the
+ * submitted body, so a clamped duration or an unknown time zone is visible in
+ * the UI immediately instead of looking saved and behaving differently.
+ */
+@controller('/v1/caldav/projection')
+export class CaldavProjectionController extends BaseHttpController {
+  constructor(@inject(TYPES.ApiGateway_CaldavService) private caldavService: CaldavService) {
+    super()
+  }
+
+  @httpGet('/', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async read(_request: Request, response: Response): Promise<void> {
+    const projection = await this.caldavService.getProjection(userUuidFrom(response))
+    response.json({
+      projection,
+      caldavEnabled: this.caldavService.isEnabled(),
+      allowed: userAllowed(response),
+    })
+  }
+
+  @httpPut('/', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async write(request: Request, response: Response): Promise<void> {
+    if (!requirePublishAccess(this.caldavService, response)) {
+      return
+    }
+    const body = (request.body ?? {}) as Record<string, unknown>
+    // Accept either the bare settings object or a `{ projection: … }` envelope so
+    // the client can round-trip exactly what GET returned.
+    const submitted = body.projection !== undefined ? body.projection : body
+    const projection = await this.caldavService.setProjection(userUuidFrom(response), submitted)
+    response.status(200).json({ projection })
+  }
+
+  @httpDelete('/', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async reset(_request: Request, response: Response): Promise<void> {
+    // Reverting to the OFF defaults stays available when either gate is off, so
+    // a user can always stop the projection.
+    const removed = await this.caldavService.resetProjection(userUuidFrom(response))
+    const projection = await this.caldavService.getProjection(userUuidFrom(response))
+    response.status(200).json({ reset: removed, projection })
   }
 }

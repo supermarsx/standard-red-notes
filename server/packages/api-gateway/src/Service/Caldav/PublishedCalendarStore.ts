@@ -7,6 +7,7 @@ import {
   SecureJsonFileStore,
 } from '../../Infra/SecureJsonFileStore'
 import { CaldavInputError } from './CaldavInputError'
+import { normalizePublishedTodoRecurrence } from './CalendarProjection'
 import { PublishedTodo } from './ICalendarSerializer'
 
 /**
@@ -38,6 +39,8 @@ const MAX_TODOS_PER_USER = 10_000
 const MAX_UID_LENGTH = 1_024
 const MAX_SUMMARY_LENGTH = 4_096
 const MAX_DESCRIPTION_LENGTH = 65_536
+const MAX_CATEGORIES = 16
+const MAX_CATEGORY_LENGTH = 128
 const DATE_PATTERN = /^\d{4}-(\d{2})-(\d{2})$/
 const DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
@@ -67,6 +70,8 @@ function isPublishedTodo(value: unknown, uid: string): value is PublishedTodo {
       'completed',
       'completedAt',
       'priority',
+      'categories',
+      'recurrence',
       'createdAt',
       'updatedAt',
     ]) &&
@@ -83,8 +88,27 @@ function isPublishedTodo(value: unknown, uid: string): value is PublishedTodo {
         Number.isSafeInteger(value.priority) &&
         value.priority >= 0 &&
         value.priority <= 9)) &&
+    isPublishedCategories(value.categories) &&
+    (value.recurrence === undefined || normalizePublishedTodoRecurrence(value.recurrence) !== undefined) &&
     isOptionalEpochMilliseconds(value.createdAt) &&
     isOptionalEpochMilliseconds(value.updatedAt)
+  )
+}
+
+/**
+ * Labels, not documents: a bounded list of bounded, single-line strings. The
+ * bound is what stops one note's tag soup from making every feed read slow, and
+ * the calendar-text rule is what stops a control character breaking RFC 5545
+ * content-line folding for the whole collection.
+ */
+function isPublishedCategories(value: unknown): value is string[] | undefined {
+  if (value === undefined) {
+    return true
+  }
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_CATEGORIES &&
+    value.every((category) => isNonBlankCalendarText(category, MAX_CATEGORY_LENGTH))
   )
 }
 
@@ -227,6 +251,8 @@ export class PublishedCalendarStore {
         ...(todo.completed !== undefined ? { completed: todo.completed } : {}),
         ...(todo.completedAt !== undefined ? { completedAt: todo.completedAt } : {}),
         ...(todo.priority !== undefined ? { priority: todo.priority } : {}),
+        ...(todo.categories !== undefined ? { categories: [...todo.categories] } : {}),
+        ...(todo.recurrence !== undefined ? { recurrence: { ...todo.recurrence } } : {}),
         createdAt: existing?.createdAt ?? now,
         updatedAt,
       }

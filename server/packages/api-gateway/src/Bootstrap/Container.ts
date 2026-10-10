@@ -62,6 +62,7 @@ import { PluginsFetchLike, PluginsProxyService } from '../Service/Plugins/Plugin
 import { AdminLogsService } from '../Service/AdminLogs/AdminLogsService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
+import { CalendarProjectionStore } from '../Service/Caldav/CalendarProjectionStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
 import { ReminderDeliveryService } from '../Service/ReminderDelivery/ReminderDeliveryService'
 import { ReminderDeliveryScheduler } from '../Service/ReminderDelivery/ReminderDeliveryScheduler'
@@ -926,15 +927,16 @@ export class ContainerConfigLoader {
     const caldavBasePath = env.get('CALDAV_BASE_PATH', true) || '/dav'
     container.bind<boolean>(TYPES.ApiGateway_CALDAV_ENABLED).toConstantValue(caldavEnabled)
     container.bind<string>(TYPES.ApiGateway_CALDAV_BASE_PATH).toConstantValue(caldavBasePath)
-    container
-      .bind<CaldavService>(TYPES.ApiGateway_CaldavService)
-      .toConstantValue(
-        new CaldavService(
-          caldavEnabled,
-          new CaldavTokenStore(path.join(caldavDataPath, 'tokens.json')),
-          new PublishedCalendarStore(path.join(caldavDataPath, 'published.json')),
-        ),
-      )
+    container.bind<CaldavService>(TYPES.ApiGateway_CaldavService).toConstantValue(
+      new CaldavService(
+        caldavEnabled,
+        new CaldavTokenStore(path.join(caldavDataPath, 'tokens.json')),
+        new PublishedCalendarStore(path.join(caldavDataPath, 'published.json')),
+        // Per-user due-date-to-event projection settings. Readable from a
+        // CalDAV token's userUuid alone, because the DAV feed has no session.
+        new CalendarProjectionStore(path.join(caldavDataPath, 'projection.json')),
+      ),
+    )
 
     // Standard Red Notes: OPT-IN server-side reminder DELIVERY (Telegram / Email /
     // WhatsApp).

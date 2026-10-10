@@ -13,6 +13,7 @@ import { TYPES } from './Bootstrap/Types'
 import { registerCaldavRoutes } from './Caldav/registerCaldavRoutes'
 import { CaldavService } from './Service/Caldav/CaldavService'
 import { CaldavTokenStore } from './Service/Caldav/CaldavTokenStore'
+import { CalendarProjectionStore } from './Service/Caldav/CalendarProjectionStore'
 import { PublishedCalendarStore } from './Service/Caldav/PublishedCalendarStore'
 import { createFallbackHandler, API_GATEWAY_WELCOME_HTML } from './Controller/FallbackController'
 
@@ -79,7 +80,12 @@ async function buildContainer(dir: string): Promise<Container> {
   // router's own 401 Basic-auth challenge (an unmistakable router signal).
   const caldavTokenStore = new CaldavTokenStore(path.join(dir, 'caldav-tokens.json'))
   const publishedStore = new PublishedCalendarStore(path.join(dir, 'caldav-published.json'))
-  const caldavService = new CaldavService(true, caldavTokenStore, publishedStore)
+  const caldavService = new CaldavService(
+    true,
+    caldavTokenStore,
+    publishedStore,
+    new CalendarProjectionStore(path.join(dir, 'caldav-projection.json')),
+  )
   container.bind(TYPES.ApiGateway_CaldavService).toConstantValue(caldavService)
   container.bind(TYPES.ApiGateway_CALDAV_BASE_PATH).toConstantValue('/dav')
 

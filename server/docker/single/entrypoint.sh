@@ -131,6 +131,15 @@ put FILES_SERVER_URL "${PUBLIC_FILES_SERVER_URL:-http://localhost:${APP_PORT:-30
 # explicit operator path; persistence then requires mounting that path too.
 put SERVER_SETTINGS_PATH "${SERVER_SETTINGS_PATH:-${DATA_DIR}/server-settings.json}"
 put CALDAV_DATA_PATH "${DATA_DIR}/caldav"
+# The CalDAV feed and its due-date EVENT projection are OFF unless the
+# operator asks for them. Without these two lines the api-gateway never
+# sees CALDAV_ENABLED at all, so the router 404s whatever the operator sets
+# and the whole feature is unreachable on this topology.
+put_opt CALDAV_ENABLED "${CALDAV_ENABLED:-}"
+# nginx proxies the DEFAULT base path (/dav) only; a custom one needs a
+# matching nginx location, so it is projected but not advertised as
+# self-service.
+put_opt CALDAV_BASE_PATH "${CALDAV_BASE_PATH:-}"
 put REMINDER_DELIVERY_DATA_PATH "${DATA_DIR}/reminder-delivery"
 
 # Cookies: defaults suit an http://localhost self-host (host-only cookie).
