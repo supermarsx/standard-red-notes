@@ -76,7 +76,22 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     }
   }
 
-  async callEmailServer(_request: Request, response: Response, _methodIdentifier: string): Promise<void> {
+  /**
+   * The four methods on this class that answer a fixed 400 read NO argument at
+   * all, so their `_payload` is deliberately unread -- but it is still
+   * DECLARED. `ServiceProxyInterface` says four parameters; an implementation
+   * that admits to three is the shape that denied 100 % of collaboration on
+   * this topology (see `callSyncingServer`), and "this one happens not to need
+   * it" is exactly the reasoning that left the hole open the first time.
+   * `ServiceProxyArity.spec.ts` holds every method of every implementation to
+   * the interface's width for that reason.
+   */
+  async callEmailServer(
+    _request: Request,
+    response: Response,
+    _methodIdentifier: string,
+    _payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     response.status(400).send({
       error: {
         message: 'Email server is not available.',
@@ -84,13 +99,54 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     })
   }
 
-  async callAuthServer(request: never, response: never, methodIdentifier: string): Promise<void> {
+  /**
+   * `payload` is forwarded as the request body, exactly as `callSyncingServer`
+   * does it and for the same reason -- see the note there.
+   *
+   * Almost every caller of this method passes `request.body`, which is already
+   * the body of the request being forwarded, so for them the argument is
+   * redundant and dropping it changed nothing. TWO callers pass a body that
+   * exists ONLY as this argument, and both were reading `undefined` on this
+   * topology:
+   *
+   *  - `SessionsController.deleteSession` sends `{ uuid: request.params.uuid }`
+   *    for `DELETE /v1/sessions/:uuid`, and `BaseSessionController.deleteSession`
+   *    reads `request.body.uuid`. MEASURED on two containers built from the
+   *    same tree: revoking another device's session over a bodyless
+   *    `DELETE /v1/sessions/<uuid>` answered **500** and left the session alive
+   *    on the single container, against **204** and gone on compose. The 500 is
+   *    `TypeError: Cannot read properties of undefined (reading 'uuid')` --
+   *    Express 5 leaves `request.body` undefined for a bodyless request, and
+   *    with the payload discarded that is what the controller read. With an
+   *    empty `{}` body it degraded instead to
+   *    `400 Please provide the session identifier.`, a refusal naming a
+   *    parameter the caller HAD supplied. Today's SNJS client also repeats the
+   *    uuid in the DELETE body, which is the only reason the app itself did not
+   *    see this; any other client, and the idiomatic bodyless form, did.
+   *  - `ValetTokenFileResourceAuthorizer.authorizePersonalResource` mints
+   *    `POST valet-tokens` with `{ operation, resources }`, a body
+   *    `BaseValetTokenController.create` reads in full. That composition runs
+   *    only in the standalone api-gateway process (where the bound proxy is the
+   *    HTTP or gRPC one), so it was latent rather than live -- but it is latent
+   *    only because of a binding in `Container.ts`, not because of anything in
+   *    this method.
+   */
+  async callAuthServer(
+    request: never,
+    response: never,
+    methodIdentifier: string,
+    payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     const authService = this.serviceContainer.get(ServiceIdentifier.create(ServiceIdentifier.NAMES.Auth).getValue())
     if (!authService) {
       throw new Error('Auth service not found')
     }
 
-    const serviceResponse = (await authService.handleRequest(request, response, methodIdentifier)) as {
+    const serviceResponse = (await authService.handleRequest(
+      this.requestWithPayload(request, payload),
+      response,
+      methodIdentifier,
+    )) as {
       statusCode: number
       json: Record<string, unknown>
     }
@@ -102,6 +158,7 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     _request: Request,
     response: Response,
     _methodIdentifier: string,
+    _payload?: Record<string, unknown> | string,
   ): Promise<void> {
     response.status(400).send({
       error: {
@@ -110,13 +167,23 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     })
   }
 
-  async callRevisionsServer(request: never, response: never, methodIdentifier: string): Promise<void> {
+  /** `payload` is forwarded as the request body -- see `callAuthServer`. */
+  async callRevisionsServer(
+    request: never,
+    response: never,
+    methodIdentifier: string,
+    payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     const service = this.serviceContainer.get(ServiceIdentifier.create(ServiceIdentifier.NAMES.Revisions).getValue())
     if (!service) {
       throw new Error('Revisions service not found')
     }
 
-    const serviceResponse = (await service.handleRequest(request, response, methodIdentifier)) as {
+    const serviceResponse = (await service.handleRequest(
+      this.requestWithPayload(request, payload),
+      response,
+      methodIdentifier,
+    )) as {
       statusCode: number
       json: Record<string, unknown>
     }
@@ -199,7 +266,12 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     return createDirectCallRequest({ from: request as unknown as Request, body: payload }) as unknown as never
   }
 
-  async callLegacySyncingServer(_request: Request, response: Response, _methodIdentifier: string): Promise<void> {
+  async callLegacySyncingServer(
+    _request: Request,
+    response: Response,
+    _methodIdentifier: string,
+    _payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     response.status(400).send({
       error: {
         message: 'Legacy syncing server endpoints are no longer available.',
@@ -207,7 +279,12 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     })
   }
 
-  async callPaymentsServer(_request: Request, response: Response, _methodIdentifier: string): Promise<void> {
+  async callPaymentsServer(
+    _request: Request,
+    response: Response,
+    _methodIdentifier: string,
+    _payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     response.status(400).send({
       error: {
         message: 'Payments server is not available.',
@@ -215,7 +292,19 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     })
   }
 
-  async callWebSocketServer(_request: Request, response: Response, methodIdentifier: string): Promise<void> {
+  /**
+   * `_payload` is declared and deliberately unread: nothing here forwards a
+   * request anywhere. The connection token is minted from `response.locals`
+   * against the in-process gateway, so there is no body for a caller's payload
+   * to become. `WebSocketsController` passes `request.body` and the mint reads
+   * none of it.
+   */
+  async callWebSocketServer(
+    _request: Request,
+    response: Response,
+    methodIdentifier: string,
+    _payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     const locals = response.locals as ResponseLocals
 
     // Only the connection-token endpoint is relevant to the self-hosted gateway;
