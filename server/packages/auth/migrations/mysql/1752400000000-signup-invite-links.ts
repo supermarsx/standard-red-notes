@@ -39,9 +39,7 @@ export class signupInviteLinks1752400000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      'DROP INDEX `index_signup_invite_links_on_created_by_user_uuid` ON `signup_invite_links`',
-    )
+    await queryRunner.query('DROP INDEX `index_signup_invite_links_on_created_by_user_uuid` ON `signup_invite_links`')
     await queryRunner.query('DROP INDEX `index_signup_invite_links_on_hashed_token` ON `signup_invite_links`')
     await queryRunner.query('DROP TABLE `signup_invite_links`')
   }

@@ -32,9 +32,7 @@ export class emailConfirmation1751400000000 implements MigrationInterface {
     await queryRunner.query(
       'DROP INDEX `index_email_confirmation_tokens_on_hashed_token` ON `email_confirmation_tokens`',
     )
-    await queryRunner.query(
-      'DROP INDEX `index_email_confirmation_tokens_on_user_uuid` ON `email_confirmation_tokens`',
-    )
+    await queryRunner.query('DROP INDEX `index_email_confirmation_tokens_on_user_uuid` ON `email_confirmation_tokens`')
     await queryRunner.query('DROP TABLE `email_confirmation_tokens`')
   }
 }

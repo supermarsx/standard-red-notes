@@ -2075,11 +2075,18 @@ export function validateCiContract(files) {
     }
   }
 
+  // Pinned byte-for-byte, so widening the formatted region is a deliberate act
+  // that has to be made here as well. `packages/*/migrations/**/*.ts` and
+  // `*.config.js` are part of the pin because neither was reachable from the
+  // src/bin globs: 11 migrations under `packages/auth` and `jest.config.js`
+  // were unformatted for as long as the narrower pin stood, and
+  // `eslint.config.js` -- the file that decides what eslint does -- was gated
+  // by nothing.
   const expectedServerFormatScripts = {
     format:
-      'prettier --write "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}"',
+      'prettier --write "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}" "packages/*/migrations/**/*.ts" "*.config.js"',
     "format:check":
-      'prettier --check "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}"',
+      'prettier --check "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}" "packages/*/migrations/**/*.ts" "*.config.js"',
   };
   for (const [name, command] of Object.entries(expectedServerFormatScripts)) {
     if (serverPackage.scripts?.[name] !== command) {

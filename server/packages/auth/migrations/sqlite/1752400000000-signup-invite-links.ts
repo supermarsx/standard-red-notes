@@ -26,7 +26,7 @@ export class signupInviteLinks1752400000000 implements MigrationInterface {
         '"allowed_domain" varchar(255), ' +
         '"created_by" varchar(255), ' +
         '"created_by_user_uuid" varchar(255), ' +
-        "\"created_by_kind\" varchar(255) NOT NULL DEFAULT ('admin'), " +
+        '"created_by_kind" varchar(255) NOT NULL DEFAULT (\'admin\'), ' +
         '"auto_approve" boolean NOT NULL DEFAULT (1), ' +
         '"created_at" datetime NOT NULL, ' +
         '"updated_at" datetime NOT NULL)',

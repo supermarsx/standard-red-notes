@@ -10,9 +10,7 @@ export class pendingMfaApprovals1718700000001 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      'DROP INDEX `index_pending_mfa_approvals_on_challenge_id` ON `pending_mfa_approvals`',
-    )
+    await queryRunner.query('DROP INDEX `index_pending_mfa_approvals_on_challenge_id` ON `pending_mfa_approvals`')
     await queryRunner.query('DROP INDEX `index_pending_mfa_approvals_on_user_uuid` ON `pending_mfa_approvals`')
     await queryRunner.query('DROP TABLE `pending_mfa_approvals`')
   }

@@ -34,4 +34,4 @@ module.exports = {
       statements: 99,
     },
   },
-};
+}

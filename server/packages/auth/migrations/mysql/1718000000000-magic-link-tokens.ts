@@ -10,9 +10,7 @@ export class magicLinkTokens1718000000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      'DROP INDEX `index_magic_link_tokens_on_user_identifier` ON `magic_link_tokens`',
-    )
+    await queryRunner.query('DROP INDEX `index_magic_link_tokens_on_user_identifier` ON `magic_link_tokens`')
     await queryRunner.query('DROP TABLE `magic_link_tokens`')
   }
 }

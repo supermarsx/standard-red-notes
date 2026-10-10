@@ -22,9 +22,7 @@ export class AddUserWorkspaceIdentifier1718900000000 implements MigrationInterfa
   name = 'AddUserWorkspaceIdentifier1718900000000'
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      "ALTER TABLE `users` ADD `workspace_identifier` varchar(255) NOT NULL DEFAULT 'default'",
-    )
+    await queryRunner.query("ALTER TABLE `users` ADD `workspace_identifier` varchar(255) NOT NULL DEFAULT 'default'")
     // Defensive backfill in case any row was inserted with an explicit NULL.
     await queryRunner.query(
       "UPDATE `users` SET `workspace_identifier` = 'default' WHERE `workspace_identifier` IS NULL",
