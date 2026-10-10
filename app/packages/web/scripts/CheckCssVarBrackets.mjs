@@ -28,7 +28,6 @@
 // are still there, because nothing else in the toolchain notices when a
 // compiled rule is dropped by the parser.
 import { readdir, readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -100,8 +99,56 @@ if (allViolations.length > 0) {
 // scripts and test fixtures must stay out of its source set. Negated `content`
 // entries are the exclusion that takes effect; `@source not` in the CSS entry
 // was measured to apply only to whole-directory patterns, not file patterns.
-const require = createRequire(import.meta.url)
-const tailwindContent = require('../tailwind.config.js').content
+//
+// The config is EVALUATED, not string-matched: the checks below read the real
+// `content` array that the real file produces, so deleting or commenting out a
+// negated entry reddens them, and a `!./scripts/**/*` written inside a comment
+// does not satisfy them.
+//
+// It cannot be `require`d, though. This gate is deliberately the first thing CI
+// runs, BEFORE any install step, so that a failing install cannot skip it — and
+// `tailwind.config.js` opens with `require('tailwindcss/plugin')`, which is not
+// resolvable when nothing is installed. `require`-ing it made this step die with
+// MODULE_NOT_FOUND on a clean checkout, which marked it failed and skipped every
+// step after it: install, build, typecheck, lint, format:check and the whole test
+// suite never ran on CI for the 11 consecutive runs on main from 2026-10-04 to
+// 2026-10-09 — every run since the config-loading check was added. The last run
+// in which `yarn check` actually executed was 37232316801.
+//
+// So the config is evaluated as the CommonJS module it is, with `require`
+// replaced by a stub that absorbs any call, construction or property access.
+// Only `content` is read, `plugins` is never invoked by anything here, and
+// nothing outside node: builtins is loaded — which is what keeps this step
+// honestly independent of `yarn install`.
+const configPath = fileURLToPath(new URL('../tailwind.config.js', import.meta.url))
+const configSource = await readFile(configPath, 'utf8')
+
+// Only the `apply` trap is exercised by the config as it stands today, and
+// mutation-testing confirms it: deleting `construct`, `get`, or the `exports`
+// initialiser below leaves this script still exiting 0, because nothing in
+// `tailwind.config.js` currently constructs a required value, reads a property
+// off one, or assigns to `exports` rather than `module.exports`. They are kept
+// anyway, and that is a deliberate choice rather than an oversight: the failure
+// this script exists to not repeat is dying before `yarn install`, and the next
+// `require` added to that config is not something this file gets to predict.
+// Robustness here is the requirement, so these branches are unreachable on
+// purpose.
+const absorbAnything = new Proxy(function absorb() {}, {
+  apply: () => absorbAnything,
+  construct: () => absorbAnything,
+  get: () => absorbAnything,
+})
+
+const configModule = { exports: {} }
+new Function('module', 'exports', 'require', '__filename', '__dirname', configSource)(
+  configModule,
+  configModule.exports,
+  () => absorbAnything,
+  configPath,
+  path.dirname(configPath),
+)
+
+const tailwindContent = configModule.exports.content
 const negations = (Array.isArray(tailwindContent) ? tailwindContent : []).filter(
   (entry) => typeof entry === 'string' && entry.startsWith('!'),
 )

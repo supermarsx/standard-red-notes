@@ -108,11 +108,31 @@ jobs:
       # install/build step below: `yarn check` chains typecheck && lint &&
       # format:check && test with `&&`, so an unrelated earlier failure would
       # silently skip `lint` (and this check with it) and nobody would notice
-      # it never ran. The script itself has zero npm dependencies (plain
-      # fs/path), so it needs nothing but Node — see
-      # .orchestration/logs/t99/t99-e4.md for the incident this guards
-      # against (36 call sites of a Tailwind v4 syntax regression that
-      # silently dropped CSS declarations, shipped to production undetected).
+      # it never ran. See .orchestration/logs/t99/t99-e4.md for the incident
+      # this guards against (36 call sites of a Tailwind v4 syntax regression
+      # that silently dropped CSS declarations, shipped to production
+      # undetected).
+      #
+      # Being first costs something, and this step did not pay it. Running
+      # before `yarn install` means the script may import NOTHING but node:
+      # builtins, and its own comment asserted it imported nothing else while
+      # it `require`d `tailwind.config.js`, whose first statement is
+      # `require('tailwindcss/plugin')`. On a clean runner that threw
+      # MODULE_NOT_FOUND, so this step failed and every step after it was
+      # skipped: install, build, typecheck, lint, format:check, the entire test
+      # suite and the Redis tombstone check did not run on main for the 11
+      # consecutive runs from 2026-10-04 to 2026-10-09 — every run since the
+      # config-loading check was added. `yarn check` last executed in run
+      # 37232316801. It passed locally only because app/node_modules exists
+      # there. The guard built so that a check could not be silently skipped
+      # had become the reason every other check was skipped.
+      #
+      # The script now evaluates that config with a stubbed `require` instead
+      # of loading it, so it reads the real `content` array without resolving
+      # any package. Keep it that way: anything this step imports has to be a
+      # node: builtin, because nothing is installed yet. Do not "fix" a failure
+      # here by moving the step below the install steps — independence from
+      # install is the entire point of its position.
       - name: Guard against Tailwind v4 bracket CSS-variable regressions
         run: node app/packages/web/scripts/CheckCssVarBrackets.mjs
       - name: Install Corepack
