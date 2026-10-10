@@ -25,7 +25,8 @@ container.
 | script | what it proves | where it runs |
 |---|---|---|
 | `realtime.e2e.mjs` | readiness through the front door, the internal mint being refused at the front door and accepted from loopback, the cross-service mint, and Redis push delivery/exclusion | front door for the public legs, inside the container for the loopback mint legs |
-| `collab-yjs.e2e.mjs` | encrypted two-editor Yjs convergence, protocol v3 epoch binding, and `room-denied` epoch adoption | inside the container |
+| `collab-yjs.e2e.mjs` | encrypted two-editor Yjs convergence, protocol v3 epoch binding, and `room-denied` epoch adoption — the RELAY only, see below | inside the container |
+| `collab-end-to-end.e2e.mjs` | collaboration on two REAL accounts: a real shared vault, a real invite, `COLLABORATION_AUTHORIZE` answering a PRESENT `authorized: true`, two editors converging with measured latency, read-only refused server-side, removal revoking, and the negative cases | host or container, any proxy configuration |
 | `push-roundtrip.e2e.mjs` | the whole cross-device push chain: save → syncing-server → SNS/SQS → gateway worker → the other device's socket | host or container; `--self-test` runs offline |
 | `sync-items-oversized.e2e.mjs` | an oversized committed `SYNC_ITEMS` result answers `STATUS COMMITTED code RESULT_TOO_LARGE` with no `result`, and the HTTP replay returns the journaled items | host or container, `SERVICE_PROXY_TYPE=grpc` only |
 | `capability-fallback.e2e.mjs` | the socket capability census from `AUTHENTICATED`, each capability exercised over the lane, and each documented HTTP fallback exercised on the same account in the same run; `CONTROL=1` adds a planted break per probe | host or container, any proxy configuration |
@@ -73,6 +74,61 @@ Proven red on a known break: run against `standard-red-notes/single:t100e2b`
 reports `lane: broken`, `stoppedAt: metadata`, `lastError: ERROR:FILE_ACCESS_DENIED`;
 against a current single container the same row reports `lane: works`,
 `chunks 2/2`, `bytes 3000/3000`, `bytesIdentical: true`.
+
+## Two blind spots these scripts had, and the defect that lived in both
+
+Measured on `d7bd839d`: `COLLABORATION_AUTHORIZE` was denied for **every** note
+on **every single-container** deployment — a personal note owned by the caller
+included — because `DirectCallServiceProxy.callSyncingServer` declared three
+parameters where `ServiceProxyInterface` declares four and silently discarded
+`payload`. `CollaborationAuthorizationService` is the only caller whose body
+exists ONLY as that argument, so `authorizeCollaboration` read
+`request.body.itemUuid`, found `undefined`, and failed closed. Nothing logged;
+the only trace was a `collaboration_authorization denied` counter.
+
+Neither script in this directory could see it, for two different reasons, and
+both reasons are worth keeping in mind before trusting a green run here:
+
+- **`collab-yjs.e2e.mjs` does not authorize anything.** It mints its own
+  connection tokens with `x-internal-secret` and signs its own room
+  capabilities with `WEB_SOCKET_CONNECTION_TOKEN_SECRET`, for user uuids that
+  need not exist. It therefore never enters `COLLABORATION_AUTHORIZE`, never
+  reads `shared_vault_users.permission`, and never touches a shared vault. It
+  proves the RELAY converges, which is real and useful — and says nothing about
+  whether any user is ALLOWED to collaborate.
+
+- **`capability-fallback.e2e.mjs`'s AUTHORIZE_COLLABORATION row cannot
+  distinguish a grant from a refusal.** It probes
+  `collabNoteUuid = randomUUID()` — a note it never created — and settles the
+  row on "a `COLLABORATION_AUTHORIZED` frame, `authorized` **either way**". For
+  a note that does not exist `authorized: false` is the CORRECT answer, so the
+  row's success case is unreachable by construction and it reads `works` on a
+  stack where every authorization is denied. That is the same shape as the
+  FILES_V1 false green this file warns about one section up, arrived at from
+  the other direction: not "not this one error code", but a predicate whose
+  positive case the probe never sets up.
+
+Both claims above are measured, not argued. The same single-container image
+with and without the `payload` fix, booted side by side:
+
+| | `capability-fallback` AUTHORIZE_COLLABORATION | `collab-end-to-end` |
+|---|---|---|
+| image WITHOUT the fix (every authorization denied) | `lane: "works"`, `laneDetail {"type":"ERROR","code":"NOT_AUTHORIZED"}`, `failures: 0` | exit 1, 8 failures |
+| image WITH the fix | `lane: "works"`, `laneDetail {"type":"ERROR","code":"NOT_AUTHORIZED"}`, `failures: 0` | exit 0 |
+
+The capability row is **byte-identical** across a defect that denied 100 % of
+collaboration. It is not wrong about what it measures — the lane did carry a
+frame, and a refusal for a note that does not exist is correct — it simply
+cannot distinguish a working authorizer from a broken one, because it never
+creates a note it is entitled to edit.
+
+`collab-end-to-end.e2e.mjs` exists for that gap. It registers two real
+accounts, creates a real shared vault, accepts a real invite, and requires a
+PRESENT `authorized: true` carrying a capability bound to the room, the epoch
+pair and the lease — and requires the refusals to be DECIDED
+(`NOT_AUTHORIZED` / 403 `collaboration-not-authorized`), never
+`BACKEND_ERROR`, `BACKEND_TIMEOUT` or silence. Its `--self-test` proves each
+predicate can fail and needs no stack.
 
 ## Session kind matters, and it is chosen at registration
 
@@ -122,7 +178,7 @@ Measured live on the multi-container image at `71e055f8`:
   re-fills it when still empty, so the `FILES_INTERNAL_URL` waiver branch cannot
   be reached from an operator env.
 
-`yarn e2e` runs `realtime` then `collab-yjs`. The push round trip and the
+`yarn e2e` runs `realtime` then `collab-yjs` — so neither leg of it exercises collaboration AUTHORIZATION at all (see the blind spots above). The push round trip and the
 oversized-result script have their own scripts because they register accounts
 and take tens of seconds.
 

@@ -5,6 +5,7 @@ import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 import { createDirectCallResponse } from '../Sync/DirectCallResponse'
+import { createDirectCallRequest } from '../Sync/DirectCallRequest'
 
 export class DirectCallServiceProxy implements ServiceProxyInterface {
   constructor(
@@ -123,7 +124,43 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     this.sendDecoratedResponse(response, serviceResponse)
   }
 
-  async callSyncingServer(request: never, response: never, methodIdentifier: string): Promise<void> {
+  /**
+   * `payload` is the FOURTH parameter `ServiceProxyInterface` declares, and
+   * dropping it denied 100 % of collaboration on every single-container
+   * deployment.
+   *
+   * Almost every caller of this method passes no payload, because the body the
+   * syncing server should read is already on the Express request being
+   * forwarded. `CollaborationAuthorizationService` is the exception: it calls
+   * `POST items/collaboration-authorization` with `{ itemUuid }`, a body that
+   * exists ONLY as this argument -- the request it forwards carries the
+   * client's `{ noteUuid, collaborationProtocolVersion, ... }` instead, and
+   * `BaseItemsController.authorizeCollaboration` reads `request.body.itemUuid`.
+   * With the payload discarded that read was `undefined`, the controller FAILED
+   * CLOSED to `{ authorized: false }`, and every note -- a personal note owned
+   * by the caller included -- was refused a collaboration capability. No error
+   * was logged anywhere, because nothing had gone wrong as far as either side
+   * could tell. `ValetTokenFileResourceAuthorizer`'s shared-vault valet-token
+   * mint passes a payload the same way.
+   *
+   * This is the single-container TWIN of the multi-container defect
+   * `DirectCallRequest` was written for: there, a fabricated request carried no
+   * `method`, axios defaulted it to GET, and the same check read the same
+   * `{ authorized: false }`. One lane, two transports, both silently denying,
+   * and `yarn build` green on both -- because the interface's optional
+   * parameter is simply absent from the implementation's signature, which
+   * TypeScript accepts without complaint.
+   *
+   * So the payload is merged in as the request body, through the same factory
+   * that fixed the other half, rather than being spread onto the request (an
+   * object spread drops `get`/`header`/`is`).
+   */
+  async callSyncingServer(
+    request: never,
+    response: never,
+    methodIdentifier: string,
+    payload?: Record<string, unknown> | string,
+  ): Promise<void> {
     const service = this.serviceContainer.get(
       ServiceIdentifier.create(ServiceIdentifier.NAMES.SyncingServer).getValue(),
     )
@@ -131,12 +168,35 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
       throw new Error('Syncing service not found')
     }
 
-    const serviceResponse = (await service.handleRequest(request, response, methodIdentifier)) as {
+    const serviceResponse = (await service.handleRequest(
+      this.requestWithPayload(request, payload),
+      response,
+      methodIdentifier,
+    )) as {
       statusCode: number
       json: Record<string, unknown>
     }
 
     this.sendDecoratedResponse(response, serviceResponse)
+  }
+
+  /**
+   * The request a direct-called service should see for a given payload. An
+   * absent or empty payload leaves the request untouched, byte for byte, so no
+   * existing caller changes behaviour; `HttpServiceProxy.getRequestData` treats
+   * the same set of values as "no body" for exactly the same reason.
+   */
+  private requestWithPayload(request: never, payload?: Record<string, unknown> | string): never {
+    if (
+      payload === undefined ||
+      payload === null ||
+      payload === '' ||
+      (typeof payload === 'object' && Object.keys(payload).length === 0)
+    ) {
+      return request
+    }
+
+    return createDirectCallRequest({ from: request as unknown as Request, body: payload }) as unknown as never
   }
 
   async callLegacySyncingServer(_request: Request, response: Response, _methodIdentifier: string): Promise<void> {

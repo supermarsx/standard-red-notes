@@ -150,6 +150,59 @@ describe('DirectCallServiceProxy', () => {
       })
     })
 
+    /**
+     * The payload is `ServiceProxyInterface`'s fourth parameter, and the
+     * implementation used to declare only three -- which TypeScript accepts in
+     * silence. The dispatch test above asserts the request with
+     * `expect.anything()`, so it passed over a proxy that threw the body away,
+     * and 100 % of collaboration was denied on every single-container
+     * deployment: `BaseItemsController.authorizeCollaboration` read
+     * `request.body.itemUuid`, found `undefined`, and failed closed to
+     * `{ authorized: false }` with nothing logged.
+     */
+    it('callSyncingServer forwards the payload as the request body the service reads', async () => {
+      await buildProxy().callSyncingServer(
+        buildRequest() as never,
+        buildResponse() as never,
+        'sync.items.authorize_collaboration',
+        { itemUuid: 'note-1' },
+      )
+
+      const forwarded = services[ServiceIdentifier.NAMES.SyncingServer].handleRequest.mock.calls[0][0]
+      expect(forwarded.body).toEqual({ itemUuid: 'note-1' })
+    })
+
+    it('callSyncingServer forwards a payload that is a raw string body', async () => {
+      await buildProxy().callSyncingServer(buildRequest() as never, buildResponse() as never, 'sync', 'raw-body')
+
+      expect(services[ServiceIdentifier.NAMES.SyncingServer].handleRequest.mock.calls[0][0].body).toBe('raw-body')
+    })
+
+    it('the forwarded request keeps a working header accessor, not a stripped spread', async () => {
+      const request = { headers: { 'x-snjs-version': '2.200.1' }, query: { a: '1' } } as unknown as Request
+
+      await buildProxy().callSyncingServer(request as never, buildResponse() as never, 'sync', { itemUuid: 'n' })
+
+      const forwarded = services[ServiceIdentifier.NAMES.SyncingServer].handleRequest.mock.calls[0][0]
+      expect(forwarded.headers['x-snjs-version']).toBe('2.200.1')
+      expect(forwarded.get('X-Snjs-Version')).toBe('2.200.1')
+      expect(forwarded.query).toEqual({ a: '1' })
+      expect(forwarded.method).toBe('POST')
+    })
+
+    it.each([
+      ['undefined', undefined],
+      ['an empty object', {}],
+      ['an empty string', ''],
+    ])('callSyncingServer forwards the request UNTOUCHED when the payload is %s', async (_label, payload) => {
+      const request = buildRequest()
+
+      await buildProxy().callSyncingServer(request as never, buildResponse() as never, 'sync', payload as never)
+
+      // The same object, not a copy: no existing caller's request is reshaped.
+      expect(services[ServiceIdentifier.NAMES.SyncingServer].handleRequest.mock.calls[0][0]).toBe(request)
+    })
+
     it('propagates the status the in-process service returned', async () => {
       services[ServiceIdentifier.NAMES.SyncingServer].handleRequest.mockResolvedValue({
         statusCode: 409,
