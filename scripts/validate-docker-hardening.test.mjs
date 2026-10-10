@@ -138,6 +138,56 @@ test("ratchets immutable deployment identity across every container topology", (
   }
 });
 
+test("the multi entrypoint must clear injected identity before it writes the api-gateway env", () => {
+  // This ordering rule had no failing-direction test, and its probe had been
+  // looking for `printenv | grep API_GATEWAY_` since 6fd9f442 replaced that
+  // text with an anchored `sed`. indexOf returned -1, which is EARLIER than
+  // every real offset, so the rule accused a correctly ordered entrypoint
+  // instead of reporting that its own probe had drifted. All three cases are
+  // pinned here: the real misordering, and each half of the probe going absent.
+  const valid = deploymentIdentityFixture();
+  const cleanup = ". /usr/local/bin/deployment-identity-env.sh\n";
+  const projection =
+    "printenv | sed -n 's/^API_GATEWAY_//p' > /opt/server/packages/api-gateway/.env\n";
+  const entrypoint = valid.multiEntrypointSource;
+  assert.equal(entrypoint.split(cleanup).length - 1, 1);
+  assert.equal(entrypoint.split(projection).length - 1, 1);
+  assert.deepEqual(validateDeploymentIdentityContract(valid), []);
+
+  // Sourced AFTER the projection, the api-gateway .env is written from an
+  // environment still carrying whatever API_GATEWAY_SRN_DEPLOY_* a caller
+  // injected, which is the forged deployment identity this ordering prevents.
+  assert.match(
+    validateDeploymentIdentityContract({
+      ...valid,
+      multiEntrypointSource: `${entrypoint.replace(cleanup, "")}${cleanup}`,
+    }).join("\n"),
+    /multi entrypoint: identity injection cleanup must run before dotenv projection/,
+  );
+
+  assert.match(
+    validateDeploymentIdentityContract({
+      ...valid,
+      multiEntrypointSource: entrypoint.replace(cleanup, ""),
+    }).join("\n"),
+    /multi entrypoint: must source the injected-identity cleanup helper/,
+  );
+
+  // A drifted probe must name itself rather than blame the ordering.
+  const withoutProjection = validateDeploymentIdentityContract({
+    ...valid,
+    multiEntrypointSource: entrypoint.replace(projection, ""),
+  }).join("\n");
+  assert.match(
+    withoutProjection,
+    /multi entrypoint: must project the api-gateway dotenv file with an anchored prefix match/,
+  );
+  assert.doesNotMatch(
+    withoutProjection,
+    /identity injection cleanup must run before dotenv projection/,
+  );
+});
+
 test("binds published images to their source and preserves operator image overrides", () => {
   const valid = deploymentIdentityFixture();
 
@@ -507,6 +557,64 @@ test("accepts source-owned SQLite migrations without runtime rewriting", () => {
   );
 });
 
+test("a qualified identifier is not a double-quoted value, a bare one still is", () => {
+  // The real de-duplicating statement from
+  // 1787100000000-add-unique-shared-vault-membership.ts. Every double-quoted
+  // token in it is an identifier, and it was reported as unsafe SQL anyway
+  // because `= "shared_vault_users"` matched before the `."user_uuid"` that
+  // makes it a qualified reference. Correcting that must not buy the pass by
+  // retiring the rule, so the same test pins the bare operand as an error.
+  const qualified =
+    'queryRunner.query(\'DELETE FROM "shared_vault_users" WHERE EXISTS (' +
+    'SELECT 1 FROM "shared_vault_users" AS "keep" ' +
+    'WHERE "keep"."shared_vault_uuid" = "shared_vault_users"."shared_vault_uuid" ' +
+    'AND "keep"."user_uuid" = "shared_vault_users"."user_uuid")\')';
+
+  assert.deepEqual(
+    validateSingleContainerSQLiteMigrationContract({
+      singleDockerfileSource: "COPY server /opt/server",
+      singleEntrypointSource: "exec supervisord -c /etc/supervisord.conf",
+      sqliteMigrationSources: [
+        { relativePath: "qualified.ts", source: qualified },
+      ],
+      legacyShimExists: false,
+    }),
+    [],
+  );
+
+  for (const [relativePath, source] of [
+    ["bare-equals.ts", 'queryRunner.query(\'UPDATE "items" SET "a" = "b"\')'],
+    [
+      "bare-like.ts",
+      'queryRunner.query(\'SELECT 1 FROM "items" WHERE "a" LIKE "b%"\')',
+    ],
+    [
+      "bare-not-equals.ts",
+      'queryRunner.query(\'DELETE FROM "items" WHERE "a" <> "Note"\')',
+    ],
+    [
+      "values.ts",
+      'queryRunner.query(\'INSERT INTO "items" ("a") VALUES ("Note")\')',
+    ],
+    [
+      "in.ts",
+      'queryRunner.query(\'DELETE FROM "items" WHERE "a" IN ("Note")\')',
+    ],
+  ]) {
+    assert.deepEqual(
+      validateSingleContainerSQLiteMigrationContract({
+        singleDockerfileSource: "COPY server /opt/server",
+        singleEntrypointSource: "exec supervisord -c /etc/supervisord.conf",
+        sqliteMigrationSources: [{ relativePath, source }],
+        legacyShimExists: false,
+      }),
+      [
+        `single container SQLite: ${relativePath} uses a double-quoted SQL value`,
+      ],
+    );
+  }
+});
+
 test("rejects SQLite migration runtime rewrites and double-quoted SQL values", () => {
   assert.deepEqual(
     validateSingleContainerSQLiteMigrationContract({
@@ -841,9 +949,13 @@ test("derives the gateway email encryption input from the existing server key", 
     entrypoint,
     /export API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY="\$AUTH_SERVER_ENCRYPTION_SERVER_KEY"/,
   );
+  const projection = entrypoint.indexOf(
+    "printenv | sed -n 's/^API_GATEWAY_//p' > /opt/server/packages/api-gateway/.env",
+  );
+  assert.ok(projection >= 0, "the anchored api-gateway projection must exist");
   assert.ok(
     entrypoint.indexOf("API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY") <
-      entrypoint.indexOf("printenv | grep API_GATEWAY_"),
+      projection,
     "the derived key must be present before the api-gateway dotenv file is written",
   );
 });
@@ -2072,7 +2184,7 @@ test("opens the realtime switches in both Compose topologies without forcing gRP
         entrypoint
           .replace(fallback, "")
           .replace(
-            /^printenv \| grep API_GATEWAY_ .*\n/m,
+            /^printenv \| sed -n 's\/\^API_GATEWAY_\/\/p' .*\n/m,
             (line) => `${line}${fallback}\n`,
           ),
       ),

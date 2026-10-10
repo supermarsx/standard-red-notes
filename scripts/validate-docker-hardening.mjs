@@ -789,8 +789,19 @@ export function validateSingleContainerSQLiteMigrationContract({
     );
   }
 
+  // The hazard is a double-quoted VALUE: SQLite reads "x" as an identifier and
+  // only falls back to a string literal when no such column exists, which is a
+  // compatibility wart and not something a migration may lean on. A qualified
+  // reference -- `= "shared_vault_users"."user_uuid"` -- is the identifier form
+  // this rule wants, but the quoted table name alone matched the comparison
+  // alternative, so the de-duplicating half of
+  // 1787100000000-add-unique-shared-vault-membership.ts was reported as unsafe
+  // SQL five times over while being correct. The lookahead takes the one case
+  // that cannot be a literal, a quoted token followed by `.`: SQLite has no
+  // `.` operator on values, it concatenates with `||`. A BARE double-quoted
+  // operand stays an error, because there it really is ambiguous.
   const doubleQuotedLiteral =
-    /(?:=|<>|!=|\bLIKE)\s*"[^"\r\n]+"|\bIN\s*\(\s*"|\bVALUES\s*\(\s*"/i;
+    /(?:=|<>|!=|\bLIKE)\s*"[^"\r\n]+"(?!\s*\.)|\bIN\s*\(\s*"|\bVALUES\s*\(\s*"/i;
   for (const { relativePath, source } of sqliteMigrationSources) {
     if (doubleQuotedLiteral.test(source)) {
       errors.push(
@@ -999,10 +1010,35 @@ export function validateDeploymentIdentityContract({
       );
   }
   const entrypoint = String(multiEntrypointSource);
+  // 6fd9f442 anchored every per-service projection, because `printenv | grep
+  // PREFIX_` was bleeding PUBLIC_FILES_SERVER_URL into files/.env and handing
+  // syncing-server a second AUTH_SERVER_URL on the wrong port. This probe kept
+  // looking for the `grep` form that fix deleted, and indexOf's -1 compares as
+  // EARLIER than every real offset, so a correctly ordered entrypoint reported
+  // itself as misordered -- the cleanup is at line 627 and the projection it
+  // must precede is at line 704. Keep the two halves named apart: a probe that
+  // no longer matches the file has to say that, not accuse the ordering, or the
+  // next reader is sent to reorder a boot sequence that was already right.
+  const identityCleanup = entrypoint.indexOf(
+    ". /usr/local/bin/deployment-identity-env.sh",
+  );
+  const apiGatewayDotenv = entrypoint.indexOf(
+    "printenv | sed -n 's/^API_GATEWAY_//p' > /opt/server/packages/api-gateway/.env",
+  );
+  if (identityCleanup < 0) {
+    errors.push(
+      "multi entrypoint: must source the injected-identity cleanup helper",
+    );
+  }
+  if (apiGatewayDotenv < 0) {
+    errors.push(
+      "multi entrypoint: must project the api-gateway dotenv file with an anchored prefix match",
+    );
+  }
   if (
-    entrypoint.indexOf(". /usr/local/bin/deployment-identity-env.sh") < 0 ||
-    entrypoint.indexOf(". /usr/local/bin/deployment-identity-env.sh") >
-      entrypoint.indexOf("printenv | grep API_GATEWAY_")
+    identityCleanup >= 0 &&
+    apiGatewayDotenv >= 0 &&
+    identityCleanup > apiGatewayDotenv
   ) {
     errors.push(
       "multi entrypoint: identity injection cleanup must run before dotenv projection",
@@ -1288,9 +1324,17 @@ export function validateRealtimeSwitchComposeContract(
     const fallback = entrypoint.search(
       /^[ \t]*export\s+API_GATEWAY_WEBSOCKET_SYNC_FILES_URL=http:\/\/localhost:\$FILES_SERVER_PORT\s*$/m,
     );
-    const projection = entrypoint.search(
-      /printenv \| grep API_GATEWAY_ \| sed 's\/API_GATEWAY_\/\/g' > \/opt\/server\/packages\/api-gateway\/\.env/,
+    // Anchored form, same drift as the identity-cleanup probe above: the old
+    // `grep` text stopped matching at 6fd9f442 and `projection >= 0` then made
+    // this ordering branch unreachable, so it could not fail over anything.
+    const projection = entrypoint.indexOf(
+      "printenv | sed -n 's/^API_GATEWAY_//p' > /opt/server/packages/api-gateway/.env",
     );
+    if (projection < 0) {
+      errors.push(
+        `${label} entrypoint: must project the api-gateway dotenv file with an anchored prefix match`,
+      );
+    }
     if (fallback < 0) {
       errors.push(
         `${label} entrypoint: must default API_GATEWAY_WEBSOCKET_SYNC_FILES_URL to the internal files service`,
