@@ -13,6 +13,7 @@ import {
   configureTrustProxy,
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
+  createCaldavCorsBypass,
   registerCaldavRoutes,
   startReminderDeliveryScheduler,
   createFallbackHandler,
@@ -107,6 +108,7 @@ import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
 import { WebSocketRedisBridge } from './WebSocketRedisBridge'
 import { WebSocketInProcessBridge } from './WebSocketInProcessBridge'
+import { resolveBundledAdminEmailDeliveryService } from './AdminEmailDeliveryComposition'
 import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerRuntime'
 import { HomeServerSyncFilesAdapter } from './HomeServerSyncFilesAdapter'
 import {
@@ -946,32 +948,39 @@ export class HomeServer implements HomeServerInterface {
           ? env.get('CORS_ALLOWED_ORIGINS', true).split(',')
           : []
         const corsStrictMode = resolveCorsStrictMode(env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true))
+        // The CalDAV mount is exempted: see createCaldavCorsBypass — `cors()`
+        // answers every OPTIONS with 204 and ends it, which hides the router's
+        // DAV/Allow discovery response from every real calendar client.
+        const caldavCorsBasePath = container.get<string>(ApiGatewayTypes.ApiGateway_CALDAV_BASE_PATH)
         app.use(
-          cors({
-            credentials: true,
-            exposedHeaders: ['Content-Range', 'Accept-Ranges', 'x-captcha-required'],
-            origin: (
-              requestOrigin: string | undefined,
-              callback: (err: Error | null, origin?: boolean | string | string[]) => void,
-            ) => {
-              const decision = decideCorsOrigin(requestOrigin, {
-                strictMode: corsStrictMode,
-                allowedOrigins: corsAllowedOrigins,
-              })
+          createCaldavCorsBypass(
+            cors({
+              credentials: true,
+              exposedHeaders: ['Content-Range', 'Accept-Ranges', 'x-captcha-required'],
+              origin: (
+                requestOrigin: string | undefined,
+                callback: (err: Error | null, origin?: boolean | string | string[]) => void,
+              ) => {
+                const decision = decideCorsOrigin(requestOrigin, {
+                  strictMode: corsStrictMode,
+                  allowedOrigins: corsAllowedOrigins,
+                })
 
-              if (decision.allow) {
-                callback(null, [requestOrigin as string])
-                return
-              }
+                if (decision.allow) {
+                  callback(null, [requestOrigin as string])
+                  return
+                }
 
-              // Disallowed CROSS-origin request: emit NO Access-Control-Allow-Origin
-              // header (a falsy origin tells the cors package to skip CORS headers and
-              // continue). The browser blocks the cross-origin RESPONSE while
-              // SAME-ORIGIN requests — which need no ACAO — keep working on any custom
-              // domain. We deliberately do NOT throw (throwing 500s same-origin deploys).
-              callback(null, false)
-            },
-          }),
+                // Disallowed CROSS-origin request: emit NO Access-Control-Allow-Origin
+                // header (a falsy origin tells the cors package to skip CORS headers and
+                // continue). The browser blocks the cross-origin RESPONSE while
+                // SAME-ORIGIN requests — which need no ACAO — keep working on any custom
+                // domain. We deliberately do NOT throw (throwing 500s same-origin deploys).
+                callback(null, false)
+              },
+            }),
+            caldavCorsBasePath,
+          ),
         )
         app.use((req: Request, res: Response, next: NextFunction) => {
           if (req.path === '/robots.txt') {
@@ -1043,16 +1052,35 @@ export class HomeServer implements HomeServerInterface {
 
         const routingLogger = winston.loggers.get('home-server')
 
-        // The bundled CACHE_TYPE=memory topology has no durable Redis queue.
-        // Mount the authenticated advanced boundary anyway so it returns an
-        // explicit 501 capability response; POST /test falls through to the
-        // annotated legacy SMTP dispatcher and is not duplicated here.
+        // Mount the authenticated advanced boundary with whatever this bundle
+        // actually built. On CACHE_TYPE=memory nothing is bound and the router
+        // answers an explicit 501 capability response, which is the truth there.
+        //
+        // This used to pass a hardcoded `undefined`, which made the 501 a claim
+        // about the TOPOLOGY rather than about the binding — and the two are not
+        // the same question. `ApiGateway_EmailDeliveryRuntime` and
+        // `ApiGateway_AdminEmailDeliveryService` are bound whenever a non-cluster
+        // Redis is bound (api-gateway Container.ts), which `MODE=home-server`
+        // permits: `buildHomeServerEnvironmentOverrides` spreads the configured
+        // environment AFTER its `CACHE_TYPE: 'memory'` default, so a bundle
+        // configured with `CACHE_TYPE=redis` runs the real queue and the real
+        // worker. Measured on exactly that bundle: the worker armed
+        // (`EmailDeliveryReadiness … state=ready`), `POST /test` answered from
+        // the advanced service with `outcome: "sent"`, and `/relays`, `/queue`
+        // and `/logs` still reported "not available in this topology" — so the
+        // queue's rows, its dead letters and the requeue action were real and
+        // unreachable. POST /test is not mounted here either way; the annotated
+        // legacy dispatcher owns it and is not duplicated.
         const emailDeliveryAuth = container.get<RequiredCrossServiceTokenMiddleware>(
           ApiGatewayTypes.ApiGateway_RequiredCrossServiceTokenMiddleware,
         )
+        const adminEmailDelivery = resolveBundledAdminEmailDeliveryService(
+          container,
+          ApiGatewayTypes.ApiGateway_AdminEmailDeliveryService,
+        )
         app.use(
           '/v1/admin/email-delivery',
-          createAdminEmailDeliveryRouter(undefined, {
+          createAdminEmailDeliveryRouter(adminEmailDelivery, {
             authenticationMiddleware: emailDeliveryAuth.handler.bind(emailDeliveryAuth),
             auditLogger: routingLogger,
           }),
@@ -1299,6 +1327,17 @@ export class HomeServer implements HomeServerInterface {
                 container.get(ApiGatewayTypes.ApiGateway_EndpointResolver),
                 container.get(ApiGatewayTypes.ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET),
                 container.get(ApiGatewayTypes.ApiGateway_COLLABORATION_CAPABILITY_TTL),
+                // THE LOGGER IS WHY THIS WENT UNNOTICED FOR WEEKS. Built
+                // without one, the authorizer on this host refused silently:
+                // collaboration was denied for every note on every
+                // single-container deployment (`6e18e3a5`) and the only trace
+                // anywhere was a `collaboration_authorization denied` counter
+                // in a metric line. The REST controller has always passed its
+                // logger; the sync lane's copy -- the one a real client
+                // actually uses -- did not. `deny()` separates "policy refused
+                // this" (info) from "nothing could decide it" (error), so the
+                // plumbing class of this bug lands in the error log.
+                logger,
               ),
             )
             sync = {
