@@ -7,6 +7,7 @@ import { SharedVaultUserHttpRepresentation } from '../../../Mapping/Http/SharedV
 import { GetSharedVaultUsers } from '../../../Domain/UseCase/SharedVaults/GetSharedVaultUsers/GetSharedVaultUsers'
 import { RemoveUserFromSharedVault } from '../../../Domain/UseCase/SharedVaults/RemoveUserFromSharedVault/RemoveUserFromSharedVault'
 import { DesignateSurvivor } from '../../../Domain/UseCase/SharedVaults/DesignateSurvivor/DesignateSurvivor'
+import { UpdateSharedVaultUserPermission } from '../../../Domain/UseCase/SharedVaults/UpdateSharedVaultUserPermission/UpdateSharedVaultUserPermission'
 import { ResponseLocals } from '../ResponseLocals'
 
 export class BaseSharedVaultUsersController extends BaseHttpController {
@@ -14,6 +15,7 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
     protected getSharedVaultUsersUseCase: GetSharedVaultUsers,
     protected removeUserFromSharedVaultUseCase: RemoveUserFromSharedVault,
     protected designateSurvivorUseCase: DesignateSurvivor,
+    protected updateSharedVaultUserPermissionUseCase: UpdateSharedVaultUserPermission,
     protected sharedVaultUserHttpMapper: MapperInterface<SharedVaultUser, SharedVaultUserHttpRepresentation>,
     private controllerContainer?: ControllerContainerInterface,
   ) {
@@ -26,6 +28,14 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
         this.removeUserFromSharedVault.bind(this),
       )
       this.controllerContainer.register('sync.shared-vault-users.designate-survivor', this.designateSurvivor.bind(this))
+      // Without this line a single-container deployment answers
+      // 500 "Method sync.shared-vault-users.update-permission not found" while the build,
+      // the decorated multi-container route and every use-case spec stay green --
+      // the failure mode that left all nine invite endpoints dead for a release.
+      this.controllerContainer.register(
+        'sync.shared-vault-users.update-permission',
+        this.updateSharedVaultUserPermission.bind(this),
+      )
     }
   }
 
@@ -77,6 +87,55 @@ export class BaseSharedVaultUsersController extends BaseHttpController {
 
     return this.json({
       success: true,
+    })
+  }
+
+  async updateSharedVaultUserPermission(request: Request, response: Response): Promise<results.JsonResult> {
+    const locals = response.locals as ResponseLocals
+
+    // `request.body` can be absent entirely on this path: Express 5 leaves it undefined
+    // for a bodyless request, and the single-container proxy forwards the payload it was
+    // given rather than a parsed body. Reading through `?.` keeps a missing body a 400
+    // naming the parameter instead of a 500 TypeError.
+    const permission = (request.body as { permission?: unknown } | undefined)?.permission
+
+    if (typeof permission !== 'string') {
+      return this.json(
+        {
+          error: {
+            message: 'Please provide the permission to set.',
+          },
+        },
+        HttpStatusCode.BadRequest,
+      )
+    }
+
+    const result = await this.updateSharedVaultUserPermissionUseCase.execute({
+      sharedVaultUuid: request.params.sharedVaultUuid as string,
+      userUuid: request.params.userUuid as string,
+      originatorUuid: locals.user.uuid,
+      permission,
+    })
+
+    if (result.isFailed()) {
+      return this.json(
+        {
+          error: {
+            message: result.getError(),
+          },
+        },
+        HttpStatusCode.BadRequest,
+      )
+    }
+
+    // The member's cross-service token carries their vault permission
+    // (`belongs_to_shared_vaults[].permission`), and BOTH file authorizers refuse an
+    // upload when it reads `read`. Stamping the SUBJECT's uuid here drops their cached
+    // token so the next request mints one with the new permission.
+    response.setHeader('x-invalidate-cache', request.params.userUuid as string)
+
+    return this.json({
+      user: this.sharedVaultUserHttpMapper.toProjection(result.getValue()),
     })
   }
 

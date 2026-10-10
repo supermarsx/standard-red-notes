@@ -15,6 +15,8 @@ import { IsVaultOwner } from './UseCase/IsVaultOwner'
 import { IsReadonlyVaultMember } from './UseCase/IsReadonlyVaultMember'
 import { IsVaultAdmin } from './UseCase/IsVaultAdmin'
 import { DesignateSurvivor } from './UseCase/DesignateSurvivor/DesignateSurvivor'
+import { ChangeVaultMemberPermission } from './UseCase/ChangeVaultMemberPermission'
+import { SharedVaultUserPermissionValue } from '@standardnotes/api'
 
 export class VaultUserService extends AbstractService<VaultUserServiceEvent> implements VaultUserServiceInterface {
   constructor(
@@ -28,6 +30,7 @@ export class VaultUserService extends AbstractService<VaultUserServiceEvent> imp
     private _getVault: GetVault,
     private _leaveVault: LeaveVault,
     private designateSurvivorUseCase: DesignateSurvivor,
+    private _changeMemberPermission: ChangeVaultMemberPermission,
     eventBus: InternalEventBusInterface,
   ) {
     super(eventBus)
@@ -130,6 +133,47 @@ export class VaultUserService extends AbstractService<VaultUserServiceEvent> imp
     void this.notifyEvent(VaultUserServiceEvent.UsersChanged)
 
     await this.vaults.rotateVaultRootKey(sharedVault)
+
+    return result
+  }
+
+  /**
+   * Changes an existing member's permission in place.
+   *
+   * Deliberately NOT a key rotation, unlike `removeUserFromSharedVault`: the member keeps
+   * their membership and therefore keeps legitimate possession of the vault key the whole
+   * time, so there is nothing to rotate away from them. A demotion write -> read is an
+   * authorization change, which this product enforces SERVER-side on
+   * `shared_vault_users.permission` -- the client cannot take back the key material a
+   * member already holds, and pretending otherwise by rotating would cost every other
+   * member a re-key for no gain.
+   *
+   * It refreshes the local member cache before returning, so the actor's own UI reflects
+   * the new permission without waiting for a realtime invalidation; the SUBJECT's client
+   * learns through the `role-changed` membership invalidation the server emits.
+   */
+  async changeMemberPermission(
+    sharedVault: SharedVaultListingInterface,
+    userUuid: string,
+    permission: SharedVaultUserPermissionValue,
+  ): Promise<Result<void>> {
+    if (!this.isCurrentUserSharedVaultAdmin(sharedVault)) {
+      return Result.fail('Only vault admins can change member permissions')
+    }
+
+    const result = await this._changeMemberPermission.execute({
+      sharedVaultUuid: sharedVault.sharing.sharedVaultUuid,
+      userUuid,
+      permission,
+    })
+
+    if (result.isFailed()) {
+      return result
+    }
+
+    await this.invalidateVaultUsersCache(sharedVault.sharing.sharedVaultUuid)
+
+    void this.notifyEvent(VaultUserServiceEvent.UsersChanged)
 
     return result
   }

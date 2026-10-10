@@ -83,6 +83,7 @@ import {
   ShareContactWithVault,
   ConvertToSharedVault,
   DeleteSharedVault,
+  ChangeVaultMemberPermission,
   RemoveVaultMember,
   GetVaultUsers,
   AsymmetricMessageService,
@@ -700,6 +701,10 @@ export class Dependencies {
       return new RemoveVaultMember(this.get<SharedVaultUsersServer>(TYPES.SharedVaultUsersServer))
     })
 
+    this.factory.set(TYPES.ChangeVaultMemberPermission, () => {
+      return new ChangeVaultMemberPermission(this.get<SharedVaultUsersServerInterface>(TYPES.SharedVaultUsersServer))
+    })
+
     this.factory.set(TYPES.DesignateSurvivor, () => {
       return new DesignateSurvivor(this.get<SharedVaultUsersServerInterface>(TYPES.SharedVaultUsersServer))
     })
@@ -883,6 +888,7 @@ export class Dependencies {
         this.get<GetVault>(TYPES.GetVault),
         this.get<LeaveVault>(TYPES.LeaveVault),
         this.get<DesignateSurvivor>(TYPES.DesignateSurvivor),
+        this.get<ChangeVaultMemberPermission>(TYPES.ChangeVaultMemberPermission),
         this.get<InternalEventBus>(TYPES.InternalEventBus),
       )
     })

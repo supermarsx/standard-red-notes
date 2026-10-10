@@ -18,7 +18,14 @@ export function inviteRealtimeProtocolEvents(): StoredInviteEvent[] {
     }
   }
   const inviteActions: InviteEventAction[] = ['created', 'updated', 'accepted', 'declined', 'canceled', 'deleted']
-  const membershipActions: SharedVaultMembershipEventAction[] = ['invited', 'accepted', 'joined', 'left', 'revoked']
+  const membershipActions: SharedVaultMembershipEventAction[] = [
+    'invited',
+    'accepted',
+    'joined',
+    'left',
+    'revoked',
+    'role-changed',
+  ]
 
   return [
     ...inviteActions.map((action): StoredInviteEvent => ({
@@ -53,6 +60,10 @@ export function inviteRealtimeProtocolEvents(): StoredInviteEvent[] {
         case 'left':
         case 'revoked':
           return { ...common, membershipUuid: inviteMembershipUuid }
+        // An in-place permission change: an existing membership row, no invite, and the
+        // role is the payload rather than an extra.
+        case 'role-changed':
+          return { ...common, membershipUuid: inviteMembershipUuid, role: 'read' }
       }
     }),
     {

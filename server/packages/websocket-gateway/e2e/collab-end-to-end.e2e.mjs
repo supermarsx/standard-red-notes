@@ -1207,12 +1207,17 @@ async function main() {
   const promoted = await promoteToWrite(alice, bob, sharedVaultUuid)
   check('B ends up a WRITE member of the vault', promoted.permission === 'write', promoted)
   if (promoted.permission !== 'write') return 1
+  check(
+    'the promotion happened IN PLACE, without evicting the member',
+    promoted.via === 'patch-in-place',
+    { via: promoted.via, patchFailure: promoted.patchFailure },
+  )
   if (promoted.requiredRemoval) {
     note(
-      'there is no endpoint that changes an existing shared-vault member permission: AddUserToSharedVault fails "User is already a member", and the only API path from read to write is DELETE the member then re-invite and re-accept',
+      'the in-place permission change was unreachable on this deployment, so B reached write only by DELETE + re-invite + re-accept: the member lost access in between and the vault key was rotated',
     )
   }
-  row('membership', { promoteRequiredRemoval: promoted.requiredRemoval === true })
+  row('membership', { promoteRequiredRemoval: promoted.requiredRemoval === true, promoteVia: promoted.via })
 
   const bobWriteLanded = await saveNote(bob, {
     sharedVaultUuid,
@@ -1844,14 +1849,33 @@ async function memberPermission(owner, sharedVaultUuid, userUuid) {
 }
 
 /**
- * Get B from read to write. There is no endpoint that changes an existing
- * member's permission, so this reports WHICH path worked.
+ * Get B from read to write, and report WHICH path did it.
+ *
+ * There IS now an endpoint that changes an existing member's permission in place --
+ * `PATCH /v1/shared-vaults/:sharedVaultUuid/users/:userUuid` -- and it is tried first,
+ * because it is the only path that does not evict the member and rotate the vault key
+ * on the way. The two fallbacks are kept deliberately: a deployment built before that
+ * endpoint existed, or one where it is unreachable (a single container missing the
+ * `sync.shared-vault-users.update-permission` DirectCall registration answers
+ * 500 "Method not found" while every other row here stays green), still reaches write
+ * and still reports HOW -- so `via` distinguishes a working in-place change from a
+ * deployment falling back to remove + re-invite, instead of both reading as success.
  */
 async function promoteToWrite(owner, recipient, sharedVaultUuid) {
+  const patched = await raw('PATCH', `/v1/shared-vaults/${sharedVaultUuid}/users/${recipient.uuid}`, {
+    ...owner.auth,
+    body: { permission: 'write' },
+  })
+  if (patched.status === 200 && patched.json?.user?.permission === 'write') {
+    const permission = await memberPermission(owner, sharedVaultUuid, recipient.uuid)
+    if (permission === 'write') return { permission, requiredRemoval: false, via: 'patch-in-place' }
+  }
+  const patchFailure = { status: patched.status, body: patched.text.slice(0, 200) }
+
   const reinvite = await inviteAndAccept(owner, recipient, sharedVaultUuid, 'write')
   if (reinvite.accepted) {
     const permission = await memberPermission(owner, sharedVaultUuid, recipient.uuid)
-    if (permission === 'write') return { permission, requiredRemoval: false, via: 're-invite' }
+    if (permission === 'write') return { permission, requiredRemoval: false, via: 're-invite', patchFailure }
   }
   const removed = await raw('DELETE', `/v1/shared-vaults/${sharedVaultUuid}/users/${recipient.uuid}`, owner.auth)
   if (removed.status !== 200) {
@@ -1860,7 +1884,7 @@ async function promoteToWrite(owner, recipient, sharedVaultUuid) {
   const again = await inviteAndAccept(owner, recipient, sharedVaultUuid, 'write')
   if (!again.accepted) return { permission: undefined, stage: 'reinvite-after-remove', detail: again }
   const permission = await memberPermission(owner, sharedVaultUuid, recipient.uuid)
-  return { permission, requiredRemoval: true, via: 'remove + re-invite', reinviteAttempt: reinvite }
+  return { permission, requiredRemoval: true, via: 'remove + re-invite', reinviteAttempt: reinvite, patchFailure }
 }
 
 const exitCode = SELF_TEST

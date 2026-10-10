@@ -3,6 +3,7 @@ import { SharedVaultListingInterface, VaultListingInterface } from '@standardnot
 import { ClientDisplayableError, SharedVaultUserServerHash } from '@standardnotes/responses'
 import { VaultUserServiceEvent } from './VaultUserServiceEvent'
 import { Result } from '@standardnotes/domain-core'
+import { SharedVaultUserPermissionValue } from '@standardnotes/api'
 
 export interface VaultUserServiceInterface extends ApplicationServiceInterface<VaultUserServiceEvent, unknown> {
   getSharedVaultUsersFromServer(
@@ -12,6 +13,11 @@ export interface VaultUserServiceInterface extends ApplicationServiceInterface<V
   isCurrentUserSharedVaultAdmin(sharedVault: SharedVaultListingInterface): boolean
   isCurrentUserReadonlyVaultMember(vault: VaultListingInterface): boolean
   removeUserFromSharedVault(sharedVault: SharedVaultListingInterface, userUuid: string): Promise<Result<void>>
+  changeMemberPermission(
+    sharedVault: SharedVaultListingInterface,
+    userUuid: string,
+    permission: SharedVaultUserPermissionValue,
+  ): Promise<Result<void>>
   designateSurvivor(sharedVault: SharedVaultListingInterface, userUuid: string): Promise<Result<void>>
   leaveSharedVault(sharedVault: SharedVaultListingInterface): Promise<ClientDisplayableError | void>
   isVaultUserOwner(user: SharedVaultUserServerHash): boolean

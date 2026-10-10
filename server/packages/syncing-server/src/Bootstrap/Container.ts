@@ -169,6 +169,7 @@ import { DeleteSharedVaults } from '../Domain/UseCase/SharedVaults/DeleteSharedV
 import { RemoveItemsFromSharedVault } from '../Domain/UseCase/SharedVaults/RemoveItemsFromSharedVault/RemoveItemsFromSharedVault'
 import { SharedVaultRemovedEventHandler } from '../Domain/Handler/SharedVaultRemovedEventHandler'
 import { DesignateSurvivor } from '../Domain/UseCase/SharedVaults/DesignateSurvivor/DesignateSurvivor'
+import { UpdateSharedVaultUserPermission } from '../Domain/UseCase/SharedVaults/UpdateSharedVaultUserPermission/UpdateSharedVaultUserPermission'
 import { RemoveUserFromSharedVaults } from '../Domain/UseCase/SharedVaults/RemoveUserFromSharedVaults/RemoveUserFromSharedVaults'
 import { TransferSharedVault } from '../Domain/UseCase/SharedVaults/TransferSharedVault/TransferSharedVault'
 import { TransferSharedVaultItems } from '../Domain/UseCase/SharedVaults/TransferSharedVaultItems/TransferSharedVaultItems'
@@ -1214,6 +1215,19 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<UpdateSharedVaultUserPermission>(TYPES.Sync_UpdateSharedVaultUserPermission)
+      .toConstantValue(
+        new UpdateSharedVaultUserPermission(
+          container.get<SharedVaultUserRepositoryInterface>(TYPES.Sync_SharedVaultUserRepository),
+          container.get<SharedVaultRepositoryInterface>(TYPES.Sync_SharedVaultRepository),
+          container.get<TimerInterface>(TYPES.Sync_Timer),
+          container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
+          container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
+          container.get<InviteMutationTransactionRunner>(TYPES.Sync_InviteMutationTransactionRunner),
+          container.get<InviteRealtimeDomainEventProducer>(TYPES.Sync_InviteRealtimeDomainEventProducer),
+        ),
+      )
+    container
       .bind<RemoveUserFromSharedVaults>(TYPES.Sync_RemoveUserFromSharedVaults)
       .toConstantValue(
         new RemoveUserFromSharedVaults(
@@ -1556,6 +1570,7 @@ export class ContainerConfigLoader {
             container.get<GetSharedVaultUsers>(TYPES.Sync_GetSharedVaultUsers),
             container.get<RemoveUserFromSharedVault>(TYPES.Sync_RemoveSharedVaultUser),
             container.get<DesignateSurvivor>(TYPES.Sync_DesignateSurvivor),
+            container.get<UpdateSharedVaultUserPermission>(TYPES.Sync_UpdateSharedVaultUserPermission),
             container.get<MapperInterface<SharedVaultUser, SharedVaultUserHttpRepresentation>>(
               TYPES.Sync_SharedVaultUserHttpMapper,
             ),

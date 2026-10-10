@@ -16,6 +16,7 @@ import {
   UserAddedToSharedVaultEvent,
   UserDesignatedAsSurvivorInSharedVaultEvent,
   UserInvitedToSharedVaultEvent,
+  UserPermissionChangedInSharedVaultEvent,
   UserRemovedFromSharedVaultEvent,
   WebSocketMessageRequestedEvent,
 } from '@standardnotes/domain-events'
@@ -149,6 +150,29 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
       createdAt: this.timer.getUTCDate(),
       meta: {
         correlation: {
+          userIdentifier: dto.userUuid,
+          userIdentifierType: 'uuid',
+        },
+        origin: DomainEventService.SyncingServer,
+      },
+      payload: dto,
+    }
+  }
+  createUserPermissionChangedInSharedVaultEvent(dto: {
+    sharedVaultUuid: string
+    userUuid: string
+    permission: string
+    previousPermission: string
+    originatorUuid: string
+    updatedAt: number
+  }): UserPermissionChangedInSharedVaultEvent {
+    return {
+      type: 'USER_PERMISSION_CHANGED_IN_SHARED_VAULT',
+      createdAt: this.timer.getUTCDate(),
+      meta: {
+        correlation: {
+          // The SUBJECT of the change, matching every other membership event here, so a
+          // consumer correlating by user lands on the member whose access moved.
           userIdentifier: dto.userUuid,
           userIdentifierType: 'uuid',
         },

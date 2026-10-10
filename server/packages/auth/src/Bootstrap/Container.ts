@@ -458,6 +458,8 @@ import { TypeORMSharedVaultUserRepository } from '../Infra/TypeORM/TypeORMShared
 import { AddSharedVaultUser } from '../Domain/UseCase/AddSharedVaultUser/AddSharedVaultUser'
 import { RemoveSharedVaultUser } from '../Domain/UseCase/RemoveSharedVaultUser/RemoveSharedVaultUser'
 import { UserAddedToSharedVaultEventHandler } from '../Domain/Handler/UserAddedToSharedVaultEventHandler'
+import { UserPermissionChangedInSharedVaultEventHandler } from '../Domain/Handler/UserPermissionChangedInSharedVaultEventHandler'
+import { UpdateSharedVaultUserPermission } from '../Domain/UseCase/UpdateSharedVaultUserPermission/UpdateSharedVaultUserPermission'
 import { UserRemovedFromSharedVaultEventHandler } from '../Domain/Handler/UserRemovedFromSharedVaultEventHandler'
 import { DesignateSurvivor } from '../Domain/UseCase/DesignateSurvivor/DesignateSurvivor'
 import { UserDesignatedAsSurvivorInSharedVaultEventHandler } from '../Domain/Handler/UserDesignatedAsSurvivorInSharedVaultEventHandler'
@@ -3118,6 +3120,13 @@ export class ContainerConfigLoader {
         new AddSharedVaultUser(container.get<SharedVaultUserRepositoryInterface>(TYPES.Auth_SharedVaultUserRepository)),
       )
     container
+      .bind<UpdateSharedVaultUserPermission>(TYPES.Auth_UpdateSharedVaultUserPermission)
+      .toConstantValue(
+        new UpdateSharedVaultUserPermission(
+          container.get<SharedVaultUserRepositoryInterface>(TYPES.Auth_SharedVaultUserRepository),
+        ),
+      )
+    container
       .bind<RemoveSharedVaultUser>(TYPES.Auth_RemoveSharedVaultUser)
       .toConstantValue(
         new RemoveSharedVaultUser(
@@ -3574,6 +3583,14 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<UserPermissionChangedInSharedVaultEventHandler>(TYPES.Auth_UserPermissionChangedInSharedVaultEventHandler)
+      .toConstantValue(
+        new UserPermissionChangedInSharedVaultEventHandler(
+          container.get<UpdateSharedVaultUserPermission>(TYPES.Auth_UpdateSharedVaultUserPermission),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
       .bind<UserDesignatedAsSurvivorInSharedVaultEventHandler>(
         TYPES.Auth_UserDesignatedAsSurvivorInSharedVaultEventHandler,
       )
@@ -3671,6 +3688,10 @@ export class ContainerConfigLoader {
       ['PAYMENTS_ACCOUNT_DELETED', container.get(TYPES.Auth_PaymentsAccountDeletedEventHandler)],
       ['USER_ADDED_TO_SHARED_VAULT', container.get(TYPES.Auth_UserAddedToSharedVaultEventHandler)],
       ['USER_REMOVED_FROM_SHARED_VAULT', container.get(TYPES.Auth_UserRemovedFromSharedVaultEventHandler)],
+      [
+        'USER_PERMISSION_CHANGED_IN_SHARED_VAULT',
+        container.get(TYPES.Auth_UserPermissionChangedInSharedVaultEventHandler),
+      ],
       [
         'USER_DESIGNATED_AS_SURVIVOR_IN_SHARED_VAULT',
         container.get(TYPES.Auth_UserDesignatedAsSurvivorInSharedVaultEventHandler),

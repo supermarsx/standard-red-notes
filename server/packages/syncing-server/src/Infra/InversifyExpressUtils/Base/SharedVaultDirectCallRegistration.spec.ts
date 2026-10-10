@@ -52,6 +52,7 @@ const SHARED_VAULT_USERS_DIRECT_CALL_IDS = [
   'sync.shared-vault-users.get-users',
   'sync.shared-vault-users.remove-user',
   'sync.shared-vault-users.designate-survivor',
+  'sync.shared-vault-users.update-permission',
 ]
 
 describe('shared-vault DirectCall registration (gateway ↔ syncing-server identifier contract)', () => {
@@ -101,14 +102,15 @@ describe('shared-vault DirectCall registration (gateway ↔ syncing-server ident
     }
   })
 
-  it('registers the 3 shared-vault-user identifiers the gateway resolves', () => {
+  it('registers the 4 shared-vault-user identifiers the gateway resolves', () => {
     const controllerContainer = new ControllerContainer()
 
     new BaseSharedVaultUsersController(
       anyDep, // 1 getSharedVaultUsersUseCase
       anyDep, // 2 removeUserFromSharedVaultUseCase
       anyDep, // 3 designateSurvivorUseCase
-      anyDep, // 4 sharedVaultUserHttpMapper
+      anyDep, // 4 updateSharedVaultUserPermissionUseCase
+      anyDep, // 5 sharedVaultUserHttpMapper
       controllerContainer,
     )
 
@@ -121,7 +123,7 @@ describe('shared-vault DirectCall registration (gateway ↔ syncing-server ident
     const controllerContainer = new ControllerContainer()
 
     new BaseSharedVaultsController(anyDep, anyDep, anyDep, anyDep, anyDep, anyDep)
-    new BaseSharedVaultUsersController(anyDep, anyDep, anyDep, anyDep)
+    new BaseSharedVaultUsersController(anyDep, anyDep, anyDep, anyDep, anyDep)
 
     // Precondition: this container was never passed to a controller, so a non-empty result would mean
     // the assertions above were reading registrations made by something other than the constructor.

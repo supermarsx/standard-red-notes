@@ -3029,7 +3029,9 @@ const INVITE_ACTIONS = new Set(['created', 'updated', 'accepted', 'declined', 'c
 // `role-changed` was dropped together with the client contract (N16): it has no
 // producer, and a client disconnects on an action it does not know, so the
 // gateway must not relay one even if a store somehow holds it.
-const MEMBERSHIP_ACTIONS = new Set(['invited', 'accepted', 'joined', 'left', 'revoked'])
+const MEMBERSHIP_ACTIONS = new Set(['invited', 'accepted', 'joined', 'left', 'revoked', 'role-changed'])
+/** Actions whose whole point is the role, so it is required rather than merely allowed. */
+const MEMBERSHIP_ACTIONS_WITH_ROLE = new Set(['invited', 'accepted', 'joined', 'role-changed'])
 const MEMBERSHIP_ROLES = new Set(['read', 'write', 'admin'])
 const APPLICATION_STATE_ACTIONS = new Set(['updated', 'invalidated'])
 const APPLICATION_STATE_RESOURCES = new Set([
@@ -3086,7 +3088,7 @@ function isValidInviteEvent(value: unknown): value is JsonObject & { streamPosit
       }
       const needsMembership = event.action !== 'invited'
       const needsInvite = event.action === 'invited' || event.action === 'accepted'
-      const needsRole = ['invited', 'accepted', 'joined'].includes(event.action)
+      const needsRole = MEMBERSHIP_ACTIONS_WITH_ROLE.has(event.action)
       return (
         (needsMembership ? isInviteUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
         (needsInvite ? isInviteUuid(event.inviteUuid) : event.inviteUuid === undefined) &&

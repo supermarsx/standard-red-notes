@@ -181,6 +181,26 @@ describe('EndpointResolver', () => {
       )
     })
 
+    /**
+     * Shared-vault member permission change. On the single container this identifier is
+     * the WHOLE of the routing: `DirectCallServiceProxy` looks the handler up in the
+     * syncing-server's ControllerContainer by this exact string, so a mismatch here is a
+     * 500 "Method not found" with the build and every use-case spec still green.
+     *
+     * PATCH and DELETE share a path and MUST resolve differently -- one changes the
+     * member's permission, the other evicts them from the vault.
+     */
+    it('maps the shared-vault member permission change, distinctly from the removal', () => {
+      const resolver = createResolver(true)
+
+      expect(
+        resolver.resolveEndpointOrMethodIdentifier('PATCH', 'shared-vaults/:sharedVaultUuid/users/:userUuid'),
+      ).toEqual('sync.shared-vault-users.update-permission')
+      expect(
+        resolver.resolveEndpointOrMethodIdentifier('DELETE', 'shared-vaults/:sharedVaultUuid/users/:userUuid'),
+      ).toEqual('sync.shared-vault-users.remove-user')
+    })
+
     // Standard Red Notes: SELF-SERVE invite links — AUTHENTICATED user surface (not
     // admin). The ':uuid' delete is declared after the collection route and maps to
     // its own identifier.

@@ -36,21 +36,55 @@ function membershipEvent(action: SharedVaultMembershipRealtimeAction): InviteRea
     case 'left':
     case 'revoked':
       return { ...common, membershipUuid }
+    case 'role-changed':
+      return { ...common, membershipUuid, role: 'read' }
   }
 }
 
 describe('InviteRealtimeEvent account-state contract', () => {
-  it.each<SharedVaultMembershipRealtimeAction>(['invited', 'accepted', 'joined', 'left', 'revoked'])(
+  it.each<SharedVaultMembershipRealtimeAction>(['invited', 'accepted', 'joined', 'left', 'revoked', 'role-changed'])(
     'accepts the strict metadata-only %s membership shape',
     (action) => {
       expect(isInviteRealtimeEvent(membershipEvent(action))).toBe(true)
     },
   )
 
-  it('no longer admits the producer-less role-changed action in any shape', () => {
-    // With a role (the shape the old contract required) and without one: both rejected.
-    expect(isInviteRealtimeEvent({ ...membershipEvent('joined'), action: 'role-changed' })).toBe(false)
-    expect(isInviteRealtimeEvent({ ...membershipEvent('left'), action: 'role-changed' })).toBe(false)
+  /**
+   * `role-changed` was rejected while nothing produced it. The syncing-server's
+   * `UpdateSharedVaultUserPermission` now does, and this event is the ONLY thing that
+   * refreshes `VaultUserCache` -- which `IsReadonlyVaultMember` reads and nothing else
+   * updates. Rejecting it would leave a demoted member's editor writable, and an action a
+   * client does not know makes it drop the connection.
+   *
+   * It is admitted on exactly one shape: an existing membership row, the new role, no
+   * invite.
+   */
+  it('admits role-changed only with a membership row and a role, and never with an invite', () => {
+    const roleChanged = membershipEvent('role-changed') as Record<string, unknown>
+
+    expect(isInviteRealtimeEvent(roleChanged)).toBe(true)
+    expect(roleChanged.role).toEqual('read')
+
+    const withoutRole = { ...roleChanged }
+    delete withoutRole.role
+    expect(isInviteRealtimeEvent(withoutRole)).toBe(false)
+
+    const withoutMembership = { ...roleChanged }
+    delete withoutMembership.membershipUuid
+    expect(isInviteRealtimeEvent(withoutMembership)).toBe(false)
+
+    expect(isInviteRealtimeEvent({ ...roleChanged, inviteUuid })).toBe(false)
+    expect(isInviteRealtimeEvent({ ...roleChanged, role: 'owner' })).toBe(false)
+    // Widening this action did not widen the others: left/revoked still carry no role.
+    expect(isInviteRealtimeEvent({ ...membershipEvent('left'), role: 'read' })).toBe(false)
+  })
+
+  it('fences a role change per membership row, so the member learns of it', () => {
+    expect(getInviteRealtimeRevisionIdentity(membershipEvent('role-changed'))).toEqual({
+      key: `membership:${membershipUuid}`,
+      revision: '1',
+      ordering: 'timestamp',
+    })
   })
 
   it('fences membership revisions per membership row as strictly-increasing timestamps', () => {

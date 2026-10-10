@@ -131,6 +131,30 @@ describe('DomainEventFactory', () => {
     })
   })
 
+  /**
+   * The in-place permission change. Correlated to the SUBJECT, not the actor: every other
+   * membership event here correlates to the member whose access moved, and auth's handler
+   * looks the mirror row up by `userUuid`. Correlating to the actor would send the
+   * invalidation to the wrong account.
+   */
+  it('should create a user permission changed in shared vault event correlated to the subject', () => {
+    const dto = {
+      sharedVaultUuid: '3-4-5',
+      userUuid: '1-2-3',
+      permission: 'write',
+      previousPermission: 'read',
+      originatorUuid: '2-3-4',
+      updatedAt: 234,
+    }
+
+    expectEvent(createFactory().createUserPermissionChangedInSharedVaultEvent(dto), {
+      type: 'USER_PERMISSION_CHANGED_IN_SHARED_VAULT',
+      userIdentifier: '1-2-3',
+      userIdentifierType: 'uuid',
+      payload: dto,
+    })
+  })
+
   it('should create a user invited to shared vault event correlated to the invited user', () => {
     const dto = {
       invite: {

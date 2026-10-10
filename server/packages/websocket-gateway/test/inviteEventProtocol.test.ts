@@ -6,14 +6,20 @@ describe('invite event wire compatibility', () => {
   it('accepts legacy invite actions and every membership/application-state action in one versioned schema', () => {
     const events = inviteRealtimeProtocolEvents()
 
-    // 6 invite + 6 subscription + 5 membership (role-changed dropped with the client contract, N16) + 2 application-state
-    expect(events).toHaveLength(19)
+    // 6 invite + 6 subscription + 6 membership (role-changed is back, with its producer:
+    // syncing-server's UpdateSharedVaultUserPermission) + 2 application-state
+    expect(events).toHaveLength(20)
     expect(events.every(isStoredInviteEvent)).toBe(true)
     const membership = events.find(
       (candidate) => candidate.kind === 'shared-vault-membership' && candidate.action === 'left',
     )
-    // The client disconnects on an action it does not know; the wire validator must not let one through.
+    // `role-changed` is now a known action, but it is NOT interchangeable with the others:
+    // it requires the new role, and `left` carries none. The client disconnects on an action
+    // it does not know, so widening the allowlist must not loosen the per-action field rules.
     expect(isStoredInviteEvent({ ...membership, action: 'role-changed' })).toBe(false)
+    expect(isStoredInviteEvent({ ...membership, action: 'role-changed', role: 'write' })).toBe(true)
+    // And an action nobody produces is still refused.
+    expect(isStoredInviteEvent({ ...membership, action: 'transferred' })).toBe(false)
     expect(
       isInviteEventReplay(
         {

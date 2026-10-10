@@ -86,7 +86,7 @@ describe('InviteLifecycleEventProducer', () => {
       })
     }
 
-    const membershipActions = ['invited', 'accepted', 'joined', 'left', 'revoked'] as const
+    const membershipActions = ['invited', 'accepted', 'joined', 'left', 'revoked', 'role-changed'] as const
     for (const [revision, action] of membershipActions.entries()) {
       await producer.recordSharedVaultMembership(transaction, membershipInput(action, revision + 1, eventId()))
     }
@@ -106,8 +106,9 @@ describe('InviteLifecycleEventProducer', () => {
       affectedUserUuids: [inviteAccountOwner, inviteAccountMember],
     })
 
-    // 6 invite + 6 subscription + 5 membership (role-changed dropped with the client contract, N16) + 2 application-state
-    expect(transaction.records).toHaveLength(19)
+    // 6 invite + 6 subscription + 6 membership (role-changed is back, with its producer:
+    // syncing-server's UpdateSharedVaultUserPermission) + 2 application-state
+    expect(transaction.records).toHaveLength(20)
     expect([...transaction.records.values()].every((record) => record.recordId === record.event.eventId)).toBe(true)
     expect([...transaction.records.values()].every((record) => !('plaintext' in record.event))).toBe(true)
   })
@@ -240,5 +241,7 @@ function membershipInput(
     case 'left':
     case 'revoked':
       return { ...common, membershipUuid: inviteMembershipUuid }
+    case 'role-changed':
+      return { ...common, membershipUuid: inviteMembershipUuid, role: 'read' }
   }
 }

@@ -331,6 +331,7 @@ const TYPES = {
   Auth_UpdateStorageQuotaUsedForUser: Symbol.for('Auth_UpdateStorageQuotaUsedForUser'),
   Auth_AddSharedVaultUser: Symbol.for('Auth_AddSharedVaultUser'),
   Auth_RemoveSharedVaultUser: Symbol.for('Auth_RemoveSharedVaultUser'),
+  Auth_UpdateSharedVaultUserPermission: Symbol.for('Auth_UpdateSharedVaultUserPermission'),
   Auth_DesignateSurvivor: Symbol.for('Auth_DesignateSurvivor'),
   Auth_GetSharedOrRegularSubscriptionForUser: Symbol.for('Auth_GetSharedOrRegularSubscriptionForUser'),
   Auth_ResolveFileQuotaScope: Symbol.for('Auth_ResolveFileQuotaScope'),
@@ -377,6 +378,9 @@ const TYPES = {
   Auth_PaymentsAccountDeletedEventHandler: Symbol.for('Auth_PaymentsAccountDeletedEventHandler'),
   Auth_UserAddedToSharedVaultEventHandler: Symbol.for('Auth_UserAddedToSharedVaultEventHandler'),
   Auth_UserRemovedFromSharedVaultEventHandler: Symbol.for('Auth_UserRemovedFromSharedVaultEventHandler'),
+  Auth_UserPermissionChangedInSharedVaultEventHandler: Symbol.for(
+    'Auth_UserPermissionChangedInSharedVaultEventHandler',
+  ),
   Auth_UserDesignatedAsSurvivorInSharedVaultEventHandler: Symbol.for(
     'Auth_UserDesignatedAsSurvivorInSharedVaultEventHandler',
   ),

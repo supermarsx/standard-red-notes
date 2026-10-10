@@ -110,6 +110,7 @@ const TYPES = {
   Sync_SendEventToClients: Symbol.for('Sync_SendEventToClients'),
   Sync_RemoveItemsFromSharedVault: Symbol.for('Sync_RemoveItemsFromSharedVault'),
   Sync_DesignateSurvivor: Symbol.for('Sync_DesignateSurvivor'),
+  Sync_UpdateSharedVaultUserPermission: Symbol.for('Sync_UpdateSharedVaultUserPermission'),
   Sync_RemoveUserFromSharedVaults: Symbol.for('Sync_RemoveUserFromSharedVaults'),
   Sync_TransferSharedVault: Symbol.for('Sync_TransferSharedVault'),
   Sync_TransferSharedVaultItems: Symbol.for('Sync_TransferSharedVaultItems'),

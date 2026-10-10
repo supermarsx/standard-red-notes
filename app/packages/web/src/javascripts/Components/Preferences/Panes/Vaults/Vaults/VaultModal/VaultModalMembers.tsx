@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useApplication } from '@/Components/ApplicationProvider'
-import { SharedVaultUserServerHash, VaultListingInterface } from '@standardnotes/snjs'
+import { SharedVaultUserPermissionValue, SharedVaultUserServerHash, VaultListingInterface } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
 import ModalOverlay from '@/Components/Modal/ModalOverlay'
@@ -41,6 +41,28 @@ const resolutionBadge = (params: { hasContact: boolean; isCurrentUser: boolean }
     icon: 'warning' as const,
     className: 'bg-warning text-warning-contrast',
   }
+}
+
+/**
+ * The permissions a given actor may SET on a given member, in the order they escalate.
+ *
+ * `admin` is owner-only on the server ("Only the owner can grant admin permission in a
+ * shared vault"), so an admin member is not offered it -- the same reasoning that moved
+ * the remove button off `isCurrentUserAdmin`: an affordance that can only ever fail is
+ * worse than no affordance. It is still listed when the member ALREADY holds it, because
+ * a select whose value is missing from its options silently renders as something else.
+ */
+const assignablePermissions = (params: {
+  currentPermission: string
+  isActorVaultOwner: boolean
+}): SharedVaultUserPermissionValue[] => {
+  const permissions: SharedVaultUserPermissionValue[] = ['read', 'write']
+
+  if (params.isActorVaultOwner || params.currentPermission === 'admin') {
+    permissions.push('admin')
+  }
+
+  return permissions
 }
 
 export const VaultModalMembers = ({
@@ -88,6 +110,40 @@ export const VaultModalMembers = ({
         }
       } catch (error) {
         void application.alerts.alert(error instanceof Error ? error.message : String(error))
+      }
+
+      onChange()
+    },
+    [application.alerts, application.vaultUsers, vault, onChange],
+  )
+
+  /**
+   * The member whose permission change is in flight, so the row that is changing is the
+   * only one disabled. A single boolean would freeze every row in a large vault.
+   */
+  const [pendingPermissionChangeFor, setPendingPermissionChangeFor] = useState<string | undefined>(undefined)
+
+  const changeMemberPermission = useCallback(
+    async (memberItem: SharedVaultUserServerHash, permission: SharedVaultUserPermissionValue) => {
+      if (!vault.isSharedVaultListing() || permission === memberItem.permission) {
+        return
+      }
+
+      setPendingPermissionChangeFor(memberItem.user_uuid)
+
+      // `changeMemberPermission` returns a failed Result for every refusal, including its
+      // own precondition, so there is nothing to catch here -- but the server's message is
+      // the only thing that distinguishes "you may not grant admin" from "you cannot change
+      // your own permission", and both have to reach the person who clicked.
+      try {
+        const result = await application.vaultUsers.changeMemberPermission(vault, memberItem.user_uuid, permission)
+        if (result.isFailed()) {
+          void application.alerts.alert(result.getError())
+        }
+      } catch (error) {
+        void application.alerts.alert(error instanceof Error ? error.message : String(error))
+      } finally {
+        setPendingPermissionChangeFor(undefined)
       }
 
       onChange()
@@ -153,9 +209,34 @@ export const VaultModalMembers = ({
                 )}
               </div>
               <div className="col-start-2 row-start-2">{permission}</div>
+              {isCurrentUserAdmin && !isMemberVaultOwner && !isCurrentUser && (
+                <div className="col-start-2 row-start-3 mt-1 flex items-center gap-2">
+                  <label className="text-passive-0" htmlFor={`vault-member-permission-${member.user_uuid}`}>
+                    Permission
+                  </label>
+                  <select
+                    id={`vault-member-permission-${member.user_uuid}`}
+                    className="border-border bg-default text-text rounded border px-2 py-1"
+                    value={member.permission}
+                    disabled={pendingPermissionChangeFor === member.user_uuid}
+                    onChange={(event) =>
+                      void changeMemberPermission(member, event.target.value as SharedVaultUserPermissionValue)
+                    }
+                  >
+                    {assignablePermissions({
+                      currentPermission: member.permission,
+                      isActorVaultOwner: isCurrentUserVaultOwner,
+                    }).map((assignable) => (
+                      <option key={assignable} value={assignable}>
+                        {application.vaultUsers.getFormattedMemberPermission(assignable)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {isCurrentUserVaultOwner && !isMemberVaultOwner && (
                 <Button
-                  className="col-start-2 row-start-3 mt-1"
+                  className="col-start-2 row-start-4 mt-1"
                   label="Remove From Vault"
                   onClick={() => removeMemberFromVault(member)}
                   small

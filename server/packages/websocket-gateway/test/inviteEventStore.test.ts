@@ -80,6 +80,8 @@ const membershipEvent = (action: SharedVaultMembershipEventAction, index: number
     case 'left':
     case 'revoked':
       return { ...common, membershipUuid: '30000000-0000-4000-8000-000000000001' }
+    case 'role-changed':
+      return { ...common, membershipUuid: '30000000-0000-4000-8000-000000000001', role: 'read' }
   }
 }
 
@@ -327,6 +329,40 @@ describe('invite event validation', () => {
     expect(isOpaqueInviteEventCursor('')).toBe(false)
     expect(isOpaqueInviteEventCursor(1)).toBe(false)
     expect(isOpaqueInviteEventCursor('x'.repeat(2_049))).toBe(false)
+  })
+
+  /**
+   * `role-changed` is the in-place permission change emitted by the syncing-server's
+   * `UpdateSharedVaultUserPermission`. It was dropped from this allowlist while nothing
+   * produced it; a producer now does, and an action this validator does not know is never
+   * acknowledged on SQS and is redelivered until the DLQ takes it.
+   *
+   * Its per-action field rules are the whole contract: an existing membership row, the new
+   * role (the point of the event), and NO invite -- nothing invited anybody.
+   */
+  it('accepts a role-changed membership event and holds it to its exact field set', () => {
+    expect(isInviteEventInvalidation(membershipEvent('role-changed', 3))).toBe(true)
+
+    const roleChanged = membershipEvent('role-changed', 3) as Record<string, unknown>
+    expect(roleChanged.role).toEqual('read')
+
+    // Role is REQUIRED: without it the event says a permission changed without saying to what.
+    const withoutRole = { ...roleChanged }
+    delete withoutRole.role
+    expect(isInviteEventInvalidation(withoutRole)).toBe(false)
+
+    // An invite uuid is forbidden, exactly as for left/revoked.
+    expect(
+      isInviteEventInvalidation({ ...roleChanged, inviteUuid: '10000000-0000-4000-8000-000000000001' }),
+    ).toBe(false)
+
+    // The membership row must be named, so the client can fence revisions per membership.
+    const withoutMembership = { ...roleChanged }
+    delete withoutMembership.membershipUuid
+    expect(isInviteEventInvalidation(withoutMembership)).toBe(false)
+
+    // An unknown role is still refused, so widening the ACTION did not widen the ROLE.
+    expect(isInviteEventInvalidation({ ...roleChanged, role: 'owner' })).toBe(false)
   })
 
   it('rejects malformed base and invite-family fields without accepting extra payload data', () => {

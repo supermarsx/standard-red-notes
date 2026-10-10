@@ -15,6 +15,7 @@ import {
   UserAddedToSharedVaultEvent,
   UserDesignatedAsSurvivorInSharedVaultEvent,
   UserInvitedToSharedVaultEvent,
+  UserPermissionChangedInSharedVaultEvent,
   UserRemovedFromSharedVaultEvent,
   WebSocketMessageRequestedEvent,
 } from '@standardnotes/domain-events'
@@ -106,6 +107,14 @@ export interface DomainEventFactoryInterface {
     sharedVaultUuid: string
     userUuid: string
   }): UserRemovedFromSharedVaultEvent
+  createUserPermissionChangedInSharedVaultEvent(dto: {
+    sharedVaultUuid: string
+    userUuid: string
+    permission: string
+    previousPermission: string
+    originatorUuid: string
+    updatedAt: number
+  }): UserPermissionChangedInSharedVaultEvent
   createItemRemovedFromSharedVaultEvent(dto: {
     sharedVaultUuid: string
     itemUuid: string

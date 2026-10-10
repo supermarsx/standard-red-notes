@@ -9,6 +9,8 @@ import { SharedVaultUsersServerInterface } from './SharedVaultUsersServerInterfa
 import { SharedVaultUsersPaths } from './Paths'
 import { GetSharedVaultUsersResponse } from '../../Response/SharedVaultUsers/GetSharedVaultUsersResponse'
 import { DesignateSurvivorResponse } from '../../Response/SharedVaultUsers/DesignateSurvivorResponse'
+import { UpdateSharedVaultUserPermissionRequestParams } from '../../Request/SharedVaultUser/UpdateSharedVaultUserPermissionRequestParams'
+import { UpdateSharedVaultUserPermissionResponse } from '../../Response/SharedVaultUsers/UpdateSharedVaultUserPermissionResponse'
 
 export class SharedVaultUsersServer implements SharedVaultUsersServerInterface {
   constructor(private httpService: HttpServiceInterface) {}
@@ -30,5 +32,14 @@ export class SharedVaultUsersServer implements SharedVaultUsersServerInterface {
     params: DeleteSharedVaultUserRequestParams,
   ): Promise<HttpResponse<DeleteSharedVaultUserResponse>> {
     return this.httpService.delete(SharedVaultUsersPaths.deleteSharedVaultUser(params.sharedVaultUuid, params.userUuid))
+  }
+
+  updateSharedVaultUserPermission(
+    params: UpdateSharedVaultUserPermissionRequestParams,
+  ): Promise<HttpResponse<UpdateSharedVaultUserPermissionResponse>> {
+    return this.httpService.patch(
+      SharedVaultUsersPaths.updateSharedVaultUserPermission(params.sharedVaultUuid, params.userUuid),
+      { permission: params.permission },
+    )
   }
 }

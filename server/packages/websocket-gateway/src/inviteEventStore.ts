@@ -45,9 +45,11 @@ return #expired
 export type InviteEventKind =
   'shared-vault-invite' | 'subscription-invite' | 'shared-vault-membership' | 'application-state'
 export type InviteEventAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
-// `role-changed` was dropped together with the client contract (N16): it has no
-// producer and a client disconnects on a kind/action it does not know.
-export type SharedVaultMembershipEventAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked'
+// `role-changed` was dropped in N16 on the condition that a future producer add it back
+// together with its emitter. `UpdateSharedVaultUserPermission` (syncing-server) is that
+// emitter: a member promoted read->write or demoted write->read learns about it only
+// through a membership invalidation. It always carries the new `role`.
+export type SharedVaultMembershipEventAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked' | 'role-changed'
 export type ApplicationStateEventAction = 'updated' | 'invalidated'
 export type SharedVaultMembershipRole = 'read' | 'write' | 'admin'
 export type ApplicationStateResource =
@@ -514,6 +516,14 @@ const MEMBERSHIP_ACTIONS = new Set<SharedVaultMembershipEventAction>([
   'joined',
   'left',
   'revoked',
+  'role-changed',
+])
+/** Actions whose whole point is the role, so it is required rather than merely allowed. */
+const MEMBERSHIP_ACTIONS_WITH_ROLE = new Set<SharedVaultMembershipEventAction>([
+  'invited',
+  'accepted',
+  'joined',
+  'role-changed',
 ])
 const APPLICATION_ACTIONS = new Set<ApplicationStateEventAction>(['updated', 'invalidated'])
 const MEMBERSHIP_ROLES = new Set<SharedVaultMembershipRole>(['read', 'write', 'admin'])
@@ -605,7 +615,7 @@ export function isInviteEventInvalidation(value: unknown): value is InviteEventI
       }
       const needsMembership = event.action !== 'invited'
       const needsInvite = event.action === 'invited' || event.action === 'accepted'
-      const needsRole = ['invited', 'accepted', 'joined'].includes(event.action)
+      const needsRole = MEMBERSHIP_ACTIONS_WITH_ROLE.has(event.action as SharedVaultMembershipEventAction)
       return (
         (needsMembership ? isUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
         (needsInvite ? isUuid(event.inviteUuid) : event.inviteUuid === undefined) &&

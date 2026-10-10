@@ -45,6 +45,8 @@ import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 
 const OWN_UUID = '7eb36f92-0121-4a5f-9696-65c19bb4bab0'
 const OTHER_UUID = '0f2c1d44-9a81-4bb2-8d1e-2b6d9f0a7c33'
+/** A vault owner who is neither the signed-in user nor the member under test. */
+const THIRD_PARTY_OWNER_UUID = '4a7b1c93-55de-4f02-9ab8-1c6e7d5f3a21'
 
 const vault = {
   uuid: 'vault-item',
@@ -67,7 +69,15 @@ type ApplicationOverrides = {
   /** Whether the SIGNED-IN user owns this vault. Removal is owner-only at every enforcing layer. */
   isCurrentUserSharedVaultOwner?: boolean
   removeUserFromSharedVault?: jest.Mock
+  changeMemberPermission?: jest.Mock
   alert?: jest.Mock
+  /**
+   * Which member the vault OWNER is. Defaults to the signed-in user, as it always did.
+   * Overriding it is what lets a test separate "this is my own row" from "this is the
+   * owner's row": with the two collapsed onto one uuid, dropping the self gate changed
+   * nothing observable and a mutation proved it.
+   */
+  vaultOwnerUuid?: string
 }
 
 const makeApplication = (
@@ -85,10 +95,11 @@ const makeApplication = (
       findContactForServerUser: (user: SharedVaultUserServerHash) => contactsByUserUuid[user.user_uuid],
     },
     vaultUsers: {
-      isVaultUserOwner: (user: SharedVaultUserServerHash) => user.user_uuid === OWN_UUID,
+      isVaultUserOwner: (user: SharedVaultUserServerHash) => user.user_uuid === (overrides.vaultOwnerUuid ?? OWN_UUID),
       isCurrentUserSharedVaultOwner: () => overrides.isCurrentUserSharedVaultOwner ?? true,
       getFormattedMemberPermission: (permission: string) => `Permission: ${permission}`,
       removeUserFromSharedVault: overrides.removeUserFromSharedVault ?? jest.fn().mockResolvedValue(okResult),
+      changeMemberPermission: overrides.changeMemberPermission ?? jest.fn().mockResolvedValue(okResult),
     },
   }) as unknown as import('@/Application/WebApplication').WebApplication
 
@@ -111,6 +122,7 @@ afterEach(() => {
 const render = async (
   application: import('@/Application/WebApplication').WebApplication,
   members: SharedVaultUserServerHash[],
+  options: { isCurrentUserAdmin?: boolean; onChange?: () => void } = {},
 ) => {
   await act(async () => {
     root.render(
@@ -121,8 +133,8 @@ const render = async (
           children: createElement(VaultModalMembers, {
             members,
             vault,
-            isCurrentUserAdmin: true,
-            onChange: () => undefined,
+            isCurrentUserAdmin: options.isCurrentUserAdmin ?? true,
+            onChange: options.onChange ?? (() => undefined),
           }),
         }),
       }),
@@ -298,5 +310,205 @@ describe('VaultModalMembers offers removal only to the vault owner', () => {
     })
 
     expect(alert).toHaveBeenCalledWith('Only owner can remove other users')
+  })
+})
+/**
+ * Standard Red Notes: changing a member's permission IN PLACE.
+ *
+ * Before this control existed, promoting a member from read to write meant removing them
+ * and re-inviting: the vault key rotated and the person lost access until they accepted
+ * again. tsc cannot see whether the control is on screen, whether it offers the right
+ * options, or whether a change reaches the service, so these drive the real component.
+ *
+ * The gates mirror the server's, which is the only place authorization is decided:
+ * read/write for any admin, `admin` for the OWNER only, never your own row, never the
+ * vault owner's row. An affordance that can only ever fail is the bug that moved the
+ * remove button off `isCurrentUserAdmin` in the first place.
+ */
+describe('VaultModalMembers permission control', () => {
+  const permissionSelect = (memberUuid: string) =>
+    container.querySelector<HTMLSelectElement>(`#vault-member-permission-${memberUuid}`)
+
+  const optionValues = (select: HTMLSelectElement | null) =>
+    Array.from(select?.options ?? []).map((option) => option.value)
+
+  const change = async (select: HTMLSelectElement, value: string) => {
+    await act(async () => {
+      select.value = value
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+
+  it('(k) offers a permission control for another member, pre-set to their current permission', async () => {
+    const application = makeApplication({ [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } })
+
+    await render(application, [member(OTHER_UUID, 'read')])
+
+    const select = permissionSelect(OTHER_UUID)
+    expect(select).not.toBeNull()
+    // Pre-set, not merely present: a control that always reads "read-only" would misreport
+    // every write member it is offered for.
+    expect(select?.value).toEqual('read')
+  })
+
+  it('(l) offers admin only to the vault OWNER, since granting admin is owner-only server-side', async () => {
+    const asOwner = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: true },
+    )
+    await render(asOwner, [member(OTHER_UUID, 'read')])
+    expect(optionValues(permissionSelect(OTHER_UUID))).toEqual(['read', 'write', 'admin'])
+
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    const asAdmin = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: false },
+    )
+    await render(asAdmin, [member(OTHER_UUID, 'read')])
+    expect(optionValues(permissionSelect(OTHER_UUID))).toEqual(['read', 'write'])
+  })
+
+  it('(m) still lists admin when the member ALREADY holds it, so the control cannot misreport them', async () => {
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: false },
+    )
+
+    await render(application, [member(OTHER_UUID, 'admin')])
+
+    const select = permissionSelect(OTHER_UUID)
+    expect(optionValues(select)).toContain('admin')
+    expect(select?.value).toEqual('admin')
+  })
+
+  /**
+   * The self gate and the owner gate are DIFFERENT rules and must be tested apart. With the
+   * signed-in user also being the vault owner -- the fake's default, and the first way this
+   * test was written -- deleting the self gate changed nothing on screen, because the owner
+   * gate already hid the row. A third party owns the vault here, so the signed-in user is a
+   * plain admin member and the only thing that can hide their own row is the self gate.
+   *
+   * It matters because the server refuses a self-change outright ("Cannot change your own
+   * permission in a shared vault"): an admin offered the control on their own row would be
+   * offered an action that can only fail.
+   */
+  it('(n) withholds the control from the signed-in user OWN row, even when they are not the vault owner', async () => {
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { vaultOwnerUuid: THIRD_PARTY_OWNER_UUID, isCurrentUserSharedVaultOwner: false },
+    )
+
+    await render(application, [member(OWN_UUID, 'admin'), member(OTHER_UUID, 'read')])
+
+    // Preconditions: the control IS offered on this screen, and the signed-in user's row is
+    // NOT the owner's row -- so the absence below is the self gate and nothing else.
+    expect(permissionSelect(OTHER_UUID)).not.toBeNull()
+    expect(application.vaultUsers.isVaultUserOwner(member(OWN_UUID, 'admin'))).toBe(false)
+    expect(permissionSelect(OWN_UUID)).toBeNull()
+  })
+
+  it('(n2) withholds the control from the VAULT OWNER row, which is a separate rule', async () => {
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { vaultOwnerUuid: THIRD_PARTY_OWNER_UUID, isCurrentUserSharedVaultOwner: false },
+    )
+
+    await render(application, [member(THIRD_PARTY_OWNER_UUID, 'admin'), member(OTHER_UUID, 'read')])
+
+    // Preconditions: the control IS offered here, and this row is neither the signed-in user
+    // nor an absent one.
+    expect(permissionSelect(OTHER_UUID)).not.toBeNull()
+    expect(THIRD_PARTY_OWNER_UUID).not.toEqual(OWN_UUID)
+    expect(permissionSelect(THIRD_PARTY_OWNER_UUID)).toBeNull()
+  })
+
+  it('(o) withholds the control when the signed-in user is not an admin at all', async () => {
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { isCurrentUserSharedVaultOwner: false },
+    )
+
+    await render(application, [member(OTHER_UUID, 'read')], { isCurrentUserAdmin: false })
+
+    expect(container.textContent).toContain('Chico')
+    expect(permissionSelect(OTHER_UUID)).toBeNull()
+  })
+
+  it('(p) sends the chosen permission to the service and refreshes the list', async () => {
+    const changeMemberPermission = jest.fn().mockResolvedValue(okResult)
+    const onChange = jest.fn()
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { changeMemberPermission },
+    )
+
+    await render(application, [member(OTHER_UUID, 'read')], { onChange })
+
+    const select = permissionSelect(OTHER_UUID)
+    expect(select).not.toBeNull()
+
+    await change(select as HTMLSelectElement, 'write')
+
+    expect(changeMemberPermission).toHaveBeenCalledTimes(1)
+    expect(changeMemberPermission.mock.calls[0][1]).toEqual(OTHER_UUID)
+    expect(changeMemberPermission.mock.calls[0][2]).toEqual('write')
+    expect(onChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('(q) surfaces a refusal from the server instead of a silent dead change', async () => {
+    const changeMemberPermission = jest.fn().mockResolvedValue({
+      isFailed: () => true,
+      getError: () => 'Only the owner can grant admin permission in a shared vault',
+    })
+    const alert = jest.fn()
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { changeMemberPermission, alert, isCurrentUserSharedVaultOwner: true },
+    )
+
+    await render(application, [member(OTHER_UUID, 'read')])
+
+    await change(permissionSelect(OTHER_UUID) as HTMLSelectElement, 'admin')
+
+    expect(alert).toHaveBeenCalledWith('Only the owner can grant admin permission in a shared vault')
+  })
+
+  it('(r) surfaces a thrown change rather than leaving the row stuck disabled', async () => {
+    const changeMemberPermission = jest.fn().mockRejectedValue(new Error('Cannot change permission in locked vault'))
+    const alert = jest.fn()
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { changeMemberPermission, alert },
+    )
+
+    await render(application, [member(OTHER_UUID, 'read')])
+
+    await change(permissionSelect(OTHER_UUID) as HTMLSelectElement, 'write')
+
+    expect(alert).toHaveBeenCalledWith('Cannot change permission in locked vault')
+    // The control must come back: a row left disabled by a thrown call is unrecoverable
+    // without reopening the modal.
+    expect(permissionSelect(OTHER_UUID)?.disabled).toBe(false)
+  })
+
+  it('(s) does not call the service when the selection did not actually change', async () => {
+    const changeMemberPermission = jest.fn().mockResolvedValue(okResult)
+    const application = makeApplication(
+      { [OTHER_UUID]: { uuid: 'contact-other', name: 'Chico' } },
+      { changeMemberPermission },
+    )
+
+    await render(application, [member(OTHER_UUID, 'read')])
+
+    await change(permissionSelect(OTHER_UUID) as HTMLSelectElement, 'read')
+
+    expect(changeMemberPermission).not.toHaveBeenCalled()
   })
 })

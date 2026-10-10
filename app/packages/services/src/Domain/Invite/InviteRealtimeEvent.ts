@@ -6,11 +6,15 @@ export type InviteRealtimeEventKind =
 export type InviteRealtimeInviteAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
 /**
  * Exactly the actions a server producer emits today (accept → `accepted`,
- * remove → `left`/`revoked`, invite → `invited`/`joined`). A `role-changed`
- * action was declared without any producer and has been dropped; a future
- * permissions producer must be added on both sides of the contract together.
+ * remove → `left`/`revoked`, invite → `invited`/`joined`, in-place permission
+ * change → `role-changed`). `role-changed` was dropped while nothing emitted it;
+ * it is back together with its emitter, `UpdateSharedVaultUserPermission` in the
+ * syncing-server, because this event is the ONLY thing that refreshes
+ * `VaultUserCache` — and `IsReadonlyVaultMember` reads nothing else, so without it
+ * a demoted member's editor stays writable until the app is reloaded.
  */
-export type SharedVaultMembershipRealtimeAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked'
+export type SharedVaultMembershipRealtimeAction =
+  'invited' | 'accepted' | 'joined' | 'left' | 'revoked' | 'role-changed'
 export type ApplicationStateRealtimeAction = 'updated' | 'invalidated'
 export type InviteRealtimeEventAction =
   InviteRealtimeInviteAction | SharedVaultMembershipRealtimeAction | ApplicationStateRealtimeAction
@@ -102,6 +106,14 @@ const MEMBERSHIP_ACTIONS = new Set<SharedVaultMembershipRealtimeAction>([
   'joined',
   'left',
   'revoked',
+  'role-changed',
+])
+/** Actions whose whole point is the role, so it is required rather than merely allowed. */
+const MEMBERSHIP_ACTIONS_WITH_ROLE = new Set<SharedVaultMembershipRealtimeAction>([
+  'invited',
+  'accepted',
+  'joined',
+  'role-changed',
 ])
 const APPLICATION_ACTIONS = new Set<ApplicationStateRealtimeAction>(['updated', 'invalidated'])
 const MEMBERSHIP_ROLES = new Set<SharedVaultMembershipRole>(['read', 'write', 'admin'])
@@ -176,7 +188,7 @@ export function isInviteRealtimeEvent(value: unknown): value is InviteRealtimeEv
       }
       const needsMembership = event.action !== 'invited'
       const needsInvite = event.action === 'invited' || event.action === 'accepted'
-      const needsRole = ['invited', 'accepted', 'joined'].includes(event.action)
+      const needsRole = MEMBERSHIP_ACTIONS_WITH_ROLE.has(event.action as SharedVaultMembershipRealtimeAction)
       return (
         (needsMembership ? isUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
         (needsInvite ? isUuid(event.inviteUuid) : event.inviteUuid === undefined) &&

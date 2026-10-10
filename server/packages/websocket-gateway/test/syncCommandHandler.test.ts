@@ -498,7 +498,9 @@ describe('SyncCommandHandler', () => {
       { action: 'joined', membershipUuid, role: 'read' },
       { action: 'left', membershipUuid },
       { action: 'revoked', membershipUuid },
-      // `role-changed` is deliberately absent: dropped with the client contract (N16).
+      // `role-changed` carries the NEW role, which is the whole content of the event: a
+      // member promoted read -> write (or demoted) learns of it only here.
+      { action: 'role-changed', membershipUuid, role: 'write' },
     ]
     const membershipEvents = membershipDetails.map((details, index) => ({
       version: 1,
@@ -511,26 +513,31 @@ describe('SyncCommandHandler', () => {
       occurredAt: index + 1,
       ...details,
     }))
+    // Numbered to continue AFTER the membership events above; `membershipDetails.length`
+    // rather than a literal, so adding a membership action cannot collide with these on
+    // eventId or streamPosition (a duplicated stream position is rejected by the replay
+    // validator, which looks exactly like the action being refused).
     const applicationEvents = ['updated', 'invalidated'].map((action, index) => ({
       version: 1,
-      eventId: `00000000-0000-4000-8000-${String(index + 6).padStart(12, '0')}`,
-      streamPosition: `cursor-${index + 6}`,
+      eventId: `00000000-0000-4000-8000-${String(index + membershipDetails.length + 1).padStart(12, '0')}`,
+      streamPosition: `cursor-${index + membershipDetails.length + 1}`,
       kind: 'application-state',
       action,
       resource: index === 0 ? 'files-metadata' : 'account',
       ...(index === 0 ? { resourceUuid: sharedVaultUuid } : {}),
-      revision: String(index + 6),
-      occurredAt: index + 6,
+      revision: String(index + membershipDetails.length + 1),
+      occurredAt: index + membershipDetails.length + 1,
     }))
+    const finalCursor = `cursor-${membershipDetails.length + applicationEvents.length}`
     const events = [...membershipEvents, ...applicationEvents]
     const inviteEvents: SyncInviteEventsAdapter = {
       distribution: 'shared',
       ready: () => true,
-      tail: vi.fn(async () => 'cursor-7'),
+      tail: vi.fn(async () => finalCursor),
       readAfter: vi.fn(async (_userUuid, cursor) => ({
         previousCursor: cursor,
         events,
-        nextCursor: 'cursor-7',
+        nextCursor: finalCursor,
         hasMore: false,
       })),
       subscribeAvailability: vi.fn(() => () => undefined),
@@ -539,7 +546,7 @@ describe('SyncCommandHandler', () => {
     const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true })
     enqueue(handler, inviteSubscribeFrame(1, 'cursor-0', events.length))
     await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('INVITE_BATCH'))
-    expect(socket.frames.at(-1)?.payload).toMatchObject({ events, nextCursor: 'cursor-7' })
+    expect(socket.frames.at(-1)?.payload).toMatchObject({ events, nextCursor: finalCursor })
     handler.disconnect()
   })
 
@@ -677,8 +684,13 @@ describe('SyncCommandHandler', () => {
       inviteUuid: undefined,
       role: undefined,
     }
-    // Dropped with the client contract (N16): otherwise a well-formed membership
-    // event under an action the client no longer knows, which must not be relayed.
+    /**
+     * `role-changed` is a known action again, emitted by the syncing-server's
+     * `UpdateSharedVaultUserPermission`. The well-formed shape is relayed (see the batch
+     * test above); what stays malformed is a role-LESS one -- an event claiming a
+     * permission changed without saying to what -- and one carrying an invite, since
+     * nobody invited anybody.
+     */
     const roleChangedMembership = {
       ...acceptedMembership,
       action: 'role-changed',
@@ -739,8 +751,10 @@ describe('SyncCommandHandler', () => {
       { ...invitedMembership, role: undefined },
       { ...leftMembership, inviteUuid: acceptedMembership.inviteUuid },
       { ...leftMembership, role: 'read' },
-      roleChangedMembership,
       { ...roleChangedMembership, role: undefined },
+      { ...roleChangedMembership, inviteUuid: acceptedMembership.inviteUuid },
+      { ...roleChangedMembership, membershipUuid: undefined },
+      { ...roleChangedMembership, role: 'owner' },
       { ...applicationState, extra: true },
       { ...applicationState, action: 1 },
       { ...applicationState, action: 'unknown' },

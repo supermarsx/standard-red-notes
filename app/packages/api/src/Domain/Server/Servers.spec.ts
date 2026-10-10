@@ -369,6 +369,19 @@ describe('Servers', () => {
 
       expect(http.delete).toHaveBeenCalledWith('/v1/shared-vaults/vault-1/users/user-1')
     })
+
+    it('updateSharedVaultUserPermission should PATCH the member resource with the permission body', async () => {
+      await new SharedVaultUsersServer(http).updateSharedVaultUserPermission({
+        sharedVaultUuid: 'vault-1',
+        userUuid: 'user-1',
+        permission: 'write',
+      })
+
+      expect(http.patch).toHaveBeenCalledWith('/v1/shared-vaults/vault-1/users/user-1', { permission: 'write' })
+      // The verb is load-bearing: the same path with DELETE removes the member outright,
+      // and the gateway resolves the two to different syncing-server handlers.
+      expect(http.delete).not.toHaveBeenCalled()
+    })
   })
 
   describe('SharedVaultInvitesServer', () => {

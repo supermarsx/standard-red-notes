@@ -3,9 +3,13 @@ export const INVITE_REALTIME_INVALIDATION_VERSION = 1 as const
 export type InviteRealtimeEventKind =
   'shared-vault-invite' | 'subscription-invite' | 'shared-vault-membership' | 'application-state'
 export type InviteRealtimeEventAction = 'created' | 'updated' | 'accepted' | 'declined' | 'canceled' | 'deleted'
-// `role-changed` was dropped together with the client contract (N16): no producer
-// emits it and a client disconnects on an action it does not know.
-export type InviteRealtimeMembershipAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked'
+// `role-changed` was dropped in N16 because nothing emitted it, on the condition that
+// "a future producer must add it back together with its emitter". That producer now
+// exists: `UpdateSharedVaultUserPermission` changes a member's permission in place, and
+// the member's own client learns about it ONLY through a membership invalidation --
+// `IsReadonlyVaultMember` reads a cache that nothing else refreshes. It carries a `role`
+// for the same reason `joined` does: the role IS the change.
+export type InviteRealtimeMembershipAction = 'invited' | 'accepted' | 'joined' | 'left' | 'revoked' | 'role-changed'
 export type InviteRealtimeMembershipRole = 'read' | 'write' | 'admin'
 export type InviteRealtimeApplicationStateAction = 'updated' | 'invalidated'
 export type InviteRealtimeApplicationStateResource =
@@ -85,6 +89,7 @@ const MEMBERSHIP_ACTIONS: ReadonlySet<string> = new Set<InviteRealtimeMembership
   'joined',
   'left',
   'revoked',
+  'role-changed',
 ])
 const MEMBERSHIP_ROLES: ReadonlySet<string> = new Set<InviteRealtimeMembershipRole>(['read', 'write', 'admin'])
 const APPLICATION_ACTIONS: ReadonlySet<string> = new Set<InviteRealtimeApplicationStateAction>([
@@ -104,6 +109,7 @@ const MEMBERSHIP_ACTIONS_WITH_ROLE: ReadonlySet<string> = new Set<InviteRealtime
   'invited',
   'accepted',
   'joined',
+  'role-changed',
 ])
 
 const BASE_FIELDS = ['version', 'eventId', 'kind', 'action', 'occurredAt']
