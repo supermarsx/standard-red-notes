@@ -70,5 +70,30 @@ module.exports = {
       functions: 91.67,
       lines: 85.63,
     },
+    // Nine lines, and here for a reason that has nothing to do with its size.
+    //
+    // `TypeCheck.ts` carried a whole-file `/* istanbul ignore file */` pragma —
+    // a coverage exclusion that lives IN THE SOURCE, where no sweep of this
+    // file or any other `jest.config.js` can see it. 31 files in this repo
+    // carry that pragma; 28 of them are in this package, and this was the only
+    // one hiding logic a spec already covers. `TypeCheck.spec.ts` asserts both
+    // arms of the `isMobileDevice` type predicate and runs on every suite, so
+    // the pragma meant the spec could have been deleted with no gate moving.
+    // The pragma is gone and the file measures 100/100/100/100.
+    //
+    // The entry below is what stops that from silently coming back. A `global`
+    // floor cannot: this package's global has ~2 pp of headroom over a ~5 000
+    // statement denominator, so nine lines leaving it is invisible, and a
+    // `global` group reports `0 | 0 | 0 | 0` and exits 0 when a file is not
+    // instrumented at all. A path-keyed entry fails loudly instead — re-adding
+    // the pragma produces `Jest: Coverage data for
+    // ./src/Domain/Device/TypeCheck.ts was not found.` — so the exclusion
+    // cannot be restored without breaking the build.
+    './src/Domain/Device/TypeCheck.ts': {
+      statements: 100,
+      branches: 100,
+      functions: 100,
+      lines: 100,
+    },
   },
 }
