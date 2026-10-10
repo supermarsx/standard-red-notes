@@ -439,6 +439,42 @@ jobs:
         run: >-
           yarn workspace @standard-red-notes/websocket-gateway node
           e2e/push-roundtrip.e2e.mjs
+      # COLLABORATION AUTHORIZATION, which nothing in CI measured until now.
+      # The two legs above are the relay and the push chain: `collab-yjs` mints
+      # its own connection tokens and signs its own room capabilities, so it
+      # never enters COLLABORATION_AUTHORIZE at all. That is how collaboration
+      # could be denied for every note on every single-container deployment
+      # (6e18e3a5) with this job green. This leg registers two real accounts,
+      # creates a real shared vault, accepts a real invite and requires a
+      # PRESENT `authorized: true` carrying a capability bound to the room, the
+      # epoch pair and the lease -- and requires every refusal to be DECIDED
+      # rather than a transport failure. Front door, like the push round trip:
+      # it is the only origin a browser uses.
+      - name: Verify collaboration AUTHORIZATION on two real accounts
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/collab-end-to-end.e2e.mjs
+      # The socket capability census and the HTTP fallback matrix, on the same
+      # stack and the same account. Its AUTHORIZE_COLLABORATION row now requires
+      # a grant for a note the account OWNS plus a refusal for one that does not
+      # exist, so it can tell a working authorizer from a denied one -- the old
+      # row was byte-identical on the broken and the fixed image.
+      - name: Verify the socket capability and HTTP fallback matrix
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          CONTROL: "1"
+          EXPECT_SESSION: cookie
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/capability-fallback.e2e.mjs
       - name: Run bounded browser and Redis smoke
         working-directory: e2e
         env:

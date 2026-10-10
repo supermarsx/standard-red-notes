@@ -26,7 +26,7 @@ import { ContentFilter } from '../Domain/Item/SaveRule/ContentFilter'
 import { ContentTypeFilter } from '../Domain/Item/SaveRule/ContentTypeFilter'
 import { OwnershipFilter } from '../Domain/Item/SaveRule/OwnershipFilter'
 import { TimeDifferenceFilter } from '../Domain/Item/SaveRule/TimeDifferenceFilter'
-import { ItemSaveValidator } from '../Domain/Item/SaveValidator/ItemSaveValidator'
+import { createItemSaveValidator } from '../Domain/Item/SaveValidator/createItemSaveValidator'
 import { ItemSaveValidatorInterface } from '../Domain/Item/SaveValidator/ItemSaveValidatorInterface'
 import { SyncResponseFactory20161215 } from '../Domain/Item/SyncResponse/SyncResponseFactory20161215'
 import { SyncResponseFactory20200115 } from '../Domain/Item/SyncResponse/SyncResponseFactory20200115'
@@ -829,18 +829,21 @@ export class ContainerConfigLoader {
         ),
       )
     container.bind<SharedVaultSnjsFilter>(TYPES.Sync_SharedVaultSnjsFilter).toConstantValue(new SharedVaultSnjsFilter())
-    container
-      .bind<ItemSaveValidatorInterface>(TYPES.Sync_ItemSaveValidator)
-      .toConstantValue(
-        new ItemSaveValidator([
-          container.get(TYPES.Sync_OwnershipFilter),
-          container.get(TYPES.Sync_TimeDifferenceFilter),
-          container.get(TYPES.Sync_ContentTypeFilter),
-          container.get(TYPES.Sync_ContentFilter),
-          container.get(TYPES.Sync_SharedVaultFilter),
-          container.get(TYPES.Sync_SharedVaultSnjsFilter),
-        ]),
-      )
+    container.bind<ItemSaveValidatorInterface>(TYPES.Sync_ItemSaveValidator).toConstantValue(
+      // The order lives in `createItemSaveValidator`, where a test can reach
+      // it: `SharedVaultFilter` now precedes `TimeDifferenceFilter`, so a
+      // read-only member with a stale copy is told it has no permission
+      // rather than `sync_conflict`. See that file for why reordering cannot
+      // change what is allowed.
+      createItemSaveValidator({
+        ownershipFilter: container.get(TYPES.Sync_OwnershipFilter),
+        sharedVaultFilter: container.get(TYPES.Sync_SharedVaultFilter),
+        timeDifferenceFilter: container.get(TYPES.Sync_TimeDifferenceFilter),
+        contentTypeFilter: container.get(TYPES.Sync_ContentTypeFilter),
+        contentFilter: container.get(TYPES.Sync_ContentFilter),
+        sharedVaultSnjsFilter: container.get(TYPES.Sync_SharedVaultSnjsFilter),
+      }),
+    )
 
     container
       .bind<ItemBackupServiceInterface>(TYPES.Sync_ItemBackupService)

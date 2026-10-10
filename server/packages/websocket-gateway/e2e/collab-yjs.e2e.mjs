@@ -1,12 +1,50 @@
 /**
  * Required-capable encrypted Yjs convergence test for the integrated gateway.
  *
- * Defaults target the api-gateway process used by the production Compose stack:
+ * ===========================================================================
+ * WHAT A GREEN RUN OF THIS SCRIPT DOES NOT MEAN
  *
- *   REQUIRE_GATEWAY=1 \
- *   GATEWAY_HTTP=http://127.0.0.1:3000 \
- *   GATEWAY_WS=ws://127.0.0.1:3000/sockets \
- *   node e2e/collab-yjs.e2e.mjs
+ * It does NOT mean anyone is ALLOWED to collaborate. This script mints its own
+ * connection tokens with `x-internal-secret` and signs its own room
+ * capabilities with `WEB_SOCKET_CONNECTION_TOKEN_SECRET`, for user uuids that
+ * need not exist. It therefore never enters `COLLABORATION_AUTHORIZE`, never
+ * reads `shared_vault_users.permission`, and never touches a shared vault.
+ *
+ * That is deliberate, and it is why this script is kept: it measures the RELAY
+ * in isolation -- encrypted convergence, >512 KiB chunked state transfer,
+ * offline-edit reconnection, `room-denied` epoch adoption, and that nothing on
+ * the wire is ever note plaintext. Those are real properties and nothing else
+ * covers them.
+ *
+ * It is also how collaboration could be denied for EVERY note on EVERY
+ * single-container deployment while this script stayed green (`6e18e3a5`). Its
+ * verdict does not contradict that one; it is about a different thing. The leg
+ * that measures AUTHORIZATION is `collab-end-to-end.e2e.mjs`: two real
+ * accounts, a real shared vault, a real invite, and a PRESENT
+ * `authorized: true`. Run both, or you know only half.
+ * ===========================================================================
+ *
+ * WHERE IT RUNS. Inside the api-gateway container of a MULTI-container stack,
+ * which is where `POST /sockets/tokens` exists and where the deployment's real
+ * `WEBSOCKET_GATEWAY_INTERNAL_SECRET` / `WEB_SOCKET_CONNECTION_TOKEN_SECRET`
+ * are already in the environment:
+ *
+ *   docker compose exec -T \
+ *     -e REQUIRE_GATEWAY=1 \
+ *     -e GATEWAY_HTTP=http://127.0.0.1:3000 \
+ *     -e GATEWAY_WS=ws://127.0.0.1:3000/sockets \
+ *     server yarn node packages/websocket-gateway/e2e/collab-yjs.e2e.mjs
+ *
+ * It CANNOT run against the single container: `HomeServer` attaches the gateway
+ * to the http.Server it owns rather than to the Express app, so the internal
+ * mint route is never registered there and the only collaboration authorization
+ * path is the authenticated one. `diagnoseMintFailure` below says so by name
+ * instead of reporting a bare 404. Use `collab-end-to-end.e2e.mjs` on that
+ * topology -- it needs no internal secret and works on both.
+ *
+ * `yarn node`, not bare `node`: the package is Yarn PnP and there is no
+ * `node_modules` to resolve `ws`/`yjs`/`y-protocols` from. Both are present in
+ * the shipped image's PnP store, so `yarn node` resolves them there too.
  *
  * With REQUIRE_GATEWAY=1 an unreachable gateway is a failure, never a skip.
  */
@@ -155,6 +193,46 @@ function roomCapability(userUuid, room, leaseRequestId, roomEpoch, bootstrapChal
   )
 }
 
+/**
+ * Say WHY the internal mint refused, by name.
+ *
+ * `token mint returned 404` reads like a broken server. It is usually one of
+ * two ordinary, diagnosable situations, and the script that cannot tell them
+ * apart sends whoever ran it looking in the wrong place -- which is the same
+ * mistake, in miniature, that let a silent authorization denial look like a
+ * permission setting for weeks.
+ */
+export function diagnoseMintFailure(status, { usingDefaultInternalSecret }) {
+  if (status === 404) {
+    return [
+      'POST /sockets/tokens does not exist on this deployment (404).',
+      'That route is registered by the api-gateway Express app, so it exists only on a MULTI-container stack.',
+      'HomeServer (the single container, the LXC install and `docker-compose.single.yml`) attaches the gateway to',
+      'the http.Server it owns and never registers the route, so the internal mint is unreachable there BY DESIGN.',
+      'This script cannot measure the relay on that topology. Use collab-end-to-end.e2e.mjs, which authenticates',
+      'real accounts and needs no internal secret, and run this one inside a compose `server` container.',
+    ].join('\n  ')
+  }
+  if (status === 401 || status === 403) {
+    return [
+      `the internal mint refused this caller (${status}).`,
+      usingDefaultInternalSecret
+        ? 'WEBSOCKET_GATEWAY_INTERNAL_SECRET is not set in this process, so the built-in dev placeholder was sent and'
+        : 'WEBSOCKET_GATEWAY_INTERNAL_SECRET is set in this process but does not match the one the gateway holds, so',
+      'it does not match. Run this INSIDE the container, where the deployment’s real value is already in the',
+      'environment -- the mint is also refused at the public front door on purpose (it is only accepted from loopback).',
+    ].join('\n  ')
+  }
+  if (status === 503) {
+    return [
+      'the gateway is not minting connection tokens (503).',
+      'WEB_SOCKET_CONNECTION_TOKEN_SECRET is absent or shorter than the 32-byte floor, which withholds the whole',
+      'realtime lane. Nothing about the relay can be measured until it is configured.',
+    ].join('\n  ')
+  }
+  return `token mint returned ${status}`
+}
+
 async function mint(userUuid, sessionUuid) {
   const response = await fetch(new URL('/sockets/tokens', GATEWAY_HTTP), {
     method: 'POST',
@@ -163,7 +241,11 @@ async function mint(userUuid, sessionUuid) {
     signal: AbortSignal.timeout(8_000),
   })
   if (!response.ok) {
-    throw new Error(`token mint returned ${response.status}`)
+    throw new Error(
+      diagnoseMintFailure(response.status, {
+        usingDefaultInternalSecret: process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET === undefined,
+      }),
+    )
   }
   const body = await response.json()
   if (typeof body.token !== 'string' || body.token.length === 0) {
@@ -589,7 +671,24 @@ async function settle(...peers) {
   }
 }
 
+/**
+ * Printed on every run, and again after a PASS.
+ *
+ * A green run of this script was read as "collaboration works" on a build where
+ * every authorization was denied. The remedy is not to weaken what it measures
+ * -- the relay really does converge -- it is to stop the verdict being read as
+ * an answer to a question it never asked.
+ */
+const SCOPE_BANNER = [
+  '',
+  'SCOPE: this measured the RELAY only. It minted its own connection tokens and signed its own',
+  '       room capabilities, so COLLABORATION_AUTHORIZE was never entered and no vault permission',
+  '       was ever read. It says nothing about whether any user is ALLOWED to collaborate.',
+  '       For that, run: yarn node e2e/collab-end-to-end.e2e.mjs',
+].join('\n')
+
 async function main() {
+  console.log(SCOPE_BANNER)
   const healthUrl = new URL(GATEWAY_HEALTH_PATH, GATEWAY_HTTP)
   const health = await fetch(healthUrl, { signal: AbortSignal.timeout(8_000) })
     .then((response) => response.status)
@@ -667,6 +766,7 @@ async function main() {
     check('wire payloads are ciphertext, never note plaintext', wirePayloads.length > 0 && !plaintextLeaked)
 
     console.log(failures === 0 ? '\nE2E PASSED' : `\nE2E FAILED (${failures})`)
+    if (failures === 0) console.log(SCOPE_BANNER)
     if (failures > 0) process.exitCode = 1
   } finally {
     await Promise.allSettled([peerA.disconnect(), peerB.disconnect()])
@@ -675,7 +775,50 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('E2E ERROR:', error instanceof Error ? error.message : error)
-  process.exitCode = 1
-})
+function selfTest() {
+  console.log('collab-yjs self-test (no stack)')
+  let failed = 0
+  const assert = (name, condition) => {
+    console.log(`  ${condition ? 'ok  ' : 'FAIL'} - ${name}`)
+    if (!condition) failed++
+  }
+  const notFound = diagnoseMintFailure(404, { usingDefaultInternalSecret: false })
+  assert('a 404 names the single-container topology, not a broken server', /HomeServer/.test(notFound))
+  assert('a 404 points at the leg that DOES work there', /collab-end-to-end/.test(notFound))
+  const refusedDefault = diagnoseMintFailure(401, { usingDefaultInternalSecret: true })
+  assert('a 401 on the built-in placeholder says the placeholder was sent', /dev placeholder/.test(refusedDefault))
+  const refusedSet = diagnoseMintFailure(403, { usingDefaultInternalSecret: false })
+  assert('a 403 with the variable SET says it does not match', /does not match/.test(refusedSet))
+  assert('a 403 does NOT blame the placeholder', !/dev placeholder/.test(refusedSet))
+  assert('a 503 names the connection-token secret floor', /32-byte floor/.test(diagnoseMintFailure(503, {})))
+  assert(
+    'an unrecognised status falls back to the bare report',
+    diagnoseMintFailure(500, {}) === 'token mint returned 500',
+  )
+  // Controls: each message must NOT be the one a different status produces.
+  assert('the 404 message is not the 401 message', notFound !== refusedDefault)
+  assert('the 401 message is not the 403 message', refusedDefault !== refusedSet)
+  assert('a 500 is not diagnosed as a topology problem', !/HomeServer/.test(diagnoseMintFailure(500, {})))
+  // The scope banner is the reason this probe is kept rather than retired: a
+  // green run of it was read as "collaboration works". If it stops saying what
+  // it does not measure, or stops naming the leg that does, it is back to being
+  // a verdict nobody can calibrate.
+  assert('the scope banner says the authorizer was never entered', /COLLABORATION_AUTHORIZE/.test(SCOPE_BANNER))
+  assert('the scope banner names the RELAY as what was measured', /RELAY only/.test(SCOPE_BANNER))
+  assert('the scope banner names the leg that measures authorization', /collab-end-to-end/.test(SCOPE_BANNER))
+  assert(
+    'the scope banner denies the claim a reader would otherwise make',
+    /nothing about whether any user is ALLOWED to collaborate/.test(SCOPE_BANNER),
+  )
+  console.log(`\nself-test: ${failed} failures`)
+  process.exit(failed === 0 ? 0 : 1)
+}
+
+if (process.argv.includes('--self-test')) {
+  selfTest()
+} else {
+  main().catch((error) => {
+    console.error('E2E ERROR:', error instanceof Error ? error.message : error)
+    process.exitCode = 1
+  })
+}

@@ -8,6 +8,8 @@ import { EndpointResolverInterface } from '../Resolver/EndpointResolverInterface
 import {
   CollaborationAuthorizationRequest,
   CollaborationAuthorizationService,
+  CollaborationDenial,
+  collaborationDenialCategory,
 } from './CollaborationAuthorizationService'
 
 // ---------------------------------------------------------------------------
@@ -92,7 +94,7 @@ function harness(
   const endpointResolver: EndpointResolverInterface = {
     resolveEndpointOrMethodIdentifier: jest.fn(() => 'items/collaboration-authorization'),
   }
-  const logger = { error: jest.fn() }
+  const logger = { error: jest.fn(), info: jest.fn() }
   const service = new CollaborationAuthorizationService(
     serviceProxy,
     endpointResolver,
@@ -529,6 +531,219 @@ describe('CollaborationAuthorizationService', () => {
       expect(logger.error).toHaveBeenCalledTimes(1)
       expect(JSON.stringify(logger.error.mock.calls)).not.toContain(SECRET)
       expect(JSON.stringify(logger.error.mock.calls)).not.toContain(NOTE)
+    })
+  })
+
+  // --- WHY A DENIAL HAPPENED ----------------------------------------------
+  // Both silent defects in this lane produced the SAME observable: a
+  // fail-closed `{ authorized: false }` with no logger attached on the sync
+  // lane's copy of this service, so the only trace was a
+  // `collaboration_authorization denied` counter. These assert the two things
+  // that changes: every denial is logged, and "policy refused this" is a
+  // DIFFERENT LOG LEVEL AND MESSAGE from "nothing could decide it".
+  describe('denial reasons', () => {
+    it('CONTROL: a granted authorization logs NOTHING at all', async () => {
+      const { service, logger } = harness()
+
+      const grant = await service.authorize(request, locals(), grantRequest())
+
+      expect(grant).toMatchObject({ authorized: true })
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(logger.info).not.toHaveBeenCalled()
+    })
+
+    const policyCases: Array<[string, () => Parameters<CollaborationAuthorizationService['authorize']>, string]> = [
+      [
+        'an unconfigured authorizer',
+        () => [request, locals(), discoveryRequest, undefined],
+        CollaborationDenial.NotConfigured,
+      ],
+      [
+        'a read-only session',
+        () => [request, locals({ readOnlyAccess: true }), discoveryRequest, undefined],
+        CollaborationDenial.ReadOnlySession,
+      ],
+      [
+        'a read-scoped MCP session',
+        () => [
+          request,
+          locals({ mcpScope: { access: 'read' } } as Partial<ResponseLocals>),
+          discoveryRequest,
+          undefined,
+        ],
+        CollaborationDenial.ReadScopedMcpSession,
+      ],
+      [
+        'collaboration disabled for the account',
+        () => [request, locals({ collaborationEnabled: false }), discoveryRequest, undefined],
+        CollaborationDenial.CollaborationDisabled,
+      ],
+      [
+        'a session with no identified user',
+        () => [request, locals({ user: undefined }), discoveryRequest, undefined],
+        CollaborationDenial.UnidentifiedSession,
+      ],
+      [
+        'a malformed request',
+        () => [request, locals(), { ...discoveryRequest, collaborationProtocolVersion: 2 } as never, undefined],
+        CollaborationDenial.MalformedRequest,
+      ],
+    ]
+
+    for (const [label, args, reason] of policyCases) {
+      it(`names ${label} as the policy reason \`${reason}\``, async () => {
+        // The unconfigured case needs an unconfigured harness; everything else
+        // must reach its refusal on a fully configured one.
+        const { service, logger, callSyncingServer } = harness(
+          reason === CollaborationDenial.NotConfigured ? { secret: '' } : {},
+        )
+
+        const grant = await service.authorize(...args())
+
+        expect(grant).toEqual({ authorized: false })
+        expect(callSyncingServer).not.toHaveBeenCalled()
+        expect(logger.error).not.toHaveBeenCalled()
+        expect(logger.info).toHaveBeenCalledTimes(1)
+        expect(logger.info.mock.calls[0][1]).toMatchObject({
+          action: 'collaboration.authorize',
+          reason,
+          category: 'policy',
+        })
+      })
+    }
+
+    it('names an access check that DECIDED no as a policy refusal, at info', async () => {
+      const { service, logger } = harness({ body: { authorized: false } })
+
+      const grant = await service.authorize(request, locals(), discoveryRequest)
+
+      expect(grant).toEqual({ authorized: false })
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(logger.info.mock.calls[0][1]).toMatchObject({
+        reason: CollaborationDenial.AccessCheckRefused,
+        category: 'policy',
+      })
+    })
+
+    // The multi-container defect `0a6897b3` fixed, in one assertion: `POST
+    // items/collaboration-authorization` left the gateway as a GET because the
+    // fabricated request had no `method`, the route did not exist, and the
+    // non-2xx was read as `{ authorized: false }` with nothing logged.
+    it('REGRESSION (0a6897b3): a non-2xx access check is UNREADABLE, at error, carrying the status', async () => {
+      const { service, logger } = harness({ status: 404, body: { authorized: undefined } })
+
+      const grant = await service.authorize(request, locals(), discoveryRequest)
+
+      expect(grant).toEqual({ authorized: false })
+      expect(logger.info).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledTimes(1)
+      expect(logger.error.mock.calls[0][0]).toBe('Collaboration authorization could not be decided.')
+      expect(logger.error.mock.calls[0][1]).toMatchObject({
+        reason: CollaborationDenial.AccessCheckHttpStatus,
+        category: 'unreadable',
+        accessCheckStatus: 404,
+      })
+    })
+
+    it('a 2xx with no decision in it is UNREADABLE, not a refusal', async () => {
+      const { service, logger } = harness({ body: { authorized: undefined } })
+
+      await service.authorize(request, locals(), discoveryRequest)
+
+      expect(logger.info).not.toHaveBeenCalled()
+      expect(logger.error.mock.calls[0][1]).toMatchObject({
+        reason: CollaborationDenial.AccessCheckUnreadable,
+        category: 'unreadable',
+      })
+    })
+
+    it('a yes with no usable revision is an INCOMPLETE grant, not a refusal', async () => {
+      const { service, logger } = harness({ body: { serverUpdatedAtTimestamp: 0 } })
+
+      await service.authorize(request, locals(), discoveryRequest)
+
+      expect(logger.info).not.toHaveBeenCalled()
+      expect(logger.error.mock.calls[0][1]).toMatchObject({
+        reason: CollaborationDenial.AccessCheckIncompleteGrant,
+        category: 'unreadable',
+      })
+    })
+
+    it('a yes with an invalid security epoch is an INCOMPLETE grant', async () => {
+      const { service, logger } = harness({ body: { collaborationSecurityEpoch: 'too-short' } })
+
+      await service.authorize(request, locals(), discoveryRequest)
+
+      expect(logger.error.mock.calls[0][1]).toMatchObject({
+        reason: CollaborationDenial.AccessCheckIncompleteGrant,
+        category: 'unreadable',
+      })
+    })
+
+    it('an access check that THREW is UNREADABLE, and says so on the SAME line as the exception', async () => {
+      const { service, logger } = harness({ throws: true })
+
+      await service.authorize(request, locals(), discoveryRequest)
+
+      expect(logger.info).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledTimes(1)
+      expect(logger.error.mock.calls[0][1]).toMatchObject({
+        action: 'collaboration.authorize',
+        reason: CollaborationDenial.AccessCheckUnreachable,
+        category: 'unreadable',
+        endpoint: '/items/collaboration-authorization',
+        method: 'POST',
+      })
+    })
+
+    it('a caller that stopped waiting is neither policy nor unreadable', async () => {
+      const controller = new AbortController()
+      controller.abort()
+      const { service, logger } = harness()
+
+      await service.authorize(request, locals(), discoveryRequest, controller.signal)
+
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(logger.info.mock.calls[0][1]).toMatchObject({
+        reason: CollaborationDenial.Abandoned,
+        category: 'abandoned',
+      })
+    })
+
+    it('a service built with NO logger still refuses, and does not throw', async () => {
+      const serviceProxy = {
+        callSyncingServer: jest.fn(async () => {
+          throw new Error('unreachable')
+        }),
+      } as unknown as ServiceProxyInterface
+      const loggerless = new CollaborationAuthorizationService(
+        serviceProxy,
+        { resolveEndpointOrMethodIdentifier: jest.fn(() => 'items/collaboration-authorization') },
+        SECRET,
+        TTL_SECONDS,
+      )
+
+      await expect(loggerless.authorize(request, locals(), discoveryRequest)).resolves.toEqual({ authorized: false })
+    })
+
+    it('every reason is categorised, and the two diagnostic halves are disjoint', () => {
+      const reasons = Object.values(CollaborationDenial)
+      expect(reasons.length).toBeGreaterThan(0)
+      for (const reason of reasons) {
+        expect(['policy', 'unreadable', 'abandoned']).toContain(collaborationDenialCategory(reason))
+      }
+      // The four that mean "nothing decided this" are exactly the access-check
+      // transport faults. A reason moved between the halves changes which log
+      // level an operator finds it at, so the membership is pinned.
+      expect(reasons.filter((reason) => collaborationDenialCategory(reason) === 'unreadable').sort()).toEqual(
+        [
+          CollaborationDenial.AccessCheckUnreachable,
+          CollaborationDenial.AccessCheckHttpStatus,
+          CollaborationDenial.AccessCheckUnreadable,
+          CollaborationDenial.AccessCheckIncompleteGrant,
+        ].sort(),
+      )
+      expect(collaborationDenialCategory(CollaborationDenial.AccessCheckRefused)).toBe('policy')
     })
   })
 })

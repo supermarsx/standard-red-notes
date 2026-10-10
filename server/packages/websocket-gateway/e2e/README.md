@@ -25,7 +25,7 @@ container.
 | script | what it proves | where it runs |
 |---|---|---|
 | `realtime.e2e.mjs` | readiness through the front door, the internal mint being refused at the front door and accepted from loopback, the cross-service mint, and Redis push delivery/exclusion | front door for the public legs, inside the container for the loopback mint legs |
-| `collab-yjs.e2e.mjs` | encrypted two-editor Yjs convergence, protocol v3 epoch binding, and `room-denied` epoch adoption — the RELAY only, see below | inside the container |
+| `collab-yjs.e2e.mjs` | encrypted two-editor Yjs convergence, >512 KiB chunked state transfer, offline-edit reconnection, protocol v3 epoch binding, `room-denied` epoch adoption, and that nothing on the wire is note plaintext — the RELAY only, see below; `--self-test` covers its mint diagnosis | inside a MULTI-container `server` container |
 | `collab-end-to-end.e2e.mjs` | collaboration on two REAL accounts: a real shared vault, a real invite, `COLLABORATION_AUTHORIZE` answering a PRESENT `authorized: true`, two editors converging with measured latency, read-only refused server-side, removal revoking, and the negative cases | host or container, any proxy configuration |
 | `push-roundtrip.e2e.mjs` | the whole cross-device push chain: save → syncing-server → SNS/SQS → gateway worker → the other device's socket | host or container; `--self-test` runs offline |
 | `sync-items-oversized.e2e.mjs` | an oversized committed `SYNC_ITEMS` result answers `STATUS COMMITTED code RESULT_TOO_LARGE` with no `result`, and the HTTP replay returns the journaled items | host or container, `SERVICE_PROXY_TYPE=grpc` only |
@@ -48,7 +48,7 @@ The rule now is a present success, and it is the same rule everywhere:
 | `SYNC_ITEMS` | a `COMMITTED` answer **and** the note read back over HTTP |
 | `API_RPC` | an `RPC_RESPONSE` with `status: 200` |
 | `STREAM_ASSISTANT` | an `RPC_*` frame, or an ERROR in `LANE_POLICY_CODES` |
-| `AUTHORIZE_COLLABORATION` | `COLLABORATION_AUTHORIZED`, or an ERROR in `LANE_POLICY_CODES` |
+| `AUTHORIZE_COLLABORATION` | a note the account OWNS: epoch discovery answers an epoch pair for that room, the grant leg that consumes its one-use challenge answers a CAPABILITY bound to the room, the epoch pair and the lease, **and** a note that was never created is refused `NOT_AUTHORIZED` / 403 |
 | `INVITE_EVENTS` | `INVITE_READY` / `INVITE_BATCH` / `INVITE_RECONCILE`, or an ERROR in `LANE_POLICY_CODES` |
 | `FILES_V1` | a whole file round trip: metadata answered, upload OPEN accepted, every chunk ACKed, FINISH completed on the client's digest, download accepted and completed on that digest, bytes byte-identical |
 | `LEGACY_PUSH` | the server answered a control **ping** on the live connection |
@@ -108,6 +108,56 @@ both reasons are worth keeping in mind before trusting a green run here:
   the other direction: not "not this one error code", but a predicate whose
   positive case the probe never sets up.
 
+Both of those are now closed, and the second one is closed in the file above
+rather than only in a new file beside it.
+
+**The `AUTHORIZE_COLLABORATION` row takes a note the account OWNS.** The row is
+green only on a PRESENT grant in each transport -- epoch discovery answering an
+epoch pair for that room, then the grant leg consuming its one-use challenge and
+answering a capability whose decoded claims name the same room, the same epoch
+pair, the same lease and the same canonical revision -- **and** red unless a
+note that was never created is refused by a DECISION in the same run. Both
+halves are load-bearing: without the grant the row is the old row, and without
+the refusal it would pass on an authorizer that grants everything.
+
+**`collab-yjs.e2e.mjs` is kept, and its scope is now printed.** The claim that
+it cannot run against a shipped image is false: `yarn node` resolves `ws`, `yjs`
+and `y-protocols` from the PnP store inside the production `server` image, and
+the `ci.yml` compose job has been running it there on every push -- measured
+green inside `srn-collab/server` at `d7bd839d`. What is true is narrower and
+worth knowing:
+
+- it **cannot** run on the single container. `POST /sockets/tokens` is
+  registered by the api-gateway **Express app**; `HomeServer` attaches the
+  gateway to the `http.Server` it owns and never registers that route, so the
+  internal mint is a 404 there by design. It used to report that as
+  `token mint returned 404`, which reads like a broken server;
+  `diagnoseMintFailure` now names the topology, and names the leg that does work
+  there. A 401/403 says whether the placeholder secret was sent or a real one
+  mismatched; a 503 names the connection-token floor. `--self-test` proves each
+  of those messages, and proves none of them is another's.
+- a green run of it is **not** a statement about authorization, so it says so
+  itself now, on every run and again after a PASS.
+
+Retiring it was the alternative and would have been wrong: the >512 KiB chunked
+encrypted transfer, the offline-edit reconnection, the `room-denied` epoch
+adoption and the explicit "no note plaintext on the wire" assertion are not
+covered anywhere else, including by `collab-end-to-end.e2e.mjs`. Bypassing the
+authorizer is what makes the relay measurable in isolation; the error was never
+that the probe exists, it was that `yarn e2e` consisted of it plus `realtime`,
+so the only collaboration leg anyone ran was the one that cannot see the
+authorizer. That is a SCRIPT WIRING problem and it is fixed as one.
+
+**What now runs.** `yarn e2e` is `realtime` + `collab-yjs` +
+`collab-end-to-end`, and there are `e2e:collab-yjs`,
+`e2e:collab-yjs:self-test`, `e2e:collab-end-to-end`,
+`e2e:collab-end-to-end:self-test` and an `e2e:self-test` that chains all four
+stack-free self-tests. `ci.yml`'s compose job gained two steps after the push
+round trip, both from the front door: `collab-end-to-end.e2e.mjs`, and
+`capability-fallback.e2e.mjs` with `CONTROL=1 EXPECT_SESSION=cookie`. So the
+authorization lane and the capability matrix are no longer gates nobody
+consumes.
+
 Both claims above are measured, not argued. The same single-container image
 with and without the `payload` fix, booted side by side:
 
@@ -116,11 +166,24 @@ with and without the `payload` fix, booted side by side:
 | image WITHOUT the fix (every authorization denied) | `lane: "works"`, `laneDetail {"type":"ERROR","code":"NOT_AUTHORIZED"}`, `failures: 0` | exit 1, 8 failures |
 | image WITH the fix | `lane: "works"`, `laneDetail {"type":"ERROR","code":"NOT_AUTHORIZED"}`, `failures: 0` | exit 0 |
 
-The capability row is **byte-identical** across a defect that denied 100 % of
-collaboration. It is not wrong about what it measures — the lane did carry a
-frame, and a refusal for a note that does not exist is correct — it simply
-cannot distinguish a working authorizer from a broken one, because it never
-creates a note it is entitled to edit.
+The capability row was **byte-identical** across a defect that denied 100 % of
+collaboration. It was not wrong about what it measured — the lane did carry a
+frame, and a refusal for a note that does not exist is correct — it simply could
+not distinguish a working authorizer from a broken one, because it never created
+a note it was entitled to edit.
+
+Re-measured with the row rewritten, on the same two images (`srn-collab/single`
+at `collab-probe` and `collab-fixed`, whose compiled
+`DirectCallServiceProxy.callSyncingServer.length` really is 3 and 4):
+
+| | `AUTHORIZE_COLLABORATION` row, OLD predicate | `AUTHORIZE_COLLABORATION` row, NEW predicate |
+|---|---|---|
+| image WITHOUT the fix | `lane: works`, `fallback: reachable`, exit 0, `failures: 0` | `lane: broken`, `fallback: broken`, **exit 1, 4 failures** |
+| image WITH the fix | `lane: works`, `fallback: reachable`, exit 0, `failures: 0` | `lane: works`, `fallback: works`, exit 0 |
+
+The old row is identical in both columns. The new row separates them, and the
+four failures name the stage: discovery refused `NOT_AUTHORIZED`, the grant leg
+never reached, the HTTP discovery 403, the HTTP grant leg never reached.
 
 `collab-end-to-end.e2e.mjs` exists for that gap. It registers two real
 accounts, creates a real shared vault, accepts a real invite, and requires a
@@ -178,19 +241,21 @@ Measured live on the multi-container image at `71e055f8`:
   re-fills it when still empty, so the `FILES_INTERNAL_URL` waiver branch cannot
   be reached from an operator env.
 
-`yarn e2e` runs `realtime` then `collab-yjs` — so neither leg of it exercises collaboration AUTHORIZATION at all (see the blind spots above). The push round trip and the
+`yarn e2e` runs `realtime`, `collab-yjs` and now `collab-end-to-end`, so the
+authorization lane is in the script someone runs. The push round trip and the
 oversized-result script have their own scripts because they register accounts
 and take tens of seconds.
 
-## Nothing in CI runs the capability matrix
+## What CI runs, and what it still does not
 
-`yarn e2e` is `realtime` + `collab-yjs`, and no workflow calls
-`capability-fallback.e2e.mjs`, `session-reauth.e2e.mjs` or
-`transport-fallback.e2e.mjs` at all. They are operator-run probes. Two scripts
-exist now — `e2e:capability-fallback` and `e2e:capability-fallback:self-test`
-— and the self-test needs no stack and no Docker, so it is the half that can
-be wired into CI cheaply. Until something calls them, a correct predicate here
-is a gate nobody consumes: it goes red only when a person runs it.
+`ci.yml`'s compose job runs `collab-yjs` (inside the container), `realtime`
+(inside the container, for the two origins), the push round trip, **and now**
+`collab-end-to-end.e2e.mjs` and `capability-fallback.e2e.mjs` from the front
+door. `session-reauth.e2e.mjs` and `transport-fallback.e2e.mjs` are still
+operator-run probes that no workflow calls, and a correct predicate in one of
+those is still a gate nobody consumes: it goes red only when a person runs it.
+`e2e:self-test` chains the four stack-free self-tests and is the cheap half of
+all of this.
 
 ## Reaching the gateway
 

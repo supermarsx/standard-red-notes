@@ -415,6 +415,183 @@ export function fileRoundTripSucceeded(trip) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// AUTHORIZE_COLLABORATION.
+//
+// The row this replaces was the SIXTH form of a gate that is not a gate: a
+// predicate whose success case is unreachable BY CONSTRUCTION. It probed
+// `collabNoteUuid = randomUUID()` -- a note it never created -- and settled on
+// "a COLLABORATION_AUTHORIZED frame, or an ERROR naming a policy". For a note
+// that does not exist `ERROR NOT_AUTHORIZED` is the CORRECT answer, so the row
+// could only ever take the policy branch, on a healthy stack and on a broken
+// one alike. Booted side by side, the broken and fixed single-container images
+// printed `lane: "works"`, `laneDetail {"type":"ERROR","code":"NOT_AUTHORIZED"}`
+// and `failures: 0` BYTE-IDENTICALLY across a defect that denied 100 % of
+// collaboration, for every note, including a personal note owned by the caller
+// (`6e18e3a5`: `DirectCallServiceProxy.callSyncingServer` declared three
+// parameters against a four-parameter interface and discarded `payload`, the
+// only place `{ itemUuid }` existed).
+//
+// So the rule here is the same one `2f02b73b` applied to the other rows, and it
+// takes a note the account is ENTITLED to edit to state it:
+//
+//   a present GRANT   -- discovery answers an epoch pair for THIS room, and the
+//                        grant that consumes its one-use challenge answers a
+//                        CAPABILITY bound to this room, this epoch pair, this
+//                        lease and a positive canonical revision;
+//   plus a REFUSAL    -- the same two legs against a note that does not exist
+//                        must be DECIDED (`ERROR NOT_AUTHORIZED` / 403
+//                        `collaboration-not-authorized`), never a grant.
+//
+// Both halves are required, in both transports. The grant alone could pass on
+// an authorizer that says yes to everything; the refusal alone is what the old
+// row measured. `BACKEND_ERROR`, `BACKEND_TIMEOUT`, `SESSION_STALE` and silence
+// are a broken lane in either half, never a refusal.
+// ---------------------------------------------------------------------------
+
+/** base64url epoch (`CollaborationAuthorizationService`) or hex (the gateway's rotated one). */
+const COLLABORATION_EPOCH_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u
+
+/**
+ * An epoch DISCOVERY actually happened: an epoch pair for THIS room, a positive
+ * canonical revision, and the one-use challenge the grant leg must consume. No
+ * capability -- discovery does not mint one, and a payload that carries one
+ * came from somewhere else.
+ */
+export function collaborationDiscoverySucceeded(answer, { room } = {}) {
+  if (answer?.type !== 'COLLABORATION_AUTHORIZED') return false
+  const payload = answer.payload
+  if (!payload || typeof payload !== 'object') return false
+  if (payload.authorized === false) return false
+  if (payload.epochDiscovery !== true) return false
+  if (payload.capability !== undefined) return false
+  if (payload.collaborationProtocolVersion !== 3) return false
+  if (!COLLABORATION_EPOCH_PATTERN.test(String(payload.roomEpoch))) return false
+  if (!COLLABORATION_EPOCH_PATTERN.test(String(payload.collaborationSecurityEpoch))) return false
+  if (!Number.isSafeInteger(payload.serverUpdatedAtTimestamp) || payload.serverUpdatedAtTimestamp <= 0) return false
+  if (typeof payload.epochDiscoveryChallenge !== 'string' || payload.epochDiscoveryChallenge.length < 32) return false
+  if (typeof payload.epochDiscoveryRequestId !== 'string' || payload.epochDiscoveryRequestId.length === 0) return false
+  if (room !== undefined && payload.room !== room) return false
+  return true
+}
+
+/**
+ * A collaboration GRANT actually happened: a capability was ISSUED and it is
+ * bound to the room, the epoch pair and the lease that were asked for. A
+ * well-formed `{ authorized: false }` is exactly what both halves of this
+ * defect produced, so it is a failure here and not a decision.
+ */
+export function collaborationGrantSucceeded(answer, { room, roomEpoch, collaborationSecurityEpoch, lease } = {}) {
+  if (answer?.type !== 'COLLABORATION_AUTHORIZED') return false
+  const payload = answer.payload
+  if (!payload || typeof payload !== 'object') return false
+  if (payload.authorized === false) return false
+  if (payload.epochDiscovery === true) return false
+  if (payload.collaborationProtocolVersion !== 3) return false
+  if (!Number.isSafeInteger(payload.expiresIn) || payload.expiresIn <= 0) return false
+  if (!Number.isSafeInteger(payload.serverUpdatedAtTimestamp) || payload.serverUpdatedAtTimestamp <= 0) return false
+  if (room !== undefined && payload.room !== room) return false
+  if (roomEpoch !== undefined && payload.roomEpoch !== roomEpoch) return false
+  if (collaborationSecurityEpoch !== undefined && payload.collaborationSecurityEpoch !== collaborationSecurityEpoch) {
+    return false
+  }
+  if (lease !== undefined && payload.leaseRequestId !== lease) return false
+  // The capability is an HS256 JWT signed with a secret this script does not
+  // hold, so it is DECODED, never verified: the point is that the claims the
+  // gateway's room authorizer checks are present and bound, not that we can
+  // re-sign them. A capability whose claims name another room or another epoch
+  // would be refused at `room-reserve`, so a grant carrying one is not a grant.
+  // `decodeJwtClaims` returns undefined for a missing, non-string or
+  // non-three-segment capability, so THIS is the presence check as well as the
+  // binding check. An extra `typeof payload.capability === 'string'` guard
+  // above it was an inert branch -- no input could make the two disagree, so no
+  // test could kill a mutation of it, and an unkillable branch in a predicate
+  // is the thing this file exists to avoid.
+  const claims = decodeJwtClaims(payload.capability)
+  if (!claims || claims.purpose !== 'collab-room') return false
+  if (claims.room !== payload.room) return false
+  if (claims.roomEpoch !== payload.roomEpoch) return false
+  if (claims.collaborationSecurityEpoch !== payload.collaborationSecurityEpoch) return false
+  if (claims.serverUpdatedAtTimestamp !== payload.serverUpdatedAtTimestamp) return false
+  if (typeof claims.userUuid !== 'string' || claims.userUuid.length === 0) return false
+  if (lease !== undefined && claims.leaseRequestId !== lease) return false
+  return true
+}
+
+/** Decode a JWT's claim set without verifying it. `undefined` for anything else. */
+export function decodeJwtClaims(token) {
+  if (typeof token !== 'string') return undefined
+  const segments = token.split('.')
+  if (segments.length !== 3) return undefined
+  try {
+    const claims = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'))
+    return claims && typeof claims === 'object' ? claims : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The server REFUSED, by DECIDING to. A transport failure is not a refusal:
+ * reading `BACKEND_ERROR`, `BACKEND_TIMEOUT` or silence as "correctly denied"
+ * is the mistake that kept both halves of this defect invisible.
+ */
+export function collaborationRefusalDecided(answer) {
+  if (answer?.type === 'COLLABORATION_AUTHORIZED') return answer.payload?.authorized === false
+  if (answer?.type !== 'ERROR') return false
+  return answer.payload?.code === 'NOT_AUTHORIZED'
+}
+
+/** The HTTP fallback's grant: a 200 carrying the same bound capability. */
+export function collaborationHttpGrantSucceeded(result, bindings = {}) {
+  if (result?.status !== 200) return false
+  return collaborationGrantSucceeded({ type: 'COLLABORATION_AUTHORIZED', payload: result.json }, bindings)
+}
+
+/**
+ * The HTTP fallback's discovery: a 200 carrying an epoch pair, no challenge.
+ *
+ * `CollaborationController` DESTRUCTURES `authorized` out of the grant before
+ * it answers (`const { authorized: _authorized, ...responseBody }`), so the
+ * 200 itself is the affirmative and requiring the key would fail over a
+ * working deployment. The epoch pair and the revision are what has to be
+ * present; `authorized: false` is still rejected, for a deployment that ever
+ * stops stripping it.
+ */
+export function collaborationHttpDiscoverySucceeded(result, { room } = {}) {
+  if (result?.status !== 200) return false
+  const body = result.json
+  if (!body || typeof body !== 'object') return false
+  if (body.authorized === false) return false
+  if (body.epochDiscovery !== true) return false
+  if (body.capability !== undefined) return false
+  if (!COLLABORATION_EPOCH_PATTERN.test(String(body.roomEpoch))) return false
+  if (!COLLABORATION_EPOCH_PATTERN.test(String(body.collaborationSecurityEpoch))) return false
+  if (!Number.isSafeInteger(body.serverUpdatedAtTimestamp) || body.serverUpdatedAtTimestamp <= 0) return false
+  if (room !== undefined && body.room !== room) return false
+  return true
+}
+
+/** The HTTP fallback's refusal: the named 403 the controller produces. */
+export function collaborationHttpRefusalDecided(result) {
+  return result?.status === 403 && result?.json?.error?.tag === 'collaboration-not-authorized'
+}
+
+/**
+ * The AUTHORIZE_COLLABORATION verdict, per transport. Every stage must be
+ * PRESENT and positive, and the refusal control must have REFUSED -- an
+ * always-grant authorizer and an always-deny one both fail.
+ */
+export function collaborationLaneSucceeded(trip) {
+  if (!trip || typeof trip !== 'object') return false
+  return (
+    trip.ownedNoteExists === true &&
+    trip.discovered === true &&
+    trip.granted === true &&
+    trip.absentNoteRefused === true
+  )
+}
+
 /** The fallback verdict: an HTTP leg counts only on a 2xx that carried data. */
 export function httpFallbackSucceeded(result) {
   return result?.status === 200 && result?.json !== undefined && result?.json !== null
@@ -740,6 +917,293 @@ function selfTest() {
     !httpFallbackSucceeded({ status: 200, json: undefined }),
   )
   control('the fallback verdict', !httpFallbackSucceeded({ status: 503, json: { error: {} } }))
+
+  // -------------------------------------------------------------------------
+  // AUTHORIZE_COLLABORATION. The regression cases below are the exact frames
+  // the broken single-container image answered: the old row called them
+  // `lane: "works"`.
+  // -------------------------------------------------------------------------
+  const probeRoom = '11111111-1111-4111-8111-111111111111'
+  const probeRoomEpoch = 'a'.repeat(32)
+  const probeSecurityEpoch = 'b'.repeat(43)
+  const probeRevision = 1_700_000_000_000_000
+  const probeLease = 'lease-probe'
+  const probeCapability = [
+    Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' }), 'utf8').toString('base64url'),
+    Buffer.from(
+      JSON.stringify({
+        purpose: 'collab-room',
+        userUuid: '22222222-2222-4222-8222-222222222222',
+        room: probeRoom,
+        collaborationProtocolVersion: 3,
+        roomEpoch: probeRoomEpoch,
+        collaborationSecurityEpoch: probeSecurityEpoch,
+        serverUpdatedAtTimestamp: probeRevision,
+        leaseRequestId: probeLease,
+      }),
+      'utf8',
+    ).toString('base64url'),
+    'not-a-real-signature',
+  ].join('.')
+  const discoveryFrame = {
+    type: 'COLLABORATION_AUTHORIZED',
+    payload: {
+      epochDiscovery: true,
+      room: probeRoom,
+      serverUpdatedAtTimestamp: probeRevision,
+      collaborationProtocolVersion: 3,
+      roomEpoch: probeRoomEpoch,
+      collaborationSecurityEpoch: probeSecurityEpoch,
+      epochDiscoveryChallenge: 'c'.repeat(64),
+      epochDiscoveryRequestId: 'req-probe',
+      challengeExpiresAt: Date.now() + 10_000,
+    },
+  }
+  const grantFrame = {
+    type: 'COLLABORATION_AUTHORIZED',
+    payload: {
+      capability: probeCapability,
+      room: probeRoom,
+      expiresIn: 300,
+      serverUpdatedAtTimestamp: probeRevision,
+      collaborationProtocolVersion: 3,
+      roomEpoch: probeRoomEpoch,
+      collaborationSecurityEpoch: probeSecurityEpoch,
+      leaseRequestId: probeLease,
+    },
+  }
+  const grantBindings = {
+    room: probeRoom,
+    roomEpoch: probeRoomEpoch,
+    collaborationSecurityEpoch: probeSecurityEpoch,
+    lease: probeLease,
+  }
+
+  check('a real epoch discovery succeeds', collaborationDiscoverySucceeded(discoveryFrame, { room: probeRoom }))
+  check(
+    'a discovery for ANOTHER room FAILS',
+    !collaborationDiscoverySucceeded(discoveryFrame, { room: '33333333-3333-4333-8333-333333333333' }),
+  )
+  for (const [label, patch] of [
+    ['the epochDiscovery flag', { epochDiscovery: false }],
+    ['the room epoch', { roomEpoch: 'short' }],
+    ['the security epoch', { collaborationSecurityEpoch: undefined }],
+    ['the canonical revision', { serverUpdatedAtTimestamp: 0 }],
+    ['the one-use challenge', { epochDiscoveryChallenge: undefined }],
+    ['the challenge request id', { epochDiscoveryRequestId: '' }],
+    ['the protocol version', { collaborationProtocolVersion: 2 }],
+  ]) {
+    check(
+      `a discovery missing ${label} FAILS`,
+      !collaborationDiscoverySucceeded(
+        { ...discoveryFrame, payload: { ...discoveryFrame.payload, ...patch } },
+        { room: probeRoom },
+      ),
+    )
+  }
+  check(
+    'REGRESSION (6e18e3a5): ERROR NOT_AUTHORIZED is NOT a successful discovery',
+    !collaborationDiscoverySucceeded({ type: 'ERROR', payload: { code: 'NOT_AUTHORIZED' } }, { room: probeRoom }),
+  )
+  check('no answer at all is NOT a successful discovery', !collaborationDiscoverySucceeded(undefined))
+  control(
+    'the discovery probe',
+    !collaborationDiscoverySucceeded({ type: 'ERROR', payload: { code: 'NOT_AUTHORIZED' } }, { room: probeRoom }),
+  )
+
+  check('a real bound grant succeeds', collaborationGrantSucceeded(grantFrame, grantBindings))
+  check(
+    'REGRESSION (6e18e3a5): a well-formed { authorized: false } is NOT a grant',
+    !collaborationGrantSucceeded({ type: 'COLLABORATION_AUTHORIZED', payload: { authorized: false } }, grantBindings),
+  )
+  check(
+    'REGRESSION (6e18e3a5): ERROR NOT_AUTHORIZED is NOT a grant (the OLD row called this `works`)',
+    !collaborationGrantSucceeded({ type: 'ERROR', payload: { code: 'NOT_AUTHORIZED' } }, grantBindings),
+  )
+  check(
+    'REGRESSION (0a6897b3): BACKEND_ERROR is NOT a grant',
+    !collaborationGrantSucceeded({ type: 'ERROR', payload: { code: 'BACKEND_ERROR' } }, grantBindings),
+  )
+  for (const [label, patch] of [
+    ['the capability', { capability: undefined }],
+    ['a non-empty capability', { capability: '' }],
+    ['the ttl', { expiresIn: 0 }],
+    ['the canonical revision', { serverUpdatedAtTimestamp: 0 }],
+    ['the protocol version', { collaborationProtocolVersion: 2 }],
+  ]) {
+    check(
+      `a grant missing ${label} FAILS`,
+      !collaborationGrantSucceeded({ ...grantFrame, payload: { ...grantFrame.payload, ...patch } }, grantBindings),
+    )
+  }
+  check(
+    'a grant for ANOTHER room FAILS',
+    !collaborationGrantSucceeded(grantFrame, { ...grantBindings, room: '44444444-4444-4444-8444-444444444444' }),
+  )
+  check(
+    'a grant for ANOTHER epoch FAILS',
+    !collaborationGrantSucceeded(grantFrame, { ...grantBindings, roomEpoch: 'd'.repeat(32) }),
+  )
+  check(
+    'a grant bound to ANOTHER lease FAILS',
+    !collaborationGrantSucceeded(grantFrame, { ...grantBindings, lease: 'lease-other' }),
+  )
+  check(
+    'a grant whose CAPABILITY names another room FAILS (the binding is read, not assumed)',
+    !collaborationGrantSucceeded(
+      {
+        ...grantFrame,
+        payload: {
+          ...grantFrame.payload,
+          capability: probeCapability.replace(
+            probeCapability.split('.')[1],
+            Buffer.from(
+              JSON.stringify({
+                purpose: 'collab-room',
+                userUuid: '22222222-2222-4222-8222-222222222222',
+                room: '55555555-5555-4555-8555-555555555555',
+                collaborationProtocolVersion: 3,
+                roomEpoch: probeRoomEpoch,
+                collaborationSecurityEpoch: probeSecurityEpoch,
+                serverUpdatedAtTimestamp: probeRevision,
+                leaseRequestId: probeLease,
+              }),
+              'utf8',
+            ).toString('base64url'),
+          ),
+        },
+      },
+      grantBindings,
+    ),
+  )
+  check(
+    'a grant whose capability is not a JWT FAILS',
+    !collaborationGrantSucceeded(
+      { ...grantFrame, payload: { ...grantFrame.payload, capability: 'not-a-jwt' } },
+      grantBindings,
+    ),
+  )
+  control('the grant probe', !collaborationGrantSucceeded({ type: 'ERROR', payload: { code: 'NOT_AUTHORIZED' } }))
+
+  check('a decoded JWT yields its claims', decodeJwtClaims(probeCapability)?.purpose === 'collab-room')
+  check('a non-JWT decodes to undefined', decodeJwtClaims('a.b') === undefined)
+  check('a JWT with unparseable claims decodes to undefined', decodeJwtClaims('a.!!!.c') === undefined)
+  control('the jwt decoder', decodeJwtClaims(undefined) === undefined)
+
+  check(
+    'ERROR NOT_AUTHORIZED is a DECIDED refusal',
+    collaborationRefusalDecided({ type: 'ERROR', payload: { code: 'NOT_AUTHORIZED' } }),
+  )
+  check(
+    'a { authorized: false } frame is a DECIDED refusal',
+    collaborationRefusalDecided({ type: 'COLLABORATION_AUTHORIZED', payload: { authorized: false } }),
+  )
+  check(
+    'BACKEND_ERROR is NOT a refusal (a broken lane is not a decision)',
+    !collaborationRefusalDecided({ type: 'ERROR', payload: { code: 'BACKEND_ERROR' } }),
+  )
+  check(
+    'BACKEND_TIMEOUT is NOT a refusal',
+    !collaborationRefusalDecided({ type: 'ERROR', payload: { code: 'BACKEND_TIMEOUT' } }),
+  )
+  check(
+    'SESSION_STALE is NOT a refusal',
+    !collaborationRefusalDecided({ type: 'ERROR', payload: { code: 'SESSION_STALE' } }),
+  )
+  check(
+    'OPERATION_UNAVAILABLE is NOT a refusal',
+    !collaborationRefusalDecided({ type: 'ERROR', payload: { code: 'OPERATION_UNAVAILABLE' } }),
+  )
+  check('silence is NOT a refusal', !collaborationRefusalDecided(undefined))
+  check('a real GRANT is NOT a refusal', !collaborationRefusalDecided(grantFrame))
+  control('the refusal probe', !collaborationRefusalDecided({ type: 'ERROR', payload: { code: 'BACKEND_ERROR' } }))
+
+  check(
+    'the HTTP discovery leg succeeds on a 200 carrying an epoch pair',
+    collaborationHttpDiscoverySucceeded(
+      { status: 200, json: { authorized: true, ...discoveryFrame.payload } },
+      { room: probeRoom },
+    ),
+  )
+  check(
+    'the HTTP discovery leg FAILS on a 403',
+    !collaborationHttpDiscoverySucceeded({ status: 403, json: { error: { tag: 'collaboration-not-authorized' } } }),
+  )
+  check(
+    'the HTTP discovery leg FAILS on a 200 that only says authorized: false',
+    !collaborationHttpDiscoverySucceeded({ status: 200, json: { authorized: false } }),
+  )
+  check(
+    'the HTTP discovery leg succeeds on the body the controller actually sends (no `authorized` key)',
+    collaborationHttpDiscoverySucceeded({ status: 200, json: discoveryFrame.payload }, { room: probeRoom }),
+  )
+  check(
+    'the HTTP discovery leg FAILS on a 200 with no epoch pair',
+    !collaborationHttpDiscoverySucceeded({ status: 200, json: { epochDiscovery: true, room: probeRoom } }),
+  )
+  check(
+    'the HTTP grant leg succeeds on a 200 carrying a bound capability',
+    collaborationHttpGrantSucceeded({ status: 200, json: { authorized: true, ...grantFrame.payload } }, grantBindings),
+  )
+  check(
+    'REGRESSION: the HTTP grant leg FAILS on the 403 the broken build returned',
+    !collaborationHttpGrantSucceeded(
+      { status: 403, json: { error: { tag: 'collaboration-not-authorized' } } },
+      grantBindings,
+    ),
+  )
+  check(
+    'the HTTP refusal control recognises the named 403',
+    collaborationHttpRefusalDecided({ status: 403, json: { error: { tag: 'collaboration-not-authorized' } } }),
+  )
+  check(
+    'the HTTP refusal control REJECTS a 502 (a dead route is not a refusal)',
+    !collaborationHttpRefusalDecided({ status: 502, json: {} }),
+  )
+  check(
+    'the HTTP refusal control REJECTS a 403 with another tag',
+    !collaborationHttpRefusalDecided({ status: 403, json: { error: { tag: 'something-else' } } }),
+  )
+  control('the http grant probe', !collaborationHttpGrantSucceeded({ status: 403, json: {} }, grantBindings))
+
+  const completeCollabTrip = { ownedNoteExists: true, discovered: true, granted: true, absentNoteRefused: true }
+  check('a complete collaboration trip succeeds', collaborationLaneSucceeded(completeCollabTrip))
+  for (const [label, patch] of [
+    ['the owned note', { ownedNoteExists: false }],
+    ['the discovery', { discovered: false }],
+    ['the grant', { granted: false }],
+    ['the refusal control', { absentNoteRefused: false }],
+  ]) {
+    check(
+      `a collaboration trip missing ${label} FAILS`,
+      !collaborationLaneSucceeded({ ...completeCollabTrip, ...patch }),
+    )
+  }
+  check('an empty collaboration trip FAILS', !collaborationLaneSucceeded({}))
+  // The EXACT shape the broken single-container image produced: the lane
+  // answered, the refusal control refused, and nothing was ever granted.
+  check(
+    'REGRESSION (6e18e3a5): a trip where every authorization was denied FAILS',
+    !collaborationLaneSucceeded({
+      ownedNoteExists: true,
+      discovered: false,
+      granted: false,
+      absentNoteRefused: true,
+      discoveryDetail: { type: 'ERROR', code: 'NOT_AUTHORIZED' },
+    }),
+  )
+  // And the other direction: an authorizer that grants EVERYTHING, including a
+  // note that does not exist, is not a working lane either.
+  check(
+    'an always-grant authorizer FAILS (the refusal control is load-bearing)',
+    !collaborationLaneSucceeded({
+      ownedNoteExists: true,
+      discovered: true,
+      granted: true,
+      absentNoteRefused: false,
+    }),
+  )
+  control('the collaboration lane verdict', !collaborationLaneSucceeded({ ...completeCollabTrip, granted: false }))
 
   console.log(`\nself-test: ${failures} failures, ${controlFailures} control failures`)
   process.exit(failures === 0 && controlFailures === 0 ? 0 : 1)
@@ -1138,61 +1602,190 @@ async function main() {
   // AUTHORIZE_COLLABORATION
   // =====================================================================
   console.log('\n[AUTHORIZE_COLLABORATION]')
-  const collabNoteUuid = randomUUID()
-  if (census.advertised.AUTHORIZE_COLLABORATION && (await ensureSocket())) {
+  // A note THIS ACCOUNT OWNS, saved over plain HTTP so the authorization legs
+  // do not inherit the socket lane's verdict. `AuthorizeCollaborationAccess`
+  // authorizes the owner of a personal note, so a grant here is the minimum
+  // the capability has to be able to produce -- and it is exactly what the
+  // single-container defect refused. The old row probed `randomUUID()`, for
+  // which a refusal is CORRECT, so it could never observe the difference.
+  const collabNote = makeNote(256)
+  const collabNoteSave = await raw('POST', '/v1/items', {
+    token,
+    cookie: account.cookie || undefined,
+    body: { api: API, items: [collabNote], compute_integrity: false },
+  })
+  const collabNoteUuid = collabNote.uuid
+  const ownedNoteExists = check(
+    'a note THIS ACCOUNT OWNS exists to authorize against (the row cannot be measured without one)',
+    (collabNoteSave.json?.saved_items ?? []).some((item) => item.uuid === collabNoteUuid),
+    { status: collabNoteSave.status, body: collabNoteSave.text.slice(0, 160) },
+  )
+  // The refusal control, on every run and in both transports: a note that was
+  // never created must be DECIDED against. Without it a grant row would also
+  // be green on an authorizer that says yes to everything.
+  const absentNoteUuid = randomUUID()
+  const collabLease = `lease-${randomUUID()}`
+
+  /** One COLLABORATION_AUTHORIZE round trip on the live socket. */
+  const authorizeOverSocket = async (payload) => {
     const requestId = `req-${randomUUID()}`
-    socket.ws.send(
-      JSON.stringify(
-        syncFrame(
-          'COLLABORATION_AUTHORIZE',
-          { noteUuid: collabNoteUuid, collaborationProtocolVersion: 3, epochDiscovery: true },
-          { sequence: sequence++, requestId },
-        ),
-      ),
-    )
-    const answer = await waitForFrame(
+    socket.ws.send(JSON.stringify(syncFrame('COLLABORATION_AUTHORIZE', payload, { sequence: sequence++, requestId })))
+    return waitForFrame(
       socket,
       (f) => f.requestId === requestId && (f.type === 'COLLABORATION_AUTHORIZED' || f.type === 'ERROR'),
       25_000,
     )
-    // An ANSWER is the contract, but it has to be an answer the server
-    // DECIDED: a COLLABORATION_AUTHORIZED frame (`authorized` either way), or
-    // an ERROR naming a policy -- a note this account cannot edit answers
-    // ERROR NOT_AUTHORIZED, which is correct. BACKEND_ERROR, BACKEND_TIMEOUT,
-    // SESSION_STALE, OPERATION_UNAVAILABLE and silence are all a broken lane.
-    const carried = check(
-      'a COLLABORATION_AUTHORIZE frame is ANSWERED by the lane (authorized either way, or a named policy refusal)',
-      laneCarried(answer, ['COLLABORATION_AUTHORIZED'], LANE_POLICY_CODES),
-      { type: answer?.type, authorized: answer?.payload?.authorized, code: answer?.payload?.code },
+  }
+
+  const collabTrip = { ownedNoteExists, discovered: false, granted: false, absentNoteRefused: false }
+  if (census.advertised.AUTHORIZE_COLLABORATION && (await ensureSocket())) {
+    // Leg 1 -- DISCOVERY on the owned note. Answers the room's epoch pair plus
+    // a one-use challenge; the gateway stores exactly one per connection.
+    const discovery = await authorizeOverSocket({
+      noteUuid: collabNoteUuid,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: true,
+    })
+    collabTrip.discovered = check(
+      'LANE: epoch DISCOVERY for a note this account owns answers an epoch pair for THIS room (a present success, not a refusal)',
+      collaborationDiscoverySucceeded(discovery, { room: collabNoteUuid }),
+      {
+        type: discovery?.type,
+        code: discovery?.payload?.code,
+        room: discovery?.payload?.room,
+        hasChallenge: typeof discovery?.payload?.epochDiscoveryChallenge === 'string',
+      },
+    )
+    collabTrip.discoveryDetail = { type: discovery?.type, code: discovery?.payload?.code }
+
+    // Leg 2 -- the GRANT that consumes that challenge. This is the leg a client
+    // cannot collaborate without, and the leg both defects killed.
+    if (collabTrip.discovered) {
+      const grant = await authorizeOverSocket({
+        noteUuid: collabNoteUuid,
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: discovery.payload.roomEpoch,
+        epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+        epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+        leaseRequestId: collabLease,
+      })
+      collabTrip.granted = check(
+        'LANE: the GRANT leg issues a CAPABILITY bound to this room, this epoch pair and this lease',
+        collaborationGrantSucceeded(grant, {
+          room: collabNoteUuid,
+          roomEpoch: discovery.payload.roomEpoch,
+          collaborationSecurityEpoch: discovery.payload.collaborationSecurityEpoch,
+          lease: collabLease,
+        }),
+        {
+          type: grant?.type,
+          code: grant?.payload?.code,
+          authorized: grant?.payload?.authorized,
+          hasCapability: typeof grant?.payload?.capability === 'string',
+          room: grant?.payload?.room,
+        },
+      )
+      collabTrip.grantDetail = { type: grant?.type, code: grant?.payload?.code }
+    } else {
+      check('LANE: the GRANT leg issues a CAPABILITY (not reached: discovery did not succeed)', false, {
+        stoppedAt: 'discovery',
+      })
+    }
+
+    // The refusal control, on the SAME socket and the same account.
+    const absent = await authorizeOverSocket({
+      noteUuid: absentNoteUuid,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: true,
+    })
+    collabTrip.absentNoteRefused = check(
+      'LANE: a note that was never created is REFUSED, and the refusal is DECIDED (so the row is not always-green)',
+      collaborationRefusalDecided(absent),
+      { type: absent?.type, code: absent?.payload?.code },
     )
     row('AUTHORIZE_COLLABORATION', {
-      lane: carried ? 'works' : 'broken',
-      laneDetail: { type: answer?.type, authorized: answer?.payload?.authorized, code: answer?.payload?.code },
+      lane: collaborationLaneSucceeded(collabTrip) ? 'works' : 'broken',
+      laneDetail: collabTrip,
     })
   } else {
     row('AUTHORIZE_COLLABORATION', { lane: census.advertised.AUTHORIZE_COLLABORATION ? 'untested' : 'withheld' })
   }
-  const collabFallback = await raw('POST', '/v1/collaboration/authorize', {
+
+  // FALLBACK: the documented HTTP path, same account, same run. The bar is a
+  // PRESENT grant, not reachability: a 403 is the right answer only for the
+  // note nobody created, and that case is measured separately below. The HTTP
+  // discovery leg issues NO challenge (only the socket lane does), so its
+  // grant leg carries the epoch alone.
+  const collabHttpDiscovery = await raw('POST', '/v1/collaboration/authorize', {
     token,
     cookie: account.cookie || undefined,
     headers: { 'idempotency-key': randomUUID() },
     body: { noteUuid: collabNoteUuid, collaborationProtocolVersion: 3, epochDiscovery: true },
   })
-  const collabVerdict = httpFallbackVerdict(collabFallback)
-  check(
-    'FALLBACK: POST /v1/collaboration/authorize ANSWERS over plain HTTP (2xx, or a 4xx the handler produced)',
-    collabVerdict !== 'broken',
-    { status: collabFallback.status, verdict: collabVerdict, body: collabFallback.text.slice(0, 160) },
+  const httpDiscovered = check(
+    'FALLBACK: POST /v1/collaboration/authorize DISCOVERS an epoch pair for a note this account owns',
+    collaborationHttpDiscoverySucceeded(collabHttpDiscovery, { room: collabNoteUuid }),
+    { status: collabHttpDiscovery.status, body: collabHttpDiscovery.text.slice(0, 200) },
+  )
+  let collabHttpGrant
+  let httpGranted = false
+  if (httpDiscovered) {
+    collabHttpGrant = await raw('POST', '/v1/collaboration/authorize', {
+      token,
+      cookie: account.cookie || undefined,
+      headers: { 'idempotency-key': randomUUID() },
+      body: {
+        noteUuid: collabNoteUuid,
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: collabHttpDiscovery.json.roomEpoch,
+        leaseRequestId: collabLease,
+      },
+    })
+    httpGranted = check(
+      'FALLBACK: the HTTP grant leg issues a CAPABILITY bound to this room, this epoch pair and this lease',
+      collaborationHttpGrantSucceeded(collabHttpGrant, {
+        room: collabNoteUuid,
+        roomEpoch: collabHttpDiscovery.json.roomEpoch,
+        collaborationSecurityEpoch: collabHttpDiscovery.json.collaborationSecurityEpoch,
+        lease: collabLease,
+      }),
+      { status: collabHttpGrant.status, body: collabHttpGrant.text.slice(0, 200) },
+    )
+  } else {
+    check('FALLBACK: the HTTP grant leg issues a CAPABILITY (not reached: discovery did not succeed)', false, {
+      stoppedAt: 'discovery',
+    })
+  }
+  const collabAbsentHttp = await raw('POST', '/v1/collaboration/authorize', {
+    token,
+    cookie: account.cookie || undefined,
+    headers: { 'idempotency-key': randomUUID() },
+    body: { noteUuid: absentNoteUuid, collaborationProtocolVersion: 3, epochDiscovery: true },
+  })
+  const httpAbsentRefused = check(
+    'FALLBACK: a note that was never created is refused 403 collaboration-not-authorized',
+    collaborationHttpRefusalDecided(collabAbsentHttp),
+    { status: collabAbsentHttp.status, body: collabAbsentHttp.text.slice(0, 160) },
   )
   row('AUTHORIZE_COLLABORATION', {
-    fallback: collabVerdict,
+    fallback: httpDiscovered && httpGranted && httpAbsentRefused ? 'works' : 'broken',
     fallbackPath: 'POST /v1/collaboration/authorize',
-    fallbackStatus: collabFallback.status,
+    fallbackStatus: collabHttpGrant?.status ?? collabHttpDiscovery.status,
+    fallbackDetail: { discovered: httpDiscovered, granted: httpGranted, absentNoteRefused: httpAbsentRefused },
   })
   if (CONTROL) {
     const broken = await raw('POST', '/v1/collaboration/authorize-nope', { token, body: {} })
     control('the collaboration reachability probe', httpFallbackVerdict(broken) === 'broken', {
       status: broken.status,
+    })
+    // A revoked credential must not mint a capability for a note the account
+    // really owns -- otherwise the grant above could be coming from anywhere.
+    const noCredential = await raw('POST', '/v1/collaboration/authorize', {
+      token: 'not-a-real-token-' + randomBytes(8).toString('hex'),
+      body: { noteUuid: collabNoteUuid, collaborationProtocolVersion: 3, epochDiscovery: true },
+    })
+    control('the collaboration grant probe (a bad credential must not be granted)', noCredential.status !== 200, {
+      status: noCredential.status,
     })
   }
 

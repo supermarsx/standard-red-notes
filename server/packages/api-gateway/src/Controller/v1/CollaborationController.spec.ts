@@ -16,7 +16,7 @@ const ROOM_EPOCH = 'room_epoch_0000000000000001'
 describe('CollaborationController', () => {
   let serviceProxy: jest.Mocked<ServiceProxyInterface>
   let endpointResolver: jest.Mocked<EndpointResolverInterface>
-  let logger: { error: jest.Mock }
+  let logger: { error: jest.Mock; info: jest.Mock }
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
@@ -74,7 +74,7 @@ describe('CollaborationController', () => {
       resolveEndpointOrMethodIdentifier: jest.fn().mockReturnValue('items/collaboration-authorization'),
     } as unknown as jest.Mocked<EndpointResolverInterface>
 
-    logger = { error: jest.fn() }
+    logger = { error: jest.fn(), info: jest.fn() }
   })
 
   it('mints a valid capability (right user + room + purpose) when the syncing-server authorizes', async () => {
@@ -158,18 +158,44 @@ describe('CollaborationController', () => {
     expect(jsonMock).not.toHaveBeenCalledWith(expect.objectContaining({ capability: expect.anything() }))
   })
 
-  it('DENIES (403) on a non-2xx syncing-server response', async () => {
+  it('DENIES (403) on a non-2xx syncing-server response, and calls it UNREADABLE', async () => {
+    // REGRESSION (0a6897b3): the multi-container defect dispatched `POST
+    // items/collaboration-authorization` as a GET, the route did not exist, and
+    // the 404 was read as `{ authorized: false }` with nothing logged. The
+    // status is now on an error line that says nothing decided this.
     serviceProxy.callSyncingServer = proxyReturning({ error: 'nope' }, 500)
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
     expect(statusMock).toHaveBeenCalledWith(403)
+    expect(logger.error).toHaveBeenCalledWith(
+      'Collaboration authorization could not be decided.',
+      expect.objectContaining({ reason: 'access-check-http-status', category: 'unreadable', accessCheckStatus: 500 }),
+    )
   })
 
-  it('DENIES (403) when the syncing-server response has no authorized flag', async () => {
+  it('DENIES (403) when the syncing-server response has no authorized flag, and calls it UNREADABLE', async () => {
     serviceProxy.callSyncingServer = proxyReturning({})
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
     expect(statusMock).toHaveBeenCalledWith(403)
+    expect(logger.error).toHaveBeenCalledWith(
+      'Collaboration authorization could not be decided.',
+      expect.objectContaining({ reason: 'access-check-unreadable', category: 'unreadable' }),
+    )
+  })
+
+  it('DENIES (403) when the access check DECIDED no, and calls it a POLICY refusal at info', async () => {
+    // The control for the two above: a well-formed `authorized: false` is a
+    // decision, and must NOT land in the error log beside the plumbing faults.
+    serviceProxy.callSyncingServer = proxyReturning({ authorized: false })
+    const response = responseWith('user-1')
+    await makeController().authorize(requestWith('note-1'), response)
+    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(logger.info).toHaveBeenCalledWith(
+      'Collaboration authorization denied.',
+      expect.objectContaining({ reason: 'access-check-refused', category: 'policy' }),
+    )
   })
 
   it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
@@ -188,16 +214,24 @@ describe('CollaborationController', () => {
     await makeController().authorize(requestWith('note-1'), response)
 
     expect(statusMock).toHaveBeenCalledWith(403)
+    // ONE line, at error, carrying both the exception detail and the verdict:
+    // an access check that could not be reached is `unreadable`, never a
+    // policy refusal. A fail-closed authorizer that logged neither is how this
+    // lane's two silent denials looked like a permission setting for weeks.
     expect(logger.error).toHaveBeenCalledWith(
-      'Collaboration access check call failed.',
+      'Collaboration authorization could not be decided.',
       expect.objectContaining({
-        action: 'collaboration.access-check',
+        action: 'collaboration.authorize',
+        reason: 'access-check-unreachable',
+        category: 'unreadable',
         endpoint: '/items/collaboration-authorization',
         method: 'POST',
         errorType: 'Error',
       }),
     )
+    expect(logger.error).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('collaboration-credential-sentinel')
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('note-1')
   })
 
   it('DENIES (403) when no signing secret is configured', async () => {
