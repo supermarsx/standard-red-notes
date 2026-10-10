@@ -205,6 +205,7 @@ describe('SubscriptionInvitesController', () => {
   it('should not invite to user subscription if the workflow does not run', async () => {
     inviteToSharedSubscription.execute = jest.fn().mockReturnValue({
       success: false,
+      refusal: 'no-shareable-subscription',
     })
 
     const result = await createController().invite({
@@ -216,5 +217,64 @@ describe('SubscriptionInvitesController', () => {
     })
 
     expect(result.status).toEqual(400)
+  })
+
+  it('tells the caller WHY an invite was refused, and tells the five refusals apart', async () => {
+    // This route answered `400 {"success": false}` to all five refusals. On
+    // both shipped topologies that single answer covered the one refusal every
+    // account gets (no `user_subscriptions` row under the default entitlement
+    // mode), so the feature read as mysteriously broken. Each refusal must now
+    // carry its own message, and `success: false` must survive beside it
+    // because that is the field the client reads.
+    const messages = new Set<string>()
+    for (const refusal of [
+      'not-entitled',
+      'no-shareable-subscription',
+      'subscription-already-shared',
+      'invite-limit-reached',
+      'already-invited',
+    ] as const) {
+      inviteToSharedSubscription.execute = jest.fn().mockReturnValue({ success: false, refusal })
+
+      const result = await createController().invite({
+        api: ApiVersion.VERSIONS.v20200115,
+        identifier: 'invitee@test.te',
+        inviterUuid: '1-2-3',
+        inviterEmail: 'test@test.te',
+        inviterRoles: ['CORE_USER'],
+      })
+
+      expect(result.status).toEqual(400)
+      const data = result.data as { success: boolean; error?: { message?: string } }
+      expect(data.success).toBe(false)
+      expect(typeof data.error?.message).toBe('string')
+      expect(data.error?.message?.length).toBeGreaterThan(0)
+      // No identifier, address or count may leak into an invite refusal.
+      expect(data.error?.message).not.toContain('invitee@test.te')
+      expect(data.error?.message).not.toContain('test@test.te')
+      expect(data.error?.message).not.toContain('1-2-3')
+      messages.add(data.error?.message as string)
+    }
+    // Five DISTINCT messages: a shared sentence would put us back where we
+    // started with a different amount of text.
+    expect(messages.size).toBe(5)
+  })
+
+  it('surfaces the no-subscription refusal as its own sentence, not the entitlement one', async () => {
+    inviteToSharedSubscription.execute = jest.fn().mockReturnValue({
+      success: false,
+      refusal: 'no-shareable-subscription',
+    })
+
+    const result = await createController().invite({
+      api: ApiVersion.VERSIONS.v20200115,
+      identifier: 'invitee@test.te',
+      inviterUuid: '1-2-3',
+      inviterEmail: 'test@test.te',
+      inviterRoles: ['PRO_USER'],
+    })
+
+    expect(result.status).toEqual(400)
+    expect((result.data as { error?: { message?: string } }).error?.message).toContain('no subscription to share')
   })
 })

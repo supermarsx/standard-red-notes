@@ -99,11 +99,21 @@ describe('InviteToSharedSubscription', () => {
   it('should not create an inivitation for sharing the subscription if inviter has no subscription', async () => {
     userSubscriptionRepository.findOneByUserUuid = jest.fn().mockReturnValue(null)
 
-    await createUseCase().execute({
-      inviteeIdentifier: 'invitee@test.te',
-      inviterUuid: '1-2-3',
-      inviterEmail: 'inviter@test.te',
-      inviterRoles: [RoleName.NAMES.ProUser],
+    // THE refusal a default self-hosted deployment gives every account: the
+    // entitlement mode writes no `user_subscriptions` row, so there is no
+    // subscription to share even though the account holds PRO_USER. It must be
+    // distinguishable from the other four, which is why the result is asserted
+    // here and not only the absence of a save.
+    expect(
+      await createUseCase().execute({
+        inviteeIdentifier: 'invitee@test.te',
+        inviterUuid: '1-2-3',
+        inviterEmail: 'inviter@test.te',
+        inviterRoles: [RoleName.NAMES.ProUser],
+      }),
+    ).toEqual({
+      success: false,
+      refusal: 'no-shareable-subscription',
     })
 
     expect(sharedSubscriptionInvitationRepository.save).not.toHaveBeenCalled()
@@ -122,6 +132,7 @@ describe('InviteToSharedSubscription', () => {
       }),
     ).toEqual({
       success: false,
+      refusal: 'not-entitled',
     })
 
     expect(sharedSubscriptionInvitationRepository.save).not.toHaveBeenCalled()
@@ -142,6 +153,7 @@ describe('InviteToSharedSubscription', () => {
       }),
     ).toEqual({
       success: false,
+      refusal: 'invite-limit-reached',
     })
 
     expect(sharedSubscriptionInvitationRepository.save).not.toHaveBeenCalled()
@@ -214,11 +226,16 @@ describe('InviteToSharedSubscription', () => {
       subscriptionType: UserSubscriptionType.Shared,
     } as jest.Mocked<UserSubscription>)
 
-    await createUseCase().execute({
-      inviteeIdentifier: 'invitee@test.te',
-      inviterUuid: '1-2-3',
-      inviterEmail: 'inviter@test.te',
-      inviterRoles: [RoleName.NAMES.ProUser],
+    expect(
+      await createUseCase().execute({
+        inviteeIdentifier: 'invitee@test.te',
+        inviterUuid: '1-2-3',
+        inviterEmail: 'inviter@test.te',
+        inviterRoles: [RoleName.NAMES.ProUser],
+      }),
+    ).toEqual({
+      success: false,
+      refusal: 'subscription-already-shared',
     })
 
     expect(sharedSubscriptionInvitationRepository.save).not.toHaveBeenCalled()
@@ -242,6 +259,7 @@ describe('InviteToSharedSubscription', () => {
       }),
     ).toEqual({
       success: false,
+      refusal: 'already-invited',
     })
 
     expect(sharedSubscriptionInvitationRepository.save).not.toHaveBeenCalled()

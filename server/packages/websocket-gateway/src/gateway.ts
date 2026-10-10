@@ -236,6 +236,33 @@ export interface SyncGatewayOptions {
   inviteEvents?: SyncInviteEventsAdapter
   /** Durable dispatcher used by the single production SQS consumer before ACK. */
   inviteEventDispatcher?: Pick<InviteEventOutboxDispatcher, 'dispatch'>
+  /**
+   * Declares that THIS HOST drives `inviteEventDispatcher` itself -- a
+   * DirectCall domain-event bridge, say -- rather than relying on the SQS
+   * consumer this gateway starts.
+   *
+   * It exists because the gateway can see exactly one invite-event ingress: the
+   * SQS consumer it builds from `config.sqs.queueUrl`. Nothing else it is
+   * handed distinguishes "the host publishes into this store" from "nobody
+   * does". Measured on a real distributed deployment with no `SQS_QUEUE_URL`,
+   * the undeclared case advertised `INVITE_EVENTS`, answered `INVITE_READY`
+   * -- the frame that means "you are caught up" -- and then delivered nothing,
+   * ever: not an invite, not an acceptance, not a revocation. The lane was
+   * inert and every client was told it was healthy.
+   *
+   * So a fleet-shared composition must now STATE its ingress, the way `files`
+   * must state its intent. Supply `config.sqs.queueUrl` (the gateway's own
+   * consumer), or set this (the host's). Declare neither and `INVITE_EVENTS`
+   * is withheld from the advertised operations instead of being advertised
+   * over nothing -- clients then take the HTTP invite path, which carries the
+   * same invites in the ordinary sync response.
+   *
+   * NOT a boot failure: a waived capability is this gateway's established
+   * answer for a lane it cannot serve (see `filesUnsupported` and the
+   * SYNC_ITEMS warning), and refusing the process would take down HTTP sync
+   * over a realtime-only misconfiguration.
+   */
+  inviteEventIngressOwnedByHost?: boolean
   /** Canonical in-process file storage adapter for the binary FILES_V1 lane. */
   files?: SyncFilesAdapter
   /**
@@ -1494,6 +1521,32 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   if (config.sqs?.queueUrl && syncOptions?.requireSharedState && !syncOptions.inviteEventDispatcher) {
     throw new Error('WebSocket sync requires the durable invite-event SQS dispatcher.')
   }
+  // The other half of that condition, which was missing: a fleet-shared
+  // composition with NO ingress at all. See `inviteEventIngressOwnedByHost`.
+  // Per-capability, not fatal -- so it is computed once here and read where the
+  // socket's operation list is built.
+  const inviteEventIngress: 'sqs' | 'host' | 'none' =
+    syncOptions?.inviteEventIngressOwnedByHost === true
+      ? 'host'
+      : config.sqs?.queueUrl && syncOptions?.inviteEventDispatcher
+        ? 'sqs'
+        : syncOptions?.requireSharedState === true
+          ? 'none'
+          : 'host'
+  if (syncOptions?.inviteEvents && inviteEventIngress === 'none') {
+    // One string, no metadata object: hosts bridge this variadic logger with
+    // `args.map(String).join(' ')`, which renders an object as [object Object].
+    // Deliberately NOT a new `SyncUnavailabilityReason`: that union is an
+    // allowlisted, exhaustively-switched wire vocabulary shared with the admin
+    // pane, and this is a per-capability waiver rather than a lane refusal.
+    logger.warn(
+      '[ws-sync] INVITE_EVENTS will not be advertised (invite-event-ingress-unavailable). ' +
+        'This fleet-shared deployment has no invite-event ingress: set SQS_QUEUE_URL so the gateway consumes ' +
+        'INVITE_REALTIME_INVALIDATION_REQUESTED, or declare inviteEventIngressOwnedByHost. ' +
+        'Invites still reach clients over HTTP in the ordinary sync response, without a push.',
+    )
+  }
+  const socketInviteEvents = inviteEventIngress === 'none' ? undefined : syncOptions?.inviteEvents
   if (syncOptions?.requireSharedState && !syncOptions.files && !syncOptions.filesUnsupported) {
     throw new Error('WebSocket sync requires a FILES_V1 storage adapter, or an explicit filesUnsupported declaration.')
   }
@@ -1765,7 +1818,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           handshakeRejected += 1
         },
         apiRpc: syncOptions!.apiRpc,
-        inviteEvents: syncOptions!.inviteEvents,
+        inviteEvents: socketInviteEvents,
         files: syncOptions!.files,
         requireSharedState: syncOptions!.requireSharedState,
         isEnabled: syncOptions!.isEnabled,

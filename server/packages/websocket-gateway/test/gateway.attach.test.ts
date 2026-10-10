@@ -1936,6 +1936,117 @@ describe('authenticated /sockets/sync command plane', () => {
     }
   })
 
+  it('advertises INVITE_EVENTS only to a fleet-shared composition that has an invite-event ingress', async () => {
+    // MEASURED on a real distributed deployment with no SQS_QUEUE_URL: the
+    // socket advertised INVITE_EVENTS, a cursored INVITE_SUBSCRIBE answered
+    // INVITE_READY -- the frame that means "you are caught up" -- and then
+    // nothing arrived, ever. Not the invite, not the acceptance, not the
+    // revocation. The gateway's only invite-event ingress is the SQS consumer
+    // it builds from `config.sqs.queueUrl`; with no queue the Redis invite
+    // store is never written, so the lane is inert and the client is told it
+    // is healthy.
+    //
+    // Each case carries BOTH halves: the operation list AND what a subscribe
+    // actually gets, because advertising it and serving it drifted apart once
+    // already. The `sqs` and host-declared cases are the controls -- without
+    // them "INVITE_EVENTS is absent" would prove only that it can be absent.
+    const sqsQueue = 'https://sqs.example.test/000000000000/invite-queue'
+    const cases = [
+      {
+        name: 'no ingress at all',
+        config: baseConfig(),
+        supplied: {},
+        operations: expect.not.arrayContaining(['INVITE_EVENTS']),
+        subscribe: 'ERROR',
+      },
+      {
+        name: 'the gateway consumes SQS',
+        config: baseConfig({ sqs: { queueUrl: sqsQueue } }),
+        supplied: {
+          inviteEventDispatcher: { dispatch: vi.fn(async () => ({ affectedUsers: 1, appended: 1, duplicates: 0 })) },
+        },
+        operations: expect.arrayContaining(['INVITE_EVENTS']),
+        subscribe: 'INVITE_RECONCILE',
+      },
+      {
+        name: 'the host declares it drives the dispatcher',
+        config: baseConfig(),
+        supplied: {
+          inviteEventDispatcher: { dispatch: vi.fn(async () => ({ affectedUsers: 1, appended: 1, duplicates: 0 })) },
+          inviteEventIngressOwnedByHost: true,
+        },
+        operations: expect.arrayContaining(['INVITE_EVENTS']),
+        subscribe: 'INVITE_RECONCILE',
+      },
+    ] as const
+
+    for (const testCase of cases) {
+      port = await listen()
+      attached = attachWebSocketGateway({
+        httpServer,
+        config: testCase.config,
+        logger: makeLogger(),
+        sync: {
+          ...syncOptions(),
+          ...sharedSyncState(),
+          requireSharedState: true,
+          filesUnsupported: true,
+          ...testCase.supplied,
+        },
+      })
+      const issued = await attached.sync.issueTicket({
+        userUuid: 'user-invite-ingress',
+        sessionUuid: 'session-invite-ingress',
+        deviceId: 'device-invite-ingress',
+      })
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+      await opened(socket)
+      const authPayload = { ticket: issued.ticket, deviceId: 'device-invite-ingress' }
+      const authenticated = nextJson(socket)
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          channel: 'sync',
+          type: 'AUTH',
+          requestId: 'auth-invite-ingress',
+          commandId: 'auth-invite-ingress',
+          sequence: 0,
+          payloadLength: Buffer.byteLength(JSON.stringify(authPayload)),
+          payload: authPayload,
+        }),
+      )
+      expect(await authenticated, testCase.name).toMatchObject({
+        type: 'AUTHENTICATED',
+        payload: { operations: testCase.operations },
+      })
+
+      const subscribePayload = { limit: 20 }
+      const subscribed = nextJson(socket)
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          channel: 'sync',
+          type: 'INVITE_SUBSCRIBE',
+          requestId: 'invite-ingress-subscribe',
+          commandId: 'invite-ingress-subscribe',
+          sequence: 1,
+          payloadLength: Buffer.byteLength(JSON.stringify(subscribePayload)),
+          payload: subscribePayload,
+        }),
+      )
+      const reply = await subscribed
+      expect(reply.type, testCase.name).toBe(testCase.subscribe)
+      if (testCase.subscribe === 'ERROR') {
+        expect(reply.payload, testCase.name).toMatchObject({ code: 'OPERATION_UNAVAILABLE' })
+      }
+
+      socket.close()
+      await attached.stop()
+      attached = undefined
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    }
+  })
+
   it('clears unconsumed process-local authentication tickets during awaited stop', async () => {
     port = await listen()
     const tickets = new InMemorySyncAuthTicketStore()

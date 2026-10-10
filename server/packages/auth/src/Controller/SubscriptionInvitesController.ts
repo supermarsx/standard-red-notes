@@ -18,7 +18,25 @@ import { AcceptSharedSubscriptionInvitation } from '../Domain/UseCase/AcceptShar
 import { CancelSharedSubscriptionInvitation } from '../Domain/UseCase/CancelSharedSubscriptionInvitation/CancelSharedSubscriptionInvitation'
 import { DeclineSharedSubscriptionInvitation } from '../Domain/UseCase/DeclineSharedSubscriptionInvitation/DeclineSharedSubscriptionInvitation'
 import { InviteToSharedSubscription } from '../Domain/UseCase/InviteToSharedSubscription/InviteToSharedSubscription'
+import { InviteToSharedSubscriptionRefusal } from '../Domain/UseCase/InviteToSharedSubscription/InviteToSharedSubscriptionResult'
 import { ListSharedSubscriptionInvitations } from '../Domain/UseCase/ListSharedSubscriptionInvitations/ListSharedSubscriptionInvitations'
+
+/**
+ * One fixed sentence per refusal. A `Record` over the closed union on purpose:
+ * add a refusal and this stops compiling, which is the only thing that keeps a
+ * new silent `success: false` from shipping. No identifier, address, count or
+ * database detail goes in a message -- a caller already knows who it invited,
+ * and an invite endpoint must not become an oracle about other accounts.
+ */
+const SUBSCRIPTION_INVITE_REFUSAL_MESSAGES: Record<InviteToSharedSubscriptionRefusal, string> = {
+  'not-entitled': 'Sharing a subscription requires a Pro subscription on this account.',
+  'no-shareable-subscription':
+    'This account has no subscription to share. A deployment that grants features to every account directly has no shared-subscription plan behind them, so there is nothing to invite anyone to.',
+  'subscription-already-shared':
+    'This account is a member of a shared subscription and cannot share it onwards. Only the subscription owner can invite.',
+  'invite-limit-reached': 'Every invite included with this subscription has been used. Cancel one to free a slot.',
+  'already-invited': 'An invitation to that recipient already exists.',
+}
 
 @injectable()
 export class SubscriptionInvitesController {
@@ -100,9 +118,20 @@ export class SubscriptionInvitesController {
       }
     }
 
+    // `success: false` is KEPT, because that is the field the client reads.
+    // The message is added beside it: this route used to answer
+    // `400 {"success": false}` to all five distinct refusals, including the one
+    // that fires for every account on a self-hosted deployment, so neither the
+    // caller nor an operator reading an access log could tell "there is no
+    // subscription here to share" from "you already invited that person".
     return {
       status: HttpStatusCode.BadRequest,
-      data: result,
+      data: {
+        ...result,
+        error: {
+          message: SUBSCRIPTION_INVITE_REFUSAL_MESSAGES[result.refusal],
+        },
+      },
     }
   }
 

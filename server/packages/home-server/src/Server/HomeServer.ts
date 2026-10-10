@@ -1320,6 +1320,16 @@ export class HomeServer implements HomeServerInterface {
               metrics: createLoggerSyncCommandMetrics(gatewayLogger),
               inviteEvents: inviteEventComposition.gatewayAdapter,
               inviteEventDispatcher: inviteEventComposition.dispatcher,
+              // THIS host owns the invite-event ingress on both of its
+              // branches: `inviteDomainEventBridge.start()` above registers a
+              // DirectCall subscriber that drives the dispatcher in-process.
+              // The gateway cannot see that -- the only ingress it can see is
+              // its own SQS consumer, which this topology never configures --
+              // so without this declaration it would withhold INVITE_EVENTS
+              // from a lane that works. (It withholds it from one that does
+              // not: a fleet-shared deployment with no SQS queue advertised
+              // the lane, answered INVITE_READY and delivered nothing.)
+              inviteEventIngressOwnedByHost: true,
               // Explicit either way: the gateway rejects a shared-state
               // composition that neither supplies nor waives FILES_V1.
               ...(filesAdapter ? { files: filesAdapter } : { filesUnsupported: true }),

@@ -51,13 +51,28 @@ export class InviteToSharedSubscription implements UseCaseInterface {
     if (!dto.inviterRoles.includes(RoleName.NAMES.ProUser)) {
       return {
         success: false,
+        refusal: 'not-entitled',
       }
     }
 
+    // Two different refusals, deliberately not collapsed. `null` is the whole
+    // story on a self-hosted deployment: with the default entitlement mode
+    // (`included`) no `user_subscriptions` row is ever written, so this branch
+    // refuses every invite on both shipped topologies while the account holds
+    // PRO_USER and a synthesised PRO_PLAN. Reporting that as the same "no"
+    // as "you are already on someone else's plan" is what made the feature
+    // look merely broken instead of inapplicable.
     const inviterUserSubscription = await this.userSubscriptionRepository.findOneByUserUuid(dto.inviterUuid)
-    if (inviterUserSubscription === null || inviterUserSubscription.subscriptionType === UserSubscriptionType.Shared) {
+    if (inviterUserSubscription === null) {
       return {
         success: false,
+        refusal: 'no-shareable-subscription',
+      }
+    }
+    if (inviterUserSubscription.subscriptionType === UserSubscriptionType.Shared) {
+      return {
+        success: false,
+        refusal: 'subscription-already-shared',
       }
     }
 
@@ -68,6 +83,7 @@ export class InviteToSharedSubscription implements UseCaseInterface {
     if (numberOfUsedInvites >= this.MAX_NUMBER_OF_INVITES) {
       return {
         success: false,
+        refusal: 'invite-limit-reached',
       }
     }
 
@@ -78,6 +94,7 @@ export class InviteToSharedSubscription implements UseCaseInterface {
     if (existingInvitation !== null && existingInvitation.status !== InvitationStatus.Canceled) {
       return {
         success: false,
+        refusal: 'already-invited',
       }
     }
 
