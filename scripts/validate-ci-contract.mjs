@@ -1491,6 +1491,57 @@ export function validateCiContract(files) {
     );
   }
 
+  // A step that runs `yarn` with the server directory as its cwd resolves
+  // through server's own PnP graph, and `server/.yarn/cache` is gitignored: a
+  // fresh checkout carries .pnp.cjs, which is tracked, but none of the zips it
+  // points at. container-smoke ran five such host-side drills while installing
+  // only Corepack, the root workspace and the Playwright runner, so the first
+  // of them -- the cross-device push round trip -- exited on "Required package
+  // missing from disk ... ws@virtual:...#npm:8.22.0" before it reached the
+  // stack, and every server-side step after it was skipped with it. Derived
+  // from the drills instead of asserted job by job, so a new job that repeats
+  // the omission cannot be green either.
+  const jobsSection = workflow.slice(workflow.indexOf("\njobs:\n"));
+  for (const jobMatch of jobsSection.matchAll(/\n  ([A-Za-z0-9_-]+):\r?\n/g)) {
+    const jobName = jobMatch[1];
+    const block = jobBlock(jobsSection, jobName);
+    if (!block.includes("working-directory: server")) {
+      continue;
+    }
+
+    const stepStarts = [
+      ...block.matchAll(/\r?\n      - (?:name|uses|run):/g),
+    ].map((step) => step.index);
+    const steps = stepStarts.map((start, position) => ({
+      start,
+      text: block.slice(start, stepStarts[position + 1] ?? block.length),
+    }));
+    const drill = steps.find(
+      (step) =>
+        step.text.includes("working-directory: server") &&
+        /\byarn\b/.test(step.text) &&
+        !step.text.includes("yarn install --immutable"),
+    );
+    if (!drill) {
+      continue;
+    }
+
+    const install = steps.find(
+      (step) =>
+        step.text.includes("working-directory: server") &&
+        step.text.includes("run: yarn install --immutable"),
+    );
+    if (!install) {
+      errors.push(
+        `${file}: ${jobName} runs yarn inside server without installing server dependencies immutably`,
+      );
+    } else if (install.start > drill.start) {
+      errors.push(
+        `${file}: ${jobName} must install server dependencies immutably before its first server yarn step`,
+      );
+    }
+  }
+
   // EVERY disposable stack has to mint the internal gRPC auth secret, and the
   // entrypoint has to hand it to the api-gateway. These are two halves of one
   // thing and neither is any use alone: the gateway SIGNS durable sync commands

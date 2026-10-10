@@ -311,15 +311,33 @@ jobs:
           --version "$SRN_DEPLOY_VERSION"
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
-      - name: Cache root Yarn and npm packages
+      - name: Cache root and server Yarn and npm packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .yarn/cache
+            server/.yarn/cache
             ~/.npm
-          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'e2e/package.json', 'e2e/package-lock.json') }}
+          key: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock', 'server/yarn.lock', 'e2e/package.json', 'e2e/package-lock.json') }}
           restore-keys: ci-stack-deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
       - name: Install root dependencies immutably
+        run: yarn install --immutable
+      # Five steps below run server e2e drills FROM THE HOST, through
+      # `yarn workspace @standard-red-notes/websocket-gateway node ...`, and
+      # every one of those scripts imports `ws` (the collaboration drill also
+      # imports `yjs`), so they need server's own PnP graph and cannot be
+      # de-indirected. This job installed Corepack, root dependencies, the
+      # Playwright runner and Chromium -- and never server's dependencies;
+      # `Install server dependencies immutably` existed only in `check` and
+      # `build`. Because `server/.yarn/cache` is gitignored this is not a
+      # zero-install tree and the zip really is absent, so the first of those
+      # five steps, the cross-device push round trip, died on `Required
+      # package missing from disk ... ws@virtual:...#npm:8.22.0` before it
+      # ever reached the stack, and every server-side step after it was
+      # skipped with it. server/yarn.lock is in the cache key above for the
+      # same reason it is in `check`'s: a lock change has to miss the cache.
+      - name: Install server dependencies immutably
+        working-directory: server
         run: yarn install --immutable
       - name: Install pinned Playwright test runner
         run: npm --prefix e2e ci --no-audit --no-fund --ignore-scripts

@@ -829,6 +829,37 @@ test("the required stack cannot skip the cross-device realtime push round trip",
   );
 });
 
+test("a job that runs yarn inside server must install server dependencies first", () => {
+  // The defect this catches: container-smoke ran five host-side server drills
+  // having installed only the root workspace, so its first one died on
+  // "Required package missing from disk ... ws@virtual:...#npm:8.22.0" and
+  // every server-side step after it was skipped. Both halves are mutated: a
+  // missing install, and an install that runs after the drills it exists for.
+  const installStep = [
+    "      - name: Install server dependencies immutably",
+    "        working-directory: server",
+    "        run: yarn install --immutable",
+    "",
+  ].join("\n");
+
+  const missing = withCiJobChanged("container-smoke", (job) =>
+    replaceRequired(job, installStep),
+  );
+  assert.match(
+    validateCiContract(missing).join("\n"),
+    /container-smoke runs yarn inside server without installing server dependencies immutably/,
+  );
+
+  const late = withCiJobChanged(
+    "container-smoke",
+    (job) => `${replaceRequired(job, installStep)}${installStep}`,
+  );
+  assert.match(
+    validateCiContract(late).join("\n"),
+    /container-smoke must install server dependencies immutably before its first server yarn step/,
+  );
+});
+
 test("the realtime push round trip must run under both the default and the gRPC service proxies", () => {
   // Dropping only the second run leaves the fragment present, so a
   // presence-only rule would pass. The count rule is what catches it.
