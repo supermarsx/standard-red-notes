@@ -126,8 +126,8 @@ export class TransactionAwareItemRepository implements ItemRepositoryInterface {
     throw new Error(`Item ${uuid} disappeared before it could be updated`)
   }
 
-  markItemsAsDeleted(itemUuids: string[], updatedAtTimestamp: number): Promise<void> {
-    return this.repository.markItemsAsDeleted(itemUuids, updatedAtTimestamp)
+  markItemsAsDeleted(itemUuids: string[], updatedAtTimestamp: number, userUuid: Uuid): Promise<void> {
+    return this.repository.markItemsAsDeleted(itemUuids, updatedAtTimestamp, userUuid)
   }
 
   updateContentSize(itemUuid: string, contentSize: number): Promise<void> {

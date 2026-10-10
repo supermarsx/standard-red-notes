@@ -32,7 +32,14 @@ export interface ItemRepositoryInterface {
   removeByUuid(uuid: Uuid): Promise<void>
   insert(item: Item): Promise<void>
   update(item: Item, expected: { userUuid: string; updatedAtTimestamp: number }): Promise<void>
-  markItemsAsDeleted(itemUuids: Array<string>, updatedAtTimestamp: number): Promise<void>
+  /**
+   * Standard Red Notes: `userUuid` is REQUIRED, and third rather than optional
+   * so that a caller which has not established whose rows these are cannot
+   * compile. The implementation empties `content`, `enc_item_key` and
+   * `auth_hash` in the same statement that flags the rows, so a uuid list
+   * crossing an account boundary is data loss and not a visibility bug.
+   */
+  markItemsAsDeleted(itemUuids: Array<string>, updatedAtTimestamp: number, userUuid: Uuid): Promise<void>
   updateContentSize(itemUuid: string, contentSize: number): Promise<void>
   unassignFromSharedVault(sharedVaultUuid: Uuid): Promise<void>
   updateSharedVaultOwner(dto: { sharedVaultUuid: Uuid; fromOwnerUuid: Uuid; toOwnerUuid: Uuid }): Promise<void>

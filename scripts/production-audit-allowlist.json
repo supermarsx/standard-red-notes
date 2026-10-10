@@ -6,8 +6,8 @@
     "vulnerableVersions": "<0.217.0",
     "versions": ["0.46.0"],
     "dependents": ["@standardnotes/domain-events-infra@npm:1.23.4"],
-    "rationale": "Re-verified 2026-10-08 structurally rather than by intent: the advisory is a crash in the Prometheus exporter's HTTP listener, and @opentelemetry/exporter-prometheus appears zero times in app/yarn.lock because sdk-node 0.46.0 does not depend on it, so the vulnerable module is absent from the installed graph and the listener cannot be constructed; the telemetry wiring supplies an explicit OTLP PeriodicExportingMetricReader instead. The patched 0.217.0 line needs @opentelemetry/api >= 1.9 while 0.46.0 pins the peer to < 1.8, so it is a family migration in the app lock domain, not a resolution.",
-    "expiry": "2026-11-08"
+    "rationale": "Re-verified 2026-10-10 structurally rather than by intent, and the previously recorded blocker was WRONG. What holds: the advisory is a crash in the Prometheus exporter's HTTP listener, @opentelemetry/exporter-prometheus appears zero times in app/yarn.lock, and the sdk-node 0.46.0 entry there depends on core, resources, sdk-metrics and sdk-trace-base/node pinned at 1.19.0 and on no prometheus exporter at all, so the vulnerable module is absent from the installed graph and the listener cannot be constructed; the wiring this copy serves (server/packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDK.ts) supplies an explicit OTLP PeriodicExportingMetricReader instead. What was wrong: the previous entry said the patched 0.217.0 needs @opentelemetry/api >= 1.9 while 0.46.0 pins the peer below 1.8. The registry gives 0.217.0 a peer range of >=1.3.0 <1.10.0 against 0.46.0's >=1.3.0 <1.8.0, and app/yarn.lock holds api 1.7.0 and 1.8.0, so the peer is not a blocker and that reason cannot be relied on. The real blocker is the family: 0.217.0 pins core, resources, sdk-metrics, sdk-trace-base and sdk-trace-node at 2.7.1 and adds @opentelemetry/configuration, while the installed copies are pinned at exactly 1.19.0 by this published dependent and by sdk-trace-node@1.19.0, so a keyed resolution on sdk-node alone puts two OpenTelemetry families underneath one prebuilt published package — and 0.217.0 adds exporter-prometheus as a hard dependency, installing the very module whose absence is today's mitigation. A family migration of a published dependency in the app lock domain, not a resolution.",
+    "expiry": "2027-01-08"
   },
   {
     "advisoryId": "1124011",
@@ -18,8 +18,8 @@
     "dependents": [
       "@opentelemetry/sdk-trace-node@virtual:a84ed6132578ddc74117561c3d24886f0e13f22a111a95cadb2664ed8640456323a0e58348830c2cb38f062f9bfe9a34f0c2a6c8f8a0222f557ef1189dbc9455#npm:1.19.0"
     ],
-    "rationale": "Re-verified 2026-10-08: the vulnerable JaegerPropagator.extract is only reachable once the propagator is registered, and the telemetry wiring this transitive copy serves (OpenTelemetrySDK.ts, the source of the published domain-events-infra the bundled home server depends on) passes a single explicit textMapPropagator of AWSXRayPropagator, which replaces the default propagator set; no OTEL_PROPAGATORS value exists anywhere in the repository to re-add jaeger. The patched 2.9.0 line requires migrating the whole pinned OpenTelemetry 1.19.x family, inside a published patched dependency of the app lock domain, so it cannot be a resolution here.",
-    "expiry": "2026-11-08"
+    "rationale": "Re-verified 2026-10-10: the vulnerable JaegerPropagator.extract is only reachable once the propagator is registered, and the telemetry wiring this transitive copy serves (server/packages/domain-events-infra/src/Infra/OpenTelemetry/OpenTelemetrySDK.ts line 61, the source of the published domain-events-infra the bundled home server depends on) passes a single explicit textMapPropagator of AWSXRayPropagator, which replaces the default propagator set rather than adding to it; git grep finds no OTEL_PROPAGATORS value anywhere in the tracked tree except this rationale, so nothing re-adds jaeger. Not resolvable by a pin: the registry shows the patched 2.9.0 depending on @opentelemetry/core 2.9.0, while this copy's dependent sdk-trace-node@1.19.0 pins core 1.19.0, so adopting it crosses OpenTelemetry major families inside a published patched dependency of the app lock domain — a family migration, not a keyed resolution.",
+    "expiry": "2027-01-08"
   },
   {
     "advisoryId": "1239766",
@@ -28,8 +28,8 @@
     "vulnerableVersions": ">=0.6.3 <=2.0.2",
     "versions": ["1.0.2"],
     "dependents": ["metro@npm:0.84.4"],
-    "rationale": "Re-verified 2026-10-08, and the previous entry for this package was wrong about why: a patched image-size now exists (2.0.3, 2.0.4), but it cannot be adopted here. Metro 0.84.4 getAssetData calls the image-size default export with a FILE PATH (src/Assets.js, isImageInput is assetInfo.files[0] unless the asset sits inside a .zip), and image-size 2.x moved path input to a separate fromFile entry point, so a 2.x pin makes that call throw a TypeError. Verified by packing 2.0.4 and calling it: a Buffer returns dimensions, a path string throws. Metro is repository-controlled mobile bundler tooling that never parses third-party images, and no shipped application or server runtime includes this parser. Revisit when Metro adopts fromFile.",
-    "expiry": "2026-11-08"
+    "rationale": "Re-verified 2026-10-10 on both sides, from the published package and from the installed one. There is no patched version in this major: the registry lists 2.0.3 and 2.0.4 as the only fixed releases (dist-tag latest 2.0.4, legacy 1.2.1 — and 1.2.1 is itself inside the advisory's >=0.6.3 <=2.0.2 range), so a 1.x floor cannot clear it. And 2.x cannot be adopted: in the packed 2.0.4, dist/cjs/index.d.ts exports only imageSize(input: Uint8Array), while path input moved to the separate subpath export image-size/fromFile as the ASYNC imageSizeFromFile(filePath: string). The installed metro 0.84.4, read out of app/.yarn/cache, calls the default export SYNCHRONOUSLY with a FILE PATH at src/Assets.js lines 174-177 (assetInfo.files[0]; a Buffer only when the asset sits inside a .zip), so a keyed resolution to 2.x breaks that call and even a Metro code change could not keep it synchronous. Metro is repository-controlled mobile bundler tooling that never parses third-party images, and this parser is absent from every shipped application and server runtime. Revisit when Metro adopts fromFile.",
+    "expiry": "2027-01-08"
   },
   {
     "advisoryId": "1240992",
@@ -38,7 +38,7 @@
     "vulnerableVersions": "<=3.0.3",
     "versions": ["3.0.3"],
     "dependents": ["chokidar@npm:3.6.0"],
-    "rationale": "Verified 2026-10-08: there is NO patched braces release to move to. The advisory covers <=3.0.3 and 3.0.3 is the newest version npm has ever published, so no resolution, floor or dedupe can clear it and a pin would only relabel the same bytes. The single dependent is chokidar 3.6.0, a development-time file watcher used by the bundler and test runners; it expands only glob patterns that this repository authors, never request data, and it is absent from every shipped runtime bundle. Short horizon so the first published fix gets picked up rather than sitting behind a long exception.",
-    "expiry": "2026-11-08"
+    "rationale": "Re-verified 2026-10-10: there is still NO patched braces release to move to. npm view braces versions ends at 3.0.3, which is the version installed here, and the advisory covers <=3.0.3, so no resolution, floor or dedupe can clear it and a pin would only relabel the same bytes; app/yarn.lock holds a single copy (braces@npm:^3.0.3, braces@npm:~3.0.2 both resolving to 3.0.3). The single dependent is chokidar 3.6.0, a development-time file watcher used by the bundler and test runners; it expands only glob patterns that this repository authors, never request data, and it is absent from every shipped runtime bundle. The previous entry deliberately kept a one-month horizon so the first published fix would be picked up; two monthly re-checks have now returned the same newest-ever 3.0.3, so the horizon is a quarter instead — re-checking is one npm view, and nothing about the exposure can change until upstream publishes.",
+    "expiry": "2027-01-08"
   }
 ]

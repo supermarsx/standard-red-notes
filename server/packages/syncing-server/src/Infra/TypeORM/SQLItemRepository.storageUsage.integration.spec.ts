@@ -187,7 +187,7 @@ describe('SQLItemRepository.getStorageUsageForUser', () => {
     await repository.updateContentSize(first, 10)
     expect((await repository.getStorageUsageForUser(userUuid)).sizedBytes).toEqual(1_010)
 
-    await repository.markItemsAsDeleted([first], 200)
+    await repository.markItemsAsDeleted([first], 200, userUuid)
     await repository.updateContentSize(first, 0)
     expect(await repository.getStorageUsageForUser(userUuid)).toEqual({
       sizedBytes: 1_000,

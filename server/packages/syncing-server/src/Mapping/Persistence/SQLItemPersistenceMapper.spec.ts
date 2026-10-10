@@ -154,6 +154,16 @@ describe('SQLItemPersistenceMapper', () => {
       ).toBeUndefined()
     })
 
+    // The column is a varchar, so a non-string here is a driver or a typing
+    // lying about a row — the one input that can still fail
+    // `KeySystemAssociation.create`, and the reason that arm is a real branch
+    // rather than an unfailable one.
+    it('rejects a row whose key system identifier is not a string at all', () => {
+      expect(() => createMapper().toDomain(createProjection({ keySystemIdentifier: 5 as unknown as string }))).toThrow(
+        /^Failed to create item from projection:/,
+      )
+    })
+
     it('restores the key system association when persisted', () => {
       const item = createMapper().toDomain(createProjection({ keySystemIdentifier: 'key-system-identifier' }))
 

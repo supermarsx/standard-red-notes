@@ -9,6 +9,7 @@ import { ExtendedIntegrityPayload } from '../../Domain/Item/ExtendedIntegrityPay
 import { ItemContentSizeDescriptor } from '../../Domain/Item/ItemContentSizeDescriptor'
 import { ItemStorageUsage } from '../../Domain/Item/ItemStorageUsage'
 import { ConcurrentItemUpdateError } from '../../Domain/Item/ConcurrentItemUpdateError'
+import { ITEM_MAPPABILITY_COLUMNS, parseItemProjection } from '../../Mapping/Persistence/SQLItemProjectionParser'
 import { SQLItem } from './SQLItem'
 
 export class SQLItemRepository implements ItemRepositoryInterface {
@@ -278,27 +279,74 @@ export class SQLItemRepository implements ItemRepositoryInterface {
   }
 
   async findDatesForComputingIntegrityHash(userUuid: string): Promise<Array<{ updated_at_timestamp: number }>> {
-    const queryBuilder = this.ormRepository.createQueryBuilder('item')
-    queryBuilder.select('item.updated_at_timestamp')
-    queryBuilder.where('item.user_uuid = :userUuid', { userUuid: userUuid })
-    queryBuilder.andWhere('item.deleted = :deleted', { deleted: false })
+    const rows = await this.findDeliverableRowsForReporting(userUuid)
 
-    const items = await queryBuilder.getRawMany()
-
-    return items.sort((itemA, itemB) => itemB.updated_at_timestamp - itemA.updated_at_timestamp)
+    return rows
+      .map((row) => ({ updated_at_timestamp: row.updatedAtTimestamp }))
+      .sort((itemA, itemB) => itemB.updated_at_timestamp - itemA.updated_at_timestamp)
   }
 
   async findItemsForComputingIntegrityPayloads(userUuid: string): Promise<ExtendedIntegrityPayload[]> {
-    const queryBuilder = this.ormRepository.createQueryBuilder('item')
-    queryBuilder.select('item.uuid', 'uuid')
-    queryBuilder.addSelect('item.updated_at_timestamp', 'updated_at_timestamp')
-    queryBuilder.addSelect('item.content_type', 'content_type')
-    queryBuilder.where('item.user_uuid = :userUuid', { userUuid: userUuid })
-    queryBuilder.andWhere('item.deleted = :deleted', { deleted: false })
+    const rows = await this.findDeliverableRowsForReporting(userUuid)
 
-    const items = await queryBuilder.getRawMany()
+    return rows
+      .map((row) => ({
+        uuid: row.uuid,
+        updated_at_timestamp: row.updatedAtTimestamp,
+        content_type: row.contentType,
+      }))
+      .sort((itemA, itemB) => itemB.updated_at_timestamp - itemA.updated_at_timestamp)
+  }
 
-    return items.sort((itemA, itemB) => itemB.updated_at_timestamp - itemA.updated_at_timestamp)
+  /**
+   * Standard Red Notes: NOTHING MAY BE REPORTED THAT CANNOT BE DELIVERED.
+   *
+   * Both readers above answer "what does the server hold for this account?", and
+   * a client compares that answer against its own store and then asks for
+   * whatever is missing. Those two questions used to be answered by different
+   * code: these readers took three columns of raw SQL and mapped nothing, while
+   * the fetch paths build a domain `Item` and drop — with a log line and nothing
+   * else — any row the mapper refuses. A row in that gap is reported forever and
+   * delivered never, and a client's only remedy, syncing again, reproduces it
+   * exactly. The repo has already learned that reliable pushes turn a rare race
+   * into a frequent one, so this is not costed as rare: every integrity check
+   * from every device of that account spends a full fetch round trip on a row
+   * none of them can ever store.
+   *
+   * So both readers now consult `parseItemProjection`, which IS the fetch path's
+   * decision rather than a copy of it, and a row that fails it is excluded here
+   * and named in the log so an operator can repair it. Exclusion loses nothing a
+   * client could have had: the fetch paths were never able to deliver these rows.
+   *
+   * The select carries `ITEM_MAPPABILITY_COLUMNS` — every column a mapping
+   * decision reads and no more, so an account's `content` is not pulled through
+   * an integrity check. `getMany()` and not `getRawMany()` on purpose: the
+   * entity hydration is what turns a driver's datetime into a `Date` and a
+   * `tinyint` into a boolean, and the fetch path decides on hydrated rows, so a
+   * raw read would answer the question about different values than the ones
+   * `findAll` will see.
+   */
+  private async findDeliverableRowsForReporting(userUuid: string): Promise<SQLItem[]> {
+    const rows = await this.ormRepository
+      .createQueryBuilder('item')
+      .select(ITEM_MAPPABILITY_COLUMNS.map((column) => `item.${column}`))
+      .where('item.user_uuid = :userUuid', { userUuid: userUuid })
+      .andWhere('item.deleted = :deleted', { deleted: false })
+      .getMany()
+
+    return rows.filter((row) => {
+      const partsOrError = parseItemProjection(row)
+      if (partsOrError.isFailed()) {
+        this.logger.error(
+          `Withheld unmappable item ${row.uuid} for user ${userUuid} from integrity reporting, ` +
+            `because no sync can deliver it: ${partsOrError.getError()}`,
+        )
+
+        return false
+      }
+
+      return true
+    })
   }
 
   async findByUuidAndUserUuid(uuid: string, userUuid: string): Promise<Item | null> {
@@ -350,7 +398,24 @@ export class SQLItemRepository implements ItemRepositoryInterface {
     return this.createFindAllQueryBuilder(query).getCount()
   }
 
-  async markItemsAsDeleted(itemUuids: Array<string>, updatedAtTimestamp: number): Promise<void> {
+  /**
+   * Standard Red Notes: A BULK WRITE NEEDS AN OWNER, NOT JUST A LIST OF UUIDS.
+   *
+   * This nulls `content`, `enc_item_key` and `auth_hash` as well as flagging the
+   * row, so a uuid that reaches it by mistake is not merely hidden, it is
+   * emptied. Keyed on `uuid IN (...)` alone, one foreign uuid anywhere in a list
+   * assembled from one account's input destroys another account's item, and no
+   * caller can hold that invariant on its own. `userUuid` is required rather
+   * than optional for that reason: a caller that does not know whose rows these
+   * are has no business running this statement.
+   *
+   * The predicate is positive (`user_uuid = :userUuid`) and not a negation, so a
+   * row whose `user_uuid` is NULL — the column is nullable in the MySQL schema
+   * this ships with — matches nothing and is left untouched. That is the safe
+   * direction for a statement that erases content: a row this server cannot
+   * attribute is a row it must not empty.
+   */
+  async markItemsAsDeleted(itemUuids: Array<string>, updatedAtTimestamp: number, userUuid: Uuid): Promise<void> {
     await this.ormRepository
       .createQueryBuilder('item')
       .update()
@@ -363,6 +428,9 @@ export class SQLItemRepository implements ItemRepositoryInterface {
       })
       .where('uuid IN (:...uuids)', {
         uuids: itemUuids,
+      })
+      .andWhere('user_uuid = :userUuid', {
+        userUuid: userUuid.value,
       })
       .execute()
   }
