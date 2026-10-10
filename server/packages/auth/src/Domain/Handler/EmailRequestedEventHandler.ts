@@ -22,6 +22,7 @@ import {
   serializeEmailBackupDeliveryState,
 } from '../Email/EmailBackupDeliveryState'
 import { applyEmailBackupStatePatch } from '../Email/EmailBackupStatePatch'
+import { EmailDeliveryNotConfirmedError } from '../Email/EmailDeliveryNotConfirmedError'
 import { EmailBackupStateRepositoryInterface } from '../Email/EmailBackupStateRepositoryInterface'
 import { EmailAttachment, EmailDeliveryStatus, EmailSenderInterface } from '../Email/EmailSenderInterface'
 import { createEmailDeliveryId } from '../Email/EmailDeliveryId'
@@ -34,6 +35,8 @@ type AttachmentReadResult =
 interface EmailDeliveryAcceptance {
   accepted: boolean
   terminal: boolean
+  /** Resolved only when nothing was accepted, to separate the two causes. */
+  deliveryConfigured?: boolean
 }
 
 export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
@@ -128,7 +131,16 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
       this.deliveryIdForEvent(event, messageIdentifier),
     )
     if (!delivery.accepted) {
-      throw new Error('Email delivery was not confirmed')
+      // Name the lost notification and the cause here, because every publisher
+      // of EMAIL_REQUESTED catches and logs through safeErrorLogMetadata, which
+      // keeps only the error type.
+      this.logger.error('Email request was not accepted by the delivery pipeline', {
+        codeTag: 'EmailRequestedEventHandler',
+        messageIdentifier,
+        deliveryConfigured: delivery.deliveryConfigured === true,
+      })
+
+      throw new EmailDeliveryNotConfirmedError(messageIdentifier, delivery.deliveryConfigured === true)
     }
 
     this.logAccepted(messageIdentifier, delivery.terminal)
@@ -601,6 +613,7 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
       return {
         accepted,
         terminal: accepted && this.emailSender.acceptanceMode === 'provider',
+        ...(accepted ? {} : { deliveryConfigured: await this.deliveryIsConfigured() }),
       }
     } catch {
       this.logger.error('Email delivery provider failed', {
@@ -608,7 +621,20 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
         messageIdentifier,
       })
 
-      return { accepted: false, terminal: false }
+      return { accepted: false, terminal: false, deliveryConfigured: await this.deliveryIsConfigured() }
+    }
+  }
+
+  /**
+   * Only consulted on the failure path, and never allowed to mask the failure
+   * it is describing: a sender that cannot answer is reported as configured, so
+   * the operator is pointed at the relay rather than told to go and set one up.
+   */
+  private async deliveryIsConfigured(): Promise<boolean> {
+    try {
+      return await this.emailSender.isConfigured()
+    } catch {
+      return true
     }
   }
 

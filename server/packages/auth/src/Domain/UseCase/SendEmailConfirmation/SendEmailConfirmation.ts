@@ -34,6 +34,22 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
     private logger: Logger,
   ) {}
 
+  /**
+   * Whether this deployment can currently deliver a confirmation link at all.
+   *
+   * Register asks BEFORE it decides to create an account unconfirmed: an
+   * unconfirmed account whose link cannot be sent is a permanent lockout, and
+   * "the use case is wired" is not the same question as "mail can leave".
+   * An unanswerable sender reports false, which keeps the new account usable.
+   */
+  async isDeliveryConfigured(): Promise<boolean> {
+    try {
+      return await this.emailSender.isConfigured()
+    } catch {
+      return false
+    }
+  }
+
   async execute(dto: SendEmailConfirmationDTO): Promise<Result<boolean>> {
     if (!dto.userUuid || !dto.email) {
       return Result.fail('Could not send email confirmation: missing user identifier.')

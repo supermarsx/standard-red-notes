@@ -15,6 +15,7 @@ describe('SmtpEmailSender', () => {
 
     logger = {} as jest.Mocked<Logger>
     logger.debug = jest.fn()
+    logger.warn = jest.fn()
     logger.error = jest.fn()
 
     sendMail = jest.fn().mockResolvedValue({ accepted: ['person@example.com'], rejected: [] })
@@ -84,7 +85,42 @@ describe('SmtpEmailSender', () => {
     await expect(sender.sendEmail('person@example.com', 'subject', 'body')).resolves.toBe(false)
 
     expect(nodemailer.createTransport).not.toHaveBeenCalled()
-    expect(logger.debug).toHaveBeenCalledWith('SMTP is not configured. Skipping email delivery.')
+    // An unconfigured relay is the one cause a self-hosted operator has to fix,
+    // so it must not sit below the shipped LOG_LEVEL=info.
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Email delivery is not configured; the message was not sent to any relay.',
+      {
+        codeTag: 'SmtpEmailSender',
+        reason: 'relay-unconfigured',
+      },
+    )
+    expect(logger.debug).not.toHaveBeenCalled()
+  })
+
+  it('reports a rejected recipient separately from an unconfigured relay', async () => {
+    const sender = new SmtpEmailSender({ host: 'smtp.example.com', from: 'notes@example.com' }, logger)
+
+    await expect(sender.sendEmail('not-an-address', 'subject', 'body')).resolves.toBe(false)
+
+    expect(nodemailer.createTransport).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith('Email delivery rejected a message before contacting the relay.', {
+      codeTag: 'SmtpEmailSender',
+      reason: 'invalid-recipient',
+    })
+  })
+
+  it('reports a header-injecting subject as an invalid subject, not an unconfigured relay', async () => {
+    const sender = new SmtpEmailSender({ host: 'smtp.example.com', from: 'notes@example.com' }, logger)
+
+    const injectedSubject = ['subject', 'Bcc: x@example.com'].join(String.fromCharCode(13, 10))
+
+    await expect(sender.sendEmail('person@example.com', injectedSubject, 'body')).resolves.toBe(false)
+
+    expect(nodemailer.createTransport).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith('Email delivery rejected a message before contacting the relay.', {
+      codeTag: 'SmtpEmailSender',
+      reason: 'invalid-subject',
+    })
   })
 
   it('rejects an invalid SMTP port as unconfigured', async () => {

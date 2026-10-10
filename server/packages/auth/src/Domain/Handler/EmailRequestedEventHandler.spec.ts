@@ -12,6 +12,7 @@ import {
   InvalidBackupAttachmentReferenceError,
 } from '../Email/BackupAttachmentStorageInterface'
 import { EmailSenderInterface } from '../Email/EmailSenderInterface'
+import { EmailDeliveryNotConfirmedError } from '../Email/EmailDeliveryNotConfirmedError'
 import { EmailBackupStateRepositoryInterface } from '../Email/EmailBackupStateRepositoryInterface'
 import { EmailBackupDeliveryState, emptyEmailBackupDeliveryState } from '../Email/EmailBackupDeliveryState'
 import { GetSetting } from '../UseCase/GetSetting/GetSetting'
@@ -308,6 +309,60 @@ describe('EmailRequestedEventHandler', () => {
 
     expect(emailSender.sendEmail).not.toHaveBeenCalled()
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('private provider failure')
+  })
+
+  it.each([
+    ['no relay is configured', false],
+    ['a configured relay refused', true],
+  ] as const)('names the lost notification and the cause when %s', async (_case, configured) => {
+    // Every EMAIL_REQUESTED publisher catches this and logs through
+    // safeErrorLogMetadata, which keeps only the error TYPE. Without a named
+    // error plus this log, the whole operator-visible trace of an undelivered
+    // sign-in notice was `errorType: "Error"`.
+    emailSender.sendEmail.mockResolvedValue(false)
+    emailSender.isConfigured = jest.fn().mockResolvedValue(configured)
+
+    const thrown = await createHandler()
+      .handle(
+        event({
+          messageIdentifier: 'USER_INVITED_TO_SHARED_VAULT',
+          backupBatchId: undefined,
+          attachments: undefined,
+          userUuid: undefined,
+        }),
+      )
+      .then(() => undefined)
+      .catch((error: unknown) => error)
+
+    expect(thrown).toBeInstanceOf(EmailDeliveryNotConfirmedError)
+    expect((thrown as EmailDeliveryNotConfirmedError).name).toEqual('EmailDeliveryNotConfirmedError')
+    expect((thrown as EmailDeliveryNotConfirmedError).messageIdentifier).toEqual('USER_INVITED_TO_SHARED_VAULT')
+    expect((thrown as EmailDeliveryNotConfirmedError).deliveryConfigured).toBe(configured)
+    expect(logger.error).toHaveBeenCalledWith('Email request was not accepted by the delivery pipeline', {
+      codeTag: 'EmailRequestedEventHandler',
+      messageIdentifier: 'USER_INVITED_TO_SHARED_VAULT',
+      deliveryConfigured: configured,
+    })
+  })
+
+  it('does not blame an unconfigured relay when the sender cannot answer', async () => {
+    emailSender.sendEmail.mockResolvedValue(false)
+    emailSender.isConfigured = jest.fn().mockRejectedValue(new Error('redis unavailable'))
+
+    const thrown = await createHandler()
+      .handle(
+        event({
+          messageIdentifier: 'SIGN_IN',
+          backupBatchId: undefined,
+          attachments: undefined,
+          userUuid: undefined,
+        }),
+      )
+      .then(() => undefined)
+      .catch((error: unknown) => error)
+
+    expect((thrown as EmailDeliveryNotConfirmedError).deliveryConfigured).toBe(true)
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('redis unavailable')
   })
 
   it('retains a provider-accepted durable backup when its receipt cannot be recorded', async () => {

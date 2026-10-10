@@ -35,8 +35,24 @@ export class SmtpEmailSender implements EmailSenderInterface {
   async sendEmail(to: string, subject: string, body: string, options?: SendEmailOptions): Promise<boolean> {
     const config = await this.resolveConfig()
     const recipient = validateEmailRecipient(to)
-    if (!isEmailDeliveryConfigured(config) || !recipient || /[\r\n\0]/.test(subject) || subject.length > 998) {
-      this.logger.debug('SMTP is not configured. Skipping email delivery.')
+    // An unconfigured relay and a malformed message are different operator
+    // problems, and the first one is the whole reason a self-hosted deployment
+    // silently sends nothing. Diagnose each at a level the shipped
+    // LOG_LEVEL=info actually prints: at `debug` the only trace an operator saw
+    // was a cause-free "could not publish" from the event publisher.
+    if (!isEmailDeliveryConfigured(config)) {
+      this.logger.warn('Email delivery is not configured; the message was not sent to any relay.', {
+        codeTag: 'SmtpEmailSender',
+        reason: 'relay-unconfigured',
+      })
+
+      return false
+    }
+    if (!recipient || /[\r\n\0]/.test(subject) || subject.length > 998) {
+      this.logger.warn('Email delivery rejected a message before contacting the relay.', {
+        codeTag: 'SmtpEmailSender',
+        reason: recipient ? 'invalid-subject' : 'invalid-recipient',
+      })
 
       return false
     }

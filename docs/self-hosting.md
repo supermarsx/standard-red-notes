@@ -210,6 +210,24 @@ for the database, Redis, operation-limit, and image-pinning model.
 
 **Email delivery topology and reliability.**
 
+**Nothing is configured out of the box, and until it is, no notification leaves
+the server.** `SMTP_HOST` and `SMTP_FROM` are both empty by default in
+`.env.example` and `.env.single.example`, and with them empty every
+user-facing message is dropped: the registration confirmation link and its
+resend, the sign-in notice, the magic-link verification code, the e-mail-changed
+confirmation, the account-approval notice, shared-vault and shared-subscription
+invitations, e-mail backups, and e-mail reminders. To turn delivery on, set
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` and (if the relay authenticates)
+`SMTP_USER` + `SMTP_PASS`; `SMTP_SECURE=true` selects implicit TLS, otherwise
+STARTTLS is required unless `SMTP_ALLOW_INSECURE=true`, which is accepted only
+for a loopback, RFC1918 or `*.localhost` relay host. Verify with
+`POST /v1/admin/email-delivery/test` from the admin panel: it reports success
+only when the relay accepted the message. On the multi-service topology a
+notification produced while no relay is enabled is retained by the event
+transport and delivered once one is; on the single-container topology there is
+no e-mail queue, so an undelivered notification is **lost** — the per-message
+`SmtpEmailSender` warning in the log is the only record.
+
 The full multi-service Compose topology uses Redis for a bounded encrypted email
 queue and supports up to 20 prioritized SMTP, SendGrid, Mailgun, and AWS SES
 relay profiles. The queue worker performs retry, fallback, per-relay rate limiting,

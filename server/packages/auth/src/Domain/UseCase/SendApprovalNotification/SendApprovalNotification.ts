@@ -31,6 +31,13 @@ export class SendApprovalNotification implements UseCaseInterface<boolean> {
 
     try {
       if (!(await this.emailSender.isConfigured())) {
+        // The approval itself already succeeded and the admin UI reports that,
+        // so a silent skip here left an operator believing the user had been
+        // told. Mirror SendEmailConfirmation and say so.
+        this.logger.warn(
+          `[approval] Email delivery is not configured; the approval notice for user ${dto.userUuid} was not sent.`,
+        )
+
         return Result.ok(false)
       }
 

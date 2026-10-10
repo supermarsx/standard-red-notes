@@ -22,6 +22,7 @@ describe('SendApprovalNotification', () => {
 
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
+    logger.warn = jest.fn()
   })
 
   it('should fail if no email is given', async () => {
@@ -40,6 +41,12 @@ describe('SendApprovalNotification', () => {
     expect(result.isFailed()).toBe(false)
     expect(result.getValue()).toBe(false)
     expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    // The approval itself succeeded and the admin UI says so, so the skip
+    // must not be silent: without this the operator believes the approved
+    // user was told.
+    expect(logger.warn).toHaveBeenCalledWith(
+      `[approval] Email delivery is not configured; the approval notice for user ${userUuid} was not sent.`,
+    )
   })
 
   it('should send the approval email without a sign-in link when no url is given', async () => {

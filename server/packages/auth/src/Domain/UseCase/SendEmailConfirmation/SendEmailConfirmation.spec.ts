@@ -142,4 +142,18 @@ describe('SendEmailConfirmation', () => {
     expect(noUuid.isFailed()).toBe(true)
     expect(tokenRepository.save).not.toHaveBeenCalled()
   })
+
+  describe('isDeliveryConfigured', () => {
+    it.each([true, false])('reports what the sender reports (%s)', async (configured) => {
+      emailSender.isConfigured = jest.fn().mockResolvedValue(configured)
+
+      await expect(createUseCase().isDeliveryConfigured()).resolves.toBe(configured)
+    })
+
+    it('reports false when the sender cannot answer, so a lockout is never risked', async () => {
+      emailSender.isConfigured = jest.fn().mockRejectedValue(new Error('relay unreachable'))
+
+      await expect(createUseCase().isDeliveryConfigured()).resolves.toBe(false)
+    })
+  })
 })

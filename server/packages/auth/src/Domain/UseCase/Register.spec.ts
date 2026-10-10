@@ -1036,7 +1036,14 @@ describe('Register', () => {
       version: '004',
     }
 
-    const createWith = (resolver: RegistrationConfigResolverInterface, sender?: { execute: jest.Mock }) =>
+    // A wired confirmation sender on a deployment that CAN send: every case
+    // below that passes a sender means that, so the default lives here and the
+    // unconfigured-delivery cases pass their own.
+    const createWith = (
+      resolver: RegistrationConfigResolverInterface,
+      sender?: { execute: jest.Mock; isDeliveryConfigured?: jest.Mock },
+      logger?: { error: jest.Mock; warn: jest.Mock },
+    ) =>
       new Register(
         userRepository,
         roleRepository,
@@ -1052,7 +1059,10 @@ describe('Register', () => {
         false,
         undefined,
         resolver,
-        sender as never,
+        (sender === undefined
+          ? undefined
+          : { isDeliveryConfigured: jest.fn().mockResolvedValue(true), ...sender }) as never,
+        logger as never,
       )
 
     it('creates the user UNCONFIRMED and sends the confirmation email when enabled', async () => {
@@ -1096,6 +1106,47 @@ describe('Register', () => {
       expect(result.success).toBe(true)
       const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
       expect(savedUser.emailConfirmed).toBeUndefined()
+    })
+
+    it.each([
+      ['delivery is unconfigured', false],
+      ['the sender cannot answer', 'throws'],
+    ] as const)('does NOT create an unconfirmed user when %s (never lock out)', async (_case, mode) => {
+      // Measured before this gate existed: with the feature on and no relay,
+      // the account was created unconfirmed, the client was told to check its
+      // inbox, and sign-in answered 403 forever. `sender !== undefined` only
+      // ever said the use case was WIRED, which it always is.
+      const sender = {
+        execute: jest.fn().mockResolvedValue(Result.ok(false)),
+        isDeliveryConfigured:
+          mode === 'throws'
+            ? jest.fn().mockRejectedValue(new Error('relay unreachable'))
+            : jest.fn().mockResolvedValue(false),
+      }
+      const logger = { error: jest.fn(), warn: jest.fn() }
+
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender, logger).execute(dto)
+
+      expect(result).toEqual({ success: true, result: { response: { foo: 'bar' }, session } })
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.emailConfirmed).toBeUndefined()
+      expect(sender.execute).not.toHaveBeenCalled()
+      expect(logger.warn).toHaveBeenCalledTimes(1)
+    })
+
+    it('still creates an unconfirmed user when delivery is configured', async () => {
+      const sender = {
+        execute: jest.fn().mockResolvedValue(Result.ok(true)),
+        isDeliveryConfigured: jest.fn().mockResolvedValue(true),
+      }
+      const logger = { error: jest.fn(), warn: jest.fn() }
+
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender, logger).execute(dto)
+
+      expect(result).toEqual({ success: true, emailConfirmationRequired: true })
+      const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+      expect(savedUser.emailConfirmed).toBe(false)
+      expect(logger.warn).not.toHaveBeenCalled()
     })
 
     it('still succeeds if the confirmation email send throws (best-effort)', async () => {

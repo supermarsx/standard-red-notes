@@ -65,7 +65,7 @@ export class Register implements UseCaseInterface {
     // param so existing call sites / specs keep compiling; when absent, no
     // confirmation email is ever sent (feature effectively off).
     private sendEmailConfirmation?: SendEmailConfirmation,
-    private logger?: { error: (message: string) => void },
+    private logger?: { error: (message: string) => void; warn?: (message: string) => void },
     // Standard Red Notes: SIGNUP CAPS (part of the admin anti-abuse surface).
     // The rate limiter backs the per-IP + per-device SOFT caps (atomic Redis
     // INCR/EXPIRE, fail-open); the resolver supplies the effective cap policy
@@ -239,8 +239,25 @@ export class Register implements UseCaseInterface {
     // otherwise the account would be created confirmed (DB default), so a
     // misconfiguration can never lock a new user out. When disabled the column is
     // left unset and the database default (confirmed) applies.
+    // `sendEmailConfirmation !== undefined` only says the use case is WIRED,
+    // which it always is on both shipped topologies — so the promise above was
+    // not kept: with the feature on and no relay configured, the account was
+    // created unconfirmed, the client was told to check its inbox, and sign-in
+    // answered 403 forever. Ask whether mail can actually leave.
     const requireEmailConfirmation =
-      registrationConfig.emailConfirmationEnabled && this.sendEmailConfirmation !== undefined
+      registrationConfig.emailConfirmationEnabled &&
+      this.sendEmailConfirmation !== undefined &&
+      (await this.emailConfirmationCanBeDelivered(this.sendEmailConfirmation))
+    if (
+      registrationConfig.emailConfirmationEnabled &&
+      this.sendEmailConfirmation !== undefined &&
+      !requireEmailConfirmation
+    ) {
+      this.logger?.warn?.(
+        'Email confirmation is enabled but email delivery is not configured; the new account was created confirmed ' +
+          'so the confirmation link it could never receive cannot lock it out.',
+      )
+    }
     if (requireEmailConfirmation) {
       user.emailConfirmed = false
       user.emailConfirmedAt = null
@@ -384,6 +401,23 @@ export class Register implements UseCaseInterface {
    * Fails OPEN (returns false) when no setting store is wired, so the env behavior
    * is preserved.
    */
+  /**
+   * Can a confirmation link actually be delivered right now?
+   *
+   * A registration must never fail because this question could not be answered,
+   * and an unanswerable sender must never be taken for a working one: an
+   * unconfirmed account whose link cannot be sent is a permanent lockout, while
+   * a confirmed account on a deployment that could in fact have emailed is a
+   * policy miss the operator can correct.
+   */
+  private async emailConfirmationCanBeDelivered(sender: SendEmailConfirmation): Promise<boolean> {
+    try {
+      return await sender.isDeliveryConfigured()
+    } catch {
+      return false
+    }
+  }
+
   private async registrationDisabledBySetting(): Promise<boolean> {
     if (this.settingRepository === undefined) {
       return false
