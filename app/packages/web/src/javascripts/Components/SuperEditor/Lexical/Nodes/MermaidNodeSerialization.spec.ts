@@ -24,6 +24,8 @@ import {
 import {
   DEFAULT_MERMAID_BACKGROUND,
   DEFAULT_MERMAID_THEME_MODE,
+  FIRST_MERMAID_VERSION_WITH_APP_THEME,
+  FIRST_MERMAID_VERSION_WITH_FIT_BOTH_DEFAULT,
   MAX_MERMAID_MAX_HEIGHT_PX,
   MERMAID_BACKGROUNDS,
   MIN_MERMAID_MAX_HEIGHT_PX,
@@ -119,7 +121,7 @@ describe('MermaidNode — the size round-trips', () => {
       // `maxHeight` is the one exception — absent means "follow the window", and
       // writing today's resolved pixel number would freeze this window's height
       // into the note.
-      fitMode: 'fitWidth',
+      fitMode: 'fitBoth',
       maxHeight: undefined,
       alignment: 'left',
       // t122: `auto` — paint a surface only when the diagram's theme disagrees
@@ -167,7 +169,7 @@ describe('MermaidNode — the size round-trips', () => {
       } as unknown as SerializedMermaidNode).exportJSON(),
     )
     const defaults: Record<string, unknown> = {
-      fitMode: 'fitWidth',
+      fitMode: 'fitBoth',
       alignment: 'left',
       background: 'auto',
       zoomPan: true,
@@ -307,7 +309,90 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
       MermaidNode.importJSON({ type: 'mermaid', version: 1, code: CODE } as SerializedMermaidNode).exportJSON(),
     )
     expect(node.version).toBe(MERMAID_VERSION)
-    expect(MERMAID_VERSION).toBe(4)
+    expect(MERMAID_VERSION).toBe(5)
+  })
+
+  /**
+   * The fit mode's version gate — the half of "the chart is rendered way too
+   * wide" that moving a default cannot reach.
+   *
+   * Version 4 made `fitWidth` the default and `exportJSON` writes `fitMode`
+   * unconditionally, so every diagram created or re-saved under that build
+   * carries `fitWidth` in the note. Measured in headless Chrome, that drew the
+   * default 263x363 flowchart 650px wide and 897px tall inside a 668px note
+   * column, at 247%. Without this migration the operator's EXISTING diagrams
+   * keep rendering that way however the default moves, because the note says so.
+   */
+  it('turns a version-4 `fitWidth` into the default, where fitWidth was the default', () => {
+    for (const version of [1, 2, 3, 4]) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version,
+          code: CODE,
+          theme: 'dark',
+          viewMode: 'preview',
+          fitMode: 'fitWidth',
+        } as unknown as SerializedMermaidNode).exportJSON(),
+      )
+      expect(json.fitMode).toBe('fitBoth')
+    }
+  })
+
+  it('keeps `fitWidth` from version 5 on, where it is a real choice', () => {
+    for (const version of [MERMAID_VERSION, MERMAID_VERSION + 1]) {
+      const json = inEditor(() =>
+        MermaidNode.importJSON({
+          type: 'mermaid',
+          version,
+          code: CODE,
+          theme: 'dark',
+          viewMode: 'preview',
+          fitMode: 'fitWidth',
+        } as unknown as SerializedMermaidNode).exportJSON(),
+      )
+      expect(json.fitMode).toBe('fitWidth')
+    }
+  })
+
+  it('never rewrites a fit mode that was not the old default', () => {
+    // `fitBoth` and `actual` were never written by a build that had not been
+    // asked, so they are deliberate at EVERY version and must survive untouched
+    // — including at the versions the migration above does rewrite.
+    for (const version of [1, 4, MERMAID_VERSION]) {
+      for (const fitMode of ['fitBoth', 'actual'] as const) {
+        const json = inEditor(() =>
+          MermaidNode.importJSON({
+            type: 'mermaid',
+            version,
+            code: CODE,
+            theme: 'dark',
+            viewMode: 'preview',
+            fitMode,
+          } as unknown as SerializedMermaidNode).exportJSON(),
+        )
+        expect(json.fitMode).toBe(fitMode)
+      }
+    }
+  })
+
+  it('does not let the two version gates move together', () => {
+    // The theme gate is a FIXED historical threshold. If it had been written as
+    // "the current version" it would now be 5, and a deliberate `default` theme
+    // saved at version 4 would start being migrated away to `app`.
+    expect(FIRST_MERMAID_VERSION_WITH_APP_THEME).toBe(4)
+    expect(FIRST_MERMAID_VERSION_WITH_FIT_BOTH_DEFAULT).toBe(5)
+    expect(FIRST_MERMAID_VERSION_WITH_FIT_BOTH_DEFAULT).toBe(MERMAID_VERSION)
+    const json = inEditor(() =>
+      MermaidNode.importJSON({
+        type: 'mermaid',
+        version: 4,
+        code: CODE,
+        theme: 'default',
+        viewMode: 'preview',
+      } as unknown as SerializedMermaidNode).exportJSON(),
+    )
+    expect(json.theme).toBe('default')
   })
 
   /**
@@ -393,7 +478,7 @@ describe('MermaidNode — backward compatibility with versions 1 and 2', () => {
         height: 300,
       } as SerializedMermaidNode).exportJSON(),
     )
-    expect(json.fitMode).toBe('fitWidth')
+    expect(json.fitMode).toBe('fitBoth')
     expect(json.maxHeight).toBeUndefined()
     expect(json.alignment).toBe('left')
     // `background` was not a serialized field at version 3 at all, so there is

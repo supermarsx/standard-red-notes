@@ -23,6 +23,8 @@ import MermaidSvgViewport, {
   computeFitBoxHeight,
   computeFitScale,
   diagramFitTransform,
+  AUTO_FIT_MAX_UPSCALE,
+  fitUpscaleCeiling,
   MAX_FIT_UPSCALE,
   MAX_PREVIEW_HEIGHT,
   MIN_PREVIEW_HEIGHT,
@@ -31,6 +33,7 @@ import MermaidSvgViewport, {
   resolveViewportOverflowBeforeMeasuring,
   viewportOverflowFor,
 } from './MermaidSvgViewport'
+import { type MermaidFitMode } from './MermaidSettings'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -131,9 +134,9 @@ afterEach(() => {
   }
 })
 
-const render = (svg: string) => {
+const render = (svg: string, props: { fitMode?: MermaidFitMode } = {}) => {
   act(() => {
-    root.render(createElement(MermaidSvgViewport, { svg }))
+    root.render(createElement(MermaidSvgViewport, { svg, ...props }))
   })
 }
 
@@ -272,24 +275,42 @@ describe('MermaidSvgViewport — graceful fallback when the diagram size cannot 
  * arithmetic and about the attributes written onto the <svg>. The on-screen
  * numbers were taken in headless Chrome; see the header of MermaidSvgViewport.tsx.
  */
-describe('computeFitScale (pure) — a vector diagram is allowed to scale UP', () => {
-  it('scales a narrow diagram up to fill its box, instead of stopping at 1:1', () => {
-    // The default diagram's real size in a 700x480 box: 480/363.36 = 1.321.
-    expect(computeFitScale(700, 480, 263.375, 363.359375)).toBeCloseTo(1.321, 3)
+describe('computeFitScale (pure) — WHO is allowed to scale a diagram UP', () => {
+  it('upscales for an explicit fitWidth, which is what that mode means', () => {
+    // 700/263.375 = 2.6578, under the 3x ceiling.
+    expect(computeFitScale(700, 480, 263.375, 363.359375, 'fitWidth')).toBeCloseTo(700 / 263.375, 6)
+    expect(computeFitScale(700, 480, 263.375, 363.359375, 'fitWidth')).toBeGreaterThan(1)
   })
 
-  it('is the behaviour the shared image fit refuses: that one would return exactly 1', () => {
-    // fitTransform(..., 1) is right for photos and wrong for SVG; this is the
-    // difference that fixed the bug.
-    expect(computeFitScale(700, 480, 263.375, 363.359375)).toBeGreaterThan(1)
+  it('does NOT upscale for the default fit — the chart was rendered way too wide', () => {
+    // The regression this pins: with `fitWidth` as the default AND the box cap
+    // coming from 0.9 x window.innerHeight, this 263x363 diagram was drawn
+    // 650x897 in a 668px note column, at 247%. The default must stop at 1:1.
+    expect(computeFitScale(700, 480, 263.375, 363.359375)).toBe(1)
+    expect(computeFitScale(700, 480, 263.375, 363.359375, 'fitBoth')).toBe(1)
+    // And it is bounded there however much room the box offers, which is the
+    // property that stops ANY container — a window-derived one included — from
+    // setting an un-configured diagram's scale.
+    expect(computeFitScale(4000, 4000, 263.375, 363.359375)).toBe(1)
   })
 
   it('still scales a too-wide diagram DOWN, exactly as before', () => {
     expect(computeFitScale(400, 200, 800, 400)).toBe(0.5)
+    // ...in both fitting modes: shrinking to fit is never the thing in dispute.
+    expect(computeFitScale(400, 200, 800, 400, 'fitWidth')).toBe(0.5)
   })
 
-  it('is bounded by MAX_FIT_UPSCALE so a two-box diagram cannot fill a screen', () => {
-    expect(computeFitScale(700, 480, 10, 10)).toBe(MAX_FIT_UPSCALE)
+  it('is bounded by MAX_FIT_UPSCALE so a two-box fitWidth cannot fill a screen', () => {
+    expect(computeFitScale(700, 480, 10, 10, 'fitWidth')).toBe(MAX_FIT_UPSCALE)
+    // The default's ceiling is the tighter one, and they are different numbers.
+    expect(computeFitScale(700, 480, 10, 10)).toBe(AUTO_FIT_MAX_UPSCALE)
+    expect(AUTO_FIT_MAX_UPSCALE).toBeLessThan(MAX_FIT_UPSCALE)
+  })
+
+  it('reports its ceiling per mode, so the scale and the box height agree', () => {
+    expect(fitUpscaleCeiling('fitWidth')).toBe(MAX_FIT_UPSCALE)
+    expect(fitUpscaleCeiling('fitBoth')).toBe(AUTO_FIT_MAX_UPSCALE)
+    expect(fitUpscaleCeiling('actual')).toBe(AUTO_FIT_MAX_UPSCALE)
   })
 
   it('fits the more constrained axis', () => {
@@ -316,10 +337,22 @@ describe('diagramFitTransform (pure)', () => {
   })
 
   it('centres an upscaled diagram too', () => {
+    // Upscaling is fitWidth's job now, so this asks for it explicitly. 100x50 in
+    // a 400x400 box wants 4x and gets the 3x ceiling: drawn 300x150, with real
+    // slack on both axes.
+    const { scale, offsetX, offsetY } = diagramFitTransform(400, 400, 100, 50, 'fitWidth')
+    expect(scale).toBe(3)
+    expect(offsetX).toBe(50)
+    expect(offsetY).toBe(125)
+  })
+
+  it('centres a diagram the DEFAULT fit leaves at its natural size', () => {
+    // 100x200 in a 400x400 box: no upscale, so it is centred with real slack on
+    // both axes — this is what a small diagram now looks like in a wide column.
     const { scale, offsetX, offsetY } = diagramFitTransform(400, 400, 100, 200)
-    expect(scale).toBe(2)
-    expect(offsetX).toBe(100)
-    expect(offsetY).toBe(0)
+    expect(scale).toBe(1)
+    expect(offsetX).toBe(150)
+    expect(offsetY).toBe(100)
   })
 
   it('degrades to the identity transform rather than dividing by zero', () => {
@@ -330,13 +363,31 @@ describe('diagramFitTransform (pure)', () => {
 describe('computeFitBoxHeight — the box is allowed to grow for an upscaled diagram', () => {
   it('sizes the box for the upscaled width-fit of a narrow diagram', () => {
     // 200 wide in a 400 box doubles; 100 tall therefore needs 200.
-    expect(computeFitBoxHeight(400, 200, 100)).toBe(200)
+    expect(computeFitBoxHeight(400, 200, 100, MAX_PREVIEW_HEIGHT, 'fitWidth')).toBe(200)
   })
 
   it('does not let the upscale cap be exceeded when sizing the box', () => {
     // 10 wide in a 700 box would be 70x, capped at MAX_FIT_UPSCALE.
-    expect(computeFitBoxHeight(700, 10, 10)).toBe(MIN_PREVIEW_HEIGHT)
-    expect(computeFitBoxHeight(700, 10, 100)).toBe(100 * MAX_FIT_UPSCALE)
+    expect(computeFitBoxHeight(700, 10, 10, MAX_PREVIEW_HEIGHT, 'fitWidth')).toBe(MIN_PREVIEW_HEIGHT)
+    expect(computeFitBoxHeight(700, 10, 100, MAX_PREVIEW_HEIGHT, 'fitWidth')).toBe(100 * MAX_FIT_UPSCALE)
+  })
+
+  it('sizes the DEFAULT box to the diagram, not to the room on offer', () => {
+    // The other half of the "gigantic container" fix: the box must be exactly
+    // as tall as the diagram drawn in it. When the height was computed from an
+    // upscale the default fit would then refuse, a 263x363 flowchart sat in an
+    // 897px box with 534px of empty space under it.
+    expect(computeFitBoxHeight(400, 200, 100)).toBe(100)
+    expect(computeFitBoxHeight(650, 263, 363, 900)).toBe(363)
+    // ...and no cap at all cannot change that, because nothing is upscaling.
+    expect(computeFitBoxHeight(650, 263, 363, null)).toBe(363)
+    expect(computeFitBoxHeight(4000, 263, 363, null)).toBe(363)
+  })
+
+  it('still shrinks the box for a diagram WIDER than the viewport', () => {
+    // Shrink-to-fit is untouched by the ceiling: 1339x94 at 650 wide.
+    expect(computeFitBoxHeight(650, 1339, 94, 900)).toBe(MIN_PREVIEW_HEIGHT)
+    expect(computeFitBoxHeight(650, 1339, 940, 900)).toBeCloseTo(940 * (650 / 1339), 4)
   })
 })
 
@@ -381,13 +432,21 @@ describe('pinSvgToNaturalSize — mermaid’s width="100%" is replaced by a defi
 })
 
 describe('MermaidSvgViewport — the mounted component applies both fixes', () => {
-  it('upscales the default diagram to fill the box instead of leaving it at 100%', () => {
+  it('leaves the default diagram at 100% rather than inflating it to fill the box', () => {
     render(DEFAULT_DIAGRAM_SVG)
-    // Stub viewport is 400x300; box height = 363.36 * (400/263.375) = 551.8,
-    // capped at MAX_PREVIEW_HEIGHT (480). Fit scale = min(400/263.375 = 1.519,
-    // 480/363.36 = 1.321) = 1.321.
-    expect(percentButton().textContent).toBe('132%')
-    expect(svgHost().style.transform).toContain('scale(1.32')
+    // Stub viewport is 400x300. This used to read 132%, because the box height
+    // was sized for a 1.519x width-fit and the scale then followed it; the
+    // window-derived cap turned the same arithmetic into 247% on a real screen.
+    // The default fit now stops at 1:1, so the box is the diagram's own 363px.
+    expect(percentButton().textContent).toBe('100%')
+    expect(svgHost().style.transform).toContain('scale(1)')
+  })
+
+  it('still upscales when the user asks for fitWidth', () => {
+    render(DEFAULT_DIAGRAM_SVG, { fitMode: 'fitWidth' })
+    // 400/263.375 = 1.519 — the same box, the same diagram, an explicit choice.
+    expect(percentButton().textContent).toBe('152%')
+    expect(svgHost().style.transform).toContain('scale(1.51')
   })
 
   it('pins the rendered svg to its natural size, so the fit scale means what it says', () => {

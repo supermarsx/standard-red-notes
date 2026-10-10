@@ -505,7 +505,7 @@ describe('a setting written on the node still reaches the rendered chart', () =>
   it('starts on the defaults the shared module declares', async () => {
     await settlePreview()
     expect(viewport()).not.toBeNull()
-    expect(viewport()!.getAttribute('data-mermaid-fit-mode')).toBe('fitWidth')
+    expect(viewport()!.getAttribute('data-mermaid-fit-mode')).toBe('fitBoth')
     let stored = { themeMode: '', maxHeight: undefined as unknown }
     editor?.getEditorState().read(() => {
       const node = $getNodeByKey(mermaidKey)

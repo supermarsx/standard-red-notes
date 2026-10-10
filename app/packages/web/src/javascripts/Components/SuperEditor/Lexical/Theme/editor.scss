@@ -161,6 +161,35 @@
   inline-size: min(100%, 72rem);
 }
 
+/*
+ * Standard Red Notes — bug fix: a mermaid block's inline size comes from the
+ * note column, NEVER from its contents.
+ *
+ * `inline-size: min(100%, 72rem)` above is a definite width during normal
+ * layout, but under INTRINSIC sizing that `100%` resolves against an indefinite
+ * width and is treated as auto — so the block still reports its contents'
+ * min-content width to whatever is sizing it. The editor's own
+ * `relative min-h-0 flex-grow` wrapper is a flex item with the default
+ * `min-width: auto`, so it is floored at that number and overflows the column,
+ * and `.editor` (overflow-hidden) then clips the difference.
+ *
+ * Measured in headless Chrome, `graphical` view mode at a 334px note column:
+ * the `.ContentEditable__root` was pushed to 468px and the block to 434px, 134px
+ * of which were clipped and unreachable, because the visual builder's form has a
+ * ~400px min-content width. The preview beside it then fitted its diagram to
+ * 201px — half of a column that does not exist.
+ *
+ * `contain: inline-size` is the structural answer rather than a per-control one:
+ * it makes this box's inline size independent of its contents, so no form, no
+ * table and no future control inside a mermaid block can stretch the note. It is
+ * scoped to the same `.ContentEditable__root` descendant position as the rule
+ * above deliberately — size containment with no definite inline size would
+ * collapse the box, and here the two are guaranteed to travel together.
+ */
+.ContentEditable__root [data-mermaid-block] {
+  contain: inline-size;
+}
+
 .ContentEditable__root [data-super-widget-layout='media'] {
   inline-size: min(100%, 64rem);
 }

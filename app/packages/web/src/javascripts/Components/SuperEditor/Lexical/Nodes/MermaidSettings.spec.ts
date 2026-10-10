@@ -76,8 +76,14 @@ describe('the default settings are the ones the component actually uses', () => 
     })
   })
 
-  it('fits the WIDTH by default — the fit the user asked for', () => {
-    expect(DEFAULT_MERMAID_FIT_MODE).toBe('fitWidth')
+  it('fits BOTH axes by default, so an un-configured diagram is never enlarged', () => {
+    // `768b9a14` made this 'fitWidth'. Measured in headless Chrome, the default
+    // 263x363 flowchart was then drawn 650px wide and 897px tall inside a 668px
+    // note column, at 247% — reported as "rendered way too wide, like it is
+    // trying to adapt to a gigantic container". `fitWidth` remains available as
+    // an explicit choice, and is still the only mode that upscales.
+    expect(DEFAULT_MERMAID_FIT_MODE).toBe('fitBoth')
+    expect(MERMAID_FIT_MODES).toContain('fitWidth')
   })
 
   it('follows the APP theme by default, so a dark editor does not get a light chart', () => {

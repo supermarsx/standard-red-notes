@@ -127,8 +127,13 @@ const translateOf = (element: HTMLElement): { x: number; y: number } => {
 describe('computeFitScale — each mode is a different, observable scale', () => {
   // A 263x363 diagram in a 700x480 box: the exact case that filled only 49.7% of
   // the width before fit modes existed.
-  it('fitBoth is the old behaviour — bound by the shorter axis', () => {
-    expect(computeFitScale(700, 480, 263, 363, 'fitBoth')).toBeCloseTo(480 / 363, 6)
+  it('fitBoth is bound by the shorter axis — and never enlarges', () => {
+    // 480/363 = 1.322 would be an UPSCALE, and the default fit does not upscale:
+    // that is the fix for "the chart is rendered way too wide". The shorter-axis
+    // rule is unchanged; it is simply also ceilinged at 1:1.
+    expect(computeFitScale(700, 480, 263, 363, 'fitBoth')).toBe(1)
+    // Where the shorter axis is a SHRINK, fitBoth still follows it exactly.
+    expect(computeFitScale(700, 180, 263, 363, 'fitBoth')).toBeCloseTo(180 / 363, 6)
   })
 
   it('fitWidth spans the full width, whatever the box height is', () => {
@@ -145,6 +150,7 @@ describe('computeFitScale — each mode is a different, observable scale', () =>
 
   it('defaults to fitBoth, so a caller that configures nothing is unchanged', () => {
     expect(computeFitScale(700, 480, 263, 363)).toBe(computeFitScale(700, 480, 263, 363, 'fitBoth'))
+    expect(computeFitScale(700, 180, 263, 363)).toBe(computeFitScale(700, 180, 263, 363, 'fitBoth'))
   })
 
   it('still respects the upscale ceiling in fitWidth', () => {
@@ -163,13 +169,17 @@ describe('computeFitScale — each mode is a different, observable scale', () =>
 
 describe('computeFitBoxHeight — the cap is an argument, not a constant', () => {
   it('honours an explicit maximum instead of 480', () => {
-    // Width-fit height for 263x363 at 700 wide is 363 * (700/263) = 966.1.
-    expect(computeFitBoxHeight(700, 263, 363, 2000)).toBeCloseTo(363 * (700 / 263), 4)
-    expect(computeFitBoxHeight(700, 263, 363, 600)).toBe(600)
+    // Width-fit height for 263x363 at 700 wide is 363 * (700/263) = 966.1 —
+    // which only fitWidth asks for, since that is the only upscaling mode.
+    expect(computeFitBoxHeight(700, 263, 363, 2000, 'fitWidth')).toBeCloseTo(363 * (700 / 263), 4)
+    expect(computeFitBoxHeight(700, 263, 363, 600, 'fitWidth')).toBe(600)
+    // The cap still bites in the default mode, for a diagram genuinely taller
+    // than it: 4000 tall at 1:1, capped to 600.
+    expect(computeFitBoxHeight(700, 263, 4000, 600)).toBe(600)
   })
 
   it('applies NO cap at all for null — what "No limit" resolves to', () => {
-    expect(computeFitBoxHeight(700, 263, 363, null)).toBeCloseTo(363 * (700 / 263), 4)
+    expect(computeFitBoxHeight(700, 263, 363, null, 'fitWidth')).toBeCloseTo(363 * (700 / 263), 4)
     expect(computeFitBoxHeight(400, 400, 4000, null)).toBe(4000)
   })
 
@@ -200,9 +210,12 @@ describe('diagramFitTransform — a diagram larger than its box is anchored, not
   })
 
   it('leaves a fitting diagram centred, exactly as before', () => {
-    const { offsetX, offsetY } = diagramFitTransform(400, 400, 100, 200, 'fitBoth')
-    expect(offsetX).toBe(100)
-    expect(offsetY).toBe(0)
+    // 100x200 at 1:1 in a 400x400 box — the default fit does not enlarge it, so
+    // there is slack on both axes and the centring arithmetic shows on both.
+    const { scale, offsetX, offsetY } = diagramFitTransform(400, 400, 100, 200, 'fitBoth')
+    expect(scale).toBe(1)
+    expect(offsetX).toBe(150)
+    expect(offsetY).toBe(100)
   })
 })
 
@@ -235,12 +248,16 @@ describe('the mounted viewport applies the configured mode and cap', () => {
     })
     const widthScale = scaleOf(svgHost())
 
-    expect(bothScale).toBeCloseTo(480 / 363, 4)
+    // fitBoth no longer enlarges: 480/363 = 1.322 would be an upscale, so the
+    // whole-diagram fit stops at 1:1. fitWidth is unchanged.
+    expect(bothScale).toBe(1)
     expect(widthScale).toBeCloseTo(700 / 263, 4)
     // The drawn width as a fraction of the declared box: the metric the Chrome
-    // harness reports. 0.497 before, 1.000 after.
-    expect((263 * bothScale) / VIEWPORT_WIDTH).toBeCloseTo(0.497, 3)
+    // harness reports. 0.376 for the default fit, 1.000 for fitWidth — and the
+    // two modes still differ, which is what this test is for.
+    expect((263 * bothScale) / VIEWPORT_WIDTH).toBeCloseTo(263 / 700, 4)
     expect((263 * widthScale) / VIEWPORT_WIDTH).toBeCloseTo(1, 4)
+    expect(widthScale).toBeGreaterThan(bothScale)
   })
 
   it('publishes the applied mode, so the two surfaces can be checked against the DOM', () => {

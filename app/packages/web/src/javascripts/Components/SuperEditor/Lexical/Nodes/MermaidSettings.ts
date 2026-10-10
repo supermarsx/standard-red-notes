@@ -46,15 +46,23 @@ export const DEFAULT_MERMAID_THEME_MODE: MermaidThemeMode = 'app'
  *
  *  - `fitWidth`  — scale so the diagram spans the box's full WIDTH (what the
  *                  container actually offers), and let the box be as tall as that
- *                  needs, up to the configured maximum height. The default.
+ *                  needs, up to the configured maximum height. Upscales a small
+ *                  diagram up to `MAX_FIT_UPSCALE`, which is why it is a
+ *                  deliberate choice rather than the default.
  *  - `fitBoth`   — scale so the whole diagram is visible inside the box in both
- *                  axes. Narrower than the box whenever the diagram is taller
- *                  than it is wide.
+ *                  axes, never enlarging it past its natural size
+ *                  (`AUTO_FIT_MAX_UPSCALE`). Narrower than the box whenever the
+ *                  diagram is taller than it is wide. The default.
  *  - `actual`    — no scaling at all (mermaid's own intrinsic size), centred.
+ *
+ * Standard Red Notes — bug fix: `768b9a14` made `fitWidth` the default, and a
+ * four-box flowchart then rendered 650px wide and 897px tall inside a 668px note
+ * column (measured; see `AUTO_FIT_MAX_UPSCALE`). An un-configured diagram gets
+ * `fitBoth` again, so "fit the container" means fit INTO it.
  */
 export const MERMAID_FIT_MODES = ['fitWidth', 'fitBoth', 'actual'] as const
 export type MermaidFitMode = (typeof MERMAID_FIT_MODES)[number]
-export const DEFAULT_MERMAID_FIT_MODE: MermaidFitMode = 'fitWidth'
+export const DEFAULT_MERMAID_FIT_MODE: MermaidFitMode = 'fitBoth'
 
 /** Where a block narrower than the note column sits within it. */
 export const MERMAID_ALIGNMENTS = ['left', 'center', 'right'] as const
@@ -632,8 +640,10 @@ export function mermaidViewportBackgroundStyle(
 
 /**
  * The first serialized version whose `theme` field could say `app` at all.
- * Equals `MERMAID_VERSION` in MermaidNode.tsx, which is where the number is
- * owned; this is the threshold the migration below compares against.
+ * It was `MERMAID_VERSION` when the mode was introduced and is now a FIXED
+ * historical threshold — the current version has moved past it (see
+ * FIRST_MERMAID_VERSION_WITH_FIT_BOTH_DEFAULT), and it must not follow, or a
+ * deliberate `default` theme saved at version 4 would start being migrated away.
  */
 export const FIRST_MERMAID_VERSION_WITH_APP_THEME = 4
 
@@ -670,6 +680,48 @@ export function migrateMermaidThemeMode(storedTheme: unknown, storedVersion: unk
   }
   const version = typeof storedVersion === 'number' && Number.isFinite(storedVersion) ? storedVersion : 0
   return version >= FIRST_MERMAID_VERSION_WITH_APP_THEME ? storedTheme : DEFAULT_MERMAID_THEME_MODE
+}
+
+/**
+ * The first serialized version whose `fitMode` field could mean a deliberate
+ * choice of `fitWidth` rather than the default of the day. Equals
+ * `MERMAID_VERSION` in MermaidNode.tsx, which is where the number is owned.
+ */
+export const FIRST_MERMAID_VERSION_WITH_FIT_BOTH_DEFAULT = 5
+
+/**
+ * The fit mode every version-4 build wrote when the user chose nothing.
+ * `DEFAULT_MERMAID_FIT_MODE` was literally `'fitWidth'` then (see
+ * `git show 768b9a14:…/MermaidSettings.ts`), and `exportJSON` writes the field
+ * unconditionally — so the value is in the note whether or not the user ever
+ * opened the control.
+ */
+export const LEGACY_DEFAULT_MERMAID_FIT_MODE: MermaidFitMode = 'fitWidth'
+
+/**
+ * Translate a stored `fitMode` into the mode to actually apply.
+ *
+ * Standard Red Notes — bug fix, the half of "the chart is rendered way too wide"
+ * that a default cannot reach. `768b9a14` made `fitWidth` the default AND
+ * `exportJSON` writes `fitMode` unconditionally, so every diagram created or
+ * re-saved since then carries `fitWidth` in the note itself. Moving the default
+ * back to `fitBoth` therefore fixes nothing the operator is actually looking at:
+ * their existing diagrams would keep rendering at 247% because the note says to.
+ *
+ * This is the same trade `migrateMermaidThemeMode` makes, for the same reason: a
+ * stored value alone cannot tell "the user chose to fill the width" from "that
+ * was the default and nobody was ever asked". The serialized VERSION can. At
+ * version 4 `fitWidth` was the un-chooseable default, so a stored `fitWidth`
+ * there means "never chose" and resolves to the new default; from version 5 on
+ * it is a deliberate choice and is kept exactly. `fitBoth` and `actual` were
+ * never the version-4 default, so both are deliberate at any version.
+ */
+export function migrateMermaidFitMode(storedFitMode: unknown, storedVersion: unknown): unknown {
+  if (normalizeMermaidFitMode(storedFitMode) !== LEGACY_DEFAULT_MERMAID_FIT_MODE) {
+    return storedFitMode
+  }
+  const version = typeof storedVersion === 'number' && Number.isFinite(storedVersion) ? storedVersion : 0
+  return version >= FIRST_MERMAID_VERSION_WITH_FIT_BOTH_DEFAULT ? storedFitMode : DEFAULT_MERMAID_FIT_MODE
 }
 
 /**

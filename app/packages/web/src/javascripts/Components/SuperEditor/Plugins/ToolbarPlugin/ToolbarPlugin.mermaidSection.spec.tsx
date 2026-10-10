@@ -333,8 +333,12 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     expect(buttons).toHaveLength(3)
     expect(buttons.map((button) => button.textContent)).toEqual(['Fit width', 'Fit both', 'Actual size'])
     expect(buttons.filter((button) => button.getAttribute('aria-pressed') === 'true')).toHaveLength(1)
-    // The default is fit-width, which is the fit the user asked for.
-    expect(buttons[0].getAttribute('aria-pressed')).toBe('true')
+    // The default is fit-both — fit the whole diagram INTO the container, never
+    // enlarge it to fill the width. `fitWidth` is still offered, first in the
+    // row, but it is now a choice rather than what everybody gets.
+    expect(buttons[1].textContent).toBe('Fit both')
+    expect(buttons[1].getAttribute('aria-pressed')).toBe('true')
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('false')
   })
 
   it('renders the alignment buttons as real svg glyphs, never the icon name as text', async () => {
@@ -730,18 +734,20 @@ describe('the Mermaid section writes to the selected node, not to a copy of its 
     await mount()
     await insertAndSelectMermaid()
     await activateMermaidTab()
-    expect(readNode((node) => node.getSettings().fitMode)).toBe('fitWidth')
+    expect(readNode((node) => node.getSettings().fitMode)).toBe('fitBoth')
 
-    const fitBoth = Array.from(segment('Fit mode')!.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Fit both',
+    const fitWidth = Array.from(segment('Fit mode')!.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Fit width',
     ) as HTMLButtonElement
     await act(async () => {
-      fitBoth.click()
+      fitWidth.click()
       await Promise.resolve()
     })
 
-    // A control wired to nothing renders identically to a wired one.
-    expect(readNode((node) => node.getSettings().fitMode)).toBe('fitBoth')
+    // A control wired to nothing renders identically to a wired one. This moves
+    // AWAY from the default now, which is the stronger direction to assert in:
+    // a write that silently did nothing would leave the default in place.
+    expect(readNode((node) => node.getSettings().fitMode)).toBe('fitWidth')
     expect(readNode((node) => node.getKey())).toBe(mermaidKey)
   })
 

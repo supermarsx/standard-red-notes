@@ -186,17 +186,62 @@ export function parseSvgNaturalSize(svgMarkup: string): { width: number; height:
 }
 
 /**
- * How far a diagram is allowed to be scaled UP to fill its container.
+ * How far a diagram is allowed to be scaled UP when the user has EXPLICITLY
+ * asked for `fitWidth` — "span the box's full width, whatever that costs".
  *
  * Unlike the image lightbox this math came from, a mermaid diagram is vector
  * art, so upscaling costs no sharpness and `fitTransform`'s "never exceed 1:1"
- * rule is wrong here — it is why the default 4-node flowchart (natural
- * 263x363) sat at 263px inside a 700px column instead of filling it. There is
- * still a ceiling, because mermaid bakes its label font sizes into the SVG:
- * past roughly 3x the labels dwarf the note's body text. So: fit, but don't
- * balloon a two-box diagram to fill a whole screen.
+ * rule is too strict for a deliberate "fill the column" request. There is still
+ * a ceiling, because mermaid bakes its label font sizes into the SVG: past
+ * roughly 3x the labels dwarf the note's body text.
  */
 export const MAX_FIT_UPSCALE = 3
+
+/**
+ * How far a diagram is allowed to be scaled UP when NOBODY asked — the ceiling
+ * for `fitBoth`, which is the default mode.
+ *
+ * Standard Red Notes — bug fix: "the mermaid chart is rendered way too wide,
+ * like it is trying to adapt to a gigantic container".
+ *
+ * It was. Measured in headless Chrome (real LexicalComposer, real MermaidNode,
+ * freshly compiled editor.scss + Tailwind), the default 263x363 flowchart in a
+ * 668px note column, whose preview viewport is 650px:
+ *
+ *   before 768b9a14:  box 480, scale 132%, drawn 347.8 x 480
+ *   at 768b9a14+:     box 897, scale 247%, drawn 650   x 897.1
+ *
+ * `768b9a14` made `fitWidth` the default AND replaced the 480px box cap with
+ * 0.9 x `window.innerHeight`. Under `fitWidth` that cap was the ONLY brake on
+ * the upscale, and a window-derived number is no brake at all on a real screen:
+ * a four-box flowchart grew to 650 x 897 — the whole viewport — with its baked-in
+ * 16px labels rendering at 40px beside 16px body text. Restoring the `fitBoth`
+ * default alone does not help, because `fitBoth` with a 897px-tall box resolves
+ * to exactly the same 247%: the cap, not the mode, was doing the work.
+ *
+ * So the automatic fit is bounded HERE instead, by the one quantity that is
+ * actually about the content: the diagram's own natural size. An un-configured
+ * diagram is shrunk to fit its container and otherwise drawn at the size mermaid
+ * chose, so its label sizes stay in proportion to the note's text and NO window
+ * dimension can reach the result at all. The configurable maximum height
+ * (`maxHeightPx`) survives as a ceiling for genuinely tall diagrams, where it is
+ * the honest stand-in for a container that has no height — it simply stops being
+ * the thing that sets a normal diagram's scale.
+ *
+ * A user who does want the diagram to span the column still has `fitWidth`,
+ * which still upscales up to MAX_FIT_UPSCALE.
+ */
+export const AUTO_FIT_MAX_UPSCALE = 1
+
+/**
+ * The upscale ceiling for a mode. `fitWidth` is a deliberate request to fill the
+ * width; `fitBoth` is what an un-configured diagram gets. Exported as one
+ * function so `computeFitScale` and `computeFitBoxHeight` cannot disagree about
+ * it — if they did, the box would be taller than the diagram drawn inside it.
+ */
+export function fitUpscaleCeiling(fitMode: MermaidFitMode): number {
+  return fitMode === 'fitWidth' ? MAX_FIT_UPSCALE : AUTO_FIT_MAX_UPSCALE
+}
 
 /**
  * The scale the diagram is drawn at.
@@ -222,9 +267,11 @@ export function computeFitScale(
     return 1
   }
   if (fitMode === 'fitWidth') {
-    return clampScale(Math.min(viewportWidth / naturalWidth, MAX_FIT_UPSCALE))
+    return clampScale(Math.min(viewportWidth / naturalWidth, fitUpscaleCeiling('fitWidth')))
   }
-  return clampScale(Math.min(viewportWidth / naturalWidth, viewportHeight / naturalHeight, MAX_FIT_UPSCALE))
+  return clampScale(
+    Math.min(viewportWidth / naturalWidth, viewportHeight / naturalHeight, fitUpscaleCeiling('fitBoth')),
+  )
 }
 
 /**
@@ -255,10 +302,11 @@ export function diagramFitTransform(
  * The inline preview box's height: as tall as the diagram needs to be once
  * scaled to fit the viewport's width, capped at `maxHeight` (`null` = uncapped).
  *
- * `fitWidth` and `fitBoth` share this height — the box is always as tall as a
- * width-fit asks for — which is precisely what makes the two modes differ: at
- * that height `fitWidth` spans the width and may overflow, while `fitBoth`
- * shrinks until it does not.
+ * The width-fit scale is taken with the SAME ceiling `computeFitScale` applies
+ * (`fitUpscaleCeiling`), so the box is exactly as tall as the diagram drawn in
+ * it. Before that ceiling was per-mode, the default `fitBoth` box was sized for
+ * an upscale it would then refuse to perform, which is what left a 263x363
+ * flowchart in an 897px-tall box.
  */
 export function computeFitBoxHeight(
   viewportWidth: number,
@@ -271,7 +319,9 @@ export function computeFitBoxHeight(
     return MIN_PREVIEW_HEIGHT
   }
   const candidate =
-    fitMode === 'actual' ? naturalHeight : naturalHeight * Math.min(viewportWidth / naturalWidth, MAX_FIT_UPSCALE)
+    fitMode === 'actual'
+      ? naturalHeight
+      : naturalHeight * Math.min(viewportWidth / naturalWidth, fitUpscaleCeiling(fitMode))
   const capped = maxHeight === null ? candidate : Math.min(candidate, maxHeight)
   return Math.max(MIN_PREVIEW_HEIGHT, capped)
 }

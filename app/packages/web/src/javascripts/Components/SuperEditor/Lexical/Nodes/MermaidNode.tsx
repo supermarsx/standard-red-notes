@@ -54,6 +54,7 @@ import {
   MermaidSettings,
   MermaidThemeMode,
   MermaidViewMode,
+  migrateMermaidFitMode,
   migrateMermaidThemeMode,
   normalizeMermaidViewMode,
   resolveMermaidMaxHeightPx,
@@ -70,8 +71,15 @@ const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK
  * settings set — fit mode, maximum height, alignment, background, pan/zoom — and
  * `theme` widened to accept `app` (follow the application's own light/dark
  * theme). See MermaidSettings.ts, which owns every one of those.
+ *
+ * 5 adds NO field. It exists only to date the `fitMode` default: version 4 wrote
+ * `fitWidth` into every note whether or not the user chose it, so `fitWidth` at
+ * version 4 cannot be read as a preference and `migrateMermaidFitMode` resolves
+ * it to the `fitBoth` default. From 5 on, the stored value is a real choice.
+ * Bumping the number IS the fix for already-saved diagrams; without it they keep
+ * rendering at 247% whatever the default says.
  */
-export const MERMAID_VERSION = 4
+export const MERMAID_VERSION = 5
 
 /** Debounce delay (ms) before re-rendering the preview while typing. */
 const RENDER_DEBOUNCE_MS = 400
@@ -208,8 +216,11 @@ function GraphicalBuilder({
 
   const inputClass =
     'min-w-0 flex-1 rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
+  // `min-w-0` is load-bearing: a <select>'s intrinsic width is its widest
+  // option, and these carry whole shape / edge-kind labels, so without it the
+  // builder's rows cannot reflow into a narrow two-pane column.
   const selectClass =
-    'rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
+    'min-w-0 rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
 
   // RULE 2 — the source cannot be modelled, so the builder renders no editing
   // control whatsoever. There is nothing here that can overwrite the diagram by
@@ -273,7 +284,7 @@ function GraphicalBuilder({
   const dangling = danglingExtras(model)
 
   return (
-    <div className="w-full p-2 text-sm" data-mermaid-graphical="true">
+    <div className="w-full overflow-x-auto p-2 text-sm" data-mermaid-graphical="true">
       <label className="mb-2 flex items-center gap-1">
         Direction
         <select
@@ -291,7 +302,7 @@ function GraphicalBuilder({
       </label>
 
       <div className="mb-3">
-        <div className="mb-1 flex items-center justify-between">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
           <span className="font-semibold">Nodes</span>
           <button
             type="button"
@@ -308,7 +319,7 @@ function GraphicalBuilder({
         ) : null}
         <div className="flex flex-col gap-1">
           {model.nodes.map((node, index) => (
-            <div key={index} className="flex items-center gap-1">
+            <div key={index} className="flex min-w-0 flex-wrap items-center gap-1">
               <input
                 className={inputClass + ' max-w-[6rem]'}
                 value={node.id}
@@ -356,7 +367,7 @@ function GraphicalBuilder({
       </div>
 
       <div>
-        <div className="mb-1 flex items-center justify-between">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
           <span className="font-semibold">Links</span>
           <button
             type="button"
@@ -374,7 +385,7 @@ function GraphicalBuilder({
         ) : null}
         <div className="flex flex-col gap-1">
           {model.edges.map((edge, index) => (
-            <div key={index} className="flex items-center gap-1">
+            <div key={index} className="flex min-w-0 flex-wrap items-center gap-1">
               <select
                 className={selectClass}
                 value={edge.from}
@@ -741,11 +752,26 @@ function MermaidComponent({
         </div>
       </div>
 
-      <div className={'flex ' + (isTwoPane ? 'flex-col md:flex-row' : 'flex-col')}>
+      {/* `min-w-0` on the row AND on every pane is load-bearing, not tidying.
+          Standard Red Notes — bug fix: a flex item's `min-width` defaults to
+          `auto`, i.e. it refuses to shrink below its own min-content width. The
+          visual builder's form (inputs, selects, labels) has a wide min-content,
+          so in `graphical` mode that demand propagated out of this block, up
+          through BlocksEditor's `relative min-h-0 flex-grow` flex item — which
+          has no `min-w-0` either — and widened the editor's own content box.
+          Measured in headless Chrome at a 334px note column: the
+          `.ContentEditable__root` grew to 468px and this block to 434px, and
+          since `.editor` is `overflow-hidden` those 134px were clipped and
+          unreachable. The preview then fitted itself to 201px of a column that
+          did not exist. Flooring the panes at zero keeps the whole widget's
+          min-content contribution at zero, so no container above it can be
+          stretched by what is inside this block. */}
+      <div className={'flex min-w-0 ' + (isTwoPane ? 'flex-col md:flex-row' : 'flex-col')}>
         {showGraphical ? (
           <div
             className={
-              'border-border flex flex-col border-b md:border-b-0 ' + (isTwoPane ? 'md:w-1/2 md:border-r' : 'w-full')
+              'border-border flex min-w-0 flex-col border-b md:border-b-0 ' +
+              (isTwoPane ? 'md:w-1/2 md:border-r' : 'w-full')
             }
           >
             <GraphicalBuilder code={draft} onCodeChange={onCodeChange} />
@@ -753,7 +779,7 @@ function MermaidComponent({
         ) : null}
 
         {showCode ? (
-          <div className={'flex flex-col ' + (isTwoPane ? 'md:border-border md:w-1/2 md:border-r' : 'w-full')}>
+          <div className={'flex min-w-0 flex-col ' + (isTwoPane ? 'md:border-border md:w-1/2 md:border-r' : 'w-full')}>
             <textarea
               className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
               rows={Math.max(6, draft.split('\n').length + 1)}
@@ -935,13 +961,23 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
     // `resolveMermaidSettings` is what decides whether a stored theme is one it
     // recognizes, and what an unrecognized one falls back to.
     //
-    // The ONE translation the theme does get is the version-gated migration:
+    // There are TWO version-gated migrations, and both exist for the same
+    // reason: `exportJSON` writes every field unconditionally, so the default of
+    // the day is in the note whether or not the user ever opened the control.
+    //
+    // The first is the theme's:
     // every build before version 4 wrote mermaid's light `default` theme into
     // the note whether or not the user had chosen anything, so an existing
     // diagram could never follow the app. `migrateMermaidThemeMode` turns that
     // one value, at those versions only, into `app`; every deliberate choice —
     // any other name, and `default` at version 4 or later, where `app` was on
     // offer — is handed through unchanged.
+    //
+    // The second is the fit mode's: version 4 wrote `fitWidth`, which drew a
+    // 263x363 flowchart 650px wide and 897px tall in a 668px note column.
+    // `migrateMermaidFitMode` turns that one value, at that version only, into
+    // the `fitBoth` default; a `fitWidth` stored from version 5 on is a real
+    // choice and is kept. See its comment in MermaidSettings.ts.
     return $createMermaidNode(
       code,
       migrateMermaidThemeMode(serializedNode.theme, serializedNode.version) as MermaidThemeMode,
@@ -949,7 +985,7 @@ export class MermaidNode extends DecoratorNode<React.JSX.Element> {
       serializedNode.width,
       serializedNode.height,
       {
-        fitMode: serializedNode.fitMode,
+        fitMode: migrateMermaidFitMode(serializedNode.fitMode, serializedNode.version) as MermaidSettings['fitMode'],
         maxHeight: serializedNode.maxHeight,
         alignment: serializedNode.alignment,
         background: serializedNode.background,
