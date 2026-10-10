@@ -36,9 +36,7 @@ export interface AdminUserListQuery {
 
 /**
  * Standard Red Notes: one row of the admin user list. `createdAt`/`updatedAt`
- * are ISO-8601 strings. `storageUsedBytes`/`storageLimitBytes` come from the
- * user's regular subscription settings (null when the user has no subscription
- * or the setting was never written; -1 limit means unlimited).
+ * are ISO-8601 strings.
  */
 export interface AdminUserRow {
   uuid: string
@@ -62,7 +60,34 @@ export interface AdminUserRow {
   pendingApproval: boolean
   approvalNote: string | null
   mfaEnabled: boolean
+  /**
+   * Standard Red Notes: the account's uploaded-FILE byte total
+   * (FILE_UPLOAD_BYTES_USED), read from the quota scope the writer uses — the
+   * newest regular `user_subscriptions` row when the user has one, the user's own
+   * uuid when it does not (see `loadStorageScopeByUser`, and
+   * `ResolveFileQuotaScope` for why the second case is the normal one on a
+   * self-hosted deployment).
+   *
+   * *** `null` IS NOT ZERO AND MUST NEVER BE RENDERED AS ONE. *** The counter is
+   * written only when a FILE_UPLOADED event is handled, so an account whose
+   * uploads have never succeeded has no row at all — "nobody measured this",
+   * which is a different fact from "this account stores no files" and the one the
+   * admin panel's storage column exists to keep apart.
+   *
+   * *** WHAT IS NOT IN IT. *** Synced ITEM payload (notes), which is the larger
+   * half of most accounts. That figure is `items.content_size` on the syncing
+   * server, exposed only self-scoped at `GET /v1/items/storage-usage`; no
+   * endpoint anywhere publishes it for another user, so a LIST cannot carry it.
+   * The field is file bytes and the column that prints it says so.
+   */
   storageUsedBytes: number | null
+  /**
+   * Standard Red Notes: the account's explicit upload allowance
+   * (FILE_UPLOAD_BYTES_LIMIT) from the same scope. `-1` means unlimited — the one
+   * value the files server treats that way. `null` means no explicit allowance is
+   * stored, so the plan default applies; that default is 0 for a plan whose role
+   * grants no file-storage permission, so `null` is not an unlimited allowance.
+   */
   storageLimitBytes: number | null
 }
 

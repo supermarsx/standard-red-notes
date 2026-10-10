@@ -59,6 +59,7 @@ import {
   parseBanOptions,
   parseDateFilter,
   parseEnvFileContent,
+  fileQuotaScopeUuid,
   parseStorageLimitInput,
   resolveOperatorEnv,
   serviceProbeTargets,
@@ -868,6 +869,20 @@ async function cmdFlagsSet(args: ParsedArgs, unset: boolean): Promise<number> {
   return 0
 }
 
+/**
+ * Standard Red Notes: the per-user file-quota figures, read from the scope they
+ * are actually written under.
+ *
+ * `subscriptionUuid === null` used to mean "no figures" AND short-circuit the
+ * read, because these two are SUBSCRIPTION settings keyed on a
+ * `user_subscriptions` uuid. On the default `STANDARD_RED_ENTITLEMENT_MODE=included`
+ * NO account has such a row, so this printed "has no regular subscription
+ * record" and nothing else, for every account on every default deployment — while
+ * the bookkeeping sat in `subscription_settings` under the user's OWN uuid, where
+ * `ResolveFileQuotaScope` puts it and where `UpdateStorageQuotaUsedForUser`
+ * writes it. Now the read follows the scope and `subscriptionUuid` reports only
+ * what it says: whether a persisted subscription row backs it.
+ */
 async function storageInfoForUser(
   container: ContainerLike,
   userUuid: string,
@@ -876,10 +891,10 @@ async function storageInfoForUser(
     TYPES.Auth_GetRegularSubscriptionForUser,
   )
   const subscriptionOrError = await getRegularSubscription.execute({ userUuid })
-  if (subscriptionOrError.isFailed()) {
-    return { subscriptionUuid: null, limit: null, used: null }
-  }
-  const subscriptionUuid = subscriptionOrError.getValue().uuid
+  const subscriptionUuid = subscriptionOrError.isFailed() ? null : subscriptionOrError.getValue().uuid
+  // The row's uuid when one exists, the user's own uuid when none does — the
+  // same precedence as BaseAdminController.getUserUsage and the admin list.
+  const quotaScopeUuid = fileQuotaScopeUuid(subscriptionUuid, userUuid)
 
   const getSubscriptionSetting = container.get<
     UseCase<
@@ -890,7 +905,7 @@ async function storageInfoForUser(
 
   const readNumber = async (settingName: string): Promise<number | null> => {
     const result = await getSubscriptionSetting.execute({
-      userSubscriptionUuid: subscriptionUuid,
+      userSubscriptionUuid: quotaScopeUuid,
       settingName,
       allowSensitiveRetrieval: false,
     })
@@ -926,17 +941,21 @@ async function cmdStorageLimitGet(args: ParsedArgs): Promise<number> {
     return 0
   }
 
-  if (info.subscriptionUuid === null) {
-    outLine(
-      `${user.email} has no regular subscription record — the files server already treats such accounts as unlimited.`,
-    )
-
-    return 0
-  }
   outLine(`used:  ${formatBytes(info.used)}${info.used !== null ? ` (${info.used} bytes)` : ''}`)
   outLine(
     `limit: ${formatBytes(info.limit)}${info.limit !== null && info.limit !== -1 ? ` (${info.limit} bytes)` : ''}`,
   )
+  // `-` above is "no figure is stored", NEVER a measured zero: the usage counter
+  // is written only when an upload succeeds. Say which silence it is rather than
+  // leaving the reader to guess.
+  if (info.used === null) {
+    outLine('       (no usage figure is stored for this account — not a measured zero; run `fix-quota` to derive one)')
+  }
+  if (info.subscriptionUuid === null) {
+    outLine(
+      `scope: no regular subscription record — figures live under the account's own uuid, and the files server mints unlimited valet tokens for such accounts unless an explicit limit is stored.`,
+    )
+  }
 
   return 0
 }
@@ -954,18 +973,23 @@ async function setStorageLimit(identifier: string, rawValue: string): Promise<nu
     TYPES.Auth_GetRegularSubscriptionForUser,
   )
   const subscriptionOrError = await getRegularSubscription.execute({ userUuid: user.uuid })
-  if (subscriptionOrError.isFailed()) {
-    throw new Error(
-      `${user.email} has no regular subscription record. Accounts without one are already treated as unlimited by the files server.`,
-    )
-  }
+  // *** THIS REFUSAL WAS TRUE WHEN IT WAS WRITTEN AND IS NO LONGER, *** for the
+  // reasons spelled out over the same branch in
+  // `BaseAdminController.setUserStorageLimit`: `CreateValetToken`'s free branch
+  // now reads the limit from the user's own uuid, so a limit written there binds.
+  // The HTTP admin endpoint was fixed and this path was not, so the admin PANE
+  // could set a limit the CLI refused to.
+  const quotaScopeUuid = fileQuotaScopeUuid(
+    subscriptionOrError.isFailed() ? null : subscriptionOrError.getValue().uuid,
+    user.uuid,
+  )
 
   const setSubscriptionSettingValue = container.get<
     UseCase<{ userSubscriptionUuid: string; settingName: string; value: string }>
   >(TYPES.Auth_SetSubscriptionSettingValue)
   requireResult(
     await setSubscriptionSettingValue.execute({
-      userSubscriptionUuid: subscriptionOrError.getValue().uuid,
+      userSubscriptionUuid: quotaScopeUuid,
       settingName: STORAGE_LIMIT_SETTING,
       value: parsed.value,
     }),

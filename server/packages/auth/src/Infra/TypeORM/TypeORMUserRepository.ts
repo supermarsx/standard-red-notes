@@ -195,45 +195,120 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
     return new Set(rows.map((row) => row.userUuid))
   }
 
-  private async loadStorageForUsers(
-    uuids: string[],
-  ): Promise<Map<string, { used: number | null; limit: number | null }>> {
+  /**
+   * Standard Red Notes: the one uuid each listed user's FILE_UPLOAD_BYTES_*
+   * settings live under, for the whole page, in ONE query.
+   *
+   * *** WHY THIS STEP EXISTS AT ALL. *** These two are SUBSCRIPTION settings, so
+   * every read is keyed on a `user_subscriptions` uuid. On the default
+   * `STANDARD_RED_ENTITLEMENT_MODE=included` registration creates NO such row, so
+   * the figures are written under the user's OWN uuid instead — the identity
+   * `GetUserSubscription.createIncludedSubscription` hands the client as the
+   * synthetic subscription's uuid, named once by `ResolveFileQuotaScope` and used
+   * by `UpdateStorageQuotaUsedForUser` (the writer) and by
+   * `BaseAdminController.getUserUsage` (the per-user detail read). This list read
+   * was the one place left joining `subscription_settings` to
+   * `user_subscriptions`, and an INNER JOIN against a table with no row for the
+   * user eliminates every row: on a default self-hosted deployment the admin
+   * users list reported `null` for every account however many files it held, and
+   * the panel rendered that, correctly, as "Not reported".
+   *
+   * *** SCOPE PRECEDENCE IS COPIED, NOT INVENTED. *** The newest REGULAR
+   * subscription's uuid when the user has one, else the user's own uuid — exactly
+   * what `getUserUsage` resolves for the detail panel. A SHARED subscription is
+   * deliberately not consulted even though `ResolveFileQuotaScope` prefers one:
+   * neither the detail endpoint nor enforcement (`CreateValetToken`, which embeds
+   * the figures into the valet token) reads a shared row, so admitting one here
+   * would make the list disagree with both the panel beside it and the limit the
+   * files server actually applies.
+   *
+   * *** COST. *** Two statements per PAGE, not per row. A `Map` keyed on the
+   * scope uuid is what lets the settings read stay a single `IN (...)`; the
+   * reverse direction cannot collide, because a user's own uuid is never another
+   * user's subscription uuid.
+   */
+  private async loadStorageScopeByUser(uuids: string[]): Promise<Map<string, string>> {
     const rows = await this.ormRepository.manager
       .createQueryBuilder()
-      .select('us.user_uuid', 'userUuid')
-      .addSelect('ss.name', 'name')
-      .addSelect('ss.value', 'value')
-      .from('subscription_settings', 'ss')
-      .innerJoin('user_subscriptions', 'us', 'us.uuid = ss.user_subscription_uuid')
+      .select('us.uuid', 'subscriptionUuid')
+      .addSelect('us.user_uuid', 'userUuid')
+      .from('user_subscriptions', 'us')
       .where('us.user_uuid IN (:...uuids)', { uuids })
-      // Standard Red Notes: REGULAR subscriptions only. Both the per-user detail
-      // endpoint (GetRegularSubscriptionForUser) and enforcement itself
-      // (CreateValetToken, which embeds the figures into the valet token) read a
-      // regular subscription's settings and never a shared one's. Without this
-      // filter a user who also belongs to a SHARED subscription created more
-      // recently had the shared row's figures reported in the admin list, so the
-      // list and the detail panel could show two different numbers for the same
-      // user and neither matched what the files server enforces.
       .andWhere('us.subscription_type = :subscriptionType', { subscriptionType: UserSubscriptionType.Regular })
-      .andWhere('ss.name IN (:...names)', {
-        names: [SettingName.NAMES.FileUploadBytesLimit, SettingName.NAMES.FileUploadBytesUsed],
-      })
       // Newest subscription first so, if a user has more than one, we read the
       // most recent subscription's storage settings.
       .orderBy('us.created_at', 'DESC')
-      .getRawMany<{ userUuid: string; name: string; value: string | null }>()
+      .getRawMany<{ subscriptionUuid: string; userUuid: string }>()
+
+    const subscriptionByUser = new Map<string, string>()
+    for (const row of rows) {
+      if (!subscriptionByUser.has(row.userUuid)) {
+        subscriptionByUser.set(row.userUuid, row.subscriptionUuid)
+      }
+    }
+
+    const scopeByUser = new Map<string, string>()
+    for (const uuid of uuids) {
+      scopeByUser.set(uuid, subscriptionByUser.get(uuid) ?? uuid)
+    }
+
+    return scopeByUser
+  }
+
+  private async loadStorageForUsers(
+    uuids: string[],
+  ): Promise<Map<string, { used: number | null; limit: number | null }>> {
+    const scopeByUser = await this.loadStorageScopeByUser(uuids)
+
+    const userByScope = new Map<string, string>()
+    for (const [userUuid, scopeUuid] of scopeByUser) {
+      userByScope.set(scopeUuid, userUuid)
+    }
+    const scopeUuids = [...userByScope.keys()]
+
+    const rows = await this.ormRepository.manager
+      .createQueryBuilder()
+      .select('ss.user_subscription_uuid', 'scopeUuid')
+      .addSelect('ss.name', 'name')
+      .addSelect('ss.value', 'value')
+      .from('subscription_settings', 'ss')
+      .where('ss.user_subscription_uuid IN (:...scopeUuids)', { scopeUuids })
+      .andWhere('ss.name IN (:...names)', {
+        names: [SettingName.NAMES.FileUploadBytesLimit, SettingName.NAMES.FileUploadBytesUsed],
+      })
+      // Freshest row first, matching the single-setting read the detail endpoint
+      // goes through (TypeORMSubscriptionSettingRepository
+      // .findLastByNameAndUserSubscriptionUuid also orders by updated_at DESC).
+      // The index on (name, user_subscription_uuid) is not unique, so a duplicate
+      // pair is possible and the two reads must resolve it the same way.
+      .orderBy('ss.updated_at', 'DESC')
+      .getRawMany<{ scopeUuid: string; name: string; value: string | null }>()
 
     const map = new Map<string, { used: number | null; limit: number | null }>()
+    // *** SEEN IS TRACKED SEPARATELY FROM THE VALUE, ON PURPOSE. *** A freshest
+    // row whose value is NULL or unparseable is still the row the detail endpoint
+    // reads, and it answers `null` for it. Deciding on `entry.used === null`
+    // instead would let a STALER row win and print a figure the panel beside it
+    // does not show.
+    const limitDecided = new Set<string>()
+    const usedDecided = new Set<string>()
     for (const row of rows) {
-      const entry = map.get(row.userUuid) ?? { used: null, limit: null }
+      const userUuid = userByScope.get(row.scopeUuid)
+      if (userUuid === undefined) {
+        continue
+      }
+
       const parsed = row.value === null ? null : Number(row.value)
       const value = parsed !== null && Number.isFinite(parsed) ? parsed : null
-      if (row.name === SettingName.NAMES.FileUploadBytesLimit && entry.limit === null) {
+      const entry = map.get(userUuid) ?? { used: null, limit: null }
+      if (row.name === SettingName.NAMES.FileUploadBytesLimit && !limitDecided.has(userUuid)) {
+        limitDecided.add(userUuid)
         entry.limit = value
-      } else if (row.name === SettingName.NAMES.FileUploadBytesUsed && entry.used === null) {
+      } else if (row.name === SettingName.NAMES.FileUploadBytesUsed && !usedDecided.has(userUuid)) {
+        usedDecided.add(userUuid)
         entry.used = value
       }
-      map.set(row.userUuid, entry)
+      map.set(userUuid, entry)
     }
 
     return map

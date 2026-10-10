@@ -36,7 +36,7 @@ jest.mock('@standardnotes/filepicker', () => ({
   formatSizeToReadableString: (bytes: number) => `${bytes} B`,
 }))
 
-import AdminUsersTab from './AdminUsersTab'
+import AdminUsersTab, { ADMIN_USERS_STORAGE_COLUMN_SCOPE } from './AdminUsersTab'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const TARGET_UUID = 'target-user-uuid'
@@ -617,22 +617,177 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
             storageLimitBytes: null,
           },
           { ...baseRow, uuid: 'row-zero', email: 'zero@example.com', storageUsedBytes: 0, storageLimitBytes: -1 },
+          // The key MISSING rather than null. No real server can send this (see
+          // ADMIN_STORAGE_USED_STATES), and the row is here to pin that the pane
+          // treats it as the same absence rather than growing a state for it.
+          { ...baseRow, uuid: 'row-silent', email: 'silent@example.com', storageLimitBytes: null },
+          // The figure the whole fix is about: an account with no subscription row
+          // whose file bytes live under its own uuid and now come back measured.
+          {
+            ...baseRow,
+            uuid: 'row-measured',
+            email: 'measured@example.com',
+            storageUsedBytes: 3_145_728,
+            storageLimitBytes: null,
+          },
         ],
-        total: 2,
+        total: 4,
       },
     })
 
     await renderTab(application)
 
-    // Precondition: both rows actually rendered.
+    // Precondition: every row actually rendered.
     expect(application.legacyApi.adminListUsers).toHaveBeenCalled()
     const absentCell = storageCellForRow('absent@example.com')
     const zeroCell = storageCellForRow('zero@example.com')
-    expect(absentCell).toBe('Not reported / Not set')
-    expect(zeroCell).toBe('0 B / Unlimited')
+    const silentCell = storageCellForRow('silent@example.com')
+    const measuredCell = storageCellForRow('measured@example.com')
+    expect(absentCell).toBe('[?]Not reported / Not set')
+    expect(zeroCell).toBe('[v]0 B / Unlimited')
+    // An absent FIELD reads as the absent FIGURE, by design and not by accident.
+    expect(silentCell).toBe(absentCell)
+    // A real figure reads as one, and as answered.
+    expect(measuredCell).toBe('[v]3 MB / Not set')
     // The complaint this column produced: a whole column of 0 B measurements.
     expect(absentCell).not.toContain('0 B')
     expect(absentCell).not.toContain('Unlimited')
     expect(absentCell).not.toBe(zeroCell)
+    // The marker legend must RENDER, not merely exist as a constant — and so must
+    // the line saying what the column leaves out and where the total lives.
+    expect(container.textContent).toContain('asked and nothing came back, which is never a zero')
+    expect(container.textContent).toContain('[n] not included')
+    expect(container.textContent).toContain('Diagnostics')
+    // ...and it must not advertise a row marker no row can print.
+    expect(container.textContent).not.toContain('[n] nothing publishes it')
+  })
+
+  // -------------------------------------------------------------------------
+  // `hasSubscription: false` — ANSWERED AND DROPPED.
+  //
+  // Every one of the cases above passes `hasSubscription: true`, and that is
+  // exactly why this survived. On the default STANDARD_RED_ENTITLEMENT_MODE=included
+  // registration creates no `user_subscriptions` row, so `false` is EVERY account
+  // on the deployment this project ships by default. The server answers from the
+  // row-less quota scope (the account's own uuid) and the pane threw the figure
+  // away: proved live against a single container built from HEAD, where an
+  // account with 3 MB uploaded answered {hasSubscription: false,
+  // uploadBytesUsed: 3145728} and the panel printed 'not tracked'.
+  // -------------------------------------------------------------------------
+
+  it('renders a figure the server reported for an account with NO subscription row', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: false, uploadBytesUsed: 3_145_728, uploadBytesLimit: null } },
+    })
+
+    await renderTab(application)
+
+    // Precondition: the read really was attempted and the panel rendered.
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledWith(TARGET_UUID)
+    expect(storageReadoutElement()).not.toBeNull()
+    // The figure arrives and is PRINTED, not replaced by a verdict about scope.
+    expect(storageReadout()).toContain('3 MB')
+    expect(storageReadout()).not.toContain('not tracked')
+    // ...and the evidence says where it came from rather than claiming there is
+    // nowhere for the server to record it.
+    expect(storageEvidence()).toContain('under the account’s own uuid')
+    expect(storageEvidence()).not.toContain('nowhere for the server to record')
+  })
+
+  it('still refuses to invent a zero for a row-less account with no figure', async () => {
+    // The companion to the case above: the fix must not have turned the absent
+    // figure into a measurement on its way to being reported.
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: false, uploadBytesUsed: null, uploadBytesLimit: null } },
+    })
+
+    await renderTab(application)
+
+    expect(storageReadout()).toContain('Not reported')
+    expect(storageReadout()).not.toContain('0 B')
+    expect(storageEvidence()).toContain('NOT a measured zero')
+  })
+
+  it('reports a row-less account’s EXPLICIT limit instead of overwriting it with Unlimited', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: false, uploadBytesUsed: 1_024, uploadBytesLimit: 4_096 } },
+    })
+
+    await renderTab(application)
+
+    // A stored limit binds for a row-less account too — setUserStorageLimit
+    // writes it to the same scope and CreateValetToken's free branch reads it.
+    expect(storageReadout()).toContain('4 KB')
+    expect(storageReadout()).not.toContain('Unlimited')
+  })
+
+  it('falls back to Unlimited for a row-less account ONLY when no limit is stored', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: false, uploadBytesUsed: 1_024, uploadBytesLimit: null } },
+    })
+
+    await renderTab(application)
+
+    expect(storageReadout()).toContain('Unlimited')
+    // ...and the note must not quote the PLAN default, which never applies here.
+    expect(storageEvidence()).toContain('minted with an unlimited allowance')
+    expect(storageEvidence()).not.toContain('That default is 0 bytes')
+  })
+
+  it('still quotes the PLAN default for a SUBSCRIBED account with no stored limit', async () => {
+    // The discriminator for the branch above: the two fallbacks are different
+    // allowances and must not share a sentence.
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: true, uploadBytesUsed: 1_024, uploadBytesLimit: null } },
+    })
+
+    await renderTab(application)
+
+    expect(storageEvidence()).toContain('That default is 0 bytes')
+    expect(storageEvidence()).not.toContain('minted with an unlimited allowance')
+  })
+
+  it('keeps the storage-limit editor usable for an account with NO subscription row', async () => {
+    // It used to be replaced by "the limit cannot be changed here", which was
+    // true until `setUserStorageLimit` learned to write to the row-less quota
+    // scope. On the default entitlement mode that refusal covered every account,
+    // so the pane hid the one control that works.
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: { flags: {}, storage: { hasSubscription: false, uploadBytesUsed: 1_024, uploadBytesLimit: null } },
+    })
+
+    await renderTab(application)
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === 'Save storage limit',
+    )
+    expect(saveButton).toBeDefined()
+    expect(saveButton?.disabled).toBe(false)
+    // *** PRESENT AND ENABLED IS NOT ENOUGH. *** `Button` spreads its props onto
+    // the real `<button>`, so a single `hidden` (or `aria-hidden`) takes the
+    // control off the screen while leaving it in the DOM, enabled — and a
+    // mutation doing exactly that survived a check that stopped at `disabled`.
+    expect(saveButton?.hidden).toBe(false)
+    expect(saveButton?.getAttribute('aria-hidden')).toBeNull()
+    expect(container.textContent).not.toContain('cannot be changed here')
+    // ...and the note that replaces it must state where the limit lives rather
+    // than claiming nothing can be done.
+    expect(container.textContent).toContain('stored under the account’s own uuid')
+  })
+
+  it('says in the list what the storage column is a figure OF, and what it leaves out', () => {
+    // A column labelled 'Storage' that silently meant 'files only' under-reported
+    // most accounts. The scope line is asserted here because the item half is
+    // genuinely unobtainable for a list and the operator must not have to guess.
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('FILE_UPLOAD_BYTES_USED')
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('[n] not included')
+    // ...and it must point at the surface that CAN report the total.
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('Space')
   })
 })

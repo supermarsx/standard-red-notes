@@ -1,6 +1,12 @@
 import {
   ADMIN_STORAGE_LIMIT_STATES,
+  ADMIN_STORAGE_READING_MARKER,
+  ADMIN_STORAGE_USED_MEANING,
+  ADMIN_STORAGE_USED_READING,
   ADMIN_STORAGE_USED_STATES,
+  ADMIN_USERS_ITEM_BYTES_READING,
+  adminStorageUsedMarker,
+  adminStorageUsedMeaning,
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
   ADMIN_USERS_MAX_LIMIT,
   adminUsersFiltersAreEmpty,
@@ -168,10 +174,56 @@ describe('formatBytes / formatAdminUserStorage', () => {
     expect(describeAdminStorageUsed(0)).toEqual({ state: 'measured', label: '0 B' })
     // ...and an absent figure must NOT read as that same zero.
     expect(describeAdminStorageUsed(null)).toEqual({ state: 'not-reported', label: 'Not reported' })
-    expect(describeAdminStorageUsed(undefined).state).toBe('not-reported')
     expect(describeAdminStorageUsed(null).label).not.toBe(describeAdminStorageUsed(0).label)
     expect(describeAdminStorageUsed(-5).state).toBe('invalid')
     expect(describeAdminStorageUsed(-5).label).not.toContain('0 B')
+  })
+
+  it('PINS the deliberate collapse of an absent field into the absent figure', () => {
+    // There is no fourth `not-published` state, and this test is why nobody
+    // re-adds one: `storageUsedBytes` arrived in the same commit as
+    // GET /admin/users and is always set, and `uploadBytesUsed` arrived with the
+    // `storage` object itself (an older server omits `storage` entirely, which is
+    // the pane's own `unsupported` state). Nothing can send the field absent, so a
+    // state for it would be reachable only from this file.
+    expect(describeAdminStorageUsed(undefined)).toEqual(describeAdminStorageUsed(null))
+    expect(describeAdminStorageUsed(undefined)).toEqual({ state: 'not-reported', label: 'Not reported' })
+    // What must stay true either way: it is not a zero.
+    expect(describeAdminStorageUsed(undefined).label).not.toContain('0 B')
+    expect(describeAdminStorageUsed(undefined).label).not.toBe(describeAdminStorageUsed(0).label)
+  })
+
+  it('maps every used-state onto the diagnostics pane’s readings and markers', () => {
+    // The markers are the pane's own legend, so a divergence here would teach the
+    // operator two vocabularies for one idea.
+    expect(ADMIN_STORAGE_READING_MARKER).toEqual({ answered: '[v]', unanswered: '[?]', unpublished: '[n]' })
+    expect(Object.keys(ADMIN_STORAGE_USED_READING).sort()).toEqual([...ADMIN_STORAGE_USED_STATES].sort())
+
+    expect(adminStorageUsedMarker(4096)).toBe('[v]')
+    // A figure that cannot be a size is still a READING, not a silence.
+    expect(adminStorageUsedMarker(-5)).toBe('[v]')
+    expect(adminStorageUsedMarker(null)).toBe('[?]')
+    // A ROW can only ever be one of those two.
+    expect([ADMIN_STORAGE_READING_MARKER.answered, ADMIN_STORAGE_READING_MARKER.unanswered]).toContain(
+      adminStorageUsedMarker(undefined),
+    )
+
+    // Every state carries a meaning, and the silence names its own heal without
+    // claiming a measurement.
+    for (const state of ADMIN_STORAGE_USED_STATES) {
+      expect(ADMIN_STORAGE_USED_MEANING[state].length).toBeGreaterThan(0)
+    }
+    expect(adminStorageUsedMeaning(null)).toContain('NOT a measured zero')
+    expect(adminStorageUsedMeaning(null)).not.toBe(adminStorageUsedMeaning(0))
+  })
+
+  it('reserves [n] for the one reading on this surface that nothing publishes', () => {
+    // Note bytes: the only source is a self-scoped route on a server with no
+    // admin surface, so there is nothing to wait for — which is what [n] means.
+    expect(ADMIN_USERS_ITEM_BYTES_READING).toBe('unpublished')
+    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_USERS_ITEM_BYTES_READING]).toBe('[n]')
+    // ...and no per-row state may claim it, or the marker would stop meaning that.
+    expect(Object.values(ADMIN_STORAGE_USED_READING)).not.toContain(ADMIN_USERS_ITEM_BYTES_READING)
   })
 
   it('separates unlimited, a figure, an allowance of nothing and an unset limit', () => {

@@ -10,7 +10,11 @@ import {
 import {
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
   AdminUserRow,
+  ADMIN_STORAGE_READING_MARKER,
+  ADMIN_USERS_ITEM_BYTES_READING,
   AdminUsersFilterState,
+  adminStorageUsedMarker,
+  adminStorageUsedMeaning,
   adminUsersFiltersAreEmpty,
   buildAdminListUsersParams,
   describeAdminStorageLimit,
@@ -126,6 +130,29 @@ type EffectivePermissions = {
 }
 
 /**
+ * What the users-list storage column is a figure OF, and what it is not.
+ *
+ * *** THE COLUMN CANNOT CARRY NOTE BYTES, AND SAYING SO IS THE POINT. ***
+ * An account's stored bytes are its synced ITEM payload plus its uploaded FILES,
+ * and for most accounts the notes are the larger half. The file half lives in
+ * auth's own `subscription_settings` and batches across a page in two statements.
+ * The item half is `items.content_size` on the syncing server, exposed at exactly
+ * one route — `GET /v1/items/storage-usage`, scoped to `response.locals.user.uuid`
+ * with no parameter, by design — and that server has no admin-authorised surface
+ * of any kind. So no endpoint anywhere publishes another account's item bytes:
+ * a LIST could only get them by signing in as each user, or by one cross-service
+ * round trip per row. A column labelled 'Storage' that silently meant 'files
+ * only' would have under-reported most accounts without ever saying so, so the
+ * column is labelled for what it holds and the total lives where it can be
+ * derived honestly — Diagnostics ▸ Space, for the signed-in account.
+ */
+export const ADMIN_USERS_STORAGE_COLUMN_SCOPE =
+  'Uploaded FILE bytes only (FILE_UPLOAD_BYTES_USED) against the stored allowance. Synced note bytes are ' +
+  ADMIN_STORAGE_READING_MARKER[ADMIN_USERS_ITEM_BYTES_READING] +
+  ' not included: no endpoint publishes another account’s item bytes, so a list cannot carry them. ' +
+  'Diagnostics ▸ Space reports the full total for the signed-in account.'
+
+/**
  * The per-user SERVER storage reading, as a closed set of ANSWERS rather than one
  * nullable figure.
  *
@@ -172,9 +199,22 @@ const describeStorageUsage = (reading: AdminStorageReading): string => {
   if (reading.state === 'unsupported') {
     return 'not reported by this server'
   }
-  if (!reading.storage.hasSubscription) {
-    return 'not tracked (no subscription record)'
-  }
+  /**
+   * *** `hasSubscription` IS NOT CONSULTED HERE, AND USED TO BE. ***
+   *
+   * It short-circuited to 'not tracked (no subscription record)', which was true
+   * when written: the figure was keyed on a `user_subscriptions` row and there was
+   * nowhere else to look. It has not been true since `ResolveFileQuotaScope` — the
+   * endpoint now reads the row-less scope (the user's own uuid) and ANSWERS with a
+   * figure. Proven live against a default single container: an account with 3 MB
+   * uploaded answers `{hasSubscription: false, uploadBytesUsed: 3145728}` and this
+   * branch threw that away and printed "not tracked", so the one deployment mode
+   * the project ships by default was the one that could never show a number.
+   *
+   * On the default `STANDARD_RED_ENTITLEMENT_MODE=included` NO account has a
+   * subscription row, so this was every account. All seven of this pane's storage
+   * cases passed `hasSubscription: true`, which is why it survived.
+   */
   return describeAdminStorageUsed(reading.storage.uploadBytesUsed).label
 }
 
@@ -192,10 +232,24 @@ const describeStorageLimit = (reading: AdminStorageReading): string => {
   if (reading.state === 'unsupported') {
     return 'not reported by this server'
   }
-  if (!reading.storage.hasSubscription) {
-    return 'Unlimited (no subscription record)'
+  const limit = describeAdminStorageLimit(reading.storage.uploadBytesLimit)
+  /**
+   * An EXPLICIT limit binds whether or not a subscription row exists — the admin
+   * write path (`setUserStorageLimit`) stores it under the same row-less scope and
+   * `CreateValetToken`'s free branch reads it from there. So a stored figure is
+   * reported as itself, and only an ABSENT one falls back.
+   *
+   * The fallback is unlimited ONLY for a row-less account, because that is what
+   * the free branch mints with nothing stored. With a subscription row and no
+   * stored limit the PLAN default applies instead, and that default is 0 for a
+   * plan whose role grants no file-storage permission — so the two cases cannot
+   * share a sentence. This used to return 'Unlimited (no subscription record)'
+   * unconditionally, overwriting a real stored allowance with a guess.
+   */
+  if (!reading.storage.hasSubscription && limit.state === 'not-set') {
+    return 'Unlimited (none stored, no subscription record)'
   }
-  return describeAdminStorageLimit(reading.storage.uploadBytesLimit).label
+  return limit.label
 }
 
 /**
@@ -216,13 +270,23 @@ const describeStorageEvidence = (reading: AdminStorageReading): string | null =>
   if (reading.state === 'unsupported') {
     return 'This server answered without any storage figures for this user, so neither figure above is a measurement.'
   }
-  if (!reading.storage.hasSubscription) {
-    return 'This account has no subscription record, so there is nowhere for the server to record its usage and upload tokens are issued with an unlimited allowance.'
-  }
-
   const used = describeAdminStorageUsed(reading.storage.uploadBytesUsed)
   const limit = describeAdminStorageLimit(reading.storage.uploadBytesLimit)
   const notes: string[] = []
+
+  /**
+   * *** THIS USED TO RETURN EARLY, SAYING SOMETHING FALSE. ***
+   *
+   * "there is nowhere for the server to record its usage" was the whole bug in one
+   * sentence: there IS somewhere — the account's own uuid — and the server reports
+   * from it. The note now says where the figures came from and stops deciding
+   * whether there are any; the two figures speak for themselves below.
+   */
+  if (!reading.storage.hasSubscription) {
+    notes.push(
+      'This account has no subscription record, so its figures are kept under the account’s own uuid (the normal arrangement when entitlements are included rather than provisioned). That is where the server read them from.',
+    )
+  }
 
   if (used.state === 'not-reported') {
     notes.push(
@@ -234,7 +298,14 @@ const describeStorageEvidence = (reading: AdminStorageReading): string | null =>
     notes.push('The server reports zero stored file bytes for this user — a measured zero, not a missing figure.')
   }
 
-  if (limit.state === 'not-set') {
+  if (limit.state === 'not-set' && !reading.storage.hasSubscription) {
+    // The row-less case has a DIFFERENT effective allowance from the subscribed
+    // one, so it gets a different sentence. CreateValetToken's free branch mints
+    // -1 when nothing is stored; the plan default never enters it.
+    notes.push(
+      'No per-user limit is stored and this account has no subscription record, so upload tokens are minted with an unlimited allowance. Set an explicit limit to cap it.',
+    )
+  } else if (limit.state === 'not-set') {
     notes.push(
       'No per-user limit is stored, so the subscription plan’s own default applies. That default is 0 bytes — every upload refused — for a plan whose role grants no file-storage permission, so this is not the same as an unlimited allowance. Set an explicit limit, or Unlimited, to settle it.',
     )
@@ -1779,8 +1850,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
                       MFA
                     </th>
-                    <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 text-right font-semibold">
-                      Storage
+                    <th
+                      className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 text-right font-semibold"
+                      title={ADMIN_USERS_STORAGE_COLUMN_SCOPE}
+                    >
+                      File storage
                     </th>
                   </tr>
                 </thead>
@@ -1837,7 +1911,13 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         )}
                       </td>
                       <td className="px-3 py-2.5">{row.mfaEnabled ? 'On' : 'Off'}</td>
-                      <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums">
+                      <td
+                        className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums"
+                        title={adminStorageUsedMeaning(row.storageUsedBytes)}
+                      >
+                        <span className="text-passive-1 mr-1 font-mono text-xs" aria-hidden="true">
+                          {adminStorageUsedMarker(row.storageUsedBytes)}
+                        </span>
                         {formatAdminUserStorage(row.storageUsedBytes, row.storageLimitBytes)}
                       </td>
                     </tr>
@@ -1845,6 +1925,19 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 </tbody>
               </table>
             </div>
+
+            {/*
+              Only the two readings a ROW can actually carry are offered as row
+              markers. `[n]` appears once, inside the scope line, attached to the
+              one thing on this surface that nothing publishes — note bytes. A
+              legend advertising a third row marker nothing can print would be the
+              same decoration this pane exists to remove.
+            */}
+            <Text className="text-passive-1 mt-3 text-xs">
+              <span className="font-mono">{ADMIN_STORAGE_READING_MARKER.answered}</span> a figure arrived &middot;{' '}
+              <span className="font-mono">{ADMIN_STORAGE_READING_MARKER.unanswered}</span> asked and nothing came back,
+              which is never a zero. {ADMIN_USERS_STORAGE_COLUMN_SCOPE}
+            </Text>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <Text className="text-passive-1 text-xs">
@@ -2224,40 +2317,51 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                     />
                   </div>
                 )}
-                {storageReading.state === 'reported' && !storageReading.storage.hasSubscription ? (
-                  <Text>
-                    This account has no subscription record, so the server treats its storage as unlimited and the limit
-                    cannot be changed here.
+                {/*
+                  *** THIS USED TO HIDE THE EDITOR, AND THE REASON IT GAVE IS NO
+                  LONGER TRUE. *** It replaced the control with "the limit cannot
+                  be changed here" whenever no `user_subscriptions` row existed —
+                  which, on the default `included` entitlement mode, is every
+                  account. `setUserStorageLimit` has since been fixed to write to
+                  the row-less quota scope (the account's own uuid) and
+                  `CreateValetToken`'s free branch reads the limit from there, so a
+                  limit saved here binds. The pane was hiding the one control that
+                  works; the editor stays, and the note says what applies while
+                  nothing is stored.
+                */}
+                {storageReading.state === 'reported' && !storageReading.storage.hasSubscription && (
+                  <Text className="text-passive-1 text-xs">
+                    This account has no subscription record, so its limit is stored under the account’s own uuid. With
+                    none stored, upload tokens are minted with an unlimited allowance.
                   </Text>
-                ) : (
-                  <div className="mt-1 flex items-center gap-3">
-                    <DecoratedInput
-                      className={{ container: 'w-28' }}
-                      placeholder="e.g. 5"
-                      value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
-                      onChange={setStorageLimitValue}
-                      type="number"
-                      disabled={storageLimitUnit === 'unlimited' || !storageWasRead(storageReading)}
-                    />
-                    <Dropdown
-                      label="Storage limit unit"
-                      items={[
-                        { label: 'MB', value: 'MB' },
-                        { label: 'GB', value: 'GB' },
-                        { label: 'Unlimited', value: 'unlimited' },
-                      ]}
-                      value={storageLimitUnit}
-                      onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
-                    />
-                    {/* Named apart from the AI request limit's own "Save limit"
-                        above: two identically labelled buttons on one screen. */}
-                    <Button
-                      label="Save storage limit"
-                      onClick={() => void saveStorageLimit()}
-                      disabled={savingStorageLimit || flagsLoading || !storageWasRead(storageReading)}
-                    />
-                  </div>
                 )}
+                <div className="mt-1 flex items-center gap-3">
+                  <DecoratedInput
+                    className={{ container: 'w-28' }}
+                    placeholder="e.g. 5"
+                    value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
+                    onChange={setStorageLimitValue}
+                    type="number"
+                    disabled={storageLimitUnit === 'unlimited' || !storageWasRead(storageReading)}
+                  />
+                  <Dropdown
+                    label="Storage limit unit"
+                    items={[
+                      { label: 'MB', value: 'MB' },
+                      { label: 'GB', value: 'GB' },
+                      { label: 'Unlimited', value: 'unlimited' },
+                    ]}
+                    value={storageLimitUnit}
+                    onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
+                  />
+                  {/* Named apart from the AI request limit's own "Save limit"
+                      above: two identically labelled buttons on one screen. */}
+                  <Button
+                    label="Save storage limit"
+                    onClick={() => void saveStorageLimit()}
+                    disabled={savingStorageLimit || flagsLoading || !storageWasRead(storageReading)}
+                  />
+                </div>
               </div>
 
               <HorizontalSeparator classes="my-3" />

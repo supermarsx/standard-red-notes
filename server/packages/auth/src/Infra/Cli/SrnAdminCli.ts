@@ -266,6 +266,28 @@ export function lockSubjectsFor(identifier: string, user?: { uuid?: string; emai
   return subjects
 }
 
+/**
+ * Standard Red Notes: the uuid an account's FILE_UPLOAD_BYTES_* settings live
+ * under — the regular `user_subscriptions` row's uuid when it has one, the
+ * account's OWN uuid when it does not.
+ *
+ * *** THE FALLBACK IS THE WHOLE POINT. *** These are SUBSCRIPTION settings, and
+ * on the default `STANDARD_RED_ENTITLEMENT_MODE=included` registration creates no
+ * subscription row, so for every account on a default deployment the figures are
+ * written under the user's own uuid (see `ResolveFileQuotaScope`, and
+ * `BaseAdminController.getUserUsage` / `setUserStorageLimit`, which resolve the
+ * same way). Two `srn-admin` commands resolved it themselves and got it wrong in
+ * opposite directions: `storage-limit get` printed "has no regular subscription
+ * record" and no figures at all, while `storage-limit set` refused outright — so
+ * the admin PANE could set a limit the CLI would not.
+ *
+ * It is one expression, and it lives here so that it is one expression with a
+ * test rather than two call sites with a convention.
+ */
+export function fileQuotaScopeUuid(subscriptionUuid: string | null, userUuid: string): string {
+  return subscriptionUuid ?? userUuid
+}
+
 /** Human-readable byte count. null → '-', -1 → 'unlimited' (files-server convention). */
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) {

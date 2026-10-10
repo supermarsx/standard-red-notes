@@ -209,10 +209,84 @@ export const formatBytes = (bytes: number): string => {
  *
  * `invalid` keeps a figure the server did send but that cannot be a size (a
  * negative counter, a non-finite number) away from both of the above.
+ *
+ * *** THERE IS NO `not-published` MEMBER, AND THAT IS A DECISION. ***
+ *
+ * The diagnostics pane next door splits the silence two ways — `[?]` asked and
+ * nothing came back, `[n]` nothing publishes this — because 49 of its 239 report
+ * rows read 'not reported' with nothing saying which. A fourth member doing the
+ * same here (`undefined` for a server too old to publish the field) was written,
+ * tested, and removed, because nothing can produce its input:
+ *
+ *   - the LIST field `storageUsedBytes` arrived in `4651efae`, the SAME commit as
+ *     `findUsersForAdmin` and `GET /admin/users`, and that method always sets it
+ *     (`?? null`). No server that answers this endpoint omits the key.
+ *   - the DETAIL field `uploadBytesUsed` arrived in `94fc98d3` together with the
+ *     `storage` object itself, so an older server omits `storage` ENTIRELY — and
+ *     that case already has its own state in the pane (`unsupported`).
+ *
+ * Its only possible caller was its own unit test, which is the shape this pane
+ * exists to refuse. `undefined` therefore collapses into `not-reported`
+ * deliberately, and a test pins that collapse so it is not split again.
+ *
+ * `[n]` is still used on this surface, for the reading that IS reachable and
+ * true: note bytes — see `ADMIN_USERS_ITEM_BYTES_READING`.
  */
 export const ADMIN_STORAGE_USED_STATES = ['measured', 'not-reported', 'invalid'] as const
 
 export type AdminStorageUsedState = (typeof ADMIN_STORAGE_USED_STATES)[number]
+
+export type AdminStorageReadingName = 'answered' | 'unanswered' | 'unpublished'
+
+/**
+ * The reading each used-state is, in the diagnostics pane's own three-valued
+ * vocabulary. *** EXHAUSTIVE `Record` ON PURPOSE *** so a fourth state cannot be
+ * added without saying which silence (or non-silence) it is.
+ *
+ * `invalid` is `answered` deliberately, matching `rowReadingOf`'s treatment of
+ * `withheld (unrecognised format)`: a misbehaving server produced a READING, and
+ * counting it as a silence would make it look like the quiet one.
+ */
+export const ADMIN_STORAGE_USED_READING: Record<AdminStorageUsedState, AdminStorageReadingName> = {
+  measured: 'answered',
+  invalid: 'answered',
+  'not-reported': 'unanswered',
+}
+
+/**
+ * The reading the users list has for an account's synced ITEM (note) bytes:
+ * `unpublished`, always, and not because this build failed to ask.
+ *
+ * `GET /v1/items/storage-usage` is the only source and it is scoped to
+ * `response.locals.user.uuid` with no parameter, by design; the syncing server
+ * has no admin-authorised surface at all. So nothing anywhere publishes another
+ * account's item bytes and there is nothing for an operator to wait for — which
+ * is exactly what `[n]` means, and why it is a COLUMN-level reading here rather
+ * than a per-row one.
+ */
+export const ADMIN_USERS_ITEM_BYTES_READING: AdminStorageReadingName = 'unpublished'
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The marker printed beside a storage
+ * cell, identical to `READING_MARKER` in `diagnosticsSections` so the two panes
+ * do not teach an operator two legends for one idea.
+ */
+export const ADMIN_STORAGE_READING_MARKER: Record<AdminStorageReadingName, string> = {
+  answered: '[v]',
+  unanswered: '[?]',
+  unpublished: '[n]',
+}
+
+/**
+ * What each reading of the usage figure MEANS, as one line the cell can show the
+ * operator. *** EXHAUSTIVE `Record` ON PURPOSE. ***
+ */
+export const ADMIN_STORAGE_USED_MEANING: Record<AdminStorageUsedState, string> = {
+  measured: 'the server measured this',
+  invalid: 'the server sent a figure that cannot be a size',
+  'not-reported':
+    'the server was asked and holds no figure — the counter is written only when an upload succeeds, so this is NOT a measured zero. Recalculate storage quota derives it from the files actually stored.',
+}
 
 /**
  * What the server said about a user's upload allowance, as a closed set.
@@ -238,6 +312,10 @@ export type AdminStorageFigure<State> = {
 export const describeAdminStorageUsed = (
   usedBytes: number | null | undefined,
 ): AdminStorageFigure<AdminStorageUsedState> => {
+  // `== null` on purpose: `undefined` collapses into the SAME answer as `null`.
+  // Nothing can send this field absent while sending the rest of the row — see
+  // ADMIN_STORAGE_USED_STATES for the two commits that prove it — so a separate
+  // state for it would be a branch only its own test could reach.
   if (usedBytes == null) {
     return { state: 'not-reported', label: 'Not reported' }
   }
@@ -280,6 +358,14 @@ export const formatAdminUserStorage = (
 ): string => {
   return `${describeAdminStorageUsed(usedBytes).label} / ${describeAdminStorageLimit(limitBytes).label}`
 }
+
+/** The marker for a reported used-figure: `[v]` / `[?]` / `[n]`. */
+export const adminStorageUsedMarker = (usedBytes: number | null | undefined): string =>
+  ADMIN_STORAGE_READING_MARKER[ADMIN_STORAGE_USED_READING[describeAdminStorageUsed(usedBytes).state]]
+
+/** One line saying what the used-figure's reading means, for the cell's title. */
+export const adminStorageUsedMeaning = (usedBytes: number | null | undefined): string =>
+  ADMIN_STORAGE_USED_MEANING[describeAdminStorageUsed(usedBytes).state]
 
 // ---------------------------------------------------------------------------
 // Server tab — all-services status chips

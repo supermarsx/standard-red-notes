@@ -2,6 +2,7 @@ import 'reflect-metadata'
 
 import {
   CLI_MANAGEABLE_FLAGS,
+  fileQuotaScopeUuid,
   findFlagSpec,
   formatBytes,
   formatLockTtl,
@@ -159,6 +160,29 @@ describe('SrnAdminCli helpers', () => {
       expect(formatBytes(1023)).toEqual('1023 B')
       expect(formatBytes(1024)).toEqual('1.0 KiB')
       expect(formatBytes(5 * 1024 * 1024 * 1024)).toEqual('5.0 GiB')
+    })
+  })
+
+  describe('fileQuotaScopeUuid', () => {
+    it('uses the subscription row when there is one', () => {
+      expect(fileQuotaScopeUuid('sub-uuid', 'user-uuid')).toEqual('sub-uuid')
+    })
+
+    it('falls back to the USER’s own uuid when there is no subscription row', () => {
+      // This is the normal case on the default `included` entitlement mode, where
+      // registration creates no `user_subscriptions` row at all. Returning
+      // anything else here is what made `storage-limit get` print no figures and
+      // `storage-limit set` refuse, for every account on a default deployment.
+      expect(fileQuotaScopeUuid(null, 'user-uuid')).toEqual('user-uuid')
+    })
+
+    it('never answers an empty scope, which would read or write the wrong rows', () => {
+      expect(fileQuotaScopeUuid(null, 'user-uuid')).not.toEqual('')
+      expect(fileQuotaScopeUuid('sub-uuid', 'user-uuid')).not.toEqual('')
+      // ...and the two inputs must not be interchangeable: a scope that ignored
+      // the subscription row would disagree with the admin panel for every
+      // provisioned account.
+      expect(fileQuotaScopeUuid('sub-uuid', 'user-uuid')).not.toEqual('user-uuid')
     })
   })
 
