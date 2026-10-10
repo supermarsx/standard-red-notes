@@ -92,7 +92,13 @@ export function startRedisBridge<S extends SendableSocket>(
     opts.logger.info(`[redis] connected ${opts.host}:${opts.port}`)
   })
 
-  client.subscribe(channel, (err, count) => {
+  // Deliberately not awaited: this function hands the caller a client to close
+  // on shutdown and must stay synchronous, and ioredis reports the outcome of
+  // the subscribe through the callback below — which is where the failure is
+  // logged. ioredis routes the callback through `standard-as-callback`, which
+  // attaches both handlers to the very promise discarded here, so the rejection
+  // is handled and cannot surface as an unhandledRejection.
+  void client.subscribe(channel, (err, count) => {
     if (err) {
       opts.logger.error('[redis] subscribe failed', safeErrorLogMetadata(err))
       return
