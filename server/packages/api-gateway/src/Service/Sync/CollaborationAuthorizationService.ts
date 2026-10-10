@@ -52,6 +52,90 @@ export type CollaborationAuthorizationGrant =
 const MAX_BOUND_IDENTIFIER_LENGTH = 128
 
 /**
+ * WHY a collaboration authorization was refused.
+ *
+ * Two silent defects in this one lane denied 100 % of collaboration -- on
+ * multi-container deployments (`0a6897b3`: a fabricated request with no
+ * `method`, which axios defaulted to GET, so the access-check route did not
+ * exist) and on single-container ones (`6e18e3a5`:
+ * `DirectCallServiceProxy.callSyncingServer` declared three parameters against
+ * a four-parameter interface and discarded `payload`, the only place
+ * `{ itemUuid }` existed). Both spent weeks looking like a permission setting,
+ * because a fail-closed authorizer with no logger produced exactly one trace
+ * for either cause: a `collaboration_authorization denied` counter.
+ *
+ * So a denial now says which it is, and the two kinds are deliberately
+ * different LOG MESSAGES and not merely different field values:
+ *
+ *   policy      something decided, and the decision was no. Normal operation:
+ *               a read-only session, a feature gate, a note this account may
+ *               not edit. Logged at info.
+ *   unreadable  nothing decided. The access check could not be reached, or
+ *               answered something this service cannot read a decision out of.
+ *               That is a PLUMBING fault wearing a permission refusal's
+ *               clothes, and it is logged at ERROR.
+ *
+ * Honest about the limit: the single-container defect lands in `policy`, as
+ * `access-check-refused`, because the syncing server really did answer a
+ * well-formed `{ authorized: false }` -- it was answering about `undefined`
+ * instead of the note, and no inspection of that answer can tell. What changes
+ * is that the refusal is now VISIBLE, and visible with the note uuid this
+ * service asked about, so "my own note, refused, every time" is a contradiction
+ * an operator can see instead of silence. The multi-container defect lands in
+ * `unreadable`, as `access-check-http-status`, which names the plumbing
+ * directly. The structural guard against the signature half of it is
+ * `ServiceProxyArity.spec.ts`.
+ */
+export const CollaborationDenial = {
+  /** No signing secret / invalid capability TTL: this deployment cannot mint. */
+  NotConfigured: 'authorizer-not-configured',
+  ReadOnlySession: 'read-only-session',
+  ReadScopedMcpSession: 'read-scoped-mcp-session',
+  CollaborationDisabled: 'collaboration-disabled',
+  UnidentifiedSession: 'unidentified-session',
+  MalformedRequest: 'malformed-request',
+  /** The access check answered, and its answer was `authorized: false`. */
+  AccessCheckRefused: 'access-check-refused',
+  /** The access-check call threw: no answer at all. */
+  AccessCheckUnreachable: 'access-check-unreachable',
+  /** The access check answered a non-2xx: the route or the service is wrong. */
+  AccessCheckHttpStatus: 'access-check-http-status',
+  /** A 2xx whose body carries no decision this service can read. */
+  AccessCheckUnreadable: 'access-check-unreadable',
+  /** `authorized: true` with no usable revision or security epoch. */
+  AccessCheckIncompleteGrant: 'access-check-incomplete-grant',
+  /** The caller stopped waiting. Not a verdict either way. */
+  Abandoned: 'request-abandoned',
+} as const
+
+export type CollaborationDenialReason = (typeof CollaborationDenial)[keyof typeof CollaborationDenial]
+
+export type CollaborationDenialCategory = 'policy' | 'unreadable' | 'abandoned'
+
+/**
+ * Typed as a total record, so a reason added without a category is a COMPILE
+ * error rather than an `undefined` that quietly logs at the wrong level.
+ */
+const DENIAL_CATEGORIES: Record<CollaborationDenialReason, CollaborationDenialCategory> = {
+  [CollaborationDenial.NotConfigured]: 'policy',
+  [CollaborationDenial.ReadOnlySession]: 'policy',
+  [CollaborationDenial.ReadScopedMcpSession]: 'policy',
+  [CollaborationDenial.CollaborationDisabled]: 'policy',
+  [CollaborationDenial.UnidentifiedSession]: 'policy',
+  [CollaborationDenial.MalformedRequest]: 'policy',
+  [CollaborationDenial.AccessCheckRefused]: 'policy',
+  [CollaborationDenial.AccessCheckUnreachable]: 'unreadable',
+  [CollaborationDenial.AccessCheckHttpStatus]: 'unreadable',
+  [CollaborationDenial.AccessCheckUnreadable]: 'unreadable',
+  [CollaborationDenial.AccessCheckIncompleteGrant]: 'unreadable',
+  [CollaborationDenial.Abandoned]: 'abandoned',
+}
+
+export function collaborationDenialCategory(reason: CollaborationDenialReason): CollaborationDenialCategory {
+  return DENIAL_CATEGORIES[reason]
+}
+
+/**
  * Shared fail-closed collaboration policy used by both the REST compatibility
  * endpoint and the authenticated WebSocket sync control plane. Keeping one
  * implementation prevents the two transports from drifting on read-only,
@@ -63,7 +147,7 @@ export class CollaborationAuthorizationService {
     private readonly endpointResolver: EndpointResolverInterface,
     private readonly capabilitySecret: string,
     private readonly capabilityTtlSeconds: number,
-    private readonly logger?: Pick<Logger, 'error'>,
+    private readonly logger?: Pick<Logger, 'error' | 'info'>,
   ) {}
 
   ready(): boolean {
@@ -76,23 +160,26 @@ export class CollaborationAuthorizationService {
     input: CollaborationAuthorizationRequest,
     signal?: AbortSignal,
   ): Promise<CollaborationAuthorizationGrant> {
-    if (
-      !this.ready() ||
-      signal?.aborted ||
-      locals.readOnlyAccess === true ||
-      locals.session?.readonly_access === true ||
-      locals.mcpScope?.access === 'read' ||
-      locals.collaborationEnabled !== true ||
-      typeof locals.user?.uuid !== 'string' ||
-      locals.user.uuid.length === 0 ||
-      !isValidRequest(input)
-    ) {
-      return { authorized: false }
+    // Each condition names itself. The ORDER and the outcome are unchanged --
+    // every one of these still refuses before the access check runs, and still
+    // refuses with a bare `{ authorized: false }` that discloses nothing to the
+    // caller. The only new thing is that the server now knows which it was.
+    const who = typeof locals.user?.uuid === 'string' ? { userId: locals.user.uuid } : {}
+    const precondition = this.refusedByPrecondition(locals, input, signal)
+    if (precondition !== undefined) {
+      return this.deny(precondition, who)
     }
 
     const access = await this.checkAccessWithSyncingServer(request, locals, input.noteUuid, signal)
-    if (!access.authorized || signal?.aborted) {
-      return { authorized: false }
+    if (!access.authorized) {
+      return this.deny(access.reason, {
+        ...who,
+        ...(access.status === undefined ? {} : { accessCheckStatus: access.status }),
+        ...(access.errorMetadata === undefined ? {} : access.errorMetadata),
+      })
+    }
+    if (signal?.aborted) {
+      return this.deny(CollaborationDenial.Abandoned, who)
     }
 
     // The default is deterministic for one encryption/membership generation so
@@ -154,13 +241,82 @@ export class CollaborationAuthorizationService {
     }
   }
 
+  /**
+   * The first refusal this request earns, before any resource is consulted, or
+   * `undefined` when none of them applies. Pure, so the mapping from condition
+   * to reason is testable on its own.
+   */
+  private refusedByPrecondition(
+    locals: ResponseLocals,
+    input: CollaborationAuthorizationRequest,
+    signal?: AbortSignal,
+  ): CollaborationDenialReason | undefined {
+    if (!this.ready()) {
+      return CollaborationDenial.NotConfigured
+    }
+    if (signal?.aborted) {
+      return CollaborationDenial.Abandoned
+    }
+    if (locals.readOnlyAccess === true || locals.session?.readonly_access === true) {
+      return CollaborationDenial.ReadOnlySession
+    }
+    if (locals.mcpScope?.access === 'read') {
+      return CollaborationDenial.ReadScopedMcpSession
+    }
+    if (locals.collaborationEnabled !== true) {
+      return CollaborationDenial.CollaborationDisabled
+    }
+    if (typeof locals.user?.uuid !== 'string' || locals.user.uuid.length === 0) {
+      return CollaborationDenial.UnidentifiedSession
+    }
+    if (!isValidRequest(input)) {
+      return CollaborationDenial.MalformedRequest
+    }
+    return undefined
+  }
+
+  /**
+   * Record a refusal and return the refusal the caller has always received.
+   *
+   * The returned value is byte-identical to the bare `{ authorized: false }`
+   * this method replaced: nothing about WHY crosses the service boundary, so a
+   * caller still cannot distinguish "this note does not exist" from "it exists
+   * and you may not edit it". The reason exists for the operator's log only.
+   *
+   * The NOTE UUID is deliberately absent, here and in the access-check error
+   * metadata. One line per refusal, and the line says what kind of refusal it
+   * was, not which resource it was about.
+   */
+  private deny(reason: CollaborationDenialReason, context: Record<string, unknown>): { authorized: false } {
+    const category = collaborationDenialCategory(reason)
+    // `action`, `reason` and `category` are written LAST so merged exception
+    // metadata (which carries its own `action`) cannot rename the verdict.
+    const metadata = { ...context, action: 'collaboration.authorize', reason, category }
+    if (category === 'unreadable') {
+      // A fail-closed refusal that NOTHING DECIDED. This is the arm both silent
+      // defects belonged in, and it is the one an operator must be able to find
+      // in an error log without knowing to look for it.
+      this.logger?.error('Collaboration authorization could not be decided.', metadata)
+    } else {
+      this.logger?.info('Collaboration authorization denied.', metadata)
+    }
+    return { authorized: false }
+  }
+
   private async checkAccessWithSyncingServer(
     request: Request,
     locals: ResponseLocals,
     noteUuid: string,
     signal?: AbortSignal,
   ): Promise<
-    { authorized: false } | { authorized: true; serverUpdatedAtTimestamp: number; collaborationSecurityEpoch: string }
+    | {
+        authorized: false
+        reason: CollaborationDenialReason
+        status?: number
+        /** Already-redacted exception detail, merged into the ONE denial line. */
+        errorMetadata?: Record<string, unknown>
+      }
+    | { authorized: true; serverUpdatedAtTimestamp: number; collaborationSecurityEpoch: string }
   > {
     let capturedStatus = 0
     let capturedBody: unknown
@@ -183,7 +339,7 @@ export class CollaborationAuthorizationService {
 
     try {
       if (signal?.aborted) {
-        return { authorized: false }
+        return { authorized: false, reason: CollaborationDenial.Abandoned }
       }
       await this.serviceProxy.callSyncingServer(
         request,
@@ -192,19 +348,34 @@ export class CollaborationAuthorizationService {
         { itemUuid: noteUuid },
       )
     } catch (error) {
-      this.logger?.error(
-        'Collaboration access check call failed.',
-        safeHttpErrorLogMetadata(error, {
+      // The exception detail travels WITH the verdict rather than on a line of
+      // its own: one refusal, one log line, carrying both what went wrong and
+      // the fact that nothing decided the refusal that followed.
+      return {
+        authorized: false,
+        reason: CollaborationDenial.AccessCheckUnreachable,
+        errorMetadata: safeHttpErrorLogMetadata(error, {
           action: 'collaboration.access-check',
           endpoint: '/items/collaboration-authorization',
           method: 'POST',
         }),
-      )
-      return { authorized: false }
+      }
     }
 
-    if (signal?.aborted || (capturedStatus !== 0 && (capturedStatus < 200 || capturedStatus >= 300))) {
-      return { authorized: false }
+    if (signal?.aborted) {
+      return { authorized: false, reason: CollaborationDenial.Abandoned }
+    }
+    if (capturedStatus !== 0 && (capturedStatus < 200 || capturedStatus >= 300)) {
+      // `0` means the direct-call transport never set a status, which is normal
+      // for it. A real non-2xx means the ROUTE answered wrongly, and that is
+      // the exact trace the multi-container defect left: `POST
+      // items/collaboration-authorization` dispatched as a GET, no such route,
+      // 404 -- read until now as `{ authorized: false }` and nothing else.
+      return {
+        authorized: false,
+        reason: CollaborationDenial.AccessCheckHttpStatus,
+        status: capturedStatus,
+      }
     }
     const body = capturedBody as
       | {
@@ -221,16 +392,26 @@ export class CollaborationAuthorizationService {
     const authorized = body?.authorized ?? body?.data?.authorized
     const serverUpdatedAtTimestamp = body?.serverUpdatedAtTimestamp ?? body?.data?.serverUpdatedAtTimestamp
     const collaborationSecurityEpoch = body?.collaborationSecurityEpoch ?? body?.data?.collaborationSecurityEpoch
-    return authorized === true &&
-      Number.isSafeInteger(serverUpdatedAtTimestamp) &&
-      Number(serverUpdatedAtTimestamp) > 0 &&
-      isValidEpoch(collaborationSecurityEpoch)
-      ? {
-          authorized: true,
-          serverUpdatedAtTimestamp: Number(serverUpdatedAtTimestamp),
-          collaborationSecurityEpoch,
-        }
-      : { authorized: false }
+    if (authorized === true) {
+      return Number.isSafeInteger(serverUpdatedAtTimestamp) &&
+        Number(serverUpdatedAtTimestamp) > 0 &&
+        isValidEpoch(collaborationSecurityEpoch)
+        ? {
+            authorized: true,
+            serverUpdatedAtTimestamp: Number(serverUpdatedAtTimestamp),
+            collaborationSecurityEpoch,
+          }
+        : // Said yes, and did not supply what a capability has to be bound to.
+          // Nobody decided this refusal either.
+          { authorized: false, reason: CollaborationDenial.AccessCheckIncompleteGrant }
+    }
+    // `false` is a DECISION; anything else is a 2xx we cannot read a decision
+    // out of (an error envelope, an empty body, a different shape) and is NOT
+    // the access check saying no.
+    return {
+      authorized: false,
+      reason: authorized === false ? CollaborationDenial.AccessCheckRefused : CollaborationDenial.AccessCheckUnreadable,
+    }
   }
 }
 
