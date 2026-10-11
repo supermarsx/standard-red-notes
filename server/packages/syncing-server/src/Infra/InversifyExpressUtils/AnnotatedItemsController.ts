@@ -17,6 +17,7 @@ import { Logger } from 'winston'
 import { ExecuteSyncCommand } from '../../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../../Domain/SyncCommand/GetSyncCommandStatus'
 import { GetUserStorageUsage } from '../../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
+import { GetUsersStorageUsage } from '../../Domain/UseCase/Syncing/GetUsersStorageUsage/GetUsersStorageUsage'
 
 @controller('/items', TYPES.Sync_AuthMiddleware)
 export class AnnotatedItemsController extends BaseItemsController {
@@ -44,6 +45,7 @@ export class AnnotatedItemsController extends BaseItemsController {
     @inject(TYPES.Sync_ExecuteSyncCommand) override executeSyncCommand: ExecuteSyncCommand,
     @inject(TYPES.Sync_GetSyncCommandStatus) override getSyncCommandStatusUseCase: GetSyncCommandStatus,
     @inject(TYPES.Sync_GetUserStorageUsage) override getUserStorageUsage: GetUserStorageUsage,
+    @inject(TYPES.Sync_GetUsersStorageUsage) override getUsersStorageUsage: GetUsersStorageUsage,
   ) {
     super(
       checkForTrafficAbuse,
@@ -65,6 +67,7 @@ export class AnnotatedItemsController extends BaseItemsController {
       executeSyncCommand,
       getSyncCommandStatusUseCase,
       getUserStorageUsage,
+      getUsersStorageUsage,
     )
   }
 
@@ -91,6 +94,20 @@ export class AnnotatedItemsController extends BaseItemsController {
   @httpGet('/storage-usage')
   override async getStorageUsage(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getStorageUsage(request, response)
+  }
+
+  // Standard Red Notes: the ADMIN per-account read. A POST because it names a
+  // page of accounts in its body — the caller is a report over a page of the admin
+  // users list, and one request per row would be an N+1 over up to 1500 users.
+  //
+  // The path has THREE segments, so it cannot be swallowed by the two-segment
+  // `/:uuid` below however the decorators are ordered; it sits beside the
+  // self-scoped read it is the administrative counterpart of so the two are
+  // maintained together. The admin role is enforced inside the handler, not here,
+  // because the single-container topology reaches it without Express middleware.
+  @httpPost('/storage-usage/by-user')
+  override async getStorageUsageForUsers(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getStorageUsageForUsers(request, response)
   }
 
   @httpGet('/:uuid')

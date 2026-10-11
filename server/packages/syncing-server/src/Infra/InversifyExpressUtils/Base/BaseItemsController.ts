@@ -2,6 +2,7 @@ import {
   safeErrorLogMetadata,
   ControllerContainerInterface,
   MapperInterface,
+  RoleName,
   Validator,
 } from '@standardnotes/domain-core'
 import { BaseHttpController, results } from 'inversify-express-utils'
@@ -25,8 +26,19 @@ import { ResponseLocals } from '../ResponseLocals'
 import { ExecuteSyncCommand } from '../../../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../../../Domain/SyncCommand/GetSyncCommandStatus'
 import { GetUserStorageUsage } from '../../../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
+import { GetUsersStorageUsage } from '../../../Domain/UseCase/Syncing/GetUsersStorageUsage/GetUsersStorageUsage'
 import { SyncCommandMetadata, SyncCommandProtocolError } from '../../../Domain/SyncCommand/SyncCommandTypes'
 import { SyncResponse20200115 } from '../../../Domain/Item/SyncResponse/SyncResponse20200115'
+
+/**
+ * Standard Red Notes: the most accounts one admin storage-usage request may name.
+ *
+ * It is the auth admin user list's own `MAX_LIMIT`, deliberately: the caller for
+ * this endpoint is a report over a page of that list, and a cap smaller than the
+ * page it has to describe would silently truncate the report. A cap larger than it
+ * would admit a request no legitimate caller can make.
+ */
+export const ADMIN_STORAGE_USAGE_MAX_USERS = 1500
 
 export class BaseItemsController extends BaseHttpController {
   constructor(
@@ -56,6 +68,11 @@ export class BaseItemsController extends BaseHttpController {
     // answers 503 rather than a fabricated figure when it is absent, because an
     // unwired dependency must never look like an account holding nothing.
     protected getUserStorageUsage?: GetUserStorageUsage,
+    // Standard Red Notes: optional for the same reason as the four above. The
+    // admin storage-usage endpoint answers 503 rather than a fabricated figure
+    // when it is absent — an unwired dependency must never look like a fleet of
+    // accounts holding nothing.
+    protected getUsersStorageUsage?: GetUsersStorageUsage,
   ) {
     super()
 
@@ -71,6 +88,11 @@ export class BaseItemsController extends BaseHttpController {
       // container has never heard of and answers "Method not found". This repo has
       // shipped that exact gap before.
       this.controllerContainer.register('sync.items.storage_usage', this.getStorageUsage.bind(this))
+      // Standard Red Notes: and WITHOUT THIS LINE the admin per-user space report
+      // is dead on every single-container deployment for exactly the same reason
+      // as the line above it — which is the deployment mode this project ships by
+      // default, so the gap would be the normal case rather than the edge one.
+      this.controllerContainer.register('sync.items.storage_usage_for_users', this.getStorageUsageForUsers.bind(this))
     }
   }
 
@@ -366,6 +388,80 @@ export class BaseItemsController extends BaseHttpController {
       })
     } catch (error) {
       this.logger.error('Storage usage lookup failed.', {
+        ...safeErrorLogMetadata(error),
+        userId: locals.user?.uuid,
+      })
+
+      return this.json({ error: { message: 'Storage usage could not be read.' } }, HttpStatusCode.InternalServerError)
+    }
+  }
+
+  /**
+   * Standard Red Notes: the stored item bytes of the accounts an ADMINISTRATOR
+   * names — the one surface on this server that reports about somebody else.
+   *
+   * *** WHAT WAS BROKEN, MEASURED. *** An account's stored bytes are its synced
+   * ITEM payload plus its uploaded FILES, and for most accounts the notes are the
+   * larger half. The file half is published per user by auth's admin endpoints and
+   * is correct. The item half was published by `getStorageUsage` above and by
+   * nothing else, and that route takes its subject from `response.locals` — so an
+   * administrator asking about three accounts holding 3 MB, 7 MB and 11 MB of
+   * notes was answered 3 MB, 3 MB and 3 MB: their OWN figure, three times. A
+   * per-account space report existed for the signed-in operator alone.
+   *
+   * *** THE GATE IS IN THIS METHOD AND NOT IN MIDDLEWARE, ON PURPOSE. *** On the
+   * single-container topology the api-gateway invokes this handler through the
+   * controller container, which does not run Express middleware — a guard that
+   * lived only in a middleware would be absent on the deployment this project
+   * ships by default, and this repo has shipped exactly that gap before. The roles
+   * are the verified cross-service token's, the same ones auth's own admin
+   * controller gates on, and an absent `roles` FAILS CLOSED.
+   *
+   * *** THE SUBJECTS COME FROM THE BODY AND THE ANSWER NAMES THEM. *** Each entry
+   * carries the uuid it measures (see `UserItemStorageUsage`) so a report cannot
+   * print a figure beside an account it does not belong to without the client
+   * being able to notice — which is precisely what nothing could do before.
+   */
+  async getStorageUsageForUsers(request: Request, response: Response): Promise<results.JsonResult> {
+    const locals = response.locals as ResponseLocals
+    const roles = locals.roles ?? []
+    if (!roles.some((role) => role.name === RoleName.NAMES.AdminUser)) {
+      return this.json({ error: { message: 'Admin role required.' } }, HttpStatusCode.Forbidden)
+    }
+
+    if (this.getUsersStorageUsage === undefined) {
+      // 503 as a literal for the same reason as `getStorageUsage` above: the
+      // pinned @standardnotes/responses carries no ServiceUnavailable member.
+      return this.json({ error: { message: 'Storage usage is not available on this server.' } }, 503)
+    }
+
+    const userUuids = (request.body as { userUuids?: unknown } | undefined)?.userUuids
+    if (!Array.isArray(userUuids) || userUuids.some((candidate) => typeof candidate !== 'string')) {
+      return this.json({ error: { message: 'userUuids must be an array of user uuids.' } }, HttpStatusCode.BadRequest)
+    }
+    if (userUuids.length > ADMIN_STORAGE_USAGE_MAX_USERS) {
+      return this.json(
+        { error: { message: `userUuids may name at most ${ADMIN_STORAGE_USAGE_MAX_USERS} users.` } },
+        HttpStatusCode.BadRequest,
+      )
+    }
+
+    try {
+      const result = await this.getUsersStorageUsage.execute({ userUuids: userUuids as string[] })
+      if (result.isFailed()) {
+        return this.json({ error: { message: result.getError() } }, HttpStatusCode.BadRequest)
+      }
+
+      return this.json({
+        usages: result.getValue().map((usage) => ({
+          userUuid: usage.userUuid,
+          itemBytesUsed: usage.sizedBytes,
+          itemsMeasured: usage.sizedItems,
+          itemsUnmeasured: usage.unsizedItems,
+        })),
+      })
+    } catch (error) {
+      this.logger.error('Admin storage usage lookup failed.', {
         ...safeErrorLogMetadata(error),
         userId: locals.user?.uuid,
       })

@@ -24,6 +24,26 @@ export interface ItemRepositoryInterface {
    * how many rows carry no size at all, so the caller can say which it was.
    */
   getStorageUsageForUser(userUuid: Uuid): Promise<ItemStorageUsage>
+  /**
+   * Standard Red Notes: the same measurement as above for a PAGE of accounts, in
+   * one statement.
+   *
+   * *** THIS EXISTS BECAUSE THE SINGLE-ACCOUNT FORM COULD NOT BE REPORTED BY AN
+   * ADMIN. *** `getStorageUsageForUser` is reachable only through a self-scoped
+   * route, so the admin users list carried uploaded FILE bytes and nothing else
+   * and a per-account SPACE report existed for the signed-in operator alone. A
+   * list that called the single-account form once per row would be an N+1 over a
+   * page of up to 1500 users; one `GROUP BY` is bounded the way the auth list's
+   * batched enrichment already is.
+   *
+   * *** THE MAP IS SPARSE AND THE CALLER MUST FILL IT. *** `GROUP BY` produces no
+   * group for an account with no rows, so an account holding nothing is simply
+   * ABSENT from the result. That absence is a complete, true zero on this server
+   * (there is no users table here to disagree with), and naming it in the caller
+   * rather than inventing rows here keeps the one place that decides what an
+   * absent figure means next to the report that prints it.
+   */
+  getStorageUsageForUsers(userUuids: Uuid[]): Promise<Map<string, ItemStorageUsage>>
   findDatesForComputingIntegrityHash(userUuid: string): Promise<Array<{ updated_at_timestamp: number }>>
   findItemsForComputingIntegrityPayloads(userUuid: string): Promise<ExtendedIntegrityPayload[]>
   findByUuidAndUserUuid(uuid: string, userUuid: string): Promise<Item | null>

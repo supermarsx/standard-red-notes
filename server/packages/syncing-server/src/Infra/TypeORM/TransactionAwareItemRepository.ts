@@ -53,6 +53,10 @@ export class TransactionAwareItemRepository implements ItemRepositoryInterface {
     return this.repository.getStorageUsageForUser(userUuid)
   }
 
+  getStorageUsageForUsers(userUuids: Uuid[]): Promise<Map<string, ItemStorageUsage>> {
+    return this.repository.getStorageUsageForUsers(userUuids)
+  }
+
   findDatesForComputingIntegrityHash(userUuid: string): Promise<Array<{ updated_at_timestamp: number }>> {
     return this.repository.findDatesForComputingIntegrityHash(userUuid)
   }

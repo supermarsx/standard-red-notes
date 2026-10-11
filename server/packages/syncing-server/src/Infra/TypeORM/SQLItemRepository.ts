@@ -241,6 +241,56 @@ export class SQLItemRepository implements ItemRepositoryInterface {
   }
 
   /**
+   * Standard Red Notes: the same three facts for a PAGE of accounts, in one
+   * statement, so an admin list can report every row's stored item bytes without
+   * an N+1.
+   *
+   * *** THE EMPTY-INPUT GUARD IS NOT DEFENSIVE PADDING. *** TypeORM expands
+   * `IN (:...uuids)` to `IN ()`, which is a syntax error on both dialects this
+   * server ships with, so an empty page would 500 the report rather than report an
+   * empty page. It returns before the query is built.
+   *
+   * *** THE RESULT IS SPARSE BY CONSTRUCTION. *** `GROUP BY` emits no row for an
+   * account with no items, so such an account is absent from the map rather than
+   * present with zeroes. The caller names what the absence means; see
+   * `ItemRepositoryInterface`. Every grouping, filter and NULL-handling decision
+   * is the single-account form's, verbatim, because the two must never be able to
+   * answer differently about one account — a spec holds them to that.
+   */
+  async getStorageUsageForUsers(userUuids: Uuid[]): Promise<Map<string, ItemStorageUsage>> {
+    const usages = new Map<string, ItemStorageUsage>()
+    if (userUuids.length === 0) {
+      return usages
+    }
+
+    const rows = await this.ormRepository
+      .createQueryBuilder('item')
+      .select('item.user_uuid', 'userUuid')
+      .addSelect('COALESCE(SUM(item.content_size), 0)', 'sizedBytes')
+      .addSelect('COALESCE(SUM(CASE WHEN item.content_size IS NULL THEN 0 ELSE 1 END), 0)', 'sizedItems')
+      .addSelect('COALESCE(SUM(CASE WHEN item.content_size IS NULL THEN 1 ELSE 0 END), 0)', 'unsizedItems')
+      .where('item.user_uuid IN (:...userUuids)', { userUuids: userUuids.map((userUuid) => userUuid.value) })
+      .andWhere('item.deleted = :deleted', { deleted: false })
+      .groupBy('item.user_uuid')
+      .getRawMany<{
+        userUuid: string
+        sizedBytes: string | number | null
+        sizedItems: string | number | null
+        unsizedItems: string | number | null
+      }>()
+
+    for (const row of rows) {
+      usages.set(row.userUuid, {
+        sizedBytes: this.wholeNonNegative(row.sizedBytes),
+        sizedItems: this.wholeNonNegative(row.sizedItems),
+        unsizedItems: this.wholeNonNegative(row.unsizedItems),
+      })
+    }
+
+    return usages
+  }
+
+  /**
    * A driver's aggregate comes back as a string on MySQL and a number on SQLite,
    * and as `null`/`undefined` for an empty set. Anything that is not a finite,
    * non-negative number becomes 0 — which is correct here and only here, because

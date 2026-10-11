@@ -195,4 +195,88 @@ describe('SQLItemRepository.getStorageUsageForUser', () => {
       unsizedItems: 0,
     })
   })
+
+  /**
+   * Standard Red Notes: the BATCHED form, which is what an admin report over a
+   * page of accounts reads.
+   *
+   * *** WHY IT IS TESTED AGAINST THE SINGLE-ACCOUNT FORM AND NOT ONLY AGAINST
+   * EXPECTED NUMBERS. *** Two statements that answer "how many bytes is this
+   * account holding" are two chances to answer differently, and a report that
+   * disagreed with the panel beside it would be worse than one that said nothing.
+   * The grouping, the `deleted = false` filter and the NULL handling are copied
+   * from the single-account query; these tests are what keeps the copy honest.
+   */
+  describe('getStorageUsageForUsers', () => {
+    const thirdUserUuid = Uuid.create('00000000-0000-0000-0000-000000000004').getValue()
+
+    it('reports each account its own figure in one statement', async () => {
+      await insertRow({ owner: userUuid, contentSize: 3_000_000 })
+      await insertRow({ owner: otherUserUuid, contentSize: 5_000_000 })
+      await insertRow({ owner: otherUserUuid, contentSize: 2_000_000 })
+      await insertRow({ owner: thirdUserUuid, contentSize: 11_000_000 })
+
+      const usages = await repository.getStorageUsageForUsers([userUuid, otherUserUuid, thirdUserUuid])
+
+      expect(usages.get(userUuid.value)).toEqual({ sizedBytes: 3_000_000, sizedItems: 1, unsizedItems: 0 })
+      expect(usages.get(otherUserUuid.value)).toEqual({ sizedBytes: 7_000_000, sizedItems: 2, unsizedItems: 0 })
+      expect(usages.get(thirdUserUuid.value)).toEqual({ sizedBytes: 11_000_000, sizedItems: 1, unsizedItems: 0 })
+    })
+
+    /**
+     * *** THE TWO FORMS MUST NEVER BE ABLE TO DISAGREE ABOUT ONE ACCOUNT. *** Every
+     * state that makes this measurement interesting is in here at once: a sized
+     * row, an unsized row, a soft-deleted row and another account's rows.
+     */
+    it('agrees with the single-account form for every account, state by state', async () => {
+      const toDelete = await insertRow({ owner: userUuid, contentSize: 4_096 })
+      await insertRow({ owner: userUuid, contentSize: 1_024 })
+      await insertRow({ owner: userUuid, contentSize: null })
+      await insertRow({ owner: otherUserUuid, contentSize: 8_388_608 })
+      await insertRow({ owner: otherUserUuid, contentSize: null })
+      await repository.markItemsAsDeleted([toDelete], 200, userUuid)
+      await repository.updateContentSize(toDelete, 0)
+
+      const batched = await repository.getStorageUsageForUsers([userUuid, otherUserUuid, thirdUserUuid])
+
+      for (const candidate of [userUuid, otherUserUuid, thirdUserUuid]) {
+        const single = await repository.getStorageUsageForUser(candidate)
+        const fromBatch = batched.get(candidate.value) ?? { sizedBytes: 0, sizedItems: 0, unsizedItems: 0 }
+        expect({ uuid: candidate.value, ...fromBatch }).toEqual({ uuid: candidate.value, ...single })
+      }
+    })
+
+    /**
+     * `GROUP BY` emits no row for an account with no items, so the map is SPARSE
+     * and the caller fills it (see `GetUsersStorageUsage`). Absent is pinned here
+     * rather than left to chance, because a repository that started returning
+     * zeroes would move that decision without anyone noticing.
+     */
+    it('omits an account with no items rather than inventing a zero row', async () => {
+      await insertRow({ owner: userUuid, contentSize: 1_000 })
+
+      const usages = await repository.getStorageUsageForUsers([userUuid, otherUserUuid])
+
+      expect(usages.has(userUuid.value)).toBe(true)
+      expect(usages.has(otherUserUuid.value)).toBe(false)
+    })
+
+    /**
+     * *** NOT DEFENSIVE PADDING. *** TypeORM expands `IN (:...uuids)` to `IN ()`,
+     * a syntax error on both dialects this server ships with, so an empty page
+     * would 500 the whole report instead of reporting an empty page.
+     */
+    it('answers an empty request without touching the database', async () => {
+      expect(await repository.getStorageUsageForUsers([])).toEqual(new Map())
+    })
+
+    it('never reports a row belonging to an account that was not asked about', async () => {
+      await insertRow({ owner: userUuid, contentSize: 1_000 })
+      await insertRow({ owner: otherUserUuid, contentSize: 9_999 })
+
+      const usages = await repository.getStorageUsageForUsers([userUuid])
+
+      expect([...usages.keys()]).toEqual([userUuid.value])
+    })
+  })
 })
