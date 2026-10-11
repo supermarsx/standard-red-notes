@@ -463,14 +463,22 @@ describe('the text-shaping the SVG inherits from the editor, which mermaid did n
    * editor (where it draws). Every one of these is an INHERITED property that
    * changes how a run of text breaks or shapes, so a difference is a diagram
    * laid out to one set of metrics and painted with another.
+   *
+   * The fourth column is honest about what each one is worth. Each property was
+   * put BACK alone, with `!important`, over the fixed build and re-measured:
+   * only `word-break` moved any geometry, and putting it back alone reproduced
+   * the defect in full. The other five are DEFENSIVE — a real divergence in
+   * computed value with no demonstrated consequence in this browser with this
+   * font. The assertions below check that the rule still names them; they are
+   * not evidence that any of the five matters.
    */
   const MEASURED_DIVERGENCES = [
-    ['word-break', 'normal', 'break-word'],
-    ['overflow-wrap', 'normal', 'break-word'],
-    ['line-break', 'auto', 'after-white-space'],
-    ['font-variant-ligatures', 'normal', 'none'],
-    ['font-feature-settings', 'normal', '"calt" 0, "liga" 0'],
-    ['tab-size', '4', '2'],
+    ['word-break', 'normal', 'break-word', 'demonstrated'],
+    ['overflow-wrap', 'normal', 'break-word', 'defensive'],
+    ['line-break', 'auto', 'after-white-space', 'defensive'],
+    ['font-variant-ligatures', 'normal', 'none', 'defensive'],
+    ['font-feature-settings', 'normal', '"calt" 0, "liga" 0', 'defensive'],
+    ['tab-size', '4', '2', 'defensive'],
   ] as const
 
   /** The rule body as `property -> value`, so an assertion names one thing. */
@@ -495,12 +503,22 @@ describe('the text-shaping the SVG inherits from the editor, which mermaid did n
     }
   })
 
+  it('keeps the one property that is demonstrated, whatever else is trimmed', () => {
+    // The whole defect, isolated: putting `word-break: break-word` back alone
+    // over the fixed build reproduces it in full — the URL edge label's slot
+    // stays 410.64 x 48 while the label draws 200 x 72 — identically to putting
+    // all six back. If the rule is ever trimmed, this is the line that may not
+    // go.
+    const demonstrated = MEASURED_DIVERGENCES.filter(([, , , standing]) => standing === 'demonstrated')
+    expect(demonstrated.map(([property]) => property)).toEqual(['word-break'])
+    expect(declarations.get('word-break')).toBe('normal')
+  })
+
   it('resets nothing it cannot show a reason for', () => {
-    // A declaration whose removal changes no measurement is a declaration no
-    // assertion can defend: `white-space: normal` was in the first draft of this
-    // rule and survived its own mutant, because mermaid sets `white-space`
-    // inline on every label it measures. The rule is exactly the measured
-    // divergences, so every line of it is killable.
+    // A declaration with no divergence behind it is one no assertion can
+    // defend: `white-space: normal` was in the first draft of this rule and
+    // survived its own mutant, because mermaid sets `white-space` inline on
+    // every label it measures. The rule is exactly the measured divergences.
     expect([...declarations.keys()].sort()).toEqual(
       MEASURED_DIVERGENCES.map(([p]) => p)
         .slice()

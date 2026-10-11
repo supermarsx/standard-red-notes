@@ -227,14 +227,35 @@
  * each label it draws, and an inline style wins over this, so its own
  * intentions are untouched.
  *
- * This list is EXACTLY the properties measured to differ, and no more. The
- * other inherited text-shaping properties — `white-space`, `letter-spacing`,
- * `word-spacing`, `font-kerning`, `hyphens`, `text-transform` — were measured
- * identical in both contexts, so a reset for them could not be shown to change
- * anything and is not here. `white-space` is the near miss: it IS inherited as
- * `pre-wrap` here against `normal` in `document.body`, but mermaid sets it
- * inline on every label it measures, so today nothing is left for the inherited
- * value to reach. If that ever stops being true, it belongs in this list.
+ * This list is EXACTLY the properties whose COMPUTED VALUES were measured to
+ * differ between the two contexts, and no more. Of the six, exactly one is
+ * demonstrated to move geometry and five are defensive — each was put back
+ * alone, with `!important`, over the fixed build and re-measured:
+ *
+ *   word-break              putting it back REPRODUCES the defect in full
+ *                           (slot 410.64 x 48, label drawn 200 x 72) —
+ *                           identical to putting all six back
+ *   overflow-wrap           no change in any probe
+ *   line-break              no change in any probe
+ *   font-variant-ligatures  no change, including on ligature-rich text
+ *   font-feature-settings   no change, including on ligature-rich text
+ *   tab-size                no change; mermaid strips tabs while parsing
+ *
+ * The five are kept because the computed-value divergence is real and the
+ * invariant is "the SVG's text shaping equals the context it was measured in",
+ * not "whatever happens to matter in one browser with one font" — a face that
+ * ships `liga`/`calt`, or a mermaid that stops stripping tabs, makes them bite.
+ * They are NOT evidence of anything on their own; do not read the mutation
+ * battery as proving each one, it proves only that the rule still names them.
+ *
+ * Deliberately NOT here: `white-space`, `letter-spacing`, `word-spacing`,
+ * `font-kerning`, `hyphens`, `text-transform`. Those measured identical in both
+ * contexts, so there is not even a divergence to point at. `white-space` is the
+ * near miss — it IS inherited as `pre-wrap` here against `normal` in
+ * `document.body`, but mermaid sets it inline on every label it measures, so
+ * nothing is left for the inherited value to reach. It was in the first draft
+ * and survived its own mutant; if mermaid ever stops setting it, it belongs
+ * back in this list.
  */
 [data-mermaid-svg-host='true'] {
   font-feature-settings: normal;
