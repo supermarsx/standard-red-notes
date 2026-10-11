@@ -333,7 +333,86 @@ apply_csp_inline_hash() {
   return 0
 }
 
+# Verify the policy we just wrote actually AUTHORISES the document we serve.
+#
+# This exists because nothing did. `apply_csp_inline_hash` ends with
+# `grep -Fq "script-src 'self' 'wasm-unsafe-eval' ${_sources};"`, which asserts
+# that the string it just wrote is present -- true by construction of the `sed`
+# that wrote it. The earlier `grep -F -c` likewise asserts only that there is
+# exactly one directive to rewrite. So BOTH checks pass over a hash that does
+# not match the script it is supposed to authorise, which is the one failure the
+# whole mechanism exists to prevent: the browser silently refuses the bootstrap,
+# the page comes up with `window.defaultSyncServer` undefined, sync has no host,
+# and the stale-service-worker recovery handler that would have rescued a blank
+# page is itself in the blocked script.
+#
+# So this re-derives the digests from `$INDEX_HTML` as it stands at this moment
+# -- a fresh read, not the values computed above -- reads the source list back
+# out of the served config, and requires the two to be EQUAL. Set equality, not
+# containment: containment is what the old check did. Equality is also what
+# catches a hash left behind by an earlier container start, and a `sed` that
+# matched a span other than the one intended.
+#
+# Fails closed, and prints both lists, so the operator is handed the hash the
+# page needs instead of a white screen.
+verify_csp_inline_hash() {
+  [ -f "$INDEX_HTML" ] || return 1
+  [ -f "$CONF" ] || return 1
+
+  # An unsubstituted placeholder is not a hash: a CSP carrying one authorises
+  # nothing and blocks every inline script on the page. Comments are stripped
+  # first -- nginx.conf DOCUMENTS the placeholder a few lines above the directive
+  # that uses it, and that copy is still there after a correct substitution.
+  if sed 's/#.*//' "$CONF" | grep -Fq '__CSP_INLINE_SCRIPT_HASH__'; then
+    echo "[entrypoint] ERROR: the served CSP still carries the __CSP_INLINE_SCRIPT_HASH__ placeholder." >&2
+    return 1
+  fi
+
+  _served="$(sed -n "s|.*script-src 'self' 'wasm-unsafe-eval' \([^;]*\);.*|\1|p" "$CONF" | head -n 1)"
+  if [ -z "$_served" ]; then
+    echo "[entrypoint] ERROR: could not read the app-shell script-src back out of $CONF." >&2
+    return 1
+  fi
+
+  _needed=""
+  _vindex=1
+  while [ "$_vindex" -le 32 ]; do
+    _vtmp="$(mktemp 2>/dev/null)" || return 1
+    if ! extract_inline_script "$INDEX_HTML" "$_vindex" > "$_vtmp" 2>/dev/null; then
+      rm -f "$_vtmp"
+      break
+    fi
+    _vb64="$(sha256sum < "$_vtmp" | awk '{print $1}' | xxd -r -p | base64 | tr -d '\n')" || {
+      rm -f "$_vtmp"
+      return 1
+    }
+    rm -f "$_vtmp"
+    printf '%s' "$_vb64" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
+    _needed="${_needed}${_needed:+ }'sha256-${_vb64}'"
+    _vindex=$((_vindex + 1))
+  done
+
+  [ -n "$_needed" ] || return 1
+  [ "$_vindex" -le 32 ] || return 1
+
+  if [ "$_served" != "$_needed" ]; then
+    echo "[entrypoint] ERROR: the served CSP does not authorise the served inline scripts." >&2
+    echo "[entrypoint]   policy:   script-src 'self' 'wasm-unsafe-eval' ${_served};" >&2
+    echo "[entrypoint]   document: script-src 'self' 'wasm-unsafe-eval' ${_needed};" >&2
+    echo "[entrypoint]   The page's bootstrap would be refused. Not starting nginx." >&2
+    return 1
+  fi
+
+  echo "[entrypoint] CSP inline-script pin verified against the served index.html"
+  return 0
+}
+
 if ! apply_csp_inline_hash; then
   echo "[entrypoint] ERROR: failed to compute and install the CSP inline-script hash; refusing to start nginx with an unpinned app bootstrap." >&2
+  exit 1
+fi
+
+if ! verify_csp_inline_hash; then
+  echo "[entrypoint] ERROR: the CSP inline-script pin does not match the served index.html; refusing to start nginx with a policy that would block the app bootstrap." >&2
   exit 1
 fi

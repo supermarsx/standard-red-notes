@@ -1645,3 +1645,191 @@ test("every new-tab link in the web app denies the opener and the referrer", () 
     "these new-tab links carry neither noopener nor noreferrer",
   );
 });
+
+test("the CSP inline-script pin is verified against the served document, not just substituted", () => {
+  // The hole this closes, and why a test is warranted: `apply_csp_inline_hash`
+  // ended with `grep -Fq "script-src 'self' 'wasm-unsafe-eval' ${_sources};"`,
+  // which asserts that the string the preceding `sed` just wrote is present --
+  // true by construction -- and the check before it asserts only that there is
+  // exactly one directive to rewrite. Both pass over a hash that does not
+  // authorise the script it names, and a browser then silently refuses the
+  // bootstrap: `window.defaultSyncServer` is undefined, sync has no host, and
+  // the stale-service-worker recovery handler that would have rescued the blank
+  // page is itself inside the blocked script.
+  //
+  // `verify_csp_inline_hash` is a safety net against states the entrypoint
+  // cannot itself produce -- another layer editing the served document after
+  // the pin, a `sed` that matched a different span, a hash left behind by an
+  // earlier start. A full boot always re-derives and therefore self-heals, so
+  // the only way to exercise the net is to drive the function directly. That is
+  // what this does, with the real code lifted out of the real file.
+  const functionSource = (name) => {
+    const match = dockerEntrypoint.match(
+      new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, "m"),
+    );
+    assert.ok(match, `${name} must exist in app/docker/docker-entrypoint.sh`);
+    return match[0];
+  };
+  const extract = functionSource("extract_inline_script");
+  const verify = functionSource("verify_csp_inline_hash");
+  // The net has to re-derive from the file rather than reuse the values the
+  // computation above produced, or it proves nothing.
+  assert.match(verify, /extract_inline_script "\$INDEX_HTML"/);
+  assert.match(verify, /sha256sum/);
+
+  const temporaryDirectory = mkdtempSync(path.join(root, ".tmp-csp-verify-"));
+  const indexPath = path.join(temporaryDirectory, "index.html");
+  const configPath = path.join(temporaryDirectory, "nginx.conf");
+  const driverPath = path.join(temporaryDirectory, "driver.sh");
+  const relative = (filePath) =>
+    path.relative(root, filePath).split(path.sep).join("/");
+
+  writeFileSync(
+    driverPath,
+    [
+      'INDEX_HTML="$1"',
+      'CONF="$2"',
+      extract,
+      verify,
+      "verify_csp_inline_hash",
+      "",
+    ].join("\n"),
+  );
+
+  const boot = () =>
+    spawnSync("sh", ["app/docker/docker-entrypoint.sh"], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SRN_ENTRYPOINT_INDEX_HTML: relative(indexPath),
+        SRN_ENTRYPOINT_NGINX_CONF: relative(configPath),
+      },
+    });
+  const verifyOnly = () =>
+    spawnSync(
+      "sh",
+      [relative(driverPath), relative(indexPath), relative(configPath)],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+  const reset = () => {
+    writeFileSync(indexPath, read("app/packages/web/src/index.html"));
+    writeFileSync(configPath, read("app/docker/nginx.conf"));
+  };
+  /** The source list the config now authorises. */
+  const pinned = () =>
+    readFileSync(configPath, "utf8").match(
+      /script-src 'self' 'wasm-unsafe-eval'([^;]*);/,
+    )?.[1];
+
+  try {
+    // 1. The healthy case must PASS, or the net is just a broken boot.
+    reset();
+    const healthy = boot();
+    assert.equal(healthy.status, 0, healthy.stderr || healthy.error?.message);
+    assert.match(healthy.stdout, /CSP inline-script pin verified/);
+    assert.equal(verifyOnly().status, 0);
+    // And it must not have tripped on the copy of the placeholder that
+    // nginx.conf DOCUMENTS a few lines above the directive using it.
+    assert.ok(
+      readFileSync(configPath, "utf8").includes("__CSP_INLINE_SCRIPT_HASH__"),
+      "the comment mentioning the placeholder is expected to survive",
+    );
+
+    // 2. The served document changes after the pin -- the shape that shipped.
+    reset();
+    assert.equal(boot().status, 0);
+    const pinnedBefore = pinned();
+    writeFileSync(
+      indexPath,
+      readFileSync(indexPath, "utf8").replace(
+        "window.ocrEnabled = false",
+        "window.ocrEnabled = false /* edited by a later layer */",
+      ),
+    );
+    const drifted = verifyOnly();
+    assert.notEqual(
+      drifted.status,
+      0,
+      "a pin that no longer matches must fail",
+    );
+    assert.match(
+      drifted.stderr,
+      /does not authorise the served inline scripts/,
+    );
+    // The operator must be handed the hash the document needs, not a white page.
+    assert.match(drifted.stderr, /policy:/);
+    assert.match(
+      drifted.stderr,
+      /document:\s+script-src 'self' 'wasm-unsafe-eval' 'sha256-/,
+    );
+    // The OLD checks pass over this exact state, which is why it shipped.
+    const configuration = readFileSync(configPath, "utf8");
+    assert.equal(
+      (configuration.match(/script-src 'self' 'wasm-unsafe-eval' /g) ?? [])
+        .length,
+      1,
+    );
+    assert.ok(
+      configuration.includes(
+        `script-src 'self' 'wasm-unsafe-eval'${pinnedBefore};`,
+      ),
+      "the old containment check passes here, which is the point",
+    );
+
+    // 3. An unsubstituted placeholder in the live directive authorises nothing.
+    reset();
+    const unsubstituted = verifyOnly();
+    assert.notEqual(unsubstituted.status, 0);
+    assert.match(
+      unsubstituted.stderr,
+      /still carries the __CSP_INLINE_SCRIPT_HASH__ placeholder/,
+    );
+
+    // 4. A second inline script appearing after the pin is refused rather than
+    //    silently unexecuted.
+    reset();
+    assert.equal(boot().status, 0);
+    writeFileSync(
+      indexPath,
+      readFileSync(indexPath, "utf8").replace(
+        "</head>",
+        "  <script>window.secondScript = 1</script>\n  </head>",
+      ),
+    );
+    const unpinned = verifyOnly();
+    assert.notEqual(unpinned.status, 0);
+    assert.match(
+      unpinned.stderr,
+      /does not authorise the served inline scripts/,
+    );
+
+    // 5. A stale hash left beside the correct one is also a mismatch: set
+    //    equality, not containment.
+    reset();
+    assert.equal(boot().status, 0);
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(
+        "script-src 'self' 'wasm-unsafe-eval' ",
+        "script-src 'self' 'wasm-unsafe-eval' 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' ",
+      ),
+    );
+    const stale = verifyOnly();
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /does not authorise the served inline scripts/);
+
+    // 6. Booting twice must not accumulate hashes, and must still verify.
+    reset();
+    assert.equal(boot().status, 0);
+    const first = pinned();
+    const second = boot();
+    assert.equal(second.status, 0, second.stderr || second.error?.message);
+    assert.equal(pinned(), first, "a restart must not accumulate pins");
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
