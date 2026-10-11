@@ -62,7 +62,7 @@ import {
   resolveMermaidSettings,
   resolveMermaidSurfaceColor,
 } from './MermaidSettings'
-import { useMermaidAppTheme } from './MermaidAppTheme'
+import { useFontFacesLoadedToken, useMermaidAppTheme, useMermaidLabelFontFamily } from './MermaidAppTheme'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
@@ -501,6 +501,11 @@ function MermaidComponent({
   const [reloadToken, setReloadToken] = useState(0)
   // Guards against a late async render overwriting a newer one.
   const renderTokenRef = useRef(0)
+  // The block's own element. Declared here rather than beside the selection
+  // gating below because the render needs it: the font a label will be DRAWN in
+  // is read off this element and handed to mermaid, so that the font it
+  // MEASURES in is the same one. See useMermaidLabelFontFamily.
+  const blockRef = useRef<HTMLDivElement>(null)
 
   // Keep the draft in sync when the node's code changes from the outside
   // (e.g. undo/redo, collaborative edits).
@@ -508,8 +513,17 @@ function MermaidComponent({
     setDraft(code)
   }, [code])
 
+  // THE concrete font stack handed to mermaid, kept live: switching the Editor
+  // Font preference re-renders the diagram, because the SVG now carries a
+  // concrete family of its own instead of deferring to its parent.
+  const labelFontFamily = useMermaidLabelFontFamily(blockRef)
+  // A font face FINISHING loading. The family name does not change across a
+  // `display: swap`, so only this can tell the diagram it was measured in the
+  // fallback's metrics and is now being drawn in the webfont's.
+  const fontFacesToken = useFontFacesLoadedToken()
+
   const render = useCallback(
-    async (source: string, activeTheme: MermaidRenderTheme) => {
+    async (source: string, activeTheme: MermaidRenderTheme, fontFamily: string) => {
       const token = ++renderTokenRef.current
       const trimmed = source.trim()
       if (!trimmed) {
@@ -530,7 +544,13 @@ function MermaidComponent({
           // one gets mermaid's own clean palette (`mainBkg` back to `#ECECFF`)
           // and not the previous diagram's overrides.
           themeVariables: activeTheme.themeVariables,
-          fontFamily: 'inherit',
+          // A CONCRETE stack, never `inherit`. Mermaid sizes every node by
+          // measuring its label in a temporary element it appends to
+          // `document.body`, and the finished SVG is then injected into the
+          // editor — so a value that defers to its parent is resolved twice,
+          // against two different fonts, and every box is sized from metrics
+          // the label never had. See resolveMermaidLabelFontFamily.
+          fontFamily,
         })
         const id = `mermaid-${nodeKey}-${renderSeq++}`
         const { svg: rendered } = await mermaid.render(id, trimmed)
@@ -565,19 +585,26 @@ function MermaidComponent({
   // render, so it cannot be a dependency itself.
   const activeThemeKey = JSON.stringify(activeTheme)
 
-  // Debounced render whenever the draft, resolved theme, or reload token changes.
+  // Debounced render whenever the draft, resolved theme, label font, or reload
+  // token changes.
   // THE live-theme path: a theme switch changes `activeThemeKey`, which
   // re-renders the diagram. Mermaid caches nothing across `render()` calls, but
   // this component does — `svg` is held in state and the viewport injects it
   // once per change — so without a new render the old SVG stays on screen with
   // the old theme's colours baked into its own `<style>`.
+  //
+  // `labelFontFamily` is in here for the same reason, and it is NOT optional:
+  // the SVG now carries a concrete font family of its own, so a diagram that is
+  // not re-rendered would keep the font it was measured in after the user
+  // changed the Editor Font — which `inherit` used to track for free, at the
+  // cost of being measured wrong.
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      void render(draft, activeTheme)
+      void render(draft, activeTheme, labelFontFamily)
     }, RENDER_DEBOUNCE_MS)
     return () => window.clearTimeout(handle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft, activeThemeKey, reloadToken, render])
+  }, [draft, activeThemeKey, labelFontFamily, fontFacesToken, reloadToken, render])
 
   // Invalidate any in-flight render when the component unmounts.
   useEffect(() => {
@@ -615,8 +642,8 @@ function MermaidComponent({
   // nothing until the Lexical selection resolves to a table cell. This is the
   // decorator-node spelling of that rule, as RemoteImageComponent does it
   // (RemoteImageComponent.tsx:109-130), with two deliberate differences — see
-  // the handler below.
-  const blockRef = useRef<HTMLDivElement>(null)
+  // the handler below. (`blockRef` itself is declared with the render state
+  // above, because the render reads the label font off that element.)
   const previewRef = useRef<HTMLDivElement>(null)
   const [isSelected, setSelected] = useLexicalNodeSelection(nodeKey)
 

@@ -6,6 +6,15 @@
  * which mermaid config). This module owns the two impure halves: reading the
  * palette out of the live cascade, and knowing WHEN it has changed.
  *
+ * It owns the LABEL FONT for the same two reasons. The font a diagram's labels
+ * are drawn in is also only knowable from the live cascade (the Editor Font
+ * preference is a custom property on `<html>`, resolved through `.font-editor`),
+ * and it changes through exactly the signals listed below — `editorFont.ts`
+ * writes the property onto `documentElement.style` and appends a Google-Fonts
+ * `<link>` whose `load` is when the family becomes measurable. Why mermaid has
+ * to be told it CONCRETELY, rather than the `fontFamily: 'inherit'` that used
+ * to be passed, is in `resolveMermaidLabelFontFamily` in MermaidSettings.ts.
+ *
  *
  * WHERE THE APP'S THEME ACTUALLY LIVES
  *
@@ -56,12 +65,14 @@
  * from the other side, and a re-read that finds no change costs one
  * `getComputedStyle` and dispatches no React update.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import {
   buildMermaidAppTokens,
   isDarkMermaidSurface,
   mermaidAppThemeIsDark,
   MERMAID_APP_TOKEN_PROPERTIES,
+  MERMAID_LABEL_FONT_FALLBACK,
+  resolveMermaidLabelFontFamily,
   type MermaidAppTheme,
 } from './MermaidSettings'
 
@@ -144,6 +155,86 @@ export function mermaidAppThemeKey(theme: MermaidAppTheme): string {
 }
 
 /**
+ * THE subscription: every signal, listed above, that can change what this
+ * module reads out of the live cascade. `onChange` is called once immediately
+ * and again on each signal; it must do its own change detection, because a
+ * stylesheet `load` fires for every image and script too.
+ *
+ * Shared, not duplicated, because the EDITOR FONT changes through exactly the
+ * same two mechanisms a theme does — `editorFont.ts` writes
+ * `--sn-stylekit-editor-font-family` onto `document.documentElement.style`
+ * (signal 3) and appends a Google-Fonts `<link>` to `<head>` whose `load` is
+ * when the family becomes measurable (signals 1 and 2). A second observer set
+ * would be the same four listeners with the same deferred re-read.
+ */
+export function subscribeToAppThemeSignals(onChange: () => void): () => void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return () => undefined
+  }
+
+  let disposed = false
+  let deferred: number | undefined
+
+  const refresh = (): void => {
+    if (disposed) {
+      return
+    }
+    onChange()
+  }
+
+  // A `<head>` insertion is reported before the new stylesheet has applied, so
+  // read again once the browser has had a frame to apply it.
+  const refreshSoon = (): void => {
+    refresh()
+    if (deferred !== undefined) {
+      return
+    }
+    const schedule =
+      typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 16)
+    deferred = schedule(() => {
+      deferred = undefined
+      refresh()
+    }) as unknown as number
+  }
+
+  refresh()
+
+  // (1) A stylesheet finished loading. `load` does not bubble; the capture
+  // phase still delivers it.
+  document.addEventListener('load', refresh, true)
+
+  // (2) A theme stylesheet added to, or removed from, `<head>`.
+  const headObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(refreshSoon)
+  if (document.head) {
+    headObserver?.observe(document.head, { childList: true })
+  }
+
+  // (3) An inline-style or class-switched palette on the root or the body.
+  const attributeObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(refresh)
+  attributeObserver?.observe(document.documentElement, { attributes: true })
+  if (document.body) {
+    attributeObserver?.observe(document.body, { attributes: true })
+  }
+
+  // (4) The OS preference, which still decides when nothing else can.
+  const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+  media?.addEventListener?.('change', refresh)
+
+  return () => {
+    disposed = true
+    document.removeEventListener('load', refresh, true)
+    headObserver?.disconnect()
+    attributeObserver?.disconnect()
+    media?.removeEventListener?.('change', refresh)
+    if (deferred !== undefined && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(deferred)
+    }
+  }
+}
+
+/**
  * Subscribe to the application's theme. The returned object is referentially
  * stable while the palette is unchanged, so a consumer may depend on it
  * directly in an effect without re-rendering its diagram on every unrelated
@@ -153,78 +244,88 @@ export function useMermaidAppTheme(): MermaidAppTheme {
   const [theme, setTheme] = useState<MermaidAppTheme>(readMermaidAppTheme)
   const keyRef = useRef<string>(mermaidAppThemeKey(theme))
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return
-    }
-
-    let disposed = false
-    let deferred: number | undefined
-
-    const refresh = (): void => {
-      if (disposed) {
-        return
-      }
-      const next = readMermaidAppTheme()
-      const key = mermaidAppThemeKey(next)
-      if (key === keyRef.current) {
-        return
-      }
-      keyRef.current = key
-      setTheme(next)
-    }
-
-    // A `<head>` insertion is reported before the new stylesheet has applied, so
-    // read again once the browser has had a frame to apply it.
-    const refreshSoon = (): void => {
-      refresh()
-      if (deferred !== undefined) {
-        return
-      }
-      const schedule =
-        typeof window.requestAnimationFrame === 'function'
-          ? window.requestAnimationFrame.bind(window)
-          : (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 16)
-      deferred = schedule(() => {
-        deferred = undefined
-        refresh()
-      }) as unknown as number
-    }
-
-    refresh()
-
-    // (1) A stylesheet finished loading. `load` does not bubble; the capture
-    // phase still delivers it.
-    document.addEventListener('load', refresh, true)
-
-    // (2) A theme stylesheet added to, or removed from, `<head>`.
-    const headObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(refreshSoon)
-    if (document.head) {
-      headObserver?.observe(document.head, { childList: true })
-    }
-
-    // (3) An inline-style or class-switched palette on the root or the body.
-    const attributeObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(refresh)
-    attributeObserver?.observe(document.documentElement, { attributes: true })
-    if (document.body) {
-      attributeObserver?.observe(document.body, { attributes: true })
-    }
-
-    // (4) The OS preference, which still decides when nothing else can.
-    const media = window.matchMedia?.('(prefers-color-scheme: dark)')
-    media?.addEventListener?.('change', refresh)
-
-    return () => {
-      disposed = true
-      document.removeEventListener('load', refresh, true)
-      headObserver?.disconnect()
-      attributeObserver?.disconnect()
-      media?.removeEventListener?.('change', refresh)
-      if (deferred !== undefined && typeof window.cancelAnimationFrame === 'function') {
-        window.cancelAnimationFrame(deferred)
-      }
-    }
-  }, [])
+  useEffect(
+    () =>
+      subscribeToAppThemeSignals(() => {
+        const next = readMermaidAppTheme()
+        const key = mermaidAppThemeKey(next)
+        if (key === keyRef.current) {
+          return
+        }
+        keyRef.current = key
+        setTheme(next)
+      }),
+    [],
+  )
 
   return theme
+}
+
+/**
+ * The font a diagram's labels will actually be DRAWN in, resolved off the
+ * element the diagram is drawn inside, as a concrete stack that means the same
+ * thing in `document.body` (where mermaid measures) as it does here. See
+ * `resolveMermaidLabelFontFamily` in MermaidSettings.ts for why `inherit` is
+ * not an answer.
+ */
+export function readMermaidLabelFontFamily(element: Element | null | undefined): string {
+  if (!element || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
+    return MERMAID_LABEL_FONT_FALLBACK
+  }
+  return resolveMermaidLabelFontFamily(window.getComputedStyle(element).fontFamily)
+}
+
+/**
+ * The label font, kept live. Read off `ref` — the diagram's own block, so a
+ * per-note or per-subtree override is picked up as readily as the global
+ * preference — and re-read on the same signals the theme uses.
+ *
+ * Returns the fallback until the ref is attached, which is the first paint
+ * only: the subscription's immediate read happens in an effect, long before the
+ * component's render debounce fires.
+ */
+export function useMermaidLabelFontFamily(ref: RefObject<Element | null>): string {
+  const [fontFamily, setFontFamily] = useState<string>(MERMAID_LABEL_FONT_FALLBACK)
+
+  useEffect(
+    () =>
+      subscribeToAppThemeSignals(() => {
+        const next = readMermaidLabelFontFamily(ref.current)
+        setFontFamily((current) => (current === next ? current : next))
+      }),
+    [ref],
+  )
+
+  return fontFamily
+}
+
+/**
+ * Increments when the browser finishes loading font faces.
+ *
+ * A concrete family NAME is not the same as concrete METRICS. `editorFont.ts`
+ * loads a Google font with `display=swap`, so between the stylesheet arriving
+ * and the woff2 arriving the editor paints a generic fallback under the chosen
+ * family's name. A diagram rendered in that window is measured in the fallback
+ * and then repainted in the webfont, with its node boxes still the fallback's
+ * size — the same defect as `fontFamily: 'inherit'`, triggered by time instead
+ * of by a preference. The family string is byte-identical either side of the
+ * swap, so nothing keyed on it can notice; this is keyed on the swap itself.
+ *
+ * `document.fonts` is absent in jsdom and in any non-browser environment, where
+ * this stays at 0 and costs nothing.
+ */
+export function useFontFacesLoadedToken(): number {
+  const [token, setToken] = useState(0)
+
+  useEffect(() => {
+    const fonts = typeof document === 'undefined' ? undefined : document.fonts
+    if (!fonts || typeof fonts.addEventListener !== 'function') {
+      return
+    }
+    const bump = (): void => setToken((n) => n + 1)
+    fonts.addEventListener('loadingdone', bump)
+    return () => fonts.removeEventListener('loadingdone', bump)
+  }, [])
+
+  return token
 }

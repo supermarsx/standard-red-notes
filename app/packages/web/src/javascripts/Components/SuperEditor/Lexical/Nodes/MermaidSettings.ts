@@ -394,6 +394,88 @@ export function isDarkMermaidSurface(value: unknown): boolean | null {
 }
 
 /**
+ * Standard Red Notes — bug fix: the font mermaid MEASURES a label in must be
+ * the font that label is DRAWN in, and `fontFamily: 'inherit'` guarantees it is
+ * not.
+ *
+ * Mermaid sizes every node from its label's measured text. With html labels it
+ * builds the label in the DOM and reads its box; for `<text>` labels
+ * (`calculateTextDimensions`) it appends a throwaway `<svg>` and reads a
+ * `getBBox()`. BOTH happen inside a temporary element that `mermaid.render(id,
+ * source)` — called with no containing element, as both of this app's call
+ * sites do — appends to `document.body` (mermaid.core.mjs:1285/1310). The
+ * finished SVG string is then injected into the EDITOR. So `inherit` resolves
+ * against `<body>` while measuring and against the editor while rendering, and
+ * every node box is sized from text metrics the label never had.
+ *
+ * Those two are not the same font in this product. `<body>` carries a hardcoded
+ * stack (`_main.scss` `html, body`); the editor carries
+ * `var(--sn-stylekit-editor-font-family)` through `.font-editor`
+ * (SuperEditor.tsx), which the Editor Font preference rewrites to a serif, a
+ * monospace, a locally installed family or a Google font
+ * (`Utils/editorFont.ts`). Measured in headless Chrome, 16px, the editor font
+ * set to the app's own Monospace preset: mermaid sized the slot for
+ * `Collect the requirements` at 173.45px and the label drew 200px; `Ship it`
+ * got a 44.52px slot for a 61.58px label — a box 38% too small, with the text
+ * eating 8.5px into the padding on each side. Even the DEFAULT stacks differ:
+ * the editor's carries `--sn-stylekit-simplified-chinese-font` and `<body>`'s
+ * does not, so a CJK label is measured and drawn in different faces.
+ *
+ * The fix is to hand mermaid a CONCRETE stack — the one resolved from the block
+ * the diagram will be drawn in — so the measurement context and the render
+ * context cannot disagree. A concrete stack also survives the SVG being moved:
+ * the print snapshot reparents it under `#srn-print-root`, which declares
+ * `font-family: Arial, Helvetica, sans-serif` (`_print.scss`), and `inherit`
+ * takes that while the geometry stays sized for the screen's font.
+ *
+ * This function is the guard on what may be handed over. It is PURE; the read
+ * itself lives in MermaidAppTheme.ts with the other cascade readers.
+ */
+export const MERMAID_LABEL_FONT_FALLBACK =
+  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif"
+
+/**
+ * The CSS-wide keywords, plus `''`. None of them is a font: each one defers the
+ * answer to whatever element the declaration lands on, which is the defect.
+ * `getComputedStyle().fontFamily` never returns one of these in a browser, but
+ * jsdom (no cascade) returns `''`, and a caller may pass a literal.
+ */
+const UNMEASURABLE_FONT_FAMILIES: readonly string[] = ['', 'inherit', 'initial', 'unset', 'revert', 'revert-layer']
+
+/**
+ * Mermaid interpolates `fontFamily` straight into the stylesheet text it builds
+ * (`createCssStyles`/`getStyles`, no escaping), and the value here is derived
+ * from a preference the user types freely. Anything that could terminate a
+ * declaration or open a rule, a comment or an at-rule is therefore refused
+ * outright rather than escaped — a font stack never needs any of it.
+ */
+const CSS_INJECTION_CHARACTERS = /[{}<>;@\\]|\/\*|\*\/|[\r\n]/
+
+/**
+ * A concrete, measurable font stack, or `MERMAID_LABEL_FONT_FALLBACK`. Never
+ * returns a CSS-wide keyword, an unresolved `var()`, or anything that could
+ * escape the declaration it is written into.
+ */
+export function resolveMermaidLabelFontFamily(value: unknown): string {
+  if (typeof value !== 'string') {
+    return MERMAID_LABEL_FONT_FALLBACK
+  }
+  const text = value.trim()
+  if (UNMEASURABLE_FONT_FAMILIES.includes(text.toLowerCase())) {
+    return MERMAID_LABEL_FONT_FALLBACK
+  }
+  // An unresolved custom property is `inherit` with extra steps: it is resolved
+  // separately in each context, against whatever `:root` each one sees.
+  if (text.toLowerCase().includes('var(')) {
+    return MERMAID_LABEL_FONT_FALLBACK
+  }
+  if (CSS_INJECTION_CHARACTERS.test(text)) {
+    return MERMAID_LABEL_FONT_FALLBACK
+  }
+  return text
+}
+
+/**
  * The custom properties the palette is read from. Named here so a spec and the
  * reader cannot drift apart.
  */

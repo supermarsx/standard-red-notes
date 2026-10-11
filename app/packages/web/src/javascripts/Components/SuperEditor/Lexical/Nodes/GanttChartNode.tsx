@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   $getNodeByKey,
   DecoratorNode,
@@ -13,7 +13,7 @@ import {
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import Icon from '@/Components/Icon/Icon'
 import MermaidSvgViewport from './MermaidSvgViewport'
-import { useMermaidAppTheme } from './MermaidAppTheme'
+import { useFontFacesLoadedToken, useMermaidAppTheme, useMermaidLabelFontFamily } from './MermaidAppTheme'
 import { resolveMermaidRenderTheme, resolveMermaidSurfaceColor, type MermaidRenderTheme } from './MermaidSettings'
 
 /**
@@ -169,6 +169,16 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
   const [editing, setEditing] = useState(data.tasks.length === 0)
   const [svg, setSvg] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  // The block's own element, and THE concrete font stack read off it. A gantt
+  // chart is the diagram type this matters most to: its task names are `<text>`
+  // elements measured through `calculateTextDimensions`, which appends a
+  // throwaway `<svg>` to `document.body` and reads a `getBBox()` there, so
+  // `fontFamily: 'inherit'` measured the chart in the BODY's font and drew it in
+  // the editor's. See resolveMermaidLabelFontFamily in MermaidSettings.ts.
+  const blockRef = useRef<HTMLDivElement>(null)
+  const labelFontFamily = useMermaidLabelFontFamily(blockRef)
+  // A font face finishing loading — see useFontFacesLoadedToken.
+  const fontFacesToken = useFontFacesLoadedToken()
 
   const mutate = useCallback(
     (fn: (draft: GanttChartData) => void) => {
@@ -199,7 +209,7 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
   const activeThemeKey = JSON.stringify(activeTheme)
 
   const render = useCallback(
-    async (source: GanttChartData, theme: MermaidRenderTheme) => {
+    async (source: GanttChartData, theme: MermaidRenderTheme, fontFamily: string) => {
       const code = buildGanttSource(source).trim()
       if (!source.tasks.length) {
         setSvg('')
@@ -213,7 +223,8 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
           securityLevel: 'strict',
           theme: theme.theme,
           themeVariables: theme.themeVariables,
-          fontFamily: 'inherit',
+          // A CONCRETE stack, never `inherit` — see the comment on `blockRef`.
+          fontFamily,
         })
         const id = `gantt-${nodeKey}-${renderSeq++}`
         const { svg: rendered } = await mermaid.render(id, code)
@@ -230,9 +241,9 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
   // held in state with the previous theme's colours baked into its own <style>,
   // so nothing short of a new render restyles it.
   useEffect(() => {
-    void render(data, activeTheme)
+    void render(data, activeTheme, labelFontFamily)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, activeThemeKey])
+  }, [data, activeThemeKey, labelFontFamily, fontFacesToken])
 
   const setTitle = (title: string) => mutate((d) => (d.title = title))
   const setTaskField = (index: number, field: keyof GanttTask, value: string) =>
@@ -246,6 +257,7 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
 
   return (
     <div
+      ref={blockRef}
       className="border-border bg-default my-2 rounded border"
       data-gantt-block="true"
       data-super-widget-layout="canvas"
