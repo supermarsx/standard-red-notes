@@ -59,7 +59,11 @@
 #       --log-lines N       Log lines to print from a failing container
 #                           (default: 200).
 #       --url BASE          Base URL for the post-deploy HTTP check. Default:
-#                           derived from APP_BIND_ADDRESS / APP_PORT in .env.
+#                           the host port Compose reports for the app service
+#                           (`compose port app 8080`), falling back to
+#                           APP_PORT / APP_BIND_ADDRESS from .env only when no
+#                           port is published. Use this to probe through the
+#                           proxy itself.
 #   -y, --yes               Assume yes; never prompt.
 #   -n, --dry-run           Print every command that would run; change nothing.
 #
