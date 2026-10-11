@@ -176,6 +176,26 @@ const lastInitializeConfig = (): Record<string, unknown> => {
 const block = (selector: string) => container.querySelector(selector) as HTMLElement
 
 /**
+ * The preconditions a font assertion depends on, asserted before it.
+ *
+ * `readMermaidLabelFontFamily` answers with MERMAID_LABEL_FONT_FALLBACK for
+ * THREE different reasons: no element, no `window.getComputedStyle`, and a
+ * computed value that is not a measurable stack. So a test that only compares
+ * the family cannot say WHICH happened, and a torn-down environment -- a worker
+ * going away mid-run, a root unmounted by a previous `afterEach` -- reads as a
+ * font mismatch. That failure is unreproducible by anyone who runs the file on
+ * its own, which is the worst shape a red can take.
+ *
+ * This makes the environment the thing that fails when the environment is the
+ * problem. It is not a retry and it does not relax any assertion.
+ */
+const expectMeasurableEnvironment = (element: HTMLElement | null): void => {
+  expect(typeof window.getComputedStyle).toBe('function')
+  expect(element).not.toBeNull()
+  expect(element?.isConnected).toBe(true)
+}
+
+/**
  * The Editor Font preference, as `Utils/editorFont.ts` applies it: the resolved
  * stack is written to `--sn-stylekit-editor-font-family` on
  * `document.documentElement`, and `.font-editor` (SuperEditor.tsx) turns that
@@ -324,6 +344,7 @@ describe('what reaches mermaid.initialize from a real Mermaid block', () => {
   })
 
   it('is a concrete font family, never a CSS-wide keyword', () => {
+    expectMeasurableEnvironment(block('[data-mermaid-block="true"]'))
     const fontFamily = lastInitializeConfig().fontFamily
     expect(typeof fontFamily).toBe('string')
     expect(fontFamily).not.toBe('inherit')

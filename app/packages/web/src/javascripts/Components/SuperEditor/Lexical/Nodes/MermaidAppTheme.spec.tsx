@@ -576,6 +576,26 @@ describe('the label FONT is part of the theme contract, and was not asserted for
   const mermaidBlock = () => container.querySelector('[data-mermaid-block="true"]') as HTMLElement
 
   /**
+   * The preconditions a font assertion depends on, asserted before it.
+   *
+   * `readMermaidLabelFontFamily` answers with MERMAID_LABEL_FONT_FALLBACK for
+   * THREE different reasons: no element, no `window.getComputedStyle`, and a
+   * computed value that is not a measurable stack. So a test that only compares
+   * the family cannot say WHICH happened, and a torn-down environment -- a worker
+   * going away mid-run, a root unmounted by a previous `afterEach` -- reads as a
+   * font mismatch. That failure is unreproducible by anyone who runs the file on
+   * its own, which is the worst shape a red can take.
+   *
+   * This makes the environment the thing that fails when the environment is the
+   * problem. It is not a retry and it does not relax any assertion.
+   */
+  const expectMeasurableEnvironment = (element: HTMLElement | null): void => {
+    expect(typeof window.getComputedStyle).toBe('function')
+    expect(element).not.toBeNull()
+    expect(element?.isConnected).toBe(true)
+  }
+
+  /**
    * The Editor Font preference, as `Utils/editorFont.ts` applies it: the
    * resolved stack goes to `--sn-stylekit-editor-font-family` on
    * `document.documentElement`, and `.font-editor` turns that into the editor
@@ -597,6 +617,7 @@ describe('the label FONT is part of the theme contract, and was not asserted for
   it('hands mermaid the family read off the diagram own block, not a constant', async () => {
     await mount(mermaidSeed('app'))
     await setEditorFont('"Opus5 Theme Probe", monospace')
+    expectMeasurableEnvironment(mermaidBlock())
     // Tied to the element the SVG is drawn inside, so a constant, a keyword, or
     // a read off `document.body` all fail.
     expect(window.getComputedStyle(mermaidBlock()).fontFamily).toContain('Opus5 Theme Probe')
@@ -607,6 +628,7 @@ describe('the label FONT is part of the theme contract, and was not asserted for
 
   it('follows the Editor Font preference, so the family cannot go stale', async () => {
     await mount(mermaidSeed('app'))
+    expectMeasurableEnvironment(mermaidBlock())
     const before = lastInitializeConfig().fontFamily
     await setEditorFont('"Opus5 Theme Probe", monospace')
     const after = lastInitializeConfig().fontFamily
