@@ -150,7 +150,7 @@ describe('Logger', () => {
     expect(serialized).toContain('user-123')
   })
 
-  it('should project Error instances to allowlisted metadata without message or stack text', () => {
+  it('should project Error instances to allowlisted metadata without their message text', () => {
     logger.setLevel('debug')
     const thrown = Object.assign(new Error('opaque-upstream-secret'), {
       code: 'ERR_NETWORK',
@@ -163,9 +163,14 @@ describe('Logger', () => {
       errorType: 'Error',
       errorCode: 'ERR_NETWORK',
       status: undefined,
+      // Frames rebuilt from allowlisted pieces: the throw site survives, the message
+      // header and the absolute paths around it do not. See SafeLog's own spec.
+      stack: expect.stringMatching(/^at /),
     })
     const serialized = JSON.stringify(error.mock.calls)
     expect(serialized).not.toContain('opaque-upstream-secret')
     expect(serialized).not.toContain('access-token-sentinel')
+    // A basename is kept, the directories around it are not — there is no path left.
+    expect((error.mock.calls[0][1] as { stack: string }).stack).not.toMatch(/[\\/]/)
   })
 })

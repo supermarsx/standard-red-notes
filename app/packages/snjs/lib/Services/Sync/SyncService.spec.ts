@@ -1,4 +1,4 @@
-import { LoggerInterface } from '@standardnotes/utils'
+import { authoredLogMessage, LoggerInterface } from '@standardnotes/utils'
 import { StorageKey, SyncEvent, SyncMode, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
 import { AccountSyncOperation } from './Account/Operation'
@@ -3753,5 +3753,131 @@ describe('SyncService t97 hot-loop fix (no-progress round defers to normal caden
       expect(realOperation.madeProgress).toBe(true)
       expect(syncAgainByHandlingNewDirtyItems).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+/**
+ * The consequence side of the multi-tab transport bug (fixed in the web worker runtime:
+ * see `SyncTransportWorkerRuntime.recover`). This is the SyncService contract that made
+ * the worker's verdict so expensive, and the diagnostic that hid it for a whole session.
+ */
+describe('SyncService transport recovery failure', () => {
+  const createService = (logger: jest.Mocked<LoggerInterface>): SyncService => {
+    const noop = () => undefined
+    const service = new SyncService(
+      {} as never,
+      {
+        isCurrentSessionReadOnly: jest.fn().mockReturnValue(false),
+        online: jest.fn().mockReturnValue(true),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) } as never,
+      {} as never,
+      { addEventHandler: noop } as never,
+    )
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { opStatus: unknown }).opStatus = {
+      syncInProgress: false,
+      setDidEnd: jest.fn(),
+      setError: jest.fn(),
+    }
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+    return service
+  }
+
+  const buildLogger = () =>
+    ({
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    }) as unknown as jest.Mocked<LoggerInterface>
+
+  /**
+   * Abandoning the sync is the CORRECT response to a recovery that must happen and did
+   * not: a response from an uncertain command belongs to the payload snapshot that
+   * created it and has to be applied and checkpointed before anything reads the current
+   * dirty set. The cost is what this pins down — nothing is uploaded, and
+   * `prepareForSync` never runs, so the durability-critical pre-sync save does not
+   * happen either. That is why a transport must not report "recovery required" in a
+   * state where recovery can never succeed.
+   */
+  it('abandons the sync before the pre-sync save and the uploads, and schedules a retry', async () => {
+    const logger = buildLogger()
+    const service = createService(logger)
+    const transport = {
+      recoverPending: jest
+        .fn()
+        .mockRejectedValue(new Error('Durable sync recovery must complete before a new command can execute.')),
+      execute: jest.fn(),
+    }
+    service.setAccountSyncTransport(transport as never)
+    // The REAL operation, so the rejection travels the production propagation path.
+    ;(service as unknown as { createServerSyncOperation: jest.Mock }).createServerSyncOperation = jest.fn(
+      async () => new AccountSyncOperation([], jest.fn() as never, { apiVersion: '20240226' } as never, { transport }),
+    )
+    const prepareForSync = jest.fn()
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = prepareForSync
+
+    await (service as unknown as { performSync: (options: { source: SyncSource }) => Promise<unknown> }).performSync({
+      source: SyncSource.External,
+    })
+
+    expect(transport.recoverPending).toHaveBeenCalledTimes(1)
+    expect(prepareForSync).not.toHaveBeenCalled()
+    expect(transport.execute).not.toHaveBeenCalled()
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+    // A failed online attempt must leave a retry behind, or the tab waits for the next
+    // mutation to try again.
+    expect((service as unknown as { failureBackoffTimeout?: unknown }).failureBackoffTimeout).toBeDefined()
+    ;(service as unknown as { cancelFailureBackoff: () => void }).cancelFailureBackoff()
+  })
+
+  /**
+   * *** THE LINE THAT COULD NOT FAIL. *** In production this logged
+   * `{ errorType: "Error", errorCode: undefined, status: undefined }` — four repeats of
+   * it in one page session, naming neither the refusal nor its cause, because
+   * `safeErrorLogMetadata` strips the message of an arbitrary error (an upstream one
+   * carries bearer tokens and e-mail addresses). The transport's own rejections are
+   * authored literals and now say so, so the same line names the refusal.
+   */
+  it('logs the recovery failure with the message the transport refused with', async () => {
+    const logger = buildLogger()
+    const service = createService(logger)
+    const transport = {
+      recoverPending: jest
+        .fn()
+        .mockRejectedValue(
+          authoredLogMessage(new Error('Durable sync recovery must complete before a new command can execute.')),
+        ),
+      execute: jest.fn(),
+    }
+    service.setAccountSyncTransport(transport as never)
+    ;(service as unknown as { createServerSyncOperation: jest.Mock }).createServerSyncOperation = jest.fn(
+      async () => new AccountSyncOperation([], jest.fn() as never, { apiVersion: '20240226' } as never, { transport }),
+    )
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn()
+
+    await (service as unknown as { performSync: (options: { source: SyncSource }) => Promise<unknown> }).performSync({
+      source: SyncSource.External,
+    })
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Sync transport recovery failed before collecting uploads',
+      expect.objectContaining({
+        errorType: 'Error',
+        message: 'Durable sync recovery must complete before a new command can execute.',
+      }),
+    )
+    ;(service as unknown as { cancelFailureBackoff: () => void }).cancelFailureBackoff()
   })
 })

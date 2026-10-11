@@ -1,5 +1,6 @@
 import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
+import { safeErrorLogMetadata } from '@standardnotes/utils'
 import { LANE_LEDGER_TRANSITION_CAPACITY } from './LaneDegradationLedger'
 import { MainToSyncWorkerMessage, SyncWorkerToMainMessage } from './syncTransportProtocol'
 import {
@@ -386,6 +387,79 @@ describe('WebSocketSyncTransport', () => {
     worker.fail()
 
     await expect(execution).rejects.toThrow('durable recovery is required')
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  /**
+   * A deferral is "this tab recovered nothing", not "this tab failed". It has to RESOLVE,
+   * because `SyncService.performSync` abandons the whole sync — the dirty-set collection,
+   * the pre-sync save and every upload — when the recovery phase throws. Said once, as
+   * info, for a condition the lane's own copy calls "expected, and not a fault".
+   */
+  it('resolves a deferred recovery instead of rejecting the sync that asked for it', async () => {
+    const info = jest.spyOn(console, 'info').mockImplementation(() => undefined)
+    try {
+      const transport = createTransport()
+      const fallback = jest.fn().mockResolvedValue(response('must-not-be-used'))
+      const first = transport.recoverPending(fallback)
+      await flush()
+      const recover = worker.posts.find((message) => message.type === 'RECOVER') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'RECOVER' }
+      >
+      worker.emit({
+        type: 'RECOVERY_DEFERRED',
+        clientRequestId: recover.clientRequestId,
+        reason: 'multi-tab-not-owner',
+      })
+
+      await expect(first).resolves.toBeUndefined()
+      expect(fallback).not.toHaveBeenCalled()
+      expect(transport.transportStatus.fallbackReason).toBe('multi-tab-not-owner')
+      expect(info).toHaveBeenCalledTimes(1)
+      expect(info.mock.calls[0][0]).toContain('belongs to the tab that holds the socket')
+
+      // The next sync in the same tab defers again; the console does not say so twice.
+      const second = transport.recoverPending(fallback)
+      await flush()
+      const repeat = worker.posts.filter((message) => message.type === 'RECOVER').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'RECOVER' }
+      >
+      worker.emit({
+        type: 'RECOVERY_DEFERRED',
+        clientRequestId: repeat.clientRequestId,
+        reason: 'multi-tab-not-owner',
+      })
+
+      await expect(second).resolves.toBeUndefined()
+      expect(info).toHaveBeenCalledTimes(1)
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  /**
+   * The paired direction: a recovery this tab really does have to complete still fails the
+   * sync, and now says WHY. `safeErrorLogMetadata` strips an arbitrary error's message, so
+   * this rejection carries the authored-message marker — without it the production log line
+   * read `{ errorType: "Error", errorCode: undefined, status: undefined }` and nothing else.
+   */
+  it('rejects a required recovery with a message a log line may carry', async () => {
+    const transport = createTransport()
+    const fallback = jest.fn().mockResolvedValue(response('must-not-be-used'))
+    const recovery = transport.recoverPending(fallback)
+    await flush()
+    const recover = worker.posts.find((message) => message.type === 'RECOVER') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'RECOVER' }
+    >
+    worker.emit({ type: 'RECOVERY_REQUIRED', clientRequestId: recover.clientRequestId })
+
+    await expect(recovery).rejects.toThrow('Durable sync recovery must complete before a new command can execute.')
+    expect(safeErrorLogMetadata(await recovery.catch((error: unknown) => error)).message).toBe(
+      'Durable sync recovery must complete before a new command can execute.',
+    )
     expect(fallback).not.toHaveBeenCalled()
   })
 

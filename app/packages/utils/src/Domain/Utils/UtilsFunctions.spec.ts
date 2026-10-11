@@ -616,6 +616,7 @@ describe('logging helpers', () => {
       errorType: 'Error',
       errorCode: undefined,
       status: undefined,
+      stack: expect.stringMatching(/^at /),
     })
     expect(structured).toEqual({
       accessToken: '[REDACTED]',

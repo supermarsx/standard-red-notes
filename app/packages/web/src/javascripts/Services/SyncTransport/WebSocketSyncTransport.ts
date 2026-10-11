@@ -38,6 +38,20 @@ import {
 } from './syncTransportProtocol'
 import { LaneDegradationLedger, type LaneLedgerReading } from './LaneDegradationLedger'
 import { OWNER_LEASE_TTL_MS } from './SyncTransportOutbox'
+import { authoredLogMessage } from '@standardnotes/utils'
+
+/**
+ * *** THE REASON A PRODUCTION FAILURE READ `{ errorType: "Error", errorCode: undefined,
+ * status: undefined }` AND NOTHING ELSE. ***
+ *
+ * Every rejection this transport produces carries a message that is a string literal
+ * written in this file, and `safeErrorLogMetadata` strips the message of an arbitrary
+ * error on purpose — an upstream one routinely carries a bearer token or an e-mail
+ * address. Marking ours tells that function the message is authored, so a sync failure
+ * logs WHICH refusal it was instead of only that something threw. Correct here, and
+ * only here, because these messages are literals: see `AuthoredLogMessageMarker`.
+ */
+const transportError = (message: string): Error => authoredLogMessage(new Error(message))
 
 type SyncWorkerLike = {
   onmessage: ((event: MessageEvent<SyncWorkerToMainMessage>) => void) | null
@@ -494,6 +508,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    * in between re-announce a deferral nothing has changed about.
    */
   private lastLoggedInviteDeferral?: string
+  /** Same reasoning again, for the pre-sync recovery probe standing down. */
+  private lastLoggedRecoveryDeferral?: string
   private pageHideListener?: () => void
   private shutdownBarrier?: () => void
   /**
@@ -1059,7 +1075,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     this.revokedSessionScopes.add(sessionScope)
-    const error = new Error('Websocket sync session was revoked.')
+    const error = transportError('Websocket sync session was revoked.')
     for (const [requestId, pending] of this.pending) {
       if (pending.sessionScope === sessionScope) {
         pending.reject(error)
@@ -1105,7 +1121,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           this.revocationBarriers.delete(requestId)
-          reject(new Error('Timed out waiting for sync session quarantine.'))
+          reject(transportError('Timed out waiting for sync session quarantine.'))
         }, BARRIER_TIMEOUT_MS)
         this.revocationBarriers.set(requestId, { resolve, reject, timeout })
         worker.postMessage({ type: 'SESSION_REVOKED', requestId, sessionScope })
@@ -1133,7 +1149,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       worker.postMessage({ type: 'SHUTDOWN' })
       void this.terminateAfterShutdown(worker)
     }
-    const error = new Error('Websocket sync transport was deinitialized.')
+    const error = transportError('Websocket sync transport was deinitialized.')
     for (const pending of this.pending.values()) {
       pending.reject(error)
     }
@@ -1256,7 +1272,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return { response: await httpFallback(normalizedRequest) }
     }
     if (this.revokedSessionScopes.has(sessionScope)) {
-      throw new Error('Websocket sync session was revoked.')
+      throw transportError('Websocket sync session was revoked.')
     }
     // Decided here, not in the worker: a platform with no socket lane used to pay
     // a worker round trip plus an IndexedDB read on every sync only to be told so.
@@ -1367,7 +1383,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           this.revocationBarriers.delete(requestId)
-          reject(new Error('Timed out rotating the sync session worker.'))
+          reject(transportError('Timed out rotating the sync session worker.'))
         }, BARRIER_TIMEOUT_MS)
         this.revocationBarriers.set(requestId, { resolve, reject, timeout })
         worker.postMessage({ type: 'SESSION_REVOKED', requestId, sessionScope })
@@ -1493,6 +1509,27 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    * of a production console flood for a state the transport's own copy calls "not a
    * fault".
    */
+  /**
+   * The pre-sync recovery probe found a durable command belonging to the tab that holds
+   * the lane. Said once per cause, as `console.info`, for the same reason the invite
+   * deferral is: nothing failed, and this used to surface as a `console.error` —
+   * `Sync transport recovery failed before collecting uploads` — once per sync, while
+   * silently costing this tab every upload in the same cycle.
+   */
+  private announceRecoveryDeferral(reason: SyncFallbackReason): void {
+    const signature = `RECOVERY_DEFERRED:${reason}`
+    if (this.lastLoggedRecoveryDeferral === signature) {
+      return
+    }
+    this.lastLoggedRecoveryDeferral = signature
+    // eslint-disable-next-line no-console
+    console.info(
+      `[sync-transport] A durable sync command belongs to the tab that holds the socket (reason ${reason}).` +
+        ` ${SYNC_FALLBACK_REASON_EXPLANATIONS[reason]}` +
+        ' That tab reconciles it; this one syncs over HTTP in the meantime and keeps uploading.',
+    )
+  }
+
   private announceInviteDeferral(reason: SyncFallbackReason): void {
     const signature = `INVITE_DEFERRED:${reason}`
     if (this.lastLoggedInviteDeferral === signature) {
@@ -1639,7 +1676,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         if (message.type === 'CHECKPOINT_CLEARED') {
           barrier.resolve()
         } else {
-          barrier.reject(new Error('Could not clear the durable sync command checkpoint.'))
+          barrier.reject(transportError('Could not clear the durable sync command checkpoint.'))
         }
       }
       return
@@ -1652,7 +1689,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         if (message.type === 'SESSION_REVOKED_ACK') {
           barrier.resolve()
         } else {
-          barrier.reject(new Error('Could not quarantine the revoked sync session.'))
+          barrier.reject(transportError('Could not quarantine the revoked sync session.'))
         }
       }
       return
@@ -1783,9 +1820,19 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.pending.delete(message.clientRequestId)
         pending.resolve(undefined)
         break
+      case 'RECOVERY_DEFERRED':
+        this.pending.delete(message.clientRequestId)
+        // One lane standing down while the socket (another tab's) stays up, which is
+        // the shape `COLLABORATION_FALLBACK` is recorded with: the state does not move,
+        // so the reason is recorded against the CURRENT state rather than inventing a
+        // transition. Said once per cause, because it is expected and not a fault.
+        this.setTransportState(this.state, message.reason, true)
+        this.announceRecoveryDeferral(message.reason)
+        pending.resolve(undefined)
+        break
       case 'RECOVERY_REQUIRED':
         this.pending.delete(message.clientRequestId)
-        pending.reject(new Error('Durable sync recovery must complete before a new command can execute.'))
+        pending.reject(transportError('Durable sync recovery must complete before a new command can execute.'))
         break
       case 'HTTP_FALLBACK':
         await this.resolveHttpFallback(message.clientRequestId, pending, message.body, message.command)
@@ -1796,13 +1843,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
           // COMMITTED proves the mutation may have taken effect. A malformed
           // response must retain the durable outbox for STATUS reconciliation;
           // replaying it over HTTP here would create a second transport owner.
-          pending.reject(new Error('Committed websocket sync response was malformed; durable recovery is required.'))
+          pending.reject(
+            transportError('Committed websocket sync response was malformed; durable recovery is required.'),
+          )
           this.pending.delete(message.clientRequestId)
           return
         }
         const persisted = pending.persisted
         if (!persisted) {
-          pending.reject(new Error('Committed websocket sync response has no durable command identity.'))
+          pending.reject(transportError('Committed websocket sync response has no durable command identity.'))
           this.pending.delete(message.clientRequestId)
           return
         }
@@ -2207,8 +2256,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.pending.delete(clientRequestId)
         this.pendingCollaboration.delete(clientRequestId)
         this.pendingInviteSubscriptions.delete(clientRequestId)
-        pending?.reject(new Error('Authenticated session changed while acquiring a sync ticket.'))
-        collaborationPending?.reject(new Error('Authenticated session changed while authorizing collaboration.'))
+        pending?.reject(transportError('Authenticated session changed while acquiring a sync ticket.'))
+        collaborationPending?.reject(transportError('Authenticated session changed while authorizing collaboration.'))
         if (rpcPending) {
           this.rejectRpc(clientRequestId, rpcPending, new AuthenticatedRpcError('SESSION_CHANGED', false, true))
         }
@@ -2338,12 +2387,12 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       void this.workerForSession(sessionScope)
         .then((worker) => {
           if (!worker) {
-            reject(new Error('Sync worker is unavailable for durable checkpoint acknowledgement.'))
+            reject(transportError('Sync worker is unavailable for durable checkpoint acknowledgement.'))
             return
           }
           const timeout = setTimeout(() => {
             this.checkpointBarriers.delete(requestId)
-            reject(new Error('Timed out clearing the durable sync command checkpoint.'))
+            reject(transportError('Timed out clearing the durable sync command checkpoint.'))
           }, BARRIER_TIMEOUT_MS)
           this.checkpointBarriers.set(requestId, { resolve, reject, timeout })
           worker.postMessage({ type: 'CHECKPOINT_DURABLE', requestId, sessionScope, commandId })
@@ -2382,15 +2431,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     for (const [, pending] of entries) {
       const persisted = pending.persisted
       if (!persisted) {
-        pending.reject(new Error('Sync worker failed before durable command identity was confirmed.'))
+        pending.reject(transportError('Sync worker failed before durable command identity was confirmed.'))
         continue
       }
       // COMMAND_PERSISTED can race the worker's socket write. Once the worker
       // itself is gone the main thread cannot prove the command stayed local,
       // so retain IndexedDB state and require STATUS recovery instead of HTTP.
-      pending.reject(new Error('Sync worker failed after command persistence; durable recovery is required.'))
+      pending.reject(transportError('Sync worker failed after command persistence; durable recovery is required.'))
     }
-    this.rejectAllBarriers(new Error('Sync worker failed during an acknowledgement barrier.'))
+    this.rejectAllBarriers(transportError('Sync worker failed during an acknowledgement barrier.'))
   }
 
   private rejectAllBarriers(error: Error): void {
@@ -2433,7 +2482,7 @@ function normalizeAuthenticatedRpcRequest(request: AuthenticatedRpcStreamRequest
   try {
     const parsed = new URL(request.path, 'http://rpc.invalid')
     if (parsed.origin !== 'http://rpc.invalid' || `${parsed.pathname}${parsed.search}` !== request.path) {
-      throw new Error('non-canonical path')
+      throw transportError('non-canonical path')
     }
   } catch {
     throw new AuthenticatedRpcError('INVALID_PATH', false, true)
@@ -2496,11 +2545,11 @@ function normalizeAuthenticatedRpcRequest(request: AuthenticatedRpcStreamRequest
 
 function decodeRpcBase64(value: string, expectedLength: number): Uint8Array {
   if (value.length % 4 !== 0 || (value.length > 0 && !/^[A-Za-z0-9+/]+={0,2}$/u.test(value))) {
-    throw new Error('Invalid RPC base64 chunk.')
+    throw transportError('Invalid RPC base64 chunk.')
   }
   const decoded = globalThis.atob(value)
   if (decoded.length !== expectedLength) {
-    throw new Error('RPC chunk length mismatch.')
+    throw transportError('RPC chunk length mismatch.')
   }
   const bytes = new Uint8Array(decoded.length)
   for (let index = 0; index < decoded.length; index++) {

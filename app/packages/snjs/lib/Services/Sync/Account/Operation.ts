@@ -1,5 +1,10 @@
 import { ServerSyncPushContextualPayload } from '@standardnotes/models'
-import { arrayByDifference, nonSecureRandomIdentifier, subtractFromArray } from '@standardnotes/utils'
+import {
+  arrayByDifference,
+  authoredLogMessage,
+  nonSecureRandomIdentifier,
+  subtractFromArray,
+} from '@standardnotes/utils'
 import { ServerSyncResponse } from '@Lib/Services/Sync/Account/Response'
 import { ResponseSignalReceiver, SyncSignal } from '@Lib/Services/Sync/Signals'
 import { LegacyApiService } from '../../Api/ApiService'
@@ -298,7 +303,9 @@ export class AccountSyncOperation {
         return { recoveredCount, hasError: false }
       }
       if (attempt === MaxPendingTransportRecoveries) {
-        throw new Error('Durable sync recovery exceeded its bounded command limit.')
+        // Authored literal, so the message may be logged: a recovery that fails with
+        // no message was a production log line that could not be acted on.
+        throw authoredLogMessage(new Error('Durable sync recovery exceeded its bounded command limit.'))
       }
 
       const recoveredPayloads = transportResult.request.items as ServerSyncPushContextualPayload[]

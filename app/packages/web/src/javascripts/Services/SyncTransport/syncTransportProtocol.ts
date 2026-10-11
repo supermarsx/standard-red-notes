@@ -1005,6 +1005,19 @@ export type SyncWorkerToMainMessage =
   | { type: 'RESULT'; clientRequestId: string; commandId: string; result: unknown }
   | { type: 'RECOVERY_EMPTY'; clientRequestId: string }
   | { type: 'RECOVERY_REQUIRED'; clientRequestId: string }
+  /**
+   * There IS a durable command in the shared outbox, and it is not this tab's to
+   * reconcile: another tab of this account holds the lane, so only that tab can ask
+   * STATUS for it. Resolved like `RECOVERY_EMPTY` — this tab recovered nothing and its
+   * ordinary sync may proceed — and kept a separate message because the two facts are
+   * different ones. Telling them apart is what makes a deferral legible as "waiting for
+   * a sibling tab" instead of "the outbox was empty".
+   *
+   * Deliberately NOT `RECOVERY_REQUIRED`: that rejects the caller, and
+   * `SyncService.performSync` abandons the whole sync — uploads included — when the
+   * recovery phase throws.
+   */
+  | { type: 'RECOVERY_DEFERRED'; clientRequestId: string; reason: SyncFallbackReason }
   | {
       type: 'COLLABORATION_RESULT'
       clientRequestId: string

@@ -850,6 +850,43 @@ export class SyncTransportWorkerRuntime {
         this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
         return
       }
+      /**
+       * *** A RECORD THIS TAB CAN READ IS NOT A RECORD THIS TAB CAN RECONCILE. ***
+       *
+       * The outbox is one IndexedDB store shared by every tab of the origin, so a
+       * SIBLING tab's in-flight command is visible here — and adopting one is a dead
+       * end for a tab that does not hold the lane. Reconciling a dispatched command
+       * means asking STATUS for it, which needs the socket the other tab is holding;
+       * and `multi-tab-not-owner` is deliberately not a reason that permits the
+       * identity-bearing HTTP replay (see `journalIdempotentReplay`) precisely because
+       * a socket WILL exist for it again. So the adoption could only ever end in
+       * `requireDurableRecovery`, whose `RECOVERY_REQUIRED` the main thread turns into
+       * a rejection — and `SyncService.performSync` abandons the WHOLE sync when the
+       * recovery phase throws, uploads and the durability-critical pre-sync save
+       * included. One account with two tabs open therefore had a second tab that
+       * logged `Sync transport recovery failed before collecting uploads` and uploaded
+       * nothing, once per sync, for as long as the lease holder had a command in
+       * flight.
+       *
+       * Deferring is not a delay in the reconciliation: the lease holder is the one tab
+       * that CAN ask STATUS, it runs this same probe before each of its own syncs, and
+       * it adopts whatever the store holds for the session — its own record or an
+       * orphan from a tab that died. This tab meanwhile syncs over HTTP exactly as it
+       * does for every other `multi-tab-not-owner` request.
+       *
+       * `replayOverHttp` is checked first and wins: it says no socket exists for this
+       * session AT ALL (the http-only switch, no websocket URL, an unusable page
+       * origin), so no tab can ask STATUS and deferring would park the record behind a
+       * reconciliation that is never coming.
+       */
+      if (!replayOverHttp && (await this.socketOwnedByAnotherTab(sessionScope))) {
+        this.dependencies.postMessage({
+          type: 'RECOVERY_DEFERRED',
+          clientRequestId,
+          reason: 'multi-tab-not-owner',
+        })
+        return
+      }
       const recoveredBody = parseStoredBody(record)
       if (!recoveredBody) {
         this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
@@ -916,7 +953,23 @@ export class SyncTransportWorkerRuntime {
     }
     try {
       const stale = await this.outbox.oldest(sessionScope)
-      if (stale) {
+      /**
+       * The same shared-store confusion as in `recover`, on the leg that costs the
+       * uploads. This refusal exists so a command of THIS tab that may be in flight is
+       * reconciled before a second, HTTP owner is created for it — but the store is
+       * shared across tabs, so the record it finds is just as likely the LANE HOLDER's
+       * live command, which this tab can neither ask STATUS for nor replay. Refusing
+       * then is not caution: the lane holder is already reconciling its own command,
+       * while this tab's dirty items sit unuploaded behind a verdict about someone
+       * else's work. An ordinary HTTP sync from a tab that is not the socket owner is
+       * what every other request from it does anyway.
+       *
+       * Deliberately the lease and not `record.dispatchedAt`: a record is only not ours
+       * to reconcile when another tab holds the lane. With no live sibling lease the
+       * record is this tab's own (or an orphan nobody else will touch) and the refusal
+       * stands — which is the case this check was written for.
+       */
+      if (stale && !(await this.socketOwnedByAnotherTab(sessionScope))) {
         this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
         return
       }

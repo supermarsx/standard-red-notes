@@ -30,6 +30,10 @@ describe('SNLog', () => {
         errorType: 'Error',
         errorCode: undefined,
         status: undefined,
+        // Frames rebuilt from allowlisted pieces — a basename, a line and a column — so
+        // the throw site survives while the message header and the absolute paths
+        // around it do not. See `SafeLog.spec.ts`.
+        stack: expect.stringMatching(/^at /),
       },
     )
     expect(JSON.stringify((SNLog.onLog as jest.Mock).mock.calls)).not.toContain('opaque-error-sentinel')

@@ -1810,6 +1810,139 @@ describe('SyncTransportWorkerRuntime', () => {
     )
   })
 
+  /**
+   * *** TWO TABS, BOTH ALIVE. *** Every other cross-tab test in this file shuts the
+   * first tab down before the second one looks, so no test could see the state the
+   * user hit: a sibling tab STILL HOLDING the lane with a command in flight.
+   *
+   * The outbox is one store shared by every tab of the origin. The second tab's
+   * pre-sync recovery probe therefore reads the lane holder's live record — and it can
+   * neither ask STATUS for it (the socket is the other tab's) nor replay it over HTTP
+   * (`multi-tab-not-owner` is deferred, not permanent, so the journal-idempotent replay
+   * is deliberately withheld). Before this fix it adopted the record anyway and ended at
+   * `requireDurableRecovery`; the main thread turns that `RECOVERY_REQUIRED` into a
+   * rejection, and `SyncService.performSync` abandons the whole sync when the recovery
+   * phase throws — uploads and the pre-sync save included. The second tab logged
+   * `Sync transport recovery failed before collecting uploads` and uploaded nothing,
+   * once per sync, for as long as the lease holder's record sat in the store.
+   */
+  it('defers a LIVE sibling tab in-flight command instead of failing every sync behind it', async () => {
+    const shared = new FakeOutbox()
+    const owner = setup(shared)
+    const ownerSocket = await authorize(owner)
+    const inFlight = JSON.parse(ownerSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+    }
+
+    const second = setup(shared)
+    await second.runtime.handle({ type: 'RECOVER', clientRequestId: 'recover-1', sessionScope: SESSION_A })
+    await flush()
+
+    expect(second.messages).toEqual([
+      { type: 'RECOVERY_DEFERRED', clientRequestId: 'recover-1', reason: 'multi-tab-not-owner' },
+    ])
+    // Not adopted: no COMMAND_PERSISTED for someone else's command, and no `active`
+    // left behind that the next request in this tab would queue behind forever.
+    expect(second.messages).not.toContainEqual(expect.objectContaining({ type: 'COMMAND_PERSISTED' }))
+
+    // And the upload leg must get through, which is the point of the whole fix.
+    await second.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'execute-1',
+      body: body('b'),
+      sessionScope: SESSION_A,
+    })
+    await flush()
+
+    expect(second.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
+    expect(second.messages).toContainEqual({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: 'execute-1',
+      reason: 'multi-tab-not-owner',
+      body: body('b'),
+    })
+    // The lane holder's record is untouched, because reconciling it is its job.
+    expect(shared.records.get(inFlight.commandId)).toEqual(
+      expect.objectContaining({ commandId: inFlight.commandId, dispatchedAt: expect.any(Number) }),
+    )
+    expect(ownerSocket.readyState).toBe(1)
+  })
+
+  /**
+   * The deferral is scoped to a LIVE sibling lease and nothing else. A record left by a
+   * tab that died — the case durable recovery exists for — must still be recovered here,
+   * or this fix would trade a stalled tab for an unreconciled command.
+   */
+  it('still recovers a record once no live lease stands for it', async () => {
+    const shared = new FakeOutbox()
+    const owner = setup(shared)
+    const ownerSocket = await authorize(owner)
+    const inFlight = JSON.parse(ownerSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+      digest: string
+      sequence: number
+    }
+
+    /**
+     * The lane holder's row AGES OUT without being handed back: a tab that was killed
+     * or frozen mid-command, which is the `lapsed` verdict `ownerRenewalOutcome`
+     * distinguishes from `taken`. Written into the store rather than reached by
+     * advancing the clock, because advancing it also runs the owner's 5 s renewal and a
+     * tab that is still renewing has not lapsed at all.
+     */
+    for (const [transportScope, lease] of shared.owners) {
+      shared.owners.set(transportScope, { ...lease, expiresAt: Date.now() - 1 })
+    }
+
+    const second = setup(shared)
+    await second.runtime.handle({ type: 'RECOVER', clientRequestId: 'recover-1', sessionScope: SESSION_A })
+    await flush()
+
+    expect(second.messages.some((message) => message.type === 'RECOVERY_DEFERRED')).toBe(false)
+    expect(second.messages).toContainEqual(
+      expect.objectContaining({ type: 'COMMAND_PERSISTED', clientRequestId: 'recover-1' }),
+    )
+    expect(shared.records.get(inFlight.commandId)).toBeDefined()
+
+    // ...and the same for the leg that refuses a new command while one is unreconciled.
+    const third = setup(shared)
+    await third.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'execute-1',
+      body: body('c'),
+      sessionScope: SESSION_A,
+    })
+    await flush()
+
+    expect(third.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'execute-1' })
+  })
+
+  /**
+   * `replayOverHttp` says no socket exists for this session at all — the http-only
+   * switch, no websocket URL, an unusable page origin. Then NO tab can ask STATUS, so
+   * deferring would park the record behind a reconciliation that is never coming. The
+   * identity-bearing HTTP replay has to win over the deferral.
+   */
+  it('replays over HTTP rather than deferring when the lane is ruled out for the session', async () => {
+    const shared = new FakeOutbox()
+    const owner = setup(shared)
+    await authorize(owner)
+
+    const second = setup(shared)
+    await second.runtime.handle({
+      type: 'RECOVER',
+      clientRequestId: 'recover-1',
+      sessionScope: SESSION_A,
+      replayOverHttp: 'http-only',
+    })
+    await flush()
+
+    expect(second.messages.some((message) => message.type === 'RECOVERY_DEFERRED')).toBe(false)
+    expect(second.messages).toContainEqual(
+      expect.objectContaining({ type: 'HTTP_FALLBACK', clientRequestId: 'recover-1', reason: 'http-only' }),
+    )
+  })
+
   it('isolates recovery by authenticated session scope and ignores legacy unscoped records', async () => {
     const shared = new FakeOutbox()
     const first = setup(shared)
