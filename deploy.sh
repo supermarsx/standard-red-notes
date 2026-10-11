@@ -6,16 +6,26 @@
 # stamped with the exact commit, brings the Docker Compose stack up, and then
 # PROVES the stack actually booted. A green build is not a running server.
 #
+# Two modes, detected automatically and announced before anything happens:
+#
+#   SETUP   no .env yet. Generates one by running scripts/setup.sh, then builds,
+#           starts and verifies. Nothing to back up on a first install.
+#   UPDATE  .env exists. Pulls, backs up the database, rebuilds, restarts and
+#           verifies. Safe to run twice; it reseeds nothing and never edits .env.
+#
 # Usage:
-#   ./deploy.sh                      # pull, back up, build, up, verify
+#   ./deploy.sh                      # detect the mode and do the right thing
 #   ./deploy.sh --dry-run            # print every command, change nothing
 #   ./deploy.sh --yes                # non-interactive (no confirmation prompt)
 #   ./deploy.sh --single             # the all-in-one docker-compose.single.yml
 #   ./deploy.sh --no-pull            # deploy the checked-out revision as-is
 #   ./deploy.sh --no-backup          # skip the pre-deploy database backup
+#   ./deploy.sh --proxy-network      # sit behind an external reverse proxy
 #
 # Flags:
 #   -h, --help              Show this help and exit.
+#       --setup             Force the first-install path. Refuses if .env exists.
+#       --update            Force the update path. Refuses if .env is missing.
 #       --single            Deploy docker-compose.single.yml (all-in-one, SQLite).
 #   -f, --file PATH         Deploy an explicit Compose file instead.
 #   -p, --project NAME      Compose project name (COMPOSE_PROJECT_NAME).
@@ -54,6 +64,7 @@ ENV_FILE="${REPO_ROOT}/.env"
 # ---------------------------------------------------------------------------
 ASSUME_YES=0
 DRY_RUN=0
+FORCE_MODE=""
 DO_PULL=1
 DO_BACKUP=1
 SINGLE=0
@@ -86,6 +97,8 @@ need_value() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) show_help; exit 0 ;;
+    --setup) FORCE_MODE="setup" ;;
+    --update) FORCE_MODE="update" ;;
     --single) SINGLE=1 ;;
     -f|--file) need_value "$1" "${2:-}"; COMPOSE_FILE="$2"; shift ;;
     -p|--project) need_value "$1" "${2:-}"; PROJECT_NAME="$2"; shift ;;
@@ -237,18 +250,10 @@ if ! docker info >/dev/null 2>&1; then
 fi
 ok "Found Git, Docker, and Compose (${COMPOSE[*]})."
 
-if [ ! -f "$ENV_FILE" ]; then
-  err "No .env at ${ENV_FILE}."
-  err "This script never creates or edits .env. Generate one first:"
-  err "    ./scripts/setup.sh"
-  err "Then re-run this script."
-  exit 1
-fi
 if [ ! -f "$COMPOSE_FILE" ]; then
   err "Compose file not found: ${COMPOSE_FILE}"
   exit 1
 fi
-ok "Using .env at ${ENV_FILE}"
 ok "Using Compose file ${COMPOSE_FILE}"
 
 if [ -n "$PROJECT_NAME" ]; then
@@ -256,9 +261,6 @@ if [ -n "$PROJECT_NAME" ]; then
   info "Compose project name: ${COMPOSE_PROJECT_NAME}"
 fi
 
-# `config --quiet` parses the file and resolves every interpolation. Output goes
-# to a file, never a pipe: a pipeline's exit status belongs to the last command,
-# so `config | tail` reports tail's success over a parse failure.
 CONFIG_LOG="$(mktemp)"
 CLEANUP_FILES=("$CONFIG_LOG")
 cleanup() {
@@ -270,12 +272,21 @@ cleanup() {
 trap cleanup EXIT
 trap 'cleanup; exit 130' HUP INT TERM
 
-if ! compose_query config --quiet >"$CONFIG_LOG" 2>&1; then
-  err "'${COMPOSE[*]} -f ${COMPOSE_FILE} config' failed to parse:"
-  cat "$CONFIG_LOG" >&2
-  exit 1
-fi
-ok "Compose configuration parses."
+# `config --quiet` parses the file and resolves every interpolation. Output goes
+# to a file, never a pipe: a pipeline's exit status belongs to the last command,
+# so `config | tail` reports tail's success over a parse failure.
+#
+# This is a function because interpolation needs .env, so on the setup path it
+# cannot run until scripts/setup.sh has written one. On the update path it still
+# runs before anything is pulled or built.
+validate_compose_configuration() {
+  if ! compose_query config --quiet >"$CONFIG_LOG" 2>&1; then
+    err "'${COMPOSE[*]} -f ${COMPOSE_FILE}' configuration failed to parse:"
+    cat "$CONFIG_LOG" >&2
+    return 1
+  fi
+  ok "Compose configuration parses."
+}
 
 # ---------------------------------------------------------------------------
 # Operator settings that silently destroy work rather than failing loudly.
@@ -283,42 +294,180 @@ ok "Compose configuration parses."
 # choice. They are printed BEFORE the build so they are still on screen when
 # the deploy finishes.
 # ---------------------------------------------------------------------------
-SMTP_HOST_VALUE="$(env_value SMTP_HOST)"
-SMTP_FROM_VALUE="$(env_value SMTP_FROM)"
-EMAIL_CONFIRMATION_VALUE="$(env_value REGISTRATION_EMAIL_CONFIRMATION)"
-INSECURE_DEFAULTS_VALUE="$(env_value ALLOW_INSECURE_DEFAULTS)"
-MAIL_CONFIGURED=1
-if [ -z "$SMTP_HOST_VALUE" ] || [ -z "$SMTP_FROM_VALUE" ]; then
-  MAIL_CONFIGURED=0
+WARNING_COUNT=0
+note_warning() {
+  WARNING_COUNT=$((WARNING_COUNT + 1))
+  warn "$1"
+  shift
+  local line
+  for line in "$@"; do
+    warn "  ${line}"
+  done
+}
+
+report_configuration_warnings() {
+  local smtp_host smtp_from email_confirmation insecure_defaults mail_configured
+  smtp_host="$(env_value SMTP_HOST)"
+  smtp_from="$(env_value SMTP_FROM)"
+  email_confirmation="$(env_value REGISTRATION_EMAIL_CONFIRMATION)"
+  insecure_defaults="$(env_value ALLOW_INSECURE_DEFAULTS)"
+  mail_configured=1
+  if [ -z "$smtp_host" ] || [ -z "$smtp_from" ]; then
+    mail_configured=0
+  fi
+
+  title "Configuration warnings"
+  if [ "$mail_configured" -eq 0 ]; then
+    note_warning "SMTP_HOST and/or SMTP_FROM are unset in .env." \
+      "Every email this deployment produces -- collaboration invites, email" \
+      "backups, confirmations, password-change notices -- is DESTROYED rather" \
+      "than queued for later. There is no retry once mail is configured."
+  fi
+  if [ "$email_confirmation" = "true" ] && [ "$mail_configured" -eq 0 ]; then
+    note_warning "REGISTRATION_EMAIL_CONFIRMATION=true with no mail relay configured." \
+      "New accounts can never receive their confirmation mail, so they stay" \
+      "unconfirmed and are refused with 403 permanently. Either configure" \
+      "SMTP_HOST/SMTP_FROM or set REGISTRATION_EMAIL_CONFIRMATION=false."
+  fi
+  if [ "$insecure_defaults" = "true" ]; then
+    note_warning "ALLOW_INSECURE_DEFAULTS=true in .env." \
+      "The stack will boot with PUBLISHED default signing/encryption secrets." \
+      "Safe only for a throwaway local instance that is not reachable from" \
+      "the internet. Never for a real deployment."
+  fi
+
+  if [ "$WARNING_COUNT" -eq 0 ]; then
+    ok "No known-destructive configuration gaps found in .env."
+  else
+    warn "${WARNING_COUNT} warning(s). These do not block the deploy."
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 1b. Which mode is this?
+#
+# The signal is .env. It is the single artifact scripts/setup.sh produces, the
+# one thing the stack cannot start without, and the only piece of state whose
+# absence genuinely means "nothing has been installed here yet". Container and
+# volume existence is NOT the signal -- a stopped stack, a pruned host and a
+# fresh clone of an existing deployment all have no containers while being very
+# much installed.
+#
+# But .env missing while this project still owns containers or volumes is not a
+# first install, it is a deployment whose .env was lost. Generating a new one
+# there would mint a new AUTH_SERVER_ENCRYPTION_SERVER_KEY and orphan every
+# encrypted row behind it, so that combination is refused rather than guessed.
+# ---------------------------------------------------------------------------
+derive_project_name() {
+  # Compose derives the default project name from the project directory name,
+  # lowercased with everything outside [a-z0-9_-] dropped. Containers are
+  # checked authoritatively with `compose ps -a -q`; this derivation is only
+  # needed to look for volumes when no container exists.
+  if [ -n "${COMPOSE_PROJECT_NAME:-}" ]; then
+    printf '%s' "$COMPOSE_PROJECT_NAME"
+    return 0
+  fi
+  basename -- "$(dirname -- "$COMPOSE_FILE")" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]//g'
+}
+
+existing_project_containers() {
+  compose_query ps -a -q 2>/dev/null || true
+}
+
+existing_project_volumes() {
+  local project
+  project="$(derive_project_name)"
+  [ -n "$project" ] || return 0
+  docker volume ls -q --filter "label=com.docker.compose.project=${project}" 2>/dev/null || true
+}
+
+title "Mode"
+# Read the evidence once and report THAT, rather than a sentence derived from
+# the mode. With --setup or --update the mode is an instruction, not a finding,
+# and "detected from: .env exists" printed next to a missing .env is a claim
+# nothing checked.
+if [ -f "$ENV_FILE" ]; then
+  ENV_PRESENT=1
+  ENV_EVIDENCE=".env exists at ${ENV_FILE}"
+else
+  ENV_PRESENT=0
+  ENV_EVIDENCE="no .env at ${ENV_FILE}"
 fi
 
-title "Configuration warnings"
-WARNING_COUNT=0
-if [ "$MAIL_CONFIGURED" -eq 0 ]; then
-  WARNING_COUNT=$((WARNING_COUNT + 1))
-  warn "SMTP_HOST and/or SMTP_FROM are unset in .env."
-  warn "  Every email this deployment produces -- collaboration invites, email"
-  warn "  backups, confirmations, password-change notices -- is DESTROYED rather"
-  warn "  than queued for later. There is no retry once mail is configured."
-fi
-if [ "$EMAIL_CONFIRMATION_VALUE" = "true" ] && [ "$MAIL_CONFIGURED" -eq 0 ]; then
-  WARNING_COUNT=$((WARNING_COUNT + 1))
-  warn "REGISTRATION_EMAIL_CONFIRMATION=true with no mail relay configured."
-  warn "  New accounts can never receive their confirmation mail, so they stay"
-  warn "  unconfirmed and are refused with 403 permanently. Either configure"
-  warn "  SMTP_HOST/SMTP_FROM or set REGISTRATION_EMAIL_CONFIRMATION=false."
-fi
-if [ "$INSECURE_DEFAULTS_VALUE" = "true" ]; then
-  WARNING_COUNT=$((WARNING_COUNT + 1))
-  warn "ALLOW_INSECURE_DEFAULTS=true in .env."
-  warn "  The stack will boot with PUBLISHED default signing/encryption secrets."
-  warn "  Safe only for a throwaway local instance that is not reachable from"
-  warn "  the internet. Never for a real deployment."
-fi
-if [ "$WARNING_COUNT" -eq 0 ]; then
-  ok "No known-destructive configuration gaps found in .env."
+if [ -n "$FORCE_MODE" ]; then
+  MODE="$FORCE_MODE"
+elif [ "$ENV_PRESENT" -eq 1 ]; then
+  MODE="update"
 else
-  warn "${WARNING_COUNT} warning(s). These do not block the deploy."
+  MODE="setup"
+fi
+
+if [ "$MODE" = "setup" ]; then
+  ok "SETUP (first install): generate .env, then build, start and verify."
+else
+  ok "UPDATE: pull, back up, rebuild, restart and verify."
+fi
+if [ -n "$FORCE_MODE" ]; then
+  info "  Forced with --${FORCE_MODE}; evidence on disk: ${ENV_EVIDENCE}"
+else
+  info "  Detected from: ${ENV_EVIDENCE}"
+fi
+
+if [ "$MODE" = "update" ] && [ "$ENV_PRESENT" -eq 0 ]; then
+  err "--update was requested but there is no .env at ${ENV_FILE}."
+  err "  Run this script without --update (or with --setup) to generate one."
+  exit 1
+fi
+
+if [ "$MODE" = "setup" ] && [ "$ENV_PRESENT" -eq 1 ]; then
+  # The loud refusal. scripts/setup.sh has a --force-overwrite that rewrites an
+  # existing .env, and this script will NEVER reach for it: that flag
+  # regenerates AUTH_SERVER_ENCRYPTION_SERVER_KEY unconditionally, and every
+  # note, file and setting already encrypted under the old key becomes
+  # unreadable with no way back. A deploy script must not be able to do that.
+  err "REFUSING to run the setup path: .env already exists at ${ENV_FILE}."
+  err ""
+  err "  Setup generates fresh secrets. Replacing the existing"
+  err "  AUTH_SERVER_ENCRYPTION_SERVER_KEY would ORPHAN every encrypted row"
+  err "  already in this deployment -- notes, files and settings become"
+  err "  permanently unreadable, and no rebuild or restore of the database"
+  err "  brings them back without the original key."
+  err ""
+  err "  This script never passes --force-overwrite to scripts/setup.sh, and"
+  err "  will not overwrite .env itself."
+  err ""
+  err "  To update this deployment instead:   ./deploy.sh --update"
+  err "  To add only a missing assistant key: ./scripts/setup.sh --generate-assistant-subscription-key"
+  exit 1
+fi
+
+if [ "$MODE" = "setup" ]; then
+  LOST_ENV_CONTAINERS="$(existing_project_containers)"
+  LOST_ENV_VOLUMES="$(existing_project_volumes)"
+  if [ -n "$LOST_ENV_CONTAINERS" ] || [ -n "$LOST_ENV_VOLUMES" ]; then
+    err "REFUSING to treat this as a first install."
+    err ""
+    err "  There is no .env, but this Compose project still owns:"
+    if [ -n "$LOST_ENV_CONTAINERS" ]; then
+      err "    containers: $(printf '%s' "$LOST_ENV_CONTAINERS" | tr '\n' ' ')"
+    fi
+    if [ -n "$LOST_ENV_VOLUMES" ]; then
+      err "    volumes:    $(printf '%s' "$LOST_ENV_VOLUMES" | tr '\n' ' ')"
+    fi
+    err ""
+    err "  That is a deployment whose .env was lost, not a new one. Generating"
+    err "  fresh secrets would orphan the encrypted data in those volumes."
+    err "  Restore .env from your backup first; see docs/backups-and-recovery.md."
+    err "  Recover a complete prior environment with: npm run recover:database"
+    exit 1
+  fi
+fi
+
+# On the update path everything needed to parse the configuration is already
+# present, so fail fast before pulling or building.
+if [ "$MODE" = "update" ]; then
+  validate_compose_configuration || exit 1
+  report_configuration_warnings
 fi
 
 # ---------------------------------------------------------------------------
@@ -416,6 +565,62 @@ if ! [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 3b. First install: generate .env by running the repository's own setup script.
+#
+# Reused, not reimplemented -- scripts/setup.sh already generates every secret
+# at the right length (AUTH_SERVER_ENCRYPTION_SERVER_KEY must be exactly 32
+# bytes of hex or auth refuses to boot), validates an existing environment and
+# supports --yes. Duplicating that here would be a second copy of the same
+# rules, drifting.
+#
+# Deliberately NOT passed:
+#   --force-overwrite  destroys the encryption key; see the refusal above.
+#   --up               this script does the build, start and verification, with
+#                      a content-based dirty check. setup.sh --up refuses on
+#                      `git status --porcelain`, which reports ~157 files
+#                      modified in this tree forever with zero content
+#                      difference, so inheriting it would make the setup path
+#                      impossible to run here.
+# ---------------------------------------------------------------------------
+if [ "$MODE" = "setup" ]; then
+  title "First install"
+  SETUP_SCRIPT="${REPO_ROOT}/scripts/setup.sh"
+  if [ ! -f "$SETUP_SCRIPT" ]; then
+    err "Cannot run the setup path: ${SETUP_SCRIPT} is missing."
+    exit 1
+  fi
+
+  SETUP_ARGS=()
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    SETUP_ARGS+=(--yes)
+  else
+    info "scripts/setup.sh runs interactively now. When it asks whether to start"
+    info "the stack, answer NO -- this script builds, starts and verifies it"
+    info "immediately afterwards, and would otherwise do it twice."
+  fi
+
+  # ${arr[@]+...}: under `set -u`, bash 3.2 (still the system bash on macOS,
+  # which scripts/setup.sh explicitly supports) treats an empty array expansion
+  # as an unbound variable and aborts. This is the portable form.
+  if ! run bash "$SETUP_SCRIPT" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}; then
+    err "scripts/setup.sh failed; nothing has been built or started."
+    err "  If it failed while starting the stack, .env may still have been"
+    err "  written. Re-run this script: it will then take the update path."
+    exit 1
+  fi
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    if [ ! -f "$ENV_FILE" ]; then
+      err "scripts/setup.sh reported success but wrote no .env at ${ENV_FILE}."
+      exit 1
+    fi
+    ok "Generated ${ENV_FILE}"
+    validate_compose_configuration || exit 1
+    report_configuration_warnings
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Back up before the build.
 #
 # Database migrations run when the container boots. That is the one part of a
@@ -431,7 +636,9 @@ fi
 # ---------------------------------------------------------------------------
 title "Pre-deploy backup"
 BACKUP_FILE=""
-if [ "$DO_BACKUP" -eq 0 ]; then
+if [ "$MODE" = "setup" ]; then
+  info "First install: there is no existing data to back up. Skipping."
+elif [ "$DO_BACKUP" -eq 0 ]; then
   warn "--no-backup: skipping the pre-deploy backup."
   warn "  Migrations run on container boot and a rebuild does not undo them."
 else
