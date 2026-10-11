@@ -289,7 +289,7 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
           /proxy_set_header X-Forwarded-For \$srn_forwarded_for;/g,
         ) ?? []
       ).length,
-      4,
+      5,
       `${relativePath}: every backend route must use the sanitized forwarding value`,
     );
     assert.doesNotMatch(
@@ -336,7 +336,7 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
           /proxy_set_header X-Forwarded-Proto \$srn_forwarded_proto;/g,
         ) ?? []
       ).length,
-      4,
+      5,
       relativePath,
     );
     assert.doesNotMatch(
@@ -376,7 +376,7 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
         /proxy_set_header X-Forwarded-For \\\$remote_addr;/g,
       ) ?? []
     ).length,
-    3,
+    4,
     "LXC public nginx must overwrite X-Forwarded-For on every backend route",
   );
   assert.doesNotMatch(

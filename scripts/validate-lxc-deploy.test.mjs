@@ -580,7 +580,7 @@ function validate(files) {
   }
   if (
     occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !==
-      3 ||
+      4 ||
     installer.includes("ENFORCE_HTTPS_FROM_PROXY") ||
     installer.includes("srn_hsts_header") ||
     installer.includes("srn_redirect_to_https")
