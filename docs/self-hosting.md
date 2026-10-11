@@ -427,6 +427,70 @@ trust the proxy's forwarded headers and the cookie must be marked Secure:
 > from the `X-Forwarded-*` headers when "trust proxy" is configured. Without it,
 > the server thinks every request is plain HTTP from the proxy's address.
 
+### Attaching to the proxy's Docker network
+
+If the proxy is itself a container - Nginx Proxy Manager, Traefik, a Caddy
+container - it can reach the app over a shared Docker network by name, and then
+no host port needs publishing at all. `docker-compose.proxy.yml` is an overlay
+that does exactly that, applied on top of `docker-compose.yml` so the base file
+stays upgradable:
+
+```bash
+# Find the network your proxy already uses
+docker network ls
+
+# Deploy onto it (the deploy script applies the overlay for you)
+./deploy.sh --proxy-network=npm_default
+
+# Or by hand
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+```
+
+Then point the proxy at `http://standard-red-notes-app:8080`. Compose also
+registers the plain service name `app` as an alias, but `app` is a name many
+stacks on a shared proxy network will claim, so prefer the explicit one. Set
+`SRN_PROXY_ALIAS` to change it, and `SRN_PROXY_NETWORK` if you are applying the
+overlay without the deploy script.
+
+The overlay makes three changes:
+
+- **`app` joins the external network, in addition to the internal one.** It
+  still needs `standard-red-notes` to reach the server, database and cache.
+- **Nothing else joins it.** A proxy network is shared with every other
+  container that proxy serves, so anything on it is reachable by all of them.
+  `db`, `cache`, `floci`, `server`, `mcp`, `n8n` and `docker-socket-proxy` stay
+  internal. Nothing is lost: the app container's nginx is the single front door
+  and already proxies every backend path same-origin, so one upstream is all a
+  proxy ever needs.
+- **The published host port is removed.** Behind a proxy, a port on every host
+  interface is a second front door that bypasses it - no TLS, no proxy auth, no
+  access log. Add `--publish-ports` (or
+  `-f docker-compose.proxy-publish.yml`) to keep a `127.0.0.1`-only port for
+  local debugging as well.
+
+The network must already exist. `./deploy.sh` will not create one unless you
+pass `--create-network`, because a proxy normally brings its own and a second
+network with the same purpose leaves a stack that looks deployed and is
+unreachable. Your proxy container has to be on the network too:
+
+```bash
+docker network connect npm_default <your-proxy-container>
+```
+
+{% include safety-alert.html
+  level="caution"
+  title="Enable websocket support on the proxy host entry"
+  body="Realtime sync opens wss://your-host/sockets and wss://your-host/sockets/sync. If the proxy does not pass the Upgrade and Connection headers through, those connections fail while every HTTP health check stays green - the deployment looks perfectly healthy and realtime silently does not work. In Nginx Proxy Manager this is the Websockets Support toggle on the proxy host."
+%}
+
+`PUBLIC_URL` and `PUBLIC_FILES_SERVER_URL` are the other two silent ones. Left
+at `http://localhost:3001`, the gateway hands browsers links, redirects and
+file URLs pointing at the container instead of your domain, and the websocket
+origin allowlist derived from `PUBLIC_URL` rejects your real origin. `./deploy.sh
+--proxy-network` warns about these, and about `ENFORCE_HTTPS_FROM_PROXY` and
+`TRUST_PROXY` disagreeing with the rest of the configuration, but it never
+edits `.env`.
+
 ### Standard Red Notes external host
 
 Route the whole hostname to the app front door (`app` container, host port
@@ -866,6 +930,16 @@ git pull
 docker compose pull            # refresh mariadb / redis / floci images
 docker compose up -d --build   # rebuild app/server/gateway and restart
 ```
+
+`./deploy.sh` does that upgrade sequence as one command, and checks the
+result: it fast-forwards the checkout (`--ff-only`, so a diverged branch fails
+loudly instead of producing a merge commit), takes a logical database backup
+and refuses to continue if the dump is truncated, rebuilds with the images
+stamped with the exact commit, and then waits for the healthchecks, makes a
+real request to the readiness endpoint and confirms the live deployment
+identity is the commit it just built. On a host with no `.env` it runs
+`scripts/setup.sh` first; it never overwrites an existing one. `--dry-run`
+prints every command it would run, and `./deploy.sh --help` lists the flags.
 
 This source-build path remains the default. `./scripts/setup.sh --up` and
 `./scripts/setup.ps1 -Up` still build the checked-out `app` and `server`

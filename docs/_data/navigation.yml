@@ -529,6 +529,8 @@
               url: /self-hosting.html#running-behind-a-reverse-proxy
             - title: Required environment
               url: /self-hosting.html#required-environment
+            - title: Proxy Docker network
+              url: /self-hosting.html#attaching-to-the-proxys-docker-network
             - title: External host
               url: /self-hosting.html#standard-red-notes-external-host
             - title: Worker WebSocket sync
