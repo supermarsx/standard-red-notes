@@ -13,7 +13,12 @@ import {
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import Icon from '@/Components/Icon/Icon'
 import MermaidSvgViewport from './MermaidSvgViewport'
-import { useFontFacesLoadedToken, useMermaidAppTheme, useMermaidLabelFontFamily } from './MermaidAppTheme'
+import {
+  readMermaidMeasurementContainer,
+  useFontFacesLoadedToken,
+  useMermaidAppTheme,
+  useMermaidLabelFontFamily,
+} from './MermaidAppTheme'
 import { resolveMermaidRenderTheme, resolveMermaidSurfaceColor, type MermaidRenderTheme } from './MermaidSettings'
 
 /**
@@ -177,6 +182,9 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
   // the editor's. See resolveMermaidLabelFontFamily in MermaidSettings.ts.
   const blockRef = useRef<HTMLDivElement>(null)
   const labelFontFamily = useMermaidLabelFontFamily(blockRef)
+  // The element mermaid MEASURES in — see the comment on the element itself,
+  // and readMermaidMeasurementContainer.
+  const measureRef = useRef<HTMLDivElement>(null)
   // A font face finishing loading — see useFontFacesLoadedToken.
   const fontFacesToken = useFontFacesLoadedToken()
 
@@ -227,7 +235,11 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
           fontFamily,
         })
         const id = `gantt-${nodeKey}-${renderSeq++}`
-        const { svg: rendered } = await mermaid.render(id, code)
+        // THE third argument: measure where the chart is drawn. `undefined`
+        // means mermaid's `document.body` path, which is all there is when the
+        // block has no layout (a collapsed foldable, a hidden pane).
+        const measureIn = readMermaidMeasurementContainer(measureRef.current)
+        const { svg: rendered } = await mermaid.render(id, code, measureIn)
         setSvg(rendered)
         setError(null)
       } catch (e) {
@@ -362,6 +374,21 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
           </div>
         ) : null}
       </div>
+
+      {/* WHERE MERMAID MEASURES — the same element the Mermaid block renders,
+          for the same reason. A gantt chart's task names go through
+          `calculateTextDimensions`, which measures in a throwaway `<svg>` of
+          its own under `document.body` whatever is passed here; what this does
+          change is the width the renderer sizes the chart from, which becomes
+          the block's instead of the window's. See
+          readMermaidMeasurementContainer. */}
+      <div
+        ref={measureRef}
+        data-mermaid-measure-host="true"
+        aria-hidden="true"
+        data-srn-print-exclude="true"
+        className="pointer-events-none invisible h-0 w-full"
+      />
     </div>
   )
 }

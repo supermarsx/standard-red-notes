@@ -56,8 +56,8 @@ import { act, createElement, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { $createMermaidNode, MermaidNode } from './MermaidNode'
 import { $createGanttChartNode, GanttChartNode } from './GanttChartNode'
-import { readMermaidLabelFontFamily, useFontFacesLoadedToken } from './MermaidAppTheme'
-import { MERMAID_LABEL_FONT_FALLBACK, resolveMermaidLabelFontFamily } from './MermaidSettings'
+import { readMermaidLabelFontFamily, readMermaidMeasurementContainer, useFontFacesLoadedToken } from './MermaidAppTheme'
+import { canMeasureMermaidIn, MERMAID_LABEL_FONT_FALLBACK, resolveMermaidLabelFontFamily } from './MermaidSettings'
 
 const DIAGRAM_SVG =
   '<svg id="m-1" width="100%" style="max-width: 600px;" viewBox="0 0 600 300" xmlns="http://www.w3.org/2000/svg"><g><rect width="10" height="10"/></g></svg>'
@@ -455,7 +455,16 @@ describe('what reaches mermaid.initialize from a real Gantt chart block', () => 
 
 describe('the text-shaping the SVG inherits from the editor, which mermaid did not measure in', () => {
   const editorScss = readFileSync(join(__dirname, '..', 'Theme', 'editor.scss'), 'utf8')
-  const hostRule = /\[data-mermaid-svg-host='true'\]\s*\{([^}]*)\}/s.exec(editorScss)?.[1] ?? ''
+  /**
+   * The rule has to name BOTH hosts. With the container argument in place and
+   * these declarations on the drawn host alone, the measuring element keeps the
+   * editor's values while the drawn one is reset — the same disagreement in the
+   * opposite direction, and measured in headless Chrome it reproduces the
+   * defect exactly (slot 410.64 x 48, label drawn 200 x 72). So the selector
+   * list is part of the contract, not formatting.
+   */
+  const RULE = /\[data-mermaid-svg-host='true'\],\s*\[data-mermaid-measure-host='true'\]\s*\{([^}]*)\}/s
+  const hostRule = RULE.exec(editorScss)?.[1] ?? ''
 
   /**
    * Measured in headless Chrome: the computed value in `document.body` (where
@@ -530,8 +539,10 @@ describe('the text-shaping the SVG inherits from the editor, which mermaid did n
     // The note, the revision preview, the share viewer, the print snapshot and
     // the exported HTML all mount the same viewport. The invariant belongs to
     // mermaid's output, not to one host.
-    expect(editorScss).toMatch(/(^|\n)\[data-mermaid-svg-host='true'\]\s*\{/)
+    expect(editorScss).toMatch(RULE)
+    expect(editorScss).toMatch(/(^|\n)\[data-mermaid-svg-host='true'\],/)
     expect(editorScss).not.toMatch(/\.ContentEditable__root \[data-mermaid-svg-host='true'\]/)
+    expect(editorScss).not.toMatch(/\.ContentEditable__root \[data-mermaid-measure-host='true'\]/)
   })
 
   it('selects an attribute the viewport actually renders', async () => {
@@ -543,5 +554,149 @@ describe('the text-shaping the SVG inherits from the editor, which mermaid did n
       }),
     )
     expect(container.querySelector('[data-mermaid-svg-host="true"]')).not.toBeNull()
+  })
+})
+
+describe('where mermaid MEASURES: the third argument to mermaid.render', () => {
+  /**
+   * The structural half of the same bug. `mermaid.render(id, source)` builds its
+   * temporary measuring element under `document.body`; `mermaid.render(id,
+   * source, element)` builds it inside `element`
+   * (mermaid.core.mjs:1289-1301 — `root = select(svgContainingElement)`,
+   * `appendDivSvgG(root, …)`) and removes it again before returning
+   * (`removeTempElements`, :1374). Pointing it at an element inside the
+   * diagram's own block makes the measuring and drawing contexts the same
+   * context, so no list of inherited properties has to be kept complete.
+   *
+   * Measured in headless Chrome over 25 diagram shapes (every flowchart node
+   * shape, subgraphs, a 4-rank fan-out, LR and TD, sequence, state, class, ER,
+   * pie, gantt, mindmap, journey, block, requirement) at 6 editor
+   * configurations: reserved slot equals drawn label to 0.00px in every one, and
+   * the geometry is identical to the CSS-reset-only build for all 25 except the
+   * gantt chart, which is now sized from the block's width (966px) instead of
+   * the window's (1280px). With the reset rule deleted and the container
+   * argument carrying the invariant alone, every shape is still 0.00px.
+   *
+   * jsdom has no layout engine, so none of that is assertable here. What IS
+   * assertable is that the argument is passed at all, that it goes through the
+   * guard rather than straight from the ref, and that the element it names
+   * exists in both blocks.
+   */
+  const lastRenderCall = (): unknown[] => {
+    const calls = mermaidRender.mock.calls as unknown as unknown[][]
+    expect(calls.length).toBeGreaterThan(0)
+    return calls[calls.length - 1]
+  }
+
+  it('is passed by the Mermaid block', async () => {
+    await mount(
+      seed(() => {
+        $getRoot().clear().append($createMermaidNode('flowchart TD\n  A[Start] --> B[End]'))
+      }),
+    )
+    // Three arguments, not two. `render(id, source)` is the defect.
+    expect(lastRenderCall()).toHaveLength(3)
+  })
+
+  it('is passed by the Gantt block', async () => {
+    await mount(
+      seed(() => {
+        $getRoot()
+          .clear()
+          .append(
+            $createGanttChartNode({
+              version: 1,
+              title: 'Release',
+              tasks: [{ name: 'Implement', section: '', start: '2026-01-01', duration: '5d' }],
+            }),
+          )
+      }),
+    )
+    expect(lastRenderCall()).toHaveLength(3)
+  })
+
+  it('goes through the guard, so an element with no layout is refused', async () => {
+    await mount(
+      seed(() => {
+        $getRoot().clear().append($createMermaidNode('flowchart TD\n  A[Start] --> B[End]'))
+      }),
+    )
+    // jsdom implements no layout, so `offsetParent` is null for every element
+    // and the guard refuses — which is the CORRECT answer in an environment
+    // with nothing to measure with, and is also what proves the guard ran: the
+    // raw ref would arrive here as an HTMLElement.
+    expect(lastRenderCall()[2]).toBeUndefined()
+  })
+
+  it('names an element both blocks actually render, and leaves its contents to mermaid', async () => {
+    await mount(
+      seed(() => {
+        $getRoot()
+          .clear()
+          .append($createMermaidNode('flowchart TD\n  A[Start] --> B[End]'))
+          .append(
+            $createGanttChartNode({
+              version: 1,
+              title: 'Release',
+              tasks: [{ name: 'Implement', section: '', start: '2026-01-01', duration: '5d' }],
+            }),
+          )
+      }),
+    )
+    const hosts = container.querySelectorAll('[data-mermaid-measure-host="true"]')
+    expect(hosts).toHaveLength(2)
+    for (const host of hosts) {
+      // Out of the accessibility tree and out of the hit-testing tree: it holds
+      // a throwaway copy of the diagram mid-render.
+      expect(host.getAttribute('aria-hidden')).toBe('true')
+      // And out of the print tree: the print snapshot clones the LIVE DOM, so a
+      // temporary subtree left behind by a render that threw would otherwise be
+      // cloned into it. `PrintNote` strips `[data-srn-print-exclude]`.
+      expect(host.getAttribute('data-srn-print-exclude')).toBe('true')
+      expect(host.className).toContain('pointer-events-none')
+      // `invisible` (visibility: hidden) and `h-0`, NOT `hidden` and not a zero
+      // WIDTH: visibility is the only one of those that still gives the subtree
+      // a layout to measure, and a zero-width element turns a working 1280x172
+      // gantt into negative rect widths and no viewBox at all (measured).
+      expect(host.className).toContain('invisible')
+      expect(host.className).toContain('h-0')
+      expect(host.className).not.toContain('hidden')
+      expect(host.className).toContain('w-full')
+      // Nothing of ours lives in it; mermaid clears it on entry and removes its
+      // own temporary subtree before returning.
+      expect(host.childElementCount).toBe(0)
+    }
+  })
+
+  it('refuses anything without a layout, and accepts an element that has one', () => {
+    expect(canMeasureMermaidIn(null)).toBe(false)
+    // Rendered but zero-width: the gantt failure mode.
+    expect(canMeasureMermaidIn({ width: 0, isRendered: true })).toBe(false)
+    expect(canMeasureMermaidIn({ width: 0.5, isRendered: true })).toBe(false)
+    // Wide but inside a `display: none` subtree: no layout engine at all.
+    expect(canMeasureMermaidIn({ width: 966, isRendered: false })).toBe(false)
+    expect(canMeasureMermaidIn({ width: 1, isRendered: true })).toBe(true)
+    expect(canMeasureMermaidIn({ width: 966, isRendered: true })).toBe(true)
+  })
+
+  it('reads width and renderedness off the element it is given', () => {
+    expect(readMermaidMeasurementContainer(null)).toBeUndefined()
+    expect(readMermaidMeasurementContainer(undefined)).toBeUndefined()
+
+    const element = document.createElement('div')
+    const describeLayout = (width: number, offsetParent: Element | null) => {
+      element.getBoundingClientRect = (() => ({ width }) as DOMRect) as typeof element.getBoundingClientRect
+      Object.defineProperty(element, 'offsetParent', { configurable: true, value: offsetParent })
+    }
+    const parent = document.createElement('div')
+
+    describeLayout(966, parent)
+    expect(readMermaidMeasurementContainer(element)).toBe(element)
+
+    // The two refusals, each on its own, so neither can be the only reason.
+    describeLayout(966, null)
+    expect(readMermaidMeasurementContainer(element)).toBeUndefined()
+    describeLayout(0, parent)
+    expect(readMermaidMeasurementContainer(element)).toBeUndefined()
   })
 })

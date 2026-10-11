@@ -476,6 +476,48 @@ export function resolveMermaidLabelFontFamily(value: unknown): string {
 }
 
 /**
+ * Standard Red Notes — bug fix: make mermaid MEASURE in the element it will be
+ * DRAWN in, instead of making the two agree one property at a time.
+ *
+ * `mermaid.render(id, source)` builds its temporary measuring element under
+ * `document.body` (mermaid.core.mjs:1285/1310) and the finished SVG string is
+ * then injected into the editor. Every node's reserved slot comes from a
+ * `getBoundingClientRect()` of the label laid out in that temporary element
+ * (`labelHelper`, chunk-4HAMMTFA.mjs: `dv.attr('width', bbox.width)`), so every
+ * INHERITED text property that changes how a run of text breaks or shapes has
+ * to be identical in the two places or the slot and the label disagree.
+ *
+ * `mermaid.render(id, source, element)` takes the measurement WITH it:
+ * `root = select(svgContainingElement)` and `appendDivSvgG(root, …)` put the
+ * temporary element inside `element`, and `removeTempElements()` takes it out
+ * again before returning (mermaid.core.mjs:1289-1301, 1374). That is the
+ * structural form of the same invariant: the two contexts agree because they
+ * are the same context, with no list of properties to keep complete.
+ *
+ * It only works where there is a layout engine to measure with, and that is
+ * what this predicate is for. Inside a `display: none` subtree — a collapsed
+ * foldable block, a hidden pane — every rect is zero, mermaid's own
+ * `calculateTextDimensions` throws `svg element not in render tree`, and a
+ * zero-width element makes the gantt renderer (which sizes itself from the
+ * svg's rendered width) emit negative rect widths and no viewBox at all:
+ * measured in headless Chrome, a `width: 0` measuring element turned a working
+ * `1280x172` gantt into six `<rect> attribute width: A negative value is not
+ * valid` errors and nothing drawn. So an element with no layout is refused and
+ * the caller passes nothing, which is mermaid's `document.body` path — the
+ * behaviour that shipped before, kept correct for that case by the reset rule
+ * in Theme/editor.scss.
+ *
+ * Pure: the geometry is read by `readMermaidMeasurementContainer` in
+ * MermaidAppTheme.ts, with the other cascade readers.
+ */
+export function canMeasureMermaidIn(layout: { width: number; isRendered: boolean } | null): boolean {
+  if (!layout) {
+    return false
+  }
+  return layout.isRendered && layout.width >= 1
+}
+
+/**
  * The custom properties the palette is read from. Named here so a spec and the
  * reader cannot drift apart.
  */

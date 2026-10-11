@@ -68,6 +68,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import {
   buildMermaidAppTokens,
+  canMeasureMermaidIn,
   isDarkMermaidSurface,
   mermaidAppThemeIsDark,
   MERMAID_APP_TOKEN_PROPERTIES,
@@ -273,6 +274,25 @@ export function readMermaidLabelFontFamily(element: Element | null | undefined):
     return MERMAID_LABEL_FONT_FALLBACK
   }
   return resolveMermaidLabelFontFamily(window.getComputedStyle(element).fontFamily)
+}
+
+/**
+ * The element to hand `mermaid.render` as its `svgContainingElement`, or
+ * `undefined` to leave mermaid on its `document.body` path.
+ *
+ * `offsetParent` is the cheap, exact test for "is being rendered": it is `null`
+ * for every element in a `display: none` subtree, which is the case the
+ * container argument cannot serve (no layout engine, every rect zero). The
+ * measuring element is `position: absolute`, so `offsetParent` is otherwise its
+ * nearest positioned ancestor and never `null` for that reason. See
+ * `canMeasureMermaidIn` in MermaidSettings.ts for the rest of the why.
+ */
+export function readMermaidMeasurementContainer(element: HTMLElement | null | undefined): HTMLElement | undefined {
+  if (!element || typeof element.getBoundingClientRect !== 'function') {
+    return undefined
+  }
+  const layout = { width: element.getBoundingClientRect().width, isRendered: element.offsetParent !== null }
+  return canMeasureMermaidIn(layout) ? element : undefined
 }
 
 /**

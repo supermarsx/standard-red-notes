@@ -194,12 +194,31 @@
  * Standard Red Notes — bug fix: "some graphs appear okay but others are crazy
  * weird with node being separated apart like a universe distance".
  *
- * Mermaid lays a diagram out from text it MEASURES, and it measures in a
- * temporary element it appends to `document.body` (mermaid.core.mjs:1285/1310,
- * because `mermaid.render(id, source)` is called with no containing element).
- * The finished SVG is then injected HERE. Every INHERITED text property that
- * changes how a run of text breaks or shapes therefore has to be the same in
- * both places, and several of the editor's are not:
+ * Mermaid lays a diagram out from text it MEASURES. Every node's reserved slot
+ * is a `getBoundingClientRect()` of the label laid out inside a temporary
+ * element (`labelHelper`, which then writes that size onto the label's own
+ * `foreignObject`), and the finished SVG string is injected somewhere else. So
+ * every INHERITED text property that changes how a run of text breaks or shapes
+ * has to be the same in both places, or the slot and the label disagree and the
+ * difference is the gap between the nodes.
+ *
+ * THE STRUCTURAL HALF of the fix is not here: both call sites now pass
+ * `mermaid.render` its third argument, `svgContainingElement`, pointing at a
+ * `[data-mermaid-measure-host]` element inside the diagram's own block
+ * (MermaidNode.tsx / GanttChartNode.tsx). Mermaid then builds its temporary
+ * element inside THAT (`root = select(svgContainingElement)`,
+ * mermaid.core.mjs:1298) instead of under `document.body`, so the measuring and
+ * drawing contexts agree because they are the same context — with no list of
+ * properties to keep complete.
+ *
+ * THIS RULE is what keeps the remaining path correct. The container argument
+ * needs a layout engine, and inside a `display: none` subtree — a collapsed
+ * foldable block, a hidden pane — there is none: every rect is zero and
+ * mermaid's own `calculateTextDimensions` throws `svg element not in render
+ * tree`. `readMermaidMeasurementContainer` therefore refuses an element with no
+ * layout and the call falls back to mermaid's `document.body` path, which is
+ * the configuration this rule was written for. It covers BOTH elements, so the
+ * two paths and the two contexts all carry one set of values:
  *
  *   property                 document.body     .ContentEditable__root
  *   word-break               normal            break-word
@@ -210,17 +229,23 @@
  *   tab-size                 4                 2
  *
  * `word-break: break-word` is the one that produces the reported symptom, and
- * only for a label containing a long token with no spaces — which is why it hits
+ * only for a label containing a long token with no spaces — which is why it hit
  * some diagrams and not others. Measured in headless Chrome,
  * `A --> |"https://example.com/a/very/long/path/that/never/breaks?query=1&more=2"| B`
- * in a 700px column: mermaid measured the edge label unbroken, reserved a
- * 410.64 x 48 slot for it and pushed the two nodes 460.64px apart; the label
- * then drew at 200 x 72 because here the URL may break anywhere. 210.64px of
- * the gap was empty, and the third line was clipped by a foreignObject sized
- * for two. Resetting these restores the label to its slot: slot and drawn
- * agree exactly, and a diagram with nothing to fix is byte-identical.
+ * in a 1000px column: with this rule removed, mermaid measured the edge label
+ * unbroken, reserved a 410.64 x 48 slot for it and pushed the two nodes
+ * 460.64px apart; the label then drew at 200 x 72 because there the URL may
+ * break anywhere. 210.64px of the gap was empty, and the third line was clipped
+ * by a foreignObject sized for two. A single unbreakable word is worse still:
+ * 404.83px of slack on `Donaudampfschiffahrts…gesellschaft`.
  *
- * Scoped to the SVG host rather than to the editor, because the invariant
+ * The rule has to name BOTH hosts and not just the drawn one. With the
+ * container argument in place and these declarations on the SVG host alone, the
+ * measuring element keeps the editor's values while the drawn one is reset —
+ * the same disagreement in the opposite direction, and it reproduces the defect
+ * exactly: slot 410.64 x 48 against a label drawn 200 x 72, measured.
+ *
+ * Scoped to the two hosts rather than to the editor, because the invariant
  * belongs to mermaid's output wherever it is mounted — the note, the revision
  * preview, the share viewer, the print snapshot and the exported HTML (which
  * carries this file). Mermaid sets `white-space` and `text-align` INLINE on
@@ -247,6 +272,8 @@
  * ships `liga`/`calt`, or a mermaid that stops stripping tabs, makes them bite.
  * They are NOT evidence of anything on their own; do not read the mutation
  * battery as proving each one, it proves only that the rule still names them.
+ * What makes the fix no longer depend on the list being complete is the
+ * container argument, not these six declarations.
  *
  * Deliberately NOT here: `white-space`, `letter-spacing`, `word-spacing`,
  * `font-kerning`, `hyphens`, `text-transform`. Those measured identical in both
@@ -256,8 +283,17 @@
  * nothing is left for the inherited value to reach. It was in the first draft
  * and survived its own mutant; if mermaid ever stops setting it, it belongs
  * back in this list.
+ *
+ * Also deliberately not here: `font-family`, `font-size` and `line-height`,
+ * which DO diverge (measured: body 13.008px against the editor's 15px, and
+ * body's stack has no `--sn-stylekit-simplified-chinese-font`). Mermaid pins
+ * all three itself — `font-size` and `font-family` in the `<style>` it inserts
+ * into the SVG (`getStyles`: `& { font-family: …; font-size: … }`),
+ * `line-height: 1.5` inline on every label div (`addHtmlSpan`) — and the family
+ * it pins is the concrete stack this app hands it (resolveMermaidLabelFontFamily).
  */
-[data-mermaid-svg-host='true'] {
+[data-mermaid-svg-host='true'],
+[data-mermaid-measure-host='true'] {
   font-feature-settings: normal;
   font-variant-ligatures: normal;
   line-break: auto;

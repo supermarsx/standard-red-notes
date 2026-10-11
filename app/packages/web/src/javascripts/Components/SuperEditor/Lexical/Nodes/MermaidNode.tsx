@@ -62,7 +62,12 @@ import {
   resolveMermaidSettings,
   resolveMermaidSurfaceColor,
 } from './MermaidSettings'
-import { useFontFacesLoadedToken, useMermaidAppTheme, useMermaidLabelFontFamily } from './MermaidAppTheme'
+import {
+  readMermaidMeasurementContainer,
+  useFontFacesLoadedToken,
+  useMermaidAppTheme,
+  useMermaidLabelFontFamily,
+} from './MermaidAppTheme'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
@@ -506,6 +511,11 @@ function MermaidComponent({
   // is read off this element and handed to mermaid, so that the font it
   // MEASURES in is the same one. See useMermaidLabelFontFamily.
   const blockRef = useRef<HTMLDivElement>(null)
+  // The element mermaid MEASURES in. A child of the block, so its inherited
+  // text context is the one the SVG is drawn in; handed to `mermaid.render` as
+  // its third argument so the reserved slot and the drawn label cannot be
+  // computed under two different cascades. See readMermaidMeasurementContainer.
+  const measureRef = useRef<HTMLDivElement>(null)
 
   // Keep the draft in sync when the node's code changes from the outside
   // (e.g. undo/redo, collaborative edits).
@@ -545,15 +555,22 @@ function MermaidComponent({
           // and not the previous diagram's overrides.
           themeVariables: activeTheme.themeVariables,
           // A CONCRETE stack, never `inherit`. Mermaid sizes every node by
-          // measuring its label in a temporary element it appends to
-          // `document.body`, and the finished SVG is then injected into the
-          // editor — so a value that defers to its parent is resolved twice,
-          // against two different fonts, and every box is sized from metrics
-          // the label never had. See resolveMermaidLabelFontFamily.
+          // measuring its label in a temporary element, and the finished SVG is
+          // then injected into the editor — so a value that defers to its
+          // parent is resolved twice, against two different fonts, and every
+          // box is sized from metrics the label never had. Still required with
+          // the measuring element below: that element only covers the DOM
+          // measurement, while the print snapshot reparents the finished SVG
+          // under `#srn-print-root` and its own `font-family`. See
+          // resolveMermaidLabelFontFamily.
           fontFamily,
         })
         const id = `mermaid-${nodeKey}-${renderSeq++}`
-        const { svg: rendered } = await mermaid.render(id, trimmed)
+        // THE third argument: measure where the diagram is drawn. `undefined`
+        // means mermaid's `document.body` path, which is all there is when the
+        // block has no layout (a collapsed foldable, a hidden pane).
+        const measureIn = readMermaidMeasurementContainer(measureRef.current)
+        const { svg: rendered } = await mermaid.render(id, trimmed, measureIn)
         // Drop the result if a newer render started in the meantime.
         if (token !== renderTokenRef.current) {
           return
@@ -870,6 +887,27 @@ function MermaidComponent({
           </div>
         ) : null}
       </div>
+
+      {/* WHERE MERMAID MEASURES. A child of the block, so every inherited text
+          property a label is laid out under here is the one it will be drawn
+          under there — the invariant by construction, rather than one property
+          at a time. In flow and `h-0`, so it takes the block's own width and no
+          vertical space; `invisible` rather than `hidden` or a zero size,
+          because `visibility: hidden` is the only one of the three that still
+          gives the subtree a full layout to measure (measured in headless
+          Chrome: a `width: 0` measuring element turns a working `1280x172`
+          gantt into negative rect widths and no viewBox). Mermaid clears it on
+          entry and removes its own temporary subtree before returning
+          (mermaid.core.mjs:1289, 1374), so it is empty between renders and
+          nothing of ours ever lives in it. See
+          readMermaidMeasurementContainer. */}
+      <div
+        ref={measureRef}
+        data-mermaid-measure-host="true"
+        aria-hidden="true"
+        data-srn-print-exclude="true"
+        className="pointer-events-none invisible h-0 w-full"
+      />
     </div>
   )
 }
