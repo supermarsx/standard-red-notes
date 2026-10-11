@@ -1,3 +1,8 @@
 @import 'base';
 @import 'custom';
 @import 'editor';
+// Standard Red Notes: the mermaid source pane's two-layer geometry and its
+// token palette. Deliberately NOT inside `editor.scss`, which is also compiled
+// standalone into the note export stylesheet (`Utils/NoteExportUtils.ts`) where
+// a diagram's source never appears.
+@import 'mermaid-code';

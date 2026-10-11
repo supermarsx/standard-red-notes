@@ -1,0 +1,287 @@
+/**
+ * Standard Red Notes — the mermaid SOURCE pane: the two layers that must agree
+ * on geometry, and the token palette.
+ *
+ * Its own file rather than a block inside `editor.scss` because `editor.scss`
+ * is also compiled standalone into the note EXPORT stylesheet
+ * (`Utils/NoteExportUtils.ts`), and none of this belongs in an exported note —
+ * an export renders the diagram, never its source.
+ *
+ * Imported from `lexical.scss` alongside `base`, `custom` and `editor`.
+ */
+
+/* ------------------------------------------------------------------------- *
+ * GEOMETRY
+ *
+ * Every property below decides WHERE A GLYPH LANDS. Both the `<pre>` underlay
+ * and the `<textarea>` carry `.MermaidCode__layer`, so there is exactly one
+ * declaration of each and the two layers cannot drift.
+ *
+ * Nothing here may be left to inheritance, and that is not caution. Two
+ * separate forces poison it:
+ *
+ *   - THE EDITOR ROOT. `editor.scss` sets `word-break: break-word`,
+ *     `overflow-wrap: break-word`, `line-break: after-white-space` and
+ *     `tab-size: 2` on the content root (that is the divergence the mermaid
+ *     label-font work documents at `editor.scss:224`). Those inherit into a
+ *     `<pre>`.
+ *   - THE UA STYLESHEET FOR `<textarea>`. A textarea does NOT inherit
+ *     `font-family`, `font-size`, `white-space`, `overflow-wrap` or `tab-size`
+ *     from its ancestors in the first place; it gets UA values
+ *     (`white-space: pre-wrap`, `overflow-wrap: break-word`, `tab-size: 8`).
+ *
+ * So the editor would style the `<pre>` and the UA would style the
+ * `<textarea>`, and they would wrap, indent and advance differently. Declaring
+ * the full list on one shared class is what makes them identical.
+ *
+ * `white-space: pre-wrap` + `overflow-wrap: break-word` is deliberately the
+ * CHROME TEXTAREA DEFAULT and not something tidier: the editable element is the
+ * one whose behaviour users already have, and the underlay has to follow it.
+ * ------------------------------------------------------------------------- */
+.MermaidCode__layer {
+  /* Box. `box-sizing: border-box` so the measured `clientWidth` the pane
+     applies to the underlay means the same thing on both. */
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  /* 0.5rem == the `p-2` the bare textarea had, kept so the pane does not move. */
+  padding: 0.5rem;
+
+  /* Font. Tailwind's own theme variables, with its own fallbacks spelled out so
+     this rule still holds if a build stops emitting an unused variable. */
+  font-family: var(
+    --font-mono,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    'Liberation Mono',
+    'Courier New',
+    monospace
+  );
+  font-size: var(--text-sm, 0.875rem);
+  line-height: var(--text-sm--line-height, calc(1.25 / 0.875));
+  font-weight: 400;
+  font-style: normal;
+  font-variant: normal;
+  /* Ligatures and kerning would advance the two layers differently the moment
+     one of them had an element boundary mid-ligature. */
+  font-variant-ligatures: none;
+  font-kerning: none;
+  font-feature-settings: normal;
+  font-variation-settings: normal;
+
+  /* Advance and breaking — the six properties that diverge between contexts. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-break: auto;
+  hyphens: none;
+  letter-spacing: normal;
+  word-spacing: normal;
+  tab-size: 2;
+
+  /* Direction and transform: a `text-transform` on an ancestor would change the
+     glyphs in the `<pre>` and not in the `<textarea>`. */
+  text-align: left;
+  text-indent: 0;
+  text-transform: none;
+  direction: ltr;
+  /* `optimizeLegibility` enables ligatures and kerning in some engines. */
+  text-rendering: auto;
+}
+
+/* The pane is the positioning context for the underlay and carries the
+   background, so the textarea above it can be fully transparent. */
+.MermaidCode {
+  position: relative;
+  min-width: 0;
+}
+
+.MermaidCode__underlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  z-index: 0;
+  /* Not interactive and not in the accessibility tree: the textarea above is
+     the only thing a pointer, a caret or a screen reader may reach. */
+  pointer-events: none;
+  user-select: none;
+  background: transparent;
+  color: var(--sn-stylekit-editor-foreground-color);
+  /* NO `scrollbar-gutter` here, and none on the textarea either.
+     `scrollbar-gutter: stable` was the first attempt at the scrollbar problem —
+     a scrolling textarea loses its scrollbar's width from its content box and
+     so wraps earlier than a `<pre>` of the same outer width, putting every
+     wrapped line on a different row in the two layers. Reserving the gutter on
+     both looked like it fixed it and measured WORSE: `overflow: hidden` makes
+     this element a scroll container too, so it reserved a gutter INSIDE the
+     width the pane had already measured off the textarea, and its content box
+     came out 15px narrower (543 vs 528 in headless Chrome at a 560px pane).
+     The pane's measured `clientWidth` is the one mechanism, it is exact in
+     every engine, and it is applied in a LAYOUT effect so it lands before the
+     first paint. An explicit width over-constrains this box and wins over
+     `right`, which is the intent. */
+
+  /* ----------------------------------------------------------------------- *
+   * THE TOKEN PALETTE
+   *
+   * Every colour is a `--sn-stylekit-*` design token, never a literal. That is
+   * what makes the palette follow the user's theme: `ThemeManager` installs a
+   * theme by appending a `<link>` whose stylesheet redefines these properties
+   * on `:root`, so a token-coloured span re-colours on a theme switch with no
+   * JavaScript, no re-render and no React state.
+   *
+   * NOT TO BE CONFUSED with `MERMAID_BUILTIN_THEMES`. Those are mermaid's own
+   * diagram themes (`default`, `dark`, `forest`, `neutral`, `base`), they are a
+   * per-block setting, and they colour the rendered DIAGRAM. This palette
+   * colours the SOURCE TEXT and is global. A diagram pinned to mermaid's
+   * `forest` theme still has its source highlighted in the app's palette, which
+   * is correct: the source is app chrome, the diagram is content.
+   *
+   * WHICH TOKENS, AND WHY THESE
+   *
+   * The six `accessory-tint` tokens are the app's categorical palette — the tag
+   * colours — so every theme already maintains six mutually distinguishable
+   * hues that are legible on its own surface. The semantic tokens (`info`,
+   * `success`, `warning`) are the ones themes maintain for TEXT, so they are
+   * used where a token should look like a link or a value rather than a
+   * category. `passive-0` and `passive-1` are the app's two de-emphasis greys,
+   * which is exactly what a comment and a bracket should be.
+   *
+   * A KNOWN LIMIT, stated rather than hidden: a theme that overrides only SOME
+   * of these (the bundled Autobiography theme overrides
+   * `accessory-tint-color-1` and leaves 2-6 inheriting the dark base) renders
+   * some tokens at the base palette's luminance on its own surface. That is a
+   * pre-existing property of the token set — the app's own tag dots have the
+   * same issue in that theme — and the fix belongs in the theme. The
+   * indirection here is what makes it fixable in one place: a theme, or a
+   * user's custom CSS, can redefine any `--srn-mermaid-token-*` property and
+   * move only the source palette.
+   * ----------------------------------------------------------------------- */
+
+  /* A comment is the one thing that should recede. */
+  --srn-mermaid-token-comment: var(--sn-stylekit-passive-color-1);
+  /* A `%%{init}%%` directive and a frontmatter fence are configuration, not
+     diagram: amber, the app's "this is a setting" tint. */
+  --srn-mermaid-token-directive: var(--sn-stylekit-accessory-tint-color-3);
+  /* A structural keyword reads like a link: the theme's own text accent. */
+  --srn-mermaid-token-keyword: var(--sn-stylekit-info-color);
+  /* A `key:` is a name — distinct from a keyword, the same weight. */
+  --srn-mermaid-token-property: var(--sn-stylekit-accessory-tint-color-4);
+  /* A quoted label or an edge label is content: the theme's success green,
+     which is every editor's string colour for a reason. */
+  --srn-mermaid-token-string: var(--sn-stylekit-success-color);
+  /* An arrow is the single most important glyph in a mermaid source. */
+  --srn-mermaid-token-operator: var(--sn-stylekit-accessory-tint-color-6);
+  /* Brackets and separators: present, not loud. */
+  --srn-mermaid-token-punctuation: var(--sn-stylekit-passive-color-0);
+  --srn-mermaid-token-number: var(--sn-stylekit-warning-color);
+}
+
+/* ONE BLOCK PER SOURCE LINE.
+ *
+ * The underlay holds no newline characters at all: each line is its own block,
+ * which is both faster and more correct. Faster because layout is per-block, so
+ * a keystroke re-lays-out one line instead of the whole inline flow — measured
+ * keystroke-to-frame on a 600-line source fell from 21.5ms p50 to the numbers
+ * in the commit message. More correct because a `<pre>`'s trailing empty line
+ * has no height, which the single-flow version had to paper over with a
+ * sentinel newline; here a source ending in a newline simply gets its own empty
+ * final block, exactly as the textarea shows a trailing empty line.
+ *
+ * `min-height` is what gives that empty block a row. `1lh` is the line-box
+ * height and is the right answer; the `calc` above it is the same value spelled
+ * out for an engine without `lh`, since every declaration in this file is
+ * load-bearing for alignment and none of them may silently do nothing.
+ *
+ * NOTHING ELSE may go in this rule. A margin, a padding, a border or a
+ * different `line-height` here would move every line below it relative to the
+ * textarea's. */
+.MermaidCode__line {
+  display: block;
+  min-height: calc(var(--text-sm--line-height, calc(1.25 / 0.875)) * 1em);
+  min-height: 1lh;
+}
+
+.MermaidCode__input {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  resize: vertical;
+  background-color: transparent;
+}
+
+/* The transparent-text state. Split out from `.MermaidCode__input` so that with
+   the preference OFF the textarea is an ordinary, opaque textarea and nothing
+   in this file applies to it except the geometry. */
+.MermaidCode__input--highlighted {
+  color: transparent;
+  caret-color: var(--sn-stylekit-editor-foreground-color);
+
+  /* The selection highlight paints in the textarea's layer, i.e. ABOVE the
+     underlay, so an opaque one hides every coloured glyph it covers. A
+     translucent one lets them read through. `color-mix` is well inside this
+     app's baseline — Tailwind v4 itself requires it. */
+  &::selection {
+    background-color: color-mix(in srgb, var(--sn-stylekit-info-color) 32%, transparent);
+    color: transparent;
+  }
+
+  /* A placeholder is real text in the textarea's own layer, so transparent text
+     would make it invisible. Painted explicitly. */
+  &::placeholder {
+    color: var(--sn-stylekit-input-placeholder-color);
+  }
+}
+
+/* COLOUR ONLY.
+ *
+ * No `font-style`, `font-weight`, `font-variant` or `letter-spacing` on any
+ * token class, ever. Those change a glyph's ADVANCE, and only the underlay
+ * would get the change — the textarea's own (invisible) characters stay roman.
+ * The caret would still be correct, because the textarea positions it, but the
+ * coloured glyphs would no longer sit under it, which is the same bug seen from
+ * the other side. An italic comment was tried and dropped for exactly this. */
+.MermaidCode__comment {
+  color: var(--srn-mermaid-token-comment);
+}
+.MermaidCode__directive {
+  color: var(--srn-mermaid-token-directive);
+}
+.MermaidCode__keyword {
+  color: var(--srn-mermaid-token-keyword);
+}
+.MermaidCode__property {
+  color: var(--srn-mermaid-token-property);
+}
+.MermaidCode__string {
+  color: var(--srn-mermaid-token-string);
+}
+.MermaidCode__operator {
+  color: var(--srn-mermaid-token-operator);
+}
+.MermaidCode__punctuation {
+  color: var(--srn-mermaid-token-punctuation);
+}
+.MermaidCode__number {
+  color: var(--srn-mermaid-token-number);
+}
+
+/* Printing and exporting a note renders the diagram, not its source. If a pane
+   does reach a printer, the underlay is dropped and the textarea's own text is
+   made visible again, so the source prints once and in one colour rather than
+   twice in two layers. */
+@media print {
+  .MermaidCode__underlay {
+    display: none;
+  }
+  .MermaidCode__input--highlighted {
+    color: var(--sn-stylekit-editor-foreground-color);
+  }
+}
