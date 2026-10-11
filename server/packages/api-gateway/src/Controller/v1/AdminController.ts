@@ -577,6 +577,36 @@ export class AdminController extends BaseHttpController {
     )
   }
 
+  /**
+   * Standard Red Notes: the SYNCED ITEM (note) bytes of the accounts named in the
+   * body — the half of a per-account space report that no endpoint published for
+   * anybody but the caller.
+   *
+   * *** WHY THIS ROUTE IS HERE AND NOT UNDER `/users/:userUuid`. *** Its caller is
+   * a report over a PAGE of the admin users list, and one request per row would be
+   * an N+1 over up to 1500 accounts. It also deliberately carries no `:userUuid`
+   * path parameter that a sibling `/users/:userUuid/...` route could claim.
+   *
+   * The admin role is checked here AND again in the syncing server's handler. This
+   * gate is the cheap one that keeps a non-admin's request off the service bus; the
+   * one that matters is the handler's, because it is the one the single-container
+   * topology also runs.
+   */
+  @httpPost('/item-storage-usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUsersItemStorageUsage(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+
+    await this.serviceProxy.callSyncingServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'items/storage-usage/by-user'),
+      request.body,
+    )
+  }
+
   @httpGet('/roles', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async getAvailableRoles(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callAuthServer(

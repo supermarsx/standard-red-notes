@@ -60,6 +60,15 @@ describe('AdminController auth-server pass-through routes', () => {
     'unallowIp',
   ])
 
+  /**
+   * Standard Red Notes: handlers that proxy to the SYNCING server rather than to
+   * auth. They are excluded from the `admin` + own-path invariant above because
+   * their endpoint belongs to a different service's route table, and they get
+   * their own assertions below instead — so a new one cannot quietly inherit
+   * either exemption.
+   */
+  const syncingServerHandlers = new Set(['getUsersItemStorageUsage'])
+
   const makeController = () =>
     new AdminController(serviceProxy, endpointResolver, true, false, undefined, {} as AssistantProviderConfig, '')
 
@@ -106,6 +115,7 @@ describe('AdminController auth-server pass-through routes', () => {
   beforeEach(() => {
     serviceProxy = {
       callAuthServer: jest.fn().mockResolvedValue(undefined),
+      callSyncingServer: jest.fn().mockResolvedValue(undefined),
     } as unknown as ServiceProxyInterface
 
     // Echo the resolver arguments back so each assertion can read exactly what
@@ -137,7 +147,9 @@ describe('AdminController auth-server pass-through routes', () => {
     return { proxied, resolverArgs, params }
   }
 
-  const proxiedRoutes = routeMetadata.filter((route) => !gatewayLocalHandlers.has(route.key as string))
+  const proxiedRoutes = routeMetadata.filter(
+    (route) => !gatewayLocalHandlers.has(route.key as string) && !syncingServerHandlers.has(route.key as string),
+  )
 
   it('finds the admin pass-through routes to check', () => {
     expect(proxiedRoutes.length).toBeGreaterThanOrEqual(35)
@@ -202,6 +214,57 @@ describe('AdminController auth-server pass-through routes', () => {
     for (const handlerName of gatewayLocalHandlers) {
       expect({ handlerName, declared: declared.has(handlerName) }).toEqual({ handlerName, declared: true })
     }
+  })
+
+  it('lists no syncing-server handler that is not an actual route', () => {
+    const declared = new Set(routeMetadata.map((route) => route.key as string))
+
+    for (const handlerName of syncingServerHandlers) {
+      expect({ handlerName, declared: declared.has(handlerName) }).toEqual({ handlerName, declared: true })
+    }
+  })
+
+  /**
+   * Standard Red Notes: the per-account ITEM-BYTES read, which is the one admin
+   * route whose work is done by the syncing server.
+   *
+   * *** THE 403 CASE IS THE ONE THAT MATTERS. *** Every other route on this
+   * controller is a pass-through whose gate lives in the service it calls, and the
+   * syncing server does gate this handler too. This gate is the one that keeps a
+   * non-admin's request off the service bus at all, and a `requestorIsAdmin` that
+   * stopped working would be invisible to every other test in this file.
+   */
+  describe('getUsersItemStorageUsage', () => {
+    const adminResponse = (): Response =>
+      ({
+        locals: { roles: [{ uuid: 'role-1', name: 'ADMIN_USER' }] },
+        setHeader: jest.fn(),
+        status: jest.fn().mockReturnValue({ send: jest.fn(), json: jest.fn() }),
+        send: jest.fn(),
+        json: jest.fn(),
+      }) as unknown as Response
+
+    it('resolves the syncing server endpoint and forwards the body', async () => {
+      await makeController().getUsersItemStorageUsage(buildRequest({}), adminResponse())
+
+      expect(endpointResolver.resolveEndpointOrMethodIdentifier).toHaveBeenCalledWith(
+        'POST',
+        'items/storage-usage/by-user',
+      )
+      const call = (serviceProxy.callSyncingServer as jest.Mock).mock.calls[0]
+      expect(call[3]).toEqual({ some: 'body' })
+      expect((serviceProxy.callAuthServer as jest.Mock).mock.calls.length).toBe(0)
+    })
+
+    it('refuses a requestor without the admin role and calls no service at all', async () => {
+      const response = buildResponse()
+
+      await makeController().getUsersItemStorageUsage(buildRequest({}), response)
+
+      expect(response.status).toHaveBeenCalledWith(403)
+      expect((serviceProxy.callSyncingServer as jest.Mock).mock.calls.length).toBe(0)
+      expect((serviceProxy.callAuthServer as jest.Mock).mock.calls.length).toBe(0)
+    })
   })
 
   it('parses an HTTP verb for exactly the routes the runtime registered', () => {

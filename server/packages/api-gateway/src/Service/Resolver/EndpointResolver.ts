@@ -156,6 +156,10 @@ export class EndpointResolver implements EndpointResolverInterface {
     // above it — a literal path that sorts after a parameterised one is a path the
     // parameterised one eats.
     ['[GET]:items/storage-usage', 'sync.items.storage_usage'],
+    // Standard Red Notes: the ADMIN per-account read of the same figure. Three
+    // segments, so the ':uuid' entry below cannot claim it; a POST, because it
+    // names a page of accounts in its body rather than one in its path.
+    ['[POST]:items/storage-usage/by-user', 'sync.items.storage_usage_for_users'],
     ['[GET]:items/:uuid', 'sync.items.get_item'],
     ['[POST]:items/collaboration-authorization', 'sync.items.authorize_collaboration'],
     // Revisions Controller V2
