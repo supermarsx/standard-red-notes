@@ -190,6 +190,61 @@
   contain: inline-size;
 }
 
+/*
+ * Standard Red Notes — bug fix: "some graphs appear okay but others are crazy
+ * weird with node being separated apart like a universe distance".
+ *
+ * Mermaid lays a diagram out from text it MEASURES, and it measures in a
+ * temporary element it appends to `document.body` (mermaid.core.mjs:1285/1310,
+ * because `mermaid.render(id, source)` is called with no containing element).
+ * The finished SVG is then injected HERE. Every INHERITED text property that
+ * changes how a run of text breaks or shapes therefore has to be the same in
+ * both places, and several of the editor's are not:
+ *
+ *   property                 document.body     .ContentEditable__root
+ *   word-break               normal            break-word
+ *   overflow-wrap            normal            break-word
+ *   line-break               auto              after-white-space
+ *   font-variant-ligatures   normal            none        (the ligatures pref)
+ *   font-feature-settings    normal            "calt" 0, "liga" 0
+ *   tab-size                 4                 2
+ *
+ * `word-break: break-word` is the one that produces the reported symptom, and
+ * only for a label containing a long token with no spaces — which is why it hits
+ * some diagrams and not others. Measured in headless Chrome,
+ * `A --> |"https://example.com/a/very/long/path/that/never/breaks?query=1&more=2"| B`
+ * in a 700px column: mermaid measured the edge label unbroken, reserved a
+ * 410.64 x 48 slot for it and pushed the two nodes 460.64px apart; the label
+ * then drew at 200 x 72 because here the URL may break anywhere. 210.64px of
+ * the gap was empty, and the third line was clipped by a foreignObject sized
+ * for two. Resetting these restores the label to its slot: slot and drawn
+ * agree exactly, and a diagram with nothing to fix is byte-identical.
+ *
+ * Scoped to the SVG host rather than to the editor, because the invariant
+ * belongs to mermaid's output wherever it is mounted — the note, the revision
+ * preview, the share viewer, the print snapshot and the exported HTML (which
+ * carries this file). Mermaid sets `white-space` and `text-align` INLINE on
+ * each label it draws, and an inline style wins over this, so its own
+ * intentions are untouched.
+ *
+ * This list is EXACTLY the properties measured to differ, and no more. The
+ * other inherited text-shaping properties — `white-space`, `letter-spacing`,
+ * `word-spacing`, `font-kerning`, `hyphens`, `text-transform` — were measured
+ * identical in both contexts, so a reset for them could not be shown to change
+ * anything and is not here. `white-space` is the near miss: it IS inherited as
+ * `pre-wrap` here against `normal` in `document.body`, but mermaid sets it
+ * inline on every label it measures, so today nothing is left for the inherited
+ * value to reach. If that ever stops being true, it belongs in this list.
+ */
+[data-mermaid-svg-host='true'] {
+  font-feature-settings: normal;
+  font-variant-ligatures: normal;
+  line-break: auto;
+  overflow-wrap: normal;
+  tab-size: 4;
+  word-break: normal;
+}
+
 .ContentEditable__root [data-super-widget-layout='media'] {
   inline-size: min(100%, 64rem);
 }

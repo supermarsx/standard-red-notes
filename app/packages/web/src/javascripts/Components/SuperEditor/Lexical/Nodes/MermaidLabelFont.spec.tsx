@@ -29,6 +29,14 @@
  * every node is 30/30/15/15 with zero overflow and the longest label wraps to
  * two lines in a box mermaid sized for two lines (260 x 78).
  *
+ * The font FAMILY is only half of it. Everything else that decides how a run of
+ * text breaks and shapes is INHERITED, and several of those also differ between
+ * `document.body` and the editor — `word-break`, `overflow-wrap`, `line-break`,
+ * the ligature preference, `tab-size`. Those are reset on the SVG host in
+ * Theme/editor.scss; the last describe below is their contract. That half is
+ * what produced "some graphs appear okay but others are crazy weird with node
+ * being separated apart like a universe distance".
+ *
  * jsdom has no layout engine, so NONE of that geometry is assertable here — the
  * numbers above come from the headless-Chrome harness, which is not a CI gate.
  * What IS assertable, and is the thing that regressed, is the config that
@@ -36,6 +44,8 @@
  * family read off the block the diagram is drawn in, never a CSS-wide keyword,
  * and re-read when the Editor Font preference changes.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
@@ -440,5 +450,80 @@ describe('what reaches mermaid.initialize from a real Gantt chart block', () => 
     const before = mermaidRender.mock.calls.length
     await finishLoadingFontFaces()
     expect(mermaidRender.mock.calls.length).toBeGreaterThan(before)
+  })
+})
+
+describe('the text-shaping the SVG inherits from the editor, which mermaid did not measure in', () => {
+  const editorScss = readFileSync(join(__dirname, '..', 'Theme', 'editor.scss'), 'utf8')
+  const hostRule = /\[data-mermaid-svg-host='true'\]\s*\{([^}]*)\}/s.exec(editorScss)?.[1] ?? ''
+
+  /**
+   * Measured in headless Chrome: the computed value in `document.body` (where
+   * mermaid measures) against the computed value on a mermaid label in the
+   * editor (where it draws). Every one of these is an INHERITED property that
+   * changes how a run of text breaks or shapes, so a difference is a diagram
+   * laid out to one set of metrics and painted with another.
+   */
+  const MEASURED_DIVERGENCES = [
+    ['word-break', 'normal', 'break-word'],
+    ['overflow-wrap', 'normal', 'break-word'],
+    ['line-break', 'auto', 'after-white-space'],
+    ['font-variant-ligatures', 'normal', 'none'],
+    ['font-feature-settings', 'normal', '"calt" 0, "liga" 0'],
+    ['tab-size', '4', '2'],
+  ] as const
+
+  /** The rule body as `property -> value`, so an assertion names one thing. */
+  const declarations = new Map(
+    hostRule
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const at = part.indexOf(':')
+        return [part.slice(0, at).trim(), part.slice(at + 1).trim()] as [string, string]
+      }),
+  )
+
+  it('resets every property measured to differ, to the value mermaid measured with', () => {
+    expect(hostRule).not.toBe('')
+    for (const [property, inBody, inEditor] of MEASURED_DIVERGENCES) {
+      expect([property, declarations.get(property)]).toEqual([property, inBody])
+      // And the reset has to be to the MEASUREMENT context's value, not to
+      // whatever the editor happened to have.
+      expect(declarations.get(property)).not.toBe(inEditor)
+    }
+  })
+
+  it('resets nothing it cannot show a reason for', () => {
+    // A declaration whose removal changes no measurement is a declaration no
+    // assertion can defend: `white-space: normal` was in the first draft of this
+    // rule and survived its own mutant, because mermaid sets `white-space`
+    // inline on every label it measures. The rule is exactly the measured
+    // divergences, so every line of it is killable.
+    expect([...declarations.keys()].sort()).toEqual(
+      MEASURED_DIVERGENCES.map(([p]) => p)
+        .slice()
+        .sort(),
+    )
+  })
+
+  it('is NOT scoped to the editor, because the SVG is drawn in five places', () => {
+    // The note, the revision preview, the share viewer, the print snapshot and
+    // the exported HTML all mount the same viewport. The invariant belongs to
+    // mermaid's output, not to one host.
+    expect(editorScss).toMatch(/(^|\n)\[data-mermaid-svg-host='true'\]\s*\{/)
+    expect(editorScss).not.toMatch(/\.ContentEditable__root \[data-mermaid-svg-host='true'\]/)
+  })
+
+  it('selects an attribute the viewport actually renders', async () => {
+    // A selector that matches nothing is a rule that cannot be made red by any
+    // stylesheet assertion. This is the half jsdom CAN check.
+    await mount(
+      seed(() => {
+        $getRoot().clear().append($createMermaidNode('flowchart TD\n  A[Start] --> B[End]'))
+      }),
+    )
+    expect(container.querySelector('[data-mermaid-svg-host="true"]')).not.toBeNull()
   })
 })
