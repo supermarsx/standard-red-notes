@@ -32,10 +32,14 @@
  * The font FAMILY is only half of it. Everything else that decides how a run of
  * text breaks and shapes is INHERITED, and several of those also differ between
  * `document.body` and the editor — `word-break`, `overflow-wrap`, `line-break`,
- * the ligature preference, `tab-size`. Those are reset on the SVG host in
- * Theme/editor.scss; the last describe below is their contract. That half is
- * what produced "some graphs appear okay but others are crazy weird with node
- * being separated apart like a universe distance".
+ * the ligature preference, `tab-size`. Those are reset on both mermaid hosts in
+ * Theme/editor.scss, and one of the describes below is their contract. They are
+ * worth a measured 210.64px of empty slot on a URL edge label — but they are
+ * NOT what produced "some graphs appear okay but others are crazy weird with
+ * node being separated apart like a universe distance". That is a FONT-SIZE
+ * divergence that only appears where a Content-Security-Policy kills mermaid's
+ * own `<style>`, and the fix for it is to measure in the element the diagram is
+ * drawn in: the last describe in this file is that contract.
  *
  * jsdom has no layout engine, so NONE of that geometry is assertable here — the
  * numbers above come from the headless-Chrome harness, which is not a CI gate.
@@ -513,11 +517,12 @@ describe('the text-shaping the SVG inherits from the editor, which mermaid did n
   })
 
   it('keeps the one property that is demonstrated, whatever else is trimmed', () => {
-    // The whole defect, isolated: putting `word-break: break-word` back alone
-    // over the fixed build reproduces it in full — the URL edge label's slot
-    // stays 410.64 x 48 while the label draws 200 x 72 — identically to putting
-    // all six back. If the rule is ever trimmed, this is the line that may not
-    // go.
+    // The SLACK defect, isolated — not the user's clipping report, which is the
+    // font-size divergence the container argument fixes (see the describe at the
+    // end of this file). Putting `word-break: break-word` back alone over the
+    // fixed build reproduces this one in full — the URL edge label's slot stays
+    // 410.64 x 48 while the label draws 200 x 72 — identically to putting all
+    // six back. If the rule is ever trimmed, this is the line that may not go.
     const demonstrated = MEASURED_DIVERGENCES.filter(([, , , standing]) => standing === 'demonstrated')
     expect(demonstrated.map(([property]) => property)).toEqual(['word-break'])
     expect(declarations.get('word-break')).toBe('normal')
@@ -568,14 +573,38 @@ describe('where mermaid MEASURES: the third argument to mermaid.render', () => {
    * diagram's own block makes the measuring and drawing contexts the same
    * context, so no list of inherited properties has to be kept complete.
    *
-   * Measured in headless Chrome over 25 diagram shapes (every flowchart node
-   * shape, subgraphs, a 4-rank fan-out, LR and TD, sequence, state, class, ER,
-   * pie, gantt, mindmap, journey, block, requirement) at 6 editor
-   * configurations: reserved slot equals drawn label to 0.00px in every one, and
-   * the geometry is identical to the CSS-reset-only build for all 25 except the
-   * gantt chart, which is now sized from the block's width (966px) instead of
-   * the window's (1280px). With the reset rule deleted and the container
-   * argument carrying the invariant alone, every shape is still 0.00px.
+   * WHAT IT IS WORTH, measured in headless Chrome against freshly compiled
+   * SCSS + Tailwind inside the real editor chain. The thing that decides
+   * whether this matters is the Content-Security-Policy, because mermaid pins
+   * `font-size` for BOTH contexts only through the `<style>` element it inserts
+   * into its own SVG (`getStyles`: `& { font-family: …; font-size: … }`):
+   *
+   *   - production nginx sends `style-src 'self' 'unsafe-inline'`, the
+   *     stylesheet is live, both contexts are pinned to mermaid's 16px, and
+   *     nothing was ever clipped. The container argument changes no geometry
+   *     there (byte-identical on 14 of 14 shapes; the gantt is now sized from
+   *     the block's 966px instead of the window's 1280px).
+   *   - `webpack-dev-server` sends `style-src *`, which does NOT grant
+   *     'unsafe-inline', so Chrome refuses every `<style>` ELEMENT. Mermaid then
+   *     measures each HTML label at `document.body`'s 13.008px and draws it at
+   *     the editor's 15px, and EVERY html-label diagram clips: flowchart 6/6,
+   *     ER 9/9, class 4/4, state 5/5, mindmap 6/6, subgraph 6/6, 4-rank
+   *     fan-out 7/7. Sequence, pie and gantt are untouched because they use
+   *     SVG `<text>` and no `foreignObject` at all, which is exactly why the
+   *     report was "only sequence diagram looks fine". With this argument the
+   *     count is 0 of every one, in all five viewport states (fitBoth,
+   *     fitWidth, actual, zoom 2.5x, zoom 0.4x).
+   *
+   * The user's own diagram, under that CSP: `Start` went from a 26.44 x 19.52
+   * slot holding text that needs 22.50px of line box, to 30.50 x 22.50; the
+   * same for `Decision` (48.72 -> 56.20), `OK` and `Rethink` (42.94 -> 49.53);
+   * centres A->B 123.87 -> 130.60 and B->C 159.81 -> 169.56.
+   *
+   * Note what the metric must NOT be: `labelHelper` writes the size it measured
+   * onto the label's `foreignObject` width/height, and that attribute then
+   * constrains the div drawn inside it — so comparing the two reads 0.00px
+   * through a visibly truncated label. The clipping numbers above come from the
+   * label span's own inline box, which the `foreignObject` does not constrain.
    *
    * jsdom has no layout engine, so none of that is assertable here. What IS
    * assertable is that the argument is passed at all, that it goes through the

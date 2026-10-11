@@ -228,16 +228,31 @@
  *   font-feature-settings    normal            "calt" 0, "liga" 0
  *   tab-size                 4                 2
  *
- * `word-break: break-word` is the one that produces the reported symptom, and
- * only for a label containing a long token with no spaces — which is why it hit
- * some diagrams and not others. Measured in headless Chrome,
+ * WHAT THIS RULE IS AND IS NOT FOR. It is NOT the cause of the user report in
+ * the first line, and an earlier version of this comment claimed it was. That
+ * report is a FONT-SIZE divergence: mermaid pins `font-size` for both contexts
+ * only through the `<style>` element it inserts into its own SVG, and
+ * `webpack-dev-server` sends `style-src *` (web.webpack.dev.js:113), which does
+ * not grant `'unsafe-inline'`, so Chrome refuses that element. Mermaid then
+ * measures every html label at `document.body`'s 13.008px and draws it at the
+ * editor's 15px, and every html-label diagram clips — measured, flowchart 6/6,
+ * ER 9/9, class 4/4, state 5/5, mindmap 6/6 — while sequence, pie and gantt,
+ * which use SVG `<text>` and no foreignObject, are untouched. The container
+ * argument is what fixes that, by making the two contexts one. Production nginx
+ * sends `'unsafe-inline'`, so there the stylesheet is live and nothing clips.
+ *
+ * What these six DO fix is a real and separate divergence, in the opposite
+ * direction: a slot WIDER than the label drawn in it. Measured in headless
+ * Chrome,
  * `A --> |"https://example.com/a/very/long/path/that/never/breaks?query=1&more=2"| B`
  * in a 1000px column: with this rule removed, mermaid measured the edge label
  * unbroken, reserved a 410.64 x 48 slot for it and pushed the two nodes
  * 460.64px apart; the label then drew at 200 x 72 because there the URL may
  * break anywhere. 210.64px of the gap was empty, and the third line was clipped
  * by a foreignObject sized for two. A single unbreakable word is worse still:
- * 404.83px of slack on `Donaudampfschiffahrts…gesellschaft`.
+ * 404.83px of slack on `Donaudampfschiffahrts…gesellschaft`. `word-break` is
+ * the one of the six that does this, and only for a label containing a long
+ * token with no spaces — which is why it hit some diagrams and not others.
  *
  * The rule has to name BOTH hosts and not just the drawn one. With the
  * container argument in place and these declarations on the SVG host alone, the
