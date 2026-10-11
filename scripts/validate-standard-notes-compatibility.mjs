@@ -29,6 +29,32 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * The diagnostic a drifted audited file produces is where somebody has to
+ * decide "legitimate change, or a regression being laundered by re-pinning?".
+ * It used to truncate both hashes to twelve characters, which on a tail-only
+ * difference prints `changed (43efdf207a2d -> 43efdf207a2d)` -- two identical
+ * strings and no way to tell them apart, in the one gate whose whole output is
+ * a pair of hashes. So print both in full, say where they first diverge, and
+ * name the command that shows the content rather than the digest.
+ */
+function describeAuditedDrift(relativePath, expectedHash, actualHash) {
+  const divergence = [...expectedHash].findIndex(
+    (character, position) => character !== actualHash[position],
+  );
+  const where =
+    divergence < 0
+      ? ""
+      : ` The two differ from hex digit ${divergence + 1} of 64.`;
+  return (
+    `${relativePath}: compatibility-audited content changed. ` +
+    `${MANIFEST_PATH} pins sha256 ${expectedHash}; the working tree hashes to ${actualHash}.${where}` +
+    ` Read the change with \`git diff -- ${relativePath}\`, compare it against the pinned upstream snapshot,` +
+    ` and re-pin the hash only once the new content is accepted -- re-pinning to clear this gate is how a` +
+    ` compatibility regression gets laundered.`
+  );
+}
+
 function validateFileMap(root, files, label) {
   const diagnostics = [];
   if (!isRecord(files) || Object.keys(files).length === 0) {
@@ -61,7 +87,7 @@ function validateFileMap(root, files, label) {
     const actualHash = normalizedSha256(fs.readFileSync(absolutePath, "utf8"));
     if (actualHash !== expectedHash) {
       diagnostics.push(
-        `${relativePath}: compatibility-audited content changed (${expectedHash.slice(0, 12)} -> ${actualHash.slice(0, 12)}); compare the pinned upstream snapshot and update the matrix before accepting the new hash`,
+        describeAuditedDrift(relativePath, String(expectedHash), actualHash),
       );
     }
   }

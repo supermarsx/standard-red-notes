@@ -14,6 +14,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
+import {
+  extractLxcNginxSite,
+  forwardingContractErrors,
+  stripNginxComments,
+} from "./nginx-route-contract.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) =>
   readFileSync(path.join(root, relativePath), "utf8");
@@ -283,17 +289,31 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
       /map \$srn_proxy_https_mode \$srn_forwarded_for \{[\s\S]*?default\s+\$remote_addr;[\s\S]*?enabled\s+\$proxy_add_x_forwarded_for;/,
       `${relativePath}: direct mode must discard a client-supplied forwarding chain`,
     );
-    assert.equal(
-      (
-        source.match(
-          /proxy_set_header X-Forwarded-For \$srn_forwarded_for;/g,
-        ) ?? []
-      ).length,
-      5,
-      `${relativePath}: every backend route must use the sanitized forwarding value`,
+    // Derived, not counted. Both forwarding headers were asserted as a
+    // hardcoded "five occurrences" here, and 0c466fcc's compliant fifth route
+    // (`location ~ ^/dav(/|$)`) turned this test red twice over on nothing but
+    // the number. The expectation now comes from the routes the file actually
+    // declares -- a `proxy_pass` found by matching braces, not by grepping a
+    // word that also appears in three comments -- so a sixth route either
+    // passes or is named here with the header it is missing.
+    assert.deepEqual(
+      forwardingContractErrors(source, {
+        label: relativePath,
+        forwardedFor: "$srn_forwarded_for",
+        forwardedProto: "$srn_forwarded_proto",
+        minimumRoutes: 5,
+      }),
+      [],
     );
+    // Over the directives nginx will actually run, not the file: these two
+    // denylists are about what the server does, and a commented-out example
+    // route carrying the forbidden text turns a file-wide regex red over a
+    // configuration that cannot reach the behaviour. A false alarm on a
+    // compliant change is the same disease as a counter that goes stale on
+    // one. The derivation above already blames the live route by name.
+    const live = stripNginxComments(source);
     assert.doesNotMatch(
-      source,
+      live,
       /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/,
       `${relativePath}: backend routes must not append raw client input directly`,
     );
@@ -330,17 +350,8 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
       /return 308 \$srn_https_public_origin\$request_uri;/,
       relativePath,
     );
-    assert.equal(
-      (
-        source.match(
-          /proxy_set_header X-Forwarded-Proto \$srn_forwarded_proto;/g,
-        ) ?? []
-      ).length,
-      5,
-      relativePath,
-    );
     assert.doesNotMatch(
-      source,
+      live,
       /proxy_set_header X-Forwarded-Proto \$(?:http_x_forwarded_proto|scheme);/,
       relativePath,
     );
@@ -370,18 +381,24 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
     assert.doesNotMatch(source, /includeSubDomains|\bpreload\b/, relativePath);
   }
 
-  assert.equal(
-    (
-      lxcInstaller.match(
-        /proxy_set_header X-Forwarded-For \\\$remote_addr;/g,
-      ) ?? []
-    ).length,
-    4,
-    "LXC public nginx must overwrite X-Forwarded-For on every backend route",
+  // Same derivation for the site the LXC installer writes, lifted out of its
+  // heredoc so the comparison is against the `$remote_addr` nginx will see
+  // rather than the `\$remote_addr` the shell holds.
+  const lxcSite = extractLxcNginxSite(lxcInstaller);
+  assert.ok(lxcSite, "the install.sh nginx heredoc must be locatable");
+  assert.deepEqual(
+    forwardingContractErrors(lxcSite.site, {
+      label: "deploy/lxc/install.sh",
+      forwardedFor: "$remote_addr",
+      forwardedProto: "$scheme",
+      minimumRoutes: 4,
+      lineOffset: lxcSite.lineOffset,
+    }),
+    [],
   );
   assert.doesNotMatch(
-    lxcInstaller,
-    /proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;/,
+    stripNginxComments(lxcSite.site),
+    /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/,
   );
 });
 

@@ -5,6 +5,11 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  extractLxcNginxSite,
+  forwardingContractErrors,
+} from "./nginx-route-contract.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseline = Object.freeze({
   installer: readFileSync(path.join(root, "deploy/lxc/install.sh"), "utf8"),
@@ -579,8 +584,6 @@ function validate(files) {
     );
   }
   if (
-    occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !==
-      4 ||
     installer.includes("ENFORCE_HTTPS_FROM_PROXY") ||
     installer.includes("srn_hsts_header") ||
     installer.includes("srn_redirect_to_https")
@@ -589,16 +592,112 @@ function validate(files) {
       "LXC must leave HTTPS redirect and HSTS enforcement to its outer proxy",
     );
   }
+  // Derived from the routes the installer actually writes, not counted. This
+  // rule used to demand a hardcoded number of `X-Forwarded-Proto $scheme`
+  // lines, which went stale the moment 0c466fcc added the CalDAV route: the
+  // repair is to bump a number, and a bumped number looks exactly the same
+  // whether or not the new route is compliant. Every proxy_pass in the
+  // generated site must overwrite both forwarding headers from the local
+  // connection instead, so a new route either passes or is named here.
+  const lxcSite = extractLxcNginxSite(installer);
+  if (lxcSite === null) {
+    errors.push(
+      "the LXC installer must write its public nginx site from one locatable heredoc",
+    );
+  } else {
+    errors.push(
+      ...forwardingContractErrors(lxcSite.site, {
+        label: "deploy/lxc/install.sh",
+        forwardedFor: "$remote_addr",
+        forwardedProto: "$scheme",
+        minimumRoutes: 4,
+        lineOffset: lxcSite.lineOffset,
+      }),
+    );
+  }
   return errors;
 }
 
+/**
+ * Replace EVERY occurrence of `from` in exactly one fixture file.
+ *
+ * `String.prototype.replace` with a string pattern rewrites only the FIRST
+ * occurrence, and that silently disables the negative test that calls it:
+ * `validate()` below compares occurrence COUNTS, so once install.sh carried
+ * four `X-Forwarded-Proto $scheme` routes, blanking one left exactly the three
+ * the rule demanded, the rule stopped firing, and the case that asserts an
+ * error observed no error at all. 4a8c2a8f repaired that by bumping the count,
+ * which would have gone inert again the next time a route was added.
+ *
+ * A mutation helper must never be ambiguous about how many occurrences it
+ * changed. These change all of them, and fail loudly -- rather than returning
+ * the baseline dressed up as a violation -- when the fixture no longer
+ * contains the text or when the replacement is not a change at all.
+ * `split`/`join` rather than `replaceAll` so a `$` in `to` stays literal.
+ */
+function mutateEach(file, replacements) {
+  let mutated = baseline[file];
+  for (const [from, to = ""] of replacements) {
+    const found = occurrences(mutated, from);
+    assert.ok(
+      found > 0,
+      `fixture text missing in ${file}, so this mutation is a silent no-op and the assertion it feeds would prove nothing: ${JSON.stringify(from)}`,
+    );
+    const next = mutated.split(from).join(to);
+    assert.notEqual(
+      next,
+      mutated,
+      `rewriting all ${found} occurrence(s) of ${JSON.stringify(from)} in ${file} changed nothing`,
+    );
+    mutated = next;
+  }
+  return { ...baseline, [file]: mutated };
+}
+
 function mutate(file, from, to = "") {
-  assert.ok(baseline[file].includes(from), `fixture text missing in ${file}`);
-  return { ...baseline, [file]: baseline[file].replace(from, to) };
+  return mutateEach(file, [[from, to]]);
+}
+
+/** A rule that fires on the PRESENCE of text needs that text added. */
+function appendTo(file, text) {
+  return { ...baseline, [file]: `${baseline[file]}\n${text}` };
 }
 
 test("LXC deployment satisfies the staged, atomic, fail-closed contract", () => {
   assert.deepEqual(validate(baseline), []);
+});
+
+test("mutate() leaves no occurrence behind, and refuses a mutation that is not one", () => {
+  // The regression guard for the shape of a defect this repository has now hit
+  // twice: a contract test that mutates a fixture with a single-occurrence
+  // `String.replace` stops testing its own target as soon as the fragment
+  // appears more than once. `validate()` compares occurrence counts, so a
+  // survivor can be the compliant number and the negative case then observes
+  // no error while still passing. Fails if `mutate()` ever goes back to
+  // rewriting only the first match.
+  const repeated = "proxy_set_header X-Forwarded-Proto \\$scheme;";
+  const before = occurrences(baseline.installer, repeated);
+  assert.ok(
+    before >= 2,
+    `this guard is only meaningful while install.sh repeats ${repeated}; it occurs ${before} time(s)`,
+  );
+  const left = occurrences(mutate("installer", repeated).installer, repeated);
+  assert.equal(
+    left,
+    0,
+    `mutate() left ${left} of ${before} occurrences behind, so a count-based rule can still be satisfied by the survivors`,
+  );
+
+  // A mutation that changes nothing is worse than no test: it feeds `validate`
+  // the untouched baseline and whatever the caller asserts about it is a lie.
+  assert.throws(
+    () => mutate("installer", "text that install.sh has never contained"),
+    /silent no-op/,
+  );
+  assert.throws(
+    () => mutate("installer", repeated, repeated),
+    /changed nothing/,
+  );
 });
 
 test("LXC secret contract rejects unsafe parsing, paths, permissions, and migration", () => {
@@ -1150,7 +1249,12 @@ test("LXC contract persists public origin without trusting forwarded transport",
     [
       "proxy_set_header X-Forwarded-Proto \\$scheme;",
       "proxy_set_header X-Forwarded-Proto \\$http_x_forwarded_proto;",
-      "outer proxy",
+      "must overwrite it with \\$scheme",
+    ],
+    [
+      "proxy_set_header X-Forwarded-For \\$remote_addr;",
+      "proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;",
+      "must overwrite it with \\$remote_addr",
     ],
   ]) {
     assert.match(
@@ -1164,6 +1268,48 @@ test("LXC contract persists public origin without trusting forwarded transport",
       installer: `${baseline.installer}\n. "\${PUBLIC_URL_CONFIG_FILE}"`,
     }).join("\n"),
     /never sourced as shell/,
+  );
+});
+
+test("LXC forwarding is checked per route, so one unsanitized route is named", () => {
+  // The failure this rule exists to catch is ONE route trusting the client,
+  // not all of them: four compliant routes plus a fifth that forwards
+  // `$proxy_add_x_forwarded_for` is exactly the regression a hardcoded
+  // occurrence count was bumped past. `client_max_body_size 1m;` is unique to
+  // the CalDAV block, so this mutation reaches that route and no other.
+  const davOnly = mutate(
+    "installer",
+    [
+      "    proxy_set_header X-Forwarded-For \\$remote_addr;",
+      "    proxy_set_header X-Forwarded-Proto \\$scheme;",
+      "    proxy_set_header X-Real-IP \\$remote_addr;",
+      "    client_max_body_size 1m;",
+    ].join("\n"),
+    [
+      "    proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;",
+      "    proxy_set_header X-Forwarded-Proto \\$scheme;",
+      "    proxy_set_header X-Real-IP \\$remote_addr;",
+      "    client_max_body_size 1m;",
+    ].join("\n"),
+  );
+  const errors = validate(davOnly);
+  assert.equal(
+    errors.length,
+    1,
+    `exactly the CalDAV route must be blamed: ${errors.join("\n")}`,
+  );
+  assert.match(
+    errors[0],
+    /deploy\/lxc\/install\.sh:\d+: backend route "location ~ \^\/dav\(\/\|\$\)" sets X-Forwarded-For to "\$proxy_add_x_forwarded_for" but every proxied backend route must overwrite it with \$remote_addr/,
+  );
+
+  // Losing a route is a red too: a per-route loop over an empty route list
+  // asserts nothing at all.
+  assert.match(
+    validate(
+      mutate("installer", "    proxy_pass http://127.0.0.1:3000;\n"),
+    ).join("\n"),
+    /found 0 proxied backend route\(s\) \(none\) but at least 4 are required/,
   );
 });
 
@@ -1263,6 +1409,101 @@ test("LXC generated env, launcher, and staged smoke pin the backend to loopback"
     ).join("\n"),
     /staged LXC backend smoke must bind only to loopback/,
   );
+});
+
+test("every remaining LXC rule reports when its invariant is actually broken", () => {
+  // A liveness campaign over `validate()` -- silencing each rule in turn and
+  // checking some test goes red -- left eleven rules with no failing-direction
+  // case at all: they could only ever report, never be shown to report. Two of
+  // them are below because moving the forwarding count out of the
+  // outer-proxy rule took away the only mutation that had been killing it; the
+  // rest were already uncovered. A rule nothing can make fire is not a rule.
+  for (const [files, expected] of [
+    // Dropping the pinned NodeSource key leaves the installer trusting
+    // whatever key the mirror serves. (`NODESOURCE_KEY_FINGERPRINT` is not in
+    // install.sh at all, so the literal fingerprint is the whole pin.)
+    [
+      mutate("installer", "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"),
+      /NodeSource signing key fingerprint must be pinned/,
+    ],
+    [
+      mutate(
+        "installer",
+        'git -C "${SOURCE_DIR}" fetch --all --tags --prune',
+        'git -C "${SOURCE_DIR}" fetch',
+      ),
+      /source fetch must be explicit and fail closed/,
+    ],
+    // `cat-file -t` prints a type for any object; only `-e` proves the
+    // resolved ref IS the expected commit.
+    [
+      mutate("installer", "cat-file -e", "cat-file -t"),
+      /resolved refs must be verified as the expected commit object/,
+    ],
+    [
+      mutate(
+        "installer",
+        "SRN_DEPLOY_VERSION must be 1-128 safe ASCII version characters.",
+      ),
+      /deployment version must be validated before host mutation/,
+    ],
+    [
+      mutate("unit", "ProtectSystem=strict", "ProtectSystem=full"),
+      /systemd must restrict writes to the persistent data directory/,
+    ],
+    [
+      mutate("readme", "--rollback", "--undo"),
+      /operators need documented pinning and rollback procedures/,
+    ],
+    [
+      mutate(
+        "installer",
+        'persist_assistant_secret "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"',
+        "true",
+      ),
+      /durably route the internal assistant pairing secret/,
+    ],
+    [
+      mutate(
+        "readme",
+        "creates the assistant pairing-encryption key internally",
+      ),
+      /automatic pairing-key and fail-closed recovery guidance/,
+    ],
+    // These three fire on the PRESENCE of text, so the violation has to be
+    // added rather than removed.
+    [
+      appendTo("installer", '. "${SECRETS_FILE}"'),
+      /persistent LXC secrets must be parsed as inert data/,
+    ],
+    [
+      appendTo("installer", 'ENFORCE_HTTPS_FROM_PROXY="true"'),
+      /leave HTTPS redirect and HSTS enforcement to its outer proxy/,
+    ],
+    [
+      appendTo(
+        "installer",
+        "add_header Strict-Transport-Security $srn_hsts_header always;",
+      ),
+      /leave HTTPS redirect and HSTS enforcement to its outer proxy/,
+    ],
+    [
+      appendTo("installer", "return 308 $srn_redirect_to_https;"),
+      /leave HTTPS redirect and HSTS enforcement to its outer proxy/,
+    ],
+    // And the route derivation has to be able to say it could not read the
+    // site at all, rather than silently checking nothing.
+    [
+      mutate(
+        "installer",
+        'cat > "${conf}" <<EOF',
+        "cat > \"${conf}\" <<'NGINX_SITE'",
+      ),
+      /must write its public nginx site from one locatable heredoc/,
+    ],
+  ]) {
+    assert.match(validate(files).join("\n"), expected);
+  }
 });
 
 test("LXC contract rejects writable runtime source and remote shell bootstrap", () => {

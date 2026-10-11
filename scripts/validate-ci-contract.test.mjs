@@ -78,7 +78,28 @@ function withCiJobChanged(jobName, update) {
   });
 }
 
-function replaceRequired(source, current, replacement = "") {
+/**
+ * Replace the FIRST occurrence of `current`, declaring how many there are.
+ *
+ * Mutating one of several occurrences is deliberate here -- blanking one of
+ * three deployment-identity paths is a sharper test than blanking all three --
+ * but it is only safe while the count is known. `validateCiContract` compares
+ * exact counts (`resolves.length !== 3`), so a fixture that grows one extra
+ * occurrence makes a single-occurrence replace land on the compliant number:
+ * the rule stops firing and the case that asserts an error observes none. That
+ * is not hypothetical, it is 4a8c2a8f in scripts/validate-lxc-deploy.test.mjs.
+ * `occurrences` pins the shape the call site is relying on, so the fixture
+ * changing under it is a loud failure rather than a silent pass.
+ *
+ * Use `replaceAllRequired` when every occurrence should go.
+ */
+function replaceRequired(source, current, replacement = "", occurrences = 1) {
+  const found = source.split(current).length - 1;
+  assert.equal(
+    found,
+    occurrences,
+    `test mutation expected ${occurrences} occurrence(s) of ${JSON.stringify(current)} but found ${found}; replacing the first of a different number can leave a count-based rule satisfied, and the assertion it feeds would then prove nothing`,
+  );
   const changed = source.replace(current, replacement);
   assert.notEqual(changed, source, `test mutation must replace: ${current}`);
   return changed;
@@ -731,7 +752,9 @@ test("all setup start paths must resolve and verify immutable deployment identit
     .replace(/\r?\n/g, "\r\n");
   assert.match(
     validateSetupOverwriteContract(
-      replaceRequired(shell, "      resolve_clean_deployment_revision"),
+      // One of the three paths, not all three: setup.sh spells two of them at
+      // this indentation and the third elsewhere.
+      replaceRequired(shell, "      resolve_clean_deployment_revision", "", 2),
       powershell,
     ).join("\n"),
     /every one of the three build\/start paths must resolve and verify deployment identity/,
@@ -742,6 +765,8 @@ test("all setup start paths must resolve and verify immutable deployment identit
       replaceRequired(
         powershell,
         "      try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }",
+        "",
+        2,
       ),
     ).join("\n"),
     /every one of the three build\/start paths must resolve and verify deployment identity/,
