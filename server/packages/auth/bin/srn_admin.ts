@@ -46,6 +46,8 @@ import {
   IP_ACL_BLOCK_KEY,
   IpAclList,
   OPERATOR_ENVS,
+  ITEM_BYTES_NOTE,
+  ITEM_BYTES_UNAVAILABLE,
   STORAGE_LIMIT_SETTING,
   STORAGE_USED_SETTING,
   findFlagSpec,
@@ -357,8 +359,11 @@ async function cmdUsersList(args: ParsedArgs): Promise<number> {
     row.mfaEnabled ? 'on' : 'off',
     `${formatBytes(row.storageUsedBytes)} / ${formatBytes(row.storageLimitBytes)}`,
   ])
-  outLine(formatTable(['EMAIL', 'UUID', 'CREATED', 'ROLES', 'BANNED', 'SUSPENDED', 'MFA', 'STORAGE USED/LIMIT'], rows))
+  outLine(
+    formatTable(['EMAIL', 'UUID', 'CREATED', 'ROLES', 'BANNED', 'SUSPENDED', 'MFA', 'FILE STORAGE USED/LIMIT'], rows),
+  )
   outLine(`\n${offset + 1}-${offset + result.rows.length} of ${result.total} user(s)`)
+  outLine(ITEM_BYTES_NOTE)
 
   return 0
 }
@@ -452,7 +457,19 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
       },
       effectivePermissions: effective?.effectivePermissionNames ?? null,
       subscription: row?.subscription ?? null,
-      storage: { usedBytes: row?.storageUsedBytes ?? null, limitBytes: row?.storageLimitBytes ?? null },
+      storage: {
+        /**
+         * Uploaded FILE bytes only. The key is kept for compatibility and the
+         * `scope` beside it says what it is a figure OF, because a consumer that
+         * read `usedBytes` as "this account's storage" was under-reporting most
+         * accounts by the larger half and had no way to know.
+         */
+        scope: 'uploaded-file-bytes-only',
+        usedBytes: row?.storageUsedBytes ?? null,
+        limitBytes: row?.storageLimitBytes ?? null,
+        itemBytesUsed: null,
+        itemBytesNote: ITEM_BYTES_UNAVAILABLE,
+      },
       flags,
       nextcloudAppPasswordConfigured: nextcloudConfigured,
     })
@@ -488,8 +505,9 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
     outLine(`plan:     ${row.subscription.plan ?? '-'} (${row.subscription.active ? 'active' : 'inactive'})`)
   }
   outLine(
-    `storage:  ${formatBytes(row?.storageUsedBytes ?? null)} used / ${formatBytes(row?.storageLimitBytes ?? null)} limit`,
+    `files:    ${formatBytes(row?.storageUsedBytes ?? null)} used / ${formatBytes(row?.storageLimitBytes ?? null)} limit`,
   )
+  outLine(`notes:    ${ITEM_BYTES_UNAVAILABLE}`)
   outLine('')
   outLine(`direct roles:          ${directRoles.join(', ') || '(none)'}`)
   if (effective) {
@@ -941,10 +959,11 @@ async function cmdStorageLimitGet(args: ParsedArgs): Promise<number> {
     return 0
   }
 
-  outLine(`used:  ${formatBytes(info.used)}${info.used !== null ? ` (${info.used} bytes)` : ''}`)
+  outLine(`files used:  ${formatBytes(info.used)}${info.used !== null ? ` (${info.used} bytes)` : ''}`)
   outLine(
-    `limit: ${formatBytes(info.limit)}${info.limit !== null && info.limit !== -1 ? ` (${info.limit} bytes)` : ''}`,
+    `files limit: ${formatBytes(info.limit)}${info.limit !== null && info.limit !== -1 ? ` (${info.limit} bytes)` : ''}`,
   )
+  outLine(`notes:       ${ITEM_BYTES_UNAVAILABLE}`)
   // `-` above is "no figure is stored", NEVER a measured zero: the usage counter
   // is written only when an upload succeeds. Say which silence it is rather than
   // leaving the reader to guess.

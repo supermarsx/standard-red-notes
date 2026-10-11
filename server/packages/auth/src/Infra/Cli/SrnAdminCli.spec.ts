@@ -3,6 +3,8 @@ import 'reflect-metadata'
 import {
   CLI_MANAGEABLE_FLAGS,
   fileQuotaScopeUuid,
+  ITEM_BYTES_NOTE,
+  ITEM_BYTES_UNAVAILABLE,
   findFlagSpec,
   formatBytes,
   formatLockTtl,
@@ -568,6 +570,43 @@ describe('SrnAdminCli helpers', () => {
     it('cliIpv4ToInt parses and rejects consistently', () => {
       expect(cliIpv4ToInt('255.255.255.255')).toBe(0xffffffff)
       expect(cliIpv4ToInt('256.0.0.1')).toBeNull()
+    })
+  })
+
+  /**
+   * Standard Red Notes: every storage figure this CLI prints is the FILE half of
+   * an account's stored bytes, and for most accounts the notes it leaves out are
+   * the LARGER half.
+   *
+   * *** AN UNLABELLED FIGURE IS THE DEFECT, NOT A COSMETIC PROBLEM. *** The admin
+   * panel's own space column under-reported most accounts for exactly this reason
+   * and had to be fixed; `storage: 3 MB used` here says the same false thing in a
+   * surface nobody was looking at. These hold the label, and the statement of
+   * where the other half CAN be read, to the source rather than to a convention.
+   */
+  describe('storage figures say which half they are', () => {
+    it('names the file half and points at the surface that reports both', () => {
+      expect(ITEM_BYTES_UNAVAILABLE).toContain('note bytes')
+      expect(ITEM_BYTES_UNAVAILABLE).toContain('admin pane')
+      expect(ITEM_BYTES_NOTE).toContain('FILE bytes only')
+      expect(ITEM_BYTES_NOTE).toContain('FILE_UPLOAD_BYTES_USED')
+      // ...and it must say which half is MISSING, not merely which is present.
+      expect(ITEM_BYTES_NOTE).toContain('larger half')
+    })
+
+    it('never offers a figure for the half it cannot read', () => {
+      // No digits: a sentence explaining an absence must not contain a quantity
+      // that could be mistaken for one, and a '0' here would be the fabricated
+      // measurement this CLI has shipped before.
+      expect(ITEM_BYTES_UNAVAILABLE).not.toMatch(/\d/)
+    })
+
+    it('says in its own help that the column is the file half', () => {
+      expect(helpFor('users', 'list')).toContain('FILE storage')
+      expect(helpFor('users', 'list')).toContain('not available from the CLI')
+      expect(helpFor('whois')).toContain('FILE half only')
+      expect(helpFor('storage-limit')).toContain('storage-limit')
+      expect(usage()).toContain('Show FILE storage used / limit')
     })
   })
 })

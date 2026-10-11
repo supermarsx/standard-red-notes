@@ -399,6 +399,31 @@ export const CLI_MANAGEABLE_FLAGS: AdminFlagSpec[] = [
 export const STORAGE_LIMIT_SETTING = 'FILE_UPLOAD_BYTES_LIMIT'
 export const STORAGE_USED_SETTING = 'FILE_UPLOAD_BYTES_USED'
 
+/**
+ * Standard Red Notes: *** WHAT EVERY STORAGE FIGURE IN THIS CLI IS, AND WHAT IT
+ * IS NOT. ***
+ *
+ * An account's stored bytes are its synced ITEM payload (notes) plus its uploaded
+ * FILES, and for most accounts the notes are the larger half. Both FILE_UPLOAD_*
+ * settings are the FILE half, and they are all this CLI can read: the note half is
+ * `items.content_size` on the syncing server, which publishes it over HTTP behind
+ * a cross-service token this process does not hold and has no business minting.
+ *
+ * The admin pane reads it per account through the syncing server's admin endpoint
+ * and shows both halves; this CLI prints the half it has and says so. An
+ * unqualified `storage:` line was the under-reporting the admin panel's own space
+ * column was fixed for, and repeating it here with no label would be the same
+ * defect in a surface nobody was looking at.
+ */
+export const ITEM_BYTES_UNAVAILABLE =
+  'not available from the CLI — synced note bytes live on the syncing server, which publishes them to the admin pane (Users ▸ a user ▸ Space used), not to this process'
+
+/** The same statement, as the footer of a table whose column is file bytes. */
+export const ITEM_BYTES_NOTE =
+  'FILE STORAGE USED/LIMIT is uploaded FILE bytes only (FILE_UPLOAD_BYTES_USED) against the stored allowance;\n' +
+  'synced note bytes — usually the larger half — are not in it and are not available from the CLI. The admin\n' +
+  "pane's Users tab reports both halves per account."
+
 export function findFlagSpec(name: string): AdminFlagSpec | undefined {
   return CLI_MANAGEABLE_FLAGS.find((spec) => spec.name === name.toUpperCase())
 }
@@ -985,7 +1010,8 @@ USAGE
 
 USERS
   users list [filters]               Paginated, filtered user table
-  user <user>                        Rich whois: roles, ban, MFA, storage, flags
+  user <user>                        Rich whois: roles, ban, MFA, file storage,
+                                     flags
                                      (aliases: whois, list-roles)
   ban <user> [--reason TEXT] [--type permanent|temporary|shadow]
              [--until ISO | --duration MINUTES]
@@ -1020,7 +1046,7 @@ FLAGS
   flags get <user> [SETTING]         Read one flag (or all of them)
   flags set <user> <SETTING> <value> Write a flag (validated)
   flags unset <user> <SETTING>       Clear a flag back to its default
-  storage-limit get <user>           Show storage used / limit
+  storage-limit get <user>           Show FILE storage used / limit
   storage-limit set <user> <bytes|unlimited>
 
 SERVER
@@ -1092,12 +1118,15 @@ USAGE
 
   DATE is ISO-8601 (e.g. 2026-01-31) or epoch milliseconds.
   Default: 100 rows, newest first. Columns: email, uuid, created, roles,
-  banned, suspended, MFA, storage used/limit.`,
+  banned, suspended, MFA, FILE storage used/limit. The file half only: synced
+  note bytes are not available from the CLI (the admin pane reports both).`,
   user: `user <user> — rich whois (absorbs the old 'whois' and 'list-roles')
 
 Shows uuid/email/created, direct + group-conferred + effective roles,
-effective permissions, ban status, MFA on/off, storage used/limit and the
-admin-manageable feature flags. --json for machine-readable output.`,
+effective permissions, ban status, MFA on/off, uploaded-FILE storage used/limit
+and the admin-manageable feature flags. The storage figure is the FILE half only;
+synced note bytes are not available from the CLI. --json for machine-readable
+output.`,
   ban: `ban <user> [--reason TEXT] [--type permanent|temporary|shadow]
           [--until ISO-DATE | --duration MINUTES]
 
