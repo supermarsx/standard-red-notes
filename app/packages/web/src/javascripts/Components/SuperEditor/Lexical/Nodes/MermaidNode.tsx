@@ -68,6 +68,8 @@ import {
   useMermaidAppTheme,
   useMermaidLabelFontFamily,
 } from './MermaidAppTheme'
+import MermaidCodePane from './MermaidCodePane'
+import { useMermaidSourceHighlightingEnabled } from './MermaidSourceHighlightPreference'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
 
@@ -595,6 +597,9 @@ function MermaidComponent({
   // OS preference) lives in MermaidAppTheme.ts, whose header says why each of
   // those is needed and which one the previous observer was missing.
   const appTheme: MermaidAppTheme = useMermaidAppTheme()
+  // The global preference, read live. Tolerates a missing ApplicationProvider,
+  // which is the PUBLIC share page — see MermaidSourceHighlightPreference.ts.
+  const highlightSource = useMermaidSourceHighlightingEnabled()
 
   const activeTheme = resolveMermaidRenderTheme(settings.themeMode, appTheme)
   // The identity of what reaches mermaid, so the render effect below re-runs on a
@@ -824,15 +829,21 @@ function MermaidComponent({
 
         {showCode ? (
           <div className={'flex min-w-0 flex-col ' + (isTwoPane ? 'md:border-border md:w-1/2 md:border-r' : 'w-full')}>
-            <textarea
-              className="bg-default text-foreground w-full resize-y p-2 font-mono text-sm outline-none"
-              rows={Math.max(6, draft.split('\n').length + 1)}
-              value={draft}
-              spellCheck={false}
-              onChange={(e) => onCodeChange(e.target.value)}
-              placeholder="Enter mermaid source…"
-              aria-label="Mermaid source"
-            />
+            {/*
+              The same `<textarea>` this pane has always been, now with an
+              optional highlighted `<pre>` underlay behind it. MermaidCodePane
+              owns both layers and the geometry that keeps them identical; the
+              editing contract here is unchanged — the same controlled `value`
+              and the same `onCodeChange`, so the local draft above still keeps
+              typing snappy and native undo, selection, clipboard and IME are
+              untouched.
+
+              `highlightSource` is the global preference, read live: toggling it
+              in Preferences adds or removes the underlay with no reload and
+              without remounting the textarea, so the caret and the undo stack
+              survive the switch.
+            */}
+            <MermaidCodePane value={draft} onChange={onCodeChange} highlight={highlightSource} />
           </div>
         ) : null}
 
