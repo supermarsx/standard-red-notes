@@ -81,9 +81,9 @@ describe('typographyProfiles', () => {
       expect(decls).toContain('border-left-style: solid')
     })
 
-    it('resolves a google: fontFamily through the vetted grammar', () => {
+    it('resolves a google: fontFamily through the vetted grammar, onto the bundled stack', () => {
       const decls = blockStyleToDeclarations({ fontFamily: 'google:Inter' })
-      expect(decls).toContain("font-family: 'Inter'")
+      expect(decls).toContain("font-family: 'Inter', sans-serif")
     })
   })
 

@@ -20,11 +20,11 @@ import { CHANGE_EDITOR_WIDTH_COMMAND } from '@standardnotes/ui-services'
 import usePreference, { useLocalPreference } from '../../../../Hooks/usePreference'
 import {
   BuiltInEditorFonts,
-  getGoogleFontName,
-  isGoogleFontValue,
+  BundledEditorFonts,
+  findBundledEditorFont,
+  getPrimaryFontFamily,
   isLocalFontAccessSupported,
   LocalFontEntry,
-  makeGoogleFontValue,
   queryLocalFonts,
 } from '@/Utils/editorFont'
 
@@ -37,7 +37,7 @@ const inputClasses = classNames(
   'focus-within:ring-2 focus-within:ring-info',
 )
 
-type FontMode = 'default' | 'builtin' | 'local' | 'google'
+type FontMode = 'default' | 'builtin' | 'local' | 'bundled'
 
 const EditorFontSelector = ({ application }: Props) => {
   const fontFamily = usePreference(PrefKey.EditorFontFamily)
@@ -54,13 +54,22 @@ const EditorFontSelector = ({ application }: Props) => {
   const [localFonts, setLocalFonts] = useState<LocalFontEntry[]>([])
   const [localFontsLoaded, setLocalFontsLoaded] = useState(false)
 
+  /**
+   * The bundled catalog entry this stored value refers to, if any. Covers a
+   * stack we wrote (`'Inter', sans-serif`), a bare family name, and a LEGACY
+   * `google:Inter` from before the fonts were self-hosted — all three land on
+   * the same picker entry, so an existing preference opens on its real font
+   * rather than on an empty text box.
+   */
+  const bundledSelection = useMemo(() => findBundledEditorFont(getPrimaryFontFamily(fontFamily)), [fontFamily])
+
   // Derive the initial UI mode from the stored value.
   const initialMode: FontMode = useMemo(() => {
     if (!fontFamily) {
       return 'default'
     }
-    if (isGoogleFontValue(fontFamily)) {
-      return 'google'
+    if (bundledSelection) {
+      return 'bundled'
     }
     const matchesBuiltIn = Object.values(BuiltInEditorFonts).includes(
       fontFamily as (typeof BuiltInEditorFonts)[keyof typeof BuiltInEditorFonts],
@@ -70,20 +79,31 @@ const EditorFontSelector = ({ application }: Props) => {
   }, [])
 
   const [mode, setMode] = useState<FontMode>(initialMode)
-  const [googleFontInput, setGoogleFontInput] = useState(
-    isGoogleFontValue(fontFamily) ? getGoogleFontName(fontFamily) : '',
-  )
-  const [localFontInput, setLocalFontInput] = useState(fontFamily && !isGoogleFontValue(fontFamily) ? fontFamily : '')
+  const [bundledFontInput, setBundledFontInput] = useState(bundledSelection?.css ?? BundledEditorFonts[0]?.css ?? '')
+  const [localFontInput, setLocalFontInput] = useState(bundledSelection || !fontFamily ? '' : fontFamily)
 
   const modeOptions = useMemo(() => {
     const options = [
       { label: 'Default (theme)', value: 'default' },
       { label: 'Built-in font', value: 'builtin' },
       { label: 'Local / system font', value: 'local' },
-      { label: 'Google Font', value: 'google' },
+      { label: 'Bundled font', value: 'bundled' },
     ]
     return options
   }, [])
+
+  /**
+   * The self-hosted families, labelled with their category so the flat dropdown
+   * still reads as grouped. Derived from the catalog, so a font added to the
+   * bundle appears here without touching this file.
+   */
+  const bundledFontOptions = useMemo(
+    () =>
+      BundledEditorFonts.filter((font): font is typeof font & { css: string } => Boolean(font.css))
+        .map((font) => ({ label: `${font.name} — ${font.category}`, value: font.css }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [],
+  )
 
   const builtInOptions = useMemo(
     () => [
@@ -104,11 +124,19 @@ const EditorFontSelector = ({ application }: Props) => {
         setFontFamily(BuiltInEditorFonts.Sans)
       } else if (nextMode === 'local') {
         setFontFamily(localFontInput.trim())
-      } else if (nextMode === 'google') {
-        setFontFamily(googleFontInput.trim() ? makeGoogleFontValue(googleFontInput) : '')
+      } else if (nextMode === 'bundled') {
+        setFontFamily(bundledFontInput)
       }
     },
-    [googleFontInput, localFontInput, setFontFamily],
+    [bundledFontInput, localFontInput, setFontFamily],
+  )
+
+  const handleBundledFontChange = useCallback(
+    (value: string) => {
+      setBundledFontInput(value)
+      setFontFamily(value)
+    },
+    [setFontFamily],
   )
 
   const loadLocalFonts = useCallback(async () => {
@@ -137,12 +165,6 @@ const EditorFontSelector = ({ application }: Props) => {
     },
     [setFontFamily],
   )
-
-  const handleGoogleInputChange: ChangeEventHandler<HTMLInputElement> = (event) => {
-    const value = event.currentTarget.value
-    setGoogleFontInput(value)
-    setFontFamily(value.trim() ? makeGoogleFontValue(value) : '')
-  }
 
   const localFontDropdownOptions = useMemo(
     () => localFonts.map((font) => ({ label: font.family, value: font.family })),
@@ -205,18 +227,17 @@ const EditorFontSelector = ({ application }: Props) => {
             </div>
           )}
 
-          {mode === 'google' && (
+          {mode === 'bundled' && (
             <div className="mt-2 flex flex-col gap-2">
-              <input
-                className={inputClasses}
-                placeholder="e.g. Inter"
-                value={googleFontInput}
-                onChange={handleGoogleInputChange}
-                spellCheck={false}
+              <Dropdown
+                label="Select a bundled font"
+                items={bundledFontOptions}
+                value={bundledFontInput}
+                onChange={handleBundledFontChange}
               />
               <Text>
-                Loads the font from Google's servers (fonts.googleapis.com), which is a third-party network request.
-                Privacy-conscious users may prefer a local / system font instead.
+                {BundledEditorFonts.length} open-source fonts shipped with the app and served from this server. They
+                work offline and send no request to any third party.
               </Text>
             </div>
           )}
