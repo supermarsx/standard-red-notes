@@ -1833,3 +1833,84 @@ test("the CSP inline-script pin is verified against the served document, not jus
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });
+
+test("the docker and LXC CSP inline-script extractors are the same implementation", () => {
+  // Two implementations of one digest is the defect. deploy/lxc/install.sh used
+  // to carry a shorter variant that built a comment-stripped copy of the buffer
+  // and cut the script body out of THAT, and it diverged from the docker one on
+  // four shapes -- two of them silently wrong rather than failing closed:
+  //
+  //   - a body containing the characters `<!--` had everything up to the next
+  //     `-->` deleted from the hashed bytes (measured: an 83-byte body hashed as
+  //     40), so the pin authorised bytes the browser never sees;
+  //   - an opening tag merely CONTAINING the letters `src` (`data-srcset`) was
+  //     taken for an external script and never pinned at all;
+  //   - `</script >` with a space and `<SCRIPT>` in capitals were not found,
+  //     which at least fails the install closed.
+  //
+  // A deployment whose bootstrap is refused comes up with
+  // `window.defaultSyncServer` undefined and no sync host, so this is worth a
+  // gate rather than a comment.
+  const bodyOf = (source, name, where) => {
+    const match = source.match(
+      new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, "m"),
+    );
+    assert.ok(match, `${name} must exist in ${where}`);
+    // Compare the implementation, not the name it is bound to.
+    return match[0].replace(new RegExp(`^${name}`), "<fn>");
+  };
+
+  const dockerBody = bodyOf(
+    dockerEntrypoint,
+    "extract_inline_script",
+    "app/docker/docker-entrypoint.sh",
+  );
+  const lxcBody = bodyOf(
+    lxcInstaller,
+    "extract_staged_inline_script",
+    "deploy/lxc/install.sh",
+  );
+
+  assert.equal(
+    lxcBody,
+    dockerBody,
+    "deploy/lxc/install.sh must carry a byte-for-byte copy of the docker extractor",
+  );
+
+  // Guard the guard: an empty or trivial match would compare nothing.
+  assert.ok(
+    dockerBody.length > 400,
+    `the extractor looks too short to be the real one (${dockerBody.length} chars)`,
+  );
+  // And the properties the weaker variant lacked, named so a rewrite that drops
+  // one is caught even if both files are rewritten together.
+  assert.match(dockerBody, /tolower\(buf\)/, "match on a lowercase mirror");
+  assert.match(
+    dockerBody,
+    /substr\(buf, bodystart, ce - 1\)/,
+    "cut the hashed bytes from the UNTOUCHED buffer",
+  );
+  assert.match(
+    dockerBody,
+    /src\[ \\t\\r\\n\]\*=/,
+    "require `src` to be a real attribute, not any occurrence of the letters",
+  );
+  assert.match(dockerBody, /"<\/script"/, "accept `</script >`");
+
+  // Both paths must verify the pin, not merely substitute it.
+  assert.match(dockerEntrypoint, /^verify_csp_inline_hash\(\) \{/m);
+  assert.match(
+    lxcInstaller,
+    /the staged CSP does not authorise the inline scripts/,
+  );
+  for (const [where, source] of [
+    ["app/docker/docker-entrypoint.sh", dockerEntrypoint],
+    ["deploy/lxc/install.sh", lxcInstaller],
+  ]) {
+    assert.match(
+      source,
+      /__CSP_INLINE_SCRIPT_HASH__'; then|__CSP_INLINE_SCRIPT_HASH__'; then|grep -Fq '__CSP_INLINE_SCRIPT_HASH__'/,
+      `${where} must refuse a surviving placeholder`,
+    );
+  }
+});

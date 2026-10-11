@@ -832,6 +832,75 @@ EOF
 STAGED_NGINX_SITE="${DEPLOY_ROOT}/.srn-nginx.conf"
 install_nginx_site "${STAGED_NGINX_SITE}"
 
+# The Nth inline <script>'s byte-exact body, or a non-zero exit when there is no
+# Nth one.
+#
+# This is a BYTE-FOR-BYTE copy of extract_inline_script in
+# app/docker/docker-entrypoint.sh, and it must stay one. This file used to carry
+# a shorter variant that built a comment-stripped copy of the buffer and cut the
+# body out of THAT, and it diverged from the docker one on four shapes, two of
+# them silently:
+#
+#   - a script body containing the characters `<!--` (in a string, in a regex)
+#     had everything up to the next `-->` DELETED from the hashed bytes:
+#     measured, an 83-byte body hashed as 40, so the pin authorised bytes the
+#     browser never sees and the script was refused;
+#   - an opening tag merely CONTAINING the letters `src` (`data-srcset`, any
+#     future `data-src-*`) was treated as external and never pinned at all,
+#     likewise refused at runtime;
+#   - `</script >` with a space, and `<SCRIPT>` in capitals, were not found at
+#     all, which at least fails closed here (`count` stays 0 and the install
+#     dies) rather than staging a wrong policy.
+#
+# The version below skips comments by advancing an index and always cuts the
+# bytes from the UNTOUCHED buffer, matches on a lowercase position-aligned
+# mirror so `<SCRIPT>` is found without changing what gets hashed, and requires
+# `src` to be a real attribute. Two implementations of one digest is the defect.
+extract_staged_inline_script() {
+  awk -v want="${2:-1}" '
+    { buf = buf $0 "\n" }
+    END {
+      L = length(buf)
+      lbuf = tolower(buf)   # position-aligned mirror used only for matching
+      i = 1
+      seen = 0
+      while (i <= L) {
+        if (substr(lbuf, i, 4) == "<!--") {
+          j = index(substr(lbuf, i + 4), "-->")
+          if (j == 0) { exit 1 }   # unterminated comment: refuse to guess
+          i = i + 4 + j + 2
+          continue
+        }
+        if (substr(lbuf, i, 7) == "<script") {
+          d = substr(lbuf, i + 7, 1)   # the tag name must end here
+          if (d == " " || d == "\t" || d == "\r" || d == "\n" || d == "/" || d == ">") {
+            gt = index(substr(lbuf, i), ">")
+            if (gt == 0) { exit 1 }
+            ltag = substr(lbuf, i, gt)        # the whole <script ...> opening tag
+            bodystart = i + gt                # first byte after the opening `>`
+            ce = index(substr(lbuf, bodystart), "</script")
+            if (ce == 0) { exit 1 }
+            after = bodystart + ce - 1 + 8    # first byte after `</script`
+            gt2 = index(substr(lbuf, after), ">")
+            if (gt2 == 0) { exit 1 }
+            if (ltag !~ /[ \t\r\n\/]src[ \t\r\n]*=/) {   # inline, not external
+              seen = seen + 1
+              if (seen == want) {
+                printf "%s", substr(buf, bodystart, ce - 1)
+                exit 0
+              }
+            }
+            i = after + gt2                   # resume past the closing tag
+            continue
+          }
+        }
+        i = i + 1
+      }
+      exit 1
+    }
+  ' "$1"
+}
+
 # Self-heal the CSP inline-script hash against the SERVED index.html — the same
 # approach as app/docker/docker-entrypoint.sh, run here at install/upgrade time.
 apply_csp_hash() {
@@ -853,26 +922,7 @@ apply_csp_hash() {
   # sits at the start of a line and produce a white screen on this topology alone.
   while [ "${want}" -le 32 ]; do
     tmp="$(mktemp)" || return 1
-    if ! awk -v want="${want}" '
-      { buf = buf $0 "\n" }
-      END {
-        L=length(buf); clean=""; i=1
-        while (i<=L) {
-          if (substr(buf,i,4)=="<!--") { rest=substr(buf,i+4); j=index(rest,"-->"); if(j==0)break; i=i+4+j+2 }
-          else { clean=clean substr(buf,i,1); i=i+1 }
-        }
-        CL=length(clean); sp=1; seen=0
-        while (sp<=CL) {
-          seg=substr(clean,sp); p=index(seg,"<script"); if(p==0)exit 1
-          abs=sp+p-1; gt=index(substr(clean,abs),">"); if(gt==0)exit 1
-          tag=substr(clean,abs,gt); if(tag ~ /src/){sp=abs+gt;continue}
-          bs=abs+gt; ce=index(substr(clean,bs),"</script>"); if(ce==0)exit 1
-          seen=seen+1
-          if (seen==want) { printf "%s", substr(clean,bs,ce-1); exit 0 }
-          sp=bs+ce-1+9
-        }
-        exit 1
-      }' "${index}" > "${tmp}" 2>/dev/null; then
+    if ! extract_staged_inline_script "${index}" "${want}" > "${tmp}" 2>/dev/null; then
       rm -f "${tmp}"
       break
     fi
@@ -891,7 +941,52 @@ apply_csp_hash() {
   [ "${want}" -le 32 ] || return 1
   sed -i "s|'sha256-__CSP_INLINE_SCRIPT_HASH__'|${sources}|g" "${conf}"
   grep -Fq "script-src 'self' 'wasm-unsafe-eval' ${sources};" "${conf}" || return 1
+
+  # Verify the policy just staged AUTHORISES the document that will be served.
+  #
+  # The `grep -Fq` above asserts that the string this function just wrote is
+  # present, which is true by construction of the `sed` that wrote it. It passes
+  # over a pin that does not match the script it names -- a hash left behind by
+  # an earlier install, a `sed` that matched a different span, an index.html
+  # rebuilt between the derivation and the release switch -- and the browser then
+  # silently refuses the app bootstrap, leaving window.defaultSyncServer
+  # undefined and sync without a host. So re-derive from the staged index.html as
+  # it stands now, read the source list back out of the staged config, and
+  # require the two to be EQUAL. Equality rather than containment is what catches
+  # a stale hash sitting beside the correct one. Mirrors
+  # verify_csp_inline_hash in app/docker/docker-entrypoint.sh.
+  local staged needed vb64 vtmp vwant
+  if sed 's/#.*//' "${conf}" | grep -Fq '__CSP_INLINE_SCRIPT_HASH__'; then
+    warn "the staged CSP still carries the __CSP_INLINE_SCRIPT_HASH__ placeholder"
+    return 1
+  fi
+  staged="$(sed -n "s|.*script-src 'self' 'wasm-unsafe-eval' \([^;]*\);.*|\1|p" "${conf}" | head -n 1)"
+  [ -n "${staged}" ] || { warn "could not read the app-shell script-src back out of the staged config"; return 1; }
+  needed=""
+  vwant=1
+  while [ "${vwant}" -le 32 ]; do
+    vtmp="$(mktemp)" || return 1
+    if ! extract_staged_inline_script "${index}" "${vwant}" > "${vtmp}" 2>/dev/null; then
+      rm -f "${vtmp}"
+      break
+    fi
+    vb64="$(sha256sum < "${vtmp}" | awk '{print $1}' | xxd -r -p | base64 | tr -d '\n')"
+    rm -f "${vtmp}"
+    printf '%s' "${vb64}" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
+    needed="${needed}${needed:+ }'sha256-${vb64}'"
+    vwant=$((vwant + 1))
+  done
+  [ -n "${needed}" ] || return 1
+  [ "${vwant}" -le 32 ] || return 1
+  if [ "${staged}" != "${needed}" ]; then
+    warn "the staged CSP does not authorise the inline scripts in the staged index.html"
+    warn "  policy:   script-src 'self' 'wasm-unsafe-eval' ${staged};"
+    warn "  document: script-src 'self' 'wasm-unsafe-eval' ${needed};"
+    return 1
+  fi
+
   for hex in ${hashes}; do log "CSP inline-script hash: sha256-${hex}"; done
+  log "CSP inline-script pin verified against the staged index.html"
 }
 apply_csp_hash || die "Could not derive the staged web CSP hash; live release was not switched."
 cat > "${DEPLOY_ROOT}/.srn-nginx-test.conf" <<EOF
