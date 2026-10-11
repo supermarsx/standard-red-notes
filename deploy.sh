@@ -8,10 +8,17 @@
 #
 # Two modes, detected automatically and announced before anything happens:
 #
-#   SETUP   no .env yet. Generates one by running scripts/setup.sh, then builds,
-#           starts and verifies. Nothing to back up on a first install.
-#   UPDATE  .env exists. Pulls, backs up the database, rebuilds, restarts and
+#   SETUP   not configured yet. Generates .env by running scripts/setup.sh,
+#           then builds, starts and verifies. Nothing to back up on a first
+#           install.
+#   UPDATE  configured. Pulls, backs up the database, rebuilds, restarts and
 #           verifies. Safe to run twice; it reseeds nothing and never edits .env.
+#
+# "Configured" is not "an .env file exists". It means .env exists AND every
+# variable the chosen Compose file declares as required is present and
+# non-empty. A stub .env that cannot render the Compose file is reported as
+# such, with the missing variables named, instead of being taken for a working
+# deployment.
 #
 # Usage:
 #   ./deploy.sh                      # detect the mode and do the right thing
@@ -640,6 +647,32 @@ fi
 # there would mint a new AUTH_SERVER_ENCRYPTION_SERVER_KEY and orphan every
 # encrypted row behind it, so that combination is refused rather than guessed.
 # ---------------------------------------------------------------------------
+# Variables the chosen Compose files declare as REQUIRED, i.e. ${NAME:?...}.
+# Compose fails to render without them, so their absence is the difference
+# between "configured" and "a file called .env exists".
+required_compose_variables() {
+  local file
+  for file in "${COMPOSE_FILE_ARGS[@]}"; do
+    [ "$file" = "-f" ] && continue
+    [ -f "$file" ] || continue
+    grep -oE '[$][{][A-Za-z_][A-Za-z0-9_]*:[?][^}]*[}]' "$file" 2>/dev/null || true
+  done | sed -E 's/[$][{]([A-Za-z_][A-Za-z0-9_]*):[?].*/\1/' | sort -u
+}
+
+missing_required_variables() {
+  local name value
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    value="$(env_value "$name")"
+    if [ -z "$value" ]; then
+      # Compose honours the process environment too, so an exported value is a
+      # legitimate way to supply one of these.
+      value="${!name:-}"
+    fi
+    [ -n "$value" ] || printf '%s\n' "$name"
+  done < <(required_compose_variables)
+}
+
 derive_project_name() {
   # Compose derives the default project name from the project directory name,
   # lowercased with everything outside [a-z0-9_-] dropped. Containers are
@@ -676,23 +709,106 @@ else
   ENV_EVIDENCE="no .env at ${ENV_FILE}"
 fi
 
-if [ -n "$FORCE_MODE" ]; then
-  MODE="$FORCE_MODE"
-elif [ "$ENV_PRESENT" -eq 1 ]; then
+# The all-in-one container generates and persists its own secrets to the
+# single-data volume on first boot, so there is nothing for scripts/setup.sh to
+# generate and docker-compose.single.yml declares no required variables. There
+# is no "first install" step to perform on this topology, and running setup
+# would write a 400-line multi-container .env that it does not read.
+MISSING_REQUIRED=""
+if [ "$SINGLE" -eq 1 ]; then
+  if [ "$FORCE_MODE" = "setup" ]; then
+    err "--setup does not apply to the all-in-one topology."
+    err "  The container generates and persists its own secrets to the"
+    err "  single-data volume on first boot, so there is nothing to generate."
+    err "  Customise it with .env.single.example if you want to, then re-run"
+    err "  without --setup."
+    exit 2
+  fi
   MODE="update"
+  ENV_EVIDENCE="all-in-one topology: secrets are generated inside the container, no .env required"
 else
-  MODE="setup"
+  if [ "$ENV_PRESENT" -eq 1 ]; then
+    MISSING_REQUIRED="$(missing_required_variables)"
+  fi
+  if [ -n "$FORCE_MODE" ]; then
+    MODE="$FORCE_MODE"
+  elif [ "$ENV_PRESENT" -eq 0 ]; then
+    MODE="setup"
+  elif [ -n "$MISSING_REQUIRED" ]; then
+    MODE="unconfigured"
+  else
+    MODE="update"
+  fi
+  if [ "$ENV_PRESENT" -eq 1 ]; then
+    # Report the denominator. "every required variable is set" is also true of a
+    # Compose file that requires none, and a satisfied check over an empty list
+    # is not evidence of anything.
+    REQUIRED_COUNT="$(required_compose_variables | grep -c . || true)"
+    if [ -n "$MISSING_REQUIRED" ]; then
+      ENV_EVIDENCE="${ENV_EVIDENCE}, but it is missing required variables"
+    elif [ "${REQUIRED_COUNT:-0}" -eq 0 ]; then
+      ENV_EVIDENCE="${ENV_EVIDENCE}; this Compose file declares no required variables"
+    else
+      ENV_EVIDENCE="${ENV_EVIDENCE}, with all ${REQUIRED_COUNT} required variables set"
+    fi
+  fi
 fi
 
-if [ "$MODE" = "setup" ]; then
-  ok "SETUP (first install): generate .env, then build, start and verify."
-else
-  ok "UPDATE: pull, back up, rebuild, restart and verify."
-fi
+case "$MODE" in
+  setup) ok "SETUP (first install): generate .env, then build, start and verify." ;;
+  update) ok "UPDATE: pull, back up, rebuild, restart and verify." ;;
+  unconfigured) err "NOT CONFIGURED: .env exists but cannot render the Compose file." ;;
+esac
 if [ -n "$FORCE_MODE" ]; then
   info "  Forced with --${FORCE_MODE}; evidence on disk: ${ENV_EVIDENCE}"
 else
   info "  Detected from: ${ENV_EVIDENCE}"
+fi
+
+# An .env that is missing required variables is neither a first install nor a
+# working deployment, and both of the obvious guesses are wrong:
+#
+#   - Routing to update fails later at `compose config` with one variable named
+#     at a time, which is where this script used to end up on exactly this repo.
+#   - Routing to setup cannot help either. scripts/setup.sh on an existing .env
+#     backfills only two specific per-install secrets and then runs
+#     `compose config`, so on a stub it exits 1 and leaves .env untouched
+#     (verified). The only thing that would rewrite it is --force-overwrite,
+#     which rotates the encryption server key and orphans every encrypted row.
+#
+# So: name every missing variable at once, and say which remedy is safe here
+# based on whether this project still owns any state.
+if [ -n "$MISSING_REQUIRED" ]; then
+  err ""
+  err "  Missing or empty in ${ENV_FILE}:"
+  while IFS= read -r missing_name; do
+    [ -n "$missing_name" ] && err "    ${missing_name}"
+  done <<< "$MISSING_REQUIRED"
+  err ""
+  err "  Note that ./scripts/setup.sh will NOT fix this: on an existing .env it"
+  err "  only backfills two per-install secrets and then validates, so it exits"
+  err "  on the same missing variables. Only --force-overwrite rewrites .env,"
+  err "  and that rotates AUTH_SERVER_ENCRYPTION_SERVER_KEY and orphans all"
+  err "  existing encrypted data, so this script never suggests it."
+  err ""
+  UNCONFIGURED_CONTAINERS="$(existing_project_containers)"
+  UNCONFIGURED_VOLUMES="$(existing_project_volumes)"
+  if [ -n "$UNCONFIGURED_CONTAINERS" ] || [ -n "$UNCONFIGURED_VOLUMES" ]; then
+    err "  This project still owns containers or volumes, so there IS data behind"
+    err "  this deployment. Add the missing variables to .env with the values"
+    err "  that deployment was created with -- taken from your backup of .env,"
+    err "  not newly generated. A new MYSQL_PASSWORD will not open the existing"
+    err "  database, and a new encryption key will not decrypt existing rows."
+  else
+    err "  This project owns no containers and no volumes, so there is no data"
+    err "  behind this .env. If it is a leftover stub, move it aside and let this"
+    err "  script generate a complete one:"
+    err "    mv .env .env.stub-backup && ./deploy.sh"
+    err "  Keep the copy until you are sure nothing needed it."
+  fi
+  err ""
+  err "  Either way this script will not guess, and has changed nothing."
+  exit 1
 fi
 
 if [ "$MODE" = "update" ] && [ "$ENV_PRESENT" -eq 0 ]; then
