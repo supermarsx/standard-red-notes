@@ -121,7 +121,11 @@ export async function clearApplicationShellCaches(
  * With the worker unregistered and its caches gone there is nothing left to
  * serve a stale shell; the only layer still in play is the browser's own HTTP
  * cache, which the server's no-cache headers on index.html already govern.
- * Deliberately mirrors the blank-screen recovery path in src/index.html.
+ * This IS the blank-screen recovery path now: `recoverFromBlankShell.ts` calls
+ * it, and the copy that used to live in src/index.html's inline bootstrap is
+ * gone. That copy did both halves at once; this one unregisters the worker
+ * BEFORE purging, so the still-controlling worker cannot re-populate a cache
+ * that was just emptied.
  */
 export async function reloadApplicationClearingCaches(
   environment?: AppCacheResetEnvironment,

@@ -1128,6 +1128,19 @@ test("single-container startup requires successful CSP runtime configuration bef
   }
 });
 
+/**
+ * Does this config pin that hash on the app-shell directive?
+ *
+ * A plain substring test on purpose. These assertions used to build a RegExp
+ * straight from the digest, and a base64 sha256 contains `+` and `/` -- regex
+ * metacharacters. `'sha256-...JY+EvRx...'` compiles to "one or more Y followed
+ * by E", which matches nothing, so the assertion passed only while the digest
+ * happened to contain neither character. It broke the first time an edit to
+ * index.html produced a hash with a `+` in it.
+ */
+const pinnedBy = (configSource, hash) =>
+  configSource.includes(`wasm-unsafe-eval' '${hash}`);
+
 test("docker CSP hashing rotates the parent hash and fails closed without changing the sandbox hash", () => {
   const temporaryDirectory = mkdtempSync(path.join(root, ".tmp-csp-restart-"));
   const relative = (filePath) =>
@@ -1157,9 +1170,9 @@ test("docker CSP hashing rotates the parent hash and fails closed without changi
       /CSP inline-script hash: (sha256-[A-Za-z0-9+/=]+)/,
     )?.[1];
     assert.ok(firstHash, first.stdout);
-    assert.match(
-      readFileSync(configPath, "utf8"),
-      new RegExp(`wasm-unsafe-eval' '${firstHash}`),
+    assert.ok(
+      pinnedBy(readFileSync(configPath, "utf8"), firstHash),
+      `the config must pin ${firstHash}`,
     );
 
     const second = run("true");
@@ -1175,13 +1188,13 @@ test("docker CSP hashing rotates the parent hash and fails closed without changi
     );
 
     const twiceStartedConfig = readFileSync(configPath, "utf8");
-    assert.match(
-      twiceStartedConfig,
-      new RegExp(`wasm-unsafe-eval' '${secondHash}`),
+    assert.ok(
+      pinnedBy(twiceStartedConfig, secondHash),
+      `a restart must pin ${secondHash}`,
     );
-    assert.doesNotMatch(
-      twiceStartedConfig,
-      new RegExp(`wasm-unsafe-eval' '${firstHash}`),
+    assert.ok(
+      !pinnedBy(twiceStartedConfig, firstHash),
+      `a restart must not leave ${firstHash} behind`,
     );
     assert.ok(
       twiceStartedConfig.includes(
@@ -1212,7 +1225,10 @@ test("docker CSP hashing rotates the parent hash and fails closed without changi
       /script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'/,
       "failed hashing must never weaken the parent script policy",
     );
-    assert.match(failedConfig, new RegExp(`wasm-unsafe-eval' '${secondHash}`));
+    assert.ok(
+      pinnedBy(failedConfig, secondHash),
+      `failed hashing must leave ${secondHash} in place`,
+    );
     assert.ok(
       failedConfig.includes(`script-src 'unsafe-eval' '${sandboxRunnerHash()}`),
       "a failed parent hash refresh must leave the fixed sandbox hash intact",

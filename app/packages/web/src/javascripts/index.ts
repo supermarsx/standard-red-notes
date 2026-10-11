@@ -18,6 +18,17 @@ import '@/Components/SuperEditor/fonts/editorFonts.css'
 import { initializeI18n } from './Internationalization/i18n'
 initializeI18n()
 
+// Blank-page recovery, armed BEFORE the application evaluates.
+//
+// Imported for its side effect, and deliberately above `import './App'`: ES
+// module imports evaluate in order before the importing module's body, so the
+// listener is registered even if App's own evaluation throws — which is one of
+// the ways the page ends up blank. It used to live in the inline bootstrap
+// <script> in index.html, which is the one script the CSP pins by hash, so it
+// was refused in exactly the situation it exists for. See
+// recoverFromBlankShell.ts.
+import './recoverFromBlankShell'
+
 // entry point
 import './App'
 
