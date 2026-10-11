@@ -1,0 +1,79 @@
+# Standard Red Notes - external reverse-proxy overlay
+#
+# Apply ON TOP of docker-compose.yml so the stack can sit behind a proxy you
+# manage separately (Nginx Proxy Manager, Traefik, Caddy, nginx):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+#
+# or just let the deploy script do it:
+#
+#   ./deploy.sh --proxy-network            # network named `proxy`
+#   ./deploy.sh --proxy-network=npm_default # or whatever yours is called
+#
+# docker-compose.yml is NOT edited by this, so the base file stays upgradable.
+#
+# Point your proxy at   http://standard-red-notes-app:8080   (or at `app`, which
+# Compose also registers as an alias on every network the service joins; the
+# explicit alias exists because `app` is a name many stacks on a shared proxy
+# network will claim).
+#
+# WHAT THIS CHANGES
+#
+# 1. `app` joins the external proxy network, IN ADDITION to the internal
+#    `standard-red-notes` network it needs for the database, cache and server.
+#
+# 2. NOTHING ELSE joins it. The proxy network is shared with every other
+#    container that proxy serves, so anything on it is reachable by all of
+#    them. `db`, `cache`, `floci`, `server`, `mcp`, `n8n` and
+#    `docker-socket-proxy` stay on the internal network only. That is not a
+#    limitation to work around: the app container's nginx is the single front
+#    door and already proxies /v1, /v2, /auth, /subscription, /healthcheck,
+#    /files/ and /sockets same-origin to the server container, so one upstream
+#    is all a proxy ever needs.
+#
+# 3. The host port publish is REMOVED (`!reset`), because the proxy reaches the
+#    container over the shared network by name and a published port would be a
+#    second, unproxied front door on every host interface. Use
+#    `--publish-ports` (which adds docker-compose.proxy-publish.yml) if you
+#    want a loopback-only port for local debugging as well.
+#
+# WHAT YOU STILL HAVE TO SET, in .env - all of it silent when wrong:
+#
+#   PUBLIC_URL                 the externally reachable origin, e.g.
+#                              https://notes.example.com. Not localhost: the
+#                              gateway uses this configured value rather than
+#                              the request Host for links, redirects, the
+#                              pairing callback and the websocket origin
+#                              allowlist.
+#   PUBLIC_FILES_SERVER_URL    that origin + /files
+#   ENFORCE_HTTPS_FROM_PROXY   true for an HTTPS proxy. It REQUIRES a pathless
+#                              https PUBLIC_URL and APP_BIND_ADDRESS=127.0.0.1;
+#                              the app entrypoint refuses to start otherwise.
+#   APP_BIND_ADDRESS           keep at 127.0.0.1. It is the trusted-mode safety
+#                              declaration even with no ports mapping at all.
+#   COOKIE_SECURE / COOKIE_DOMAIN   true and your domain, on HTTPS.
+#   TRUST_PROXY                usually leave unset. The default applied by
+#                              docker-compose.yml, `loopback, linklocal,
+#                              uniquelocal`, already trusts a proxy reaching
+#                              the stack over a private Docker network, which
+#                              is exactly this case.
+#
+# And on the proxy host: ENABLE WEBSOCKET SUPPORT for this host entry. Without
+# the Upgrade/Connection headers passed through, realtime sync fails while
+# every HTTP check stays perfectly green.
+#
+# See docs/self-hosting.md "Running behind a reverse proxy".
+
+services:
+  app:
+    networks:
+      standard-red-notes: {}
+      proxy:
+        aliases:
+          - ${SRN_PROXY_ALIAS:-standard-red-notes-app}
+    ports: !reset []
+
+networks:
+  proxy:
+    name: ${SRN_PROXY_NETWORK:-proxy}
+    external: true

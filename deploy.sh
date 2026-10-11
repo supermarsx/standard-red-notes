@@ -21,6 +21,7 @@
 #   ./deploy.sh --no-pull            # deploy the checked-out revision as-is
 #   ./deploy.sh --no-backup          # skip the pre-deploy database backup
 #   ./deploy.sh --proxy-network      # sit behind an external reverse proxy
+#   ./deploy.sh --proxy-network=npm_default --create-network
 #
 # Flags:
 #   -h, --help              Show this help and exit.
@@ -34,6 +35,21 @@
 #                           migrations run on container boot and a rebuild
 #                           cannot undo them.
 #       --backup-dir DIR    Where backups land (default: ./backups).
+#       --proxy-network[=NAME]
+#                           Put the stack behind an externally managed reverse
+#                           proxy by applying docker-compose.proxy.yml: `app`
+#                           joins the named external network (default `proxy`)
+#                           and stops publishing a host port. Nothing else
+#                           joins it. NAME may also be given as the next
+#                           argument.
+#       --create-network    Create the proxy network if it does not exist.
+#                           Without this, a missing network is an error that
+#                           prints the exact `docker network create` to run -
+#                           your proxy usually brings its own network, and
+#                           silently making a second one with the same purpose
+#                           leaves the proxy unable to see the app.
+#       --publish-ports     In proxy mode, ALSO publish APP_PORT on 127.0.0.1
+#                           for local debugging.
 #       --allow-dirty       Deploy a checkout with uncommitted content changes.
 #                           The images are then built UNSTAMPED, because a
 #                           commit stamp on modified sources is a lie, and the
@@ -72,6 +88,10 @@ ALLOW_DIRTY=0
 COMPOSE_FILE=""
 PROJECT_NAME=""
 BACKUP_DIR="${REPO_ROOT}/backups"
+PROXY_MODE=0
+PROXY_NETWORK="proxy"
+CREATE_NETWORK=0
+PUBLISH_PORTS=0
 HEALTH_TIMEOUT=600
 LOG_LINES=200
 HEALTH_URL=""
@@ -105,6 +125,16 @@ while [ "$#" -gt 0 ]; do
     --no-pull) DO_PULL=0 ;;
     --no-backup) DO_BACKUP=0 ;;
     --backup-dir) need_value "$1" "${2:-}"; BACKUP_DIR="$2"; shift ;;
+    --proxy-network) # bare: default name; `--proxy-network NAME` also accepted
+      PROXY_MODE=1
+      case "${2:-}" in
+        ""|-*) ;;
+        *) PROXY_NETWORK="$2"; shift ;;
+      esac
+      ;;
+    --proxy-network=*) PROXY_MODE=1; PROXY_NETWORK="${1#*=}" ;;
+    --create-network) CREATE_NETWORK=1 ;;
+    --publish-ports) PUBLISH_PORTS=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --timeout) need_value "$1" "${2:-}"; HEALTH_TIMEOUT="$2"; shift ;;
     --log-lines) need_value "$1" "${2:-}"; LOG_LINES="$2"; shift ;;
@@ -151,6 +181,49 @@ if [ -z "$COMPOSE_FILE" ]; then
   fi
 fi
 
+if [ "$PROXY_MODE" -eq 0 ]; then
+  if [ "$CREATE_NETWORK" -eq 1 ]; then
+    err "--create-network only means something with --proxy-network."
+    exit 2
+  fi
+  if [ "$PUBLISH_PORTS" -eq 1 ]; then
+    err "--publish-ports only means something with --proxy-network; without it the"
+    err "  base Compose file already publishes APP_PORT."
+    exit 2
+  fi
+fi
+
+if [ "$PROXY_MODE" -eq 1 ] && [ -z "$PROXY_NETWORK" ]; then
+  err "--proxy-network was given an empty network name."
+  exit 2
+fi
+
+# The overlay overrides the `app` service and the top-level networks of
+# docker-compose.yml by name. docker-compose.single.yml is one self-contained
+# `app` service on the default network with no `standard-red-notes` network to
+# preserve, so the overlay does not fit it and is refused rather than silently
+# half-applied.
+if [ "$PROXY_MODE" -eq 1 ] && [ "$SINGLE" -eq 1 ]; then
+  err "--proxy-network does not apply to the all-in-one topology."
+  err "  docker-compose.proxy.yml overlays the multi-container app service and"
+  err "  its internal network, neither of which docker-compose.single.yml has."
+  err "  For the all-in-one container, publish APP_PORT on loopback"
+  err "  (APP_BIND_ADDRESS=127.0.0.1) and point the proxy at that host port."
+  exit 2
+fi
+
+PROXY_OVERLAY="${REPO_ROOT}/docker-compose.proxy.yml"
+PROXY_PUBLISH_OVERLAY="${REPO_ROOT}/docker-compose.proxy-publish.yml"
+COMPOSE_FILE_ARGS=(-f "$COMPOSE_FILE")
+if [ "$PROXY_MODE" -eq 1 ]; then
+  COMPOSE_FILE_ARGS+=(-f "$PROXY_OVERLAY")
+  if [ "$PUBLISH_PORTS" -eq 1 ]; then
+    COMPOSE_FILE_ARGS+=(-f "$PROXY_PUBLISH_OVERLAY")
+  fi
+  export SRN_PROXY_NETWORK="$PROXY_NETWORK"
+fi
+PROXY_ALIAS="${SRN_PROXY_ALIAS:-standard-red-notes-app}"
+
 # ---------------------------------------------------------------------------
 # Command execution. Every mutating command goes through run(), so --dry-run
 # prints exactly what would have happened and executes nothing.
@@ -166,7 +239,8 @@ run() {
 
 # Read-only queries. These change nothing, so they run even under --dry-run;
 # a dry run that cannot see the live stack cannot tell you what it would do.
-compose_query() { "${COMPOSE[@]}" -f "$COMPOSE_FILE" "$@"; }
+compose_query() { "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" "$@"; }
+compose_display() { printf '%s %s' "${COMPOSE[*]}" "${COMPOSE_FILE_ARGS[*]}"; }
 
 confirm() {
   local question="$1" answer
@@ -255,6 +329,19 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   exit 1
 fi
 ok "Using Compose file ${COMPOSE_FILE}"
+if [ "$PROXY_MODE" -eq 1 ]; then
+  for overlay in "$PROXY_OVERLAY" "$PROXY_PUBLISH_OVERLAY"; do
+    case " ${COMPOSE_FILE_ARGS[*]} " in
+      *" ${overlay} "*)
+        if [ ! -f "$overlay" ]; then
+          err "Proxy overlay not found: ${overlay}"
+          exit 1
+        fi
+        ok "Overlay ${overlay}"
+        ;;
+    esac
+  done
+fi
 
 if [ -n "$PROJECT_NAME" ]; then
   export COMPOSE_PROJECT_NAME="$PROJECT_NAME"
@@ -281,7 +368,7 @@ trap 'cleanup; exit 130' HUP INT TERM
 # runs before anything is pulled or built.
 validate_compose_configuration() {
   if ! compose_query config --quiet >"$CONFIG_LOG" 2>&1; then
-    err "'${COMPOSE[*]} -f ${COMPOSE_FILE}' configuration failed to parse:"
+    err "'$(compose_display)' configuration failed to parse:"
     cat "$CONFIG_LOG" >&2
     return 1
   fi
@@ -336,12 +423,203 @@ report_configuration_warnings() {
       "the internet. Never for a real deployment."
   fi
 
+  if [ "$PROXY_MODE" -eq 1 ]; then
+    report_proxy_warnings
+  fi
+
   if [ "$WARNING_COUNT" -eq 0 ]; then
     ok "No known-destructive configuration gaps found in .env."
   else
     warn "${WARNING_COUNT} warning(s). These do not block the deploy."
   fi
 }
+
+# Behind a proxy, every one of these is wrong in a way that looks fine: the
+# stack boots, the health check passes, and links, logins, file downloads or
+# per-IP limits are quietly broken. Warnings only -- .env is never rewritten.
+report_proxy_warnings() {
+  local public_url files_url enforce_https bind_address trust_proxy cookie_secure
+
+  public_url="$(env_value PUBLIC_URL)"
+  files_url="$(env_value PUBLIC_FILES_SERVER_URL)"
+  enforce_https="$(env_value ENFORCE_HTTPS_FROM_PROXY)"
+  bind_address="$(env_value APP_BIND_ADDRESS)"
+  trust_proxy="$(env_value TRUST_PROXY)"
+  cookie_secure="$(env_value COOKIE_SECURE)"
+
+  if [ -z "$public_url" ]; then
+    note_warning "PUBLIC_URL is unset in .env." \
+      "The gateway uses this CONFIGURED origin, never the request Host, to" \
+      "build links, the pairing callback and the websocket origin allowlist." \
+      "Behind a proxy it must be the externally reachable origin, e.g." \
+      "https://notes.example.com."
+  else
+    case "$public_url" in
+      *localhost*|*127.0.0.1*)
+        note_warning "PUBLIC_URL is still a loopback address: ${public_url}" \
+          "Behind a proxy this is the one value nothing can correct for you." \
+          "Links, redirects and the websocket origin allowlist will all point" \
+          "at the container instead of your domain."
+        ;;
+    esac
+  fi
+
+  if [ -z "$files_url" ]; then
+    note_warning "PUBLIC_FILES_SERVER_URL is unset in .env." \
+      "Compose then defaults it to http://localhost:\${APP_PORT}/files, which" \
+      "no browser outside this host can reach. Set it to your public origin" \
+      "plus /files."
+  else
+    case "$files_url" in
+      *localhost*|*127.0.0.1*)
+        note_warning "PUBLIC_FILES_SERVER_URL is still a loopback address: ${files_url}" \
+          "Clients are told to fetch and upload attachments there, so every" \
+          "file operation from outside this host fails."
+        ;;
+    esac
+  fi
+
+  # ENFORCE_HTTPS_FROM_PROXY is not advisory: app/docker/docker-entrypoint.sh
+  # refuses to start without a pathless https PUBLIC_URL and a loopback bind.
+  # Warn rather than block, because the verification stage below will catch the
+  # container failing to come up -- but say plainly that it is fatal.
+  if [ "$enforce_https" = "true" ]; then
+    case "$public_url" in
+      https://*) ;;
+      *)
+        note_warning "ENFORCE_HTTPS_FROM_PROXY=true with a non-HTTPS PUBLIC_URL (${public_url:-unset})." \
+          "The app entrypoint REFUSES TO START without a pathless https" \
+          "PUBLIC_URL. The container will not come up."
+        ;;
+    esac
+    if [ -n "$bind_address" ] && [ "$bind_address" != "127.0.0.1" ]; then
+      note_warning "ENFORCE_HTTPS_FROM_PROXY=true with APP_BIND_ADDRESS=${bind_address}." \
+        "The app entrypoint requires 127.0.0.1 and will REFUSE TO START." \
+        "Keep that declaration even with no ports mapping at all -- it is the" \
+        "trusted-mode safety gate, not just a publish address."
+    fi
+  else
+    case "$public_url" in
+      https://*)
+        note_warning "PUBLIC_URL is HTTPS but ENFORCE_HTTPS_FROM_PROXY is not true." \
+          "Forwarded headers are then ignored, so the server treats every" \
+          "request as plain HTTP from the proxy: no HSTS, no http->https" \
+          "redirect, and req.secure stays false behind your TLS."
+        ;;
+    esac
+  fi
+
+  case "$public_url" in
+    https://*)
+      if [ "$cookie_secure" != "true" ]; then
+        note_warning "PUBLIC_URL is HTTPS but COOKIE_SECURE is not true." \
+          "The browser may drop the auth cookie on an HTTPS origin, and then" \
+          "every request 401s with nothing in the logs to explain it."
+      fi
+      ;;
+  esac
+
+  # TRUST_PROXY: the risk is req.ip becoming the PROXY for every request, which
+  # collapses per-IP rate limits, IP allow/block lists and session IPs onto one
+  # address. This project has already shipped a caller-controlled x-origin-ip
+  # that made per-IP limits spoofable, so the stakes are known.
+  #
+  # UNSET IS CORRECT HERE and is deliberately not warned about: docker-compose.yml
+  # applies `loopback, linklocal, uniquelocal`, which already trusts a proxy
+  # arriving over a private Docker network -- exactly this case. Warning on it
+  # would send operators to "fix" a correct configuration.
+  #
+  # A bare hop count and `true` are documented, deliberate settings. An explicit
+  # address list is the one that can silently miss, so it is checked against the
+  # proxy network's REAL subnet rather than guessed at.
+  if [ -n "$trust_proxy" ]; then
+    local trust_covered=0 proxy_subnets subnet subnet_prefix
+    case "$trust_proxy" in
+      false|0)
+        note_warning "TRUST_PROXY=${trust_proxy} disables forwarded-header trust." \
+          "Behind a proxy that makes req.ip the PROXY for every request, so" \
+          "per-IP rate limits, IP allow/block lists and session IPs all collapse" \
+          "onto one address. Leave TRUST_PROXY unset to use the compose default."
+        trust_covered=1
+        ;;
+      true|*uniquelocal*|*loopback*|*linklocal*)
+        trust_covered=1
+        ;;
+    esac
+    # ^[0-9]+$ only. A glob like *[0-9] matches anything ENDING in a digit,
+    # which silently accepted every IPv4 address as a hop count.
+    if [ "$trust_covered" -eq 0 ] && [[ "$trust_proxy" =~ ^[0-9]+$ ]]; then
+      trust_covered=1
+    fi
+    if [ "$trust_covered" -eq 0 ]; then
+      proxy_subnets="$(docker network inspect "$PROXY_NETWORK" --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || true)"
+      for subnet in $proxy_subnets; do
+        # Compare on the first two octets: enough to tell "names this network"
+        # from "names something else entirely", without doing CIDR arithmetic in
+        # shell. The message below carries the real subnet either way.
+        subnet_prefix="$(printf '%s' "$subnet" | cut -d. -f1-2)."
+        case "$trust_proxy" in
+          *"$subnet_prefix"*) trust_covered=1 ;;
+        esac
+      done
+      if [ "$trust_covered" -eq 0 ]; then
+        note_warning "TRUST_PROXY=${trust_proxy} may not cover the proxy network." \
+          "The proxy reaches the app over '${PROXY_NETWORK}' (subnet:${proxy_subnets:- unknown})," \
+          "and nothing in that value names it. If the proxy's address is not" \
+          "trusted, req.ip is the PROXY for every request. Leave TRUST_PROXY" \
+          "unset to use the compose default (loopback, linklocal, uniquelocal)," \
+          "which already covers a proxy on a private Docker network."
+      fi
+    fi
+  fi
+
+  warn "Reverse-proxy reminder: ENABLE WEBSOCKET SUPPORT on the proxy host entry."
+  warn "  Realtime sync opens wss://<host>/sockets and /sockets/sync. Without the"
+  warn "  Upgrade and Connection headers passed through, those fail while every"
+  warn "  HTTP check stays green -- the stack looks perfectly healthy and"
+  warn "  realtime silently does not work."
+}
+
+# ---------------------------------------------------------------------------
+# 1a. The external proxy network.
+#
+# Not created implicitly. Nginx Proxy Manager, Traefik and friends normally
+# bring their own network, and quietly creating a second one with the same name
+# in a different scope - or an empty one the proxy is not on - produces a stack
+# that looks deployed and is unreachable. So: require it, and print the exact
+# command when it is missing.
+# ---------------------------------------------------------------------------
+if [ "$PROXY_MODE" -eq 1 ]; then
+  title "Proxy network"
+  if docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1; then
+    ok "External network '${PROXY_NETWORK}' exists."
+  elif [ "$CREATE_NETWORK" -eq 1 ]; then
+    if ! run docker network create "$PROXY_NETWORK"; then
+      err "Could not create the network '${PROXY_NETWORK}'."
+      exit 1
+    fi
+    if [ "$DRY_RUN" -eq 0 ]; then
+      ok "Created external network '${PROXY_NETWORK}'."
+      warn "Your reverse proxy container must also be attached to it:"
+      warn "  docker network connect ${PROXY_NETWORK} <your-proxy-container>"
+    fi
+  else
+    err "The external network '${PROXY_NETWORK}' does not exist."
+    err ""
+    err "  Your reverse proxy normally creates its own network - find it with:"
+    err "    docker network ls"
+    err "  then re-run with that name:"
+    err "    ./deploy.sh --proxy-network=<its-network>"
+    err ""
+    err "  Or create a new one and attach your proxy to it yourself:"
+    err "    docker network create ${PROXY_NETWORK}"
+    err "    docker network connect ${PROXY_NETWORK} <your-proxy-container>"
+    err ""
+    err "  Or let this script create it: --proxy-network --create-network"
+    exit 1
+  fi
+  ok "App reachable on it as: http://${PROXY_ALIAS}:8080 (alias 'app' too)"
+fi
 
 # ---------------------------------------------------------------------------
 # 1b. Which mode is this?
@@ -688,12 +966,12 @@ else
       # fails. Observed, not theoretical. Inside the string it is untouched, and
       # this matches the shape of the dump command below.
       TAR_COMMAND='cd /data && exec tar -cf - .'
-      BACKUP_DESCRIPTION="${COMPOSE[*]} -f ${COMPOSE_FILE} exec -T app sh -c ${TAR_COMMAND}"
+      BACKUP_DESCRIPTION="$(compose_display) exec -T app sh -c ${TAR_COMMAND}"
       if [ "$DRY_RUN" -eq 1 ]; then
         printf '%s %s > %s\n' "${DIM}would run:${RESET}" "$BACKUP_DESCRIPTION" "$BACKUP_FILE"
       else
         printf '%s %s > %s\n' "${DIM}+${RESET}" "$BACKUP_DESCRIPTION" "$BACKUP_FILE"
-        if ! "${COMPOSE[@]}" -f "$COMPOSE_FILE" exec -T app \
+        if ! "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" exec -T app \
             sh -c "$TAR_COMMAND" >"$BACKUP_FILE"; then
           err "Archiving /data failed. The deploy is aborted; nothing has been rebuilt."
           err "  Partial archive left at ${BACKUP_FILE} for inspection."
@@ -707,12 +985,12 @@ else
       # Compose already gave the db service. Expanding them here would put the
       # root password in this host process list.
       DUMP_COMMAND='exec mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --events "$MYSQL_DATABASE"'
-      BACKUP_DESCRIPTION="${COMPOSE[*]} -f ${COMPOSE_FILE} exec -T db sh -c ${DUMP_COMMAND}"
+      BACKUP_DESCRIPTION="$(compose_display) exec -T db sh -c ${DUMP_COMMAND}"
       if [ "$DRY_RUN" -eq 1 ]; then
         printf '%s %s > %s\n' "${DIM}would run:${RESET}" "$BACKUP_DESCRIPTION" "$BACKUP_FILE"
       else
         printf '%s %s > %s\n' "${DIM}+${RESET}" "$BACKUP_DESCRIPTION" "$BACKUP_FILE"
-        if ! "${COMPOSE[@]}" -f "$COMPOSE_FILE" exec -T db \
+        if ! "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" exec -T db \
             sh -c "$DUMP_COMMAND" >"$BACKUP_FILE"; then
           err "mariadb-dump failed. The deploy is aborted; nothing has been rebuilt."
           err "  Partial dump left at ${BACKUP_FILE} for inspection."
@@ -786,8 +1064,8 @@ if ! confirm "Rebuild the images and restart the stack now?"; then
   exit 0
 fi
 
-if ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" -f "$COMPOSE_FILE" up -d --build; then
-  err "'${COMPOSE[*]} -f ${COMPOSE_FILE} up -d --build' failed."
+if ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --build; then
+  err "'$(compose_display) up -d --build' failed."
   if [ -n "$BACKUP_FILE" ]; then
     err "  Your pre-deploy backup is at ${BACKUP_FILE}"
   fi
@@ -820,7 +1098,7 @@ fi
 report_failure_logs() {
   local service="$1"
   err "Last ${LOG_LINES} log lines from ${service}:"
-  "${COMPOSE[@]}" -f "$COMPOSE_FILE" logs --no-color --tail "$LOG_LINES" "$service" >&2 || true
+  "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" logs --no-color --tail "$LOG_LINES" "$service" >&2 || true
 }
 
 # Containers of THIS project only, INCLUDING the ones that are no longer
@@ -842,7 +1120,7 @@ while :; do
   container_ids="$(compose_query ps -a -q || true)"
   if [ -z "$container_ids" ]; then
     err "Compose reported success but this project has no running containers."
-    "${COMPOSE[@]}" -f "$COMPOSE_FILE" ps -a >&2 || true
+    "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" ps -a >&2 || true
     exit 1
   fi
   while IFS= read -r container_id; do
@@ -883,6 +1161,98 @@ while :; do
   sleep 5
 done
 
+# b1. Proxy mode: prove what the PROXY will experience, which a host-side
+# probe of a published port cannot speak to at all. Three assertions:
+#   - the app container is on BOTH networks (internal + proxy);
+#   - its alias resolves FROM a container on the proxy network; and
+#   - readiness answers over that network.
+# The probe runs in a throwaway container on the proxy network, using the app's
+# own image (it has wget -- its healthcheck uses it) so nothing has to be
+# pulled, with --entrypoint sh so the app's own startup does not run.
+if [ "$PROXY_MODE" -eq 1 ]; then
+  title "Proxy reachability"
+  PROXY_APP_CONTAINER="$(compose_query ps -q app 2>/dev/null | head -1 || true)"
+  if [ -z "$PROXY_APP_CONTAINER" ]; then
+    err "No running app container to check proxy reachability against."
+    exit 1
+  fi
+
+  PROXY_APP_NETWORKS="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$PROXY_APP_CONTAINER" 2>/dev/null || true)"
+  info "app container networks: ${PROXY_APP_NETWORKS}"
+  case " ${PROXY_APP_NETWORKS} " in
+    *" ${PROXY_NETWORK} "*) ok "Attached to the proxy network '${PROXY_NETWORK}'." ;;
+    *)
+      err "The app container is NOT attached to '${PROXY_NETWORK}'."
+      err "  Networks found: ${PROXY_APP_NETWORKS}"
+      exit 1
+      ;;
+  esac
+  PROXY_INTERNAL_NETWORK_FOUND=0
+  for network_name in $PROXY_APP_NETWORKS; do
+    case "$network_name" in
+      *standard-red-notes*|*_default) PROXY_INTERNAL_NETWORK_FOUND=1 ;;
+    esac
+  done
+  if [ "$PROXY_INTERNAL_NETWORK_FOUND" -eq 1 ]; then
+    ok "Still attached to the internal network as well."
+  else
+    err "The app container lost its internal network; it cannot reach the server."
+    err "  Networks found: ${PROXY_APP_NETWORKS}"
+    exit 1
+  fi
+
+  PROXY_APP_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$PROXY_APP_CONTAINER" 2>/dev/null || true)"
+  if [ -z "$PROXY_APP_IMAGE" ]; then
+    err "Could not determine the app image to run the in-network probe with."
+    exit 1
+  fi
+
+  PROXY_PROBE_LOG="$(mktemp)"
+  CLEANUP_FILES+=("$PROXY_PROBE_LOG")
+  PROXY_READINESS_URL="http://${PROXY_ALIAS}:8080/healthcheck/readiness"
+  PROXY_MARKER_URL="http://${PROXY_ALIAS}:8080/.well-known/srn-deployment.json"
+  info "Probing ${PROXY_READINESS_URL} from a container on '${PROXY_NETWORK}'"
+  if ! docker run --rm --network "$PROXY_NETWORK" --entrypoint sh "$PROXY_APP_IMAGE" \
+      -c "wget -qO- --timeout=20 ${PROXY_READINESS_URL}" >"$PROXY_PROBE_LOG" 2>&1; then
+    err "The app is not reachable as '${PROXY_ALIAS}' from the proxy network."
+    cat "$PROXY_PROBE_LOG" >&2 || true
+    err "  This is exactly what your reverse proxy would see. Check that the"
+    err "  proxy container is itself attached to '${PROXY_NETWORK}':"
+    err "    docker network connect ${PROXY_NETWORK} <your-proxy-container>"
+    report_failure_logs app
+    exit 1
+  fi
+  ok "Readiness answered over the proxy network, by service alias."
+  head -c 400 "$PROXY_PROBE_LOG"
+  printf '\n'
+
+  # Identity over the proxy network. scripts/verify-deployment-identity.mjs
+  # needs host reachability and node, and neither is available in here, so this
+  # asserts the exact revision and derived version on BOTH surfaces the
+  # verifier reads. Stated for what it is: an exact-string check on both
+  # endpoints, not the verifier's full key-shape validation.
+  if [ "$STAMP_REVISION" -eq 1 ]; then
+    PROXY_EXPECTED_VERSION="src-$(printf '%s' "$REVISION" | cut -c1-12)"
+    if ! docker run --rm --network "$PROXY_NETWORK" --entrypoint sh "$PROXY_APP_IMAGE" \
+        -c "wget -qO- --timeout=20 ${PROXY_MARKER_URL}" >>"$PROXY_PROBE_LOG" 2>&1; then
+      err "The deployment marker is not reachable over the proxy network."
+      cat "$PROXY_PROBE_LOG" >&2 || true
+      exit 1
+    fi
+    # grep -o, not grep -c: -c counts LINES, and neither endpoint's JSON body
+    # ends in a newline, so both responses append into a single line and a
+    # line count of the two surfaces would be 1 however well it worked.
+    PROXY_IDENTITY_HITS="$(grep -o "\"revision\":\"${REVISION}\"" "$PROXY_PROBE_LOG" | wc -l | tr -d '[:space:]')"
+    if [ "${PROXY_IDENTITY_HITS:-0}" -lt 2 ] || ! grep -q "\"version\":\"${PROXY_EXPECTED_VERSION}\"" "$PROXY_PROBE_LOG"; then
+      err "Over the proxy network, readiness and the deployment marker do not both"
+      err "report the commit just built (${REVISION} / ${PROXY_EXPECTED_VERSION})."
+      cat "$PROXY_PROBE_LOG" >&2 || true
+      exit 1
+    fi
+    ok "Both identity surfaces report ${REVISION} (${PROXY_EXPECTED_VERSION}) over the proxy network."
+  fi
+fi
+
 # b. A real HTTP request over the published port. The readiness endpoint fans
 # out to the database, cache and every sub-service, so its worst case is around
 # four seconds; --max-time 20 leaves room without hiding a hang.
@@ -894,7 +1264,16 @@ done
 # hit 13901, got HTTP 200 and {"status":"ready"} from a DIFFERENT project's
 # container on this host, and called the deploy verified. Asking Compose closes
 # that, and --url still overrides everything for a reverse-proxied deployment.
-if [ -z "$HEALTH_URL" ]; then
+PROXY_SKIPS_HOST_PROBE=0
+if [ "$PROXY_MODE" -eq 1 ] && [ "$PUBLISH_PORTS" -eq 0 ] && [ -z "$HEALTH_URL" ]; then
+  PROXY_SKIPS_HOST_PROBE=1
+  info "Proxy mode publishes no host port, so there is nothing to probe from this"
+  info "host. The proxy-network checks above are the stronger evidence anyway:"
+  info "they test the path your proxy actually uses. Pass --publish-ports for a"
+  info "loopback port, or --url for a probe through the proxy itself."
+fi
+
+if [ "$PROXY_SKIPS_HOST_PROBE" -eq 0 ] && [ -z "$HEALTH_URL" ]; then
   PUBLISHED_ENDPOINT="$(compose_query port app 8080 2>/dev/null | tr -d '[:space:]' || true)"
   if [ -n "$PUBLISHED_ENDPOINT" ]; then
     PROBE_PORT="${PUBLISHED_ENDPOINT##*:}"
@@ -913,10 +1292,14 @@ if [ -z "$HEALTH_URL" ]; then
   HEALTH_URL="http://${PROBE_HOST}:${PROBE_PORT}"
 fi
 HEALTH_URL="${HEALTH_URL%/}"
-READINESS_URL="${HEALTH_URL}/healthcheck/readiness"
+READINESS_URL=""
+if [ -n "$HEALTH_URL" ]; then
+  READINESS_URL="${HEALTH_URL}/healthcheck/readiness"
+fi
 
 PROBE_LOG="$(mktemp)"
 CLEANUP_FILES+=("$PROBE_LOG")
+probe_status=1
 probe_readiness() {
   if command -v curl >/dev/null 2>&1; then
     curl -fsS --max-time 20 "$READINESS_URL" >"$PROBE_LOG" 2>&1
@@ -927,10 +1310,14 @@ probe_readiness() {
   fi
 }
 
-info "Probing ${READINESS_URL}"
-probe_deadline=$(( $(date +%s) + 60 ))
-probe_status=1
-while :; do
+if [ -n "$READINESS_URL" ]; then
+  info "Probing ${READINESS_URL}"
+  probe_deadline=$(( $(date +%s) + 60 ))
+fi
+
+# Does not run at all when there is no URL to probe, which is the normal case
+# in proxy mode: the proxy-network checks above already covered that path.
+while [ -n "$READINESS_URL" ]; do
   # Read the status from the command itself. `$?` after `if cmd; then ... fi`
   # with no else branch is the status of the IF, which is 0 even when cmd failed.
   probe_status=0
@@ -969,6 +1356,8 @@ fi
 IDENTITY_SCRIPT="${REPO_ROOT}/scripts/verify-deployment-identity.mjs"
 if [ "$STAMP_REVISION" -eq 0 ]; then
   warn "Skipping the deployment-identity check: --allow-dirty built unstamped images."
+elif [ "$PROXY_SKIPS_HOST_PROBE" -eq 1 ]; then
+  info "Deployment identity was checked over the proxy network above."
 elif [ "$probe_status" -ne 0 ]; then
   warn "Skipping the deployment-identity check: the readiness endpoint was not reachable from this host."
 elif [ ! -f "$IDENTITY_SCRIPT" ]; then
@@ -997,12 +1386,18 @@ fi
 # ---------------------------------------------------------------------------
 title "Deployed"
 ok "Revision:  ${REVISION}"
-ok "App:       ${HEALTH_URL}"
+if [ "$PROXY_MODE" -eq 1 ]; then
+  ok "Proxy net: ${PROXY_NETWORK}"
+  ok "Upstream:  http://${PROXY_ALIAS}:8080   <- point your reverse proxy here"
+fi
+if [ -n "$HEALTH_URL" ]; then
+  ok "App:       ${HEALTH_URL}"
+fi
 if [ -n "$BACKUP_FILE" ]; then
   ok "Backup:    ${BACKUP_FILE}"
 fi
 if [ "$WARNING_COUNT" -gt 0 ]; then
   warn "${WARNING_COUNT} configuration warning(s) above are still unresolved."
 fi
-info "Logs:      ${COMPOSE[*]} -f ${COMPOSE_FILE} logs -f"
-info "Stop:      ${COMPOSE[*]} -f ${COMPOSE_FILE} stop -t 75 app server"
+info "Logs:      $(compose_display) logs -f"
+info "Stop:      $(compose_display) stop -t 75 app server"
