@@ -69,6 +69,14 @@ export const PrefDefaults = {
   // Standard Red Notes: default to the slightly smaller Small toolbar icons;
   // users can bump this to Medium (previous size) or Large.
   [PrefKey.SuperToolbarIconSize]: SuperToolbarIconSize.Small,
+  // Standard Red Notes: mermaid source highlighting is ON. A diagram source in
+  // one undifferentiated colour is the state the feature exists to end, so the
+  // toggle is an escape hatch rather than an opt-in. Note that web does NOT
+  // read this default at runtime: it pins the literal and its own default in
+  // `MermaidSourceHighlightPreference.ts`, because a brand-new member of this
+  // file is `undefined` in the browser until `models` AND the webpack-bundled
+  // `snjs` have both been rebuilt.
+  [PrefKey.SuperMermaidSourceHighlighting]: true,
   [PrefKey.AssistantProvider]: '',
   [PrefKey.AssistantModel]: '',
   [PrefKey.AssistantConfirmBeforeWrite]: true,

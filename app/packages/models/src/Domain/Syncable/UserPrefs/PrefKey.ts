@@ -134,6 +134,15 @@ export enum PrefKey {
   // Defaults to the (slightly smaller) Small; Medium restores the previous size
   // and Large makes them bigger for easier tap targets.
   SuperToolbarIconSize = 'superToolbarIconSize',
+  // Standard Red Notes: whether a mermaid diagram block's SOURCE pane (the
+  // `code` and `split` view modes) is syntax-highlighted. Defaults ON; turning
+  // it off restores the plain, single-colour textarea exactly.
+  //
+  // This is NOT one of mermaid's own diagram themes (MERMAID_BUILTIN_THEMES,
+  // a per-block setting that colours the rendered chart). It is global, it
+  // colours the source text, and it draws its colours from the application's
+  // `--sn-stylekit-*` tokens so it follows the user's app theme.
+  SuperMermaidSourceHighlighting = 'superMermaidSourceHighlighting',
   AssistantProvider = 'assistantProvider',
   AssistantModel = 'assistantModel',
   AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
@@ -448,6 +457,7 @@ export type PrefValue = {
   [PrefKey.ActiveComponents]: string[]
   [PrefKey.AlwaysShowSuperToolbar]: boolean
   [PrefKey.SuperToolbarIconSize]: SuperToolbarIconSize
+  [PrefKey.SuperMermaidSourceHighlighting]: boolean
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
   [PrefKey.AssistantConfirmBeforeWrite]: boolean

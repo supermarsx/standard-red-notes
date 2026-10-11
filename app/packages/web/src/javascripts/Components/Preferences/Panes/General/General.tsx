@@ -20,6 +20,7 @@ import ReloadApp from './ReloadApp'
 import SyncConnection from './SyncConnection'
 import TodoHeadings from './TodoHeadings'
 import ChecklistRecurrence from './ChecklistRecurrence'
+import MermaidSourceHighlighting from './MermaidSourceHighlighting'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useTabState } from '@/Components/Tabs/useTabState'
 
@@ -60,6 +61,7 @@ const General: FunctionComponent = () => {
           */}
           <TodoHeadings application={application} />
           <ChecklistRecurrence application={application} />
+          <MermaidSourceHighlighting application={application} />
           <Spellcheck application={application} />
           <SmartViews application={application} featuresController={application.featuresController} />
         </>
