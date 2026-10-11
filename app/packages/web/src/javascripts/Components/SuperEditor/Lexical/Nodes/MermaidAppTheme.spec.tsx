@@ -41,7 +41,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { $createMermaidNode, MermaidNode, type SerializedMermaidNode } from './MermaidNode'
 import { $createGanttChartNode, GanttChartNode } from './GanttChartNode'
 import { declaredThemeTypeToTrust, mermaidAppThemeKey, readMermaidAppTheme } from './MermaidAppTheme'
-import { MERMAID_APP_TOKEN_PROPERTIES, type MermaidThemeMode } from './MermaidSettings'
+import {
+  mermaidAppThemeVariables,
+  MERMAID_APP_TOKEN_PROPERTIES,
+  MERMAID_LABEL_FONT_FALLBACK,
+  type MermaidThemeMode,
+} from './MermaidSettings'
 
 const DIAGRAM_SVG =
   '<svg id="m-1" width="100%" style="max-width: 600px;" viewBox="0 0 600 300" xmlns="http://www.w3.org/2000/svg"><g><rect width="10" height="10"/></g></svg>'
@@ -540,5 +545,145 @@ describe('the theme key is what suppresses a pointless re-render', () => {
     const readable = mermaidAppThemeKey(readMermaidAppTheme())
     palette = { [MERMAID_APP_TOKEN_PROPERTIES.themeType]: 'dark' }
     expect(mermaidAppThemeKey(readMermaidAppTheme())).not.toBe(readable)
+  })
+})
+
+describe('the label FONT is part of the theme contract, and was not asserted for four months', () => {
+  /**
+   * `fontFamily: 'inherit'` shipped in `a416573e` (2026-06-13, the commit that
+   * created MermaidNode.tsx) and survived until `64ab24ed` four months later,
+   * through this suite and through every other. That is what these cases exist
+   * to stop happening again.
+   *
+   * WHY IT MATTERS, measured in headless Chrome against freshly compiled
+   * SCSS + Tailwind inside the real editor chain, under the PRODUCTION CSP:
+   * with the Editor Font preference set to the app's own Monospace preset the
+   * stack handed to mermaid is `SFMono-Regular, Consolas, ...` and 0 of 6 labels
+   * clip; with `inherit` it resolved to `document.body`'s stack while measuring
+   * and to the editor's while drawing, and a label measured in one font and
+   * drawn in another overflows the slot reserved for it.
+   *
+   * The theme variables carry NO `fontSize` and no `fontFamily`, deliberately:
+   * mermaid's own `base` theme supplies `16px` and `getStyles` emits it as
+   * `#<svgId>{font-size:16px}` into the SVG, which pins BOTH contexts. The
+   * family travels as the top-level `fontFamily` instead. The last case below
+   * pins that shape, because a `fontSize` added to the variables would be a
+   * second source of truth for the one property that already agrees.
+   */
+  const svgHost = () => container.querySelector('[data-mermaid-svg-host="true"]') as HTMLElement
+  const measureHost = () => container.querySelector('[data-mermaid-measure-host="true"]') as HTMLElement
+
+  const mermaidBlock = () => container.querySelector('[data-mermaid-block="true"]') as HTMLElement
+
+  /**
+   * The Editor Font preference, as `Utils/editorFont.ts` applies it: the
+   * resolved stack goes to `--sn-stylekit-editor-font-family` on
+   * `document.documentElement`, and `.font-editor` turns that into the editor
+   * subtree's `font-family`.
+   *
+   * jsdom resolves no custom-property cascade AND does not inherit `font-family`
+   * down a subtree, so this also writes the resolved value inline on the block —
+   * the element the component reads. The documentElement write is still what the
+   * subscription observes; remove it and nothing re-reads.
+   */
+  const setEditorFont = async (stack: string): Promise<void> => {
+    mermaidBlock().style.fontFamily = stack
+    await act(async () => {
+      document.documentElement.style.setProperty('--sn-stylekit-editor-font-family', stack)
+    })
+    await settle()
+  }
+
+  it('hands mermaid the family read off the diagram own block, not a constant', async () => {
+    await mount(mermaidSeed('app'))
+    await setEditorFont('"Opus5 Theme Probe", monospace')
+    // Tied to the element the SVG is drawn inside, so a constant, a keyword, or
+    // a read off `document.body` all fail.
+    expect(window.getComputedStyle(mermaidBlock()).fontFamily).toContain('Opus5 Theme Probe')
+    expect(lastInitializeConfig().fontFamily).toBe(window.getComputedStyle(mermaidBlock()).fontFamily)
+    expect(lastInitializeConfig().fontFamily).not.toBe('inherit')
+    expect(lastInitializeConfig().fontFamily).not.toBe(MERMAID_LABEL_FONT_FALLBACK)
+  })
+
+  it('follows the Editor Font preference, so the family cannot go stale', async () => {
+    await mount(mermaidSeed('app'))
+    const before = lastInitializeConfig().fontFamily
+    await setEditorFont('"Opus5 Theme Probe", monospace')
+    const after = lastInitializeConfig().fontFamily
+    expect(after).not.toBe(before)
+    expect(after).toContain('Opus5 Theme Probe')
+  })
+
+  it('never hands over a value that would be resolved twice', async () => {
+    // A CSS-wide keyword or an unresolved custom property is `inherit` with
+    // extra steps: it resolves separately in each context. The resolver refuses
+    // them, and the fallback is a concrete stack.
+    await mount(mermaidSeed('app'))
+    await setEditorFont('var(--sn-stylekit-editor-font-family)')
+    expect(lastInitializeConfig().fontFamily).toBe(MERMAID_LABEL_FONT_FALLBACK)
+    for (const keyword of ['inherit', 'initial', 'unset', 'revert']) {
+      await setEditorFont(keyword)
+      expect(lastInitializeConfig().fontFamily).toBe(MERMAID_LABEL_FONT_FALLBACK)
+    }
+  })
+
+  it('measures and draws under the same ancestor, so neither can take a different font', async () => {
+    // The structural half: `mermaid.render`'s third argument points at
+    // `[data-mermaid-measure-host]`, so the font (and size, and every other
+    // inherited text property) a label is laid out in is the one it is painted
+    // in BY CONSTRUCTION. jsdom performs no layout and does not inherit
+    // `font-family` down a subtree, so the assertable form of that is the
+    // ancestry and the absence of any font declaration of their own. Measured in
+    // headless Chrome, both hosts compute the identical family and size, and the
+    // computed-text-property diff between them is empty.
+    await mount(mermaidSeed('app'))
+    const block = mermaidBlock()
+    expect(block.contains(svgHost())).toBe(true)
+    // This is the line that goes red if the measuring element is moved out of
+    // the block, which is the only way the two contexts can diverge again.
+    expect(block.contains(measureHost())).toBe(true)
+    for (const host of [svgHost(), measureHost()]) {
+      expect(host.style.fontFamily).toBe('')
+      expect(host.style.fontSize).toBe('')
+      expect(host.style.lineHeight).toBe('')
+      // And no utility class that would set one.
+      expect(host.className).not.toMatch(/\bfont-(?:editor|mono|sans|serif)\b|\btext-(?:xs|sm|base|lg|xl)\b/)
+    }
+  })
+
+  it('carries no font SIZE and no font FAMILY in the theme variables', async () => {
+    // Not an omission to fix: mermaid's `base` theme supplies `fontSize: 16px`
+    // and emits it into the SVG's own `<style>`, which is what makes the
+    // measuring and drawing contexts agree on size. A `fontSize` here would be
+    // a second source of truth for it. The family travels as the top-level
+    // `fontFamily` so that it also reaches `calculateTextDimensions`, which
+    // measures `<text>` labels in a throwaway svg under `document.body` and is
+    // NOT moved by the container argument.
+    await mount(mermaidSeed('app'))
+    const variables = lastThemeVariables() ?? {}
+    expect(Object.keys(variables)).not.toContain('fontSize')
+    expect(Object.keys(variables)).not.toContain('fontFamily')
+    expect(typeof lastInitializeConfig().fontFamily).toBe('string')
+    // And the pure builder agrees with what the component actually sent, so
+    // this cannot pass against a hand-written object.
+    const built = mermaidAppThemeVariables(
+      {
+        background: '#ffffff',
+        foreground: '#000000',
+        contrastBackground: '#eeeeee',
+        secondaryBackground: '#dddddd',
+        secondaryContrastBackground: '#cccccc',
+        border: '#bbbbbb',
+        passive: '#999999',
+      },
+      false,
+    )
+    expect(Object.keys(built)).not.toContain('fontSize')
+    expect(Object.keys(built)).not.toContain('fontFamily')
+    // Every value has to be something mermaid can interpolate into CSS text; an
+    // empty one would silently drop a declaration.
+    for (const [key, value] of Object.entries(built)) {
+      expect([key, typeof value === 'boolean' || (typeof value === 'string' && value.length > 0)]).toEqual([key, true])
+    }
   })
 })
