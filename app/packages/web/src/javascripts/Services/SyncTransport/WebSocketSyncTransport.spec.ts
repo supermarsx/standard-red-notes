@@ -391,6 +391,52 @@ describe('WebSocketSyncTransport', () => {
   })
 
   /**
+   * *** THE "NO CONFIGURED HOST" HYPOTHESIS, PINNED SO IT CANNOT BE RE-ARGUED. ***
+   *
+   * A production deployment was serving a CSP that refused the inline bootstrap which sets
+   * `window.defaultSyncServer` and `window.websocketUrl`, and the obvious suspicion was that a
+   * transport built with no URL half-initialises and then throws inside `recoverPending` — it
+   * keeps a truthy `recoverPending` either way, because that is a method.
+   *
+   * It does not throw. With no configured URL the lane is ruled out for the whole session, and
+   * the recovery probe passes that verdict to the worker as `replayOverHttp` instead: the worker
+   * then has nothing to recover (`RECOVERY_EMPTY`) or replays the record over HTTP with its
+   * identity. Either way the caller gets `undefined` and the sync proceeds to collect its uploads.
+   *
+   * It also pins the discriminator that reads the production console: an unconfigured lane reports
+   * `capability-unavailable` at `HTTP_ONLY`, decided on the main thread BEFORE any worker round
+   * trip or lease read. So a console that says `state HTTP_FALLBACK, reason multi-tab-not-owner`
+   * is positive evidence that the websocket URL WAS configured in that page, whatever the CSP did
+   * to the script that usually supplies it.
+   */
+  it('resolves rather than throws when no websocket URL is configured, and says capability-unavailable', async () => {
+    const transport = createTransport({ getConfiguredWebSocketUrl: () => undefined })
+    const fallback = jest.fn().mockResolvedValue(response('http-only-host'))
+
+    const recovery = transport.recoverPending(fallback)
+    await flush()
+    const recover = worker.posts.find((message) => message.type === 'RECOVER') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'RECOVER' }
+    >
+    expect(recover.replayOverHttp).toBe('capability-unavailable')
+    worker.emit({ type: 'RECOVERY_EMPTY', clientRequestId: recover.clientRequestId })
+
+    await expect(recovery).resolves.toBeUndefined()
+
+    // And the sync that follows it goes over HTTP under the reason that names the real cause,
+    // without the worker being asked anything at all.
+    const postsBefore = worker.posts.length
+    await expect(transport.execute(request('no-host'), fallback)).resolves.toEqual({
+      response: response('http-only-host'),
+    })
+    expect(worker.posts).toHaveLength(postsBefore)
+    expect(transport.transportStatus.state).toBe('HTTP_ONLY')
+    expect(transport.transportStatus.fallbackReason).toBe('capability-unavailable')
+    expect(fallback).toHaveBeenCalledTimes(1)
+  })
+
+  /**
    * A deferral is "this tab recovered nothing", not "this tab failed". It has to RESOLVE,
    * because `SyncService.performSync` abandons the whole sync — the dirty-set collection,
    * the pre-sync save and every upload — when the recovery phase throws. Said once, as
