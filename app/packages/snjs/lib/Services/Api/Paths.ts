@@ -60,6 +60,10 @@ const AdminPaths = {
   adminLogs: '/v1/admin/logs',
   userFeatureFlags: (userUuid: string) => `/v1/admin/users/${userUuid}/feature-flags`,
   userUsage: (userUuid: string) => `/v1/admin/users/${userUuid}/usage`,
+  // Standard Red Notes: the SYNCED ITEM (note) bytes of a PAGE of accounts. A
+  // POST because the accounts are named in the body — the caller is a report over
+  // a page of the admin users list, and one request per row would be an N+1.
+  adminItemStorageUsage: '/v1/admin/item-storage-usage',
   userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
   setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,
   // Standard Red Notes: reversible administrative SUSPENSION (distinct from ban).

@@ -48,6 +48,22 @@ const makeApplication = () => ({
     adminListUsers: jest.fn().mockResolvedValue({ data: { users: [], total: 0 } }),
     adminGetAvailableRoles: jest.fn().mockResolvedValue({ data: { roleNames: [] } }),
     adminGetUserFeatureFlags: jest.fn().mockResolvedValue({ data: { flags: {}, storage: null } }),
+    // Standard Red Notes: the note half of the space report. The default answers
+    // a COMPLETE ZERO for every account it is asked about -- what a server holding
+    // no items for them really sends -- so the file-half tests below keep testing
+    // the file half.
+    adminGetUsersItemStorageUsage: jest.fn((userUuids: string[]): Promise<unknown> =>
+      Promise.resolve({
+        data: {
+          usages: userUuids.map((userUuid) => ({
+            userUuid,
+            itemBytesUsed: 0,
+            itemsMeasured: 0,
+            itemsUnmeasured: 0,
+          })),
+        },
+      }),
+    ),
     adminGetUserUsage: jest.fn().mockResolvedValue({
       data: {
         userUuid: TARGET_UUID,
@@ -156,6 +172,21 @@ const storageCellForRow = (email: string): string => {
   }
   const cells = Array.from(row.querySelectorAll('td'))
   return cells[cells.length - 1].textContent ?? ''
+}
+
+/** One half of a row's space cell, by its own test id. */
+const spacePartForRow = (email: string, testId: string): string => {
+  const row = Array.from(container.querySelectorAll('tbody tr')).find((candidate) =>
+    Array.from(candidate.querySelectorAll('td')).some((cell) => cell.textContent === email),
+  )
+  if (!row) {
+    throw new Error(`No list row rendered for ${email}`)
+  }
+  const part = row.querySelector(`[data-test-id="${testId}"]`)
+  if (!part) {
+    throw new Error(`Row for ${email} rendered no ${testId}`)
+  }
+  return part.textContent ?? ''
 }
 
 const setInputValue = async (input: HTMLInputElement, value: string) => {
@@ -639,16 +670,16 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
 
     // Precondition: every row actually rendered.
     expect(application.legacyApi.adminListUsers).toHaveBeenCalled()
-    const absentCell = storageCellForRow('absent@example.com')
-    const zeroCell = storageCellForRow('zero@example.com')
-    const silentCell = storageCellForRow('silent@example.com')
-    const measuredCell = storageCellForRow('measured@example.com')
-    expect(absentCell).toBe('[?]Not reported / Not set')
-    expect(zeroCell).toBe('[v]0 B / Unlimited')
+    const absentCell = spacePartForRow('absent@example.com', 'admin-row-files')
+    const zeroCell = spacePartForRow('zero@example.com', 'admin-row-files')
+    const silentCell = spacePartForRow('silent@example.com', 'admin-row-files')
+    const measuredCell = spacePartForRow('measured@example.com', 'admin-row-files')
+    expect(absentCell).toBe('[?]files Not reported / Not set')
+    expect(zeroCell).toBe('[v]files 0 B / Unlimited')
     // An absent FIELD reads as the absent FIGURE, by design and not by accident.
     expect(silentCell).toBe(absentCell)
     // A real figure reads as one, and as answered.
-    expect(measuredCell).toBe('[v]3 MB / Not set')
+    expect(measuredCell).toBe('[v]files 3 MB / Not set')
     // The complaint this column produced: a whole column of 0 B measurements.
     expect(absentCell).not.toContain('0 B')
     expect(absentCell).not.toContain('Unlimited')
@@ -656,8 +687,8 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
     // The marker legend must RENDER, not merely exist as a constant — and so must
     // the line saying what the column leaves out and where the total lives.
     expect(container.textContent).toContain('asked and nothing came back, which is never a zero')
-    expect(container.textContent).toContain('[n] not included')
-    expect(container.textContent).toContain('Diagnostics')
+    expect(container.textContent).toContain('this server build does not')
+    expect(container.textContent).toContain('items.content_size')
     // ...and it must not advertise a row marker no row can print.
     expect(container.textContent).not.toContain('[n] nothing publishes it')
   })
@@ -781,13 +812,141 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
     expect(container.textContent).toContain('stored under the account’s own uuid')
   })
 
-  it('says in the list what the storage column is a figure OF, and what it leaves out', () => {
+  it('says in the list what the space column is a figure OF, and what it leaves out', () => {
     // A column labelled 'Storage' that silently meant 'files only' under-reported
-    // most accounts. The scope line is asserted here because the item half is
-    // genuinely unobtainable for a list and the operator must not have to guess.
+    // most accounts. It carries BOTH halves now, so the scope line must name both
+    // sources, the one thing the allowance actually caps, and the half still
+    // missing from the figure.
     expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('FILE_UPLOAD_BYTES_USED')
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('[n] not included')
-    // ...and it must point at the surface that CAN report the total.
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('Space')
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('items.content_size')
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('FILE half only')
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('Revisions')
+    // The old line claimed note bytes could not be carried by a list at all. That
+    // claim is false now, and this is where its return is caught.
+    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).not.toContain('not included')
+  })
+
+  /**
+   * *** THE DEFECT, AS THE OPERATOR SEES IT. ***
+   *
+   * Three accounts holding 3 MB, 7 MB and 11 MB of notes. The only endpoint that
+   * published stored note bytes took its subject from the session, so an admin
+   * asking about all three was answered their OWN figure three times, and the list
+   * column carried no note bytes at all. Three rows that DIFFER, each matching the
+   * account it is printed beside, is the whole proof: one row cannot tell 'per
+   * account' from 'the caller's own figure repeated'.
+   */
+  describe('per-account note bytes in the list', () => {
+    const THREE_USERS = [
+      { uuid: 'uuid-alice', email: 'alice-realsub@example.com', itemBytesUsed: 3_000_000, storageUsedBytes: 1_048_576 },
+      { uuid: 'uuid-bob', email: 'bob-included@example.com', itemBytesUsed: 7_000_000, storageUsedBytes: 5_242_880 },
+      { uuid: 'uuid-carol', email: 'carol-nosub@example.com', itemBytesUsed: 11_000_000, storageUsedBytes: null },
+    ]
+
+    const listThreeUsers = (application: ReturnType<typeof makeApplication>) => {
+      application.legacyApi.adminListUsers.mockResolvedValue({
+        data: {
+          users: THREE_USERS.map((user) => ({
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            roles: [],
+            subscription: null,
+            banned: false,
+            suspended: false,
+            mfaEnabled: false,
+            uuid: user.uuid,
+            email: user.email,
+            storageUsedBytes: user.storageUsedBytes,
+            storageLimitBytes: null,
+          })),
+          total: 3,
+        },
+      })
+    }
+
+    it('prints each account its own note bytes and its own total', async () => {
+      const application = makeApplication()
+      listThreeUsers(application)
+      application.legacyApi.adminGetUsersItemStorageUsage.mockResolvedValue({
+        data: {
+          usages: THREE_USERS.map((user) => ({
+            userUuid: user.uuid,
+            itemBytesUsed: user.itemBytesUsed,
+            itemsMeasured: 2,
+            itemsUnmeasured: 0,
+          })),
+        },
+      })
+
+      await renderTab(application)
+
+      // ONE request for the whole page, naming every account on it -- not one per
+      // row, which across a service boundary is the N+1 this endpoint's body-based
+      // shape exists to avoid. (A second, single-account call belongs to the
+      // SELECTED user's detail panel, which can show an account that is not on
+      // this page at all.)
+      const pageCalls = application.legacyApi.adminGetUsersItemStorageUsage.mock.calls.filter(
+        (call: unknown[]) => (call[0] as string[]).length > 1,
+      )
+      expect(pageCalls).toEqual([[['uuid-alice', 'uuid-bob', 'uuid-carol']]])
+
+      const notes = THREE_USERS.map((user) => spacePartForRow(user.email, 'admin-row-notes'))
+      expect(notes).toEqual(['[v]notes 2.9 MB', '[v]notes 6.7 MB', '[v]notes 10.5 MB'])
+      // ...and no two rows share a figure, which is exactly what the defect was.
+      expect(new Set(notes).size).toBe(3)
+
+      // The two halves and the combined figure are in ONE cell, so an operator
+      // reading a row cannot see a total without seeing what it is made of.
+      const aliceCell = storageCellForRow('alice-realsub@example.com')
+      expect(aliceCell).toContain('notes 2.9 MB')
+      expect(aliceCell).toContain('files 1 MB')
+
+      const totals = THREE_USERS.map((user) => spacePartForRow(user.email, 'admin-row-space-total'))
+      // alice: 3 MB of notes + 1 MiB of files, both measured -> an exact total.
+      expect(totals[0]).toBe('3.9 MB')
+      expect(totals[1]).toBe('11.7 MB')
+      // carol has NO stored file figure, which is not a measured zero, so her
+      // total is a lower bound and wears the sign that says so.
+      expect(totals[2]).toBe('≥ 10.5 MB')
+      expect(new Set(totals).size).toBe(3)
+    })
+
+    it('refuses a figure that names an account the page did not ask about', async () => {
+      const application = makeApplication()
+      listThreeUsers(application)
+      // The defect's exact shape, as a misbehaving server would send it: one
+      // figure, attributed to somebody else. It is dropped, not printed beside
+      // these rows.
+      application.legacyApi.adminGetUsersItemStorageUsage.mockResolvedValue({
+        data: {
+          usages: [
+            { userUuid: 'uuid-of-the-signed-in-admin', itemBytesUsed: 3_000_000, itemsMeasured: 1, itemsUnmeasured: 0 },
+          ],
+        },
+      })
+
+      await renderTab(application)
+
+      for (const user of THREE_USERS) {
+        expect(spacePartForRow(user.email, 'admin-row-notes')).toBe('[?]notes Not reported')
+      }
+      expect(container.textContent).not.toContain('2.9 MB')
+    })
+
+    it('reports a server build without the route as unpublished, never as a zero', async () => {
+      const application = makeApplication()
+      listThreeUsers(application)
+      application.legacyApi.adminGetUsersItemStorageUsage.mockResolvedValue({ error: { message: 'x' }, status: 404 })
+
+      await renderTab(application)
+
+      for (const user of THREE_USERS) {
+        expect(spacePartForRow(user.email, 'admin-row-notes')).toBe('[n]notes Not published')
+      }
+      // The file half still reports, so the total is a bound rather than nothing.
+      expect(spacePartForRow('alice-realsub@example.com', 'admin-row-space-total')).toBe('≥ 1 MB')
+      // ...and carol, with neither half, reports neither.
+      expect(spacePartForRow('carol-nosub@example.com', 'admin-row-space-total')).toBe('Not reported')
+    })
   })
 })

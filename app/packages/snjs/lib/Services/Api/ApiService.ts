@@ -247,6 +247,31 @@ export type AdminUserFeatureFlagsResponse = {
   storage: AdminUserStorageUsage | null
 }
 
+/**
+ * Standard Red Notes: one account's stored SYNCED ITEM (note) bytes, as reported
+ * by the syncing server's admin endpoint.
+ *
+ * *** `userUuid` IS LOAD-BEARING AND CALLERS MUST CHECK IT. *** The defect this
+ * endpoint exists to close was a space report that answered the CALLER's own
+ * figure for every account it was asked about, because the only route publishing
+ * the measurement took its subject from the session. Each entry now names the
+ * account it measures so a pane can refuse an entry it did not ask for, instead of
+ * printing it beside the wrong email.
+ *
+ * `itemsUnmeasured > 0` makes `itemBytesUsed` a FLOOR rather than a total: those
+ * rows predate the `content_size` column and carry no size at all.
+ */
+export type AdminUserItemStorageUsage = {
+  userUuid: string
+  itemBytesUsed: number
+  itemsMeasured: number
+  itemsUnmeasured: number
+}
+
+export type AdminItemStorageUsageResponse = {
+  usages: AdminUserItemStorageUsage[]
+}
+
 export type AdminUserTokenUsageWindow = {
   usedTokens: number | null
   /** Effective per-user ceiling; 0 means unlimited. */
@@ -998,6 +1023,23 @@ export class LegacyApiService
       url: joinPaths(this.host, Paths.v1.userUsage(userUuid)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to get user usage.',
+    })
+  }
+
+  /**
+   * Standard Red Notes: the stored SYNCED ITEM (note) bytes of several accounts,
+   * in one request. Admin-gated at the gateway and again in the syncing server.
+   *
+   * The account list goes in the BODY rather than the path so that a report over a
+   * page of the admin users list costs one round trip instead of one per row.
+   */
+  async adminGetUsersItemStorageUsage(userUuids: UuidString[]): Promise<HttpResponse<AdminItemStorageUsageResponse>> {
+    return this.tokenRefreshableRequest<AdminItemStorageUsageResponse>({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.adminItemStorageUsage),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get stored item bytes.',
+      params: { userUuids },
     })
   }
 

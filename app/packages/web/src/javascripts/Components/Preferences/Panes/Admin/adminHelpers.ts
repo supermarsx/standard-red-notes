@@ -229,8 +229,15 @@ export const formatBytes = (bytes: number): string => {
  * exists to refuse. `undefined` therefore collapses into `not-reported`
  * deliberately, and a test pins that collapse so it is not split again.
  *
- * `[n]` is still used on this surface, for the reading that IS reachable and
- * true: note bytes — see `ADMIN_USERS_ITEM_BYTES_READING`.
+ * `[n]` is still used on this surface, for the item-bytes readings in which
+ * nothing publishes the figure at all — a server build without the admin route,
+ * and a read that has not been attempted. See `ADMIN_ITEM_BYTES_READING`.
+ *
+ * *** THAT CONSTANT USED TO BE A SINGLE COLUMN-LEVEL `'unpublished'`. *** It said,
+ * correctly at the time, that no endpoint anywhere published another account's
+ * note bytes. The syncing server now has an admin-authorised read, so the claim
+ * would be false and the marker would be decoration; an account's note bytes are a
+ * per-row reading like every other figure here.
  */
 export const ADMIN_STORAGE_USED_STATES = ['measured', 'not-reported', 'invalid'] as const
 
@@ -252,19 +259,6 @@ export const ADMIN_STORAGE_USED_READING: Record<AdminStorageUsedState, AdminStor
   invalid: 'answered',
   'not-reported': 'unanswered',
 }
-
-/**
- * The reading the users list has for an account's synced ITEM (note) bytes:
- * `unpublished`, always, and not because this build failed to ask.
- *
- * `GET /v1/items/storage-usage` is the only source and it is scoped to
- * `response.locals.user.uuid` with no parameter, by design; the syncing server
- * has no admin-authorised surface at all. So nothing anywhere publishes another
- * account's item bytes and there is nothing for an operator to wait for — which
- * is exactly what `[n]` means, and why it is a COLUMN-level reading here rather
- * than a per-row one.
- */
-export const ADMIN_USERS_ITEM_BYTES_READING: AdminStorageReadingName = 'unpublished'
 
 /**
  * *** EXHAUSTIVE `Record` ON PURPOSE. *** The marker printed beside a storage
@@ -366,6 +360,205 @@ export const adminStorageUsedMarker = (usedBytes: number | null | undefined): st
 /** One line saying what the used-figure's reading means, for the cell's title. */
 export const adminStorageUsedMeaning = (usedBytes: number | null | undefined): string =>
   ADMIN_STORAGE_USED_MEANING[describeAdminStorageUsed(usedBytes).state]
+
+// ---------------------------------------------------------------------------
+// Users tab — the SYNCED ITEM (note) half of an account's stored space
+// ---------------------------------------------------------------------------
+
+/**
+ * What the server said about one account's stored SYNCED ITEM (note) bytes, as a
+ * closed set of ANSWERS rather than one nullable number.
+ *
+ * *** WHY THIS TYPE EXISTS, AND WHAT IT REPLACED. *** Notes are the larger half of
+ * most accounts' storage, and until the syncing server grew an admin-authorised
+ * read there was no way to learn another account's item bytes at all: the only
+ * route publishing them took its subject from the session, so an administrator
+ * asking about three accounts holding 3 MB, 7 MB and 11 MB of notes was answered
+ * their OWN figure three times. `ADMIN_USERS_ITEM_BYTES_READING` was the constant
+ * `'unpublished'` for exactly that reason. It is a READING per account now, because
+ * the figure can arrive, fail to arrive, or be refused by a server build that
+ * predates the route — three different facts the old constant could not hold.
+ *
+ * A FLOOR is not a separate state: an account with `itemsUnmeasured > 0` has rows
+ * that predate the `content_size` column and carry no size, so its reported bytes
+ * are a lower bound. That travels with the figure (see `ItemStorageUsage` on the
+ * server) rather than replacing it, because the number is still the best bound
+ * there is and withholding it would report less than is known.
+ */
+export type AdminItemBytesReading =
+  | { state: 'not-attempted' }
+  | { state: 'loading' }
+  | { state: 'failed'; message: string | null }
+  | { state: 'unsupported' }
+  | { state: 'reported'; bytes: number; itemsUnmeasured: number }
+
+export const ADMIN_ITEM_BYTES_STATES = ['not-attempted', 'loading', 'failed', 'unsupported', 'reported'] as const
+
+export type AdminItemBytesState = (typeof ADMIN_ITEM_BYTES_STATES)[number]
+
+/**
+ * The reading each item-bytes state is, in the same three-valued vocabulary the
+ * file half and the diagnostics pane use. *** EXHAUSTIVE `Record` ON PURPOSE. ***
+ *
+ * `unsupported` is `unpublished` and not `unanswered`: a server build without the
+ * route publishes nothing, and sending that operator to debug their syncing
+ * service would be a dead end — the answer is a redeploy. `not-attempted` is
+ * `unpublished` too, because nothing has been asked and so nothing is outstanding.
+ */
+export const ADMIN_ITEM_BYTES_READING: Record<AdminItemBytesState, AdminStorageReadingName> = {
+  'not-attempted': 'unpublished',
+  loading: 'unanswered',
+  failed: 'unanswered',
+  unsupported: 'unpublished',
+  reported: 'answered',
+}
+
+/** Classify + label one account's reported item bytes. */
+export const describeAdminItemBytes = (reading: AdminItemBytesReading): AdminStorageFigure<AdminItemBytesState> => {
+  if (reading.state === 'reported') {
+    return {
+      state: 'reported',
+      label: reading.itemsUnmeasured > 0 ? `≥ ${formatBytes(reading.bytes)}` : formatBytes(reading.bytes),
+    }
+  }
+  if (reading.state === 'loading') {
+    return { state: 'loading', label: 'reading…' }
+  }
+  if (reading.state === 'failed') {
+    return { state: 'failed', label: 'Not reported' }
+  }
+  if (reading.state === 'unsupported') {
+    return { state: 'unsupported', label: 'Not published' }
+  }
+
+  return { state: 'not-attempted', label: 'Not read' }
+}
+
+/** One line saying what an item-bytes reading means, for a cell's title. */
+export const adminItemBytesMeaning = (reading: AdminItemBytesReading): string => {
+  if (reading.state === 'reported') {
+    return reading.itemsUnmeasured > 0
+      ? `${reading.itemsUnmeasured} of this account’s stored items carry no recorded size, so its note bytes are a LOWER BOUND and not a total.`
+      : 'The server measured every one of this account’s stored items.'
+  }
+  if (reading.state === 'loading') {
+    return 'Reading this account’s stored note bytes from the server…'
+  }
+  if (reading.state === 'failed') {
+    return `The note-bytes read failed${reading.message ? ` (${reading.message})` : ''}, so this is not a measurement and is never a zero.`
+  }
+  if (reading.state === 'unsupported') {
+    return 'This server build does not publish another account’s stored note bytes. A redeploy answers it, and the first read after one is already correct for everything stored before it.'
+  }
+
+  return 'This account’s stored note bytes have not been read yet.'
+}
+
+// ---------------------------------------------------------------------------
+// Users tab — the two halves combined into one space figure
+// ---------------------------------------------------------------------------
+
+/**
+ * An account's TOTAL stored space, and how complete that total is.
+ *
+ * *** A SUM OVER A MISSING HALF IS A BOUND, NEVER A TOTAL. *** The file half is
+ * `null` whenever `FILE_UPLOAD_BYTES_USED` has never been written, which is not a
+ * measured zero (see `ADMIN_STORAGE_USED_STATES`); the note half can be absent for
+ * its own reasons, and can itself be a bound when rows carry no recorded size.
+ * Adding what is present and printing it as a total would under-report the account
+ * while looking exactly like a measurement — the flattering direction, and the one
+ * this pane keeps being fixed for. So the state says which it is and the label
+ * wears a `≥` when it is a bound.
+ */
+export const ADMIN_SPACE_TOTAL_STATES = ['total', 'floor', 'unknown'] as const
+
+export type AdminSpaceTotalState = (typeof ADMIN_SPACE_TOTAL_STATES)[number]
+
+export type AdminSpaceTotal = {
+  state: AdminSpaceTotalState
+  label: string
+  /** Which halves contributed. Both false is `unknown`. */
+  includesItemBytes: boolean
+  includesFileBytes: boolean
+  /**
+   * Whether the FILE half was read at all. `false` and `includesFileBytes: false`
+   * is "the read did not arrive"; `true` and `includesFileBytes: false` is "the
+   * server was asked and holds no figure". Two different silences, and the
+   * explanation beside the number has to name the right one.
+   */
+  fileHalfWasRead: boolean
+}
+
+/**
+ * Combine an account's note bytes and uploaded-file bytes into the one figure the
+ * operator asked for: how much space this user is taking.
+ *
+ * `fileUsedBytes` is read through `describeAdminStorageUsed`, so only a `measured`
+ * figure counts — `null` (never written) and an unusable figure are both an absent
+ * half rather than a zero.
+ *
+ * `fileWasRead` is `false` when the file-side read itself never produced an answer
+ * (not attempted, in flight, failed, or unsupported by the server). The sum is the
+ * same either way; the SENTENCE beside it is not, which is the whole reason the
+ * flag exists rather than being inferred from a `null`.
+ */
+export const combineAdminSpaceTotal = (
+  itemReading: AdminItemBytesReading,
+  fileUsedBytes: number | null | undefined,
+  fileWasRead = true,
+): AdminSpaceTotal => {
+  const fileFigure = describeAdminStorageUsed(fileUsedBytes)
+  const fileBytes = fileWasRead && fileFigure.state === 'measured' ? (fileUsedBytes as number) : null
+  const itemBytes = itemReading.state === 'reported' ? itemReading.bytes : null
+  const itemIsBound = itemReading.state === 'reported' && itemReading.itemsUnmeasured > 0
+
+  if (itemBytes === null && fileBytes === null) {
+    return {
+      state: 'unknown',
+      label: 'Not reported',
+      includesItemBytes: false,
+      includesFileBytes: false,
+      fileHalfWasRead: fileWasRead,
+    }
+  }
+
+  const sum = (itemBytes ?? 0) + (fileBytes ?? 0)
+  const complete = itemBytes !== null && fileBytes !== null && !itemIsBound
+
+  return {
+    state: complete ? 'total' : 'floor',
+    label: complete ? formatBytes(sum) : `≥ ${formatBytes(sum)}`,
+    includesItemBytes: itemBytes !== null,
+    includesFileBytes: fileBytes !== null,
+    fileHalfWasRead: fileWasRead,
+  }
+}
+
+/** One line saying exactly what the combined figure does and does not contain. */
+export const adminSpaceTotalMeaning = (total: AdminSpaceTotal): string => {
+  if (total.state === 'unknown') {
+    return 'Neither half of this account’s stored space produced a figure, so nothing here is a measurement and none of it is a zero.'
+  }
+  if (total.state === 'total') {
+    return 'Stored note bytes plus uploaded file bytes, both measured. Revisions (note history) live on another service and are in neither half.'
+  }
+  const missing: string[] = []
+  if (!total.includesItemBytes) {
+    missing.push('the stored note bytes did not arrive')
+  }
+  if (!total.includesFileBytes) {
+    missing.push(
+      total.fileHalfWasRead
+        ? 'no uploaded-file figure is stored, which is not a measured zero'
+        : 'the uploaded-file figure did not arrive',
+    )
+  }
+  if (missing.length === 0) {
+    missing.push('some of this account’s stored items carry no recorded size')
+  }
+
+  return `A LOWER BOUND, not a total: ${missing.join(' and ')}. Revisions (note history) live on another service and are in neither half.`
+}
 
 // ---------------------------------------------------------------------------
 // Server tab — all-services status chips

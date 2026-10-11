@@ -4,7 +4,12 @@ import {
   ADMIN_STORAGE_USED_MEANING,
   ADMIN_STORAGE_USED_READING,
   ADMIN_STORAGE_USED_STATES,
-  ADMIN_USERS_ITEM_BYTES_READING,
+  ADMIN_ITEM_BYTES_READING,
+  ADMIN_ITEM_BYTES_STATES,
+  adminItemBytesMeaning,
+  adminSpaceTotalMeaning,
+  combineAdminSpaceTotal,
+  describeAdminItemBytes,
   adminStorageUsedMarker,
   adminStorageUsedMeaning,
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
@@ -217,13 +222,103 @@ describe('formatBytes / formatAdminUserStorage', () => {
     expect(adminStorageUsedMeaning(null)).not.toBe(adminStorageUsedMeaning(0))
   })
 
-  it('reserves [n] for the one reading on this surface that nothing publishes', () => {
-    // Note bytes: the only source is a self-scoped route on a server with no
-    // admin surface, so there is nothing to wait for — which is what [n] means.
-    expect(ADMIN_USERS_ITEM_BYTES_READING).toBe('unpublished')
-    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_USERS_ITEM_BYTES_READING]).toBe('[n]')
-    // ...and no per-row state may claim it, or the marker would stop meaning that.
-    expect(Object.values(ADMIN_STORAGE_USED_READING)).not.toContain(ADMIN_USERS_ITEM_BYTES_READING)
+  /**
+   * `[n]` used to be a single column-level constant asserting that NOTHING
+   * published another account's note bytes. The syncing server now does, for the
+   * accounts an admin names, so the marker belongs to the item-bytes readings in
+   * which nothing publishes the figure — and to those only.
+   */
+  it('reserves [n] for the item-bytes readings in which nothing publishes the figure', () => {
+    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_ITEM_BYTES_READING['unsupported']]).toBe('[n]')
+    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_ITEM_BYTES_READING['not-attempted']]).toBe('[n]')
+
+    // A figure that ARRIVED is never a silence, and a read that was attempted and
+    // produced nothing is the OTHER silence — [?] — because there is something to
+    // wait for. Merging the two is what made 49 diagnostics rows unreadable.
+    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_ITEM_BYTES_READING['reported']]).toBe('[v]')
+    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_ITEM_BYTES_READING['failed']]).toBe('[?]')
+    expect(ADMIN_STORAGE_READING_MARKER[ADMIN_ITEM_BYTES_READING['loading']]).toBe('[?]')
+
+    // Exhaustive: a new state cannot be added without saying which reading it is.
+    for (const state of ADMIN_ITEM_BYTES_STATES) {
+      expect(ADMIN_ITEM_BYTES_READING[state]).toBeDefined()
+    }
+    expect(Object.keys(ADMIN_ITEM_BYTES_READING).sort()).toEqual([...ADMIN_ITEM_BYTES_STATES].sort())
+
+    // No FILE-half state may claim [n]: the file figure is always published by a
+    // server that answers the endpoint at all.
+    expect(Object.values(ADMIN_STORAGE_USED_READING)).not.toContain('unpublished')
+  })
+
+  /**
+   * *** THE REGRESSION THIS WHOLE GROUP EXISTS FOR. *** An admin space report
+   * answered the CALLER's own note bytes for every account it was asked about, so
+   * three accounts holding different amounts all read the same figure. These pin
+   * the two properties that make such an answer impossible to print as a
+   * measurement: a figure arrives per account, and a sum over a missing half wears
+   * a `≥` and says which half is missing.
+   */
+  it('reports each account its own note bytes, and marks an incomplete one as a bound', () => {
+    // The three figures the live repro used, which the broken report printed as
+    // one. Each is its own label, and no two of them collapse together.
+    const labels = [3_000_000, 7_000_000, 11_000_000].map(
+      (bytes) => describeAdminItemBytes({ state: 'reported', bytes, itemsUnmeasured: 0 }).label,
+    )
+    expect(labels).toEqual([formatBytes(3_000_000), formatBytes(7_000_000), formatBytes(11_000_000)])
+    expect(new Set(labels).size).toBe(3)
+
+    // Rows that carry no recorded size make the figure a floor, and say so.
+    const bound = describeAdminItemBytes({ state: 'reported', bytes: 3_000_000, itemsUnmeasured: 4 })
+    expect(bound.label.startsWith('≥ ')).toBe(true)
+    expect(adminItemBytesMeaning({ state: 'reported', bytes: 3_000_000, itemsUnmeasured: 4 })).toContain('LOWER BOUND')
+
+    // Every non-reported state names what happened instead of a quantity, and
+    // none of them is a zero.
+    for (const reading of [
+      { state: 'not-attempted' } as const,
+      { state: 'loading' } as const,
+      { state: 'failed', message: null } as const,
+      { state: 'unsupported' } as const,
+    ]) {
+      expect(describeAdminItemBytes(reading).label).not.toContain('0')
+      expect(adminItemBytesMeaning(reading).length).toBeGreaterThan(0)
+    }
+    // "this build publishes nothing" and "asked and nothing came back" are not
+    // the same sentence, because they do not have the same remedy.
+    expect(adminItemBytesMeaning({ state: 'unsupported' })).not.toBe(
+      adminItemBytesMeaning({ state: 'failed', message: null }),
+    )
+  })
+
+  it('sums the two halves only when both are measured, and calls a partial sum a bound', () => {
+    const both = combineAdminSpaceTotal({ state: 'reported', bytes: 3_000_000, itemsUnmeasured: 0 }, 1_048_576)
+    expect(both.state).toBe('total')
+    expect(both.label).toBe(formatBytes(4_048_576))
+    expect(adminSpaceTotalMeaning(both)).not.toContain('LOWER BOUND')
+
+    // A measured ZERO file half is a half, so the total stays a total.
+    expect(combineAdminSpaceTotal({ state: 'reported', bytes: 1_000, itemsUnmeasured: 0 }, 0).state).toBe('total')
+
+    // An ABSENT file figure is not a zero: the sum of the other half is a bound.
+    const noFileFigure = combineAdminSpaceTotal({ state: 'reported', bytes: 11_000_000, itemsUnmeasured: 0 }, null)
+    expect(noFileFigure.state).toBe('floor')
+    expect(noFileFigure.label.startsWith('≥ ')).toBe(true)
+    expect(adminSpaceTotalMeaning(noFileFigure)).toContain('not a measured zero')
+
+    // The same missing half, for a different reason, gets a different sentence.
+    const fileReadFailed = combineAdminSpaceTotal(
+      { state: 'reported', bytes: 11_000_000, itemsUnmeasured: 0 },
+      null,
+      false,
+    )
+    expect(fileReadFailed.state).toBe('floor')
+    expect(adminSpaceTotalMeaning(fileReadFailed)).toContain('did not arrive')
+    expect(adminSpaceTotalMeaning(fileReadFailed)).not.toBe(adminSpaceTotalMeaning(noFileFigure))
+
+    // Neither half: nothing is reported, and nothing is a zero.
+    const neither = combineAdminSpaceTotal({ state: 'failed', message: null }, null)
+    expect(neither).toMatchObject({ state: 'unknown', label: 'Not reported' })
+    expect(adminSpaceTotalMeaning(neither)).toContain('none of it is a zero')
   })
 
   it('separates unlimited, a figure, an allowance of nothing and an unset limit', () => {
