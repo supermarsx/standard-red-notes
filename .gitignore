@@ -48,5 +48,10 @@ server/packages/files/uploads/*
 !server/packages/files/uploads/.gitkeep
 server/docker-compose.yml
 
+# deploy.sh writes pre-deploy database dumps here. A dump carries database
+# credentials, session secrets and encrypted-payload key material, so it must
+# never become committable by accident.
+backups/
+
 .git-backups/
 .claude/

@@ -40,3 +40,6 @@ server/packages/files/uploads
 .env
 .env.*
 !.env.sample
+
+# Pre-deploy database dumps written by deploy.sh.
+backups
