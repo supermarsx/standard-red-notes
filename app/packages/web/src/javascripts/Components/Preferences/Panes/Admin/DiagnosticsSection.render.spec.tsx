@@ -203,6 +203,39 @@ describe('DiagnosticsSection', () => {
     expect(rowStatus('Gateway')).toBe('healthy')
   })
 
+  /**
+   * *** A ROW IS READ WITHOUT SCROLLING SIDEWAYS. *** The rows were a table as
+   * wide as its widest line inside a box that scrolled, with the note in a fourth
+   * column that began near the right edge of the pane and ran out of view. The
+   * note now takes the row's full width under the other three cells. jsdom lays
+   * nothing out, so what is pinned is what the layout rests on: the same four
+   * cells in the same order, each named for what it is, and no scrolling box.
+   */
+  it('keeps a row as four cells in order, with the note under them and no sideways scroll', async () => {
+    await render(model())
+    const rows = [...container.querySelectorAll('tr')]
+
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      const cells = [...row.children]
+
+      expect(cells.map((cell) => cell.tagName)).toEqual(['TD', 'TD', 'TD', 'TD'])
+      expect(row.getAttribute('role')).toBe('row')
+      expect(cells.map((cell) => cell.getAttribute('role'))).toEqual(['cell', 'cell', 'cell', 'cell'])
+      // The status chip is in the third cell and nowhere else in the row.
+      expect(cells.map((cell) => cell.querySelector('[data-diagnostics-status]') !== null)).toEqual([
+        false,
+        false,
+        true,
+        false,
+      ])
+      // The note spans the row: it is the only cell that does.
+      expect(cells.map((cell) => cell.className.split(' ').includes('col-span-3'))).toEqual([false, false, false, true])
+      expect(row.closest('.overflow-x-auto')).toBeNull()
+      expect(row.closest('table')?.className.split(' ')).not.toContain('min-w-max')
+    }
+  })
+
   it('paints a claim built on a proxy as Unknown, never as OK, and prints the caveat', async () => {
     const text = await render(model())
 

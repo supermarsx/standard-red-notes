@@ -183,7 +183,7 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
       )}
 
       {block.findings.length > 0 && (
-        <ul className="mt-3 flex flex-col gap-2">
+        <ul className="mt-3 flex list-none flex-col gap-2">
           {block.findings.map((finding) => (
             <li key={finding.code}>
               <FindingCard finding={finding} />
@@ -192,32 +192,45 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
         </ul>
       )}
 
+      {/* ROWS THAT WRAP. This was a table as wide as its widest line (`min-w-max`)
+          in a box that scrolled sideways, with the note in a fourth column: on an
+          ordinary desktop pane the note of every row began near the right edge
+          and ran out of view, so the sentence that says what a row means had to
+          be scrolled to, block by block. Label, value and status share a line
+          and the note takes the full width beneath them; nothing scrolls.
+
+          STILL FOUR CELLS, in the same order, in a `tr`: the specs read them by
+          index. Only how they are laid out changed, and the roles are spelled
+          out because a row that is displayed as a grid loses its implicit one. */}
       {block.rows.length > 0 && (
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-max text-left text-sm">
-            <tbody>
-              {block.rows.map((row) => (
-                <tr
-                  key={row.label}
-                  className="border-border border-t align-top"
-                  data-diagnostics-reading={readingOf(row.value)}
-                  data-diagnostics-row-status={row.verdict}
-                >
-                  <td className="py-2 pr-4 font-semibold">{row.label}</td>
-                  <td className="py-2 pr-4 font-mono">{row.value}</td>
-                  <td className="py-2 pr-4">
-                    <StatusChip verdict={row.verdict} />
-                  </td>
-                  <td className="text-passive-0 max-w-xl py-2 whitespace-normal">
-                    <ReadingTag reading={readingOf(row.value)} />
-                    {row.caveat !== undefined && <div className="text-text mb-1">{row.caveat}</div>}
-                    {row.note}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <table className="mt-2 block w-full text-left text-sm" role="table">
+          <tbody className="block" role="rowgroup">
+            {block.rows.map((row) => (
+              <tr
+                key={row.label}
+                role="row"
+                className="border-border grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-start gap-x-4 gap-y-1 border-t py-2"
+                data-diagnostics-reading={readingOf(row.value)}
+                data-diagnostics-row-status={row.verdict}
+              >
+                <td role="cell" className="font-semibold break-words">
+                  {row.label}
+                </td>
+                <td role="cell" className="font-mono break-words">
+                  {row.value}
+                </td>
+                <td role="cell" className="whitespace-nowrap">
+                  <StatusChip verdict={row.verdict} />
+                </td>
+                <td role="cell" className="text-passive-0 col-span-3 break-words whitespace-normal">
+                  <ReadingTag reading={readingOf(row.value)} />
+                  {row.caveat !== undefined && <div className="text-text mb-1">{row.caveat}</div>}
+                  {row.note}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </details>
   )
@@ -234,7 +247,7 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
 const StatusLegend: FunctionComponent = () => (
   <details className="mt-1" data-diagnostics-legend="true">
     <summary className="text-passive-0 cursor-pointer text-xs">What the statuses mean</summary>
-    <ul className="mt-2 flex flex-col gap-1 text-sm">
+    <ul className="mt-2 flex list-none flex-col gap-1 text-sm">
       {[...VERDICTS]
         .sort((left, right) => VERDICT_SEVERITY[right] - VERDICT_SEVERITY[left])
         .map((verdict) => (

@@ -1894,7 +1894,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
               <summary className="cursor-pointer text-sm font-semibold">
                 {`Context: ${ranked.context.length} finding(s) that are not faults`}
               </summary>
-              <ul className="mt-2 flex flex-col gap-2">
+              <ul className="mt-2 flex list-none flex-col gap-2">
                 {ranked.context.map((entry) => (
                   <li key={entry.finding.code}>
                     <FindingCard finding={entry.finding} source={`Seen in: ${entry.sources.join(SOURCE_JOIN)}`} />
@@ -1913,7 +1913,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             <span data-diagnostics-lane-diagnosis="true">{diagnosis.headline}</span>
           </Text>
           {diagnosis.findings.length > 0 && (
-            <ul className="mt-3 flex flex-col gap-3">
+            <ul className="mt-3 flex list-none flex-col gap-3">
               {diagnosis.findings.map((finding) => (
                 <li key={finding.title} className="border-border rounded border p-3">
                   <div className="text-sm font-semibold">{finding.title}</div>
@@ -1953,7 +1953,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
               never run is visible as "Not tested" with its own control instead of
               being absent. The status shown is the ROW's — the same `checkRow` its
               section renders — so this list and the section cannot disagree. */}
-          <ul className="mt-3 flex flex-col gap-2">
+          <ul className="mt-3 flex list-none flex-col gap-2">
             {readings.map((reading) => {
               const { definition } = reading
               const row = checkRow(reading)
