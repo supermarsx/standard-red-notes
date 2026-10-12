@@ -6,6 +6,7 @@ import {
 } from '../../Domain/SyncCommand/SyncCommandRepositoryInterface'
 import { TypeORMSyncCommand } from './TypeORMSyncCommand'
 import { SyncCommandTransactionContext } from './SyncCommandTransactionContext'
+import { SyncCommandClaimLostError } from '../../Domain/SyncCommand/SyncCommandTypes'
 
 export class TypeORMSyncCommandRepository implements SyncCommandRepositoryInterface {
   constructor(
@@ -84,8 +85,26 @@ export class TypeORMSyncCommandRepository implements SyncCommandRepositoryInterf
       .execute()
 
     if (result.affected !== 1) {
-      throw new Error('Sync command lost its execution claim before commit.')
+      throw new SyncCommandClaimLostError()
     }
+  }
+
+  async deleteAcceptedIfUnclaimed(userUuid: string, sessionUuid: string, commandId: string): Promise<boolean> {
+    // Both conditions matter. A committed command keeps its stored result for replay, and a
+    // claimed one is being executed by someone else: its claim is a row lock this statement
+    // waits behind, and by the time it is released the row is either committed or free.
+    const result = await this.repository
+      .createQueryBuilder()
+      .delete()
+      .from(TypeORMSyncCommand)
+      .where('user_uuid = :userUuid', { userUuid })
+      .andWhere('session_uuid = :sessionUuid', { sessionUuid })
+      .andWhere('command_id = :commandId', { commandId })
+      .andWhere('status = :status', { status: 'accepted' })
+      .andWhere('execution_token IS NULL')
+      .execute()
+
+    return (result.affected ?? 0) > 0
   }
 
   async deleteExpired(nowTimestamp: number): Promise<number> {

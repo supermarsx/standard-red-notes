@@ -30,6 +30,32 @@ export class SyncCommandProtocolError extends Error {
   }
 }
 
+/**
+ * The command's execution claim was gone when its result came to be stored.
+ *
+ * The claim and the result are written by the SAME transaction, so the only way to lose
+ * the claim in between is for the database to have rolled that transaction back underneath
+ * the code that was still using it.
+ */
+export class SyncCommandClaimLostError extends Error {
+  constructor() {
+    super('Sync command lost its execution claim before commit.')
+    this.name = 'SyncCommandClaimLostError'
+  }
+}
+
+/**
+ * The database aborted the command's transaction (a write over a row another transaction
+ * had changed since this one read it, a deadlock, a busy database). Nothing the transaction
+ * did survives, so the execution may be run again from the start.
+ */
+export class SyncCommandTransactionAbortedError extends Error {
+  constructor(cause: unknown) {
+    super('The database aborted the sync command transaction; nothing it wrote was kept.', { cause })
+    this.name = 'SyncCommandTransactionAbortedError'
+  }
+}
+
 export function validateSyncCommandMetadata(metadata: SyncCommandMetadata): void {
   const idBytes = Buffer.byteLength(metadata.id, 'utf8')
   if (idBytes === 0 || idBytes > SYNC_COMMAND_ID_MAX_BYTES || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(metadata.id)) {

@@ -60,6 +60,20 @@ class InMemoryCommandRepository implements SyncCommandRepositoryInterface {
     delete command.executionToken
   }
 
+  async deleteAcceptedIfUnclaimed(userUuid: string, sessionUuid: string, commandId: string): Promise<boolean> {
+    for (const [uuid, entry] of this.commands) {
+      if (
+        this.key(entry) === this.key({ userUuid, sessionUuid, commandId }) &&
+        entry.status === 'accepted' &&
+        !entry.executionToken
+      ) {
+        this.commands.delete(uuid)
+        return true
+      }
+    }
+    return false
+  }
+
   async deleteExpired(): Promise<number> {
     return 0
   }

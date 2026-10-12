@@ -46,6 +46,7 @@ const createCommandRepository = (): jest.Mocked<SyncCommandRepositoryInterface> 
   find: jest.fn(),
   claimAccepted: jest.fn(),
   commit: jest.fn(),
+  deleteAcceptedIfUnclaimed: jest.fn(),
   deleteExpired: jest.fn(),
 })
 

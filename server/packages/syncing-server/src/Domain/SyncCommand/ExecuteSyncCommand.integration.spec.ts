@@ -110,13 +110,17 @@ describe('durable sync command transaction integration', () => {
     expect(await dataSource.getRepository(SyncCommandTestMutation).count()).toBe(0)
     expect(await dataSource.getRepository(TypeORMSyncCommandOutbox).count()).toBe(0)
     expect(transactionContext.manager).toBeUndefined()
+    // The acceptance is withdrawn with the failed execution: left behind it would answer
+    // every status query `accepted` ("still being processed") until it expired a day later.
+    expect(await dataSource.getRepository(TypeORMSyncCommand).count()).toBe(0)
     expect(
-      await dataSource.getRepository(TypeORMSyncCommand).findOneByOrFail({
+      await new GetSyncCommandStatus(commandRepository).execute({
         userUuid: 'user-1',
         sessionUuid: 'session-1',
         commandId: metadata.id,
+        requestDigest: metadata.digest,
       }),
-    ).toMatchObject({ status: 'accepted', responseJson: null, executionToken: null })
+    ).toEqual({ command: { id: metadata.id, status: 'unknown' } })
 
     rawPublisher.publish.mockImplementation(async () => {
       expect(await dataSource.getRepository(SyncCommandTestMutation).count()).toBe(1)
@@ -269,13 +273,17 @@ describe('durable sync command transaction integration', () => {
     expect(await dataSource.getRepository(TypeORMSyncCommandOutbox).count()).toBe(0)
     expect(metricDelegate.storeMetric).not.toHaveBeenCalled()
     expect(metricDelegate.storeUserBasedMetric).not.toHaveBeenCalled()
+    // The acceptance is withdrawn with the failed execution: left behind it would answer
+    // every status query `accepted` ("still being processed") until it expired a day later.
+    expect(await dataSource.getRepository(TypeORMSyncCommand).count()).toBe(0)
     expect(
-      await dataSource.getRepository(TypeORMSyncCommand).findOneByOrFail({
+      await new GetSyncCommandStatus(commandRepository).execute({
         userUuid: 'user-1',
         sessionUuid: 'session-1',
         commandId: metadata.id,
+        requestDigest: metadata.digest,
       }),
-    ).toMatchObject({ status: 'accepted', responseJson: null, executionToken: null })
+    ).toEqual({ command: { id: metadata.id, status: 'unknown' } })
 
     const committed = await executeSyncCommand.execute({
       userUuid: 'user-1',
@@ -308,6 +316,131 @@ describe('durable sync command transaction integration', () => {
     expect(metricDelegate.storeMetric).toHaveBeenCalledTimes(1)
     expect(metricDelegate.storeUserBasedMetric).toHaveBeenCalledTimes(1)
     expect(rawPublisher.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('withdraws only an acceptance that nobody is executing and nobody has committed', async () => {
+    const row = (uuid: string, commandId: string, overrides: Partial<TypeORMSyncCommand> = {}): TypeORMSyncCommand => ({
+      uuid,
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      commandId,
+      requestDigest: metadata.digest,
+      status: 'accepted',
+      responseJson: null,
+      executionToken: null,
+      createdAtTimestamp: 1,
+      updatedAtTimestamp: 1,
+      expiresAtTimestamp: Date.now() + 60_000,
+      ...overrides,
+    })
+    await dataSource
+      .getRepository(TypeORMSyncCommand)
+      .insert([
+        row('abandoned', 'abandoned-command'),
+        row('executing', 'executing-command', { executionToken: 'held-by-another-request' }),
+        row('committed', 'committed-command', { status: 'committed', responseJson: '{"saved_items":[]}' }),
+        row('other-session', 'abandoned-command', { sessionUuid: 'session-2' }),
+      ])
+
+    expect(await commandRepository.deleteAcceptedIfUnclaimed('user-1', 'session-1', 'abandoned-command')).toBe(true)
+    expect(await commandRepository.deleteAcceptedIfUnclaimed('user-1', 'session-1', 'abandoned-command')).toBe(false)
+    expect(await commandRepository.deleteAcceptedIfUnclaimed('user-1', 'session-1', 'executing-command')).toBe(false)
+    expect(await commandRepository.deleteAcceptedIfUnclaimed('user-1', 'session-1', 'committed-command')).toBe(false)
+
+    const remaining = await dataSource.getRepository(TypeORMSyncCommand).find({ order: { uuid: 'ASC' } })
+    expect(remaining.map((command) => command.uuid)).toEqual(['committed', 'executing', 'other-session'])
+  })
+
+  it('runs an execution the database aborted again, keeping nothing of the first attempt', async () => {
+    const mutations = dataSource.getRepository(SyncCommandTestMutation)
+    let attempts = 0
+
+    const result = await executeSyncCommand.execute({
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      metadata,
+      canonicalPayload: payload,
+      execute: async () => {
+        attempts += 1
+        await transactionContext.manager?.getRepository(SyncCommandTestMutation).insert({
+          uuid: `mutation-of-attempt-${attempts}`,
+          value: 'saved',
+        })
+        await transactionalPublisher.publish(event)
+        if (attempts === 1) {
+          throw Object.assign(new Error('Record has changed since last read'), {
+            name: 'QueryFailedError',
+            driverError: { errno: 1020, code: 'ER_CHECKREAD' },
+          })
+        }
+        return { saved_items: [], attempt: attempts }
+      },
+    })
+    await dispatcher.waitForIdle()
+
+    expect(attempts).toBe(2)
+    expect(result).toMatchObject({ replayed: false, response: { attempt: 2, command: { status: 'committed' } } })
+    // Only the second attempt's work exists; the first attempt's row and event went with it.
+    expect((await mutations.find()).map((mutation) => mutation.uuid)).toEqual(['mutation-of-attempt-2'])
+    expect(rawPublisher.publish).toHaveBeenCalledTimes(1)
+    expect(
+      await dataSource.getRepository(TypeORMSyncCommand).findOneByOrFail({ commandId: metadata.id }),
+    ).toMatchObject({
+      status: 'committed',
+      executionToken: null,
+    })
+    expect(transactionContext.manager).toBeUndefined()
+  })
+
+  it('starts over when the code saving an item swallowed the error that ended the transaction', async () => {
+    // The driver's one query runner, made to fail a named statement the way a database that has
+    // given up on the transaction does. Saving one item is allowed to fail, so the caller
+    // catches this and carries on -- which is exactly how it used to go unnoticed.
+    const runner = dataSource.createQueryRunner()
+    const realQuery = runner.query.bind(runner)
+    const abortingStatement = 'SELECT the_database_gives_up'
+    runner.query = (async (sql: string, ...rest: unknown[]) => {
+      if (sql === abortingStatement) {
+        throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })
+      }
+      return (realQuery as (...parameters: unknown[]) => Promise<unknown>)(sql, ...rest)
+    }) as typeof runner.query
+    const mutations = dataSource.getRepository(SyncCommandTestMutation)
+    let attempts = 0
+    const swallowed: unknown[] = []
+
+    try {
+      const result = await executeSyncCommand.execute({
+        userUuid: 'user-1',
+        sessionUuid: 'session-1',
+        metadata,
+        canonicalPayload: payload,
+        execute: async () => {
+          attempts += 1
+          const manager = transactionContext.manager as NonNullable<typeof transactionContext.manager>
+          await manager
+            .getRepository(SyncCommandTestMutation)
+            .insert({ uuid: `first-item-${attempts}`, value: 'saved' })
+          if (attempts === 1) {
+            await manager.queryRunner?.query(abortingStatement).catch((error: unknown) => swallowed.push(error))
+            // The next item: with the transaction gone this would be kept on its own.
+            await manager
+              .getRepository(SyncCommandTestMutation)
+              .insert({ uuid: 'written-after-the-transaction-ended', value: 'stray' })
+              .catch((error: unknown) => swallowed.push(error))
+          }
+          return { saved_items: [], attempt: attempts }
+        },
+      })
+
+      // Precondition: both errors really were swallowed by the caller, as SaveItems does.
+      expect(swallowed).toHaveLength(2)
+      expect(attempts).toBe(2)
+      expect(result).toMatchObject({ replayed: false, response: { attempt: 2 } })
+      expect((await mutations.find()).map((mutation) => mutation.uuid)).toEqual(['first-item-2'])
+    } finally {
+      runner.query = realQuery as typeof runner.query
+    }
   })
 
   it('returns the committed command without awaiting an unrelated global outbox drain', async () => {
