@@ -21,6 +21,7 @@ import {
 } from './syncDiagnostics'
 import {
   buildWebsocketSection,
+  describeLiveSocketCheck,
   CAPABILITY_STATUSES,
   LANE_GATING_PRECONDITIONS,
   PRECONDITION_CODES,
@@ -2872,6 +2873,41 @@ describe('a socket that never connects', () => {
 
       expect({ state, raised: codesOf(model).includes('SOCKET_NOT_CONNECTING') }).toEqual({ state, raised: true })
     }
+  })
+
+  /**
+   * *** ONE FAULT, AND ONLY ITS OWN SECTION. *** Read mid-dial, the live-socket
+   * check said "unknown", and every row in three other sections that rests on a
+   * live socket said unknown with it — which sections depended on the second the
+   * pane was read in. The history settles it: this tab is on HTTP.
+   */
+  it('reads the live socket as on HTTP, not as unknown, while a lane that never connects is dialling again', () => {
+    const dialling = transport({ state: 'HALF_OPEN', operations: [] })
+    const notConnecting = describeLiveSocketCheck(dialling, behindAProxyThatDoesNotUpgrade())
+    const firstDial = describeLiveSocketCheck(
+      dialling,
+      recorded((instance) => {
+        instance.recordTransition('HALF_OPEN', undefined, false)
+      }),
+    )
+    const reconnecting = describeLiveSocketCheck(
+      dialling,
+      recorded((instance) => {
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('DEGRADED', 'server-kill', false)
+        instance.recordTransition('DEGRADED', 'reconnect-gap', false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+      }),
+    )
+
+    expect(notConnecting.state).toBe('degraded')
+    expect(String(notConnecting.result)).toBe('on HTTP: reconnecting, and has not connected once')
+    // The controls: a first dial, and a lane that HAS connected and is coming
+    // back, are still open questions.
+    expect(firstDial.state).toBe('unknown')
+    expect(reconnecting.state).toBe('unknown')
+    // And with no ledger at all the check claims nothing from history.
+    expect(describeLiveSocketCheck(dialling).state).toBe('unknown')
   })
 
   it('does not name the proxy for a cause that is not the proxy’s', () => {

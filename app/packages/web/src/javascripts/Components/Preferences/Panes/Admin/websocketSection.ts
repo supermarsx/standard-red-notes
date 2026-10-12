@@ -2551,6 +2551,55 @@ const AGO = safeConstant('ago')
 /** What can carry a sync round, as the transport's ledger names it. Closed. */
 const SYNC_ROUND_CARRIERS = ['socket', 'http', 'failed'] as const
 
+/**
+ * Whether this tab keeps trying the socket and has not once arrived on it.
+ *
+ * ONE definition, read in two places — the finding in the ledger block and the
+ * live-socket check — so the two cannot disagree about a lane the pane is
+ * describing twice. Read from the history on purpose: at most instants such a
+ * lane is between attempts, and its state then says "dialling", which is true
+ * and says nothing about the forty attempts before it.
+ *
+ * Two attempts at least, so a page that has only just loaded is not accused of
+ * anything; never for a tab that is standing by, which is not trying; and never
+ * when the ledger holds a state this build cannot name, where "never arrived"
+ * cannot be established.
+ */
+export function describeLaneNotConnecting(
+  ledger: LaneLedgerSectionView | undefined,
+): { readonly attempts: number; readonly proxyRefused: boolean; readonly wholeHistory: boolean } | undefined {
+  if (ledger === undefined) {
+    return undefined
+  }
+
+  const latest = ledger.transitions.length > 0 ? ledger.transitions[ledger.transitions.length - 1] : undefined
+  let arrived = false
+  for (const transition of ledger.transitions) {
+    const carrier = carrierOf(transition.state)
+    if (carrier === undefined) {
+      return undefined
+    }
+    arrived = arrived || carrier === 'socket'
+  }
+  const standingBy =
+    latest !== undefined &&
+    carrierOf(latest.state) === 'http' &&
+    latest.reason !== undefined &&
+    isKnownFallbackReason(latest.reason) &&
+    socketFallbackIsDeferred(latest.reason)
+  const folded = foldedFallbackCounts(ledger.fallbackCounts)
+  const attempts = [...folded.values()].reduce((sum, count) => sum + count, 0)
+  if (arrived || standingBy || attempts < 2) {
+    return undefined
+  }
+
+  return {
+    attempts,
+    proxyRefused: (folded.get('proxy-failed') ?? 0) > 0,
+    wholeHistory: ledger.transitionsDropped === 0,
+  }
+}
+
 function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): DiagnosticBlock {
   const heading = safeConstant('Lane degradation ledger')
   const description =
@@ -3016,9 +3065,9 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
    * Not for a tab that is standing by: that tab is not trying. And two attempts
    * at least, so a page that has only just loaded is not accused of anything.
    */
-  const attempts = [...folded.values()].reduce((sum, count) => sum + count, 0)
-  if (connections === 0 && attempts >= 2 && !standingBy && unnameableStates === 0) {
-    const proxyRefused = (folded.get('proxy-failed') ?? 0) > 0
+  const notConnecting = describeLaneNotConnecting(ledger)
+  if (notConnecting !== undefined) {
+    const { proxyRefused } = notConnecting
 
     findings.push(
       diagnosticFinding({
@@ -3030,7 +3079,7 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
           'This tab keeps trying the socket and has not arrived on it. The app is working — every read and every save goes over HTTP instead — so nothing on this pane is red for it, and at any one instant the transport row may read "reconnecting" rather than a failure. What is lost is immediacy: live updates, collaboration and pushed invitations wait for the next sync.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
-        remedy: remedyForSocketNotConnecting(proxyRefused, attempts, ledger.transitionsDropped === 0),
+        remedy: remedyForSocketNotConnecting(proxyRefused, notConnecting.attempts, notConnecting.wholeHistory),
       }),
     )
   }
@@ -3214,7 +3263,10 @@ function buildTabsBlock(transport: TransportStatusInput | undefined, tabs: TabsV
  * Every `result` is a closed code of this build: the state and the reason are
  * admitted through `safeEnum` against the transport's own tuples.
  */
-export function describeLiveSocketCheck(transport: TransportStatusInput | undefined): Omit<CheckOutcome, 'id'> {
+export function describeLiveSocketCheck(
+  transport: TransportStatusInput | undefined,
+  ledger?: LaneLedgerSectionView,
+): Omit<CheckOutcome, 'id'> {
   if (transport === undefined) {
     return {
       state: 'degraded',
@@ -3250,6 +3302,23 @@ export function describeLiveSocketCheck(transport: TransportStatusInput | undefi
   }
 
   if (LANE_STATE_CARRIER[state] === 'dialling') {
+    /**
+     * *** "DIALLING" IS NOT AN OPEN QUESTION ON A LANE THAT NEVER CONNECTS. ***
+     * Behind a proxy that does not pass the upgrade this tab is between attempts
+     * at most instants, so this check read "unknown" at most instants — and every
+     * row in three other sections that rests on a live socket read unknown with
+     * it. One fault, four sections off OK, and which ones depended on the second
+     * the pane was read in. The history settles it: tried repeatedly, never
+     * arrived, is a tab on HTTP.
+     */
+    if (describeLaneNotConnecting(ledger) !== undefined) {
+      return {
+        state: 'degraded',
+        result: safeConstant('on HTTP: reconnecting, and has not connected once'),
+        detail: `This tab is between connection attempts (${state}) and has not arrived on the socket once since the ledger began. The app keeps working over HTTP; what is lost is the realtime lane. The ledger below names what ends each attempt.`,
+      }
+    }
+
     return {
       state: 'unknown',
       result: safeTokens(safeConstant('dialling:'), safeEnum(state, SOCKET_TRANSPORT_STATES)),

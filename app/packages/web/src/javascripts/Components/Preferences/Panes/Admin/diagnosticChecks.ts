@@ -405,15 +405,15 @@ const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
   'server-build': {
     code: safeConstant('WEB_AND_SERVER_BUILDS_DIFFER'),
     title: {
-      fail: 'The API server did not say which build it is',
+      fail: 'The web app and the API server are different builds',
       degraded: 'The web app and the API server are different builds',
     },
     summary: {
-      fail: 'The server’s readiness route did not answer as ready. Check the server container’s own health before reading the rest of this pane: every server reading here came from a server that says it is not ready.',
+      fail: 'Deploy the web app and the server from the same commit. A newer web app against an older server calls endpoints that are not there yet, and the reverse hides fixes that were shipped; both present as features that half work.',
       degraded:
         'Deploy the web app and the server from the same commit. A newer web app against an older server calls endpoints that are not there yet, and the reverse hides fixes that were shipped; both present as features that half work.',
     },
-    effort: { fail: 'peer-service', degraded: 'rebuild' },
+    effort: { fail: 'rebuild', degraded: 'rebuild' },
   },
   sync: {
     code: safeConstant('SYNC_ROUND_TRIP_DID_NOT_PASS'),
@@ -957,25 +957,28 @@ export function describeServerBuildCheck(input: {
   readonly readiness: { readonly status: number; readonly body: unknown }
 }): Omit<CheckOutcome, 'id'> {
   const { status, body } = input.readiness
-  if (status < 200 || status >= 300) {
-    const absent = status === 404
-
-    return {
-      state: absent ? 'unknown' : 'fail',
-      result: safeTokens(safeConstant('readiness answered HTTP'), safeCount(status)),
-      detail: absent
-        ? 'This server has no readiness route to ask, so which build it is cannot be read from here.'
-        : `The server’s readiness route answered ${status}: the server itself says it is not ready.`,
-    }
-  }
-
+  /**
+   * *** WHICH BUILD IT IS DOES NOT DEPEND ON WHETHER IT IS READY. *** The
+   * readiness route names the build in its body whatever status it answers
+   * with, and this check is about the build. It used to fail on anything but a
+   * 2xx — so with one backend service stopped, the first entry under "What
+   * needs attention" was "the API server did not say which build it is", above
+   * the service that was actually down. A server that is not ready is reported
+   * by the probes and checks that say WHAT is not ready; this one compares two
+   * commits when it is given two, and says it could not when it is not.
+   */
   const server = admittedRevision((body as { deployment?: unknown } | null | undefined)?.deployment)
   if (server === undefined) {
+    const answered = status >= 200 && status < 300
+
     return {
       state: 'unknown',
-      result: safeConstant('the server names no build'),
-      detail:
-        'The server answered as ready and named no usable build revision, so it cannot be compared with the web app. A server image built with SRN_DEPLOY_REVISION publishes one.',
+      result: answered
+        ? safeConstant('the server names no build')
+        : safeTokens(safeConstant('readiness answered HTTP'), safeCount(status), safeConstant('and named no build')),
+      detail: answered
+        ? 'The server answered as ready and named no usable build revision, so it cannot be compared with the web app. A server image built with SRN_DEPLOY_REVISION publishes one.'
+        : `The server’s readiness route answered ${status} with no usable build revision in it, so which build the server is cannot be read from here. Whether the server is working is the other sections’ question.`,
     }
   }
 

@@ -1291,7 +1291,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       readingsFrom(
         {
           ...outcomes,
-          negotiation: { id: 'negotiation', ...describeLiveSocketCheck(transport) },
+          negotiation: { id: 'negotiation', ...describeLiveSocketCheck(transport, ledger) },
           ...(markerRead === undefined
             ? {}
             : {

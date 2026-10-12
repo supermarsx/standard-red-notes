@@ -928,21 +928,39 @@ describe('describeServerBuildCheck', () => {
     expect(String(outcome.result)).toBe(`different builds: web app ${NEW_BUILD} · server ${OLD_BUILD}`)
   })
 
-  it('reads a server that says it is not ready as not working, and a missing route as unknown', () => {
-    const notReady = describeServerBuildCheck({
+  /**
+   * *** WHICH BUILD, NOT WHETHER READY. *** With one backend service stopped the
+   * server answers 503 — and still names its build. This check failed on the
+   * status, and "the API server did not say which build it is" became the first
+   * thing the pane told an operator, above the service that was down.
+   */
+  it('compares the builds whatever status the readiness route answers with', () => {
+    const notReadySame = describeServerBuildCheck({
       marker: marker(NEW_BUILD),
       markerRead: 'answered',
-      readiness: { status: 503, body: { status: 'not-ready' } },
+      readiness: { status: 503, body: { status: 'not-ready', deployment: marker(NEW_BUILD) } },
     })
-    const absent = describeServerBuildCheck({
+    const notReadyOther = describeServerBuildCheck({
       marker: marker(NEW_BUILD),
       markerRead: 'answered',
-      readiness: { status: 404, body: {} },
+      readiness: { status: 503, body: { status: 'not-ready', deployment: marker(OLD_BUILD) } },
     })
 
-    expect(notReady.state).toBe('fail')
-    expect(String(notReady.result)).toBe('readiness answered HTTP 503')
-    expect(absent.state).toBe('unknown')
+    expect(notReadySame.state).toBe('pass')
+    expect(notReadyOther.state).toBe('degraded')
+  })
+
+  it('never calls a server it could not identify not working: that is another row’s question', () => {
+    for (const status of [404, 500, 502, 503]) {
+      const outcome = describeServerBuildCheck({
+        marker: marker(NEW_BUILD),
+        markerRead: 'answered',
+        readiness: { status, body: { status: 'not-ready' } },
+      })
+
+      expect({ status, state: outcome.state }).toEqual({ status, state: 'unknown' })
+      expect(String(outcome.result)).toBe(`readiness answered HTTP ${status} and named no build`)
+    }
   })
 
   it('says which side names no build, and claims no match either way', () => {
