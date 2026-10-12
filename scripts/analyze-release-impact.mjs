@@ -25,6 +25,12 @@ const VERSION_PROFILES = new Set([
   "semver",
 ]);
 const MAX_FORCE_REASON_LENGTH = 500;
+// A job output handed to a later job arrives there as one environment string,
+// and the operating system caps that string: 131072 bytes on Linux, 32767
+// characters on Windows. Past the cap the runner cannot start the step's shell
+// at all ("Argument list too long"), so nothing written to GITHUB_OUTPUT may
+// grow with the size of the change set.
+const MAX_GITHUB_OUTPUT_BYTES = 30000;
 const NATIVE_EXECUTOR_PATH = "scripts/native-cli-release.mjs";
 const RELEASE_PACKAGING_CONTRACT_PATH =
   "scripts/release-packaging-contract.mjs";
@@ -3102,7 +3108,25 @@ function parseArguments(argv) {
   return values;
 }
 
-function appendGithubOutputs(file, result) {
+// The paths and refs behind a reason stay in the --output file; the hand-off
+// carries how many there were.
+function githubSummaryReason({
+  code,
+  package: packageName,
+  products,
+  paths,
+  refs,
+}) {
+  return {
+    code,
+    ...(packageName === undefined ? {} : { package: packageName }),
+    ...(products === undefined ? {} : { products }),
+    ...(paths === undefined ? {} : { pathCount: paths.length }),
+    ...(refs === undefined ? {} : { refCount: refs.length }),
+  };
+}
+
+export function githubOutputs(result) {
   const reasons = result.mode === "single" ? result.reasons : [];
   const changedFiles = result.mode === "single" ? result.matchedFiles : [];
   const aggregateEntries =
@@ -3128,8 +3152,8 @@ function appendGithubOutputs(file, result) {
           baseSha: result.baseSha,
           excludedReleaseRef: result.excludedReleaseRef,
           headSha: result.headSha,
-          matchedFiles: result.matchedFiles,
-          reasons: result.reasons,
+          matchedFileCount: result.matchedFiles.length,
+          reasons: result.reasons.map(githubSummaryReason),
         }
       : result.mode === "all-workspaces"
         ? {
@@ -3164,12 +3188,25 @@ function appendGithubOutputs(file, result) {
       result.mode === "single" ? result.publicationGate : "aggregate",
     head_sha: result.headSha,
     reason_codes: JSON.stringify(reasons.map(({ code }) => code)),
-    changed_files: JSON.stringify(changedFiles),
+    changed_file_count: String(changedFiles.length),
     result_json: JSON.stringify(githubSummary),
   };
+  for (const [key, value] of Object.entries(outputs)) {
+    const bytes = Buffer.byteLength(value);
+    if (bytes > MAX_GITHUB_OUTPUT_BYTES) {
+      throw new ReleaseImpactError(
+        "github-output-too-large",
+        `GitHub output '${key}' is ${bytes} bytes; the limit is ${MAX_GITHUB_OUTPUT_BYTES}. A later job receives it as one environment string and could not start its shell.`,
+      );
+    }
+  }
+  return outputs;
+}
+
+function appendGithubOutputs(file, result) {
   appendFileSync(
     file,
-    `${Object.entries(outputs)
+    `${Object.entries(githubOutputs(result))
       .map(([key, value]) => `${key}=${value}`)
       .join("\n")}\n`,
   );

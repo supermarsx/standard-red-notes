@@ -23,6 +23,7 @@ import {
   discoverStandaloneManagedPackages,
   discoverWorkflowOwnership,
   discoverWorkspaceInventory,
+  githubOutputs,
   renderReleaseImpactReport,
   ReleaseImpactError,
 } from "./analyze-release-impact.mjs";
@@ -2290,6 +2291,154 @@ test("repository CLI writes JSON, Markdown, and GitHub outputs", () => {
   } finally {
     context.cleanup();
   }
+});
+
+function packageGithubOutputs(repo) {
+  const githubOutput = path.join(repo, "github-output.txt");
+  rmSync(githubOutput, { force: true });
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.resolve("scripts/analyze-release-impact.mjs"),
+      "--repo",
+      repo,
+      "--package",
+      "@fixture/a",
+      "--workspace-root",
+      "root",
+      "--output",
+      "release-impact.json",
+      "--github-output",
+      githubOutput,
+    ],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return Object.fromEntries(
+    readFileSync(githubOutput, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => [
+        line.slice(0, line.indexOf("=")),
+        line.slice(line.indexOf("=") + 1),
+      ]),
+  );
+}
+
+// srn-desktop stopped releasing on 2026-09-26 when result_json, which then
+// listed every matched path twice, passed 131072 bytes: the next job received
+// it as an environment variable and the runner could not start bash.
+test("the GitHub hand-off does not grow with the number of changed files", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0");
+    write(
+      context.repo,
+      "packages/b/src/index.js",
+      "export const b = 'changed';\n",
+    );
+    commit(context.repo, "one changed dependency file");
+    const small = packageGithubOutputs(context.repo);
+
+    const directory = `packages/b/src/${"generated-sources-".repeat(4)}`;
+    for (let index = 0; index < 900; index += 1) {
+      write(
+        context.repo,
+        `${directory}/module-${String(index).padStart(4, "0")}.js`,
+        `export const value = ${index};\n`,
+      );
+    }
+    const headSha = commit(
+      context.repo,
+      "nine hundred changed dependency files",
+    );
+    const large = packageGithubOutputs(context.repo);
+
+    const evidence = JSON.parse(
+      readFileSync(path.join(context.repo, "release-impact.json"), "utf8"),
+    );
+    assert.equal(evidence.matchedFiles.length, 901);
+    assert.ok(Buffer.byteLength(JSON.stringify(evidence.matchedFiles)) > 90000);
+
+    const summary = JSON.parse(large.result_json);
+    assert.equal(summary.headSha, headSha);
+    assert.equal(summary.forced, false);
+    assert.equal(summary.forceReason, null);
+    assert.equal(summary.matchedFileCount, 901);
+    assert.equal(large.changed_file_count, "901");
+    assert.deepEqual(summary.reasons, [
+      {
+        code: "workspace-dependency-change",
+        package: "@fixture/b",
+        pathCount: 901,
+      },
+    ]);
+    assert.equal(JSON.parse(small.result_json).matchedFileCount, 1);
+    for (const [name, value] of Object.entries(large)) {
+      assert.ok(
+        Buffer.byteLength(value) - Buffer.byteLength(small[name]) <= 8,
+        `${name} grew from ${Buffer.byteLength(small[name])} to ${Buffer.byteLength(value)} bytes`,
+      );
+      assert.ok(Buffer.byteLength(value) < 30000, `${name} is too large`);
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("an oversized GitHub output fails in the analyzer instead of a later job's shell", () => {
+  const single = (reasons) => ({
+    schemaVersion: 1,
+    mode: "single",
+    identity: "@fixture/a",
+    changed: true,
+    forced: false,
+    forceReason: null,
+    firstRelease: false,
+    noAncestorBaseline: false,
+    baselineStatus: "ancestor",
+    publicationGate: "build-and-compare",
+    baseRef: "@fixture/a@1.0.0",
+    baseSha: "a".repeat(40),
+    excludedReleaseRef: null,
+    headSha: "b".repeat(40),
+    matchedFiles: ["packages/b/src/index.js"],
+    reasons,
+  });
+
+  assert.equal(
+    githubOutputs(single([{ code: "target-package-change", paths: ["a"] }]))
+      .changed,
+    "true",
+  );
+  assert.throws(
+    () =>
+      githubOutputs(
+        single(
+          Array.from({ length: 2000 }, () => ({
+            code: "workspace-dependency-change",
+          })),
+        ),
+      ),
+    (error) =>
+      error instanceof ReleaseImpactError &&
+      error.code === "github-output-too-large" &&
+      /GitHub output 'reason_codes' is 60001 bytes; the limit is 30000\./.test(
+        error.message,
+      ),
+  );
+  assert.throws(
+    () =>
+      githubOutputs(
+        single([{ code: "target-package-change", package: "p".repeat(40000) }]),
+      ),
+    (error) =>
+      error instanceof ReleaseImpactError &&
+      error.code === "github-output-too-large" &&
+      /GitHub output 'result_json' is \d+ bytes; the limit is 30000\./.test(
+        error.message,
+      ),
+  );
 });
 
 test("the repository Yarn-workspace snapshot covers all 44 manifests", () => {

@@ -7299,6 +7299,12 @@ export function validateReleaseContract(files) {
     ],
     ["MAX_FORCE_REASON_LENGTH = 500", "bounded force reason"],
     ["invalid-force-reason", "single-line force reason guard"],
+    ["MAX_GITHUB_OUTPUT_BYTES = 30000;", "bounded cross-job GitHub outputs"],
+    ["github-output-too-large", "oversized GitHub output guard"],
+    [
+      "matchedFileCount: result.matchedFiles.length",
+      "path-count impact hand-off",
+    ],
     ["createReleaseAnalysisContext", "shared release-analysis context"],
     ["discoverReleaseTargetSurface", "computed release trigger surface"],
     ["BigInt(", "arbitrary-precision tag ordering"],

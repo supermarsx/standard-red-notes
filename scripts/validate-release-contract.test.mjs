@@ -3442,6 +3442,36 @@ test("hybrid history ambiguity and package-version collisions stay fail-closed",
   );
 });
 
+test("the impact hand-off to later jobs stays bounded", () => {
+  const file = "scripts/analyze-release-impact.mjs";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "const MAX_GITHUB_OUTPUT_BYTES = 30000;",
+        "const MAX_GITHUB_OUTPUT_BYTES = 30000000;",
+      )
+      .replace('"github-output-too-large"', '"github-output-accepted"')
+      .replace(
+        "matchedFileCount: result.matchedFiles.length",
+        "matchedFiles: result.matchedFiles",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing bounded cross-job GitHub outputs/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing oversized GitHub output guard/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing path-count impact hand-off/,
+  );
+});
+
 test("computed dependency closure must remain covered by publisher paths", () => {
   const file = ".github/workflows/srn-mobile.yml";
   const files = withFileChanged(file, (content) =>
