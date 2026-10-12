@@ -8,10 +8,12 @@ import {
   CHECK_STATES,
   checkRow,
   CHECKS,
+  describeAppShellCheck,
   describeControlPlaneRead,
   describeFileTransfer,
   describeMarkerCheck,
   describeRevisionsRead,
+  describeServerBuildCheck,
   describeSyncRound,
   howToRun,
   LIVE_CHECK_IDS,
@@ -497,6 +499,29 @@ describe('describeControlPlaneRead', () => {
     expect(String(httpOnly.result)).toBe('answered over HTTP')
   })
 
+  /**
+   * The round trip through the socket and whatever sits in front of it. A figure
+   * and never a verdict: there is no latency a deployment owes this pane.
+   */
+  it('prints how long a read over the socket took, as whole milliseconds, without judging it', () => {
+    const read = (elapsedMs: number | undefined) =>
+      describeControlPlaneRead({
+        status: 200,
+        ok: true,
+        carriedBy: 'socket',
+        apiRpcNegotiated: true,
+        ...(elapsedMs === undefined ? {} : { elapsedMs }),
+      })
+
+    expect(String(read(41.6).result)).toBe('answered over the socket’s control-plane lane · 42 ms')
+    expect(String(read(0).result)).toBe('answered over the socket’s control-plane lane · 0 ms')
+    expect(read(9_000).state).toBe('pass')
+    // Untimed, or timed nonsensically, it claims no figure at all.
+    for (const elapsedMs of [undefined, Number.NaN, -5, Number.POSITIVE_INFINITY]) {
+      expect(String(read(elapsedMs).result)).toBe('answered over the socket’s control-plane lane')
+    }
+  })
+
   it('reads a refusal as unknown and only a server failure as not working, whatever the lane', () => {
     for (const carriedBy of ['socket', 'http'] as const) {
       for (const status of [401, 403, 404]) {
@@ -696,7 +721,9 @@ describe('the two witnesses a check cannot stand in for', () => {
       mismatched: 'refuted',
       failed: 'refuted',
       'not-negotiated': 'unavailable',
-      'not-reached': 'not-run',
+      // The check RAN and failed before the socket read. Not "not tested": the
+      // reader must not be sent back to run the check that just failed.
+      'not-reached': 'unknown',
     })
     const notRun = board({ checks: [], transport: ready })['file-socket-read']
     expect(notRun.state).toBe('not-run')
@@ -743,5 +770,186 @@ describe('a check that did not pass', () => {
 
     expect(JSON.stringify(remedy)).not.toContain('hunter2')
     expect(JSON.stringify(remedy)).not.toContain('files.internal.example')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Three build identities, compared two at a time                             */
+/* -------------------------------------------------------------------------- */
+
+const OLD_BUILD = 'a'.repeat(40)
+const NEW_BUILD = 'b'.repeat(40)
+const marker = (revision: string) => ({ revision, version: `src-${revision.slice(0, 12)}` })
+
+describe('describeAppShellCheck', () => {
+  it('passes when this tab’s code and the server’s marker name the same commit', () => {
+    const outcome = describeAppShellCheck({
+      bundleRevision: NEW_BUILD,
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+    })
+
+    expect(outcome.state).toBe('pass')
+    expect(String(outcome.result)).toBe('this tab runs the build the server serves')
+  })
+
+  /**
+   * *** THE STALE SHELL. *** The server has moved on and this tab has not. It is
+   * "working, with something lost" — the app runs — and the row names both
+   * commits, so the reader can see which is behind.
+   */
+  it('says the tab is stale, and names both builds, when they differ', () => {
+    const outcome = describeAppShellCheck({
+      bundleRevision: OLD_BUILD,
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+    })
+
+    expect(outcome.state).toBe('degraded')
+    expect(String(outcome.result)).toBe(`stale: this tab runs ${OLD_BUILD} and the server serves ${NEW_BUILD}`)
+    expect(outcome.detail).toContain('Fixes in the newer build are not running here')
+  })
+
+  it('does not call a bundle with no revision a match, or a mismatch', () => {
+    for (const bundleRevision of ['', 'unstamped', 'abc123', NEW_BUILD.toUpperCase()]) {
+      const outcome = describeAppShellCheck({ bundleRevision, marker: marker(NEW_BUILD), markerRead: 'answered' })
+
+      expect({ bundleRevision, state: outcome.state }).toEqual({ bundleRevision, state: 'unknown' })
+      expect(String(outcome.result)).toBe('this tab’s code carries no build revision')
+    }
+  })
+
+  it('has nothing to compare with when the server names no build, and leaves that fact to the marker check', () => {
+    const unstamped = describeAppShellCheck({
+      bundleRevision: NEW_BUILD,
+      marker: { revision: 'unstamped', version: 'unstamped' },
+      markerRead: 'answered',
+    })
+    const unread = describeAppShellCheck({ bundleRevision: NEW_BUILD, marker: {}, markerRead: 'failed' })
+
+    for (const outcome of [unstamped, unread]) {
+      expect(outcome.state).toBe('not-applicable')
+      expect(readingOf(outcome.result)).toBe('unavailable')
+    }
+  })
+
+  it('admits a revision by shape only, so a marker cannot put text into the result', () => {
+    const planted = 'https://deploy.internal.example/?token=hunter2'
+    const outcome = describeAppShellCheck({
+      bundleRevision: OLD_BUILD,
+      marker: { revision: planted, version: planted },
+      markerRead: 'answered',
+    })
+
+    expect(String(outcome.result)).not.toContain('hunter2')
+    expect(outcome.detail).not.toContain('hunter2')
+    expect(outcome.state).toBe('not-applicable')
+  })
+})
+
+describe('describeServerBuildCheck', () => {
+  const ready = (revision: string) => ({ status: 200, body: { status: 'ready', deployment: marker(revision) } })
+
+  it('passes when the web app and the API server name the same commit', () => {
+    const outcome = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: ready(NEW_BUILD),
+    })
+
+    expect(outcome.state).toBe('pass')
+    expect(String(outcome.result)).toBe('same build')
+  })
+
+  it('says the two are different builds, and names both, when they are', () => {
+    const outcome = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: ready(OLD_BUILD),
+    })
+
+    expect(outcome.state).toBe('degraded')
+    expect(String(outcome.result)).toBe(`different builds: web app ${NEW_BUILD} · server ${OLD_BUILD}`)
+  })
+
+  it('reads a server that says it is not ready as not working, and a missing route as unknown', () => {
+    const notReady = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: { status: 503, body: { status: 'not-ready' } },
+    })
+    const absent = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: { status: 404, body: {} },
+    })
+
+    expect(notReady.state).toBe('fail')
+    expect(String(notReady.result)).toBe('readiness answered HTTP 503')
+    expect(absent.state).toBe('unknown')
+  })
+
+  it('says which side names no build, and claims no match either way', () => {
+    const serverSilent = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: { status: 200, body: { status: 'ready', deployment: { revision: 'unstamped' } } },
+    })
+    const noBody = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: { status: 200, body: null },
+    })
+    const webSilent = describeServerBuildCheck({ marker: {}, markerRead: 'failed', readiness: ready(NEW_BUILD) })
+
+    expect(serverSilent.state).toBe('unknown')
+    expect(noBody.state).toBe('unknown')
+    expect(String(serverSilent.result)).toBe('the server names no build')
+    expect(webSilent.state).toBe('not-applicable')
+  })
+
+  it('admits the server’s revision by shape only', () => {
+    const planted = 'redis://admin:hunter2@redis.internal.example:6379'
+    const outcome = describeServerBuildCheck({
+      marker: marker(NEW_BUILD),
+      markerRead: 'answered',
+      readiness: { status: 200, body: { status: 'ready', deployment: { revision: planted, version: planted } } },
+    })
+
+    expect(JSON.stringify(outcome)).not.toContain('hunter2')
+    expect(outcome.state).toBe('unknown')
+  })
+})
+
+describe('a build that is behind', () => {
+  it('raises one finding each, with something to do about it', () => {
+    const stale = buildChecksBlock(
+      'environment',
+      readingsFrom({
+        'app-shell': {
+          id: 'app-shell',
+          ...describeAppShellCheck({ bundleRevision: OLD_BUILD, marker: marker(NEW_BUILD), markerRead: 'answered' }),
+        },
+        'server-build': {
+          id: 'server-build',
+          ...describeServerBuildCheck({
+            marker: marker(NEW_BUILD),
+            markerRead: 'answered',
+            readiness: { status: 200, body: { status: 'ready', deployment: marker(OLD_BUILD) } },
+          }),
+        },
+      }),
+    )
+
+    expect(stale?.findings.map((finding) => String(finding.code))).toEqual([
+      'APP_SHELL_STALE',
+      'WEB_AND_SERVER_BUILDS_DIFFER',
+    ])
+    expect(stale?.findings[0]?.remedy?.summary).toContain('Reload this tab')
+    expect(stale?.findings[0]?.remedy?.summary).toContain('clears program files only and none of your data')
+    expect(stale?.findings[1]?.remedy?.summary).toContain('from the same commit')
+    for (const finding of stale?.findings ?? []) {
+      expect(finding.verdict).toBe('degraded')
+    }
   })
 })

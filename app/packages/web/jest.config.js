@@ -108,6 +108,8 @@ module.exports = {
   },
   globals: {
     __WEB_VERSION__: '1.0.0',
+    // A bundle built without a revision, which is what a test run is.
+    __SRN_BUILD_REVISION__: '',
   },
   transform: {
     '^.+\\.(ts|tsx|js|jsx)?$': 'ts-jest',

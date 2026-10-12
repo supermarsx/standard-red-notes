@@ -3,6 +3,9 @@ import { ContentType, isErrorResponse, PrefKey, SettingName } from '@standardnot
 import { convertTimestampToMilliseconds } from '@standardnotes/utils'
 
 import { WebApplication } from '@/Application/WebApplication'
+import { WebBuildRevision } from '@/Constants/BuildRevision'
+import { readCspViolations } from '@/Utils/CspViolationLedger'
+import { takeTabCensus } from '@/Utils/TabCensus'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
@@ -35,10 +38,12 @@ import {
   buildWitnessBoard,
   CHECKS,
   checkRow,
+  describeAppShellCheck,
   describeControlPlaneRead,
   describeFileTransfer,
   describeMarkerCheck,
   describeRevisionsRead,
+  describeServerBuildCheck,
   describeSyncRound,
   readingsFrom,
   RUNNABLE_CHECK_IDS,
@@ -69,6 +74,7 @@ import {
   describeLiveSocketCheck,
   socketFallbackIsDeferred,
   type LaneLedgerSectionView,
+  type TabCensusView,
 } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
@@ -408,6 +414,13 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   const [fileTransfer, setFileTransfer] = useState<FileTransferResult | undefined>(undefined)
   /**
+   * The other tabs of this app, as they answered. `undefined` while the question
+   * is still out; `'unavailable'` on a browser that cannot ask.
+   */
+  const [tabCensus, setTabCensus] = useState<TabCensusView | 'unavailable' | undefined>(undefined)
+  /** What this page's Content-Security-Policy has refused, as the page's own ledger counted it. */
+  const [csp, setCsp] = useState(() => readCspViolations())
+  /**
    * How far the run in flight has got, or `null` when idle.
    *
    * It carries WHICH check is running and how many are done, so the button can
@@ -489,7 +502,25 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     // sentence; a fabricated empty one would claim this client watched the lane and
     // saw nothing happen, which is a different and much stronger statement.
     setLedger(application.syncTransportLedger)
+    // The same tick, for the same reason: it is this page's own running count.
+    setCsp(readCspViolations())
   }, [application])
+
+  /**
+   * Ask the other tabs where they stand. Taken when the pane opens and again
+   * after every run and refresh — a census is a moment, and the moment an
+   * operator cares about is the one they are looking at.
+   */
+  const takeCensus = useCallback(() => {
+    void takeTabCensus().then(
+      (reading) => setTabCensus(reading ?? 'unavailable'),
+      () => setTabCensus('unavailable'),
+    )
+  }, [])
+
+  useEffect(() => {
+    takeCensus()
+  }, [takeCensus])
 
   useEffect(() => {
     readTransport()
@@ -538,6 +569,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       // `clockReadingFor`. One response's travel time is immaterial at the
       // threshold the Browser section uses; the age of a cached payload is not.
       const localReceivedAtMs = Date.now()
+      takeCensus()
       setPayload(response.data)
       setClock(clockReadingFor(response.data?.capturedAt, localReceivedAtMs))
     } catch (error) {
@@ -550,7 +582,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     } finally {
       setLoading(false)
     }
-  }, [application, noteIfForbidden])
+  }, [application, noteIfForbidden, takeCensus])
 
   const loadDeployment = useCallback(async () => {
     try {
@@ -1073,8 +1105,10 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       },
       'control-plane': async () => {
         try {
+          const started = performance.now()
           const response =
             await application.serverGetJsonRequestObservingLane<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
+          const elapsedMs = performance.now() - started
           const status = application.syncTransportStatus
 
           return describeControlPlaneRead({
@@ -1082,6 +1116,26 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             ok: response.ok,
             carriedBy: response.carriedBy,
             apiRpcNegotiated: status?.state === 'READY' && status.operations.includes('API_RPC'),
+            elapsedMs,
+          })
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+      'server-build': async () => {
+        try {
+          // Plain HTTP on purpose: the readiness route is public, and it is the
+          // API server's own statement about itself — the lane it rides is not
+          // the question.
+          const response = await application.httpOnlyJsonRequest<unknown>('GET', '/healthcheck/readiness')
+          // The marker is read again here rather than taken from state, so the
+          // comparison is between two answers of the same moment.
+          const marker = await fetch('/.well-known/srn-deployment.json', { headers: { Accept: 'application/json' } })
+
+          return describeServerBuildCheck({
+            marker: marker.ok ? await marker.json() : {},
+            markerRead: marker.ok ? 'answered' : 'failed',
+            readiness: { status: response.status, body: response.data },
           })
         } catch (error) {
           return requestThrew(error)
@@ -1189,7 +1243,13 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
           negotiation: { id: 'negotiation', ...describeLiveSocketCheck(transport) },
           ...(markerRead === undefined
             ? {}
-            : { marker: { id: 'marker' as const, ...describeMarkerCheck(deployment, markerRead) } }),
+            : {
+                marker: { id: 'marker' as const, ...describeMarkerCheck(deployment, markerRead) },
+                'app-shell': {
+                  id: 'app-shell' as const,
+                  ...describeAppShellCheck({ bundleRevision: WebBuildRevision, marker: deployment, markerRead }),
+                },
+              }),
         },
         progress === null ? [] : [progress.current],
       ),
@@ -1444,8 +1504,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         checks: readings,
         witnesses,
         ...(ledger === undefined ? {} : { ledger }),
+        tabs: tabCensus === undefined ? {} : { census: tabCensus },
       }),
-    [payload, transport, readings, witnesses, ledger],
+    [payload, transport, readings, witnesses, ledger, tabCensus],
   )
   const environmentModel = useMemo(
     // `runtime` IS passed now and is threaded straight off the payload. It used
@@ -1519,8 +1580,15 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     [accountObservations, payload, readFailure, readings, witnesses],
   )
   const browserModel = useMemo(
-    () => buildBrowserSection({ observations: browserObservations, clock, checks: readings, witnesses }),
-    [browserObservations, clock, readings, witnesses],
+    () =>
+      buildBrowserSection({
+        observations: browserObservations,
+        clock,
+        ...(csp === undefined ? {} : { csp }),
+        checks: readings,
+        witnesses,
+      }),
+    [browserObservations, clock, csp, readings, witnesses],
   )
 
   /**
@@ -1653,7 +1721,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         )}
         <details className="mt-1" data-diagnostics-consent="true">
           <summary className="text-passive-0 cursor-pointer text-xs">
-            {`What “Run all checks” does — ${operatorChecks.length} of ${RUNNABLE_CHECK_IDS.length} checks write something`}
+            {`What “Run all checks” does — ${operatorChecks.length} of the ${RUNNABLE_CHECK_IDS.length} checks it runs write something`}
           </summary>
           <Text className="mt-1">
             It runs every check on the Checks tab, one at a time. The read-only ones already ran when this pane opened.

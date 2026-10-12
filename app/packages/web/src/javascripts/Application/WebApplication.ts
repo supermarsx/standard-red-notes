@@ -113,6 +113,9 @@ import {
   SyncTicketResponse,
   WebSocketSyncTransport,
 } from '@/Services/SyncTransport/WebSocketSyncTransport'
+import { LANE_STATE_CARRIER } from '@/Services/SyncTransport/LaneDegradationLedger'
+import { syncFallbackDisposition } from '@/Services/SyncTransport/syncTransportProtocol'
+import { installTabCensusResponder } from '@/Utils/TabCensus'
 import { InviteRealtimeApplicationLifecycle } from './InviteRealtimeApplicationLifecycle'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
@@ -502,6 +505,29 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     })
     this._webSocketSyncTransport = transport
     this.sync.setAccountSyncTransport(transport)
+
+    /**
+     * Answer other tabs that ask where this one stands on the socket lane.
+     *
+     * One tab per account holds the socket and the rest stand by. A tab that is
+     * standing by cannot tell an ordinary sibling from an owner that has gone
+     * away — unless the tabs can ask each other, which is all this is: two closed
+     * facts about this tab, read at the moment of the question. See TabCensus.
+     */
+    this.disposers.push(
+      installTabCensusResponder(() => {
+        const status = transport.transportStatus
+        const carrier = LANE_STATE_CARRIER[status.state]
+
+        return {
+          carrier,
+          standingBy:
+            carrier === 'http' &&
+            status.fallbackReason !== undefined &&
+            syncFallbackDisposition(status.fallbackReason) === 'deferred',
+        }
+      }),
+    )
 
     /**
      * Offer the socket to file transfers. This installs a preference, not a

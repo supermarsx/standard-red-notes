@@ -83,6 +83,8 @@ export const CHECK_IDS = [
   'ticket',
   'control-plane',
   'marker',
+  'app-shell',
+  'server-build',
   'sync',
   'revisions',
   'file-transfer',
@@ -98,7 +100,7 @@ export type CheckId = (typeof CHECK_IDS)[number]
  * at `RunnableCheckId`'s one consumer, the runner table, instead of reaching the
  * screen as a row nothing can ever fill in.
  */
-export const LIVE_CHECK_IDS = ['negotiation', 'marker'] as const satisfies readonly CheckId[]
+export const LIVE_CHECK_IDS = ['negotiation', 'marker', 'app-shell'] as const satisfies readonly CheckId[]
 
 export type LiveCheckId = (typeof LIVE_CHECK_IDS)[number]
 
@@ -186,6 +188,22 @@ export const CHECKS: Record<CheckId, CheckDefinition> = {
     mode: 'live',
     does: 'Sends nothing more. Reads the deployment marker this pane already fetched when it opened (/.well-known/srn-deployment.json, from the server that serves this page), which names the commit that server was built from. Refresh fetches it again.',
     establishes: 'the server that serves this page names the build it is running',
+  },
+  'app-shell': {
+    id: 'app-shell',
+    section: 'environment',
+    title: safeConstant('App shell this tab is running'),
+    mode: 'live',
+    does: 'Sends nothing more. Compares the commit compiled into the code THIS TAB is running with the commit the server that serves this page says it is — the deployment marker this pane already fetched, which is never served from a cache.',
+    establishes: 'this tab is running the build the server serves',
+  },
+  'server-build': {
+    id: 'server-build',
+    section: 'environment',
+    title: safeConstant('Web app and server are one build'),
+    mode: 'auto',
+    does: 'Reads the API server’s own readiness answer over plain HTTP (GET /healthcheck/readiness), which names the commit that server was built from, and compares it with the commit of the web app. Read-only: nothing is written.',
+    establishes: 'the web app and the API server were built from the same commit',
   },
   sync: {
     id: 'sync',
@@ -371,6 +389,32 @@ type CheckFailureCopy = {
 }
 
 const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
+  'app-shell': {
+    code: safeConstant('APP_SHELL_STALE'),
+    title: {
+      fail: 'This tab is running an older build than the server serves',
+      degraded: 'This tab is running an older build than the server serves',
+    },
+    summary: {
+      fail: 'Reload this tab, and every other open tab of the app. If it still reads stale after a reload, the browser is serving an old app shell from its cache: use “Reload app and clear cached files” in General preferences, which clears program files only and none of your data.',
+      degraded:
+        'Reload this tab, and every other open tab of the app. If it still reads stale after a reload, the browser is serving an old app shell from its cache: use “Reload app and clear cached files” in General preferences, which clears program files only and none of your data.',
+    },
+    effort: { fail: 'device', degraded: 'device' },
+  },
+  'server-build': {
+    code: safeConstant('WEB_AND_SERVER_BUILDS_DIFFER'),
+    title: {
+      fail: 'The API server did not say which build it is',
+      degraded: 'The web app and the API server are different builds',
+    },
+    summary: {
+      fail: 'The server’s readiness route did not answer as ready. Check the server container’s own health before reading the rest of this pane: every server reading here came from a server that says it is not ready.',
+      degraded:
+        'Deploy the web app and the server from the same commit. A newer web app against an older server calls endpoints that are not there yet, and the reverse hides fixes that were shipped; both present as features that half work.',
+    },
+    effort: { fail: 'peer-service', degraded: 'rebuild' },
+  },
   sync: {
     code: safeConstant('SYNC_ROUND_TRIP_DID_NOT_PASS'),
     title: {
@@ -714,8 +758,14 @@ function durableSyncWitness(
 
 function fileSocketReadWitness(read: FileSocketRead | undefined): Witness {
   const what = PASSIVE_WITNESS_WHAT['file-socket-read']
-  if (read === undefined || read === 'not-reached') {
+  if (read === undefined) {
     return { state: 'not-run', what, how: howToRun(CHECKS['file-transfer']) }
+  }
+  // The round trip RAN and failed before it got as far as the socket read. That
+  // is not "not tested" — telling the reader to run the check that just failed
+  // is a loop — and it says nothing either way about the socket's file lane.
+  if (read === 'not-reached') {
+    return { state: 'unknown', what }
   }
   if (read === 'not-negotiated') {
     return { state: 'unavailable', what, how: 'this tab’s socket did not negotiate FILES_V1, so files go over HTTP' }
@@ -820,6 +870,144 @@ export function describeMarkerCheck(raw: unknown, read: 'answered' | 'failed'): 
 }
 
 /** The sections that hold at least one check, in the contract's order. For tests. */
+const SEPARATOR = safeConstant('·')
+
+/* -------------------------------------------------------------------------- */
+/* Three build identities, compared two at a time                             */
+/* -------------------------------------------------------------------------- */
+
+/** A marker's revision when it is one this build admits by shape, and nothing otherwise. */
+const admittedRevision = (raw: unknown): string | undefined => {
+  const view = describeDeployment(raw)
+
+  return !view.unstamped && DEPLOY_REVISION.test(view.revision) ? view.revision : undefined
+}
+
+const revisionToken = (revision: string): SafeValue => safeToken(revision, DEPLOY_REVISION)
+
+/**
+ * Whether THIS TAB is running the build the server serves.
+ *
+ * *** THE STALE SHELL, WHICH NOTHING IN THE PAGE COULD SEE. *** The marker is
+ * fetched fresh and says what the server serves now. The code in this tab was
+ * loaded whenever the tab was — or handed over by an older service worker's
+ * cache — and carried no identity of its own, so "fixed in the release that is
+ * live" and "still broken in this tab" were the same screen. The bundle now
+ * compiles its commit in, and this compares the two.
+ *
+ * Each silence is its own answer. A marker with no build to compare with is the
+ * marker check's finding, so this one has nothing to test rather than a second
+ * unknown about the same fact. A bundle with no revision is a real unknown: it
+ * is running, and what it is cannot be said.
+ */
+export function describeAppShellCheck(input: {
+  readonly bundleRevision: string
+  readonly marker: unknown
+  readonly markerRead: 'answered' | 'failed'
+}): Omit<CheckOutcome, 'id'> {
+  const served = input.markerRead === 'answered' ? admittedRevision(input.marker) : undefined
+  if (served === undefined) {
+    return {
+      state: 'not-applicable',
+      result: safeNotAvailableHere('the server names no build to compare with'),
+      detail:
+        'The server that serves this page publishes no usable build identity — the Deployment marker check says why — so there is nothing to compare this tab’s code against.',
+    }
+  }
+  if (!DEPLOY_REVISION.test(input.bundleRevision)) {
+    return {
+      state: 'unknown',
+      result: safeConstant('this tab’s code carries no build revision'),
+      detail:
+        'The code this tab is running was built without a revision, so it cannot be compared with the build the server serves. An image built with SRN_DEPLOY_REVISION compiles it in.',
+    }
+  }
+  if (input.bundleRevision === served) {
+    return {
+      state: 'pass',
+      result: safeConstant('this tab runs the build the server serves'),
+      detail: `This tab’s code and the server’s deployment marker both name revision ${served}.`,
+    }
+  }
+
+  return {
+    state: 'degraded',
+    result: safeTokens(
+      safeConstant('stale: this tab runs'),
+      revisionToken(input.bundleRevision),
+      safeConstant('and the server serves'),
+      revisionToken(served),
+    ),
+    detail: `This tab is running code built from ${input.bundleRevision}, and the server that serves this page is now serving ${served}. The tab was opened before the deployment changed, or the browser is handing it an older app shell from its cache. Fixes in the newer build are not running here.`,
+  }
+}
+
+/**
+ * Whether the web app and the API server are the same build.
+ *
+ * Two images, two build arguments, and on a compose stack nothing forces them to
+ * be given the same one: a web app redeployed without its server (or the
+ * reverse) is a supported way to end up with endpoints one side calls and the
+ * other does not have. The server names its own commit on its readiness route;
+ * this compares it with the web app's.
+ */
+export function describeServerBuildCheck(input: {
+  readonly marker: unknown
+  readonly markerRead: 'answered' | 'failed'
+  readonly readiness: { readonly status: number; readonly body: unknown }
+}): Omit<CheckOutcome, 'id'> {
+  const { status, body } = input.readiness
+  if (status < 200 || status >= 300) {
+    const absent = status === 404
+
+    return {
+      state: absent ? 'unknown' : 'fail',
+      result: safeTokens(safeConstant('readiness answered HTTP'), safeCount(status)),
+      detail: absent
+        ? 'This server has no readiness route to ask, so which build it is cannot be read from here.'
+        : `The server’s readiness route answered ${status}: the server itself says it is not ready.`,
+    }
+  }
+
+  const server = admittedRevision((body as { deployment?: unknown } | null | undefined)?.deployment)
+  if (server === undefined) {
+    return {
+      state: 'unknown',
+      result: safeConstant('the server names no build'),
+      detail:
+        'The server answered as ready and named no usable build revision, so it cannot be compared with the web app. A server image built with SRN_DEPLOY_REVISION publishes one.',
+    }
+  }
+
+  const web = input.markerRead === 'answered' ? admittedRevision(input.marker) : undefined
+  if (web === undefined) {
+    return {
+      state: 'not-applicable',
+      result: safeNotAvailableHere('the web app names no build to compare with'),
+      detail:
+        'The server names its build, and the web app’s deployment marker names none — the Deployment marker check says why — so the two cannot be compared.',
+    }
+  }
+  if (web === server) {
+    return {
+      state: 'pass',
+      result: safeConstant('same build'),
+      detail: `The web app and the API server both name revision ${server}.`,
+    }
+  }
+
+  return {
+    state: 'degraded',
+    result: safeTokens(
+      safeConstant('different builds: web app'),
+      revisionToken(web),
+      safeConstant('· server'),
+      revisionToken(server),
+    ),
+    detail: `The web app was built from ${web} and the API server from ${server}. They were deployed separately, and one of them is behind.`,
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* What each new check found, in closed words                                 */
 /* -------------------------------------------------------------------------- */
@@ -912,6 +1100,8 @@ export function describeControlPlaneRead(input: {
   readonly ok: boolean
   readonly carriedBy: 'socket' | 'http'
   readonly apiRpcNegotiated: boolean
+  /** How long the read took, end to end, in whole milliseconds. Absent: not timed. */
+  readonly elapsedMs?: number
 }): Omit<CheckOutcome, 'id'> {
   if (!input.ok) {
     // *** A REFUSED READ IS NOT A BROKEN DEPLOYMENT. *** 401, 403 and 404 are the
@@ -931,10 +1121,30 @@ export function describeControlPlaneRead(input: {
     }
   }
   if (input.carriedBy === 'socket') {
+    const timed =
+      typeof input.elapsedMs === 'number' && Number.isFinite(input.elapsedMs) && input.elapsedMs >= 0
+        ? Math.round(input.elapsedMs)
+        : undefined
+
     return {
       state: 'pass',
-      result: safeConstant('answered over the socket’s control-plane lane'),
-      detail: 'Succeeded, and the socket’s API_RPC lane carried it — measured on this read, not inferred.',
+      // The round trip THROUGH the socket and whatever sits in front of it: this
+      // browser, any reverse proxy, the gateway, and back. A figure, not a
+      // verdict — there is no threshold a deployment owes — and it is the one
+      // number here that changes when a proxy starts buffering the socket.
+      result:
+        timed === undefined
+          ? safeConstant('answered over the socket’s control-plane lane')
+          : safeTokens(
+              safeConstant('answered over the socket’s control-plane lane'),
+              SEPARATOR,
+              safeCount(timed),
+              safeConstant('ms'),
+            ),
+      detail:
+        timed === undefined
+          ? 'Succeeded, and the socket’s API_RPC lane carried it — measured on this read, not inferred.'
+          : `Succeeded, and the socket’s API_RPC lane carried it — measured on this read, not inferred. The read took ${timed} ms end to end, through whatever sits between this browser and the gateway.`,
     }
   }
 
@@ -1031,8 +1241,6 @@ const FILE_CLEANUP_WORDS: Record<FileTransferCleanup, { readonly result: SafeVal
     detail: `The throwaway object could not be deleted: up to ${FILE_TRANSFER_BYTES / 1024} KiB of random bytes remain on the files service, referenced by nothing in this account. It is counted against this account’s file usage until an administrator removes it.`,
   },
 }
-
-const SEPARATOR = safeConstant('·')
 
 /**
  * The file-transfer round trip, in closed words.

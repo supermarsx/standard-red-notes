@@ -12,6 +12,7 @@ module.exports = {
   },
   globals: {
     __WEB_VERSION__: true,
+    __SRN_BUILD_REVISION__: true,
   },
   rules: {
     // React Compiler rules added in react-hooks v6: opt out for now (require code refactors).

@@ -103,8 +103,12 @@ COPY app/ ./
 # Focus only the web workspace's dependency closure, then build the static bundle.
 RUN --mount=type=cache,target=/opt/app/.yarn/cache,sharing=locked \
   yarn workspaces focus @standardnotes/web
+# The revision reaches the web BUILD as well as the marker: the bundle compiles
+# it in and the service worker keys its cache name on it. Mirrors app/Dockerfile,
+# which says why.
+ARG SRN_DEPLOY_REVISION
 RUN --mount=type=cache,target=/opt/app/node_modules/.cache \
-  yarn build:web
+  SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
 
 # -----------------------------------------------------------------------------
 # RUNTIME — node + nginx + supervisord, no compiler toolchain. Runs as `srn`.

@@ -2644,3 +2644,144 @@ describe('checks, as rows', () => {
     expect(model.worstVerdict).toBe('broken')
   })
 })
+
+/* -------------------------------------------------------------------------- */
+/* The other tabs, and a tab that is standing by                              */
+/* -------------------------------------------------------------------------- */
+
+describe('the tabs of this app', () => {
+  const standingBy = transport({ state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'multi-tab-not-owner' })
+  const census = (otherTabs: number, othersOnSocket: number, othersStandingBy = 0) => ({
+    census: { otherTabs, othersOnSocket, othersStandingBy },
+  })
+
+  it('is not rendered at all for a caller that took no census', () => {
+    const model = build({ transport: transport() })
+
+    expect(model.blocks.map((block) => String(block.heading))).not.toContain('Tabs of this app in this browser')
+  })
+
+  it('says a tab on the socket holds it, and has no holder to look for', () => {
+    const model = build({ transport: transport(), tabs: census(2, 0, 2) })
+
+    expect(String(rowOf(model, 'This tab on the socket lane').value)).toBe('holds the socket')
+    expect(String(rowOf(model, 'Other tabs of this app that answered').value)).toBe('2')
+    expect(String(rowOf(model, 'Other tabs holding a socket').value)).toBe('0')
+    expect(String(rowOf(model, 'The tab this one is standing by for').value)).toBe(
+      'nothing to report (this tab is not standing by)',
+    )
+    expect(rowOf(model, 'The tab this one is standing by for').verdict).toBe('not-applicable')
+  })
+
+  /**
+   * *** THE ORDINARY SECOND TAB. *** On HTTP because the first tab holds the
+   * socket, and that tab answered. Nothing here is a fault and nothing reads as
+   * one: not the block, and not the ledger, which used to call it
+   * "still-degraded" in amber for as long as the tab stayed open.
+   */
+  it('reads a second tab whose sibling holds the socket as standing by, with nothing wrong', () => {
+    const model = build({
+      transport: standingBy,
+      tabs: census(1, 1),
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'multi-tab-not-owner', false)
+      }),
+    })
+
+    expect(String(rowOf(model, 'This tab on the socket lane').value)).toBe('standing by for another tab')
+    expect(String(rowOf(model, 'The tab this one is standing by for').value)).toBe('a tab that answered')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('standing-by')
+    expect(rowOf(model, 'Where the lane ended up').verdict).toBe('informational')
+    expect(rowOf(model, 'Degradations recorded').verdict).toBe('informational')
+    expect(codesOf(model)).not.toContain('SOCKET_HOLDER_DID_NOT_ANSWER')
+    // Not one row of the section is a fault.
+    const alarming = model.blocks.flatMap((block) =>
+      block.rows.filter((row) => row.verdict === 'degraded' || row.verdict === 'broken'),
+    )
+    expect(alarming.map((row) => String(row.label))).toEqual([])
+  })
+
+  /**
+   * And the reading that looks identical from inside: standing by for a holder
+   * that no open tab admits to being.
+   */
+  it('says so when the tab it is standing by for did not answer, as context and not as a fault', () => {
+    const model = build({ transport: standingBy, tabs: census(1, 0, 1) })
+    const finding = findingOf(model, 'SOCKET_HOLDER_DID_NOT_ANSWER')
+
+    expect(String(rowOf(model, 'The tab this one is standing by for').value)).toBe('no tab that answered')
+    expect(finding?.verdict).toBe('informational')
+    expect(finding?.remedy?.summary).toContain('close the other tabs of this app, or reload this one')
+  })
+
+  it('keeps a real fallback on HTTP a fault, whoever else is open', () => {
+    const model = build({
+      transport: transport({ state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'server-kill' }),
+      tabs: census(1, 1),
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'server-kill', false)
+      }),
+    })
+
+    expect(String(rowOf(model, 'This tab on the socket lane').value)).toBe('on HTTP')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('still-degraded')
+    expect(rowOf(model, 'Where the lane ended up').verdict).toBe('degraded')
+    expect(rowOf(model, 'The tab this one is standing by for').verdict).toBe('not-applicable')
+  })
+
+  it('says it could not ask, rather than that nobody answered, on a browser with no way to ask', () => {
+    const model = build({ transport: standingBy, tabs: { census: 'unavailable' } })
+
+    for (const label of [
+      'Other tabs of this app that answered',
+      'Other tabs holding a socket',
+      'The tab this one is standing by for',
+    ]) {
+      expect({ label, verdict: rowOf(model, label).verdict }).toEqual({ label, verdict: 'not-applicable' })
+    }
+    expect(codesOf(model)).not.toContain('SOCKET_HOLDER_DID_NOT_ANSWER')
+  })
+
+  it('reads a census still in flight as not reported, and raises nothing from it', () => {
+    const model = build({ transport: standingBy, tabs: {} })
+
+    expect(String(rowOf(model, 'Other tabs of this app that answered').value)).toBe(NOT_REPORTED)
+    expect(rowOf(model, 'Other tabs of this app that answered').verdict).toBe('undetermined')
+    expect(codesOf(model)).not.toContain('SOCKET_HOLDER_DID_NOT_ANSWER')
+  })
+})
+
+describe('how long the socket has been up', () => {
+  it('counts from the transition that last brought the lane onto the socket', () => {
+    const model = build({
+      ledger: recorded((instance, advance) => {
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+        advance(60_000)
+        instance.recordTransition('HTTP_FALLBACK', 'server-kill', false)
+        advance(5_000)
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+        advance(125_000)
+      }),
+    })
+
+    // The SECOND arrival, not the first: the socket in use is two minutes old,
+    // not three.
+    expect(String(rowOf(model, 'This socket has been up for').value)).toBe('2m 5s')
+  })
+
+  it('has no age to give for a tab that is not on a socket', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('HTTP_FALLBACK', 'server-kill', false)
+      }),
+    })
+
+    expect(String(rowOf(model, 'This socket has been up for').value)).toBe(
+      'nothing to report (this tab is not on a socket)',
+    )
+    expect(rowOf(model, 'This socket has been up for').verdict).toBe('not-applicable')
+  })
+})

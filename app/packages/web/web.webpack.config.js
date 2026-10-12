@@ -130,6 +130,17 @@ module.exports = (env) => {
       }),
       new webpack.DefinePlugin({
         __WEB_VERSION__: JSON.stringify(require('./package.json').version),
+        // The commit this bundle is built from, so a running tab can say which
+        // build IT is — the deployment marker only says what the server serves
+        // now. The same SRN_DEPLOY_REVISION the image stamps that marker from
+        // (and the service worker's cache name above is keyed on), admitted by
+        // SHAPE here: anything that is not exactly forty lowercase hexadecimal
+        // characters compiles in as the empty string, which the client reads as
+        // "built without a revision" and never as a match. See
+        // src/javascripts/Constants/BuildRevision.ts.
+        __SRN_BUILD_REVISION__: JSON.stringify(
+          /^[0-9a-f]{40}$/.test(process.env.SRN_DEPLOY_REVISION || '') ? process.env.SRN_DEPLOY_REVISION : '',
+        ),
       }),
       // libsodium's dual Node/browser CJS file contains a guarded
       // require('node:fs'). Normalize the scheme so resolve.fallback can replace

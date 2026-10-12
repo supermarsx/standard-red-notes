@@ -277,6 +277,12 @@ describe('the file-transfer round trip', () => {
       if (stage === 'authorize-upload') {
         expect(result.cleanup).toBe('nothing-stored')
         expect(files.stepsOf()).toEqual(['authorize-write'])
+      } else if (stage === 'open') {
+        // The service refused the session, so nothing was stored — and a delete
+        // is asked for all the same, in case the refusal was only the answer
+        // getting lost.
+        expect(result.cleanup).toBe('deleted')
+        expect(files.stepsOf()).toEqual(['authorize-write', 'open', 'authorize-delete', 'remove'])
       } else {
         expect(result.cleanup).toBe('deleted')
         expect(files.stepsOf().slice(-2)).toEqual(['authorize-delete', 'remove'])
@@ -284,6 +290,34 @@ describe('the file-transfer round trip', () => {
       }
     })
   }
+
+  /**
+   * *** A FILES SERVICE THAT IS SIMPLY DOWN. *** It refuses the open and then
+   * refuses the delete. Nothing was ever stored, and the result must not tell an
+   * operator that a throwaway object was left behind — measured against a real
+   * stack with the files service stopped, where it said exactly that.
+   */
+  it('does not report a leftover when the service never accepted the upload at all', async () => {
+    const down = service({ refuseOpen: true, refuseDelete: true })
+    const unreachable = service({ throwAt: 'open', refuseAuthorize: 'delete' })
+
+    for (const files of [down, unreachable]) {
+      const result = await runFileTransferCheck(files.port)
+
+      expect(result.failedAt).toBe('open')
+      expect(result.cleanup).toBe('nothing-stored')
+      expect(files.stored.size).toBe(0)
+    }
+    // The delete was still ASKED for: an open whose answer was lost may have happened.
+    expect(down.stepsOf()).toContain('remove')
+  })
+
+  it('does report one once the service has accepted the session, however early it then fails', async () => {
+    const result = await runFileTransferCheck(service({ refuseSendOfChunk: 1, refuseDelete: true }).port)
+
+    expect(result.failedAt).toBe('send')
+    expect(result.cleanup).toBe('failed')
+  })
 
   it('treats a step that throws as a step that failed, and still cleans up', async () => {
     for (const throwAt of ['open', 'send-1', 'close', 'read-http']) {

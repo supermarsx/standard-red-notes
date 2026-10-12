@@ -4,10 +4,12 @@ import { buildBrowserSection, type BrowserObservations } from './browserSection'
 import {
   buildWitnessBoard,
   CHECK_IDS,
+  describeAppShellCheck,
   describeControlPlaneRead,
   describeFileTransfer,
   describeMarkerCheck,
   describeRevisionsRead,
+  describeServerBuildCheck,
   describeSyncRound,
   readingsFrom,
   type CheckOutcome,
@@ -128,6 +130,11 @@ const firefox: BrowserObservations = {
   serviceWorkerPresent: true,
   serviceWorkerControlling: true,
   serviceWorkerRegistrations: 1,
+  // One registration, nothing waiting, this build's one shell cache.
+  shellUpdateWaiting: false,
+  shellCacheCount: 1,
+  // Stock Firefox reports reduced motion ON here, and on the operator's machine.
+  reducedMotion: true,
   notificationPermission: 'granted',
   online: true,
   visibilityState: 'visible',
@@ -185,6 +192,12 @@ const checksWith = (run: boolean): readonly CheckReading[] =>
   readingsFrom({
     negotiation: { id: 'negotiation', ...describeLiveSocketCheck(transport) },
     marker: { id: 'marker', ...describeMarkerCheck(MARKER, 'answered') },
+    // This tab is running the build the server serves: the operator had just
+    // reloaded, and nothing in their report said otherwise.
+    'app-shell': {
+      id: 'app-shell',
+      ...describeAppShellCheck({ bundleRevision: REVISION, marker: MARKER, markerRead: 'answered' }),
+    },
     ...(run
       ? {
           capabilities: passed('capabilities', 'advertises 1 capability entry'),
@@ -199,6 +212,14 @@ const checksWith = (run: boolean): readonly CheckReading[] =>
               before: { socket: 40, http: 1, failed: 0 },
               after: { socket: 41, http: 1, failed: 0 },
               socketCarriesSync: true,
+            }),
+          },
+          'server-build': {
+            id: 'server-build',
+            ...describeServerBuildCheck({
+              marker: MARKER,
+              markerRead: 'answered',
+              readiness: { status: 200, body: { status: 'ready', deployment: MARKER } },
             }),
           },
           revisions: { id: 'revisions', ...describeRevisionsRead({ status: 200 }) },
@@ -235,7 +256,15 @@ const sectionsFor = (
   })
 
   return {
-    websocket: buildWebsocketSection({ payload, transport, ledger, checks, witnesses }),
+    websocket: buildWebsocketSection({
+      payload,
+      transport,
+      ledger,
+      checks,
+      witnesses,
+      // The only tab of the app the operator had open.
+      tabs: { census: { otherTabs: 0, othersOnSocket: 0, othersStandingBy: 0 } },
+    }),
     environment: buildEnvironmentSection({
       topology: payload.deployment,
       deploymentMarker: MARKER,
@@ -263,6 +292,8 @@ const sectionsFor = (
     }),
     browser: buildBrowserSection({
       observations: firefox,
+      // The page's own count: nothing refused in the 38 minutes it had been open.
+      csp: { total: 0, enforced: 0, byDirective: {}, armedForMs: 2_331_000 },
       clock: { serverCapturedAtMs: 1_000, localReceivedAtMs: 1_200 },
       checks,
       witnesses,

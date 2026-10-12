@@ -211,9 +211,19 @@ export async function runFileTransferCheck(port: FileTransferPort): Promise<File
 
   let failedAt: FileTransferStage | undefined
   let socketRead: FileSocketRead = 'not-reached'
-  // From the moment a write token is presented to the files service, an object
-  // may exist. Before it, nothing can have been stored and nothing is deleted.
-  let mayHaveStored = false
+  // TWO thresholds, and they are not the same one.
+  //
+  // From the moment a write token is PRESENTED to the files service, a delete is
+  // attempted whatever happens next: an open whose answer was lost may still
+  // have happened, and asking twice costs nothing.
+  //
+  // But a leftover is only REPORTED once the service has accepted the upload
+  // session. A files service that is simply down refuses the open and then
+  // refuses the delete, and "THE THROWAWAY OBJECT COULD NOT BE DELETED" over a
+  // service that never took a byte sends an operator to clean up something that
+  // is not there — measured, with the files service stopped.
+  let tokenPresented = false
+  let sessionOpened = false
 
   const transfer = async (): Promise<FileTransferStage | undefined> => {
     const writeToken = await attempt(() => port.authorize(remoteIdentifier, 'write', FILE_TRANSFER_BYTES))
@@ -221,10 +231,11 @@ export async function runFileTransferCheck(port: FileTransferPort): Promise<File
       return 'authorize-upload'
     }
 
-    mayHaveStored = true
+    tokenPresented = true
     if ((await attempt(() => port.open(writeToken))) !== true) {
       return 'open'
     }
+    sessionOpened = true
     for (let chunk = 0; chunk < FILE_TRANSFER_CHUNKS; chunk++) {
       const bytes = payload.subarray(chunk * FILE_TRANSFER_CHUNK_BYTES, (chunk + 1) * FILE_TRANSFER_CHUNK_BYTES)
       // Chunk ids start at 1: the files service rejects 0.
@@ -257,10 +268,10 @@ export async function runFileTransferCheck(port: FileTransferPort): Promise<File
   try {
     failedAt = await transfer()
   } finally {
-    if (mayHaveStored) {
+    if (tokenPresented) {
       const deleteToken = await attempt(() => port.authorize(remoteIdentifier, 'delete', FILE_TRANSFER_BYTES))
       const removed = deleteToken === undefined ? false : await attempt(() => port.remove(deleteToken))
-      cleanup = removed === true ? 'deleted' : 'failed'
+      cleanup = removed === true ? 'deleted' : sessionOpened ? 'failed' : 'nothing-stored'
     }
   }
 

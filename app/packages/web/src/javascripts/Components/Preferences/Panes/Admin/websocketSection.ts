@@ -30,6 +30,7 @@ import {
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNotAvailableHere,
   evidenceNothingToReport,
   evidenceProxy,
   LANE_REJECTION_STATUSES,
@@ -463,6 +464,13 @@ export type WebsocketSectionInput = {
   transport?: TransportStatusInput
   /** The client-side lane-degradation ledger. Absent in a build that records none. */
   ledger?: LaneLedgerSectionView
+  /**
+   * The other tabs of this app in this browser, as they answered a census. When
+   * the member is absent the block is not rendered at all (a caller that takes no
+   * census has nothing to say); `{}` is a census still in flight, and
+   * `'unavailable'` is a browser that cannot ask.
+   */
+  tabs?: TabsView
   counters?: SocketGatewayCountersView
   /** Every registered check, run or not. This section renders its own as rows. */
   checks?: readonly CheckReading[]
@@ -472,6 +480,14 @@ export type WebsocketSectionInput = {
    */
   witnesses?: WitnessBoard
 }
+
+export type TabCensusView = {
+  readonly otherTabs: number
+  readonly othersOnSocket: number
+  readonly othersStandingBy: number
+}
+
+export type TabsView = { readonly census?: TabCensusView | 'unavailable' }
 
 /* -------------------------------------------------------------------------- */
 /* Row helpers                                                                */
@@ -2332,7 +2348,13 @@ const REJECTION_STATUS_ROW: Record<LaneRejectionStatus, { label: SafeValue; note
  * steps on the way to READY, and calling a dial in progress either a recovery or a
  * failure would be a verdict the data does not support.
  */
-export const LANE_LEDGER_OUTCOMES = ['never-degraded', 'recovered', 'still-degraded', 'reconnecting'] as const
+export const LANE_LEDGER_OUTCOMES = [
+  'never-degraded',
+  'recovered',
+  'still-degraded',
+  'standing-by',
+  'reconnecting',
+] as const
 
 export type LaneLedgerOutcome = (typeof LANE_LEDGER_OUTCOMES)[number]
 
@@ -2521,16 +2543,32 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
     return Math.max(0, ledger.recordingForMs - transition.msSinceLedgerStart) / 1000
   }
 
+  /**
+   * *** A TAB STANDING BY IS NOT A LANE THAT IS DOWN. *** The second tab of an
+   * account lands on HTTP because the first one holds the socket — the cause the
+   * protocol itself calls "expected, and not a fault". It read "still-degraded"
+   * here, in amber, for as long as the tab stayed open, beside a transport row
+   * that correctly called the same state informational.
+   */
+  const standingBy =
+    latest !== undefined &&
+    carrierOf(latest.state) === 'http' &&
+    latest.reason !== undefined &&
+    isKnownFallbackReason(latest.reason) &&
+    socketFallbackIsDeferred(latest.reason)
+
   const outcome: LaneLedgerOutcome | undefined =
     latest === undefined || unnameableStates > 0
       ? undefined
       : degradations === 0
         ? 'never-degraded'
-        : carrierOf(latest.state) === 'http'
-          ? 'still-degraded'
-          : carrierOf(latest.state) === 'socket'
-            ? 'recovered'
-            : 'reconnecting'
+        : standingBy
+          ? 'standing-by'
+          : carrierOf(latest.state) === 'http'
+            ? 'still-degraded'
+            : carrierOf(latest.state) === 'socket'
+              ? 'recovered'
+              : 'reconnecting'
 
   /**
    * Whether the degradations in this ledger are HISTORY.
@@ -2541,7 +2579,8 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
    * a reload. The counts carry a verdict only while the lane is not known to be
    * back — still on HTTP, or ended somewhere this build cannot name.
    */
-  const degradationsAreHistory = outcome === 'recovered' || outcome === 'never-degraded' || outcome === 'reconnecting'
+  const degradationsAreHistory =
+    outcome === 'recovered' || outcome === 'never-degraded' || outcome === 'reconnecting' || outcome === 'standing-by'
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -2627,7 +2666,7 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
       label: safeConstant('Where the lane ended up'),
       value: safeEnum(outcome, LANE_LEDGER_OUTCOMES),
       ...absentOr(outcome, outcome === 'still-degraded' ? 'degraded' : 'informational'),
-      note: 'The whole ledger in one word, read from the last transition recorded. "never-degraded" means nothing moved the lane off the socket while this page has been open — which is only as strong as the recording time at the top of this block. "recovered" means it fell back and came back. "still-degraded" means it fell back and has not. "reconnecting" means a dial is in progress and the answer is not settled yet. With no transitions at all, or with a transition this build cannot name, no answer is given rather than a guess.',
+      note: 'The whole ledger in one word, read from the last transition recorded. "never-degraded" means nothing moved the lane off the socket while this page has been open — which is only as strong as the recording time at the top of this block. "recovered" means it fell back and came back. "still-degraded" means it fell back and has not. "standing-by" means this tab is on HTTP because another tab of the account holds the socket, which is by design and not a fault — the tabs block below says whether that tab answered. "reconnecting" means a dial is in progress and the answer is not settled yet. With no transitions at all, or with a transition this build cannot name, no answer is given rather than a guess.',
     }),
   )
 
@@ -2767,6 +2806,38 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
     }),
   )
 
+  /**
+   * How long the socket this tab is on has been up: since the transition that
+   * last brought the lane onto it. Nothing to report when the tab is not on one.
+   */
+  let arrivedOnSocket: { readonly msSinceLedgerStart: number } | undefined
+  for (const transition of transitions) {
+    const carrier = carrierOf(transition.state)
+    if (carrier === 'socket') {
+      arrivedOnSocket = arrivedOnSocket ?? transition
+    } else if (carrier !== undefined) {
+      arrivedOnSocket = undefined
+    }
+  }
+  const socketUpFor = arrivedOnSocket === undefined ? undefined : agoSeconds(arrivedOnSocket)
+  const onSocketNow = latest !== undefined && carrierOf(latest.state) === 'socket'
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('This socket has been up for'),
+      ...(latest !== undefined && !onSocketNow
+        ? {
+            value: safeNothingToReport('this tab is not on a socket'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'The most recent transition this tab recorded did not land on the socket, so there is no connection to give an age for.',
+            ),
+          }
+        : { value: safeDuration(socketUpFor), ...absentOr(socketUpFor, 'informational') }),
+      note: 'How long the connection this tab is using has been open, from the transition that brought the lane onto it. A socket through a reverse proxy that is cut every sixty seconds shows here as an age that never passes a minute, beside a recovery count that keeps climbing — the signature of a proxy idle timeout shorter than the socket’s own keep-alive.',
+    }),
+  )
+
   const latestAgo = latest === undefined ? undefined : agoSeconds(latest)
   const latestSocket = latest === undefined ? undefined : socketAfter(latest)
 
@@ -2870,6 +2941,140 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
   }
 
   return { heading, description, rows, findings }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The other tabs                                                             */
+/* -------------------------------------------------------------------------- */
+
+const THIS_TAB_STANDINGS = ['holds the socket', 'standing by for another tab', 'on HTTP', 'connecting'] as const
+
+type ThisTabStanding = (typeof THIS_TAB_STANDINGS)[number]
+
+const LANE_HOLDERS = ['a tab that answered', 'no tab that answered'] as const
+
+function remedyForSilentLaneHolder(): Remedy {
+  return {
+    code: 'SOCKET_HOLDER_DID_NOT_ANSWER',
+    summary:
+      'Nothing to do if this clears within a few seconds. If it stays, another tab of the app is open on an older build, or was closed without letting go: close the other tabs of this app, or reload this one.',
+    steps: [
+      'Wait a quarter of a minute and press Refresh. A tab that was closed gives the socket up within about fifteen seconds, and this tab then takes it.',
+      'If it persists, look for another tab or window of this app in this browser profile. One running a build from before the census existed cannot answer it — and is itself the stale app shell the Environment section warns about. Reload it.',
+    ],
+    effort: 'device',
+    basis: 'verified',
+    because: [
+      'This tab is on HTTP because another tab of the account is recorded as holding the socket.',
+      'No other tab of this app answered when asked, so that holder is closed, frozen, or running a build that does not answer.',
+    ],
+  }
+}
+
+/**
+ * Which tab holds the socket, and how many tabs there are.
+ *
+ * *** THE TWO READINGS OF "THIS TAB IS ON HTTP". *** One tab per account holds
+ * the socket and the rest stand by, so a second tab on HTTP is ordinary. A tab
+ * standing by for an owner that is no longer there looks exactly the same from
+ * inside — until the other tabs are asked. This block is the answer they gave.
+ *
+ * Counts only. A census is a FLOOR: a tab on a build older than the census does
+ * not answer, and the rows say so rather than calling the number exact.
+ */
+function buildTabsBlock(transport: TransportStatusInput | undefined, tabs: TabsView): DiagnosticBlock {
+  const state = transport?.state
+  const carrier = state === undefined ? undefined : LANE_STATE_CARRIER[state]
+  const deferred = transport !== undefined && state !== 'READY' && socketFallbackIsDeferred(transport.fallbackReason)
+  const standing: ThisTabStanding | undefined =
+    carrier === undefined
+      ? undefined
+      : carrier === 'socket'
+        ? 'holds the socket'
+        : deferred
+          ? 'standing by for another tab'
+          : carrier === 'http'
+            ? 'on HTTP'
+            : 'connecting'
+
+  const census = tabs.census
+  const counted = census !== undefined && census !== 'unavailable' ? census : undefined
+  const cannotAsk = {
+    value: safeNotAvailableHere('this browser cannot ask its other tabs'),
+    verdict: 'not-applicable' as const,
+    evidence: evidenceNotAvailableHere(
+      'This browser has no BroadcastChannel, which is how one tab asks the others where they stand. The other tabs cannot be counted from here.',
+    ),
+  }
+  const holderAnswered = counted === undefined ? undefined : counted.othersOnSocket > 0
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('This tab on the socket lane'),
+      value: safeEnum(standing, THIS_TAB_STANDINGS),
+      ...absentOr(standing, 'informational'),
+      note: 'Where this tab stands. One tab per account holds the realtime socket; any other tab of the same account stands by and syncs over HTTP, which costs it live updates arriving a little later and nothing else. The verdict on the transport itself is the first block of this section — this row is which of the two ordinary places this tab is in.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Other tabs of this app that answered'),
+      ...(census === 'unavailable'
+        ? cannotAsk
+        : { value: safeCount(counted?.otherTabs), ...absentOr(counted?.otherTabs, 'informational') }),
+      note: 'How many other tabs or windows of this app, in this browser profile, answered when this tab asked. A floor rather than an exact count: a tab running a build older than this question cannot answer it, and a tab the browser has frozen in the background may not answer in time.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Other tabs holding a socket'),
+      ...(census === 'unavailable'
+        ? cannotAsk
+        : { value: safeCount(counted?.othersOnSocket), ...absentOr(counted?.othersOnSocket, 'informational') }),
+      note: 'Of the tabs that answered, how many say they are on a socket. One, beside a tab that is standing by, is the lane held exactly as designed. More than one is not a fault by itself: two different accounts signed in to two tabs each hold their own.',
+    }),
+    diagnosticRow({
+      label: safeConstant('The tab this one is standing by for'),
+      ...(standing !== undefined && standing !== 'standing by for another tab'
+        ? {
+            value: safeNothingToReport('this tab is not standing by'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'This tab is not on HTTP on account of another tab, so there is no holder to look for.',
+            ),
+          }
+        : census === 'unavailable'
+          ? cannotAsk
+          : {
+              value:
+                holderAnswered === undefined
+                  ? safeEnum(undefined, LANE_HOLDERS)
+                  : safeEnum(holderAnswered ? 'a tab that answered' : 'no tab that answered', LANE_HOLDERS),
+              ...absentOr(standing === undefined ? undefined : holderAnswered, 'informational'),
+            }),
+      note: 'Whether the tab that holds the socket is one that answered. "a tab that answered" is the ordinary second tab. "no tab that answered" is this tab waiting on a holder that is closed, frozen, or on a build too old to answer — the finding below says what to do, and it clears by itself within about fifteen seconds when the holder really is gone.',
+    }),
+  ]
+
+  const findings: DiagnosticFinding[] = []
+
+  if (standing === 'standing by for another tab' && holderAnswered === false) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_HOLDER_DID_NOT_ANSWER'),
+        title: 'This tab is standing by for a tab that did not answer',
+        detail:
+          'Another tab of this account is recorded as holding the realtime socket, and no other open tab of the app said it does. This tab keeps working over HTTP in the meantime. Context rather than a fault: it is what the fifteen seconds after closing the other tab look like, and it is also what a tab left open on an older build looks like.',
+        verdict: 'informational',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForSilentLaneHolder(),
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('Tabs of this app in this browser'),
+    description:
+      'Which tab holds the realtime socket and how many tabs of the app are open, as the tabs themselves answered. Counts only — no tab is identified.',
+    rows,
+    findings,
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3024,6 +3229,7 @@ export function buildWebsocketSection(input: WebsocketSectionInput = {}): Sectio
     // cannot answer the question either way.
     buildAdmissionBlock(counters, gate?.recorded === true ? gate.gatewayAttached : undefined, witness),
     buildLedgerBlock(input.ledger),
+    ...(input.tabs === undefined ? [] : [buildTabsBlock(input.transport, input.tabs)]),
   ]
 
   return buildSectionModel({

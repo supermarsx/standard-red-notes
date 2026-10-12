@@ -111,8 +111,17 @@ COPY . .
 # from a COLD cache — the dominant recurring cost. With it, webpack recompiles
 # only the changed modules. Cache location is pinned in web.webpack.config.js
 # (cacheDirectory) to match this mount target.
+# The revision reaches the BUILD, not only the marker. Two things read it there
+# (see packages/web/web.webpack.config.js): the bundle compiles it in, so a
+# running tab can say which build it is and be told apart from a stale shell;
+# and the service worker keys its cache name on it, so the cache and the
+# deployment marker name the same release. It was declared for the marker stage
+# alone, so the worker fell back to a build timestamp and the bundle carried no
+# identity at all. Scoped to this one command — it is not an ENV, so nothing
+# else in the stage is invalidated by it — and empty is still a valid build.
+ARG SRN_DEPLOY_REVISION
 RUN --mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache \
-  yarn build:web
+  SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
 
 # Hardening: run the runtime image as a NON-ROOT user. The unprivileged nginx
 # image is a drop-in for nginx:alpine that runs the master process as the

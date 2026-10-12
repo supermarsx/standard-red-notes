@@ -149,6 +149,11 @@ export type ServiceWorkerContainerLike = {
   getRegistrations?(): Promise<readonly unknown[]>
 }
 
+/** Cache Storage, as far as this section reads it: the NAMES of the caches, to count the app's own. */
+export type CacheStorageLike = {
+  keys?(): Promise<readonly string[]>
+}
+
 export type UserAgentDataLike = {
   brands?: readonly { brand?: string; version?: string }[]
   platform?: string
@@ -181,6 +186,8 @@ export type BrowserRuntime = {
   navigator?: NavigatorLike
   document?: { visibilityState?: string }
   Notification?: { permission?: string }
+  caches?: CacheStorageLike
+  matchMedia?: (query: string) => { matches?: boolean } | null | undefined
 }
 
 /* -------------------------------------------------------------------------- */
@@ -262,6 +269,12 @@ export type BrowserObservations = {
   serviceWorkerPresent?: boolean
   serviceWorkerControlling?: boolean
   serviceWorkerRegistrations?: number
+  /** A newer service worker is installed and has not taken over yet. Absent: no registration to ask. */
+  shellUpdateWaiting?: boolean
+  /** How many of this app's shell caches this browser holds. Absent: no Cache Storage here. */
+  shellCacheCount?: number
+  /** `prefers-reduced-motion: reduce` matches. Absent: this browser cannot be asked. */
+  reducedMotion?: boolean
   notificationPermission?: string
   online?: boolean
   visibilityState?: string
@@ -591,17 +604,62 @@ async function observeServiceWorker(
   const controller = reading(() => container.controller)
   const registrationsFn = container.getRegistrations
   let serviceWorkerRegistrations: number | undefined
+  let shellUpdateWaiting: boolean | undefined
   if (typeof registrationsFn === 'function') {
     const attempted = await attempt(() => registrationsFn.call(container), timeoutMs)
-    serviceWorkerRegistrations =
-      attempted.kind === 'ok' && Array.isArray(attempted.value) ? attempted.value.length : undefined
+    if (attempted.kind === 'ok' && Array.isArray(attempted.value)) {
+      serviceWorkerRegistrations = attempted.value.length
+      // Asked only of a registration that exists: with none there is no worker
+      // that could be waiting, and that is "nothing to ask" rather than "no".
+      if (attempted.value.length > 0) {
+        shellUpdateWaiting = attempted.value.some((registration) => {
+          const waiting = reading(() => (registration as { waiting?: unknown } | null | undefined)?.waiting)
+          return waiting.ok && waiting.value !== undefined && waiting.value !== null
+        })
+      }
+    }
   }
 
   return {
     serviceWorkerPresent: true,
     serviceWorkerControlling: controller.ok ? controller.value !== undefined && controller.value !== null : undefined,
     serviceWorkerRegistrations,
+    ...(shellUpdateWaiting === undefined ? {} : { shellUpdateWaiting }),
   }
+}
+
+/** The prefix `src/service-worker.js` names every app-shell cache with. */
+const SHELL_CACHE_PREFIX = 'srn-shell-'
+
+/**
+ * How many of this app's shell caches this browser holds.
+ *
+ * Only the COUNT is kept. A cache name carries the build it belongs to, and the
+ * name is read here solely to tell the app's own caches from anything else on
+ * the origin.
+ */
+async function observeShellCaches(runtime: BrowserRuntime, timeoutMs: number): Promise<Partial<BrowserObservations>> {
+  const storage = reading(() => runtime.caches)
+  const keysFn = storage.ok ? storage.value?.keys : undefined
+  if (typeof keysFn !== 'function') {
+    return {}
+  }
+
+  const attempted = await attempt(() => keysFn.call(storage.value), timeoutMs)
+  if (attempted.kind !== 'ok' || !Array.isArray(attempted.value)) {
+    return {}
+  }
+
+  return {
+    shellCacheCount: attempted.value.filter((name) => typeof name === 'string' && name.startsWith(SHELL_CACHE_PREFIX))
+      .length,
+  }
+}
+
+function observeReducedMotion(runtime: BrowserRuntime): Partial<BrowserObservations> {
+  const matched = reading(() => runtime.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches)
+
+  return matched.ok && typeof matched.value === 'boolean' ? { reducedMotion: matched.value } : {}
 }
 
 /**
@@ -719,6 +777,8 @@ export async function observeBrowserCapabilities(
     ...(await observeWebCrypto(runtime, timeoutMs)),
     ...(await observeStorageManager(navigatorLike, timeoutMs)),
     ...(await observeServiceWorker(navigatorLike, timeoutMs)),
+    ...(await observeShellCaches(runtime, timeoutMs)),
+    ...observeReducedMotion(runtime),
     webSocketPresent: booleanOf(reading(() => typeof runtime.WebSocket === 'function').value),
     workerPresent: booleanOf(reading(() => typeof runtime.Worker === 'function').value),
     indexedDbPresent: booleanOf(reading(() => runtime.indexedDB !== undefined && runtime.indexedDB !== null).value),
@@ -1099,11 +1159,52 @@ export type BrowserSectionInput = {
   /** Absent until the first collection run resolves; every row then reads "not reported". */
   observations?: BrowserObservations
   clock?: BrowserClockReading
+  /**
+   * What this page's Content-Security-Policy has refused since it loaded, as the
+   * page's own ledger counted it. Absent: no ledger was armed on this page.
+   */
+  csp?: CspRefusals
   /** Every registered check, run or not. This section renders its own as rows. */
   checks?: readonly CheckReading[]
   /** The direct observations a capped row here can point at. Absent: none was made. */
   witnesses?: WitnessBoard
 }
+
+/**
+ * The CSP ledger's reading, as this section accepts it. Typed WIDE on the
+ * directive on purpose: the keys are chosen by another module, and the only
+ * thing that keeps a directive name this build does not know off the screen is
+ * the closed tuple it is admitted against here.
+ */
+export type CspRefusals = {
+  readonly total: number
+  readonly enforced: number
+  readonly byDirective: Readonly<Record<string, number | undefined>>
+  readonly armedForMs: number
+}
+
+/** The directives a refusal can be counted against. Closed; anything else prints as unrecognised. */
+export const CSP_DIRECTIVE_NAMES = [
+  'default-src',
+  'script-src',
+  'script-src-elem',
+  'script-src-attr',
+  'style-src',
+  'style-src-elem',
+  'style-src-attr',
+  'img-src',
+  'font-src',
+  'connect-src',
+  'media-src',
+  'frame-src',
+  'child-src',
+  'worker-src',
+  'object-src',
+  'manifest-src',
+  'form-action',
+  'frame-ancestors',
+  'base-uri',
+] as const
 
 /** How a block reads a witness. Absent board: every witness is unobserved. */
 type WitnessOf = (id: WitnessId) => Witness
@@ -1558,6 +1659,156 @@ function buildSupportingBlock(observed: BrowserObservations, witness: WitnessOf,
   }
 }
 
+function remedyForCspRefusals(): Remedy {
+  return {
+    code: 'CSP_REFUSALS_OBSERVED',
+    summary:
+      'Open this browser’s console on this page: each refusal is listed there with what was blocked. The directive rows say which part of the policy refused it; the policy itself is a header set by the web server that serves this page.',
+    steps: [
+      'Reload the page with the console open, then repeat whatever was not working. A refusal names the directive and the thing it blocked, which this pane deliberately does not record.',
+      'If what was blocked is part of this app — its own script, style or request — the policy the web server sends is out of step with the build it serves. Redeploy both from one revision; the two build checks in Environment & setup say whether they already are.',
+      'If what was blocked came from a browser extension, the policy is doing its job and nothing on the server needs to change.',
+    ],
+    effort: 'restart',
+    basis: 'verified',
+    because: [
+      'The browser raised a securitypolicyviolation event on this page, and this page counted it.',
+      'Only the directive and whether it was enforced are kept. What was blocked, and from where, is never read.',
+    ],
+  }
+}
+
+/**
+ * The page's own policy and shell: what the browser refused, and which copy of
+ * the app it is holding.
+ *
+ * Every row here is a fact about THIS page in THIS browser that the server
+ * cannot know and the operator cannot see without opening developer tools.
+ */
+function buildPolicyBlock(
+  observed: BrowserObservations,
+  csp: CspRefusals | undefined,
+  collected: boolean,
+): DiagnosticBlock {
+  const enforced = csp?.enforced
+  const blocking = enforced !== undefined && enforced > 0
+
+  const rows: DiagnosticRow[] = [
+    diagnosticRow({
+      label: safeConstant('Content-Security-Policy refusals since this page loaded'),
+      value: safeCount(csp?.total),
+      ...absentOr(csp?.total, blocking ? 'degraded' : 'informational'),
+      note: 'How many times this page’s Content-Security-Policy refused something, counted by the page itself from the moment it started. A refusal is silent everywhere but the console: the page carries on without a script that never ran, a style that never applied or a request that never left. Zero is "none observed while listening", which the row below puts a duration on — a refusal that stopped the page starting at all could not have been counted by it.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Of those, enforced'),
+      value: safeCount(enforced),
+      ...absentOr(enforced, blocking ? 'degraded' : 'informational'),
+      note: 'Refusals that actually blocked something. The rest were raised by a report-only policy, which blocks nothing and exists to preview a stricter one.',
+    }),
+  ]
+
+  for (const directive of [...CSP_DIRECTIVE_NAMES, 'other']) {
+    const count = csp?.byDirective[directive]
+    if (typeof count !== 'number' || count <= 0) {
+      continue
+    }
+    rows.push(
+      diagnosticRow({
+        label: safeTokens(safeConstant('Refusals under'), safeEnum(directive, CSP_DIRECTIVE_NAMES)),
+        value: safeCount(count),
+        verdict: blocking ? 'degraded' : 'informational',
+        evidence: EVIDENCE_DIRECT,
+        note: 'The directive that refused, from this build’s own closed list — the part of the policy to read. What was blocked, and where it came from, is deliberately not recorded: it is an address or a fragment of code. A directive this build has no name for is counted as unrecognised and never printed.',
+      }),
+    )
+  }
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('This page has been counting refusals for'),
+      value: safeDuration(csp === undefined ? undefined : csp.armedForMs / 1000),
+      ...absentOr(csp?.armedForMs, 'informational'),
+      note: 'How long the count above covers. It starts when the page’s code starts and is lost on a reload, so a zero on a page loaded seconds ago establishes little, and a zero over an hour of use is a policy that fits the app.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Reduced motion requested'),
+      ...(observed.reducedMotion === undefined && collected
+        ? {
+            value: safeNotAvailableHere('this browser cannot be asked'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNotAvailableHere(
+              'This browser has no matchMedia to ask whether reduced motion is requested.',
+            ),
+          }
+        : {
+            value: safeYesNo(observed.reducedMotion),
+            ...absentOr(observed.reducedMotion, 'informational'),
+          }),
+      note: 'Whether this browser reports prefers-reduced-motion. A fact, not a fault — and worth having on the screen because it changes how the app behaves: with it on, every animation and transition is cut to nothing, so a panel that "does not slide" or a spinner that "does not spin" is the app honouring the setting. It comes from the operating system’s animation setting, and some browsers report it on for privacy reasons regardless.',
+    }),
+    diagnosticRow({
+      label: safeConstant('An updated app shell is waiting to take over'),
+      ...(observed.shellUpdateWaiting === undefined && collected
+        ? {
+            value: safeNotAvailableHere('no service worker is registered for this page'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNotAvailableHere(
+              'This page has no service worker registration, so there is no app shell held by one and none waiting. A page served over plain HTTP from anywhere but this machine never registers one.',
+            ),
+          }
+        : {
+            value: safeYesNo(observed.shellUpdateWaiting),
+            ...absentOr(
+              observed.shellUpdateWaiting,
+              observed.shellUpdateWaiting === true ? 'degraded' : 'informational',
+            ),
+          }),
+      note: 'Whether a newer service worker is installed and has not taken control. The worker is built to take over at once, so "yes" means that did not happen: this tab is still being served the previous app shell. Reloading every open tab of the app lets the new one in.',
+    }),
+    diagnosticRow({
+      label: safeConstant('App shell caches held by this browser'),
+      ...(observed.shellCacheCount === undefined && collected
+        ? {
+            value: safeNotAvailableHere('this page has no Cache Storage'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNotAvailableHere(
+              'This page cannot read Cache Storage — it is not a secure context, or the browser withholds it — so no app shell is cached here at all.',
+            ),
+          }
+        : {
+            value: safeCount(observed.shellCacheCount),
+            ...absentOr(observed.shellCacheCount, 'informational'),
+          }),
+      note: 'How many of this app’s shell caches this browser holds. One per build, and the previous build’s is deleted when a new worker takes over — so one is the ordinary reading, none is a page that has not been cached yet, and more than one is an older shell that was not cleared. A count only: a cache’s name is read to recognise it and is never shown.',
+    }),
+  )
+
+  const findings: DiagnosticFinding[] = []
+
+  if (blocking) {
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('CSP_REFUSALS_OBSERVED'),
+        title: 'This page’s Content-Security-Policy has blocked something',
+        detail:
+          'The browser refused at least one script, style or request on this page and the page carried on without it. Nothing else on this screen can see that: the server did not serve an error and the app did not throw one. The directive rows say which part of the policy refused.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForCspRefusals(),
+      }),
+    )
+  }
+
+  return {
+    heading: safeConstant('Page policy and app shell'),
+    description:
+      'What this browser has refused to run or load on this page, and which copy of the app it is holding. Facts about this page that the server cannot know.',
+    rows,
+    findings,
+  }
+}
+
 function buildIdentityBlock(observed: BrowserObservations): DiagnosticBlock {
   return {
     heading: safeConstant('Browser identity'),
@@ -1692,6 +1943,7 @@ export function buildBrowserSection(input: BrowserSectionInput = {}): SectionMod
     buildRequirementsBlock(observed, witness),
     buildStorageBlock(observed),
     buildSupportingBlock(observed, witness, collected),
+    buildPolicyBlock(observed, input.csp, collected),
     buildIdentityBlock(observed),
     buildClockBlock(input.clock),
   ]

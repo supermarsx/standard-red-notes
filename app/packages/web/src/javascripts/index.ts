@@ -18,6 +18,13 @@ import '@/Components/SuperEditor/fonts/editorFonts.css'
 import { initializeI18n } from './Internationalization/i18n'
 initializeI18n()
 
+// Content-Security-Policy refusals, counted from before the application
+// evaluates. Imported for its side effect and placed here for the same reason as
+// the recovery listener below: a refusal during startup is exactly the one worth
+// counting, and a listener registered after `./App` has run would miss it. It
+// keeps a count per directive and nothing the event says — see the module.
+import './Utils/CspViolationLedger'
+
 // Blank-page recovery, armed BEFORE the application evaluates.
 //
 // Imported for its side effect, and deliberately above `import './App'`: ES

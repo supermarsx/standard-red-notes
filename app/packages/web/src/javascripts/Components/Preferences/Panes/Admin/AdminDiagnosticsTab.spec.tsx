@@ -53,6 +53,24 @@ jest.mock('@standardnotes/snjs', () => ({
 
 let madeUpIdentifiers = 0
 
+/**
+ * The commit compiled into "this tab's code". A test run's bundle carries none,
+ * so one is given here — fixed, and only ever compared with the marker a test
+ * supplies. Against the default (unstamped) marker it changes nothing: the
+ * server names no build, so there is nothing to compare with.
+ */
+jest.mock('@/Constants/BuildRevision', () => ({ WebBuildRevision: 'c'.repeat(40) }))
+
+/**
+ * The other tabs of the app, as they would answer a census. jsdom has no
+ * BroadcastChannel, so without this the pane would always read "cannot ask";
+ * a test that is about tabs sets the answer it needs.
+ */
+let mockOtherTabs: { otherTabs: number; othersOnSocket: number; othersStandingBy: number } | undefined
+// A plain function and not a `jest.fn`: mock implementations are reset between
+// tests here, and a reset `jest.fn` answers `undefined` instead of a promise.
+jest.mock('@/Utils/TabCensus', () => ({ takeTabCensus: async () => mockOtherTabs }))
+
 jest.mock('@standardnotes/ui-services', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }))
@@ -239,6 +257,13 @@ const HTTP_ONLY_PATHS = {
   '/v1/items/storage-usage': { status: 200, ok: true, data: storageUsagePayload },
   // The revision list of the one note the default account holds.
   '/v2/items/a-note/revisions': { status: 200, ok: true, data: [] },
+  // The API server's own statement of which build it is. Unstamped, like the
+  // default marker: a test that is about build identity supplies its own.
+  '/healthcheck/readiness': {
+    status: 200,
+    ok: true,
+    data: { status: 'ready', deployment: { revision: 'unstamped', version: 'unstamped' } },
+  },
 } as const
 
 /**
@@ -440,6 +465,7 @@ let container: HTMLElement
 let root: Root
 
 beforeEach(() => {
+  mockOtherTabs = undefined
   jest.useFakeTimers()
   // Pinned 30 seconds after the fixture's capture instant, so the Browser
   // section's clock block has a real, bounded offset to report rather than
@@ -2336,7 +2362,10 @@ describe('AdminDiagnosticsTab — Checks', () => {
     expect(item?.textContent).toContain('Another tab of this account owns the socket lane')
     expect(item?.textContent).toContain('Expected, and not a fault')
     // The summary line stops counting it against the run, in either direction.
-    expect(text).toContain('had nothing to test here')
+    // TWO, not one: this fixture's marker is unstamped, so the app-shell check
+    // has no build to compare with in every test of this file. The second is
+    // the live-socket check this test is about.
+    expect(text).toContain('2 had nothing to test here')
     expect(item?.textContent).not.toContain('on HTTP:')
   })
 
@@ -2360,7 +2389,10 @@ describe('AdminDiagnosticsTab — Checks', () => {
       expect(item?.getAttribute('data-diagnostics-probe-status')).toBe('degraded')
       expect(item?.textContent).toContain(`on HTTP: HTTP_FALLBACK ${fallbackReason}`)
       expect(item?.textContent).toContain('The app keeps working over HTTP')
-      expect(text).not.toContain('had nothing to test here')
+      // One — the app-shell check, against this fixture's unstamped marker — and
+      // NOT two: a fallback that is a fault is counted, never skipped.
+      expect(text).toContain('1 had nothing to test here')
+      expect(text).not.toContain('2 had nothing to test here')
       expect(item?.textContent).not.toContain('another tab')
     }
   })
@@ -2381,7 +2413,118 @@ describe('AdminDiagnosticsTab — Checks', () => {
     item = activePanel().querySelector('[data-diagnostics-probe="negotiation"]')
     expect(item?.getAttribute('data-diagnostics-probe-status')).toBe('degraded')
     expect(text).toContain('No realtime transport is installed in this client')
-    expect(text).not.toContain('had nothing to test here')
+    expect(text).toContain('1 had nothing to test here')
+    expect(text).not.toContain('2 had nothing to test here')
+  })
+
+  /**
+   * *** THE SECOND TAB. *** Another tab of the account holds the socket and this
+   * one stands by on HTTP — by design. Every check this tab can run passes, the
+   * section says where the tab stands and who holds the lane, and nothing on the
+   * pane calls it a fault.
+   */
+  describe('a tab that is standing by', () => {
+    const standingBy = { state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'multi-tab-not-owner' }
+
+    it('says another tab holds the socket, that it answered, and raises nothing', async () => {
+      mockOtherTabs = { otherTabs: 1, othersOnSocket: 1, othersStandingBy: 0 }
+      await renderTab(makeApplication({ syncTransportStatus: standingBy }))
+      await openSubtab('WebSocket')
+
+      expect(sectionRow('This tab on the socket lane')[1]).toBe('standing by for another tab')
+      expect(sectionRow('Other tabs of this app that answered')[1]).toBe('1')
+      expect(sectionRow('Other tabs holding a socket')[1]).toBe('1')
+      expect(sectionRow('The tab this one is standing by for')[1]).toBe('a tab that answered')
+      expect(sectionRowStatus('This tab’s live socket')).toBe('not-applicable')
+      expect(activePanel().textContent).not.toContain('This tab is standing by for a tab that did not answer')
+    })
+
+    it('says so when no open tab admits to holding the socket', async () => {
+      mockOtherTabs = { otherTabs: 0, othersOnSocket: 0, othersStandingBy: 0 }
+      await renderTab(makeApplication({ syncTransportStatus: standingBy }))
+      await openSubtab('WebSocket')
+
+      expect(sectionRow('The tab this one is standing by for')[1]).toBe('no tab that answered')
+      expect(activePanel().textContent).toContain('This tab is standing by for a tab that did not answer')
+    })
+
+    it('says it cannot ask on a browser with no way to ask its other tabs', async () => {
+      mockOtherTabs = undefined
+      await renderTab(makeApplication({ syncTransportStatus: standingBy }))
+      await openSubtab('WebSocket')
+
+      expect(sectionRow('Other tabs of this app that answered')[1]).toBe(
+        'not available here (this browser cannot ask its other tabs)',
+      )
+    })
+  })
+
+  /**
+   * *** THE STALE SHELL, END TO END. *** The server's marker names a newer commit
+   * than the one compiled into this tab's code. It is on the Environment section
+   * as a row, it turns the section amber, and it is a card saying to reload —
+   * with no check having been run by anybody.
+   */
+  describe('build identity', () => {
+    const THIS_TAB = 'c'.repeat(40)
+    const NEWER = 'd'.repeat(40)
+    const serving = (revision: string) => {
+      ;(globalThis as { fetch?: unknown }).fetch = jest
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({ revision, version: `src-${revision.slice(0, 12)}` }) })
+    }
+    const serverBuiltFrom = (revision: string) =>
+      answering(
+        { status: 200, ok: true, data: unavailablePayload },
+        {
+          http: {
+            '/healthcheck/readiness': {
+              status: 200,
+              ok: true,
+              data: { status: 'ready', deployment: { revision, version: `src-${revision.slice(0, 12)}` } },
+            },
+          },
+        },
+      )
+
+    it('says this tab runs the build the server serves when the two commits agree', async () => {
+      serving(THIS_TAB)
+      await renderTab(makeApplication(serverBuiltFrom(THIS_TAB)))
+      await openSubtab('Environment & setup')
+
+      expect(sectionRow('App shell this tab is running')[1]).toBe('this tab runs the build the server serves')
+      expect(sectionRowStatus('App shell this tab is running')).toBe('healthy')
+      expect(sectionRow('Web app and server are one build')[1]).toBe('same build')
+      expect(sectionRowStatus('Web app and server are one build')).toBe('healthy')
+    })
+
+    it('reports a tab running an older build than the server serves, and says to reload', async () => {
+      serving(NEWER)
+      await renderTab(makeApplication(serverBuiltFrom(NEWER)))
+      await openSubtab('Environment & setup')
+
+      expect(sectionRow('App shell this tab is running')[1]).toBe(
+        `stale: this tab runs ${THIS_TAB} and the server serves ${NEWER}`,
+      )
+      expect(sectionRowStatus('App shell this tab is running')).toBe('degraded')
+      expect(activePanel().textContent).toContain('This tab is running an older build than the server serves')
+      expect(activePanel().textContent).toContain('Reload this tab')
+      // The web app and the server ARE one build here; only this tab is behind.
+      expect(sectionRowStatus('Web app and server are one build')).toBe('healthy')
+    })
+
+    it('reports a web app and an API server that were deployed from different commits', async () => {
+      serving(THIS_TAB)
+      await renderTab(makeApplication(serverBuiltFrom(NEWER)))
+      await openSubtab('Environment & setup')
+
+      expect(sectionRow('Web app and server are one build')[1]).toBe(
+        `different builds: web app ${THIS_TAB} · server ${NEWER}`,
+      )
+      expect(sectionRowStatus('Web app and server are one build')).toBe('degraded')
+      expect(activePanel().textContent).toContain('The web app and the API server are different builds')
+      expect(sectionRowStatus('App shell this tab is running')).toBe('healthy')
+    })
   })
 
   /**
@@ -2451,6 +2594,7 @@ describe('AdminDiagnosticsTab — Checks', () => {
         ['POST', '/v1/sockets/sync/ticket'],
         ['GET', '/v1/items/storage-usage'],
         ['GET', '/v2/items/a-note/revisions'],
+        ['GET', '/healthcheck/readiness'],
       ]).toContainEqual([method, path])
     }
     expect(application.serverJsonRequest).not.toHaveBeenCalled()
@@ -2471,7 +2615,7 @@ describe('AdminDiagnosticsTab — Checks', () => {
     // 1. the header, beside Run all checks, on every tab
     const consent = container.querySelector('[data-diagnostics-consent]')
     expect(consent?.textContent).toContain(sentence)
-    expect(consent?.textContent).toContain('2 of 6 checks write something')
+    expect(consent?.textContent).toContain('2 of the 7 checks it runs write something')
     // The file round trip's own account of itself is there too, in full.
     expect(consent?.textContent).toContain('Uploads ONE throwaway object of 16 KiB of random bytes')
     expect(consent?.textContent).toContain('none of your own files is read, changed or removed')
@@ -2721,7 +2865,10 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
     expect(routerStatus('websocket')).not.toBe('degraded')
     expect(await openSubtab('WebSocket')).toContain('Socket lane and boot gate')
     // The lane the control-plane read rode is the one MEASURED on that read.
-    expect(sectionRow('Authenticated control-plane read')[1]).toBe('answered over the socket’s control-plane lane')
+    // …with how long that read took, end to end, as a figure and not a verdict.
+    expect(sectionRow('Authenticated control-plane read')[1]).toMatch(
+      /^answered over the socket’s control-plane lane · \d+ ms$/,
+    )
     expect(sectionRowStatus('Authenticated control-plane read')).toBe('healthy')
 
     await openSubtab('Database & internal comms')

@@ -4,11 +4,13 @@ import { readingOf } from './diagnosticsSections'
 
 import {
   buildBrowserSection,
+  CSP_DIRECTIVE_NAMES,
   observeBrowserCapabilities,
   probeInputBytes,
   PROBE_DIGEST_SHA256_HEX,
   type BrowserObservations,
   type BrowserRuntime,
+  type CspRefusals,
   type NavigatorLike,
   type SubtleCryptoLike,
   type WebStorageLike,
@@ -68,7 +70,8 @@ const healthyNavigator = (overrides: Partial<NavigatorLike> = {}): NavigatorLike
   },
   serviceWorker: {
     controller: { scriptURL: 'sw.js' },
-    getRegistrations: () => Promise.resolve([{}]),
+    // One registration, with nothing waiting: the worker took over at once.
+    getRegistrations: () => Promise.resolve([{ waiting: null }]),
   },
   clipboard: { writeText: () => Promise.resolve() },
   userAgentData: {
@@ -92,8 +95,14 @@ const healthyRuntime = (overrides: Partial<BrowserRuntime> = {}): BrowserRuntime
   navigator: healthyNavigator(),
   document: { visibilityState: 'visible' },
   Notification: { permission: 'granted' },
+  // This build's shell cache, beside a cache that is not the app's.
+  caches: { keys: () => Promise.resolve(['srn-shell-1.0.0-0123abcd', 'some-extension-cache']) },
+  matchMedia: (query) => ({ matches: query === '(prefers-reduced-motion: reduce)' ? false : false }),
   ...overrides,
 })
+
+/** A page whose policy has refused nothing in the hour it has been listening. */
+const QUIET_CSP: CspRefusals = { total: 0, enforced: 0, byDirective: {}, armedForMs: 3_600_000 }
 
 /** A subtle implementation that resolves with the wrong bytes rather than failing. */
 const shimmedSubtle = (): SubtleCryptoLike => ({
@@ -591,9 +600,15 @@ describe('buildBrowserSection on a healthy browser', () => {
     const confirmed = buildBrowserSection({
       observations: observed,
       clock: ALIGNED_CLOCK,
+      csp: QUIET_CSP,
       witnesses: board('confirmed'),
     })
-    const notRun = buildBrowserSection({ observations: observed, clock: ALIGNED_CLOCK, witnesses: board('not-run') })
+    const notRun = buildBrowserSection({
+      observations: observed,
+      clock: ALIGNED_CLOCK,
+      csp: QUIET_CSP,
+      witnesses: board('not-run'),
+    })
     const refuted = buildBrowserSection({ observations: observed, clock: ALIGNED_CLOCK, witnesses: board('refuted') })
     const unavailable = buildBrowserSection({
       observations: observed,
@@ -994,7 +1009,7 @@ describe('buildBrowserSection with nothing observed', () => {
     const model = buildBrowserSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(36)
+    expect(rows).toHaveLength(42)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -1089,7 +1104,7 @@ describe('buildBrowserSection output discipline', () => {
     expect(report).toContain('- [INFO] Engine: chromium')
   })
 
-  it('builds the five blocks it always builds, in order', () => {
+  it('builds the six blocks it always builds, in order', () => {
     const model = buildBrowserSection()
 
     expect(model.id).toBe('browser')
@@ -1098,6 +1113,7 @@ describe('buildBrowserSection output discipline', () => {
       'Hard requirements',
       'Storage',
       'Supporting capabilities',
+      'Page policy and app shell',
       'Browser identity',
       'Clock',
     ])
@@ -1178,5 +1194,173 @@ describe('buildBrowserSection clock block', () => {
     expect(row.verdict).toBe('undetermined')
     expect(row.evidence.kind).toBe('absent')
     expect(codesOf(model)).toEqual([])
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* Page policy and app shell                                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('the page’s policy and app shell', () => {
+  const observedOn = async (runtime: BrowserRuntime = healthyRuntime()) => observeBrowserCapabilities(runtime)
+  const section = async (csp: CspRefusals | undefined, runtime?: BrowserRuntime) =>
+    buildBrowserSection({ observations: await observedOn(runtime), ...(csp === undefined ? {} : { csp }) })
+
+  it('reads a page whose policy refused nothing as a measured zero over a stated time', async () => {
+    const model = await section(QUIET_CSP)
+
+    expect(rowOf(model, 'Content-Security-Policy refusals since this page loaded').value).toBe('0')
+    expect(rowOf(model, 'Content-Security-Policy refusals since this page loaded').verdict).toBe('informational')
+    expect(rowOf(model, 'Of those, enforced').value).toBe('0')
+    expect(rowOf(model, 'This page has been counting refusals for').value).toBe('1h 0m')
+    expect(codesOf(model)).not.toContain('CSP_REFUSALS_OBSERVED')
+    expect(allRows(model).some((row) => String(row.label).startsWith('Refusals under'))).toBe(false)
+  })
+
+  /**
+   * *** THE FAULT NOTHING ELSE ON THE SCREEN CAN SEE. *** The browser refused a
+   * style and a request; the server served no error and the app threw none.
+   */
+  it('reports enforced refusals as something lost, by directive, with one thing to do', async () => {
+    const model = await section({
+      total: 3,
+      enforced: 3,
+      byDirective: { 'style-src-elem': 2, 'connect-src': 1 },
+      armedForMs: 90_000,
+    })
+
+    expect(rowOf(model, 'Content-Security-Policy refusals since this page loaded').value).toBe('3')
+    expect(rowOf(model, 'Content-Security-Policy refusals since this page loaded').verdict).toBe('degraded')
+    expect(rowOf(model, 'Refusals under style-src-elem').value).toBe('2')
+    expect(rowOf(model, 'Refusals under connect-src').value).toBe('1')
+    expect(rowOf(model, 'Refusals under style-src-elem').verdict).toBe('degraded')
+    expect(findingOf(model, 'CSP_REFUSALS_OBSERVED')?.verdict).toBe('degraded')
+    expect(findingOf(model, 'CSP_REFUSALS_OBSERVED')?.remedy?.summary).toContain('Open this browser’s console')
+    expect(model.worstVerdict).toBe('degraded')
+  })
+
+  it('does not count a report-only policy’s refusals against the page: nothing was blocked', async () => {
+    const model = await section({ total: 4, enforced: 0, byDirective: { 'script-src': 4 }, armedForMs: 5_000 })
+
+    expect(rowOf(model, 'Content-Security-Policy refusals since this page loaded').verdict).toBe('informational')
+    expect(rowOf(model, 'Refusals under script-src').verdict).toBe('informational')
+    expect(codesOf(model)).not.toContain('CSP_REFUSALS_OBSERVED')
+  })
+
+  it('prints a directive only from its own closed list, and counts any other as unrecognised', async () => {
+    const planted = 'https://evil.internal.example/?token=hunter2'
+    const model = await section({
+      total: 3,
+      enforced: 3,
+      byDirective: { [planted]: 1, 'a-directive-from-the-future': 1, other: 1 },
+      armedForMs: 1_000,
+    })
+    const serialised = JSON.stringify(model)
+
+    expect(serialised).not.toContain('hunter2')
+    expect(serialised).not.toContain('internal.example')
+    expect(serialised).not.toContain('a-directive-from-the-future')
+    // The ledger folds what it cannot name into `other`, which IS printed, as unrecognised.
+    expect(rowOf(model, 'Refusals under other (unrecognised)').value).toBe('1')
+    for (const row of allRows(model).filter((candidate) => String(candidate.label).startsWith('Refusals under'))) {
+      expect([
+        ...CSP_DIRECTIVE_NAMES.map((name) => `Refusals under ${name}`),
+        'Refusals under other (unrecognised)',
+      ]).toContain(String(row.label))
+    }
+  })
+
+  it('says a page with no ledger armed did not report, rather than that it refused nothing', async () => {
+    const model = await section(undefined)
+    const row = rowOf(model, 'Content-Security-Policy refusals since this page loaded')
+
+    expect(row.value).toBe('not reported')
+    expect(row.evidence.kind).toBe('absent')
+  })
+
+  it('reports reduced motion as a fact about this browser, either way', async () => {
+    const on = await section(QUIET_CSP, healthyRuntime({ matchMedia: () => ({ matches: true }) }))
+    const off = await section(QUIET_CSP, healthyRuntime({ matchMedia: () => ({ matches: false }) }))
+    const cannotAsk = await section(QUIET_CSP, healthyRuntime({ matchMedia: undefined }))
+
+    expect(rowOf(on, 'Reduced motion requested').value).toBe('yes')
+    expect(rowOf(off, 'Reduced motion requested').value).toBe('no')
+    // Never a fault: it is the operator's own setting being honoured.
+    expect(rowOf(on, 'Reduced motion requested').verdict).toBe('informational')
+    expect(rowOf(on, 'Reduced motion requested').note).toContain('every animation and transition is cut to nothing')
+    expect(rowOf(cannotAsk, 'Reduced motion requested').verdict).toBe('not-applicable')
+    expect(readingOf(rowOf(cannotAsk, 'Reduced motion requested').value)).toBe('unavailable')
+  })
+
+  it('asks the media query it means, and no other', async () => {
+    const asked: string[] = []
+    await observedOn(
+      healthyRuntime({
+        matchMedia: (query) => {
+          asked.push(query)
+          return { matches: true }
+        },
+      }),
+    )
+
+    expect(asked).toEqual(['(prefers-reduced-motion: reduce)'])
+  })
+
+  it('reports a newer app shell that is waiting to take over as something lost', async () => {
+    const waiting = await section(
+      QUIET_CSP,
+      healthyRuntime({
+        navigator: healthyNavigator({
+          serviceWorker: {
+            controller: { scriptURL: 'sw.js' },
+            getRegistrations: () => Promise.resolve([{ waiting: { state: 'installed' } }]),
+          },
+        }),
+      }),
+    )
+    const settled = await section(QUIET_CSP)
+
+    expect(rowOf(waiting, 'An updated app shell is waiting to take over').value).toBe('yes')
+    expect(rowOf(waiting, 'An updated app shell is waiting to take over').verdict).toBe('degraded')
+    expect(rowOf(settled, 'An updated app shell is waiting to take over').value).toBe('no')
+    expect(rowOf(settled, 'An updated app shell is waiting to take over').verdict).toBe('informational')
+  })
+
+  it('has no app shell to report on where no service worker is registered, which is not a "no"', async () => {
+    const none = await section(
+      QUIET_CSP,
+      healthyRuntime({
+        navigator: healthyNavigator({
+          serviceWorker: { controller: null, getRegistrations: () => Promise.resolve([]) },
+        }),
+        caches: undefined,
+      }),
+    )
+
+    for (const label of ['An updated app shell is waiting to take over', 'App shell caches held by this browser']) {
+      expect({ label, verdict: rowOf(none, label).verdict }).toEqual({ label, verdict: 'not-applicable' })
+      expect(readingOf(rowOf(none, label).value)).toBe('unavailable')
+    }
+  })
+
+  it('counts this app’s own shell caches and nothing else on the origin, and never prints a name', async () => {
+    const model = await section(
+      QUIET_CSP,
+      healthyRuntime({
+        caches: {
+          keys: () =>
+            Promise.resolve([
+              'srn-shell-1.0.0-aaaaaaaa',
+              'srn-shell-1.0.0-bbbbbbbb',
+              'workbox-precache-someone-else',
+              'srn-other',
+            ]),
+        },
+      }),
+    )
+
+    expect(rowOf(model, 'App shell caches held by this browser').value).toBe('2')
+    expect(JSON.stringify(model)).not.toContain('aaaaaaaa')
+    expect(JSON.stringify(model)).not.toContain('workbox-precache')
   })
 })
