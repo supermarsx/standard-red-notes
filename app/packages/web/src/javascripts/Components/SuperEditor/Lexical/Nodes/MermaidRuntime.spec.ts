@@ -29,6 +29,12 @@ const POISONED = '---\nconfig:\n  theme: base\n  themeVariables:\n    primaryCol
 const HEALTHY = 'flowchart LR\n  A --> B'
 const withFrontmatter = (theme: string): string => `---\nconfig:\n  theme: ${theme}\n---\n${HEALTHY}`
 const BROKEN_WITH_FRONTMATTER = '---\ntitle: Broken\n---\nflowchart LR\n  A -->'
+/** Variables and no `theme` key: a bigger font, and a `background` nobody should act on. */
+const VARIABLES_ONLY = `---\nconfig:\n  themeVariables:\n    fontSize: 20px\n---\n${HEALTHY}`
+/** `theme: base` with a page of its own — a dark one. */
+const BASE_WITH_ITS_OWN_PAGE = `---\nconfig:\n  theme: base\n  themeVariables:\n    background: "#1A1A2E"\n---\n${HEALTHY}`
+/** The same, with a page this app must not paint. */
+const BASE_WITH_A_HOSTILE_PAGE = `---\nconfig:\n  theme: base\n  themeVariables:\n    background: hostile\n---\n${HEALTHY}`
 
 /** What the fake `parse` reports each text's own config to be — mermaid's answer, not the runtime's. */
 const CONFIG_IN_TEXT = new Map<string, Record<string, unknown>>([
@@ -37,6 +43,9 @@ const CONFIG_IN_TEXT = new Map<string, Record<string, unknown>>([
   [withFrontmatter('base'), { theme: 'base', themeVariables: { primaryColor: '#ffcc00' } }],
   [withFrontmatter('nosuch'), { theme: 'nosuch' }],
   ['---\ntitle: Only a title\n---\n' + HEALTHY, {}],
+  [VARIABLES_ONLY, { themeVariables: { fontSize: '20px', background: '#000000' } }],
+  [BASE_WITH_ITS_OWN_PAGE, { theme: 'base', themeVariables: { background: '#1A1A2E' } }],
+  [BASE_WITH_A_HOSTILE_PAGE, { theme: 'base', themeVariables: { background: 'rgb(1,2,3) url(favicon.ico)' } }],
 ])
 
 /** Every call the runtime made, in order. */
@@ -187,6 +196,7 @@ describe('one diagram is not drawn with another block’s settings', () => {
     await expect(good).resolves.toEqual({
       svg: '<svg id="mermaid-2-0" data-measured-in="body"></svg>',
       ownTheme: undefined,
+      ownSurface: undefined,
     })
   })
 })
@@ -219,10 +229,42 @@ describe('a diagram that names its own theme is drawn in that theme', () => {
     expect(result.ownTheme).toBe('neo-dark')
   })
 
-  it('keeps the app palette under `theme: base` — the diagram is still the app’s, with some colours fixed', async () => {
+  /**
+   * `base` was the one exception, and it was the same defect with a different
+   * fill. Measured in the running app's dark theme: `theme: base` with
+   * `primaryColor: "#ffcc00"` drew the app's near-white text on that yellow,
+   * 1.15 to 1 — `base` takes its text colour from the palette it is handed.
+   */
+  it('withholds the app palette under `theme: base` too — it is no exception', async () => {
     const result = await renderMermaidDiagram(request({ text: withFrontmatter('base') }))
+    expect(calls.filter((call) => call.startsWith('initialize'))).toEqual([
+      'initialize base +palette',
+      'initialize base',
+    ])
+    expect(initialized[1].themeVariables).toBeUndefined()
+    expect(result.ownTheme).toBe('base')
+  })
+
+  it('leaves the app palette alone for variables with NO theme key — mermaid recomputes nothing for those', async () => {
+    const result = await renderMermaidDiagram(request({ text: VARIABLES_ONLY }))
+    // A bigger font does not make a diagram somebody else's: withholding the
+    // palette here would turn it into mermaid's light default for a font size.
     expect(calls.filter((call) => call.startsWith('initialize'))).toEqual(['initialize base +palette'])
     expect(result.ownTheme).toBeUndefined()
+    // …and with no theme of its own, a `background` in the text decides nothing.
+    expect(result.ownSurface).toBeUndefined()
+  })
+
+  it('reports the page a self-themed diagram gave itself, as a colour and nothing else', async () => {
+    const dark = await renderMermaidDiagram(request({ text: BASE_WITH_ITS_OWN_PAGE }))
+    expect(dark).toMatchObject({ ownTheme: 'base', ownSurface: '#1a1a2e' })
+    // A value from somebody's diagram on its way into a `background`: anything
+    // that is not, whole, a hex colour or an rgb() triple does not get there.
+    const hostile = await renderMermaidDiagram(request({ text: BASE_WITH_A_HOSTILE_PAGE }))
+    expect(hostile).toMatchObject({ ownTheme: 'base', ownSurface: undefined })
+    // A theme named with no page of its own has only its stock page.
+    const forest = await renderMermaidDiagram(request({ text: withFrontmatter('forest') }))
+    expect(forest).toMatchObject({ ownTheme: 'forest', ownSurface: undefined })
   })
 
   it('keeps the app palette for a name mermaid does not know, which it would ignore', async () => {

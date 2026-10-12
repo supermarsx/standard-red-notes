@@ -781,12 +781,24 @@ export function resolveMermaidRenderTheme(mode: unknown, appTheme: MermaidAppThe
  *    Forest's white page behind them.
  *  - `withoutAppPalette` — the app's palette must not reach mermaid.
  *
- * `base` is the exception, deliberately: it is the theme mermaid's own
- * documentation says to customise, and `app` mode IS `base` carrying the app's
- * palette. A diagram that says `theme: base` and sets three colours therefore
- * keeps following the application for every colour it did not set, and the
- * block's theme still stands. (A fixed light fill under the app's following
- * text colour can still be unreadable there; nothing here pretends otherwise.)
+ * THE RULE IS THE `theme` KEY, and `base` is no exception to it. `base` used to
+ * be one, on the reasoning that `app` mode IS `base` carrying the app's palette,
+ * so a diagram saying `theme: base` and setting a few colours could keep
+ * following the application for the rest. What that produced is the same defect
+ * with a different fill: `theme: base` + `primaryColor: "#ffcc00"` drew the
+ * app's near-white text on the diagram's own yellow — 1.15 to 1, measured in the
+ * running app — because `base` takes its text colour from the palette it is
+ * handed, not from the fill. That is the form mermaid's own theming
+ * documentation teaches. Without the app's palette mermaid derives `#333` for
+ * that text, and the diagram is what any other mermaid tool draws from it.
+ *
+ * And it is the `theme` key, NOT "the text sets some `themeVariables`", for a
+ * measured reason: without a `theme` key mermaid does not recompute a palette at
+ * all — it lays the named variables over the one it was configured with. So a
+ * diagram that only sets `themeVariables.fontSize` is still the application's
+ * diagram with larger text, and withholding the palette from it would turn it
+ * into mermaid's light default for nothing (the colour it named would still not
+ * show). A text with no `theme` key leaves the block's theme standing.
  *
  * When the block carries no palette — pinned to a theme, or no palette could be
  * read — there is nothing to withhold, and mermaid simply draws what the text
@@ -800,13 +812,53 @@ export function resolveMermaidOwnTheme(
   if (named === undefined) {
     return { ownTheme: undefined, withoutAppPalette: false }
   }
-  if (blockTheme.themeVariables === undefined) {
-    return { ownTheme: named, withoutAppPalette: false }
+  return { ownTheme: named, withoutAppPalette: blockTheme.themeVariables !== undefined }
+}
+
+/**
+ * The page colour a diagram's OWN TEXT gave its theme, or `undefined` when it
+ * is not one this app will paint.
+ *
+ * A diagram that themes itself can move its page as well: `theme: base` with
+ * `background: "#1a1a2e"` and light text is a dark diagram, and mermaid then
+ * draws its links light. Painting `base`'s stock `#f4f4f4` behind that — which
+ * is all a table keyed on the theme's NAME can know — puts light lines on a
+ * light page. So the page is the one mermaid computed for that text.
+ *
+ * It comes out of a diagram's text, which in a shared note is somebody else's,
+ * and it goes into a `background` — a SHORTHAND, in which `url(…)` is as valid
+ * as a colour. So nothing is passed through: the value has to be, whole, a hex
+ * colour or an `rgb()` triple, and what is returned is that and no more.
+ * Anything else — a colour name, `hsl()`, the `white` mermaid itself reports
+ * for some themes — is `undefined`, and the caller falls back to the theme's
+ * own stock page.
+ */
+export function normalizeMermaidOwnSurface(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined
   }
-  if (named === 'base') {
-    return { ownTheme: undefined, withoutAppPalette: false }
+  const text = raw.trim().toLowerCase()
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(text)) {
+    return text
   }
-  return { ownTheme: named, withoutAppPalette: true }
+  const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(text)
+  if (rgb && [rgb[1], rgb[2], rgb[3]].every((channel) => Number(channel) <= 255)) {
+    return `rgb(${Number(rgb[1])}, ${Number(rgb[2])}, ${Number(rgb[3])})`
+  }
+  return undefined
+}
+
+/**
+ * The page a diagram drawn in one of mermaid's themes belongs on, and whether
+ * that page is a dark one: the diagram's own, when its text set one this app
+ * will paint, otherwise the theme's stock page.
+ */
+function drawnThemePage(theme: MermaidLibraryTheme, ownSurface: unknown): { color: string; isDark: boolean } {
+  const own = normalizeMermaidOwnSurface(ownSurface)
+  if (own === undefined) {
+    return { color: MERMAID_LIBRARY_THEME_BACKGROUNDS[theme], isDark: MERMAID_LIBRARY_THEME_IS_DARK[theme] }
+  }
+  return { color: own, isDark: isDarkMermaidSurface(own) ?? MERMAID_LIBRARY_THEME_IS_DARK[theme] }
 }
 
 /**
@@ -825,13 +877,17 @@ export function resolveMermaidDrawnTheme(blockMode: unknown, ownTheme: unknown):
  * This is the ONE combination a transparent background cannot survive — a light
  * diagram floating on a dark surface, or the reverse — and `app` mode is never
  * in it by construction.
+ *
+ * `ownSurface` is the page a self-themed diagram's text gave it (see
+ * `normalizeMermaidOwnSurface`); when there is one, IT is what is light or dark,
+ * not the theme's name. A caller with no such page passes nothing.
  */
-export function mermaidThemeDisagreesWithApp(mode: unknown, appTheme: MermaidAppTheme): boolean {
+export function mermaidThemeDisagreesWithApp(mode: unknown, appTheme: MermaidAppTheme, ownSurface?: unknown): boolean {
   const normalized = normalizeMermaidDrawnTheme(mode) ?? DEFAULT_MERMAID_THEME_MODE
   if (normalized === 'app') {
     return false
   }
-  return MERMAID_LIBRARY_THEME_IS_DARK[normalized] !== appTheme.isDark
+  return drawnThemePage(normalized, ownSurface).isDark !== appTheme.isDark
 }
 
 /**
@@ -852,23 +908,27 @@ export function mermaidThemeDisagreesWithApp(mode: unknown, appTheme: MermaidApp
  * disagreement by construction, so `auto` paints nothing for it — which is why
  * `auto` can be the default without putting a visible box round every diagram
  * in the product.
+ *
+ * `ownSurface`, when a self-themed diagram's text set a page of its own, is that
+ * page — it replaces the theme's stock one in both decisions here.
  */
 export function resolveMermaidSurfaceColor(
   background: MermaidBackground,
   mode: unknown,
   appTheme: MermaidAppTheme,
+  ownSurface?: unknown,
 ): string | undefined {
   if (background === 'transparent') {
     return undefined
   }
-  if (background === 'auto' && !mermaidThemeDisagreesWithApp(mode, appTheme)) {
+  if (background === 'auto' && !mermaidThemeDisagreesWithApp(mode, appTheme, ownSurface)) {
     return undefined
   }
   const normalized = normalizeMermaidDrawnTheme(mode) ?? DEFAULT_MERMAID_THEME_MODE
   if (normalized === 'app') {
     return appTheme.tokens?.background
   }
-  return MERMAID_LIBRARY_THEME_BACKGROUNDS[normalized]
+  return drawnThemePage(normalized, ownSurface).color
 }
 
 /** The app's own surface, as a CSS variable, for a caller that resolved none. */

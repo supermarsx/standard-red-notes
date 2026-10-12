@@ -36,6 +36,7 @@ import {
   MERMAID_LIBRARY_THEMES,
   mermaidThemeDisagreesWithApp,
   normalizeMermaidLibraryTheme,
+  normalizeMermaidOwnSurface,
   resolveMermaidDrawnTheme,
   resolveMermaidOwnTheme,
   resolveMermaidSurfaceColor,
@@ -49,12 +50,21 @@ const DIAGRAM_SVG =
 
 const BODY = 'flowchart LR\n  A[Alpha] --> B[Beta]'
 const withFrontmatter = (theme: string): string => `---\nconfig:\n  theme: ${theme}\n---\n${BODY}`
+/** The form mermaid's own theming documentation teaches: `base`, and a colour. */
+const BASE_WITH_ITS_OWN_FILL = `---\nconfig:\n  theme: base\n  themeVariables:\n    primaryColor: "#ffcc00"\n---\n${BODY}`
+/** `base` made into a dark diagram by its own text. */
+const BASE_WITH_A_DARK_PAGE = `---\nconfig:\n  theme: base\n  themeVariables:\n    darkMode: true\n    background: "#1a1a2e"\n---\n${BODY}`
+/** Variables with NO theme key: the application's diagram, with larger text. */
+const VARIABLES_ONLY = `---\nconfig:\n  themeVariables:\n    fontSize: 20px\n    background: "#ffffff"\n---\n${BODY}`
 
 /** Mermaid's reading of each text, as the fake `parse` reports it. */
 const CONFIG_IN_TEXT = new Map<string, Record<string, unknown>>([
   [withFrontmatter('forest'), { theme: 'forest' }],
   [withFrontmatter('dark'), { theme: 'dark' }],
   [withFrontmatter('base'), { theme: 'base' }],
+  [BASE_WITH_ITS_OWN_FILL, { theme: 'base', themeVariables: { primaryColor: '#ffcc00' } }],
+  [BASE_WITH_A_DARK_PAGE, { theme: 'base', themeVariables: { darkMode: true, background: '#1a1a2e' } }],
+  [VARIABLES_ONLY, { themeVariables: { fontSize: '20px', background: '#ffffff' } }],
 ])
 
 const mermaidInitialize = jest.fn()
@@ -106,14 +116,13 @@ const APP_MODE: MermaidRenderTheme = { theme: 'base', themeVariables: { primaryC
 const PINNED_DARK: MermaidRenderTheme = { theme: 'dark' }
 
 describe('what a theme named in the diagram’s own text means for one render', () => {
-  it('replaces the app palette, for every theme mermaid ships but `base`', () => {
+  it('replaces the app palette, for every theme mermaid ships — `base` included', () => {
     for (const theme of MERMAID_LIBRARY_THEMES) {
-      const expected =
-        theme === 'base'
-          ? { ownTheme: undefined, withoutAppPalette: false }
-          : { ownTheme: theme, withoutAppPalette: true }
-      expect(resolveMermaidOwnTheme(theme, APP_MODE)).toEqual(expected)
+      expect(resolveMermaidOwnTheme(theme, APP_MODE)).toEqual({ ownTheme: theme, withoutAppPalette: true })
     }
+    // `base` was the exception once, and it was the same defect with a different
+    // fill: the app's near-white text on the diagram's own yellow, 1.15 to 1.
+    expect(resolveMermaidOwnTheme('base', APP_MODE).withoutAppPalette).toBe(true)
   })
 
   it('leaves the block’s theme standing when the text names none', () => {
@@ -183,6 +192,68 @@ describe('the surface is decided by the theme the diagram is DRAWN in', () => {
   it('still treats a name it does not know as the app’s', () => {
     expect(mermaidThemeDisagreesWithApp('nosuch', DARK_APP)).toBe(false)
     expect(resolveMermaidSurfaceColor('themed', 'nosuch', DARK_APP)).toBe('#16090f')
+  })
+})
+
+describe('a diagram that themes itself can give that theme a page of its own', () => {
+  it('paints `base`’s stock page when the text set none', () => {
+    expect(resolveMermaidSurfaceColor('auto', 'base', DARK_APP)).toBe('#f4f4f4')
+    expect(resolveMermaidSurfaceColor('auto', 'base', DARK_APP, undefined)).toBe('#f4f4f4')
+  })
+
+  it('goes by the page the text set, not by the theme’s name: a dark `base` agrees with a dark app', () => {
+    // By name `base` is light, and its stock page under a diagram whose text
+    // made it dark — light links and all — is light lines on a light page.
+    expect(mermaidThemeDisagreesWithApp('base', DARK_APP, '#1a1a2e')).toBe(false)
+    expect(resolveMermaidSurfaceColor('auto', 'base', DARK_APP, '#1a1a2e')).toBeUndefined()
+    expect(resolveMermaidSurfaceColor('themed', 'base', DARK_APP, '#1a1a2e')).toBe('#1a1a2e')
+    expect(mermaidThemeDisagreesWithApp('base', LIGHT_APP, '#1a1a2e')).toBe(true)
+    expect(resolveMermaidSurfaceColor('auto', 'base', LIGHT_APP, '#1a1a2e')).toBe('#1a1a2e')
+  })
+
+  it('works the other way round for a dark theme given a light page', () => {
+    expect(mermaidThemeDisagreesWithApp('dark', DARK_APP)).toBe(false)
+    expect(mermaidThemeDisagreesWithApp('dark', DARK_APP, '#ffffff')).toBe(true)
+    expect(resolveMermaidSurfaceColor('auto', 'dark', DARK_APP, 'rgb(255, 255, 255)')).toBe('rgb(255, 255, 255)')
+  })
+
+  it('never lets an own page speak for a diagram that follows the app', () => {
+    expect(mermaidThemeDisagreesWithApp('app', DARK_APP, '#ffffff')).toBe(false)
+    expect(resolveMermaidSurfaceColor('themed', 'app', DARK_APP, '#ffffff')).toBe('#16090f')
+  })
+
+  it('accepts a hex colour or an rgb() triple, whole, and hands back that and no more', () => {
+    expect(normalizeMermaidOwnSurface('#1A1A2E')).toBe('#1a1a2e')
+    expect(normalizeMermaidOwnSurface(' #333 ')).toBe('#333')
+    expect(normalizeMermaidOwnSurface('rgb(26,26, 46)')).toBe('rgb(26, 26, 46)')
+    expect(normalizeMermaidOwnSurface('RGB( 0 , 0 , 0 )')).toBe('rgb(0, 0, 0)')
+  })
+
+  /**
+   * The value comes out of a diagram's text — in a shared note, somebody
+   * else's — and goes into a `background`, a shorthand in which `url(…)` is as
+   * valid as a colour. So what is not exactly a colour this reads is refused
+   * outright, and the theme's stock page is used instead.
+   */
+  it.each([
+    ['a colour followed by an image', 'rgb(1,2,3) url(favicon.ico)'],
+    ['an image', 'url(https://example.invalid/x.png)'],
+    ['a hex followed by anything', '#fff url(x)'],
+    ['a second declaration', '#fff; background-image: url(x)'],
+    ['a channel out of range', 'rgb(256, 0, 0)'],
+    ['rgba', 'rgba(0, 0, 0, 0.5)'],
+    ['a colour name', 'white'],
+    ['hsl', 'hsl(240, 100%, 50%)'],
+    ['a var()', 'var(--sn-stylekit-background-color)'],
+    ['a hex of the wrong length', '#12345'],
+    ['an empty string', ''],
+    ['a number', 0x1a1a2e],
+    ['an object', { toString: () => '#ffffff' }],
+    ['nothing', undefined],
+  ])('refuses %s', (_name, value) => {
+    expect(normalizeMermaidOwnSurface(value)).toBeUndefined()
+    expect(resolveMermaidSurfaceColor('themed', 'base', DARK_APP, value)).toBe('#f4f4f4')
+    expect(mermaidThemeDisagreesWithApp('base', DARK_APP, value)).toBe(true)
   })
 })
 
@@ -339,10 +410,40 @@ describe('a real Mermaid block, in the dark app theme', () => {
     expect(paintedSurface()).toBe('')
   })
 
-  it('keeps the app palette, and the bare page, under `theme: base`', async () => {
+  /**
+   * THE case this rule was widened for. Measured in the running app before:
+   * `theme: base` with `primaryColor: "#ffcc00"` — the form mermaid's theming
+   * documentation teaches — drew the app's `rgb(234, 221, 224)` text on that
+   * yellow, 1.15 to 1, because `base` was the one theme still handed the app's
+   * palette.
+   */
+  it('renders `theme: base` with its own fill WITHOUT the app palette, on `base`’s page', async () => {
+    await mount(BASE_WITH_ITS_OWN_FILL)
+    expect(initializeCalls().map((config) => config.themeVariables !== undefined)).toEqual([true, false])
+    expect(lastInitialize()).toMatchObject({ theme: 'base', themeVariables: undefined })
+    expect(paintedSurface()).toBe('rgb(244, 244, 244)')
+  })
+
+  it('does the same for `theme: base` alone: the rule is the theme key, with no exception', async () => {
     await mount(withFrontmatter('base'))
+    expect(lastInitialize().themeVariables).toBeUndefined()
+    expect(paintedSurface()).toBe('rgb(244, 244, 244)')
+  })
+
+  it('paints nothing behind a `base` diagram whose own text made it dark', async () => {
+    await mount(BASE_WITH_A_DARK_PAGE)
+    expect(lastInitialize().themeVariables).toBeUndefined()
+    // Its page is `#1a1a2e`, which agrees with the dark app. `base`'s stock
+    // `#f4f4f4` here would sit under the light links mermaid draws for it.
+    expect(paintedSurface()).toBe('')
+  })
+
+  it('leaves a diagram that only sets variables — no theme — exactly as the app’s', async () => {
+    await mount(VARIABLES_ONLY)
     expect(initializeCalls()).toHaveLength(1)
-    expect(lastInitialize().themeVariables).toMatchObject({ background: '#16090f' })
+    expect(lastInitialize().themeVariables).toMatchObject({ darkMode: true, background: '#16090f' })
+    // Its `background: "#ffffff"` decides nothing: without a theme of its own
+    // the diagram is still the application's, on the application's page.
     expect(paintedSurface()).toBe('')
   })
 

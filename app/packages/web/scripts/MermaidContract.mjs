@@ -156,6 +156,12 @@ const pureTheme = (theme) => {
   mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme, fontFamily: FONT })
   return api.getConfig().themeVariables
 }
+/** What mermaid computes for the application's own theme, with nothing in the text. */
+const appThemeAlone = () => {
+  api.reset()
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', ...APP_THEME, fontFamily: FONT })
+  return api.getConfig().themeVariables
+}
 const palette = (variables) => ({
   mainBkg: variables.mainBkg,
   textColor: variables.textColor,
@@ -307,12 +313,9 @@ await check('the defect is real in this mermaid: the app palette is forced into 
   return `forest fill ${forced.mainBkg} with text ${text}`
 })
 
-await check('through the runtime, every theme but base is drawn clean', async () => {
+await check('through the runtime, every theme mermaid ships is drawn clean, base included', async () => {
   let checked = 0
   for (const theme of Settings.MERMAID_LIBRARY_THEMES) {
-    if (theme === 'base') {
-      continue
-    }
     const pure = palette(pureTheme(theme))
     for (const text of [frontmatter(`theme: ${theme}`, FLOW), `%%{init: {"theme":"${theme}"}}%%\n${FLOW}`]) {
       const result = await render(text)
@@ -330,25 +333,104 @@ await check('through the runtime, every theme but base is drawn clean', async ()
   return `${checked} renders`
 })
 
-await check('`theme: base` and unknown names keep the app palette', async () => {
-  const own = await render(frontmatter('theme: base\nthemeVariables:\n  primaryColor: "#ffcc00"', FLOW))
-  let variables = api.getConfig().themeVariables
-  assert(own.ownTheme === undefined, `base reported as ${own.ownTheme}`)
-  assert(variables.mainBkg === '#ffcc00', `the diagram's own colour was not applied: ${variables.mainBkg}`)
-  assert(variables.textColor === TOKENS.foreground, `the app's text colour was dropped: ${variables.textColor}`)
-  for (const name of ['nosuch', 'null']) {
-    const unknown = await render(frontmatter(`theme: "${name}"`, FLOW))
-    variables = api.getConfig().themeVariables
-    assert(unknown.ownTheme === undefined, `${name} reported as ${unknown.ownTheme}`)
-    assert(variables.textColor === TOKENS.foreground, `${name}: the app palette was dropped`)
-  }
-  const plain = await render(FLOW)
-  assert(
-    plain.ownTheme === undefined && api.getConfig().themeVariables.background === TOKENS.background,
-    'a plain diagram lost the app palette',
-  )
-  return 'base with its own colour, nosuch, null, and no theme at all'
-})
+const BASE_WITH_ITS_OWN_FILL = frontmatter('theme: base\nthemeVariables:\n  primaryColor: "#ffcc00"', FLOW)
+
+await check(
+  'the defect is real in this mermaid: under `theme: base` the app’s text lands on the diagram’s own fill',
+  async () => {
+    // `base` takes its text colour from the palette it is handed, not from the
+    // fill. If a later mermaid derived it from the fill, withholding the palette
+    // under `base` would be guarding nothing.
+    api.reset()
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', ...APP_THEME, fontFamily: FONT })
+    await mermaid.parse(BASE_WITH_ITS_OWN_FILL)
+    const forced = api.getConfig().themeVariables
+    assert(forced.mainBkg === '#ffcc00', `the diagram's own fill was not applied: ${forced.mainBkg}`)
+    assert(
+      forced.nodeTextColor === TOKENS.foreground,
+      `expected the app's text colour on it, got ${forced.nodeTextColor}`,
+    )
+    return `fill ${forced.mainBkg} with text ${forced.nodeTextColor}`
+  },
+)
+
+await check(
+  'through the runtime, `theme: base` with its own fill gets mermaid’s text colour, not the app’s',
+  async () => {
+    const result = await render(BASE_WITH_ITS_OWN_FILL)
+    const variables = api.getConfig().themeVariables
+    const pure = pureTheme('base')
+    assert(result.ownTheme === 'base', `reported ${result.ownTheme}`)
+    assert(variables.mainBkg === '#ffcc00', `the diagram's own fill was not applied: ${variables.mainBkg}`)
+    assert(
+      variables.nodeTextColor === pure.nodeTextColor,
+      `text is ${variables.nodeTextColor}, mermaid's own base gives ${pure.nodeTextColor}`,
+    )
+    assert(variables.nodeTextColor !== TOKENS.foreground, 'the app’s text colour is still on the diagram’s fill')
+    assert(
+      variables.background === pure.background,
+      `page is ${variables.background}, base's own is ${pure.background}`,
+    )
+    assert(result.ownSurface === undefined, `no page was set in the text, yet one came back: ${result.ownSurface}`)
+    return `fill ${variables.mainBkg}, text ${variables.nodeTextColor}, page ${variables.background}`
+  },
+)
+
+await check(
+  'a name mermaid does not know, and variables with no theme key, leave the app palette in place',
+  async () => {
+    for (const name of ['nosuch', 'null']) {
+      const unknown = await render(frontmatter(`theme: "${name}"`, FLOW))
+      assert(unknown.ownTheme === undefined, `${name} reported as ${unknown.ownTheme}`)
+      assert(api.getConfig().themeVariables.textColor === TOKENS.foreground, `${name}: the app palette was dropped`)
+    }
+    // No `theme` key: mermaid recomputes no palette, it lays the named variables
+    // over the one it was configured with. So the font size takes, the diagram is
+    // still the application's, and a `background` in such a text is nobody's page.
+    const sized = await render(frontmatter('themeVariables:\n  fontSize: "20px"\n  background: "#ffffff"', FLOW))
+    const variables = api.getConfig().themeVariables
+    assert(sized.ownTheme === undefined, `variables alone reported as ${sized.ownTheme}`)
+    assert(sized.ownSurface === undefined, `variables alone produced a page: ${sized.ownSurface}`)
+    assert(variables.fontSize === '20px', `the font size did not take: ${variables.fontSize}`)
+    assert(variables.textColor === TOKENS.foreground, `the app's text colour was dropped: ${variables.textColor}`)
+    assert(variables.mainBkg === palette(appThemeAlone()).mainBkg, `the app's fill was dropped: ${variables.mainBkg}`)
+    const plain = await render(FLOW)
+    assert(
+      plain.ownTheme === undefined && api.getConfig().themeVariables.background === TOKENS.background,
+      'a plain diagram lost the app palette',
+    )
+    return 'nosuch, null, variables with no theme key, and no config at all'
+  },
+)
+
+await check(
+  'a page the text sets is kept as written by every theme, and comes back as a colour or not at all',
+  async () => {
+    let pages = 0
+    for (const theme of Settings.MERMAID_LIBRARY_THEMES) {
+      const result = await render(frontmatter(`theme: ${theme}\nthemeVariables:\n  background: "#123456"`, FLOW))
+      const computed = api.getConfig().themeVariables.background
+      // What the runtime reports is read from the text. It is only the page if
+      // mermaid really uses the text's value untouched — for every theme.
+      assert(computed === '#123456', `${theme}: mermaid's page is ${computed}, the text said #123456`)
+      assert(result.ownSurface === '#123456', `${theme}: the runtime reported ${result.ownSurface}`)
+      pages++
+      // And a value that is not, whole, a colour never comes back — whether
+      // mermaid rejects the diagram for it or lets it through.
+      for (const hostile of ['rgb(1,2,3) url(favicon.ico)', 'white', 'hsl(240, 100%, 50%)']) {
+        let outcome
+        try {
+          outcome = await render(frontmatter(`theme: ${theme}\nthemeVariables:\n  background: "${hostile}"`, FLOW))
+        } catch {
+          continue
+        }
+        assert(outcome.ownSurface === undefined, `${theme}: "${hostile}" came back as a page: ${outcome.ownSurface}`)
+      }
+    }
+    counts.ownPages = pages
+    return `${pages} themes`
+  },
+)
 
 await check('a block pinned to a theme reports the theme its text draws instead', async () => {
   const result = await render(frontmatter('theme: forest', FLOW), { theme: 'dark' })

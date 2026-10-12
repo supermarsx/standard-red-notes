@@ -587,6 +587,9 @@ function MermaidComponent({
   // the diagram always belongs to the picture on screen — including the last
   // good one, kept while a newer source fails.
   const [ownTheme, setOwnTheme] = useState<MermaidLibraryTheme | undefined>(undefined)
+  // …and the page that text gave its theme, when it gave it one. Set with the
+  // theme, for the same reason.
+  const [ownSurface, setOwnSurface] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
   // Incremented to force a re-render even when the source/theme are unchanged
   // (the Reload button).
@@ -626,6 +629,7 @@ function MermaidComponent({
       if (!trimmed) {
         setSvg('')
         setOwnTheme(undefined)
+        setOwnSurface(undefined)
         setError(null)
         return
       }
@@ -653,6 +657,7 @@ function MermaidComponent({
         }
         setSvg(rendered.svg)
         setOwnTheme(rendered.ownTheme)
+        setOwnSurface(rendered.ownSurface)
         setError(null)
       } catch (e) {
         if (token !== renderTokenRef.current) {
@@ -1008,11 +1013,14 @@ function MermaidComponent({
                   // theme the picture was DRAWN in, which is the diagram's own
                   // when its text names one: a Forest diagram inside an
                   // app-themed block needs Forest's page behind it just as a
-                  // block pinned to Forest does.
+                  // block pinned to Forest does. And when that text gave its
+                  // theme a page of its own, that page, not the theme's stock
+                  // one: a `base` diagram with a dark `background` is dark.
                   backgroundColor={resolveMermaidSurfaceColor(
                     settings.background,
                     resolveMermaidDrawnTheme(settings.themeMode, ownTheme),
                     appTheme,
+                    ownSurface,
                   )}
                 >
                   <MermaidResizeHandle

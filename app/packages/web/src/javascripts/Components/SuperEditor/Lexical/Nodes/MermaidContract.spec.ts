@@ -35,8 +35,11 @@ const EXPECTED_CHECKS = [
   'the theme list matches the library, name for name',
   'each theme’s surface and polarity are the ones mermaid computes',
   'the defect is real in this mermaid: the app palette is forced into a named theme',
-  'through the runtime, every theme but base is drawn clean',
-  '`theme: base` and unknown names keep the app palette',
+  'through the runtime, every theme mermaid ships is drawn clean, base included',
+  'the defect is real in this mermaid: under `theme: base` the app’s text lands on the diagram’s own fill',
+  'through the runtime, `theme: base` with its own fill gets mermaid’s text colour, not the app’s',
+  'a name mermaid does not know, and variables with no theme key, leave the app palette in place',
+  'a page the text sets is kept as written by every theme, and comes back as a colour or not at all',
   'a block pinned to a theme reports the theme its text draws instead',
   'no text mermaid finds config in is turned away by the pre-check',
   'a theme named with an escaped key is honoured, which is why the pre-check is not a word search',
@@ -96,7 +99,8 @@ describe('the installed mermaid, asked directly', () => {
     // mostly accepts; every removal over the styled diagrams. A count that
     // drops to zero is a check that still says "ok" over nothing.
     expect(counts.themes).toBe(11)
-    expect(counts.ownThemeRenders).toBe(20)
+    expect(counts.ownThemeRenders).toBe(22)
+    expect(counts.ownPages).toBe(11)
     expect(counts.preCheckTexts).toBeGreaterThanOrEqual(15)
     expect(counts.secureProbes).toBeGreaterThanOrEqual(12)
     expect(counts.lockedKeys).toBeGreaterThanOrEqual(6)

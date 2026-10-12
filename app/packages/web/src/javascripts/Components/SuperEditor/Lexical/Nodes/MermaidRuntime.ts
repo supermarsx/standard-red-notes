@@ -1,4 +1,9 @@
-import { resolveMermaidOwnTheme, type MermaidLibraryTheme, type MermaidRenderTheme } from './MermaidSettings'
+import {
+  normalizeMermaidOwnSurface,
+  resolveMermaidOwnTheme,
+  type MermaidLibraryTheme,
+  type MermaidRenderTheme,
+} from './MermaidSettings'
 
 /**
  * Standard Red Notes — THE one place this app talks to mermaid.
@@ -102,6 +107,12 @@ export type MermaidRenderResult = {
    * box needs it to paint the right page behind the diagram.
    */
   ownTheme: MermaidLibraryTheme | undefined
+  /**
+   * The page that theme was given by the diagram's own text, when it set one
+   * this app will paint (`normalizeMermaidOwnSurface`); otherwise `undefined`,
+   * and the theme's stock page applies. Never set without `ownTheme`.
+   */
+  ownSurface: string | undefined
 }
 
 /**
@@ -179,6 +190,7 @@ export async function renderMermaidDiagram(request: MermaidRenderRequest): Promi
   return inTurn(async () => {
     configure(mermaid, siteConfig(request, true))
     let ownTheme: MermaidLibraryTheme | undefined
+    let ownSurface: string | undefined
     if (mermaidTextMayCarryConfig(request.text)) {
       // Mermaid's own reading of the text, so the app and mermaid cannot
       // disagree about what a piece of YAML means. A source it cannot parse
@@ -186,11 +198,16 @@ export async function renderMermaidDiagram(request: MermaidRenderRequest): Promi
       const { config } = await mermaid.parse(request.text)
       const own = resolveMermaidOwnTheme(config.theme, request.theme)
       ownTheme = own.ownTheme
+      // The page, too, when the text that names a theme also gives it one:
+      // mermaid keeps a `background` the text sets exactly as written, for
+      // every theme. Asked only of a diagram that themes itself — for any
+      // other the page is the block's to decide.
+      ownSurface = ownTheme === undefined ? undefined : normalizeMermaidOwnSurface(config.themeVariables?.background)
       if (own.withoutAppPalette) {
         configure(mermaid, siteConfig(request, false))
       }
     }
     const { svg } = await mermaid.render(request.id, request.text, request.measureIn)
-    return { svg, ownTheme }
+    return { svg, ownTheme, ownSurface }
   })
 }
