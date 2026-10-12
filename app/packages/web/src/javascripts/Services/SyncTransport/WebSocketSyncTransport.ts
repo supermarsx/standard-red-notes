@@ -167,6 +167,13 @@ export type WebSocketSyncTransportOptions = {
 }
 
 type TransportResponse = HttpResponse<RawSyncResponse>
+
+/** Whether the HTTP sync endpoint answered a round with a success, read off the status alone. */
+function isSuccessfulSyncResponse(response: TransportResponse | undefined): boolean {
+  const status = (response as { status?: unknown } | undefined)?.status
+
+  return typeof status === 'number' && status >= 200 && status < 300
+}
 type CapabilityProbeVerdict = 'present' | 'absent' | 'unknown'
 type PendingResult =
   AccountSyncTransportResult<TransportResponse> | AccountSyncTransportRecoveryResult<TransportResponse> | undefined
@@ -616,12 +623,45 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     return this.enqueue(() => this.recoverPendingOrdered(httpFallback))
   }
 
+  /**
+   * *** WHERE A SYNC ROUND IS COUNTED, AND WHY HERE. ***
+   *
+   * Every path through `executeOrdered` ends in exactly one of three ways: the
+   * worker's committed RESULT resolves it without the HTTP fallback ever being
+   * called; the fallback is called and its response is returned; or it rejects.
+   * So the fallback is wrapped to notice being called, and the round is recorded
+   * where the promise settles — one place, instead of a counter at each of the
+   * eight sites that can send a round to HTTP, where the ninth would be missed.
+   *
+   * An HTTP response that is not a success is `failed` and not `http`: the HTTP
+   * client resolves with an error response rather than throwing, and "carried by
+   * HTTP" must not be claimable by a 401 or a 500.
+   */
   execute(
     request: AccountSyncTransportRequest,
     httpFallback: AccountSyncHttpFallback<TransportResponse>,
     context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
-    return this.enqueue(() => this.executeOrdered(request, httpFallback, context))
+    let servedOverHttp: boolean | undefined
+    // EVERY argument is forwarded, by spread and not by name. The fallback takes
+    // the durable command's metadata as a second argument on a replay, and a
+    // wrapper declared with one parameter compiles and silently drops it.
+    const observedFallback: AccountSyncHttpFallback<TransportResponse> = async (...args) => {
+      const response = await httpFallback(...args)
+      servedOverHttp = isSuccessfulSyncResponse(response)
+      return response
+    }
+
+    return this.enqueue(() => this.executeOrdered(request, observedFallback, context)).then(
+      (result) => {
+        this.ledger.recordSyncRound(servedOverHttp === undefined ? 'socket' : servedOverHttp ? 'http' : 'failed')
+        return result
+      },
+      (error: unknown) => {
+        this.ledger.recordSyncRound('failed')
+        throw error
+      },
+    )
   }
 
   /**

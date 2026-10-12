@@ -1025,9 +1025,9 @@ function remedyForUnverifiedFileTransfer(): Remedy {
   return {
     code: 'FILE_TRANSFER_UNVERIFIED',
     summary:
-      'Nothing here is misconfigured as far as this screen can see, and nothing here establishes that a transfer works either. One real upload and read-back settles it, and no row on this screen can.',
+      'Run “File transfer round trip”. Nothing here is misconfigured as far as this screen can see, and nothing here establishes that a transfer works either: one real upload and read-back settles it.',
     steps: [
-      'Attach a small file to a note in this app and open it again. That exercises the whole authorized path — a valet token minted at auth, presented to the files service, accepted, and a ranged read completed — which is the part no probe on this screen touches.',
+      'Press Run all checks, or run “File transfer round trip” on the Checks tab. It uploads one throwaway object of random bytes, reads it back, compares it and deletes it; it creates no file in your account and touches none of yours. Attaching a small file to a note and opening it again establishes the same thing by hand. That exercises the whole authorized path — a valet token minted at auth, presented to the files service, accepted, and a ranged read completed — which is the part no probe on this screen touches.',
       'If that fails, read the files rows above as "the process is up and its storage answered" and nothing more. A credential the far end refuses and a stalled range request are both invisible to an unauthenticated readiness probe.',
       'Check VALET_TOKEN_SECRET and AUTH_JWT_SECRET agree across auth and the files service only where those services are configured SEPARATELY. On the images this repo ships the entrypoint exports both keys once, unprefixed, before supervisord starts, so a disagreement cannot arise there and chasing one is a dead end.',
     ],
@@ -1186,6 +1186,7 @@ function buildDatabaseBlock(
   status: Record<string, unknown> | undefined,
   datastore: DatastoreView,
   services: ServicesReading,
+  witness: WitnessOf,
 ): DiagnosticBlock {
   const health = isRecord(status?.health) ? status.health : undefined
   const auth = isRecord(health?.auth) ? health.auth : undefined
@@ -1322,6 +1323,12 @@ function buildDatabaseBlock(
                     'that a statement which changes no row was accepted or refused by the service that owns the connection',
                   cannotConfirm: 'that a real write, with rows to change, would succeed',
                   necessaryCondition: true,
+                  // A sync committed over the socket's durable lane IS a real
+                  // write to this store: the command is recorded before it is
+                  // answered. Where sync does not ride the socket there is no
+                  // write this pane can make without changing the operator's
+                  // data, and the row says that rather than "unknown".
+                  confirmedBy: witness('durable-sync'),
                 })
               : EVIDENCE_DIRECT,
         note: 'What a REAL write statement established, which no read can. The probe is a self-assignment under an impossible predicate, so it matches no row, takes no row lock and writes no undo record — and a read-only server, a read-only replica and a revoked UPDATE grant all refuse it while every read on this screen, including the auth readiness query above, still passes. "accepted" is reported as undetermined on purpose: a statement that changes nothing being accepted is necessary for a write to work and does not establish it, because a full volume, a constraint or a trigger refuses the real one. "refused" is conclusive and keeps its verdict. "not-attempted" is a deployment where the probe was not run rather than one that failed it.',
@@ -1758,6 +1765,11 @@ const PROBE_CANNOT_CONFIRM =
 const PROBE_WITNESS: Partial<Record<KnownService, WitnessId>> = {
   auth: 'admin-read',
   'websocket-gateway': 'negotiation',
+  // The three the checks exist for. Each is the service doing its own job for
+  // this session, which is what an unauthenticated readiness route cannot show.
+  'syncing-server': 'sync',
+  files: 'file-transfer',
+  revisions: 'revisions',
 }
 
 function probeEvidence(service: KnownService, outcome: ServiceOutcome, witness: WitnessOf): Evidence {
@@ -1837,6 +1849,7 @@ function buildCommunicationBlock(
   topology: DeploymentTopology | undefined,
   buildIdentified: boolean | undefined,
   witness: WitnessOf,
+  fileTransferTested = false,
 ): DiagnosticBlock {
   const rows: DiagnosticRow[] = []
   const filesTarget = filesProbeTarget(topology)
@@ -1953,7 +1966,9 @@ function buildCommunicationBlock(
    * look at. It is emitted whenever the files probe is reported at all, including —
    * especially — when that probe reads perfectly.
    */
-  if (services.byName.files?.outcome !== undefined) {
+  // Raised until the round trip has RUN, and not after: once it has, its own
+  // row says what happened and its own finding says what to do about a failure.
+  if (services.byName.files?.outcome !== undefined && !fileTransferTested) {
     findings.push(
       diagnosticFinding({
         code: safeConstant('FILE_TRANSFER_UNVERIFIED'),
@@ -1963,7 +1978,7 @@ function buildCommunicationBlock(
         // `untested` and not `undetermined`: nothing failed to arrive. A transfer
         // is a thing that can be tested and has not been, and the finding says how.
         verdict: 'untested',
-        evidence: evidenceUntested('attach a small file to a note in this app and open it again'),
+        evidence: evidenceUntested('run “File transfer round trip” on the Checks tab, or Run all checks'),
         remedy: remedyForUnverifiedFileTransfer(),
       }),
     )
@@ -2291,9 +2306,16 @@ export function buildBackendSection(input: BackendSectionInput = {}): SectionMod
   const blocks: DiagnosticBlock[] = [
     ...(checks === undefined ? [] : [checks]),
     buildReadBlock(status, input.statusError),
-    buildDatabaseBlock(status, datastore, services),
+    buildDatabaseBlock(status, datastore, services, witness),
     buildCacheBlock(status, input.topology),
-    buildCommunicationBlock(services, input.topology, input.buildIdentified, witness),
+    buildCommunicationBlock(
+      services,
+      input.topology,
+      input.buildIdentified,
+      witness,
+      input.checks?.some((reading) => reading.definition.id === 'file-transfer' && reading.outcome !== undefined) ===
+        true,
+    ),
     // The RAW optional, not a defaulted `{}`: an absent block is a server older
     // than it, and a present block with no verdict in it is a server that looked
     // and withheld one. Defaulting here would erase that distinction before the

@@ -60,32 +60,40 @@ const makeApplication = () => ({
     adminListUsers: jest.fn().mockResolvedValue({ data: { users: [], total: 0 } }),
   },
   // Diagnostics tab: reads the admin sync-diagnostics endpoint and the live
-  // transport directly off the application, not through legacyApi.
-  serverGetJsonRequest: jest.fn().mockResolvedValue({
-    status: 200,
-    ok: true,
-    data: {
-      gate: {
-        recorded: true,
-        gatewayAttached: true,
-        syncLaneEnabled: false,
-        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'configure REDIS_URL' }],
-        unmetCodes: ['REDIS_UNBOUND'],
-        files: {
-          advertised: false,
-          unmetCondition: 'FILES_INTERNAL_URL',
-          remedy: 'no INTERNAL files service URL is configured.',
-        },
-      },
-      live: { capabilities: [], unavailabilityReasons: ['sync-not-configured'], ticketAvailable: false },
-      protocol: { version: 1, serverOperations: ['SYNC_ITEMS', 'FILES_V1'] },
-    },
-  }),
+  // transport directly off the application, not through legacyApi. The pane's
+  // own read of that endpoint goes over plain HTTP, so both helpers answer it.
+  httpOnlyJsonRequest: jest
+    .fn()
+    .mockImplementation(async (_method: string, path: string) =>
+      path === '/v1/admin/sync-diagnostics' ? DIAGNOSTICS_ANSWER : { status: 404, ok: false, data: {} },
+    ),
+  serverGetJsonRequest: jest.fn().mockResolvedValue(DIAGNOSTICS_ANSWER),
   serverJsonRequest: jest
     .fn()
     .mockResolvedValue({ status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }),
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
 })
+
+const DIAGNOSTICS_ANSWER = {
+  status: 200,
+  ok: true,
+  data: {
+    gate: {
+      recorded: true,
+      gatewayAttached: true,
+      syncLaneEnabled: false,
+      unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'configure REDIS_URL' }],
+      unmetCodes: ['REDIS_UNBOUND'],
+      files: {
+        advertised: false,
+        unmetCondition: 'FILES_INTERNAL_URL',
+        remedy: 'no INTERNAL files service URL is configured.',
+      },
+    },
+    live: { capabilities: [], unavailabilityReasons: ['sync-not-configured'], ticketAvailable: false },
+    protocol: { version: 1, serverOperations: ['SYNC_ITEMS', 'FILES_V1'] },
+  },
+}
 
 let container: HTMLElement
 let root: Root
@@ -205,6 +213,8 @@ describe('Admin shell — top-level tab set after folding Audit into Logs', () =
     expect(container.textContent).toContain('Capability diagnostics')
     expect(container.textContent).toContain('REDIS_UNBOUND')
     expect(container.textContent).toContain('REDIS_URL')
-    expect(application.serverGetJsonRequest).toHaveBeenCalledWith('/v1/admin/sync-diagnostics')
+    // Over plain HTTP: a read on the socket lane carries no origin, so the
+    // gateway could not say whether this client's origin is admitted.
+    expect(application.httpOnlyJsonRequest).toHaveBeenCalledWith('GET', '/v1/admin/sync-diagnostics')
   })
 })

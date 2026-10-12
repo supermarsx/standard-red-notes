@@ -85,6 +85,27 @@ describe('LaneDegradationLedger', () => {
    * pane counted that READY as a recovery from a degradation that never happened.
    * It is a per-lane event, counted by cause, and the ring does not move.
    */
+  it('counts each sync round against what carried it, and remembers only the last one', () => {
+    const time = clock()
+    const ledger = new LaneDegradationLedger({ now: time.now })
+
+    time.advance(1_000)
+    ledger.recordSyncRound('http')
+    time.advance(2_000)
+    ledger.recordSyncRound('socket')
+    ledger.recordSyncRound('socket')
+    time.advance(500)
+    ledger.recordSyncRound('failed')
+
+    const view = ledger.view()
+
+    expect(view.syncRoundCounts).toEqual({ socket: 2, http: 1, failed: 1 })
+    expect(view.lastSyncRound).toEqual({ carrier: 'failed', msSinceLedgerStart: 3_500 })
+    // A sync round is not a transition and not a degradation.
+    expect(view.transitions).toEqual([])
+    expect(view.fallbackCounts).toEqual({})
+  })
+
   it('counts a lane standing down on a live socket without recording a transition', () => {
     const ledger = new LaneDegradationLedger({ now: () => 0 })
     ledger.recordTransition('READY', undefined, false)
@@ -390,6 +411,8 @@ describe('LaneDegradationLedger', () => {
       controlPlaneRejectionsByStatus: { 401: 0, 498: 0 },
       fallbackCounts: {},
       laneStandDownCounts: {},
+      // Zero for every carrier, and NO last round: "none yet" is not a carrier.
+      syncRoundCounts: { socket: 0, http: 0, failed: 0 },
       transitions: [],
       transitionsDropped: 0,
       recordingForMs: 0,
@@ -431,6 +454,7 @@ describe('LaneDegradationLedger', () => {
         'fallbackCounts',
         'laneStandDownCounts',
         'recordingForMs',
+        'syncRoundCounts',
         'transitions',
         'transitionsDropped',
       ].sort(),

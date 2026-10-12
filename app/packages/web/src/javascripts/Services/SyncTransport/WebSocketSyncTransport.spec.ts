@@ -164,6 +164,10 @@ describe('WebSocketSyncTransport', () => {
     const result = await execution
     expect(result.response).toEqual(response('ws-next'))
     expect(fallback).not.toHaveBeenCalled()
+    // The round is counted against the carrier that settled it: a committed
+    // RESULT, with the HTTP fallback never called.
+    expect(transport.laneDegradationLedger.syncRoundCounts).toEqual({ socket: 1, http: 0, failed: 0 })
+    expect(transport.laneDegradationLedger.lastSyncRound?.carrier).toBe('socket')
     expect(worker.posts).not.toContainEqual({ type: 'CHECKPOINT_DURABLE', commandId: 'command-1' })
 
     const checkpoint = result.markCheckpointDurable?.() as Promise<void>
@@ -672,10 +676,29 @@ describe('WebSocketSyncTransport', () => {
     })
     await expect(unsupported.execute(request(), fallback)).resolves.toEqual({ response: response('http') })
     expect(worker.posts).toHaveLength(0)
+    expect(unsupported.laneDegradationLedger.syncRoundCounts).toEqual({ socket: 0, http: 1, failed: 0 })
 
     const httpOnly = createTransport({ isHttpOnly: () => true })
     await expect(httpOnly.execute(request('legacy'), fallback)).resolves.toEqual({ response: response('http') })
     expect(worker.posts).toHaveLength(0)
+  })
+
+  /**
+   * "Carried by HTTP" must not be claimable by a refusal. The HTTP client resolves
+   * with an error response instead of throwing, so the status is what is read.
+   */
+  it('counts a sync round the HTTP endpoint refused, or that threw, as failed and never as carried', async () => {
+    const refused = createTransport({ isHttpOnly: () => true })
+    const unauthorized = { ...response('http'), status: 401 } as HttpResponse<RawSyncResponse>
+    await refused.execute(request(), jest.fn().mockResolvedValue(unauthorized))
+
+    expect(refused.laneDegradationLedger.syncRoundCounts).toEqual({ socket: 0, http: 0, failed: 1 })
+
+    const threw = createTransport({ isHttpOnly: () => true })
+    await expect(threw.execute(request(), jest.fn().mockRejectedValue(new Error('offline')))).rejects.toThrow('offline')
+
+    expect(threw.laneDegradationLedger.syncRoundCounts).toEqual({ socket: 0, http: 0, failed: 1 })
+    expect(threw.laneDegradationLedger.lastSyncRound?.carrier).toBe('failed')
   })
 
   it('falls back when capability negotiation is absent and never exposes a session token to the worker', async () => {

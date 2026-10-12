@@ -412,7 +412,11 @@ describe('buildDiagnosticsReport — what it says', () => {
     expect(report).toContain('- [NOT WORKING] Socket ticket: refused with HTTP 503')
     expect(report).not.toContain('[NOT WORKING] This tab’s live socket')
     // It leaves the denominator, and is named as what it is.
-    expect(report).toContain('1 of 4 checks passed, 2 not run yet, 1 did not pass, 1 had nothing to test here.')
+    // The denominator is the REGISTRY less the one with nothing to test, so a
+    // check added later cannot be left out of it.
+    expect(report).toContain(
+      `1 of ${CHECK_IDS.length - 1} checks passed, ${CHECK_IDS.length - 3} not run yet, 1 did not pass, 1 had nothing to test here.`,
+    )
   })
 
   it('says so when the topology was not reported, instead of guessing one', () => {

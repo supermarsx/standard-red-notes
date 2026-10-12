@@ -471,6 +471,20 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Standard Red Notes: the socket's file lane, READ side only, for the
+   * diagnostics pane's file round trip.
+   *
+   * Narrowed to the two members that check uses on purpose. It reads a throwaway
+   * object back over the lane and never uploads over it: an upload on the socket
+   * is accounted differently from one over HTTP, and a diagnostic must not be the
+   * thing that moves the usage figure it reports.
+   */
+  public get syncTransportFileLane():
+    Pick<WebSocketSyncTransport, 'isFileLaneAvailable' | 'downloadFileOverSocket'> | undefined {
+    return this._webSocketSyncTransport
+  }
+
+  /**
    * Install websocket-preferred account sync for capable browsers. Capability
    * and one-use ticket requests stay on the authenticated main-thread client;
    * no long-lived session token is ever posted to the worker.
@@ -1706,6 +1720,29 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    * server that has not deployed the feature yet) from an actual payload and
    * degrade gracefully instead of throwing on a non-JSON error page.
    */
+  /**
+   * {@link serverGetJsonRequest}, plus WHICH LANE CARRIED THE READ.
+   *
+   * The same two steps in the same order — the socket's control-plane lane when
+   * it will take the request, plain HTTP otherwise — with the answer to "which"
+   * returned instead of discarded. It exists for the diagnostics pane, whose
+   * control-plane check used to report the lane by INFERENCE ("API_RPC is
+   * negotiated, so the socket carries it"): true of a healthy socket, and exactly
+   * wrong for the stranded one that check is there to catch, where the lane
+   * refuses the read and HTTP quietly serves it.
+   */
+  public async serverGetJsonRequestObservingLane<T>(
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T; carriedBy: 'socket' | 'http' }> {
+    const overSocket = await this.controlPlaneRpc<T>('GET', path, undefined, signal)
+    if (overSocket) {
+      return { ...overSocket, carriedBy: 'socket' }
+    }
+
+    return { ...(await this.httpOnlyJsonRequest<T>('GET', path, undefined, signal)), carriedBy: 'http' }
+  }
+
   public async serverGetJsonRequest<T>(
     path: string,
     signal?: AbortSignal,

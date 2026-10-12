@@ -1386,4 +1386,8 @@ export type LaneDegradationLedgerView = {
    * older than the counter, which is not the same as none having happened.
    */
   readonly laneStandDownCounts?: Readonly<Partial<Record<SyncFallbackReason, number>>>
+  /** Sync rounds this tab settled, by what carried them. */
+  readonly syncRoundCounts?: Readonly<Record<'socket' | 'http' | 'failed', number>>
+  /** The most recent sync round, as an offset from the start of the ledger. */
+  readonly lastSyncRound?: { readonly carrier: 'socket' | 'http' | 'failed'; readonly msSinceLedgerStart: number }
 }

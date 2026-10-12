@@ -4,11 +4,16 @@ import { buildBrowserSection, type BrowserObservations } from './browserSection'
 import {
   buildWitnessBoard,
   CHECK_IDS,
+  describeControlPlaneRead,
+  describeFileTransfer,
   describeMarkerCheck,
+  describeRevisionsRead,
+  describeSyncRound,
   readingsFrom,
   type CheckOutcome,
   type CheckReading,
 } from './diagnosticChecks'
+import type { FileTransferResult } from './diagnosticFileTransfer'
 import {
   COMPOSE_GRPC_DIAGNOSTICS,
   COMPOSE_GRPC_SERVER_STATUS,
@@ -52,24 +57,23 @@ const REVISION = '70cf746a7290e224044197392dcc9ef149099bba'
 const MARKER = { revision: REVISION, version: 'src-70cf746a7290' }
 
 /**
- * The captured compose payload, as the OPERATOR's deployment and the TAB's read
- * differ from the capture:
+ * The captured compose payload, as the OPERATOR's deployment differs from the
+ * capture: it was taken over plain HTTP on loopback, so the session cookie is not
+ * Secure there. Theirs is HTTPS behind a reverse proxy, where it is.
  *
- *   - the capture was taken over plain HTTP on loopback, so the session cookie is
- *     not Secure there. The operator's deployment is HTTPS behind a reverse proxy,
- *     where it is;
- *   - the capture was made with an HTTP-only read, which carries the page's origin.
- *     The tab reads through the app's ordinary helper, which rides the socket's
- *     control-plane lane when the socket is up — and that lane re-enters the
- *     gateway with no origin at all, so the gateway cannot say whether this
- *     client's origin would be admitted. That is the reading the operator saw.
+ * The capture was made with an HTTP-only read, which carries the page's origin —
+ * and that is now how the tab reads it too. It used to go through the app's
+ * ordinary helper, which rides the socket's control-plane lane and re-enters the
+ * gateway with no origin at all, so the gateway could not say whether this
+ * client's origin would be admitted. `AS_THE_OPERATOR_SAW_IT` is that reading,
+ * kept so the difference stays asserted.
  */
-const { originAdmitted: _capturedOverHttp, ...admissionOverTheSocketLane } = COMPOSE_GRPC_DIAGNOSTICS.admission ?? {}
 const AS_THE_TAB_READS_IT: SyncDiagnosticsPayload = {
   ...COMPOSE_GRPC_DIAGNOSTICS,
   runtime: { ...COMPOSE_GRPC_DIAGNOSTICS.runtime, cookieSecure: true },
-  admission: admissionOverTheSocketLane,
 }
+const { originAdmitted: _capturedOverHttp, ...admissionOverTheSocketLane } = COMPOSE_GRPC_DIAGNOSTICS.admission ?? {}
+const AS_THE_OPERATOR_SAW_IT: SyncDiagnosticsPayload = { ...AS_THE_TAB_READS_IT, admission: admissionOverTheSocketLane }
 
 const transport: TransportStatusInput = { state: 'READY', operations: [...NEGOTIATED_OPERATIONS] }
 
@@ -89,6 +93,10 @@ const ledger: LaneLedgerSectionView = {
   // On the operator's screen it was a second READY in the ring and a fallback
   // reason on a READY transport; it is counted here, where it is what it is.
   laneStandDownCounts: { 'reconnect-gap': 1 },
+  // What the transport counts where each round settles: the page's first sync
+  // went over HTTP before the socket was up, and every one since over the socket.
+  syncRoundCounts: { socket: 41, http: 1, failed: 0 },
+  lastSyncRound: { carrier: 'socket', msSinceLedgerStart: 2_318_000 },
   recordingForMs: 2_331_000,
 }
 
@@ -150,9 +158,17 @@ const account: AccountObservations = {
   fileCensus: 'present',
   protocolVersion: 1,
   serverOperations: [...NEGOTIATED_OPERATIONS],
-  // The reading the pane has today: the flags read lands and carries neither flag.
+  // Both flags, read through the gateway's envelope. The read used to look for
+  // them at the top of the body and report that it carried none.
   flagReading: 'read-carried-no-flags',
+  liveSyncEnabledForAccount: true,
+  collaborationEnabledForAccount: true,
 }
+
+/** The same account as the pane read it before the envelope was unwrapped. */
+const accountWithoutFlags: AccountObservations = { ...account }
+delete accountWithoutFlags.liveSyncEnabledForAccount
+delete accountWithoutFlags.collaborationEnabledForAccount
 
 const passed = (id: CheckOutcome['id'], result: string): CheckOutcome => ({
   id,
@@ -171,18 +187,38 @@ const checksWith = (run: boolean): readonly CheckReading[] =>
       ? {
           capabilities: passed('capabilities', 'advertises 1 capability entry'),
           ticket: passed('ticket', 'issued; never redeemed, and it expires on its own'),
-          'control-plane': passed('control-plane', 'answered; API_RPC is negotiated, so the socket lane carries it'),
+          'control-plane': {
+            id: 'control-plane',
+            ...describeControlPlaneRead({ status: 200, ok: true, carriedBy: 'socket', apiRpcNegotiated: true }),
+          },
+          sync: {
+            id: 'sync',
+            ...describeSyncRound({
+              before: { socket: 40, http: 1, failed: 0 },
+              after: { socket: 41, http: 1, failed: 0 },
+              socketCarriesSync: true,
+            }),
+          },
+          revisions: { id: 'revisions', ...describeRevisionsRead({ status: 200 }) },
+          'file-transfer': { id: 'file-transfer', ...describeFileTransfer(ROUND_TRIP) },
         }
       : {}),
   })
+
+/** The file round trip as it comes back on a healthy compose stack. Measured, not assumed. */
+const ROUND_TRIP: FileTransferResult = { socketRead: 'matched', cleanup: 'deleted', usage: 'returned' }
 
 const sectionsFor = (
   payload: SyncDiagnosticsPayload,
   serverStatus: unknown,
   checks: readonly CheckReading[],
+  observed: AccountObservations = account,
 ): Record<SectionId, SectionModel> => {
+  const fileCheckRan = checks.some((reading) => reading.definition.id === 'file-transfer' && reading.outcome)
   const witnesses = buildWitnessBoard({
     checks,
+    ...(ledger.syncRoundCounts === undefined ? {} : { syncRounds: ledger.syncRoundCounts }),
+    ...(fileCheckRan ? { fileSocketRead: ROUND_TRIP.socketRead } : {}),
     transport: { state: transport.state, operations: transport.operations, deferred: false },
     ...(payload.protocol?.serverOperations === undefined
       ? {}
@@ -214,7 +250,7 @@ const sectionsFor = (
       witnesses,
     }),
     account: buildAccountSection({
-      observations: account,
+      observations: observed,
       adminAccess: { payloadRead: true },
       checks,
       witnesses,
@@ -244,9 +280,11 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
   it('is a real deployment and not an empty one', () => {
     expect(everyRow(run).length).toBeGreaterThan(180)
     expect(COMPOSE_GRPC_DIAGNOSTICS.deployment?.boundServiceProxy).toBe('grpc')
-    // The capture itself DID carry the origin answer; the tab's read does not.
+    // The capture carries the origin answer, and so does the tab's read now. The
+    // reading the operator saw did not.
     expect(COMPOSE_GRPC_DIAGNOSTICS.admission?.originAdmitted).toBe(true)
-    expect(AS_THE_TAB_READS_IT.admission?.originAdmitted).toBeUndefined()
+    expect(AS_THE_TAB_READS_IT.admission?.originAdmitted).toBe(true)
+    expect(AS_THE_OPERATOR_SAW_IT.admission?.originAdmitted).toBeUndefined()
     expect(_capturedOverHttp).toBe(true)
     expect(checksWith(true).every((reading) => reading.outcome?.state === 'pass')).toBe(true)
     expect(checksWith(true)).toHaveLength(CHECK_IDS.length)
@@ -340,55 +378,101 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
    * NOT OK. *** The one check that writes has not been asked to, and that row is
    * what says so. An OK nobody tested is the claim this pane exists to refuse.
    */
-  it('reads not-tested, and names the check, while the check that writes has not run', () => {
-    const untested = everyRow(notRun).filter(({ row }) => row.verdict === 'untested')
+  it('reads not-tested, and names the check, while the checks have not run', () => {
+    const blocking = everyRow(notRun).filter(({ row }) => BLOCKS_OK[row.verdict])
 
-    expect(labelsOf(untested)).toContain('websocket: Socket ticket')
-    for (const { row } of untested) {
-      expect(row.caveat).toContain('Not tested yet: ')
-    }
-    expect(notRun.websocket.worstVerdict).not.toBe('healthy')
-    expect(BLOCKS_OK[triage({ sections: notRun }).sectionWorst]).toBe(true)
-  })
-
-  /**
-   * *** WHAT STILL KEEPS THIS DEPLOYMENT OFF "OK" ONCE EVERY CHECK HAS PASSED —
-   * NAMED, ROW BY ROW. ***
-   *
-   * Thirty-three capped rows used to read Unknown here for ever. Each row below
-   * is one that is still unestablished, with the reason, and the list is asserted
-   * EXACTLY: a row that starts blocking and is not written down here fails this
-   * test, and so does a row that stops blocking and is left on the list. It is
-   * the pane's remaining debt in one place, and it is meant to shrink — each
-   * entry names the check that retires it.
-   */
-  const STILL_UNESTABLISHED: Record<string, string> = {
-    'websocket: This client’s origin admitted':
-      'the pane’s read rides the socket lane, which carries no origin; needs an HTTP read of the admission block',
-    'environment: Internal gRPC auth secret':
-      'that the gateway and the syncing server hold the SAME secret; needs a sync that crosses the durable lane',
-    'environment: WEBSOCKET_SYNC_FILES_URL': 'needs a file transfer over the socket lane',
-    'environment: VALET_TOKEN_SECRET': 'needs an authorized file transfer',
-    'backend: Database write probe': 'a zero-row write was accepted; needs a real write observed landing',
-    'backend: Syncing server probe': 'needs an authorized sync round trip',
-    'backend: Files service probe': 'needs an authorized file transfer',
-    'backend: Revisions service probe': 'needs an authorized revisions read',
-    'account: Live sync for this account': 'the flags read does not unwrap the gateway’s envelope',
-    'account: Collaboration permitted for this account': 'the flags read does not unwrap the gateway’s envelope',
-  }
-
-  it('is kept off OK, once every check has passed, by exactly the rows it says it is', () => {
-    const blocking = everyRow(run).filter(({ row }) => BLOCKS_OK[row.verdict])
-
-    expect(labelsOf(blocking).sort()).toEqual(Object.keys(STILL_UNESTABLISHED).sort())
-    // Every one of them is something this pane could not establish — none is a
-    // fault, and none is a check left unrun.
+    // NOTHING is "unknown" here. Every row that keeps this deployment off OK
+    // before the checks run is one a check settles, and says which.
     for (const { section, row } of blocking) {
       expect({ label: `${section}: ${row.label}`, verdict: row.verdict }).toEqual({
         label: `${section}: ${row.label}`,
-        verdict: 'undetermined',
+        verdict: 'untested',
+      })
+      expect(row.caveat).toContain('Not tested yet: ')
+    }
+    expect(labelsOf(blocking)).toEqual(
+      expect.arrayContaining([
+        'websocket: Socket ticket',
+        'backend: Sync round trip',
+        'backend: Revision history read',
+        'backend: File transfer round trip',
+      ]),
+    )
+
+    // The rows a check exists FOR name that check, so "not tested" is an
+    // instruction and not a shrug.
+    const settledBy: Record<string, string> = {
+      'backend: Syncing server probe': 'Sync round trip',
+      'backend: Revisions service probe': 'Revision history read',
+      'backend: Files service probe': 'File transfer round trip',
+      'environment: VALET_TOKEN_SECRET': 'File transfer round trip',
+      'environment: WEBSOCKET_SYNC_FILES_URL': 'File transfer round trip',
+    }
+    for (const [label, check] of Object.entries(settledBy)) {
+      const found = blocking.find(({ section, row }) => `${section}: ${row.label}` === label)
+
+      expect({ label, caveat: found?.row.caveat }).toEqual({
+        label,
+        caveat: expect.stringContaining(`run “${check}”`),
       })
     }
+
+    expect(notRun.websocket.worstVerdict).not.toBe('healthy')
+    expect(triage({ sections: notRun }).sectionWorst).toBe('untested')
+  })
+
+  /**
+   * *** THE POINT OF THE WHOLE PANE: A HEALTHY DEPLOYMENT CAN SAY SO. ***
+   *
+   * Thirty-three capped rows used to read Unknown here for ever, and after the
+   * verdict split ten still did — each named in this file, with the check that
+   * would retire it. Those checks exist now. Asserted EXACTLY: not one row of the
+   * five sections may keep a healthy deployment off OK once the checks have
+   * passed, and a row that starts doing so fails here by name.
+   */
+  it('reaches OK once every check has passed, with nothing left unestablished', () => {
+    const blocking = everyRow(run).filter(({ row }) => BLOCKS_OK[row.verdict])
+
+    expect(labelsOf(blocking)).toEqual([])
+    for (const id of SECTION_IDS) {
+      expect({ id, worst: run[id].worstVerdict }).toEqual({ id, worst: 'healthy' })
+    }
+    expect(triage({ sections: run }).sectionWorst).toBe('healthy')
+  })
+
+  /**
+   * And it is not a green bought by reclassifying. Each of the ten is OK because
+   * something OBSERVED it — take the observation away and the row goes back to
+   * blocking, by itself, with the rest unmoved.
+   */
+  it('owes each of those rows to an observation, and loses the row when the observation is taken away', () => {
+    const blockingIn = (sections: Record<SectionId, SectionModel>): string[] =>
+      labelsOf(everyRow(sections).filter(({ row }) => BLOCKS_OK[row.verdict])).sort()
+
+    // The read that rode the socket lane carried no origin.
+    expect(blockingIn(sectionsFor(AS_THE_OPERATOR_SAW_IT, COMPOSE_GRPC_SERVER_STATUS, checksWith(true)))).toEqual([
+      'websocket: This client’s origin admitted',
+    ])
+
+    // The flags read that did not unwrap the gateway's envelope carried neither flag.
+    expect(
+      blockingIn(sectionsFor(AS_THE_TAB_READS_IT, COMPOSE_GRPC_SERVER_STATUS, checksWith(true), accountWithoutFlags)),
+    ).toEqual(['account: Collaboration permitted for this account', 'account: Live sync for this account'])
+
+    // A check that FAILED refutes the rows that rested on it, and does not leave them green.
+    const failedTransfer = readingsFrom({
+      ...Object.fromEntries(checksWith(true).map((reading) => [reading.definition.id, reading.outcome])),
+      'file-transfer': {
+        id: 'file-transfer',
+        ...describeFileTransfer({ failedAt: 'open', socketRead: 'not-reached', cleanup: 'deleted', usage: 'returned' }),
+      },
+    } as Partial<Record<CheckOutcome['id'], CheckOutcome>>)
+    const withFailedTransfer = sectionsFor(AS_THE_TAB_READS_IT, COMPOSE_GRPC_SERVER_STATUS, failedTransfer)
+
+    expect(withFailedTransfer.backend.worstVerdict).toBe('broken')
+    expect(blockingIn(withFailedTransfer)).toContain('backend: File transfer round trip')
+    const filesProbe = everyRow(withFailedTransfer).find(({ row }) => String(row.label) === 'Files service probe')
+    expect(filesProbe?.row.verdict).not.toBe('healthy')
   })
 
   /**
@@ -466,7 +550,16 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
     const top = report.slice(0, report.indexOf('## What needs attention'))
 
     expect(top).toContain(`Build: revision ${REVISION}, version src-70cf746a7290, stamped yes`)
-    expect(top).toContain('| Browser | OK |')
+    expect(top).toContain('**OK** — ')
+    for (const title of [
+      'WebSocket',
+      'Environment & setup',
+      'Database & internal comms',
+      'Account, space & requirements',
+      'Browser',
+    ]) {
+      expect(top).toContain(`| ${title} | OK |`)
+    }
     expect(top).toContain(`- Checks: ${CHECK_IDS.length} of ${CHECK_IDS.length} checks passed.`)
     expect(top).not.toContain('NOT WORKING** — ')
     // The census is one sentence in which each count owns its words.

@@ -8,7 +8,11 @@ import {
   CHECK_STATES,
   checkRow,
   CHECKS,
+  describeControlPlaneRead,
+  describeFileTransfer,
   describeMarkerCheck,
+  describeRevisionsRead,
+  describeSyncRound,
   howToRun,
   LIVE_CHECK_IDS,
   PASSIVE_WITNESS_IDS,
@@ -23,6 +27,13 @@ import {
   type CheckState,
   type WitnessTransport,
 } from './diagnosticChecks'
+import {
+  FILE_SOCKET_READS,
+  FILE_TRANSFER_CLEANUPS,
+  FILE_TRANSFER_STAGES,
+  FILE_TRANSFER_USAGES,
+  type FileTransferResult,
+} from './diagnosticFileTransfer'
 import {
   readingOf,
   safeConstant,
@@ -93,12 +104,29 @@ describe('the check registry', () => {
   it('makes every check that writes say what it writes, and every other one say it writes nothing', () => {
     const operator = CHECK_IDS.filter((id) => CHECKS[id].mode === 'operator')
 
-    expect(operator).toEqual(['ticket'])
+    expect(operator).toEqual(['ticket', 'file-transfer'])
     expect(CHECKS.ticket.does).toContain('mint ONE short-lived, single-use socket ticket')
     expect(CHECKS.ticket.does).toContain('never redeemed')
     expect(CHECKS.ticket.does).toContain('Nothing else is written')
+    // The one check that stores something says how much, that it is not a file of
+    // the operator's, that theirs are untouched, and what happens when it fails.
+    const transfer = CHECKS['file-transfer'].does
+    expect(transfer).toContain('Uploads ONE throwaway object of 16 KiB of random bytes')
+    expect(transfer).toContain('then deletes it')
+    expect(transfer).toContain('No file item is created')
+    expect(transfer).toContain('none of your own files is read, changed or removed')
+    expect(transfer).toContain('deleted even when an earlier step fails')
+    expect(transfer).toContain('if the delete itself fails, the result says so')
+    // *** WHY THE UPLOAD IS HTTP AND ONLY THE READ-BACK IS THE SOCKET. *** The
+    // consent says which lane writes; a check that uploaded over the socket would
+    // be accounted differently and could leave the usage figure wrong.
+    expect(transfer).toContain('over HTTP, under an identifier made up for this check')
+
     for (const id of CHECK_IDS.filter((candidate) => CHECKS[candidate].mode !== 'operator')) {
-      expect({ id, says: /Read-only|Sends nothing/.test(CHECKS[id].does) }).toEqual({ id, says: true })
+      expect({ id, says: /Read-only|Sends nothing|makes no change of its own/.test(CHECKS[id].does) }).toEqual({
+        id,
+        says: true,
+      })
     }
   })
 })
@@ -394,5 +422,326 @@ describe('the witness board', () => {
     // A database that has not finished loading is still loading — not unopenable.
     expect(read({ checks: [], localDatabaseLoaded: true })['local-database'].state).toBe('confirmed')
     expect(read({ checks: [], localDatabaseLoaded: false })['local-database'].state).toBe('unknown')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* The checks that test a whole path                                          */
+/* -------------------------------------------------------------------------- */
+
+describe('describeSyncRound', () => {
+  const none = { socket: 4, http: 1, failed: 0 }
+
+  it('reads the round off the difference between two counter readings, never off the call returning', () => {
+    const overSocket = describeSyncRound({ before: none, after: { ...none, socket: 5 }, socketCarriesSync: true })
+    const nothing = describeSyncRound({ before: none, after: none, socketCarriesSync: true })
+
+    expect(overSocket.state).toBe('pass')
+    expect(String(overSocket.result)).toBe('completed over the socket')
+    // The call returned in both cases. Only one of them is a sync.
+    expect(nothing.state).toBe('unknown')
+    expect(String(nothing.result)).toBe('no sync round settled')
+  })
+
+  /**
+   * *** HTTP IS A WORKING SYNC, AND "WITH SOMETHING LOST" ONLY WHERE THE SOCKET
+   * HAD AGREED TO CARRY IT. *** The control is the same round on a tab whose
+   * socket does not carry sync: that is the lane working as deployed.
+   */
+  it('calls an HTTP round degraded only on a tab whose socket negotiated sync', () => {
+    const after = { ...none, http: 2 }
+    const agreed = describeSyncRound({ before: none, after, socketCarriesSync: true })
+    const notOffered = describeSyncRound({ before: none, after, socketCarriesSync: false })
+
+    expect(agreed.state).toBe('degraded')
+    expect(String(agreed.result)).toBe('completed over HTTP, although this socket negotiated SYNC_ITEMS')
+    expect(notOffered.state).toBe('pass')
+    expect(String(notOffered.result)).toBe('completed over HTTP')
+  })
+
+  it('fails only when a round was tried and completed on no lane', () => {
+    const failed = describeSyncRound({ before: none, after: { ...none, failed: 1 }, socketCarriesSync: true })
+    // A failure followed by a success in the same window is a sync that worked.
+    const recovered = describeSyncRound({
+      before: none,
+      after: { socket: 5, http: 1, failed: 1 },
+      socketCarriesSync: true,
+    })
+
+    expect(failed.state).toBe('fail')
+    expect(recovered.state).toBe('pass')
+  })
+
+  it('says it could not observe the round on a build with no transport to count with', () => {
+    expect(describeSyncRound({ before: undefined, after: undefined, socketCarriesSync: false }).state).toBe('unknown')
+  })
+})
+
+describe('describeControlPlaneRead', () => {
+  /**
+   * *** THE LANE IS MEASURED. *** This check said "API_RPC is negotiated, so the
+   * socket lane carries it" — an inference that is wrong for exactly the socket
+   * it exists to catch: the stranded one, which refuses the read while HTTP
+   * quietly serves it.
+   */
+  it('reports the lane that carried the read, and calls HTTP on a negotiated lane what it is', () => {
+    const socket = describeControlPlaneRead({ status: 200, ok: true, carriedBy: 'socket', apiRpcNegotiated: true })
+    const stranded = describeControlPlaneRead({ status: 200, ok: true, carriedBy: 'http', apiRpcNegotiated: true })
+    const httpOnly = describeControlPlaneRead({ status: 200, ok: true, carriedBy: 'http', apiRpcNegotiated: false })
+
+    expect(socket.state).toBe('pass')
+    expect(String(socket.result)).toBe('answered over the socket’s control-plane lane')
+    expect(stranded.state).toBe('degraded')
+    expect(String(stranded.result)).toBe('answered over HTTP, although this socket negotiated API_RPC')
+    expect(httpOnly.state).toBe('pass')
+    expect(String(httpOnly.result)).toBe('answered over HTTP')
+  })
+
+  it('reads a refusal as unknown and only a server failure as not working, whatever the lane', () => {
+    for (const carriedBy of ['socket', 'http'] as const) {
+      for (const status of [401, 403, 404]) {
+        const refused = describeControlPlaneRead({ status, ok: false, carriedBy, apiRpcNegotiated: true })
+        expect({ status, state: refused.state }).toEqual({ status, state: 'unknown' })
+      }
+      expect(describeControlPlaneRead({ status: 502, ok: false, carriedBy, apiRpcNegotiated: true }).state).toBe('fail')
+    }
+  })
+})
+
+describe('describeRevisionsRead', () => {
+  it('passes on an answer, has nothing to test without a note, and separates a refusal from a failure', () => {
+    expect(describeRevisionsRead({ status: 200 }).state).toBe('pass')
+    expect(describeRevisionsRead('no-note').state).toBe('not-applicable')
+    expect(readingOf(describeRevisionsRead('no-note').result)).toBe('unavailable')
+    expect(describeRevisionsRead({ status: 403 }).state).toBe('unknown')
+    expect(describeRevisionsRead({ status: 502 }).state).toBe('fail')
+    expect(String(describeRevisionsRead({ status: 502 }).result)).toBe('answered HTTP 502')
+  })
+})
+
+describe('describeFileTransfer', () => {
+  const worked: FileTransferResult = { socketRead: 'matched', cleanup: 'deleted', usage: 'returned' }
+
+  it('passes when the object was stored, read back on both lanes and deleted', () => {
+    const outcome = describeFileTransfer(worked)
+
+    expect(outcome.state).toBe('pass')
+    expect(String(outcome.result)).toBe('stored, read back intact over HTTP and over the socket · deleted')
+  })
+
+  it('passes over HTTP alone where the socket did not negotiate files, and says the lane was not exercised', () => {
+    const outcome = describeFileTransfer({ ...worked, socketRead: 'not-negotiated' })
+
+    expect(outcome.state).toBe('pass')
+    expect(String(outcome.result)).toBe('stored, read back intact over HTTP · deleted')
+    expect(outcome.detail).toContain('the socket file lane was not exercised')
+  })
+
+  it('names the step that failed and what became of the object, for every stage', () => {
+    const seen = new Set<string>()
+    for (const failedAt of FILE_TRANSFER_STAGES) {
+      const outcome = describeFileTransfer({
+        failedAt,
+        socketRead: 'not-reached',
+        cleanup: 'deleted',
+        usage: 'returned',
+      })
+
+      expect({ failedAt, state: outcome.state }).toEqual({ failedAt, state: 'fail' })
+      expect(String(outcome.result)).toMatch(/ · deleted$/)
+      seen.add(String(outcome.result))
+    }
+    // Seven stages, seven different sentences: none inherits another's.
+    expect(seen.size).toBe(FILE_TRANSFER_STAGES.length)
+    expect(
+      String(
+        describeFileTransfer({
+          failedAt: 'authorize-upload',
+          socketRead: 'not-reached',
+          cleanup: 'nothing-stored',
+          usage: 'returned',
+        }).result,
+      ),
+    ).toBe('the server would not authorize an upload · nothing was stored')
+  })
+
+  /**
+   * *** "WORKING, WITH SOMETHING LOST" — THREE WAYS, AND NONE IS A FAILURE. ***
+   * The transfer worked in all of them; what differs is what was lost, and the
+   * row says which.
+   */
+  it('is degraded, not failed, when the transfer worked and something was lost', () => {
+    const socket = describeFileTransfer({ ...worked, socketRead: 'failed' })
+    const corrupt = describeFileTransfer({ ...worked, socketRead: 'mismatched' })
+    const leftover = describeFileTransfer({ ...worked, cleanup: 'failed', usage: 'not-reported' })
+    const counter = describeFileTransfer({ ...worked, usage: 'not-returned' })
+
+    for (const outcome of [socket, corrupt, leftover, counter]) {
+      expect(outcome.state).toBe('degraded')
+      expect(String(outcome.result)).toContain('stored, read back intact over HTTP')
+    }
+    expect(String(socket.result)).toContain('the socket lane did not return it')
+    expect(corrupt.detail).toContain('returned different bytes')
+    expect(String(leftover.result)).toContain('THE THROWAWAY OBJECT COULD NOT BE DELETED')
+    expect(leftover.detail).toContain('16 KiB of random bytes remain')
+    expect(String(counter.result)).toContain('the usage counter did not come back')
+  })
+
+  it('says a leftover out loud even when the transfer itself failed', () => {
+    const outcome = describeFileTransfer({
+      failedAt: 'read',
+      socketRead: 'not-reached',
+      cleanup: 'failed',
+      usage: 'not-reported',
+    })
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).toBe(
+      'the stored object could not be read back · THE THROWAWAY OBJECT COULD NOT BE DELETED',
+    )
+  })
+
+  /**
+   * The counter not being READABLE is not the counter being wrong, and a counter
+   * that did not move during the transfer is not read at all.
+   */
+  it('does not hold an unreadable usage counter against a transfer that worked', () => {
+    expect(describeFileTransfer({ ...worked, usage: 'not-reported' }).state).toBe('pass')
+  })
+
+  it('has a verdict for every combination the runner can return, and never throws', () => {
+    for (const socketRead of FILE_SOCKET_READS) {
+      for (const cleanup of FILE_TRANSFER_CLEANUPS) {
+        for (const usage of FILE_TRANSFER_USAGES) {
+          for (const failedAt of [undefined, ...FILE_TRANSFER_STAGES]) {
+            const outcome = describeFileTransfer({
+              ...(failedAt === undefined ? {} : { failedAt }),
+              socketRead,
+              cleanup,
+              usage,
+            })
+
+            expect(CHECK_STATES).toContain(outcome.state)
+            expect(String(outcome.result).length).toBeGreaterThan(10)
+            // A failed stage is never reported as anything but a failure.
+            if (failedAt !== undefined) {
+              expect(outcome.state).toBe('fail')
+            }
+          }
+        }
+      }
+    }
+  })
+})
+
+describe('the two witnesses a check cannot stand in for', () => {
+  const ready: WitnessTransport = { state: 'READY', operations: ['SYNC_ITEMS', 'FILES_V1'], deferred: false }
+  const board = (input: Parameters<typeof buildWitnessBoard>[0]) => buildWitnessBoard(input)
+
+  /**
+   * *** NEGOTIATED IS NOT CROSSED. *** `sync-items` is the socket agreeing to
+   * carry sync. `durable-sync` is a sync having gone over it and come back, which
+   * is the only observation that the gateway and the syncing server hold the same
+   * secret.
+   */
+  it('confirms the durable lane only on a sync that crossed it', () => {
+    const crossed = board({ checks: [], transport: ready, syncRounds: { socket: 1, http: 0, failed: 0 } })
+    const notYet = board({ checks: [], transport: ready, syncRounds: { socket: 0, http: 3, failed: 0 } })
+
+    expect(crossed['sync-items'].state).toBe('confirmed')
+    expect(crossed['durable-sync'].state).toBe('confirmed')
+    // Negotiated, every round so far over HTTP: the socket agreed and nothing has
+    // crossed. A check settles it, and the witness names the check.
+    expect(notYet['sync-items'].state).toBe('confirmed')
+    expect(notYet['durable-sync'].state).toBe('not-run')
+    expect(notYet['durable-sync'].how).toBe(howToRun(CHECKS.sync))
+  })
+
+  it('does not send the reader back to a check that has already run and did not cross', () => {
+    const ran = readingsFrom({ sync: outcome('sync', 'degraded') })
+    const witnesses = board({ checks: ran, transport: ready, syncRounds: { socket: 0, http: 4, failed: 0 } })
+
+    expect(witnesses['durable-sync'].state).toBe('unknown')
+  })
+
+  it('has nothing to observe where sync does not ride a socket on this tab', () => {
+    const rounds = { socket: 0, http: 2, failed: 0 }
+    const sibling = board({
+      checks: [],
+      transport: { state: 'HTTP_FALLBACK', operations: [], deferred: true },
+      syncRounds: rounds,
+    })
+    const httpOnly = board({
+      checks: [],
+      transport: { state: 'HTTP_ONLY', operations: [], deferred: false },
+      syncRounds: rounds,
+    })
+
+    expect(sibling['durable-sync'].state).toBe('unavailable')
+    expect(httpOnly['durable-sync'].state).toBe('unavailable')
+    // And with no counters at all it is a reading that did not arrive.
+    expect(board({ checks: [], transport: ready })['durable-sync'].state).toBe('unknown')
+  })
+
+  it('reads the socket half of the file round trip, and only that half', () => {
+    const states = Object.fromEntries(
+      FILE_SOCKET_READS.map((read) => [
+        read,
+        board({ checks: [], transport: ready, fileSocketRead: read })['file-socket-read'].state,
+      ]),
+    )
+
+    expect(states).toEqual({
+      matched: 'confirmed',
+      mismatched: 'refuted',
+      failed: 'refuted',
+      'not-negotiated': 'unavailable',
+      'not-reached': 'not-run',
+    })
+    const notRun = board({ checks: [], transport: ready })['file-socket-read']
+    expect(notRun.state).toBe('not-run')
+    expect(notRun.how).toBe(howToRun(CHECKS['file-transfer']))
+  })
+})
+
+describe('a check that did not pass', () => {
+  it('raises a finding with one action for the checks that test a whole path', () => {
+    for (const id of ['sync', 'revisions', 'file-transfer'] as const) {
+      for (const state of ['fail', 'degraded'] as const) {
+        const block = buildChecksBlock(
+          'backend',
+          readingsFrom({ [id]: outcome(id, state, 'what happened, for the screen') }),
+        )
+        const finding = block?.findings[0]
+
+        expect({ id, state, findings: block?.findings.length }).toEqual({ id, state, findings: 1 })
+        expect(finding?.verdict).toBe(CHECK_STATE_VERDICT[state])
+        expect(finding?.evidence.kind).toBe('direct')
+        expect((finding?.remedy?.summary ?? '').length).toBeGreaterThan(40)
+        // The check's own detail is the reasoning on screen, verbatim.
+        expect(finding?.detail).toBe('what happened, for the screen')
+      }
+    }
+  })
+
+  it('raises nothing for a check that passed, has not run, or had nothing to test', () => {
+    for (const state of ['pass', 'unknown', 'not-applicable'] as const) {
+      const block = buildChecksBlock('backend', readingsFrom({ 'file-transfer': outcome('file-transfer', state) }))
+
+      expect({ state, findings: block?.findings.length }).toEqual({ state, findings: 0 })
+    }
+    expect(buildChecksBlock('backend', readingsFrom({}))?.findings).toEqual([])
+  })
+
+  it('keeps its copy in this build: no part of a remedy is the check’s screen-only detail', () => {
+    const planted = 'https://files.internal.example/?token=hunter2'
+    const block = buildChecksBlock(
+      'backend',
+      readingsFrom({ 'file-transfer': outcome('file-transfer', 'fail', planted) }),
+    )
+    const remedy = block?.findings[0]?.remedy
+
+    expect(JSON.stringify(remedy)).not.toContain('hunter2')
+    expect(JSON.stringify(remedy)).not.toContain('files.internal.example')
   })
 })

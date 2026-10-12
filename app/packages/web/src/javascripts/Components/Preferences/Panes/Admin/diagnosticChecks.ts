@@ -1,17 +1,28 @@
 import type { SyncNegotiatedOperation, SyncTransportState } from '@/Services/SyncTransport/syncTransportProtocol'
 import {
+  FILE_TRANSFER_BYTES,
+  type FileSocketRead,
+  type FileTransferCleanup,
+  type FileTransferResult,
+  type FileTransferStage,
+} from './diagnosticFileTransfer'
+import type { Remedy, RemedyEffort } from './diagnosticRemedies'
+import {
+  diagnosticFinding,
   diagnosticRow,
   EVIDENCE_DIRECT,
   evidenceNotAvailableHere,
   evidenceUntested,
   readingOf,
   safeConstant,
+  safeCount,
   safeNotAvailableHere,
   safeNotTested,
   safeToken,
   safeTokens,
   SECTION_IDS,
   type DiagnosticBlock,
+  type DiagnosticFinding,
   type DiagnosticRow,
   type SafeValue,
   type SectionId,
@@ -66,7 +77,16 @@ import { describeDeployment } from './syncDiagnostics'
  * Every check, as a VALUE as well as a type, so "exhaustive over the checks" is
  * checkable by a test and not only by the compiler.
  */
-export const CHECK_IDS = ['negotiation', 'capabilities', 'ticket', 'control-plane', 'marker'] as const
+export const CHECK_IDS = [
+  'negotiation',
+  'capabilities',
+  'ticket',
+  'control-plane',
+  'marker',
+  'sync',
+  'revisions',
+  'file-transfer',
+] as const
 
 export type CheckId = (typeof CHECK_IDS)[number]
 
@@ -111,6 +131,13 @@ export type CheckDefinition = {
   readonly does: string
   /** The observation a pass establishes, as a clause a caveat can end with. */
   readonly establishes: string
+  /**
+   * For a check that writes: WHAT it writes, as one clause that completes the
+   * sentence "Run all checks …". It is shown beside the button, always, where
+   * `does` is the full account folded under it — consent that has to be opened
+   * to be read is not consent. Absent on every check that writes nothing.
+   */
+  readonly writes?: string
 }
 
 /**
@@ -142,6 +169,7 @@ export const CHECKS: Record<CheckId, CheckDefinition> = {
     mode: 'operator',
     does: 'Asks the server to mint ONE short-lived, single-use socket ticket for your own session (POST /v1/sockets/sync/ticket), under a throwaway device id so the device your live socket is registered under is not disturbed. The ticket is never redeemed and expires by itself. Nothing else is written.',
     establishes: 'the server mints a socket ticket for this session',
+    writes: 'mints one short-lived socket ticket that is never used',
   },
   'control-plane': {
     id: 'control-plane',
@@ -158,6 +186,31 @@ export const CHECKS: Record<CheckId, CheckDefinition> = {
     mode: 'live',
     does: 'Sends nothing more. Reads the deployment marker this pane already fetched when it opened (/.well-known/srn-deployment.json, from the server that serves this page), which names the commit that server was built from. Refresh fetches it again.',
     establishes: 'the server that serves this page names the build it is running',
+  },
+  sync: {
+    id: 'sync',
+    section: 'backend',
+    title: safeConstant('Sync round trip'),
+    mode: 'auto',
+    does: 'Asks the app to run one ordinary sync now — the same request it makes whenever a note changes — and reads from this tab’s own transport which lane carried it. It makes no change of its own: with nothing unsaved a sync uploads nothing and only asks what is new, and anything it does upload is an edit you had already made and the app was about to send.',
+    establishes: 'a sync from this tab completed just now',
+  },
+  revisions: {
+    id: 'revisions',
+    section: 'backend',
+    title: safeConstant('Revision history read'),
+    mode: 'auto',
+    does: 'Asks the server for the revision list of one note already in this account (GET /v2/items/…/revisions), over plain HTTP. Read-only: it lists history and opens none of it. Skipped when this account holds no note to ask about.',
+    establishes: 'the revisions service answered an authenticated read through the gateway',
+  },
+  'file-transfer': {
+    id: 'file-transfer',
+    section: 'backend',
+    title: safeConstant('File transfer round trip'),
+    mode: 'operator',
+    does: `Uploads ONE throwaway object of ${FILE_TRANSFER_BYTES / 1024} KiB of random bytes over HTTP, under an identifier made up for this check; reads it back in two ranged requests over HTTP — and over the socket lane too, where this tab’s socket negotiated FILES_V1 — and compares every byte; then deletes it. No file item is created, so nothing appears in your files, and none of your own files is read, changed or removed. The object is deleted even when an earlier step fails; if the delete itself fails, the result says so.`,
+    establishes: 'an authorized file was stored, read back intact and deleted',
+    writes: `uploads one throwaway ${FILE_TRANSFER_BYTES / 1024} KiB file of random bytes, reads it back and deletes it`,
   },
 }
 
@@ -295,6 +348,96 @@ export function checkRow(reading: CheckReading): DiagnosticRow {
   })
 }
 
+/**
+ * What to DO when a check did not pass.
+ *
+ * A row can say a check failed; it cannot be the first entry under "What needs
+ * attention", and a failed round trip is the most concrete thing this pane ever
+ * learns. So the checks that test a whole path raise a finding of their own,
+ * with one action, when they fail or come back with something lost.
+ *
+ * Only those. The older checks each already have a finding in the section whose
+ * rows explain the same fault — a second card for it would be one fact stated
+ * twice — which is why this is `Partial`.
+ *
+ * Every sentence is a literal of this file. The check's own `detail` goes on the
+ * screen as the finding's reasoning and is never printed in the report.
+ */
+type CheckFailureCopy = {
+  readonly code: SafeValue
+  readonly title: Record<'fail' | 'degraded', string>
+  readonly summary: Record<'fail' | 'degraded', string>
+  readonly effort: Record<'fail' | 'degraded', RemedyEffort>
+}
+
+const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
+  sync: {
+    code: safeConstant('SYNC_ROUND_TRIP_DID_NOT_PASS'),
+    title: {
+      fail: 'A sync from this tab did not complete',
+      degraded: 'Sync works, but not over the socket that agreed to carry it',
+    },
+    summary: {
+      fail: 'Notes changed in this tab are not reaching the server. Reload and run the check again; if it fails twice, the syncing server and database rows in this section say which part is down.',
+      degraded:
+        'Nothing is lost but the lane: the sync went over HTTP. Run the check again — one oversized first sync legitimately does this — and if it repeats, the lane degradation ledger in the WebSocket section names the cause.',
+    },
+    effort: { fail: 'peer-service', degraded: 'wait' },
+  },
+  revisions: {
+    code: safeConstant('REVISIONS_READ_DID_NOT_PASS'),
+    title: {
+      fail: 'The revisions service did not answer',
+      degraded: 'The revisions service did not answer',
+    },
+    summary: {
+      fail: 'Note history will not load. Check that the revisions service is running and that the gateway can reach it; its probe row in this section says whether the process answers at all.',
+      degraded:
+        'Note history will not load. Check that the revisions service is running and that the gateway can reach it; its probe row in this section says whether the process answers at all.',
+    },
+    effort: { fail: 'peer-service', degraded: 'peer-service' },
+  },
+  'file-transfer': {
+    code: safeConstant('FILE_TRANSFER_DID_NOT_PASS'),
+    title: {
+      fail: 'A file could not be stored and read back',
+      degraded: 'Files work over HTTP, with something lost',
+    },
+    summary: {
+      fail: 'Attachments do not work on this deployment. The check’s own row names the step that failed, and that step names the service: authorization is auth, opening and sending is the files service, reading back is the download path through any proxy in front of it.',
+      degraded:
+        'Attachments work. The check’s own row says what was lost — the socket’s file lane not returning the object, or the throwaway object or its usage count being left behind — and that is the thing to look at.',
+    },
+    effort: { fail: 'peer-service', degraded: 'peer-service' },
+  },
+}
+
+function checkFinding(reading: CheckReading): DiagnosticFinding | undefined {
+  const { definition, outcome } = reading
+  const copy = CHECK_FAILURE[definition.id]
+  if (copy === undefined || outcome === undefined || (outcome.state !== 'fail' && outcome.state !== 'degraded')) {
+    return undefined
+  }
+
+  const remedy: Remedy = {
+    code: String(copy.code),
+    summary: copy.summary[outcome.state],
+    steps: [],
+    effort: copy.effort[outcome.state],
+    basis: 'verified',
+    because: [`“${definition.title}” was run from this pane and did not pass. What it does: ${definition.does}`],
+  }
+
+  return diagnosticFinding({
+    code: copy.code,
+    title: copy.title[outcome.state],
+    detail: outcome.detail,
+    verdict: CHECK_STATE_VERDICT[outcome.state],
+    evidence: EVIDENCE_DIRECT,
+    remedy,
+  })
+}
+
 const CHECKS_HEADING = safeConstant('Checks')
 
 /**
@@ -319,7 +462,11 @@ export function buildChecksBlock(
     description:
       'What this pane tested, rather than what it was told. A check that has not been run reads “not tested” and keeps this section — and the headline — off OK until it has. The Checks tab says what each one does before it runs, and is where one can be run on its own.',
     rows: mine.map(checkRow),
-    findings: [],
+    findings: mine.flatMap((reading) => {
+      const finding = checkFinding(reading)
+
+      return finding === undefined ? [] : [finding]
+    }),
   }
 }
 
@@ -389,6 +536,8 @@ export const PASSIVE_WITNESS_IDS = [
   'crypto',
   'local-database',
   'gateway-cache',
+  'durable-sync',
+  'file-socket-read',
 ] as const
 
 export type PassiveWitnessId = (typeof PASSIVE_WITNESS_IDS)[number]
@@ -408,6 +557,8 @@ const PASSIVE_WITNESS_WHAT: Record<PassiveWitnessId, string> = {
   crypto: 'this browser hashed and round-tripped an encryption with Web Crypto just now',
   'local-database': 'this app opened and read its own local database in this browser profile',
   'gateway-cache': 'the cache client this gateway holds answered a ping when the server status was read',
+  'durable-sync': 'a sync from this tab was committed over the socket’s durable lane',
+  'file-socket-read': 'the throwaway file was read back intact over the socket’s file lane',
 }
 
 const whatOf = (id: WitnessId): string => {
@@ -470,6 +621,10 @@ export type WitnessInputs = {
   readonly localDatabaseLoaded?: boolean
   /** The gateway's own cache ping, as the server status reported it. Absent: not reported. */
   readonly gatewayCachePing?: boolean
+  /** Sync rounds this tab's transport settled, by carrier, since the page loaded. */
+  readonly syncRounds?: SyncRoundCounts
+  /** The socket half of the last file-transfer check, when one has run. */
+  readonly fileSocketRead?: FileSocketRead
 }
 
 /**
@@ -514,6 +669,61 @@ function operationWitness(
  * else, so two sections pointing at one observation cannot come to disagree about
  * whether it was made.
  */
+/**
+ * Whether a sync has actually crossed the socket's durable lane from this tab.
+ *
+ * *** THE DIFFERENCE BETWEEN "NEGOTIATED" AND "HAPPENED". *** `sync-items` says
+ * the socket agreed to carry sync. This says it DID: the gateway accepted a
+ * durable command, the syncing server committed it, and the answer came back —
+ * which is the only observation in this pane that the two services hold the same
+ * internal secret and that the durable store takes a real write. It is counted by
+ * the transport where each round settles, so it needs no check to have been run:
+ * the app syncs when it opens.
+ *
+ * `not-run` and not `unknown` when the socket would carry sync and none has
+ * crossed yet: that is a thing a check settles, and the check is named. A tab
+ * where sync does not ride the socket at all has nothing to observe.
+ */
+function durableSyncWitness(
+  transport: WitnessTransport | undefined,
+  rounds: SyncRoundCounts | undefined,
+  syncCheck: Witness['state'],
+): Witness {
+  const what = PASSIVE_WITNESS_WHAT['durable-sync']
+  if (rounds !== undefined && rounds.socket > 0) {
+    return { state: 'confirmed', what }
+  }
+  // The check HAS run and the round did not cross the socket. Sending the reader
+  // back to run it again would be a loop; what is left is a real unknown.
+  if (transport === undefined || rounds === undefined || syncCheck === 'refuted') {
+    return { state: 'unknown', what }
+  }
+  if (transport.deferred) {
+    return {
+      state: 'unavailable',
+      what,
+      how: 'another tab of this account holds the socket lane, so this tab syncs over HTTP by design',
+    }
+  }
+  if (transport.state === 'READY' && transport.operations.includes('SYNC_ITEMS')) {
+    return { state: 'not-run', what, how: howToRun(CHECKS.sync) }
+  }
+
+  return { state: 'unavailable', what, how: 'sync does not ride a socket on this tab, so it goes over HTTP' }
+}
+
+function fileSocketReadWitness(read: FileSocketRead | undefined): Witness {
+  const what = PASSIVE_WITNESS_WHAT['file-socket-read']
+  if (read === undefined || read === 'not-reached') {
+    return { state: 'not-run', what, how: howToRun(CHECKS['file-transfer']) }
+  }
+  if (read === 'not-negotiated') {
+    return { state: 'unavailable', what, how: 'this tab’s socket did not negotiate FILES_V1, so files go over HTTP' }
+  }
+
+  return { state: read === 'matched' ? 'confirmed' : 'refuted', what }
+}
+
 export function buildWitnessBoard(input: WitnessInputs): WitnessBoard {
   const board: Partial<Record<WitnessId, Witness>> = {}
 
@@ -558,6 +768,8 @@ export function buildWitnessBoard(input: WitnessInputs): WitnessBoard {
     state: input.gatewayCachePing === undefined ? 'unknown' : input.gatewayCachePing ? 'confirmed' : 'refuted',
     what: PASSIVE_WITNESS_WHAT['gateway-cache'],
   }
+  board['durable-sync'] = durableSyncWitness(transport, input.syncRounds, (board.sync ?? UNOBSERVED_BOARD.sync).state)
+  board['file-socket-read'] = fileSocketReadWitness(input.fileSocketRead)
 
   return board as WitnessBoard
 }
@@ -608,6 +820,298 @@ export function describeMarkerCheck(raw: unknown, read: 'answered' | 'failed'): 
 }
 
 /** The sections that hold at least one check, in the contract's order. For tests. */
+/* -------------------------------------------------------------------------- */
+/* What each new check found, in closed words                                 */
+/* -------------------------------------------------------------------------- */
+
+export type SyncRoundCounts = Readonly<Record<'socket' | 'http' | 'failed', number>>
+
+/**
+ * One sync round, read as the DIFFERENCE between two readings of the transport's
+ * own counters — never as "the call returned".
+ *
+ * `sync()` resolves for a locked client, an offline one and a round that was
+ * merged into another, so its returning says nothing. What settled in between is
+ * counted by the transport at the one place a round can settle.
+ *
+ * *** HTTP IS NOT A FAILURE, AND IS NOT ALWAYS FINE EITHER. *** A round the HTTP
+ * endpoint served is a working sync. It is "working, with something lost" only
+ * where this tab's socket had agreed to carry sync and did not: that is the lane
+ * the deployment paid for standing idle.
+ */
+export function describeSyncRound(input: {
+  readonly before: SyncRoundCounts | undefined
+  readonly after: SyncRoundCounts | undefined
+  /** This tab's socket is READY and negotiated SYNC_ITEMS. */
+  readonly socketCarriesSync: boolean
+}): Omit<CheckOutcome, 'id'> {
+  const { before, after } = input
+  if (before === undefined || after === undefined) {
+    return {
+      state: 'unknown',
+      result: safeConstant('the round could not be observed'),
+      detail:
+        'This tab has no realtime transport to count sync rounds with, so whether the sync completed, and how, cannot be read from here.',
+    }
+  }
+
+  const socket = after.socket - before.socket
+  const http = after.http - before.http
+  const failed = after.failed - before.failed
+
+  if (socket > 0) {
+    return {
+      state: 'pass',
+      result: safeConstant('completed over the socket'),
+      detail:
+        'A sync round was committed over the socket’s durable lane: the gateway accepted it, the syncing server stored and answered it, and the answer came back on the same socket.',
+    }
+  }
+  if (http > 0) {
+    return input.socketCarriesSync
+      ? {
+          state: 'degraded',
+          result: safeConstant('completed over HTTP, although this socket negotiated SYNC_ITEMS'),
+          detail:
+            'The sync completed, so nothing is lost but the lane: this tab’s socket agreed to carry sync and the round went over HTTP instead. The ledger in the WebSocket section names the cause.',
+        }
+      : {
+          state: 'pass',
+          result: safeConstant('completed over HTTP'),
+          detail:
+            'A sync round completed over the HTTP sync endpoint, which is the lane this tab uses: its socket does not carry sync.',
+        }
+  }
+  if (failed > 0) {
+    return {
+      state: 'fail',
+      result: safeConstant('the sync did not complete'),
+      detail:
+        'The app ran a sync round and it failed on every lane it tried. Notes changed in this tab are not reaching the server.',
+    }
+  }
+
+  return {
+    state: 'unknown',
+    result: safeConstant('no sync round settled'),
+    detail:
+      'The app was asked to sync and no round completed or failed in the time allowed. A locked or offline client does that; so does a sync still in progress.',
+  }
+}
+
+/**
+ * The control-plane read, with the lane MEASURED.
+ *
+ * This used to say "API_RPC is negotiated, so the socket lane carries it". That
+ * is an inference, and it is wrong in exactly the case the check exists for: a
+ * stranded socket refuses the read and HTTP quietly serves it, and the row read
+ * green over a lane that was not working.
+ */
+export function describeControlPlaneRead(input: {
+  readonly status: number
+  readonly ok: boolean
+  readonly carriedBy: 'socket' | 'http'
+  readonly apiRpcNegotiated: boolean
+}): Omit<CheckOutcome, 'id'> {
+  if (!input.ok) {
+    // *** A REFUSED READ IS NOT A BROKEN DEPLOYMENT. *** 401, 403 and 404 are the
+    // server ANSWERING — that this session is not authenticated, is not an
+    // administrator, or that this build has no such endpoint. Each is a reason
+    // this pane cannot look, and none of them is evidence about the lane the
+    // check was asking after. Calling that a failure is the "unread is not down"
+    // mistake this pane has already made once.
+    const cannotLook = input.status === 401 || input.status === 403 || input.status === 404
+
+    return {
+      state: cannotLook ? 'unknown' : 'fail',
+      result: safeTokens(safeConstant('answered HTTP'), safeCount(input.status)),
+      detail: cannotLook
+        ? `The admin endpoint answered ${input.status}, so this session cannot read it. That is why this pane is empty, and it says nothing about whether the deployment is working.`
+        : `The admin endpoint answered ${input.status}.`,
+    }
+  }
+  if (input.carriedBy === 'socket') {
+    return {
+      state: 'pass',
+      result: safeConstant('answered over the socket’s control-plane lane'),
+      detail: 'Succeeded, and the socket’s API_RPC lane carried it — measured on this read, not inferred.',
+    }
+  }
+
+  return input.apiRpcNegotiated
+    ? {
+        state: 'degraded',
+        result: safeConstant('answered over HTTP, although this socket negotiated API_RPC'),
+        detail:
+          'The read succeeded, over HTTP: the socket’s control-plane lane was offered it first and did not carry it. That is the stranded-lane case — every admin and settings read is quietly taking the slower path. The ledger in this section counts the refusals and says which kind.',
+      }
+    : {
+        state: 'pass',
+        result: safeConstant('answered over HTTP'),
+        detail: 'Succeeded, over HTTP. This tab’s socket did not negotiate API_RPC, so HTTP is the lane for it.',
+      }
+}
+
+/** What the revisions read came back with. `no-note` is an account with nothing to ask about. */
+export function describeRevisionsRead(read: { readonly status: number } | 'no-note'): Omit<CheckOutcome, 'id'> {
+  if (read === 'no-note') {
+    return {
+      state: 'not-applicable',
+      result: safeNotAvailableHere('this account has no note to ask about'),
+      detail: 'This account holds no note, so there is no revision history to ask the server for. Nothing was sent.',
+    }
+  }
+  if (read.status >= 200 && read.status < 300) {
+    return {
+      state: 'pass',
+      result: safeConstant('answered'),
+      detail: 'The revisions service listed the history of one note through the gateway.',
+    }
+  }
+
+  const refused = read.status === 401 || read.status === 403 || read.status === 404
+
+  return {
+    state: refused ? 'unknown' : 'fail',
+    result: safeTokens(safeConstant('answered HTTP'), safeCount(read.status)),
+    detail: refused
+      ? `The revisions read answered ${read.status}. This session was refused, or the route is not on this server, which says nothing about whether the service works.`
+      : `The revisions read answered ${read.status}: the gateway reached for the revisions service and did not get an answer from it.`,
+  }
+}
+
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** The step that failed, and the boundary it crosses. */
+const FILE_STAGE_WORDS: Record<FileTransferStage, { readonly result: SafeValue; readonly detail: string }> = {
+  'authorize-upload': {
+    result: safeConstant('the server would not authorize an upload'),
+    detail:
+      'The auth service did not mint an upload token for this account. Nothing was stored. That is the account’s file entitlement or the auth service itself — the files service was never reached.',
+  },
+  open: {
+    result: safeConstant('the files service refused the upload'),
+    detail:
+      'Auth minted an upload token and the files service did not accept it. That is the files service being unreachable at its public address, or the two services disagreeing about the token secret.',
+  },
+  send: {
+    result: safeConstant('the upload did not go through'),
+    detail:
+      'The files service opened an upload and then did not accept the bytes. That is its storage, or a proxy in front of it limiting the request.',
+  },
+  close: {
+    result: safeConstant('the upload could not be completed'),
+    detail:
+      'Every byte was sent and the files service did not finalise the object. That is its storage refusing the write.',
+  },
+  'authorize-read': {
+    result: safeConstant('the server would not authorize the read-back'),
+    detail:
+      'The object was stored, and the auth service then did not mint a token to read it. Reading files back is refused for this account.',
+  },
+  read: {
+    result: safeConstant('the stored object could not be read back'),
+    detail:
+      'The object was stored and the ranged read-back did not complete. That is the download path: the files service, or a proxy in front of it that does not pass Range requests through.',
+  },
+  compare: {
+    result: safeConstant('the bytes read back were not the bytes stored'),
+    detail:
+      'The object was stored and read back, and the two differ. Something between this browser and the files service’s storage is altering or truncating file bodies.',
+  },
+}
+
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** What became of the throwaway object. */
+const FILE_CLEANUP_WORDS: Record<FileTransferCleanup, { readonly result: SafeValue; readonly detail: string }> = {
+  deleted: { result: safeConstant('deleted'), detail: 'The throwaway object was deleted.' },
+  'nothing-stored': {
+    result: safeConstant('nothing was stored'),
+    detail: 'Nothing was stored, so there is nothing to clean up.',
+  },
+  failed: {
+    result: safeConstant('THE THROWAWAY OBJECT COULD NOT BE DELETED'),
+    detail: `The throwaway object could not be deleted: up to ${FILE_TRANSFER_BYTES / 1024} KiB of random bytes remain on the files service, referenced by nothing in this account. It is counted against this account’s file usage until an administrator removes it.`,
+  },
+}
+
+const SEPARATOR = safeConstant('·')
+
+/**
+ * The file-transfer round trip, in closed words.
+ *
+ * Four outcomes and no more: it failed at a named step; it worked over HTTP and
+ * the socket lane returned the wrong thing; it worked and left something behind;
+ * it worked. The usage counter is REPORTED and never the reason for a verdict on
+ * its own — except where the object is gone and the counter has not come back,
+ * which is this check having changed the account's figure, and is said.
+ */
+export function describeFileTransfer(result: FileTransferResult): Omit<CheckOutcome, 'id'> {
+  const cleanup = FILE_CLEANUP_WORDS[result.cleanup]
+
+  if (result.failedAt !== undefined) {
+    const stage = FILE_STAGE_WORDS[result.failedAt]
+
+    return {
+      state: 'fail',
+      result: safeTokens(stage.result, SEPARATOR, cleanup.result),
+      detail: `${stage.detail} ${cleanup.detail}`,
+    }
+  }
+
+  const stored =
+    result.socketRead === 'matched'
+      ? safeConstant('stored, read back intact over HTTP and over the socket')
+      : safeConstant('stored, read back intact over HTTP')
+  const base = `A ${FILE_TRANSFER_BYTES / 1024} KiB object was uploaded over HTTP and read back in two ranged requests, byte for byte.`
+
+  if (result.socketRead === 'mismatched' || result.socketRead === 'failed') {
+    return {
+      state: 'degraded',
+      result: safeTokens(
+        stored,
+        SEPARATOR,
+        safeConstant('the socket lane did not return it'),
+        SEPARATOR,
+        cleanup.result,
+      ),
+      detail: `${base} This tab’s socket negotiated FILES_V1, and reading the same object over that lane ${
+        result.socketRead === 'failed' ? 'did not complete' : 'returned different bytes'
+      }. File transfers still work, over HTTP; the socket file lane does not. ${cleanup.detail}`,
+    }
+  }
+  if (result.cleanup === 'failed') {
+    return {
+      state: 'degraded',
+      result: safeTokens(stored, SEPARATOR, cleanup.result),
+      detail: `${base} ${cleanup.detail}`,
+    }
+  }
+  if (result.usage === 'not-returned') {
+    return {
+      state: 'degraded',
+      result: safeTokens(
+        stored,
+        SEPARATOR,
+        cleanup.result,
+        SEPARATOR,
+        safeConstant('the usage counter did not come back'),
+      ),
+      detail: `${base} ${cleanup.detail} The account’s file-usage figure has not returned to what it read before the check, although the object is gone: the server’s accounting did not undo what it counted. The figure in the Account section is off by up to ${FILE_TRANSFER_BYTES / 1024} KiB until it is recomputed.`,
+    }
+  }
+
+  const socket =
+    result.socketRead === 'matched'
+      ? ' The same object was then read back over the socket’s FILES_V1 lane, byte for byte.'
+      : ' This tab’s socket did not negotiate FILES_V1, so the socket file lane was not exercised.'
+
+  return {
+    state: 'pass',
+    result: safeTokens(stored, SEPARATOR, cleanup.result),
+    detail: `${base}${socket} ${cleanup.detail}${
+      result.usage === 'returned' ? ' The account’s file-usage figure is back where it was.' : ''
+    }`,
+  }
+}
+
 export const SECTIONS_WITH_CHECKS: readonly SectionId[] = SECTION_IDS.filter((section) =>
   CHECK_IDS.some((id) => CHECKS[id].section === section),
 )

@@ -633,11 +633,21 @@ function presenceProxy(key: string, confirmedBy?: Witness): Evidence {
  */
 const PRESENCE_WITNESS: Partial<Record<KnownEnvKey, WitnessId>> = {
   WEB_SOCKET_CONNECTION_TOKEN_SECRET: 'negotiation',
-  SYNCING_SERVER_GRPC_URL: 'sync-items',
-  SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: 'sync-items',
+  // *** NEGOTIATED IS NOT CROSSED. *** These two were resolved on the socket
+  // having AGREED to carry sync, which the gateway decides alone. That the
+  // syncing server answers at this address, and accepts this secret, is only
+  // established by a sync that went there and came back.
+  SYNCING_SERVER_GRPC_URL: 'durable-sync',
+  SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: 'durable-sync',
   AUTH_SERVER_GRPC_URL: 'admin-read',
   AUTH_JWT_SECRET: 'admin-read',
   REDIS_URL: 'gateway-cache',
+  // Two services must hold the same value: auth mints with it and the files
+  // service verifies with it. A stored-and-read-back file is both.
+  VALET_TOKEN_SECRET: 'file-transfer',
+  // The address the socket's file lane reaches the files service on, which
+  // nothing but a read over that lane exercises.
+  WEBSOCKET_SYNC_FILES_URL: 'file-socket-read',
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1071,7 +1081,15 @@ const SECRET_UNREPORTED_NOTE =
 const SECRET_NOTE =
   'Three states, never a length and never the value. A secret below 32 bytes counts as UNCONFIGURED to the durable adapter, which then never reports ready — so a short secret and an absent one have the same consequence and completely different fixes. "At least 32 bytes" is reported as undetermined on purpose: the length passing is necessary and not sufficient, because the gateway and the syncing server must also hold the SAME secret, and two valid secrets that disagree fail exactly like one short one.'
 
-function secretRow(state: GrpcSecretState | undefined, present: boolean | undefined): DiagnosticRow {
+function secretRow(
+  state: GrpcSecretState | undefined,
+  present: boolean | undefined,
+  witness: WitnessOf,
+): DiagnosticRow {
+  // What NO reading of the secret on one side can say — that both sides hold the
+  // same one — is exactly what a sync committed over the durable lane shows.
+  const sameOnBothSides = witness('durable-sync')
+
   if (state === undefined) {
     return diagnosticRow({
       label: SECRET_LABEL,
@@ -1091,6 +1109,7 @@ function secretRow(state: GrpcSecretState | undefined, present: boolean | undefi
         observed: 'that the boot-time lane resolver measured the secret at or above the 32-byte minimum',
         cannotConfirm: 'that the gateway and the syncing server hold the same secret',
         necessaryCondition: true,
+        confirmedBy: sameOnBothSides,
       }),
       note: SECRET_NOTE,
     })
@@ -1101,7 +1120,7 @@ function secretRow(state: GrpcSecretState | undefined, present: boolean | undefi
       label: SECRET_LABEL,
       value: safeTokens(safePresence(present), SECRET_THRESHOLD_UNREPORTED),
       verdict: present === true ? 'healthy' : 'broken',
-      evidence: presenceProxy('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET'),
+      evidence: presenceProxy('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET', sameOnBothSides),
       note: `${SECRET_NOTE}${SECRET_UNREPORTED_NOTE}`,
     })
   }
@@ -1111,7 +1130,7 @@ function secretRow(state: GrpcSecretState | undefined, present: boolean | undefi
       label: SECRET_LABEL,
       value: safeTokens(safePresence(present), SECRET_UNMEASURED),
       verdict: present === true ? 'healthy' : 'broken',
-      evidence: presenceProxy('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET'),
+      evidence: presenceProxy('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET', sameOnBothSides),
       note: `${SECRET_NOTE} The boot-time lane resolver returned before it reached the length test on this deployment, so presence is all that was observed.`,
     })
   }
@@ -1398,7 +1417,7 @@ function buildTransportBlock(
       ...absentOr(reportedDecision, decision === 'no-secret' || unreachable ? 'degraded' : 'informational'),
       note: decisionNote(reportedDecision, decision),
     }),
-    secretRow(secret, secretPresent),
+    secretRow(secret, secretPresent, witness),
     secretOriginRow(secretOrigin),
     diagnosticRow({
       label: safeConstant('gRPC transport health'),

@@ -2363,6 +2363,8 @@ export type LaneLedgerSectionView = {
   }[]
   readonly transitionsDropped: number
   readonly laneStandDownCounts?: Readonly<Record<string, number | undefined>>
+  readonly syncRoundCounts?: Readonly<Record<'socket' | 'http' | 'failed', number>>
+  readonly lastSyncRound?: { readonly carrier: string; readonly msSinceLedgerStart: number }
   readonly recordingForMs?: number
 }
 
@@ -2447,6 +2449,9 @@ function socketAfter(transition: {
 
 const SEPARATOR = safeConstant('·')
 const AGO = safeConstant('ago')
+
+/** What can carry a sync round, as the transport's ledger names it. Closed. */
+const SYNC_ROUND_CARRIERS = ['socket', 'http', 'failed'] as const
 
 function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): DiagnosticBlock {
   const heading = safeConstant('Lane degradation ledger')
@@ -2703,6 +2708,64 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
       }),
     )
   }
+
+  /**
+   * Sync rounds, by what carried them.
+   *
+   * The one reading in this section that is a sync and not a condition for one:
+   * the transport counts each round where it settles. A producer older than the
+   * counter sends none, which is "not reported" and not zero.
+   */
+  const rounds = ledger.syncRoundCounts
+  const lastRound = ledger.lastSyncRound
+  const lastRoundAgo = lastRound === undefined ? undefined : agoSeconds(lastRound)
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('Sync rounds carried by the socket'),
+      value: safeCount(rounds?.socket),
+      ...absentOr(rounds?.socket, 'informational'),
+      note: 'Sync rounds this tab completed over the socket’s durable lane since the page loaded: the gateway accepted the command, the syncing server committed it, and the answer came back on the socket. Any count above zero is the lane working end to end, which no negotiated operation and no probe establishes.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Sync rounds carried by HTTP'),
+      value: safeCount(rounds?.http),
+      ...absentOr(rounds?.http, 'informational'),
+      note: 'Sync rounds the HTTP sync endpoint served. The first round of a page usually is one — it starts before the socket is up — and so is any round too large for a socket frame. A tab whose socket carries sync and whose rounds ALL land here is one whose lane is not doing its job; the Sync round trip check says so when it sees it.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Sync rounds that failed'),
+      value: safeCount(rounds?.failed),
+      ...absentOr(rounds?.failed, lastRound?.carrier === 'failed' ? 'degraded' : 'informational'),
+      note: 'Sync rounds that completed on no lane: the socket did not commit them and the HTTP endpoint refused or did not answer. History once a later round has succeeded; a fault while the most recent round is one of them.',
+    }),
+    diagnosticRow({
+      label: safeConstant('Most recent sync round'),
+      ...(lastRound === undefined && rounds !== undefined
+        ? {
+            value: safeNothingToReport('no sync round has settled yet'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'This tab’s transport counts sync rounds and has counted none since the page loaded.',
+            ),
+          }
+        : {
+            value:
+              lastRound === undefined
+                ? safeEnum(undefined, SYNC_ROUND_CARRIERS)
+                : lastRoundAgo === undefined
+                  ? safeEnum(lastRound.carrier, SYNC_ROUND_CARRIERS)
+                  : safeTokens(
+                      safeEnum(lastRound.carrier, SYNC_ROUND_CARRIERS),
+                      SEPARATOR,
+                      safeDuration(lastRoundAgo),
+                      AGO,
+                    ),
+            ...absentOr(lastRound, lastRound?.carrier === 'failed' ? 'degraded' : 'informational'),
+          }),
+      note: 'What carried the last sync round this tab settled, and how long ago. A duration, never a clock reading.',
+    }),
+  )
 
   const latestAgo = latest === undefined ? undefined : agoSeconds(latest)
   const latestSocket = latest === undefined ? undefined : socketAfter(latest)

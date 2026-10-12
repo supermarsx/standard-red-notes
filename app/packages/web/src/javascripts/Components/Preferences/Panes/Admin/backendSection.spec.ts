@@ -6,8 +6,8 @@ import {
   KNOWN_SERVICES,
   type BackendSectionInput,
 } from './backendSection'
-import { readingsFrom, SECTIONS_WITH_CHECKS } from './diagnosticChecks'
-import { readingOf } from './diagnosticsSections'
+import { buildWitnessBoard, readingsFrom, SECTIONS_WITH_CHECKS } from './diagnosticChecks'
+import { readingOf, safeConstant } from './diagnosticsSections'
 import type { DeploymentTopology } from './diagnosticRemedies'
 import {
   NOT_PUBLISHED,
@@ -982,7 +982,10 @@ describe('internal service communication', () => {
     // that can be tested and has not been, and that is a different instruction.
     expect(finding?.verdict).toBe('untested')
     expect(finding?.evidence.kind).toBe('untested')
-    expect(finding?.caveat).toContain('attach a small file')
+    // And the instruction is the check that settles it, by name.
+    expect(finding?.caveat).toContain('run “File transfer round trip”')
+    expect(finding?.remedy?.summary).toContain('Run “File transfer round trip”')
+    expect(finding?.remedy?.steps[0]).toContain('creates no file in your account and touches none of yours')
     expect(finding?.detail).toContain('never as "file transfers work"')
     // It credits the probe with what the readiness route really proves, rather than
     // understating it and sending an operator to re-check cleared ground.
@@ -993,6 +996,81 @@ describe('internal service communication', () => {
     // the finding must not imply it for the deployment reading the report.
     expect(finding?.detail).toContain('on the images this repo ships that cannot happen')
     expect(finding?.detail).toContain('only where the services are configured separately')
+  })
+
+  /**
+   * *** THE FINDING IS A DEBT, AND RUNNING THE CHECK PAYS IT. *** It is raised
+   * until the round trip has run and never after — whatever the round trip found.
+   * A transfer that failed has its own row and its own finding; "has not been
+   * tested" beside a test result would be the pane contradicting itself.
+   */
+  it('stops saying the transfer is untested once the round trip has run, pass or fail', () => {
+    const withTransfer = (state: 'pass' | 'fail' | 'degraded') =>
+      buildBackendSection({
+        topology: topology(),
+        serverStatus: serverStatus(),
+        checks: readingsFrom({
+          'file-transfer': { id: 'file-transfer', state, result: safeConstant('result'), detail: 'what happened' },
+        }),
+      })
+
+    expect(
+      codesOf(buildBackendSection({ topology: topology(), serverStatus: serverStatus(), checks: readingsFrom({}) })),
+    ).toContain('FILE_TRANSFER_UNVERIFIED')
+    for (const state of ['pass', 'fail', 'degraded'] as const) {
+      expect({ state, untested: codesOf(withTransfer(state)).includes('FILE_TRANSFER_UNVERIFIED') }).toEqual({
+        state,
+        untested: false,
+      })
+    }
+    // A failure is said, by the check, in its place.
+    expect(codesOf(withTransfer('fail'))).toContain('FILE_TRANSFER_DID_NOT_PASS')
+    expect(codesOf(withTransfer('pass'))).not.toContain('FILE_TRANSFER_DID_NOT_PASS')
+  })
+
+  /**
+   * The three probes no passive reading could ever settle, each resting on the
+   * check that exercises the service for this session.
+   */
+  it('settles the syncing, files and revisions probes on the check that exercises each', () => {
+    const board = (outcomes: Parameters<typeof readingsFrom>[0]) => {
+      const checks = readingsFrom(outcomes)
+
+      return buildBackendSection({
+        topology: topology(),
+        serverStatus: serverStatus(),
+        checks,
+        witnesses: buildWitnessBoard({ checks }),
+      })
+    }
+    const passed = (id: 'sync' | 'revisions' | 'file-transfer') => ({
+      id,
+      state: 'pass' as const,
+      result: safeConstant('result'),
+      detail: 'detail',
+    })
+    const probes: Record<string, 'sync' | 'revisions' | 'file-transfer'> = {
+      'Syncing server probe': 'sync',
+      'Revisions service probe': 'revisions',
+      'Files service probe': 'file-transfer',
+    }
+
+    for (const [label, check] of Object.entries(probes)) {
+      const notRun = rowOf(board({}), label)
+      const ran = rowOf(board({ [check]: passed(check) }), label)
+      const failed = rowOf(board({ [check]: { ...passed(check), state: 'fail' as const } }), label)
+
+      // Not tested, naming the check; OK once it passed; and never OK on a
+      // probe that answered while the service failed at its actual job.
+      expect({ label, verdict: notRun.verdict }).toEqual({ label, verdict: 'untested' })
+      expect(notRun.caveat).toContain('Not tested yet: run “')
+      expect({ label, verdict: ran.verdict }).toEqual({ label, verdict: 'healthy' })
+      expect(failed.verdict).not.toBe('healthy')
+      // One check settles one probe: the other two are unmoved by it.
+      for (const other of Object.keys(probes).filter((candidate) => candidate !== label)) {
+        expect(rowOf(board({ [check]: passed(check) }), other).verdict).toBe('untested')
+      }
+    }
   })
 
   it('does not raise the unverified-transfer finding when no files probe was reported at all', () => {

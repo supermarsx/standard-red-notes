@@ -46,8 +46,12 @@ jest.mock('@standardnotes/snjs', () => ({
   // `ContentType.TYPES.File` throw, `observed` swallow the throw, and the census
   // read "not reported" for a reason that does not exist in production — the same
   // trap the SettingName double above records.
-  ContentType: { TYPES: { File: 'SN|FileItem' } },
+  ContentType: { TYPES: { File: 'SN|FileItem', Note: 'Note' } },
+  // The file round trip names its throwaway object with the app's own generator.
+  UuidGenerator: { GenerateUuid: () => `made-up-${++madeUpIdentifiers}` },
 }))
+
+let madeUpIdentifiers = 0
 
 jest.mock('@standardnotes/ui-services', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
@@ -233,13 +237,154 @@ const HTTP_ONLY_PATHS = {
   '/v1/sockets/sync/ticket': { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } },
   '/v1/sockets/sync/capabilities': { status: 200, ok: true, data: { capabilities: [] } },
   '/v1/items/storage-usage': { status: 200, ok: true, data: storageUsagePayload },
+  // The revision list of the one note the default account holds.
+  '/v2/items/a-note/revisions': { status: 200, ok: true, data: [] },
 } as const
 
-const makeApplication = (overrides: Record<string, unknown> = {}) => ({
+/**
+ * A files service the round trip can really go round: it stores what is sent and
+ * serves what it stored, and logs every operation with the identifier it named —
+ * which is what lets a test say the check wrote one object, deleted that object,
+ * and named nothing else.
+ */
+const filesApi = () => {
+  const objects = new Map<string, Uint8Array[]>()
+  const tokens = new Map<string, string>()
+  const operations: [string, string][] = []
+  const identifierOf = (token: string): string => tokens.get(token) as string
+
+  return {
+    objects,
+    operations,
+    createUserFileValetToken: jest.fn().mockImplementation(async (remoteIdentifier: string, operation: string) => {
+      const token = `valet-${operation}-${tokens.size}`
+      tokens.set(token, remoteIdentifier)
+      operations.push([`authorize-${operation}`, remoteIdentifier])
+      return token
+    }),
+    startUploadSession: jest.fn().mockImplementation(async (token: string) => {
+      objects.set(identifierOf(token), [])
+      operations.push(['open', identifierOf(token)])
+      return { status: 200, data: { uploadId: 'upload-1' } }
+    }),
+    uploadFileBytes: jest
+      .fn()
+      .mockImplementation(async (token: string, _ownership: string, _chunkId: number, bytes: Uint8Array) => {
+        objects.get(identifierOf(token))?.push(bytes.slice())
+        operations.push(['send', identifierOf(token)])
+        return true
+      }),
+    closeUploadSession: jest.fn().mockResolvedValue(true),
+    downloadFile: jest
+      .fn()
+      .mockImplementation(
+        async (params: {
+          file: { remoteIdentifier: string }
+          onBytesReceived: (bytes: Uint8Array) => Promise<void>
+        }) => {
+          operations.push(['read', params.file.remoteIdentifier])
+          for (const chunk of objects.get(params.file.remoteIdentifier) ?? []) {
+            await params.onBytesReceived(chunk)
+          }
+          return undefined
+        },
+      ),
+    deleteFile: jest.fn().mockImplementation(async (token: string) => {
+      objects.delete(identifierOf(token))
+      operations.push(['delete', identifierOf(token)])
+      return { status: 200, data: {} }
+    }),
+  }
+}
+
+type Answer = { status: number; ok: boolean; data: unknown }
+
+/**
+ * The three reads of the admin diagnostics endpoint, answering one thing.
+ *
+ * The PANE reads it over plain HTTP — a read on the socket lane carries no origin,
+ * so the gateway cannot say whether this client's origin is admitted. The
+ * control-plane CHECK reads it again through the lane-observing helper, which is
+ * the one place the lane is the question. And the flags read still goes through
+ * the ordinary lane-first helper. A test that says "the server answers X" means
+ * all three, which is what its single stub used to mean.
+ */
+const answering = (
+  answer: Answer,
+  options: { carriedBy?: 'socket' | 'http'; http?: Readonly<Record<string, Answer>> } = {},
+) => ({
+  httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
+    if (path === '/v1/admin/sync-diagnostics') {
+      return answer
+    }
+    if (options.http !== undefined && Object.hasOwn(options.http, path)) {
+      return options.http[path]
+    }
+    return Object.hasOwn(HTTP_ONLY_PATHS, path)
+      ? HTTP_ONLY_PATHS[path as keyof typeof HTTP_ONLY_PATHS]
+      : { status: 404, ok: false, data: {} }
+  }),
+  serverGetJsonRequestObservingLane: jest.fn().mockResolvedValue({ ...answer, carriedBy: options.carriedBy ?? 'http' }),
+  serverGetJsonRequest: jest.fn().mockResolvedValue(answer),
+})
+
+/**
+ * A transport ledger that counts the app's own sync rounds, as the real one does.
+ * The Sync round trip check reads the difference either side of `sync()`, so a
+ * double whose `sync()` moves nothing would report "no sync round settled".
+ */
+const countingSync = (carrier: 'socket' | 'http' | 'failed' = 'http') => {
+  const rounds = { socket: 0, http: 0, failed: 0 }
+
+  return {
+    sync: {
+      isDatabaseLoaded: () => true,
+      sync: jest.fn().mockImplementation(async () => {
+        rounds[carrier] += 1
+      }),
+    },
+    ledger: () => ({
+      controlPlaneRejections: 0,
+      controlPlaneRejectionsByStatus: { 401: 0, 498: 0 },
+      fallbackCounts: {},
+      laneStandDownCounts: {},
+      syncRoundCounts: { ...rounds },
+      transitions: [],
+      transitionsDropped: 0,
+      recordingForMs: 60_000,
+    }),
+  }
+}
+
+const makeApplication = (
+  overrides: Record<string, unknown> = {},
+  options: { syncCarrier?: 'socket' | 'http' | 'failed' } = {},
+) => {
+  const counting = countingSync(options.syncCarrier)
+  const application = { ...makeApplicationWith(counting), ...overrides }
+  // A GETTER on the finished object, not a spread value: the check reads the
+  // counters either side of `sync()`, and a snapshot taken at construction would
+  // read the same on both sides for ever.
+  if (!Object.hasOwn(overrides, 'syncTransportLedger')) {
+    Object.defineProperty(application, 'syncTransportLedger', { get: () => counting.ledger(), enumerable: true })
+  }
+
+  return application
+}
+
+const makeApplicationWith = (counting: ReturnType<typeof countingSync>) => ({
   serverGetJsonRequest: jest.fn().mockImplementation(async (path: string) => {
     return Object.hasOwn(GET_PATHS, path)
       ? GET_PATHS[path as keyof typeof GET_PATHS]
       : { status: 404, ok: false, data: {} }
+  }),
+  serverGetJsonRequestObservingLane: jest.fn().mockImplementation(async (path: string) => {
+    return {
+      ...(Object.hasOwn(GET_PATHS, path)
+        ? GET_PATHS[path as keyof typeof GET_PATHS]
+        : { status: 404, ok: false, data: {} }),
+      carriedBy: 'http',
+    }
   }),
   serverJsonRequest: jest
     .fn()
@@ -249,13 +394,19 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   // helpers throw when a socket is live. This double answers only the ticket and
   // capability paths, and the tests below pin which helper each probe reaches for.
   httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
+    if (Object.hasOwn(GET_PATHS, path)) {
+      return GET_PATHS[path as keyof typeof GET_PATHS]
+    }
     return Object.hasOwn(HTTP_ONLY_PATHS, path)
       ? HTTP_ONLY_PATHS[path as keyof typeof HTTP_ONLY_PATHS]
       : { status: 404, ok: false, data: {} }
   }),
   // The SAME method the Server pane calls, read additively for the Database
   // section. Nothing is migrated out of that pane and no new route exists.
-  legacyApi: { adminGetServerStatus: jest.fn().mockResolvedValue({ status: 200, data: serverStatusPayload }) },
+  legacyApi: {
+    adminGetServerStatus: jest.fn().mockResolvedValue({ status: 200, data: serverStatusPayload }),
+    ...filesApi(),
+  },
   sessions: { isSignedIn: () => true, isSignedIntoFirstPartyServer: () => true },
   featuresController: { isAdminUser: () => true, isEntitledToSharedVaults: () => true },
   subscriptionController: { onlineSubscription: { planName: 'PRO_PLAN', cancelled: false, endsAt: 0 } },
@@ -278,10 +429,11 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   // The file census the Space block reads to decide whether an absent usage
   // figure is a lost bookkeeping write or simply nothing to report. Two surfaces,
   // because an empty item list means nothing until the cold load has finished.
-  sync: { isDatabaseLoaded: () => true },
-  items: { getItems: () => [] },
+  sync: counting.sync,
+  syncTransportLedger: counting.ledger(),
+  // One note, so there is a revision history to ask for; no files.
+  items: { getItems: (type?: string) => (type === 'Note' ? [{ uuid: 'a-note' }] : []) },
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
-  ...overrides,
 })
 
 let container: HTMLElement
@@ -591,7 +743,7 @@ describe('AdminDiagnosticsTab — the Overview router', () => {
 
   it('says what an absent verdict means instead of leaving a row that reads like a pass', async () => {
     const application = makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 404, ok: false, data: {} }),
+      ...answering({ status: 404, ok: false, data: {} }),
       // No transport status either: with one, the HTTP_ONLY reading is a real
       // measurement and the section is honestly "Degraded" rather than unknown.
       syncTransportStatus: undefined,
@@ -696,7 +848,7 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
   it('says nothing can be done, rather than naming a variable, in home-server mode', async () => {
     const text = await openWebsocket(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -730,7 +882,7 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
   it('claims nothing about SYNC_ITEMS from the older advertised boolean', async () => {
     const text = await openWebsocket(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -760,7 +912,7 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
   it('renders the withheld cause and its meaning when the server does report the verdict', async () => {
     const text = await openWebsocket(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -796,7 +948,8 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
    * reported.
    */
   it('renders the unproduced counter and ledger blocks as empty notes, never as zeros', async () => {
-    const text = await openWebsocket()
+    // A client build with no realtime transport installed has no ledger to read.
+    const text = await openWebsocket(makeApplication({ syncTransportLedger: undefined }))
 
     expect(text).toContain('Gateway admission and traffic')
     expect(text).toContain('reported no admission counters at all')
@@ -822,7 +975,7 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
   it('threads the admission block, so the ten counter rows render as values', async () => {
     await openWebsocket(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -866,7 +1019,7 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
   it('says no gateway is attached rather than blaming the server build', async () => {
     const text = await openWebsocket(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -885,7 +1038,7 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
   it('renders every realtime health row the gateway reported', async () => {
     const text = await openWebsocket(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -988,7 +1141,7 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
   it('threads the per-call gRPC fallback counters off the payload', async () => {
     await openEnvironment(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -1067,7 +1220,7 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
   it('threads the runtime block, so the gateway and auth facts render as values', async () => {
     await openEnvironment(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -1103,7 +1256,7 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
   it('does not paint an unprobeable auth process as a fault', async () => {
     await openEnvironment(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -1123,9 +1276,7 @@ describe('AdminDiagnosticsTab — Environment & setup', () => {
   it('says the server does not report presence rather than showing an empty table', async () => {
     const text = await openEnvironment(
       makeApplication({
-        serverGetJsonRequest: jest
-          .fn()
-          .mockResolvedValue({ status: 200, ok: true, data: { ...unavailablePayload, deployment: undefined } }),
+        ...answering({ status: 200, ok: true, data: { ...unavailablePayload, deployment: undefined } }),
       }),
     )
 
@@ -1180,7 +1331,7 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
   it('threads the datastore and queue blocks, including the verdict the server derived', async () => {
     await openBackend(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: {
@@ -1201,8 +1352,11 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     expect(sectionRow('Database connection state')[1]).toBe('handle-only')
     expect(sectionRow('Database connection state')[2]).toBe('Not working')
     expect(sectionRow('Database write probe')[1]).toBe('accepted')
-    // Narrow positive: accepted is a necessary condition, so it is capped.
-    expect(sectionRow('Database write probe')[2]).toBe('Unknown')
+    // Narrow positive: accepted is a necessary condition, so it is capped — and
+    // on this tab, whose sync does not ride a socket, there is no real write this
+    // pane can watch land without changing the operator's data. So it is context
+    // and says why, rather than an "unknown" nothing here could ever resolve.
+    expect(sectionRow('Database write probe')[2]).toBe('Info')
     expect(sectionRow('Schema migrations')[1]).toBe('yes')
     // Absent pool figures inside a block that DID report: the driver keeps none.
     expect(sectionRow('Connection pool in use')[1]).toBe('no pool kept by this driver')
@@ -1223,7 +1377,7 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
   it('renders a withheld queue verdict as withheld, not as the reassuring answer', async () => {
     await openBackend(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({
+        ...answering({
           status: 200,
           ok: true,
           data: { ...unavailablePayload, queues: { consumerCount: 1 } },
@@ -1286,7 +1440,16 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     const overLane = new Set(application.serverGetJsonRequest.mock.calls.map(([path]: [string]) => path))
     const overHttp = new Set(application.httpOnlyJsonRequest.mock.calls.map(([, path]: [string, string]) => path))
 
-    expect([...overLane].sort()).toEqual(['/v1/admin/sync-diagnostics'])
+    // The pane's own read of the diagnostics endpoint is plain HTTP: over the
+    // socket lane it arrives with no origin, and the gateway then cannot say
+    // whether this client's origin is admitted. The lane-first helper asks for
+    // nothing here; the one lane-observing read is the control-plane CHECK,
+    // whose whole question is which lane carries it.
+    expect([...overLane].sort()).toEqual([])
+    expect(overHttp.has('/v1/admin/sync-diagnostics')).toBe(true)
+    expect(application.serverGetJsonRequestObservingLane.mock.calls.map(([path]: [string]) => path)).toEqual([
+      '/v1/admin/sync-diagnostics',
+    ])
     expect(overHttp.has('/v1/items/storage-usage')).toBe(true)
     // And the lane-first helper must NEVER be the one that asks for it: that is
     // the regression, and it is invisible in any assertion over a merged list.
@@ -1829,6 +1992,39 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
       }),
     })
 
+  /**
+   * *** THE SHAPE THE GATEWAY REALLY SENDS. *** The route is proxied to the auth
+   * service, so the flags arrive inside `{ meta, data: { flags } }`. The read
+   * looked for `flags` at the top of the body, found nothing, and both rows read
+   * "the read carried no flags" on every deployment — captured live on a compose
+   * stack and on a single container.
+   */
+  it('reads the flags through the gateway’s envelope, which is how they really arrive', async () => {
+    const application = makeApplication({
+      sessions: {
+        isSignedIn: () => true,
+        isSignedIntoFirstPartyServer: () => true,
+        getUser: () => ({ uuid: FLAG_READ_USER_UUID }),
+      },
+      serverGetJsonRequest: jest.fn().mockImplementation(async (path: string) => {
+        return path.includes('/feature-flags')
+          ? {
+              status: 200,
+              ok: true,
+              data: {
+                meta: { auth: { userUuid: FLAG_READ_USER_UUID } },
+                data: { flags: { LIVE_SYNC_ENABLED: null, COLLABORATION_ENABLED: 'false' } },
+              },
+            }
+          : { status: 404, ok: false, data: {} }
+      }),
+    })
+    await openAccount(application)
+
+    expect(sectionRow('Live sync for this account')[1]).toBe('enabled')
+    expect(sectionRow('Collaboration permitted for this account')[1]).toBe('disabled')
+  })
+
   it('reads this account’s own feature flags and renders both switches', async () => {
     const application = flagsApplication({ LIVE_SYNC_ENABLED: null, COLLABORATION_ENABLED: 'false' })
     await openAccount(application)
@@ -1882,7 +2078,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
   it('reports a 403 as the role being refused, and names the session cause', async () => {
     const text = await openAccount(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 403, ok: false, data: {} }),
+        ...answering({ status: 403, ok: false, data: {} }),
       }),
     )
 
@@ -1893,7 +2089,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
   it('reports a 401 as not establishing the role at all, rather than as a refusal', async () => {
     const text = await openAccount(
       makeApplication({
-        serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 401, ok: false, data: {} }),
+        ...answering({ status: 401, ok: false, data: {} }),
       }),
     )
 
@@ -2032,9 +2228,7 @@ describe('AdminDiagnosticsTab — Browser', () => {
   it('reports no clock offset at all when the server sent no capture instant', async () => {
     const text = await openBrowser(
       makeApplication({
-        serverGetJsonRequest: jest
-          .fn()
-          .mockResolvedValue({ status: 200, ok: true, data: { ...unavailablePayload, capturedAt: undefined } }),
+        ...answering({ status: 200, ok: true, data: { ...unavailablePayload, capturedAt: undefined } }),
       }),
     )
 
@@ -2190,10 +2384,51 @@ describe('AdminDiagnosticsTab — Checks', () => {
     expect(text).not.toContain('had nothing to test here')
   })
 
-  it('does not write, invite or delete anything while testing', async () => {
+  /**
+   * *** OPENING THE PANE WRITES NOTHING. *** The checks that run on open are the
+   * read-only ones. No ticket is minted and no file is stored until an operator
+   * presses a button that says so.
+   */
+  it('writes nothing at all until an operator starts a run', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+
+    expect(application.legacyApi.operations).toEqual([])
+    expect(application.httpOnlyJsonRequest.mock.calls.filter(([method]: [string]) => method === 'POST')).toEqual([])
+    expect(application.serverJsonRequest).not.toHaveBeenCalled()
+  })
+
+  /**
+   * *** AND A RUN WRITES EXACTLY TWO THINGS. *** One ticket, never redeemed; and
+   * one throwaway object under an identifier the check made up, which it deletes.
+   * Asserted as the whole list of file operations, in order, so a check that
+   * starts naming a second object — or stops deleting the first — fails here.
+   */
+  it('writes one ticket and one throwaway object in a run, and deletes the object', async () => {
     const application = makeApplication()
     await renderTab(application)
     await clickButton('Run all checks')
+
+    const operations = application.legacyApi.operations
+    const identifier = operations[0]?.[1]
+    expect(identifier).toMatch(/^made-up-\d+$/)
+    expect(operations).toEqual([
+      ['authorize-write', identifier],
+      ['open', identifier],
+      ['send', identifier],
+      ['send', identifier],
+      ['authorize-read', identifier],
+      ['read', identifier],
+      ['authorize-delete', identifier],
+      ['delete', identifier],
+    ])
+    // Nothing is left on the files service.
+    expect(application.legacyApi.objects.size).toBe(0)
+
+    await openSubtab('Checks')
+    const transfer = activePanel().querySelector('[data-diagnostics-probe="file-transfer"]')
+    expect(transfer?.getAttribute('data-diagnostics-probe-status')).toBe('healthy')
+    expect(transfer?.textContent).toContain('stored, read back intact over HTTP · deleted')
 
     // Only the single, self-expiring ticket mint may POST, and only to /ticket.
     for (const [method, path] of application.httpOnlyJsonRequest.mock.calls) {
@@ -2211,9 +2446,11 @@ describe('AdminDiagnosticsTab — Checks', () => {
     // and a path-only assertion would admit any other write added here later.
     for (const [method, path] of application.httpOnlyJsonRequest.mock.calls) {
       expect([
+        ['GET', '/v1/admin/sync-diagnostics'],
         ['GET', '/v1/sockets/sync/capabilities'],
         ['POST', '/v1/sockets/sync/ticket'],
         ['GET', '/v1/items/storage-usage'],
+        ['GET', '/v2/items/a-note/revisions'],
       ]).toContainEqual([method, path])
     }
     expect(application.serverJsonRequest).not.toHaveBeenCalled()
@@ -2234,7 +2471,17 @@ describe('AdminDiagnosticsTab — Checks', () => {
     // 1. the header, beside Run all checks, on every tab
     const consent = container.querySelector('[data-diagnostics-consent]')
     expect(consent?.textContent).toContain(sentence)
-    expect(consent?.textContent).toContain('1 of 3 checks write something')
+    expect(consent?.textContent).toContain('2 of 6 checks write something')
+    // The file round trip's own account of itself is there too, in full.
+    expect(consent?.textContent).toContain('Uploads ONE throwaway object of 16 KiB of random bytes')
+    expect(consent?.textContent).toContain('none of your own files is read, changed or removed')
+    // And WHAT a run writes is on the page without opening anything: consent that
+    // has to be unfolded to be read is not consent.
+    const writes = container.querySelector('[data-diagnostics-writes]')
+    expect(writes?.closest('details')).toBeNull()
+    expect(writes?.textContent).toBe(
+      'Run all checks mints one short-lived socket ticket that is never used, and uploads one throwaway 16 KiB file of random bytes, reads it back and deletes it. Nothing of yours is read, changed or removed.',
+    )
     for (const label of ALL_SUBTABS) {
       await openSubtab(label)
       expect(container.querySelector('[data-diagnostics-consent]')?.textContent).toContain(sentence)
@@ -2404,7 +2651,7 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
   it('explains a 403 rather than rendering an empty screen', async () => {
     const noteIfForbidden = jest.fn()
     const application = makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 403, ok: false, data: {} }),
+      ...answering({ status: 403, ok: false, data: {} }),
     })
 
     await act(async () => {
@@ -2423,53 +2670,137 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
   })
 
   it('renders the healthy path without inventing findings', async () => {
-    const application = makeApplication({
-      httpOnlyJsonRequest: jest
-        .fn()
-        .mockImplementation(async (_method: string, path: string) =>
-          path === '/v1/sockets/sync/capabilities'
-            ? { status: 200, ok: true, data: { capabilities: [{ id: 'ws-sync' }] } }
-            : path === '/v1/sockets/sync/ticket'
-              ? { status: 200, ok: true, data: {} }
-              : { status: 200, ok: true, data: storageUsagePayload },
+    const operations = ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS']
+    const application = makeApplication(
+      {
+        ...answering(
+          {
+            status: 200,
+            ok: true,
+            data: {
+              capturedAt: CAPTURED_AT,
+              deployment: {
+                ...unavailablePayload.deployment,
+                serviceProxySetting: 'grpc',
+                grpcSyncingProxyBound: true,
+              },
+              gate: {
+                recorded: true,
+                gatewayAttached: true,
+                syncLaneEnabled: true,
+                syncItems: { state: 'ADVERTISED', cause: null, remedy: null, probe: 'READY' },
+                unmetPreconditions: [],
+                unmetCodes: [],
+                files: { advertised: true },
+              },
+              live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
+              protocol: { version: 1, serverOperations: operations },
+            },
+          },
+          {
+            // A healthy socket carries the control-plane read, and the check
+            // reports the lane it MEASURED.
+            carriedBy: 'socket',
+            // The descriptor and ticket a healthy server serves, so the checks
+            // see what this payload describes rather than the default fixture.
+            http: {
+              '/v1/sockets/sync/capabilities': { status: 200, ok: true, data: { capabilities: [{ id: 'ws-sync' }] } },
+              '/v1/sockets/sync/ticket': { status: 200, ok: true, data: {} },
+            },
+          },
         ),
-      serverGetJsonRequest: jest.fn().mockResolvedValue({
-        status: 200,
-        ok: true,
-        data: {
-          capturedAt: CAPTURED_AT,
-          deployment: { ...unavailablePayload.deployment, serviceProxySetting: 'grpc', grpcSyncingProxyBound: true },
-          gate: {
-            recorded: true,
-            gatewayAttached: true,
-            syncLaneEnabled: true,
-            syncItems: { state: 'ADVERTISED', cause: null, remedy: null, probe: 'READY' },
-            unmetPreconditions: [],
-            unmetCodes: [],
-            files: { advertised: true },
-          },
-          live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
-          protocol: {
-            version: 1,
-            serverOperations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS'],
-          },
-        },
-      }),
-      syncTransportStatus: {
-        state: 'READY',
-        operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS'],
+        syncTransportStatus: { state: 'READY', operations },
       },
-    })
+      { syncCarrier: 'socket' },
+    )
 
     const text = await renderTab(application)
 
-    // The descriptor a healthy server serves, so the read-only check that runs
-    // on open sees what this payload describes rather than the default fixture's
-    // empty list.
     expect(text).toContain('fully configured and available')
     expect(routerStatus('websocket')).not.toBe('broken')
     expect(routerStatus('websocket')).not.toBe('degraded')
     expect(await openSubtab('WebSocket')).toContain('Socket lane and boot gate')
+    // The lane the control-plane read rode is the one MEASURED on that read.
+    expect(sectionRow('Authenticated control-plane read')[1]).toBe('answered over the socket’s control-plane lane')
+    expect(sectionRowStatus('Authenticated control-plane read')).toBe('healthy')
+
+    await openSubtab('Database & internal comms')
+    // And the sync is one that happened: counted by the transport either side of
+    // the app's own `sync()`, not read off the call returning.
+    expect(application.sync.sync).toHaveBeenCalledTimes(1)
+    expect(sectionRow('Sync round trip')[1]).toBe('completed over the socket')
+    expect(sectionRowStatus('Sync round trip')).toBe('healthy')
+    expect(sectionRow('Revision history read')[1]).toBe('answered')
+    // The check that writes has not been asked to, and says so.
+    expect(sectionRowStatus('File transfer round trip')).toBe('untested')
+  })
+
+  /**
+   * *** THE STRANDED LANE, WHICH THIS CHECK USED TO PASS. *** The socket is up
+   * and negotiated API_RPC; the lane refuses the read and HTTP quietly serves it.
+   * The old row inferred the lane from the negotiation and read OK.
+   */
+  it('reports a control-plane read that HTTP served on a socket that negotiated the lane as something lost', async () => {
+    const operations = ['SYNC_ITEMS', 'API_RPC']
+    const application = makeApplication({
+      ...answering({ status: 200, ok: true, data: unavailablePayload }, { carriedBy: 'http' }),
+      syncTransportStatus: { state: 'READY', operations },
+    })
+    await renderTab(application)
+    await openSubtab('WebSocket')
+
+    expect(sectionRow('Authenticated control-plane read')[1]).toBe(
+      'answered over HTTP, although this socket negotiated API_RPC',
+    )
+    expect(sectionRowStatus('Authenticated control-plane read')).toBe('degraded')
+  })
+
+  it('reports a sync that went over HTTP on a socket that negotiated it as working, with something lost', async () => {
+    const application = makeApplication(
+      { syncTransportStatus: { state: 'READY', operations: ['SYNC_ITEMS'] } },
+      { syncCarrier: 'http' },
+    )
+    await renderTab(application)
+    await openSubtab('Database & internal comms')
+
+    expect(sectionRow('Sync round trip')[1]).toBe('completed over HTTP, although this socket negotiated SYNC_ITEMS')
+    expect(sectionRowStatus('Sync round trip')).toBe('degraded')
+    expect(activePanel().textContent).toContain('Sync works, but not over the socket that agreed to carry it')
+  })
+
+  it('reports a sync that completed on no lane as not working, and says what that costs', async () => {
+    const application = makeApplication({}, { syncCarrier: 'failed' })
+    await renderTab(application)
+    await openSubtab('Database & internal comms')
+
+    expect(sectionRow('Sync round trip')[1]).toBe('the sync did not complete')
+    expect(sectionRowStatus('Sync round trip')).toBe('broken')
+    expect(routerStatus('backend')).toBe('broken')
+    expect(activePanel().textContent).toContain('A sync from this tab did not complete')
+  })
+
+  /**
+   * *** A FILE THAT CANNOT BE STORED, AND WHAT IS LEFT BEHIND. *** The files
+   * service takes the upload and will not serve it back. The row names the step,
+   * the section goes red, a card says what to do — and the object the failed run
+   * left on the server is deleted anyway.
+   */
+  it('names the step a file round trip failed at, raises it, and still deletes what it stored', async () => {
+    const application = makeApplication()
+    application.legacyApi.downloadFile.mockResolvedValue({ text: 'range not satisfiable' })
+    await renderTab(application)
+    await clickButton('Run all checks')
+    await openSubtab('Database & internal comms')
+
+    expect(sectionRow('File transfer round trip')[1]).toBe('the stored object could not be read back · deleted')
+    expect(sectionRowStatus('File transfer round trip')).toBe('broken')
+    expect(routerStatus('backend')).toBe('broken')
+    expect(activePanel().textContent).toContain('A file could not be stored and read back')
+    // The files probe answered, and is NOT called working over a transfer that failed.
+    expect(sectionRowStatus('Files service probe')).not.toBe('healthy')
+    // Cleaned up after a half-way failure.
+    expect(application.legacyApi.operations.at(-1)?.[0]).toBe('delete')
+    expect(application.legacyApi.objects.size).toBe(0)
   })
 
   /**
@@ -2559,7 +2890,7 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
       protocol: { version: 1, serverOperations: ['SYNC_ITEMS', SECRETS[3]] },
     }
     const application = makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 200, ok: true, data: poisoned }),
+      ...answering({ status: 200, ok: true, data: poisoned }),
       legacyApi: {
         adminGetServerStatus: jest.fn().mockResolvedValue({
           status: 200,
@@ -2624,7 +2955,7 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
    */
   it('counts an unrecognised operation in its rows rather than naming it', async () => {
     const application = makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({
+      ...answering({
         status: 200,
         ok: true,
         data: {
@@ -2677,7 +3008,7 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
 describe('AdminDiagnosticsTab — an unreadable diagnostics endpoint', () => {
   const unreadable = (status: number) =>
     makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({ status, ok: false, data: {} }),
+      ...answering({ status, ok: false, data: {} }),
       syncTransportStatus: { state: 'READY', operations: ['SYNC_ITEMS', 'API_RPC'] },
     })
 
@@ -2956,7 +3287,7 @@ describe('AdminDiagnosticsTab — identity on the header', () => {
 
   it('says the capture instant was not reported rather than inventing one', async () => {
     const application = makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 200, ok: true, data: { gate: {} } }),
+      ...answering({ status: 200, ok: true, data: { gate: {} } }),
     })
     await renderTab(application)
 

@@ -35,7 +35,11 @@ import {
   buildWitnessBoard,
   CHECKS,
   checkRow,
+  describeControlPlaneRead,
+  describeFileTransfer,
   describeMarkerCheck,
+  describeRevisionsRead,
+  describeSyncRound,
   readingsFrom,
   RUNNABLE_CHECK_IDS,
   summarizeChecks,
@@ -57,6 +61,8 @@ import {
   type Verdict,
 } from './diagnosticsSections'
 import DiagnosticsSection from './DiagnosticsSection'
+import { runFileTransferCheck, type FileTransferResult } from './diagnosticFileTransfer'
+import { fileTransferPortFor, readRevisionsOfOneNote, runSyncRound } from './diagnosticRunners'
 import { COVERAGE_SENTENCE, OVERALL_SENTENCE, rankFindings, SOURCE_JOIN, triage } from './diagnosticsTriage'
 import {
   buildWebsocketSection,
@@ -393,6 +399,15 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   const [outcomes, setOutcomes] = useState<Partial<Record<CheckId, CheckOutcome>>>({})
   /**
+   * The last file round trip, as the closed facts it returned.
+   *
+   * Kept beside the check's worded outcome because a row in ANOTHER section
+   * rests on half of it: whether the socket's file lane returned the object is
+   * what settles `WEBSOCKET_SYNC_FILES_URL`, and that is not recoverable from a
+   * sentence.
+   */
+  const [fileTransfer, setFileTransfer] = useState<FileTransferResult | undefined>(undefined)
+  /**
    * How far the run in flight has got, or `null` when idle.
    *
    * It carries WHICH check is running and how many are done, so the button can
@@ -487,7 +502,26 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     setLoadError(null)
     setReadFailure(undefined)
     try {
-      const response = await application.serverGetJsonRequest<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
+      /**
+       * *** PLAIN HTTP, AND NOT THE HELPER THE REST OF THE APP USES. ***
+       *
+       * `serverGetJsonRequest` prefers the socket's control-plane lane, and a
+       * request that rides it reaches the gateway over its own loopback with no
+       * `Origin` and no `Referer`. The admission block is computed from exactly
+       * those two headers — so "This client's origin admitted" read "not
+       * reported" on every deployment whose socket was healthy, which is the
+       * one case where the answer is a plain yes. Measured on both topologies:
+       * the same endpoint over HTTP answers `originAdmitted: true`.
+       *
+       * It is also the right lane on principle. This read is the pane; a pane
+       * that goes blank when the socket's control-plane lane is stranded cannot
+       * report that it is. Whether THAT lane works is the control-plane check's
+       * question, and it asks it separately, on purpose.
+       */
+      const response = await application.httpOnlyJsonRequest<SyncDiagnosticsPayload>(
+        'GET',
+        '/v1/admin/sync-diagnostics',
+      )
       if (!response.ok) {
         noteIfForbidden(response)
         setPayload(undefined)
@@ -864,14 +898,25 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         return { reading: 'not-attempted' }
       }
 
-      const response = await application.serverGetJsonRequest<{ flags?: Record<string, string | null> }>(
+      type FlagsBody = { flags?: Record<string, string | null> }
+
+      const response = await application.serverGetJsonRequest<FlagsBody & { data?: FlagsBody }>(
         `/v1/admin/users/${encodeURIComponent(userUuid)}/feature-flags`,
       )
       if (!response.ok) {
         return { reading: response.status === 403 ? 'admin-required' : 'read-threw' }
       }
 
-      const flags = response.data?.flags
+      /**
+       * *** THE GATEWAY WRAPS THIS ONE. *** The route is proxied to the auth
+       * service, so the body arrives as `{ meta, data: { flags } }` — and this
+       * read looked for `flags` at the top, found nothing, and reported "the
+       * read carried no flags" on every deployment. "Live sync for this
+       * account" and "Collaboration permitted" were unanswered for that reason
+       * alone. Read through the envelope when there is one and off the body
+       * when there is not, exactly as the storage-usage read above does.
+       */
+      const flags = (response.data?.data ?? response.data)?.flags
       if (flags === undefined || flags === null || typeof flags !== 'object') {
         return { reading: 'read-carried-no-flags' }
       }
@@ -1027,44 +1072,36 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         }
       },
       'control-plane': async () => {
-        // When API_RPC is negotiated this rides the socket; otherwise it is an
-        // ordinary HTTP request. Either way a failure here means the admin surface
-        // itself is broken.
         try {
-          const response = await application.serverGetJsonRequest<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
-          if (!response.ok) {
-            // *** A REFUSED READ IS NOT A BROKEN DEPLOYMENT. *** 401, 403 and 404
-            // are the server ANSWERING — that this session is not authenticated,
-            // is not an administrator, or that this build has no such endpoint.
-            // Each is a reason this pane cannot look, and none of them is evidence
-            // about the lane the check was asking after. Calling that a failure is
-            // the "unread is not down" mistake this pane has already made once,
-            // and the Account section is where the role and the session are judged.
-            const cannotLook = response.status === 401 || response.status === 403 || response.status === 404
+          const response =
+            await application.serverGetJsonRequestObservingLane<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
+          const status = application.syncTransportStatus
 
-            return {
-              state: cannotLook ? 'unknown' : 'fail',
-              result: answeredStatus(response.status),
-              detail: cannotLook
-                ? `The admin endpoint answered ${response.status}, so this session cannot read it. That is why this pane is empty, and it says nothing about whether the deployment is working.`
-                : `The admin endpoint answered ${response.status}.`,
-            }
-          }
-
-          const overSocket = application.syncTransportStatus?.operations.includes('API_RPC') === true
-
-          return {
-            state: 'pass',
-            result: overSocket
-              ? safeConstant('answered; API_RPC is negotiated, so the socket lane carries it')
-              : safeConstant('answered over HTTP; API_RPC is not negotiated'),
-            detail: overSocket
-              ? 'Succeeded. API_RPC is negotiated on this tab’s socket, which is the lane the helper prefers.'
-              : 'Succeeded, over HTTP (API_RPC is not negotiated on this tab).',
-          }
+          return describeControlPlaneRead({
+            status: response.status,
+            ok: response.ok,
+            carriedBy: response.carriedBy,
+            apiRpcNegotiated: status?.state === 'READY' && status.operations.includes('API_RPC'),
+          })
         } catch (error) {
           return requestThrew(error)
         }
+      },
+      sync: async () => {
+        const status = application.syncTransportStatus
+        const round = await runSyncRound(application)
+
+        return describeSyncRound({
+          ...round,
+          socketCarriesSync: status?.state === 'READY' && status.operations.includes('SYNC_ITEMS'),
+        })
+      },
+      revisions: async () => describeRevisionsRead(await readRevisionsOfOneNote(application)),
+      'file-transfer': async () => {
+        const result = await runFileTransferCheck(fileTransferPortFor(application))
+        setFileTransfer(result)
+
+        return describeFileTransfer(result)
       },
     }),
     [application],
@@ -1201,8 +1238,10 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       ...(cryptoWorks === undefined ? {} : { cryptoWorks }),
       ...(localDatabaseLoaded === undefined ? {} : { localDatabaseLoaded }),
       ...(gatewayCachePing === undefined ? {} : { gatewayCachePing }),
+      ...(ledger?.syncRoundCounts === undefined ? {} : { syncRounds: ledger.syncRoundCounts }),
+      ...(fileTransfer === undefined ? {} : { fileSocketRead: fileTransfer.socketRead }),
     })
-  }, [application, browserObservations, payload, readFailure, readings, serverStatus, transport])
+  }, [application, browserObservations, fileTransfer, ledger, payload, readFailure, readings, serverStatus, transport])
 
   const topology = payload?.deployment
   /**
@@ -1600,7 +1639,16 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             Built from the registry, so a check that writes cannot be added without
             its sentence appearing here: the list is every check whose mode is
             `operator`, in its own words. */}
-        <details className="mt-2" data-diagnostics-consent="true">
+        {operatorChecks.length > 0 && (
+          <Text className="mt-2">
+            <span data-diagnostics-writes="true">
+              {`Run all checks ${operatorChecks
+                .map((id) => CHECKS[id].writes ?? `runs “${CHECKS[id].title}”`)
+                .join(', and ')}. Nothing of yours is read, changed or removed.`}
+            </span>
+          </Text>
+        )}
+        <details className="mt-1" data-diagnostics-consent="true">
           <summary className="text-passive-0 cursor-pointer text-xs">
             {`What “Run all checks” does — ${operatorChecks.length} of ${RUNNABLE_CHECK_IDS.length} checks write something`}
           </summary>

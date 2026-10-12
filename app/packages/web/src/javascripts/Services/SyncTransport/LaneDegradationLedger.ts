@@ -132,6 +132,20 @@ export type LaneLedgerTransition = {
  * `websocketSection.spec.ts`, which feeds a REAL ledger into the real section
  * builder — if the shapes ever drift, that file stops compiling.
  */
+/**
+ * What carried one sync round, or that it did not complete.
+ *
+ * *** THE ONE THING THIS PANE COULD NOT SAY ABOUT SYNC WAS WHETHER IT HAPPENED. ***
+ * Every other reading of the durable lane is a necessary condition: the socket
+ * is up, SYNC_ITEMS was negotiated, a variable is set, a probe answered. None of
+ * them is a sync. This is — counted where the round settles, so `socket` means
+ * the gateway committed a durable command and answered it over the socket, and
+ * `http` means the same round was served by the HTTP sync endpoint.
+ */
+export const LANE_LEDGER_SYNC_CARRIERS = ['socket', 'http', 'failed'] as const
+
+export type LaneLedgerSyncCarrier = (typeof LANE_LEDGER_SYNC_CARRIERS)[number]
+
 export type LaneLedgerReading = {
   readonly controlPlaneRejections: number
   readonly controlPlaneRejectionsByStatus: Readonly<Partial<Record<LaneLedgerRejectionStatus, number>>>
@@ -145,6 +159,10 @@ export type LaneLedgerReading = {
    * cause. NOT transitions: the transport did not move. See `recordLaneStandDown`.
    */
   readonly laneStandDownCounts: Readonly<Partial<Record<LaneLedgerReason, number>>>
+  /** Sync rounds this tab settled, by what carried them. Zero for every carrier, never an empty record. */
+  readonly syncRoundCounts: Readonly<Record<LaneLedgerSyncCarrier, number>>
+  /** The most recent sync round. A DURATION from the start of this ledger, never an instant. */
+  readonly lastSyncRound?: { readonly carrier: LaneLedgerSyncCarrier; readonly msSinceLedgerStart: number }
   /** How long this ledger has been recording. An empty ledger is not a quiet one. */
   readonly recordingForMs: number
 }
@@ -167,6 +185,8 @@ export class LaneDegradationLedger {
   private readonly ring: LaneLedgerTransition[] = []
   private readonly fallbacks = new Map<LaneLedgerReason, number>()
   private readonly laneStandDowns = new Map<LaneLedgerReason, number>()
+  private readonly syncRounds = new Map<LaneLedgerSyncCarrier, number>()
+  private lastSyncRound: { carrier: LaneLedgerSyncCarrier; msSinceLedgerStart: number } | undefined
   private readonly rejections = new Map<LaneLedgerRejectionStatus, number>()
   private dropped = 0
   private rejectionTotal = 0
@@ -253,6 +273,18 @@ export class LaneDegradationLedger {
   }
 
   /**
+   * Record one sync round settling, and what carried it.
+   *
+   * A counter per carrier and the most recent one — bounded by the closed carrier
+   * set, so it elides nothing. Nothing about the round itself is kept: no item
+   * count, no token, no size.
+   */
+  recordSyncRound(carrier: LaneLedgerSyncCarrier): void {
+    this.syncRounds.set(carrier, (this.syncRounds.get(carrier) ?? 0) + 1)
+    this.lastSyncRound = { carrier, msSinceLedgerStart: Math.max(0, this.now() - this.startedAt) }
+  }
+
+  /**
    * Record a control-plane read the socket lane refused and that HTTP then served.
    *
    * Only 401 and 498 are counted, and that is not a filter on noise — it is the only
@@ -299,6 +331,12 @@ export class LaneDegradationLedger {
       transitions: [...this.ring],
       transitionsDropped: this.dropped,
       laneStandDownCounts,
+      syncRoundCounts: {
+        socket: this.syncRounds.get('socket') ?? 0,
+        http: this.syncRounds.get('http') ?? 0,
+        failed: this.syncRounds.get('failed') ?? 0,
+      },
+      ...(this.lastSyncRound === undefined ? {} : { lastSyncRound: { ...this.lastSyncRound } }),
       recordingForMs: Math.max(0, this.now() - this.startedAt),
     }
   }
