@@ -317,6 +317,38 @@
   word-break: normal;
 }
 
+/* Standard Red Notes — bug fix: a diagram's label is the colour ITS THEME gave
+ * it, not the colour of the note's body text.
+ *
+ * Mermaid writes an HTML label as `<span class="nodeLabel"><p>…</p></span>` and
+ * colours it on the span (`.label`, `span` in the stylesheet it puts inside the
+ * SVG), leaving the `<p>` to inherit. This app colours paragraphs BY ELEMENT —
+ * `p { color: … }` in stylesheets/_main.scss and `#blocks-editor p { color: … }`
+ * in Theme/custom.scss — and a rule that names an element beats a value it
+ * would only have inherited. So every node and link label in every diagram was
+ * painted in the editor's text colour, whatever theme the diagram was drawn in.
+ *
+ * In `app` mode nobody could see it: the palette handed to mermaid is the
+ * application's, so the two colours were the same one. For any other theme it
+ * is the whole diagram. Measured in the running app's dark theme, a block
+ * PINNED to Forest with the toolbar's own Theme control: mermaid's stylesheet
+ * said `#000000`, the `<span>` computed to that, and the `<p>` inside it was
+ * `rgb(234, 221, 224)` on Forest's light green — 1.05 to 1, unreadable. It is
+ * also what would have made honouring a diagram's own theme
+ * (`resolveMermaidOwnTheme`) change nothing a user could read.
+ *
+ * Two selectors because there are two rules to outrank, and the first has an
+ * id in it: `[data-mermaid-svg-host] p` alone loses to `#blocks-editor p`.
+ * MermaidLabelColour.spec.ts reads both competing rules from their files and
+ * fails if either stops being outranked.
+ *
+ * The drawn host only: colour takes no part in measuring. Print keeps its own
+ * `!important` black (stylesheets/_print.scss), which this does not touch. */
+#blocks-editor [data-mermaid-svg-host='true'] p,
+[data-mermaid-svg-host='true'] p {
+  color: inherit;
+}
+
 .ContentEditable__root [data-super-widget-layout='media'] {
   inline-size: min(100%, 64rem);
 }
