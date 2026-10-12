@@ -5,7 +5,7 @@ import { isIP } from 'net'
 import { Readable, Transform } from 'stream'
 import { createBrotliDecompress, createGunzip, createInflate } from 'zlib'
 
-import { ResolveHost, resolveHttpUrlForOutboundConnection } from './SsrfFilter'
+import { OutboundHttpResolutionPolicy, ResolveHost, resolveHttpUrlForOutboundConnection } from './SsrfFilter'
 
 export interface PinnedHttpRequestOptions {
   url: string | URL
@@ -47,6 +47,14 @@ export type PinnedRequestFactory = (
 export interface PinnedHttpTransportOptions {
   /** Exact operator-configured origins that may resolve to private addresses. */
   allowedPrivateOrigins?: readonly string[]
+  /**
+   * `'private-ranges'` keeps loopback, link-local and every other special range
+   * refused even for a trusted origin. Defaults to `'any'`, the historical
+   * behaviour. See `OutboundHttpResolutionPolicy.allowedPrivateOriginScope`.
+   */
+  allowedPrivateOriginScope?: 'any' | 'private-ranges'
+  /** Addresses refused for every origin, on every hop, trusted or not. */
+  isAddressDenied?: (address: string) => boolean
 }
 
 export class PinnedHttpError extends Error {
@@ -66,14 +74,18 @@ export class PinnedHttpError extends Error {
  * verification retain their normal security semantics.
  */
 export class PinnedHttpTransport {
-  private readonly allowedPrivateOrigins: ReadonlySet<string>
+  private readonly resolutionPolicy: OutboundHttpResolutionPolicy
 
   constructor(
     private readonly resolveHost?: ResolveHost,
     private readonly requestFactory: PinnedRequestFactory = defaultRequestFactory,
     options: PinnedHttpTransportOptions = {},
   ) {
-    this.allowedPrivateOrigins = normalizeAllowedOrigins(options.allowedPrivateOrigins)
+    this.resolutionPolicy = {
+      allowedPrivateOrigins: normalizeAllowedOrigins(options.allowedPrivateOrigins),
+      allowedPrivateOriginScope: options.allowedPrivateOriginScope,
+      isAddressDenied: options.isAddressDenied,
+    }
   }
 
   async fetch(
@@ -115,9 +127,7 @@ export class PinnedHttpTransport {
     try {
       for (let redirects = 0; ; redirects++) {
         const resolved = await awaitWithSignal(
-          resolveHttpUrlForOutboundConnection(currentUrl.toString(), this.resolveHost, {
-            allowedPrivateOrigins: this.allowedPrivateOrigins,
-          }),
+          resolveHttpUrlForOutboundConnection(currentUrl.toString(), this.resolveHost, this.resolutionPolicy),
           lifecycle.signal,
         )
         const selectedAddress = resolved.addresses[0]

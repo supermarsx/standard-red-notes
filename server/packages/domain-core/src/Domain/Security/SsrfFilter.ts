@@ -49,6 +49,28 @@ export interface OutboundHttpResolutionPolicy {
    * pinned connection and still reject malformed URLs and non-HTTP schemes.
    */
   allowedPrivateOrigins?: ReadonlySet<string>
+  /**
+   * How far that operator trust reaches.
+   *
+   * `'any'` is the default and the historical behaviour: a trusted origin skips
+   * every address check, so it may resolve to loopback or to the cloud metadata
+   * address. That is right for an address the operator typed into the server's
+   * own configuration and wrong for an address a USER typed that merely happens
+   * to be on an operator's list.
+   *
+   * `'private-ranges'` lets a trusted origin resolve to a public address or to
+   * RFC 1918, carrier-grade NAT and unique-local space, and to nothing else:
+   * loopback, link-local (169.254.169.254 included), unspecified, multicast and
+   * every other special range stay refused whatever the operator listed. See
+   * {@link isOperatorAllowablePrivateIp}.
+   */
+  allowedPrivateOriginScope?: 'any' | 'private-ranges'
+  /**
+   * Refuses an address whatever else is true about it, trusted origin or not.
+   * Used to keep a deployment's own services out of reach by address as well as
+   * by name. It is consulted for literal hosts and for every DNS answer.
+   */
+  isAddressDenied?: (address: string) => boolean
 }
 
 async function defaultResolveHost(host: string): Promise<string[]> {
@@ -114,12 +136,27 @@ export async function resolveHttpUrlForOutboundConnection(
     throw new SsrfValidationError('The requested host is not allowed.', 'blocked-host')
   }
 
+  // One rule for a literal host and for every DNS answer, so the two paths
+  // cannot drift apart. A denied address is refused first and unconditionally.
+  const isRefusedAddress = (address: string): boolean => {
+    if (policy.isAddressDenied?.(address) === true) {
+      return true
+    }
+    if (!isBlockedIp(address)) {
+      return false
+    }
+    if (!isAllowedPrivateOrigin) {
+      return true
+    }
+    return policy.allowedPrivateOriginScope === 'private-ranges' && !isOperatorAllowablePrivateIp(address)
+  }
+
   // Literal IPs are checked directly; hostnames are resolved and EVERY resolved
   // address must be public (defends against DNS-rebinding to a private address
   // and against names that resolve to metadata IPs).
   let addresses: string[]
   if (isIP(host)) {
-    if (!isAllowedPrivateOrigin && isBlockedIp(host)) {
+    if (isRefusedAddress(host)) {
       throw new SsrfValidationError('The requested host is not allowed.', 'blocked-host')
     }
     addresses = [host]
@@ -129,10 +166,7 @@ export async function resolveHttpUrlForOutboundConnection(
     } catch {
       throw new SsrfValidationError('The host could not be resolved.', 'unresolvable-host')
     }
-    if (
-      addresses.length === 0 ||
-      addresses.some((address) => !isIP(address) || (!isAllowedPrivateOrigin && isBlockedIp(address)))
-    ) {
+    if (addresses.length === 0 || addresses.some((address) => !isIP(address) || isRefusedAddress(address))) {
       throw new SsrfValidationError('The requested host is not allowed.', 'blocked-host')
     }
   }
@@ -211,6 +245,53 @@ for (const [network, prefix] of [
 
 function isBlockedIpv4(ip: string): boolean {
   return blockedIpv4Ranges.check(ip, 'ipv4')
+}
+
+/**
+ * The private space an operator can open to a trusted origin under the
+ * `'private-ranges'` scope: where a self-hosted service on a LAN, a VPN or a
+ * container network actually lives.
+ *
+ * It is a list of what is ALLOWED, not of what is forbidden, so an address
+ * class nobody thought about stays refused. Deliberately absent: loopback
+ * (127.0.0.0/8, ::1), link-local (169.254.0.0/16 with the cloud metadata
+ * address, fe80::/10), the unspecified addresses, multicast, and IPv4-mapped
+ * IPv6 — a mapped answer is never how a real service is published, and
+ * admitting it would let `::ffff:127.0.0.1` ride in on the IPv4 rule.
+ */
+const operatorAllowablePrivateRanges = new BlockList()
+
+for (const [network, prefix] of [
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['172.16.0.0', 12],
+  ['192.168.0.0', 16],
+] as const) {
+  operatorAllowablePrivateRanges.addSubnet(network, prefix, 'ipv4')
+}
+operatorAllowablePrivateRanges.addSubnet('fc00::', 7, 'ipv6')
+
+const ipv4MappedRange = new BlockList()
+ipv4MappedRange.addSubnet('::ffff:0:0', 96, 'ipv6')
+
+export function isOperatorAllowablePrivateIp(ip: string): boolean {
+  if (typeof ip !== 'string' || ip.includes('%')) {
+    return false
+  }
+  try {
+    const family = isIP(ip)
+    if (family === 4) {
+      return operatorAllowablePrivateRanges.check(ip, 'ipv4')
+    }
+    if (family === 6) {
+      // BlockList matches an IPv4 rule against an IPv4-mapped IPv6 address, so
+      // the mapped form has to be turned away before the range check.
+      return !ipv4MappedRange.check(ip, 'ipv6') && operatorAllowablePrivateRanges.check(ip, 'ipv6')
+    }
+  } catch {
+    // Unparseable input is never allowable.
+  }
+  return false
 }
 
 /**
