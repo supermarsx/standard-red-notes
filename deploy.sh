@@ -280,6 +280,22 @@ env_value() {
   printf '%s' "$value"
 }
 
+compose_file_default_project() {
+  # The project name Compose itself gives FILE when nobody passes -p: a
+  # COMPOSE_PROJECT_NAME in .env, else the file's own top-level `name:`, else
+  # the directory name lowercased with everything outside [a-z0-9_-] dropped.
+  local file="$1" name
+  name="$(env_value COMPOSE_PROJECT_NAME)"
+  if [ -z "$name" ] && [ -f "$file" ]; then
+    name="$(sed -n -E 's/^name:[[:space:]]*["'\'']?([A-Za-z0-9_.-]+).*$/\1/p' "$file")"
+    name="${name%%$'\n'*}"
+  fi
+  if [ -z "$name" ]; then
+    name="$(basename -- "$(dirname -- "$file")" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]//g')"
+  fi
+  printf '%s' "$name"
+}
+
 human_size() {
   local bytes="$1"
   if [ "$bytes" -ge 1073741824 ]; then
@@ -674,15 +690,21 @@ missing_required_variables() {
 }
 
 derive_project_name() {
-  # Compose derives the default project name from the project directory name,
-  # lowercased with everything outside [a-z0-9_-] dropped. Containers are
-  # checked authoritatively with `compose ps -a -q`; this derivation is only
-  # needed to look for volumes when no container exists.
+  # The project name Compose will use. Containers are checked authoritatively
+  # with `compose ps -a -q`, but that cannot render the file while .env is
+  # missing, so this derivation is what finds a lost deployment's volumes.
+  #
+  # It has to follow Compose's own rule, not the directory name alone. Both
+  # Compose files in this repository declare a top-level `name:` and Compose
+  # prefers that, so a derivation from the directory looked for the volumes
+  # under the wrong project in every checkout not itself called
+  # standard-red-notes, found none, and let a deployment whose .env was lost
+  # through as a first install.
   if [ -n "${COMPOSE_PROJECT_NAME:-}" ]; then
     printf '%s' "$COMPOSE_PROJECT_NAME"
     return 0
   fi
-  basename -- "$(dirname -- "$COMPOSE_FILE")" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]//g'
+  compose_file_default_project "$COMPOSE_FILE"
 }
 
 existing_project_containers() {
