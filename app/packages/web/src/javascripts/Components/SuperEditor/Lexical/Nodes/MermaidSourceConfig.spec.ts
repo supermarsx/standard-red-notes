@@ -9,6 +9,7 @@
  * which MermaidConfigContract.spec.ts runs inside this same gate.
  */
 import {
+  describeUnreadableFrontmatter,
   emitMermaidConfigScalar,
   listMermaidFrontmatterConfig,
   MermaidConfigChange,
@@ -469,6 +470,23 @@ describe('a frontmatter that cannot be kept exactly', () => {
     // Reset is a removal. It gets no licence to rewrite what a set may not.
     expect(refusalOf(text, [unset('theme')]).code).toBe(code)
   })
+
+  it.each(UNSUPPORTED)(
+    'can be described without claiming anything was attempted, when it has $shape',
+    ({ text, says }) => {
+      // The panel notices such a frontmatter when it opens, before any control is
+      // touched; "so nothing was changed" would then be a sentence about nothing.
+      const reading = readMermaidSourceConfig(text)
+      if (reading.frontmatter.state !== 'unreadable') {
+        throw new Error('read after all')
+      }
+      const described = describeUnreadableFrontmatter(reading.frontmatter.refusal)
+      expect(described).toContain(says)
+      expect(described).not.toContain('nothing was changed')
+      expect(described.endsWith('.')).toBe(true)
+      expect(reading.frontmatter.refusal.message.startsWith(described)).toBe(true)
+    },
+  )
 
   it('names every shape the plan promised to refuse', () => {
     const named = new Set(UNSUPPORTED.map((entry) => entry.code))

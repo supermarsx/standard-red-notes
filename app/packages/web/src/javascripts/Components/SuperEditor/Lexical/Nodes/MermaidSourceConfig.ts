@@ -183,6 +183,18 @@ const refusal = (
 const LEFT_ALONE =
   'Options are only written into a frontmatter that can be kept exactly as it is, so nothing was changed.'
 
+/**
+ * What is wrong with a frontmatter this reader refuses, WITHOUT the "so nothing
+ * was changed" every such refusal ends with. That ending is true of an attempt;
+ * a panel that merely notices the frontmatter, before anything is tried, needs
+ * the first half only.
+ */
+export function describeUnreadableFrontmatter(unreadable: MermaidConfigRefusal): string {
+  return unreadable.message.endsWith(LEFT_ALONE)
+    ? unreadable.message.slice(0, -LEFT_ALONE.length).trim()
+    : unreadable.message
+}
+
 const onLine = (index: number): string => `line ${index + 1}`
 
 // --- scalars ----------------------------------------------------------------
@@ -395,7 +407,7 @@ function readFrontmatter(lines: readonly Line[]): MermaidSourceConfigReading['fr
   const refuse = (code: MermaidConfigRefusalCode, what: string, line: number) =>
     ({
       state: 'unreadable',
-      refusal: refusal(code, `The diagram's frontmatter has ${what} on ${onLine(line)}. ${LEFT_ALONE}`, {
+      refusal: refusal(code, `The diagram’s frontmatter has ${what} on ${onLine(line)}. ${LEFT_ALONE}`, {
         line: line + 1,
       }),
     }) as const
@@ -414,7 +426,7 @@ function readFrontmatter(lines: readonly Line[]): MermaidSourceConfigReading['fr
       state: 'unreadable',
       refusal: refusal(
         'frontmatter-not-closed',
-        `The diagram's frontmatter opens with "---" on ${onLine(open)} and is never closed. ${LEFT_ALONE}`,
+        `The diagram’s frontmatter opens with "---" on ${onLine(open)} and is never closed. ${LEFT_ALONE}`,
         { line: open + 1 },
       ),
     }
@@ -484,7 +496,7 @@ function readFrontmatter(lines: readonly Line[]): MermaidSourceConfigReading['fr
         state: 'unreadable',
         refusal: refusal(
           'unknown-top-level-key',
-          `The diagram's frontmatter has a top-level key "${entry.key}" on ${onLine(entry.line)} that mermaid does not define. ${LEFT_ALONE}`,
+          `The diagram’s frontmatter has a top-level key "${entry.key}" on ${onLine(entry.line)} that mermaid does not define. ${LEFT_ALONE}`,
           { line: entry.line + 1, key: entry.key },
         ),
       }
@@ -494,7 +506,7 @@ function readFrontmatter(lines: readonly Line[]): MermaidSourceConfigReading['fr
         state: 'unreadable',
         refusal: refusal(
           'config-is-not-a-mapping',
-          `The diagram's frontmatter gives "config" a single value on ${onLine(entry.line)} instead of a list of options. ${LEFT_ALONE}`,
+          `The diagram’s frontmatter gives "config" a single value on ${onLine(entry.line)} instead of a list of options. ${LEFT_ALONE}`,
           { line: entry.line + 1, key: 'config' },
         ),
       }
@@ -817,7 +829,7 @@ function applyChange(lines: Line[], change: MermaidConfigChange, eol: string): M
       if (existing.children.length > 0) {
         return refusal(
           'key-holds-a-mapping',
-          `"${key}" holds other options on ${onLine(existing.line)} of the diagram's frontmatter, so it cannot be given a single value here. Nothing was changed.`,
+          `"${key}" holds other options on ${onLine(existing.line)} of the diagram’s frontmatter, so it cannot be given a single value here. Nothing was changed.`,
           { line: existing.line + 1, key },
         )
       }
@@ -829,7 +841,7 @@ function applyChange(lines: Line[], change: MermaidConfigChange, eol: string): M
     if (existing.scalar !== undefined && existing.scalar !== null) {
       return refusal(
         'key-holds-a-value',
-        `"${fullPath.slice(1, depth + 1).join('.')}" is given a single value on ${onLine(existing.line)} of the diagram's frontmatter, so "${key}" cannot be written under it. Nothing was changed.`,
+        `"${fullPath.slice(1, depth + 1).join('.')}" is given a single value on ${onLine(existing.line)} of the diagram’s frontmatter, so "${key}" cannot be written under it. Nothing was changed.`,
         { line: existing.line + 1, key },
       )
     }
@@ -856,7 +868,7 @@ function removeKey(lines: Line[], block: ReadFrontmatter, path: MermaidConfigPat
   if (leaf.children.length > 0) {
     return refusal(
       'key-holds-a-mapping',
-      `"${dotted(path)}" holds other options on ${onLine(leaf.line)} of the diagram's frontmatter, so it was not removed. Nothing was changed.`,
+      `"${dotted(path)}" holds other options on ${onLine(leaf.line)} of the diagram’s frontmatter, so it was not removed. Nothing was changed.`,
       { line: leaf.line + 1, key: dotted(path) },
     )
   }

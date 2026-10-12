@@ -19,7 +19,7 @@
  * too, and that the checks this file names all ran — a check deleted from the
  * script must not be able to pass by being absent.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import * as path from 'node:path'
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..', '..')
@@ -47,13 +47,30 @@ let status: number | null = null
 let stderr = ''
 let summary: Summary | undefined
 
-beforeAll(() => {
+beforeAll(async () => {
   // `process.execPath` is the Node running jest, so the script is judged by the
   // same Node the suite is — 26 on CI, whatever is installed locally.
-  const run = spawnSync(process.execPath, [SCRIPT], { cwd: PACKAGE_ROOT, encoding: 'utf8', timeout: 120_000 })
-  status = run.status
-  stderr = `${run.error ? String(run.error) + '\n' : ''}${run.stderr ?? ''}`
-  const lastLine = (run.stdout ?? '').trim().split('\n').pop() ?? ''
+  //
+  // Started WITHOUT blocking, unlike its sibling: this script takes about three
+  // times as long (it has mermaid parse some eight hundred texts), and a jest
+  // worker that sits inside `spawnSync` for that long cannot answer its parent,
+  // which then force-exits it and warns about leaking tests.
+  let stdout = ''
+  await new Promise<void>((resolve) => {
+    const child = spawn(process.execPath, [SCRIPT], { cwd: PACKAGE_ROOT })
+    const timer = setTimeout(() => child.kill(), 120_000)
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    child.on('error', (error) => {
+      stderr = `${String(error)}\n${stderr}`
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      status = code
+      resolve()
+    })
+  })
+  const lastLine = stdout.trim().split('\n').pop() ?? ''
   try {
     summary = JSON.parse(lastLine) as Summary
   } catch {

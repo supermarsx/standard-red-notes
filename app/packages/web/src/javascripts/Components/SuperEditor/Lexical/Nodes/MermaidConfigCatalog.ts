@@ -373,6 +373,27 @@ export function readMermaidEffectiveTheme(
 }
 
 /**
+ * Where the theme on show comes from, as one line for the control's tooltip and
+ * caption. "Set in the diagram's text" is the answer to a diagram whose picture
+ * and toolbar used to disagree.
+ */
+export function describeMermaidThemeSource(effective: MermaidEffectiveTheme): string {
+  if (effective.state === 'app') {
+    return 'Follows the app’s light or dark theme.'
+  }
+  if (effective.state === 'unknown') {
+    return effective.reason
+  }
+  if (effective.from === 'frontmatter') {
+    return `Written in the diagram’s text, line ${effective.line}.`
+  }
+  if (effective.from === 'directive') {
+    return `Set by an init directive on line ${effective.line} of the diagram’s text.`
+  }
+  return 'Pinned on this block. Choosing a theme here writes it into the diagram’s text.'
+}
+
+/**
  * What the BLOCK stores when a theme is written into the text. A current build
  * ignores the block's theme whenever the text names one, so this value is for
  * an older build reading the same note: one that still lays the application's
@@ -461,6 +482,22 @@ export function readMermaidTextSize(reading: MermaidSourceConfigReading, kind: s
     (written, base) => tidy((written * DEFAULT_MERMAID_TEXT_SIZE) / base),
     (value) => isWholeBetween(value, MIN_MERMAID_TEXT_SIZE, MAX_MERMAID_TEXT_SIZE),
   )
+}
+
+/**
+ * What a text size comes to for one kind of diagram: its share of mermaid's
+ * default, and the pixels that kind's main text is then drawn at — 20 for a
+ * flowchart at 125%, 13.75 for a Gantt chart, whose own default is 11.
+ */
+export function describeMermaidTextSize(kind: string, size: number): { percent: number; pixels: number } | null {
+  const keys = TEXT_SIZE_KEYS[kind]
+  if (keys === undefined) {
+    return null
+  }
+  return {
+    percent: Math.round((size / DEFAULT_MERMAID_TEXT_SIZE) * 100),
+    pixels: tidy((size * keys[0].base) / DEFAULT_MERMAID_TEXT_SIZE),
+  }
 }
 
 /** Spacing, as a percentage of mermaid's default. */
@@ -693,6 +730,27 @@ export function applyMermaidLineStyle(
       ? remove(['flowchart', 'curve'])
       : { path: ['flowchart', 'curve'], value: style },
   ])
+}
+
+/**
+ * The managed options an init directive decides — the ones no control here can
+ * change, because the directive wins over the frontmatter the controls write.
+ * `null` when no directive touches any of them. `unreadable` is a directive
+ * mermaid applies in a way the reader does not follow: it may decide any.
+ */
+export function readMermaidDirectiveOverrides(
+  reading: MermaidSourceConfigReading,
+): { line: number; keys: string[]; unreadable: boolean } | null {
+  if (reading.directive.state === 'absent') {
+    return null
+  }
+  if (reading.directive.state === 'unreadable') {
+    return { line: reading.directive.line, keys: [], unreadable: true }
+  }
+  const keys = MERMAID_MANAGED_CONFIG_PATHS.filter((path) => mermaidDirectiveRefusal(reading, path) !== null).map(
+    (path) => path.join('.'),
+  )
+  return keys.length === 0 ? null : { line: reading.directive.line, keys, unreadable: false }
 }
 
 // --- what a preset is made of ---------------------------------------------------
