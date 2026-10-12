@@ -833,7 +833,11 @@ if [ -n "$MISSING_REQUIRED" ]; then
   exit 1
 fi
 
-if [ "$MODE" = "update" ] && [ "$ENV_PRESENT" -eq 0 ]; then
+# Not the all-in-one topology: it has no setup step and reads no .env (see
+# above), so a missing one there is the normal case, not a missing
+# prerequisite. Without this exception `./deploy.sh --single` on a fresh host
+# stopped here, one line after announcing "no .env required".
+if [ "$MODE" = "update" ] && [ "$ENV_PRESENT" -eq 0 ] && [ "$SINGLE" -eq 0 ]; then
   err "--update was requested but there is no .env at ${ENV_FILE}."
   err "  Run this script without --update (or with --setup) to generate one."
   exit 1
