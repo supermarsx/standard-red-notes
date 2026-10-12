@@ -6,7 +6,7 @@ import { MentionCandidate } from './mentions'
 
 /**
  * Source the @mention autocomplete from the note's shared-vault membership — the
- * SAME source the CollaboratorsPresencePanel uses: the server-backed member list
+ * SAME source the title bar collaborators popup (`useVaultRoster`) uses: the server-backed member list
  * (`vaultUsers.getSharedVaultUsersFromServer`) with display names resolved via
  * trusted contacts (`contacts.findContactForServerUser`). The server hash only
  * carries `user_uuid`, so a member with no trusted contact falls back to showing

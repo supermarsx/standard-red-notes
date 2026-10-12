@@ -12,7 +12,7 @@ type Props = {
 
 /**
  * The title bar's status chips, in their fixed reading order: encrypted
- * collaboration first, then note sync.
+ * collaboration — with whoever else is in the note — first, then note sync.
  *
  * This exists as its own component so that ordering is an observable DOM fact a
  * test can assert, rather than a line buried in NoteView's several-hundred-line
@@ -22,7 +22,7 @@ type Props = {
 const NoteStatusCluster: FunctionComponent<Props> = ({ note, status, syncTakingTooLong, updateSavingIndicator }) => {
   return (
     <div className="flex flex-shrink-0 items-center">
-      <CollaborationStatusIndicator noteUuid={note.uuid} />
+      <CollaborationStatusIndicator note={note} />
       <NoteStatusIndicator
         note={note}
         status={status}

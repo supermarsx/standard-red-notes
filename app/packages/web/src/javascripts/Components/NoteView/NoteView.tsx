@@ -81,8 +81,6 @@ import { MapEditor, MapEditorIdentifier } from './MapEditor/MapEditor'
 import { NoteStatus } from './NoteStatusIndicator'
 import NoteStatusCluster from './NoteStatusCluster'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
-import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
-import PresenceBadge from './PresenceBadge'
 import Button from '../Button/Button'
 import Icon from '../Icon/Icon'
 import { EditorContentWithSafeAreaPadding } from './EditorContentWithSafeAreaPadding'
@@ -1442,7 +1440,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                   syncTakingTooLong={this.state.syncTakingTooLong}
                   updateSavingIndicator={this.state.updateSavingIndicator}
                 />
-                <PresenceBadge item={this.note} />
               </div>
               {shouldShowConflictsButton && (
                 <Button
@@ -1508,9 +1505,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 linkingController={this.application.linkingController}
                 readonly={this.state.readonly}
               />
-              <div className="mt-1.5">
-                <CollaboratorsPresencePanel item={this.note} />
-              </div>
             </div>
           </div>
         )}

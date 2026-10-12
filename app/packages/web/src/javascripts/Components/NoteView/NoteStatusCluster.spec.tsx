@@ -14,10 +14,21 @@ import { createRoot, Root } from 'react-dom/client'
 const mockApplication = {
   setPreference: jest.fn(),
   sync: { sync: jest.fn() },
+  sessions: { getUser: () => ({ uuid: 'self-uuid', email: 'me@example.com' }) },
+  vaultUsers: { getSharedVaultUsersFromServer: jest.fn() },
+  contacts: { findContactForServerUser: () => undefined },
+  preferences: { getLocalValue: (_key: string, fallback: unknown) => fallback, setLocalValue: jest.fn() },
+  addEventObserver: () => () => undefined,
 }
 
 jest.mock('../ApplicationProvider', () => ({
   useApplication: () => mockApplication,
+}))
+
+// The note is in no vault here: the cluster is about ORDER, and the collaboration
+// control's own suite covers what a shared note adds to it.
+jest.mock('@/Hooks/useItemVaultInfo', () => ({
+  useItemVaultInfo: () => ({ vault: undefined }),
 }))
 
 jest.mock('../Popover/Popover', () => ({
@@ -54,6 +65,14 @@ const renderCluster = async (): Promise<void> => {
 
 beforeEach(() => {
   CollaborationStatusRegistry.clearRoom(ROOM)
+  window.matchMedia = ((query: string) => ({
+    matches: query === '(min-width: 768px)',
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+  })) as unknown as typeof window.matchMedia
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)

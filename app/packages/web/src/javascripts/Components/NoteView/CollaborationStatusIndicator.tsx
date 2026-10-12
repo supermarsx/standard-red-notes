@@ -1,13 +1,25 @@
-import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
+import { FunctionComponent, KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { classNames } from '@standardnotes/utils'
-import { IconType } from '@standardnotes/snjs'
+import { SNNote } from '@standardnotes/snjs'
+import { MediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
+import { useLocalPreference } from '@/Hooks/usePreference'
 import Icon from '../Icon/Icon'
 import Popover from '../Popover/Popover'
 import { usePresence } from '../SuperEditor/Collaboration/usePresence'
 import { useCollaborationStatus } from '../SuperEditor/Collaboration/useCollaborationStatus'
-import { CollaborationRoomState } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'
-import { PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
-import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collaboration/collaboratorColor'
+import { CollaboratorAvatarStack } from './CollaboratorAvatars'
+import CollaboratorsPopover, { SESSION_TONE_CLASS } from './CollaboratorsPopover'
+import {
+  buildCollaborators,
+  COLLABORATORS_COLLAPSED_PREF_KEY,
+  describeAttendance,
+  describeSession,
+  FirstPreparationPhase,
+  normalizeCollaboratorsCollapsed,
+  presenceNeedsClock,
+  sessionSpeaksForItself,
+} from './collaborators'
+import { useVaultRoster } from './useVaultRoster'
 
 /**
  * How long a first-time "preparing" must last before it is worth a pixel.
@@ -39,124 +51,52 @@ export const PREPARING_STAND_DOWN_MS = 20_000
 
 export const COLLABORATION_INDICATOR_TEST_ID = 'collaboration-status-indicator'
 
+/** How long to keep trying to move focus into a popup that is still being positioned. */
+const FOCUS_ATTEMPT_FRAMES = 30
+
 type Props = {
-  /** The note whose collaboration room this indicator reflects. */
-  noteUuid: string
-}
-
-type Presentation = {
-  icon: IconType
-  chipClassName: string
-  animateIcon: boolean
-  /** Accessible name — MUST describe the current state, not the widget. */
-  label: string
-  heading: string
-  detail?: string
-}
-
-function describePeers(peers: PresentPeer[]): string {
-  return peers.map((peer) => peer.name).join(', ')
-}
-
-function presentationFor(state: CollaborationRoomState, peers: PresentPeer[]): Presentation {
-  if (state.status.kind === 'active') {
-    const heading = 'Encrypted collaboration active'
-    if (peers.length === 0) {
-      return {
-        icon: 'user',
-        chipClassName: 'bg-success text-success-contrast',
-        animateIcon: false,
-        label: 'Encrypted collaboration active. No one else is editing this note right now.',
-        heading,
-        detail: 'End-to-end encrypted live editing is on. No one else is editing this note right now.',
-      }
-    }
-    const names = describePeers(peers)
-    const noun = peers.length === 1 ? 'collaborator' : 'collaborators'
-    return {
-      icon: 'user-filled',
-      chipClassName: 'bg-success text-success-contrast',
-      animateIcon: false,
-      label: `Encrypted collaboration active. ${peers.length} ${noun} editing now: ${names}`,
-      heading,
-      detail: `${peers.length} ${noun} editing now.`,
-    }
-  }
-
-  if (state.status.kind === 'preparing') {
-    if (state.hasBeenActive) {
-      return {
-        icon: 'sync',
-        chipClassName: 'bg-warning text-warning-contrast',
-        animateIcon: true,
-        label: 'Reconnecting encrypted collaboration. Your edits are still being saved.',
-        heading: 'Reconnecting encrypted collaboration',
-        detail: 'Live editing dropped and is reconnecting. Your edits are still saved as usual meanwhile.',
-      }
-    }
-    if (state.status.awaitingPeerState) {
-      return {
-        icon: 'sync',
-        chipClassName: 'bg-warning text-warning-contrast',
-        animateIcon: true,
-        label: "Waiting for a collaborator's copy of this note. Editing resumes when it arrives.",
-        heading: 'Waiting for a collaborator',
-        detail:
-          "This note is being edited live elsewhere and a collaborator's copy has not arrived yet. " +
-          'The editor is read-only until it does; if no one answers, this device takes over shortly.',
-      }
-    }
-    return {
-      icon: 'sync',
-      chipClassName: 'bg-contrast text-passive-1',
-      animateIcon: true,
-      label: 'Preparing encrypted collaboration. You can keep editing.',
-      heading: 'Preparing encrypted collaboration',
-      detail: 'Setting up the end-to-end encrypted room. You can keep editing while this finishes.',
-    }
-  }
-
-  const standDown = state.status.retriesExhausted
-    ? ' Automatic retries have paused; they resume when you return to this tab or edit the note.'
-    : ''
-  return {
-    icon: 'cloud-off',
-    chipClassName: 'bg-warning text-warning-contrast',
-    animateIcon: false,
-    label: `Encrypted collaboration unavailable. ${state.status.reason}`,
-    heading: 'Encrypted collaboration unavailable',
-    detail: `${state.status.reason}${standDown}`,
-  }
+  /** The note whose collaboration room and shared vault this reflects. */
+  note: SNNote
 }
 
 /**
- * Compact collaboration status chip, rendered immediately BEFORE the note sync
- * status in the title bar and deliberately built to the same idiom (a 20px round
- * chip that toggles a Popover).
+ * Collaboration in the title bar, in one control: the session's status chip and,
+ * beside it, whoever else is in the note right now. It sits immediately BEFORE
+ * the note sync status and is built to the same idiom — a 20px round chip that
+ * opens a Popover — so the row reads as one row and never grows.
  *
- * It replaces the former full-editor takeover: collaboration state must never
- * cover, dim or disable the editing surface, so everything the takeover said now
- * lives here, in a row the user can ignore.
+ * The chip is the whole of it when nobody else is here. With collaborators it
+ * grows sideways only: up to MAX_BAR_AVATARS overlapping avatars in their cursor
+ * colours and "+N" for the rest, or — collapsed by choice, and always below `md`
+ * — just the count inside the chip. Clicking it, or Enter/Space, opens the one
+ * place to look: what the session is doing, then every person and their status.
  *
- * It renders NOTHING unless collaboration is genuinely applicable and worth
- * reporting:
- *  - no entry in the registry (plain/component editor, no Super editor) -> hidden
- *  - unavailable and never once live -> hidden, because "this deployment has no
- *    live collaboration" is not news on every note open — UNLESS the room's
- *    automatic retries have stood down (`retriesExhausted`): the gateway was
- *    reachable and still refused three times, which the user must be able to see
- *  - preparing for the first time -> hidden until PREPARING_QUIET_PERIOD_MS, and
- *    hidden again after PREPARING_STAND_DOWN_MS if it still has not settled —
- *    except while waiting for a collaborator's copy, when the editor is locked
- *    and the wait is bounded, so it stays visible
- * so the common quiet path really is silent rather than a permanent dead icon.
+ * It replaces three things that each showed a part of this: the status chip's
+ * own popover, a separate stack of avatars after the sync status, and a
+ * bordered panel under the title bar that listed the vault's members.
+ *
+ * It renders NOTHING unless there is something to say. That is when the session
+ * speaks for itself (`sessionSpeaksForItself`, which keeps the title bar silent
+ * on a deployment that simply has no live collaboration), or when the note has
+ * collaborators at all — someone in it right now, or other members of its shared
+ * vault. A note nobody else can open, with no live room, contributes no markup.
  */
-const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) => {
+const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
+  const noteUuid = note.uuid
   const state = useCollaborationStatus(noteUuid)
   const { peers } = usePresence(noteUuid)
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [firstPreparationPhase, setFirstPreparationPhase] = useState<'quiet' | 'visible' | 'stood-down'>('quiet')
+  const [isOpen, setIsOpen] = useState(false)
+  const [rosterRefreshKey, setRosterRefreshKey] = useState(0)
+  const { members, selfUuid, selfEmail } = useVaultRoster(note, rosterRefreshKey)
+  const [storedCollapsed, setStoredCollapsed] = useLocalPreference(COLLABORATORS_COLLAPSED_PREF_KEY)
+  const collapsed = normalizeCollaboratorsCollapsed(storedCollapsed)
+  const isDesktopScreen = useMediaQuery(MediaQueryBreakpoints.md)
+  const [firstPreparationPhase, setFirstPreparationPhase] = useState<FirstPreparationPhase>('quiet')
+  const [now, setNow] = useState(() => Date.now())
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const wasOpen = useRef(false)
+  const dialogId = useId()
 
   const isFirstPreparation = state?.status.kind === 'preparing' && !state.hasBeenActive
   const isAwaitingPeerState = state?.status.kind === 'preparing' && state.status.awaitingPeerState === true
@@ -178,42 +118,179 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) =>
     }
   }, [isFirstPreparation, isAwaitingPeerState])
 
-  const toggleTooltip = useCallback(() => {
-    setIsTooltipVisible((visible) => !visible)
+  // "Typing" and "idle" are derived from a timestamp when a peer carries one, so
+  // they change with the clock alone. No peer carries one -> no timer at all.
+  const needsClock = presenceNeedsClock(peers)
+  useEffect(() => {
+    if (!needsClock) {
+      return
+    }
+    setNow(Date.now())
+    const tick = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(tick)
+  }, [needsClock, peers])
+
+  const collaborators = useMemo(
+    () => buildCollaborators({ peers, members, selfUuid, selfEmail, state, now }),
+    [peers, members, selfUuid, selfEmail, state, now],
+  )
+  const others = collaborators.filter((collaborator) => !collaborator.isSelf)
+  const present = others.filter((collaborator) => collaborator.isPresent)
+  const isVisible = sessionSpeaksForItself(state, firstPreparationPhase) || others.length > 0
+
+  const toggle = useCallback(() => {
+    setIsOpen((open) => !open)
   }, [])
 
-  if (!state) {
-    return null
-  }
-  if (state.status.kind === 'unavailable' && !state.hasBeenActive && !state.status.retriesExhausted) {
-    return null
-  }
-  if (isFirstPreparation && firstPreparationPhase !== 'visible') {
+  // A trigger that went away takes its popup with it, and must not bring it back later.
+  useEffect(() => {
+    if (!isVisible) {
+      setIsOpen(false)
+    }
+  }, [isVisible])
+
+  useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+    setRosterRefreshKey((key) => key + 1)
+
+    // The popup is portalled to the end of the document, so Tab from the trigger
+    // would never reach it: focus is moved in. The Popover keeps its content
+    // unfocusable (`visibility: hidden`) until it has measured and placed it,
+    // hence the retry — a focus() that did not take is simply tried next frame.
+    let frame = 0
+    let attempts = 0
+    const focusDialog = (): void => {
+      const dialog = dialogRef.current
+      dialog?.focus({ preventScroll: true })
+      if (dialog && document.activeElement === dialog) {
+        return
+      }
+      attempts += 1
+      if (attempts < FOCUS_ATTEMPT_FRAMES) {
+        frame = requestAnimationFrame(focusDialog)
+      }
+    }
+    focusDialog()
+    return () => cancelAnimationFrame(frame)
+  }, [isOpen])
+
+  // Closing hands focus back to the trigger — unless the user has already put it
+  // somewhere themselves, as a click into the editor does. A click on something
+  // that takes no focus leaves it on the body, and that is handed back too.
+  useEffect(() => {
+    if (isOpen) {
+      wasOpen.current = true
+      return
+    }
+    if (!wasOpen.current) {
+      return
+    }
+    wasOpen.current = false
+    const active = document.activeElement
+    if (!active || active === document.body || dialogRef.current?.contains(active)) {
+      buttonRef.current?.focus({ preventScroll: true })
+    }
+  }, [isOpen])
+
+  // Popover stamps `aria-haspopup="true"` — a menu — on its anchor and removes
+  // `aria-expanded` when closed. This popup is a dialog, and a collapsed trigger
+  // should say so. Parent effects run after a child's, so this has the last word.
+  useEffect(() => {
+    const button = buttonRef.current
+    if (!button) {
+      return
+    }
+    button.setAttribute('aria-haspopup', 'dialog')
+    button.setAttribute('aria-expanded', isOpen ? 'true' : 'false')
+  }, [isOpen, isVisible])
+
+  const onTriggerKeyDown = useCallback((event: KeyboardEvent<HTMLButtonElement>) => {
+    // Focus normally lives inside the popup while it is open, where Popover
+    // handles Escape itself; this is for when it is still on the trigger.
+    if (event.key === 'Escape' && wasOpen.current) {
+      event.stopPropagation()
+      setIsOpen(false)
+    }
+  }, [])
+
+  const onDialogKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Tab') {
+      return
+    }
+    const dialog = dialogRef.current
+    if (!dialog) {
+      return
+    }
+    // Tabbing past either end of the popup closes it and lands on the trigger,
+    // instead of wandering off into whatever follows a portal in the document.
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled])'))
+    const active = document.activeElement
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    const leavingBackwards = event.shiftKey && (active === dialog || active === first)
+    const leavingForwards = !event.shiftKey && (last === undefined ? active === dialog : active === last)
+    if (leavingBackwards || leavingForwards) {
+      event.preventDefault()
+      setIsOpen(false)
+      buttonRef.current?.focus({ preventScroll: true })
+    }
+  }, [])
+
+  const toggleCollapsed = useCallback(() => {
+    setStoredCollapsed(!collapsed)
+  }, [collapsed, setStoredCollapsed])
+
+  if (!isVisible) {
     return null
   }
 
-  const presentation = presentationFor(state, peers)
+  const session = describeSession(state, firstPreparationPhase)
+  const attendance = describeAttendance(collaborators, state?.status.kind === 'active')
+  const label = attendance ? `${session.summary} ${attendance}` : session.summary
+  const showAvatars = isDesktopScreen && !collapsed && present.length > 0
+  const showCount = !showAvatars && present.length > 0
 
   return (
     <div className="note-status-tooltip-container mr-2">
       <button
-        aria-label={presentation.label}
-        className={classNames(
-          'peer flex h-5 w-5 flex-shrink-0 cursor-pointer items-center justify-center rounded-full',
-          presentation.chipClassName,
-        )}
+        aria-controls={isOpen ? dialogId : undefined}
+        aria-label={label}
+        className="peer flex h-5 flex-shrink-0 cursor-pointer items-center rounded-full"
         data-testid={COLLABORATION_INDICATOR_TEST_ID}
-        onClick={toggleTooltip}
+        onClick={toggle}
+        onKeyDown={onTriggerKeyDown}
         ref={buttonRef}
-        title={presentation.label}
+        title={label}
         type="button"
       >
-        <Icon className={presentation.animateIcon ? 'animate-spin' : ''} type={presentation.icon} size="small" />
+        <span
+          className={classNames(
+            'flex h-5 flex-shrink-0 items-center justify-center rounded-full',
+            showCount ? 'min-w-5 gap-0.5 px-1.5' : 'w-5',
+            SESSION_TONE_CLASS[session.tone],
+          )}
+          data-collaboration-status-dot={session.tone}
+        >
+          <Icon className={session.animateIcon ? 'animate-spin' : ''} type={session.icon} size="small" />
+          {showCount && (
+            <span className="text-[0.65rem] leading-none font-bold" data-collaborator-count>
+              {present.length}
+            </span>
+          )}
+        </span>
+        {showAvatars && (
+          <CollaboratorAvatarStack
+            dimmed={present.some((collaborator) => collaborator.presence === 'reconnecting')}
+            present={present}
+          />
+        )}
       </button>
       <Popover
-        title="Encrypted collaboration status"
-        open={isTooltipVisible}
-        togglePopover={() => setIsTooltipVisible((visible) => !visible)}
+        title="Collaborators"
+        open={isOpen}
+        togglePopover={toggle}
         className="px-3 py-2"
         containerClassName="!min-w-0 !w-auto max-w-[90vw]"
         anchorElement={buttonRef}
@@ -223,24 +300,16 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) =>
         disableMobileFullscreenTakeover
         disableApplyingMobileWidth
       >
-        <div className="text-sm font-bold">{presentation.heading}</div>
-        {presentation.detail && <div className="mt-0.5 text-sm">{presentation.detail}</div>}
-        {peers.length > 0 && (
-          <div className="mt-1.5 space-y-1">
-            {peers.map((peer) => (
-              <div key={peer.userUuid || peer.clientId} className="flex items-center gap-2">
-                <div
-                  className="flex h-5 w-5 items-center justify-center rounded-full text-[0.55rem] font-bold text-white select-none"
-                  style={{ backgroundColor: peer.color || collaboratorColor(peer.userUuid || String(peer.clientId)) }}
-                  aria-hidden
-                >
-                  {collaboratorInitials(peer.name)}
-                </div>
-                <span className="text-text truncate text-sm">{peer.name}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        <CollaboratorsPopover
+          attendance={attendance}
+          collaborators={collaborators}
+          collapsed={collapsed}
+          id={dialogId}
+          onKeyDown={onDialogKeyDown}
+          onToggleCollapsed={isDesktopScreen && others.length > 0 ? toggleCollapsed : undefined}
+          ref={dialogRef}
+          session={session}
+        />
       </Popover>
     </div>
   )
