@@ -100,6 +100,10 @@ describe('AssistantTools preference value validation', () => {
     PrefKey.NotesHideEditorIcon,
     PrefKey.EditorSpellcheck,
     PrefKey.AlwaysShowSuperToolbar,
+    // Written as the stored string, which is what a model actually sends and
+    // what must be on the allowlist: the enum member for a key this new can be
+    // missing from the built bundle the application runs.
+    'superToolbarAutoHide',
   ]
 
   it('accepts only booleans for every allowlisted boolean preference', async () => {
@@ -107,11 +111,43 @@ describe('AssistantTools preference value validation', () => {
     const tools = new AssistantTools({ setPreference } as unknown as WebApplication, makeContext())
 
     for (const key of booleanKeys) {
+      // Every key under test is a real, non-empty name; a key that read
+      // `undefined` here would be exercising the "no key" path by accident.
+      expect(typeof key).toBe('string')
+      expect(key).not.toBe('')
       await expect(tools.call('app.setPreference', { key, value: true })).resolves.toMatchObject({ ok: true, key })
       await expect(tools.call('app.setPreference', { key, value: 'true' })).rejects.toThrow('boolean')
     }
 
     expect(setPreference).toHaveBeenCalledTimes(booleanKeys.length)
+  })
+
+  it('writes the toolbar auto-hide preference under the name the toolbar reads', async () => {
+    const setPreference = jest.fn(async () => undefined)
+    const tools = new AssistantTools({ setPreference } as unknown as WebApplication, makeContext())
+
+    await expect(tools.call('app.setPreference', { key: 'superToolbarAutoHide', value: true })).resolves.toMatchObject({
+      ok: true,
+      key: 'superToolbarAutoHide',
+      value: true,
+    })
+
+    expect(setPreference).toHaveBeenCalledTimes(1)
+    expect(setPreference).toHaveBeenCalledWith('superToolbarAutoHide', true)
+  })
+
+  it('rejects a call that names no preference at all', async () => {
+    // If any entry of the allowlist were `undefined` — which is what an enum
+    // member newer than the built bundle reads as — a call with NO key would
+    // match it, pass the boolean check, and be written as a preference named
+    // "undefined". The allowlist must not admit the one request it cannot name.
+    const setPreference = jest.fn(async () => undefined)
+    const tools = new AssistantTools({ setPreference } as unknown as WebApplication, makeContext())
+
+    await expect(tools.call('app.setPreference', { value: true })).rejects.toThrow('not allowed')
+    await expect(tools.call('app.setPreference', { key: undefined, value: true })).rejects.toThrow('not allowed')
+
+    expect(setPreference).not.toHaveBeenCalled()
   })
 
   it('bounds note sorting to the concrete values supported by the list controller', async () => {

@@ -38,6 +38,7 @@ import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailRemin
 import { webSearch, webFetch } from './webTools'
 import { achievements, ACHIEVEMENTS } from '@/Achievements'
 import { AssistantToolConfirmation } from './assistantPresentation'
+import { SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY } from '@/Components/SuperEditor/Plugins/ToolbarPlugin/ToolbarAutoHidePreference'
 import {
   AssistantNoteChange,
   AssistantNoteSnapshot,
@@ -80,6 +81,14 @@ const TODO_STATUSES: TodoStatus[] = ['pending', 'in_progress', 'completed']
 /**
  * PrefKeys the assistant is allowed to set via app.setPreference. Anything not
  * in this allowlist is rejected.
+ *
+ * Every entry must be a key that is DEFINED at runtime, which is why the
+ * toolbar auto-hide key is the pinned literal and not `PrefKey.SuperToolbarAutoHide`.
+ * A member added to the enum after the `snjs` bundle was last built reads
+ * `undefined` here, and an `undefined` in this list is not an inert entry: it
+ * makes `includes(args.key)` true for a call that sent NO key at all, which
+ * would then be written as a preference named "undefined". The allowlist would
+ * have admitted the one request it can least describe.
  */
 const ALLOWED_PREFERENCE_KEYS: PrefKey[] = [
   PrefKey.SortNotesBy,
@@ -93,6 +102,10 @@ const ALLOWED_PREFERENCE_KEYS: PrefKey[] = [
   PrefKey.NotesHideEditorIcon,
   PrefKey.EditorSpellcheck,
   PrefKey.AlwaysShowSuperToolbar,
+  // The same kind of thing as the entry above — how the editor's toolbar is
+  // shown, reversible from Preferences, touching no note — so the assistant may
+  // set it on the same terms.
+  SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY,
 ]
 
 const BOOLEAN_PREFERENCE_KEYS = new Set<PrefKey>([
@@ -106,6 +119,7 @@ const BOOLEAN_PREFERENCE_KEYS = new Set<PrefKey>([
   PrefKey.NotesHideEditorIcon,
   PrefKey.EditorSpellcheck,
   PrefKey.AlwaysShowSuperToolbar,
+  SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY,
 ])
 
 const ALLOWED_NOTE_SORT_VALUES = new Set<string>([
