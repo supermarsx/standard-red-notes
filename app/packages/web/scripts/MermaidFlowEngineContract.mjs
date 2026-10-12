@@ -26,6 +26,7 @@ import { api, flowParser, mermaidVersion, NODES } from './MermaidUnderNode.mjs'
 
 const Grammar = await import(`${NODES}/MermaidFlowGrammar.ts`)
 const SourceDoc = await import(`${NODES}/MermaidSourceDoc.ts`)
+const Oracle = await import(`${NODES}/MermaidOracle.ts`)
 const Corpus = await import(`${NODES}/MermaidFlowCorpus.fixture.ts`)
 
 const everyDeletion = process.argv.includes('--all')
@@ -71,17 +72,26 @@ counts.texts = texts.length
 // ---------------------------------------------------------------------------
 const parser = await flowParser()
 
-/** What mermaid's flowchart parser is handed for a source: `Diagram.text`, then its wrapper's one rewrite. */
+const FLOWCHART_TYPES = new Set(['flowchart', 'flowchart-v2'])
+
+/**
+ * What mermaid makes of a source, asked once: the text its flowchart parser
+ * was handed (`Diagram.text`, then its wrapper's one rewrite), and — for a
+ * flowchart — its database read through the app's one adapter.
+ */
 const parsedTextOf = async (source) => {
   let diagram
   try {
     diagram = await api.getDiagramFromText(source)
   } catch (error) {
-    // The text mermaid parsed is not available when parsing threw. Detection
-    // alone can say whether this was a flowchart at all.
+    // Neither is available when parsing threw.
     return { failed: String(error?.message ?? error).split('\n')[0] }
   }
-  return { type: diagram.type, text: diagram.text.replace(/}\s*\n/g, '}\n') }
+  const text = diagram.text.replace(/}\s*\n/g, '}\n')
+  if (!FLOWCHART_TYPES.has(diagram.type)) {
+    return { type: diagram.type, text }
+  }
+  return { type: diagram.type, text, reading: Oracle.mermaidFlowReadingFromDatabase(diagram.db) }
 }
 
 /** Mermaid's lexer over a text: each token's name (null when it hands the parser nothing is not observable here) and match. */
@@ -206,6 +216,179 @@ await check('printing every text gives it back, byte for byte', async () => {
     assert(SourceDoc.printMermaidFlowDocument(document) === text, `${name}: printed differently`)
   }
   return `${observed.length} texts`
+})
+
+// ===========================================================================
+// 3. Mermaid's database, read through the app's one adapter, and the reading
+//    the builder makes of the same text.
+// ===========================================================================
+const lines = (...parts) => parts.join('\n')
+
+await check('mermaid’s flowchart database is the shape the builder’s one adapter reads', async () => {
+  // Through the app's own path — MermaidRuntime's queue, then the adapter — on
+  // a diagram that uses every part of the database the builder relies on. If
+  // an upgrade renames a getter or changes what one returns, this is where it
+  // is said, by name.
+  const source = lines(
+    'flowchart LR',
+    '  A[One] e1@-->|go| B(Two)',
+    '  B -.-> C',
+    '  subgraph g [Group]',
+    '    direction TB',
+    '    C --> D{{Four}}',
+    '  end',
+    '  classDef hot fill:#f96',
+    '  class A hot',
+    '  style B fill:#eee',
+    '  click A href "https://example.com" "tip"',
+    '  linkStyle 1 stroke:#f00',
+    '  linkStyle default stroke-width:2px',
+  )
+  const result = await Oracle.readMermaidFlowchart(source)
+  assert(result.ok, `mermaid's reading was refused: ${result.message}`)
+  const { reading } = result
+  const node = (id) => reading.nodes.find((entry) => entry.id === id)
+  assert(
+    same(
+      reading.nodes.map((entry) => entry.id),
+      ['A', 'B', 'C', 'D'],
+    ),
+    `boxes: ${JSON.stringify(reading.nodes)}`,
+  )
+  assert(
+    same(
+      [node('A').text, node('A').type, node('A').labelType, node('A').classes],
+      ['One', 'square', 'text', ['hot', 'clickable']],
+    ),
+    `A: ${JSON.stringify(node('A'))}`,
+  )
+  assert(same([node('B').type, node('B').styles], ['round', ['fill:#eee']]), `B: ${JSON.stringify(node('B'))}`)
+  assert(node('C').type === undefined && node('C').text === 'C', `C: ${JSON.stringify(node('C'))}`)
+  assert(node('D').type === 'hexagon', `D: ${JSON.stringify(node('D'))}`)
+  assert(
+    String(node('A').extra?.link).includes('example.com'),
+    `A's link is not in extra: ${JSON.stringify(node('A'))}`,
+  )
+  assert(
+    same(
+      reading.edges.map((edge) => [
+        edge.start,
+        edge.end,
+        edge.type,
+        edge.stroke,
+        edge.length,
+        edge.text,
+        edge.id ?? null,
+      ]),
+      [
+        ['A', 'B', 'arrow_point', 'normal', 1, 'go', 'e1'],
+        ['B', 'C', 'arrow_point', 'dotted', 1, '', null],
+        ['C', 'D', 'arrow_point', 'normal', 1, '', null],
+      ],
+    ),
+    `links: ${JSON.stringify(reading.edges)}`,
+  )
+  assert(
+    same(reading.edges[1].style, ['stroke:#f00', 'fill:none']),
+    `link 1 style: ${JSON.stringify(reading.edges[1])}`,
+  )
+  assert(
+    same(
+      reading.groups.map((group) => [group.id, group.title, [...group.nodes].sort(), group.dir, group.labelType]),
+      [['g', 'Group', ['C', 'D'], 'TB', 'text']],
+    ),
+    `groups: ${JSON.stringify(reading.groups)}`,
+  )
+  assert(
+    same(reading.classes, [{ id: 'hot', styles: ['fill:#f96'], textStyles: [] }]),
+    `classes: ${JSON.stringify(reading.classes)}`,
+  )
+  assert(
+    same(reading.defaultLinkStyle, ['stroke-width:2px']),
+    `default link style: ${JSON.stringify(reading.defaultLinkStyle)}`,
+  )
+  assert(same(reading.extra?.tooltips, [['A', 'tip']]), `tooltips: ${JSON.stringify(reading.extra)}`)
+
+  const other = await Oracle.readMermaidFlowchart('sequenceDiagram\n  A->>B: hi')
+  assert(!other.ok && other.kind === 'not-flowchart' && other.diagramType === 'sequence', JSON.stringify(other))
+  const broken = await Oracle.readMermaidFlowchart('flowchart LR\n  A -->')
+  assert(!broken.ok && broken.kind === 'rejected' && /Parse error/.test(broken.message), JSON.stringify(broken))
+  return 'boxes, links, groups, named styles, link styles, tooltips; another kind; a text mermaid rejects'
+})
+
+await check('every corpus text reads the same to the builder and to mermaid', async () => {
+  let compared = 0
+  let common = 0
+  for (const { name, text, whole, mermaid, document } of observed) {
+    if (!whole) {
+      continue
+    }
+    assert(
+      mermaid.reading !== undefined,
+      `${name}: mermaid does not read this corpus text as a flowchart (${mermaid.failed ?? mermaid.type})`,
+    )
+    assert(
+      document.problem === null,
+      `${name}: the builder refuses it — ${document.problem?.kind}: ${document.problem?.message}`,
+    )
+    const differences = SourceDoc.compareMermaidFlowReadings(document.reading, mermaid.reading)
+    assert(differences.length === 0, `${name}: ${differences.join(' ;; ')} — source ${quoted(text)}`)
+    assert(
+      document.edges.length === mermaid.reading.edges.length,
+      `${name}: the builder places ${document.edges.length} links, mermaid has ${mermaid.reading.edges.length}`,
+    )
+    compared++
+    common += commonNames.has(name) ? 1 : 0
+  }
+  assert(compared === Corpus.MERMAID_FLOW_CORPUS.length, `${compared} of ${Corpus.MERMAID_FLOW_CORPUS.length} compared`)
+  counts.corpusRead = compared
+  counts.commonFormsRead = common
+  return `${compared} texts, ${common} of them the common forms`
+})
+
+await check('one character short of a corpus text, the builder never reads something mermaid does not', async () => {
+  // Four outcomes are possible for a damaged text. Two are fine: both read it
+  // and read the same, or both refuse. One is tolerated and bounded: mermaid
+  // refuses for YAML the document does not parse — a frontmatter block, the
+  // inside of `@{ … }` — and at run time the oracle is what refuses those.
+  // The other two are faults: a different reading, or a refusal of a text
+  // mermaid reads.
+  const yamlRefusal = /^(No such shape|bad indentation|end of the stream|missed comma|can not read)/
+  let sameReading = 0
+  let bothRefuse = 0
+  let yamlOnly = 0
+  for (const { name, text, whole, mermaid, document } of observed) {
+    if (whole) {
+      continue
+    }
+    if (mermaid.reading === undefined) {
+      if (document.problem !== null) {
+        bothRefuse++
+        continue
+      }
+      const carriesYaml = text.includes('@{') || /^\s*---/.test(text)
+      assert(
+        carriesYaml && mermaid.failed !== undefined && yamlRefusal.test(mermaid.failed),
+        `${name}: the builder reads a text mermaid refuses (${mermaid.failed ?? mermaid.type}) — source ${quoted(text)}`,
+      )
+      yamlOnly++
+      continue
+    }
+    assert(
+      document.problem === null,
+      `${name}: the builder refuses (${document.problem?.kind}: ${document.problem?.message}) a text mermaid reads — source ${quoted(text)}`,
+    )
+    const differences = SourceDoc.compareMermaidFlowReadings(document.reading, mermaid.reading)
+    assert(differences.length === 0, `${name}: ${differences.join(' ;; ')} — source ${quoted(text)}`)
+    assert(document.edges.length === mermaid.reading.edges.length, `${name}: link count`)
+    sameReading++
+  }
+  counts.deletionsSameReading = sameReading
+  counts.deletionsBothRefuse = bothRefuse
+  counts.deletionsMermaidRefusesYaml = yamlOnly
+  assert(sameReading >= 1000, `only ${sameReading} damaged texts were still read by both`)
+  assert(bothRefuse >= 500, `only ${bothRefuse} damaged texts were refused by both`)
+  return `${sameReading} read the same, ${bothRefuse} refused by both, ${yamlOnly} refused by mermaid alone for their YAML`
 })
 
 const failed = checks.filter((entry) => !entry.ok)

@@ -2179,15 +2179,25 @@ const sameList = (a: readonly unknown[] | undefined, b: readonly unknown[] | und
   (a === undefined || (a.length === b?.length && a.every((value, index) => value === b[index])))
 
 /**
- * The part of a label mermaid's sanitiser cannot have changed: everything
- * before its first `<`, `>`, `&` or no-break space. Mermaid keeps a label as
- * DOMPurify serialises it — `&` becomes `&amp;`, an unknown tag disappears, an
- * unclosed one swallows the rest — and this module does not sanitise. So the
- * two readings are compared up to the first character that could be markup,
- * which for a label with none is the whole label.
+ * Could mermaid have made `theirs` out of the label this module read as `ours`?
+ *
+ * Mermaid keeps a label as DOMPurify serialises it — `&` becomes `&amp;`, an
+ * unknown tag disappears, an unclosed one swallows the rest — and this module
+ * does not sanitise. What the sanitiser cannot change is everything BEFORE the
+ * label's first `<`, `>`, `&` or no-break space, so that is what is compared:
+ * mermaid's text has to begin with it. For a label with no such character,
+ * which is nearly all of them, that is the whole label and the two must be
+ * equal.
  */
 const MARKUP_ONWARDS = new RegExp('[<>&' + String.fromCharCode(160) + '][^]*$')
-const looseLabel = (value: string): string => value.replace(MARKUP_ONWARDS, '').replace(/\s+/g, ' ').trim()
+const beforeMarkup = (value: string): string => value.replace(MARKUP_ONWARDS, '').replace(/\s+/g, ' ').trim()
+function sameLabelSoFar(ours: string, theirs: string): boolean {
+  const prefix = beforeMarkup(ours)
+  if (prefix.length === ours.replace(/\s+/g, ' ').trim().length) {
+    return prefix === beforeMarkup(theirs) && !MARKUP_ONWARDS.test(theirs)
+  }
+  return beforeMarkup(theirs).startsWith(prefix)
+}
 
 /**
  * Every way `ours` (this module's imitation) differs from `theirs` (mermaid's
@@ -2220,7 +2230,7 @@ export function compareMermaidFlowReadings(ours: MermaidFlowReading, theirs: Mer
         if (node.type !== other.type) {
           differ(`shape of ${node.id}`, node.type, other.type)
         }
-        if (looseLabel(node.text) !== looseLabel(other.text)) {
+        if (!sameLabelSoFar(node.text, other.text)) {
           differ(`label of ${node.id}`, node.text, other.text)
         }
         if (node.labelType !== other.labelType) {
@@ -2248,7 +2258,7 @@ export function compareMermaidFlowReadings(ours: MermaidFlowReading, theirs: Mer
       if (edge.type !== other.type || edge.stroke !== other.stroke || edge.length !== other.length) {
         differ(`line of ${name}`, [edge.type, edge.stroke, edge.length], [other.type, other.stroke, other.length])
       }
-      if (looseLabel(edge.text) !== looseLabel(other.text) || edge.labelType !== other.labelType) {
+      if (!sameLabelSoFar(edge.text, other.text) || edge.labelType !== other.labelType) {
         differ(`text of ${name}`, [edge.text, edge.labelType], [other.text, other.labelType])
       }
       if (edge.id !== other.id) {
@@ -2279,7 +2289,7 @@ export function compareMermaidFlowReadings(ours: MermaidFlowReading, theirs: Mer
       if (group.dir !== other.dir) {
         differ(`direction of group ${group.id}`, group.dir, other.dir)
       }
-      if (looseLabel(group.title) !== looseLabel(other.title) || group.labelType !== other.labelType) {
+      if (!sameLabelSoFar(group.title, other.title) || group.labelType !== other.labelType) {
         differ(`title of group ${group.id}`, [group.title, group.labelType], [other.title, other.labelType])
       }
       if (!sameList(group.classes, other.classes)) {

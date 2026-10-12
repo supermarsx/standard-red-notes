@@ -211,3 +211,32 @@ export async function renderMermaidDiagram(request: MermaidRenderRequest): Promi
     return { svg, ownTheme, ownSurface }
   })
 }
+
+/** A diagram as mermaid parsed it: its kind, and the database its parser filled. */
+export type MermaidParsedDiagram = { type: string; db: unknown }
+
+/**
+ * What mermaid makes of a diagram's text, WITHOUT drawing it: the diagram is
+ * parsed and `extract` is handed the result. Rejects with mermaid's own error
+ * for a text it cannot parse.
+ *
+ * It takes its turn in the same line as the renders, for two reasons. The
+ * reading depends on mermaid's global configuration — the security level
+ * decides what a label is sanitised to — so it is taken under a configuration
+ * of its own, and configuring is exactly what must never happen between
+ * another diagram's `initialize` and its `render`. And several diagram kinds
+ * keep their database in a module-level singleton that the next parse
+ * overwrites, which is why the caller reads what it needs inside `extract`
+ * rather than being handed the database to keep.
+ *
+ * The configuration is the application's without any diagram's own theme or
+ * palette: what a text means does not depend on what it is drawn with.
+ */
+export async function readMermaidDiagram<T>(text: string, extract: (diagram: MermaidParsedDiagram) => T): Promise<T> {
+  const mermaid = await loadMermaid()
+  return inTurn(async () => {
+    configure(mermaid, { startOnLoad: false, securityLevel: 'strict', secure: [...MERMAID_APP_SECURE_KEYS] })
+    const diagram = await mermaid.mermaidAPI.getDiagramFromText(text)
+    return extract({ type: diagram.type, db: diagram.db })
+  })
+}

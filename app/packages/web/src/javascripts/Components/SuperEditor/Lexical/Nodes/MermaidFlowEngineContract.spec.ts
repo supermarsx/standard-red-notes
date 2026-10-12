@@ -36,6 +36,9 @@ const EXPECTED_CHECKS = [
   'the builder hands its lexer exactly the text mermaid hands its own parser',
   'the builder’s tokens are mermaid’s tokens, name for name and character for character',
   'printing every text gives it back, byte for byte',
+  'mermaid’s flowchart database is the shape the builder’s one adapter reads',
+  'every corpus text reads the same to the builder and to mermaid',
+  'one character short of a corpus text, the builder never reads something mermaid does not',
 ]
 
 let status: number | null = null
@@ -96,6 +99,15 @@ describe('the builder’s engine, checked against the installed mermaid', () => 
     expect(counts.tokens).toBeGreaterThanOrEqual(100_000)
     expect(counts.lexRules).toBeGreaterThanOrEqual(100)
     expect(counts.parserStates).toBeGreaterThanOrEqual(200)
+    // Every corpus text read by both and read the same — all 37 common forms
+    // among them — and, of the damaged texts, a thousand still read by both
+    // and hundreds refused by both. The few mermaid alone refuses are YAML the
+    // document does not parse; the script fails on any other.
+    expect(counts.corpusRead).toBe(counts.corpus)
+    expect(counts.commonFormsRead).toBe(37)
+    expect(counts.deletionsSameReading).toBeGreaterThanOrEqual(1000)
+    expect(counts.deletionsBothRefuse).toBeGreaterThanOrEqual(500)
+    expect(counts.deletionsMermaidRefusesYaml).toBeLessThanOrEqual(40)
   })
 
   it('says which mermaid and which Node it judged', () => {
