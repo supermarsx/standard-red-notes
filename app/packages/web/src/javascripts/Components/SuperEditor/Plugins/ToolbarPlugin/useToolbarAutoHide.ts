@@ -192,6 +192,7 @@ function createToolbarAutoHideController(
   let restTimer: number | undefined
   let hideTimer: number | undefined
   let focusGraceTimer: number | undefined
+  let focusFrame: number | undefined
   /** What the pointer is resting on, or about to count as resting on. */
   let pointedAt: Element | null = null
   /** True only while this controller is the one clicking a tab, to switch to it on hover. */
@@ -251,7 +252,34 @@ function createToolbarAutoHideController(
   const stopAwaitingFocus = () => {
     window.clearTimeout(focusGraceTimer)
     focusGraceTimer = undefined
+    if (focusFrame !== undefined) {
+      window.cancelAnimationFrame(focusFrame)
+      focusFrame = undefined
+    }
     open('awaitingFocus', false)
+  }
+
+  /**
+   * Move focus to the panel's first control, trying again each frame until it
+   * takes.
+   *
+   * One attempt is not enough, and where it fails is the configuration this
+   * feature's first user actually runs: Firefox with reduced motion on. The app
+   * answers reduced motion by clamping every transition to 0.001ms rather than
+   * removing it, so making the panel visible starts a (vanishingly short)
+   * transition of the inherited `visibility` on everything inside it — and until
+   * the next frame those controls are still hidden, and a hidden control cannot
+   * be focused. The shortcut then opened the panel and left focus in the note.
+   */
+  const focusWhenPossible = () => {
+    focusFrame = undefined
+    if (!opening.awaitingFocus) {
+      return
+    }
+    panel.querySelector<HTMLElement>(FIRST_CONTROL_SELECTOR)?.focus()
+    if (!isInsidePanel(document.activeElement)) {
+      focusFrame = window.requestAnimationFrame(focusWhenPossible)
+    }
   }
 
   /**
@@ -426,12 +454,15 @@ function createToolbarAutoHideController(
       window.clearTimeout(focusGraceTimer)
       focusGraceTimer = window.setTimeout(stopAwaitingFocus, TOOLBAR_AUTO_HIDE_FOCUS_GRACE_MS)
       open('awaitingFocus', true)
-      panel.querySelector<HTMLElement>(FIRST_CONTROL_SELECTOR)?.focus()
+      focusWhenPossible()
     },
     dispose: () => {
       window.clearTimeout(restTimer)
       window.clearTimeout(hideTimer)
       window.clearTimeout(focusGraceTimer)
+      if (focusFrame !== undefined) {
+        window.cancelAnimationFrame(focusFrame)
+      }
       anchorObserver.disconnect()
       toolbar.removeEventListener('pointerover', handlePointerOver)
       toolbar.removeEventListener('pointerenter', handlePointerEnterBar)

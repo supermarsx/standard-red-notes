@@ -789,6 +789,32 @@ describe('asking for the panel from the keyboard shortcut', () => {
     expect(whenFocused).toEqual({ open: true, inert: false })
   })
 
+  it('tries again on the next frame when the first control cannot take focus yet', async () => {
+    // Firefox with reduced motion on: the app clamps transitions to 0.001ms
+    // instead of removing them, so the panel's controls are still hidden for
+    // one frame after it opens and the first focus() does nothing.
+    await render({ name: 'a', active: true })
+    await focus('a-note')
+    const first = el('a-first')
+    const realFocus = first.focus.bind(first)
+    let attempts = 0
+    first.focus = () => {
+      attempts++
+      if (attempts > 1) {
+        realFocus()
+      }
+    }
+    await act(async () => latest.a.revealAndFocus())
+    expect(document.activeElement).toBe(el('a-note'))
+    await advance(40)
+    expect(attempts).toBe(2)
+    expect(document.activeElement).toBe(first)
+    // ...and it stops trying once focus is where it was wanted.
+    await advance(LONG)
+    expect(attempts).toBe(2)
+    expect(isOpen()).toBe(true)
+  })
+
   it('waits for focus that is slow to arrive, longer than the ordinary hide delay', async () => {
     await render({ name: 'a', active: true })
     const first = el('a-first')
