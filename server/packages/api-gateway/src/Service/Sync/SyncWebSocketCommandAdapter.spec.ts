@@ -3,7 +3,11 @@ import type { JsonObject, SyncTicketIdentity } from '@standard-red-notes/websock
 
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { CollaborationAuthorizationService } from './CollaborationAuthorizationService'
-import { DurableSyncCommandPort, SyncWebSocketCommandAdapter } from './SyncWebSocketCommandAdapter'
+import {
+  DurableSyncCommandPort,
+  SOCKET_SYNC_LANE_SNJS_VERSION,
+  SyncWebSocketCommandAdapter,
+} from './SyncWebSocketCommandAdapter'
 
 const JWT_SECRET = 'sync-adapter-test-secret'
 const identity: SyncTicketIdentity = {
@@ -208,7 +212,7 @@ describe('SyncWebSocketCommandAdapter', () => {
       expect.objectContaining({ headers: { authorization: 'session-token' } }),
     )
     expect(durable.sync).toHaveBeenCalledWith(
-      expect.objectContaining({ headers: { 'x-snjs-version': '20200115' } }),
+      expect.objectContaining({ headers: { 'x-snjs-version': SOCKET_SYNC_LANE_SNJS_VERSION } }),
       expect.objectContaining({
         locals: expect.objectContaining({ user: { uuid: 'user-1', email: 'user@example.test' } }),
       }),
@@ -219,6 +223,35 @@ describe('SyncWebSocketCommandAdapter', () => {
       payload: { retrieved_items: [], command: { id: 'command-1', digest, status: 'committed' } },
     })
   })
+
+  // The syncing server compares this header as a semver for every item that has a key system
+  // or sits in a shared vault, and `semver.lt` throws on anything else. The lane used to
+  // forward the command's API version here, so every vault save over the socket failed.
+  it.each(['20200115', '20240226'])(
+    'forwards an SNJS version, never the command API version %s, to the durable sync',
+    async (api) => {
+      const { adapter, durable } = build()
+      const digest = 'b'.repeat(64)
+      const payload = {
+        command: 'SYNC_ITEMS',
+        body: {
+          api,
+          items: [{ uuid: 'vault-note', key_system_identifier: 'key-system-1', shared_vault_uuid: 'vault-1' }],
+        },
+      }
+
+      await adapter.execute({ identity, commandId: 'command-vault', digest, payload }, new AbortController().signal)
+
+      const forwarded = (durable.sync as jest.Mock).mock.calls[0][0] as { headers: Record<string, unknown> }
+      const version = forwarded.headers['x-snjs-version']
+      expect(version).toBe(SOCKET_SYNC_LANE_SNJS_VERSION)
+      expect(version).not.toBe(api)
+      const [major, minor] = String(version).split('.').map(Number)
+      expect(String(version)).toMatch(/^\d+\.\d+\.\d+$/)
+      // SharedVaultSnjsFilter.MINIMUM_SNJS_VERSION_FOR_SHARED_VAULT_OPERATIONS is 2.200.0.
+      expect(major > 2 || (major === 2 && minor >= 200)).toBe(true)
+    },
+  )
 
   it.each([
     ['read-only session', { session: { uuid: 'session-1', readonly_access: true } }, 'READ_ONLY'],

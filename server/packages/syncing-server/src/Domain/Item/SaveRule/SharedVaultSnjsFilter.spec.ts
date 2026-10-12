@@ -84,6 +84,51 @@ describe('SharedVaultSnjsFilter', () => {
     })
   })
 
+  // The socket SYNC_ITEMS lane forwarded the client's API version under `x-snjs-version` for
+  // as long as it existed, and a caller that sends no header at all forwards `undefined`.
+  // `semver.lt` throws on both, which failed the whole sync instead of refusing the item.
+  it.each([
+    ['an API version in the SNJS header', '20240226'],
+    ['a version that is not a semver', 'not-a-version'],
+    ['an empty version', ''],
+    ['no version at all', undefined as unknown as string],
+  ])('refuses %s by name instead of throwing', async (_name, snjsVersion) => {
+    const result = await createFilter().check({
+      userUuid: '00000000-0000-0000-0000-000000000001',
+      apiVersion: '20240226',
+      itemHash,
+      existingItem,
+      snjsVersion,
+    })
+
+    expect(result).toEqual({
+      passed: false,
+      conflict: {
+        unsavedItem: itemHash,
+        serverItem: existingItem,
+        type: 'shared_vault_snjs_version_error',
+      },
+    })
+  })
+
+  it('does not read the version at all for an item outside every vault', async () => {
+    existingItem = Item.create(
+      { ...existingItem.props, sharedVaultAssociation: undefined },
+      new UniqueEntityId('00000000-0000-0000-0000-000000000000'),
+    ).getValue()
+    itemHash = ItemHash.create({ ...itemHash.props, key_system_identifier: null }).getValue()
+
+    const result = await createFilter().check({
+      userUuid: '00000000-0000-0000-0000-000000000001',
+      apiVersion: '20240226',
+      itemHash,
+      existingItem,
+      snjsVersion: '20240226',
+    })
+
+    expect(result).toEqual({ passed: true })
+  })
+
   it('should leave items with valid snjs version', async () => {
     const result = await createFilter().check({
       userUuid: '00000000-0000-0000-0000-000000000001',

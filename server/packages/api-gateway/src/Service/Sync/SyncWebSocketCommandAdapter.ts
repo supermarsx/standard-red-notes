@@ -66,6 +66,24 @@ type ValidatedSession = {
 export const SUPPLIED_SESSION_MAX_AGE_MS = 5_000
 
 /**
+ * The SNJS version every socket-lane request is forwarded with.
+ *
+ * The socket protocol carries no SNJS version; only HTTP sends `X-SNJS-Version`. This
+ * request used to state the command's API version (`20240226`) under that name, and the
+ * syncing server's `SharedVaultSnjsFilter` compares the header as a semver for every item
+ * that has a key system or sits in a shared vault. `20240226` is not a semver, the compare
+ * threw, the command failed, the gateway killed the socket and the client replayed the
+ * same command for good: no vault item could be saved over this lane on any topology, and
+ * the tab that tried lost item sync entirely. Items outside a vault return before the
+ * compare, which is why nothing that saved only plain notes ever saw it.
+ *
+ * What the lane can truthfully state is its own floor: a client that speaks durable
+ * SYNC_ITEMS runs the SNJS that introduced the lane or a later one, and that release
+ * already postdates shared vaults (2.200.0).
+ */
+export const SOCKET_SYNC_LANE_SNJS_VERSION = '2.211.7'
+
+/**
  * The syncing-server routes the three socket lanes stand in for, exactly as
  * `AnnotatedItemsController` declares them (`@controller('/items')` plus
  * `@httpPost('/sync')`, `@httpGet('/sync-command/:commandId')` and
@@ -616,12 +634,11 @@ export class SyncWebSocketCommandAdapter
     body: JsonObject,
     route: { method: 'GET' | 'POST'; url: string },
   ): { request: Request; response: Response } {
-    const api = typeof body.api === 'string' ? body.api : undefined
     return {
       request: createDirectCallRequest({
         method: route.method,
         url: route.url,
-        headers: { 'x-snjs-version': api },
+        headers: { 'x-snjs-version': SOCKET_SYNC_LANE_SNJS_VERSION },
         body,
       }),
       response: createDirectCallResponse(locals),
