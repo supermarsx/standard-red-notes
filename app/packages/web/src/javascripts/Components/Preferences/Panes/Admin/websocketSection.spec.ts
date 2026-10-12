@@ -2679,6 +2679,38 @@ describe('the tabs of this app', () => {
    * one: not the block, and not the ledger, which used to call it
    * "still-degraded" in amber for as long as the tab stayed open.
    */
+  /**
+   * A tab that is standing by made no handshake, so "was this operation
+   * negotiated" has no answer IN THAT TAB. Six rows read "unknown" there and kept
+   * an ordinary second tab — every check passing — off OK.
+   */
+  it('has no handshake to report on in a tab that is standing by, and does not call that unknown', () => {
+    const model = build({ payload: payload(), transport: standingBy, tabs: census(1, 1) })
+
+    for (const operation of SOCKET_OPERATIONS) {
+      const row = model.blocks
+        .flatMap((block) => block.rows)
+        .find((candidate) => String(candidate.label).startsWith(`${operation} — `))
+
+      expect({ operation, verdict: row?.verdict, value: String(row?.value) }).toEqual({
+        operation,
+        verdict: 'not-applicable',
+        value: 'not available here (another tab holds the socket lane)',
+      })
+    }
+  })
+
+  it('still reads the same rows as unknown for a tab that has no socket for any other reason', () => {
+    // The control: a tab that is dialling, or fell back for a fault, DID try a
+    // handshake of its own, and what it negotiated is a real open question.
+    const dialling = build({ payload: payload(), transport: transport({ state: 'HALF_OPEN', operations: [] }) })
+    const row = dialling.blocks
+      .flatMap((block) => block.rows)
+      .find((candidate) => String(candidate.label).startsWith('SYNC_ITEMS — '))
+
+    expect(row?.verdict).not.toBe('not-applicable')
+  })
+
   it('reads a second tab whose sibling holds the socket as standing by, with nothing wrong', () => {
     const model = build({
       transport: standingBy,
@@ -2783,5 +2815,120 @@ describe('how long the socket has been up', () => {
       'nothing to report (this tab is not on a socket)',
     )
     expect(rowOf(model, 'This socket has been up for').verdict).toBe('not-applicable')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* A socket that never connects                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * *** THE REVERSE PROXY THAT DOES NOT UPGRADE. *** Captured from a real stack
+ * behind one: plain HTTP got through, the socket was refused before it
+ * authenticated, and the lane cycled between a failed attempt and the next one.
+ * The headline said the first entry under "What needs attention" would say what
+ * was lost, and there was no entry.
+ */
+describe('a socket that never connects', () => {
+  const behindAProxyThatDoesNotUpgrade = () =>
+    recorded((instance) => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        instance.recordTransition('HALF_OPEN', undefined, false)
+        instance.recordTransition('DEGRADED', 'reconnect-gap', false)
+        instance.recordTransition('DEGRADED', 'proxy-failed', false)
+      }
+    })
+
+  it('says so as one finding, and tells the operator to make the proxy pass the upgrade', () => {
+    const model = build({
+      transport: transport({ state: 'DEGRADED', operations: [], fallbackReason: 'proxy-failed' }),
+      ledger: behindAProxyThatDoesNotUpgrade(),
+    })
+    const finding = findingOf(model, 'SOCKET_NOT_CONNECTING')
+
+    expect(finding?.verdict).toBe('degraded')
+    expect(finding?.title).toContain('refused before it connects, while plain HTTP gets through')
+    expect(finding?.remedy?.summary).toContain('pass the WebSocket upgrade')
+    expect(finding?.remedy?.steps.join(' ')).toContain('proxy_set_header Upgrade $http_upgrade')
+    expect(finding?.remedy?.because.join(' ')).toContain('has not once arrived on it')
+    expect(model.worstVerdict).toBe('degraded')
+  })
+
+  /**
+   * The lane is BETWEEN attempts at most instants. The finding must be there
+   * whatever state the pane happens to be read in — that is the whole reason it
+   * comes from the history and not from the transport row.
+   */
+  it('is raised whichever instant the pane is read at, including mid-dial', () => {
+    for (const state of ['HALF_OPEN', 'CONNECTING', 'DEGRADED', 'HTTP_FALLBACK'] as const) {
+      const model = build({
+        transport: transport({
+          state,
+          operations: [],
+          ...(state === 'DEGRADED' || state === 'HTTP_FALLBACK' ? { fallbackReason: 'proxy-failed' as const } : {}),
+        }),
+        ledger: behindAProxyThatDoesNotUpgrade(),
+      })
+
+      expect({ state, raised: codesOf(model).includes('SOCKET_NOT_CONNECTING') }).toEqual({ state, raised: true })
+    }
+  })
+
+  it('does not name the proxy for a cause that is not the proxy’s', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('DEGRADED', 'ack-timeout', false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+        instance.recordTransition('DEGRADED', 'server-kill', false)
+      }),
+    })
+    const finding = findingOf(model, 'SOCKET_NOT_CONNECTING')
+
+    expect(finding?.title).toBe('The realtime socket is not connecting')
+    expect(finding?.remedy?.summary).not.toContain('WebSocket upgrade')
+    expect(finding?.remedy?.steps.join(' ')).not.toContain('proxy_set_header')
+  })
+
+  it('is not raised for a lane that arrived on the socket even once, however it has moved since', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('DEGRADED', 'proxy-failed', false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+        instance.recordTransition('DEGRADED', 'proxy-failed', false)
+      }),
+    })
+
+    expect(codesOf(model)).not.toContain('SOCKET_NOT_CONNECTING')
+  })
+
+  it('is not raised on one failed attempt, nor for a tab that is standing by and is not trying', () => {
+    const once = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('DEGRADED', 'proxy-failed', false)
+      }),
+    })
+    const sibling = build({
+      transport: transport({ state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'multi-tab-not-owner' }),
+      ledger: recorded((instance) => {
+        instance.recordTransition('HTTP_FALLBACK', 'reconnect-gap', false)
+        instance.recordTransition('HTTP_FALLBACK', 'multi-tab-not-owner', false)
+      }),
+    })
+
+    expect(codesOf(once)).not.toContain('SOCKET_NOT_CONNECTING')
+    expect(codesOf(sibling)).not.toContain('SOCKET_NOT_CONNECTING')
+  })
+
+  it('says "in the last transitions" rather than "since the page loaded" once the ring has dropped any', () => {
+    const whole = findingOf(build({ ledger: behindAProxyThatDoesNotUpgrade() }), 'SOCKET_NOT_CONNECTING')
+    const elided = findingOf(
+      build({ ledger: { ...behindAProxyThatDoesNotUpgrade(), transitionsDropped: 30 } }),
+      'SOCKET_NOT_CONNECTING',
+    )
+
+    expect(whole?.remedy?.because[0]).toContain('since the page loaded')
+    expect(elided?.remedy?.because[0]).toContain('In the last transitions this tab recorded')
+    expect(elided?.remedy?.because[0]).not.toContain('since the page loaded')
   })
 })

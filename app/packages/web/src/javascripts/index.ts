@@ -18,6 +18,18 @@ import '@/Components/SuperEditor/fonts/editorFonts.css'
 import { initializeI18n } from './Internationalization/i18n'
 initializeI18n()
 
+// The commit this bundle was built from, pinned into the ENTRY chunk and stamped
+// on <html>. The import is the point: a module first reached from a lazy chunk
+// is bundled INTO that chunk, and the diagnostics pane — the only thing that
+// reads this — lives in one. Chunk file names are not content-hashed, so a tab
+// that has been open across a deployment loads its lazy chunks fresh from the
+// new build while its entry stays the old one: read from the chunk, the
+// revision would be the NEW one, and the stale-shell check would report
+// "current" in exactly the case it exists for. Measured: built without this
+// line, the revision was in 2499.app.js and nowhere in app.js.
+import { WebBuildRevision } from './Constants/BuildRevision'
+document.documentElement.setAttribute('data-srn-build', WebBuildRevision === '' ? 'unstamped' : WebBuildRevision)
+
 // Content-Security-Policy refusals, counted from before the application
 // evaluates. Imported for its side effect and placed here for the same reason as
 // the recovery listener below: a refusal during startup is exactly the one worth

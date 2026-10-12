@@ -134,8 +134,14 @@ export function fileTransferPortFor(application: WebApplication): FileTransferPo
   }
 }
 
-/** How long a sync round is given to settle after `sync()` returns, for a round merged into one already in flight. */
-const SYNC_SETTLE_MS = 5_000
+/**
+ * How long a sync round is given to settle after `sync()` returns. `sync()` can
+ * return before the round it asked for has finished — it is merged into one
+ * already in flight — and a round that is going to FAIL takes its time about
+ * it: it waits out an acknowledgement before it gives up. Five seconds missed
+ * exactly those. Well inside the check's own deadline.
+ */
+const SYNC_SETTLE_MS = 25_000
 const SYNC_POLL_MS = 100
 
 const settled = (before: SyncRoundCounts, after: SyncRoundCounts): boolean =>
@@ -147,9 +153,11 @@ const settled = (before: SyncRoundCounts, after: SyncRoundCounts): boolean =>
  * `undefined` on both sides when this build has no realtime transport to count
  * with — which the describer reports as unobservable rather than as a failure.
  */
-export async function runSyncRound(
-  application: WebApplication,
-): Promise<{ before: SyncRoundCounts | undefined; after: SyncRoundCounts | undefined }> {
+export async function runSyncRound(application: WebApplication): Promise<{
+  before: SyncRoundCounts | undefined
+  after: SyncRoundCounts | undefined
+  lastCarrier?: 'socket' | 'http' | 'failed'
+}> {
   const read = (): SyncRoundCounts | undefined => application.syncTransportLedger?.syncRoundCounts
   const before = read()
 
@@ -164,7 +172,9 @@ export async function runSyncRound(
     after = read()
   }
 
-  return { before, after }
+  const lastCarrier = application.syncTransportLedger?.lastSyncRound?.carrier
+
+  return { before, after, ...(lastCarrier === undefined ? {} : { lastCarrier }) }
 }
 
 /**

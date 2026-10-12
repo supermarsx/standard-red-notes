@@ -36,9 +36,11 @@ import { Chip, FindingCard, StatusChip } from './diagnosticsPresentation'
 import {
   AUTO_CHECK_IDS,
   buildWitnessBoard,
+  CHECK_DEADLINE_MS,
   CHECKS,
   checkRow,
   describeAppShellCheck,
+  describeCheckTimeout,
   describeControlPlaneRead,
   describeFileTransfer,
   describeMarkerCheck,
@@ -332,6 +334,33 @@ export const clockReadingFor = (
  */
 const injectedBrowserRuntime = (): BrowserRuntime => globalThis
 
+/**
+ * How long the pane's own reads are given. Without it a server that accepts the
+ * request and never answers leaves the pane on its previous reading for ever,
+ * with nothing on screen to say the reading is old.
+ */
+const PANE_READ_DEADLINE_MS = 20_000
+
+const TIMED_OUT = Symbol('timed out')
+
+/**
+ * Settle with the work, or with `TIMED_OUT` once the deadline passes — whichever
+ * is first. The timer is cleared when the work settles, so a run of checks does
+ * not leave one armed behind each of them.
+ */
+async function withDeadline<T>(work: Promise<T>, deadlineMs: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), deadlineMs)
+  })
+
+  try {
+    return await Promise.race([work, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Read one ambient fact, or report nothing. A thrown read is never a `false`. */
 const observed = <T,>(read: () => T): T | undefined => {
   try {
@@ -549,10 +578,22 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
        * report that it is. Whether THAT lane works is the control-plane check's
        * question, and it asks it separately, on purpose.
        */
-      const response = await application.httpOnlyJsonRequest<SyncDiagnosticsPayload>(
-        'GET',
-        '/v1/admin/sync-diagnostics',
+      const response = await withDeadline(
+        application.httpOnlyJsonRequest<SyncDiagnosticsPayload>('GET', '/v1/admin/sync-diagnostics'),
+        PANE_READ_DEADLINE_MS,
       )
+      if (response === TIMED_OUT) {
+        // Not a status and not a refusal: the server took the request and said
+        // nothing. The previous reading is dropped rather than left on screen
+        // looking current.
+        setPayload(undefined)
+        setClock(undefined)
+        setReadFailure({})
+        setLoadError(
+          `The sync diagnostics endpoint did not answer within ${PANE_READ_DEADLINE_MS / 1000} seconds. The server accepted the request and never replied.`,
+        )
+        return
+      }
       if (!response.ok) {
         noteIfForbidden(response)
         setPayload(undefined)
@@ -618,7 +659,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const loadServerStatus = useCallback(async () => {
     setStatusError(null)
     try {
-      const response = await application.legacyApi.adminGetServerStatus()
+      const response = await withDeadline(application.legacyApi.adminGetServerStatus(), PANE_READ_DEADLINE_MS)
+      if (response === TIMED_OUT) {
+        setServerStatus(undefined)
+        setStatusError(
+          `The server status endpoint did not answer within ${PANE_READ_DEADLINE_MS / 1000} seconds, so nothing below could be read.`,
+        )
+        return
+      }
       if (isErrorResponse(response)) {
         noteIfForbidden(response)
         setServerStatus(undefined)
@@ -1192,7 +1240,10 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
           let finding: CheckFinding
           try {
-            finding = await runners[id]()
+            // Against its own deadline: a check whose request is never answered
+            // must end, say so, and let the checks behind it run.
+            const settled = await withDeadline(runners[id](), CHECK_DEADLINE_MS[id])
+            finding = settled === TIMED_OUT ? describeCheckTimeout(CHECK_DEADLINE_MS[id]) : settled
           } catch (error) {
             finding = requestThrew(error)
           }
@@ -1757,32 +1808,43 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
             written here — how many rows carry each status, and the one reason it
             has the status it has. An operator arriving mid-incident reads these
             five lines and opens one tab instead of five. */}
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-max text-left text-sm" data-diagnostics-summary="true">
-            <tbody>
-              {SECTION_IDS.map((id) => {
-                const model = sections[id]
+        {/* ROWS THAT WRAP, NOT A TABLE THAT SCROLLS. This was a table as wide as
+            its widest line, in a box that scrolled sideways — so on a section with
+            something wrong, whose count line is the long one, the REASON and the
+            Open button were pushed out of view: the summary showed least exactly
+            when it mattered most. Each line now wraps inside the pane, the reason
+            takes whatever width is left, and the button stays at the end. */}
+        <div className="mt-4 text-sm" data-diagnostics-summary="true" role="list">
+          {SECTION_IDS.map((id) => {
+            const model = sections[id]
 
-                return (
-                  <tr key={id} data-diagnostics-router-row={id} className="border-border border-t align-top">
-                    <td className="py-2 pr-4">
-                      <StatusChip verdict={model.worstVerdict} />
-                    </td>
-                    <td className="py-2 pr-4 font-semibold">{model.title}</td>
-                    <td className="text-passive-0 py-2 pr-4 whitespace-nowrap">
-                      {describeVerdictCensus(model.counts)}
-                    </td>
-                    <td className="text-passive-0 max-w-md py-2 pr-4 whitespace-normal">{sectionReason(model)}</td>
-                    <td className="py-2">
-                      <Button small onClick={() => setActiveTab(sectionTabId(id))}>
-                        Open
-                      </Button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+            return (
+              <div
+                key={id}
+                role="listitem"
+                data-diagnostics-router-row={id}
+                className="border-border flex flex-wrap items-start gap-x-4 gap-y-1 border-t py-2"
+              >
+                <div className="w-32 flex-shrink-0" data-diagnostics-router-cell="status">
+                  <StatusChip verdict={model.worstVerdict} />
+                </div>
+                <div className="w-56 flex-shrink-0 font-semibold" data-diagnostics-router-cell="title">
+                  {model.title}
+                </div>
+                <div className="text-passive-0 min-w-0 flex-1 basis-64">
+                  <div className="text-xs" data-diagnostics-router-cell="counts">
+                    {describeVerdictCensus(model.counts)}
+                  </div>
+                  <div data-diagnostics-router-cell="reason">{sectionReason(model)}</div>
+                </div>
+                <div className="flex-shrink-0" data-diagnostics-router-cell="open">
+                  <Button small onClick={() => setActiveTab(sectionTabId(id))}>
+                    Open
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </PreferencesSegment>
 

@@ -572,7 +572,7 @@ const routerRow = (section: string): string[] => {
   const row = container.querySelector(`[data-diagnostics-router-row="${section}"]`)
   expect(row).not.toBeNull()
 
-  return [...(row?.querySelectorAll('td') ?? [])].map((cell) => cell.textContent ?? '')
+  return [...(row?.querySelectorAll('[data-diagnostics-router-cell]') ?? [])].map((cell) => cell.textContent ?? '')
 }
 
 /**
@@ -2525,6 +2525,60 @@ describe('AdminDiagnosticsTab — Checks', () => {
       expect(activePanel().textContent).toContain('The web app and the API server are different builds')
       expect(sectionRowStatus('App shell this tab is running')).toBe('healthy')
     })
+  })
+
+  /**
+   * *** A SERVER THAT TAKES THE REQUEST AND NEVER ANSWERS. *** Measured on a real
+   * stack with Redis stopped under an open pane: the capability request was
+   * accepted and never replied to, the run sat on "Running 1 of 6…" indefinitely,
+   * and the five checks behind it were never reached. A check now ends at its
+   * deadline, says so, and the run goes on.
+   */
+  it('ends a check whose request is never answered, reports it, and runs the checks behind it', async () => {
+    const never = new Promise<never>(() => undefined)
+    const application = makeApplication()
+    const answer = application.httpOnlyJsonRequest.getMockImplementation() as (...args: unknown[]) => Promise<unknown>
+    application.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
+      path === '/v1/sockets/sync/capabilities' ? never : answer(method, path),
+    )
+
+    await renderTab(application)
+    // The run that starts when the pane opens is sitting on the first check.
+    expect(container.querySelector('[data-diagnostics-progress]')?.textContent).toContain(
+      'Now running: Capability descriptor',
+    )
+
+    await act(async () => {
+      jest.advanceTimersByTime(20_000)
+    })
+    await settle()
+    await settle()
+
+    await openSubtab('WebSocket')
+    expect(sectionRow('Capability descriptor')[1]).toBe('no answer within 20 s')
+    expect(sectionRowStatus('Capability descriptor')).toBe('broken')
+    // The checks BEHIND it ran: the run did not die with the one that hung.
+    expect(sectionRowStatus('Authenticated control-plane read')).not.toBe('untested')
+    await openSubtab('Database & internal comms')
+    expect(sectionRow('Sync round trip')[1]).toBe('completed over HTTP')
+    expect(container.querySelector('[data-diagnostics-progress]')).toBeNull()
+  })
+
+  it('says the pane’s own read did not answer, instead of leaving an old reading on screen', async () => {
+    const never = new Promise<never>(() => undefined)
+    const application = makeApplication()
+    const answer = application.httpOnlyJsonRequest.getMockImplementation() as (...args: unknown[]) => Promise<unknown>
+    application.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
+      path === '/v1/admin/sync-diagnostics' ? never : answer(method, path),
+    )
+
+    await renderTab(application)
+    await act(async () => {
+      jest.advanceTimersByTime(20_000)
+    })
+    await settle()
+
+    expect(container.textContent).toContain('The sync diagnostics endpoint did not answer within 20 seconds')
   })
 
   /**

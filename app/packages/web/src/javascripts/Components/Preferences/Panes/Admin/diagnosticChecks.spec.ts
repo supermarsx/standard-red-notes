@@ -2,6 +2,7 @@ import {
   AUTO_CHECK_IDS,
   buildChecksBlock,
   buildWitnessBoard,
+  CHECK_DEADLINE_MS,
   CHECK_IDS,
   CHECK_MODES,
   CHECK_STATE_VERDICT,
@@ -9,6 +10,7 @@ import {
   checkRow,
   CHECKS,
   describeAppShellCheck,
+  describeCheckTimeout,
   describeControlPlaneRead,
   describeFileTransfer,
   describeMarkerCheck,
@@ -474,6 +476,51 @@ describe('describeSyncRound', () => {
     expect(recovered.state).toBe('pass')
   })
 
+  /**
+   * *** A SYNC THAT HANGS IS NOT "UNKNOWN" WHEN NONE HAS EVER WORKED. *** Measured
+   * with the gateway and the syncing server holding different internal secrets:
+   * every sync was accepted and never committed, not one note had loaded, and the
+   * round the check asked for was still hanging when it stopped watching — so it
+   * said "no sync round settled", unknown, and the headline read "working".
+   */
+  it('reads a tab whose every settled sync has failed as not syncing, even when this round never finished', () => {
+    const neverWorked = { socket: 0, http: 0, failed: 2 }
+    const outcome = describeSyncRound({ before: neverWorked, after: neverWorked, socketCarriesSync: true })
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).toBe('no sync has completed since this page loaded')
+  })
+
+  it('reads a round that did not finish after a failed one as not syncing', () => {
+    const outcome = describeSyncRound({
+      before: { socket: 9, http: 1, failed: 1 },
+      after: { socket: 9, http: 1, failed: 1 },
+      socketCarriesSync: true,
+      lastCarrier: 'failed',
+    })
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).toBe('the last sync failed, and this one did not finish')
+  })
+
+  it('keeps "unknown" for a round that did not finish on a tab whose syncs have been working', () => {
+    // The control for both of the above: nothing has failed, so a round still in
+    // flight is a round still in flight — a locked or offline client does this.
+    for (const lastCarrier of ['socket', 'http', undefined] as const) {
+      const outcome = describeSyncRound({
+        before: none,
+        after: none,
+        socketCarriesSync: true,
+        ...(lastCarrier === undefined ? {} : { lastCarrier }),
+      })
+
+      expect({ lastCarrier, state: outcome.state }).toEqual({ lastCarrier, state: 'unknown' })
+    }
+    // And a tab that has settled nothing at all has nothing to judge.
+    const idle = { socket: 0, http: 0, failed: 0 }
+    expect(describeSyncRound({ before: idle, after: idle, socketCarriesSync: false }).state).toBe('unknown')
+  })
+
   it('says it could not observe the round on a build with no transport to count with', () => {
     expect(describeSyncRound({ before: undefined, after: undefined, socketCarriesSync: false }).state).toBe('unknown')
   })
@@ -732,6 +779,15 @@ describe('the two witnesses a check cannot stand in for', () => {
 })
 
 describe('a check that did not pass', () => {
+  it('names the internal secret as the suspect when the server closes the socket on every sync', () => {
+    const block = buildChecksBlock('backend', readingsFrom({ sync: outcome('sync', 'fail') }))
+
+    expect(block?.findings[0]?.remedy?.summary).toContain(
+      'SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET must be the same value',
+    )
+    expect(block?.findings[0]?.remedy?.summary).toContain('at least 32 bytes')
+  })
+
   it('raises a finding with one action for the checks that test a whole path', () => {
     for (const id of ['sync', 'revisions', 'file-transfer'] as const) {
       for (const state of ['fail', 'degraded'] as const) {
@@ -951,5 +1007,28 @@ describe('a build that is behind', () => {
     for (const finding of stale?.findings ?? []) {
       expect(finding.verdict).toBe('degraded')
     }
+  })
+})
+
+describe('a check that never answers', () => {
+  it('has a deadline for every check that sends something, and for nothing else', () => {
+    expect(Object.keys(CHECK_DEADLINE_MS).sort()).toEqual([...RUNNABLE_CHECK_IDS].sort())
+    for (const id of RUNNABLE_CHECK_IDS) {
+      // Generous, and finite: a slow answer is not a failure, and no answer is.
+      expect(CHECK_DEADLINE_MS[id]).toBeGreaterThanOrEqual(20_000)
+      expect(CHECK_DEADLINE_MS[id]).toBeLessThanOrEqual(120_000)
+    }
+    // The round trip is seven requests and a delete, so it is given the longest.
+    expect(Math.max(...Object.values(CHECK_DEADLINE_MS))).toBe(CHECK_DEADLINE_MS['file-transfer'])
+  })
+
+  it('reports running out of time as not working, in whole seconds, and says it is not a refusal', () => {
+    const outcome = describeCheckTimeout(20_000)
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).toBe('no answer within 20 s')
+    expect(outcome.detail).toContain('That is not a refusal')
+    expect(String(describeCheckTimeout(45_400).result)).toBe('no answer within 45 s')
+    expect(String(describeCheckTimeout(0).result)).toBe('no answer within 1 s')
   })
 })

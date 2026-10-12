@@ -422,7 +422,7 @@ const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
       degraded: 'Sync works, but not over the socket that agreed to carry it',
     },
     summary: {
-      fail: 'Notes changed in this tab are not reaching the server. Reload and run the check again; if it fails twice, the syncing server and database rows in this section say which part is down.',
+      fail: 'Notes changed in this tab are not reaching the server. Reload and run the check again; if it fails twice, the syncing server and database rows in this section say which part is down. If the WebSocket ledger shows the server closing the socket each time a sync is tried (cause server-kill), the gateway and the syncing server are not agreeing on the internal gRPC secret: SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET must be the same value for both, and at least 32 bytes.',
       degraded:
         'Nothing is lost but the lane: the sync went over HTTP. Run the check again — one oversized first sync legitimately does this — and if it repeats, the lane degradation ledger in the WebSocket section names the cause.',
     },
@@ -1032,6 +1032,8 @@ export function describeSyncRound(input: {
   readonly after: SyncRoundCounts | undefined
   /** This tab's socket is READY and negotiated SYNC_ITEMS. */
   readonly socketCarriesSync: boolean
+  /** What carried the most recent round this tab settled, when there has been one. */
+  readonly lastCarrier?: 'socket' | 'http' | 'failed'
 }): Omit<CheckOutcome, 'id'> {
   const { before, after } = input
   if (before === undefined || after === undefined) {
@@ -1076,6 +1078,34 @@ export function describeSyncRound(input: {
       result: safeConstant('the sync did not complete'),
       detail:
         'The app ran a sync round and it failed on every lane it tried. Notes changed in this tab are not reaching the server.',
+    }
+  }
+
+  /**
+   * *** NOTHING SETTLED WHILE THE CHECK WATCHED — WHICH IS NOT ALWAYS "UNKNOWN". ***
+   *
+   * Measured on a stack whose gateway and syncing server held different internal
+   * secrets: every sync was accepted, never committed, and never finished. The
+   * round this check asked for was still hanging when it stopped watching, so it
+   * reported "no sync round settled" — unknown — on a deployment where not one
+   * note had loaded. The transport's own record says more than that window did:
+   * a tab whose every settled round has failed, or whose last one did, is not
+   * syncing, whatever the round in flight goes on to do.
+   */
+  if (after.socket + after.http === 0 && after.failed > 0) {
+    return {
+      state: 'fail',
+      result: safeConstant('no sync has completed since this page loaded'),
+      detail:
+        'Every sync this tab has attempted since it loaded has failed, and the one this check asked for did not finish either. Nothing is reaching the server from this tab, and nothing new is arriving.',
+    }
+  }
+  if (input.lastCarrier === 'failed') {
+    return {
+      state: 'fail',
+      result: safeConstant('the last sync failed, and this one did not finish'),
+      detail:
+        'The most recent sync this tab settled failed, and the one this check asked for had not finished when the check stopped watching.',
     }
   }
 
@@ -1317,6 +1347,44 @@ export function describeFileTransfer(result: FileTransferResult): Omit<CheckOutc
     detail: `${base}${socket} ${cleanup.detail}${
       result.usage === 'returned' ? ' The account’s file-usage figure is back where it was.' : ''
     }`,
+  }
+}
+
+/**
+ * How long each check is given before it is reported as not answering.
+ *
+ * *** A CHECK THAT HANGS IS A CHECK THAT FAILED, AND IT USED TO BE NEITHER. ***
+ * Measured against a real stack with Redis stopped under an open pane: the
+ * gateway accepted the capability request and never answered it, the run sat on
+ * "Running 1 of 6…" for as long as anyone cared to watch, and the five checks
+ * behind it were never reached. A server waiting on a dependency it cannot reach
+ * is the commonest way a deployment is broken, and it is exactly the case where
+ * the pane has to finish and say so.
+ *
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** A check added without a deadline does
+ * not compile. The figures are generous on purpose — a slow answer is not a
+ * failure — and each allows for what that check does: the control-plane read
+ * waits out the socket lane's own thirty-second deadline before HTTP is tried,
+ * and the file round trip is seven requests and a delete.
+ */
+export const CHECK_DEADLINE_MS: Record<RunnableCheckId, number> = {
+  capabilities: 20_000,
+  ticket: 20_000,
+  'control-plane': 45_000,
+  'server-build': 20_000,
+  sync: 45_000,
+  revisions: 20_000,
+  'file-transfer': 90_000,
+}
+
+/** What a check that ran out of time reports. Closed copy and a whole number of seconds. */
+export function describeCheckTimeout(deadlineMs: number): Omit<CheckOutcome, 'id'> {
+  const seconds = Math.max(1, Math.round(deadlineMs / 1000))
+
+  return {
+    state: 'fail',
+    result: safeTokens(safeConstant('no answer within'), safeCount(seconds), safeConstant('s')),
+    detail: `The check sent its request and nothing came back in ${seconds} seconds. That is not a refusal: something accepted the request and never answered it, which is what a service waiting on a dependency it cannot reach looks like. The Database & internal comms section says which dependency.`,
   }
 }
 

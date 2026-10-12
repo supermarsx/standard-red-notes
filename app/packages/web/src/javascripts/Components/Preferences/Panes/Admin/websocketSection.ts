@@ -1006,6 +1006,58 @@ function remedyForFlappingLane(): Remedy {
   }
 }
 
+/**
+ * What to do about a socket that never connects.
+ *
+ * Branched on the one cause that names its own fix. `proxy-failed` is the
+ * handshake being refused or cut before it authenticated while plain HTTP gets
+ * through, and that is a reverse proxy that does not pass the WebSocket upgrade
+ * nine times in ten. Any other cause has no single fix to name, and is sent to
+ * the counters that say which it was.
+ */
+function remedyForSocketNotConnecting(proxyRefused: boolean, attempts: number, wholeHistory: boolean): Remedy {
+  const because = [
+    wholeHistory
+      ? `This tab has tried the socket ${attempts} times since the page loaded and has not once arrived on it.`
+      : `In the last transitions this tab recorded it tried the socket ${attempts} times and did not once arrive on it.`,
+    'Every check that does not need the socket passes: the server is answering over plain HTTP from this same browser.',
+  ]
+
+  if (!proxyRefused) {
+    return {
+      code: 'SOCKET_NOT_CONNECTING',
+      summary:
+        'The realtime socket is not connecting, and the app is working over HTTP in the meantime. The per-cause counters in the ledger below name why each attempt ended; start with the commonest one.',
+      steps: [
+        'Read "Degradations with cause …" in the Lane degradation ledger. Each cause carries its own explanation, and the one with the highest count is the one to act on.',
+        'Read the boot-gate and admission blocks above it: a socket the server never offered, or an origin it does not admit, fails here every time and is named there.',
+        'Nothing is lost but immediacy. Saves are one HTTP request each, and changes made elsewhere arrive on the next sync instead of at once.',
+      ],
+      effort: 'peer-service',
+      basis: 'verified',
+      because,
+    }
+  }
+
+  return {
+    code: 'SOCKET_NOT_CONNECTING',
+    summary:
+      'Make whatever sits in front of this server pass the WebSocket upgrade. The socket is refused or cut before it authenticates on every attempt while plain HTTP gets through, which is what a reverse proxy that does not upgrade looks like.',
+    steps: [
+      'On nginx, the location that proxies this server needs three lines: proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade". Without them the handshake arrives as an ordinary GET and is never switched to a socket.',
+      'Caddy and Traefik upgrade by default. Apache needs mod_proxy_wstunnel. A CDN, tunnel or corporate proxy may have WebSockets switched off as a setting of its own.',
+      'Reload this page after changing the proxy, then run the checks again: "This tab’s live socket" is the row that turns.',
+      'Nothing is lost but immediacy in the meantime. Saves are one HTTP request each, and changes made elsewhere arrive on the next sync instead of at once.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      ...because,
+      'The cause the transport gave was proxy-failed: the socket was refused or cut before it authenticated.',
+    ],
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Block 1: this client's own transport                                       */
 /* -------------------------------------------------------------------------- */
@@ -1585,12 +1637,36 @@ function buildCapabilityBlock(
    * thing the contract forbids outright.
    */
   const observedEitherSide = serverOperations !== undefined || negotiated !== undefined
+  /**
+   * *** A TAB THAT IS STANDING BY HAS NO HANDSHAKE TO READ. *** It is on HTTP
+   * because another tab of the account holds the socket, so it negotiated
+   * nothing — by design. Six rows read "unknown" there, one per operation, and
+   * kept an ordinary second tab off OK over a question that has no answer in
+   * that tab. The tab that holds the socket is where this block is read.
+   */
+  const standingBy =
+    transport !== undefined && transport.state !== 'READY' && socketFallbackIsDeferred(transport.fallbackReason)
 
   const rows: DiagnosticRow[] = []
 
   for (const operation of SOCKET_OPERATIONS) {
     const row = byOperation.get(operation)
     const advertisable = counters.advertisable?.[operation]
+
+    if (standingBy && (row === undefined || row.status === 'unknown')) {
+      rows.push(
+        diagnosticRow({
+          label: OPERATION_LABEL[operation],
+          value: safeNotAvailableHere('another tab holds the socket lane'),
+          verdict: 'not-applicable',
+          evidence: evidenceNotAvailableHere(
+            'This tab is standing by for another tab of the account, so it has no socket of its own and negotiated no operation. The tab that holds the socket is the one this row can be read in.',
+          ),
+          note: 'Whether this operation was negotiated is a fact about a handshake, and this tab made none.',
+        }),
+      )
+      continue
+    }
 
     if (!observedEitherSide || row === undefined) {
       rows.push(
@@ -2926,6 +3002,39 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
    * least two recoveries, which no ordinary session reaches: a reconnect after a
    * sleep or a network change is one pair.
    */
+  /**
+   * *** A SOCKET THAT NEVER CONNECTS — THE FAULT WITH NO FINDING. ***
+   *
+   * Measured behind a reverse proxy that does not pass the WebSocket upgrade:
+   * the headline read "working, with something lost — the first entry under
+   * What needs attention says what", and there was NO entry. The transport row
+   * says where the lane is at this instant, and at most instants it is between
+   * attempts; the flap finding needs recoveries, and a lane that never arrives
+   * has none. Only the history can say "tried repeatedly, never arrived", so it
+   * is said from here — steadily, whatever instant the pane is read at.
+   *
+   * Not for a tab that is standing by: that tab is not trying. And two attempts
+   * at least, so a page that has only just loaded is not accused of anything.
+   */
+  const attempts = [...folded.values()].reduce((sum, count) => sum + count, 0)
+  if (connections === 0 && attempts >= 2 && !standingBy && unnameableStates === 0) {
+    const proxyRefused = (folded.get('proxy-failed') ?? 0) > 0
+
+    findings.push(
+      diagnosticFinding({
+        code: safeConstant('SOCKET_NOT_CONNECTING'),
+        title: proxyRefused
+          ? 'The realtime socket is refused before it connects, while plain HTTP gets through'
+          : 'The realtime socket is not connecting',
+        detail:
+          'This tab keeps trying the socket and has not arrived on it. The app is working — every read and every save goes over HTTP instead — so nothing on this pane is red for it, and at any one instant the transport row may read "reconnecting" rather than a failure. What is lost is immediacy: live updates, collaboration and pushed invitations wait for the next sync.',
+        verdict: 'degraded',
+        evidence: EVIDENCE_DIRECT,
+        remedy: remedyForSocketNotConnecting(proxyRefused, attempts, ledger.transitionsDropped === 0),
+      }),
+    )
+  }
+
   if (degradations >= 3 && recoveries >= 2) {
     findings.push(
       diagnosticFinding({

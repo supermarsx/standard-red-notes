@@ -16,6 +16,11 @@
  * built without a revision (a local build), which is "cannot be compared" and
  * never "matches".
  *
+ * *** IMPORTED BY THE ENTRY MODULE, ON PURPOSE. *** `index.ts` imports this so
+ * that it is part of the entry chunk — the code that was loaded when the tab
+ * was. Reached only from a lazy chunk it would be bundled into that chunk, which
+ * a stale tab loads fresh, and would then name the new build.
+ *
  * A `typeof` guard rather than a bare read: a build that does not define the
  * constant must degrade to "no revision" instead of throwing a ReferenceError at
  * module load and taking the importing screen down with it.
