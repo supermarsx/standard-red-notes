@@ -3443,21 +3443,70 @@ describe('AdminDiagnosticsTab — running one check', () => {
     await openSubtab('Checks')
 
     const statusCallsBefore = application.legacyApi.adminGetServerStatus.mock.calls.length
-    const diagnosticsCallsBefore = application.serverGetJsonRequest.mock.calls.filter(
-      ([path]: [string]) => path === '/v1/admin/sync-diagnostics',
-    ).length
+    // Counted on the helper the pane READS WITH. This used to count calls on the
+    // lane-first helper, which the pane stopped using for this read — so it
+    // compared zero with zero and could not fail.
+    const diagnosticsReads = (): number =>
+      application.httpOnlyJsonRequest.mock.calls.filter(
+        ([, path]: [string, string]) => path === '/v1/admin/sync-diagnostics',
+      ).length
+    const diagnosticsCallsBefore = diagnosticsReads()
+    expect(diagnosticsCallsBefore).toBeGreaterThan(0)
 
     await clickProbe('ticket')
 
     expect(application.legacyApi.adminGetServerStatus.mock.calls).toHaveLength(statusCallsBefore)
-    expect(
-      application.serverGetJsonRequest.mock.calls.filter(([path]: [string]) => path === '/v1/admin/sync-diagnostics'),
-    ).toHaveLength(diagnosticsCallsBefore)
+    expect(diagnosticsReads()).toBe(diagnosticsCallsBefore)
 
     // A FULL run still does re-read both: several of its probes change what they
     // answer, so leaving them stale would be the opposite defect.
     await clickButton('Run all checks')
     expect(application.legacyApi.adminGetServerStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore)
+  })
+
+  /**
+   * *** REFRESH RE-READS THE PANE, NOT A THIRD OF IT. *** Measured on a real
+   * stack: a new web build was deployed under an open pane, Refresh was pressed,
+   * and the pane went on naming the old build. It reloaded one of its three
+   * reads and none of its checks.
+   */
+  it('re-reads everything the pane reads on Refresh, re-runs the read-only checks, and writes nothing', async () => {
+    const current = 'c'.repeat(40)
+    const next = 'd'.repeat(40)
+    let served = current
+    ;(globalThis as { fetch?: unknown }).fetch = jest.fn().mockImplementation(async () => {
+      return { ok: true, json: async () => ({ revision: served, version: 'rel-1.0.0' }) }
+    })
+    const application = makeApplication()
+    await renderTab(application)
+    const identity = (): string => container.querySelector('[data-diagnostics-identity]')?.textContent ?? ''
+    const diagnosticsReads = (): number =>
+      application.httpOnlyJsonRequest.mock.calls.filter(
+        ([, path]: [string, string]) => path === '/v1/admin/sync-diagnostics',
+      ).length
+    const before = {
+      diagnostics: diagnosticsReads(),
+      status: application.legacyApi.adminGetServerStatus.mock.calls.length,
+      syncs: application.sync.sync.mock.calls.length,
+      tickets: application.serverJsonRequest.mock.calls.length,
+    }
+    expect(identity()).toContain(current)
+    expect(before.syncs).toBe(1)
+
+    // A deployment lands under the open pane.
+    served = next
+    await clickButton('Refresh')
+
+    expect(diagnosticsReads()).toBe(before.diagnostics + 1)
+    expect(application.legacyApi.adminGetServerStatus.mock.calls).toHaveLength(before.status + 1)
+    // The marker: the pane now names the build the server serves.
+    expect(identity()).toContain(next)
+    expect(identity()).not.toContain(current)
+    // The read-only checks ran again…
+    expect(application.sync.sync.mock.calls).toHaveLength(before.syncs + 1)
+    // …and neither check that writes did: no ticket minted, no upload opened.
+    expect(application.serverJsonRequest.mock.calls).toHaveLength(before.tickets)
+    expect(application.legacyApi.startUploadSession).not.toHaveBeenCalled()
   })
 
   it('keeps the results in the registry’s order however they were run', async () => {

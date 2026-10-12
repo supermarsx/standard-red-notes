@@ -1268,6 +1268,27 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const runAllChecks = useCallback(() => runChecks(RUNNABLE_CHECK_IDS, true), [runChecks])
 
   /**
+   * *** REFRESH RE-READS THE PANE, NOT A THIRD OF IT. *** It reloaded the sync
+   * diagnostics and nothing else. Measured with a new web build deployed under an
+   * open pane: Refresh was pressed and the pane went on naming the old build, so
+   * the stale-tab check had nothing to compare. The same held for the service
+   * probes — the pane's own advice under a failed probe is "re-read this pane
+   * after repairing the service", and the button that looks like that left the
+   * probes exactly as they were — and for every read-only check, which kept the
+   * result it got when the pane opened.
+   *
+   * It now does what opening the pane does: the three reads, and the read-only
+   * checks. Nothing that writes; those stay behind the button that says so.
+   */
+  const refresh = useCallback(() => {
+    readTransport()
+    void loadDiagnostics()
+    void loadServerStatus()
+    void loadDeployment()
+    void runChecks(AUTO_CHECK_IDS, false)
+  }, [loadDeployment, loadDiagnostics, loadServerStatus, readTransport, runChecks])
+
+  /**
    * The read-only checks, run once when the pane opens.
    *
    * They write nothing, so there is nothing to consent to, and a pane that opened
@@ -1739,7 +1760,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
           <Button primary onClick={() => void runAllChecks()} disabled={busy}>
             {progress === null ? 'Run all checks' : `Running ${progress.done + 1} of ${progress.total}…`}
           </Button>
-          <Button onClick={() => void loadDiagnostics()} disabled={loading || busy}>
+          <Button onClick={refresh} disabled={loading || busy}>
             Refresh
           </Button>
           {loading && <Spinner className="h-4 w-4" />}
