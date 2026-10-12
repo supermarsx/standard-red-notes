@@ -81,8 +81,33 @@ describe('FSFileDownloader', () => {
       expect(await createDownloader().listFiles('user-1')).toEqual([])
     })
 
-    it('rejects when the user has no directory at all', async () => {
-      await expect(createDownloader().listFiles('never-uploaded')).rejects.toThrow()
+    /**
+     * This used to be pinned the other way round ("rejects when the user has no
+     * directory at all"), and that is the behaviour that made the admin's
+     * Recalculate storage quota answer 500 on the all-in-one container for every
+     * account that had never uploaded: the directory is created by the first
+     * upload, so "no directory" is the ordinary state of an account with no
+     * files, and the recount of it is zero.
+     */
+    it('answers with an empty list for a user who has never uploaded and so has no directory', async () => {
+      await seed('user-2/theirs.txt', 'theirs')
+
+      expect(await createDownloader().listFiles('never-uploaded')).toEqual([])
+    })
+
+    // Zero is a measurement, and only a true one if the storage is there to look
+    // in. With the upload root itself gone, `[]` would recount every account to
+    // a confident zero on a deployment that has lost its files.
+    it('still rejects when the upload root itself is missing, because that is not "no files"', async () => {
+      await rm(uploadPath, { recursive: true, force: true })
+
+      await expect(createDownloader().listFiles('never-uploaded')).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+
+    it('still rejects when the user path exists but cannot be listed as a directory', async () => {
+      await seed('not-a-directory', 'a file where an account directory should be')
+
+      await expect(createDownloader().listFiles('not-a-directory')).rejects.toMatchObject({ code: 'ENOTDIR' })
     })
   })
 
