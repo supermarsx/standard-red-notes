@@ -61,6 +61,9 @@ import {
 import { PluginsFetchLike, PluginsProxyService } from '../Service/Plugins/PluginsProxyService'
 import { AdminLogsService } from '../Service/AdminLogs/AdminLogsService'
 import { CaldavService } from '../Service/Caldav/CaldavService'
+import { createDavBridgeService } from '../Service/DavBridge/DavBridgeFactory'
+import { DavBridgeService } from '../Service/DavBridge/DavBridgeService'
+import { DavSharedCounterStore } from '../Service/DavBridge/DavRelayLimiter'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
 import { CalendarProjectionStore } from '../Service/Caldav/CalendarProjectionStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
@@ -1075,6 +1078,33 @@ export class ContainerConfigLoader {
           ),
         )
     }
+
+    // Standard Red Notes: THE DAV BRIDGE. Two-way calendar and task sync with a
+    // user's own Nextcloud or CalDAV account. The app does the syncing (it holds
+    // the keys); the gateway stores the account's credential encrypted under the
+    // server's existing key, checks every address against the administrator's
+    // network policy, and forwards one request at a time. It keeps no calendar
+    // content. OFF unless DAV_BRIDGE_ENABLED is set (or an administrator
+    // switches it on in the pane), and per user unless allowed.
+    //
+    // Bound here, after the rate-limit counter store, because the bridge shares
+    // that store between gateway replicas when the deployment has one. Its own
+    // in-process counters apply regardless, so with no shared store the budget
+    // is per process rather than absent.
+    container.bind<DavBridgeService>(TYPES.ApiGateway_DavBridgeService).toConstantValue(
+      createDavBridgeService({
+        env: (name) => env.get(name, true) || undefined,
+        workingDirectory: process.cwd(),
+        serverSettingsStore,
+        // The same already-required server key that protects relay credentials,
+        // under its own HKDF context. No new operator secret.
+        encryptionKey: emailDeliveryEncryptionKey,
+        logger,
+        sharedCounterStore: container.isBound(TYPES.ApiGateway_RateLimitStore)
+          ? (container.get<RateLimitStore>(TYPES.ApiGateway_RateLimitStore) as DavSharedCounterStore)
+          : undefined,
+      }),
+    )
 
     // Standard Red Notes: THE IP ALLOW/BLOCK LISTS AND THROTTLE TELEMETRY on the
     // no-Redis arm. The binding above (line ~620) is keyed off the ioredis client,

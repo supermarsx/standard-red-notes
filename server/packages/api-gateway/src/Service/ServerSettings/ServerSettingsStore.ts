@@ -305,6 +305,40 @@ export interface PersistedPluginsSettings {
   sameOriginRendering?: boolean
 }
 
+/**
+ * Standard Red Notes: DAV BRIDGE knobs (two-way calendar and task sync with a
+ * user's Nextcloud or other CalDAV account, relayed by the gateway). Enforced
+ * ENTIRELY by the api-gateway and read per request, so a change here takes
+ * effect without a restart; that matters most for `enabled`, which is the kill
+ * switch.
+ *
+ *   enabled                the operator switch. Off unless set.
+ *   mode                   how the server takes part. `relay` (it forwards
+ *                          requests and keeps NO copy of calendar content) is
+ *                          the only mode this build implements. It is persisted
+ *                          as a plain bounded string, not as a closed set, so
+ *                          that a settings file written by a later build with a
+ *                          mode this one does not know still LOADS: the bridge
+ *                          then refuses to run (see DavBridgeSettings), instead
+ *                          of every other admin setting becoming unreadable.
+ *   allowAllUsers          grants the per-user permission to everyone, for
+ *                          single-user instances.
+ *   allowedPrivateOrigins  exact origins users may connect to although they
+ *                          resolve to private addresses, use plain http or a
+ *                          non-standard port: the Nextcloud on the LAN.
+ *   maxAccountsPerUser     1..20.
+ *
+ * Every field is optional; absence falls through to env (DAV_BRIDGE_*) then to
+ * the safe default (off, relay, nobody, no origins, 5).
+ */
+export interface PersistedDavBridgeSettings {
+  enabled?: boolean
+  mode?: string
+  allowAllUsers?: boolean
+  allowedPrivateOrigins?: string[]
+  maxAccountsPerUser?: number
+}
+
 export interface PersistedServerSettings {
   ai?: PersistedAiSettings
   updateCheck?: { url?: string }
@@ -316,6 +350,7 @@ export interface PersistedServerSettings {
   ocr?: PersistedOcrSettings
   workflows?: PersistedWorkflowsSettings
   plugins?: PersistedPluginsSettings
+  davBridge?: PersistedDavBridgeSettings
 }
 
 type FieldValidator = (value: unknown) => boolean
@@ -343,7 +378,48 @@ export const SERVER_SETTINGS_BOUNDS = {
   emailSubjectLength: { minimum: 0, maximum: 1_000 },
   emailBodyLength: { minimum: 0, maximum: 20_000 },
   emailDeliveryPort: { minimum: 1, maximum: 65_535 },
+  davBridgeAccountsPerUser: { minimum: 1, maximum: 20 },
+  davBridgeAllowedOrigins: { minimum: 0, maximum: 64 },
 } as const
+
+/**
+ * An exact origin: scheme, host and optional port, http or https, and nothing
+ * after it. `http://nextcloud/` and `http://nextcloud/dav` are NOT origins and
+ * are refused rather than trimmed, so that what an administrator sees in the
+ * list is exactly what is compared.
+ */
+export function isExactHttpOrigin(value: unknown): value is string {
+  if (!isBoundedString(value, 1, 300)) {
+    return false
+  }
+  try {
+    const parsed = new URL(value)
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      parsed.origin === value &&
+      // A plain host name or an address. The URL parser accepts `*.home.lan`
+      // as a host, and an entry like that would sit in the list looking like a
+      // wildcard while matching nothing: origins are compared exactly.
+      (/^[a-z0-9._-]+$/.test(parsed.hostname) || /^\[[0-9a-f:.]+\]$/.test(parsed.hostname))
+    )
+  } catch {
+    return false
+  }
+}
+
+export function isDavBridgeOriginList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= SERVER_SETTINGS_BOUNDS.davBridgeAllowedOrigins.maximum &&
+    value.every(isExactHttpOrigin) &&
+    new Set(value).size === value.length
+  )
+}
+
+/** A mode NAME. Which names are implemented is the resolver's business, not the file's. */
+export function isDavBridgeModeName(value: unknown): value is string {
+  return isBoundedString(value, 1, 32) && /^[a-z][a-z0-9-]*$/.test(value)
+}
 
 const isBoolean = (value: unknown): boolean => typeof value === 'boolean'
 const isNonNegativeSafeInteger = (value: unknown): boolean =>
@@ -781,6 +857,19 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
           repoUrl: isHttpUrl,
           sameOriginRendering: isBoolean,
         }),
+      davBridge: (candidate) =>
+        matchesFields(candidate, {
+          enabled: isBoolean,
+          mode: isDavBridgeModeName,
+          allowAllUsers: isBoolean,
+          allowedPrivateOrigins: isDavBridgeOriginList,
+          maxAccountsPerUser: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.davBridgeAccountsPerUser.minimum,
+              SERVER_SETTINGS_BOUNDS.davBridgeAccountsPerUser.maximum,
+            ),
+        }),
     })
   ) {
     return false
@@ -876,6 +965,13 @@ export interface ServerSettingsPatch {
   plugins?: {
     repoUrl?: string | null
     sameOriginRendering?: boolean | null
+  }
+  davBridge?: {
+    enabled?: boolean | null
+    mode?: string | null
+    allowAllUsers?: boolean | null
+    allowedPrivateOrigins?: string[] | null
+    maxAccountsPerUser?: number | null
   }
 }
 
@@ -1106,6 +1202,17 @@ export class ServerSettingsStore {
         this.applyKey(data.plugins, 'sameOriginRendering', patch.plugins.sameOriginRendering)
         if (Object.keys(data.plugins).length === 0) {
           delete data.plugins
+        }
+      }
+      if (patch.davBridge) {
+        data.davBridge = data.davBridge ?? {}
+        this.applyKey(data.davBridge, 'enabled', patch.davBridge.enabled)
+        this.applyKey(data.davBridge, 'mode', patch.davBridge.mode)
+        this.applyKey(data.davBridge, 'allowAllUsers', patch.davBridge.allowAllUsers)
+        this.applyKey(data.davBridge, 'allowedPrivateOrigins', patch.davBridge.allowedPrivateOrigins)
+        this.applyKey(data.davBridge, 'maxAccountsPerUser', patch.davBridge.maxAccountsPerUser)
+        if (Object.keys(data.davBridge).length === 0) {
+          delete data.davBridge
         }
       }
       result = data

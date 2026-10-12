@@ -102,6 +102,9 @@ export const TYPES = {
   ApiGateway_CALDAV_ENABLED: Symbol.for('ApiGateway_CALDAV_ENABLED'),
   ApiGateway_CALDAV_BASE_PATH: Symbol.for('ApiGateway_CALDAV_BASE_PATH'),
   ApiGateway_CaldavService: Symbol.for('ApiGateway_CaldavService'),
+  // Standard Red Notes: the DAV bridge (two-way calendar and task sync with a
+  // user's own Nextcloud/CalDAV account; the gateway relays, stores nothing).
+  ApiGateway_DavBridgeService: Symbol.for('ApiGateway_DavBridgeService'),
   // Standard Red Notes: server-side reminder DELIVERY of EXPLICITLY published reminders.
   ApiGateway_REMINDER_DELIVERY_ENABLED: Symbol.for('ApiGateway_REMINDER_DELIVERY_ENABLED'),
   ApiGateway_ReminderDeliveryService: Symbol.for('ApiGateway_ReminderDeliveryService'),

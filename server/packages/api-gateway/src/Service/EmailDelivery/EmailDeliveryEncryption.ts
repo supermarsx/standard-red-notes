@@ -32,11 +32,18 @@ export class EmailDeliveryCipher {
     private readonly context = EMAIL_RELAY_SETTINGS_ENCRYPTION_CONTEXT,
   ) {}
 
-  encrypt(value: unknown): EncryptedEmailDeliveryEnvelope {
+  /**
+   * `boundTo` ties the envelope to one record on top of the context: an
+   * envelope encrypted for one record does not decrypt when it is presented as
+   * another's, so ciphertext copied between records (or between users' files)
+   * fails closed instead of handing one owner another's secret. Omitted, the
+   * authenticated data is the context alone, byte for byte as before.
+   */
+  encrypt(value: unknown, boundTo?: readonly string[]): EncryptedEmailDeliveryEnvelope {
     const key = this.deriveKey()
     const iv = crypto.randomBytes(IV_BYTES)
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
-    cipher.setAAD(Buffer.from(this.context, 'utf8'))
+    cipher.setAAD(this.authenticatedData(boundTo))
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
 
     return {
@@ -48,7 +55,7 @@ export class EmailDeliveryCipher {
     }
   }
 
-  decrypt<T>(envelope: EncryptedEmailDeliveryEnvelope): T {
+  decrypt<T>(envelope: EncryptedEmailDeliveryEnvelope, boundTo?: readonly string[]): T {
     if (!isEncryptedEmailDeliveryEnvelope(envelope)) {
       throw new EmailDeliveryEncryptionError('Stored email delivery ciphertext has an invalid envelope.')
     }
@@ -58,7 +65,7 @@ export class EmailDeliveryCipher {
       const tag = strictBase64Url(envelope.tag, 16)
       const ciphertext = strictBase64Url(envelope.ciphertext)
       const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
-      decipher.setAAD(Buffer.from(this.context, 'utf8'))
+      decipher.setAAD(this.authenticatedData(boundTo))
       decipher.setAuthTag(tag)
       const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
       return JSON.parse(plaintext) as T
@@ -70,6 +77,17 @@ export class EmailDeliveryCipher {
         'Stored email delivery data could not be decrypted (wrong server key or tampered ciphertext).',
       )
     }
+  }
+
+  /**
+   * A JSON array is an unambiguous framing: no choice of parts can make
+   * ("a", "b") and ("ab") or ("a,b") authenticate the same bytes.
+   */
+  private authenticatedData(boundTo: readonly string[] | undefined): Buffer {
+    if (boundTo === undefined) {
+      return Buffer.from(this.context, 'utf8')
+    }
+    return Buffer.from(JSON.stringify([this.context, ...boundTo]), 'utf8')
   }
 
   private deriveKey(): Buffer {
