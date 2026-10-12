@@ -1,0 +1,64 @@
+# Standard Red Notes - external reverse-proxy overlay, ALL-IN-ONE topology
+#
+# The docker-compose.single.yml counterpart of docker-compose.proxy.yml. Apply
+# it ON TOP of docker-compose.single.yml so the single container can sit behind
+# a proxy you manage separately (Nginx Proxy Manager, Traefik, Caddy, nginx):
+#
+#   ./deploy.sh --single --proxy-network=npm_default
+#
+# The deploy script remembers that. Every later plain `./deploy.sh` redeploys
+# the all-in-one stack onto the same network, and a network that has gone
+# missing stops the deploy instead of falling back to a published port.
+#
+# By hand, name the network yourself and repeat BOTH files every time:
+#
+#   SRN_PROXY_NETWORK=npm_default docker compose \
+#     -f docker-compose.single.yml -f docker-compose.single.proxy.yml up -d
+#
+# There is no shortcut for this topology. Compose only auto-loads an override
+# beside the default docker-compose.yml, so a
+# `docker compose -f docker-compose.single.yml up -d` without this file
+# recreates the container OFF the proxy network and WITH a host port published.
+# Start and restart it with ./deploy.sh.
+#
+# Point your proxy at   http://standard-red-notes-app:8080   (SRN_PROXY_ALIAS,
+# or --proxy-alias, changes the name).
+#
+# WHY A SEPARATE FILE
+#
+# docker-compose.proxy.yml keeps `app` on the multi-container stack's internal
+# `standard-red-notes` network. The all-in-one file declares no network at all:
+# its one service sits on the project's implicit `default` network. Naming a
+# network that does not exist is a Compose error, so the two topologies cannot
+# share an overlay. docker-compose.proxy-publish.yml only replaces `app`'s
+# ports and is shared by both.
+#
+# WHAT THIS CHANGES
+#
+# 1. `app` joins the external proxy network, in addition to its own `default`
+#    network. There is nothing else in this stack to keep off it.
+#
+# 2. The host port publish is REMOVED (`!reset`), for the reason given in
+#    docker-compose.proxy.yml: a published port is a second, unproxied front
+#    door on every host interface. `--publish-ports` adds
+#    docker-compose.proxy-publish.yml for a loopback-only one.
+#
+# The .env settings a proxy needs (PUBLIC_URL, PUBLIC_FILES_SERVER_URL,
+# ENFORCE_HTTPS_FROM_PROXY, APP_BIND_ADDRESS, COOKIE_SECURE, TRUST_PROXY) and
+# the websocket-support reminder are the same as for the multi-container stack;
+# see docker-compose.proxy.yml and docs/self-hosting.md "Running behind a
+# reverse proxy".
+
+services:
+  app:
+    networks:
+      default: {}
+      proxy:
+        aliases:
+          - ${SRN_PROXY_ALIAS:-standard-red-notes-app}
+    ports: !reset []
+
+networks:
+  proxy:
+    name: ${SRN_PROXY_NETWORK:-proxy}
+    external: true

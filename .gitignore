@@ -55,3 +55,13 @@ backups/
 
 .git-backups/
 .claude/
+
+# deploy.sh remembers how THIS host was deployed - which stack, which Compose
+# project, which reverse-proxy network - in .deploy-state, and generates
+# docker-compose.override.yml from it so that a bare `docker compose up -d`
+# deploys the same way. Both describe one machine and have to survive
+# `git pull`, so neither is ever tracked. The glob covers a second deployment's
+# --state-file (.deploy-state.staging) and the temporary file of an atomic write.
+/.deploy-state
+/.deploy-state.*
+/docker-compose.override.yml

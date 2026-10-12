@@ -1,13 +1,19 @@
 # Standard Red Notes - keep a loopback host port while behind a proxy
 #
-# docker-compose.proxy.yml removes the published port entirely, because the
-# proxy reaches the app container over the shared network. Add this file after
-# it when you also want a host port for local debugging:
+# docker-compose.proxy.yml (and docker-compose.single.proxy.yml, for the
+# all-in-one stack) removes the published port entirely, because the proxy
+# reaches the app container over the shared network. Add this file after it
+# when you also want a host port for local debugging:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml \
-#                  -f docker-compose.proxy-publish.yml up -d
+#   ./deploy.sh --publish-ports      # on a deployment already behind a proxy
 #
-# or: ./deploy.sh --proxy-network --publish-ports
+# The deploy script remembers that like the proxy network itself, until
+# `./deploy.sh --no-publish-ports`. By hand it is one more file to repeat on
+# every command:
+#
+#   SRN_PROXY_NETWORK=npm_default docker compose \
+#     -f docker-compose.yml -f docker-compose.proxy.yml \
+#     -f docker-compose.proxy-publish.yml up -d
 #
 # The bind address is hard-coded to 127.0.0.1 rather than ${APP_BIND_ADDRESS},
 # which defaults to 0.0.0.0. Behind a proxy, a port on every host interface is

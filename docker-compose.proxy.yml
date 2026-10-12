@@ -1,14 +1,26 @@
 # Standard Red Notes - external reverse-proxy overlay
 #
 # Apply ON TOP of docker-compose.yml so the stack can sit behind a proxy you
-# manage separately (Nginx Proxy Manager, Traefik, Caddy, nginx):
+# manage separately (Nginx Proxy Manager, Traefik, Caddy, nginx). Let the
+# deploy script do it:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+#   ./deploy.sh --proxy-network=npm_default   # whatever your proxy's is called
 #
-# or just let the deploy script do it:
+# It remembers the network in .deploy-state, so every later plain `./deploy.sh`
+# redeploys onto it, and it stops rather than fall back to a published port if
+# that network has gone missing. `./deploy.sh --no-proxy` is the way back out.
+# The all-in-one stack has its own overlay, docker-compose.single.proxy.yml.
 #
-#   ./deploy.sh --proxy-network            # network named `proxy`
-#   ./deploy.sh --proxy-network=npm_default # or whatever yours is called
+# By hand, BOTH files and the network name have to be repeated every time:
+#
+#   SRN_PROXY_NETWORK=npm_default docker compose \
+#     -f docker-compose.yml -f docker-compose.proxy.yml up -d
+#
+# Leave any of them off and Compose recreates `app` OFF the proxy network and
+# WITH its host port published again, without a word. After a `./deploy.sh` in
+# proxy mode a bare `docker compose up -d` is safe as well: the script
+# generates docker-compose.override.yml, which Compose loads by itself, from
+# what it remembers, and checks that Compose renders it the same.
 #
 # docker-compose.yml is NOT edited by this, so the base file stays upgradable.
 #

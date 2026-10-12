@@ -26,3 +26,10 @@ coverage
 
 # Pre-deploy database dumps written by deploy.sh.
 backups
+
+# What deploy.sh remembers about this host, and the Compose override it
+# generates from that. Neither belongs in an image, and changing a proxy
+# network name must not invalidate the build cache.
+.deploy-state
+.deploy-state.*
+docker-compose.override.yml

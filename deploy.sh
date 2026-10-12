@@ -27,16 +27,57 @@
 #   ./deploy.sh --single             # the all-in-one docker-compose.single.yml
 #   ./deploy.sh --no-pull            # deploy the checked-out revision as-is
 #   ./deploy.sh --no-backup          # skip the pre-deploy database backup
-#   ./deploy.sh --proxy-network      # sit behind an external reverse proxy
+#   ./deploy.sh --proxy-network=npm_default   # behind a containerised proxy
 #   ./deploy.sh --proxy-network=npm_default --create-network
+#   ./deploy.sh --no-proxy           # leave the proxy network again
+#
+# REMEMBERED BETWEEN RUNS. The choices that decide WHICH stack this is and HOW
+# it is reached are written to .deploy-state beside this script, and read back
+# at the top of every later run:
+#
+#   --single / --file       which Compose file
+#   -p / --project          the Compose project name
+#   --proxy-network         the reverse-proxy network, together with
+#                           --proxy-alias and --publish-ports
+#
+# So after `./deploy.sh --proxy-network=npm_default`, a plain `./deploy.sh`
+# redeploys onto npm_default again. Every run prints which file it read and
+# what it took from it before it does anything else.
+#
+#   - The proxy settings change only by an explicit flag (a different
+#     --proxy-network=NAME, --no-proxy, --no-publish-ports, --proxy-alias).
+#     The change is announced before anything happens and is then remembered
+#     in turn.
+#   - A remembered proxy network that no longer exists STOPS the deploy. The
+#     script never falls back to publishing a host port: that would detach the
+#     site from its proxy and open an unproxied front door in one step.
+#   - --single, --file and -p say WHICH deployment this is, so they are never
+#     changed in place. A command line naming a different one from the one
+#     remembered is refused, with the ways out; settings are never carried
+#     from one deployment to another.
+#   - On a first install with a terminal attached and no proxy flag, the
+#     script asks whether the stack sits behind a containerised reverse proxy
+#     and lists the Docker networks to choose from. It never asks under --yes
+#     or without a terminal.
+#   - A deployment made before settings were remembered, whose app container
+#     was started with the proxy overlay, is carried forward as it is rather
+#     than taken off the network.
+#
+# .deploy-state holds no secrets, is parsed and never executed, and is ignored
+# by Git, so it survives `git pull`. Nothing is written to it under --dry-run.
+# Deleting it forgets what it holds, but that is not the way off a proxy
+# network: use --no-proxy.
 #
 # Flags:
 #   -h, --help              Show this help and exit.
 #       --setup             Force the first-install path. Refuses if .env exists.
 #       --update            Force the update path. Refuses if .env is missing.
 #       --single            Deploy docker-compose.single.yml (all-in-one, SQLite).
-#   -f, --file PATH         Deploy an explicit Compose file instead.
+#                           Remembered.
+#   -f, --file PATH         Deploy an explicit Compose file instead. Remembered.
 #   -p, --project NAME      Compose project name (COMPOSE_PROJECT_NAME).
+#                           Remembered, as is a COMPOSE_PROJECT_NAME inherited
+#                           from the environment.
 #       --no-pull           Do not run `git pull`.
 #       --no-backup         Do not back up the database first. NOT RECOMMENDED:
 #                           migrations run on container boot and a rebuild
@@ -44,19 +85,33 @@
 #       --backup-dir DIR    Where backups land (default: ./backups).
 #       --proxy-network[=NAME]
 #                           Put the stack behind an externally managed reverse
-#                           proxy by applying docker-compose.proxy.yml: `app`
-#                           joins the named external network (default `proxy`)
-#                           and stops publishing a host port. Nothing else
-#                           joins it. NAME may also be given as the next
-#                           argument.
+#                           proxy by applying docker-compose.proxy.yml (or
+#                           docker-compose.single.proxy.yml with --single):
+#                           `app` joins the named external network and stops
+#                           publishing a host port. Nothing else joins it.
+#                           NAME may also be given as the next argument.
+#                           Without a NAME it means the remembered network, or
+#                           `proxy` when none is remembered. Remembered.
+#       --no-proxy          Leave the proxy network: `app` publishes APP_PORT
+#                           on the host again. Remembered. This is the only
+#                           way out of proxy mode; it is never left implicitly.
+#       --proxy-alias NAME  The name `app` answers to on the proxy network
+#                           (default: standard-red-notes-app, or
+#                           SRN_PROXY_ALIAS). Remembered.
 #       --create-network    Create the proxy network if it does not exist.
 #                           Without this, a missing network is an error that
 #                           prints the exact `docker network create` to run -
 #                           your proxy usually brings its own network, and
 #                           silently making a second one with the same purpose
-#                           leaves the proxy unable to see the app.
+#                           leaves the proxy unable to see the app. Applies to
+#                           this run only; it is never remembered.
 #       --publish-ports     In proxy mode, ALSO publish APP_PORT on 127.0.0.1
-#                           for local debugging.
+#                           for local debugging. Remembered.
+#       --no-publish-ports  Stop doing that. Remembered.
+#       --state-file PATH   Read and write the remembered settings there
+#                           instead of ./.deploy-state. For a second
+#                           deployment from the same checkout: a state file
+#                           remembers exactly one.
 #       --allow-dirty       Deploy a checkout with uncommitted content changes.
 #                           The images are then built UNSTAMPED, because a
 #                           commit stamp on modified sources is a lie, and the
@@ -75,7 +130,12 @@
 #   -n, --dry-run           Print every command that would run; change nothing.
 #
 # This script NEVER creates or modifies .env, never stashes, never prunes, and
-# never removes a volume. It reads .env without sourcing it.
+# never removes a volume. It reads .env without sourcing it. Besides the
+# backups, the only files it writes are .deploy-state and, for the
+# multi-container stack, docker-compose.override.yml: a copy of the remembered
+# settings in the one file Compose loads by itself, so that a hand-typed
+# `docker compose up -d` in this directory deploys the same way too. It never
+# touches an override file it did not generate.
 #
 set -euo pipefail
 
@@ -94,18 +154,29 @@ DRY_RUN=0
 FORCE_MODE=""
 DO_PULL=1
 DO_BACKUP=1
-SINGLE=0
 ALLOW_DIRTY=0
-COMPOSE_FILE=""
-PROJECT_NAME=""
 BACKUP_DIR="${REPO_ROOT}/backups"
-PROXY_MODE=0
-PROXY_NETWORK="proxy"
 CREATE_NETWORK=0
-PUBLISH_PORTS=0
 HEALTH_TIMEOUT=600
 LOG_LINES=200
 HEALTH_URL=""
+
+# The remembered choices. ARG_* records only what THIS command line said, so
+# that "not mentioned" can resolve to the saved value rather than to a default
+# that silently undoes it. They are resolved against .deploy-state in section 0.
+ARG_SINGLE=0
+ARG_COMPOSE_FILE=""
+ARG_PROJECT=""
+ARG_PROXY_ON=0
+ARG_PROXY_OFF=0
+ARG_PROXY_NETWORK=""
+ARG_PROXY_NETWORK_GIVEN=0
+ARG_PROXY_ALIAS=""
+ARG_PROXY_ALIAS_GIVEN=0
+ARG_PUBLISH_ON=0
+ARG_PUBLISH_OFF=0
+DEFAULT_STATE_FILE="${REPO_ROOT}/.deploy-state"
+STATE_FILE="$DEFAULT_STATE_FILE"
 
 show_help() {
   # Print only the contiguous comment block under the shebang. `grep '^#'` over
@@ -130,22 +201,27 @@ while [ "$#" -gt 0 ]; do
     -h|--help) show_help; exit 0 ;;
     --setup) FORCE_MODE="setup" ;;
     --update) FORCE_MODE="update" ;;
-    --single) SINGLE=1 ;;
-    -f|--file) need_value "$1" "${2:-}"; COMPOSE_FILE="$2"; shift ;;
-    -p|--project) need_value "$1" "${2:-}"; PROJECT_NAME="$2"; shift ;;
+    --single) ARG_SINGLE=1 ;;
+    -f|--file) need_value "$1" "${2:-}"; ARG_COMPOSE_FILE="$2"; shift ;;
+    -p|--project) need_value "$1" "${2:-}"; ARG_PROJECT="$2"; shift ;;
     --no-pull) DO_PULL=0 ;;
     --no-backup) DO_BACKUP=0 ;;
     --backup-dir) need_value "$1" "${2:-}"; BACKUP_DIR="$2"; shift ;;
-    --proxy-network) # bare: default name; `--proxy-network NAME` also accepted
-      PROXY_MODE=1
+    --proxy-network) # bare: the remembered network, else `proxy`; `--proxy-network NAME` also accepted
+      ARG_PROXY_ON=1
       case "${2:-}" in
         ""|-*) ;;
-        *) PROXY_NETWORK="$2"; shift ;;
+        *) ARG_PROXY_NETWORK="$2"; ARG_PROXY_NETWORK_GIVEN=1; shift ;;
       esac
       ;;
-    --proxy-network=*) PROXY_MODE=1; PROXY_NETWORK="${1#*=}" ;;
+    --proxy-network=*) ARG_PROXY_ON=1; ARG_PROXY_NETWORK="${1#*=}"; ARG_PROXY_NETWORK_GIVEN=1 ;;
+    --no-proxy) ARG_PROXY_OFF=1 ;;
+    --proxy-alias) need_value "$1" "${2:-}"; ARG_PROXY_ALIAS="$2"; ARG_PROXY_ALIAS_GIVEN=1; shift ;;
+    --proxy-alias=*) ARG_PROXY_ALIAS="${1#*=}"; ARG_PROXY_ALIAS_GIVEN=1 ;;
     --create-network) CREATE_NETWORK=1 ;;
-    --publish-ports) PUBLISH_PORTS=1 ;;
+    --publish-ports) ARG_PUBLISH_ON=1 ;;
+    --no-publish-ports) ARG_PUBLISH_OFF=1 ;;
+    --state-file) need_value "$1" "${2:-}"; STATE_FILE="$2"; shift ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --timeout) need_value "$1" "${2:-}"; HEALTH_TIMEOUT="$2"; shift ;;
     --log-lines) need_value "$1" "${2:-}"; LOG_LINES="$2"; shift ;;
@@ -180,60 +256,55 @@ for numeric in HEALTH_TIMEOUT LOG_LINES; do
   fi
 done
 
-if [ "$SINGLE" -eq 1 ] && [ -n "$COMPOSE_FILE" ]; then
+# Contradictions that need nothing but the command line. Whatever also depends
+# on what is remembered is decided in section 0, once that has been read.
+if [ "$ARG_SINGLE" -eq 1 ] && [ -n "$ARG_COMPOSE_FILE" ]; then
   err "--single and --file are mutually exclusive; --single already selects docker-compose.single.yml."
   exit 2
 fi
-if [ -z "$COMPOSE_FILE" ]; then
-  if [ "$SINGLE" -eq 1 ]; then
-    COMPOSE_FILE="${REPO_ROOT}/docker-compose.single.yml"
-  else
-    COMPOSE_FILE="${REPO_ROOT}/docker-compose.yml"
-  fi
+if [ "$ARG_PROXY_ON" -eq 1 ] && [ "$ARG_PROXY_OFF" -eq 1 ]; then
+  err "--proxy-network and --no-proxy contradict each other."
+  exit 2
 fi
-
-if [ "$PROXY_MODE" -eq 0 ]; then
-  if [ "$CREATE_NETWORK" -eq 1 ]; then
-    err "--create-network only means something with --proxy-network."
-    exit 2
-  fi
-  if [ "$PUBLISH_PORTS" -eq 1 ]; then
-    err "--publish-ports only means something with --proxy-network; without it the"
-    err "  base Compose file already publishes APP_PORT."
+if [ "$ARG_PUBLISH_ON" -eq 1 ] && [ "$ARG_PUBLISH_OFF" -eq 1 ]; then
+  err "--publish-ports and --no-publish-ports contradict each other."
+  exit 2
+fi
+if [ "$ARG_PROXY_OFF" -eq 1 ]; then
+  if [ "$CREATE_NETWORK" -eq 1 ] || [ "$ARG_PUBLISH_ON" -eq 1 ] || [ "$ARG_PROXY_ALIAS_GIVEN" -eq 1 ]; then
+    err "--create-network, --publish-ports and --proxy-alias configure the proxy"
+    err "  network, and --no-proxy leaves it. Pass one or the other."
     exit 2
   fi
 fi
 
-if [ "$PROXY_MODE" -eq 1 ] && [ -z "$PROXY_NETWORK" ]; then
-  err "--proxy-network was given an empty network name."
-  exit 2
-fi
+# A name that reaches a docker command line is checked first, whether it was
+# typed just now or read back from .deploy-state. A leading dash would be taken
+# for an option, and anything outside this alphabet is not a name Docker or
+# Compose would have accepted in the first place.
+NETWORK_NAME_PATTERN='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+PROJECT_NAME_PATTERN='^[a-z0-9][a-z0-9_-]*$'
+valid_network_name() { [ "${#1}" -le 128 ] && [[ "$1" =~ $NETWORK_NAME_PATTERN ]]; }
+valid_project_name() { [ "${#1}" -le 128 ] && [[ "$1" =~ $PROJECT_NAME_PATTERN ]]; }
 
-# The overlay overrides the `app` service and the top-level networks of
-# docker-compose.yml by name. docker-compose.single.yml is one self-contained
-# `app` service on the default network with no `standard-red-notes` network to
-# preserve, so the overlay does not fit it and is refused rather than silently
-# half-applied.
-if [ "$PROXY_MODE" -eq 1 ] && [ "$SINGLE" -eq 1 ]; then
-  err "--proxy-network does not apply to the all-in-one topology."
-  err "  docker-compose.proxy.yml overlays the multi-container app service and"
-  err "  its internal network, neither of which docker-compose.single.yml has."
-  err "  For the all-in-one container, publish APP_PORT on loopback"
-  err "  (APP_BIND_ADDRESS=127.0.0.1) and point the proxy at that host port."
-  exit 2
-fi
-
-PROXY_OVERLAY="${REPO_ROOT}/docker-compose.proxy.yml"
-PROXY_PUBLISH_OVERLAY="${REPO_ROOT}/docker-compose.proxy-publish.yml"
-COMPOSE_FILE_ARGS=(-f "$COMPOSE_FILE")
-if [ "$PROXY_MODE" -eq 1 ]; then
-  COMPOSE_FILE_ARGS+=(-f "$PROXY_OVERLAY")
-  if [ "$PUBLISH_PORTS" -eq 1 ]; then
-    COMPOSE_FILE_ARGS+=(-f "$PROXY_PUBLISH_OVERLAY")
+if [ "$ARG_PROXY_NETWORK_GIVEN" -eq 1 ]; then
+  if [ -z "$ARG_PROXY_NETWORK" ]; then
+    err "--proxy-network was given an empty network name."
+    exit 2
   fi
-  export SRN_PROXY_NETWORK="$PROXY_NETWORK"
+  if ! valid_network_name "$ARG_PROXY_NETWORK"; then
+    err "--proxy-network: '${ARG_PROXY_NETWORK}' is not a Docker network name."
+    err "  A name starts with a letter or digit and continues with letters, digits,"
+    err "  '_', '.' or '-'. List the real ones with: docker network ls"
+    exit 2
+  fi
 fi
-PROXY_ALIAS="${SRN_PROXY_ALIAS:-standard-red-notes-app}"
+if [ "$ARG_PROXY_ALIAS_GIVEN" -eq 1 ] && ! valid_network_name "$ARG_PROXY_ALIAS"; then
+  err "--proxy-alias: '${ARG_PROXY_ALIAS}' cannot be used as a network alias."
+  err "  An alias starts with a letter or digit and continues with letters, digits,"
+  err "  '_', '.' or '-'."
+  exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Command execution. Every mutating command goes through run(), so --dry-run
@@ -316,13 +387,732 @@ file_size() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Preflight. Nothing below this point has touched the deployment yet.
+# 0. Remembered settings.
+#
+# A deploy is a statement about one host: this stack, under this project name,
+# reached through this reverse-proxy network. Until this section existed that
+# statement had to be retyped in full on every run, and whatever was left off
+# fell back to a default. For the proxy network the default is the worst
+# outcome available. A plain `./deploy.sh` after
+# `./deploy.sh --proxy-network=npm_default` recreated the app container OFF the
+# proxy network, so the site went dark behind the proxy, and WITH a host port
+# published on APP_BIND_ADDRESS, which defaults to every interface. Measured on
+# a real stack before this was written: the proxy answered 502 and the port
+# answered 200. A forgotten -p or --single starts a second stack beside the
+# first one instead.
+#
+# So the settings are written to a small file next to this script and read
+# back here, before anything else is decided.
+#
+# Why its own file and not .env: .env holds the encryption key. Rewriting the
+# one file whose corruption orphans every encrypted row, in order to store a
+# network name, is the wrong trade, so the promise at the top of this script --
+# .env is never created or modified -- still holds. The file is ignored by Git,
+# so `git pull` leaves it alone and the content-based checkout guard in
+# section 2 never sees it.
+#
+# It is PARSED, never sourced, and parsed strictly: an unknown key, a repeated
+# key, a value outside its alphabet or a missing version all stop the deploy.
+# A file that can only be half understood must not be half applied, because the
+# half that went missing may be the proxy network.
 # ---------------------------------------------------------------------------
 title "Standard Red Notes - deploy"
 if [ "$DRY_RUN" -eq 1 ]; then
   warn "DRY RUN: no command that changes anything will be executed."
 fi
 
+DEFAULT_PROXY_ALIAS="standard-red-notes-app"
+GUARD_FILE="${REPO_ROOT}/docker-compose.override.yml"
+GUARD_MARKER="# GENERATED by deploy.sh from .deploy-state. Do not edit: it is rewritten on every deploy."
+
+# What the caller's own shell would hand a hand-typed `docker compose`. Kept
+# apart from what this script exports further down, so that the bare-Compose
+# check in sync_guard_file can reproduce that shell exactly.
+INHERITED_PROJECT="${COMPOSE_PROJECT_NAME:-}"
+INHERITED_PROXY_ALIAS="${SRN_PROXY_ALIAS:-}"
+INHERITED_ENVIRONMENT=()
+if [ -n "${COMPOSE_PROJECT_NAME+set}" ]; then
+  INHERITED_ENVIRONMENT+=("COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}")
+fi
+if [ -n "${SRN_PROXY_NETWORK+set}" ]; then
+  INHERITED_ENVIRONMENT+=("SRN_PROXY_NETWORK=${SRN_PROXY_NETWORK}")
+fi
+if [ -n "${SRN_PROXY_ALIAS+set}" ]; then
+  INHERITED_ENVIRONMENT+=("SRN_PROXY_ALIAS=${SRN_PROXY_ALIAS}")
+fi
+
+absolute_path() {
+  # absolute_path PATH -- without realpath, which stock macOS does not have.
+  # A file whose directory does not exist is returned as given; the caller's
+  # own existence check then reports it.
+  local target="$1" directory
+  case "$target" in
+    /*|[A-Za-z]:[\\/]*) ;;
+    *) target="${PWD}/${target}" ;;
+  esac
+  if directory="$(cd "$(dirname -- "$target")" 2>/dev/null && pwd)"; then
+    printf '%s/%s' "${directory%/}" "$(basename -- "$target")"
+  else
+    printf '%s' "$target"
+  fi
+}
+
+STATE_IS_DEFAULT=0
+if [ "$(absolute_path "$STATE_FILE")" = "$(absolute_path "$DEFAULT_STATE_FILE")" ]; then
+  STATE_IS_DEFAULT=1
+fi
+
+describe_stack() {
+  # describe_stack TOPOLOGY COMPOSE_FILE PROJECT
+  local text
+  case "$1" in
+    single) text="the all-in-one stack (docker-compose.single.yml)" ;;
+    file) text="the stack in ${2}" ;;
+    *) text="the multi-container stack (docker-compose.yml)" ;;
+  esac
+  if [ -n "$3" ]; then
+    printf "%s, Compose project '%s'" "$text" "$3"
+  else
+    printf "%s, Compose's default project name" "$text"
+  fi
+}
+
+describe_proxy() {
+  # describe_proxy on|off NETWORK ALIAS yes|no
+  if [ "$1" != "on" ]; then
+    printf '%s' "no reverse-proxy network: the app publishes APP_PORT on the host"
+  elif [ "$4" = "yes" ]; then
+    printf "behind reverse-proxy network '%s' as '%s', plus a 127.0.0.1 host port" "$2" "$3"
+  else
+    printf "behind reverse-proxy network '%s' as '%s', no host port" "$2" "$3"
+  fi
+}
+
+STATE_PRESENT=0
+ST_VERSION=""
+ST_TOPOLOGY=""
+ST_COMPOSE_FILE=""
+ST_PROJECT=""
+ST_PROXY=""
+ST_PROXY_NETWORK=""
+ST_PROXY_ALIAS=""
+ST_PUBLISH=""
+ST_SAVED_AT=""
+
+state_refuse() {
+  # The saved settings cannot be trusted. Stop rather than deploy with part of
+  # them: the part that is unreadable may be the proxy network, and a deploy
+  # without it detaches the site and publishes a port.
+  local line
+  err "REFUSING to deploy: the remembered settings in ${STATE_FILE} cannot be used."
+  for line in "$@"; do
+    err "  ${line}"
+  done
+  err ""
+  err "  Nothing has been changed. Either correct the file (it is plain key=value"
+  err "  text), or delete it and re-run with the flags that describe this"
+  err "  deployment, for example:"
+  err "    ./deploy.sh --proxy-network=<your-proxy-network>"
+  exit 1
+}
+
+load_state() {
+  local line key value number=0 seen=" "
+  [ -f "$STATE_FILE" ] || return 0
+  STATE_PRESENT=1
+  while IFS= read -r line || [ -n "$line" ]; do
+    number=$((number + 1))
+    # Tolerate a file saved by a Windows editor, and trailing blanks.
+    line="${line%$'\r'}"
+    while [ "${line% }" != "$line" ] || [ "${line%$'\t'}" != "$line" ]; do
+      line="${line% }"
+      line="${line%$'\t'}"
+    done
+    case "$line" in
+      ""|"#"*) continue ;;
+    esac
+    if ! [[ "$line" =~ ^([a-z_]+)=(.*)$ ]]; then
+      state_refuse "Line ${number} is not of the form key=value:" "  ${line}"
+    fi
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$seen" in
+      *" ${key} "*) state_refuse "Line ${number} sets '${key}' a second time. Which one is meant?" ;;
+    esac
+    seen="${seen}${key} "
+    case "$key" in
+      version) ST_VERSION="$value" ;;
+      topology) ST_TOPOLOGY="$value" ;;
+      compose_file) ST_COMPOSE_FILE="$value" ;;
+      project) ST_PROJECT="$value" ;;
+      proxy) ST_PROXY="$value" ;;
+      proxy_network) ST_PROXY_NETWORK="$value" ;;
+      proxy_alias) ST_PROXY_ALIAS="$value" ;;
+      proxy_publish_ports) ST_PUBLISH="$value" ;;
+      saved_at) ST_SAVED_AT="$value" ;;
+      saved_revision) ;;
+      *)
+        state_refuse "Line ${number} sets '${key}', which this deploy.sh does not know." \
+          "A newer deploy.sh may have written it; this one will not guess what it means."
+        ;;
+    esac
+  done < "$STATE_FILE"
+
+  if [ "$ST_VERSION" != "1" ]; then
+    state_refuse "version is '${ST_VERSION:-missing}'; this deploy.sh reads version 1."
+  fi
+  case "$ST_TOPOLOGY" in
+    multi|single)
+      if [ -n "$ST_COMPOSE_FILE" ]; then
+        state_refuse "topology=${ST_TOPOLOGY} but compose_file is set. compose_file belongs to topology=file."
+      fi
+      ;;
+    file)
+      case "$ST_COMPOSE_FILE" in
+        "") state_refuse "topology=file needs compose_file to name the Compose file." ;;
+        -*) state_refuse "compose_file='${ST_COMPOSE_FILE}' starts with a dash and would be read as an option." ;;
+      esac
+      ;;
+    *) state_refuse "topology is '${ST_TOPOLOGY:-missing}'; it must be multi, single or file." ;;
+  esac
+  if [ -n "$ST_PROJECT" ] && ! valid_project_name "$ST_PROJECT"; then
+    state_refuse "project='${ST_PROJECT}' is not a Compose project name."
+  fi
+  if ! [[ "$ST_SAVED_AT" =~ ^[0-9TZ:-]*$ ]]; then
+    state_refuse "saved_at='${ST_SAVED_AT}' is not a timestamp."
+  fi
+  case "$ST_PROXY" in
+    on)
+      if ! valid_network_name "$ST_PROXY_NETWORK"; then
+        state_refuse "proxy=on but proxy_network='${ST_PROXY_NETWORK}' is not a Docker network name."
+      fi
+      if ! valid_network_name "$ST_PROXY_ALIAS"; then
+        state_refuse "proxy=on but proxy_alias='${ST_PROXY_ALIAS}' cannot be used as a network alias."
+      fi
+      case "$ST_PUBLISH" in
+        yes|no) ;;
+        *) state_refuse "proxy_publish_ports is '${ST_PUBLISH:-missing}'; it must be yes or no." ;;
+      esac
+      ;;
+    off)
+      # proxy=off beside a network name is what a hand edit that set the
+      # network and forgot the switch looks like. Reading it as "no proxy"
+      # would publish a port on the say-so of a file that names a proxy.
+      if [ -n "$ST_PROXY_NETWORK" ]; then
+        state_refuse "proxy=off but proxy_network='${ST_PROXY_NETWORK}' is set. Which one is meant?"
+      fi
+      ;;
+    *) state_refuse "proxy is '${ST_PROXY:-missing}'; it must be on or off." ;;
+  esac
+}
+
+load_state
+
+title "Remembered settings"
+if [ "$STATE_PRESENT" -eq 1 ]; then
+  info "File:   ${STATE_FILE}${ST_SAVED_AT:+ (saved ${ST_SAVED_AT})}"
+  ok "Loaded: $(describe_stack "$ST_TOPOLOGY" "$ST_COMPOSE_FILE" "$ST_PROJECT")"
+  ok "        $(describe_proxy "$ST_PROXY" "$ST_PROXY_NETWORK" "$ST_PROXY_ALIAS" "$ST_PUBLISH")"
+else
+  info "File:   ${STATE_FILE} (does not exist: nothing is remembered yet)"
+  info "  This run is decided by its command line alone."
+fi
+
+# --- Which deployment -------------------------------------------------------
+# An inherited COMPOSE_PROJECT_NAME is an instruction too: Compose obeys it, so
+# it names the deployment exactly as -p does, and is remembered the same way.
+REQUESTED_PROJECT="$ARG_PROJECT"
+REQUESTED_PROJECT_SAID="-p ${ARG_PROJECT}"
+if [ -z "$REQUESTED_PROJECT" ] && [ -n "$INHERITED_PROJECT" ]; then
+  REQUESTED_PROJECT="$INHERITED_PROJECT"
+  REQUESTED_PROJECT_SAID="COMPOSE_PROJECT_NAME=${INHERITED_PROJECT} in the environment"
+fi
+if [ -n "$REQUESTED_PROJECT" ] && ! valid_project_name "$REQUESTED_PROJECT"; then
+  err "${REQUESTED_PROJECT_SAID}: not a Compose project name."
+  err "  Lowercase letters, digits, '-' and '_', starting with a letter or digit."
+  exit 2
+fi
+
+saved_compose_file() {
+  # The Compose file the remembered settings name. A relative compose_file is
+  # relative to this script, so the checkout can be moved.
+  case "$ST_TOPOLOGY" in
+    single) printf '%s' "${REPO_ROOT}/docker-compose.single.yml" ;;
+    file)
+      case "$ST_COMPOSE_FILE" in
+        /*|[A-Za-z]:[\\/]*) printf '%s' "$ST_COMPOSE_FILE" ;;
+        *) printf '%s' "${REPO_ROOT}/${ST_COMPOSE_FILE}" ;;
+      esac
+      ;;
+    *) printf '%s' "${REPO_ROOT}/docker-compose.yml" ;;
+  esac
+}
+
+identity_refuse() {
+  # identity_refuse WHAT-WAS-SAID -- --single, --file and -p do not configure a
+  # deployment, they say which one. The remembered settings belong to exactly
+  # one, and are never applied to another.
+  err "REFUSING to deploy: $1 names a different deployment from the one"
+  err "remembered in ${STATE_FILE}."
+  err ""
+  err "  Remembered: $(describe_stack "$ST_TOPOLOGY" "$ST_COMPOSE_FILE" "$ST_PROJECT")"
+  err "              $(describe_proxy "$ST_PROXY" "$ST_PROXY_NETWORK" "$ST_PROXY_ALIAS" "$ST_PUBLISH")"
+  err ""
+  err "  Settings are remembered for ONE deployment and never carried over to"
+  err "  another. Behind a proxy that would put a second app container on the"
+  err "  same network under the same name, and the proxy would then split"
+  err "  requests between two databases."
+  err ""
+  err "  Nothing has been changed. Pick one:"
+  err "    Redeploy the remembered deployment:"
+  err "      ./deploy.sh                 (leave that out)"
+  err "    Deploy this one as well, remembered separately:"
+  err "      ./deploy.sh <the same flags> --state-file ${STATE_FILE}.<name>"
+  err "    Make this one the remembered deployment instead:"
+  err "      delete ${STATE_FILE}, then run this command again"
+  exit 2
+}
+
+TOPOLOGY="multi"
+if [ "$STATE_PRESENT" -eq 1 ]; then
+  TOPOLOGY="$ST_TOPOLOGY"
+fi
+if [ "$ARG_SINGLE" -eq 1 ]; then
+  if [ "$STATE_PRESENT" -eq 1 ] && [ "$ST_TOPOLOGY" != "single" ]; then
+    identity_refuse "--single"
+  fi
+  TOPOLOGY="single"
+elif [ -n "$ARG_COMPOSE_FILE" ]; then
+  if [ "$STATE_PRESENT" -eq 1 ]; then
+    if [ "$ST_TOPOLOGY" != "file" ] || [ "$(absolute_path "$ARG_COMPOSE_FILE")" != "$(absolute_path "$(saved_compose_file)")" ]; then
+      identity_refuse "--file ${ARG_COMPOSE_FILE}"
+    fi
+  fi
+  TOPOLOGY="file"
+fi
+
+SINGLE=0
+case "$TOPOLOGY" in
+  single)
+    SINGLE=1
+    COMPOSE_FILE="${REPO_ROOT}/docker-compose.single.yml"
+    ;;
+  file)
+    if [ -n "$ARG_COMPOSE_FILE" ]; then
+      COMPOSE_FILE="$ARG_COMPOSE_FILE"
+    else
+      COMPOSE_FILE="$(saved_compose_file)"
+    fi
+    ;;
+  *) COMPOSE_FILE="${REPO_ROOT}/docker-compose.yml" ;;
+esac
+
+PROJECT_NAME="$REQUESTED_PROJECT"
+if [ "$STATE_PRESENT" -eq 1 ]; then
+  if [ -z "$REQUESTED_PROJECT" ]; then
+    PROJECT_NAME="$ST_PROJECT"
+  elif [ -n "$ST_PROJECT" ]; then
+    if [ "$REQUESTED_PROJECT" != "$ST_PROJECT" ]; then
+      identity_refuse "$REQUESTED_PROJECT_SAID"
+    fi
+  elif [ "$REQUESTED_PROJECT" != "$(compose_file_default_project "$COMPOSE_FILE")" ]; then
+    # Nothing was remembered for the project, i.e. Compose's own default. Naming
+    # that default out loud is the same deployment; naming anything else is not.
+    identity_refuse "$REQUESTED_PROJECT_SAID"
+  fi
+fi
+
+# --- How it is reached ------------------------------------------------------
+# PROXY_ORIGIN records where the proxy decision came from: flag, saved, adopted
+# (read off the running stack, section 1c), asked (the first-install question)
+# or default (nobody has said anything, anywhere).
+PROXY_MODE=0
+PROXY_NETWORK=""
+PROXY_NETWORK_REMEMBERED=0
+PROXY_ALIAS="$DEFAULT_PROXY_ALIAS"
+PUBLISH_PORTS=0
+PROXY_ORIGIN="default"
+if [ "$ARG_PROXY_OFF" -eq 1 ]; then
+  PROXY_ORIGIN="flag"
+elif [ "$ARG_PROXY_ON" -eq 1 ]; then
+  PROXY_ORIGIN="flag"
+  PROXY_MODE=1
+  if [ -n "$ARG_PROXY_NETWORK" ]; then
+    PROXY_NETWORK="$ARG_PROXY_NETWORK"
+  elif [ "$ST_PROXY" = "on" ]; then
+    PROXY_NETWORK="$ST_PROXY_NETWORK"
+    PROXY_NETWORK_REMEMBERED=1
+  else
+    PROXY_NETWORK="proxy"
+  fi
+elif [ "$STATE_PRESENT" -eq 1 ]; then
+  PROXY_ORIGIN="saved"
+  if [ "$ST_PROXY" = "on" ]; then
+    PROXY_MODE=1
+    PROXY_NETWORK="$ST_PROXY_NETWORK"
+    PROXY_NETWORK_REMEMBERED=1
+  fi
+fi
+
+resolve_proxy_alias() {
+  # resolve_proxy_alias REMEMBERED -- the first of: --proxy-alias, an inherited
+  # SRN_PROXY_ALIAS, SRN_PROXY_ALIAS in .env (where Compose would read it too),
+  # the remembered alias, the default. Everything above "remembered" is the
+  # operator saying so now, and is announced as a change when it differs.
+  local remembered="$1" from_env_file
+  from_env_file="$(env_value SRN_PROXY_ALIAS)"
+  if [ "$ARG_PROXY_ALIAS_GIVEN" -eq 1 ]; then
+    PROXY_ALIAS="$ARG_PROXY_ALIAS"
+  elif [ -n "$INHERITED_PROXY_ALIAS" ]; then
+    PROXY_ALIAS="$INHERITED_PROXY_ALIAS"
+  elif [ -n "$from_env_file" ]; then
+    PROXY_ALIAS="$from_env_file"
+  elif [ -n "$remembered" ]; then
+    PROXY_ALIAS="$remembered"
+  else
+    PROXY_ALIAS="$DEFAULT_PROXY_ALIAS"
+  fi
+  if ! valid_network_name "$PROXY_ALIAS"; then
+    err "The proxy alias '${PROXY_ALIAS}' (SRN_PROXY_ALIAS) cannot be used as a network alias."
+    err "  An alias starts with a letter or digit and continues with letters, digits,"
+    err "  '_', '.' or '-'."
+    exit 2
+  fi
+}
+
+resolve_publish_ports() {
+  # resolve_publish_ports REMEMBERED(yes|no) -- a flag on this command line
+  # wins; otherwise what was remembered.
+  if [ "$ARG_PUBLISH_ON" -eq 1 ]; then
+    PUBLISH_PORTS=1
+  elif [ "$ARG_PUBLISH_OFF" -eq 1 ]; then
+    PUBLISH_PORTS=0
+  elif [ "$1" = "yes" ]; then
+    PUBLISH_PORTS=1
+  else
+    PUBLISH_PORTS=0
+  fi
+}
+
+if [ "$PROXY_MODE" -eq 1 ]; then
+  resolve_proxy_alias "$ST_PROXY_ALIAS"
+  resolve_publish_ports "$ST_PUBLISH"
+else
+  if [ "$CREATE_NETWORK" -eq 1 ]; then
+    err "--create-network only means something with --proxy-network."
+    exit 2
+  fi
+  if [ "$ARG_PUBLISH_ON" -eq 1 ]; then
+    err "--publish-ports only means something with --proxy-network; without it the"
+    err "  base Compose file already publishes APP_PORT."
+    exit 2
+  fi
+  if [ "$ARG_PUBLISH_OFF" -eq 1 ] || [ "$ARG_PROXY_ALIAS_GIVEN" -eq 1 ]; then
+    err "--no-publish-ports and --proxy-alias only mean something with --proxy-network."
+    exit 2
+  fi
+fi
+
+# Say what is about to change BEFORE anything is checked, pulled or built. Only
+# a remembered deployment can change; with nothing remembered there is nothing
+# to compare against.
+CHANGE_COUNT=0
+note_change() {
+  local line
+  CHANGE_COUNT=$((CHANGE_COUNT + 1))
+  warn "CHANGE: $1"
+  shift
+  for line in "$@"; do
+    warn "  ${line}"
+  done
+}
+if [ "$STATE_PRESENT" -eq 1 ]; then
+  if [ "$ST_PROXY" = "on" ] && [ "$PROXY_MODE" -eq 0 ]; then
+    bind_address="$(env_value APP_BIND_ADDRESS)"
+    note_change "leaving the reverse-proxy network '${ST_PROXY_NETWORK}' (--no-proxy)." \
+      "The app container will be detached from it and will publish APP_PORT on" \
+      "the host again, on APP_BIND_ADDRESS (${bind_address:-unset, which means 0.0.0.0: every interface})." \
+      "Your proxy can no longer reach it by name."
+  elif [ "$ST_PROXY" = "off" ] && [ "$PROXY_MODE" -eq 1 ]; then
+    note_change "going behind the reverse-proxy network '${PROXY_NETWORK}'." \
+      "The app container will join it as '${PROXY_ALIAS}' and stop publishing a host port."
+  elif [ "$PROXY_MODE" -eq 1 ]; then
+    if [ "$PROXY_NETWORK" != "$ST_PROXY_NETWORK" ]; then
+      note_change "reverse-proxy network '${ST_PROXY_NETWORK}' -> '${PROXY_NETWORK}'." \
+        "The app container will be MOVED: detached from '${ST_PROXY_NETWORK}' and attached" \
+        "to '${PROXY_NETWORK}'. Your proxy has to be on '${PROXY_NETWORK}' to reach it."
+    fi
+    if [ "$PROXY_ALIAS" != "$ST_PROXY_ALIAS" ]; then
+      note_change "proxy alias '${ST_PROXY_ALIAS}' -> '${PROXY_ALIAS}'." \
+        "Your proxy's upstream has to become http://${PROXY_ALIAS}:8080."
+    fi
+    if [ "$PUBLISH_PORTS" -eq 1 ] && [ "$ST_PUBLISH" != "yes" ]; then
+      note_change "also publishing APP_PORT on 127.0.0.1 (--publish-ports)."
+    elif [ "$PUBLISH_PORTS" -eq 0 ] && [ "$ST_PUBLISH" = "yes" ]; then
+      note_change "no longer publishing APP_PORT on 127.0.0.1 (--no-publish-ports)."
+    fi
+  fi
+  if [ "$CHANGE_COUNT" -gt 0 ]; then
+    info "Nothing has happened yet. The change is saved to ${STATE_FILE}"
+    info "  when the deploy is confirmed, and is what a plain ./deploy.sh does from then on."
+  else
+    info "This run: as remembered."
+  fi
+fi
+
+PROXY_PUBLISH_OVERLAY="${REPO_ROOT}/docker-compose.proxy-publish.yml"
+if [ "$SINGLE" -eq 1 ]; then
+  # docker-compose.single.yml is one `app` service on the project's default
+  # network, with no `standard-red-notes` network to keep, so it has its own
+  # overlay. The publish overlay only replaces `app`'s ports and fits both.
+  PROXY_OVERLAY="${REPO_ROOT}/docker-compose.single.proxy.yml"
+else
+  PROXY_OVERLAY="${REPO_ROOT}/docker-compose.proxy.yml"
+fi
+
+apply_proxy_settings() {
+  # Called again from section 1c when the proxy decision is only made there.
+  COMPOSE_FILE_ARGS=(-f "$COMPOSE_FILE")
+  if [ "$PROXY_MODE" -eq 1 ]; then
+    COMPOSE_FILE_ARGS+=(-f "$PROXY_OVERLAY")
+    if [ "$PUBLISH_PORTS" -eq 1 ]; then
+      COMPOSE_FILE_ARGS+=(-f "$PROXY_PUBLISH_OVERLAY")
+    fi
+    # Exported, not passed: every compose invocation below, including the
+    # read-only ones, must interpolate the overlay with the same two names.
+    export SRN_PROXY_NETWORK="$PROXY_NETWORK"
+    export SRN_PROXY_ALIAS="$PROXY_ALIAS"
+  fi
+}
+apply_proxy_settings
+
+# --- Writing it down --------------------------------------------------------
+render_state() {
+  local proxy="off" network="" alias="" publish="no" stored_file="" absolute
+  if [ "$PROXY_MODE" -eq 1 ]; then
+    proxy="on"
+    network="$PROXY_NETWORK"
+    alias="$PROXY_ALIAS"
+    if [ "$PUBLISH_PORTS" -eq 1 ]; then
+      publish="yes"
+    fi
+  fi
+  if [ "$TOPOLOGY" = "file" ]; then
+    absolute="$(absolute_path "$COMPOSE_FILE")"
+    case "$absolute" in
+      "${REPO_ROOT}/"*) stored_file="${absolute#"${REPO_ROOT}/"}" ;;
+      *) stored_file="$absolute" ;;
+    esac
+  fi
+  cat <<EOF
+# Standard Red Notes - what ./deploy.sh remembers about this deployment.
+#
+# Written by ./deploy.sh just before it starts the stack, and read back at the
+# top of every later run, so that a plain ./deploy.sh redeploys the same way.
+# There are no secrets in here; those live in .env, which deploy.sh never
+# writes. Git ignores this file, so it survives git pull.
+#
+# Plain key=value, parsed strictly and never executed: a line deploy.sh does
+# not understand stops the deploy instead of being guessed at. Prefer the flags
+# (./deploy.sh --help) to editing by hand. Deleting this file forgets what is
+# in it; it is not how to leave a proxy network (that is --no-proxy).
+version=1
+
+# Which stack: multi (docker-compose.yml), single (docker-compose.single.yml)
+# or file (compose_file, given with --file; relative to deploy.sh).
+topology=${TOPOLOGY}
+compose_file=${stored_file}
+
+# Compose project name from -p / COMPOSE_PROJECT_NAME. Empty = Compose's default.
+project=${PROJECT_NAME}
+
+# Reverse proxy. on = the app container joins proxy_network, an existing
+# external Docker network, answers there as proxy_alias, and publishes no host
+# port. Leave it with ./deploy.sh --no-proxy, never by deleting these lines.
+proxy=${proxy}
+proxy_network=${network}
+proxy_alias=${alias}
+# yes = also publish APP_PORT on 127.0.0.1 (--publish-ports).
+proxy_publish_ports=${publish}
+
+saved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+saved_revision=${REVISION:-}
+EOF
+}
+
+guard_is_ours() {
+  local first=""
+  [ -f "$GUARD_FILE" ] || return 1
+  IFS= read -r first < "$GUARD_FILE" || true
+  [ "${first%$'\r'}" = "$GUARD_MARKER" ]
+}
+
+render_guard() {
+  printf '%s\n' "$GUARD_MARKER"
+  cat <<'EOF'
+#
+# Compose loads docker-compose.override.yml by itself whenever it is run in
+# this directory without -f. This copy of what .deploy-state remembers is what
+# makes a hand-typed `docker compose up -d` act on the same deployment as
+# ./deploy.sh does - the same Compose project, on the same reverse-proxy
+# network - instead of quietly starting a second stack, or recreating the app
+# container off that network with a host port published.
+#
+# Change these settings with ./deploy.sh (see --help), never here. Git ignores
+# this file. deploy.sh removes it again when nothing remembered needs it.
+EOF
+  if [ -n "$PROJECT_NAME" ]; then
+    printf 'name: "%s"\n' "$PROJECT_NAME"
+  fi
+  if [ "$PROXY_MODE" -eq 1 ]; then
+    printf 'services:\n  app:\n    networks:\n      standard-red-notes: {}\n      proxy:\n        aliases:\n          - "%s"\n' "$PROXY_ALIAS"
+    if [ "$PUBLISH_PORTS" -eq 1 ]; then
+      # shellcheck disable=SC2016  # Deliberate: Compose interpolates APP_PORT,
+      # exactly as it does in docker-compose.proxy-publish.yml.
+      printf '    ports: !override\n      - "127.0.0.1:${APP_PORT:-3001}:8080"\n'
+    else
+      printf '    ports: !reset []\n'
+    fi
+    printf 'networks:\n  proxy:\n    name: "%s"\n    external: true\n' "$PROXY_NETWORK"
+  fi
+}
+
+guard_matches_deploy() {
+  # The generated file repeats what the tracked overlays say, and two copies
+  # drift. So it is not trusted: ask Compose to render what this script deploys
+  # and what a bare `docker compose` in this directory would deploy, in the
+  # caller's own environment, and compare the two. Checksums, not files, since
+  # a rendered configuration contains every secret in .env.
+  local deployed bare
+  deployed="$(compose_query config 2>/dev/null | cksum)" || return 1
+  bare="$(cd "$REPO_ROOT" && env -u COMPOSE_PROJECT_NAME -u SRN_PROXY_NETWORK -u SRN_PROXY_ALIAS \
+    ${INHERITED_ENVIRONMENT[@]+"${INHERITED_ENVIRONMENT[@]}"} "${COMPOSE[@]}" config 2>/dev/null | cksum)" || return 1
+  [ "$deployed" = "$bare" ]
+}
+
+# What a hand-typed `docker compose up -d` in this directory would do, for the
+# closing summary: guarded (it deploys the remembered settings), unguarded (it
+# would not), or irrelevant (nothing remembered differs from the defaults).
+BARE_COMPOSE="irrelevant"
+sync_guard_file() {
+  local wanted=0 temporary
+  if [ "$STATE_IS_DEFAULT" -eq 0 ]; then
+    # A second deployment kept in its own state file. A bare `docker compose`
+    # in this directory can only ever mean one deployment, and it is the one in
+    # .deploy-state.
+    if [ "$PROXY_MODE" -eq 1 ] || [ -n "$PROJECT_NAME" ] || [ "$TOPOLOGY" != "multi" ]; then
+      BARE_COMPOSE="unguarded"
+    fi
+    return 0
+  fi
+  if [ "$TOPOLOGY" = "multi" ]; then
+    if [ "$PROXY_MODE" -eq 1 ] || [ -n "$PROJECT_NAME" ]; then
+      wanted=1
+    fi
+  else
+    # Compose only auto-loads an override beside docker-compose.yml, so there
+    # is nothing to generate for --single or --file. Their settings are safe
+    # only through this script, and the summary says so.
+    BARE_COMPOSE="unguarded"
+  fi
+
+  if [ -f "$GUARD_FILE" ] && ! guard_is_ours; then
+    if [ "$wanted" -eq 1 ]; then
+      BARE_COMPOSE="unguarded"
+      warn "${GUARD_FILE} exists and was not generated by this script, so it is left alone."
+      warn "  A hand-typed 'docker compose up -d' here is therefore NOT known to"
+      warn "  deploy the remembered settings. Use ./deploy.sh."
+    fi
+    return 0
+  fi
+
+  if [ "$wanted" -eq 0 ]; then
+    if guard_is_ours; then
+      run rm -f -- "$GUARD_FILE"
+      info "  The remembered settings no longer need it: a bare 'docker compose' is right again."
+    fi
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s %s\n' "${DIM}would write:${RESET}" "$GUARD_FILE"
+    render_guard | sed -e '/^#/d' -e 's/^/    /'
+    return 0
+  fi
+
+  printf '%s %s\n' "${DIM}+${RESET}" "write ${GUARD_FILE}"
+  temporary="${GUARD_FILE}.tmp.$$"
+  if ! render_guard >"$temporary" || ! mv -f -- "$temporary" "$GUARD_FILE"; then
+    rm -f -- "$temporary"
+    BARE_COMPOSE="unguarded"
+    warn "Could not write ${GUARD_FILE}; a hand-typed 'docker compose up -d' is not covered."
+    return 0
+  fi
+  if guard_matches_deploy; then
+    BARE_COMPOSE="guarded"
+    ok "A hand-typed 'docker compose up -d' in ${REPO_ROOT} now deploys this too."
+    info "  Checked, not assumed: Compose renders it identically to what this script deploys."
+  else
+    # Kept only when proven. A guard file that renders something else, or does
+    # not render, would be worse than none: it is loaded by every bare command.
+    rm -f -- "$GUARD_FILE"
+    BARE_COMPOSE="unguarded"
+    warn "A bare 'docker compose' here does NOT render what this script deploys, so the"
+    warn "  generated ${GUARD_FILE} was removed again."
+    warn "  The usual cause is COMPOSE_FILE set in .env or in the shell, which makes"
+    warn "  Compose skip the override file. Use ./deploy.sh to start or restart the stack."
+  fi
+}
+
+SETTINGS_SAVED=0
+remember_settings() {
+  local temporary
+  # Nothing remembered before, and nothing but defaults now: leave no file
+  # behind, so a deployment that never used a flag behaves exactly as it did.
+  if [ "$STATE_PRESENT" -eq 0 ] && [ "$TOPOLOGY" = "multi" ] && [ -z "$PROJECT_NAME" ] \
+      && [ "$PROXY_MODE" -eq 0 ] && [ "$PROXY_ORIGIN" = "default" ]; then
+    if [ "$STATE_IS_DEFAULT" -eq 1 ] && guard_is_ours; then
+      # An override this script generated from settings that have since been
+      # deleted. Left in place it would send a bare `docker compose up -d`
+      # somewhere this script no longer deploys to.
+      run rm -f -- "$GUARD_FILE"
+      info "  It was generated from settings that are no longer remembered."
+    fi
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s %s\n' "${DIM}would write:${RESET}" "$STATE_FILE"
+    render_state | sed -e '/^#/d' -e '/^$/d' -e 's/^/    /'
+  else
+    printf '%s %s\n' "${DIM}+${RESET}" "write ${STATE_FILE}"
+    temporary="${STATE_FILE}.tmp.$$"
+    if ! render_state >"$temporary" || ! mv -f -- "$temporary" "$STATE_FILE"; then
+      rm -f -- "$temporary"
+      err "Could not write ${STATE_FILE}."
+      err "  Stopping before anything is built or restarted: a deploy that cannot be"
+      err "  remembered is undone by the next plain ./deploy.sh."
+      exit 1
+    fi
+    SETTINGS_SAVED=1
+    ok "Saved: $(describe_stack "$TOPOLOGY" "$COMPOSE_FILE" "$PROJECT_NAME")"
+    if [ "$PROXY_MODE" -eq 1 ]; then
+      if [ "$PUBLISH_PORTS" -eq 1 ]; then
+        ok "       $(describe_proxy on "$PROXY_NETWORK" "$PROXY_ALIAS" yes)"
+      else
+        ok "       $(describe_proxy on "$PROXY_NETWORK" "$PROXY_ALIAS" no)"
+      fi
+    else
+      ok "       $(describe_proxy off "" "" no)"
+    fi
+    info "  A plain ./deploy.sh redeploys exactly this from now on."
+  fi
+  sync_guard_file
+}
+
+# ---------------------------------------------------------------------------
+# 1. Preflight. Nothing below this point has touched the deployment yet.
+# ---------------------------------------------------------------------------
 if ! command -v git >/dev/null 2>&1; then
   err "Git is not installed or not on PATH."
   exit 1
@@ -356,7 +1146,10 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   exit 1
 fi
 ok "Using Compose file ${COMPOSE_FILE}"
-if [ "$PROXY_MODE" -eq 1 ]; then
+check_overlays_exist() {
+  # Called again from section 1c when the proxy decision is only made there.
+  local overlay
+  [ "$PROXY_MODE" -eq 1 ] || return 0
   for overlay in "$PROXY_OVERLAY" "$PROXY_PUBLISH_OVERLAY"; do
     case " ${COMPOSE_FILE_ARGS[*]} " in
       *" ${overlay} "*)
@@ -368,7 +1161,8 @@ if [ "$PROXY_MODE" -eq 1 ]; then
         ;;
     esac
   done
-fi
+}
+check_overlays_exist
 
 if [ -n "$PROJECT_NAME" ]; then
   export COMPOSE_PROJECT_NAME="$PROJECT_NAME"
@@ -608,47 +1402,6 @@ report_proxy_warnings() {
 }
 
 # ---------------------------------------------------------------------------
-# 1a. The external proxy network.
-#
-# Not created implicitly. Nginx Proxy Manager, Traefik and friends normally
-# bring their own network, and quietly creating a second one with the same name
-# in a different scope - or an empty one the proxy is not on - produces a stack
-# that looks deployed and is unreachable. So: require it, and print the exact
-# command when it is missing.
-# ---------------------------------------------------------------------------
-if [ "$PROXY_MODE" -eq 1 ]; then
-  title "Proxy network"
-  if docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1; then
-    ok "External network '${PROXY_NETWORK}' exists."
-  elif [ "$CREATE_NETWORK" -eq 1 ]; then
-    if ! run docker network create "$PROXY_NETWORK"; then
-      err "Could not create the network '${PROXY_NETWORK}'."
-      exit 1
-    fi
-    if [ "$DRY_RUN" -eq 0 ]; then
-      ok "Created external network '${PROXY_NETWORK}'."
-      warn "Your reverse proxy container must also be attached to it:"
-      warn "  docker network connect ${PROXY_NETWORK} <your-proxy-container>"
-    fi
-  else
-    err "The external network '${PROXY_NETWORK}' does not exist."
-    err ""
-    err "  Your reverse proxy normally creates its own network - find it with:"
-    err "    docker network ls"
-    err "  then re-run with that name:"
-    err "    ./deploy.sh --proxy-network=<its-network>"
-    err ""
-    err "  Or create a new one and attach your proxy to it yourself:"
-    err "    docker network create ${PROXY_NETWORK}"
-    err "    docker network connect ${PROXY_NETWORK} <your-proxy-container>"
-    err ""
-    err "  Or let this script create it: --proxy-network --create-network"
-    exit 1
-  fi
-  ok "App reachable on it as: http://${PROXY_ALIAS}:8080 (alias 'app' too)"
-fi
-
-# ---------------------------------------------------------------------------
 # 1b. Which mode is this?
 #
 # The signal is .env. It is the single artifact scripts/setup.sh produces, the
@@ -885,6 +1638,381 @@ if [ "$MODE" = "setup" ]; then
     err "  Recover a complete prior environment with: npm run recover:database"
     exit 1
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 1c. The reverse proxy, when nobody has said anything about it yet.
+#
+# With nothing remembered and no proxy flag, "not behind a proxy" is only a
+# guess, and it is the expensive guess to get wrong. Two things are looked at
+# before settling for it.
+#
+# First, the running stack. A deployment made before settings were remembered
+# has no .deploy-state, but its app container still carries the list of Compose
+# files it was created from. If that list includes the proxy overlay, the
+# operator already answered this question, and the answer is carried forward
+# instead of being silently reversed. That list is the only evidence used: an
+# extra network attached by hand does not turn a deployment into a proxy one.
+#
+# Second, on a first install with a terminal attached, the operator is asked.
+# The usual mistake is the network's name -- Nginx Proxy Manager started by
+# Compose sits on <its-project>_default, not on anything called "proxy" -- so
+# the networks are listed, with the ones a recognisable proxy is attached to
+# first. Nothing is ever asked under --yes, under --dry-run, or without a
+# terminal: those runs behave exactly as they always did.
+# ---------------------------------------------------------------------------
+PROXY_LOOKALIKE_PATTERN='nginx-proxy-manager|nginxproxymanager|traefik|caddy|openresty|haproxy|nginx'
+CANDIDATE_NETWORKS=()
+CANDIDATE_NOTES=()
+CANDIDATE_PROXY_COUNT=0
+
+collect_candidate_networks() {
+  # collect_candidate_networks [OWN_PROJECT] -- every network the app could
+  # join, the ones with a proxy-looking container on them first. Three docker
+  # calls in total, however many networks there are: one round trip per network
+  # makes this list slower to print than to read.
+  local own_project="${1:-}" roster names inspected pass name owner members member
+  local count detail image ports lowered described found note
+  CANDIDATE_NETWORKS=()
+  CANDIDATE_NOTES=()
+  CANDIDATE_PROXY_COUNT=0
+
+  roster="$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}' 2>/dev/null || true)"
+  names="$(docker network ls --format '{{.Name}}' 2>/dev/null || true)"
+  [ -n "$names" ] || return 0
+  # shellcheck disable=SC2086  # Deliberate: one argument per network. Docker
+  # network names cannot contain whitespace.
+  inspected="$(docker network inspect --format '{{.Name}}|{{index .Labels "com.docker.compose.project"}}|{{range .Containers}}{{.Name}} {{end}}' $names 2>/dev/null || true)"
+
+  for pass in proxies others; do
+    while IFS='|' read -r name owner members; do
+      [ -n "$name" ] || continue
+      case "$name" in
+        bridge|host|none) continue ;;
+      esac
+      if [ -n "$own_project" ] && [ "$owner" = "$own_project" ]; then
+        continue
+      fi
+      valid_network_name "$name" || continue
+      count=0
+      found=""
+      for member in $members; do
+        count=$((count + 1))
+        detail="$(printf '%s\n' "$roster" | awk -F'|' -v wanted="$member" '$1 == wanted && !seen { print $2 "|" $3; seen = 1 }')"
+        image="${detail%%|*}"
+        ports="${detail#*|}"
+        lowered="$(printf '%s %s' "$member" "$image" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$lowered" =~ $PROXY_LOOKALIKE_PATTERN ]]; then
+          described="${member} (${image:-image unknown}"
+          case "$ports" in
+            *":80->"*|*":80-"*|*":443->"*) described="${described}, publishes 80/443" ;;
+          esac
+          found="${found}${found:+, }${described})"
+        fi
+      done
+      if [ -n "$found" ]; then
+        [ "$pass" = "proxies" ] || continue
+        CANDIDATE_PROXY_COUNT=$((CANDIDATE_PROXY_COUNT + 1))
+        note="<- reverse proxy on it: ${found}"
+      else
+        [ "$pass" = "others" ] || continue
+        case "$count" in
+          0) note="no container attached" ;;
+          1) note="1 container, not recognisably a reverse proxy" ;;
+          *) note="${count} containers, none recognisably a reverse proxy" ;;
+        esac
+      fi
+      CANDIDATE_NETWORKS+=("$name")
+      CANDIDATE_NOTES+=("$note")
+    done <<< "$inspected"
+  done
+}
+
+print_candidate_networks() {
+  local index=0 width=12
+  while [ "$index" -lt "${#CANDIDATE_NETWORKS[@]}" ]; do
+    if [ "${#CANDIDATE_NETWORKS[$index]}" -gt "$width" ]; then
+      width="${#CANDIDATE_NETWORKS[$index]}"
+    fi
+    index=$((index + 1))
+  done
+  index=0
+  while [ "$index" -lt "${#CANDIDATE_NETWORKS[@]}" ]; do
+    printf '  %2d) %-*s  %s\n' "$((index + 1))" "$width" "${CANDIDATE_NETWORKS[$index]}" "${CANDIDATE_NOTES[$index]}"
+    index=$((index + 1))
+  done
+}
+
+carry_forward_running_proxy() {
+  local container files entry overlay_seen=0 own_project networks network owner
+  local found="" found_count=0 aliases candidate container_name service remembered_alias="" bindings
+
+  container="$(compose_query ps -a -q app 2>/dev/null || true)"
+  container="${container%%$'\n'*}"
+  [ -n "$container" ] || return 0
+
+  # Compose records the files as one comma-separated list of absolute paths,
+  # with backslashes on Windows. Only the file names matter here.
+  files="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$container" 2>/dev/null || true)"
+  files="${files//\\//}"
+  while IFS= read -r entry; do
+    case "${entry##*/}" in
+      docker-compose.proxy.yml|docker-compose.single.proxy.yml) overlay_seen=1 ;;
+      docker-compose.override.yml)
+        if guard_is_ours; then
+          overlay_seen=1
+        fi
+        ;;
+    esac
+  done < <(printf '%s\n' "$files" | tr ',' '\n')
+  [ "$overlay_seen" -eq 1 ] || return 0
+
+  own_project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container" 2>/dev/null || true)"
+  networks="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container" 2>/dev/null || true)"
+  for network in $networks; do
+    owner="$(docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' "$network" 2>/dev/null || true)"
+    if [ -z "$own_project" ] || [ "$owner" != "$own_project" ]; then
+      found="${found}${network} "
+      found_count=$((found_count + 1))
+    fi
+  done
+  found="${found% }"
+
+  if [ "$found_count" -ne 1 ] || ! valid_network_name "$found"; then
+    err "The app container of this deployment was started with the reverse-proxy"
+    err "overlay, but this script cannot tell which network is the proxy's."
+    err "  Networks it is on that do not belong to this stack: ${found:-none}"
+    err ""
+    err "  Nothing is remembered yet, so say it once and it will be:"
+    err "    ./deploy.sh --proxy-network=<name>   stay behind that proxy network"
+    err "    ./deploy.sh --no-proxy               publish a host port instead"
+    err "  Nothing has been changed."
+    exit 1
+  fi
+
+  # Compose gives every container its own name and its service name as aliases;
+  # whatever is left is the one the overlay added, i.e. the proxy's upstream.
+  container_name="$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null || true)"
+  container_name="${container_name#/}"
+  service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container" 2>/dev/null || true)"
+  aliases="$(docker inspect --format "{{with index .NetworkSettings.Networks \"${found}\"}}{{range .Aliases}}{{.}} {{end}}{{end}}" "$container" 2>/dev/null || true)"
+  for candidate in $aliases; do
+    case "$candidate" in
+      "$container_name"|"$service") continue ;;
+    esac
+    case "$container" in
+      "$candidate"*) continue ;;
+    esac
+    remembered_alias="$candidate"
+    break
+  done
+  bindings="$(docker inspect --format '{{range $port, $_ := .HostConfig.PortBindings}}{{$port}} {{end}}' "$container" 2>/dev/null || true)"
+
+  PROXY_MODE=1
+  PROXY_NETWORK="$found"
+  PROXY_NETWORK_REMEMBERED=1
+  PROXY_ORIGIN="adopted"
+  resolve_proxy_alias "$remembered_alias"
+  if [ -n "$bindings" ]; then
+    resolve_publish_ports yes
+  else
+    resolve_publish_ports no
+  fi
+
+  title "Reverse proxy"
+  warn "Nothing is remembered yet, but this deployment's app container was started"
+  warn "with the reverse-proxy overlay and is on '${PROXY_NETWORK}' as '${PROXY_ALIAS}'."
+  ok "Carrying that forward: this deploy stays on '${PROXY_NETWORK}', and it is remembered from now on."
+  info "  To leave the proxy network instead, re-run with --no-proxy."
+}
+
+ask_about_reverse_proxy() {
+  local answer="" choice="" attempts=0 index default_index="" prompt chosen=""
+
+  title "Reverse proxy"
+  info "Does this deployment sit behind a reverse proxy that runs as a CONTAINER on"
+  info "this host - Nginx Proxy Manager, Traefik, Caddy, an nginx container? If it"
+  info "does, the app container has to join that proxy's Docker network, and it then"
+  info "stops publishing a host port. Answer no for a proxy installed on the host"
+  info "itself, or for no proxy at all."
+  read -r -p "Behind a containerised reverse proxy? ${DIM}[y/N]${RESET} " answer || answer=""
+  case "$answer" in
+    [yY]|[yY][eE][sS]) ;;
+    *)
+      PROXY_ORIGIN="asked"
+      ok "No reverse-proxy network. The app will publish APP_PORT on the host."
+      info "  Changed your mind later? ./deploy.sh --proxy-network=<name>"
+      return 0
+      ;;
+  esac
+
+  collect_candidate_networks "$(derive_project_name)"
+  if [ "${#CANDIDATE_NETWORKS[@]}" -eq 0 ]; then
+    err "There is no Docker network on this host for the app to join yet."
+    err "  Start your reverse proxy first (it creates its own network) and re-run,"
+    err "  or have this script create one and attach the proxy to it afterwards:"
+    err "    ./deploy.sh --proxy-network=<name> --create-network"
+    err "  Nothing has been changed."
+    exit 1
+  fi
+
+  info "Docker networks on this host:"
+  print_candidate_networks
+  info "The usual mistake is the name. A proxy started with Docker Compose is on"
+  info "<its-project>_default unless its Compose file says otherwise."
+  if [ "$CANDIDATE_PROXY_COUNT" -eq 1 ]; then
+    default_index=1
+  fi
+  while [ -z "$chosen" ]; do
+    attempts=$((attempts + 1))
+    prompt="Which network is your proxy on? Number or name"
+    if [ -n "$default_index" ]; then
+      prompt="${prompt} ${DIM}[${default_index}]${RESET}"
+    fi
+    read -r -p "${prompt}: " choice || choice=""
+    if [ -z "$choice" ]; then
+      choice="$default_index"
+    fi
+    if [[ "$choice" =~ ^[0-9]+$ ]]; then
+      if [ "$choice" -ge 1 ] && [ "$choice" -le "${#CANDIDATE_NETWORKS[@]}" ]; then
+        chosen="${CANDIDATE_NETWORKS[$((choice - 1))]}"
+      fi
+    elif [ -n "$choice" ]; then
+      index=0
+      while [ "$index" -lt "${#CANDIDATE_NETWORKS[@]}" ]; do
+        if [ "${CANDIDATE_NETWORKS[$index]}" = "$choice" ]; then
+          chosen="$choice"
+        fi
+        index=$((index + 1))
+      done
+    fi
+    if [ -z "$chosen" ]; then
+      if [ "$attempts" -ge 3 ]; then
+        err "No network chosen. Nothing has been changed."
+        err "  Re-run and pick one from the list, or say it on the command line:"
+        err "    ./deploy.sh --proxy-network=<name>     or     ./deploy.sh --no-proxy"
+        exit 1
+      fi
+      if [ -n "$choice" ]; then
+        warn "'${choice}' is not one of the networks above."
+      fi
+      warn "Enter the number or the exact name of one of the networks above."
+    fi
+  done
+
+  PROXY_MODE=1
+  PROXY_NETWORK="$chosen"
+  PROXY_ORIGIN="asked"
+  resolve_proxy_alias ""
+  resolve_publish_ports no
+  ok "Reverse-proxy network: '${PROXY_NETWORK}'. It is remembered for every later ./deploy.sh."
+  if [ "$MODE" = "setup" ]; then
+    info "  scripts/setup.sh runs next. When it asks for the public domain, give the"
+    info "  hostname your proxy serves, so that PUBLIC_URL comes out right."
+  fi
+}
+
+if [ "$PROXY_ORIGIN" = "default" ]; then
+  carry_forward_running_proxy
+fi
+if [ "$PROXY_ORIGIN" = "default" ]; then
+  FIRST_INSTALL=0
+  if [ "$MODE" = "setup" ]; then
+    FIRST_INSTALL=1
+  elif [ "$SINGLE" -eq 1 ] && [ -z "$(existing_project_containers)" ] && [ -z "$(existing_project_volumes)" ]; then
+    # The all-in-one topology has no setup mode; a first install is one where
+    # this project owns nothing yet.
+    FIRST_INSTALL=1
+  fi
+  if [ "$FIRST_INSTALL" -eq 1 ]; then
+    if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+      ask_about_reverse_proxy
+    else
+      info "First install: not asking about a reverse proxy (--yes, --dry-run or no terminal)."
+      info "  To put the stack behind a containerised one: ./deploy.sh --proxy-network=<name>"
+    fi
+  fi
+fi
+if [ "$PROXY_ORIGIN" = "adopted" ] || [ "$PROXY_ORIGIN" = "asked" ]; then
+  apply_proxy_settings
+  check_overlays_exist
+fi
+
+# ---------------------------------------------------------------------------
+# 1d. The external proxy network.
+#
+# Not created implicitly. Nginx Proxy Manager, Traefik and friends normally
+# bring their own network, and quietly creating a second one with the same name
+# in a different scope - or an empty one the proxy is not on - produces a stack
+# that looks deployed and is unreachable. So: require it, and print the exact
+# command when it is missing.
+#
+# A REMEMBERED network that has gone missing is its own case, and it never
+# falls back to deploying without one. That fallback is the failure this
+# script's memory exists to prevent, arrived at by a different road: the app
+# container would leave the proxy and publish a host port instead.
+# ---------------------------------------------------------------------------
+if [ "$PROXY_MODE" -eq 1 ]; then
+  title "Proxy network"
+  if docker network inspect "$PROXY_NETWORK" >/dev/null 2>&1; then
+    ok "External network '${PROXY_NETWORK}' exists."
+  elif [ "$CREATE_NETWORK" -eq 1 ]; then
+    if ! run docker network create "$PROXY_NETWORK"; then
+      err "Could not create the network '${PROXY_NETWORK}'."
+      exit 1
+    fi
+    if [ "$DRY_RUN" -eq 0 ]; then
+      ok "Created external network '${PROXY_NETWORK}'."
+      warn "Your reverse proxy container must also be attached to it:"
+      warn "  docker network connect ${PROXY_NETWORK} <your-proxy-container>"
+    fi
+  elif [ "$PROXY_NETWORK_REMEMBERED" -eq 1 ]; then
+    err "The reverse-proxy network '${PROXY_NETWORK}' does not exist any more."
+    err ""
+    err "  This deployment is remembered as sitting behind it (${STATE_FILE})."
+    err "  Deploying without it would take the site off your proxy and publish"
+    err "  APP_PORT on the host instead, so this script will not do that on its"
+    err "  own. Nothing has been changed, and the running stack is untouched."
+    err ""
+    err "  Two ways out:"
+    err "    1. The proxy is on a different network now (renamed, or its stack was"
+    err "       recreated). Move this deployment onto that one:"
+    err "         ./deploy.sh --proxy-network=<its-network>"
+    err "    2. This deployment is no longer behind a containerised proxy:"
+    err "         ./deploy.sh --no-proxy"
+    err "       That publishes APP_PORT on the host again, on APP_BIND_ADDRESS."
+    err ""
+    err "  If the proxy stack is merely stopped, start it - that brings its network"
+    err "  back - and re-run ./deploy.sh unchanged."
+    collect_candidate_networks "$(derive_project_name)"
+    if [ "${#CANDIDATE_NETWORKS[@]}" -gt 0 ]; then
+      err ""
+      err "  Docker networks on this host now:"
+      print_candidate_networks >&2
+    fi
+    exit 1
+  else
+    err "The external network '${PROXY_NETWORK}' does not exist."
+    err ""
+    err "  Your reverse proxy normally creates its own network - find it with:"
+    err "    docker network ls"
+    err "  then re-run with that name:"
+    err "    ./deploy.sh --proxy-network=<its-network>"
+    err ""
+    err "  Or create a new one and attach your proxy to it yourself:"
+    err "    docker network create ${PROXY_NETWORK}"
+    err "    docker network connect ${PROXY_NETWORK} <your-proxy-container>"
+    err ""
+    err "  Or let this script create it: --proxy-network --create-network"
+    collect_candidate_networks "$(derive_project_name)"
+    if [ "${#CANDIDATE_NETWORKS[@]}" -gt 0 ]; then
+      err ""
+      err "  Docker networks on this host now:"
+      print_candidate_networks >&2
+    fi
+    exit 1
+  fi
+  ok "App reachable on it as: http://${PROXY_ALIAS}:8080 (alias 'app' too)"
 fi
 
 # On the update path everything needed to parse the configuration is already
@@ -1209,6 +2337,12 @@ if ! confirm "Rebuild the images and restart the stack now?"; then
   fi
   exit 0
 fi
+
+# The settings are written here: after the operator has confirmed, and BEFORE
+# the stack is touched. Any later, and a deploy that moved the app container
+# onto the proxy network and then failed its health wait would be forgotten --
+# the next plain ./deploy.sh would take the container off the network again.
+remember_settings
 
 if ! run "${BUILD_ENV[@]}" "${COMPOSE[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --build; then
   err "'$(compose_display) up -d --build' failed."
@@ -1542,6 +2676,18 @@ fi
 if [ -n "$BACKUP_FILE" ]; then
   ok "Backup:    ${BACKUP_FILE}"
 fi
+if [ "$SETTINGS_SAVED" -eq 1 ]; then
+  ok "Saved in:  ${STATE_FILE}   <- a plain ./deploy.sh redeploys this way"
+fi
+case "$BARE_COMPOSE" in
+  guarded)
+    info "By hand:   'docker compose up -d' in ${REPO_ROOT} deploys this too."
+    ;;
+  unguarded)
+    warn "By hand:   start and restart this stack with ./deploy.sh. A bare"
+    warn "           'docker compose up -d' does not know the settings above."
+    ;;
+esac
 if [ "$WARNING_COUNT" -gt 0 ]; then
   warn "${WARNING_COUNT} configuration warning(s) above are still unresolved."
 fi
