@@ -1788,7 +1788,52 @@ describe('the lane-degradation ledger', () => {
     // subtract from and says so, instead of printing the offset as if it were one.
     expect(String(rowOf(model, 'Most recent transition, how long ago').value)).toBe(NOT_REPORTED)
     expect(String(rowOf(model, 'Transitions dropped from the ring').value)).toBe('4')
-    expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('degraded')
+    // The lane is back on the socket, so what the ring lost on the way is history.
+    expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('informational')
+  })
+
+  /**
+   * *** A RESTART IS NOT A FAULT FOR THE LIFE OF THE PAGE. *** Captured on a real
+   * stack: the web container was replaced under an open tab, the tab dialled
+   * until the server returned and the ring overflowed on the way. The socket came
+   * back, and this one row kept the section off OK until a reload.
+   */
+  it('counts an overflowed ring as history once the lane is back, and as a fault while it is not', () => {
+    const outage = (instance: LaneDegradationLedger, advance: (ms: number) => void): void => {
+      instance.recordTransition('READY', undefined, false)
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        advance(1_500)
+        instance.recordTransition('HTTP_FALLBACK', 'proxy-failed', false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+      }
+    }
+    const back = build({
+      ledger: recorded((instance, advance) => {
+        outage(instance, advance)
+        instance.recordTransition('READY', undefined, false)
+      }),
+    })
+    const stillAway = build({
+      ledger: recorded((instance, advance) => {
+        outage(instance, advance)
+        instance.recordTransition('HTTP_FALLBACK', 'proxy-failed', false)
+      }),
+    })
+
+    expect(Number(String(rowOf(back, 'Transitions dropped from the ring').value))).toBeGreaterThan(0)
+    expect(String(rowOf(back, 'Where the lane ended up').value)).toBe('recovered')
+    expect(rowOf(back, 'Transitions dropped from the ring').verdict).toBe('informational')
+    // One outage, however long, is not a lane that flaps.
+    expect(codesOf(back)).not.toContain('SOCKET_LANE_FLAPPING')
+    // Nothing in the block keeps a lane that came back off OK.
+    expect(
+      allRows(back)
+        .filter((row) => row.verdict === 'degraded' || row.verdict === 'broken')
+        .map((row) => String(row.label)),
+    ).toEqual([])
+
+    expect(String(rowOf(stillAway, 'Where the lane ended up').value)).toBe('still-degraded')
+    expect(rowOf(stillAway, 'Transitions dropped from the ring').verdict).toBe('degraded')
   })
 
   /* ------------------------------------------------------------------------ */
@@ -2043,8 +2088,10 @@ describe('the lane-degradation ledger', () => {
       String(100 - LANE_LEDGER_TRANSITION_CAPACITY),
     )
     // The elision is a REPORTED number, not a silent truncation: the two add back
-    // up to what really happened.
-    expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('degraded')
+    // up to what really happened. This lane ended on the socket, so the count is
+    // history — and what says it cannot hold a connection is the finding.
+    expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('informational')
+    expect(codesOf(model)).toContain('SOCKET_LANE_FLAPPING')
     // And the causes survive the elision, because they are keyed by a closed set.
     expect(String(rowOf(model, 'Degradations with cause backpressure').value)).toBe('50')
     expect(String(rowOf(model, 'Distinct degradation causes recorded').value)).toBe('1')

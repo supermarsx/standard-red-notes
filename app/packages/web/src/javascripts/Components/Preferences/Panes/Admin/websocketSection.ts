@@ -2754,8 +2754,18 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
     diagnosticRow({
       label: safeConstant('Transitions dropped from the ring'),
       value: safeCount(ledger.transitionsDropped),
-      ...absentOr(ledger.transitionsDropped, ledger.transitionsDropped > 0 ? 'degraded' : 'informational'),
-      note: 'Transitions that fell off the end of the bounded ring. The ring is the only thing here that elides — the counters above and below are keyed by closed sets and are bounded by construction, so what overflowing costs is the ORDER of the oldest transitions and never the fact that they happened. Non-zero is itself a finding: the ring is sized for ordinary reconnection, so filling it means the lane changed state more often than a healthy session ever does.',
+      // HISTORY once the lane is back, like the degradations it is a count of.
+      // Measured: the web container was replaced under an open tab, the tab
+      // dialled until the server returned, and the ring overflowed on the way. The
+      // socket came back, every other row read OK, and this one kept the section
+      // "working, with something lost" until a reload — for a restart. A lane that
+      // really cannot hold a connection is the flapping finding below, which is
+      // counted from what the ring still holds and does not need this row.
+      ...absentOr(
+        ledger.transitionsDropped,
+        ledger.transitionsDropped > 0 && !degradationsAreHistory ? 'degraded' : 'informational',
+      ),
+      note: 'Transitions that fell off the end of the bounded ring. The ring is the only thing here that elides — the counters above and below are keyed by closed sets and are bounded by construction, so what overflowing costs is the ORDER of the oldest transitions and never the fact that they happened. The ring is sized for ordinary reconnection, so filling it means the lane changed state many times: once it is back on the socket that is history — one long outage does it — and while it is still off the socket it is part of what is wrong.',
     }),
     diagnosticRow({
       label: safeConstant('Transitions this build cannot name'),

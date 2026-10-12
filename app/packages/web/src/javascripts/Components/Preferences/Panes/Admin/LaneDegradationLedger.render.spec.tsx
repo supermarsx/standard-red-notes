@@ -256,7 +256,9 @@ describe('the lane-degradation ledger on screen', () => {
 
     expect(historyRows).toHaveLength(LANE_LEDGER_TRANSITION_CAPACITY)
     expect(rowValue('Transitions dropped from the ring')).toBe(String(160 - LANE_LEDGER_TRANSITION_CAPACITY))
-    expect(rowChip('Transitions dropped from the ring')).toBe('Degraded')
+    // Back on the socket: the count is history, and the finding below is what
+    // says this lane cannot hold a connection.
+    expect(rowChip('Transitions dropped from the ring')).toBe('Info')
     // The causes survive the elision, so the ledger still knows what happened even
     // where it no longer knows when.
     expect(rowValue('Degradations with cause ack-timeout')).toBe('80')
