@@ -212,6 +212,35 @@ const typeInto = async (element: Element | null, value: string) => {
   })
 }
 
+/** A key pressed in a field, as React hears it. */
+const pressKey = async (element: Element | null, key: string) => {
+  expect(element).not.toBeNull()
+  await act(async () => {
+    ;(element as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    await Promise.resolve()
+  })
+}
+
+/** Focus leaving a field. React's `onBlur` listens for `focusout`, which is the one that bubbles. */
+const leave = async (element: Element | null) => {
+  expect(element).not.toBeNull()
+  await act(async () => {
+    ;(element as HTMLElement).dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
+/** One character at a time, the way a keyboard delivers them — each one its own change. */
+const typeKeyByKey = async (element: Element | null, keys: string[]) => {
+  for (const value of keys) {
+    await typeInto(element, value)
+  }
+}
+
+const idRefusal = () => container.querySelector('[data-mermaid-id-refusal="true"]')
+const templateConfirmation = () => container.querySelector('[data-mermaid-template-confirm="true"]')
+const idField = (label: string) => byLabel(label) as HTMLInputElement
+
 /** The preview only exists once the debounced mermaid render has resolved. */
 const settlePreview = async () => {
   await act(async () => {
@@ -370,9 +399,175 @@ describe('each visual action writes the source it claims to', () => {
   it('keeps a link when its node is renamed', async () => {
     await mountWith(src('graph TD', '  A["Start"]', '  B["End"]', '  A -->|go| B'))
     await typeInto(byLabel('Node 1 id'), 'Kickoff')
+    await pressKey(byLabel('Node 1 id'), 'Enter')
     const source = committedSource()
     expect(source).toContain('Kickoff["Start"]')
     expect(source).toContain('Kickoff -->|go| B')
+  })
+})
+
+describe('a node id is committed once, when the user has finished typing it', () => {
+  const THREE_NODES = src('graph TD', '  A["Start"]', '  B["End"]', '  C["Other"]', '  A --> B', '  C --> A')
+
+  /**
+   * THE defect, as measured in the running app with real key input before this
+   * change: renaming B to `A2` while a node `A` exists. Every keystroke was a
+   * committed rename, the keystroke that spelled `A` merged B into A, and the
+   * next one took A's links along — `A2 --> A2`, `C --> A2`, node A unlinked.
+   */
+  it('renames B to A2 without passing through A', async () => {
+    await mountWith(THREE_NODES)
+    await typeKeyByKey(byLabel('Node 2 id'), ['', 'A', 'A2'])
+    // Nothing has reached the diagram yet: three keystrokes, no rename.
+    expect(committedSource()).toBe(THREE_NODES)
+    await pressKey(byLabel('Node 2 id'), 'Enter')
+    expect(committedSource()).toBe(
+      src('graph TD', '  A["Start"]', '  A2["End"]', '  C["Other"]', '  A --> A2', '  C --> A'),
+    )
+    expect(idRefusal()).toBeNull()
+  })
+
+  it('commits when the field is left, too', async () => {
+    await mountWith(THREE_NODES)
+    await typeInto(byLabel('Node 2 id'), 'Finish')
+    await leave(byLabel('Node 2 id'))
+    expect(committedSource()).toContain('A --> Finish')
+  })
+
+  it('refuses an id another node has, says why, and puts the old id back', async () => {
+    await mountWith(THREE_NODES)
+    await typeInto(byLabel('Node 2 id'), 'A')
+    await pressKey(byLabel('Node 2 id'), 'Enter')
+    expect(committedSource()).toBe(THREE_NODES)
+    expect(idField('Node 2 id').value).toBe('B')
+    expect(idRefusal()?.textContent).toContain('Another node is already called A')
+    expect(idRefusal()?.getAttribute('role')).toBe('alert')
+  })
+
+  it('refuses an id that only DIFFERS from another before it is sanitised', async () => {
+    await mountWith(src('graph TD', '  a_b["One"]', '  B["Two"]', '  a_b --> B'))
+    await typeInto(byLabel('Node 2 id'), 'a-b')
+    await leave(byLabel('Node 2 id'))
+    expect(committedSource()).toContain('a_b --> B')
+    expect(idRefusal()?.textContent).toContain('a_b')
+  })
+
+  it('refuses an empty id rather than inventing one', async () => {
+    await mountWith(THREE_NODES)
+    await typeInto(byLabel('Node 3 id'), '')
+    await pressKey(byLabel('Node 3 id'), 'Enter')
+    expect(committedSource()).toBe(THREE_NODES)
+    expect(idField('Node 3 id').value).toBe('C')
+    expect(idRefusal()?.textContent).toContain('needs an id')
+  })
+
+  it('shows the id as it was written, not as it was typed', async () => {
+    await mountWith(THREE_NODES)
+    await typeInto(byLabel('Node 2 id'), 'my node')
+    await pressKey(byLabel('Node 2 id'), 'Enter')
+    expect(committedSource()).toContain('A --> my_node')
+    expect(idField('Node 2 id').value).toBe('my_node')
+  })
+
+  it('drops what was typed on Escape, and leaving the field then changes nothing', async () => {
+    await mountWith(THREE_NODES)
+    await typeInto(byLabel('Node 2 id'), 'A')
+    await pressKey(byLabel('Node 2 id'), 'Escape')
+    expect(idField('Node 2 id').value).toBe('B')
+    await leave(byLabel('Node 2 id'))
+    expect(committedSource()).toBe(THREE_NODES)
+    expect(idRefusal()).toBeNull()
+  })
+
+  it('takes the refusal away with the next change that lands', async () => {
+    await mountWith(THREE_NODES)
+    await typeInto(byLabel('Node 2 id'), 'A')
+    await pressKey(byLabel('Node 2 id'), 'Enter')
+    expect(idRefusal()).not.toBeNull()
+    await typeInto(byLabel('Node 2 label'), 'Finish line')
+    expect(idRefusal()).toBeNull()
+  })
+})
+
+describe('removing a link keeps numbered link styles on the links they styled', () => {
+  /**
+   * Measured in the running app before this change: removing the first link of
+   * this diagram left `linkStyle 1` pointing past the end of the list, and
+   * mermaid stopped drawing the whole diagram with `Cannot set properties of
+   * undefined (setting 'style')`.
+   */
+  it('renumbers the style that followed the removed link', async () => {
+    await mountWith(src('flowchart LR', '  A --> B', '  B --> C', '  linkStyle 1 stroke:#f00,stroke-width:4px'))
+    await click(byLabel('Remove edge 1'))
+    const source = committedSource()
+    expect(source).toContain('B --> C')
+    expect(source).not.toContain('A --> B')
+    expect(source).toContain('linkStyle 0 stroke:#f00,stroke-width:4px')
+    expect(source).not.toContain('linkStyle 1')
+  })
+
+  it('removes the style with the link when it styled nothing else', async () => {
+    await mountWith(src('flowchart LR', '  A --> B', '  B --> C', '  linkStyle 0 stroke:#f00'))
+    await click(byLabel('Remove edge 1'))
+    expect(committedSource()).not.toContain('linkStyle')
+  })
+
+  it('does the same when links go because their node was removed', async () => {
+    await mountWith(src('flowchart LR', '  A --> B', '  B --> C', '  C --> D', '  linkStyle 2 stroke:#f00'))
+    // Node A takes link 0 with it; the styled link, C --> D, moves from 2 to 1.
+    await click(byLabel('Remove node 1'))
+    const source = committedSource()
+    expect(source).toContain('C --> D')
+    expect(source).toContain('linkStyle 1 stroke:#f00')
+  })
+})
+
+describe('a template does not replace somebody’s diagram without being asked twice', () => {
+  const OWN = src('graph TD', '  X["My own diagram"] --> Y["Do not lose me"]')
+  const templatePicker = () => byLabel('Insert a template diagram')
+
+  it('asks first, and changes nothing until it is answered', async () => {
+    await mountWith(OWN)
+    await choose(templatePicker(), 'org-chart')
+    expect(committedSource()).toBe(OWN)
+    expect(templateConfirmation()?.textContent).toContain('Org chart')
+    expect(templateConfirmation()?.textContent).toContain('discards the current source')
+  })
+
+  it('keeps the diagram on "Keep my diagram"', async () => {
+    await mountWith(OWN)
+    await choose(templatePicker(), 'org-chart')
+    await click(buttonSaying('Keep my diagram'))
+    expect(committedSource()).toBe(OWN)
+    expect(templateConfirmation()).toBeNull()
+  })
+
+  it('replaces it on the confirmed second action', async () => {
+    await mountWith(OWN)
+    await choose(templatePicker(), 'org-chart')
+    await click(buttonSaying('Replace my diagram'))
+    expect(committedSource()).toContain('CEO["CEO"]')
+    expect(committedSource()).not.toContain('Do not lose me')
+    expect(templateConfirmation()).toBeNull()
+  })
+
+  it('does not ask over a starter diagram nobody has edited', async () => {
+    // The source a freshly inserted block holds.
+    await mountWith('graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]')
+    await choose(templatePicker(), 'sequence')
+    expect(templateConfirmation()).toBeNull()
+    expect(committedSource()).toContain('sequenceDiagram')
+    // Nor from one untouched template to another.
+    await choose(templatePicker(), 'org-chart')
+    expect(templateConfirmation()).toBeNull()
+    expect(committedSource()).toContain('CEO["CEO"]')
+  })
+
+  it('does not ask over an empty diagram', async () => {
+    await mountWith('')
+    await choose(templatePicker(), 'flowchart')
+    expect(templateConfirmation()).toBeNull()
+    expect(committedSource()).toContain('B{"Decision"}')
   })
 })
 

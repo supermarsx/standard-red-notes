@@ -21,6 +21,7 @@ import {
   appendGraphEdge,
   appendGraphNode,
   buildFlowchartSource,
+  commitGraphNodeId,
   createEmptyGraphModel,
   danglingExtras,
   DEFAULT_MERMAID_EDGE_KIND,
@@ -38,8 +39,9 @@ import {
   MermaidGraphModel,
   MermaidGraphNode,
   MermaidNodeShape,
+  removeGraphEdge,
   removeGraphNode,
-  renameGraphNode,
+  templateReplacesUserWork,
 } from './MermaidGraphBuilder'
 import MermaidSvgViewport from './MermaidSvgViewport'
 import { MermaidResizeHandle } from './MermaidBlockControls'
@@ -106,6 +108,64 @@ const INTERACTIVE_IN_BLOCK =
 let renderSeq = 0
 
 /**
+ * A node's id, typed freely and committed ONCE — on Enter, or when the field is
+ * left. Escape puts back the id the node has.
+ *
+ * It holds its own draft because an id is not a value like a label is: every
+ * intermediate spelling is a different node name, and one that another node
+ * already has merges the two. Typing `A2` over `B` passes through `A`. So
+ * nothing reaches the diagram until the user has finished, and what reaches it
+ * then can be refused (`commitGraphNodeId`). `onCommit` answers with the id the
+ * node has afterwards — the new one, sanitised, or the old one if the rename was
+ * refused — and the field shows that, never a spelling the source does not have.
+ */
+function NodeIdField({
+  id,
+  label,
+  className,
+  onCommit,
+}: {
+  id: string
+  label: string
+  className: string
+  onCommit: (typed: string) => string
+}): React.JSX.Element {
+  const [draft, setDraft] = useState(id)
+
+  // The node's id changed from outside this field: undo, a hand edit in the
+  // code pane, a row shifting up after a removal.
+  useEffect(() => {
+    setDraft(id)
+  }, [id])
+
+  const commit = () => {
+    if (draft !== id) {
+      setDraft(onCommit(draft))
+    }
+  }
+
+  return (
+    <input
+      className={className}
+      value={draft}
+      spellCheck={false}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+        } else if (e.key === 'Escape') {
+          setDraft(id)
+        }
+      }}
+      placeholder="id"
+      aria-label={label}
+    />
+  )
+}
+
+/**
  * The VISUAL flowchart builder: a form over the diagram's NODES and LINKS that
  * regenerates mermaid source as it changes, shown beside the live diagram (the
  * `graphical` view mode is a two-pane layout exactly as `split` is — a builder
@@ -146,6 +206,9 @@ function GraphicalBuilder({
   const [model, setModel] = useState<MermaidGraphModel>(() => analysis.model ?? createEmptyGraphModel())
   const lastEmittedRef = useRef<string>('')
   const [confirmingReplace, setConfirmingReplace] = useState(false)
+  // The one refused rename on show: which node kept its id, and why. Cleared by
+  // the next change of any kind, so it never outlives the state it describes.
+  const [idRefusal, setIdRefusal] = useState<{ index: number; reason: string } | null>(null)
 
   // Re-seed when the source changes from the OUTSIDE — undo/redo, a template, a
   // hand edit in the code pane, a collaborative change. This is the source ->
@@ -158,10 +221,12 @@ function GraphicalBuilder({
       setModel(analysis.model)
     }
     setConfirmingReplace(false)
+    setIdRefusal(null)
   }, [code, analysis])
 
   const commit = useCallback(
     (next: MermaidGraphModel) => {
+      setIdRefusal(null)
       setModel(next)
       const source = buildFlowchartSource(next)
       lastEmittedRef.current = source
@@ -173,14 +238,27 @@ function GraphicalBuilder({
   const addNode = useCallback(() => commit(appendGraphNode(model)), [model, commit])
 
   const updateNode = useCallback(
-    (index: number, patch: Partial<MermaidGraphNode>) => {
-      // An id change is a RENAME, not a field write: every link that referenced
-      // the old id has to follow it, or generation drops the link.
-      const renamed = typeof patch.id === 'string' ? renameGraphNode(model, index, patch.id) : model
-      const rest: Partial<MermaidGraphNode> = { ...patch }
-      delete rest.id
-      const nodes = renamed.nodes.map((node, i) => (i === index ? { ...node, ...rest } : node))
-      commit({ ...renamed, nodes })
+    (index: number, patch: Partial<Omit<MermaidGraphNode, 'id'>>) => {
+      commit({ ...model, nodes: model.nodes.map((node, i) => (i === index ? { ...node, ...patch } : node)) })
+    },
+    [model, commit],
+  )
+
+  // An id change is a RENAME, not a field write: every link that referenced the
+  // old id has to follow it. It arrives here ONCE, when the user has finished
+  // typing (see NodeIdField), and `commitGraphNodeId` may refuse it. Returns the
+  // id the node has now, which is what the field goes back to showing.
+  const renameNode = useCallback(
+    (index: number, typed: string): string => {
+      const outcome = commitGraphNodeId(model, index, typed)
+      if (outcome.refusal !== null) {
+        setIdRefusal({ index, reason: outcome.refusal })
+      } else if (outcome.model !== model) {
+        commit(outcome.model)
+      } else {
+        setIdRefusal(null)
+      }
+      return outcome.model.nodes[index]?.id ?? typed
     },
     [model, commit],
   )
@@ -196,12 +274,9 @@ function GraphicalBuilder({
     [model, commit],
   )
 
-  const removeEdge = useCallback(
-    (index: number) => {
-      commit({ ...model, edges: model.edges.filter((_, i) => i !== index) })
-    },
-    [model, commit],
-  )
+  // Through `removeGraphEdge`, never a bare filter: a `linkStyle 1 …` in the
+  // preserved lines names a link by position, and has to move with it.
+  const removeEdge = useCallback((index: number) => commit(removeGraphEdge(model, index)), [model, commit])
 
   const setDirection = useCallback(
     (direction: MermaidGraphDirection) => {
@@ -321,13 +396,11 @@ function GraphicalBuilder({
         <div className="flex flex-col gap-1">
           {model.nodes.map((node, index) => (
             <div key={index} className="flex min-w-0 flex-wrap items-center gap-1">
-              <input
+              <NodeIdField
                 className={inputClass + ' max-w-[6rem]'}
-                value={node.id}
-                spellCheck={false}
-                onChange={(e) => updateNode(index, { id: e.target.value })}
-                placeholder="id"
-                aria-label={`Node ${index + 1} id`}
+                id={node.id}
+                label={`Node ${index + 1} id`}
+                onCommit={(typed) => renameNode(index, typed)}
               />
               <input
                 className={inputClass}
@@ -362,6 +435,19 @@ function GraphicalBuilder({
                     so the mark itself is decorative and belongs in the icon set. */}
                 <Icon type="close" size="small" />
               </button>
+              {/* A refused rename SAYS it was refused, on the row it happened to.
+                  Putting the old id back without a word would look like the
+                  field had not taken the keystrokes. */}
+              {idRefusal?.index === index ? (
+                <p
+                  className="text-danger w-full text-xs"
+                  role="alert"
+                  data-mermaid-id-refusal="true"
+                  data-srn-print-exclude="true"
+                >
+                  {idRefusal.reason}
+                </p>
+              ) : null}
             </div>
           ))}
         </div>
@@ -720,6 +806,33 @@ function MermaidComponent({
     [persistCode],
   )
 
+  // The template that has been CHOSEN but not yet applied, because applying it
+  // would discard a diagram somebody wrote. A template used to replace the whole
+  // source the moment it was picked, with nothing asked — which is what the
+  // builder's own "replace" has always refused to do without a second action.
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | null>(null)
+  const pendingTemplate = MERMAID_TEMPLATES.find((t) => t.id === pendingTemplateId)
+
+  const chooseTemplate = useCallback(
+    (templateId: string) => {
+      // Asked about the DRAFT, which is what is on screen and what would go.
+      if (templateReplacesUserWork(draft, [DEFAULT_MERMAID])) {
+        setPendingTemplateId(templateId)
+        return
+      }
+      setPendingTemplateId(null)
+      applyTemplate(templateId)
+    },
+    [draft, applyTemplate],
+  )
+
+  const confirmTemplate = useCallback(() => {
+    if (pendingTemplateId !== null) {
+      applyTemplate(pendingTemplateId)
+    }
+    setPendingTemplateId(null)
+  }, [pendingTemplateId, applyTemplate])
+
   const showCode = viewMode === 'split' || viewMode === 'code'
   // The BUILDER SHOWS THE DIAGRAM. `graphical` used to be the one mode with no
   // preview at all, so the "visual" builder was a blind form: you edited nodes
@@ -764,7 +877,7 @@ function MermaidComponent({
               value=""
               onChange={(e) => {
                 if (e.target.value) {
-                  applyTemplate(e.target.value)
+                  chooseTemplate(e.target.value)
                 }
               }}
               aria-label="Insert a template diagram"
@@ -789,6 +902,37 @@ function MermaidComponent({
           </button>
         </div>
       </div>
+
+      {/* THE SECOND ACTION a template needs before it replaces somebody's
+          diagram. Worded and styled as the builder's own confirmed replace is,
+          because it is the same decision. Nothing is changed until "Replace" is
+          pressed; "Keep my diagram" only dismisses this. */}
+      {pendingTemplate ? (
+        <div
+          className="border-danger bg-contrast text-foreground flex flex-wrap items-center gap-2 border-b p-2 text-xs"
+          data-mermaid-template-confirm="true"
+          data-srn-print-exclude="true"
+        >
+          <span>
+            Replace this diagram with the <strong>{pendingTemplate.label}</strong> template? This{' '}
+            <strong>discards the current source</strong>. Undo restores it.
+          </span>
+          <button
+            type="button"
+            className="border-danger text-danger hover:bg-contrast rounded border px-2 py-0.5"
+            onClick={confirmTemplate}
+          >
+            Replace my diagram
+          </button>
+          <button
+            type="button"
+            className="border-border hover:bg-contrast rounded border px-2 py-0.5"
+            onClick={() => setPendingTemplateId(null)}
+          >
+            Keep my diagram
+          </button>
+        </div>
+      ) : null}
 
       {/* `min-w-0` on the row AND on every pane is load-bearing, not tidying.
           Standard Red Notes — bug fix: a flex item's `min-width` defaults to

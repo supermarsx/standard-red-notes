@@ -272,14 +272,55 @@ function unquoteLabel(raw: string): string {
   return unquoted.replace(/&quot;/g, '"').trim()
 }
 
-/** A single shaped node reference: its id, its shape and its label. */
-function matchShapedNode(text: string): { id: string; shape: MermaidNodeShape; label: string } | null {
+/**
+ * Shapes mermaid draws that this builder does NOT model, by the characters
+ * mermaid recognises them from — each of which is ALSO the start of a shape the
+ * builder does model. `[/Input/]` opens with `[`, so it used to be read as a
+ * plain box whose label was `/Input/`, and regenerated that way: a slanted box
+ * became a rectangle with slashes in its text on the first edit of anything
+ * else. Judged by mermaid's own parser, before and after a visual edit that
+ * changed nothing:
+ *
+ *   `A[/Input/]`   lean_right "Input"    ->  square "/Input/"
+ *   `A[\Output\]`  lean_left "Output"    ->  square "\Output\"
+ *   `A[/Trap\]`    trapezoid "Trap"      ->  square "/Trap\"
+ *   `A(((Stop)))`  doublecircle "Stop"   ->  circle "(Stop)"
+ *   `A(-Oval-)`    ellipse "Oval"        ->  round "-Oval-"
+ *   `A[|b:lt|T]`   rect "T"              ->  square "|b:lt|T"
+ *
+ * Ordered LONGEST OPENER FIRST, and consulted BEFORE the modelled shapes, for
+ * the reason those are ordered: `(((` must not be read as `((`. A QUOTED label
+ * is untouched by all of this — `A["/path/"]` opens with `["`, which is a box
+ * and nothing else, and it is the form the builder itself writes.
+ */
+const UNMODELLED_SHAPE_OPENERS: { open: string; name: string }[] = [
+  { open: '(((', name: 'a double circle' },
+  { open: '[/', name: 'a slanted box or trapezoid' },
+  { open: '[\\', name: 'a slanted box or trapezoid' },
+  { open: '[|', name: 'a box with properties' },
+  { open: '(-', name: 'an ellipse' },
+  { open: '>', name: 'a flag-shaped box' },
+]
+
+/**
+ * A single shaped node reference: its id, its shape and its label — or, for a
+ * shape mermaid understands and this builder does not, the id and what the
+ * shape is, so the caller can refuse it by name rather than misread it.
+ */
+type ShapedNodeMatch =
+  { id: string; shape: MermaidNodeShape; label: string; unmodelled?: undefined } | { id: string; unmodelled: string }
+
+function matchShapedNode(text: string): ShapedNodeMatch | null {
   const head = /^([A-Za-z0-9_]+)\s*(.*)$/.exec(text.trim())
   if (!head) {
     return null
   }
   const id = head[1]
   const rest = head[2]
+  const unmodelled = UNMODELLED_SHAPE_OPENERS.find((candidate) => rest.startsWith(candidate.open))
+  if (unmodelled) {
+    return { id, unmodelled: unmodelled.name }
+  }
   for (const candidate of SHAPE_DELIMITERS) {
     if (
       rest.length >= candidate.open.length + candidate.close.length &&
@@ -395,6 +436,15 @@ function findConnector(line: string): ConnectorScan {
 
 /** Statements the builder preserves verbatim rather than modelling. */
 const PASSTHROUGH_RE = /^(?:%%|classDef\b|class\b|style\b|linkStyle\b|click\b)/
+
+/**
+ * The two forms of `linkStyle` mermaid accepts: `default`, or a list of link
+ * POSITIONS with no space inside it (`linkStyle 0,2 stroke:red` — measured
+ * against mermaid 11.17.2, `0, 2` is a parse error). Group 1 is everything up to
+ * the list, group 2 the list, group 3 the rest of the line, so a numbered one
+ * can be rewritten touching nothing but its numbers.
+ */
+const LINK_STYLE_RE = /^(\s*linkStyle\s+)(default|\d+(?:,\d+)*)(\s.*)?$/
 
 /**
  * Best-effort reverse parser for the flowchart dialect this builder models.
@@ -527,18 +577,38 @@ export function analyzeMermaidSource(source: string): MermaidSourceAnalysis {
   const nodeMap = new Map<string, MermaidGraphNode>()
   const edges: MermaidGraphEdge[] = []
 
-  const ensureNode = (id: string, label?: string, shape?: MermaidNodeShape): void => {
+  /**
+   * A reference to a node. `shaped` is present when the reference carried a
+   * shape and a label (`A[Start]`), absent for a bare id (`A`).
+   *
+   * THE LAST SHAPED REFERENCE WINS, both halves of it, because that is what
+   * mermaid does: `A[Start]` … `A(Renamed later)` is a rounded node labelled
+   * "Renamed later". This used to keep the FIRST label and any non-box shape it
+   * had seen, so opening such a diagram in the builder and touching anything
+   * put the old label back. A bare reference changes nothing, in mermaid or
+   * here.
+   */
+  const ensureNode = (id: string, shaped?: { label: string; shape: MermaidNodeShape }): void => {
     const existing = nodeMap.get(id)
     if (existing) {
-      if (label && existing.label === existing.id) {
-        existing.label = label
-      }
-      if (shape && shape !== DEFAULT_MERMAID_NODE_SHAPE) {
-        existing.shape = shape
+      if (shaped) {
+        existing.label = shaped.label.length > 0 ? shaped.label : id
+        existing.shape = shaped.shape
       }
       return
     }
-    nodeMap.set(id, { id, label: label && label.length > 0 ? label : id, shape: shape ?? DEFAULT_MERMAID_NODE_SHAPE })
+    nodeMap.set(id, {
+      id,
+      label: shaped && shaped.label.length > 0 ? shaped.label : id,
+      shape: shaped?.shape ?? DEFAULT_MERMAID_NODE_SHAPE,
+    })
+  }
+
+  /** Says which shape was refused, and where — never a bare "cannot read". */
+  const refuseShape = (lineNumber: number, node: { id: string; unmodelled: string }): void => {
+    blockers.push(
+      `line ${lineNumber}: node ${node.id} is ${node.unmodelled}, a shape the builder does not model — it would be redrawn as a plain box`,
+    )
   }
 
   let index = 0
@@ -595,6 +665,13 @@ export function analyzeMermaidSource(source: string): MermaidSourceAnalysis {
       continue
     }
     if (PASSTHROUGH_RE.test(trimmed)) {
+      // A `linkStyle` names links by their POSITION, so it is the one preserved
+      // statement an edit can silently re-point. One the builder cannot keep in
+      // step (see `removeGraphEdge`) blocks it, like any other unreadable line.
+      if (/^linkStyle\b/.test(trimmed) && !LINK_STYLE_RE.test(trimmed)) {
+        blockers.push(`line ${index + 1}: a linkStyle the builder cannot keep in step with its links: ${trimmed}`)
+        continue
+      }
       extras.push(line)
       continue
     }
@@ -632,21 +709,34 @@ export function analyzeMermaidSource(source: string): MermaidSourceAnalysis {
       }
       const fromNode = matchShapedNode(left)
       const toNode = matchShapedNode(right)
+      if (fromNode?.unmodelled !== undefined || toNode?.unmodelled !== undefined) {
+        if (fromNode?.unmodelled !== undefined) {
+          refuseShape(index + 1, fromNode)
+        }
+        if (toNode?.unmodelled !== undefined) {
+          refuseShape(index + 1, toNode)
+        }
+        continue
+      }
       const fromId = fromNode?.id ?? (/^[A-Za-z0-9_]+$/.test(left) ? left : null)
       const toId = toNode?.id ?? (/^[A-Za-z0-9_]+$/.test(right) ? right : null)
       if (!fromId || !toId) {
         blockers.push(`line ${index + 1}: a link the builder cannot read: ${trimmed}`)
         continue
       }
-      ensureNode(fromId, fromNode?.label, fromNode?.shape)
-      ensureNode(toId, toNode?.label, toNode?.shape)
+      ensureNode(fromId, fromNode ?? undefined)
+      ensureNode(toId, toNode ?? undefined)
       edges.push({ from: fromId, to: toId, label, kind: connector.kind })
       continue
     }
 
     const declaration = matchShapedNode(trimmed)
+    if (declaration?.unmodelled !== undefined) {
+      refuseShape(index + 1, declaration)
+      continue
+    }
     if (declaration) {
-      ensureNode(declaration.id, declaration.label, declaration.shape)
+      ensureNode(declaration.id, declaration)
       continue
     }
 
@@ -708,14 +798,111 @@ export function appendGraphEdge(model: MermaidGraphModel): MermaidGraphModel {
   return { ...model, edges: [...model.edges, { from: previous, to: last, label: '', kind: DEFAULT_MERMAID_EDGE_KIND }] }
 }
 
+/**
+ * What committing a typed node id did: the model to use, and — when the id was
+ * refused — the reason, in words the builder shows beside the field.
+ */
+export interface GraphNodeIdCommit {
+  model: MermaidGraphModel
+  refusal: string | null
+}
+
+/**
+ * Commits what was typed into a node's id field, ONCE, when the user has
+ * finished typing it.
+ *
+ * The field used to rename on every keystroke, and a rename to an id another
+ * node already has MERGES the two — `buildFlowchartSource` writes one node per
+ * id. So renaming `B` to `A2` while a node `A` existed passed through `A` on
+ * the way: on that keystroke B became a second `A`, and on the next one the
+ * rename took A's links with it. Measured in the running app with real key
+ * input: `A --> B`, `C --> A` came out as `A2 --> A2`, `C --> A2`, with node A
+ * left unlinked. Committing on Enter or blur removes the intermediate ids, and
+ * these two refusals remove the destinations that are never right:
+ *
+ *  - an EMPTY id, which generation would have replaced with `n`;
+ *  - an id ANOTHER NODE HAS, compared as it will be WRITTEN — `a-b` and `a_b`
+ *    are the same id once sanitised, and so are the same node.
+ *
+ * The id committed is the sanitised one, so the field shows what the source
+ * says rather than what was typed.
+ */
+export function commitGraphNodeId(model: MermaidGraphModel, index: number, typed: string): GraphNodeIdCommit {
+  const target = model.nodes[index]
+  if (!target) {
+    return { model, refusal: null }
+  }
+  if (typeof typed !== 'string' || typed.trim().length === 0) {
+    return { model, refusal: `A node needs an id, so this one is still ${target.id}.` }
+  }
+  const nextId = sanitizeNodeId(typed)
+  if (nextId === target.id) {
+    return { model, refusal: null }
+  }
+  if (model.nodes.some((node, i) => i !== index && sanitizeNodeId(node.id) === nextId)) {
+    return {
+      model,
+      refusal: `Another node is already called ${nextId}, and two nodes with one id are one node. This one is still ${target.id}.`,
+    }
+  }
+  return { model: renameGraphNode(model, index, nextId), refusal: null }
+}
+
+/**
+ * Removes one link — and keeps every numbered `linkStyle` pointing at the link
+ * it pointed at before.
+ *
+ * `linkStyle 1 stroke:red` styles the SECOND link, by position. Removing the
+ * first link used to leave that line as written, so it now named a position
+ * past the end of the list, and mermaid does not ignore that: it throws
+ * `Cannot set properties of undefined (setting 'style')` and the whole diagram
+ * stops drawing. Removing a LATER link was quieter and no better — every style
+ * after it moved onto the wrong link.
+ *
+ * So the numbers move with the links: a position after the removed one drops by
+ * one, the removed position leaves its list, and a statement left styling
+ * nothing is removed with the link it styled. Nothing else in the line is
+ * touched, and `linkStyle default` is not touched at all.
+ */
+export function removeGraphEdge(model: MermaidGraphModel, index: number): MermaidGraphModel {
+  if (!Number.isInteger(index) || index < 0 || index >= model.edges.length) {
+    return model
+  }
+  const extras: string[] = []
+  for (const line of model.extras ?? []) {
+    const match = LINK_STYLE_RE.exec(line)
+    if (!match || match[2] === 'default') {
+      extras.push(line)
+      continue
+    }
+    const positions = match[2]
+      .split(',')
+      .map(Number)
+      .filter((position) => position !== index)
+      .map((position) => (position > index ? position - 1 : position))
+    if (positions.length > 0) {
+      extras.push(`${match[1]}${positions.join(',')}${match[3] ?? ''}`)
+    }
+  }
+  return { ...model, edges: model.edges.filter((_, i) => i !== index), extras }
+}
+
 /** Removes a node and every link that touched it. */
 export function removeGraphNode(model: MermaidGraphModel, index: number): MermaidGraphModel {
   const removedId = model.nodes[index]?.id
-  return {
-    ...model,
-    nodes: model.nodes.filter((_, i) => i !== index),
-    edges: model.edges.filter((edge) => edge.from !== removedId && edge.to !== removedId),
+  if (removedId === undefined) {
+    return model
   }
+  // One link at a time, LAST FIRST, through `removeGraphEdge`: each removal
+  // renumbers the `linkStyle` statements, and going backwards means the
+  // positions still to be removed have not moved yet.
+  let next = model
+  for (let edge = model.edges.length - 1; edge >= 0; edge--) {
+    if (model.edges[edge].from === removedId || model.edges[edge].to === removedId) {
+      next = removeGraphEdge(next, edge)
+    }
+  }
+  return { ...next, nodes: next.nodes.filter((_, i) => i !== index) }
 }
 
 /**
@@ -833,4 +1020,24 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
 /** Looks up a template's source by id, or undefined if unknown. */
 export function getTemplateSource(id: string): string | undefined {
   return MERMAID_TEMPLATES.find((t) => t.id === id)?.source
+}
+
+/**
+ * Must choosing a template be confirmed first? A template REPLACES the whole
+ * source, and it used to do so the moment it was picked from the dropdown, with
+ * nothing asked — one stray selection and a diagram was gone, behind the same
+ * control that offers "Flowchart" as if it were a setting.
+ *
+ * It need not be confirmed when there is nothing of the user's to lose: an
+ * empty diagram, or one that is still exactly a starter — a template as
+ * inserted, or one of `starterSources` (the caller passes the source a new
+ * block is created with). Anything else is somebody's work.
+ */
+export function templateReplacesUserWork(currentSource: string, starterSources: readonly string[] = []): boolean {
+  const current = typeof currentSource === 'string' ? currentSource.trim() : ''
+  if (current.length === 0) {
+    return false
+  }
+  const starters = [...MERMAID_TEMPLATES.map((template) => template.source), ...starterSources]
+  return !starters.some((starter) => starter.trim() === current)
 }
