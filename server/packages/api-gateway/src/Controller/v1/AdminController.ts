@@ -58,6 +58,7 @@ import {
   readAuthRuntimeBody,
 } from '../../Service/Diagnostics/RuntimeDiagnostics'
 import { admissionProbeFromHeaders, readGatewayAdmission } from '../../Service/Diagnostics/AdmissionDiagnostics'
+import { withCanonicalAdminUuids } from '../AdminUuidCanonicalizer'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -162,6 +163,10 @@ export type ReadinessFetchLike = (
  * per-user feature-flag setters/getters (never the broader unprotected admin
  * routes).
  */
+// Standard Red Notes: `withCanonicalAdminUuids` lower-cases every uuid a request
+// carries before any handler below (or the service behind it) looks an account
+// up by it. It wraps every route of this class, including ones added later.
+@withCanonicalAdminUuids
 @controller('/v1/admin')
 export class AdminController extends BaseHttpController {
   constructor(
