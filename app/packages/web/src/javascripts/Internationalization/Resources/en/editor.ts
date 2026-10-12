@@ -112,6 +112,10 @@ const editor = {
   // Mobile
   dismissKeyboard: 'Dismiss keyboard',
 
+  // The button beside the ribbon tabs that collapses the toolbar to its tab row
+  collapseToolbar: 'Collapse the toolbar',
+  keepToolbarOpen: 'Keep the toolbar open',
+
   // Popover titles / a11y labels
   tableOfContentsLower: 'Table of contents',
   noHeadingsFound: 'No headings found',

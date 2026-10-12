@@ -207,6 +207,12 @@ import {
   resolveContextualWidget,
 } from './ContextualToolbar'
 import BlockZoomOverlay from './BlockZoomOverlay'
+import {
+  SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY,
+  isSuperToolbarAutoHideActive,
+  normalizeSuperToolbarAutoHide,
+} from './ToolbarAutoHidePreference'
+import { useToolbarAutoHide } from './useToolbarAutoHide'
 import { FORMAT_PAINTER_TOGGLE, useFormatPainter } from '../FormatPainterPlugin'
 import { useFormattingMarks } from '../FormattingMarksPlugin/FormattingMarksPlugin'
 import {
@@ -1942,6 +1948,57 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   // Separate store for the element-specific contextual tools, which render on
   // their own line below the main toolbar.
   const contextualToolbarStore = useToolbarStore()
+
+  // Standard Red Notes: the ribbon can be collapsed to its row of tabs, as in
+  // Word. OFF unless the user turns it on — from Preferences or from the button
+  // beside the tabs, which write the same preference — and it only ever applies
+  // to the docked desktop toolbar of an editable note; see
+  // `isSuperToolbarAutoHideActive`. While it does not apply, the hook listens to
+  // nothing and writes nothing, and the toolbar is the one it always was plus
+  // that one button.
+  //
+  // Collapsed, the tab row stays and the command panel under it is put away,
+  // coming back over the note when a tab is pointed at or activated. Whether the
+  // panel is currently showing is deliberately NOT state of this component: it
+  // is written straight onto the panel as an attribute, so pointing at the
+  // toolbar never re-renders it (see `useToolbarAutoHide`).
+  const storedToolbarAutoHide = usePreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY)
+  const isToolbarCollapsePreferred = normalizeSuperToolbarAutoHide(storedToolbarAutoHide)
+  const isAutoHideActive = isSuperToolbarAutoHideActive({
+    storedPreference: storedToolbarAutoHide,
+    isMobile,
+    isToolbarFixedToTop,
+    isEditable,
+  })
+  const commandPanelRef = useRef<HTMLDivElement>(null)
+  // Destructured rather than kept as one object: the callbacks are stable, the
+  // object is new on every render, and the command handler below must not be
+  // re-registered each time this component renders.
+  const {
+    revealAndFocus: revealAutoHiddenToolbar,
+    containsFocus: autoHideContainsFocus,
+    release: releaseAutoHideHold,
+  } = useToolbarAutoHide({
+    active: isAutoHideActive,
+    toolbarRef: containerRef,
+    panelRef: commandPanelRef,
+    // Dialogs have no anchor inside the panel for the hook to see, so they are
+    // reported here: `modal` is the single slot every `showModal` dialog goes
+    // through (Customize toolbar, Insert table, Sort lines, …) and the style
+    // editor is the one dialog that does not use it. Dropdowns need no entry —
+    // the hook finds those itself, including the ones this component does not own.
+    hasOpenDialog: modal !== null || isTypographyEditorOpen,
+    getEditorRootElement: () => editor.getRootElement(),
+    focusEditor: () => editor.focus(),
+  })
+  // The collapse button is offered wherever the docked desktop ribbon is: it is
+  // how the toolbar is collapsed in the first place, so it cannot wait for the
+  // setting to be on. Mobile and the floating toolbar have nothing to collapse.
+  const canCollapseToolbar = !isMobile && isToolbarFixedToTop
+  const toggleToolbarCollapsed = useCallback(() => {
+    application.setPreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY, !isToolbarCollapsePreferred).catch(console.error)
+  }, [application, isToolbarCollapsePreferred])
+
   useEffect(() => {
     return application.keyboardService.addCommandHandler({
       command: SUPER_TOGGLE_TOOLBAR,
@@ -1952,6 +2009,33 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
           return
         }
         if (!alwaysShowToolbar) {
+          return
+        }
+
+        // Collapsed, the shortcut is the keyboard's way to the commands: it
+        // opens the panel and moves focus into it, and pressed again from
+        // inside it hands focus back to the note so the panel can go. It does
+        // not swap the docked ribbon for the floating toolbar in this mode — a
+        // "toggle toolbar" key that could not bring hidden commands back would
+        // be the one thing it is for, not working.
+        if (isAutoHideActive) {
+          // Every open note mounts its own toolbar and they all hear this
+          // command, so answer only for the note the keystroke was made in.
+          // Without this, leaving one note's toolbar would immediately pull
+          // focus into another's.
+          const focusedSuperEditor = ownSuperEditorElement(document.activeElement)
+          if (focusedSuperEditor && focusedSuperEditor !== ownSuperEditorElement(editor.getRootElement())) {
+            return
+          }
+
+          event.preventDefault()
+
+          if (autoHideContainsFocus()) {
+            releaseAutoHideHold()
+            editor.focus()
+          } else {
+            revealAutoHiddenToolbar()
+          }
           return
         }
 
@@ -1971,10 +2055,14 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   }, [
     alwaysShowToolbar,
     application.keyboardService,
+    autoHideContainsFocus,
     clearContainerFloatingStyles,
     editor,
+    isAutoHideActive,
     isMobile,
     isToolbarFixedToTop,
+    releaseAutoHideHold,
+    revealAutoHiddenToolbar,
     toolbarStore,
   ])
 
@@ -3562,6 +3650,15 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
               ? 'z-tooltip translucent-ui:border-(--popover-border-color) translucent-ui:bg-(--popover-background-color) translucent-ui:[backdrop-filter:var(--popover-backdrop-filter)] fixed top-0 left-0 hidden translate-x-(--translate-x) translate-y-(--translate-y) rounded border py-0.5'
               : 'w-full px-1 py-1'
             : '',
+          // Collapsed: the bar itself stays where it is, in the flow, and only
+          // becomes the box the command panel below is positioned against. Its
+          // own bottom padding and rule are dropped, because with the panel gone
+          // the tab row's rule IS the bottom of the bar, and two rules four
+          // pixels apart read as a mistake. The entry is `false` — which
+          // `classNames` drops entirely, where an empty string would leave a
+          // stray space — unless the toolbar is collapsed, so the default
+          // toolbar's class attribute is the same string it has always been.
+          isAutoHideActive && 'relative !border-b-0 !pb-0',
         )}
         id="super-mobile-toolbar"
         ref={containerRef}
@@ -3735,7 +3832,37 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
               )}
             </div>
           )}
-          <div className="flex w-full">
+          <div
+            ref={commandPanelRef}
+            className={classNames(
+              'flex w-full',
+              // Collapsed, this panel is taken out of the flow and drawn under
+              // the tab row, OVER the note, so the text being read does not move
+              // when it comes and goes. It keeps the bar's own side padding, so
+              // every command is at the x it has when the ribbon is expanded.
+              isAutoHideActive &&
+                'border-border bg-default shadow-main z-tooltip absolute top-full left-0 border-b px-1 pb-1',
+              // HIDDEN is what these classes say on their own: not visible, taking
+              // no pointer events. So the panel is hidden from its very first
+              // paint, and stays hidden if the state attribute were ever missing.
+              isAutoHideActive &&
+                'pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 motion-reduce:transition-none',
+              // REVEALED is keyed on the attribute `useToolbarAutoHide` writes to
+              // this element. The classes never change while collapsed; only that
+              // attribute does, which is why pointing at the toolbar costs no
+              // render.
+              //
+              // It fades rather than slides, so a button never moves under the
+              // pointer and a menu anchored to it is positioned against where it
+              // really is. Revealing switches `visibility` at once (only opacity
+              // eases in), so the controls can take focus in the same instant;
+              // hiding keeps the panel visible until the fade has finished. The
+              // reduced-motion entry is repeated under the attribute because the
+              // attribute makes a selector too specific for the plain one to beat.
+              isAutoHideActive &&
+                'data-[super-toolbar-autohide=revealed]:pointer-events-auto data-[super-toolbar-autohide=revealed]:visible data-[super-toolbar-autohide=revealed]:opacity-100 data-[super-toolbar-autohide=revealed]:transition-opacity motion-reduce:data-[super-toolbar-autohide=revealed]:transition-none',
+            )}
+          >
             {isContextualActive ? (
               <Toolbar
                 // Mirror the normal super-group layout: spaced, captioned segment
@@ -3961,6 +4088,53 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
               >
                 <Icon type="keyboard-close" size="medium" />
               </button>
+            )}
+            {/* Standard Red Notes: collapse the ribbon to its tab row, or keep it
+                open — the one control, where Word keeps it: the lower-right
+                corner of the command panel. It writes the same preference as
+                the switch in Preferences, so the two cannot disagree. While
+                the ribbon is collapsed the panel is only there temporarily,
+                and this is the pin that brings it back for good.
+
+                It is fixed chrome, deliberately not one of the buttons
+                Customize Toolbar can hide: a user who hid it would have hidden
+                the way back.
+
+                WHERE IT SITS costs the rest of the toolbar nothing, which the
+                tab row could not offer: on a bar of ordinary width that row is
+                already overfull, and a button there clipped the utility
+                actions by its own width. Here it is drawn in the corner from a
+                zero-width box at the end of the panel, so no command has less
+                room than it had. The corner it covers is the caption band
+                under the last row of buttons — a strip of labels, with nothing
+                in it to click.
+
+                mousedown is cancelled for the same reason as on every toolbar
+                button: clicking it must not take the caret out of the note. */}
+            {canCollapseToolbar && (
+              <div className="relative w-0 flex-shrink-0 self-stretch" data-super-toolbar-collapse-corner="">
+                <StyledTooltip
+                  showOnHover
+                  label={isToolbarCollapsePreferred ? t('keepToolbarOpen') : t('collapseToolbar')}
+                  side="top"
+                >
+                  <button
+                    type="button"
+                    data-super-toolbar-collapse=""
+                    aria-label={isToolbarCollapsePreferred ? t('keepToolbarOpen') : t('collapseToolbar')}
+                    aria-pressed={isToolbarCollapsePreferred}
+                    className="border-border bg-default text-passive-1 hover:bg-contrast hover:text-text focus-visible:bg-contrast focus-visible:text-text absolute right-0 bottom-0 flex h-4 w-5 items-center justify-center rounded border transition-colors focus:shadow-none focus:outline-none pointer-coarse:h-6 pointer-coarse:w-7"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={toggleToolbarCollapsed}
+                  >
+                    <Icon
+                      type={isToolbarCollapsePreferred ? 'pin-filled' : 'chevron-up'}
+                      size="custom"
+                      className="h-3 w-3"
+                    />
+                  </button>
+                </StyledTooltip>
+              </div>
             )}
           </div>
         </div>
