@@ -12,6 +12,7 @@ import {
   REALTIME_FIELD_NOT_REPORTED,
   REALTIME_UNATTACHED_NOTE,
   sanitizeServerCopy,
+  SERVER_LANE_HAS_NOTHING_UNMET,
   SYNC_ITEMS_CAUSE_COPY,
   SYNC_ITEMS_CAUSES,
   SYNC_ITEMS_STATE_CHIP,
@@ -196,6 +197,67 @@ describe('sync diagnostics model', () => {
   })
 
   describe('diagnose', () => {
+    /**
+     * *** WHAT THE SERVER BUILT IS NOT WHERE THIS TAB IS. *** Captured behind a
+     * proxy that does not pass the WebSocket upgrade: headline "working, with
+     * something lost", first fix "the realtime socket is refused before it
+     * connects", and this sentence under them saying the lane was "fully
+     * configured and available".
+     */
+    describe('with nothing unmet on the server', () => {
+      const onSocket = diagnose(gateSatisfied, { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] })
+
+      it('says "available" only for a tab that is on the socket', () => {
+        expect(onSocket.headline).toBe('The realtime sync lane is fully configured and available.')
+        expect(onSocket.tone).toBe('good')
+
+        const offSocket: (TransportStatusInput | undefined)[] = [
+          undefined,
+          { state: 'HTTP_ONLY', operations: [] },
+          { state: 'HTTP_FALLBACK', fallbackReason: 'proxy-failed', operations: [] },
+          { state: 'DEGRADED', fallbackReason: 'server-kill', operations: [] },
+          { state: 'HTTP_FALLBACK', fallbackReason: 'multi-tab-not-owner', operations: [] },
+          { state: 'CONNECTING', operations: [] },
+          { state: 'AUTHENTICATING', operations: [] },
+          { state: 'HALF_OPEN', operations: [] },
+        ]
+        for (const transport of offSocket) {
+          const diagnosis = diagnose(gateSatisfied, transport)
+
+          expect({ state: transport?.state, available: diagnosis.headline.includes('available') }).toEqual({
+            state: transport?.state,
+            available: false,
+          })
+          // The server's half is still said, and nothing is invented against it.
+          expect(diagnosis.headline.startsWith(SERVER_LANE_HAS_NOTHING_UNMET)).toBe(true)
+          expect(diagnosis.findings).toHaveLength(0)
+        }
+      })
+
+      it('says where the tab is instead: refused, standing by, or still connecting', () => {
+        const refused = diagnose(gateSatisfied, {
+          state: 'HTTP_FALLBACK',
+          fallbackReason: 'proxy-failed',
+          operations: [],
+        })
+        const standingBy = diagnose(gateSatisfied, {
+          state: 'HTTP_FALLBACK',
+          fallbackReason: 'multi-tab-not-owner',
+          operations: [],
+        })
+        const dialling = diagnose(gateSatisfied, { state: 'HALF_OPEN', operations: [] })
+
+        expect(refused.headline).toContain('This tab is not on it')
+        expect(refused.tone).toBe('warn')
+        // A second tab is not a fault, and is not told to go and find one.
+        expect(standingBy.headline).toContain('standing by on HTTP')
+        expect(standingBy.headline).not.toContain('what stops the socket')
+        expect(standingBy.tone).toBe('good')
+        expect(dialling.headline).toContain('connecting to it')
+        expect(dialling.tone).toBe('neutral')
+      })
+    })
+
     it('names the specific missing configuration item, not the category', () => {
       const diagnosis = diagnose(
         {

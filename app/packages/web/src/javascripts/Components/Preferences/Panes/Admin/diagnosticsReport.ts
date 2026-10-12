@@ -48,6 +48,7 @@ import {
   describeSyncItems,
   describeTransport,
   diagnose,
+  DIAGNOSIS_LABEL,
   isKnownFilesUnmetCondition,
   KNOWN_LIVE_REFUSAL_REASONS,
   KNOWN_PRECONDITION_CODES,
@@ -447,7 +448,7 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
   }
   verdictBlock.push(`- Checks: ${summarizeChecks(checks)}`)
   verdictBlock.push(`- ${COVERAGE_SENTENCE}`)
-  verdictBlock.push(`- Diagnosis: ${diagnosis.headline}`)
+  verdictBlock.push(`- ${DIAGNOSIS_LABEL}: ${diagnosis.headline}`)
   verdictBlock.push(
     triaged.first === undefined
       ? '- Do first: nothing. No finding in this pane needs action.'

@@ -790,7 +790,7 @@ describe('AdminDiagnosticsTab — the Overview router', () => {
   it('keeps the cross-cutting diagnosis on the Overview, beside the router', async () => {
     const text = await renderTab(makeApplication())
 
-    expect(text).toContain('Diagnosis')
+    expect(text).toContain('Realtime lane diagnosis')
     expect(text).toContain('running over HTTP')
     expect(text).toContain('SYNCING_SERVER_GRPC_UNBOUND')
   })
@@ -2928,6 +2928,46 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
     expect(sectionRow('Revision history read')[1]).toBe('answered')
     // The check that writes has not been asked to, and says so.
     expect(sectionRowStatus('File transfer round trip')).toBe('untested')
+  })
+
+  /**
+   * *** THE SAME SERVER, BEHIND A PROXY THAT DOES NOT UPGRADE. *** Nothing is
+   * unmet on the server and this tab cannot reach the socket. The line under the
+   * findings said the realtime lane was "fully configured and available", a few
+   * rows below a headline that said something was lost.
+   */
+  it('does not call the realtime lane available on a tab the socket refuses', async () => {
+    const operations = ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS']
+    const application = makeApplication({
+      ...answering({
+        status: 200,
+        ok: true,
+        data: {
+          capturedAt: CAPTURED_AT,
+          deployment: { ...unavailablePayload.deployment, serviceProxySetting: 'grpc', grpcSyncingProxyBound: true },
+          gate: {
+            recorded: true,
+            gatewayAttached: true,
+            syncLaneEnabled: true,
+            syncItems: { state: 'ADVERTISED', cause: null, remedy: null, probe: 'READY' },
+            unmetPreconditions: [],
+            unmetCodes: [],
+            files: { advertised: true },
+          },
+          live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
+          protocol: { version: 1, serverOperations: operations },
+        },
+      }),
+      syncTransportStatus: { state: 'HTTP_FALLBACK', fallbackReason: 'proxy-failed', operations: [] },
+    })
+
+    await renderTab(application)
+    const diagnosis = container.querySelector('[data-diagnostics-lane-diagnosis]')?.textContent ?? ''
+
+    expect(diagnosis).toContain('The server built the realtime sync lane with nothing unmet.')
+    expect(diagnosis).toContain('This tab is not on it')
+    expect(diagnosis).not.toContain('available')
+    expect(headlineStatus()).not.toBe('healthy')
   })
 
   /**

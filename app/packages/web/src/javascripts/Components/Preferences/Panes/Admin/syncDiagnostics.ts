@@ -5,6 +5,7 @@ import {
   type SyncNegotiatedOperation,
   type SyncTransportState,
 } from '@/Services/SyncTransport/syncTransportProtocol'
+import { LANE_STATE_CARRIER } from '@/Services/SyncTransport/LaneDegradationLedger'
 import type { DeploymentTopology } from './diagnosticRemedies'
 
 /**
@@ -1310,6 +1311,19 @@ export function describeSyncItems(payload: SyncDiagnosticsPayload | undefined): 
 }
 
 /**
+ * The server's half of a lane with no finding against it, said on its own so it
+ * can be followed by where THIS tab is.
+ */
+export const SERVER_LANE_HAS_NOTHING_UNMET = 'The server built the realtime sync lane with nothing unmet.'
+
+/**
+ * What the pane and the report call {@link diagnose}'s sentence. One constant,
+ * so the two cannot drift — and scoped, because it is about one lane and sits a
+ * few rows from a headline that is about everything.
+ */
+export const DIAGNOSIS_LABEL = 'Realtime lane diagnosis'
+
+/**
  * The highest-value output of this tab: turn "unavailable" into the one thing an
  * operator has to change.
  *
@@ -1541,9 +1555,36 @@ export function diagnose(
   }
 
   if (findings.length === 0) {
+    /**
+     * *** WHAT THE SERVER BUILT IS NOT WHERE THIS TAB IS. *** No finding means the
+     * server's gate has nothing unmet, and that is all it means. Behind a reverse
+     * proxy that does not pass the WebSocket upgrade the pane's headline read
+     * "working, with something lost", the first thing to fix was "the realtime
+     * socket is refused before it connects" — and this line, a few rows further
+     * down, said the realtime sync lane was "fully configured and available". The
+     * server's half was. "Available" is a claim about reaching it, and this
+     * function is handed the one measurement of that: the transport.
+     */
+    const carrier = transport === undefined ? undefined : LANE_STATE_CARRIER[transport.state]
+    if (carrier === 'socket') {
+      return {
+        headline: 'The realtime sync lane is fully configured and available.',
+        tone: 'good',
+        findings: [],
+      }
+    }
+
+    const standingBy =
+      transport?.fallbackReason !== undefined && syncFallbackDisposition(transport.fallbackReason) === 'deferred'
+    const where = standingBy
+      ? 'This tab is standing by on HTTP for the tab of this account that holds the socket.'
+      : carrier === 'dialling'
+        ? 'This tab is connecting to it and is not on it yet.'
+        : 'This tab is not on it: the WebSocket section says what stops the socket.'
+
     return {
-      headline: 'The realtime sync lane is fully configured and available.',
-      tone: 'good',
+      headline: `${SERVER_LANE_HAS_NOTHING_UNMET} ${where}`,
+      tone: standingBy ? 'good' : carrier === 'dialling' ? 'neutral' : 'warn',
       findings: [],
     }
   }

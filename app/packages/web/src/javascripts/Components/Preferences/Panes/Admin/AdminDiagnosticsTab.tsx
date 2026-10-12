@@ -19,6 +19,7 @@ import {
   describeDeployment,
   describeTransport,
   diagnose,
+  DIAGNOSIS_LABEL,
   type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
   type TransportStatusInput,
@@ -1905,8 +1906,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
           <HorizontalSeparator classes="mt-4 mb-4" />
 
-          <Subtitle>Diagnosis</Subtitle>
-          <Text className="mt-1">{diagnosis.headline}</Text>
+          {/* Named for what it is about. As a bare "Diagnosis" it read as the
+              pane's verdict, a few rows under the headline that IS the verdict. */}
+          <Subtitle>{DIAGNOSIS_LABEL}</Subtitle>
+          <Text className="mt-1">
+            <span data-diagnostics-lane-diagnosis="true">{diagnosis.headline}</span>
+          </Text>
           {diagnosis.findings.length > 0 && (
             <ul className="mt-3 flex flex-col gap-3">
               {diagnosis.findings.map((finding) => (

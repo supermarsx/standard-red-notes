@@ -1198,6 +1198,10 @@ describe('buildDiagnosticsSummary', () => {
     expect(summary).toContain('# Standard Red Notes — capability diagnostics')
     expect(summary).toContain('Build: revision unstamped')
     expect(summary).toContain('## Summary')
+    // Named for the one lane it is about: as "Diagnosis" it read as the verdict,
+    // two lines under the line that is the verdict.
+    expect(summary).toContain('- Realtime lane diagnosis: ')
+    expect(summary).not.toContain('- Diagnosis: ')
     expect(summary).toContain('## What needs attention')
     expect(summary).toContain('### 1. ')
     expect(summary).toContain('## How to read this')
