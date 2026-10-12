@@ -82,6 +82,17 @@ export type CrossServiceTokenData = {
    */
   caldav_enabled?: boolean
   /**
+   * Standard Red Notes: per-user DAV BRIDGE gate (two-way sync with a Nextcloud
+   * or other CalDAV account through the api-gateway relay), read from the auth
+   * settings store at token-mint time (SettingName.DavBridgeAllowed).
+   *
+   * OPT-IN (default-off), mirroring `workflows_enabled`: the field is EMITTED
+   * ONLY WHEN the admin-managed setting is literally 'true'. Absent MUST be
+   * treated as NOT allowed, so the relay fails closed for older tokens and for
+   * users an administrator never enabled.
+   */
+  dav_bridge_allowed?: boolean
+  /**
    * Standard Red Notes: per-user SERVER-SIDE OCR gate, read from the auth
    * settings store at token-mint time (SettingName.OcrServerAllowed).
    *

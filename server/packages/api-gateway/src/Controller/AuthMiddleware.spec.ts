@@ -111,6 +111,23 @@ describe('AuthMiddleware settings projection', () => {
     expect(falseValue[SettingName.NAMES.CaldavEnabled]).toBeUndefined()
   })
 
+  it('projects only a literal dav_bridge_allowed opt-in and otherwise fails closed', async () => {
+    const allowed = await runWith({ ...baseToken(), dav_bridge_allowed: true })
+    const absent = await runWith(baseToken())
+    const falseValue = await runWith({ ...baseToken(), dav_bridge_allowed: false })
+    const truthyString = await runWith({
+      ...baseToken(),
+      dav_bridge_allowed: 'true' as unknown as boolean,
+    })
+    const otherOptIns = await runWith({ ...baseToken(), caldav_enabled: true, workflows_enabled: true })
+
+    expect(allowed[SettingName.NAMES.DavBridgeAllowed]).toBe('true')
+    expect(absent[SettingName.NAMES.DavBridgeAllowed]).toBeUndefined()
+    expect(falseValue[SettingName.NAMES.DavBridgeAllowed]).toBeUndefined()
+    expect(truthyString[SettingName.NAMES.DavBridgeAllowed]).toBeUndefined()
+    expect(otherOptIns[SettingName.NAMES.DavBridgeAllowed]).toBeUndefined()
+  })
+
   const runReturningLocals = async (decoded: CrossServiceTokenData): Promise<Record<string, unknown>> => {
     mockedVerify.mockReturnValue(decoded)
     const request = {

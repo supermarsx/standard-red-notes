@@ -187,6 +187,14 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       authTokenData.caldav_enabled = true
     }
 
+    // Standard Red Notes: the DAV BRIDGE is OPT-IN (default-off) and
+    // administrator-set, same shape as WORKFLOWS above. Only a literal 'true'
+    // is carried; absent keeps every pre-existing token byte-identical and makes
+    // the api-gateway relay fail closed for users nobody enabled.
+    if (await this.readOptInGatingFlag(user.uuid, SettingName.NAMES.DavBridgeAllowed)) {
+      authTokenData.dav_bridge_allowed = true
+    }
+
     // Standard Red Notes: SERVER-SIDE OCR is OPT-IN (default-off), same shape as
     // WORKFLOWS above — the field is emitted ONLY when the admin-managed
     // OcrServerAllowed setting is literally 'true'. Absent means not allowed, so

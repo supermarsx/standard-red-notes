@@ -215,6 +215,14 @@ export abstract class AuthMiddleware extends BaseMiddleware {
       settings[SettingName.NAMES.CaldavEnabled] = 'true'
     }
 
+    // DAV_BRIDGE_ALLOWED is OPT-IN (default-off) and administrator-set: auth
+    // emits `dav_bridge_allowed` only for a literal 'true'. Anything else stays
+    // absent, so the relay fails closed for old tokens and for users nobody
+    // enabled.
+    if (decodedToken.dav_bridge_allowed === true) {
+      settings[SettingName.NAMES.DavBridgeAllowed] = 'true'
+    }
+
     // OCR_SERVER_ALLOWED is OPT-IN (default-off) like WORKFLOWS_ENABLED: auth
     // emits `ocr_server_allowed` ONLY when the admin-managed setting is literally
     // 'true', so the key is projected only in that case. An absent key means "not

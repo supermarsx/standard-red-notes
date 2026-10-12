@@ -782,6 +782,51 @@ describe('CreateCrossServiceToken', () => {
     })
   })
 
+  describe('DAV bridge gating (dav_bridge_allowed)', () => {
+    const payloadFor = async (stored: string | undefined): Promise<CrossServiceTokenData> => {
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.DavBridgeAllowed && stored !== undefined) {
+          return Promise.resolve({ props: { value: stored } })
+        }
+        return Promise.resolve(null)
+      })
+
+      await createUseCase().execute({ user, session })
+
+      return (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    }
+
+    it('embeds dav_bridge_allowed === true when the setting is literally "true"', async () => {
+      expect((await payloadFor('true')).dav_bridge_allowed).toBe(true)
+    })
+
+    it.each([[undefined], ['false'], ['TRUE'], ['1'], ['yes'], ['']])(
+      'does NOT embed dav_bridge_allowed when the stored value is %p (fail-closed)',
+      async (stored) => {
+        const payload = await payloadFor(stored)
+
+        expect(payload.dav_bridge_allowed).toBeUndefined()
+        expect('dav_bridge_allowed' in payload).toBe(false)
+      },
+    )
+
+    it('does not let another opt-in flag stand in for it', async () => {
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.CaldavEnabled || settingName === SettingName.NAMES.WorkflowsEnabled) {
+          return Promise.resolve({ props: { value: 'true' } })
+        }
+        return Promise.resolve(null)
+      })
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.caldav_enabled).toBe(true)
+      expect(payload.workflows_enabled).toBe(true)
+      expect(payload.dav_bridge_allowed).toBeUndefined()
+    })
+  })
+
   describe('server-side OCR gating (ocr_server_allowed)', () => {
     it('does NOT embed ocr_server_allowed when the setting is unset (fail-closed)', async () => {
       // Default mock: findLastByNameAndUserUuid resolves to null for every setting.

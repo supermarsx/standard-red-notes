@@ -72,3 +72,20 @@ describe('SettingName subscription classification', () => {
     expect(result.getError()).toBe('Invalid setting name: NOT_A_SETTING')
   })
 })
+
+describe('SettingName — DAV bridge permission (Standard Red Notes)', () => {
+  it('is a recognized, creatable setting name with a stable wire value', () => {
+    expect(SettingName.NAMES.DavBridgeAllowed).toEqual('DAV_BRIDGE_ALLOWED')
+
+    const result = SettingName.create('DAV_BRIDGE_ALLOWED')
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue().value).toEqual('DAV_BRIDGE_ALLOWED')
+  })
+
+  it('carries no secret and is not a subscription setting', () => {
+    const name = SettingName.create(SettingName.NAMES.DavBridgeAllowed).getValue()
+
+    expect(name.isSensitive()).toBe(false)
+    expect(name.isASubscriptionSetting()).toBe(false)
+  })
+})

@@ -250,6 +250,7 @@ describe('SrnAdminCli helpers', () => {
         'NEXTCLOUD_BACKUP_ALLOWED',
         'NEXTCLOUD_BACKUP_FREQUENCY',
         'WORKFLOWS_ENABLED',
+        'DAV_BRIDGE_ALLOWED',
       ]) {
         expect(names).toContain(expected)
       }

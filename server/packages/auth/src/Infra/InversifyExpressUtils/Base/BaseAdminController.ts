@@ -105,6 +105,13 @@ const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   // env at the api-gateway. Reuses the same get/set feature-flag endpoints;
   // value is validated below.
   SettingName.NAMES.WorkflowsEnabled,
+  // Standard Red Notes: admin gate for the DAV BRIDGE ('true' to allow this user
+  // to connect a Nextcloud or other CalDAV account and have the api-gateway
+  // relay requests to it; anything else disables). Mirrors WorkflowsEnabled:
+  // OFF by default, composed with the operator switch DAV_BRIDGE_ENABLED at the
+  // api-gateway. Reuses the same get/set feature-flag endpoints; value is
+  // validated below.
+  SettingName.NAMES.DavBridgeAllowed,
 ]
 
 /**
@@ -120,6 +127,7 @@ const STRICT_BOOLEAN_ADMIN_SETTINGS = new Set<string>([
   SettingName.NAMES.OcrServerAllowed,
   SettingName.NAMES.NextcloudBackupAllowed,
   SettingName.NAMES.WorkflowsEnabled,
+  SettingName.NAMES.DavBridgeAllowed,
 ])
 const AI_LIMIT_ADMIN_SETTINGS = new Set<string>([
   SettingName.NAMES.AiRequestLimit,

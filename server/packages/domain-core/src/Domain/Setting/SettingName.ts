@@ -161,6 +161,19 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // second cross-service round trip. Carries no secret; unencrypted/unsensitive
     // so token minting can read it without per-user key material.
     WorkflowsEnabled: 'WORKFLOWS_ENABLED',
+    // Standard Red Notes: per-user, OFF-BY-DEFAULT admin gate for the DAV BRIDGE
+    // (two-way calendar and task sync with a Nextcloud or other CalDAV account,
+    // relayed by the api-gateway). Mirrors WorkflowsEnabled: a plain
+    // 'true'/'false' flag toggled per user from the admin panel. Two gates apply
+    // before the relay forwards anything for a user: the operator switch
+    // DAV_BRIDGE_ENABLED (api-gateway) AND this flag being literally 'true'
+    // (or the operator's allow-all-users setting). It is admin-set, not
+    // client-mutable, because the relay makes the SERVER open connections to an
+    // address the user typed while carrying a stored password: who may do that
+    // is the administrator's decision. Rides along in the cross-service token
+    // (dav_bridge_allowed). Carries no secret; unencrypted/unsensitive so token
+    // minting can read it without per-user key material.
+    DavBridgeAllowed: 'DAV_BRIDGE_ALLOWED',
   }
 
   get value(): string {

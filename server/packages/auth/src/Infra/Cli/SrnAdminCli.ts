@@ -382,6 +382,11 @@ export const CLI_MANAGEABLE_FLAGS: AdminFlagSpec[] = [
   { name: 'NEXTCLOUD_BACKUP_FREQUENCY', description: 'Nextcloud backup cadence (view/override)' },
   { name: 'WORKFLOWS_ENABLED', description: 'Workflows (n8n automation) admin gate', allowedValues: STRICT_BOOLEAN },
   {
+    name: 'DAV_BRIDGE_ALLOWED',
+    description: 'Calendar and task sync with a Nextcloud/CalDAV account (admin gate)',
+    allowedValues: STRICT_BOOLEAN,
+  },
+  {
     name: 'CALDAV_ENABLED',
     description: 'CalDAV bridge user opt-in (CLI-only override)',
     allowedValues: STRICT_BOOLEAN,
@@ -687,6 +692,15 @@ export const OPERATOR_ENVS: OperatorEnvSpec[] = [
     defaultValue: 'false',
     description: 'Master switch: CalDAV bridge',
     restartRequired: true,
+  },
+  {
+    env: 'DAV_BRIDGE_ENABLED',
+    service: 'api-gateway',
+    kind: 'boolean-loose',
+    defaultValue: 'false',
+    description: 'Master switch: calendar and task sync with Nextcloud/CalDAV accounts',
+    restartRequired: true,
+    note: 'An administrator override set in the admin pane wins over this value and needs no restart.',
   },
   {
     env: 'REMINDER_DELIVERY_ENABLED',

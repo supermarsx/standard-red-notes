@@ -46,6 +46,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // plain 'true'/'false' flag carrying no secret; stored unencrypted so
     // cross-service token minting can read it without per-user key material.
     SettingName.NAMES.WorkflowsEnabled,
+    // Standard Red Notes: per-user admin gate for the DAV bridge. A plain
+    // 'true'/'false' flag carrying no secret; stored unencrypted for the same
+    // reason as WorkflowsEnabled.
+    SettingName.NAMES.DavBridgeAllowed,
     SettingName.NAMES.MuteSignInEmails,
     SettingName.NAMES.MuteMarketingEmails,
     SettingName.NAMES.DropboxBackupFrequency,
@@ -96,6 +100,9 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // The owning client and the admin panel must be able to read it back; it
     // carries no secret, so it is not marked sensitive.
     SettingName.NAMES.WorkflowsEnabled,
+    // Standard Red Notes: per-user admin gate for the DAV bridge. Readable by
+    // the owning client and the admin panel; carries no secret.
+    SettingName.NAMES.DavBridgeAllowed,
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.LogSessionUserAgent,
     SettingName.NAMES.RecoveryCodes,
@@ -131,6 +138,13 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.AiWeeklyTokenLimit,
     SettingName.NAMES.CollaborationEnabled,
     SettingName.NAMES.LiveSyncEnabled,
+    // Standard Red Notes: the DAV bridge gate decides whether the SERVER may
+    // open connections to an address this user typed, carrying a stored
+    // password. Opt-in flags are otherwise safe to leave client-writable (a
+    // user can only switch a feature on for themselves), but this one would let
+    // any signed-in user grant themselves a server-side request relay the
+    // administrator had not given them.
+    SettingName.NAMES.DavBridgeAllowed,
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.FileUploadBytesLimit,
     SettingName.NAMES.FileUploadBytesUsed,

@@ -536,6 +536,49 @@ describe('BaseAdminController workflows-enabled flag (admin-manageable)', () => 
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
+  it('classifies DAV_BRIDGE_ALLOWED as admin-manageable and persists a valid value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.DavBridgeAllowed, 'true'),
+      adminResponse,
+    )
+
+    expect(setSettingValue.execute).toHaveBeenCalledWith({
+      settingName: SettingName.NAMES.DavBridgeAllowed,
+      value: 'true',
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+    expect(result.json).toMatchObject({ success: true, name: SettingName.NAMES.DavBridgeAllowed, value: 'true' })
+  })
+
+  it('rejects a non-boolean DAV_BRIDGE_ALLOWED value', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.DavBridgeAllowed, 'yes'),
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-admin requestor for the DAV bridge flag', async () => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.DavBridgeAllowed, 'true'),
+      nonAdminResponse,
+    )
+
+    expect(result.statusCode).toEqual(403)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('includes DAV_BRIDGE_ALLOWED in the admin-readable feature flags', async () => {
+    const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    expect((result.json as { flags: Record<string, string | null> }).flags).toHaveProperty(
+      SettingName.NAMES.DavBridgeAllowed,
+    )
+  })
+
   it('includes WORKFLOWS_ENABLED in the admin-readable feature flags', async () => {
     const result = await createController().getUserFeatureFlags(flagRequest(), adminResponse)
 

@@ -84,6 +84,9 @@ describe('SettingsAssociationService', () => {
       SettingName.NAMES.AiWeeklyTokenLimit,
       SettingName.NAMES.CollaborationEnabled,
       SettingName.NAMES.LiveSyncEnabled,
+      // Opt-in rather than opt-out, and still administrator-only: a user who
+      // could write it would be granting themselves a server-side request relay.
+      SettingName.NAMES.DavBridgeAllowed,
     ]
 
     it.each(gateSettings)('%s is plaintext, non-sensitive, and client-immutable', (name) => {
