@@ -35,4 +35,14 @@ describe('LocalPrefDefaults', () => {
       expect(LocalPrefDefaults[LocalPrefKey.NavigationPaneCollapsed]).toBe(false)
     })
   })
+
+  describe('collapsed collaborators', () => {
+    it('stores under the published literal', () => {
+      expect(LocalPrefKey.CollaboratorsCollapsed).toBe('collaboratorsCollapsed')
+    })
+
+    it('defaults OFF, so the shipped title bar shows the avatars', () => {
+      expect(LocalPrefDefaults[LocalPrefKey.CollaboratorsCollapsed]).toBe(false)
+    })
+  })
 })

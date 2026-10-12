@@ -71,6 +71,10 @@ export enum LocalPrefKey {
   // restored after a full application reload. This remains encrypted and
   // device/workspace-local with the rest of LocalPreferences.
   AssistantPaneOpen = 'assistantPaneOpen',
+  // Standard Red Notes: shows the collaborators in a note's title bar as a count
+  // instead of a row of avatars. Device/workspace-local with the pane collapse
+  // keys, for the same reason: it is a layout choice about THIS screen.
+  CollaboratorsCollapsed = 'collaboratorsCollapsed',
   ActiveThemes = 'activeThemes',
   UseSystemColorScheme = 'useSystemColorScheme',
   UseTranslucentUI = 'useTranslucentUI',
@@ -102,6 +106,7 @@ export type LocalPrefValue = {
   [LocalPrefKey.NavigationPaneCollapsed]: boolean
   [LocalPrefKey.NavigationPaneMini]: boolean
   [LocalPrefKey.AssistantPaneOpen]: boolean
+  [LocalPrefKey.CollaboratorsCollapsed]: boolean
   [LocalPrefKey.ActiveThemes]: string[]
   [LocalPrefKey.UseSystemColorScheme]: boolean
   [LocalPrefKey.UseTranslucentUI]: boolean
@@ -126,6 +131,8 @@ export const LocalPrefDefaults = {
   // is an explicit user choice.
   [LocalPrefKey.NavigationPaneMini]: false,
   [LocalPrefKey.AssistantPaneOpen]: false,
+  // Default OFF: the avatars are the shipped title bar; the count is a choice.
+  [LocalPrefKey.CollaboratorsCollapsed]: false,
   [LocalPrefKey.ActiveThemes]: [],
   [LocalPrefKey.UseSystemColorScheme]: false,
   [LocalPrefKey.UseTranslucentUI]: true,
