@@ -45,6 +45,9 @@ const BASE = (process.env.BASE ?? 'http://localhost:3001').replace(/\/$/, '')
 const WS_BASE = process.env.WS_BASE ?? BASE.replace(/^http/, 'ws')
 const ORIGIN = process.env.ORIGIN ?? BASE
 const REQUIRE_GATEWAY = process.env.REQUIRE_GATEWAY === '1'
+// Fail, rather than skip, when the durable socket SYNC_ITEMS lane is not advertised.
+const REQUIRE_SYNC_ITEMS = process.env.REQUIRE_SYNC_ITEMS === '1' || process.argv.includes('--require-sync-items')
+const DURABLE_RACE_ROUNDS = Number(process.env.DURABLE_RACE_ROUNDS ?? 20)
 const REGISTER_API = process.env.REGISTER_API ?? '20240226'
 const TOPOLOGY = process.env.TOPOLOGY ?? 'unknown'
 const SNJS_VERSION = process.env.SNJS_VERSION ?? '2.200.1'
@@ -185,6 +188,49 @@ export function itemReadable(syncBody, itemUuid) {
   return retrieved.some(
     (item) => item?.uuid === itemUuid && typeof item.content === 'string' && item.content.length > 0 && !item.deleted,
   )
+}
+
+/**
+ * A durable command COMMITTED: a terminal frame that says so and carries the sync result, on a
+ * socket that is still open. "No ERROR frame arrived" is not this predicate -- silence, a closed
+ * socket and an ERROR are all not a commit.
+ */
+export function commandCommitted(answer) {
+  if (!answer || answer.close !== undefined) return false
+  const committed = answer.type === 'COMMITTED' || (answer.type === 'STATUS' && answer.status === 'COMMITTED')
+  return committed && typeof answer.result === 'object' && answer.result !== null
+}
+
+/**
+ * This save lost a race to another writer and was TOLD so: the server's copy came back as a
+ * `sync_conflict`, and the item is not among the saved ones. That is the designed answer for the
+ * second of two concurrent saves; an error, or a save that silently landed too, is not it.
+ */
+export function saveLostToConcurrentWriter(syncBody, itemUuid) {
+  if (!syncBody || typeof syncBody !== 'object') return false
+  const saved = Array.isArray(syncBody.saved_items) ? syncBody.saved_items : []
+  if (saved.some((item) => item?.uuid === itemUuid)) return false
+  const conflicts = Array.isArray(syncBody.conflicts) ? syncBody.conflicts : []
+  return conflicts.some((conflict) => conflict?.type === 'sync_conflict' && conflict?.server_item?.uuid === itemUuid)
+}
+
+/**
+ * One round of two people saving the same item from the same revision: BOTH commands commit,
+ * exactly ONE save lands, and the other is told it lost. Returns why not, or undefined.
+ */
+export function raceRoundFault(first, second, itemUuid) {
+  for (const [who, answer] of [
+    ['first', first],
+    ['second', second],
+  ]) {
+    if (!commandCommitted(answer)) {
+      return `${who} command did not commit: ${answer?.type ?? 'silence'} ${answer?.code ?? ''}`.trim()
+    }
+  }
+  const landed = [first, second].filter((answer) => saveLanded(answer.result, itemUuid)).length
+  const lost = [first, second].filter((answer) => saveLostToConcurrentWriter(answer.result, itemUuid)).length
+  if (landed !== 1 || lost !== 1) return `landed ${landed}, told-they-lost ${lost} (want 1 and 1)`
+  return undefined
 }
 
 /** A room join was DENIED, with the reason named. */
@@ -349,6 +395,29 @@ async function waitForFrame(state, predicate, timeoutMs = 20_000) {
   return undefined
 }
 
+/**
+ * Protocol-v1 canonical JSON and command digest, byte for byte what the gateway validates a
+ * COMMAND frame against (`canonicalSyncJson`/`digestSyncCommandBody` in src/syncProtocol.ts)
+ * and what the syncing server re-asserts (`computeSyncCommandDigest`). Checked in --self-test
+ * against the published cross-transport vector.
+ */
+export function canonicalSyncJson(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null'
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalSyncJson(entry)).join(',')}]`
+  }
+  const keys = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalSyncJson(value[key])}`).join(',')}}`
+}
+
+export function commandDigest(body) {
+  return createHash('sha256').update(canonicalSyncJson(body), 'utf8').digest('hex')
+}
+
 /** The authenticated sync lane for one account, carrying COLLABORATION_AUTHORIZE. */
 class SyncLane {
   constructor(account) {
@@ -394,6 +463,52 @@ class SyncLane {
       timeoutMs,
     )
     return { kind: 'frame', type: frame?.type, payload: frame?.payload, requestId, close: this.state.close }
+  }
+
+  /**
+   * One durable SYNC_ITEMS command over this lane -- what the web client sends for every save
+   * when the lane is negotiated. Resolves with its terminal answer, normalized.
+   */
+  async command(body, timeoutMs = 30_000) {
+    const requestId = `req-${randomUUID()}`
+    const commandId = `cmd-${randomUUID()}`
+    const digest = commandDigest(body)
+    this.state.ws.send(
+      JSON.stringify({
+        ...syncFrame('COMMAND', { command: 'SYNC_ITEMS', body }, { sequence: this.sequence++, requestId, commandId }),
+        digest,
+      }),
+    )
+    const frame = await waitForFrame(
+      this.state,
+      (f) =>
+        f.commandId === commandId &&
+        (f.type === 'COMMITTED' || f.type === 'ERROR' || (f.type === 'STATUS' && f.payload?.status !== 'ACCEPTED')),
+      timeoutMs,
+    )
+    return {
+      commandId,
+      digest,
+      type: frame?.type,
+      status: frame?.payload?.status,
+      code: frame?.payload?.code,
+      result: frame?.payload?.result,
+      close: this.state.close,
+    }
+  }
+
+  /** Ask what became of a command. `ACCEPTED` means "still being processed". */
+  async status(commandId, digest, timeoutMs = 15_000) {
+    const requestId = `req-${randomUUID()}`
+    this.state.ws.send(
+      JSON.stringify({ ...syncFrame('STATUS', {}, { sequence: this.sequence++, requestId, commandId }), digest }),
+    )
+    const frame = await waitForFrame(
+      this.state,
+      (f) => f.requestId === requestId && (f.type === 'STATUS' || f.type === 'ERROR'),
+      timeoutMs,
+    )
+    return { type: frame?.type, status: frame?.payload?.status, code: frame?.payload?.code, close: this.state.close }
   }
 
   /**
@@ -1029,6 +1144,69 @@ function selfTest() {
     roomDenied([{ t: 'room-denied', requestId: 'r', reason: 'capability-invalid' }], 'r', ['capability-invalid']) &&
       !roomDenied([{ t: 'room-denied', requestId: 'r', reason: 'rate-limited' }], 'r', ['capability-invalid']),
   )
+  // The published cross-transport digest vector (syncing-server SyncCommandTypes.spec.ts).
+  check(
+    'commandDigest is order-independent and drops undefined, like the server',
+    commandDigest({ b: 1, a: [{ d: undefined, c: 'x' }] }) === commandDigest({ a: [{ c: 'x' }], b: 1 }) &&
+      canonicalSyncJson({ b: 1, a: [{ d: undefined, c: 'x' }] }) === '{"a":[{"c":"x"}],"b":1}',
+  )
+  const landedAnswer = { type: 'COMMITTED', result: { saved_items: [{ uuid: 'n1' }], conflicts: [] }, close: undefined }
+  const lostAnswer = {
+    type: 'COMMITTED',
+    result: { saved_items: [], conflicts: [{ type: 'sync_conflict', server_item: { uuid: 'n1' } }] },
+    close: undefined,
+  }
+  check('commandCommitted accepts a COMMITTED frame carrying a result', commandCommitted(landedAnswer))
+  check(
+    'commandCommitted accepts a STATUS that reports COMMITTED with a result',
+    commandCommitted({ type: 'STATUS', status: 'COMMITTED', result: {} }),
+  )
+  check('commandCommitted REJECTS an ERROR frame', !commandCommitted({ type: 'ERROR', code: 'BACKEND_ERROR' }))
+  check('commandCommitted REJECTS silence', !commandCommitted({ type: undefined }) && !commandCommitted(undefined))
+  check(
+    'commandCommitted REJECTS a STATUS that is still ACCEPTED',
+    !commandCommitted({ type: 'STATUS', status: 'ACCEPTED', result: {} }),
+  )
+  check('commandCommitted REJECTS a commit with no result', !commandCommitted({ type: 'COMMITTED' }))
+  check(
+    'commandCommitted REJECTS an answer read off a closed socket',
+    !commandCommitted({ ...landedAnswer, close: { code: 4000 } }),
+  )
+  check(
+    'saveLostToConcurrentWriter accepts the server copy as a sync_conflict',
+    saveLostToConcurrentWriter(lostAnswer.result, 'n1'),
+  )
+  check('saveLostToConcurrentWriter REJECTS a save that landed', !saveLostToConcurrentWriter(landedAnswer.result, 'n1'))
+  check(
+    'saveLostToConcurrentWriter REJECTS an empty answer',
+    !saveLostToConcurrentWriter({ saved_items: [], conflicts: [] }, 'n1'),
+  )
+  check(
+    'saveLostToConcurrentWriter REJECTS a conflict of another type or about another item',
+    !saveLostToConcurrentWriter({ conflicts: [{ type: 'uuid_conflict', server_item: { uuid: 'n1' } }] }, 'n1') &&
+      !saveLostToConcurrentWriter({ conflicts: [{ type: 'sync_conflict', server_item: { uuid: 'n2' } }] }, 'n1'),
+  )
+  check(
+    'raceRoundFault accepts one landed and one told-it-lost, in either order',
+    raceRoundFault(landedAnswer, lostAnswer, 'n1') === undefined &&
+      raceRoundFault(lostAnswer, landedAnswer, 'n1') === undefined,
+  )
+  check(
+    'raceRoundFault REJECTS a round in which a command errored',
+    typeof raceRoundFault(landedAnswer, { type: 'ERROR', code: 'BACKEND_ERROR' }, 'n1') === 'string',
+  )
+  check(
+    'raceRoundFault REJECTS a round in which both saves landed',
+    typeof raceRoundFault(landedAnswer, landedAnswer, 'n1') === 'string',
+  )
+  check(
+    'raceRoundFault REJECTS a round in which neither landed',
+    typeof raceRoundFault(lostAnswer, lostAnswer, 'n1') === 'string',
+  )
+  check(
+    'raceRoundFault REJECTS a round with an unanswered command',
+    typeof raceRoundFault(landedAnswer, { type: undefined }, 'n1') === 'string',
+  )
   console.log(`\n[self-test] ${failures === 0 ? 'PASS' : `FAIL (${failures})`}`)
   return failures === 0 ? 0 : 1
 }
@@ -1207,11 +1385,10 @@ async function main() {
   const promoted = await promoteToWrite(alice, bob, sharedVaultUuid)
   check('B ends up a WRITE member of the vault', promoted.permission === 'write', promoted)
   if (promoted.permission !== 'write') return 1
-  check(
-    'the promotion happened IN PLACE, without evicting the member',
-    promoted.via === 'patch-in-place',
-    { via: promoted.via, patchFailure: promoted.patchFailure },
-  )
+  check('the promotion happened IN PLACE, without evicting the member', promoted.via === 'patch-in-place', {
+    via: promoted.via,
+    patchFailure: promoted.patchFailure,
+  })
   if (promoted.requiredRemoval) {
     note(
       'the in-place permission change was unreachable on this deployment, so B reached write only by DELETE + re-invite + re-accept: the member lost access in between and the vault key was rotated',
@@ -1240,6 +1417,125 @@ async function main() {
   const bobLaneOpen2 = await bobLane.open()
   check('B opens the sync lane', bobLaneOpen2.opened, bobLaneOpen2)
   if (!aliceLaneOpen.opened || !bobLaneOpen2.opened) return 1
+
+  // -- the note saved over the DURABLE SOCKET LANE, by both members ----------
+  // Every save above went over HTTP, which is the one transport a browser does NOT use for
+  // saves once this lane is negotiated. So the lane could refuse every vault item (it sent
+  // the API version where the SNJS version goes and the shared-vault rule threw) and fail a
+  // command whenever two members saved the same note (the database aborted the second
+  // transaction and nothing retried it) with this whole drill green.
+  console.log('\n[the shared-vault note over the durable socket lane]')
+  const bothAdvertiseSyncItems = [aliceLane, bobLane].every(
+    (lane) => Array.isArray(lane.operations) && lane.operations.includes('SYNC_ITEMS'),
+  )
+  if (!bothAdvertiseSyncItems) {
+    const reason = `SYNC_ITEMS not negotiated (A: [${aliceLane.operations}], B: [${bobLane.operations}])`
+    if (REQUIRE_SYNC_ITEMS) {
+      check(`REQUIRED: ${reason}`, false)
+      return 1
+    }
+    console.log(`  skip - ${reason}`)
+    row('durableSave', { negotiated: false })
+  } else {
+    const vaultSave = (content, updatedAtTimestamp) => ({
+      api: '20200115',
+      items: [noteHash({ uuid: noteUuid, content, sharedVaultUuid, keySystemIdentifier, updatedAtTimestamp })],
+      limit: 150,
+      compute_integrity: false,
+    })
+    const landedStamp = (answer) =>
+      (answer.result?.saved_items ?? []).find((item) => item?.uuid === noteUuid)?.updated_at_timestamp
+    // A command that did not commit must not be left saying "still being processed": a client in
+    // recovery only asks STATUS, and waits on ACCEPTED until the record expires a day later.
+    const unfinished = []
+    const noteIfLeftAccepted = async (lane, answer, label) => {
+      if (commandCommitted(answer) || lane.state.close !== undefined) return
+      const after = await lane.status(answer.commandId, answer.digest)
+      if (after.status === 'ACCEPTED') unfinished.push({ command: label, answeredWith: answer.code ?? answer.type })
+    }
+
+    const ownerSave = await aliceLane.command(
+      vaultSave('004:alice-over-the-socket', await serverTimestamp(alice, sharedVaultUuid, noteUuid)),
+    )
+    check(
+      "the owner's durable socket save of the vault note COMMITS and lands",
+      commandCommitted(ownerSave) && saveLanded(ownerSave.result, noteUuid),
+      {
+        type: ownerSave.type,
+        code: ownerSave.code,
+        close: ownerSave.close,
+        conflicts: ownerSave.result?.conflicts?.map((c) => c.type),
+      },
+    )
+    await noteIfLeftAccepted(aliceLane, ownerSave, 'owner save')
+    const memberSave = await bobLane.command(
+      vaultSave('004:bob-over-the-socket', await serverTimestamp(bob, sharedVaultUuid, noteUuid)),
+    )
+    check(
+      "a write member's durable socket save of the vault note COMMITS and lands",
+      commandCommitted(memberSave) && saveLanded(memberSave.result, noteUuid),
+      {
+        type: memberSave.type,
+        code: memberSave.code,
+        close: memberSave.close,
+        conflicts: memberSave.result?.conflicts?.map((c) => c.type),
+      },
+    )
+
+    await noteIfLeftAccepted(bobLane, memberSave, 'member save')
+
+    // Two people typing: both save the same note from the same revision, at once, again and
+    // again. Each round must end with one save landed and the other TOLD it lost.
+    let stamp =
+      landedStamp(memberSave) ?? landedStamp(ownerSave) ?? (await serverTimestamp(alice, sharedVaultUuid, noteUuid))
+    const faults = []
+    let rounds = 0
+    for (; rounds < DURABLE_RACE_ROUNDS && typeof stamp === 'number'; rounds += 1) {
+      const [byAlice, byBob] = await Promise.all([
+        aliceLane.command(vaultSave(`004:alice-race-${rounds}`, stamp)),
+        bobLane.command(vaultSave(`004:bob-race-${rounds}`, stamp)),
+      ])
+      const fault = raceRoundFault(byAlice, byBob, noteUuid)
+      if (fault) faults.push({ round: rounds, fault })
+      await noteIfLeftAccepted(aliceLane, byAlice, `alice race ${rounds}`)
+      await noteIfLeftAccepted(bobLane, byBob, `bob race ${rounds}`)
+      stamp = landedStamp(byAlice) ?? landedStamp(byBob) ?? (await serverTimestamp(alice, sharedVaultUuid, noteUuid))
+      if (aliceLane.state.close !== undefined || bobLane.state.close !== undefined) break
+    }
+    check(
+      `in each of ${DURABLE_RACE_ROUNDS} races between the two members, both commands commit, one save lands and the other is told it lost`,
+      rounds === DURABLE_RACE_ROUNDS && faults.length === 0,
+      { rounds, faults: faults.slice(0, 5), faulty: faults.length },
+    )
+    check('no command is left reporting "still being processed" after it failed', unfinished.length === 0, {
+      unfinished: unfinished.slice(0, 5),
+    })
+    check(
+      'both sync lanes are still open after the races',
+      aliceLane.state.close === undefined && bobLane.state.close === undefined,
+      {
+        a: aliceLane.state.close,
+        b: bobLane.state.close,
+      },
+    )
+    const afterRaces = await pullVault(bob, sharedVaultUuid)
+    const stored = (afterRaces.json?.retrieved_items ?? []).find((item) => item.uuid === noteUuid)
+    check(
+      'the note the server holds afterwards is one of the raced saves, once',
+      /^004:(alice|bob)-race-\d+$/.test(stored?.content ?? ''),
+      {
+        content: stored?.content,
+      },
+    )
+    row('durableSave', {
+      negotiated: true,
+      ownerLands: commandCommitted(ownerSave) && saveLanded(ownerSave.result, noteUuid),
+      memberLands: commandCommitted(memberSave) && saveLanded(memberSave.result, noteUuid),
+      raceRounds: rounds,
+      raceFaults: faults.length,
+      leftAccepted: unfinished.length,
+    })
+  }
 
   const aliceDiscovery = await aliceLane.authorize({
     noteUuid,

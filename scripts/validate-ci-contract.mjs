@@ -1214,6 +1214,10 @@ export function validateCiContract(files) {
     ],
     ['REQUIRE_SYNC_ITEMS: "1"', "required worker-lane SYNC_ITEMS negotiation"],
     [
+      "e2e/collab-end-to-end.e2e.mjs --require-sync-items",
+      "two members saving one shared-vault note over the socket sync lane",
+    ],
+    [
       "echo 'SERVICE_PROXY_TYPE=grpc' >> \"$GITHUB_ENV\"",
       "gRPC service proxy phase switch",
     ],

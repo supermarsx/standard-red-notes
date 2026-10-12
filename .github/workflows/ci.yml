@@ -567,6 +567,34 @@ jobs:
         run: >-
           yarn workspace @standard-red-notes/websocket-gateway node
           e2e/push-roundtrip.e2e.mjs
+      # TWO PEOPLE SAVING ONE SHARED NOTE, over the lane a browser actually saves on.
+      # The same drill ran above, but every save in it went over HTTP, and a browser
+      # stops using HTTP for saves the moment the socket SYNC_ITEMS lane is
+      # negotiated. So the lane could refuse EVERY vault item -- it forwarded the API
+      # version where the SNJS version goes and the shared-vault save rule threw
+      # (bee44c36) -- and could fail a command whenever two members saved the same
+      # note, then leave it reporting "still being processed" until its record expired
+      # a day later (e15a897b), with that step and every other one here green. Its
+      # durable-save section saves the vault note over the socket as the owner and as
+      # a write member, then races the two from the same revision twenty times and
+      # requires, each time, both commands committed, one save landed and the other
+      # TOLD it lost. `--require-sync-items` makes an un-negotiated lane a failure here
+      # instead of a skip; it is a flag, not a second `REQUIRE_SYNC_ITEMS` entry in
+      # this job, because the contract test for the oversized-result step above
+      # removes that fragment by its first occurrence. Proven against three builds of
+      # this stack: origin/main at 8d629f71 fails five of its checks, bee44c36 fails
+      # the race and the left-accepted check (twenty rounds of twenty), e15a897b
+      # passes.
+      - name: Verify two members saving one shared-vault note over the socket sync lane
+        working-directory: server
+        env:
+          REQUIRE_GATEWAY: "1"
+          TOPOLOGY: compose-grpc
+          BASE: http://127.0.0.1:3001
+          WS_BASE: ws://127.0.0.1:3001
+        run: >-
+          yarn workspace @standard-red-notes/websocket-gateway node
+          e2e/collab-end-to-end.e2e.mjs --require-sync-items
       # THIS IS THE ONLY BROWSER SIGN-IN THAT RUNS ON A GENUINE COOKIE SESSION,
       # and the only one in the gRPC phase. Both halves matter.
       #

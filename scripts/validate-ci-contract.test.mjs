@@ -929,6 +929,31 @@ test("the required stack cannot skip the oversized SYNC_ITEMS result drill", () 
   }
 });
 
+test("the required stack cannot skip two members saving one shared note over the socket sync lane", () => {
+  // The same drill also runs earlier in the job without the flag, where an
+  // un-negotiated lane is a skip. Dropping the flag, or the run that carries
+  // it, leaves that earlier run in place and every save in it on HTTP.
+  for (const [current, replacement] of [
+    [
+      "e2e/collab-end-to-end.e2e.mjs --require-sync-items",
+      "e2e/collab-end-to-end.e2e.mjs",
+    ],
+    [
+      "e2e/collab-end-to-end.e2e.mjs --require-sync-items",
+      "e2e/disabled.e2e.mjs --require-sync-items",
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.equal(content.split(current).length - 1, 1);
+      return content.replace(current, replacement);
+    });
+    assert.match(
+      validateCiContract(files).join("\n"),
+      /container-smoke two members saving one shared-vault note over the socket sync lane/,
+    );
+  }
+});
+
 test("the oversized SYNC_ITEMS drill cannot run without the gRPC service proxy phase", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(
