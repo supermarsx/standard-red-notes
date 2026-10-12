@@ -3112,6 +3112,8 @@ export class ContainerConfigLoader {
           container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
           container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
         ),
       )
     container

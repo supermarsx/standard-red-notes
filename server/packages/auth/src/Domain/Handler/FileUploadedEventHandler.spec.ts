@@ -29,7 +29,9 @@ describe('FileUploadedEventHandler', () => {
   it('should add the uploaded file size to the storage quota used', async () => {
     await createHandler().handle(event)
 
-    expect(updateStorageQuotaUsedForUser.execute).toHaveBeenCalledWith({ userUuid, bytesUsed: 123 })
+    // `ownFiles` is what lets an absent usage figure be recounted from the
+    // account's storage instead of invented from this one delta.
+    expect(updateStorageQuotaUsedForUser.execute).toHaveBeenCalledWith({ userUuid, bytesUsed: 123, ownFiles: true })
     expect(logger.error).not.toHaveBeenCalled()
   })
 

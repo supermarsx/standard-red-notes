@@ -25,4 +25,17 @@ export interface UpdateStorageQuotaUsedForUserDTO {
    * reads as a measurement.
    */
   absolute?: boolean
+  /**
+   * Standard Red Notes: the delta is for a file in the account's OWN storage
+   * (FILE_UPLOADED / FILE_REMOVED), as opposed to a shared-vault file billed to
+   * its owner.
+   *
+   * It decides one thing: whether a delta that cannot be applied -- no figure is
+   * stored, or the books would go below zero -- may be answered by RECOUNTING the
+   * account's storage instead. The recount sums the account's own directory and
+   * nothing else, so it is the right answer for an own-file delta and the wrong
+   * one for a vault file, which lives under the vault and would simply vanish
+   * from the owner's total.
+   */
+  ownFiles?: boolean
 }

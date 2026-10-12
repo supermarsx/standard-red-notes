@@ -13,6 +13,7 @@ export class FileRemovedEventHandler implements DomainEventHandlerInterface {
     const result = await this.updateStorageQuotaUsedForUserUseCase.execute({
       userUuid: event.payload.userUuid,
       bytesUsed: -event.payload.fileByteSize,
+      ownFiles: true,
     })
 
     if (result.isFailed()) {

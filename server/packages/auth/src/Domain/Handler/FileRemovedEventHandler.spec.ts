@@ -29,7 +29,9 @@ describe('FileRemovedEventHandler', () => {
   it('should subtract the removed file size from the storage quota used', async () => {
     await createHandler().handle(event)
 
-    expect(updateStorageQuotaUsedForUser.execute).toHaveBeenCalledWith({ userUuid, bytesUsed: -123 })
+    // `ownFiles` is what keeps a removal against no stored figure from being
+    // written down as a measured zero.
+    expect(updateStorageQuotaUsedForUser.execute).toHaveBeenCalledWith({ userUuid, bytesUsed: -123, ownFiles: true })
     expect(logger.error).not.toHaveBeenCalled()
   })
 
