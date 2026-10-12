@@ -49,6 +49,7 @@ import {
   DEFAULT_MERMAID_VIEW_MODE,
   mermaidAlignmentStyle,
   type MermaidAppTheme,
+  type MermaidLibraryTheme,
   MermaidMaxHeight,
   MERMAID_RENDER_ID_PREFIX,
   type MermaidRenderTheme,
@@ -58,6 +59,7 @@ import {
   migrateMermaidFitMode,
   migrateMermaidThemeMode,
   normalizeMermaidViewMode,
+  resolveMermaidDrawnTheme,
   resolveMermaidMaxHeightPx,
   resolveMermaidRenderTheme,
   resolveMermaidSettings,
@@ -494,6 +496,11 @@ function MermaidComponent({
   // (and debounce-rendered) as it changes.
   const [draft, setDraft] = useState(code)
   const [svg, setSvg] = useState<string>('')
+  // The theme THAT svg was drawn in, when the diagram's own text chose one over
+  // the block's. Set with the svg and only with it, so the page painted behind
+  // the diagram always belongs to the picture on screen — including the last
+  // good one, kept while a newer source fails.
+  const [ownTheme, setOwnTheme] = useState<MermaidLibraryTheme | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
   // Incremented to force a re-render even when the source/theme are unchanged
   // (the Reload button).
@@ -532,6 +539,7 @@ function MermaidComponent({
       const trimmed = source.trim()
       if (!trimmed) {
         setSvg('')
+        setOwnTheme(undefined)
         setError(null)
         return
       }
@@ -546,7 +554,7 @@ function MermaidComponent({
         // Through the shared runtime, never `mermaid.initialize` here: mermaid's
         // configuration is global, and MermaidRuntime.ts is what stops one
         // diagram's settings — or one diagram's error — reaching the next.
-        const { svg: rendered } = await renderMermaidDiagram({
+        const rendered = await renderMermaidDiagram({
           id,
           text: trimmed,
           theme: activeTheme,
@@ -557,7 +565,8 @@ function MermaidComponent({
         if (token !== renderTokenRef.current) {
           return
         }
-        setSvg(rendered)
+        setSvg(rendered.svg)
+        setOwnTheme(rendered.ownTheme)
         setError(null)
       } catch (e) {
         if (token !== renderTokenRef.current) {
@@ -851,8 +860,16 @@ function MermaidComponent({
                   // app's: a diagram pinned to one of mermaid's own themes does
                   // not follow the app, so painting the app's dark surface
                   // behind a light-pinned chart is the thing that made it
-                  // unreadable. See resolveMermaidSurfaceColor.
-                  backgroundColor={resolveMermaidSurfaceColor(settings.background, settings.themeMode, appTheme)}
+                  // unreadable. See resolveMermaidSurfaceColor. Asked about the
+                  // theme the picture was DRAWN in, which is the diagram's own
+                  // when its text names one: a Forest diagram inside an
+                  // app-themed block needs Forest's page behind it just as a
+                  // block pinned to Forest does.
+                  backgroundColor={resolveMermaidSurfaceColor(
+                    settings.background,
+                    resolveMermaidDrawnTheme(settings.themeMode, ownTheme),
+                    appTheme,
+                  )}
                 >
                   <MermaidResizeHandle
                     active={isSelected}

@@ -16,11 +16,28 @@
  * `scripts/MermaidContract.mjs`; this spec pins the ORDER the runtime calls it
  * in, which is the whole fix.
  */
-import { MERMAID_APP_SECURE_KEYS, renderMermaidDiagram, type MermaidRenderRequest } from './MermaidRuntime'
+import {
+  MERMAID_APP_SECURE_KEYS,
+  mermaidTextMayCarryConfig,
+  renderMermaidDiagram,
+  type MermaidRenderRequest,
+} from './MermaidRuntime'
 
 const BAD_COLOUR = 'Unsupported color format: "#ff"'
+const SYNTAX_ERROR = 'Parse error on line 2'
 const POISONED = '---\nconfig:\n  theme: base\n  themeVariables:\n    primaryColor: "#ff"\n---\nflowchart LR\n  P --> Q'
 const HEALTHY = 'flowchart LR\n  A --> B'
+const withFrontmatter = (theme: string): string => `---\nconfig:\n  theme: ${theme}\n---\n${HEALTHY}`
+const BROKEN_WITH_FRONTMATTER = '---\ntitle: Broken\n---\nflowchart LR\n  A -->'
+
+/** What the fake `parse` reports each text's own config to be — mermaid's answer, not the runtime's. */
+const CONFIG_IN_TEXT = new Map<string, Record<string, unknown>>([
+  [withFrontmatter('forest'), { theme: 'forest' }],
+  [withFrontmatter('neo-dark'), { theme: 'neo-dark' }],
+  [withFrontmatter('base'), { theme: 'base', themeVariables: { primaryColor: '#ffcc00' } }],
+  [withFrontmatter('nosuch'), { theme: 'nosuch' }],
+  ['---\ntitle: Only a title\n---\n' + HEALTHY, {}],
+])
 
 /** Every call the runtime made, in order. */
 let calls: string[] = []
@@ -40,7 +57,7 @@ const fakeMermaid = {
     },
   },
   initialize: (config: Record<string, unknown>) => {
-    calls.push(`initialize ${String(config.theme)}`)
+    calls.push(`initialize ${String(config.theme)}${config.themeVariables === undefined ? '' : ' +palette'}`)
     initialized.push(config)
     // The real `setSiteConfig` recomputes the config from the stored
     // directives, and that is where a bad colour throws a second time.
@@ -48,10 +65,21 @@ const fakeMermaid = {
       throw new Error(BAD_COLOUR)
     }
   },
+  parse: async (text: string) => {
+    calls.push('parse')
+    if (text === POISONED) {
+      // Stored FIRST, then thrown on — exactly the real order.
+      storedDirective = 'bad colour'
+      throw new Error(BAD_COLOUR)
+    }
+    if (text === BROKEN_WITH_FRONTMATTER) {
+      throw new Error(SYNTAX_ERROR)
+    }
+    return { diagramType: 'flowchart-v2', config: CONFIG_IN_TEXT.get(text) ?? {} }
+  },
   render: async (id: string, text: string, measureIn: unknown) => {
     calls.push(`render ${id} start`)
     if (text === POISONED) {
-      // Stored FIRST, then thrown on — exactly the real order.
       storedDirective = 'bad colour'
       throw new Error(BAD_COLOUR)
     }
@@ -71,6 +99,7 @@ jest.mock('mermaid', () => ({
   default: {
     mermaidAPI: { reset: () => fakeMermaid.mermaidAPI.reset() },
     initialize: (config: Record<string, unknown>) => fakeMermaid.initialize(config),
+    parse: (text: string) => fakeMermaid.parse(text),
     render: (id: string, text: string, measureIn: unknown) => fakeMermaid.render(id, text, measureIn),
   },
 }))
@@ -101,7 +130,7 @@ beforeEach(() => {
 describe('one bad diagram does not break the next', () => {
   it('drops the previous diagram before configuring: reset, initialize, render', async () => {
     await renderMermaidDiagram(request({ id: 'mermaid-7-0' }))
-    expect(calls).toEqual(['reset', 'initialize base', 'render mermaid-7-0 start', 'render mermaid-7-0 end'])
+    expect(calls).toEqual(['reset', 'initialize base +palette', 'render mermaid-7-0 start', 'render mermaid-7-0 end'])
   })
 
   it('renders a healthy diagram after one whose own colour mermaid cannot parse', async () => {
@@ -155,7 +184,95 @@ describe('one diagram is not drawn with another block’s settings', () => {
     const bad = renderMermaidDiagram(request({ id: 'mermaid-1-0', text: POISONED }))
     const good = renderMermaidDiagram(request({ id: 'mermaid-2-0' }))
     await expect(bad).rejects.toThrow(BAD_COLOUR)
-    await expect(good).resolves.toEqual({ svg: '<svg id="mermaid-2-0" data-measured-in="body"></svg>' })
+    await expect(good).resolves.toEqual({
+      svg: '<svg id="mermaid-2-0" data-measured-in="body"></svg>',
+      ownTheme: undefined,
+    })
+  })
+})
+
+describe('a diagram that names its own theme is drawn in that theme', () => {
+  it('is configured again WITHOUT the app palette before it is rendered', async () => {
+    const result = await renderMermaidDiagram(request({ id: 'mermaid-3-0', text: withFrontmatter('forest') }))
+    // The second `initialize` is the fix. With the palette still in it, mermaid
+    // computes Forest's colours on top of the application's — light green boxes
+    // carrying the app's near-white text.
+    expect(calls).toEqual([
+      'reset',
+      'initialize base +palette',
+      'parse',
+      'reset',
+      'initialize base',
+      'render mermaid-3-0 start',
+      'render mermaid-3-0 end',
+    ])
+    expect(initialized[1].themeVariables).toBeUndefined()
+    // Everything else the block asked for still reaches mermaid.
+    expect(initialized[1]).toMatchObject({ securityLevel: 'strict', fontFamily: 'Georgia, serif' })
+    expect(initialized[1].secure).toEqual([...MERMAID_APP_SECURE_KEYS])
+    expect(result.ownTheme).toBe('forest')
+  })
+
+  it('knows the themes the block’s own picker does not offer', async () => {
+    const result = await renderMermaidDiagram(request({ text: withFrontmatter('neo-dark') }))
+    expect(initialized).toHaveLength(2)
+    expect(result.ownTheme).toBe('neo-dark')
+  })
+
+  it('keeps the app palette under `theme: base` — the diagram is still the app’s, with some colours fixed', async () => {
+    const result = await renderMermaidDiagram(request({ text: withFrontmatter('base') }))
+    expect(calls.filter((call) => call.startsWith('initialize'))).toEqual(['initialize base +palette'])
+    expect(result.ownTheme).toBeUndefined()
+  })
+
+  it('keeps the app palette for a name mermaid does not know, which it would ignore', async () => {
+    const result = await renderMermaidDiagram(request({ text: withFrontmatter('nosuch') }))
+    expect(calls.filter((call) => call.startsWith('initialize'))).toEqual(['initialize base +palette'])
+    expect(result.ownTheme).toBeUndefined()
+  })
+
+  it('has nothing to withhold from a block pinned to a theme, and still reports what was drawn', async () => {
+    const result = await renderMermaidDiagram(request({ theme: { theme: 'dark' }, text: withFrontmatter('forest') }))
+    expect(calls.filter((call) => call.startsWith('initialize'))).toEqual(['initialize dark'])
+    // Mermaid draws Forest here whatever the block says, so the page painted
+    // behind it has to be Forest's.
+    expect(result.ownTheme).toBe('forest')
+  })
+
+  it('does not ask at all when the text cannot carry configuration', async () => {
+    const result = await renderMermaidDiagram(request({ text: HEALTHY }))
+    expect(calls).not.toContain('parse')
+    expect(result.ownTheme).toBeUndefined()
+  })
+
+  it('reports mermaid’s own error for a text it cannot parse, and never reaches the render', async () => {
+    await expect(renderMermaidDiagram(request({ id: 'mermaid-5-0', text: BROKEN_WITH_FRONTMATTER }))).rejects.toThrow(
+      SYNTAX_ERROR,
+    )
+    expect(calls).toEqual(['reset', 'initialize base +palette', 'parse'])
+    await expect(renderMermaidDiagram(request({ id: 'mermaid-6-0' }))).resolves.toMatchObject({ ownTheme: undefined })
+  })
+})
+
+describe('which texts mermaid is asked about', () => {
+  it.each([
+    ['a frontmatter block', '---\nconfig:\n  theme: forest\n---\nflowchart LR\n  A --> B'],
+    ['an indented frontmatter block', '  ---\n  config:\n    theme: forest\n  ---\nflowchart LR\n  A --> B'],
+    ['an init directive', '%%{init: {"theme":"forest"}}%%\nflowchart LR\n  A --> B'],
+    ['an initialize directive, mid-text', 'flowchart LR\n  A --> B\n%%{initialize: {"theme":"dark"}}%%'],
+    // Three hyphens that are a link, not frontmatter: asked needlessly, never wrongly.
+    ['an open link', 'flowchart LR\n  A --- B'],
+  ])('%s', (_name, text) => {
+    expect(mermaidTextMayCarryConfig(text)).toBe(true)
+  })
+
+  it.each([
+    ['a plain flowchart', 'graph TD\n  A["Start"] --> B{"Decision"}\n  B -->|Yes| C["OK"]'],
+    ['a sequence diagram', 'sequenceDiagram\n  U->>S: Request\n  S-->>U: Response'],
+    ['a comment that is not a directive', 'flowchart LR\n  %% theme: forest\n  A --> B'],
+    ['the Gantt block’s generated source', 'gantt\ndateFormat YYYY-MM-DD\ntitle Plan\nResearch :t0, 2024-01-01, 5d'],
+  ])('not %s', (_name, text) => {
+    expect(mermaidTextMayCarryConfig(text)).toBe(false)
   })
 })
 

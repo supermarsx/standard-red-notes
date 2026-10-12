@@ -1,4 +1,4 @@
-import type { MermaidRenderTheme } from './MermaidSettings'
+import { resolveMermaidOwnTheme, type MermaidLibraryTheme, type MermaidRenderTheme } from './MermaidSettings'
 
 /**
  * Standard Red Notes — THE one place this app talks to mermaid.
@@ -29,6 +29,11 @@ import type { MermaidRenderTheme } from './MermaidSettings'
  *
  * So every render goes through `renderMermaidDiagram`, and they run ONE AT A
  * TIME: reset, configure, render, as a unit nothing else can get between.
+ *
+ * The same unit is where a diagram that names its own theme gets that theme
+ * rather than the application's palette forced over it — see
+ * `resolveMermaidOwnTheme` in MermaidSettings.ts for the rule, and
+ * `mermaidTextMayCarryConfig` below for how the text is asked.
  */
 
 type MermaidLibrary = typeof import('mermaid').default
@@ -91,9 +96,34 @@ export type MermaidRenderRequest = {
 
 export type MermaidRenderResult = {
   svg: string
+  /**
+   * The theme the diagram was drawn in INSTEAD of the block's, because its own
+   * text selected it; `undefined` when the block's theme stands. The preview
+   * box needs it to paint the right page behind the diagram.
+   */
+  ownTheme: MermaidLibraryTheme | undefined
 }
 
-function siteConfig(request: MermaidRenderRequest): MermaidSiteConfig {
+/**
+ * Could this text carry configuration of its own? Mermaid takes a diagram's
+ * config from exactly two places — a YAML frontmatter block, which its pattern
+ * can only match on three hyphens, and `%%{…}%%` directives — so a text with
+ * neither cannot name a theme, and the common diagram is spared a second parse.
+ *
+ * Deliberately a superset, and deliberately not smarter: `A --- B` has three
+ * hyphens and is no frontmatter, and costs one unnecessary parse. Looking for
+ * the word `theme` instead would be wrong in the other direction, where it
+ * matters — mermaid reads directives as JSON, so a key written with a unicode
+ * escape for its first letter names a theme without spelling it (measured: it
+ * is honoured). What a text MEANS is always mermaid's answer; this only
+ * decides whether to ask. `MermaidContract.mjs` checks it against the library:
+ * no text mermaid finds config in may be turned away here.
+ */
+export function mermaidTextMayCarryConfig(text: string): boolean {
+  return text.includes('---') || text.includes('%%{')
+}
+
+function siteConfig(request: MermaidRenderRequest, withAppPalette: boolean): MermaidSiteConfig {
   return {
     startOnLoad: false,
     securityLevel: 'strict',
@@ -104,7 +134,7 @@ function siteConfig(request: MermaidRenderRequest): MermaidSiteConfig {
     // the defaults rather than accumulating, so a pinned diagram rendered after
     // an app-themed one gets mermaid's own clean palette and not the previous
     // diagram's overrides.
-    themeVariables: request.theme.themeVariables,
+    themeVariables: withAppPalette ? request.theme.themeVariables : undefined,
     // A CONCRETE stack, never `inherit`. Mermaid sizes every node by measuring
     // its label in a temporary element, and the finished SVG is then injected
     // into the editor — so a value that defers to its parent is resolved twice,
@@ -147,8 +177,20 @@ function inTurn<T>(job: () => Promise<T>): Promise<T> {
 export async function renderMermaidDiagram(request: MermaidRenderRequest): Promise<MermaidRenderResult> {
   const mermaid = await loadMermaid()
   return inTurn(async () => {
-    configure(mermaid, siteConfig(request))
+    configure(mermaid, siteConfig(request, true))
+    let ownTheme: MermaidLibraryTheme | undefined
+    if (mermaidTextMayCarryConfig(request.text)) {
+      // Mermaid's own reading of the text, so the app and mermaid cannot
+      // disagree about what a piece of YAML means. A source it cannot parse
+      // throws here exactly as it would in `render`.
+      const { config } = await mermaid.parse(request.text)
+      const own = resolveMermaidOwnTheme(config.theme, request.theme)
+      ownTheme = own.ownTheme
+      if (own.withoutAppPalette) {
+        configure(mermaid, siteConfig(request, false))
+      }
+    }
     const { svg } = await mermaid.render(request.id, request.text, request.measureIn)
-    return { svg }
+    return { svg, ownTheme }
   })
 }

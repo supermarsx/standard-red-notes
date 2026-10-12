@@ -352,6 +352,71 @@ export const MERMAID_BUILTIN_THEME_IS_DARK: Record<MermaidBuiltinTheme, boolean>
 }
 
 /**
+ * EVERY theme the installed mermaid ships — eleven in 11.17.2 — which is what a
+ * diagram's OWN TEXT may name, in a frontmatter `config:` block or an
+ * `%%{init: …}%%` line. Wider than `MERMAID_BUILTIN_THEMES`, which is only what
+ * the block's Theme control offers: a diagram pasted from mermaid's own
+ * documentation can say `theme: neo` whether or not this app has a button for
+ * it, and mermaid will draw it.
+ *
+ * A name that is NOT here is one mermaid does not know either. It then keeps
+ * whatever palette it was configured with and merely records the name, so such
+ * a diagram is still the block's theme and must be treated as one.
+ *
+ * `scripts/MermaidContract.mjs` checks this list, and the two tables below,
+ * against the library itself, so an upgrade that adds a theme says so.
+ */
+export const MERMAID_LIBRARY_THEMES = [
+  ...MERMAID_BUILTIN_THEMES,
+  'neo',
+  'neo-dark',
+  'redux',
+  'redux-dark',
+  'redux-color',
+  'redux-dark-color',
+] as const
+export type MermaidLibraryTheme = (typeof MERMAID_LIBRARY_THEMES)[number]
+
+export function normalizeMermaidLibraryTheme(raw: unknown): MermaidLibraryTheme | undefined {
+  return typeof raw === 'string' && (MERMAID_LIBRARY_THEMES as readonly string[]).includes(raw)
+    ? (raw as MermaidLibraryTheme)
+    : undefined
+}
+
+/** The background each of those themes renders against, as mermaid reports it. */
+export const MERMAID_LIBRARY_THEME_BACKGROUNDS: Record<MermaidLibraryTheme, string> = {
+  ...MERMAID_BUILTIN_THEME_BACKGROUNDS,
+  neo: '#ffffff',
+  'neo-dark': '#333333',
+  redux: '#ffffff',
+  'redux-dark': '#333333',
+  'redux-color': '#ffffff',
+  'redux-dark-color': '#333333',
+}
+
+/** Which of them is a dark one: the four whose background is `#333`. */
+export const MERMAID_LIBRARY_THEME_IS_DARK: Record<MermaidLibraryTheme, boolean> = {
+  ...MERMAID_BUILTIN_THEME_IS_DARK,
+  neo: false,
+  'neo-dark': true,
+  redux: false,
+  'redux-dark': true,
+  'redux-color': false,
+  'redux-dark-color': true,
+}
+
+/**
+ * What a diagram is DRAWN in: the application's palette, or one of mermaid's
+ * own themes. The surface questions further down are asked about this, not
+ * about the block's stored theme mode — see `resolveMermaidDrawnTheme`.
+ */
+export type MermaidDrawnTheme = 'app' | MermaidLibraryTheme
+
+export function normalizeMermaidDrawnTheme(raw: unknown): MermaidDrawnTheme | undefined {
+  return raw === 'app' ? 'app' : normalizeMermaidLibraryTheme(raw)
+}
+
+/**
  * The application's own palette, as read from the `--sn-stylekit-*` custom
  * properties on `document.documentElement` — which is where ThemeManager both
  * writes a theme (by attaching its stylesheet) and reads the result back from
@@ -693,17 +758,80 @@ export function resolveMermaidRenderTheme(mode: unknown, appTheme: MermaidAppThe
 }
 
 /**
+ * Standard Red Notes — bug fix: a diagram that NAMES ITS OWN THEME is drawn in
+ * that theme, and not in that theme with the application's palette forced over
+ * it.
+ *
+ * A diagram's text can say `theme: forest`, and mermaid honours it — but it
+ * then computes Forest's colours ON TOP OF whatever `themeVariables` the app
+ * passed to `initialize`. In `app` mode that is the application's whole palette,
+ * so the node kept Forest's light green fill and took the app's near-white text.
+ * Measured in the running app's dark theme, a Forest diagram alone in a note:
+ * mermaid's own stylesheet gave its labels `#eadde0`, the app's text colour, on
+ * Forest's `#cde498` fill — 1.05 to 1. Any diagram pasted from mermaid's
+ * documentation with a theme in its header was unreadable.
+ *
+ * So what the text names decides two things for one render, and this is the one
+ * place that decides them:
+ *
+ *  - `ownTheme` — the theme the diagram is drawn in INSTEAD of the block's, or
+ *    `undefined` when the block's still stands. The preview box paints its
+ *    surface from this (`resolveMermaidDrawnTheme`), exactly as it already does
+ *    for a block pinned to a theme, because Forest's black link labels need
+ *    Forest's white page behind them.
+ *  - `withoutAppPalette` — the app's palette must not reach mermaid.
+ *
+ * `base` is the exception, deliberately: it is the theme mermaid's own
+ * documentation says to customise, and `app` mode IS `base` carrying the app's
+ * palette. A diagram that says `theme: base` and sets three colours therefore
+ * keeps following the application for every colour it did not set, and the
+ * block's theme still stands. (A fixed light fill under the app's following
+ * text colour can still be unreadable there; nothing here pretends otherwise.)
+ *
+ * When the block carries no palette — pinned to a theme, or no palette could be
+ * read — there is nothing to withhold, and mermaid simply draws what the text
+ * names.
+ */
+export function resolveMermaidOwnTheme(
+  namedInText: unknown,
+  blockTheme: MermaidRenderTheme,
+): { ownTheme: MermaidLibraryTheme | undefined; withoutAppPalette: boolean } {
+  const named = normalizeMermaidLibraryTheme(namedInText)
+  if (named === undefined) {
+    return { ownTheme: undefined, withoutAppPalette: false }
+  }
+  if (blockTheme.themeVariables === undefined) {
+    return { ownTheme: named, withoutAppPalette: false }
+  }
+  if (named === 'base') {
+    return { ownTheme: undefined, withoutAppPalette: false }
+  }
+  return { ownTheme: named, withoutAppPalette: true }
+}
+
+/**
+ * The theme a diagram is actually drawn in: the one its own text selected when
+ * there is one, otherwise the block's stored mode. This — never the stored mode
+ * alone — is what `mermaidThemeDisagreesWithApp` and
+ * `resolveMermaidSurfaceColor` must be asked about, or a Forest diagram inside
+ * an `app`-mode block gets no page painted behind it.
+ */
+export function resolveMermaidDrawnTheme(blockMode: unknown, ownTheme: unknown): MermaidDrawnTheme {
+  return normalizeMermaidLibraryTheme(ownTheme) ?? normalizeMermaidThemeMode(blockMode) ?? DEFAULT_MERMAID_THEME_MODE
+}
+
+/**
  * Does the diagram's resolved theme disagree with the application's polarity?
  * This is the ONE combination a transparent background cannot survive — a light
  * diagram floating on a dark surface, or the reverse — and `app` mode is never
  * in it by construction.
  */
 export function mermaidThemeDisagreesWithApp(mode: unknown, appTheme: MermaidAppTheme): boolean {
-  const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
+  const normalized = normalizeMermaidDrawnTheme(mode) ?? DEFAULT_MERMAID_THEME_MODE
   if (normalized === 'app') {
     return false
   }
-  return MERMAID_BUILTIN_THEME_IS_DARK[normalized] !== appTheme.isDark
+  return MERMAID_LIBRARY_THEME_IS_DARK[normalized] !== appTheme.isDark
 }
 
 /**
@@ -736,11 +864,11 @@ export function resolveMermaidSurfaceColor(
   if (background === 'auto' && !mermaidThemeDisagreesWithApp(mode, appTheme)) {
     return undefined
   }
-  const normalized = normalizeMermaidThemeMode(mode) ?? DEFAULT_MERMAID_THEME_MODE
+  const normalized = normalizeMermaidDrawnTheme(mode) ?? DEFAULT_MERMAID_THEME_MODE
   if (normalized === 'app') {
     return appTheme.tokens?.background
   }
-  return MERMAID_BUILTIN_THEME_BACKGROUNDS[normalized]
+  return MERMAID_LIBRARY_THEME_BACKGROUNDS[normalized]
 }
 
 /** The app's own surface, as a CSS variable, for a caller that resolved none. */
