@@ -30,6 +30,19 @@ import { UserItemStorageUsage } from './UserItemStorageUsage'
  * list shorter than the one asked for and no indication of which subject was
  * discarded — the flattering direction, and the direction that lets a caller
  * mis-key a report without ever being told.
+ *
+ * *** AN ACCOUNT IS LOOKED UP BY ITS CANONICAL, LOWER-CASE UUID. *** A uuid is
+ * case-insensitive on input, `Uuid.create` accepts either spelling and keeps the
+ * one it was given, and this server generates and stores account uuids in lower
+ * case. Asked about a real account in UPPER CASE, this use case used to answer a
+ * complete, measured-looking zero on both databases: SQLite compared the two
+ * spellings as different strings and matched no row; MySQL matched the rows and
+ * returned them keyed on the stored lower-case uuid, which the upper-case lookup
+ * into that map then missed. Measured through the gateway on both topologies.
+ *
+ * So each uuid is validated as given (a refusal names what the caller sent) and
+ * then asked about, and answered under, its lower-case spelling. That mapping
+ * loses nothing: the server only ever mints lower-case account uuids.
  */
 export class GetUsersStorageUsage implements UseCaseInterface<UserItemStorageUsage[]> {
   constructor(private itemRepository: ItemRepositoryInterface) {}
@@ -41,7 +54,7 @@ export class GetUsersStorageUsage implements UseCaseInterface<UserItemStorageUsa
       if (userUuidOrError.isFailed()) {
         return Result.fail(userUuidOrError.getError())
       }
-      userUuids.push(userUuidOrError.getValue())
+      userUuids.push(Uuid.create(candidate.toLowerCase()).getValue())
     }
 
     const usages = await this.itemRepository.getStorageUsageForUsers(userUuids)
