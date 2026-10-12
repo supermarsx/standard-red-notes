@@ -6,7 +6,9 @@
  *
  * MermaidSourceConfig.ts makes two kinds of claim about the library: "this text
  * sets the theme to forest" (the toolbar shows it), and "after this patch
- * mermaid will read the value that was chosen" (every Customise control). A
+ * mermaid will read the value that was chosen" (every Customise control).
+ * MermaidConfigCatalog.ts adds a third: "this is a key, a default and a choice
+ * mermaid has", for every option the panel offers. A
  * jest spec cannot check either, because jest here does not transform ESM in
  * node_modules and every mermaid spec therefore fakes the library.
  *
@@ -32,6 +34,13 @@ const EXPECTED_CHECKS = [
   'a text the reader is sure of sets what the reader says, key for key',
   'an option written into any frontmatter is the option mermaid reads, and no other moves',
   'the reason a change is refused under a directive is real: mermaid would have ignored it',
+  'every catalogue key and sample value is written, and read back by mermaid as written',
+  'every default the catalogue quotes is the one mermaid ships',
+  'the line styles, looks and themes offered are the library’s own',
+  'every sample diagram is one mermaid accepts, of the kind the app takes it for',
+  'every control and every preset, on every kind, leaves a diagram mermaid reads as chosen',
+  'still true of this mermaid: the class renderer takes its spacing from the state group',
+  'still true of this mermaid: the sequence renderer ignores messageMargin and its own three font sizes',
 ]
 
 let status: number | null = null
@@ -84,6 +93,16 @@ describe('the installed mermaid, asked what a diagram’s own configuration mean
     expect(counts.readingClaims).toBeGreaterThanOrEqual(440)
     expect(counts.listedTexts).toBeGreaterThanOrEqual(25)
     expect(counts.patchesReadBack).toBeGreaterThanOrEqual(195)
+    // The catalogue: every key the panel writes, each sample of each read back
+    // three times over, every default compared, every kind of diagram, and
+    // every control and preset applied to each kind that takes it.
+    expect(counts.catalogueKeys).toBeGreaterThanOrEqual(23)
+    expect(counts.catalogueReadBack).toBeGreaterThanOrEqual(204)
+    expect(counts.catalogueDefaults).toBeGreaterThanOrEqual(22)
+    expect(counts.lineStyles).toBe(13)
+    expect(counts.sampleKinds).toBe(18)
+    expect(counts.controlsApplied).toBeGreaterThanOrEqual(176)
+    expect(counts.controlsUnavailable).toBeGreaterThan(0)
   })
 
   it('says which mermaid and which Node it judged', () => {

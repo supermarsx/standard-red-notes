@@ -882,6 +882,36 @@ function removeKey(lines: Line[], block: ReadFrontmatter, path: MermaidConfigPat
 }
 
 /**
+ * The refusal for a key an init directive decides, or `null` when none does.
+ * Exported because a control that takes an option AWAY asks the same question:
+ * removing `theme` from the frontmatter is always possible, and does nothing
+ * visible while a directive still names one.
+ */
+export function mermaidDirectiveRefusal(
+  reading: MermaidSourceConfigReading,
+  path: MermaidConfigPath,
+): MermaidConfigRefusal | null {
+  const key = dotted(path)
+  if (reading.directive.state === 'unreadable') {
+    return refusal(
+      'directive-sets-key',
+      `Line ${reading.directive.line} is ${reading.directive.reason}, which may set "${key}" itself, and a directive wins over the frontmatter. Nothing was changed; edit that line instead.`,
+      { line: reading.directive.line, key },
+    )
+  }
+  const fromDirective = directiveValue(reading.directive, path)
+  if (!fromDirective.touched) {
+    return null
+  }
+  const line = fromDirective.line
+  return refusal(
+    'directive-sets-key',
+    `Line ${line} is an init directive that sets "${key}" itself, and a directive wins over the frontmatter. Nothing was changed; edit or remove "${key}" on that line to choose it here.`,
+    { line, key },
+  )
+}
+
+/**
  * Apply changes to the diagram's frontmatter `config:` and return the new text
  * — or refuse, with the reason, and return none. All of the changes or none of
  * them: a refusal on the third leaves the first two unwritten.
@@ -924,31 +954,9 @@ export function patchMermaidSourceConfig(
     return { ok: false, refusal: reading.frontmatter.refusal }
   }
   for (const change of changes) {
-    if (change.value === undefined) {
-      continue
-    }
-    const key = dotted(change.path)
-    if (reading.directive.state === 'unreadable') {
-      return {
-        ok: false,
-        refusal: refusal(
-          'directive-sets-key',
-          `Line ${reading.directive.line} is ${reading.directive.reason}, which may set "${key}" itself, and a directive wins over the frontmatter. Nothing was changed; edit that line instead.`,
-          { line: reading.directive.line, key },
-        ),
-      }
-    }
-    const fromDirective = directiveValue(reading.directive, change.path)
-    if (fromDirective.touched) {
-      const line = fromDirective.line
-      return {
-        ok: false,
-        refusal: refusal(
-          'directive-sets-key',
-          `Line ${line} is an init directive that sets "${key}" itself, and a directive wins over the frontmatter. Nothing was changed; edit or remove "${key}" on that line to choose it here.`,
-          { line, key },
-        ),
-      }
+    const refused = change.value === undefined ? null : mermaidDirectiveRefusal(reading, change.path)
+    if (refused !== null) {
+      return { ok: false, refusal: refused }
     }
   }
 

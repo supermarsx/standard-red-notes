@@ -18,6 +18,8 @@
 // its exit code and the JSON summary on its last line. By hand:
 // `node scripts/MermaidConfigContract.mjs` from app/packages/web.
 import { createRequire, registerHooks } from 'node:module'
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 const require = createRequire(import.meta.url)
 
@@ -65,6 +67,9 @@ const NODES = '../src/javascripts/Components/SuperEditor/Lexical/Nodes'
 const mermaid = (await import('mermaid')).default
 const SourceConfig = await import(`${NODES}/MermaidSourceConfig.ts`)
 const Runtime = await import(`${NODES}/MermaidRuntime.ts`)
+const Catalog = await import(`${NODES}/MermaidConfigCatalog.ts`)
+const Presets = await import(`${NODES}/MermaidStylePresets.ts`)
+const Fixtures = await import(`${NODES}/MermaidCustomise.fixtures.ts`)
 const api = mermaid.mermaidAPI
 const mermaidVersion = require('mermaid/package.json').version
 
@@ -515,6 +520,239 @@ await check('the reason a change is refused under a directive is real: mermaid w
   assert(read.theme === 'forest', `mermaid now lets the frontmatter win: theme is ${read.theme}`)
   return `frontmatter says dark, directive says forest, mermaid draws ${read.theme}`
 })
+
+// ===========================================================================
+// 3. The catalogue: every key, default and choice the Customise panel relies on.
+// ===========================================================================
+
+const at2 = (config, path) => path.reduce((value, key) => (value == null ? undefined : value[key]), config)
+
+await check('every catalogue key and sample value is written, and read back by mermaid as written', async () => {
+  // Read back TWICE over: as the configuration mermaid takes from the text, and
+  // as the configuration in force afterwards — the second is what a key on the
+  // app's locked list, or one mermaid has no schema entry for, would fail.
+  let readBack = 0
+  for (const entry of Catalog.MERMAID_CONFIG_CATALOG) {
+    const name = entry.path.join('.')
+    for (const sample of entry.samples) {
+      for (const base of [FLOW, fm('title: Plan\nconfig:\n  layout: dagre'), SEQUENCE]) {
+        const result = SourceConfig.patchMermaidSourceConfig(base, [{ path: entry.path, value: sample }])
+        assert(result.ok, `${name} = ${JSON.stringify(sample)}: refused (${result.refusal?.code})`)
+        const taken = await mermaidReads(result.text)
+        assert(taken !== null, `${name} = ${JSON.stringify(sample)}: mermaid rejects ${JSON.stringify(result.text)}`)
+        assert(
+          at2(taken, entry.path) === sample,
+          `${name}: wrote ${JSON.stringify(sample)}, mermaid took ${JSON.stringify(at2(taken, entry.path))}`,
+        )
+        const inForce = at2(api.getConfig(), entry.path)
+        assert(
+          inForce === sample,
+          `${name}: wrote ${JSON.stringify(sample)}, and ${JSON.stringify(inForce)} is in force — mermaid refuses this key from a diagram's text`,
+        )
+        const mine = SourceConfig.readMermaidConfigValue(SourceConfig.readMermaidSourceConfig(result.text), entry.path)
+        assert(mine.state === 'set' && mine.value === sample, `${name}: the reader says ${JSON.stringify(mine)}`)
+        readBack++
+      }
+    }
+  }
+  counts.catalogueKeys = Catalog.MERMAID_CONFIG_CATALOG.length
+  counts.catalogueReadBack = readBack
+  return `${Catalog.MERMAID_CONFIG_CATALOG.length} keys, ${readBack} values read back`
+})
+
+await check('every default the catalogue quotes is the one mermaid ships', async () => {
+  api.reset()
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base' })
+  const baseTheme = api.getConfig().themeVariables
+  let compared = 0
+  for (const entry of Catalog.MERMAID_CONFIG_CATALOG) {
+    const name = entry.path.join('.')
+    if (name === 'theme') {
+      // Deliberately quoted as "none": in this app the block decides.
+      assert(entry.default === undefined, 'the catalogue quotes a default theme')
+      continue
+    }
+    const shipped = entry.path[0] === 'themeVariables' ? baseTheme[entry.path[1]] : at2(api.defaultConfig, entry.path)
+    assert(
+      shipped === entry.default,
+      `${name}: mermaid ships ${JSON.stringify(shipped)}, the catalogue says ${JSON.stringify(entry.default)}`,
+    )
+    compared++
+  }
+  counts.catalogueDefaults = compared
+  return `${compared} defaults`
+})
+
+await check('the line styles, looks and themes offered are the library’s own', async () => {
+  const declared = readFileSync(
+    join(dirname(require.resolve('mermaid/package.json')), 'dist', 'config.type.d.ts'),
+    'utf8',
+  )
+  const union = (pattern, what) => {
+    const found = pattern.exec(declared)
+    assert(found !== null, `no ${what} union in mermaid/dist/config.type.d.ts`)
+    return found[1]
+      .split('|')
+      .map((part) => part.trim().replace(/^'|'$/g, ''))
+      .filter((name) => name !== 'null')
+      .sort()
+  }
+  const curves = union(/^\s*curve\?:\s*([^;]+);/m, 'curve')
+  assert(
+    same(curves, [...Catalog.MERMAID_LINE_STYLES].sort()),
+    `mermaid ${mermaidVersion} has curves [${curves.join(', ')}]; the catalogue offers [${[...Catalog.MERMAID_LINE_STYLES].sort().join(', ')}]`,
+  )
+  const looks = union(/^\s*look\?:\s*([^;]+);/m, 'look')
+  for (const look of Catalog.MERMAID_LOOKS) {
+    assert(looks.includes(look), `mermaid has no look "${look}"`)
+  }
+  const themes = union(/^\s*theme\?:\s*([^;]+);/m, 'theme')
+  assert(
+    same(themes, Object.keys(Catalog.MERMAID_LIBRARY_THEME_LABELS).sort()),
+    `mermaid ships themes [${themes.join(', ')}]; the panel labels [${Object.keys(Catalog.MERMAID_LIBRARY_THEME_LABELS).sort().join(', ')}]`,
+  )
+  counts.lineStyles = curves.length
+  return `${curves.length} line styles, ${Catalog.MERMAID_LOOKS.length} of ${looks.length} looks, ${themes.length} themes`
+})
+
+/** The diagram type mermaid reports for each kind the app names. */
+const MERMAID_TYPE_OF_KIND = {
+  flowchart: 'flowchart-v2',
+  sequence: 'sequence',
+  class: 'classDiagram',
+  state: 'stateDiagram',
+  er: 'er',
+  gantt: 'gantt',
+  pie: 'pie',
+  journey: 'journey',
+  gitGraph: 'gitGraph',
+  mindmap: 'mindmap',
+  timeline: 'timeline',
+  quadrant: 'quadrantChart',
+  requirement: 'requirement',
+  sankey: 'sankey',
+  xychart: 'xychart',
+  block: 'block',
+  c4: 'c4',
+  unknown: 'kanban',
+}
+
+const typeOf = async (text) => {
+  api.reset()
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base' })
+  return (await mermaid.parse(text.trim())).diagramType
+}
+
+await check('every sample diagram is one mermaid accepts, of the kind the app takes it for', async () => {
+  for (const [kind, text] of Object.entries(Fixtures.MERMAID_SAMPLE_DIAGRAMS)) {
+    assert(
+      Catalog.mermaidCustomiseKind(text) === kind,
+      `${kind}: the app calls it ${Catalog.mermaidCustomiseKind(text)}`,
+    )
+    const type = await typeOf(text)
+    assert(
+      type === MERMAID_TYPE_OF_KIND[kind],
+      `${kind}: mermaid calls it ${type}, expected ${MERMAID_TYPE_OF_KIND[kind]}`,
+    )
+  }
+  counts.sampleKinds = Object.keys(Fixtures.MERMAID_SAMPLE_DIAGRAMS).length
+  return `${counts.sampleKinds} kinds`
+})
+
+await check('every control and every preset, on every kind, leaves a diagram mermaid reads as chosen', async () => {
+  let applied = 0
+  let unavailable = 0
+  for (const [kind, base] of Object.entries(Fixtures.MERMAID_SAMPLE_DIAGRAMS)) {
+    const edits = [
+      ['theme forest', Catalog.applyMermaidTheme(base, 'forest')],
+      ['theme neo-dark', Catalog.applyMermaidTheme(base, 'neo-dark')],
+      ['look handDrawn', Catalog.applyMermaidLook(base, 'app', 'handDrawn')],
+      ['text size 20', Catalog.applyMermaidTextSize(base, 'app', 20)],
+      ['text size 9', Catalog.applyMermaidTextSize(base, 'app', 9)],
+      ['spacing 160', Catalog.applyMermaidSpacing(base, 'app', 160)],
+      ['spacing 40', Catalog.applyMermaidSpacing(base, 'app', 40)],
+      ['line style linear', Catalog.applyMermaidLineStyle(base, 'app', 'linear')],
+      ...Presets.MERMAID_STYLE_PRESET_IDS.map((id) => [`preset ${id}`, Presets.applyMermaidStylePreset(base, id)]),
+    ]
+    for (const [what, edit] of edits) {
+      if (!edit.ok) {
+        assert(edit.refusal.code === 'invalid-change', `${kind}, ${what}: refused as ${edit.refusal.code}`)
+        unavailable++
+        continue
+      }
+      const taken = await mermaidReads(edit.code)
+      assert(taken !== null, `${kind}, ${what}: mermaid rejects ${JSON.stringify(edit.code)}`)
+      assert(
+        (await typeOf(edit.code)) === MERMAID_TYPE_OF_KIND[kind],
+        `${kind}, ${what}: no longer the same kind of diagram`,
+      )
+      const listed = Object.fromEntries(
+        SourceConfig.listMermaidFrontmatterConfig(SourceConfig.readMermaidSourceConfig(edit.code)).map((item) => [
+          item.key,
+          item.value,
+        ]),
+      )
+      assert(
+        same(Object.entries(flatten(taken)).sort(), Object.entries(listed).sort()),
+        `${kind}, ${what}: mermaid takes ${JSON.stringify(flatten(taken))}, the text was meant to say ${JSON.stringify(listed)}`,
+      )
+      applied++
+    }
+  }
+  counts.controlsApplied = applied
+  counts.controlsUnavailable = unavailable
+  return `${applied} edits read back, ${unavailable} not offered for their kind`
+})
+
+// ---------------------------------------------------------------------------
+// The three places the catalogue departs from mermaid's own documentation are
+// each a fact about a renderer's SOURCE, which Node cannot observe by drawing.
+// So the source is read. Crude, and deliberate: if an upgrade changes any of
+// these the catalogue's table is wrong for that mermaid, and somebody has to
+// measure again in a browser rather than find out from a control that does
+// nothing.
+// ---------------------------------------------------------------------------
+const CHUNKS = join(dirname(require.resolve('mermaid/package.json')), 'dist', 'chunks', 'mermaid.core')
+const chunkWith = (marker) => {
+  const names = readdirSync(CHUNKS).filter((name) => name.endsWith('.mjs'))
+  const found = names.filter((name) => readFileSync(join(CHUNKS, name), 'utf8').includes(marker))
+  assert(found.length === 1, `expected one chunk containing ${JSON.stringify(marker)}, found ${found.length}`)
+  return readFileSync(join(CHUNKS, found[0]), 'utf8')
+}
+
+await check('still true of this mermaid: the class renderer takes its spacing from the state group', async () => {
+  const source = chunkWith('Drawing class diagram (v3)')
+  const draw = source.slice(
+    source.indexOf('Drawing class diagram (v3)'),
+    source.indexOf('Drawing class diagram (v3)') + 900,
+  )
+  assert(/state:\s*conf/.test(draw), 'the class renderer no longer destructures `state: conf`')
+  assert(/nodeSpacing\s*=\s*conf\?\.nodeSpacing/.test(draw), 'the class renderer no longer reads conf.nodeSpacing')
+  assert(
+    Catalog.readMermaidSpacing(SourceConfig.readMermaidSourceConfig(Fixtures.MERMAID_SAMPLE_DIAGRAMS.class), 'class')
+      .state === 'unavailable',
+    'the catalogue now offers spacing for a class diagram',
+  )
+  return 'spacing for a class diagram is `state.nodeSpacing`; the panel offers none'
+})
+
+await check(
+  'still true of this mermaid: the sequence renderer ignores messageMargin and its own three font sizes',
+  async () => {
+    const source = chunkWith('conf.actorFontSize = conf.noteFontSize = conf.messageFontSize = cnf.fontSize')
+    assert(!source.includes('messageMargin'), 'the sequence renderer now reads messageMargin')
+    assert(
+      source.includes('conf.boxMargin') && source.includes('conf.actorMargin'),
+      'boxMargin / actorMargin are no longer read',
+    )
+    const written = Catalog.applyMermaidTextSize(Fixtures.MERMAID_SAMPLE_DIAGRAMS.sequence, 'app', 20)
+    assert(
+      written.ok && written.code.includes('\n  fontSize: 20\n'),
+      'the catalogue no longer writes the root fontSize for a sequence diagram',
+    )
+    return 'text size is the root `fontSize`; spacing is `actorMargin` and `boxMargin`'
+  },
+)
 
 const failed = checks.filter((entry) => !entry.ok)
 for (const entry of checks) {
