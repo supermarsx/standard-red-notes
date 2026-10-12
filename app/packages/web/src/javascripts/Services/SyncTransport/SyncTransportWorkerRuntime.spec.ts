@@ -962,6 +962,192 @@ describe('SyncTransportWorkerRuntime', () => {
       })
     })
 
+    /**
+     * *** THE WAY A REAL SOCKET DELIVERS THEM, AND THE WAY FIREFOX TIMES IT. ***
+     *
+     * Every other test here settles each frame before the next one arrives. A
+     * socket does not: the chunks and the COMPLETE of a small file land in one
+     * read, and each is dispatched while the one before it is still awaiting its
+     * digest. Measured on a real stack, every download over this lane failed in
+     * stock Firefox — FILE_TRUNCATED, because the COMPLETE was judged against an
+     * offset the last chunk had not advanced yet — while Chromium, which happens
+     * to resolve the digest before the next message event, delivered the same
+     * file whole. The digest here resolves only when released, so the order the
+     * frames are APPLIED in is decided by the code and not by the engine.
+     */
+    it('applies a transfer’s chunks and its COMPLETE in arrival order, however long a digest takes', async () => {
+      const pendingDigests: (() => void)[] = []
+      let deferDigests = false
+      const digestBytes = Uint8Array.from({ length: 32 }, () => 0xab).buffer
+      const subtle = {
+        digest: jest.fn(() =>
+          deferDigests
+            ? new Promise<ArrayBuffer>((resolve) => pendingDigests.push(() => resolve(digestBytes)))
+            : Promise.resolve(digestBytes),
+        ),
+      } as unknown as SubtleCrypto
+      const harness = setup(new FakeOutbox(), subtle)
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = sentFrames(socket).find((frame) => frame.type === 'FILES_DOWNLOAD_OPEN')!
+      acceptDownload(socket)
+      await flush()
+
+      // Back to back, with nothing settled in between.
+      deferDigests = true
+      const chunk = (index: number, offset: number, bytes: number[]) =>
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index,
+          offset,
+          declaredSize: 10,
+          bytes: Uint8Array.from(bytes),
+        })
+      socket.receiveBinary(chunk(0, 0, [1, 2, 3, 4, 5, 6]))
+      socket.receiveBinary(chunk(1, 6, [7, 8, 9, 10]))
+      socket.receive(
+        serverFrame('FILES_COMPLETE', open.commandId, {
+          mode: 'download',
+          transferId: 'transfer-1',
+          generation: 1,
+          sha256: STUB_DIGEST_HEX,
+          rangeStart: 0,
+          declaredSize: 10,
+        }),
+      )
+      await flush()
+
+      // Nothing has been judged ahead of the digest it depends on.
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_ERROR')).toEqual([])
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_COMPLETE')).toEqual([])
+
+      // Release the digests one at a time; each chunk is applied only then.
+      while (pendingDigests.length > 0) {
+        pendingDigests.shift()?.()
+        await flush()
+        await flush()
+      }
+
+      const chunks = harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_CHUNK') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'FILE_DOWNLOAD_CHUNK' }
+      >[]
+      expect(chunks.map((entry) => [...entry.bytes])).toEqual([
+        [1, 2, 3, 4, 5, 6],
+        [7, 8, 9, 10],
+      ])
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_ERROR')).toEqual([])
+      expect(harness.messages).toContainEqual({
+        type: 'FILE_DOWNLOAD_COMPLETE',
+        clientRequestId: 'file-download-1',
+        sha256: STUB_DIGEST_HEX,
+        declaredSize: 10,
+      })
+      // And the COMPLETE came AFTER the last chunk, not before it.
+      const order = harness.messages
+        .map((message) => message.type)
+        .filter((type) => type === 'FILE_DOWNLOAD_CHUNK' || type === 'FILE_DOWNLOAD_COMPLETE')
+      expect(order).toEqual(['FILE_DOWNLOAD_CHUNK', 'FILE_DOWNLOAD_CHUNK', 'FILE_DOWNLOAD_COMPLETE'])
+    })
+
+    it('applies nothing that was still queued when the transfer is cancelled', async () => {
+      const pendingDigests: (() => void)[] = []
+      let deferDigests = false
+      const digestBytes = Uint8Array.from({ length: 32 }, () => 0xab).buffer
+      const subtle = {
+        digest: jest.fn(() =>
+          deferDigests
+            ? new Promise<ArrayBuffer>((resolve) => pendingDigests.push(() => resolve(digestBytes)))
+            : Promise.resolve(digestBytes),
+        ),
+      } as unknown as SubtleCrypto
+      const harness = setup(new FakeOutbox(), subtle)
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = sentFrames(socket).find((frame) => frame.type === 'FILES_DOWNLOAD_OPEN')!
+      acceptDownload(socket)
+      await flush()
+
+      deferDigests = true
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        }),
+      )
+      socket.receive(
+        serverFrame('FILES_COMPLETE', open.commandId, {
+          mode: 'download',
+          transferId: 'transfer-1',
+          generation: 1,
+          sha256: STUB_DIGEST_HEX,
+          rangeStart: 0,
+          declaredSize: 10,
+        }),
+      )
+      await flush()
+      // The caller gives up while the chunk is still verifying and the COMPLETE is queued behind it.
+      deferDigests = false
+      await harness.runtime.handle({ type: 'CANCEL_FILE_DOWNLOAD', clientRequestId: 'file-download-1' })
+      while (pendingDigests.length > 0) {
+        pendingDigests.shift()?.()
+        await flush()
+        await flush()
+      }
+
+      // One terminal message, and neither the chunk nor the COMPLETE is delivered after it.
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_CHUNK')).toEqual([])
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_COMPLETE')).toEqual([])
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_ERROR')).toHaveLength(1)
+    })
+
+    it('still fails a COMPLETE that arrives before the bytes it claims, once the chunks ahead of it are applied', async () => {
+      // The control: ordering the frames must not turn a genuinely short transfer
+      // into a completed one.
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = sentFrames(socket).find((frame) => frame.type === 'FILES_DOWNLOAD_OPEN')!
+      acceptDownload(socket)
+      await flush()
+
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6]),
+        }),
+      )
+      socket.receive(
+        serverFrame('FILES_COMPLETE', open.commandId, {
+          mode: 'download',
+          transferId: 'transfer-1',
+          generation: 1,
+          sha256: STUB_DIGEST_HEX,
+          rangeStart: 0,
+          declaredSize: 10,
+        }),
+      )
+      await flush()
+      await flush()
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'FILE_TRUNCATED', safeToFallback: false }),
+      )
+      expect(harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_COMPLETE')).toEqual([])
+    })
+
     it('forwards a shared-vault reference whole instead of rebuilding it as personal', async () => {
       const harness = setup()
       const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])

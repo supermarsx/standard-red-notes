@@ -540,6 +540,26 @@ type ActiveFileDownload = {
   chunksForwarded: number
   outstandingCreditBytes: number
   deadlineTimer?: ReturnType<typeof setTimeout>
+  /**
+   * The chain this transfer's chunks and its COMPLETE are applied on, in the
+   * order they ARRIVED.
+   *
+   * *** EVERY SOCKET MESSAGE IS HANDLED CONCURRENTLY, AND A CHUNK AWAITS. *** A
+   * chunk verifies its digest with SubtleCrypto before it advances `nextOffset`,
+   * and the socket does not wait for that: the next message is dispatched at
+   * once. So the COMPLETE that follows the last chunk was read against an offset
+   * that had not moved yet and failed the transfer as FILE_TRUNCATED, and a chunk
+   * arriving behind another one was read against the previous index and failed
+   * it as FILE_CHUNK_OUT_OF_ORDER. Which of the two won was a race between the
+   * digest and the next message event. Chromium resolves the digest first;
+   * Firefox does not — where every download over this lane failed, measured on
+   * a real stack, with a file that the same code in Chromium delivered whole.
+   *
+   * It is per TRANSFER and not per socket on purpose. Other frames on this
+   * socket must not queue behind a file's digests, and a handler that waits for a
+   * LATER frame would deadlock on a socket-wide queue.
+   */
+  tail: Promise<void>
 }
 
 /**
@@ -1374,6 +1394,7 @@ export class SyncTransportWorkerRuntime {
       nextOffset: 0,
       chunksForwarded: 0,
       outstandingCreditBytes: 0,
+      tail: Promise.resolve(),
     }
     download.deadlineTimer = this.scheduleTimeout(() => {
       void this.cancelFileDownload(clientRequestId, 'DEADLINE_EXCEEDED')
@@ -1518,26 +1539,53 @@ export class SyncTransportWorkerRuntime {
     }
     if (frame.type === 'FILES_COMPLETE') {
       const payload = frame.payload
-      if (
-        payload.mode !== 'download' ||
-        payload.transferId !== download.transferId ||
-        payload.generation !== download.generation ||
-        payload.rangeStart !== 0 ||
-        payload.declaredSize !== download.declaredSize ||
-        !isFileSha256(payload.sha256) ||
-        download.nextOffset !== download.declaredSize
-      ) {
-        this.failFileDownload(download, 'FILE_TRUNCATED', false)
-        return
-      }
-      this.clearFileDownload(download)
-      this.dependencies.postMessage({
-        type: 'FILE_DOWNLOAD_COMPLETE',
-        clientRequestId: download.clientRequestId,
-        sha256: payload.sha256,
-        declaredSize: download.declaredSize,
+      // Behind every chunk that arrived before it. Judged at once, the offset it
+      // is compared with belongs to a chunk whose digest is still being computed.
+      this.afterEarlierFileFrames(download, () => {
+        if (
+          payload.mode !== 'download' ||
+          payload.transferId !== download.transferId ||
+          payload.generation !== download.generation ||
+          payload.rangeStart !== 0 ||
+          payload.declaredSize !== download.declaredSize ||
+          !isFileSha256(payload.sha256) ||
+          download.nextOffset !== download.declaredSize
+        ) {
+          this.failFileDownload(download, 'FILE_TRUNCATED', false)
+          return
+        }
+        this.clearFileDownload(download)
+        this.dependencies.postMessage({
+          type: 'FILE_DOWNLOAD_COMPLETE',
+          clientRequestId: download.clientRequestId,
+          sha256: payload.sha256 as string,
+          declaredSize: download.declaredSize,
+        })
       })
     }
+  }
+
+  /**
+   * Run `step` once every frame of this transfer that arrived earlier has been
+   * applied — and not at all if the transfer has ended in the meantime, which is
+   * what a failure or a cancel on the chain ahead of it means.
+   *
+   * A step never rejects the chain: one that throws is a transfer that failed,
+   * and the frames behind it find the transfer gone.
+   */
+  private afterEarlierFileFrames(download: ActiveFileDownload, step: () => void | Promise<void>): Promise<void> {
+    download.tail = download.tail.then(async () => {
+      if (this.fileDownloads.get(download.clientRequestId) !== download) {
+        return
+      }
+      try {
+        await step()
+      } catch {
+        this.failFileDownload(download, 'FILE_INVALID_STATE', false)
+      }
+    })
+
+    return download.tail
   }
 
   /**
@@ -1564,39 +1612,47 @@ export class SyncTransportWorkerRuntime {
     if (!download || !download.accepted) {
       return
     }
-    if (
-      decoded.header.index !== download.nextIndex ||
-      decoded.header.offset !== download.nextOffset ||
-      decoded.header.declaredSize !== download.declaredSize ||
-      decoded.header.byteLength > download.outstandingCreditBytes
-    ) {
-      this.failFileDownload(download, 'FILE_CHUNK_OUT_OF_ORDER', false)
-      return
-    }
-    let digestMatches: boolean
-    try {
-      digestMatches = await fileBinaryPayloadMatchesDigest(decoded, this.subtle)
-    } catch {
-      digestMatches = false
-    }
-    if (!digestMatches) {
-      this.failFileDownload(download, 'FILE_INTEGRITY_MISMATCH', false)
-      return
-    }
-    // The transfer can be cancelled or replaced while the digest is being
-    // computed; re-establish that this frame is still the one expected.
-    if (this.fileDownloads.get(download.clientRequestId) !== download || decoded.header.index !== download.nextIndex) {
-      return
-    }
-    download.nextIndex += 1
-    download.nextOffset += decoded.header.byteLength
-    download.outstandingCreditBytes -= decoded.header.byteLength
-    download.chunksForwarded += 1
-    this.dependencies.postMessage({
-      type: 'FILE_DOWNLOAD_CHUNK',
-      clientRequestId: download.clientRequestId,
-      bytes: decoded.bytes.slice(),
-      offset: decoded.header.offset,
+    // In arrival order, on the transfer's own chain: the index and the offset
+    // this chunk is checked against are the ones the chunk BEFORE it left
+    // behind, and that chunk is still verifying its digest when this one lands.
+    await this.afterEarlierFileFrames(download, async () => {
+      if (
+        decoded.header.index !== download.nextIndex ||
+        decoded.header.offset !== download.nextOffset ||
+        decoded.header.declaredSize !== download.declaredSize ||
+        decoded.header.byteLength > download.outstandingCreditBytes
+      ) {
+        this.failFileDownload(download, 'FILE_CHUNK_OUT_OF_ORDER', false)
+        return
+      }
+      let digestMatches: boolean
+      try {
+        digestMatches = await fileBinaryPayloadMatchesDigest(decoded, this.subtle)
+      } catch {
+        digestMatches = false
+      }
+      if (!digestMatches) {
+        this.failFileDownload(download, 'FILE_INTEGRITY_MISMATCH', false)
+        return
+      }
+      // The transfer can be cancelled or replaced while the digest is being
+      // computed; re-establish that this frame is still the one expected.
+      if (
+        this.fileDownloads.get(download.clientRequestId) !== download ||
+        decoded.header.index !== download.nextIndex
+      ) {
+        return
+      }
+      download.nextIndex += 1
+      download.nextOffset += decoded.header.byteLength
+      download.outstandingCreditBytes -= decoded.header.byteLength
+      download.chunksForwarded += 1
+      this.dependencies.postMessage({
+        type: 'FILE_DOWNLOAD_CHUNK',
+        clientRequestId: download.clientRequestId,
+        bytes: decoded.bytes.slice(),
+        offset: decoded.header.offset,
+      })
     })
   }
 
