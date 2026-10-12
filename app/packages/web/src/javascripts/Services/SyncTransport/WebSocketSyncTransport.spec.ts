@@ -2540,9 +2540,11 @@ describe('WebSocketSyncTransport', () => {
       worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
       await flush()
 
+      // The READY between them carries no answer at all: a socket that is up was
+      // not "torn down", and `false` there is what the pane used to print.
       expect(transport.laneDegradationLedger.transitions.map((entry) => entry.socketPreserved)).toEqual([
         true,
-        false,
+        undefined,
         false,
       ])
     })
@@ -2620,12 +2622,23 @@ describe('WebSocketSyncTransport', () => {
       expect(transport.laneDegradationLedger.transitions).toEqual([])
     })
 
-    it('records a lane standing down on a socket that stays up', async () => {
+    /**
+     * *** "Reported fallback reason: reconnect-gap" ON A READY TRANSPORT. ***
+     *
+     * One collaboration authorization answered "use HTTP for this one" while the
+     * socket carried on. It was recorded by calling `setTransportState` at the
+     * current state, which did three things, all wrong on a healthy deployment:
+     * it set the transport-wide fallback reason, which nothing later cleared; it
+     * wrote a second READY into the ring; and the pane counted that READY as a
+     * recovery — "Recoveries: 2" beside "Degradations: 0".
+     */
+    it('counts a lane standing down on a live socket, and leaves the transport as it was', async () => {
       const transport = createTransport()
       const authorizing = transport.authorizeCollaborationRoom('note-1')
       await flush()
       worker.emit({ type: 'STATE', state: 'READY' })
       await flush()
+      const before = transport.laneDegradationLedger.transitions
       const open = worker.posts.find((message) => message.type === 'AUTHORIZE_COLLABORATION') as Extract<
         MainToSyncWorkerMessage,
         { type: 'AUTHORIZE_COLLABORATION' }
@@ -2635,12 +2648,18 @@ describe('WebSocketSyncTransport', () => {
       await authorizing
 
       const ledger = transport.laneDegradationLedger
-      const last = ledger.transitions[ledger.transitions.length - 1]
 
-      expect(last).toMatchObject({ state: 'READY', reason: 'proxy-failed', socketPreserved: true })
-      // READY is not a state that serves saves over HTTP, so this is NOT counted as
-      // a degradation of the transport: one lane stood down, the rest did not.
+      expect(ledger.laneStandDownCounts).toEqual({ 'proxy-failed': 1 })
+      // The transport did not move: no new entry, and the last one is still the
+      // plain READY it was, with no cause attached to it.
+      expect(ledger.transitions).toEqual(before)
+      expect(ledger.transitions[ledger.transitions.length - 1]).toEqual({
+        state: 'READY',
+        msSinceLedgerStart: expect.any(Number),
+      })
       expect(ledger.fallbackCounts).toEqual({})
+      expect(transport.transportStatus.state).toBe('READY')
+      expect(transport.transportStatus.fallbackReason).toBeUndefined()
     })
 
     it('counts a refused control-plane read against the status it was refused with', () => {

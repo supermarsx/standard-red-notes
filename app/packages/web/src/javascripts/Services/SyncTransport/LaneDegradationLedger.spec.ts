@@ -45,10 +45,61 @@ describe('LaneDegradationLedger', () => {
 
     expect(ledger.view().transitions).toEqual([
       { state: 'HTTP_FALLBACK', reason: 'multi-tab-not-owner', socketPreserved: false, msSinceLedgerStart: 1_000 },
-      { state: 'READY', socketPreserved: false, msSinceLedgerStart: 5_000 },
+      { state: 'READY', msSinceLedgerStart: 5_000 },
     ])
     expect(ledger.view().fallbackCounts).toEqual({ 'multi-tab-not-owner': 1 })
     expect(ledger.view().transitionsDropped).toBe(0)
+  })
+
+  /**
+   * *** "HALF_OPEN ... socket torn down" ON A DEPLOYMENT WHERE NOTHING WAS. ***
+   * `socketPreserved` was a required boolean defaulting to false, so a dial and a
+   * READY both carried "the socket did not survive" and the pane printed it. The
+   * question only has an answer for a fall onto HTTP; anywhere else the field is
+   * ABSENT, which a reader can tell from "no".
+   */
+  it('says whether the socket survived only for a transition that landed on HTTP', () => {
+    const ledger = new LaneDegradationLedger({ now: () => 0 })
+
+    ledger.recordTransition('CONNECTING', undefined, false)
+    ledger.recordTransition('HALF_OPEN', undefined, false)
+    ledger.recordTransition('READY', undefined, true)
+    ledger.recordTransition('HTTP_FALLBACK', 'operation-unavailable', true)
+    ledger.recordTransition('DEGRADED', 'server-kill', false)
+
+    expect(ledger.view().transitions.map((entry) => [entry.state, entry.socketPreserved])).toEqual([
+      ['CONNECTING', undefined],
+      ['HALF_OPEN', undefined],
+      ['READY', undefined],
+      ['HTTP_FALLBACK', true],
+      ['DEGRADED', false],
+    ])
+    for (const entry of ledger.view().transitions.slice(0, 3)) {
+      expect(Object.hasOwn(entry, 'socketPreserved')).toBe(false)
+    }
+  })
+
+  /**
+   * *** "never-degraded", "Degradations: 0", "Recoveries: 2". *** One request sent
+   * to HTTP on a live socket was written into the ring as a second READY, and the
+   * pane counted that READY as a recovery from a degradation that never happened.
+   * It is a per-lane event, counted by cause, and the ring does not move.
+   */
+  it('counts a lane standing down on a live socket without recording a transition', () => {
+    const ledger = new LaneDegradationLedger({ now: () => 0 })
+    ledger.recordTransition('READY', undefined, false)
+
+    ledger.recordLaneStandDown('reconnect-gap')
+    ledger.recordLaneStandDown('reconnect-gap')
+    ledger.recordLaneStandDown('proxy-failed')
+    ledger.recordLaneStandDown('https://sync.example.test/a-reason-this-build-never-heard-of')
+
+    const view = ledger.view()
+
+    expect(view.laneStandDownCounts).toEqual({ 'reconnect-gap': 2, 'proxy-failed': 1, other: 1 })
+    expect(view.transitions).toEqual([{ state: 'READY', msSinceLedgerStart: 0 }])
+    expect(view.fallbackCounts).toEqual({})
+    expect(JSON.stringify(view)).not.toContain('example.test')
   })
 
   /**
@@ -338,6 +389,7 @@ describe('LaneDegradationLedger', () => {
       // one is what made a reader print "not reported" under a total of 0.
       controlPlaneRejectionsByStatus: { 401: 0, 498: 0 },
       fallbackCounts: {},
+      laneStandDownCounts: {},
       transitions: [],
       transitionsDropped: 0,
       recordingForMs: 0,
@@ -377,6 +429,7 @@ describe('LaneDegradationLedger', () => {
         'controlPlaneRejections',
         'controlPlaneRejectionsByStatus',
         'fallbackCounts',
+        'laneStandDownCounts',
         'recordingForMs',
         'transitions',
         'transitionsDropped',

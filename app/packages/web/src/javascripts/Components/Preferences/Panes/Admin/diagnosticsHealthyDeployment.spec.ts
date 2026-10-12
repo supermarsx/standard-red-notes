@@ -79,12 +79,16 @@ const ledger: LaneLedgerSectionView = {
   controlPlaneRejectionsByStatus: { 401: 0, 498: 0 },
   fallbackCounts: {},
   transitions: [
-    { state: 'HALF_OPEN', socketPreserved: false, msSinceLedgerStart: 400 },
-    { state: 'CONNECTING', socketPreserved: false, msSinceLedgerStart: 800 },
-    { state: 'AUTHENTICATING', socketPreserved: false, msSinceLedgerStart: 1100 },
-    { state: 'READY', socketPreserved: false, msSinceLedgerStart: 1300 },
+    { state: 'HALF_OPEN', msSinceLedgerStart: 400 },
+    { state: 'CONNECTING', msSinceLedgerStart: 800 },
+    { state: 'AUTHENTICATING', msSinceLedgerStart: 1100 },
+    { state: 'READY', msSinceLedgerStart: 1300 },
   ],
   transitionsDropped: 0,
+  // The one collaboration authorization the worker sent to HTTP while it was busy.
+  // On the operator's screen it was a second READY in the ring and a fallback
+  // reason on a READY transport; it is counted here, where it is what it is.
+  laneStandDownCounts: { 'reconnect-gap': 1 },
   recordingForMs: 2_331_000,
 }
 
@@ -359,9 +363,6 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
    * entry names the check that retires it.
    */
   const STILL_UNESTABLISHED: Record<string, string> = {
-    'websocket: Reported fallback reason':
-      'a READY socket has no fallback reason, and the row calls that a missing reading rather than nothing to report',
-    'websocket: What that reason is worth': 'follows the row above',
     'websocket: This client’s origin admitted':
       'the pane’s read rides the socket lane, which carries no origin; needs an HTTP read of the admission block',
     'environment: Internal gRPC auth secret':
@@ -388,6 +389,58 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
         verdict: 'undetermined',
       })
     }
+  })
+
+  /**
+   * *** THE REPORT CONTRADICTED ITSELF IN SIX PLACES, ON A DEPLOYMENT WITH NOTHING
+   * WRONG WITH IT. *** Each is pinned here against the operator's own figures, so
+   * the pair of rows that disagreed is asserted TOGETHER — a fix to one that
+   * leaves the other saying the opposite fails this test rather than passing two.
+   */
+  it('does not contradict itself anywhere the operator’s report did', () => {
+    const sections = run
+    const value = (section: SectionId, label: string): string => {
+      const found = everyRow(sections).find((entry) => entry.section === section && String(entry.row.label) === label)
+      return String(found?.row.value)
+    }
+
+    // "Transport: READY" beside "Reported fallback reason: reconnect-gap".
+    expect(value('websocket', 'Transport in use right now')).toBe('READY')
+    expect(value('websocket', 'Reported fallback reason')).toBe('nothing to report (the socket is up)')
+
+    // "never-degraded" and "Degradations recorded: 0" beside "Recoveries recorded: 2".
+    expect(value('websocket', 'Where the lane ended up')).toBe('never-degraded')
+    expect(value('websocket', 'Degradations recorded')).toBe('0')
+    expect(value('websocket', 'Recoveries recorded')).toBe('0')
+    expect(value('websocket', 'Connections established')).toBe('1')
+    expect(value('websocket', 'Single requests sent to HTTP on a live socket')).toBe('1')
+
+    // "HALF_OPEN not reported socket torn down", and every transition "1s after
+    // the ledger started" on a ledger 38 minutes old.
+    const history = everyRow(sections)
+      .filter((entry) => entry.section === 'websocket' && String(entry.row.label).startsWith('Transition '))
+      .map((entry) => String(entry.row.value))
+    expect(history).toEqual([
+      'HALF_OPEN · no socket yet · 38m 50s ago',
+      'CONNECTING · no socket yet · 38m 50s ago',
+      'AUTHENTICATING · no socket yet · 38m 49s ago',
+      'READY · socket up · 38m 49s ago',
+    ])
+
+    // "Subscription: active" beside "allowance from: no-active-subscription", and
+    // "Time until the subscription ends: 36499d 23h".
+    expect(value('account', 'Subscription')).toBe('included by this deployment')
+    expect(value('account', 'Where the file allowance comes from')).toBe('no-subscription-record')
+    expect(value('account', 'Time until the subscription ends')).toBe(
+      'nothing to report (an included plan does not expire)',
+    )
+
+    // Items 0 MB + files 1 MB beside a total of 2 MB.
+    const megabytes = ['Server item bytes used, whole MB', 'Server file bytes used, whole MB'].map((label) =>
+      Number(value('account', label)),
+    )
+    expect(megabytes[0] + megabytes[1]).toBe(Number(value('account', 'Total account storage, whole MB')))
+    expect(value('account', 'Total account storage, whole MB')).toBe('2')
   })
 
   it('keeps the browser section, which has nothing left to establish, on OK', () => {

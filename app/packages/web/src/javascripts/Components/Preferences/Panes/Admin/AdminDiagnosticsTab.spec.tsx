@@ -1406,7 +1406,10 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     )
 
     expect(sectionRow('Server file allowance, whole MB')[1]).toBe('no limit set')
-    expect(sectionRow('Where the file allowance comes from')[1]).toBe('no-active-subscription')
+    // The account in this fixture holds an ACTIVE plan, so the older server's one
+    // word for "no live row" is resolved to the case it is in: no row at all.
+    // Printing it as it arrived put "no-active-subscription" beside "active".
+    expect(sectionRow('Where the file allowance comes from')[1]).toBe('no-subscription-record')
     expect(sectionRow('Server file bytes used, whole MB')[1]).toBe('1')
     expect(sectionRow('Room for a file upload')[1]).toBe('no limit set')
     expect(text).not.toContain('asked for and did not arrive')

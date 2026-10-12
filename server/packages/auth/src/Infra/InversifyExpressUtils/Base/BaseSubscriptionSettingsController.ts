@@ -171,11 +171,23 @@ export class BaseSubscriptionSettingsController extends BaseHttpController {
     }
 
     let value: number | undefined
-    let origin: 'plan-default' | 'no-active-subscription'
+    let origin: 'plan-default' | 'no-active-subscription' | 'no-subscription-record'
 
     if (scope.activePlanName === undefined) {
       value = -1
-      origin = 'no-active-subscription'
+      // *** TWO DIFFERENT ACCOUNTS USED TO GET ONE WORD HERE. ***
+      //
+      // An account whose subscription row EXPIRED and an account that has no row
+      // at all both reach this branch, and both are unlimited for the same reason
+      // `CreateValetToken` gives. But on this fork's default `included`
+      // entitlement NO account has a row, while `GetUserSubscription` hands every
+      // one of them a synthesised, active PRO_PLAN — so this endpoint told a
+      // client "no active subscription" about an account that same server had
+      // just described as subscribed, and the admin diagnostics pane printed the
+      // two statements one row apart. The scope already knows which case it is.
+      // A row-less account is said to have no RECORD, which is true and claims
+      // nothing about the plan the account is entitled to.
+      origin = scope.backedBySubscriptionRow ? 'no-active-subscription' : 'no-subscription-record'
     } else {
       if (this.subscriptionSettingsAssociationService === undefined) {
         return undefined

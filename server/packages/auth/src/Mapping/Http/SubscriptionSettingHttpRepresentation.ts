@@ -19,13 +19,21 @@ export interface SubscriptionSettingHttpRepresentation {
    *   - `plan-default`          the subscription plan's default allowance, which
    *                             is what `CreateValetToken` applies when the
    *                             per-account limit setting is missing.
-   *   - `no-active-subscription` no live subscription, so the token minter grants
-   *                             unlimited (-1) unless an explicit limit says
-   *                             otherwise.
+   *   - `no-active-subscription` a subscription row exists and is not live, so
+   *                             the token minter grants unlimited (-1) unless an
+   *                             explicit limit says otherwise.
+   *   - `no-subscription-record` there is no subscription row at all, which on
+   *                             the default `included` entitlement is EVERY
+   *                             account: the plan is included by the deployment
+   *                             rather than stored. Unlimited (-1) for the same
+   *                             reason, and kept apart from the member above
+   *                             because that one says the subscription is not
+   *                             active — which is false of an account the same
+   *                             server reports as holding an active plan.
    *
    * ONLY ever accompanies a LIMIT. A usage total is never synthesised: an account
    * with no total reported has its figure absent, because a fabricated 0 and a
    * measured 0 are different answers and only one of them is true.
    */
-  origin?: 'account-setting' | 'plan-default' | 'no-active-subscription'
+  origin?: 'account-setting' | 'plan-default' | 'no-active-subscription' | 'no-subscription-record'
 }

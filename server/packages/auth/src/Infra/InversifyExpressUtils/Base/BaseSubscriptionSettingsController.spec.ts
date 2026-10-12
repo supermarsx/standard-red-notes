@@ -120,7 +120,14 @@ describe('BaseSubscriptionSettingsController', () => {
   /* The effective allowance                                                  */
   /* ------------------------------------------------------------------------ */
 
-  it('answers unlimited for an account with no live subscription, which is what the token minter grants', async () => {
+  /**
+   * The default deployment: `included` entitlement, so NO account has a
+   * subscription row while every account is handed a synthesised active plan.
+   * The origin says there is no RECORD — it must not say the subscription is not
+   * active, which is what it used to say about an account this same server
+   * describes as subscribed.
+   */
+  it('answers unlimited for an account with no subscription record, and says that is why', async () => {
     const result = await createController().getSubscriptionSetting(requestFor('FILE_UPLOAD_BYTES_LIMIT'), responseFor())
 
     expect(bodyOf(result)).toEqual({
@@ -132,8 +139,21 @@ describe('BaseSubscriptionSettingsController', () => {
         createdAt: 0,
         updatedAt: 0,
         sensitive: false,
-        origin: 'no-active-subscription',
+        origin: 'no-subscription-record',
       },
+    })
+  })
+
+  it('answers unlimited for an account whose subscription row is no longer live, and keeps that word for it', async () => {
+    resolveFileQuotaScope.execute = jest
+      .fn()
+      .mockReturnValue(Result.ok({ userSubscriptionUuid: SUBSCRIPTION_UUID, backedBySubscriptionRow: true }))
+
+    const result = await createController().getSubscriptionSetting(requestFor('FILE_UPLOAD_BYTES_LIMIT'), responseFor())
+
+    expect(bodyOf(result)).toMatchObject({
+      success: true,
+      setting: { value: '-1', origin: 'no-active-subscription' },
     })
   })
 

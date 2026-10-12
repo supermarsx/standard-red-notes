@@ -84,7 +84,7 @@ const controlPlane = (): SyncTransportControlPlane => ({
   }),
 })
 
-const liveTransport = async () => {
+const liveTransport = async (options: { startSync?: boolean } = {}) => {
   const transport = new WebSocketSyncTransport({
     controlPlane: controlPlane(),
     getConfiguredWebSocketUrl: () => 'wss://sync.example.test',
@@ -94,8 +94,13 @@ const liveTransport = async () => {
     environment: { hasWorker: true, hasWebSocket: true, hasIndexedDb: true },
     isHttpOnly: () => false,
   })
-  // Creates the worker, so the STATE messages below have somewhere to land.
-  void transport.execute(syncRequest(), jest.fn().mockResolvedValue(httpResponse()))
+  // Creates the worker, so the STATE messages below have somewhere to land. A
+  // test whose own first request creates it opts out: the transport serialises
+  // its requests, and this sync — which no fake worker ever answers — would hold
+  // everything behind it.
+  if (options.startSync !== false) {
+    void transport.execute(syncRequest(), jest.fn().mockResolvedValue(httpResponse()))
+  }
   await flush()
   return transport
 }
@@ -163,10 +168,53 @@ describe('the lane-degradation ledger on screen', () => {
     expect(rowValue('Degradations recorded')).toBe('1')
     expect(rowValue('Recoveries recorded')).toBe('1')
     expect(rowValue('Where the lane ended up')).toBe('recovered')
-    expect(rowValue('Transition 1')).toBe('HTTP_FALLBACK multi-tab-not-owner socket torn down under 1s')
-    expect(rowValue('Transition 3')).toBe('READY not reported socket torn down under 1s')
+    expect(rowValue('Transition 1')).toBe('HTTP_FALLBACK multi-tab-not-owner · socket closed · under 1s ago')
+    expect(rowValue('Transition 2')).toBe('CONNECTING · no socket yet · under 1s ago')
+    expect(rowValue('Transition 3')).toBe('READY · socket up · under 1s ago')
     // The lane is back, so the row is a statement rather than a fault.
     expect(rowChip('Where the lane ended up')).toBe('Info')
+    expect(rowChip('Degradations recorded')).toBe('Info')
+  })
+
+  /**
+   * *** THE OPERATOR'S REPORT, REPRODUCED THROUGH THE REAL TRANSPORT. *** A
+   * healthy socket, and one collaboration authorization the worker sent to HTTP
+   * because it was busy. On their screen: "Reported fallback reason:
+   * reconnect-gap" on a READY transport, "never-degraded" and "Degradations
+   * recorded: 0" beside "Recoveries recorded: 2". Nothing here is a fixture of the
+   * ledger's view — the worker message goes through `WebSocketSyncTransport`, so
+   * the cause is what is under test and not the wording.
+   */
+  it('shows a healthy socket as one that never fell back when a single request went to HTTP', async () => {
+    const transport = await liveTransport({ startSync: false })
+    const authorizing = transport.authorizeCollaborationRoom('note-1')
+    const posted = () => worker.posts.find((message) => message.type === 'AUTHORIZE_COLLABORATION')
+    // The request crosses several awaits before it is posted; wait for the post
+    // itself rather than for a number of ticks that happens to be enough today.
+    for (let tick = 0; tick < 50 && posted() === undefined; tick++) {
+      await flush()
+    }
+    const open = posted() as Extract<MainToSyncWorkerMessage, { type: 'AUTHORIZE_COLLABORATION' }>
+    expect(open).toBeDefined()
+    worker.emit({ type: 'STATE', state: 'CONNECTING' })
+    worker.emit({ type: 'STATE', state: 'READY' })
+    await flush()
+    worker.emit({ type: 'COLLABORATION_FALLBACK', clientRequestId: open.clientRequestId, reason: 'reconnect-gap' })
+    await flush()
+    await authorizing
+
+    await renderLedgerOf(transport)
+
+    expect(rowValue('Transport in use right now')).toBe('READY')
+    expect(rowValue('Reported fallback reason')).toBe('nothing to report (the socket is up)')
+    expect(rowChip('Reported fallback reason')).toBe('N/A')
+    expect(rowValue('Where the lane ended up')).toBe('never-degraded')
+    expect(rowValue('Degradations recorded')).toBe('0')
+    expect(rowValue('Recoveries recorded')).toBe('0')
+    expect(rowValue('Transport transitions recorded')).toBe('2')
+    expect(rowValue('Most recent transition')).toBe('READY')
+    expect(rowValue('Single requests sent to HTTP on a live socket')).toBe('1')
+    expect(rowValue('Single requests sent to HTTP, cause reconnect-gap')).toBe('1')
   })
 
   /**
@@ -283,7 +331,7 @@ describe('the lane-degradation ledger on screen', () => {
     expect(text).not.toContain(SESSION)
     expect(text).not.toContain('ticketticket')
     // Not vacuous: the block really did render this session's history.
-    expect(rowValue('Transition 2')).toBe('DEGRADED server-kill socket torn down under 1s')
+    expect(rowValue('Transition 2')).toBe('DEGRADED server-kill · socket closed · under 1s ago')
   })
 
   /**

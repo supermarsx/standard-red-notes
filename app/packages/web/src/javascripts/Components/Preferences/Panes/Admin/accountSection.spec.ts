@@ -3,6 +3,7 @@ import {
   ACCOUNT_ROLES,
   accountStorageTotal,
   ADMIN_READINGS,
+  apportionWholeMegabytes,
   buildAccountSection,
   describeAdminReading,
   describeFileQuota,
@@ -12,6 +13,7 @@ import {
   FILE_QUOTA_NEAR_FRACTION,
   fileQuotaFraction,
   ITEM_USAGE_READINGS,
+  planIsIncluded,
   SOFT_CAP_COMPARISONS,
   SPACE_FIGURE_SOURCES,
   STORAGE_TOTAL_COVERAGE,
@@ -440,9 +442,60 @@ describe('buildAccountSection never discloses an account identifier', () => {
     expect(rowOf(model, 'Server file bytes used, whole MB').value).toBe('117')
     expect(rowOf(model, 'Server file allowance, whole MB').value).toBe('941')
     expect(rowOf(model, 'Server file allowance used').value).toBe('0-25%')
-    expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('52')
+    // 52.98 MB of items and 117.74 MB of files are 170.72 MB: the total is its
+    // own floor, and the megabyte the two floors lost between them goes to the
+    // part that was closest to the next one. 52 + 117 would have been 169.
+    expect(rowOf(model, 'Server item bytes used, whole MB').value).toBe('53')
     expect(rowOf(model, 'Total account storage, whole MB').value).toBe('170')
     expect(rowOf(model, 'Local usage, whole MB').value).toBe('42')
+  })
+
+  /**
+   * *** "items: 0", "files: 1", "total: 2". *** The operator's own figures —
+   * 815,247 bytes of notes and 1.4 MB of files — each rounded down alone. Three
+   * true statements whose sum is false, in the block whose whole job is to say
+   * how much an account stores.
+   */
+  it('prints parts that add up to the total it prints beside them', () => {
+    const cases: readonly (readonly [number, number])[] = [
+      [815_247, 1_400_000],
+      [55_555_555, 123_456_789],
+      [0, 0],
+      [MB - 1, MB - 1],
+      [MB - 1, 1],
+      [3 * MB, 5 * MB],
+      [MB / 2, MB / 2],
+      [7 * MB + 1, 0],
+    ]
+
+    for (const [itemBytes, fileBytes] of cases) {
+      const model = buildAccountSection({
+        observations: healthyObservations({
+          itemBytesUsed: itemBytes,
+          fileUploadBytesUsed: fileBytes,
+          fileCensus: 'present',
+        }),
+      })
+      const items = Number(rowOf(model, 'Server item bytes used, whole MB').value)
+      const files = Number(rowOf(model, 'Server file bytes used, whole MB').value)
+      const total = Number(rowOf(model, 'Total account storage, whole MB').value)
+
+      expect({ itemBytes, fileBytes, sum: items + files }).toEqual({ itemBytes, fileBytes, sum: total })
+      // The total is still the plain floor of the true sum, and no part strays a
+      // whole megabyte from its own true figure.
+      expect(total).toBe(Math.floor((itemBytes + fileBytes) / MB))
+      expect(Math.abs(items - itemBytes / MB)).toBeLessThan(1)
+      expect(Math.abs(files - fileBytes / MB)).toBeLessThan(1)
+    }
+  })
+
+  it('apportions the megabytes the floors lost to the parts nearest the next one, ties to the first', () => {
+    expect(apportionWholeMegabytes([815_247, 1_400_000])).toEqual({ parts: [1, 1], total: 2 })
+    expect(apportionWholeMegabytes([MB / 2, MB / 2])).toEqual({ parts: [1, 0], total: 1 })
+    expect(apportionWholeMegabytes([0.4 * MB, 0.4 * MB, 0.4 * MB])).toEqual({ parts: [1, 0, 0], total: 1 })
+    expect(apportionWholeMegabytes([0.9 * MB, 0.8 * MB, 0.7 * MB])).toEqual({ parts: [1, 1, 0], total: 2 })
+    expect(apportionWholeMegabytes([3 * MB, 5 * MB])).toEqual({ parts: [3, 5], total: 8 })
+    expect(apportionWholeMegabytes([])).toEqual({ parts: [], total: 0 })
   })
 
   /**
@@ -1147,8 +1200,14 @@ describe('the account file allowance', () => {
 
   it('reports where the allowance came from, as a closed server enum', () => {
     for (const origin of FILE_ALLOWANCE_ORIGINS) {
+      // An account with NO subscription, so the one origin this pane resolves
+      // against the subscription row beside it is printed as it arrived.
       const model = buildAccountSection({
-        observations: healthyObservations({ fileUploadBytesLimit: 1000 * MB, fileAllowanceOrigin: origin }),
+        observations: healthyObservations({
+          subscriptionPresent: false,
+          fileUploadBytesLimit: 1000 * MB,
+          fileAllowanceOrigin: origin,
+        }),
       })
       const row = rowOf(model, 'Where the file allowance comes from')
 
@@ -1162,7 +1221,90 @@ describe('the account file allowance', () => {
   })
 
   it('covers every declared allowance origin in the loop above', () => {
-    expect([...FILE_ALLOWANCE_ORIGINS].sort()).toEqual(['account-setting', 'no-active-subscription', 'plan-default'])
+    expect([...FILE_ALLOWANCE_ORIGINS].sort()).toEqual([
+      'account-setting',
+      'no-active-subscription',
+      'no-subscription-record',
+      'plan-default',
+    ])
+  })
+
+  /**
+   * *** "Subscription: active", "allowance from: no-active-subscription", "ends
+   * in: 36499d 23h". *** One account, three rows, two of them contradicting each
+   * other and the third counting down from a number that is recomputed on every
+   * read. The fact under all three is one: the deployment includes the plan and
+   * stores no subscription record for it.
+   */
+  describe('a plan the deployment includes', () => {
+    const CENTURY = 36_499 * 86_400 + 23 * 3_600
+    const included = (origin: string) =>
+      buildAccountSection({
+        observations: healthyObservations({
+          subscriptionEndsInSeconds: CENTURY,
+          fileUploadBytesLimit: -1,
+          fileAllowanceOrigin: origin,
+        }),
+      })
+
+    // The server's own word for it, and the one word an older server used for
+    // both this and a lapsed subscription.
+    for (const origin of ['no-subscription-record', 'no-active-subscription']) {
+      it(`is said once, and the three rows agree, when the server sends ${origin}`, () => {
+        const model = included(origin)
+
+        expect(String(rowOf(model, 'Subscription').value)).toBe('included by this deployment')
+        expect(rowOf(model, 'Subscription').verdict).toBe('informational')
+        expect(String(rowOf(model, 'Where the file allowance comes from').value)).toBe('no-subscription-record')
+        expect(String(rowOf(model, 'Time until the subscription ends').value)).toBe(
+          'nothing to report (an included plan does not expire)',
+        )
+        expect(rowOf(model, 'Time until the subscription ends').verdict).toBe('not-applicable')
+        expect(model.reportLines.join('\n')).not.toContain('36499d')
+        // The plan is still named: included is how it is held, not what it is.
+        expect(String(rowOf(model, 'Subscription plan').value)).toBe('PRO_PLAN')
+      })
+    }
+
+    it('is not claimed for a subscription the server does store', () => {
+      for (const origin of ['plan-default', 'account-setting']) {
+        const model = buildAccountSection({
+          observations: healthyObservations({ subscriptionEndsInSeconds: 86_400 * 30, fileAllowanceOrigin: origin }),
+        })
+
+        expect(String(rowOf(model, 'Subscription').value)).toBe('active')
+        expect(String(rowOf(model, 'Time until the subscription ends').value)).toBe('30d 0h')
+        expect(String(rowOf(model, 'Where the file allowance comes from').value)).toBe(origin)
+      }
+    })
+
+    it('is not claimed for a subscription that lapsed, which the same origin also describes', () => {
+      const model = buildAccountSection({
+        observations: healthyObservations({
+          subscriptionEndsInSeconds: -3_600,
+          fileAllowanceOrigin: 'no-active-subscription',
+        }),
+      })
+
+      expect(String(rowOf(model, 'Subscription').value)).toBe('ended')
+      expect(rowOf(model, 'Subscription').verdict).toBe('degraded')
+      expect(String(rowOf(model, 'Time until the subscription ends').value)).toBe('already ended')
+      expect(String(rowOf(model, 'Where the file allowance comes from').value)).toBe('no-active-subscription')
+    })
+
+    it('is not claimed for a cancelled subscription, nor when no origin arrived at all', () => {
+      const cancelled = buildAccountSection({
+        observations: healthyObservations({
+          subscriptionCancelled: true,
+          fileAllowanceOrigin: 'no-active-subscription',
+        }),
+      })
+      const silent = buildAccountSection({ observations: healthyObservations() })
+
+      expect(String(rowOf(cancelled, 'Subscription').value)).toBe('cancelled, active until it ends')
+      expect(String(rowOf(silent, 'Subscription').value)).toBe('active')
+      expect(planIsIncluded(healthyObservations())).toBe(false)
+    })
   })
 
   it('refuses an allowance origin outside its closed set rather than echoing it', () => {

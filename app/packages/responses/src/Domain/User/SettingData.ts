@@ -16,9 +16,13 @@ export type SettingData = {
    *   - `plan-default`           the subscription plan's default allowance — what
    *                              `CreateValetToken` applies when no per-account
    *                              limit row exists.
-   *   - `no-active-subscription` no live subscription, so the upload token is
-   *                              minted unlimited (-1) unless an explicit limit
-   *                              row says otherwise.
+   *   - `no-active-subscription` a subscription row that is no longer live, so
+   *                              the upload token is minted unlimited (-1) unless
+   *                              an explicit limit row says otherwise.
+   *   - `no-subscription-record` no subscription row at all — every account on the
+   *                              default `included` entitlement, where the plan
+   *                              is included by the deployment rather than stored.
+   *                              Unlimited for the same reason.
    *
    * Typed as a wide `string` on purpose: it is a SERVER enum, and a client that
    * declared it as a union would have to either trust an unknown value or crash on

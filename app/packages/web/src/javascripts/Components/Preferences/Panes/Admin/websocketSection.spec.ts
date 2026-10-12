@@ -802,6 +802,35 @@ describe('the transport block', () => {
 
   const DISPOSITION_ROW = 'What that reason is worth'
 
+  /**
+   * *** TWO ROWS THAT READ "not reported" ON EVERY HEALTHY SOCKET. *** A socket
+   * that is up has not fallen back, so there is no reason and nothing it is worth.
+   * Settled by READY and ONLY by READY — a transport sitting on HTTP that names
+   * no reason is a real gap, and the control below keeps it one.
+   */
+  it('has nothing to report about a fallback reason on a socket that is up', () => {
+    const ready = build({ transport: transport() })
+
+    for (const label of ['Reported fallback reason', DISPOSITION_ROW]) {
+      expect(String(rowOf(ready, label).value)).toBe('nothing to report (the socket is up)')
+      expect(rowOf(ready, label).verdict).toBe('not-applicable')
+      expect(rowOf(ready, label).evidence.kind).toBe('not-applicable')
+    }
+
+    const onHttp = build({ transport: transport({ state: 'HTTP_FALLBACK' }) })
+
+    for (const label of ['Reported fallback reason', DISPOSITION_ROW]) {
+      expect(String(rowOf(onHttp, label).value)).toBe(NOT_REPORTED)
+      expect(rowOf(onHttp, label).verdict).toBe('undetermined')
+    }
+
+    // And a reason that IS reported is printed whatever the state: the row never
+    // hides what the transport said.
+    const stale = build({ transport: transport({ fallbackReason: 'reconnect-gap' }) })
+
+    expect(String(rowOf(stale, 'Reported fallback reason').value)).toBe('reconnect-gap')
+  })
+
   it('separates a structural fallback reason from a retryable one', () => {
     const structural = build({ transport: transport({ state: 'HTTP_ONLY', fallbackReason: 'capability-unavailable' }) })
     expect(String(rowOf(structural, DISPOSITION_ROW).value)).toBe('permanent')
@@ -1750,9 +1779,13 @@ describe('the lane-degradation ledger', () => {
       }),
     })
 
-    expect(String(rowOf(model, 'Most recent transition').value)).toBe(`READY ${NOT_REPORTED}`)
-    expect(String(rowOf(model, 'Socket survived that transition').value)).toBe('preserved')
-    expect(String(rowOf(model, 'That transition, after the ledger started').value)).toBe('2m 5s')
+    // No "not reported" beside a READY: it arrived with no cause because there is
+    // none, and a missing-reading token there is what the pane used to print.
+    expect(String(rowOf(model, 'Most recent transition').value)).toBe('READY')
+    expect(String(rowOf(model, 'The socket after that transition').value)).toBe('socket up')
+    // The fixture gives no recording time, so "how long ago" has nothing to
+    // subtract from and says so, instead of printing the offset as if it were one.
+    expect(String(rowOf(model, 'Most recent transition, how long ago').value)).toBe(NOT_REPORTED)
     expect(String(rowOf(model, 'Transitions dropped from the ring').value)).toBe('4')
     expect(rowOf(model, 'Transitions dropped from the ring').verdict).toBe('degraded')
   })
@@ -1792,16 +1825,85 @@ describe('the lane-degradation ledger', () => {
 
     expect(String(rowOf(never, 'Where the lane ended up').value)).toBe('never-degraded')
     expect(rowOf(never, 'Where the lane ended up').verdict).toBe('informational')
+    // *** "Degradations: 0" beside "Recoveries: 2". *** The first connect of a
+    // page recovered from nothing: it is a connection, and the two counts under
+    // it agree with the word above them.
+    expect(String(rowOf(never, 'Connections established').value)).toBe('1')
+    expect(String(rowOf(never, 'Degradations recorded').value)).toBe('0')
+    expect(String(rowOf(never, 'Recoveries recorded').value)).toBe('0')
 
     expect(String(rowOf(recovered, 'Where the lane ended up').value)).toBe('recovered')
     expect(rowOf(recovered, 'Where the lane ended up').verdict).toBe('informational')
     expect(String(rowOf(recovered, 'Degradations recorded').value)).toBe('1')
     expect(String(rowOf(recovered, 'Recoveries recorded').value)).toBe('1')
+    // History once the lane is back: counted, and not painted as a fault.
+    expect(rowOf(recovered, 'Degradations recorded').verdict).toBe('informational')
+    expect(rowOf(recovered, 'Degradations with cause server-kill').verdict).toBe('informational')
 
     expect(String(rowOf(down, 'Where the lane ended up').value)).toBe('still-degraded')
     expect(rowOf(down, 'Where the lane ended up').verdict).toBe('degraded')
     expect(String(rowOf(down, 'Degradations recorded').value)).toBe('2')
     expect(String(rowOf(down, 'Recoveries recorded').value)).toBe('0')
+    // And a fault while it is not: the same two rows, the lane still on HTTP.
+    expect(rowOf(down, 'Degradations recorded').verdict).toBe('degraded')
+    expect(rowOf(down, 'Degradations with cause server-kill').verdict).toBe('degraded')
+  })
+
+  it('never reports more recoveries than degradations, however the lane moved', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('HTTP_FALLBACK', 'server-kill', false)
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+      }),
+    })
+
+    expect(String(rowOf(model, 'Connections established').value)).toBe('3')
+    expect(String(rowOf(model, 'Degradations recorded').value)).toBe('1')
+    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('1')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('recovered')
+  })
+
+  /**
+   * *** THE OPERATOR'S OWN LEDGER, AS THEIR BROWSER RECORDED IT. *** A healthy
+   * deployment: the page connected, and one collaboration authorization was sent
+   * to HTTP while the worker was busy. It read "never-degraded", "Degradations
+   * recorded: 0", "Recoveries recorded: 2", and "Most recent transition: READY
+   * reconnect-gap".
+   */
+  it('counts one request sent to HTTP on a live socket as that, and as nothing else', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+        instance.recordLaneStandDown('reconnect-gap')
+      }),
+    })
+
+    expect(String(rowOf(model, 'Single requests sent to HTTP on a live socket').value)).toBe('1')
+    expect(String(rowOf(model, 'Single requests sent to HTTP, cause reconnect-gap').value)).toBe('1')
+    expect(rowOf(model, 'Single requests sent to HTTP on a live socket').verdict).toBe('informational')
+    expect(rowOf(model, 'Single requests sent to HTTP, cause reconnect-gap').verdict).toBe('informational')
+
+    expect(String(rowOf(model, 'Transport transitions recorded').value)).toBe('2')
+    expect(String(rowOf(model, 'Most recent transition').value)).toBe('READY')
+    expect(String(rowOf(model, 'Where the lane ended up').value)).toBe('never-degraded')
+    expect(String(rowOf(model, 'Degradations recorded').value)).toBe('0')
+    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('0')
+    expect(codesOf(model)).toEqual([])
+  })
+
+  it('says a producer that does not count single-lane stand-downs did not report them, rather than zero', () => {
+    const model = build({ ledger: ledger() })
+    const row = rowOf(model, 'Single requests sent to HTTP on a live socket')
+
+    expect(String(row.value)).toBe(NOT_REPORTED)
+    expect(row.evidence.kind).toBe('absent')
+    expect(String(rowOf(build({ ledger: ledger({ laneStandDownCounts: {} }) }), String(row.label)).value)).toBe('0')
   })
 
   it('calls a dial in progress neither a recovery nor a failure', () => {
@@ -1957,8 +2059,58 @@ describe('the lane-degradation ledger', () => {
       }),
     })
 
-    expect(String(rowOf(model, 'Transition 1').value)).toBe('HTTP_FALLBACK multi-tab-not-owner socket torn down 2s')
-    expect(String(rowOf(model, 'Transition 2').value)).toBe(`READY ${NOT_REPORTED} socket preserved 1m 2s`)
+    // How long AGO, read against the ledger's own age (62s): the fall was a minute
+    // back and the return is now. As an offset from the start these read "2s" and
+    // "1m 2s", and on a page open for an hour every one of them read "1s".
+    expect(String(rowOf(model, 'Transition 1').value)).toBe(
+      'HTTP_FALLBACK multi-tab-not-owner · socket closed · 1m 0s ago',
+    )
+    expect(String(rowOf(model, 'Transition 2').value)).toBe('READY · socket up · under 1s ago')
+    expect(String(rowOf(model, 'Most recent transition, how long ago').value)).toBe('under 1s')
+  })
+
+  /**
+   * *** "HALF_OPEN not reported socket torn down". *** Three things wrong in four
+   * words: a missing-reading token for a cause that does not exist, and a torn-down
+   * socket on a dial that had none yet. What became of the socket is derived from
+   * where the transition landed, and only a fall onto HTTP reads the boolean.
+   */
+  it('says what became of the socket from where the transition landed', () => {
+    const model = build({
+      ledger: recorded((instance) => {
+        instance.recordTransition('CONNECTING', undefined, false)
+        instance.recordTransition('HALF_OPEN', undefined, false)
+        instance.recordTransition('READY', undefined, false)
+        instance.recordTransition('HTTP_FALLBACK', 'operation-unavailable', true)
+        instance.recordTransition('DEGRADED', 'server-kill', false)
+      }),
+    })
+    const history = [1, 2, 3, 4, 5].map((index) => String(rowOf(model, `Transition ${index}`).value))
+
+    expect(history).toEqual([
+      'CONNECTING · no socket yet · under 1s ago',
+      'HALF_OPEN · no socket yet · under 1s ago',
+      'READY · socket up · under 1s ago',
+      'HTTP_FALLBACK operation-unavailable · socket kept · under 1s ago',
+      'DEGRADED server-kill · socket closed · under 1s ago',
+    ])
+    for (const entry of history) {
+      expect(entry).not.toContain(NOT_REPORTED)
+      expect(entry).not.toContain('torn down')
+    }
+    expect(String(rowOf(model, 'The socket after that transition').value)).toBe('socket closed')
+  })
+
+  it('says a fall onto HTTP from an older producer did not report what became of the socket', () => {
+    const model = build({
+      ledger: {
+        ...ledger(),
+        transitions: [{ state: 'HTTP_FALLBACK', reason: 'ack-timeout', msSinceLedgerStart: 1_000 }],
+        recordingForMs: 4_000,
+      },
+    })
+
+    expect(String(rowOf(model, 'Transition 1').value)).toBe('HTTP_FALLBACK ack-timeout · socket not reported · 3s ago')
   })
 
   it('keeps every row label in the ledger block unique, history rows included', () => {
@@ -2007,7 +2159,9 @@ describe('the lane-degradation ledger', () => {
     expect(serialised).not.toContain('sync.internal.example')
     expect(serialised).not.toContain('hunter2')
     expect(serialised).not.toContain('another-new-reason')
-    expect(String(rowOf(model, 'Transition 1').value)).toBe(`${UNRECOGNISED} ${UNRECOGNISED} socket torn down 1s`)
+    // A state this build cannot name has no carrier, so nothing is said about its
+    // socket at all — not "up", not "closed".
+    expect(String(rowOf(model, 'Transition 1').value)).toBe(`${UNRECOGNISED} ${UNRECOGNISED} · 9s ago`)
     // Both unknown causes fold onto ONE row, so there is no duplicate label and no
     // line in the report that says the same thing twice.
     expect(String(rowOf(model, `Degradations with cause ${UNRECOGNISED}`).value)).toBe('3')
@@ -2040,7 +2194,7 @@ describe('the lane-degradation ledger', () => {
     expect(String(rowOf(model, 'Where the lane ended up').value)).toBe(NOT_REPORTED)
     expect(rowOf(model, 'Where the lane ended up').verdict).toBe('undetermined')
     // Not vacuous: the recognised half was still classified.
-    expect(String(rowOf(model, 'Recoveries recorded').value)).toBe('1')
+    expect(String(rowOf(model, 'Connections established').value)).toBe('1')
   })
 
   it('names a deferred cause without calling it a fault', () => {
@@ -2147,11 +2301,12 @@ describe('the lane-degradation ledger', () => {
     expect(blockOf(model, 'Lane degradation ledger').emptyNote).toBeUndefined()
     expect(blockOf(model, 'Lane degradation ledger').rows.length).toBeGreaterThan(10)
     expect(report).toContain('- [INFO] Where the lane ended up: recovered')
-    expect(report).toContain('- [DEGRADED] Degradations recorded: 1')
+    expect(report).toContain('- [INFO] Degradations recorded: 1')
     expect(report).toContain('- [INFO] Recoveries recorded: 1')
-    expect(report).toContain('- [DEGRADED] Degradations with cause server-kill: 1')
-    expect(report).toContain('- [INFO] Transition 1: HTTP_FALLBACK server-kill socket torn down 1s')
-    expect(report).toContain('- [INFO] Transition 2: READY not reported socket torn down 2s')
+    expect(report).toContain('- [INFO] Degradations with cause server-kill: 1')
+    expect(report).toContain('- [INFO] Single requests sent to HTTP on a live socket: 0')
+    expect(report).toContain('- [INFO] Transition 1: HTTP_FALLBACK server-kill · socket closed · 1s ago')
+    expect(report).toContain('- [INFO] Transition 2: READY · socket up · under 1s ago')
     expect(report).toContain('- [DEGRADED] Control-plane reads refused with 401: 1')
     // The status the ledger never recorded is a measured zero, not a silence.
     expect(report).toContain('- [INFO] Control-plane reads refused with 498: 0')
@@ -2195,9 +2350,10 @@ describe('the copyable report', () => {
     controlPlaneRejections: 1,
     controlPlaneRejectionsByStatus: { 401: 1 },
     fallbackCounts: { [secret]: 2, 'server-kill': 1 },
+    laneStandDownCounts: { [secret]: 3, 'reconnect-gap': 1 },
     transitions: [
       { state: secret, reason: secret, socketPreserved: false, msSinceLedgerStart: 1_000 },
-      { state: 'READY', socketPreserved: true, msSinceLedgerStart: 2_000 },
+      { state: 'READY', msSinceLedgerStart: 2_000 },
     ],
     transitionsDropped: 1,
     recordingForMs: 30_000,
@@ -2299,6 +2455,7 @@ describe('the copyable report', () => {
         ['transitions[].state', String(planted?.transitions[0]?.state)],
         ['transitions[].reason', String(planted?.transitions[0]?.reason)],
         ['fallbackCounts key', Object.keys(planted?.fallbackCounts ?? {}).join(' ')],
+        ['laneStandDownCounts key', Object.keys(planted?.laneStandDownCounts ?? {}).join(' ')],
       ]
 
       for (const [field, value] of fields) {
@@ -2325,7 +2482,9 @@ describe('the copyable report', () => {
   it('renders the ledger rows those fields feed, so the scans below are not over an empty block', () => {
     const model = build(poisoned(PLANTED_OPAQUE))
 
-    expect(String(rowOf(model, 'Transition 1').value)).toBe(`${UNRECOGNISED} ${UNRECOGNISED} socket torn down 1s`)
+    expect(String(rowOf(model, 'Transition 1').value)).toBe(`${UNRECOGNISED} ${UNRECOGNISED} · 29s ago`)
+    expect(String(rowOf(model, `Single requests sent to HTTP, cause ${UNRECOGNISED}`).value)).toBe('3')
+    expect(String(rowOf(model, 'Single requests sent to HTTP on a live socket').value)).toBe('4')
     expect(String(rowOf(model, `Degradations with cause ${UNRECOGNISED}`).value)).toBe('2')
     expect(String(rowOf(model, 'Degradations with cause server-kill').value)).toBe('1')
     expect(String(rowOf(model, 'Transitions this build cannot name').value)).toBe('1')

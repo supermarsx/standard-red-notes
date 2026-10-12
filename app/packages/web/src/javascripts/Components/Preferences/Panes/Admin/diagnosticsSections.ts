@@ -1349,8 +1349,12 @@ export type LaneRejectionStatus = (typeof LANE_REJECTION_STATUSES)[number]
 export type LaneTransitionRecord = {
   readonly state: SyncTransportState
   readonly reason?: SyncFallbackReason
-  /** Whether the socket itself survived the transition, or was torn down. */
-  readonly socketPreserved: boolean
+  /**
+   * Whether the socket itself survived a fall onto HTTP, or was torn down.
+   * Present only on a transition that LANDED on HTTP: a dial has no socket yet and
+   * READY has one by definition, so the question has no answer for either.
+   */
+  readonly socketPreserved?: boolean
   readonly msSinceLedgerStart: number
 }
 
@@ -1376,4 +1380,10 @@ export type LaneDegradationLedgerView = {
   readonly transitions: readonly LaneTransitionRecord[]
   /** How many transitions fell off the end of the bounded ring. */
   readonly transitionsDropped: number
+  /**
+   * Single lanes that stood down while the transport stayed on the socket, by
+   * cause. Not transitions — the transport did not move. Absent from a producer
+   * older than the counter, which is not the same as none having happened.
+   */
+  readonly laneStandDownCounts?: Readonly<Partial<Record<SyncFallbackReason, number>>>
 }

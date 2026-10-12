@@ -1043,6 +1043,22 @@ function buildTransportBlock(transport: TransportStatusInput | undefined): Diagn
   const reason = transport?.fallbackReason
   const disposition = reason === undefined ? undefined : syncFallbackDisposition(reason)
   const operations = transport === undefined ? undefined : transport.operations.length
+  /**
+   * *** A SOCKET THAT IS UP HAS NOT FALLEN BACK, SO THERE IS NO REASON TO REPORT. ***
+   *
+   * These two rows read "not reported" on every healthy socket and were counted
+   * as readings that failed to arrive. They are settled by the row above them —
+   * and ONLY by READY: a transport sitting on HTTP that gives no reason is a real
+   * gap, and stays one.
+   */
+  const notFallenBack = state === 'READY' && reason === undefined
+  const NO_FALLBACK = {
+    value: safeNothingToReport('the socket is up'),
+    verdict: 'not-applicable' as const,
+    evidence: evidenceNothingToReport(
+      'This tab’s transport is READY, so it has not fallen back and there is no fallback reason to report.',
+    ),
+  }
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -1056,11 +1072,11 @@ function buildTransportBlock(transport: TransportStatusInput | undefined): Diagn
             ? `${TRANSPORT_DEFERRED_NOTE} ${describeTransport(transport).detail}`
             : describeTransport(transport).detail,
     }),
-    observedRow({
+    diagnosticRow({
       label: safeConstant('Reported fallback reason'),
-      observed: reason,
-      value: safeEnum(reason, SOCKET_FALLBACK_REASONS),
-      verdict: 'informational',
+      ...(notFallenBack
+        ? NO_FALLBACK
+        : { value: safeEnum(reason, SOCKET_FALLBACK_REASONS), ...absentOr(reason, 'informational') }),
       note:
         reason === undefined
           ? 'The transport reported no fallback reason. On a READY socket that is correct and expected; with no transport status at all it means nothing was read.'
@@ -1068,8 +1084,12 @@ function buildTransportBlock(transport: TransportStatusInput | undefined): Diagn
     }),
     diagnosticRow({
       label: safeConstant('What that reason is worth'),
-      value: safeEnum(disposition, SOCKET_FALLBACK_DISPOSITIONS),
-      ...absentOr(disposition, disposition === 'permanent' ? 'degraded' : 'informational'),
+      ...(notFallenBack
+        ? NO_FALLBACK
+        : {
+            value: safeEnum(disposition, SOCKET_FALLBACK_DISPOSITIONS),
+            ...absentOr(disposition, disposition === 'permanent' ? 'degraded' : 'informational'),
+          }),
       note: 'Three answers, not two. "permanent" describes an absence rather than a fault — this deployment does not advertise the socket lane, or this client is built or configured never to use it — and no amount of retrying makes one succeed. "retryable" clears on the next attempt, so a transport sitting on one is mid-recovery rather than broken. "deferred" is neither: the lane is standing down because an external condition holds which is EXPECTED and clears by itself, and the only member today is another tab of this account holding the socket. This row read a boolean before, so "deferred" was answered "retryable" — a correct steady state described as a recovery in progress.',
     }),
     diagnosticRow({
@@ -2338,10 +2358,11 @@ export type LaneLedgerSectionView = {
   readonly transitions: readonly {
     readonly state: string
     readonly reason?: string
-    readonly socketPreserved: boolean
+    readonly socketPreserved?: boolean
     readonly msSinceLedgerStart: number
   }[]
   readonly transitionsDropped: number
+  readonly laneStandDownCounts?: Readonly<Record<string, number | undefined>>
   readonly recordingForMs?: number
 }
 
@@ -2387,7 +2408,45 @@ function foldedFallbackCounts(counts: Readonly<Record<string, number | undefined
 const UNRECOGNISED_REASON_KEY = '__unrecognised__'
 
 const LEDGER_HISTORY_NOTE =
-  'One transition this client watched, in the order it happened: the lane it moved to, the transport’s own closed cause where it gave one, whether the socket survived, and how long after this ledger started. Nothing here is a clock reading.'
+  'One transition this client watched, in the order it happened: the state it moved to, the transport’s own closed cause where it gave one, what became of the socket, and how long ago. Nothing here is a clock reading.'
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What became of the socket in a
+ * transition, in words — DERIVED from where the transition landed.
+ *
+ * This printed "socket torn down" beside every dial and every READY, because the
+ * ledger stored one boolean for all of them and its default was `false`. Whether
+ * the socket SURVIVED is a question about a fall onto HTTP and about nothing
+ * else: a dial has no socket yet, and READY has one by definition. So the word
+ * comes from the carrier, and the boolean is read only where it means something.
+ */
+const SOCKET_AFTER: Record<'socket' | 'dialling' | 'http-kept' | 'http-closed' | 'http-unreported', SafeValue> = {
+  socket: safeConstant('socket up'),
+  dialling: safeConstant('no socket yet'),
+  'http-kept': safeConstant('socket kept'),
+  'http-closed': safeConstant('socket closed'),
+  'http-unreported': safeConstant('socket not reported'),
+}
+
+function socketAfter(transition: {
+  readonly state: string
+  readonly socketPreserved?: boolean
+}): SafeValue | undefined {
+  const carrier = carrierOf(transition.state)
+  if (carrier === undefined) {
+    return undefined
+  }
+  if (carrier !== 'http') {
+    return SOCKET_AFTER[carrier]
+  }
+
+  return transition.socketPreserved === undefined
+    ? SOCKET_AFTER['http-unreported']
+    : SOCKET_AFTER[transition.socketPreserved ? 'http-kept' : 'http-closed']
+}
+
+const SEPARATOR = safeConstant('·')
+const AGO = safeConstant('ago')
 
 function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): DiagnosticBlock {
   const heading = safeConstant('Lane degradation ledger')
@@ -2409,17 +2468,33 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
   const latest = transitions.length > 0 ? transitions[transitions.length - 1] : undefined
   const rejections = ledger.controlPlaneRejections
 
+  /**
+   * *** A RECOVERY IS A RETURN, NOT AN ARRIVAL. ***
+   *
+   * Every transition onto the socket used to be counted as a recovery, so the
+   * first connect of a page — which recovered from nothing — was one, and a ledger
+   * read "Degradations recorded: 0" beside "Recoveries recorded: 2". A recovery is
+   * counted only when the lane comes back onto the socket AFTER having been on
+   * HTTP; arriving on the socket for the first time is a connection.
+   */
   let degradations = 0
   let recoveries = 0
+  let connections = 0
   let unnameableStates = 0
+  let awayOnHttp = false
   for (const transition of transitions) {
     const carrier = carrierOf(transition.state)
     if (carrier === undefined) {
       unnameableStates += 1
     } else if (carrier === 'http') {
       degradations += 1
+      awayOnHttp = true
     } else if (carrier === 'socket') {
-      recoveries += 1
+      connections += 1
+      if (awayOnHttp) {
+        recoveries += 1
+      }
+      awayOnHttp = false
     }
   }
 
@@ -2432,6 +2507,15 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
   // counters disagree with each other — behind a comfortable zero.
   const unnameableRefusals = rejections - namedRefusals
 
+  /** How long ago a transition happened, or nothing when the ledger does not give its own age. */
+  const agoSeconds = (transition: { readonly msSinceLedgerStart: number }): number | undefined => {
+    if (ledger.recordingForMs === undefined) {
+      return undefined
+    }
+
+    return Math.max(0, ledger.recordingForMs - transition.msSinceLedgerStart) / 1000
+  }
+
   const outcome: LaneLedgerOutcome | undefined =
     latest === undefined || unnameableStates > 0
       ? undefined
@@ -2442,6 +2526,17 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
           : carrierOf(latest.state) === 'socket'
             ? 'recovered'
             : 'reconnecting'
+
+  /**
+   * Whether the degradations in this ledger are HISTORY.
+   *
+   * A count of past degradations beside a lane that is back on the socket is a
+   * record, not a fault, and it used to be painted as one for the life of the
+   * page: one reconnect after a laptop woke up kept the whole section amber until
+   * a reload. The counts carry a verdict only while the lane is not known to be
+   * back — still on HTTP, or ended somewhere this build cannot name.
+   */
+  const degradationsAreHistory = outcome === 'recovered' || outcome === 'never-degraded' || outcome === 'reconnecting'
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -2500,16 +2595,28 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
       note: 'Recorded transitions whose transport state is not one this build knows. Expected to be zero and worth a row anyway: the derived counts beneath cannot classify such a transition as a degradation or a recovery, so a non-zero count here is why "Where the lane ended up" refuses to answer rather than guessing from a partial reading.',
     }),
     diagnosticRow({
+      label: safeConstant('Connections established'),
+      value: safeCount(connections),
+      ...absentOr(connections, 'informational'),
+      note: 'How many times this lane arrived on the socket, the first connect of this page included. Read with the two rows below: connections less recoveries is how many times it connected without having been on HTTP first.',
+    }),
+    diagnosticRow({
       label: safeConstant('Degradations recorded'),
       value: safeCount(degradations),
-      ...absentOr(degradations, degradations > 0 ? 'degraded' : 'informational'),
-      note: 'Transitions onto HTTP — HTTP_ONLY, DEGRADED or HTTP_FALLBACK. Counted from the recorded transitions, so a degradation that fell off the ring is NOT counted here; the per-reason counters below are the ones that survive elision.',
+      // HISTORY, unless it is still true. A fall onto HTTP that the lane came back
+      // from is something that happened, and painting the whole section degraded
+      // for it would say the lane is degraded NOW — which the transport row at
+      // the top of this section, read off the live socket, says it is not. The
+      // lane that is still down keeps the verdict, and a lane that keeps doing it
+      // is the flapping finding below.
+      ...absentOr(degradations, degradations > 0 && !degradationsAreHistory ? 'degraded' : 'informational'),
+      note: 'Transitions onto HTTP — HTTP_ONLY, DEGRADED or HTTP_FALLBACK. Counted from the recorded transitions, so a degradation that fell off the ring is NOT counted here; the per-reason counters below are the ones that survive elision. A count here is history once the lane has come back: it carries a verdict only while the lane is still on HTTP.',
     }),
     diagnosticRow({
       label: safeConstant('Recoveries recorded'),
       value: safeCount(recoveries),
       ...absentOr(recoveries, 'informational'),
-      note: 'Transitions back onto the socket. A ledger that counted only failures could not tell a lane that degraded once and came straight back from one that went down and stayed down, which is the question an operator actually has. Dials in progress — CONNECTING, AUTHENTICATING, HALF_OPEN — are counted as neither.',
+      note: 'Returns to the socket AFTER a degradation. The first connect of a page is not one — it recovered from nothing — so this can never exceed the degradations above it. A ledger that counted only failures could not tell a lane that degraded once and came straight back from one that went down and stayed down, which is the question an operator actually has. Dials in progress — CONNECTING, AUTHENTICATING, HALF_OPEN — are counted as neither.',
     }),
     diagnosticRow({
       label: safeConstant('Where the lane ended up'),
@@ -2545,8 +2652,9 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
         // A cause this build cannot name is reported as a degradation rather than
         // asked about: `syncFallbackDisposition` would have to be given a value it
         // has no answer for, and guessing "expected" over an unknown cause is the
-        // flattering direction.
-        verdict: named && socketFallbackIsDeferred(reason) ? 'informational' : 'degraded',
+        // flattering direction. And, as with the count above, a cause is a
+        // PRESENT fact only while the lane is still down for it.
+        verdict: (named && socketFallbackIsDeferred(reason)) || degradationsAreHistory ? 'informational' : 'degraded',
         evidence: EVIDENCE_DIRECT,
         note: named
           ? SYNC_FALLBACK_REASON_EXPLANATIONS[reason]
@@ -2555,43 +2663,97 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
     )
   }
 
+  /**
+   * Single lanes that stood down while the transport stayed on the socket.
+   *
+   * Not transitions and not degradations of the transport: one request went to
+   * HTTP and the socket carried on. A producer older than the counter sends none,
+   * which is "not reported" and not zero.
+   */
+  const standDowns = ledger.laneStandDownCounts
+  const foldedStandDowns = standDowns === undefined ? undefined : foldedFallbackCounts(standDowns)
+  const standDownTotal =
+    foldedStandDowns === undefined ? undefined : [...foldedStandDowns.values()].reduce((sum, count) => sum + count, 0)
+
+  rows.push(
+    diagnosticRow({
+      label: safeConstant('Single requests sent to HTTP on a live socket'),
+      value: safeCount(standDownTotal),
+      ...absentOr(standDownTotal, 'informational'),
+      note: 'One lane’s request answered "use HTTP for this one" while the socket stayed up and the transport stayed READY — a collaboration authorization that arrived while the worker was busy with a sync command is the ordinary case. Nothing fell back and nothing recovered, so these are counted here and are NOT transitions: recording one as a transition is how this block once showed two recoveries beside zero degradations.',
+    }),
+  )
+  for (const reason of [...SOCKET_FALLBACK_REASONS, UNRECOGNISED_REASON_KEY]) {
+    const count = foldedStandDowns?.get(reason)
+    if (count === undefined) {
+      continue
+    }
+    rows.push(
+      diagnosticRow({
+        label: safeTokens(
+          safeConstant('Single requests sent to HTTP, cause'),
+          safeEnum(reason, SOCKET_FALLBACK_REASONS),
+        ),
+        value: safeCount(count),
+        verdict: 'informational',
+        evidence: EVIDENCE_DIRECT,
+        note: isKnownFallbackReason(reason)
+          ? SYNC_FALLBACK_REASON_EXPLANATIONS[reason]
+          : 'A cause this build has no name for, so it is counted and not printed.',
+      }),
+    )
+  }
+
+  const latestAgo = latest === undefined ? undefined : agoSeconds(latest)
+  const latestSocket = latest === undefined ? undefined : socketAfter(latest)
+
   rows.push(
     diagnosticRow({
       label: safeConstant('Most recent transition'),
       value:
         latest === undefined
           ? safeEnum(undefined, SOCKET_TRANSPORT_STATES)
-          : safeTokens(
-              safeEnum(latest.state, SOCKET_TRANSPORT_STATES),
-              safeEnum(latest.reason, SOCKET_FALLBACK_REASONS),
-            ),
+          : latest.reason === undefined
+            ? safeEnum(latest.state, SOCKET_TRANSPORT_STATES)
+            : safeTokens(
+                safeEnum(latest.state, SOCKET_TRANSPORT_STATES),
+                safeEnum(latest.reason, SOCKET_FALLBACK_REASONS),
+              ),
       ...absentOr(latest, 'informational'),
       note: 'The state the lane moved to last, with the transport’s own closed reason where it gave one. Read with the transport row at the top of this section: that row is where the lane is now, this one is how it got there.',
     }),
     diagnosticRow({
-      label: safeConstant('Socket survived that transition'),
-      value: safeState(latest?.socketPreserved, 'preserved', 'torn down'),
-      ...absentOr(latest?.socketPreserved, 'informational'),
-      note: 'Whether the socket itself outlived the transition. A preserved socket keeps its collaboration rooms, invite subscription, command lease and in-flight transfers; a torn-down one discards all of them and rebuilds, which is why an in-place credential refresh is worth the complexity it costs.',
+      label: safeConstant('The socket after that transition'),
+      value: latestSocket ?? safeEnum(undefined, SOCKET_TRANSPORT_STATES),
+      ...absentOr(latestSocket, 'informational'),
+      note: 'What became of the socket in that transition. "socket up" is a lane that arrived on the socket and "no socket yet" is a dial in progress — neither can have preserved or lost anything. Only a fall onto HTTP has the other two answers: a kept socket keeps its collaboration rooms, invite subscription, command lease and in-flight transfers; a closed one discards all of them and rebuilds, which is why an in-place credential refresh is worth the complexity it costs.',
     }),
     diagnosticRow({
-      label: safeConstant('That transition, after the ledger started'),
-      value: safeDuration(latest === undefined ? undefined : latest.msSinceLedgerStart / 1000),
-      ...absentOr(latest, 'informational'),
-      note: 'An offset from the start of this ledger, not a clock reading. It gives the ordering and the frequency this block is for, and a duration is a category the copyable report already permits while an absolute instant would let a reader line this deployment up against other logs.',
+      label: safeConstant('Most recent transition, how long ago'),
+      value: safeDuration(latestAgo),
+      ...absentOr(latestAgo, 'informational'),
+      note: 'How long ago, not when. It used to be printed as an offset from the start of this ledger, which on a page that connected at once and has been open for an hour read "1s" for every transition — true, and no use to anyone asking how recently the lane last moved. A duration, never a clock reading: an absolute instant would let a reader line this deployment up against other logs.',
     }),
   )
 
   transitions.forEach((transition, index) => {
+    const parts: SafeValue[] = [safeEnum(transition.state, SOCKET_TRANSPORT_STATES)]
+    if (transition.reason !== undefined) {
+      parts.push(safeEnum(transition.reason, SOCKET_FALLBACK_REASONS))
+    }
+    const socket = socketAfter(transition)
+    if (socket !== undefined) {
+      parts.push(SEPARATOR, socket)
+    }
+    const ago = agoSeconds(transition)
+    if (ago !== undefined) {
+      parts.push(SEPARATOR, safeDuration(ago), AGO)
+    }
+
     rows.push(
       diagnosticRow({
         label: safeTokens(safeConstant('Transition'), safeCount(index + 1)),
-        value: safeTokens(
-          safeEnum(transition.state, SOCKET_TRANSPORT_STATES),
-          safeEnum(transition.reason, SOCKET_FALLBACK_REASONS),
-          safeState(transition.socketPreserved, 'socket preserved', 'socket torn down'),
-          safeDuration(transition.msSinceLedgerStart / 1000),
-        ),
+        value: safeTokens(...parts),
         verdict: 'informational',
         evidence: EVIDENCE_DIRECT,
         note: LEDGER_HISTORY_NOTE,

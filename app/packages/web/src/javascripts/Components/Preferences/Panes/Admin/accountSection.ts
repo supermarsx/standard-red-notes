@@ -8,6 +8,7 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceNotAvailableHere,
+  evidenceNothingToReport,
   evidenceProxy,
   reportLine,
   safeConstant,
@@ -15,6 +16,7 @@ import {
   safeDuration,
   safeEnum,
   safeNotAvailableHere,
+  safeNothingToReport,
   safePercentBucket,
   safePresence,
   safeState,
@@ -218,13 +220,21 @@ export const SUBSCRIPTION_PLANS = ['CORE_PLAN', 'PLUS_PLAN', 'PRO_PLAN'] as cons
  * account. A section that painted it amber would send every self-hoster after a
  * purchase they do not need.
  */
-export const SUBSCRIPTION_STATES = ['active', 'cancelled-until-end', 'expired', 'offline-only', 'none'] as const
+export const SUBSCRIPTION_STATES = [
+  'active',
+  'included',
+  'cancelled-until-end',
+  'expired',
+  'offline-only',
+  'none',
+] as const
 
 export type SubscriptionState = (typeof SUBSCRIPTION_STATES)[number]
 
 /** *** EXHAUSTIVE `Record` ON PURPOSE. *** What each subscription state prints. */
 const SUBSCRIPTION_VALUE: Record<SubscriptionState, SafeValue> = {
   active: safeConstant('active'),
+  included: safeConstant('included by this deployment'),
   'cancelled-until-end': safeConstant('cancelled, active until it ends'),
   expired: safeConstant('ended'),
   'offline-only': safeConstant('offline subscription only'),
@@ -271,9 +281,61 @@ const FILE_QUOTA_VALUE: Record<FileQuotaState, SafeValue> = {
  * like the role and plan names: an unrecognised origin — or an identifier arriving
  * in the wrong field — collapses to a constant without echoing a byte.
  */
-export const FILE_ALLOWANCE_ORIGINS = ['account-setting', 'plan-default', 'no-active-subscription'] as const
+export const FILE_ALLOWANCE_ORIGINS = [
+  'account-setting',
+  'plan-default',
+  'no-active-subscription',
+  'no-subscription-record',
+] as const
 
 export type FileAllowanceOrigin = (typeof FILE_ALLOWANCE_ORIGINS)[number]
+
+/**
+ * Whether this account's plan is INCLUDED by the deployment rather than stored.
+ *
+ * *** THE THREE ROWS THIS RECONCILES. *** On the default `included` entitlement
+ * the server creates no subscription row and still hands every account a
+ * synthesised, active PRO_PLAN whose end date is "now, plus a century". The pane
+ * printed all of that as it arrived: "Subscription: active", "Time until the
+ * subscription ends: 36499d 23h", and — from the endpoint that looks at ROWS —
+ * "Where the file allowance comes from: no-active-subscription". Two statements
+ * about one account that contradict each other, and a duration that was never a
+ * duration.
+ *
+ * The fact underneath is one fact: the server holds no live subscription record
+ * for an account whose plan it reports as active. That is what `included` means,
+ * and nothing else produces the pair — an EXPIRED row is reported by the same
+ * server with an end date in the past, which is `expired` and never reaches here.
+ *
+ * `no-subscription-record` is the server saying so in its own word. The older
+ * `no-active-subscription` is admitted too, because a server one build back used
+ * that single word for both cases and this pane must not go back to contradicting
+ * itself against it.
+ */
+export function planIsIncluded(observed: AccountObservations): boolean {
+  if (observed.subscriptionPresent !== true || observed.subscriptionCancelled === true) {
+    return false
+  }
+  const endsIn = observed.subscriptionEndsInSeconds
+  if (typeof endsIn === 'number' && Number.isFinite(endsIn) && endsIn <= 0) {
+    return false
+  }
+
+  return (
+    observed.fileAllowanceOrigin === 'no-subscription-record' ||
+    observed.fileAllowanceOrigin === 'no-active-subscription'
+  )
+}
+
+/**
+ * The origin as this pane PRINTS it: the server's code, except that the older
+ * server's one word for two cases is resolved to the case this account is in.
+ */
+export function describeAllowanceOrigin(observed: AccountObservations): FileAllowanceOrigin | undefined {
+  const origin = FILE_ALLOWANCE_ORIGINS.find((candidate) => candidate === observed.fileAllowanceOrigin)
+
+  return origin === 'no-active-subscription' && planIsIncluded(observed) ? 'no-subscription-record' : origin
+}
 
 /** The share of a file allowance at which this build reports it as nearly full. */
 export const FILE_QUOTA_NEAR_FRACTION = 0.9
@@ -774,6 +836,45 @@ export function wholeMegabytes(bytes: number | undefined): number | undefined {
 }
 
 /**
+ * Whole megabytes for the PARTS of a total, such that the parts add up to it.
+ *
+ * *** EACH FIGURE USED TO BE ROUNDED ALONE. *** 0.78 MB of notes and 1.34 MB of
+ * files are 2.11 MB together, and three independent floors print that as
+ * "items: 0", "files: 1", "total: 2" — three true statements whose sum is false,
+ * in the one block whose job is to say how much an account is storing. A reader
+ * cannot tell a rounding artefact from a third component nobody listed.
+ *
+ * So the TOTAL is rounded once, down, exactly as before, and the parts are
+ * apportioned to it by largest remainder: each takes its own floor, and the
+ * megabytes the floors lost go to the parts that were closest to the next one.
+ * Every part is still within one megabyte of its true figure — it is its floor or
+ * its floor plus one — and the parts now always sum to the total. A tie goes to
+ * the earlier part, so the result does not depend on anything but the inputs.
+ *
+ * Negative, non-finite and non-numeric inputs are refused by the caller: this is
+ * handed bytes that already passed `wholeBytes`.
+ */
+export function apportionWholeMegabytes(partsInBytes: readonly number[]): { parts: number[]; total: number } {
+  const exact = partsInBytes.map((bytes) => bytes / BYTES_PER_MB)
+  const parts = exact.map((megabytes) => Math.floor(megabytes))
+  const total = Math.floor(partsInBytes.reduce((sum, bytes) => sum + bytes, 0) / BYTES_PER_MB)
+
+  let owed = total - parts.reduce((sum, megabytes) => sum + megabytes, 0)
+  const byRemainder = exact
+    .map((megabytes, index) => ({ index, remainder: megabytes - Math.floor(megabytes) }))
+    .sort((left, right) => right.remainder - left.remainder || left.index - right.index)
+  for (const { index } of byRemainder) {
+    if (owed <= 0) {
+      break
+    }
+    parts[index] += 1
+    owed -= 1
+  }
+
+  return { parts, total }
+}
+
+/**
  * How much of the account's file allowance is in use, as a fraction, or
  * `undefined` where the question does not apply (no limit, no allowance, nothing
  * measured). Never a division by zero and never a fabricated zero.
@@ -905,7 +1006,7 @@ export function accountStorageTotal(input: {
 }
 
 /**
- * The subscription as one of five closed states.
+ * The subscription as one of six closed states.
  *
  * An offline subscription is reported where there is no online one rather than
  * being merged into `active`: they entitle the same features and are completely
@@ -917,7 +1018,11 @@ export function describeSubscription(observed: AccountObservations): Subscriptio
     if (typeof endsIn === 'number' && Number.isFinite(endsIn) && endsIn <= 0) {
       return 'expired'
     }
-    return observed.subscriptionCancelled === true ? 'cancelled-until-end' : 'active'
+    if (observed.subscriptionCancelled === true) {
+      return 'cancelled-until-end'
+    }
+
+    return planIsIncluded(observed) ? 'included' : 'active'
   }
 
   if (observed.offlineSubscription === true) {
@@ -1424,7 +1529,7 @@ function buildAccessBlock(observed: AccountObservations, reading: AdminReading, 
       label: safeConstant('Subscription'),
       value: subscription === undefined ? safePresence(undefined) : SUBSCRIPTION_VALUE[subscription],
       ...absentOr(subscription, subscription === 'expired' ? 'degraded' : 'informational'),
-      note: 'A STATE, never an identifier. "none" is not a fault: this fork is single-tier and entitles every feature, so no subscription is the ordinary state of a self-hosted account and the only thing it changes is the file allowance. "ended" is reported as degraded because it is the state in which a previously granted allowance can have gone away under this account’s feet.',
+      note: 'A STATE, never an identifier. "included by this deployment" is the ordinary state of a self-hosted account on the default entitlement: the server stores no subscription record and entitles the account to the plan anyway, so there is nothing to renew and nothing to expire. "none" is not a fault: this fork is single-tier and entitles every feature, so no subscription is the ordinary state of a self-hosted account and the only thing it changes is the file allowance. "ended" is reported as degraded because it is the state in which a previously granted allowance can have gone away under this account’s feet.',
     }),
     observedRow({
       label: safeConstant('Subscription plan'),
@@ -1435,11 +1540,25 @@ function buildAccessBlock(observed: AccountObservations, reading: AdminReading, 
     }),
     diagnosticRow({
       label: safeConstant('Time until the subscription ends'),
-      value:
-        typeof endsIn === 'number' && Number.isFinite(endsIn) && endsIn <= 0
-          ? safeConstant('already ended')
-          : safeDuration(endsIn),
-      ...absentOr(endsIn, 'informational'),
+      // *** "36499d 23h" WAS NEVER A DURATION. *** An included plan's end date is
+      // recomputed on every read as "now, plus a century", so this row counted
+      // down from the same number for ever. It does not end; the row says that,
+      // on the same evidence that makes the row above read "included".
+      ...(subscription === 'included'
+        ? {
+            value: safeNothingToReport('an included plan does not expire'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'This account’s plan is included by the deployment: the server holds no subscription record for it, so there is no end date to count down to.',
+            ),
+          }
+        : {
+            value:
+              typeof endsIn === 'number' && Number.isFinite(endsIn) && endsIn <= 0
+                ? safeConstant('already ended')
+                : safeDuration(endsIn),
+            ...absentOr(endsIn, 'informational'),
+          }),
       note: 'How long is left, not when it ends. A duration answers the question; an expiry instant would additionally pin this account to a purchase date in a report written to be pasted in public.',
     }),
   )
@@ -1489,7 +1608,7 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
   const limitMb = wholeMegabytes(observed.fileUploadBytesLimit)
 
   const census = ACCOUNT_FILE_CENSUS.find((candidate) => candidate === observed.fileCensus)
-  const allowanceOrigin = FILE_ALLOWANCE_ORIGINS.find((candidate) => candidate === observed.fileAllowanceOrigin)
+  const allowanceOrigin = describeAllowanceOrigin(observed)
 
   const cap = observed.localSoftCapBytes
   const capSet = cap === undefined ? undefined : cap > 0
@@ -1497,14 +1616,27 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
   const localUsedMb = wholeMegabytes(observed.localUsageBytes)
 
   const itemReading = ITEM_USAGE_READINGS.find((candidate) => candidate === observed.itemUsageReading)
-  const itemMb = wholeMegabytes(observed.itemBytesUsed)
   const total = accountStorageTotal({
     itemBytes: observed.itemBytesUsed,
     fileBytes: observed.fileUploadBytesUsed,
     fileCensus: census,
     spaceFigureSource: observed.spaceFigureSource,
   })
-  const totalMb = total === undefined ? undefined : wholeMegabytes(total.bytes)
+  // *** THE THREE FIGURES ARE ROUNDED TOGETHER WHEN THEY ARE ONE SUM. *** Where
+  // the total really is the item bytes plus the file bytes, the two parts are
+  // apportioned to it, so the rows cannot print "0", "1" and "2". Where the
+  // total covers the items alone, each figure is its own floor, as before:
+  // there is no sum to keep.
+  const bothHalves =
+    total?.coverage === 'items-and-files' &&
+    wholeBytes(observed.itemBytesUsed) !== undefined &&
+    wholeBytes(observed.fileUploadBytesUsed) !== undefined
+      ? apportionWholeMegabytes([observed.itemBytesUsed as number, observed.fileUploadBytesUsed as number])
+      : undefined
+  const itemMb = bothHalves === undefined ? wholeMegabytes(observed.itemBytesUsed) : bothHalves.parts[0]
+  const fileUsedMb = bothHalves === undefined ? usedMb : bothHalves.parts[1]
+  const totalMb =
+    total === undefined ? undefined : bothHalves === undefined ? wholeMegabytes(total.bytes) : bothHalves.total
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -1526,13 +1658,16 @@ function buildSpaceBlock(observed: AccountObservations): DiagnosticBlock {
     }),
     diagnosticRow({
       label: safeConstant('Where the file allowance comes from'),
-      value: safeEnum(observed.fileAllowanceOrigin, FILE_ALLOWANCE_ORIGINS),
+      // The origin as RESOLVED, when it is one this build knows; the raw value
+      // goes through the same closed tuple otherwise, so an unrecognised origin
+      // still collapses to a constant instead of being printed.
+      value: safeEnum(allowanceOrigin ?? observed.fileAllowanceOrigin, FILE_ALLOWANCE_ORIGINS),
       ...absentOr(allowanceOrigin, 'informational'),
       note: 'Whether the allowance above is a per-account setting, the subscription plan’s default, or the unlimited fallback for an account with no live subscription. A closed server enum, admitted rather than printed. It is reported because the figure alone cannot be audited: "set for this account" is a decision with an author, "the plan default" is a ceiling nobody chose, and only the first can be raised from Admin → Users without changing the plan. "not reported" here means the server does not send provenance — every build before the effective-allowance answer — and not that the allowance is unset.',
     }),
     diagnosticRow({
       label: safeConstant('Server file bytes used, whole MB'),
-      value: safeCount(usedMb),
+      value: safeCount(fileUsedMb),
       ...absentOr(observed.fileUploadBytesUsed, 'informational'),
       note: 'Uploaded file bytes for this account, rounded down to whole megabytes. Note content is not counted here, which is why a large vault with no attachments reads 0.',
     }),

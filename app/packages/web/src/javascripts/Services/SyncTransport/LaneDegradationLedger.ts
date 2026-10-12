@@ -108,8 +108,17 @@ export const LANE_STATE_CARRIER: Record<SyncTransportState, 'http' | 'socket' | 
 export type LaneLedgerTransition = {
   readonly state: SyncTransportState
   readonly reason?: LaneLedgerReason
-  /** Whether the socket itself survived the transition, or was torn down. */
-  readonly socketPreserved: boolean
+  /**
+   * Whether the socket itself survived a fall onto HTTP, or was torn down.
+   *
+   * PRESENT ONLY ON A TRANSITION THAT LANDED ON HTTP, because that is the only
+   * place the question has an answer. It used to be a required boolean that
+   * defaulted to `false`, so every dial and every READY carried "the socket was
+   * torn down" — and the pane printed exactly that beside a state whose whole
+   * meaning is that the socket is up. A fact recorded for a transition it does
+   * not apply to is not a default; it is a wrong reading with nothing to mark it.
+   */
+  readonly socketPreserved?: boolean
   /** A DURATION from the start of this ledger. Never a wall-clock instant. */
   readonly msSinceLedgerStart: number
 }
@@ -131,6 +140,11 @@ export type LaneLedgerReading = {
   readonly transitions: readonly LaneLedgerTransition[]
   /** How many transitions fell off the end of the bounded ring. */
   readonly transitionsDropped: number
+  /**
+   * Single lanes that stood down while the transport stayed on the socket, by
+   * cause. NOT transitions: the transport did not move. See `recordLaneStandDown`.
+   */
+  readonly laneStandDownCounts: Readonly<Partial<Record<LaneLedgerReason, number>>>
   /** How long this ledger has been recording. An empty ledger is not a quiet one. */
   readonly recordingForMs: number
 }
@@ -152,6 +166,7 @@ export class LaneDegradationLedger {
   private readonly startedAt: number
   private readonly ring: LaneLedgerTransition[] = []
   private readonly fallbacks = new Map<LaneLedgerReason, number>()
+  private readonly laneStandDowns = new Map<LaneLedgerReason, number>()
   private readonly rejections = new Map<LaneLedgerRejectionStatus, number>()
   private dropped = 0
   private rejectionTotal = 0
@@ -186,7 +201,10 @@ export class LaneDegradationLedger {
    */
   recordTransition(state: SyncTransportState, reason: string | undefined, socketPreserved: boolean): void {
     const closedReason = reason === undefined ? undefined : this.closeReason(reason)
-    const signature = signatureOf(state, closedReason, socketPreserved)
+    // Whether the socket survived is a fact about a fall onto HTTP and about
+    // nothing else: a dial has no socket yet and READY has one by definition.
+    const landedOnHttp = LANE_STATE_CARRIER[state] === 'http'
+    const signature = signatureOf(state, closedReason, landedOnHttp && socketPreserved)
     if (signature === this.lastSignature) {
       return
     }
@@ -195,7 +213,7 @@ export class LaneDegradationLedger {
     this.ring.push({
       state,
       ...(closedReason === undefined ? {} : { reason: closedReason }),
-      socketPreserved,
+      ...(landedOnHttp ? { socketPreserved } : {}),
       msSinceLedgerStart: Math.max(0, this.now() - this.startedAt),
     })
     if (this.ring.length > LANE_LEDGER_TRANSITION_CAPACITY) {
@@ -209,6 +227,29 @@ export class LaneDegradationLedger {
     if (closedReason !== undefined && LANE_STATE_CARRIER[state] === 'http') {
       this.fallbacks.set(closedReason, (this.fallbacks.get(closedReason) ?? 0) + 1)
     }
+  }
+
+  /**
+   * Record ONE lane standing down while the transport stays on the socket.
+   *
+   * *** NOT A TRANSITION, AND IT USED TO BE RECORDED AS ONE. *** A single request
+   * — a collaboration authorization that arrived while the worker was busy with a
+   * sync command — is answered "use HTTP for this one" and the socket carries on.
+   * The transport did not move. It was written into the ring anyway, as a second
+   * READY with the lane's cause attached, and three wrong readings followed from
+   * that one record: the pane counted it as a RECOVERY (two recoveries beside
+   * zero degradations on a lane that had never left the socket), printed the
+   * lane's cause as the reason for the transport's latest "transition", and — the
+   * same call having also overwritten the transport-wide fallback reason — showed
+   * a READY transport with a fallback reason for as long as the page stayed open.
+   *
+   * It is counted here instead, by cause, where it is what it is: a per-lane
+   * event on a healthy socket. Bounded by the closed reason set, like the
+   * fallback counters, so it elides nothing and needs no ring.
+   */
+  recordLaneStandDown(reason: string): void {
+    const closedReason = this.closeReason(reason)
+    this.laneStandDowns.set(closedReason, (this.laneStandDowns.get(closedReason) ?? 0) + 1)
   }
 
   /**
@@ -246,12 +287,18 @@ export class LaneDegradationLedger {
       fallbackCounts[reason] = count
     }
 
+    const laneStandDownCounts: Partial<Record<LaneLedgerReason, number>> = {}
+    for (const [reason, count] of this.laneStandDowns) {
+      laneStandDownCounts[reason] = count
+    }
+
     return {
       controlPlaneRejections: this.rejectionTotal,
       controlPlaneRejectionsByStatus,
       fallbackCounts,
       transitions: [...this.ring],
       transitionsDropped: this.dropped,
+      laneStandDownCounts,
       recordingForMs: Math.max(0, this.now() - this.startedAt),
     }
   }

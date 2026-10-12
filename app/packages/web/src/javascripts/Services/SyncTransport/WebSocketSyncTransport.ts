@@ -36,7 +36,7 @@ import {
   utf8Bytes,
   WorkerAuthenticatedRpcRequest,
 } from './syncTransportProtocol'
-import { LaneDegradationLedger, type LaneLedgerReading } from './LaneDegradationLedger'
+import { LANE_STATE_CARRIER, LaneDegradationLedger, type LaneLedgerReading } from './LaneDegradationLedger'
 import { OWNER_LEASE_TTL_MS } from './SyncTransportOutbox'
 import { authoredLogMessage } from '@standardnotes/utils'
 
@@ -570,6 +570,32 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.state = state
     this.fallbackReason = reason
     this.ledger.recordTransition(state, reason, socketPreserved)
+  }
+
+  /**
+   * One lane standing down on its own, with the socket — if there is one — left
+   * exactly as it was.
+   *
+   * *** TWO CASES, AND ONLY ONE OF THEM IS A FACT ABOUT THE TRANSPORT. ***
+   *
+   * While the transport is ON THE SOCKET, a single request sent to HTTP is a
+   * per-lane event: nothing fell back, the socket is up, and the next request
+   * rides it. It is counted in the ledger and it must NOT touch `fallbackReason`.
+   * It used to — routed through `setTransportState` at the current state — and
+   * since no later transition arrives to clear it (the worker's state never
+   * moved), a READY transport reported a fallback reason for the life of the
+   * page, and the ledger gained a phantom READY the pane counted as a recovery.
+   *
+   * While the transport is NOT on the socket, the lane's cause IS the transport's
+   * current reason — a tab standing down for a sibling is told so here before any
+   * STATE message says it — so it is recorded as before.
+   */
+  private recordLaneStandDown(reason: SyncFallbackReason): void {
+    if (LANE_STATE_CARRIER[this.state] === 'socket') {
+      this.ledger.recordLaneStandDown(reason)
+      return
+    }
+    this.setTransportState(this.state, reason, true)
   }
 
   get transportStatus(): {
@@ -1795,11 +1821,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
       this.pendingCollaboration.delete(message.clientRequestId)
       if (message.type === 'COLLABORATION_FALLBACK') {
-        // A single lane standing down on a socket that stays up. The transport
-        // state does not move, so this is recorded at the CURRENT state with the
-        // socket marked preserved — otherwise the one degradation that leaves the
-        // connection intact is the one the ledger never sees.
-        this.setTransportState(this.state, message.reason, true)
+        // A single lane standing down, with the socket left as it was. On a live
+        // socket that is a per-lane event the ledger counts and the transport's
+        // own state and reason are untouched by; see `recordLaneStandDown`.
+        this.recordLaneStandDown(message.reason)
         collaborationPending.resolve(undefined)
       } else if (message.type === 'COLLABORATION_DENIED') {
         collaborationPending.resolve(null)
@@ -1823,10 +1848,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       case 'RECOVERY_DEFERRED':
         this.pending.delete(message.clientRequestId)
         // One lane standing down while the socket (another tab's) stays up, which is
-        // the shape `COLLABORATION_FALLBACK` is recorded with: the state does not move,
-        // so the reason is recorded against the CURRENT state rather than inventing a
-        // transition. Said once per cause, because it is expected and not a fault.
-        this.setTransportState(this.state, message.reason, true)
+        // the shape `COLLABORATION_FALLBACK` is recorded with: the state does not move.
+        // This tab is not on the socket here, so the cause becomes the transport's
+        // current reason. Said once per cause, because it is expected and not a fault.
+        this.recordLaneStandDown(message.reason)
         this.announceRecoveryDeferral(message.reason)
         pending.resolve(undefined)
         break
