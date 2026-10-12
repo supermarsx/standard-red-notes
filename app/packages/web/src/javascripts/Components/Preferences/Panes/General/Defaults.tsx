@@ -125,8 +125,8 @@ const Defaults: FunctionComponent<Props> = ({ application }) => {
                 <Text>
                   When enabled, the toolbar at the top of the note shrinks to its row of tabs and gives the rest of the
                   space to your note. Point at a tab, or click one, to bring its commands back; they hide again when you
-                  return to the note. You can also switch this with the arrow button next to the tabs, and press
-                  Cmd/Ctrl+Shift+K to jump straight into the commands.
+                  return to the note. The small button at the bottom right of the commands switches this too, and
+                  Cmd/Ctrl+Shift+K takes you straight into them.
                 </Text>
                 {!alwaysShowSuperToolbar && (
                   <div data-test="super-toolbar-auto-hide-unavailable">
