@@ -1,5 +1,6 @@
 import {
   SYNC_FALLBACK_REASON_EXPLANATIONS,
+  syncFallbackDisposition,
   type SyncFallbackReason,
   type SyncNegotiatedOperation,
   type SyncTransportState,
@@ -730,6 +731,24 @@ export function describeTransport(status: TransportStatusInput | undefined): Tra
 
   if (!status.fallbackReason) {
     return { ...copy }
+  }
+
+  /**
+   * *** A TAB THAT IS STANDING BY DID NOT "ATTEMPT AND ABANDON" ANYTHING. *** The
+   * second tab of an account lands in HTTP_FALLBACK because the first one holds
+   * the socket, and the state's own sentence — "the socket lane was attempted and
+   * abandoned; everything is on HTTP until the next attempt" — then sat at the
+   * top of a pane whose headline said OK. Both true of the state; neither true of
+   * what happened. The cause is the protocol's own "expected, and not a fault",
+   * so it gets a sentence that says what the tab is doing.
+   */
+  if (status.state !== 'READY' && syncFallbackDisposition(status.fallbackReason) === 'deferred') {
+    return {
+      label: 'HTTP (standing by)',
+      tone: 'neutral',
+      detail:
+        'Another tab of this account holds the realtime socket, so this tab syncs over HTTP by design and takes the socket over when that tab closes. Expected, and not a fault.',
+    }
   }
 
   const meaning = FALLBACK_REASON_COPY[status.fallbackReason]

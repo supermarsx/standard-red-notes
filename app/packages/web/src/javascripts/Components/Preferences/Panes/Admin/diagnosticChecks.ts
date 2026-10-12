@@ -270,6 +270,13 @@ export type CheckOutcome = {
    * where the reader already knows their own hosts, and never copied anywhere.
    */
   readonly detail: string
+  /**
+   * The check ran out of time: its request was accepted and never answered.
+   * Carried as a fact of its own because every check that times out is the SAME
+   * fault — a server that is not answering — and they raise one finding between
+   * them instead of one each.
+   */
+  readonly timedOut?: true
 }
 
 /** One check as the pane holds it: what it is, what it found, whether it is running now. */
@@ -456,8 +463,54 @@ const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
   },
 }
 
+/**
+ * *** ONE FAULT, HOWEVER MANY CHECKS HIT IT. *** Measured with Redis stopped
+ * under an open pane: every request was accepted and none was answered, six
+ * checks ran out of time, and the pane raised "a sync did not complete", "the
+ * revisions service did not answer" and "a file could not be stored" as three
+ * separate things to fix. None of them was the fault. A server that is not
+ * answering cannot tell the pane what it is waiting for, so the pane says the
+ * one thing it does know, once, and where to look instead.
+ *
+ * The same code from every check that timed out, so the Overview — which keeps
+ * one entry per code — shows one card and lists the sections that saw it.
+ */
+const SERVER_NOT_ANSWERING = safeConstant('SERVER_NOT_ANSWERING')
+
+function serverNotAnsweringFinding(reading: CheckReading): DiagnosticFinding {
+  const remedy: Remedy = {
+    code: String(SERVER_NOT_ANSWERING),
+    summary:
+      'The server is accepting requests and not answering them. Look at it from the host: a gateway waiting on a cache or a database it cannot reach behaves exactly like this, and cannot say so because it cannot answer.',
+    steps: [
+      'On the host, see which of this deployment’s containers or services is stopped or restarting (docker compose ps). The cache and the database are the two the gateway waits on for every request.',
+      'Read the gateway’s own log for what it is waiting for. Nothing in this pane can read further: every reading it shows comes from the server that is not answering.',
+      'Press Refresh here once the dependency is back. A dependency that was simply stopped needs nothing reconfigured.',
+    ],
+    effort: 'peer-service',
+    basis: 'verified',
+    because: [
+      `“${reading.definition.title}” sent its request and got no answer within its deadline. That is not a refusal: the connection was accepted.`,
+      'Every check that runs out of time raises this same finding, so however many did, it is listed once.',
+    ],
+  }
+
+  return diagnosticFinding({
+    code: SERVER_NOT_ANSWERING,
+    title: 'The server is accepting requests and not answering them',
+    detail:
+      'At least one check sent a request that was accepted and never answered. The checks that depend on the server will all read the same way, and none of them is the fault: the server is waiting on something it cannot reach, and cannot report it.',
+    verdict: 'broken',
+    evidence: EVIDENCE_DIRECT,
+    remedy,
+  })
+}
+
 function checkFinding(reading: CheckReading): DiagnosticFinding | undefined {
   const { definition, outcome } = reading
+  if (outcome?.timedOut === true) {
+    return serverNotAnsweringFinding(reading)
+  }
   const copy = CHECK_FAILURE[definition.id]
   if (copy === undefined || outcome === undefined || (outcome.state !== 'fail' && outcome.state !== 'degraded')) {
     return undefined
@@ -1387,7 +1440,8 @@ export function describeCheckTimeout(deadlineMs: number): Omit<CheckOutcome, 'id
   return {
     state: 'fail',
     result: safeTokens(safeConstant('no answer within'), safeCount(seconds), safeConstant('s')),
-    detail: `The check sent its request and nothing came back in ${seconds} seconds. That is not a refusal: something accepted the request and never answered it, which is what a service waiting on a dependency it cannot reach looks like. The Database & internal comms section says which dependency.`,
+    detail: `The check sent its request and nothing came back in ${seconds} seconds. That is not a refusal: something accepted the request and never answered it, which is what a server waiting on a dependency it cannot reach looks like.`,
+    timedOut: true,
   }
 }
 

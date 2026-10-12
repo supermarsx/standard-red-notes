@@ -1040,6 +1040,34 @@ describe('a check that never answers', () => {
     expect(Math.max(...Object.values(CHECK_DEADLINE_MS))).toBe(CHECK_DEADLINE_MS['file-transfer'])
   })
 
+  /**
+   * *** ONE FAULT, ONE FINDING. *** With Redis stopped under an open pane six
+   * checks ran out of time and the pane raised three unrelated-looking things to
+   * fix. Every check that times out raises the SAME code, so the Overview — one
+   * entry per code — shows it once.
+   */
+  it('raises the same finding from every check that ran out of time, in place of the check’s own', () => {
+    const timedOut = (id: CheckOutcome['id']): CheckOutcome => ({ id, ...describeCheckTimeout(CHECK_DEADLINE_MS.sync) })
+    const codes = new Set<string>()
+
+    for (const id of RUNNABLE_CHECK_IDS) {
+      const block = buildChecksBlock(CHECKS[id].section, readingsFrom({ [id]: timedOut(id) }))
+      const raised = block?.findings.map((finding) => String(finding.code))
+
+      expect({ id, raised }).toEqual({ id, raised: ['SERVER_NOT_ANSWERING'] })
+      codes.add(String(block?.findings[0]?.code))
+      expect(block?.findings[0]?.verdict).toBe('broken')
+      expect(block?.findings[0]?.remedy?.summary).toContain('accepting requests and not answering them')
+    }
+    expect([...codes]).toEqual(['SERVER_NOT_ANSWERING'])
+  })
+
+  it('still raises the check’s own finding for a failure that WAS answered', () => {
+    const answered = buildChecksBlock('backend', readingsFrom({ sync: outcome('sync', 'fail') }))
+
+    expect(answered?.findings.map((finding) => String(finding.code))).toEqual(['SYNC_ROUND_TRIP_DID_NOT_PASS'])
+  })
+
   it('reports running out of time as not working, in whole seconds, and says it is not a refusal', () => {
     const outcome = describeCheckTimeout(20_000)
 

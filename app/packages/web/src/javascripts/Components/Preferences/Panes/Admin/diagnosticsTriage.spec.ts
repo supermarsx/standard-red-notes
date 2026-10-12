@@ -8,6 +8,7 @@ import {
   observationsFromSections,
   overallWord,
   rankActions,
+  rankFindings,
   remedyLines,
   rowsFromSections,
   SOURCE_JOIN,
@@ -33,6 +34,12 @@ import {
   type Verdict,
 } from './diagnosticsSections'
 import type { Remedy } from './diagnosticRemedies'
+import { buildAccountSection } from './accountSection'
+import { buildBackendSection } from './backendSection'
+import { buildBrowserSection } from './browserSection'
+import { describeCheckTimeout, readingsFrom } from './diagnosticChecks'
+import { buildEnvironmentSection } from './environmentSection'
+import { buildWebsocketSection } from './websocketSection'
 
 /**
  * The triage is the ANSWER half of the pane, and the four things it must never do
@@ -559,5 +566,37 @@ describe('secrecy', () => {
     // NOT vacuous: the entry the planted fields feed really is rendered.
     expect(rendered).toContain('### 1. NOT WORKING — PUSH_BRIDGE_ABSENT')
     expect(rendered).toContain('Seen in: WebSocket')
+  })
+})
+
+/**
+ * The promise the timed-out checks rely on: one entry per code, however many
+ * sections raised it, with every section that saw it named.
+ */
+describe('a fault several sections saw', () => {
+  it('is one entry under "What needs attention", listing the sections that saw it', () => {
+    const timedOut = (id: 'capabilities' | 'server-build' | 'sync') => ({ id, ...describeCheckTimeout(20_000) })
+    const checks = readingsFrom({
+      capabilities: timedOut('capabilities'),
+      'server-build': timedOut('server-build'),
+      sync: timedOut('sync'),
+    })
+    const sections = {
+      websocket: buildWebsocketSection({ checks }),
+      environment: buildEnvironmentSection({ checks }),
+      backend: buildBackendSection({ checks }),
+      account: buildAccountSection({ checks }),
+      browser: buildBrowserSection({ checks }),
+    }
+    const ranked = rankFindings(sections).actions.filter(
+      (entry) => String(entry.finding.code) === 'SERVER_NOT_ANSWERING',
+    )
+
+    expect(ranked).toHaveLength(1)
+    expect(ranked[0]?.sources.map(String).sort()).toEqual(
+      ['Database & internal comms', 'Environment & setup', 'WebSocket'].sort(),
+    )
+    // And it is the FIRST thing the pane says.
+    expect(String(rankFindings(sections).actions[0]?.finding.code)).toBe('SERVER_NOT_ANSWERING')
   })
 })

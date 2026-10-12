@@ -120,6 +120,23 @@ describe('sync diagnostics model', () => {
       expect(verdict.detail).toContain('nothing to fall back FROM')
     })
 
+    it('says a tab that is standing by is standing by, not that it attempted the socket and abandoned it', () => {
+      const standingBy = describeTransport({
+        state: 'HTTP_FALLBACK',
+        operations: [],
+        fallbackReason: 'multi-tab-not-owner',
+      })
+      const fellBack = describeTransport({ state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'server-kill' })
+
+      expect(standingBy.label).toBe('HTTP (standing by)')
+      expect(standingBy.tone).toBe('neutral')
+      expect(standingBy.detail).toContain('Another tab of this account holds the realtime socket')
+      expect(standingBy.detail).not.toContain('attempted and abandoned')
+      // The control: a fallback for a fault keeps the state's own sentence.
+      expect(fellBack.detail).toContain('attempted and abandoned')
+      expect(fellBack.label).not.toBe('HTTP (standing by)')
+    })
+
     it('distinguishes never-attempted HTTP from a fallback', () => {
       expect(describeTransport({ state: 'HTTP_ONLY', operations: [] }).detail).toContain('never entered')
       expect(describeTransport({ state: 'HTTP_FALLBACK', operations: [] }).detail).toContain('attempted and abandoned')
