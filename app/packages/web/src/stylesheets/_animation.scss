@@ -139,6 +139,72 @@
   }
 
   /**
+   * EXCEPTION to the clamp above: nothing mermaid measures may transition.
+   *
+   * Standard Red Notes — bug fix: "node scattered really badly", "only sequence
+   * diagram look fine, anything else looks wrong". In Firefox, with reduced
+   * motion on — which is what the operating system reports whenever its
+   * animation effects are off, a Remote Desktop session included.
+   *
+   * The clamp does not remove transitions, it shortens them: 0.001ms is not
+   * zero and `transition-property` is `all` by default, so under this media
+   * query every element still transitions every property. A transition means
+   * that a script which changes a value and reads it back IN THE SAME TASK gets
+   * the old value, because the transition only advances on the next frame.
+   * Mermaid lays a diagram out from exactly such reads, twice:
+   *
+   *  1. THE BOX. For each HTML label it creates a `foreignObject` at 2000x2000
+   *     (`addHtmlSpan`: ten times the wrapping width), measures the text,
+   *     shrinks the `foreignObject` to fit, and then asks for the node group's
+   *     `getBBox()` to give the layout its size (`insertMeasuredNode`). In
+   *     Firefox a `foreignObject`'s `width`/`height` and a group's `transform`
+   *     are CSS properties, so the shrink is a transition and the box that
+   *     comes back is the 2000x2000 one. Measured in stock Firefox 157 on the
+   *     user's own four-node flowchart: attribute 32.5, computed width 2000px,
+   *     node box 2046x2027 where 92.5x54 is right — and a viewBox of 3199x4285
+   *     where 260x362 is right. The nodes are then DRAWN at their real size,
+   *     2000 units apart. Fifty milliseconds later the computed width is right.
+   *  2. THE FONT. Mermaid creates its `<svg>`, awaits (a chunk load, the first
+   *     time a diagram type is used), and only then inserts the `<style>` that
+   *     pins `font-size: 16px` on it. If a frame styled the `<svg>` during the
+   *     await, 15px -> 16px is a transition too, and every label is measured
+   *     at the editor's 15px and drawn at 16px: a slot 57.55 wide for a label
+   *     that needs 61.35.
+   *
+   * Sequence, pie and gantt charts are drawn with SVG `<text>`, which is
+   * created at its final size and never resized, so they were never affected.
+   * Chromium does not expose a transition's start value to a same-task read at
+   * all; with this rule absent it rendered all of these correctly, reduced
+   * motion or not.
+   *
+   * BOTH selectors are needed, measured in the running app with each one
+   * alone. The descendant selector by itself gives the right box and still the
+   * stale font (57.55x22.5): the labels INHERIT the size that the `<svg>`, and
+   * the `<g>` mermaid creates with it before the await, are still transitioning
+   * away from. The `<svg>` by itself fixes neither.
+   *
+   * Keyed on the id the app itself hands `mermaid.render`
+   * (`MERMAID_RENDER_ID_PREFIX`, MermaidSettings.ts), which mermaid puts on the
+   * `<svg>` it measures in. That one anchor holds wherever mermaid builds the
+   * element — inside the block's own measuring host, or under `document.body`
+   * when the block has no layout. A rule naming the host covers only the
+   * first: measured, it leaves the `document.body` path at 2000x2000. This one
+   * also matches the drawn copy, which carries the same id; there it changes
+   * nothing, since nothing reads that copy back.
+   *
+   * `transition-property`, not the `transition` shorthand: the clamp above
+   * outranks this selector on `transition-duration`, and leaves the property
+   * list alone.
+   *
+   * NOT covered, because it measured correct in every configuration: the Gantt
+   * chart block's own `gantt-` ids.
+   */
+  svg[id^='mermaid-'],
+  svg[id^='mermaid-'] * {
+    transition-property: none !important;
+  }
+
+  /**
    * Belt-and-suspenders: re-assert essential looping indicators as infinite in
    * case any of the above (or Tailwind's compiled utilities) tries to clamp
    * them. Durations are slowed slightly for reduced-motion comfort, but they

@@ -50,6 +50,7 @@ import {
   mermaidAlignmentStyle,
   type MermaidAppTheme,
   MermaidMaxHeight,
+  MERMAID_RENDER_ID_PREFIX,
   type MermaidRenderTheme,
   MermaidSettings,
   MermaidThemeMode,
@@ -567,7 +568,9 @@ function MermaidComponent({
           // resolveMermaidLabelFontFamily.
           fontFamily,
         })
-        const id = `mermaid-${nodeKey}-${renderSeq++}`
+        // The prefix is what the reduced-motion exception in
+        // stylesheets/_animation.scss recognises a measuring `<svg>` by.
+        const id = `${MERMAID_RENDER_ID_PREFIX}${nodeKey}-${renderSeq++}`
         // THE third argument: measure where the diagram is drawn. `undefined`
         // means mermaid's `document.body` path, which is all there is when the
         // block has no layout (a collapsed foldable, a hidden pane).

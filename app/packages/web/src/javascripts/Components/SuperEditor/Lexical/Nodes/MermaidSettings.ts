@@ -518,6 +518,21 @@ export function canMeasureMermaidIn(layout: { width: number; isRendered: boolean
 }
 
 /**
+ * What every id handed to `mermaid.render` starts with. Mermaid puts that id on
+ * the `<svg>` it builds and measures in, so the prefix is the one thing that
+ * identifies "an element mermaid is measuring" wherever mermaid builds it — in
+ * the block's measuring host, or under `document.body` when the block has no
+ * layout (see `canMeasureMermaidIn`).
+ *
+ * It is an ANCHOR, not a label: `stylesheets/_animation.scss` keys its
+ * reduced-motion exception on `svg[id^='mermaid-']`, and without that rule
+ * Firefox lays every HTML-label diagram out from 2000x2000 boxes whenever
+ * reduced motion is on. Named here so the render call and the spec that reads
+ * that stylesheet cannot drift apart; renaming it means renaming the selector.
+ */
+export const MERMAID_RENDER_ID_PREFIX = 'mermaid-'
+
+/**
  * The custom properties the palette is read from. Named here so a spec and the
  * reader cannot drift apart.
  */
