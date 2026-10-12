@@ -27,16 +27,24 @@ import {
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNotAvailableHere,
+  evidenceNothingToReport,
   evidenceProxy,
+  evidenceUntested,
   NOT_PUBLISHED,
   READING_MEANING,
   READING_TAG,
   safeConstant,
   safeCount,
   safeEnum,
+  safeNotAvailableHere,
+  safeNotTested,
+  safeNothingToReport,
   safeState,
+  VERDICT_CHIP_LABEL,
+  VERDICT_MEANING,
+  VERDICTS,
   type SectionModel,
-  type SectionTaggedOutcome,
   type Verdict,
 } from './diagnosticsSections'
 import type { Remedy } from './diagnosticRemedies'
@@ -51,14 +59,6 @@ const remedy: Remedy = {
   effort: 'restart',
   basis: 'verified',
   because: ['The gRPC syncing proxy was not bound at boot.'],
-}
-
-const outcome: SectionTaggedOutcome = {
-  name: 'Ticket mint',
-  passed: false,
-  detail: 'The gateway answered 503 SYNC_DISABLED.',
-  reportDetail: 'ticket mint refused: SYNC_DISABLED',
-  section: 'websocket',
 }
 
 const model = (): SectionModel =>
@@ -112,7 +112,6 @@ const model = (): SectionModel =>
             remedy,
           }),
         ],
-        outcomes: [outcome],
       },
       {
         heading: safeConstant('Realtime health'),
@@ -165,6 +164,22 @@ const rowChip = (label: string): string | undefined => {
   return [...(row?.querySelectorAll('span') ?? [])].map((element) => element.textContent ?? '')[0]
 }
 
+/**
+ * The VERDICT on one named row's chip, read off the element rather than its word.
+ *
+ * The word is copy and may change; `data-diagnostics-status` is the fact. It is
+ * read from the chip inside the row's third cell, so it cannot be satisfied by a
+ * chip that belongs to the block's summary or to another row.
+ */
+const rowStatus = (label: string): string | null => {
+  const row = [...container.querySelectorAll('tr')].find(
+    (element) => element.querySelector('td')?.textContent === label,
+  )
+  const cell = [...(row?.querySelectorAll('td') ?? [])][2]
+
+  return cell?.querySelector('[data-diagnostics-status]')?.getAttribute('data-diagnostics-status') ?? null
+}
+
 describe('DiagnosticsSection', () => {
   it('renders the section title, its worst-verdict chip and every block heading', async () => {
     const text = await render(model())
@@ -185,12 +200,14 @@ describe('DiagnosticsSection', () => {
     expect(text).toContain('attached')
     expect(text).toContain('A websocket gateway is attached to this process.')
     expect(rowChip('Gateway')).toBe('OK')
+    expect(rowStatus('Gateway')).toBe('healthy')
   })
 
   it('paints a claim built on a proxy as Unknown, never as OK, and prints the caveat', async () => {
     const text = await render(model())
 
     expect(rowChip('SYNC_ITEMS')).toBe('Unknown')
+    expect(rowStatus('SYNC_ITEMS')).toBe('undetermined')
     expect(text).toContain('does not establish')
     expect(text).toContain('that the handshake advertises SYNC_ITEMS')
   })
@@ -201,7 +218,10 @@ describe('DiagnosticsSection', () => {
     expect(text).toContain('not reported')
     expect(text).toContain('An unreported field is not a negative answer.')
     expect(rowChip('Live sockets')).toBe('Unknown')
-    expect(chips()).not.toContain('Down')
+    // No ROW and no block reads as not working. Asked of the rows and the block
+    // headers, not of every chip on the page: the legend lists all seven.
+    expect(container.querySelector('tr [data-diagnostics-status="broken"]')).toBeNull()
+    expect(container.querySelector('[data-diagnostics-block] > summary [data-diagnostics-status="broken"]')).toBeNull()
   })
 
   it('keeps a row that was never a verdict out of the verdict vocabulary', async () => {
@@ -218,22 +238,81 @@ describe('DiagnosticsSection', () => {
     expect(text).not.toContain('redis.internal.example')
   })
 
-  it('renders findings with their remedy, steps and evidence', async () => {
-    const text = await render(model())
+  /**
+   * *** STATUS, ONE SENTENCE, ONE ACTION — AND THE REASONING BEHIND A FOLD. ***
+   *
+   * Asserted on ELEMENTS, in order, and not on the text being somewhere on the
+   * page: every one of these strings was already on the page when the card was
+   * five paragraphs with the instruction buried in the middle of them.
+   */
+  it('leads a finding with its status, then one sentence, then one action, and folds the rest', async () => {
+    await render(model())
+    const card = container.querySelector('[data-diagnostics-finding="SYNC_ITEMS_WITHHELD"]')
 
-    expect(text).toContain('Note syncing is falling back to HTTP')
-    expect(text).toContain('Set SERVICE_PROXY_TYPE to grpc and restart the container.')
-    expect(text).toContain('Set SERVICE_PROXY_TYPE=grpc')
-    expect(text).toContain('The gRPC syncing proxy was not bound at boot.')
-    expect(chips()).toContain('Config + restart')
+    expect(card).not.toBeNull()
+    expect(card?.getAttribute('data-diagnostics-finding-status')).toBe('degraded')
+
+    // 1. the status chip is the FIRST thing in the card
+    const first = card?.firstElementChild?.firstElementChild
+    expect(first?.getAttribute('data-diagnostics-status')).toBe('degraded')
+    // 2. then the one sentence
+    expect(card?.querySelector('[data-diagnostics-finding-title]')?.textContent).toBe(
+      'Note syncing is falling back to HTTP',
+    )
+    // 3. then the ONE action: the remedy's summary, with where the fix lives
+    const action = card?.querySelector('[data-diagnostics-finding-action]')
+    expect(action?.textContent).toContain('Set SERVICE_PROXY_TYPE to grpc and restart the container.')
+    expect(action?.textContent).toContain('Config + restart')
+    // …and the action does NOT carry the steps or the reasoning.
+    expect(action?.textContent).not.toContain('Set SERVICE_PROXY_TYPE=grpc')
+    expect(action?.textContent).not.toContain('was not bound at boot')
+
+    // 4. the long detail, the steps and the evidence are in a CLOSED fold —
+    //    present in the DOM, so nothing is dropped, and not open.
+    const fold = card?.querySelector('details[data-diagnostics-finding-reasoning]') as HTMLDetailsElement | null
+    expect(fold).not.toBeNull()
+    expect(fold?.open).toBe(false)
+    expect(fold?.textContent).toContain('The socket stays up and carries collaboration')
+    expect(fold?.textContent).toContain('Set SERVICE_PROXY_TYPE=grpc')
+    expect(fold?.textContent).toContain('The gRPC syncing proxy was not bound at boot.')
+
+    // Order in the document: title before action before fold.
+    const order = (element: Element | null | undefined): number =>
+      element ? [...(card?.querySelectorAll('*') ?? [])].indexOf(element) : -1
+    expect(order(card?.querySelector('[data-diagnostics-finding-title]'))).toBeLessThan(order(action))
+    expect(order(action)).toBeLessThan(order(fold))
   })
 
-  it('renders probe outcomes read-only and says where a run is started', async () => {
-    const text = await render(model())
+  it('says a finding has no recorded fix rather than leaving the action empty', async () => {
+    await render(
+      buildSectionModel({
+        id: 'backend',
+        blocks: [
+          {
+            heading: safeConstant('Queues'),
+            description: 'd',
+            rows: [],
+            findings: [
+              diagnosticFinding({
+                code: safeConstant('EVENT_QUEUE_SHARED'),
+                title: 'Two consumers share one queue',
+                detail: 'detail',
+                verdict: 'broken',
+                evidence: EVIDENCE_DIRECT,
+              }),
+            ],
+          },
+        ],
+      }),
+    )
+    const action = container.querySelector('[data-diagnostics-finding-action]')
 
-    expect(text).toContain('Ticket mint')
-    expect(text).toContain('The gateway answered 503 SYNC_DISABLED.')
-    expect(text).toContain('only place a run can be started')
+    expect(action?.textContent).toContain('No fix is recorded in this client build')
+  })
+
+  it('starts no check and offers no control of its own', async () => {
+    await render(model())
+
     expect(container.querySelectorAll('button')).toHaveLength(0)
   })
 
@@ -264,15 +343,44 @@ describe('DiagnosticsSection', () => {
 
   /**
    * The unmapped-`Icon` hazard: an `Icon` whose `type` is absent from
-   * `IconNameToSvgMapping.ts` renders its own name as literal text, and both tsc
-   * and any spec that mocks `Icon` are blind to it. This renderer is text-only,
-   * and this is the assertion that keeps it that way — adding an icon fails here
-   * first, which is the point at which the mapping has to be proven.
+   * `IconNameToSvgMapping.ts` renders its own name as literal text inside a
+   * `label`, and both tsc and any spec that mocks `Icon` are blind to it. This
+   * renderer used to be text-only and asserted it emitted no svg at all. Every
+   * status has an icon now, so the assertion is the hazard itself: `Icon` is NOT
+   * mocked in this file, every chip drew exactly one glyph, and nothing fell
+   * back to a label.
    */
-  it('emits no SVG, so no section can acquire an unmapped icon unnoticed', async () => {
+  it('draws one real glyph for every status chip and falls back to a name for none', async () => {
     await render(model())
 
-    expect(container.querySelectorAll('svg')).toHaveLength(0)
+    const statusChips = [...container.querySelectorAll('[data-diagnostics-status]')]
+    expect(statusChips.length).toBeGreaterThan(5)
+    for (const chip of statusChips) {
+      expect(chip.querySelectorAll('svg')).toHaveLength(1)
+      // Decorative: the word beside it is the accessible name.
+      expect(chip.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+      expect((chip.textContent ?? '').trim().length).toBeGreaterThan(0)
+    }
+    expect(container.querySelectorAll('label')).toHaveLength(0)
+  })
+
+  /**
+   * Every status, side by side, in the legend each section carries: a word, a
+   * glyph and the gloss. Seven verdicts, seven DISTINCT glyphs — a status that
+   * differed from another only by colour would fail here.
+   */
+  it('lists every status in its legend with a word, a distinct glyph and what it means', async () => {
+    const text = await render(model())
+    const legend = container.querySelector('[data-diagnostics-legend]')
+    const entries = [...(legend?.querySelectorAll('[data-diagnostics-status]') ?? [])]
+
+    expect(entries.map((entry) => entry.getAttribute('data-diagnostics-status')).sort()).toEqual([...VERDICTS].sort())
+    const glyphs = entries.map((entry) => entry.querySelector('svg')?.innerHTML ?? '')
+    expect(new Set(glyphs).size).toBe(VERDICTS.length)
+    for (const verdict of VERDICTS) {
+      expect(legend?.textContent).toContain(VERDICT_CHIP_LABEL[verdict])
+      expect(text).toContain(VERDICT_MEANING[verdict])
+    }
   })
 })
 
@@ -285,7 +393,7 @@ describe('DiagnosticsSection', () => {
  * `data-diagnostics-reading`, the two silences carry a tag, and each block states
  * its own census.
  */
-describe('DiagnosticsSection — the three silences', () => {
+describe('DiagnosticsSection — the silences', () => {
   const threeReadings = (): SectionModel =>
     buildSectionModel({
       id: 'browser',
@@ -312,8 +420,29 @@ describe('DiagnosticsSection — the three silences', () => {
               label: safeConstant('Unpublished'),
               value: NOT_PUBLISHED,
               verdict: 'informational',
-              evidence: EVIDENCE_ABSENT,
+              evidence: evidenceNotAvailableHere('No endpoint publishes this field.'),
               note: 'nothing publishes it',
+            }),
+            diagnosticRow({
+              label: safeConstant('Not exposed'),
+              value: safeNotAvailableHere('this browser does not expose it'),
+              verdict: 'informational',
+              evidence: evidenceNotAvailableHere('This browser has no such API.'),
+              note: 'the browser does not offer it',
+            }),
+            diagnosticRow({
+              label: safeConstant('Nothing happened'),
+              value: safeNothingToReport('no failure recorded'),
+              verdict: 'informational',
+              evidence: evidenceNothingToReport('The counters were reported and read zero.'),
+              note: 'the last failure, had there been one',
+            }),
+            diagnosticRow({
+              label: safeConstant('Untested'),
+              value: safeNotTested('run it from this pane'),
+              verdict: 'healthy',
+              evidence: evidenceUntested('run “File round trip” on the Checks tab'),
+              note: 'what the check does',
             }),
           ],
           findings: [],
@@ -335,7 +464,31 @@ describe('DiagnosticsSection — the three silences', () => {
 
     expect(readingOfRow('Answered')).toBe('answered')
     expect(readingOfRow('Unanswered')).toBe('unanswered')
-    expect(readingOfRow('Unpublished')).toBe('unpublished')
+    expect(readingOfRow('Unpublished')).toBe('unavailable')
+    expect(readingOfRow('Not exposed')).toBe('unavailable')
+    expect(readingOfRow('Nothing happened')).toBe('not-applicable')
+    expect(readingOfRow('Untested')).toBe('untested')
+  })
+
+  /**
+   * The split that this whole change is for. Four rows with no value used to read
+   * alike — "not reported", Unknown — and here each has its own status: only the
+   * one that was asked for and did not arrive is unknown.
+   */
+  it('gives each kind of silence its own status, and only one of them is unknown', async () => {
+    await render(threeReadings())
+
+    expect(rowStatus('Unanswered')).toBe('undetermined')
+    expect(rowStatus('Unpublished')).toBe('not-applicable')
+    expect(rowStatus('Not exposed')).toBe('not-applicable')
+    expect(rowStatus('Nothing happened')).toBe('not-applicable')
+    expect(rowStatus('Untested')).toBe('untested')
+    expect(rowChip('Untested')).toBe('Not tested')
+    expect(rowChip('Nothing happened')).toBe('N/A')
+    // The reason is printed with the row, so "not applicable" is never bare.
+    expect(container.textContent).toContain('The counters were reported and read zero.')
+    expect(container.textContent).toContain('This browser has no such API.')
+    expect(container.textContent).toContain('Not tested yet: run “File round trip” on the Checks tab.')
   })
 
   it('prints a tag for each silence and none for a value', async () => {
@@ -352,7 +505,10 @@ describe('DiagnosticsSection — the three silences', () => {
 
     expect(tagsIn('Answered')).toEqual([])
     expect(tagsIn('Unanswered')).toEqual([READING_TAG.unanswered])
-    expect(tagsIn('Unpublished')).toEqual([READING_TAG.unpublished])
+    expect(tagsIn('Unpublished')).toEqual([READING_TAG.unavailable])
+    expect(tagsIn('Not exposed')).toEqual([READING_TAG.unavailable])
+    expect(tagsIn('Nothing happened')).toEqual([READING_TAG['not-applicable']])
+    expect(tagsIn('Untested')).toEqual([READING_TAG.untested])
   })
 
   /**
@@ -363,9 +519,9 @@ describe('DiagnosticsSection — the three silences', () => {
   it('keeps the verdict chip as the first span in every row', async () => {
     await render(threeReadings())
 
-    for (const label of ['Answered', 'Unanswered', 'Unpublished']) {
+    for (const label of ['Answered', 'Unanswered', 'Unpublished', 'Not exposed', 'Nothing happened', 'Untested']) {
       expect(rowChip(label)).toBeDefined()
-      expect(['OK', 'Unknown', 'Info', 'Degraded', 'Down']).toContain(rowChip(label))
+      expect(Object.values(VERDICT_CHIP_LABEL)).toContain(rowChip(label))
     }
   })
 
@@ -373,16 +529,23 @@ describe('DiagnosticsSection — the three silences', () => {
     await render(threeReadings())
     const block = container.querySelector('[data-diagnostics-block="Readings"]')
 
-    expect(block?.getAttribute('data-diagnostics-census')).toBe('answered=1,unanswered=1,unpublished=1')
-    expect(block?.querySelector('summary')?.textContent).toContain('3 rows: 1 answered · 1 no answer · 1 no source')
+    expect(block?.getAttribute('data-diagnostics-census')).toBe(
+      'answered=1,unanswered=1,untested=1,not-applicable=1,unavailable=2',
+    )
+    // The header counts STATUSES, worst first: it is what a reader scans for.
+    expect(block?.querySelector('[data-diagnostics-block-counts]')?.textContent).toBe(
+      '1 unknown · 1 not tested · 1 OK · 3 n/a',
+    )
   })
 
-  it('explains all three readings once per section, including the one with no tag', async () => {
+  it('explains every reading once per section, including the one with no tag', async () => {
     const text = await render(threeReadings())
 
     expect(text).toContain(READING_MEANING.answered)
     expect(text).toContain(READING_MEANING.unanswered)
-    expect(text).toContain(READING_MEANING.unpublished)
+    expect(text).toContain(READING_MEANING.untested)
+    expect(text).toContain(READING_MEANING['not-applicable'])
+    expect(text).toContain(READING_MEANING.unavailable)
     expect(text).toContain(READING_TAG.unanswered)
   })
 })
@@ -446,7 +609,7 @@ describe('DiagnosticsSection — collapsing', () => {
    * heading here would therefore test the wrong thing and pass for the wrong
    * reason.
    */
-  it('opens a block whose rows alone are degraded or broken, and keeps an undetermined one closed', async () => {
+  it('opens a block whose rows alone keep the section off OK, and keeps every other one closed', async () => {
     const rowOnly = (verdict: Verdict): SectionModel =>
       buildSectionModel({
         id: 'backend',
@@ -468,11 +631,15 @@ describe('DiagnosticsSection — collapsing', () => {
         ],
       })
 
-    for (const verdict of ['broken', 'degraded'] as const) {
+    // An unknown or untested row is what the section's summary line names as
+    // the reason it is not OK, so the block holding it is open: a headline that
+    // says "Not tested: Socket ticket" over a folded block would make the reader
+    // hunt for the row it just named.
+    for (const verdict of ['broken', 'degraded', 'undetermined', 'untested'] as const) {
       await render(rowOnly(verdict))
       expect(blockFor(`Rows ${verdict}`).open).toBe(true)
     }
-    for (const verdict of ['undetermined', 'healthy', 'informational'] as const) {
+    for (const verdict of ['healthy', 'informational', 'not-applicable'] as const) {
       await render(rowOnly(verdict))
       expect(blockFor(`Rows ${verdict}`).open).toBe(false)
     }
@@ -523,11 +690,14 @@ describe('DiagnosticsSection — collapsing', () => {
           heading: safeConstant('Quiet'),
           description: 'd',
           rows: [
+            // A row with nothing to act on — a settled absence — so the block is
+            // collapsed. (An UNANSWERED row would open it now: that is the reason
+            // the section is not OK, and the next assertion pins it.)
             diagnosticRow({
               label: safeConstant('Storage estimate call'),
-              value: safeCount(undefined),
-              verdict: 'healthy',
-              evidence: EVIDENCE_ABSENT,
+              value: safeNothingToReport('no failure recorded'),
+              verdict: 'informational',
+              evidence: evidenceNothingToReport('The counters were reported and read zero.'),
               note: 'n',
             }),
           ],
@@ -539,7 +709,7 @@ describe('DiagnosticsSection — collapsing', () => {
 
     expect(blockFor('Quiet').open).toBe(false)
     expect(quiet).toContain('Storage estimate call')
-    expect(quiet).toContain('not reported')
+    expect(quiet).toContain('nothing to report (no failure recorded)')
     expect(blockFor('Quiet').querySelectorAll('tbody tr')).toHaveLength(1)
   })
 
@@ -576,8 +746,7 @@ describe('DiagnosticsSection — collapsing', () => {
     await render(model())
 
     expect(container.querySelectorAll('button')).toHaveLength(0)
-    expect(container.querySelectorAll('summary').length).toBe(model().blocks.length)
-    expect(container.querySelectorAll('svg')).toHaveLength(0)
+    expect(container.querySelectorAll('[data-diagnostics-block] > summary').length).toBe(model().blocks.length)
   })
 
   it('names the block and its verdict in the summary, so a collapsed block is still an index', async () => {

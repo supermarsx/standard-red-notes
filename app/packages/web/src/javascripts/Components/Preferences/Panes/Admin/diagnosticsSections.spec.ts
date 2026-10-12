@@ -2,24 +2,27 @@ import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 
 import {
+  BLOCKS_OK,
   blockWorstVerdict,
   buildSectionModel,
   describeCensus,
+  describeVerdictCensus,
   diagnosticFinding,
   diagnosticRow,
   ENV_NAME,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNotAvailableHere,
+  evidenceNothingToReport,
   evidenceProxy,
+  evidenceUntested,
   isBlockEmpty,
   LANE_REJECTION_STATUSES,
   NOT_PUBLISHED,
-  outcomesForSection,
   PERCENT_BUCKETS,
   PROXY_RELATIONS,
   readingCensus,
   readingOf,
-  READING_MARKER,
   READING_MEANING,
   READING_TAG,
   reportLine,
@@ -30,6 +33,9 @@ import {
   safeDuration,
   safeEnum,
   safeEnvName,
+  safeNotAvailableHere,
+  safeNotTested,
+  safeNothingToReport,
   safePercentBucket,
   safePresence,
   safeState,
@@ -38,18 +44,23 @@ import {
   safeYesNo,
   SECTION_IDS,
   SECTION_TITLE,
+  STATUS_TAG,
   TONE_FOR_VERDICT,
   UNRECOGNISED,
   VERDICT_CHIP_LABEL,
+  VERDICT_MEANING,
   VERDICT_SEVERITY,
+  verdictCensus,
   VERDICTS,
+  WITNESS_STATES,
   worstVerdictOf,
   type DiagnosticBlock,
   type DiagnosticRow,
   type Evidence,
   type SafeValue,
-  type SectionTaggedOutcome,
   type Verdict,
+  type Witness,
+  type WitnessState,
 } from './diagnosticsSections'
 import { admitToken, declarePattern, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
 import { TONES } from './syncDiagnostics'
@@ -688,39 +699,6 @@ describe('worstVerdictOf and blockWorstVerdict', () => {
     expect(blockWorstVerdict(block)).toBe('degraded')
     expect(isBlockEmpty(block)).toBe(false)
   })
-
-  it('counts a block carrying only probe outcomes as non-empty', () => {
-    const outcome: SectionTaggedOutcome = {
-      name: 'Ticket mint',
-      passed: true,
-      detail: 'detail',
-      reportDetail: 'reportDetail',
-      section: 'websocket',
-    }
-
-    expect(
-      isBlockEmpty({
-        heading: safeConstant('Socket checks'),
-        description: 'description',
-        rows: [],
-        findings: [],
-        outcomes: [outcome],
-      }),
-    ).toBe(false)
-  })
-})
-
-describe('outcomesForSection', () => {
-  const outcomes: SectionTaggedOutcome[] = [
-    { name: 'a', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' },
-    { name: 'b', passed: false, detail: 'd', reportDetail: 'r', section: 'browser' },
-    { name: 'c', passed: true, detail: 'd', reportDetail: 'r' },
-  ]
-
-  it('keeps only the outcomes tagged for that section, and drops untagged ones', () => {
-    expect(outcomesForSection(outcomes, 'websocket').map((outcome) => outcome.name)).toEqual(['a'])
-    expect(outcomesForSection(outcomes, 'environment')).toHaveLength(0)
-  })
 })
 
 describe('buildSectionModel', () => {
@@ -804,10 +782,10 @@ describe('buildSectionModel', () => {
     const report = model.reportLines.join('\n')
 
     expect(report).toContain('## WebSocket')
-    expect(report).toContain('- Worst verdict: broken')
+    expect(report).toContain('- Status: NOT WORKING')
     expect(report).toContain('### Lane')
-    expect(report).toContain('- [v] Gateway: attached')
-    expect(report).toContain('- Finding: PUSH_BRIDGE_UNBOUND broken')
+    expect(report).toContain('- [OK] Gateway: attached')
+    expect(report).toContain('- Finding: NOT WORKING PUSH_BRIDGE_UNBOUND')
     expect(report).toContain('- Protocol version: 1')
     // Prose stays on screen. `note`, `title` and `detail` are the three fields a
     // builder could interpolate a server value into, so none of them is on the
@@ -904,9 +882,44 @@ describe('readingOf', () => {
     expect(readingOf(safeDuration(undefined))).toBe('unanswered')
   })
 
-  it('reads a field with no producer as its own third state', () => {
-    expect(readingOf(NOT_PUBLISHED)).toBe('unpublished')
+  it('reads a field with no producer as not available here, never as unanswered', () => {
+    expect(readingOf(NOT_PUBLISHED)).toBe('unavailable')
     expect(readingOf(NOT_PUBLISHED)).not.toBe('unanswered')
+  })
+
+  /**
+   * *** THE THREE SILENCES THAT USED TO BE ONE. *** Each constructor yields a value
+   * whose reading is its own, so a row built with one cannot be counted among the
+   * questions that went unanswered — which is the count that kept a healthy
+   * deployment's headline on UNKNOWN.
+   */
+  it('reads each settled silence as its own state, with the qualifier attached', () => {
+    const nothing = safeNothingToReport('no gRPC failure recorded')
+    const unavailable = safeNotAvailableHere('this browser does not expose it')
+    const untested = safeNotTested('run it from this pane')
+
+    expect(String(nothing)).toBe('nothing to report (no gRPC failure recorded)')
+    expect(String(unavailable)).toBe('not available here (this browser does not expose it)')
+    expect(String(untested)).toBe('not tested (run it from this pane)')
+    expect(readingOf(nothing)).toBe('not-applicable')
+    expect(readingOf(unavailable)).toBe('unavailable')
+    expect(readingOf(untested)).toBe('untested')
+    // And none of the three is the one silence worth asking "why not?" of.
+    for (const value of [nothing, unavailable, untested]) {
+      expect(readingOf(value)).not.toBe('unanswered')
+      expect(readingOf(value)).not.toBe('answered')
+    }
+  })
+
+  it('refuses a qualifier that is not a literal of this build', () => {
+    const fromTheWire: string = JSON.parse('"redis://admin:hunter2@host:6379"')
+
+    // @ts-expect-error — a `string` is not a literal, so a server value cannot become the reason
+    safeNothingToReport(fromTheWire)
+    // @ts-expect-error — same rule
+    safeNotAvailableHere(fromTheWire)
+    // @ts-expect-error — same rule
+    safeNotTested(fromTheWire)
   })
 
   /**
@@ -929,7 +942,10 @@ describe('readingOf', () => {
    */
   it('does not call a value a silence because it mentions one', () => {
     expect(readingOf(safeTokens(safePresence(false), safeConstant('(threshold not reported)')))).toBe('answered')
-    expect(readingOf(safeTokens(safeConstant('no endpoint publishes this'), safeConstant('(yet)')))).toBe('unpublished')
+    expect(readingOf(safeTokens(safeConstant('no endpoint publishes this'), safeConstant('(yet)')))).toBe('unavailable')
+    // A value that merely MENTIONS a settled silence is still a reading.
+    expect(readingOf(safeTokens(safeConstant('issued;'), safeConstant('not tested for replay')))).toBe('answered')
+    expect(readingOf(safeTokens(safeConstant('on HTTP:'), safeConstant('nothing to report')))).toBe('answered')
     expect(readingOf(safeTokens(safeConstant('not reported'), safeConstant('(by this build)')))).toBe('unanswered')
   })
 })
@@ -946,16 +962,27 @@ describe('readingCensus and describeCensus', () => {
       }),
     )
 
-  it('always carries all three keys, so a zero is a reading', () => {
+  it('always carries every key, so a zero is a reading', () => {
     const census = readingCensus(rowsOf(safeYesNo(true)))
 
-    expect(census).toEqual({ answered: 1, unanswered: 0, unpublished: 0 })
+    expect(census).toEqual({ answered: 1, unanswered: 0, untested: 0, 'not-applicable': 0, unavailable: 0 })
+    expect(Object.keys(census).sort()).toEqual([...ROW_READINGS].sort())
   })
 
   it('counts a mixed block correctly', () => {
-    const census = readingCensus(rowsOf(safeYesNo(true), safeCount(undefined), safeCount(undefined), NOT_PUBLISHED))
+    const census = readingCensus(
+      rowsOf(
+        safeYesNo(true),
+        safeCount(undefined),
+        safeCount(undefined),
+        NOT_PUBLISHED,
+        safeNotAvailableHere('this browser does not expose it'),
+        safeNothingToReport('the read answered'),
+        safeNotTested('run it from this pane'),
+      ),
+    )
 
-    expect(census).toEqual({ answered: 1, unanswered: 2, unpublished: 1 })
+    expect(census).toEqual({ answered: 1, unanswered: 2, untested: 1, 'not-applicable': 1, unavailable: 2 })
   })
 
   /**
@@ -982,19 +1009,43 @@ describe('reportRow', () => {
       note: 'n',
     })
 
-  it('marks each of the three readings with its own marker', () => {
+  /**
+   * *** THE TAG IS THE VERDICT. *** It used to be the reading — whether a value
+   * arrived — so a line said `[v]` over a row the screen called Unknown, and no
+   * line of the paste said whether the fact on it was good news.
+   */
+  it('tags every row with the status its evidence earned', () => {
+    const verdictRow = (verdict: Verdict, evidence = EVIDENCE_DIRECT, value: SafeValue = safeConstant('issuing')) =>
+      diagnosticRow({ label: safeConstant('Ticket minting right now'), value, verdict, evidence, note: 'n' })
+
     expect(String(reportRow(row(safeState(true, 'issuing', 'refusing'))))).toBe(
-      '- [v] Ticket minting right now: issuing',
+      '- [INFO] Ticket minting right now: issuing',
     )
-    expect(String(reportRow(row(safeCount(undefined))))).toBe('- [?] Ticket minting right now: not reported')
-    expect(String(reportRow(row(NOT_PUBLISHED)))).toBe('- [n] Ticket minting right now: no endpoint publishes this')
+    expect(String(reportRow(verdictRow('healthy')))).toBe('- [OK] Ticket minting right now: issuing')
+    expect(String(reportRow(verdictRow('degraded')))).toBe('- [DEGRADED] Ticket minting right now: issuing')
+    expect(String(reportRow(verdictRow('broken')))).toBe('- [NOT WORKING] Ticket minting right now: issuing')
+    // The CAPPED verdict, not the claimed one: absent evidence is UNKNOWN whatever was asked for.
+    expect(String(reportRow(verdictRow('healthy', EVIDENCE_ABSENT, safeCount(undefined))))).toBe(
+      '- [UNKNOWN] Ticket minting right now: not reported',
+    )
+    expect(
+      String(reportRow(verdictRow('healthy', evidenceUntested('run it'), safeNotTested('run it from this pane')))),
+    ).toBe('- [NOT TESTED] Ticket minting right now: not tested (run it from this pane)')
+    expect(
+      String(
+        reportRow(verdictRow('healthy', evidenceNothingToReport('because'), safeNothingToReport('the read answered'))),
+      ),
+    ).toBe('- [N/A] Ticket minting right now: nothing to report (the read answered)')
   })
 
-  it('draws every marker from the exhaustive Record, and uses three distinct ones', () => {
-    expect(Object.keys(READING_MARKER).sort()).toEqual([...ROW_READINGS].sort())
-    expect(new Set(Object.values(READING_MARKER)).size).toBe(ROW_READINGS.length)
+  it('draws every tag from the exhaustive Record, and uses distinct ones', () => {
+    expect(Object.keys(STATUS_TAG).sort()).toEqual([...VERDICTS].sort())
+    expect(new Set(Object.values(STATUS_TAG)).size).toBe(VERDICTS.length)
+    for (const verdict of VERDICTS) {
+      expect(STATUS_TAG[verdict]).toBe(STATUS_TAG[verdict].toUpperCase())
+      expect(VERDICT_MEANING[verdict].length).toBeGreaterThan(0)
+    }
     for (const reading of ROW_READINGS) {
-      expect(READING_MARKER[reading].length).toBeGreaterThan(0)
       expect(READING_TAG[reading].length).toBeGreaterThan(0)
       expect(READING_MEANING[reading].length).toBeGreaterThan(0)
     }
@@ -1038,7 +1089,7 @@ describe('buildSectionModel — the row census in the report', () => {
   it('states how many rows the section produced and what they were', () => {
     const report = model([safeYesNo(true), safeCount(undefined), NOT_PUBLISHED]).reportLines.join('\n')
 
-    expect(report).toContain('- Rows: 3 (1 answered · 1 no answer · 1 no source)')
+    expect(report).toContain('- Rows: 3 (1 answered · 1 no answer · 1 not available here)')
   })
 
   /**
@@ -1119,5 +1170,217 @@ describe('no section module bypasses the SafeValue brand', () => {
       // covers both spellings of the bypass.
       expect(readFileSync(join(directory, name), 'utf8')).not.toContain('as SafeValue')
     }
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* The split of `undetermined`, and the witness                               */
+/* -------------------------------------------------------------------------- */
+
+describe('untested and not-applicable', () => {
+  it('ranks them where the headline needs them: both quiet, one blocking', () => {
+    // Not tested keeps a headline off OK, and so does unknown.
+    expect(BLOCKS_OK.untested).toBe(true)
+    expect(BLOCKS_OK.undetermined).toBe(true)
+    expect(BLOCKS_OK.degraded).toBe(true)
+    expect(BLOCKS_OK.broken).toBe(true)
+    // Nothing to judge never does, and neither does context or a pass.
+    expect(BLOCKS_OK['not-applicable']).toBe(false)
+    expect(BLOCKS_OK.informational).toBe(false)
+    expect(BLOCKS_OK.healthy).toBe(false)
+
+    expect(VERDICT_SEVERITY.untested).toBeGreaterThan(VERDICT_SEVERITY.healthy)
+    expect(VERDICT_SEVERITY.untested).toBeLessThan(VERDICT_SEVERITY.undetermined)
+    expect(VERDICT_SEVERITY['not-applicable']).toBeLessThan(VERDICT_SEVERITY.informational)
+    // Severity and blocking agree: everything that blocks outranks everything that does not.
+    const blocking = VERDICTS.filter((verdict) => BLOCKS_OK[verdict])
+    const quiet = VERDICTS.filter((verdict) => !BLOCKS_OK[verdict])
+    expect(Math.min(...blocking.map((verdict) => VERDICT_SEVERITY[verdict]))).toBeGreaterThan(
+      Math.max(...quiet.map((verdict) => VERDICT_SEVERITY[verdict])),
+    )
+  })
+
+  it('makes a settled absence not-applicable whatever was claimed, and prints why', () => {
+    for (const claimed of VERDICTS) {
+      const nothing = diagnosticRow({
+        label: safeConstant('Most recent gRPC failure'),
+        value: safeNothingToReport('no gRPC failure recorded'),
+        verdict: claimed,
+        evidence: evidenceNothingToReport('The gateway reported its counters and both read zero.'),
+        note: 'n',
+      })
+      const unavailable = diagnosticRow({
+        label: safeConstant('Device memory, GB'),
+        value: safeNotAvailableHere('this browser does not expose it'),
+        verdict: claimed,
+        evidence: evidenceNotAvailableHere('This browser has no navigator.deviceMemory.'),
+        note: 'n',
+      })
+
+      expect({ claimed, verdict: nothing.verdict }).toEqual({ claimed, verdict: 'not-applicable' })
+      expect({ claimed, verdict: unavailable.verdict }).toEqual({ claimed, verdict: 'not-applicable' })
+      expect(nothing.caveat).toBe('The gateway reported its counters and both read zero.')
+      expect(unavailable.caveat).toBe('This browser has no navigator.deviceMemory.')
+    }
+  })
+
+  it('makes an untested row untested whatever was claimed — a builder cannot ask for OK', () => {
+    for (const claimed of VERDICTS) {
+      const row = diagnosticRow({
+        label: safeConstant('Socket ticket'),
+        value: safeNotTested('run it from this pane'),
+        verdict: claimed,
+        evidence: evidenceUntested('run “Socket ticket” on the Checks tab'),
+        note: 'n',
+      })
+
+      expect({ claimed, verdict: row.verdict }).toEqual({ claimed, verdict: 'untested' })
+      expect(row.caveat).toBe('Not tested yet: run “Socket ticket” on the Checks tab.')
+    }
+  })
+
+  it('never lets a section of settled absences and context read as a pass or as a problem', () => {
+    expect(worstVerdictOf(['not-applicable', 'not-applicable'])).toBe('not-applicable')
+    expect(worstVerdictOf(['not-applicable', 'informational'])).toBe('informational')
+    expect(worstVerdictOf(['not-applicable', 'informational', 'healthy'])).toBe('healthy')
+    expect(worstVerdictOf(['healthy', 'untested'])).toBe('untested')
+    expect(worstVerdictOf(['healthy', 'untested', 'undetermined'])).toBe('undetermined')
+    // And an EMPTY list is still unknown: nothing read is not nothing to judge.
+    expect(worstVerdictOf([])).toBe('undetermined')
+  })
+})
+
+describe('a witness: the direct observation a capped row points at', () => {
+  const proxyRow = (verdict: Verdict, confirmedBy?: Witness, necessaryCondition = true) =>
+    diagnosticRow({
+      label: safeConstant('Socket lane built at boot'),
+      value: safeConstant('built'),
+      verdict,
+      evidence: evidenceProxy({
+        observed: 'that the boot gate decided to build the socket lane',
+        cannotConfirm: 'that a client is being admitted onto it now',
+        necessaryCondition,
+        ...(confirmedBy === undefined ? {} : { confirmedBy }),
+      }),
+      note: 'n',
+    })
+  const witness = (state: WitnessState): Witness => ({
+    state,
+    what: 'this tab’s own socket is up and authenticated',
+    how: 'run “This tab’s live socket” on the Checks tab',
+  })
+
+  /**
+   * The one way a proxy row comes to read OK, and it is on the WITNESS's evidence.
+   * Asserted over every state, with the expectation written out rather than read
+   * back from the table under test.
+   */
+  it('resolves a healthy claim on the witness, and on nothing else', () => {
+    const expected: Record<WitnessState, Verdict> = {
+      confirmed: 'healthy',
+      refuted: 'informational',
+      'not-run': 'untested',
+      unavailable: 'informational',
+      unknown: 'undetermined',
+    }
+    expect(Object.keys(expected).sort()).toEqual([...WITNESS_STATES].sort())
+
+    for (const state of WITNESS_STATES) {
+      const row = proxyRow('healthy', witness(state))
+
+      expect({ state, verdict: row.verdict }).toEqual({ state, verdict: expected[state] })
+      // The claim and the evidence are untouched: the row proved nothing itself.
+      expect(row.claimed).toBe('healthy')
+      expect(row.evidence.kind).toBe('proxy')
+      // Every sentence restates what the row actually read.
+      expect(row.caveat).toContain('that the boot gate decided to build the socket lane')
+    }
+    expect(Object.values(expected).filter((verdict) => verdict === 'healthy')).toHaveLength(1)
+  })
+
+  it('keeps the old answer when no witness is supplied at all', () => {
+    const row = proxyRow('healthy')
+
+    expect(row.verdict).toBe('undetermined')
+    expect(row.caveat).toBe(
+      'This reads that the boot gate decided to build the socket lane, which does not establish that a client is being admitted onto it now. Reported as undetermined rather than claiming it.',
+    )
+  })
+
+  it('says what confirmed it, what to run, or why it cannot be confirmed from here', () => {
+    expect(proxyRow('healthy', witness('confirmed')).caveat).toContain(
+      'Confirmed directly: this tab’s own socket is up and authenticated.',
+    )
+    expect(proxyRow('healthy', witness('not-run')).caveat).toContain(
+      'Not tested yet: run “This tab’s live socket” on the Checks tab.',
+    )
+    expect(proxyRow('healthy', witness('refuted')).caveat).toContain('did NOT hold')
+    expect(proxyRow('healthy', witness('unavailable')).caveat).toContain('that is not a fault')
+  })
+
+  /**
+   * A witness establishes that the thing WORKS. It must not rescue a suspicion of
+   * loss, and it must not soften a failure: only a `healthy` claim reads it.
+   */
+  it('leaves every other claim exactly where the cap put it, confirmed or not', () => {
+    for (const state of WITNESS_STATES) {
+      expect(proxyRow('degraded', witness(state)).verdict).toBe('undetermined')
+      expect(proxyRow('broken', witness(state)).verdict).toBe('broken')
+      expect(proxyRow('broken', witness(state), false).verdict).toBe('undetermined')
+      expect(proxyRow('informational', witness(state)).verdict).toBe('informational')
+      expect(proxyRow('undetermined', witness(state)).verdict).toBe('undetermined')
+    }
+  })
+
+  it('confirms a correlated signal too, since the confirmation is the witness and not the signal', () => {
+    expect(proxyRow('healthy', witness('confirmed'), false).verdict).toBe('healthy')
+    expect(proxyRow('healthy', undefined, false).verdict).toBe('undetermined')
+  })
+})
+
+describe('verdictCensus and describeVerdictCensus', () => {
+  it('counts every verdict and prints the non-zero ones worst first, in the chip’s own words', () => {
+    const census = verdictCensus(['healthy', 'healthy', 'untested', 'informational', 'not-applicable', 'broken'])
+
+    expect(Object.keys(census).sort()).toEqual([...VERDICTS].sort())
+    expect(census.healthy).toBe(2)
+    expect(census.degraded).toBe(0)
+    expect(describeVerdictCensus(census)).toBe('1 not working · 1 not tested · 2 OK · 1 info · 1 n/a')
+    expect(describeVerdictCensus(verdictCensus([]))).toBe('no rows')
+  })
+
+  it('counts a section’s rows and not its findings, so one fault is not counted twice', () => {
+    const model = buildSectionModel({
+      id: 'websocket',
+      blocks: [
+        {
+          heading: safeConstant('Lane'),
+          description: 'd',
+          rows: [
+            diagnosticRow({
+              label: safeConstant('Gateway'),
+              value: safeConstant('attached'),
+              verdict: 'healthy',
+              evidence: EVIDENCE_DIRECT,
+              note: 'n',
+            }),
+          ],
+          findings: [
+            diagnosticFinding({
+              code: safeConstant('PUSH_BRIDGE_UNBOUND'),
+              title: 't',
+              detail: 'd',
+              verdict: 'broken',
+              evidence: EVIDENCE_DIRECT,
+            }),
+          ],
+        },
+      ],
+    })
+
+    expect(model.counts.healthy).toBe(1)
+    expect(model.counts.broken).toBe(0)
+    // The finding still drives the section's status.
+    expect(model.worstVerdict).toBe('broken')
   })
 })

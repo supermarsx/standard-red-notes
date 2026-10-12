@@ -2,8 +2,10 @@ import { EFFORT_LABEL, type Remedy, type RemedyEffort } from './diagnosticRemedi
 import {
   readingCensus,
   ROW_READINGS,
+  type DiagnosticFinding,
   SECTION_IDS,
   SECTION_TITLE,
+  STATUS_TAG,
   VERDICT_SEVERITY,
   VERDICTS,
   worstVerdictOf,
@@ -93,16 +95,19 @@ export type ActionSource = {
  *
  * Split rather than ordered-and-truncated, because the two need different
  * treatment in the report: the first list is the answer and is never collapsed,
- * and the second is context and is. `informational` is the only verdict that
- * lands in the second list — `undetermined` does not, deliberately, because a
- * fact the panel could not establish is a thing to act on (run the checks, read
- * the section) and the whole pane exists to stop it reading as a pass.
+ * and the second is context and is. `informational` is the only verdict a finding
+ * carries that lands in the second list — `undetermined` and `untested` do not,
+ * deliberately, because a fact the panel could not establish, or has not tested,
+ * is a thing to act on (run the checks, read the section) and the whole pane
+ * exists to stop either reading as a pass.
  */
 export const ACTIONABLE_VERDICTS: Record<Verdict, boolean> = {
   broken: true,
   degraded: true,
   undetermined: true,
+  untested: true,
   healthy: false,
+  'not-applicable': false,
   informational: false,
 }
 
@@ -134,7 +139,7 @@ export type Triage = {
   readonly context: readonly ActionItem[]
   /** The single thing to do first, or nothing when there is nothing to do. */
   readonly first: ActionItem | undefined
-  /** Row readings across the five sections. Always all three keys. */
+  /** Row readings across the five sections. Always every key. */
   readonly rows: Record<RowReading, number>
   readonly rowTotal: number
   /** How many ranked actions carry no remedy at all. A gap in THIS build. */
@@ -142,21 +147,14 @@ export type Triage = {
 }
 
 /**
- * *** EXHAUSTIVE `Record` ON PURPOSE. *** The one-word severity each verdict
- * prints as in the ranked list.
+ * The status word each verdict prints as in the ranked list and the headline.
  *
- * Upper case and distinct from `VERDICT_CHIP_LABEL`, which is for a chip four
- * characters wide. "UNKNOWN" is spelled out rather than shortened because this is
- * the list someone else reads without the panel: a reader who skims "Unknown" as
- * a shrug is the failure mode the whole `undetermined` verdict exists to prevent.
+ * It IS `STATUS_TAG`, by reference: the word at the head of a row, the word on a
+ * finding and the word in the headline were three tables once, which is how a
+ * report came to say `Overall: UNKNOWN` over rows whose own vocabulary had no such
+ * word. One record, exhaustive over `Verdict`, read by all three.
  */
-export const ACTION_SEVERITY_WORD: Record<Verdict, string> = {
-  broken: 'BROKEN',
-  degraded: 'DEGRADED',
-  undetermined: 'UNKNOWN',
-  healthy: 'HEALTHY',
-  informational: 'CONTEXT',
-}
+export const ACTION_SEVERITY_WORD: Record<Verdict, string> = STATUS_TAG
 
 /**
  * The overall word, from the worst verdict the SECTIONS themselves derived.
@@ -178,11 +176,49 @@ export function overallWord(triage: Triage): string {
   return ACTION_SEVERITY_WORD[triage.sectionWorst]
 }
 
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The headline, as one sentence per
+ * verdict, in words that need no legend.
+ *
+ * The pane and the report both print this, from this record, so the screen and
+ * the paste cannot give the same deployment two different headlines. Each
+ * sentence says what the word is WORTH, because the headline is the only line
+ * many readers get to: `NOT TESTED` has to say that nothing read so far is wrong,
+ * or it reads as a fault; `UNKNOWN` has to say it is not a pass, or it reads as a
+ * shrug; and `OK` has to say what was actually looked at, or it is the unqualified
+ * green this pane was rebuilt twice to stop printing.
+ */
+export const OVERALL_SENTENCE: Record<Verdict, string> = {
+  healthy: 'Everything this pane read is working, and every check it ran passed.',
+  degraded: 'It is working, with something lost. The first entry under “What needs attention” says what.',
+  broken: 'At least one thing is not working. The first entry under “What needs attention” says what.',
+  undetermined:
+    'At least one reading that should have arrived did not, so this is NOT a pass. Nothing is known to be broken either.',
+  untested:
+    'Nothing read so far is wrong, and at least one check has not been run. Run all checks to turn this into an answer.',
+  'not-applicable': 'Nothing in this pane carried a verdict either way.',
+  informational: 'Nothing in this pane carried a verdict either way.',
+}
+
+/**
+ * What an OK from this pane covers, and what it does not.
+ *
+ * Printed under the headline whatever the headline says, because the question it
+ * answers — "OK about what?" — is the one a bare green word invites and the pane
+ * has no business leaving open. It is a statement about the PANE, written by this
+ * build, and the second sentence is not modesty: each thing it names is something
+ * an operator could reasonably assume a screen called "diagnostics" had checked.
+ */
+export const COVERAGE_SENTENCE =
+  'Covers: the realtime socket as THIS tab experienced it; the server’s own report of its configuration, database, cache, queues and internal services; this account’s access and space; this browser’s requirements; and the checks listed under Checks. Does not cover: other accounts, other browsers or devices, e-mail delivery, or backups.'
+
 const emptyCounts = (): Record<Verdict, number> => ({
   broken: 0,
   degraded: 0,
   undetermined: 0,
+  untested: 0,
   healthy: 0,
+  'not-applicable': 0,
   informational: 0,
 })
 
@@ -322,6 +358,64 @@ export function observationsFromSections(
   return observations
 }
 
+/**
+ * One finding as the SCREEN lists it: the finding itself, and every section that
+ * raised it.
+ *
+ * The screen's counterpart to `ActionItem`. It carries the whole
+ * `DiagnosticFinding` — title and detail included — because those are prose for
+ * the screen and the screen is where this goes; the report's list is built from
+ * `rankActions`, which carries neither.
+ */
+export type RankedFinding = {
+  readonly finding: DiagnosticFinding
+  readonly sources: readonly SafeValue[]
+}
+
+/**
+ * Every finding in the pane, worst first, one entry per fact.
+ *
+ * The SAME order and the SAME folding as `rankActions`, by construction rather
+ * than by imitation: the codes are ranked by that function, and each entry here
+ * is looked up from its result. So the list on screen and the list in the report
+ * cannot put two findings in a different order, or disagree about which section
+ * saw one. The finding shown for a code raised twice is the WORST of its
+ * duplicates, for the reason `rankActions` takes the worst verdict.
+ */
+export function rankFindings(sections: Readonly<Record<SectionId, SectionModel>> | undefined): {
+  readonly actions: readonly RankedFinding[]
+  readonly context: readonly RankedFinding[]
+} {
+  if (sections === undefined) {
+    return { actions: [], context: [] }
+  }
+
+  const worstByCode = new Map<string, DiagnosticFinding>()
+  for (const id of SECTION_IDS) {
+    for (const block of sections[id].blocks) {
+      for (const finding of block.findings) {
+        const existing = worstByCode.get(finding.code)
+        if (existing === undefined || VERDICT_SEVERITY[finding.verdict] > VERDICT_SEVERITY[existing.verdict]) {
+          worstByCode.set(finding.code, finding)
+        }
+      }
+    }
+  }
+
+  const ranked: RankedFinding[] = []
+  for (const item of rankActions(observationsFromSections(sections))) {
+    const finding = worstByCode.get(item.code)
+    if (finding !== undefined) {
+      ranked.push({ finding, sources: item.sources })
+    }
+  }
+
+  return {
+    actions: ranked.filter((entry) => ACTIONABLE_VERDICTS[entry.finding.verdict]),
+    context: ranked.filter((entry) => !ACTIONABLE_VERDICTS[entry.finding.verdict]),
+  }
+}
+
 /** Every row in every section, in the contract's order. */
 export function rowsFromSections(
   sections: Readonly<Record<SectionId, SectionModel>> | undefined,
@@ -387,7 +481,7 @@ export function triage(input: {
  * as a number rather than only as N silent entries.
  */
 export const NO_REMEDY_LINE =
-  '  - No fix is recorded in this client build for this finding. That is a gap in the client, not a statement that nothing can be done — read the section named above, which carries the full explanation on screen.'
+  '- Do: No fix is recorded in this client build for this finding. That is a gap in the client, not a statement that nothing can be done — read the section named above, which carries the full explanation on screen.'
 
 /**
  * How several observation sources are joined.
@@ -398,17 +492,33 @@ export const NO_REMEDY_LINE =
  */
 export const SOURCE_JOIN = ' · '
 
-/** The remedy as report lines. Every part is a literal this build compiled in. */
+/**
+ * The remedy as report lines. Every part is a literal this build compiled in.
+ *
+ * *** ONE ACTION, THEN A FOLD. *** This printed the summary, every step and every
+ * `because` as one flat list, so the only finding on a healthy deployment arrived
+ * as six bullets of reasoning with the instruction somewhere among them. The
+ * `Do:` line is `Remedy.summary`, which is defined as the one sentence that says
+ * what to do; the steps and the facts they rest on follow inside a collapsed
+ * region. Collapsed is not dropped: pasted somewhere that renders no HTML, every
+ * line is still there, with two extra tags.
+ */
 export function remedyLines(remedy: Remedy): readonly string[] {
   const lines = [
-    `  - Fix (${EFFORT_LABEL[remedy.effort]}${remedy.basis === 'generic' ? ', generic advice' : ''}): ${remedy.summary}`,
+    `- Do (${EFFORT_LABEL[remedy.effort]}${remedy.basis === 'generic' ? ', generic advice' : ''}): ${remedy.summary}`,
   ]
+  if (remedy.steps.length === 0 && remedy.because.length === 0) {
+    return lines
+  }
+
+  lines.push('', '<details>', '<summary>Steps and reasoning</summary>', '')
   for (const step of remedy.steps) {
-    lines.push(`    - ${step}`)
+    lines.push(`- ${step}`)
   }
   for (const fact of remedy.because) {
-    lines.push(`    - Because: ${fact}`)
+    lines.push(`- Because: ${fact}`)
   }
+  lines.push('', '</details>')
 
   return lines
 }
@@ -434,9 +544,9 @@ export function actionLines(item: ActionItem, position: number): readonly string
 }
 
 /**
- * *** EXHAUSTIVE `Record` ON PURPOSE, AND SPELLED OUT. *** The census names all
- * three readings and prints a zero for the ones at zero, unlike the per-block
- * census, which omits them.
+ * *** EXHAUSTIVE `Record` ON PURPOSE, AND SPELLED OUT. *** The census names every
+ * reading and prints a zero for the ones at zero, unlike the per-block census,
+ * which omits them.
  *
  * The difference is deliberate: a block census is read beside its own rows, where
  * an absent group is visible, and this one is the top of a document somebody else
@@ -445,12 +555,24 @@ export function actionLines(item: ActionItem, position: number): readonly string
  * report that never counted.
  */
 const CENSUS_PHRASE: Record<RowReading, string> = {
-  answered: 'carried a value',
+  answered: 'carry a value',
   unanswered: 'were asked for and nothing came back',
-  unpublished: 'have no publisher at all, so there is nothing to wait for',
+  untested: 'are not tested yet',
+  'not-applicable': 'have nothing to report',
+  unavailable: 'are not available here',
 }
 
-/** The row census as one sentence, naming all three readings including the zeros. */
+/**
+ * The row census as one sentence, naming every reading including the zeros.
+ *
+ * *** EACH COUNT OWNS ITS OWN WORDS, AND NOTHING TRAILS. *** This read "13 were
+ * asked for and nothing came back, 0 have no publisher at all, so there is
+ * nothing to wait for" — a comma-joined list whose last phrase carried a
+ * subordinate clause, so the clause attached itself to the whole sentence and
+ * told a reader with thirteen unanswered rows that there was nothing to wait
+ * for. The parts are separated by a mark no phrase contains and none of them has
+ * a clause of its own; what each reading MEANS is the legend's job.
+ */
 export function describeRowCensus(triage: Triage): string {
   if (triage.rowTotal === 0) {
     return 'no rows were produced, so nothing below is a reading'
@@ -458,7 +580,7 @@ export function describeRowCensus(triage: Triage): string {
 
   const parts = ROW_READINGS.map((reading) => `${triage.rows[reading]} ${CENSUS_PHRASE[reading]}`)
 
-  return `${triage.rowTotal} rows — ${parts.join(', ')}`
+  return `${triage.rowTotal} rows: ${parts.join(' · ')}`
 }
 
 /**
@@ -470,12 +592,14 @@ export function describeRowCensus(triage: Triage): string {
  * they keep reading. Sorted on the same `VERDICT_SEVERITY` the list below it is
  * ranked on, so the counts and the entries cannot come out in different orders.
  *
- * `healthy` is excluded because a finding is never raised for a healthy fact —
- * including it would print a constant zero that reads as a measurement.
+ * `healthy` and `not-applicable` are excluded because a finding is never raised
+ * for either — including them would print constant zeros that read as
+ * measurements. The words are the status tags, lower-cased, so the count and the
+ * entries under it name each status the same way.
  */
 export function describeFindingCounts(triage: Triage): string {
-  return VERDICTS.filter((verdict) => verdict !== 'healthy')
+  return VERDICTS.filter((verdict) => verdict !== 'healthy' && verdict !== 'not-applicable')
     .sort((left, right) => VERDICT_SEVERITY[right] - VERDICT_SEVERITY[left])
-    .map((verdict) => `${triage.counts[verdict]} ${verdict}`)
+    .map((verdict) => `${triage.counts[verdict]} ${STATUS_TAG[verdict].toLowerCase()}`)
     .join(', ')
 }

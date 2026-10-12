@@ -1,4 +1,5 @@
 import type { SyncFallbackReason } from '@/Services/SyncTransport/syncTransportProtocol'
+import { buildChecksBlock, witnessFrom, type CheckReading, type WitnessBoard, type WitnessId } from './diagnosticChecks'
 import { remedyForClientGap, type Remedy, type RemedyEffort } from './diagnosticRemedies'
 import {
   buildSectionModel,
@@ -6,13 +7,14 @@ import {
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNotAvailableHere,
   evidenceProxy,
-  outcomesForSection,
   reportLine,
   safeConstant,
   safeCount,
   safeDuration,
   safeEnum,
+  safeNotAvailableHere,
   safePercentBucket,
   safePresence,
   safeState,
@@ -23,9 +25,12 @@ import {
   type Evidence,
   type SafeValue,
   type SectionModel,
-  type SectionTaggedOutcome,
   type Verdict,
+  type Witness,
 } from './diagnosticsSections'
+
+/** How a block reads a witness. Absent board: every witness is unobserved. */
+type WitnessOf = (id: WitnessId) => Witness
 import { CLIENT_RECOGNIZED_ONLY_OPERATIONS, CLIENT_SYNC_OPERATIONS } from './syncDiagnostics'
 
 /**
@@ -748,7 +753,10 @@ export type AccountSectionInput = {
   observations?: AccountObservations
   /** This pane's own admin request, which is the only probe of the role it needs. */
   adminAccess?: AdminAccessReading
-  outcomes?: readonly SectionTaggedOutcome[]
+  /** Every registered check, run or not. This section renders its own as rows. */
+  checks?: readonly CheckReading[]
+  /** The direct observations a capped row here can point at. Absent: none was made. */
+  witnesses?: WitnessBoard
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1289,13 +1297,19 @@ function remedyForFileQuota(exhausted: boolean): Remedy {
  * the gap here is a CLIENT surface rather than a server endpoint, and sending an
  * operator to look for a missing server field would be the same wrong errand in a
  * new direction.
+ *
+ * It is a NOT-AVAILABLE-HERE value, and it used to be a plain constant. A plain
+ * constant is read as an answer, so the copyable report marked this row "a value
+ * arrived" and the row beside it in the census was counted among the facts —
+ * while the screen, working from the same row's evidence, called it Unknown. The
+ * value now carries the reading itself, so the two cannot disagree again.
  */
-const ROLE_NAMES_UNPUBLISHED = safeConstant('not exposed by any client surface')
+const ROLE_NAMES_UNPUBLISHED = safeNotAvailableHere('no client surface exposes the role names')
 
 const ADMIN_ROLE_NOTE =
   'The server’s own answer, taken from this pane’s own request rather than from a probe invented for the row. A 403 is conclusive: the request authenticated and was then refused on the role. A 401 is NOT evidence about the role at all — the cross-service-token middleware runs before the role check, so the check never happened — and this row reports that as undetermined rather than as a refusal. Confusing the two is the single most common dead end in this area.'
 
-function buildAccessBlock(observed: AccountObservations, reading: AdminReading): DiagnosticBlock {
+function buildAccessBlock(observed: AccountObservations, reading: AdminReading, witness: WitnessOf): DiagnosticBlock {
   const roles = observed.roles
   const held = (role: AccountRole): boolean | undefined => {
     return roles === undefined ? undefined : roles.some((candidate) => candidate === role)
@@ -1335,6 +1349,10 @@ function buildAccessBlock(observed: AccountObservations, reading: AdminReading):
               observed: "this client's own cached role list",
               cannotConfirm: 'the roles the session carries on the server',
               necessaryCondition: false,
+              // The server's own answer to the admin-gated read this pane is built
+              // from. It is the row below; here it is what lets a cached "held"
+              // stop reading as unknown once the server has agreed with it.
+              confirmedBy: witness('admin-read'),
             }),
       note: 'Capped in BOTH directions on purpose, and the clearest example in this section of why. The client’s list and the session’s server-side claims can disagree each way — a role granted after this session was issued is absent from the session, and a role cached here can have been revoked — so neither reading establishes the other. The row below is the one that actually asks the server.',
     }),
@@ -1369,8 +1387,10 @@ function buildAccessBlock(observed: AccountObservations, reading: AdminReading):
       diagnosticRow({
         label: safeConstant('Roles held by this account'),
         value: ROLE_NAMES_UNPUBLISHED,
-        verdict: 'informational',
-        evidence: EVIDENCE_ABSENT,
+        verdict: 'not-applicable',
+        evidence: evidenceNotAvailableHere(
+          'Nothing in this client can produce the list of role names, so there is nothing to wait for and nothing failed. The admin role itself is established by the row above, which asks the server.',
+        ),
         note: 'Not a failed read: nothing in this client can produce the list. The client exposes only `hasRole()` for one name at a time, so a list built here could hold this build’s own four names and could never report a fifth the server knows about — and reporting an unrecognised role as a count is the one job the list has. Four per-role rows and a count of roles outside this build’s taxonomy appear here the moment a surface supplies the names. The row above — the admin role as the server itself answered — is unaffected and is the one that carries a verdict.',
       }),
     )
@@ -2081,24 +2101,15 @@ const REPORT_ITEM_COUNTS = reportLine(
 export function buildAccountSection(input: AccountSectionInput = {}): SectionModel {
   const observed = input.observations ?? {}
   const reading = describeAdminReading(input.adminAccess)
-  const outcomes = outcomesForSection(input.outcomes ?? [], 'account')
+  const witness = witnessFrom(input.witnesses)
+  const checks = buildChecksBlock('account', input.checks)
 
   const blocks: DiagnosticBlock[] = [
-    buildAccessBlock(observed, reading),
+    ...(checks === undefined ? [] : [checks]),
+    buildAccessBlock(observed, reading, witness),
     buildSpaceBlock(observed),
     buildRequirementsBlock(observed, reading),
   ]
-
-  if (outcomes.length > 0) {
-    blocks.push({
-      heading: safeConstant('Operator-triggered checks'),
-      description:
-        'Results from the last run on the Checks sub-tab. Read-only here: a run is started in exactly one place, so the paragraph explaining what it does to your own account appears exactly once.',
-      rows: [],
-      findings: [],
-      outcomes,
-    })
-  }
 
   return buildSectionModel({
     id: 'account',

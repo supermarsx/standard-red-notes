@@ -17,19 +17,29 @@ import {
   type RemedyEffort,
 } from './diagnosticRemedies'
 import {
+  buildChecksBlock,
+  witnessFrom,
+  type CheckOutcome,
+  type CheckReading,
+  type WitnessBoard,
+  type WitnessId,
+} from './diagnosticChecks'
+import {
   buildSectionModel,
   diagnosticFinding,
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNothingToReport,
   evidenceProxy,
   LANE_REJECTION_STATUSES,
-  outcomesForSection,
   reportLine,
   safeConstant,
   safeCount,
   safeDuration,
   safeEnum,
+  safeNotAvailableHere,
+  safeNothingToReport,
   safeState,
   safeTokens,
   safeYesNo,
@@ -42,9 +52,12 @@ import {
   type LaneRejectionStatus,
   type SafeValue,
   type SectionModel,
-  type SectionTaggedOutcome,
   type Verdict,
+  type Witness,
 } from './diagnosticsSections'
+
+/** How a block reads a witness. Absent board: every witness is unobserved. */
+type WitnessOf = (id: WitnessId) => Witness
 import {
   admitMembers,
   buildCapabilityRows,
@@ -451,7 +464,13 @@ export type WebsocketSectionInput = {
   /** The client-side lane-degradation ledger. Absent in a build that records none. */
   ledger?: LaneLedgerSectionView
   counters?: SocketGatewayCountersView
-  outcomes?: readonly SectionTaggedOutcome[]
+  /** Every registered check, run or not. This section renders its own as rows. */
+  checks?: readonly CheckReading[]
+  /**
+   * The direct observations a capped row here can point at. Absent means none was
+   * made, and every capped row then keeps the verdict the cap has always given.
+   */
+  witnesses?: WitnessBoard
 }
 
 /* -------------------------------------------------------------------------- */
@@ -491,8 +510,13 @@ function observedRow(input: {
  * A signal the described thing cannot work without. Its failure is conclusive;
  * its holding establishes nothing, so a positive claim caps to `undetermined`.
  */
-function necessaryProxy(observed: string, cannotConfirm: string): Evidence {
-  return evidenceProxy({ observed, cannotConfirm, necessaryCondition: true })
+function necessaryProxy(observed: string, cannotConfirm: string, confirmedBy?: Witness): Evidence {
+  return evidenceProxy({
+    observed,
+    cannotConfirm,
+    necessaryCondition: true,
+    ...(confirmedBy === undefined ? {} : { confirmedBy }),
+  })
 }
 
 /**
@@ -1179,6 +1203,7 @@ function buildGateBlock(
   gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined,
   ticketAvailable: boolean | undefined,
   topology: DeploymentTopology | undefined,
+  witness: WitnessOf,
 ): DiagnosticBlock {
   const recorded = gate?.recorded
   const laneEnabled = recorded === true ? gate?.syncLaneEnabled : undefined
@@ -1208,6 +1233,7 @@ function buildGateBlock(
           : necessaryProxy(
               'that the boot gate decided to build the socket lane',
               'that a client is being admitted onto it now',
+              witness('negotiation'),
             ),
       note: 'The gate records a DECISION, taken once when the process started. Building the lane is necessary for a client to get onto it and is nowhere near sufficient — which is why a positive reading here is reported as undetermined and the transport row above, measured on this client’s own socket, is the one that can say the lane works. A negative reading is conclusive: an unbuilt lane admits nobody.',
     }),
@@ -1221,6 +1247,7 @@ function buildGateBlock(
           : necessaryProxy(
               'that the composition root recorded a successful gateway attach',
               'that the gateway is still serving sockets now',
+              witness('negotiation'),
             ),
       note: 'The gate records a decision; the composition root records the attach OUTCOME. They come from different places and can disagree, and showing only the decision is how this pane came to report a working lane over a gateway that was never there.',
     }),
@@ -1241,6 +1268,7 @@ function buildGateBlock(
             ? necessaryProxy(
                 'that the gate listed no unmet condition',
                 'that every socket operation is actually offered',
+                witness('all-operations'),
               )
             : EVIDENCE_DIRECT,
       note: UNMET_COUNT_NOTE,
@@ -1325,7 +1353,7 @@ const SYNC_ITEMS_VERDICT: Record<SyncItemsState, Verdict> = {
   NOT_OBSERVED: 'undetermined',
 }
 
-function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined): DiagnosticBlock {
+function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined, witness: WitnessOf): DiagnosticBlock {
   // CONSUMED, not re-derived. `gate.syncItemsAdvertised` is never read in this
   // file: on the builds that sent it, it was derived from whether a proxy OBJECT
   // had been constructed rather than from the predicate the handshake asks.
@@ -1341,6 +1369,7 @@ function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined): Diagn
    */
   const causeKnown = verdict.cause !== null
   const causeNamed = causeKnown || verdict.unrecognisedCause
+  const nothingWithheld = !causeNamed && verdict.state === 'ADVERTISED'
 
   /**
    * Whether the server reports the structured verdict is only knowable once a
@@ -1362,6 +1391,7 @@ function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined): Diagn
             ? necessaryProxy(
                 'that the gate read the handshake’s own readiness predicate and it answered ready',
                 'that this client’s socket negotiated SYNC_ITEMS',
+                witness('sync-items'),
               )
             : EVIDENCE_DIRECT,
       note: verdict.detail,
@@ -1372,8 +1402,24 @@ function buildSyncItemsBlock(payload: SyncDiagnosticsPayload | undefined): Diagn
         ? safeEnum(verdict.cause, SYNC_ITEMS_CAUSES)
         : verdict.unrecognisedCause
           ? safeConstant(UNRECOGNISED)
-          : safeEnum(undefined, SYNC_ITEMS_CAUSES),
-      ...absentOr(causeNamed || undefined, 'informational'),
+          : nothingWithheld
+            ? safeNothingToReport('nothing is withheld')
+            : safeEnum(undefined, SYNC_ITEMS_CAUSES),
+      // *** A CAUSE FOR A WITHHOLDING THAT DID NOT HAPPEN IS NOT A MISSING
+      // READING. *** On an ADVERTISED lane the gate names no cause because there
+      // is none to name, and this row read "not reported" — counted, with the
+      // rest of its kind, as something asked for that never came back. It is
+      // settled by the state the row above printed, and says so. Every other
+      // state keeps the old answer: a WITHHELD lane with no cause is a server
+      // that withheld and did not say why, which IS a missing reading.
+      ...(nothingWithheld
+        ? {
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'The gate reports SYNC_ITEMS as ADVERTISED, so there is no withholding for it to give a cause for.',
+            ),
+          }
+        : absentOr(causeNamed || undefined, 'informational')),
       note: verdict.unrecognisedCause
         ? 'The server named a cause outside the closed set this build knows, so it is refused rather than paraphrased as one this build does know. The state above is the server’s own verdict and still stands.'
         : verdict.title,
@@ -1616,6 +1662,7 @@ function buildCapabilityBlock(
  */
 function buildDescriptorBlock(
   capabilities: NonNullable<SyncDiagnosticsPayload['live']>['capabilities'],
+  witness: WitnessOf,
 ): DiagnosticBlock {
   const entries = capabilities
   const count = entries?.length
@@ -1634,6 +1681,7 @@ function buildDescriptorBlock(
             : necessaryProxy(
                 'that the gateway advertises at least one capability entry',
                 'that a client can open and authenticate a socket',
+                witness('negotiation'),
               ),
       note: 'What the capability descriptor offers. An EMPTY list is conclusive in the bad direction: the transport reads this before it will attempt a socket at all, so an empty list means no client on this deployment ever tries, and the fallback reason above reads capability-unavailable. A non-empty list is necessary and not sufficient, which is why it is reported as undetermined.',
     }),
@@ -1928,10 +1976,16 @@ function buildRealtimeBlock(
 /* Block 8: the FILES_V1 sub-gate                                             */
 /* -------------------------------------------------------------------------- */
 
-function buildFilesBlock(gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined): DiagnosticBlock {
+function buildFilesBlock(
+  gate: NonNullable<SyncDiagnosticsPayload['gate']> | undefined,
+  witness: WitnessOf,
+): DiagnosticBlock {
   const files = gate?.files
   const advertised = files?.advertised
   const condition = files?.unmetCondition
+  // Settled only by an ADVERTISED sub-gate that named nothing. A withheld one
+  // that named no condition is a server that withheld and did not say why.
+  const nothingUnmet = advertised === true && (condition === undefined || condition === null)
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
@@ -1945,15 +1999,22 @@ function buildFilesBlock(gate: NonNullable<SyncDiagnosticsPayload['gate']> | und
             ? necessaryProxy(
                 'that the boot gate advertised the realtime file transport',
                 'that this client’s socket negotiated FILES_V1',
+                witness('files-lane'),
               )
             : EVIDENCE_DIRECT,
       note: 'A sub-gate of its own: the file transport can be waived at boot while every other operation is offered. Withheld, file uploads and downloads use ordinary HTTP requests — slower, and no other symptom — which is why this is a degradation rather than an outage. What this client actually negotiated is the FILES_V1 row in the capabilities block.',
     }),
-    observedRow({
+    diagnosticRow({
       label: safeConstant('FILES_V1 unmet condition'),
-      observed: condition,
-      value: safeEnum(condition, FILES_UNMET_CONDITIONS),
-      verdict: 'informational',
+      value: nothingUnmet ? safeNothingToReport('no condition is unmet') : safeEnum(condition, FILES_UNMET_CONDITIONS),
+      ...(nothingUnmet
+        ? {
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'The sub-gate reports FILES_V1 as advertised, so there is no unmet condition for it to name.',
+            ),
+          }
+        : absentOr(condition, 'informational')),
       note: 'Which precondition the composition found missing. FILES_INTERNAL_URL covers the whole internal-URL group, because any one of them satisfies the requirement; TRANSPORT_CONSTRUCTION is the residual case where every value was present and the adapter still threw, and its thrown message stays in the boot log because it can embed the resolved files-service address.',
     }),
   ]
@@ -2055,7 +2116,11 @@ function admissionReported(counters: SocketGatewayCountersView): boolean {
   )
 }
 
-function buildAdmissionBlock(counters: SocketGatewayCountersView, attached: boolean | undefined): DiagnosticBlock {
+function buildAdmissionBlock(
+  counters: SocketGatewayCountersView,
+  attached: boolean | undefined,
+  witness: WitnessOf,
+): DiagnosticBlock {
   /**
    * ONE SENTENCE RATHER THAN TEN EMPTY ROWS — AND NOW IT SAYS WHICH SILENCE.
    *
@@ -2114,6 +2179,7 @@ function buildAdmissionBlock(counters: SocketGatewayCountersView, attached: bool
           : necessaryProxy(
               'that the gateway would admit the origin this admin request arrived from',
               'that a socket from this origin then authenticates',
+              witness('negotiation'),
             ),
       note: 'Whether this browser would be let onto the socket at all — the question whose only other evidence is a 1008 close that no screen reads. PER REQUEST: it is the gateway\'s own upgrade predicate run against the origin THIS admin request arrived from, neither a counter nor a snapshot. Admission is necessary and nowhere near sufficient, so a yes is reported as undetermined; a no is conclusive, and it is a different fault from an empty allowlist. "Not reported" here is a request that named no origin at all — a non-browser caller, or a referrer policy that strips both headers — and is NOT a no. The origin itself is never carried into this panel or the copyable report.',
     }),
@@ -2582,6 +2648,93 @@ function buildLedgerBlock(ledger: LaneLedgerSectionView | undefined): Diagnostic
 }
 
 /* -------------------------------------------------------------------------- */
+/* The live-socket check                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What this tab's own transport says, as the outcome of the `negotiation` check.
+ *
+ * It sends nothing, so it is evaluated on every render and is never stale.
+ *
+ * FOUR ANSWERS, and the middle two are the ones that were wrong for longest:
+ *
+ *   - READY is a PASS, with how many operations the handshake negotiated.
+ *   - Another tab of this account owning the lane is NOT APPLICABLE HERE. The
+ *     disposition is the transport's own (`socketFallbackIsDeferred`), never the
+ *     negation of "permanent" — which is how this once recorded a failure over a
+ *     second browser tab behaving exactly as designed.
+ *   - Any other state that carries traffic over HTTP is DEGRADED, not a failure.
+ *     The app is working: saves go out as HTTP requests, and what is lost is the
+ *     realtime lane. A screen that calls that "not working" sends an operator
+ *     looking for an outage while their notes are syncing.
+ *   - A dial in progress is UNKNOWN, because it is: the answer is not settled.
+ *
+ * No transport installed at all is DEGRADED for the same reason as a fallback —
+ * the client syncs over HTTP — and says which it is.
+ *
+ * Every `result` is a closed code of this build: the state and the reason are
+ * admitted through `safeEnum` against the transport's own tuples.
+ */
+export function describeLiveSocketCheck(transport: TransportStatusInput | undefined): Omit<CheckOutcome, 'id'> {
+  if (transport === undefined) {
+    return {
+      state: 'degraded',
+      result: safeConstant('no realtime transport in this client; syncing over HTTP'),
+      detail:
+        'No realtime transport is installed in this client, so everything it sends goes over HTTP. Nothing is failing; live updates are what is missing.',
+    }
+  }
+
+  const { state, fallbackReason: reason } = transport
+
+  if (state === 'READY') {
+    const count = transport.operations.length
+
+    return {
+      state: 'pass',
+      result: safeTokens(
+        safeConstant('READY,'),
+        safeCount(count),
+        safeConstant(count === 1 ? 'operation negotiated' : 'operations negotiated'),
+      ),
+      detail: `This tab’s socket is up and negotiated: ${transport.operations.join(', ') || 'nothing'}.`,
+    }
+  }
+
+  if (socketFallbackIsDeferred(reason)) {
+    return {
+      state: 'not-applicable',
+      result: safeNotAvailableHere('another tab holds the socket lane'),
+      detail:
+        'Another tab of this account owns the socket lane, so this tab sends over HTTP by design while that one holds the lease. Expected, and not a fault: there is no socket in THIS tab to test.',
+    }
+  }
+
+  if (LANE_STATE_CARRIER[state] === 'dialling') {
+    return {
+      state: 'unknown',
+      result: safeTokens(safeConstant('dialling:'), safeEnum(state, SOCKET_TRANSPORT_STATES)),
+      detail: `A connection attempt is in progress (${state}), so whether this tab gets a socket is not settled yet. This row updates by itself.`,
+    }
+  }
+
+  return {
+    state: 'degraded',
+    result:
+      reason === undefined
+        ? safeTokens(safeConstant('on HTTP:'), safeEnum(state, SOCKET_TRANSPORT_STATES))
+        : safeTokens(
+            safeConstant('on HTTP:'),
+            safeEnum(state, SOCKET_TRANSPORT_STATES),
+            safeEnum(reason, SOCKET_FALLBACK_REASONS),
+          ),
+    detail: `This tab is not on the socket (${state}${
+      reason === undefined ? '' : `, ${reason}: ${SYNC_FALLBACK_REASON_EXPLANATIONS[reason]}`
+    }). The app keeps working over HTTP; what is lost is the realtime lane.`,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* The section                                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -2627,35 +2780,26 @@ export function buildWebsocketSection(input: WebsocketSectionInput = {}): Sectio
    * resurrect ten rows.
    */
   const counters: SocketGatewayCountersView = { ...(payload?.admission ?? {}), ...(input.counters ?? {}) }
-  const outcomes = outcomesForSection(input.outcomes ?? [], 'websocket')
+  const witness = witnessFrom(input.witnesses)
+  const checks = buildChecksBlock('websocket', input.checks)
 
   const blocks: DiagnosticBlock[] = [
+    ...(checks === undefined ? [] : [checks]),
     buildTransportBlock(input.transport),
-    buildGateBlock(gate, payload?.live?.ticketAvailable, topology),
-    buildSyncItemsBlock(payload),
+    buildGateBlock(gate, payload?.live?.ticketAvailable, topology, witness),
+    buildSyncItemsBlock(payload, witness),
     buildCapabilityBlock(payload, input.transport, counters),
-    buildDescriptorBlock(payload?.live?.capabilities),
+    buildDescriptorBlock(payload?.live?.capabilities, witness),
     buildRefusalBlock(payload, topology),
     buildRealtimeBlock(payload?.live?.realtime, topology),
-    buildFilesBlock(gate),
+    buildFilesBlock(gate, witness),
     // `gatewayAttached` is passed so the EMPTY note can say which silence this
     // is: no gateway to count, or a server older than the block. Gated on
     // `recorded` like every other read of the gate, so an unrecorded block
     // cannot answer the question either way.
-    buildAdmissionBlock(counters, gate?.recorded === true ? gate.gatewayAttached : undefined),
+    buildAdmissionBlock(counters, gate?.recorded === true ? gate.gatewayAttached : undefined, witness),
     buildLedgerBlock(input.ledger),
   ]
-
-  if (outcomes.length > 0) {
-    blocks.push({
-      heading: safeConstant('Operator-triggered checks'),
-      description:
-        'Results from the last run on the Checks sub-tab. Read-only here: one of those probes mints a real server-side ticket for your own session, so the paragraph explaining what a run does appears in exactly one place.',
-      rows: [],
-      findings: [],
-      outcomes,
-    })
-  }
 
   return buildSectionModel({
     id: 'websocket',

@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from 'fs'
+import { readingsFrom, SECTIONS_WITH_CHECKS } from './diagnosticChecks'
+import { readingOf } from './diagnosticsSections'
 import { dirname, join } from 'path'
 
 import { DECLARED_ENV_KEYS } from './diagnosticEnvironment'
@@ -253,41 +255,48 @@ describe('buildEnvironmentSection shape', () => {
     expect(headingsOf(model)).not.toContain('Configuration presence')
   })
 
-  it('shows only the probe results tagged for this section, and only when there are some', () => {
-    const none = buildEnvironmentSection({
-      outcomes: [{ name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' }],
-    })
-    const some = buildEnvironmentSection({
-      outcomes: [
-        { name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' },
-        { name: 'Marker fetch', passed: false, detail: 'd', reportDetail: 'r', section: 'environment' },
-      ],
-    })
+  it('renders exactly the checks registered for this section, as rows, and none when no readings are supplied', () => {
+    const readings = readingsFrom({})
+    const mine = readings.filter((reading) => reading.definition.section === 'environment')
+    const without = buildEnvironmentSection()
+    const withChecks = buildEnvironmentSection({ checks: readings })
 
-    expect(headingsOf(none)).not.toContain('Operator-triggered checks')
-    const checks = some.blocks.find((block) => String(block.heading) === 'Operator-triggered checks')
-    expect(checks?.outcomes).toHaveLength(1)
-    expect(checks?.outcomes?.[0]?.name).toBe('Marker fetch')
+    expect(without.blocks.map((block) => String(block.heading))).not.toContain('Checks')
+
+    const block = withChecks.blocks.find((candidate) => String(candidate.heading) === 'Checks')
+    // The registry decides whether this section has a block at all, so the
+    // expectation is read off the registry rather than written down twice.
+    expect(block !== undefined).toBe(SECTIONS_WITH_CHECKS.includes('environment'))
+    expect((block?.rows ?? []).map((row) => String(row.label))).toEqual(
+      mine.map((reading) => String(reading.definition.title)),
+    )
+    // A check nobody has run is NOT TESTED — never unknown, and never a pass.
+    for (const row of block?.rows ?? []) {
+      expect(row.verdict).toBe('untested')
+      expect(readingOf(row.value)).toBe('untested')
+    }
+    // First, because a tested fact outranks a reported one.
+    if (block !== undefined) {
+      expect(withChecks.blocks[0]).toBe(block)
+    }
   })
 
   /**
    * The second defect this spec caught in its own module: the checks block was
-   * appended inside the branch that handles a REPORTED presence map, so a
-   * deployment whose server reports none — the one most likely to have run a
-   * probe — silently lost its results.
+   * added inside the branch that handles a REPORTED presence map, so a
+   * deployment whose server reports none — the one most likely to need a
+   * check — silently lost them.
    */
-  it('keeps the probe results when the server reported no configuration presence at all', () => {
-    const model = buildEnvironmentSection({
-      outcomes: [{ name: 'Marker fetch', passed: false, detail: 'd', reportDetail: 'r', section: 'environment' }],
-    })
+  it('keeps its checks when the server reported no configuration presence at all', () => {
+    const model = buildEnvironmentSection({ checks: readingsFrom({}) })
 
     expect(headingsOf(model)).toEqual([
+      'Checks',
       'Deployment shape',
       'Durable backend transport',
       'Sessions and cookies',
       'Deployment identity',
       'Configuration presence',
-      'Operator-triggered checks',
     ])
   })
 
@@ -1377,6 +1386,82 @@ describe('the three states the runtime ledger separates', () => {
     expect(rowOf(model, 'Calls served over HTTP instead of gRPC').verdict).toBe('informational')
   })
 
+  /**
+   * *** THE THREE "MOST RECENT FAILURE" ROWS, AND WHEN THEY HAVE NOTHING TO SAY. ***
+   *
+   * On a deployment with no gRPC failure they read "not reported", three in a
+   * row, each counted as a question that went unanswered. They are settled ONLY
+   * by the gateway having reported its counters and both reading zero — and all
+   * four arms are pinned, because "nothing to report" over a failure nobody
+   * counted would be the same row lying in the flattering direction.
+   */
+  it('says the last-failure rows have nothing to report only when the counters were reported and read zero', () => {
+    const FAILURE_ROWS = [
+      'Most recent gRPC failure',
+      'Lane of the most recent gRPC failure',
+      'Time since the last gRPC failure',
+    ]
+    type Fallback = NonNullable<Parameters<typeof buildEnvironmentSection>[0]>['fallback']
+    const build = (fallback: Fallback) =>
+      buildEnvironmentSection({
+        topology: topology({ boundServiceProxy: 'grpc' }),
+        ...(fallback === undefined ? {} : { fallback }),
+      })
+
+    // 1. counters reported, both zero, no failure named: NOTHING TO REPORT.
+    const quiet = build({ observed: false, everDegraded: false, lanes: lanes() })
+    for (const label of FAILURE_ROWS) {
+      const row = rowOf(quiet, label)
+      expect({ label, value: String(row.value), verdict: row.verdict, kind: row.evidence.kind }).toEqual({
+        label,
+        value: 'nothing to report (no gRPC failure recorded)',
+        verdict: 'not-applicable',
+        kind: 'not-applicable',
+      })
+      expect(row.caveat).toContain('both read zero')
+    }
+
+    // 2. no ledger at all: the server never said, so the question stays OPEN.
+    const absent = build(undefined)
+    // 3. a ledger that names no lane: same.
+    const laneless = build({ observed: false, everDegraded: false })
+    // 4. calls DID fall back and no failure is named beside them: a real gap.
+    const unexplained = build({
+      observed: true,
+      everDegraded: true,
+      lanes: lanes({
+        'items-sync': { degradedCalls: 3, refusedCalls: 0, lastFailureClass: null, lastFailureAgeMs: null },
+      }),
+    })
+    for (const model of [absent, laneless, unexplained]) {
+      for (const label of FAILURE_ROWS) {
+        const row = rowOf(model, label)
+        expect({ label, value: String(row.value), verdict: row.verdict }).toEqual({
+          label,
+          value: 'not reported',
+          verdict: 'undetermined',
+        })
+      }
+    }
+
+    // 5. and a failure that WAS recorded is printed, not settled away.
+    const failed = build({
+      observed: true,
+      everDegraded: true,
+      lanes: lanes({
+        'items-sync': {
+          degradedCalls: 1,
+          refusedCalls: 0,
+          lastFailureClass: 'channel-unavailable',
+          lastFailureAgeMs: 4_000,
+        },
+      }),
+    })
+    expect(String(rowOf(failed, 'Most recent gRPC failure').value)).toBe('channel-unavailable')
+    expect(String(rowOf(failed, 'Lane of the most recent gRPC failure').value)).toBe('items-sync')
+    expect(String(rowOf(failed, 'Time since the last gRPC failure').value)).toBe('4s')
+  })
+
   it('reports no count at all when the fallback block names no lane', () => {
     const model = buildEnvironmentSection({
       topology: topology({ boundServiceProxy: 'grpc' }),
@@ -1689,7 +1774,7 @@ describe('deployment identity', () => {
     expect(row.evidence.kind).toBe('direct')
     // It reaches the copyable report through the ordinary row path, with no
     // hand-written line and no second admission rule.
-    expect(model.reportLines.join('\n')).toContain(`- [v] Build revision: ${'a'.repeat(40)}`)
+    expect(model.reportLines.join('\n')).toContain(`] Build revision: ${'a'.repeat(40)}`)
     // The verdict still belongs to the state row; this one is context.
     expect(rowOf(model, 'Deployment identity').verdict).toBe('healthy')
   })
@@ -1885,11 +1970,11 @@ describe('no configured value reaches a row, a finding, a remedy or the report',
     }
     // And the scan is not vacuous: the report is real, and full.
     expect(report).toContain('## Environment & setup')
-    expect(report).toContain('- Worst verdict: broken')
+    expect(report).toContain('- Status: NOT WORKING')
     // The three unnameable keys survive as a count. A refusal sentinel in that
     // position is asserted ABSENT: it would mean a wire key had reached a label
     // and been scrubbed there rather than never arriving.
-    expect(report).toContain('- [v] Variables this build does not recognise: 3')
+    expect(report).toContain('] Variables this build does not recognise: 3')
     expect(report).not.toContain(`- ${WITHHELD}: set`)
     expect(report).not.toContain('[address withheld]')
   })

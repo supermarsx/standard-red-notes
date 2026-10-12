@@ -1,4 +1,4 @@
-import { FunctionComponent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ContentType, isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
 import { convertTimestampToMilliseconds } from '@standardnotes/utils'
 
@@ -13,16 +13,11 @@ import Tab from '@/Components/Tabs/Tab'
 import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import {
-  CAPABILITY_OUTCOME_CHIP,
-  capabilityOutcomeState,
   describeDeployment,
   describeTransport,
   diagnose,
-  summarizeTestRun,
-  type CapabilityOutcomeState,
   type DiagnosticsReadFailure,
   type SyncDiagnosticsPayload,
-  type Tone,
   type TransportStatusInput,
 } from './syncDiagnostics'
 // The ONE copy of the three shared presentation primitives. They lived here as
@@ -34,18 +29,41 @@ import {
 // this file looking like a second source of truth for `TONE_CHIP`, which is the
 // drift hazard rather than a cure for it. The spec imports it from the module
 // that defines it.
-import { Chip } from './diagnosticsPresentation'
+import { Chip, FindingCard, StatusChip } from './diagnosticsPresentation'
 import {
+  AUTO_CHECK_IDS,
+  buildWitnessBoard,
+  CHECKS,
+  checkRow,
+  describeMarkerCheck,
+  readingsFrom,
+  RUNNABLE_CHECK_IDS,
+  summarizeChecks,
+  type CheckId,
+  type CheckOutcome,
+  type RunnableCheckId,
+} from './diagnosticChecks'
+import {
+  BLOCKS_OK,
+  describeVerdictCensus,
+  safeConstant,
+  safeCount,
+  safeTokens,
   SECTION_IDS,
   SECTION_TITLE,
   VERDICT_CHIP_LABEL,
   type SectionId,
   type SectionModel,
-  type SectionTaggedOutcome,
   type Verdict,
 } from './diagnosticsSections'
 import DiagnosticsSection from './DiagnosticsSection'
-import { buildWebsocketSection, socketFallbackIsDeferred, type LaneLedgerSectionView } from './websocketSection'
+import { COVERAGE_SENTENCE, OVERALL_SENTENCE, rankFindings, SOURCE_JOIN, triage } from './diagnosticsTriage'
+import {
+  buildWebsocketSection,
+  describeLiveSocketCheck,
+  socketFallbackIsDeferred,
+  type LaneLedgerSectionView,
+} from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
 import {
@@ -140,121 +158,81 @@ type AccountSpaceReading = {
 }
 
 /**
- * The diagnosis chip, one label per tone.
- *
- * *** EXHAUSTIVE `Record` ON PURPOSE — the fall-through WAS the bug. ***
- *
- * This was a ternary chain: `good ? 'Healthy' : warn ? 'Degraded' : 'Unavailable'`.
- * Every other tone therefore inherited "Unavailable", including the `'neutral'`
- * that means "no verdict at all" — so a failure to READ the diagnostics endpoint
- * was rendered as a confident claim that the socket was unavailable, directly
- * beside a verdict chip reading "WebSocket" that said the opposite and was right.
- * A tone added to the union now fails this file to compile rather than quietly
- * acquiring that claim.
- *
- * `Chip` can render all four: `TONE_CHIP` in `diagnosticsPresentation.tsx` is
- * itself a `Record<Tone, string>` and already carries the neutral styling.
- */
-export const DIAGNOSIS_CHIP_LABEL: Record<Tone, string> = {
-  good: 'Healthy',
-  warn: 'Degraded',
-  bad: 'Unavailable',
-  neutral: 'Unknown',
-}
-
-/**
- * *** EXHAUSTIVE `Record` ON PURPOSE. *** What the Overview router says about a
- * section that raised NO finding, per worst verdict.
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What the summary says about a section
+ * that raised NO finding and has no single row to name, per worst verdict.
  *
  * A single sentence for all of them would have to be either reassuring or
  * alarming, and both are wrong half the time: a section with no findings and a
- * `healthy` worst verdict read everything it needed, while one with no findings
- * and an `undetermined` worst verdict read almost nothing. Those are the two
- * states this whole pane exists to keep apart, so the router does not collapse
- * them into "nothing to report".
+ * `healthy` worst verdict read everything it needed, while one whose worst is
+ * `undetermined` is missing a reading. Those are the two states this whole pane
+ * exists to keep apart, so the summary does not collapse them into "nothing to
+ * report".
  */
-const ROUTER_NO_FINDING: Record<Verdict, string> = {
-  healthy: 'Every row this section could read came back healthy.',
-  degraded: 'No single finding, but at least one row in this section is degraded.',
-  broken: 'No single finding, but at least one row in this section reads as down.',
+const SECTION_NO_FINDING: Record<Verdict, string> = {
+  healthy: 'Everything this section read is working.',
+  degraded: 'At least one row in this section is degraded.',
+  broken: 'At least one row in this section reads as not working.',
   undetermined:
-    'Nothing in this section established its facts, so no verdict is claimed. That is NOT the same as everything being fine.',
+    'At least one reading in this section did not arrive, so no verdict is claimed for it. That is NOT the same as everything being fine.',
+  untested: 'Nothing read here is wrong; at least one check in this section has not been run.',
+  'not-applicable': 'Nothing in this section applies here.',
   informational: 'This section carries context only — nothing in it is a verdict.',
 }
 
 /**
- * One operator-triggered check.
+ * The ONE line the summary prints beside a section: why it has the status it has.
  *
- * *** A REGISTRY, SO ONE CHECK CAN BE ASKED TWICE. *** The five probes were
- * inline in a single `runTests` that always ran all of them and then re-read the
- * diagnostics endpoint, the server-status endpoint and the transport — so
- * narrowing one failing check meant regenerating the whole report, and an
- * operator watching a flapping ticket mint had no way to repeat that one
- * question. Each probe is an entry now, and the Checks tab offers each one its
- * own control.
+ * In order of usefulness. A finding at the section's worst verdict is the answer
+ * outright, and its title is one sentence by construction. Failing that, the rows
+ * that carry the worst verdict are NAMED — "Not tested: Socket ticket" tells a
+ * reader what to press, where "this section could not establish its facts" told
+ * them nothing and was the only thing this line used to say. The generic sentence
+ * is the last resort, for a verdict no row and no finding accounts for.
  *
- * `run` is handed a `record` closed over the probe's own `section` and `name`, so
- * a probe cannot mislabel its own result or tag it onto another section — the
- * failure the five inline `record('websocket', 'Capability descriptor…')` calls
- * were one copy-paste away from.
+ * Only a verdict that keeps the section off OK is worth naming rows for: a section
+ * whose worst is `healthy` has dozens of rows at that verdict and no reader wants
+ * the first of them.
  */
-export type DiagnosticProbe = {
-  readonly id: string
-  readonly section: SectionId
-  readonly name: string
-  readonly run: (
-    record: (
-      passed: boolean,
-      detail: string,
-      reportDetail: string,
-      state?: CapabilityOutcomeState,
-    ) => SectionTaggedOutcome,
-  ) => Promise<SectionTaggedOutcome>
-}
+export function sectionReason(model: SectionModel): string {
+  const worst = model.worstVerdict
+  if (model.headline !== undefined && model.headline.verdict === worst) {
+    return model.headline.title
+  }
+  if (!BLOCKS_OK[worst]) {
+    return SECTION_NO_FINDING[worst]
+  }
 
-/** `'all'` for a full run, a probe id for a single one. */
-export type ProbeRun = 'all' | string
+  const rows = model.blocks.flatMap((block) => block.rows.filter((row) => row.verdict === worst))
+  if (rows.length === 0) {
+    return SECTION_NO_FINDING[worst]
+  }
+
+  return `${VERDICT_CHIP_LABEL[worst]}: ${rows[0].label}${rows.length > 1 ? `, and ${rows.length - 1} more` : ''}`
+}
 
 /**
- * Fold fresh outcomes into the ones already on screen, in the REGISTRY's order.
+ * How far a run has got.
  *
- * Two properties, and both matter:
- *
- *   - a single-probe run replaces only its own result. Returning just the fresh
- *     outcome would blank the other four, which would make "re-run one check"
- *     strictly worse than the full run it exists to avoid.
- *   - the order is the registry's, not the order results arrived in. A re-run
- *     that moved its probe to the bottom of the list would make the list reorder
- *     itself under the operator's eyes every time they pressed a button, and the
- *     copyable report reads this same array.
- *
- * An outcome whose name is in neither list cannot appear: the result is built by
- * walking `probes`, so a stale outcome from a probe that has since been removed
- * is dropped rather than kept for ever.
+ * `current` is the check being run right now, so its own row and its own control
+ * can say so; `done` and `total` are what "Running 2 of 3" is built from.
  */
-export function mergeOutcomes(
-  previous: readonly SectionTaggedOutcome[],
-  fresh: readonly SectionTaggedOutcome[],
-  probes: readonly DiagnosticProbe[],
-): SectionTaggedOutcome[] {
-  const byName = new Map<string, SectionTaggedOutcome>()
-  for (const outcome of previous) {
-    byName.set(outcome.name, outcome)
-  }
-  for (const outcome of fresh) {
-    byName.set(outcome.name, outcome)
-  }
+export type CheckProgress = { readonly done: number; readonly total: number; readonly current: CheckId }
 
-  const merged: SectionTaggedOutcome[] = []
-  for (const probe of probes) {
-    const outcome = byName.get(probe.name)
-    if (outcome !== undefined) {
-      merged.push(outcome)
-    }
-  }
+/** What a check runner returns. The id is added by the one loop that calls it. */
+type CheckFinding = Omit<CheckOutcome, 'id'>
 
-  return merged
-}
+/** A request that threw before any answer arrived. Closed copy; the message stays on screen. */
+const REQUEST_DID_NOT_COMPLETE = safeConstant('the request did not complete')
+
+const requestThrew = (error: unknown): CheckFinding => ({
+  state: 'fail',
+  result: REQUEST_DID_NOT_COMPLETE,
+  detail: `The request threw before an answer arrived: ${String(error)}.`,
+})
+
+/** An HTTP status as a closed result: a literal of this build and a bounded count. */
+const answeredStatus = (status: number): CheckFinding['result'] =>
+  safeTokens(safeConstant('answered HTTP'), safeCount(status))
 
 /**
  * A short, valid device identifier for the ticket probe. Deliberately NOT the
@@ -403,16 +381,27 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   const [readFailure, setReadFailure] = useState<DiagnosticsReadFailure | undefined>(undefined)
   const [deployment, setDeployment] = useState<unknown>(undefined)
-  const [outcomes, setOutcomes] = useState<SectionTaggedOutcome[]>([])
   /**
-   * WHICH run is in flight, not WHETHER one is.
-   *
-   * `'all'` for a full run, a probe id for a single one, `null` for idle. A
-   * boolean could not express "this one check is re-running" while leaving the
-   * other four controls live, which is the whole point of the per-probe controls
-   * below.
+   * Whether the marker fetch itself landed. Held beside `deployment` because that
+   * state is `{}` both for a marker that answered empty and for one that could
+   * not be fetched, and the `marker` check must not call the second "unstamped".
    */
-  const [running, setRunning] = useState<ProbeRun | null>(null)
+  const [markerRead, setMarkerRead] = useState<'answered' | 'failed' | undefined>(undefined)
+  /**
+   * What each RUN check found, keyed by its id. A check that has not run has no
+   * entry — never a placeholder — which is what makes its row read "not tested".
+   */
+  const [outcomes, setOutcomes] = useState<Partial<Record<CheckId, CheckOutcome>>>({})
+  /**
+   * How far the run in flight has got, or `null` when idle.
+   *
+   * It carries WHICH check is running and how many are done, so the button can
+   * say "Running 2 of 3" and the row being run can say so too. A boolean could
+   * express neither, and a run that mints a ticket should not be a spinner.
+   */
+  const [progress, setProgress] = useState<CheckProgress | null>(null)
+  /** Guards re-entry without waiting for a render: two clicks must not start two runs. */
+  const runInFlight = useRef(false)
   /**
    * Which copy button last succeeded, so the confirmation sits beside the button
    * that was pressed. A single boolean put "Copied" next to both.
@@ -536,8 +525,10 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       // authenticated helpers.
       const response = await fetch('/.well-known/srn-deployment.json', { headers: { Accept: 'application/json' } })
       setDeployment(response.ok ? await response.json() : {})
+      setMarkerRead(response.ok ? 'answered' : 'failed')
     } catch {
       setDeployment({})
+      setMarkerRead('failed')
     }
   }, [])
 
@@ -938,215 +929,280 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   }, [])
 
   /**
-   * Operator-triggered checks that actually exercise each lane and report the
-   * real error. All are read-only against user data: nothing is written, no
-   * invite is sent, nothing is deleted. The one probe that does cause a server
-   * write — the ticket mint — is called out in its own row, because a
-   * short-lived single-use ticket for your own session is the ONLY way to learn
-   * whether `/ticket` would actually succeed.
+   * The checks that DO something, one runner each.
    *
-   * Each outcome carries TWO details. `detail` is for the operator in front of
-   * the screen and may quote a thrown message; `reportDetail` is constant copy
-   * for the copyable report, which is assumed to become public. A thrown message
-   * from `fetch` can name the host it failed to reach, so the two are kept
-   * separate at the point of recording rather than filtered later.
+   * *** A `Record` OVER `RunnableCheckId`, SO A CHECK CANNOT BE REGISTERED WITHOUT
+   * A RUNNER. *** The registry in `diagnosticChecks.ts` says what each one does in
+   * words; this says it in code, and the two are bound by the key type — a check
+   * added there and not here fails compilation on this line.
    *
-   * Each outcome is also TAGGED with the section it belongs to, so the result
-   * appears read-only inside that section while the consent paragraph and the
-   * button that mints a real server-side ticket stay in exactly one place.
+   * Each runner answers with a `CheckFinding`: a closed `result` for the row and
+   * the copyable report, and a `detail` for the operator in front of the screen.
+   * `detail` MAY quote a thrown message — an exception from `fetch` can name the
+   * host it failed to reach, which is worth having where the reader already knows
+   * their own hosts — and is never copied anywhere. The two are separate fields at
+   * the point of recording rather than filtered later.
    *
-   * *** ONE PROBE AT A TIME, AND THAT IS THE POINT OF THE REGISTRY. *** This was
-   * a single `runTests` that always ran all five and then re-read the diagnostics
-   * endpoint, the server-status endpoint and the transport — so narrowing one
-   * failing check meant regenerating the entire report, and an operator watching
-   * a flapping ticket mint had no way to ask that one question twice. Each probe
-   * is now an entry with its own `run`, the Checks tab offers each one its own
-   * control, and a single-probe run deliberately does NOT re-read the payload: it
-   * answers the one question that was asked and leaves every other row exactly as
-   * the operator was reading it.
+   * The transport is read off `application` at RUN time, not captured from render
+   * state: a runner closed over a two-second-old status would report the lane a
+   * request rode from a reading taken before the request was made.
    */
-  const probes: readonly DiagnosticProbe[] = useMemo(
-    () => [
-      {
-        id: 'capabilities',
-        section: 'websocket',
-        name: 'Capability descriptor (GET /v1/sockets/sync/capabilities)',
-        run: async (record) => {
-          try {
-            // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
-            // websocket RPC lane (routing the handshake through the transport it
-            // establishes is circular), and that refusal is not safe-to-fallback —
-            // through the ordinary helper this probe would throw and be reported as a
-            // FAILED check precisely when the socket is healthy.
-            const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
-              'GET',
-              '/v1/sockets/sync/capabilities',
-            )
-            const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
-            const summary = response.ok
-              ? advertised > 0
-                ? `Advertises ${advertised} capability entry(ies).`
-                : 'Reachable, but advertises an EMPTY capability list — the client will not attempt a socket at all.'
-              : `Answered ${response.status}.`
-            return record(response.ok && advertised > 0, summary, summary)
-          } catch (error) {
-            return record(false, String(error), 'The request threw before an answer arrived.')
+  const runners: Record<RunnableCheckId, () => Promise<CheckFinding>> = useMemo(
+    () => ({
+      capabilities: async () => {
+        try {
+          // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
+          // websocket RPC lane (routing the handshake through the transport it
+          // establishes is circular), and that refusal is not safe-to-fallback —
+          // through the ordinary helper this check would throw and be reported as
+          // FAILED precisely when the socket is healthy.
+          const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
+            'GET',
+            '/v1/sockets/sync/capabilities',
+          )
+          if (!response.ok) {
+            return {
+              state: 'fail',
+              result: answeredStatus(response.status),
+              detail: `The capability descriptor answered ${response.status}.`,
+            }
           }
-        },
-      },
-      {
-        id: 'ticket',
-        section: 'websocket',
-        name: 'Ticket issuance (POST /v1/sockets/sync/ticket)',
-        run: async (record) => {
-          try {
-            // HTTP-only for the same reason as the capability probe above.
-            const response = await application.httpOnlyJsonRequest<{ error?: { code?: string }; endpoint?: string }>(
-              'POST',
-              '/v1/sockets/sync/ticket',
-              { deviceId: probeDeviceId() },
-            )
-            const code = response.data?.error?.code
-            const summary = response.ok
-              ? 'A short-lived single-use ticket was issued. It is not redeemed, and expires on its own.'
-              : code === 'SYNC_DISABLED'
-                ? 'Refused with SYNC_DISABLED — the sync lane was not composed at boot. See the unmet conditions above.'
-                : `Refused with ${response.status}${code ? ` (${code})` : ''}.`
-            return record(response.ok, summary, summary)
-          } catch (error) {
-            return record(false, String(error), 'The request threw before an answer arrived.')
-          }
-        },
-      },
-      {
-        id: 'control-plane',
-        section: 'websocket',
-        name: 'Authenticated control-plane round trip',
-        run: async (record) => {
-          // When API_RPC is negotiated this rides the socket; otherwise it is an
-          // ordinary HTTP request. Either way a failure here means the admin
-          // surface itself is broken.
-          try {
-            const response =
-              await application.serverGetJsonRequest<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
-            const summary = response.ok
-              ? transport?.operations.includes('API_RPC')
-                ? 'Succeeded, over the socket API_RPC lane.'
-                : 'Succeeded, over HTTP (API_RPC is not negotiated).'
-              : `Answered ${response.status}.`
-            return record(response.ok, summary, summary)
-          } catch (error) {
-            return record(false, String(error), 'The request threw before an answer arrived.')
-          }
-        },
-      },
-      {
-        id: 'negotiation',
-        section: 'websocket',
-        name: 'Live socket negotiation',
-        run: async (record) => {
-          // No request at all, just what this client's own transport reports.
-          //
-          // THREE ANSWERS, NOT TWO. A transport standing down because another tab
-          // of this account owns the socket lane is a correct steady state — the
-          // lane's own copy for that reason reads "Expected, and not a fault" —
-          // and this check recorded `[FAIL]` for it, in a report whose top-level
-          // Diagnosis said on the same screen that the lane is fully available.
-          // The disposition comes from the transport's own classification
-          // (`socketFallbackIsDeferred`, which consumes `syncFallbackDisposition`);
-          // it is not re-derived here, because re-deriving it as the negation of
-          // "permanent" is exactly the defect that produced the FAIL.
-          //
-          // Every other way this check fails still fails: a reason the lane calls
-          // retryable or permanent, a non-READY state with no reason at all, and
-          // no transport installed are each still recorded as a failure.
-          const live = application.syncTransportStatus
-          const deferred = live !== undefined && live.state !== 'READY' && socketFallbackIsDeferred(live.fallbackReason)
-          const liveSummary = live
-            ? live.state === 'READY'
-              ? `Socket READY, negotiated: ${live.operations.join(', ') || 'nothing'}.`
-              : deferred
-                ? 'Not negotiated here: another tab of this account owns the socket lane. Expected, and not a fault — this tab sends over HTTP by design while that one holds the lease.'
-                : `Transport is ${live.state}${live.fallbackReason ? ` (${live.fallbackReason})` : ''} — no operations are negotiated.`
-            : 'No realtime transport is installed in this client.'
 
-          return record(live?.state === 'READY', liveSummary, liveSummary, deferred ? 'informational' : undefined)
-        },
-      },
-      {
-        id: 'marker',
-        section: 'environment',
-        name: 'Deployment marker (/.well-known/srn-deployment.json)',
-        run: async (record) => {
-          // "Is the running build current" must be answerable. Tagged for
-          // Environment & setup, which is where the deployment identity block lives.
-          try {
-            const response = await fetch('/.well-known/srn-deployment.json', {
-              headers: { Accept: 'application/json' },
-            })
-            const marker = response.ok ? await response.json() : {}
-            setDeployment(marker)
-            const view = describeDeployment(marker)
-            const summary = view.unstamped
-              ? (view.note ?? 'No revision recorded.')
-              : `Running revision ${view.revision}.`
-            return record(!view.unstamped, summary, summary)
-          } catch (error) {
-            return record(false, String(error), 'The marker could not be read.')
+          const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
+          if (advertised === 0) {
+            return {
+              state: 'fail',
+              result: safeConstant('reachable, and advertises nothing'),
+              detail:
+                'Reachable, but advertises an EMPTY capability list — the client will not attempt a socket at all.',
+            }
           }
-        },
+
+          const noun = advertised === 1 ? 'capability entry' : 'capability entries'
+
+          return {
+            state: 'pass',
+            result: safeTokens(
+              safeConstant('advertises'),
+              safeCount(advertised),
+              advertised === 1 ? safeConstant('capability entry') : safeConstant('capability entries'),
+            ),
+            detail: `The server advertises ${advertised} ${noun}.`,
+          }
+        } catch (error) {
+          return requestThrew(error)
+        }
       },
-    ],
-    [application, transport],
+      ticket: async () => {
+        try {
+          // HTTP-only for the same reason as the capability check above.
+          const response = await application.httpOnlyJsonRequest<{ error?: { code?: string } }>(
+            'POST',
+            '/v1/sockets/sync/ticket',
+            { deviceId: probeDeviceId() },
+          )
+          if (response.ok) {
+            return {
+              state: 'pass',
+              result: safeConstant('issued; never redeemed, and it expires on its own'),
+              detail: 'A short-lived single-use ticket was issued. It is not redeemed, and expires on its own.',
+            }
+          }
+          if (response.data?.error?.code === 'SYNC_DISABLED') {
+            return {
+              state: 'fail',
+              result: safeConstant('refused: SYNC_DISABLED'),
+              detail:
+                'Refused with SYNC_DISABLED — the sync lane was not composed at boot. The unmet boot conditions in this section say why.',
+            }
+          }
+
+          return {
+            state: 'fail',
+            result: safeTokens(safeConstant('refused with HTTP'), safeCount(response.status)),
+            detail: `The ticket request was refused with ${response.status}.`,
+          }
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+      'control-plane': async () => {
+        // When API_RPC is negotiated this rides the socket; otherwise it is an
+        // ordinary HTTP request. Either way a failure here means the admin surface
+        // itself is broken.
+        try {
+          const response = await application.serverGetJsonRequest<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
+          if (!response.ok) {
+            // *** A REFUSED READ IS NOT A BROKEN DEPLOYMENT. *** 401, 403 and 404
+            // are the server ANSWERING — that this session is not authenticated,
+            // is not an administrator, or that this build has no such endpoint.
+            // Each is a reason this pane cannot look, and none of them is evidence
+            // about the lane the check was asking after. Calling that a failure is
+            // the "unread is not down" mistake this pane has already made once,
+            // and the Account section is where the role and the session are judged.
+            const cannotLook = response.status === 401 || response.status === 403 || response.status === 404
+
+            return {
+              state: cannotLook ? 'unknown' : 'fail',
+              result: answeredStatus(response.status),
+              detail: cannotLook
+                ? `The admin endpoint answered ${response.status}, so this session cannot read it. That is why this pane is empty, and it says nothing about whether the deployment is working.`
+                : `The admin endpoint answered ${response.status}.`,
+            }
+          }
+
+          const overSocket = application.syncTransportStatus?.operations.includes('API_RPC') === true
+
+          return {
+            state: 'pass',
+            result: overSocket
+              ? safeConstant('answered; API_RPC is negotiated, so the socket lane carries it')
+              : safeConstant('answered over HTTP; API_RPC is not negotiated'),
+            detail: overSocket
+              ? 'Succeeded. API_RPC is negotiated on this tab’s socket, which is the lane the helper prefers.'
+              : 'Succeeded, over HTTP (API_RPC is not negotiated on this tab).',
+          }
+        } catch (error) {
+          return requestThrew(error)
+        }
+      },
+    }),
+    [application],
   )
 
   /**
-   * Run one probe, or all of them.
+   * Run some checks, in order, one at a time.
    *
-   * `running` carries WHICH run is in flight rather than a boolean, so a single
-   * probe's own control can say "Re-running…" while the others stay live. A full
-   * run re-reads the payload and the server status afterwards because several of
-   * its probes change what those endpoints answer; a single run deliberately does
-   * not, which is the whole reason it exists.
+   * ONE AT A TIME, so the progress line is true and so a failure is attributable:
+   * five requests in flight together would all be "running" and would all report
+   * against a transport that the first of them may have moved.
+   *
+   * A runner that THROWS — as opposed to one that reports a thrown request — is a
+   * defect in this pane, and is still recorded as that check failing rather than
+   * allowed to abandon the run: the checks after it are independent of it, and a
+   * run that stops at the first surprise reports less exactly when more is wanted.
+   *
+   * `reload` re-reads the payload, the server status and the marker afterwards.
+   * A full run does, because its results are read against them; a single check
+   * does not, which is the whole reason a single check can be run on its own: it
+   * answers the one question asked and leaves every other row as it was.
    */
-  const runProbes = useCallback(
-    async (selected: readonly DiagnosticProbe[], label: ProbeRun) => {
-      setRunning(label)
-      const fresh: SectionTaggedOutcome[] = []
+  const runChecks = useCallback(
+    async (ids: readonly RunnableCheckId[], reload: boolean) => {
+      if (runInFlight.current) {
+        return
+      }
+      runInFlight.current = true
 
       try {
-        for (const probe of selected) {
-          const record = (
-            passed: boolean,
-            detail: string,
-            reportDetail: string,
-            state?: CapabilityOutcomeState,
-          ): SectionTaggedOutcome => ({
-            section: probe.section,
-            name: probe.name,
-            passed,
-            detail,
-            reportDetail,
-            ...(state === undefined ? {} : { state }),
-          })
+        for (let index = 0; index < ids.length; index++) {
+          const id = ids[index]
+          setProgress({ done: index, total: ids.length, current: id })
 
-          fresh.push(await probe.run(record))
+          let finding: CheckFinding
+          try {
+            finding = await runners[id]()
+          } catch (error) {
+            finding = requestThrew(error)
+          }
+
+          setOutcomes((previous) => ({ ...previous, [id]: { id, ...finding } }))
         }
-
-        setOutcomes((previous) => mergeOutcomes(previous, fresh, probes))
       } finally {
-        setRunning(null)
+        runInFlight.current = false
+        setProgress(null)
         readTransport()
-        if (label === 'all') {
+        if (reload) {
           void loadDiagnostics()
           void loadServerStatus()
+          void loadDeployment()
         }
       }
     },
-    [loadDiagnostics, loadServerStatus, probes, readTransport],
+    [loadDeployment, loadDiagnostics, loadServerStatus, readTransport, runners],
   )
 
-  const runTests = useCallback(() => runProbes(probes, 'all'), [probes, runProbes])
+  const runAllChecks = useCallback(() => runChecks(RUNNABLE_CHECK_IDS, true), [runChecks])
+
+  /**
+   * The read-only checks, run once when the pane opens.
+   *
+   * They write nothing, so there is nothing to consent to, and a pane that opened
+   * with every check reading "not tested" would be asking the operator to press a
+   * button to learn what it could have told them already. The checks that DO
+   * write stay behind the button that says what they write.
+   */
+  useEffect(() => {
+    void runChecks(AUTO_CHECK_IDS, false)
+  }, [runChecks])
+
+  /**
+   * Every registered check with what it found: the run ones from state, the LIVE
+   * ones evaluated here from what this pane already holds.
+   *
+   * The marker check has no outcome until the marker fetch has settled one way or
+   * the other, so that for the first frame it reads "not tested" rather than
+   * claiming a failure nobody has observed yet.
+   */
+  const readings = useMemo(
+    () =>
+      readingsFrom(
+        {
+          ...outcomes,
+          negotiation: { id: 'negotiation', ...describeLiveSocketCheck(transport) },
+          ...(markerRead === undefined
+            ? {}
+            : { marker: { id: 'marker' as const, ...describeMarkerCheck(deployment, markerRead) } }),
+        },
+        progress === null ? [] : [progress.current],
+      ),
+    [outcomes, transport, deployment, markerRead, progress],
+  )
+
+  /**
+   * The direct observations a capped row can point at, from what this pane holds
+   * right now. Built once and handed to all five sections, so two of them
+   * pointing at one observation cannot disagree about whether it was made.
+   *
+   * `cryptoWorks` is three-valued and that is the care here: both round trips
+   * passing confirms, either one FAILING refutes, and anything else — not
+   * collected yet, or an API that was absent so nothing was attempted — is left
+   * unobserved rather than read as a failure.
+   */
+  const witnesses = useMemo(() => {
+    const digest = browserObservations?.digest
+    const aes = browserObservations?.aesRoundTrip
+    const failed = (outcome: string | undefined): boolean =>
+      outcome === 'mismatch' || outcome === 'threw' || outcome === 'timed-out'
+    const cryptoWorks = digest === 'ok' && aes === 'ok' ? true : failed(digest) || failed(aes) ? false : undefined
+    const localDatabaseLoaded = observed(() => application.sync.isDatabaseLoaded())
+    // Read by shape and nothing else: `true` and `false` are the ping's two
+    // answers, and anything else — including the `null` the gateway sends when it
+    // holds no cache client at all — is no reading.
+    const cachePing = (serverStatus as { health?: { gateway?: { redis?: unknown } } } | undefined)?.health?.gateway
+      ?.redis
+    const gatewayCachePing = typeof cachePing === 'boolean' ? cachePing : undefined
+
+    return buildWitnessBoard({
+      checks: readings,
+      ...(transport === undefined
+        ? {}
+        : {
+            transport: {
+              state: transport.state,
+              operations: transport.operations,
+              deferred: transport.state !== 'READY' && socketFallbackIsDeferred(transport.fallbackReason),
+            },
+          }),
+      ...(payload?.protocol?.serverOperations === undefined
+        ? {}
+        : { serverOperations: payload.protocol.serverOperations }),
+      ...(payload !== undefined ? { adminRead: true } : readFailure !== undefined ? { adminRead: false } : {}),
+      ...(cryptoWorks === undefined ? {} : { cryptoWorks }),
+      ...(localDatabaseLoaded === undefined ? {} : { localDatabaseLoaded }),
+      ...(gatewayCachePing === undefined ? {} : { gatewayCachePing }),
+    })
+  }, [application, browserObservations, payload, readFailure, readings, serverStatus, transport])
 
   const topology = payload?.deployment
   /**
@@ -1342,8 +1398,15 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     // `application.syncTransportLedger` is `undefined` with no realtime transport
     // installed, and that absence must reach the block rather than be smoothed into
     // an empty reading.
-    () => buildWebsocketSection({ payload, transport, outcomes, ...(ledger === undefined ? {} : { ledger }) }),
-    [payload, transport, outcomes, ledger],
+    () =>
+      buildWebsocketSection({
+        payload,
+        transport,
+        checks: readings,
+        witnesses,
+        ...(ledger === undefined ? {} : { ledger }),
+      }),
+    [payload, transport, readings, witnesses, ledger],
   )
   const environmentModel = useMemo(
     // `runtime` IS passed now and is threaded straight off the payload. It used
@@ -1361,9 +1424,10 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         deploymentMarker: deployment,
         fallback: payload?.transportFallback,
         runtime: payload?.runtime,
-        outcomes,
+        checks: readings,
+        witnesses,
       }),
-    [topology, deployment, payload, outcomes],
+    [topology, deployment, payload, readings, witnesses],
   )
   const backendModel = useMemo(
     // `datastore` and `queues` ARE passed now, both raw and both optional. The
@@ -1392,9 +1456,10 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         datastore: payload?.datastore,
         queues: payload?.queues,
         buildIdentified: !describeDeployment(deployment).unstamped,
-        outcomes,
+        checks: readings,
+        witnesses,
       }),
-    [serverStatus, statusError, topology, deployment, payload, outcomes],
+    [serverStatus, statusError, topology, deployment, payload, readings, witnesses],
   )
   const accountModel = useMemo(
     () =>
@@ -1406,13 +1471,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
           payloadRead: payload !== undefined,
           ...(readFailure?.status === undefined ? {} : { status: readFailure.status }),
         },
-        outcomes,
+        checks: readings,
+        witnesses,
       }),
-    [accountObservations, payload, readFailure, outcomes],
+    [accountObservations, payload, readFailure, readings, witnesses],
   )
   const browserModel = useMemo(
-    () => buildBrowserSection({ observations: browserObservations, clock, outcomes }),
-    [browserObservations, clock, outcomes],
+    () => buildBrowserSection({ observations: browserObservations, clock, checks: readings, witnesses }),
+    [browserObservations, clock, readings, witnesses],
   )
 
   /**
@@ -1437,12 +1503,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         payload,
         transport,
         deploymentMarker: deployment,
-        outcomes,
+        checks: readings,
         loadError,
         readFailure,
         sections,
       }),
-    [payload, transport, deployment, outcomes, loadError, readFailure, sections],
+    [payload, transport, deployment, readings, loadError, readFailure, sections],
   )
 
   /**
@@ -1459,12 +1525,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         payload,
         transport,
         deploymentMarker: deployment,
-        outcomes,
+        checks: readings,
         loadError,
         readFailure,
         sections,
       }),
-    [payload, transport, deployment, outcomes, loadError, readFailure, sections],
+    [payload, transport, deployment, readings, loadError, readFailure, sections],
   )
 
   const copy = useCallback((text: string, which: 'report' | 'summary') => {
@@ -1478,45 +1544,127 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const copyReport = useCallback(() => copy(report, 'report'), [copy, report])
   const copySummary = useCallback(() => copy(summary, 'summary'), [copy, summary])
 
+  /**
+   * The headline, and the findings the Overview lists.
+   *
+   * BOTH from the same five section models the report is built from, through the
+   * same module the report uses — `triage` for the headline verdict, `rankFindings`
+   * for the order — so the screen and the paste cannot give one deployment two
+   * headlines or put its findings in two orders.
+   */
+  const overall: Verdict = useMemo(() => triage({ sections }).sectionWorst, [sections])
+  const ranked = useMemo(() => rankFindings(sections), [sections])
+  const busy = progress !== null
+  const operatorChecks = RUNNABLE_CHECK_IDS.filter((id) => CHECKS[id].mode === 'operator')
+
   return (
     <>
       <PreferencesSegment>
         <Title>Capability diagnostics</Title>
-        <Text>
-          What transport this client is actually on, what the server advertises, and — when something is unavailable —
-          which specific configuration item is missing and what to do about it. Reports configuration presence only; no
-          value, address or secret is read from the server.
-        </Text>
+
+        {/* *** THE ANSWER FIRST, AND IN THREE FORMS. *** One status for the whole
+            pane as a word, a shape and a colour, then one sentence saying what the
+            word is worth, then what it does and does not cover. The verdict is on
+            the element as `data-diagnostics-headline`, which is what a test reads:
+            the sentence is copy, the verdict is the fact. */}
+        <div className="mt-3 flex flex-wrap items-center gap-3" data-diagnostics-headline={overall}>
+          <StatusChip verdict={overall} large />
+          <span className="text-base font-semibold">{OVERALL_SENTENCE[overall]}</span>
+        </div>
+        <Text className="mt-2">{COVERAGE_SENTENCE}</Text>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Chip tone={verdict.tone}>{verdict.label}</Chip>
-          <Chip tone={diagnosis.tone}>{DIAGNOSIS_CHIP_LABEL[diagnosis.tone]}</Chip>
-          {loading && <Spinner className="h-4 w-4" />}
-          <Button onClick={() => void loadDiagnostics()} disabled={loading}>
+          <Button primary onClick={() => void runAllChecks()} disabled={busy}>
+            {progress === null ? 'Run all checks' : `Running ${progress.done + 1} of ${progress.total}…`}
+          </Button>
+          <Button onClick={() => void loadDiagnostics()} disabled={loading || busy}>
             Refresh
           </Button>
-          <Button primary onClick={() => void runTests()} disabled={running !== null}>
-            {running === 'all' ? 'Testing…' : 'Test all capabilities'}
-          </Button>
+          {loading && <Spinner className="h-4 w-4" />}
+          <span className="text-passive-0 text-sm" data-diagnostics-check-summary="true">
+            {summarizeChecks(readings)}
+          </span>
         </div>
-        {/* The one-line answer to "what am I on right now", beside the chip it
-            belongs to and OUTSIDE the panels, so it is readable from whichever
-            section the operator is in. The full transport breakdown is the
-            WebSocket section's and is not restated there or here. */}
-        <Text className="mt-2">{verdict.detail}</Text>
+        {progress !== null && (
+          <div className="mt-2" data-diagnostics-progress={`${progress.done}/${progress.total}`}>
+            <div className="bg-contrast h-1.5 w-full overflow-hidden rounded">
+              <div
+                className="bg-info h-full"
+                style={{ width: `${Math.round((progress.done / Math.max(1, progress.total)) * 100)}%` }}
+              />
+            </div>
+            <Text className="mt-1">{`Now running: ${CHECKS[progress.current].title}`}</Text>
+          </div>
+        )}
+        {/* WHAT A RUN DOES, BESIDE THE BUTTON THAT STARTS ONE, AND NOWHERE ELSE.
+            Built from the registry, so a check that writes cannot be added without
+            its sentence appearing here: the list is every check whose mode is
+            `operator`, in its own words. */}
+        <details className="mt-2" data-diagnostics-consent="true">
+          <summary className="text-passive-0 cursor-pointer text-xs">
+            {`What “Run all checks” does — ${operatorChecks.length} of ${RUNNABLE_CHECK_IDS.length} checks write something`}
+          </summary>
+          <Text className="mt-1">
+            It runs every check on the Checks tab, one at a time. The read-only ones already ran when this pane opened.
+            None of them reads, changes or deletes a note or a file of yours. The ones that write anything are:
+          </Text>
+          <ul className="mt-1 list-disc pl-5 text-sm">
+            {operatorChecks.map((id) => (
+              <li key={id}>
+                <span className="font-semibold">{CHECKS[id].title}</span>
+                {` — ${CHECKS[id].does}`}
+              </li>
+            ))}
+          </ul>
+        </details>
+
+        {/* The one-line answer to "what am I on right now", OUTSIDE the panels so
+            it is readable from whichever section the operator is in. The full
+            transport breakdown is the WebSocket section's and is not restated. */}
+        <Text className="mt-3">{`Transport: ${verdict.label}. ${verdict.detail}`}</Text>
         {/* *** IDENTITY AND CAPTURE TIME, ON THE PANE AND NOT ONLY IN THE REPORT. ***
             "Which commit is live" and "how old is this reading" are the first two
-            questions of every incident, and both used to be reachable only by
-            opening the Environment section or scrolling the report. Admitted by
-            exactly the rules the report uses — `describeDeployment` for the marker
-            and the section's own identity row for the revision — so the screen and
-            the paste cannot disagree. */}
+            questions of every incident. Admitted by exactly the rules the report
+            uses, so the screen and the paste cannot disagree. */}
         <Text className="mt-1">
           {/* The attribute lives on a span rather than on `Text`, which takes only
               `children` and `className` and silently drops anything else. */}
           <span data-diagnostics-identity="true">{`Build: ${deploymentIdentity} · captured ${capturedLabel}`}</span>
         </Text>
         {loadError && <Text className="text-danger mt-2">{loadError}</Text>}
+
+        {/* *** ONE LINE PER SECTION: STATUS, COUNTS, AND WHY. *** Each line carries
+            the WORST verdict anything in that section reported — never a summary
+            written here — how many rows carry each status, and the one reason it
+            has the status it has. An operator arriving mid-incident reads these
+            five lines and opens one tab instead of five. */}
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-max text-left text-sm" data-diagnostics-summary="true">
+            <tbody>
+              {SECTION_IDS.map((id) => {
+                const model = sections[id]
+
+                return (
+                  <tr key={id} data-diagnostics-router-row={id} className="border-border border-t align-top">
+                    <td className="py-2 pr-4">
+                      <StatusChip verdict={model.worstVerdict} />
+                    </td>
+                    <td className="py-2 pr-4 font-semibold">{model.title}</td>
+                    <td className="text-passive-0 py-2 pr-4 whitespace-nowrap">
+                      {describeVerdictCensus(model.counts)}
+                    </td>
+                    <td className="text-passive-0 max-w-md py-2 pr-4 whitespace-normal">{sectionReason(model)}</td>
+                    <td className="py-2">
+                      <Button small onClick={() => setActiveTab(sectionTabId(id))}>
+                        Open
+                      </Button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </PreferencesSegment>
 
       {/* Sub-tab bar, built from the same raw primitives as the Admin shell's own
@@ -1536,39 +1684,43 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
       <TabPanel state={tabState} id="diag-overview">
         <PreferencesSegment>
-          <Subtitle>Which section to open</Subtitle>
-          <Text>
-            One row per section, each carrying the WORST verdict anything in that section reported — not a summary
-            written here. An operator arriving mid-incident reads this table and opens one tab instead of five.
-            &ldquo;Unknown&rdquo; is not a quiet pass: it means that section could not establish its facts, which is
-            worth opening and is deliberately ranked above healthy and below degraded.
-          </Text>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-max text-left text-sm">
-              <tbody>
-                {SECTION_IDS.map((id) => {
-                  const model = sections[id]
+          <Subtitle>What needs attention</Subtitle>
+          {ranked.actions.length === 0 ? (
+            <Text className="mt-1">
+              {BLOCKS_OK[overall]
+                ? 'No finding needs action. What keeps the headline off OK is a row rather than a finding: the summary above names it, section by section.'
+                : 'Nothing. No section raised a finding that is not working, degraded, untested or unknown.'}
+            </Text>
+          ) : (
+            <>
+              <Text className="mt-1">
+                Worst first, one entry per fact however many sections saw it. Each says what is wrong and ONE thing to
+                do; the steps and the reasoning are folded under it.
+              </Text>
+              <ol className="mt-3 flex flex-col gap-2" data-diagnostics-attention="true">
+                {ranked.actions.map((entry) => (
+                  <li key={entry.finding.code}>
+                    <FindingCard finding={entry.finding} source={`Seen in: ${entry.sources.join(SOURCE_JOIN)}`} />
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
 
-                  return (
-                    <tr key={id} data-diagnostics-router-row={id} className="border-border border-t align-top">
-                      <td className="py-2 pr-4 font-semibold">{model.title}</td>
-                      <td className="py-2 pr-4">
-                        <Chip tone={model.worst}>{VERDICT_CHIP_LABEL[model.worstVerdict]}</Chip>
-                      </td>
-                      <td className="text-passive-0 py-2 pr-4">
-                        {model.headline?.title ?? ROUTER_NO_FINDING[model.worstVerdict]}
-                      </td>
-                      <td className="py-2">
-                        <Button small onClick={() => setActiveTab(sectionTabId(id))}>
-                          Open
-                        </Button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          {ranked.context.length > 0 && (
+            <details className="mt-4" data-diagnostics-context="true">
+              <summary className="cursor-pointer text-sm font-semibold">
+                {`Context: ${ranked.context.length} finding(s) that are not faults`}
+              </summary>
+              <ul className="mt-2 flex flex-col gap-2">
+                {ranked.context.map((entry) => (
+                  <li key={entry.finding.code}>
+                    <FindingCard finding={entry.finding} source={`Seen in: ${entry.sources.join(SOURCE_JOIN)}`} />
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           <HorizontalSeparator classes="mt-4 mb-4" />
 
@@ -1598,56 +1750,57 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
 
       <TabPanel state={tabState} id="diag-checks">
         <PreferencesSegment>
-          <Subtitle>Capability tests</Subtitle>
-          {/* THE ONLY PLACE A RUN CAN BE STARTED, and therefore the only place
-              this paragraph appears. One of these probes mints a real
-              server-side ticket; a consent notice repeated on six tabs is a
-              notice nobody reads, so the sections show the results read-only. */}
+          <Subtitle>Checks</Subtitle>
           <Text>
-            Operator-triggered checks that exercise each lane and report the real error. This is the only tab that
-            probes anything: every other section reads what the server already reported, and shows the results below
-            read-only. Read-only against your data — nothing is written, no invite is sent, nothing is deleted. The
-            ticket check mints a short-lived, single-use ticket for your own session, which is never redeemed and
-            expires by itself.
+            What this pane tests, as opposed to what it is told. Each check says what running it does BEFORE it runs.
+            The ones marked “read-only” ran when the pane opened; the ones marked “writes” run only from here or from
+            Run all checks. None of them reads, changes or deletes a note or a file of yours.
           </Text>
-          <Text className="mt-2">{summarizeTestRun(outcomes)}</Text>
+          <Text className="mt-2">{summarizeChecks(readings)}</Text>
           <div className="mt-3">
-            <Button primary onClick={() => void runTests()} disabled={running !== null}>
-              {running === 'all' ? 'Testing…' : 'Test all capabilities'}
+            <Button primary onClick={() => void runAllChecks()} disabled={busy}>
+              {progress === null ? 'Run all checks' : `Running ${progress.done + 1} of ${progress.total}…`}
             </Button>
           </div>
-          {/* EVERY probe, listed whether or not it has been run, each with its own
-              control. Iterated over the registry rather than over `outcomes`, so a
-              check that has never run is visible as "Not run" with a button beside
-              it instead of being absent — and so re-running one check is a single
-              press that leaves every other row on this pane untouched. */}
+          {/* EVERY check, listed whether or not it has run. Iterated over the
+              registry's readings rather than over the outcomes, so a check that has
+              never run is visible as "Not tested" with its own control instead of
+              being absent. The status shown is the ROW's — the same `checkRow` its
+              section renders — so this list and the section cannot disagree. */}
           <ul className="mt-3 flex flex-col gap-2">
-            {probes.map((probe) => {
-              const outcome = outcomes.find((candidate) => candidate.name === probe.name)
+            {readings.map((reading) => {
+              const { definition } = reading
+              const row = checkRow(reading)
+              const runnable = RUNNABLE_CHECK_IDS.find((id) => id === definition.id)
 
               return (
-                <li key={probe.id} data-diagnostics-probe={probe.id} className="border-border rounded border p-3">
+                <li
+                  key={definition.id}
+                  data-diagnostics-probe={definition.id}
+                  data-diagnostics-probe-status={row.verdict}
+                  className="border-border rounded border p-3"
+                >
                   <div className="flex flex-wrap items-center gap-2">
-                    {outcome === undefined ? (
-                      <Chip tone="neutral">Not run</Chip>
-                    ) : (
-                      <Chip tone={CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].tone}>
-                        {CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].label}
-                      </Chip>
+                    <StatusChip verdict={row.verdict} />
+                    <span className="text-sm font-semibold">{definition.title}</span>
+                    <Chip tone={definition.mode === 'operator' ? 'warn' : 'neutral'}>
+                      {definition.mode === 'operator' ? 'writes' : definition.mode === 'live' ? 'live' : 'read-only'}
+                    </Chip>
+                    {runnable !== undefined && (
+                      <Button small onClick={() => void runChecks([runnable], false)} disabled={busy}>
+                        {reading.running === true
+                          ? 'Running…'
+                          : reading.outcome === undefined
+                            ? 'Run this check'
+                            : 'Re-run this check'}
+                      </Button>
                     )}
-                    <span className="text-sm font-semibold">{probe.name}</span>
-                    <Button small onClick={() => void runProbes([probe], probe.id)} disabled={running !== null}>
-                      {running === probe.id
-                        ? 'Running…'
-                        : outcome === undefined
-                          ? 'Run this check'
-                          : 'Re-run this check'}
-                    </Button>
                   </div>
-                  <div className="text-passive-0 mt-1 text-sm">
-                    {outcome?.detail ??
-                      'Not run. Running this one check re-reads nothing else: every other row on this pane stays exactly as you are reading it.'}
-                  </div>
+                  <div className="mt-1 font-mono text-sm">{row.value}</div>
+                  {reading.outcome !== undefined && (
+                    <div className="text-passive-0 mt-1 text-sm">{reading.outcome.detail}</div>
+                  )}
+                  <div className="text-passive-0 mt-1 text-sm">{`What it does: ${definition.does}`}</div>
                 </li>
               )
             })}
@@ -1659,17 +1812,17 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         <PreferencesSegment>
           <Subtitle>Copyable report</Subtitle>
           <Text>
-            The whole diagnosis as markdown, for pasting into an issue or a support conversation — the verdict, the
-            gate, the capability matrix, configuration presence, the checks, and all five sections with their own worst
-            verdicts. It is written on the assumption that it becomes public: it carries variable NAMES, booleans,
-            closed codes, bounded counts and durations, and contains no URL, host, port, token or key — not truncated
-            and not hashed. Run the checks first if you want them included.
+            The whole diagnosis as markdown, for pasting into an issue or a support conversation — the summary table,
+            what needs attention, the gate, the capability matrix, configuration presence, the checks, and all five
+            sections with a status on every row. It is written on the assumption that it becomes public: it carries
+            variable NAMES, booleans, closed codes, bounded counts and durations, and contains no URL, host, port, token
+            or key — not truncated and not hashed.
           </Text>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {/* The SUMMARY first, and primary. It is what an operator wants in a
-                chat message or an issue title: the verdict, the ranked list of
-                what to fix, and the legend that makes both readable. The whole
-                report is the attachment, not the message. */}
+                chat message or an issue title: the status table, the ranked list
+                of what needs attention, and the legend that makes both readable.
+                The whole report is the attachment, not the message. */}
             <Button primary onClick={copySummary}>
               Copy summary
             </Button>

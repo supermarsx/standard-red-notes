@@ -1,3 +1,4 @@
+import { buildChecksBlock, witnessFrom, type CheckReading, type WitnessBoard, type WitnessId } from './diagnosticChecks'
 import type { DeploymentTopology, Remedy, RemedyEffort } from './diagnosticRemedies'
 import {
   buildSectionModel,
@@ -5,8 +6,10 @@ import {
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNothingToReport,
   evidenceProxy,
-  outcomesForSection,
+  evidenceUntested,
+  safeNothingToReport,
   reportLine,
   safeConstant,
   safeCount,
@@ -23,7 +26,7 @@ import {
   type Evidence,
   type SafeValue,
   type SectionModel,
-  type SectionTaggedOutcome,
+  type Witness,
   type Verdict,
 } from './diagnosticsSections'
 import { errorKind } from './healthReport'
@@ -537,8 +540,14 @@ export type BackendSectionInput = {
    * Absent means the caller did not say, and then no claim is made.
    */
   buildIdentified?: boolean
-  outcomes?: readonly SectionTaggedOutcome[]
+  /** Every registered check, run or not. This section renders its own as rows. */
+  checks?: readonly CheckReading[]
+  /** The direct observations a capped row here can point at. Absent: none was made. */
+  witnesses?: WitnessBoard
 }
+
+/** How a block reads a witness. Absent board: every witness is unobserved. */
+type WitnessOf = (id: WitnessId) => Witness
 
 /* -------------------------------------------------------------------------- */
 /* Reading the payload by allowlist                                           */
@@ -1100,8 +1109,22 @@ function buildReadBlock(
     }),
     diagnosticRow({
       label: LABEL_FAILURE,
-      value: safeEnum(failure, BACKEND_READ_FAILURES),
-      ...absentOr(failure, failure === 'unauthorized' || failure === 'forbidden' ? 'informational' : 'degraded'),
+      // *** A REASON FOR A FAILURE THAT DID NOT HAPPEN IS NOT A MISSING READING. ***
+      // The read answered, so there is no failure to classify — and this row read
+      // "not reported" directly under one reading "answered". Settled by that
+      // row, and only by it: with no read at all the reason stays unreported.
+      ...(failure === undefined && answered === true
+        ? {
+            value: safeNothingToReport('the read answered'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'The status endpoint answered, so there is no failure for this row to give a reason for.',
+            ),
+          }
+        : {
+            value: safeEnum(failure, BACKEND_READ_FAILURES),
+            ...absentOr(failure, failure === 'unauthorized' || failure === 'forbidden' ? 'informational' : 'degraded'),
+          }),
       note: 'One of five closed codes, classified by the same function the Server pane copyable report uses, so the two cannot disagree about why a read failed. The error TEXT is never shown and never entered in the report: it interpolates whatever the fetch threw, which is where an address reaches a diagnostic. A 401 or a 403 is reported as informational rather than as a fault — the services are not implicated by a permission answer.',
     }),
   ]
@@ -1719,17 +1742,38 @@ function slowestProbe(services: ServicesReading): SlowestProbe {
 const PROBE_CANNOT_CONFIRM =
   'that an AUTHORIZED request to this service succeeds — the probe is unauthenticated, so a credential the far end refuses is invisible to it, and no probe completes a ranged read'
 
-function probeEvidence(service: KnownService, outcome: ServiceOutcome): Evidence {
+/**
+ * The direct observation of an AUTHORIZED request to each service succeeding —
+ * which is exactly what `PROBE_CANNOT_CONFIRM` says the probe cannot show.
+ *
+ * *** PARTIAL ON PURPOSE. *** A service is listed only where something this pane
+ * observes could not have happened unless that service accepted a credential:
+ *
+ *   - `auth` issued and validated the session behind this pane's own admin read;
+ *   - `websocket-gateway` authenticated the socket this tab is on.
+ *
+ * The rest keep `Unknown` until a check exercises them, because nothing passive
+ * does: no row on this screen is a file transfer, a sync or a revision read.
+ */
+const PROBE_WITNESS: Partial<Record<KnownService, WitnessId>> = {
+  auth: 'admin-read',
+  'websocket-gateway': 'negotiation',
+}
+
+function probeEvidence(service: KnownService, outcome: ServiceOutcome, witness: WitnessOf): Evidence {
   // A probe that failed, failed. Negative readings keep direct evidence: the
   // point of capping is that a green probe over-claims, not that a red one does.
   if (SERVICE_FAILED[outcome] || outcome === 'not-configured') {
     return EVIDENCE_DIRECT
   }
 
+  const confirming = PROBE_WITNESS[service]
+
   return evidenceProxy({
     observed: `that ${service} answered an unauthenticated readiness route at the address this gateway probes it on`,
     cannotConfirm: PROBE_CANNOT_CONFIRM,
     necessaryCondition: true,
+    ...(confirming === undefined ? {} : { confirmedBy: witness(confirming) }),
   })
 }
 
@@ -1792,6 +1836,7 @@ function buildCommunicationBlock(
   services: ServicesReading,
   topology: DeploymentTopology | undefined,
   buildIdentified: boolean | undefined,
+  witness: WitnessOf,
 ): DiagnosticBlock {
   const rows: DiagnosticRow[] = []
   const filesTarget = filesProbeTarget(topology)
@@ -1816,6 +1861,10 @@ function buildCommunicationBlock(
                   observed: 'that the gateway which answered this request listed itself as reachable',
                   cannotConfirm: 'that this gateway is healthy in any respect it did not test',
                   necessaryCondition: false,
+                  // The one respect that IS tested from here: it authenticated and
+                  // answered this pane's own admin read. The witness says exactly
+                  // that and no more, and the row's note keeps the rest.
+                  confirmedBy: witness('admin-read'),
                 }),
           note: SERVICE_NOTE[service],
         }),
@@ -1829,7 +1878,7 @@ function buildCommunicationBlock(
           label: SERVICE_LABEL[service],
           value: outcome === undefined ? safePresence(undefined) : SERVICE_OUTCOME_VALUE[outcome],
           verdict: outcome === undefined ? 'undetermined' : SERVICE_VERDICT[outcome],
-          evidence: outcome === undefined ? EVIDENCE_ABSENT : probeEvidence(service, outcome),
+          evidence: outcome === undefined ? EVIDENCE_ABSENT : probeEvidence(service, outcome, witness),
           note: `${SERVICE_NOTE[service]}${FILES_PROBE_TARGET_NOTE[filesTarget]}`,
         }),
       )
@@ -1841,7 +1890,7 @@ function buildCommunicationBlock(
         label: SERVICE_LABEL[service],
         value: outcome === undefined ? safePresence(undefined) : SERVICE_OUTCOME_VALUE[outcome],
         verdict: outcome === undefined ? 'undetermined' : SERVICE_VERDICT[outcome],
-        evidence: outcome === undefined ? EVIDENCE_ABSENT : probeEvidence(service, outcome),
+        evidence: outcome === undefined ? EVIDENCE_ABSENT : probeEvidence(service, outcome, witness),
         note: SERVICE_NOTE[service],
       }),
     )
@@ -1908,15 +1957,13 @@ function buildCommunicationBlock(
     findings.push(
       diagnosticFinding({
         code: safeConstant('FILE_TRANSFER_UNVERIFIED'),
-        title: 'Nothing on this screen establishes that a file transfer works',
+        title: 'File transfer has not been tested',
         detail:
           'The files probe is worth more than nothing: its readiness route answers 200 only when the files service\'s storage check passed and, where Redis is configured for it, Redis answered — so a green probe rules out the process being down and its storage or Redis being unreachable. What no row here does is exercise the authorized path a real transfer takes: mint a valet token at auth, present it to the files service, have the files service accept it, and complete a ranged read. A credential the far end refuses is invisible to an unauthenticated probe, and so is a stalled range request. One topology note, so this does not send you after a mechanism that cannot apply: two services holding non-empty VALET_TOKEN_SECRET or AUTH_JWT_SECRET values that DISAGREE would satisfy every row here and refuse every transfer — but on the images this repo ships that cannot happen, because the entrypoint exports both keys once, unprefixed, before supervisord starts, with no per-program environment, and auth and files read that same key from that same process environment. It is a live hypothesis only where the services are configured separately. Read the files rows as "nothing visible is misconfigured", never as "file transfers work": if attachments are failing, this screen has not cleared the files lane, and the field that would is named in this section’s header.',
-        verdict: 'undetermined',
-        evidence: evidenceProxy({
-          observed: 'that the files service answered an unauthenticated readiness route',
-          cannotConfirm: PROBE_CANNOT_CONFIRM,
-          necessaryCondition: true,
-        }),
+        // `untested` and not `undetermined`: nothing failed to arrive. A transfer
+        // is a thing that can be tested and has not been, and the finding says how.
+        verdict: 'untested',
+        evidence: evidenceUntested('attach a small file to a note in this app and open it again'),
         remedy: remedyForUnverifiedFileTransfer(),
       }),
     )
@@ -2238,30 +2285,21 @@ export function buildBackendSection(input: BackendSectionInput = {}): SectionMod
   const status = isRecord(input.serverStatus) ? input.serverStatus : undefined
   const datastore = input.datastore ?? {}
   const services = readServices(status)
-  const outcomes = outcomesForSection(input.outcomes ?? [], 'backend')
+  const witness = witnessFrom(input.witnesses)
+  const checks = buildChecksBlock('backend', input.checks)
 
   const blocks: DiagnosticBlock[] = [
+    ...(checks === undefined ? [] : [checks]),
     buildReadBlock(status, input.statusError),
     buildDatabaseBlock(status, datastore, services),
     buildCacheBlock(status, input.topology),
-    buildCommunicationBlock(services, input.topology, input.buildIdentified),
+    buildCommunicationBlock(services, input.topology, input.buildIdentified, witness),
     // The RAW optional, not a defaulted `{}`: an absent block is a server older
     // than it, and a present block with no verdict in it is a server that looked
     // and withheld one. Defaulting here would erase that distinction before the
     // row that depends on it ever sees it.
     buildQueueBlock(input.topology, input.queues),
   ]
-
-  if (outcomes.length > 0) {
-    blocks.push({
-      heading: safeConstant('Operator-triggered checks'),
-      description:
-        'Results from the last run on the Checks sub-tab. Read-only here: a run is started in exactly one place, so the paragraph explaining what it does to your own account appears exactly once.',
-      rows: [],
-      findings: [],
-      outcomes,
-    })
-  }
 
   return buildSectionModel({
     id: 'backend',

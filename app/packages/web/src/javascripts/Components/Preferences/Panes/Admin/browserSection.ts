@@ -1,3 +1,4 @@
+import { buildChecksBlock, witnessFrom, type CheckReading, type WitnessBoard, type WitnessId } from './diagnosticChecks'
 import type { Remedy, RemedyEffort } from './diagnosticRemedies'
 import {
   buildSectionModel,
@@ -5,8 +6,9 @@ import {
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNotAvailableHere,
   evidenceProxy,
-  outcomesForSection,
+  safeNotAvailableHere,
   reportLine,
   safeConstant,
   safeCount,
@@ -23,7 +25,7 @@ import {
   type Evidence,
   type SafeValue,
   type SectionModel,
-  type SectionTaggedOutcome,
+  type Witness,
   type Verdict,
 } from './diagnosticsSections'
 
@@ -980,11 +982,36 @@ function presenceRow(input: {
   cannotConfirm: string
   note: string
   absentVerdict?: Verdict
+  /**
+   * The direct observation of the capability actually working, when this client
+   * makes one. A present constructor then reads OK on THAT evidence, "not tested"
+   * where a check makes it and has not run, and `Unknown` where nothing does.
+   */
+  confirmedBy?: Witness
+  /**
+   * For a capability NOTHING here can exercise without a side effect on the
+   * reader — writing their clipboard is the case. Its presence is then context
+   * and is reported as that: a row that can never be confirmed and never be
+   * refuted is not an unknown worth a reader's attention, and leaving it one kept
+   * a healthy browser off OK for ever. Its ABSENCE keeps its verdict.
+   */
+  presenceIsContext?: boolean
 }): DiagnosticRow {
+  if (input.present === true && input.presenceIsContext === true) {
+    return diagnosticRow({
+      label: input.label,
+      value: safePresence(true),
+      verdict: 'informational',
+      evidence: EVIDENCE_DIRECT,
+      note: `${input.note} Presence only: this pane does not exercise it, because doing so would act on your device, so no verdict is claimed from it being there.`,
+    })
+  }
+
   const evidence: Evidence = evidenceProxy({
     observed: input.observed,
     cannotConfirm: input.cannotConfirm,
     necessaryCondition: true,
+    ...(input.confirmedBy === undefined ? {} : { confirmedBy: input.confirmedBy }),
   })
 
   return diagnosticRow({
@@ -1072,8 +1099,14 @@ export type BrowserSectionInput = {
   /** Absent until the first collection run resolves; every row then reads "not reported". */
   observations?: BrowserObservations
   clock?: BrowserClockReading
-  outcomes?: readonly SectionTaggedOutcome[]
+  /** Every registered check, run or not. This section renders its own as rows. */
+  checks?: readonly CheckReading[]
+  /** The direct observations a capped row here can point at. Absent: none was made. */
+  witnesses?: WitnessBoard
 }
+
+/** How a block reads a witness. Absent board: every witness is unobserved. */
+type WitnessOf = (id: WitnessId) => Witness
 
 const PROBE_FAILURES: readonly ProbeOutcome[] = ['mismatch', 'threw', 'timed-out']
 
@@ -1081,7 +1114,7 @@ function failed(outcome: ProbeOutcome | undefined): boolean {
   return outcome !== undefined && PROBE_FAILURES.includes(outcome)
 }
 
-function buildRequirementsBlock(observed: BrowserObservations): DiagnosticBlock {
+function buildRequirementsBlock(observed: BrowserObservations, witness: WitnessOf): DiagnosticBlock {
   const rows: DiagnosticRow[] = [
     diagnosticRow({
       label: safeConstant('Secure context'),
@@ -1110,6 +1143,7 @@ function buildRequirementsBlock(observed: BrowserObservations): DiagnosticBlock 
       present: observed.subtlePresent,
       observed: 'whether crypto.subtle exists as an object on this page',
       cannotConfirm: 'a cryptographic operation actually succeeding here',
+      confirmedBy: witness('crypto'),
       note: 'Presence only. This row is capped on purpose: the rows below it ran real operations, and they are the ones that establish Web Crypto works. A shimmed or cut-down implementation passes this row and fails those.',
     }),
     probeRow({
@@ -1135,6 +1169,7 @@ function buildRequirementsBlock(observed: BrowserObservations): DiagnosticBlock 
       present: observed.webSocketPresent,
       observed: 'whether the WebSocket constructor exists on this page',
       cannotConfirm: "this client's socket actually connecting",
+      confirmedBy: witness('negotiation'),
       note: 'The browser-capability half only. Whether the socket is connected, and why it is not, belongs to the WebSocket section and is not restated here — one defect reported twice in different words is how an operator stops believing a panel.',
     }),
     presenceRow({
@@ -1142,6 +1177,9 @@ function buildRequirementsBlock(observed: BrowserObservations): DiagnosticBlock 
       present: observed.workerPresent,
       observed: 'whether the Worker constructor exists on this page',
       cannotConfirm: 'a worker actually starting',
+      // The sync transport's socket lives in a worker, so a live socket in this
+      // tab is a worker that started.
+      confirmedBy: witness('negotiation'),
       note: 'The sync transport runs in a worker and the decryption pool is sized from this too. Without it the realtime lane is never built and decryption falls back to the main thread, which a large vault feels immediately.',
     }),
     presenceRow({
@@ -1149,7 +1187,8 @@ function buildRequirementsBlock(observed: BrowserObservations): DiagnosticBlock 
       present: observed.indexedDbPresent,
       observed: 'whether the indexedDB accessor exists on this page',
       cannotConfirm: 'a database actually opening',
-      note: 'Presence is explicitly NOT the test here: Firefox private windows and locked-down profiles expose indexedDB and then reject open(), which the transport reports as outbox-unavailable and which closes the lane. A real open-and-close of a throwaway database is operator-triggered and lives on the Checks sub-tab, because a render path must not create databases.',
+      confirmedBy: witness('local-database'),
+      note: 'Presence is explicitly NOT the test here: Firefox private windows and locked-down profiles expose indexedDB and then reject open(), which the transport reports as outbox-unavailable and which closes the lane. What establishes that a database opens is one that DID: this app’s own local database, which it opens and reads before it shows a single note. No throwaway database is created to prove it — a render path must not create databases, and the real one is better evidence.',
     }),
   ]
 
@@ -1342,7 +1381,7 @@ function buildStorageBlock(observed: BrowserObservations): DiagnosticBlock {
   }
 }
 
-function buildSupportingBlock(observed: BrowserObservations): DiagnosticBlock {
+function buildSupportingBlock(observed: BrowserObservations, witness: WitnessOf, collected: boolean): DiagnosticBlock {
   const rows: DiagnosticRow[] = [
     observedRow({
       label: safeConstant('WebAssembly present'),
@@ -1395,6 +1434,7 @@ function buildSupportingBlock(observed: BrowserObservations): DiagnosticBlock {
               observed: "the browser's own navigator.onLine flag",
               cannotConfirm: 'this deployment actually being reachable',
               necessaryCondition: true,
+              confirmedBy: witness('admin-read'),
             }),
       note: 'Asymmetric on purpose, and the clearest small example of why this pane derives verdicts from evidence. A true reading proves nothing — a captive portal and a dead server both read online — so it is reported as undetermined. A false reading means the browser has no usable interface at all, which is conclusive.',
     }),
@@ -1417,6 +1457,9 @@ function buildSupportingBlock(observed: BrowserObservations): DiagnosticBlock {
               observed: "the browser's own navigator.cookieEnabled flag",
               cannotConfirm: "this origin's session cookie being stored and sent back",
               necessaryCondition: true,
+              // The session this origin holds was accepted on an authenticated
+              // read, which is the thing a blocked cookie would have prevented.
+              confirmedBy: witness('admin-read'),
             }),
       note: 'Every web sign-in on this fork is cookie-based, so a false reading is a sign-in failure rather than a missing feature. The honest limitation, stated rather than hidden: the flag does not reflect per-site or third-party blocking, and a page cannot test that about itself — so a true reading is reported as undetermined.',
     }),
@@ -1426,6 +1469,7 @@ function buildSupportingBlock(observed: BrowserObservations): DiagnosticBlock {
       observed: 'whether navigator.clipboard.writeText exists on this page',
       cannotConfirm: 'a clipboard write actually succeeding, which also needs a user gesture and permission',
       absentVerdict: 'broken',
+      presenceIsContext: true,
       note: "This pane's own Copy report button depends on it, and that button swallows its failure — it silently reports nothing copied. A diagnostics panel that cannot report its own broken button is the exact failure class this pane exists to end, which is why a convenience gets a verdict here.",
     }),
     diagnosticRow({
@@ -1436,11 +1480,27 @@ function buildSupportingBlock(observed: BrowserObservations): DiagnosticBlock {
     }),
     diagnosticRow({
       label: safeConstant('Device memory, GB'),
-      value: safeEnum(
-        observed.deviceMemoryGb === undefined ? undefined : String(observed.deviceMemoryGb),
-        DEVICE_MEMORY_VALUES,
-      ),
-      ...absentOr(observed.deviceMemoryGb, 'informational'),
+      // *** NOT EXPOSED IS NOT UNANSWERED. *** `navigator.deviceMemory` exists in
+      // Chromium only. On Gecko and WebKit there is no such property, so once the
+      // collection run has completed an absent reading means the browser has no
+      // answer to give — and this row read "not reported", which the pane counted
+      // as a question that went unanswered. Before the run completes it still
+      // reads that, because then nothing has been asked yet.
+      ...(collected && observed.deviceMemoryGb === undefined
+        ? {
+            value: safeNotAvailableHere('this browser does not expose it'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNotAvailableHere(
+              'This browser has no navigator.deviceMemory, so there is no figure to read. It is context only, and nothing depends on it.',
+            ),
+          }
+        : {
+            value: safeEnum(
+              observed.deviceMemoryGb === undefined ? undefined : String(observed.deviceMemoryGb),
+              DEVICE_MEMORY_VALUES,
+            ),
+            ...absentOr(observed.deviceMemoryGb, 'informational'),
+          }),
       note: 'The browser reports this only as one of six coarse values, and only some browsers report it at all. Admitted against exactly those six so an unexpected figure is refused rather than printed.',
     }),
   ]
@@ -1518,8 +1578,18 @@ function buildIdentityBlock(observed: BrowserObservations): DiagnosticBlock {
       }),
       diagnosticRow({
         label: safeConstant('Mobile form factor'),
-        value: safeYesNo(observed.mobileFormFactor),
-        ...absentOr(observed.mobileFormFactor, 'informational'),
+        // Reported only where client hints exist, and the row beneath says whether
+        // they do. A browser WITHOUT them — Gecko, WebKit — has no answer to give,
+        // which is a settled absence and not a reading that failed to arrive.
+        ...(observed.mobileFormFactor === undefined && observed.userAgentDataPresent === false
+          ? {
+              value: safeNotAvailableHere('this browser has no client hints'),
+              verdict: 'not-applicable' as const,
+              evidence: evidenceNotAvailableHere(
+                'This browser does not implement navigator.userAgentData, which is the only place the form factor is reported. It is not inferred from a screen size.',
+              ),
+            }
+          : { value: safeYesNo(observed.mobileFormFactor), ...absentOr(observed.mobileFormFactor, 'informational') }),
         note: "The browser's own answer, reported only where client hints exist. Not inferred from a screen size, which would be a guess dressed up as an observation.",
       }),
       diagnosticRow({
@@ -1597,7 +1667,7 @@ const REPORT_UA_WITHHELD = reportLine(
 
 const REPORT_DB_OPEN = reportLine(
   safeConstant('Local database open test'),
-  safeConstant('operator-triggered on the Checks sub-tab'),
+  safeConstant('none is run; the IndexedDB row is confirmed by this app’s own database having loaded'),
 )
 
 /**
@@ -1611,26 +1681,20 @@ const REPORT_DB_OPEN = reportLine(
  */
 export function buildBrowserSection(input: BrowserSectionInput = {}): SectionModel {
   const observed = input.observations ?? {}
-  const outcomes = outcomesForSection(input.outcomes ?? [], 'browser')
+  const witness = witnessFrom(input.witnesses)
+  const checks = buildChecksBlock('browser', input.checks)
+  // Whether the collection run has completed. An absent reading means "this
+  // browser does not offer it" only AFTER the run; before it, nothing was asked.
+  const collected = input.observations !== undefined
 
   const blocks: DiagnosticBlock[] = [
-    buildRequirementsBlock(observed),
+    ...(checks === undefined ? [] : [checks]),
+    buildRequirementsBlock(observed, witness),
     buildStorageBlock(observed),
-    buildSupportingBlock(observed),
+    buildSupportingBlock(observed, witness, collected),
     buildIdentityBlock(observed),
     buildClockBlock(input.clock),
   ]
-
-  if (outcomes.length > 0) {
-    blocks.push({
-      heading: safeConstant('Operator-triggered checks'),
-      description:
-        'Results from the last run on the Checks sub-tab. Read-only here: the one place a run can be started is that tab, so the paragraph explaining what a run does to your own account appears exactly once.',
-      rows: [],
-      findings: [],
-      outcomes,
-    })
-  }
 
   return buildSectionModel({
     id: 'browser',

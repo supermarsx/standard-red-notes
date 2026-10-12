@@ -1,7 +1,7 @@
 import type { SyncFallbackReason, SyncTransportState } from '@/Services/SyncTransport/syncTransportProtocol'
 import type { Remedy } from './diagnosticRemedies'
 import { admitToken, NOT_REPORTED, WITHHELD, type DeclaredPattern } from './reportAllowlist'
-import type { CapabilityTestOutcome, Tone } from './syncDiagnostics'
+import type { Tone } from './syncDiagnostics'
 
 /**
  * Standard Red Notes: the shared contract behind the sectioned admin diagnostics.
@@ -196,6 +196,49 @@ export function safeConstant<T extends string>(text: T & (string extends T ? nev
  */
 export const NOT_PUBLISHED: SafeValue = mint('no endpoint publishes this')
 
+/**
+ * *** THREE MORE SILENCES, EACH OF WHICH USED TO READ "not reported". ***
+ *
+ * Measured on a healthy deployment the operator pasted: 13 rows read exactly
+ * `not reported`, and the pane counted every one of them as "asked for and
+ * nothing came back" — which made each section, and the headline over them, read
+ * UNKNOWN on a server where nothing was wrong. They were three different facts:
+ *
+ *   - NOTHING TO REPORT. "Most recent gRPC failure" beside a failure count of
+ *     zero; "Why the read failed" on a read that answered; "FILES_V1 unmet
+ *     condition" with none unmet. The row describes an event that did not happen,
+ *     and the absence of an event is not a missing reading.
+ *   - NOT AVAILABLE HERE. `navigator.deviceMemory` on Gecko; the role names no
+ *     client surface exposes. Nothing went unanswered: there is nobody to ask.
+ *     `NOT_PUBLISHED` above is the same fact about a server endpoint.
+ *   - NOT TESTED. A check that establishes the row exists and nobody has run it.
+ *     The operator's next action is one button, which "unknown" does not say.
+ *
+ * Only the fourth — asked, and nothing came back — is `NOT_REPORTED`, and only
+ * that one may stop a headline from reading OK on its own.
+ *
+ * Each takes a LITERAL qualifier, exactly as `safeConstant` does, so the reason
+ * printed in the copyable report is this build's own words and never a server's.
+ * The fixed prefix is what `readingOf` matches, which keeps the reading derived
+ * from the value: there is still no second place for a builder to state a reading
+ * that disagrees with what its row prints.
+ */
+export const NOTHING_TO_REPORT = 'nothing to report'
+export const NOT_AVAILABLE_HERE = 'not available here'
+export const NOT_TESTED = 'not tested'
+
+export function safeNothingToReport<T extends string>(why: T & (string extends T ? never : unknown)): SafeValue {
+  return mint(`${NOTHING_TO_REPORT} (${why})`)
+}
+
+export function safeNotAvailableHere<T extends string>(why: T & (string extends T ? never : unknown)): SafeValue {
+  return mint(`${NOT_AVAILABLE_HERE} (${why})`)
+}
+
+export function safeNotTested<T extends string>(how: T & (string extends T ? never : unknown)): SafeValue {
+  return mint(`${NOT_TESTED} (${how})`)
+}
+
 /** `yes` / `no` / `not reported`. Three-valued because absent is not false. */
 export function safeYesNo(value: boolean | undefined): SafeValue {
   return mint(value === true ? 'yes' : value === false ? 'no' : NOT_REPORTED)
@@ -369,103 +412,126 @@ export function reportLine(label: SafeValue, value: SafeValue): SafeValue {
 }
 
 /**
- * One ROW as a report line, carrying its reading marker.
+ * One ROW as a report line, carrying its STATUS tag.
  *
  * Separate from `reportLine` on purpose: `reportLine` also mints the handful of
  * lines a section writes by hand (`extraReportLines`), which are statements about
- * the section rather than readings of a field and have no reading to mark. Only a
- * real row gets a marker, so the marker column means exactly one thing.
+ * the section rather than readings of a field and have no status to carry. Only a
+ * real row gets a tag, so the tag column means exactly one thing.
  *
- * The marker comes from an exhaustive `Record` over `RowReading`, keyed by the
- * reading derived from the row's own already-safe value, so it is a literal of
+ * *** THE TAG IS THE VERDICT NOW, AND IT USED TO BE THE READING. *** The line
+ * began `[v]`, `[?]` or `[n]` — whether a value had arrived — so a row could read
+ * `[v] Roles held by this account: not exposed by any client surface` and be
+ * counted as an answer, and nothing on any line of a 560-line paste said whether
+ * the fact it carried was good news. The reading is still in the line: it is the
+ * value. What the reader could not get from the value was the verdict.
+ *
+ * The tag comes from an exhaustive `Record` over `Verdict`, so it is a literal of
  * this build whatever the server sent.
  */
-export function reportRow(row: { readonly label: SafeValue; readonly value: SafeValue }): SafeValue {
-  return mint(`- ${READING_MARKER[readingOf(row.value)]} ${row.label}: ${row.value}`)
+export function reportRow(row: {
+  readonly label: SafeValue
+  readonly value: SafeValue
+  readonly verdict: Verdict
+}): SafeValue {
+  return mint(`- [${STATUS_TAG[row.verdict]}] ${row.label}: ${row.value}`)
 }
 
 /* -------------------------------------------------------------------------- */
-/* The three silences                                                         */
+/* The silences                                                               */
 /* -------------------------------------------------------------------------- */
 
 /**
- * *** THREE DIFFERENT FACTS, AND THEY USED TO READ ALIKE. ***
+ * *** FIVE DIFFERENT FACTS, AND FOUR OF THEM USED TO READ ALIKE. ***
  *
- * The pane already models all three carefully — `safeYesNo` and friends are
- * three-valued so an absent field cannot read as `false`, and `NOT_PUBLISHED`
- * exists so a field with no producer does not send an operator looking for a
- * defect — and then prints them as two sentences a reader has to parse. On a
- * realistic deployment 49 of 239 report rows read exactly `not reported`, with
- * nothing in the line saying which of the two silences it is or why.
+ * The pane models absence carefully — `safeYesNo` and friends are three-valued so
+ * an absent field cannot read as `false` — and then printed every kind of absence
+ * as the one sentence `not reported`. On the deployment this was last measured on,
+ * 13 of 205 rows read exactly that, every one was counted as "asked for and
+ * nothing came back", and that count alone made all five sections and the
+ * headline read UNKNOWN over a server with nothing wrong with it.
  *
  * So the distinction is a CLOSED value derived from the row, once, here:
  *
- *   - `answered`    — the server (or the browser) produced a value. This includes
- *     a value that was refused on the way out: `withheld (unrecognised format)`
- *     and `other (unrecognised)` are both readings, and a reading is not a
- *     silence. That matters for the report's census, which would otherwise count
- *     a misbehaving server as a quiet one.
- *   - `unanswered`  — this build asked and nothing came back. The question "why
- *     not?" is open, and this is the state where it is worth asking.
- *   - `unpublished` — nothing in the system publishes the field yet. The same
- *     question has no answer, and that is precisely why `NOT_PUBLISHED` exists.
+ *   - `answered`       — the server (or the browser) produced a value. This
+ *     includes a value that was refused on the way out: `withheld (unrecognised
+ *     format)` and `other (unrecognised)` are both readings, and a reading is not
+ *     a silence. That matters for the census, which would otherwise count a
+ *     misbehaving server as a quiet one.
+ *   - `unanswered`     — this build asked and nothing came back. The question
+ *     "why not?" is open, and this is the ONE silence worth asking it of.
+ *   - `untested`       — a check that establishes the row exists and has not been
+ *     run. Not a mystery: the next action is one button.
+ *   - `not-applicable` — the row describes something that did not happen, so there
+ *     is nothing to say. The absence of a failure is not a missing reading.
+ *   - `unavailable`    — nothing here can produce the value at all: no endpoint
+ *     publishes it, no client surface exposes it, or this browser does not offer
+ *     the API. The same question has no answer, and the row says so.
  *
  * Derived from the VALUE rather than stored on the row, deliberately: the value
  * is minted by the constructors above, which are the only things that can produce
- * `NOT_REPORTED` or `NOT_PUBLISHED`, so there is no second place for a builder to
- * state a reading that disagrees with what its row actually prints.
+ * a sentinel, so there is no second place for a builder to state a reading that
+ * disagrees with what its row actually prints.
  */
-export const ROW_READINGS = ['answered', 'unanswered', 'unpublished'] as const
+export const ROW_READINGS = ['answered', 'unanswered', 'untested', 'not-applicable', 'unavailable'] as const
 
 export type RowReading = (typeof ROW_READINGS)[number]
 
-/**
- * *** EXHAUSTIVE `Record` ON PURPOSE. *** The marker the copyable report puts at
- * the head of every row, so the three are separable by eye in a document the
- * operator pastes somewhere else. Three characters each, all literals of this
- * build, and the legend is printed once in the report's own `How to read this`.
- */
-export const READING_MARKER: Record<RowReading, string> = {
-  answered: '[v]',
-  unanswered: '[?]',
-  unpublished: '[n]',
-}
-
-/** *** EXHAUSTIVE `Record` ON PURPOSE. *** The on-screen tag for the two silences. */
+/** *** EXHAUSTIVE `Record` ON PURPOSE. *** The on-screen tag for the four silences. */
 export const READING_TAG: Record<RowReading, string> = {
   answered: 'answered',
   unanswered: 'no answer',
-  unpublished: 'no source',
+  untested: 'not tested',
+  'not-applicable': 'nothing to report',
+  unavailable: 'not available here',
 }
 
 /** *** EXHAUSTIVE `Record` ON PURPOSE. *** What each reading MEANS, in one line. */
 export const READING_MEANING: Record<RowReading, string> = {
   answered: 'a value arrived',
   unanswered: 'this build asked and nothing came back',
-  unpublished: 'nothing publishes this field yet, so there is nothing to wait for',
+  untested: 'a check establishes this and it has not been run yet',
+  'not-applicable': 'the row describes something that did not happen, so there is nothing to say',
+  unavailable: 'nothing here can produce the value — no endpoint, client surface or browser API offers it',
 }
+
+/** Whether `value` is the sentinel itself or the sentinel joined to a qualifier. */
+const opensWith = (value: string, sentinel: string): boolean => value === sentinel || value.startsWith(`${sentinel} `)
 
 /**
  * Which silence — or none — a value represents.
  *
  * Matched by PREFIX rather than equality, because several rows join a sentinel to
- * a qualifier (`no endpoint publishes this (…)`), and anchored at the start so a
- * row whose value merely CONTAINS the words — `not set (threshold not established:
- * no lane decision reported)` is a real one — stays `answered`, which it is.
+ * a qualifier (`nothing to report (no failure recorded)`), and anchored at the
+ * start so a row whose value merely CONTAINS the words — `not set (threshold not
+ * established: no lane decision reported)` is a real one — stays `answered`,
+ * which it is.
  */
 export function readingOf(value: string): RowReading {
-  if (value === NOT_PUBLISHED || value.startsWith(`${NOT_PUBLISHED} `)) {
-    return 'unpublished'
+  if (opensWith(value, NOT_PUBLISHED) || opensWith(value, NOT_AVAILABLE_HERE)) {
+    return 'unavailable'
   }
-  if (value === NOT_REPORTED || value.startsWith(`${NOT_REPORTED} `)) {
+  if (opensWith(value, NOTHING_TO_REPORT)) {
+    return 'not-applicable'
+  }
+  if (opensWith(value, NOT_TESTED)) {
+    return 'untested'
+  }
+  if (opensWith(value, NOT_REPORTED)) {
     return 'unanswered'
   }
   return 'answered'
 }
 
-/** How many rows of each reading. Always all three keys, so a zero is a reading. */
+/** How many rows of each reading. Always every key, so a zero is a reading. */
 export function readingCensus(rows: readonly { readonly value: SafeValue }[]): Record<RowReading, number> {
-  const census: Record<RowReading, number> = { answered: 0, unanswered: 0, unpublished: 0 }
+  const census: Record<RowReading, number> = {
+    answered: 0,
+    unanswered: 0,
+    untested: 0,
+    'not-applicable': 0,
+    unavailable: 0,
+  }
   for (const row of rows) {
     census[readingOf(row.value)] += 1
   }
@@ -501,42 +567,105 @@ export function describeCensus(census: Record<RowReading, number>): string {
  * important thing this task adds, because the state the pane used to render as
  * "Unavailable" was usually this one. `informational` means the row carries
  * context with no verdict at all, like a CPU count.
+ *
+ * *** `untested` AND `not-applicable` ARE NOT SHADES OF `undetermined` EITHER. ***
+ * They were split out of it, because `undetermined` had become the pane's answer
+ * to four different situations and a healthy deployment read UNKNOWN from top to
+ * bottom as a result:
+ *
+ *   - `untested` — a check exists that establishes this, and it has not been run.
+ *     The reader's next action is known and is one button. It still stops a
+ *     headline from reading OK, which is the point of keeping it a verdict: an OK
+ *     nobody tested is the claim this pane exists to refuse.
+ *   - `not-applicable` — there is nothing to judge. The row describes a failure
+ *     that did not occur, or a value nothing here can produce. It carries no
+ *     weight in either direction and ranks below even `informational`.
+ *
+ * What is left in `undetermined` is the one case that deserves the word: a
+ * reading that should have arrived and did not.
  */
-export const VERDICTS = ['healthy', 'degraded', 'broken', 'undetermined', 'informational'] as const
+export const VERDICTS = [
+  'healthy',
+  'degraded',
+  'broken',
+  'undetermined',
+  'untested',
+  'not-applicable',
+  'informational',
+] as const
 
 export type Verdict = (typeof VERDICTS)[number]
 
 /**
  * How much an operator should care, lowest first. Used to pick a section's worst
- * verdict for the Overview router and the sub-tab chip.
+ * verdict for the summary, the sub-tab chip and the headline.
  *
  * `undetermined` sits ABOVE `healthy` and below `degraded` on purpose: a section
  * that could not establish its facts is worth opening, and is not worth opening
- * ahead of one that is actually degraded.
+ * ahead of one that is actually degraded. `untested` sits just beneath it — both
+ * keep a headline off OK, and a reading that failed to arrive is the more
+ * surprising of the two. `not-applicable` is the floor: it is the only verdict
+ * that says there was nothing to look at.
  */
 export const VERDICT_SEVERITY: Record<Verdict, number> = {
-  informational: 0,
-  healthy: 1,
-  undetermined: 2,
-  degraded: 3,
-  broken: 4,
+  'not-applicable': 0,
+  informational: 1,
+  healthy: 2,
+  untested: 3,
+  undetermined: 4,
+  degraded: 5,
+  broken: 6,
 }
 
 /**
  * *** EXHAUSTIVE `Record` ON PURPOSE — the fall-through WAS the bug. ***
  *
- * The chip label for each verdict. Two verdicts share the neutral TONE and must
- * not share a label: "Unknown" is the panel admitting it cannot tell, "Info" is a
- * row that was never a verdict. The ternary chain this replaces
- * (`tone === 'good' ? 'OK' : tone === 'bad' ? 'Down' : 'Note'`) could express
- * neither.
+ * The chip label for each verdict, in the fewest plain words that cannot be taken
+ * for one another. Three verdicts paint with a quiet tone and must not share a
+ * label: "Unknown" is the panel admitting it cannot tell, "Not tested" is a check
+ * nobody has run, and "Info" is a row that was never a verdict. The ternary chain
+ * this replaces (`tone === 'good' ? 'OK' : tone === 'bad' ? 'Down' : 'Note'`)
+ * could express none of them.
  */
 export const VERDICT_CHIP_LABEL: Record<Verdict, string> = {
   healthy: 'OK',
   degraded: 'Degraded',
-  broken: 'Down',
+  broken: 'Not working',
   undetermined: 'Unknown',
+  untested: 'Not tested',
+  'not-applicable': 'N/A',
   informational: 'Info',
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What each verdict MEANS, as a phrase a
+ * sentence can be built round. The chip is the word; this is the gloss printed
+ * once in each legend, on screen and in the report, so the two cannot describe a
+ * status differently.
+ */
+export const VERDICT_MEANING: Record<Verdict, string> = {
+  healthy: 'working',
+  degraded: 'working, with something lost',
+  broken: 'not working',
+  undetermined: 'could not be checked — a reading that should have arrived did not',
+  untested: 'not tested yet — a check establishes it and has not been run',
+  'not-applicable': 'not applicable here — nothing to judge',
+  informational: 'context only, no verdict',
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The tag at the head of every row in the
+ * copyable report. Upper case and spelled out: the report is read without the
+ * pane, without colour and without icons, so the word is the whole signal.
+ */
+export const STATUS_TAG: Record<Verdict, string> = {
+  healthy: 'OK',
+  degraded: 'DEGRADED',
+  broken: 'NOT WORKING',
+  undetermined: 'UNKNOWN',
+  untested: 'NOT TESTED',
+  'not-applicable': 'N/A',
+  informational: 'INFO',
 }
 
 /** *** EXHAUSTIVE `Record` ON PURPOSE. *** The tone a verdict paints with. */
@@ -545,7 +674,26 @@ export const TONE_FOR_VERDICT: Record<Verdict, Tone> = {
   degraded: 'warn',
   broken: 'bad',
   undetermined: 'neutral',
+  untested: 'neutral',
+  'not-applicable': 'neutral',
   informational: 'neutral',
+}
+
+/**
+ * Whether a verdict keeps a section, and the headline over it, from reading OK.
+ *
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The two that paint quietly and still
+ * block are the ones this record exists for: `undetermined` and `untested` have no
+ * alarming colour, and a headline derived from colour alone would step over both.
+ */
+export const BLOCKS_OK: Record<Verdict, boolean> = {
+  healthy: false,
+  degraded: true,
+  broken: true,
+  undetermined: true,
+  untested: true,
+  'not-applicable': false,
+  informational: false,
 }
 
 /**
@@ -586,14 +734,110 @@ export type ProxyEvidence = {
    * from so that nothing downstream can branch on it with an `else`.
    */
   readonly relation: ProxyRelation
+  /**
+   * The DIRECT observation of the thing this signal only implies, when the pane
+   * has a way to make one. See `Witness`.
+   */
+  readonly confirmedBy?: Witness
+}
+
+/**
+ * A direct observation of something a proxy row can only imply.
+ *
+ * *** WHY THIS EXISTS: THE CAP WAS RIGHT AND ITS RESULT WAS UNUSABLE. *** A row
+ * resting on a necessary condition may not claim the thing works — that rule is
+ * the pane's reason for being believed, and it stays. But the cap's only answer
+ * was `undetermined`, so on a healthy deployment thirty-three rows read "Unknown"
+ * for ever: the socket lane was built, the gateway attached, every required
+ * variable set, six internal probes answering — and each of them unknown, because
+ * each is necessary for something it cannot establish. Nothing the operator did
+ * could clear one. A verdict that cannot be cleared is not information.
+ *
+ * What a capped row is missing is not more hedging. It is the observation it
+ * stands in for — and in most cases the pane CAN make that observation: "that a
+ * client is being admitted onto the lane now" is this tab's own socket being
+ * READY; "that an authorized file transfer works" is an upload and a read-back.
+ * A witness is that observation, handed to the row that needs it. The row still
+ * cannot claim anything on its own evidence. It can now say who can.
+ *
+ * `state` is closed, and each member is a different sentence:
+ *
+ *   - `confirmed`   — the direct observation was made and held. The row reads OK,
+ *     and says what confirmed it.
+ *   - `refuted`     — it was made and did not hold. The row's own condition still
+ *     holds, so the fault lies past it; the row carries no verdict and points at
+ *     the observation, which reports the failure itself.
+ *   - `not-run`     — a check makes the observation and has not been run. The row
+ *     reads "not tested" and names the check.
+ *   - `unavailable` — it cannot be made from here, for a stated reason that is not
+ *     a fault (a tab that is deliberately not the socket's owner cannot observe
+ *     the socket). No verdict.
+ *   - `unknown`     — nothing says whether it was made. The row keeps the old
+ *     answer, `undetermined`, because that is now the honest one: an observation
+ *     that should have been available and was not.
+ *
+ * `what` and `how` are prose written by this build and are rendered on screen in
+ * a caveat only. Neither is a path into the copyable report.
+ */
+export const WITNESS_STATES = ['confirmed', 'refuted', 'not-run', 'unavailable', 'unknown'] as const
+
+export type WitnessState = (typeof WITNESS_STATES)[number]
+
+export type Witness = {
+  readonly state: WitnessState
+  /** The observation, as a clause: "this tab's own socket is READY". */
+  readonly what: string
+  /**
+   * For `not-run`, how to make it ("run the file round trip check"). For
+   * `unavailable`, why it cannot be made here. Unused otherwise.
+   */
+  readonly how?: string
+}
+
+/**
+ * An event that did not happen, or a value nothing here can produce.
+ *
+ * `because` is REQUIRED and is the whole discipline of these two arms: "nothing to
+ * report" is a claim, and the claim is only as good as the observation it rests
+ * on. "Most recent gRPC failure" is not applicable BECAUSE the gateway reported
+ * its fallback counters and both read zero — and where those counters are absent
+ * the row must go on reading `not reported`, since a failure nobody counted is
+ * not a failure that did not happen. A builder cannot reach either arm without
+ * writing that sentence down, and the renderer prints it under the row.
+ */
+export type SettledAbsenceEvidence =
+  | { readonly kind: 'not-applicable'; readonly because: string }
+  | { readonly kind: 'unavailable'; readonly because: string }
+
+/** A check exists that establishes this row, and it has not been run. */
+export type UntestedEvidence = {
+  readonly kind: 'untested'
+  /** How to run it, in the reader's terms. Printed under the row. */
+  readonly how: string
 }
 
 /** What a verdict rests on. */
-export type Evidence = { readonly kind: 'direct' } | ProxyEvidence | { readonly kind: 'absent' }
+export type Evidence =
+  { readonly kind: 'direct' } | ProxyEvidence | { readonly kind: 'absent' } | SettledAbsenceEvidence | UntestedEvidence
 
 export const EVIDENCE_DIRECT: Evidence = { kind: 'direct' }
 
 export const EVIDENCE_ABSENT: Evidence = { kind: 'absent' }
+
+/** Nothing happened that this row would describe. `because` names what established that. */
+export function evidenceNothingToReport(because: string): Evidence {
+  return { kind: 'not-applicable', because }
+}
+
+/** Nothing here can produce this value at all. `because` names which surface is missing. */
+export function evidenceNotAvailableHere(because: string): Evidence {
+  return { kind: 'unavailable', because }
+}
+
+/** A check establishes this and has not been run. `how` says which, and how to run it. */
+export function evidenceUntested(how: string): Evidence {
+  return { kind: 'untested', how }
+}
 
 /**
  * `necessaryCondition` stays a boolean at this boundary deliberately: it is the
@@ -605,27 +849,41 @@ export const EVIDENCE_ABSENT: Evidence = { kind: 'absent' }
  * A necessary condition failing is conclusive, so a `broken` verdict survives; a
  * merely correlated signal establishes nothing in either direction and caps to
  * `undetermined`.
+ *
+ * `confirmedBy` is the direct observation of `cannotConfirm`, when one exists. It
+ * changes what a POSITIVE claim resolves to and nothing else — see `capVerdict`.
  */
 export function evidenceProxy(input: {
   observed: string
   cannotConfirm: string
   necessaryCondition: boolean
+  confirmedBy?: Witness
 }): Evidence {
   return {
     kind: 'proxy',
     observed: input.observed,
     cannotConfirm: input.cannotConfirm,
     relation: input.necessaryCondition ? 'necessary' : 'correlated',
+    ...(input.confirmedBy === undefined ? {} : { confirmedBy: input.confirmedBy }),
   }
 }
 
-/** Verdicts that assert the described thing is working, wholly or in part. */
-const ASSERTS_FUNCTION: Record<Verdict, boolean> = {
-  healthy: true,
-  degraded: true,
-  broken: false,
-  undetermined: false,
-  informational: false,
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** What a `healthy` claim on a proxy
+ * resolves to, per state of the observation that would confirm it.
+ *
+ * This is the only place a proxy row can come to read OK, and it does so on the
+ * WITNESS's evidence, never on its own: `confirmed` is the single member that
+ * yields `healthy`. `unknown` keeps the answer the cap has always given, so a
+ * caller that supplies no witness — every section spec written before witnesses
+ * existed — sees exactly the verdict it saw before.
+ */
+const HEALTHY_CLAIM_ON_PROXY: Record<WitnessState, Verdict> = {
+  confirmed: 'healthy',
+  refuted: 'informational',
+  'not-run': 'untested',
+  unavailable: 'informational',
+  unknown: 'undetermined',
 }
 
 /**
@@ -655,8 +913,19 @@ const PROXY_CAVEAT: Record<ProxyRelation, (evidence: ProxyEvidence) => string> =
 }
 
 /**
- * Cap a claim at what its evidence establishes. The whole point of the task in
- * four lines.
+ * Cap a claim at what its evidence establishes. The whole point of the pane.
+ *
+ * THE FOUR SETTLED ARMS FIRST. Direct evidence carries any claim. Absent evidence
+ * carries none. The two settled absences are `not-applicable` whatever was
+ * claimed, and an untested row is `untested` whatever was claimed — a builder
+ * cannot make one of those rows read OK by asking for it.
+ *
+ * THE PROXY ARM. A `healthy` claim resolves on the witness, and only a confirmed
+ * witness yields `healthy`. A `degraded` claim is a suspicion of loss resting on
+ * indirect evidence, and stays `undetermined` with or without a witness: a
+ * witness establishes that the thing works, and that is not what the row is
+ * suggesting. A `broken` claim survives on a necessary condition and on nothing
+ * else, exactly as before.
  */
 function capVerdict(claimed: Verdict, evidence: Evidence): Verdict {
   if (evidence.kind === 'direct') {
@@ -665,13 +934,43 @@ function capVerdict(claimed: Verdict, evidence: Evidence): Verdict {
   if (evidence.kind === 'absent') {
     return 'undetermined'
   }
-  if (ASSERTS_FUNCTION[claimed]) {
+  if (evidence.kind === 'not-applicable' || evidence.kind === 'unavailable') {
+    return 'not-applicable'
+  }
+  if (evidence.kind === 'untested') {
+    return 'untested'
+  }
+  if (claimed === 'healthy') {
+    return HEALTHY_CLAIM_ON_PROXY[evidence.confirmedBy?.state ?? 'unknown']
+  }
+  if (claimed === 'degraded') {
     return 'undetermined'
   }
   if (claimed === 'broken' && !BROKEN_SURVIVES[evidence.relation]) {
     return 'undetermined'
   }
   return claimed
+}
+
+/**
+ * *** EXHAUSTIVE `Record` ON PURPOSE. *** The sentence under a proxy row whose
+ * `healthy` claim was resolved on a witness, one per state.
+ *
+ * Every one of them restates what the row itself read, because the resolution
+ * must never read as the row having proved something: the row's evidence is
+ * unchanged, and what moved its verdict is named beside it.
+ */
+const WITNESSED_CAVEAT: Record<WitnessState, (evidence: ProxyEvidence, witness: Witness | undefined) => string> = {
+  confirmed: (evidence, witness) =>
+    `Confirmed directly: ${witness?.what ?? ''}. On its own this row reads ${evidence.observed}, which is necessary and would not have been enough.`,
+  refuted: (evidence, witness) =>
+    `This reads ${evidence.observed}, and yet ${witness?.what ?? ''} did NOT hold. So the condition here is met and the fault lies past it — the row that reports that observation carries the verdict; this one claims none.`,
+  'not-run': (evidence, witness) =>
+    `This reads ${evidence.observed}, which is necessary for ${evidence.cannotConfirm} and does not establish it. Not tested yet: ${witness?.how ?? 'run the checks on this pane'}.`,
+  unavailable: (evidence, witness) =>
+    `This reads ${evidence.observed}. Whether ${evidence.cannotConfirm} cannot be confirmed from here: ${witness?.how ?? 'no direct observation is available'}. No verdict is claimed, and that is not a fault.`,
+  unknown: (evidence) =>
+    `This reads ${evidence.observed}, which does not establish ${evidence.cannotConfirm}. Reported as undetermined rather than claiming it.`,
 }
 
 function caveatFor(claimed: Verdict, verdict: Verdict, evidence: Evidence): string | undefined {
@@ -682,6 +981,15 @@ function caveatFor(claimed: Verdict, verdict: Verdict, evidence: Evidence): stri
     return claimed === 'undetermined'
       ? undefined
       : 'Nothing was reported for this, so no verdict is claimed. An unreported field is not a negative answer.'
+  }
+  if (evidence.kind === 'not-applicable' || evidence.kind === 'unavailable') {
+    return evidence.because
+  }
+  if (evidence.kind === 'untested') {
+    return `Not tested yet: ${evidence.how}.`
+  }
+  if (claimed === 'healthy') {
+    return WITNESSED_CAVEAT[evidence.confirmedBy?.state ?? 'unknown'](evidence, evidence.confirmedBy)
   }
   if (verdict !== claimed) {
     return `This reads ${evidence.observed}, which does not establish ${evidence.cannotConfirm}. Reported as undetermined rather than claiming it.`
@@ -793,32 +1101,12 @@ export function diagnosticFinding(input: DiagnosticFindingInput): DiagnosticFind
   } as unknown as DiagnosticFinding
 }
 
-/**
- * A probe outcome tagged with the section it belongs to.
- *
- * Declared here as an intersection rather than by adding the field to
- * `CapabilityTestOutcome` itself: that type lives in `syncDiagnostics.ts`, which
- * another change owns. The tag lets a probe result appear read-only inside its
- * section while the consent paragraph and the button that mints a real
- * server-side ticket stay in exactly one place.
- */
-export type SectionTaggedOutcome = CapabilityTestOutcome & { readonly section?: SectionId }
-
-export function outcomesForSection(
-  outcomes: readonly SectionTaggedOutcome[],
-  section: SectionId,
-): readonly SectionTaggedOutcome[] {
-  return outcomes.filter((outcome) => outcome.section === section)
-}
-
 /** A headed group of rows and findings inside a section. */
 export type DiagnosticBlock = {
   readonly heading: SafeValue
   readonly description: string
   readonly rows: readonly DiagnosticRow[]
   readonly findings: readonly DiagnosticFinding[]
-  /** Probe results belonging to this block, rendered read-only. */
-  readonly outcomes?: readonly SectionTaggedOutcome[]
   /**
    * What to say when the block has nothing at all. A block with no rows is
    * normally a server that reported nothing, which is a fact worth a sentence —
@@ -832,7 +1120,7 @@ export function blockWorstVerdict(block: DiagnosticBlock): Verdict {
 }
 
 export function isBlockEmpty(block: DiagnosticBlock): boolean {
-  return block.rows.length === 0 && block.findings.length === 0 && (block.outcomes ?? []).length === 0
+  return block.rows.length === 0 && block.findings.length === 0
 }
 
 /**
@@ -852,6 +1140,42 @@ export function worstVerdictOf(verdicts: readonly Verdict[]): Verdict {
     }
   }
   return worst
+}
+
+/** How many of each verdict. Always every key, so a zero is a count and not an absent one. */
+export function verdictCensus(verdicts: readonly Verdict[]): Record<Verdict, number> {
+  const census: Record<Verdict, number> = {
+    healthy: 0,
+    degraded: 0,
+    broken: 0,
+    undetermined: 0,
+    untested: 0,
+    'not-applicable': 0,
+    informational: 0,
+  }
+  for (const verdict of verdicts) {
+    census[verdict] += 1
+  }
+
+  return census
+}
+
+/**
+ * The verdict census as one short line: `41 OK · 3 not tested · 12 info`.
+ *
+ * In SEVERITY order, worst first, so the first number a reader meets is the one
+ * that decides whether they keep reading — and a verdict at zero is omitted, since
+ * this line is read beside the rows it counts. The words are `VERDICT_CHIP_LABEL`'s
+ * own, lower-cased, so the line and the chips under it cannot name a status
+ * differently.
+ */
+export function describeVerdictCensus(census: Record<Verdict, number>): string {
+  const parts = [...VERDICTS]
+    .sort((left, right) => VERDICT_SEVERITY[right] - VERDICT_SEVERITY[left])
+    .filter((verdict) => census[verdict] > 0)
+    .map((verdict) => `${census[verdict]} ${verdict === 'healthy' ? 'OK' : VERDICT_CHIP_LABEL[verdict].toLowerCase()}`)
+
+  return parts.length === 0 ? 'no rows' : parts.join(' · ')
 }
 
 /**
@@ -886,6 +1210,12 @@ export type SectionModel = {
   /** The single worst finding, for the Overview router's one-line-per-section row. */
   readonly headline: DiagnosticFinding | undefined
   readonly blocks: readonly DiagnosticBlock[]
+  /**
+   * How many ROWS carry each verdict, across every block. Findings are not
+   * counted here: a finding restates rows already in this census, and counting
+   * both would make one fault read as two.
+   */
+  readonly counts: Record<Verdict, number>
   /** Markdown for the copyable report. Every line is a `SafeValue`. */
   readonly reportLines: readonly SafeValue[]
   readonly __sectionModel: 'built-by-buildSectionModel'
@@ -901,7 +1231,7 @@ export type SectionModelInput = {
   extraReportLines?: readonly SafeValue[]
 }
 
-const LABEL_WORST = safeConstant('Worst verdict')
+const LABEL_WORST = safeConstant('Status')
 const LABEL_FINDING = safeConstant('Finding')
 const LABEL_ROWS = safeConstant('Rows')
 const NOTHING_REPORTED = safeConstant('- Nothing was reported for this block.')
@@ -918,6 +1248,13 @@ const NOTHING_REPORTED = safeConstant('- Nothing was reported for this block.')
  */
 const censusValue = (rows: readonly DiagnosticRow[]): SafeValue =>
   mint(`${rows.length} (${describeCensus(readingCensus(rows))})`)
+
+/**
+ * A verdict as its report tag. Minted because `STATUS_TAG` is an exhaustive
+ * `Record` of literals of this build keyed by a closed union — there is no
+ * value of `Verdict` for which this can yield anything a server chose.
+ */
+const statusValue = (verdict: Verdict): SafeValue => mint(STATUS_TAG[verdict])
 
 export function buildSectionModel(input: SectionModelInput): SectionModel {
   const { id, blocks } = input
@@ -949,7 +1286,7 @@ export function buildSectionModel(input: SectionModelInput): SectionModel {
   const reportLines: SafeValue[] = [
     mint(`## ${title}`),
     mint(''),
-    reportLine(LABEL_WORST, safeEnum(worstVerdict, VERDICTS)),
+    reportLine(LABEL_WORST, statusValue(worstVerdict)),
     reportLine(LABEL_ROWS, censusValue(everyRow)),
     mint(''),
   ]
@@ -963,7 +1300,7 @@ export function buildSectionModel(input: SectionModelInput): SectionModel {
       reportLines.push(reportRow(row))
     }
     for (const finding of block.findings) {
-      reportLines.push(reportLine(LABEL_FINDING, safeTokens(finding.code, safeEnum(finding.verdict, VERDICTS))))
+      reportLines.push(reportLine(LABEL_FINDING, safeTokens(statusValue(finding.verdict), finding.code)))
     }
     reportLines.push(mint(''))
   }
@@ -977,6 +1314,7 @@ export function buildSectionModel(input: SectionModelInput): SectionModel {
     worstVerdict,
     headline,
     blocks,
+    counts: verdictCensus(everyRow.map((row) => row.verdict)),
     reportLines,
   } as unknown as SectionModel
 }

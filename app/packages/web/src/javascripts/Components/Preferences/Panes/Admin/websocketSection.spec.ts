@@ -1,4 +1,6 @@
 import { LaneDegradationLedger, LANE_LEDGER_TRANSITION_CAPACITY } from '@/Services/SyncTransport/LaneDegradationLedger'
+import { readingsFrom, SECTIONS_WITH_CHECKS } from './diagnosticChecks'
+import { readingOf, safeConstant, STATUS_TAG } from './diagnosticsSections'
 import { SYNC_FALLBACK_REASON_EXPLANATIONS } from '@/Services/SyncTransport/syncTransportProtocol'
 import { EFFORT_LABEL } from './diagnosticRemedies'
 import {
@@ -293,9 +295,7 @@ describe('buildWebsocketSection with nothing reported', () => {
   })
 
   it('keeps every row label unique inside its block and every heading unique', () => {
-    const model = build({
-      outcomes: [{ name: 'probe', passed: true, detail: 'd', reportDetail: 'd', section: 'websocket' }],
-    })
+    const model = build({ checks: readingsFrom({}) })
 
     for (const block of model.blocks) {
       const labels = block.rows.map((row) => String(row.label))
@@ -2146,13 +2146,15 @@ describe('the lane-degradation ledger', () => {
     // carries that sentence for the two blocks nothing populates yet.
     expect(blockOf(model, 'Lane degradation ledger').emptyNote).toBeUndefined()
     expect(blockOf(model, 'Lane degradation ledger').rows.length).toBeGreaterThan(10)
-    expect(report).toContain('- [v] Where the lane ended up: recovered')
-    expect(report).toContain('- [v] Degradations recorded: 1')
-    expect(report).toContain('- [v] Recoveries recorded: 1')
-    expect(report).toContain('- [v] Degradations with cause server-kill: 1')
-    expect(report).toContain('- [v] Transition 1: HTTP_FALLBACK server-kill socket torn down 1s')
-    expect(report).toContain('- [v] Transition 2: READY not reported socket torn down 2s')
-    expect(report).toContain('- [v] Control-plane reads refused with 401: 1')
+    expect(report).toContain('- [INFO] Where the lane ended up: recovered')
+    expect(report).toContain('- [DEGRADED] Degradations recorded: 1')
+    expect(report).toContain('- [INFO] Recoveries recorded: 1')
+    expect(report).toContain('- [DEGRADED] Degradations with cause server-kill: 1')
+    expect(report).toContain('- [INFO] Transition 1: HTTP_FALLBACK server-kill socket torn down 1s')
+    expect(report).toContain('- [INFO] Transition 2: READY not reported socket torn down 2s')
+    expect(report).toContain('- [DEGRADED] Control-plane reads refused with 401: 1')
+    // The status the ledger never recorded is a measured zero, not a silence.
+    expect(report).toContain('- [INFO] Control-plane reads refused with 498: 0')
   })
 })
 
@@ -2423,7 +2425,7 @@ describe('the copyable report', () => {
     for (const block of model.blocks) {
       expect(report).toContain(`### ${block.heading}`)
     }
-    expect(report).toContain(`- Worst verdict: ${model.worstVerdict}`)
+    expect(report).toContain(`- Status: ${STATUS_TAG[model.worstVerdict]}`)
   })
 })
 
@@ -2431,22 +2433,55 @@ describe('the copyable report', () => {
 /* Probe outcomes                                                             */
 /* -------------------------------------------------------------------------- */
 
-describe('operator-triggered check results', () => {
-  it('renders only the outcomes tagged for this section', () => {
-    const model = build({
-      outcomes: [
-        { name: 'socket probe', passed: true, detail: 'ok', reportDetail: 'ok', section: 'websocket' },
-        { name: 'browser probe', passed: false, detail: 'no', reportDetail: 'no', section: 'browser' },
-        { name: 'untagged probe', passed: true, detail: 'ok', reportDetail: 'ok' },
-      ],
-    })
-    const block = blockOf(model, 'Operator-triggered checks')
+describe('checks, as rows', () => {
+  it('renders exactly the checks registered for this section, as rows, and none when no readings are supplied', () => {
+    const readings = readingsFrom({})
+    const mine = readings.filter((reading) => reading.definition.section === 'websocket')
+    const without = buildWebsocketSection()
+    const withChecks = buildWebsocketSection({ checks: readings })
 
-    expect(block.outcomes?.map((outcome) => outcome.name)).toEqual(['socket probe'])
-    expect(block.description).toContain('exactly one place')
+    expect(without.blocks.map((block) => String(block.heading))).not.toContain('Checks')
+
+    const block = withChecks.blocks.find((candidate) => String(candidate.heading) === 'Checks')
+    // The registry decides whether this section has a block at all, so the
+    // expectation is read off the registry rather than written down twice.
+    expect(block !== undefined).toBe(SECTIONS_WITH_CHECKS.includes('websocket'))
+    expect((block?.rows ?? []).map((row) => String(row.label))).toEqual(
+      mine.map((reading) => String(reading.definition.title)),
+    )
+    // A check nobody has run is NOT TESTED — never unknown, and never a pass.
+    for (const row of block?.rows ?? []) {
+      expect(row.verdict).toBe('untested')
+      expect(readingOf(row.value)).toBe('untested')
+    }
+    // First, because a tested fact outranks a reported one.
+    if (block !== undefined) {
+      expect(withChecks.blocks[0]).toBe(block)
+    }
   })
 
-  it('adds no block at all when nothing was run', () => {
-    expect(build().blocks.map((block) => String(block.heading))).not.toContain('Operator-triggered checks')
+  it('gives a run check the verdict its outcome earned, on direct evidence', () => {
+    const model = buildWebsocketSection({
+      checks: readingsFrom({
+        ticket: { id: 'ticket', state: 'fail', result: safeConstant('refused: SYNC_DISABLED'), detail: 'd' },
+        capabilities: {
+          id: 'capabilities',
+          state: 'pass',
+          result: safeConstant('advertises 1 capability entry'),
+          detail: 'd',
+        },
+      }),
+    })
+    const block = blockOf(model, 'Checks')
+    const ticket = block.rows.find((row) => String(row.label) === 'Socket ticket')
+    const capabilities = block.rows.find((row) => String(row.label) === 'Capability descriptor')
+
+    expect(ticket?.verdict).toBe('broken')
+    expect(ticket?.evidence.kind).toBe('direct')
+    expect(String(ticket?.value)).toBe('refused: SYNC_DISABLED')
+    expect(capabilities?.verdict).toBe('healthy')
+    // A failed check is a row, so it moves the section: it used to sit in a list
+    // of its own that took no part in the section's verdict at all.
+    expect(model.worstVerdict).toBe('broken')
   })
 })

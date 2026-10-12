@@ -334,7 +334,9 @@ describe('LaneDegradationLedger', () => {
 
     expect(reloaded.view()).toEqual({
       controlPlaneRejections: 0,
-      controlPlaneRejectionsByStatus: {},
+      // Zero for EVERY status in the closed set, never an empty record: an empty
+      // one is what made a reader print "not reported" under a total of 0.
+      controlPlaneRejectionsByStatus: { 401: 0, 498: 0 },
       fallbackCounts: {},
       transitions: [],
       transitionsDropped: 0,

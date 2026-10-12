@@ -286,13 +286,25 @@ describe('the lane-degradation ledger on screen', () => {
     expect(rowValue('Transition 2')).toBe('DEGRADED server-kill socket torn down under 1s')
   })
 
-  it('emits no SVG, so the block cannot acquire an unmapped icon unnoticed', async () => {
+  /**
+   * The pane used to assert it emitted NO svg at all, because an `Icon` whose
+   * name is missing from the mapping renders that name as text inside a `label`
+   * and neither tsc nor an `Icon`-mocking spec can see it. Every status now has an
+   * icon, so the assertion is the hazard itself: every status chip drew a glyph,
+   * and nothing fell back to a label. `Icon` is NOT mocked in this file.
+   */
+  it('draws a real glyph for every status chip and falls back to a name for none', async () => {
     const transport = await liveTransport()
     worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'server-kill' })
     await flush()
 
     await renderLedgerOf(transport)
 
-    expect(container.querySelectorAll('svg')).toHaveLength(0)
+    const chips = Array.from(container.querySelectorAll('[data-diagnostics-status]'))
+    expect(chips.length).toBeGreaterThan(10)
+    for (const chip of chips) {
+      expect(chip.querySelectorAll('svg')).toHaveLength(1)
+    }
+    expect(container.querySelectorAll('label')).toHaveLength(0)
   })
 })

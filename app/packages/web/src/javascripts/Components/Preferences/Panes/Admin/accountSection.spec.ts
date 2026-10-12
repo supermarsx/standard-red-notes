@@ -22,6 +22,8 @@ import {
   type AccountObservations,
   type AccountSectionInput,
 } from './accountSection'
+import { readingsFrom, SECTIONS_WITH_CHECKS } from './diagnosticChecks'
+import { readingOf } from './diagnosticsSections'
 import { EFFORT_LABEL } from './diagnosticRemedies'
 import type { DiagnosticFinding, DiagnosticRow, SectionModel } from './diagnosticsSections'
 
@@ -352,9 +354,15 @@ describe('buildAccountSection never discloses an account identifier', () => {
     })
     const labels = allRows(model).map((row) => String(row.label))
 
-    expect(rowOf(model, 'Roles held by this account').value).toBe('not exposed by any client surface')
-    expect(rowOf(model, 'Roles held by this account').verdict).toBe('undetermined')
-    expect(rowOf(model, 'Roles held by this account').claimed).toBe('informational')
+    // NOT AVAILABLE HERE, in the value itself: a plain constant was read as an
+    // answer, so the report marked this row "a value arrived" while the screen
+    // called it Unknown. The reading is derived from the value, so they agree.
+    expect(rowOf(model, 'Roles held by this account').value).toBe(
+      'not available here (no client surface exposes the role names)',
+    )
+    expect(readingOf(rowOf(model, 'Roles held by this account').value)).toBe('unavailable')
+    expect(rowOf(model, 'Roles held by this account').verdict).toBe('not-applicable')
+    expect(rowOf(model, 'Roles held by this account').evidence.kind).toBe('unavailable')
     expect(labels).not.toContain('Role: Admin user')
     expect(labels).not.toContain(UNRECOGNISED_ROLES_LABEL)
     // The row that DOES ask the server is untouched by the collapse.
@@ -1892,9 +1900,9 @@ describe('roles and subscription', () => {
 
     const collapsed = rowOf(model, 'Roles held by this account')
     expect({ value: String(collapsed.value), kind: collapsed.evidence.kind, verdict: collapsed.verdict }).toEqual({
-      value: 'not exposed by any client surface',
-      kind: 'absent',
-      verdict: 'undetermined',
+      value: 'not available here (no client surface exposes the role names)',
+      kind: 'unavailable',
+      verdict: 'not-applicable',
     })
   })
 
@@ -1962,13 +1970,19 @@ describe('buildAccountSection with nothing observed', () => {
     // its absent reading fails this test rather than slipping through a loop that
     // never sees it. Six rows arrived with the account storage total.
     expect(rows).toHaveLength(28)
+    // The ONE row whose absence is settled rather than open: nothing in the
+    // client can produce the role names, with or without a session to read.
+    const settled = ['Roles held by this account']
     for (const row of rows) {
+      const isSettled = settled.includes(String(row.label))
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
-        kind: 'absent',
-        verdict: 'undetermined',
+        kind: isSettled ? 'unavailable' : 'absent',
+        verdict: isSettled ? 'not-applicable' : 'undetermined',
       })
     }
+    // Not vacuous: the exception really is in the list it is carved out of.
+    expect(rows.filter((row) => settled.includes(String(row.label)))).toHaveLength(1)
     expect(codesOf(model)).toEqual([])
     expect(model.worstVerdict).toBe('undetermined')
     expect(model.headline).toBeUndefined()
@@ -2013,7 +2027,9 @@ describe('buildAccountSection with nothing observed', () => {
     // the client exposes only `hasRole()` for one name at a time, so a list built
     // here could never report a name this build does not know — which is the only
     // thing the list is for.
-    expect(String(rowOf(model, 'Roles held by this account').value)).toBe('not exposed by any client surface')
+    expect(String(rowOf(model, 'Roles held by this account').value)).toBe(
+      'not available here (no client surface exposes the role names)',
+    )
 
     // *** AND THE TWO ACCOUNT FLAGS ARE NO LONGER AMONG THEM. ***
     // `GET /v1/admin/users/:userUuid/feature-flags` publishes both. They word the
@@ -2039,20 +2055,29 @@ describe('buildAccountSection with nothing observed', () => {
     ])
   })
 
-  it('shows only the probe results tagged for this section, and only when there are some', () => {
-    const none = buildAccountSection({
-      outcomes: [{ name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' }],
-    })
-    const some = buildAccountSection({
-      outcomes: [
-        { name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' },
-        { name: 'Authenticated round trip', passed: true, detail: 'd', reportDetail: 'r', section: 'account' },
-      ],
-    })
+  it('renders exactly the checks registered for this section, as rows, and none when no readings are supplied', () => {
+    const readings = readingsFrom({})
+    const mine = readings.filter((reading) => reading.definition.section === 'account')
+    const without = buildAccountSection()
+    const withChecks = buildAccountSection({ checks: readings })
 
-    expect(none.blocks.map((block) => String(block.heading))).not.toContain('Operator-triggered checks')
-    const checks = some.blocks.find((block) => String(block.heading) === 'Operator-triggered checks')
-    expect(checks?.outcomes).toHaveLength(1)
-    expect(checks?.outcomes?.[0]?.name).toBe('Authenticated round trip')
+    expect(without.blocks.map((block) => String(block.heading))).not.toContain('Checks')
+
+    const block = withChecks.blocks.find((candidate) => String(candidate.heading) === 'Checks')
+    // The registry decides whether this section has a block at all, so the
+    // expectation is read off the registry rather than written down twice.
+    expect(block !== undefined).toBe(SECTIONS_WITH_CHECKS.includes('account'))
+    expect((block?.rows ?? []).map((row) => String(row.label))).toEqual(
+      mine.map((reading) => String(reading.definition.title)),
+    )
+    // A check nobody has run is NOT TESTED — never unknown, and never a pass.
+    for (const row of block?.rows ?? []) {
+      expect(row.verdict).toBe('untested')
+      expect(readingOf(row.value)).toBe('untested')
+    }
+    // First, because a tested fact outranks a reported one.
+    if (block !== undefined) {
+      expect(withChecks.blocks[0]).toBe(block)
+    }
   })
 })

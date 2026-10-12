@@ -1,21 +1,29 @@
 import { buildEnvironmentPresence, describeTopology } from './diagnosticEnvironment'
 import { admitToken, DEPLOY_REVISION, VERSION_TOKEN } from './reportAllowlist'
+import { CHECK_STATE_VERDICT, summarizeChecks, type CheckReading } from './diagnosticChecks'
 import {
-  READING_MARKER,
   ROW_READINGS,
   READING_MEANING,
+  READING_TAG,
   safeConstant,
   SECTION_IDS,
   SECTION_TITLE,
+  STATUS_TAG,
+  VERDICT_MEANING,
+  VERDICT_SEVERITY,
+  VERDICTS,
   type SectionId,
   type SectionModel,
+  type Verdict,
 } from './diagnosticsSections'
 import {
   ACTION_SEVERITY_WORD,
   actionLines,
+  COVERAGE_SENTENCE,
   describeFindingCounts,
   describeRowCensus,
   NO_REMEDY_LINE,
+  OVERALL_SENTENCE,
   overallWord,
   remedyLines,
   SOURCE_JOIN,
@@ -35,8 +43,6 @@ import {
 import {
   admitMembers,
   buildCapabilityRows,
-  CAPABILITY_OUTCOME_REPORT_TAG,
-  capabilityOutcomeState,
   describeDeployment,
   describeDiagnosticsReadFailure,
   describeSyncItems,
@@ -48,8 +54,6 @@ import {
   SYNC_ITEMS_STATE_REPORT,
   UNRECOGNISED_FILES_CONDITION,
   UNRECOGNISED_OPERATION,
-  summarizeTestRun,
-  type CapabilityTestOutcome,
   type DiagnosticsReadFailure,
   type KnownLiveRefusalReason,
   type KnownPreconditionCode,
@@ -70,8 +74,10 @@ import {
  *     yes/no. Variable names are public — they are in the compose files.
  *   - No URL, host, port, token or key. Not truncated, not hashed, not partial.
  *     A hashed host is still a host to anyone holding a candidate list.
- *   - Capability tests contribute `reportDetail`, which is constant copy, never
- *     `detail`, which may embed a thrown message carrying the URL that failed.
+ *   - A check contributes its `result`, a `SafeValue`, never its `detail`, which
+ *     may embed a thrown message carrying the URL that failed. It used to
+ *     contribute a free `string` described as constant copy, and one check built
+ *     that string from the deployment marker's revision: see `diagnosticChecks.ts`.
  *   - Operation names are NAMED only where this build declares them and COUNTED
  *     otherwise. They are server-chosen strings; the table used to print them
  *     through the redactor, which withheld an address-shaped one and printed
@@ -104,7 +110,12 @@ export type DiagnosticsReportInput = {
   payload: SyncDiagnosticsPayload | undefined
   transport: TransportStatusInput | undefined
   deploymentMarker: unknown
-  outcomes: readonly CapabilityTestOutcome[]
+  /**
+   * Every REGISTERED check, run or not. The whole registry rather than the
+   * outcomes that exist, so the report can say how many were never run — "5 of 5
+   * passed" over a registry of nine is the flattering denominator.
+   */
+  checks: readonly CheckReading[]
   loadError: string | null
   /**
    * The read failure behind `loadError`, when there was one. Carried separately
@@ -216,21 +227,41 @@ const SOURCE_DEPLOYMENT = safeConstant('Deployment')
 const SOURCE_CAPABILITIES = safeConstant('Capabilities')
 
 /**
- * *** EXHAUSTIVE OVER THE WORDS, AND A GLOSS ONLY WHERE ONE EARNS ITS LINE. ***
+ * The statuses a section can report, worst first, as the summary table's columns.
  *
- * The overall word is the first thing read and `UNKNOWN` is the one that gets
- * misread: it is the panel admitting it could not establish its facts, and a
- * reader who takes it for a shrug draws exactly the wrong conclusion. The gloss
- * is keyed off `ACTION_SEVERITY_WORD`'s own values so a renamed word cannot leave
- * a stale sentence behind.
+ * Derived from `VERDICTS` and `VERDICT_SEVERITY` rather than written out, so a
+ * verdict added to the contract becomes a column without anything here changing —
+ * and cannot be left out of the one table that says how the pane is doing.
  */
-const OVERALL_GLOSS: Readonly<Record<string, string>> = {
-  [ACTION_SEVERITY_WORD.broken]: ' — at least one thing in this deployment is not working.',
-  [ACTION_SEVERITY_WORD.degraded]: ' — everything is working, with something lost.',
-  [ACTION_SEVERITY_WORD.undetermined]:
-    ' — this pane could not establish its facts. That is NOT the same as everything being fine.',
-  [ACTION_SEVERITY_WORD.healthy]: ' — every row the pane could read came back healthy.',
-  [ACTION_SEVERITY_WORD.informational]: ' — nothing in the pane carried a verdict either way.',
+const SUMMARY_COLUMNS: readonly Verdict[] = [...VERDICTS].sort(
+  (left, right) => VERDICT_SEVERITY[right] - VERDICT_SEVERITY[left],
+)
+
+/**
+ * The whole pane in one small table: a line per section, the status word, and how
+ * many rows carry each status.
+ *
+ * *** THIS IS THE FIRST THING IN THE DOCUMENT ON PURPOSE. *** The report opened
+ * with a verdict paragraph and reached its first per-section status 175 lines
+ * down, behind five collapsed regions. A reader handed the paste could not tell
+ * which section to open without opening all of them. Every cell is a section
+ * title (a `SafeValue`), a status tag or a count.
+ */
+function summaryTable(sections: Readonly<Record<SectionId, SectionModel>>): readonly string[] {
+  const lines = [
+    `| Section | Status | ${SUMMARY_COLUMNS.map((verdict) => STATUS_TAG[verdict]).join(' | ')} |`,
+    `| --- | --- | ${SUMMARY_COLUMNS.map(() => '---:').join(' | ')} |`,
+  ]
+  for (const id of SECTION_IDS) {
+    const model = sections[id]
+    lines.push(
+      `| ${SECTION_TITLE[id]} | ${STATUS_TAG[model.worstVerdict]} | ${SUMMARY_COLUMNS.map(
+        (verdict) => model.counts[verdict],
+      ).join(' | ')} |`,
+    )
+  }
+
+  return lines
 }
 
 /**
@@ -332,7 +363,7 @@ type ReportParts = {
 }
 
 function buildParts(input: DiagnosticsReportInput): ReportParts {
-  const { payload, transport, deploymentMarker, outcomes, loadError, readFailure } = input
+  const { payload, transport, deploymentMarker, checks, loadError, readFailure } = input
   const topology: DeploymentTopology | undefined = payload?.deployment
   const verdict = describeTransport(transport)
   const diagnosis = diagnose(payload, transport, readFailure)
@@ -408,17 +439,22 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
   /* Verdict — the answer, before any evidence                               */
   /* ------------------------------------------------------------------------ */
 
-  const verdictBlock: string[] = ['## Verdict', '']
-  verdictBlock.push(`- Overall: ${overall}${OVERALL_GLOSS[overall] ?? ''}`)
+  const verdictBlock: string[] = ['## Summary', '']
+  verdictBlock.push(`**${overall}** — ${OVERALL_SENTENCE[triaged.sectionWorst]}`)
+  verdictBlock.push('')
+  if (input.sections !== undefined) {
+    verdictBlock.push(...summaryTable(input.sections), '')
+  }
+  verdictBlock.push(`- Checks: ${summarizeChecks(checks)}`)
+  verdictBlock.push(`- ${COVERAGE_SENTENCE}`)
   verdictBlock.push(`- Diagnosis: ${diagnosis.headline}`)
   verdictBlock.push(
     triaged.first === undefined
-      ? '- Fix first: nothing. No finding in this pane needs action.'
-      : `- Fix first: ${triaged.first.code}, reported by ${triaged.first.sources.join(SOURCE_JOIN)}. It is entry 1 of "What to fix, in order" below.`,
+      ? '- Do first: nothing. No finding in this pane needs action.'
+      : `- Do first: ${triaged.first.code}, reported by ${triaged.first.sources.join(SOURCE_JOIN)}. It is entry 1 of "What needs attention" below.`,
   )
   verdictBlock.push(`- Findings needing action: ${triaged.actions.length} (${describeFindingCounts(triaged)})`)
   verdictBlock.push(`- Evidence below: ${describeRowCensus(triaged)}`)
-  verdictBlock.push(`- Operator checks: ${summarizeTestRun(outcomes)}`)
   // Printed at zero as well. "Every ranked finding carries a fix" is a reading
   // about THIS CLIENT, and an absent line is indistinguishable from a report that
   // never counted — the rule every other count in this document follows.
@@ -442,12 +478,12 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
   verdictBlock.push('')
 
   /* ------------------------------------------------------------------------ */
-  /* What to fix, in order                                                   */
+  /* What needs attention                                                    */
   /* ------------------------------------------------------------------------ */
 
-  const actionBlock: string[] = ['## What to fix, in order', '']
+  const actionBlock: string[] = ['## What needs attention', '']
   actionBlock.push(
-    'Worst first, one entry per FACT however many sections observed it, ranked on the same severity the sub-tab chips and the Overview router use. Each fix is this build’s own copy for the condition — never the server’s sentence — and says where the fix lives: a setting plus a restart, an image rebuild, another service, this device, a newer build, or nothing at all.',
+    'Worst first, one entry per FACT however many sections observed it. Each entry is a status, where it was seen and ONE thing to do; the steps and the reasoning are folded beneath it. Every sentence is this build’s own copy for the condition — never the server’s.',
   )
   actionBlock.push('')
   if (triaged.actions.length === 0) {
@@ -482,14 +518,18 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
 
   const legendBlock: string[] = ['## How to read this', '']
   legendBlock.push(
-    `- Severity, worst first: ${ACTION_SEVERITY_WORD.broken} (it is not working) · ${ACTION_SEVERITY_WORD.degraded} (working, with something lost) · ${ACTION_SEVERITY_WORD.undetermined} (the panel could not establish it — NOT a pass, and ranked above healthy on purpose) · ${ACTION_SEVERITY_WORD.informational} (context, no verdict).`,
-  )
-  legendBlock.push(
-    `- Row markers, on every row of the five topic sections: ${ROW_READINGS.map(
-      (reading) => `${READING_MARKER[reading]} ${READING_MEANING[reading]}`,
+    `- Status, worst first, on every row, finding, section and the headline: ${SUMMARY_COLUMNS.map(
+      (verdict) => `${STATUS_TAG[verdict]} (${VERDICT_MEANING[verdict]})`,
     ).join(
       ' · ',
-    )}. The three are different facts and are never merged: the second invites the question "why not?", the third answers it.`,
+    )}. ${STATUS_TAG.undetermined} and ${STATUS_TAG.untested} both keep the headline off ${STATUS_TAG.healthy}; ${
+      STATUS_TAG['not-applicable']
+    } and ${STATUS_TAG.informational} never do.`,
+  )
+  legendBlock.push(
+    `- A row with no value says which kind of silence it is: ${ROW_READINGS.filter((reading) => reading !== 'answered')
+      .map((reading) => `"${READING_TAG[reading]}" — ${READING_MEANING[reading]}`)
+      .join(' · ')}. They are different facts and are never merged.`,
   )
   legendBlock.push(
     '- Collapsed regions hold the full detail, unchanged. Nothing is omitted — pasted somewhere that renders no HTML, every line is still here.',
@@ -523,7 +563,7 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
     deploymentBody.push(`- Note: ${marker.note}`)
   }
   if (marker.unstamped) {
-    deploymentBody.push('- Fix: ranked as DEPLOYMENT_UNSTAMPED under "What to fix, in order".')
+    deploymentBody.push('- Fix: ranked as DEPLOYMENT_UNSTAMPED under "What needs attention".')
   }
   deploymentBody.push('')
   detail.push(
@@ -588,7 +628,7 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
     // "every condition the gate named was one this build knows" is a reading, and
     // an absent line is indistinguishable from a report that never asked.
     gateBody.push(`  - Conditions this build does not recognise: ${unmet.unnameable}`)
-    gateBody.push('  - Every condition above is ranked under "What to fix, in order", with the fix for THIS topology.')
+    gateBody.push('  - Every condition above is ranked under "What needs attention", with the fix for THIS topology.')
   }
   if (liveReasons.named.length > 0 || liveReasons.unnameable > 0) {
     gateBody.push('- Live refusal reasons:')
@@ -636,7 +676,7 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
   // an absent line would be indistinguishable from a report that never asked.
   capabilityBody.push(`- Operations this build does not recognise: ${unnameable}`)
   if (clientGaps.length > 0) {
-    capabilityBody.push('- Fix: ranked as CLIENT_GAP under "What to fix, in order".')
+    capabilityBody.push('- Fix: ranked as CLIENT_GAP under "What needs attention".')
   }
   capabilityBody.push('')
   detail.push(
@@ -697,17 +737,24 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
     ),
   )
 
+  // *** EVERY LINE BELOW IS A `SafeValue`. *** The section each check belongs to
+  // carries the same row with its status tag; this block is the registry in one
+  // place, so "which checks exist, and which were never run" has one answer.
   const checksBody: string[] = []
-  if (outcomes.length === 0) {
-    checksBody.push('Not run.')
+  if (checks.length === 0) {
+    checksBody.push('No checks were supplied to this report. That is a caller defect, not a run with nothing to test.')
   }
-  for (const outcome of outcomes) {
+  for (const reading of checks) {
     checksBody.push(
-      `- [${CAPABILITY_OUTCOME_REPORT_TAG[capabilityOutcomeState(outcome)]}] ${outcome.name} — ${outcome.reportDetail}`,
+      reading.outcome === undefined
+        ? `- [${STATUS_TAG.untested}] ${reading.definition.title}: not run`
+        : `- [${STATUS_TAG[CHECK_STATE_VERDICT[reading.outcome.state]]}] ${reading.definition.title}: ${
+            reading.outcome.result
+          }`,
     )
   }
   checksBody.push('')
-  detail.push('## Checks', '', ...collapsible(`Checks — ${summarizeTestRun(outcomes)}`, checksBody))
+  detail.push('## Checks', '', ...collapsible(`Checks — ${summarizeChecks(checks)}`, checksBody))
 
   // The five topic sections. Iterated over SECTION_IDS, not over the caller's
   // object, so the order is the pane's order and no section can be skipped.
@@ -718,7 +765,7 @@ function buildParts(input: DiagnosticsReportInput): ReportParts {
     detail.push('')
   } else {
     detail.push(
-      'The five topic sections follow, each with the worst verdict it derived from its own rows and findings. Every value in them is a variable name, a boolean, a closed code, a bounded count, a duration or a closed bucket.',
+      'The five topic sections follow, each with the status it derived from its own rows and findings, and every row tagged with its own. Every value in them is a variable name, a boolean, a closed code, a bounded count, a duration or a closed bucket.',
     )
     detail.push('')
     for (const id of SECTION_IDS) {

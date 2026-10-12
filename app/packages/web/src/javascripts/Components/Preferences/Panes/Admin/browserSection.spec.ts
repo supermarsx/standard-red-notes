@@ -1,4 +1,6 @@
 import { webcrypto } from 'crypto'
+import { readingsFrom, SECTIONS_WITH_CHECKS, UNOBSERVED_BOARD, type WitnessBoard } from './diagnosticChecks'
+import { readingOf } from './diagnosticsSections'
 
 import {
   buildBrowserSection,
@@ -547,9 +549,111 @@ describe('buildBrowserSection on a healthy browser', () => {
     expect(cookies.claimed).toBe('healthy')
     expect(cookies.verdict).toBe('undetermined')
 
+    // *** THE ONE ROW THAT IS NOT CAPPED, BECAUSE NOTHING COULD EVER UNCAP IT. ***
+    // Exercising the clipboard means writing the reader's clipboard, so its
+    // presence is context on direct evidence — and its ABSENCE keeps a verdict.
     const clipboard = rowOf(model, 'Clipboard write')
-    expect(clipboard.claimed).toBe('healthy')
-    expect(clipboard.verdict).toBe('undetermined')
+    expect(clipboard.claimed).toBe('informational')
+    expect(clipboard.verdict).toBe('informational')
+    expect(clipboard.evidence.kind).toBe('direct')
+    expect(clipboard.note).toContain('does not exercise it')
+    const observed = await observeBrowserCapabilities(healthyRuntime())
+    expect(
+      rowOf(buildBrowserSection({ observations: { ...observed, clipboardWritePresent: false } }), 'Clipboard write')
+        .verdict,
+    ).toBe('broken')
+  })
+
+  /**
+   * The other half of the cap: each of those rows names the direct observation
+   * that would confirm it, and resolves on THAT. Without this a healthy browser
+   * read "Unknown" on seven rows for ever, which is what kept this section — and
+   * the headline over it — off OK on every deployment.
+   */
+  it('resolves each capped row on the observation that confirms it, and only on that', async () => {
+    const observed = await observeBrowserCapabilities(healthyRuntime())
+    // A clock reading too, so the only thing that can keep this section off OK
+    // in the assertions below is the rows under test.
+    const ALIGNED_CLOCK = { serverCapturedAtMs: 1_000, localReceivedAtMs: 1_200 }
+    const board = (state: 'confirmed' | 'refuted' | 'not-run' | 'unavailable') =>
+      Object.fromEntries(
+        Object.entries(UNOBSERVED_BOARD).map(([id, witness]) => [id, { ...witness, state, how: 'the reason' }]),
+      ) as WitnessBoard
+    const labels = [
+      'Web Crypto present',
+      'WebSocket constructor',
+      'Worker constructor',
+      'IndexedDB present',
+      'Network flag',
+      'Cookies enabled',
+    ]
+
+    const confirmed = buildBrowserSection({
+      observations: observed,
+      clock: ALIGNED_CLOCK,
+      witnesses: board('confirmed'),
+    })
+    const notRun = buildBrowserSection({ observations: observed, clock: ALIGNED_CLOCK, witnesses: board('not-run') })
+    const refuted = buildBrowserSection({ observations: observed, clock: ALIGNED_CLOCK, witnesses: board('refuted') })
+    const unavailable = buildBrowserSection({
+      observations: observed,
+      clock: ALIGNED_CLOCK,
+      witnesses: board('unavailable'),
+    })
+
+    for (const label of labels) {
+      expect({ label, verdict: rowOf(confirmed, label).verdict }).toEqual({ label, verdict: 'healthy' })
+      expect(rowOf(confirmed, label).caveat).toContain('Confirmed directly')
+      expect({ label, verdict: rowOf(notRun, label).verdict }).toEqual({ label, verdict: 'untested' })
+      expect(rowOf(notRun, label).caveat).toContain('Not tested yet: the reason')
+      // A condition that holds while the thing it is necessary for does not is
+      // NOT a fault in the condition: the row claims nothing and points away.
+      expect({ label, verdict: rowOf(refuted, label).verdict }).toEqual({ label, verdict: 'informational' })
+      expect({ label, verdict: rowOf(unavailable, label).verdict }).toEqual({ label, verdict: 'informational' })
+      // The claim and the evidence are untouched by any of it.
+      expect(rowOf(confirmed, label).claimed).toBe('healthy')
+      expect(rowOf(confirmed, label).evidence.kind).toBe('proxy')
+    }
+    expect(confirmed.worstVerdict).toBe('healthy')
+    expect(notRun.worstVerdict).toBe('untested')
+  })
+
+  /**
+   * Gecko exposes neither `navigator.deviceMemory` nor client hints. Both rows
+   * read "not reported", and each was counted as a question that went unanswered.
+   */
+  it('reports a value this browser does not offer as not available here, and only once it has looked', async () => {
+    const observed = await observeBrowserCapabilities(healthyRuntime())
+    const gecko = buildBrowserSection({
+      clock: { serverCapturedAtMs: 1_000, localReceivedAtMs: 1_200 },
+      observations: {
+        ...observed,
+        deviceMemoryGb: undefined,
+        mobileFormFactor: undefined,
+        userAgentDataPresent: false,
+      },
+    })
+
+    for (const label of ['Device memory, GB', 'Mobile form factor']) {
+      const row = rowOf(gecko, label)
+      expect({ label, verdict: row.verdict, reading: readingOf(row.value), kind: row.evidence.kind }).toEqual({
+        label,
+        verdict: 'not-applicable',
+        reading: 'unavailable',
+        kind: 'unavailable',
+      })
+    }
+
+    // Before the collection run has completed nothing has been asked, so the
+    // same absence is still an open question and must not be closed early.
+    const pending = buildBrowserSection()
+    expect(String(rowOf(pending, 'Device memory, GB').value)).toBe('not reported')
+    expect(rowOf(pending, 'Device memory, GB').verdict).toBe('undetermined')
+    // And client hints that DO exist with no form factor is a real gap.
+    const hinted = buildBrowserSection({
+      observations: { ...observed, mobileFormFactor: undefined, userAgentDataPresent: true },
+    })
+    expect(String(rowOf(hinted, 'Mobile form factor').value)).toBe('not reported')
   })
 
   it('claims nothing more than informational for the rows that are context', async () => {
@@ -978,9 +1082,11 @@ describe('buildBrowserSection output discipline', () => {
     expect(report).not.toContain('PRIVATE-UA-MARKER')
     expect(report).not.toContain('PRIVATE-HOST-MARKER')
     expect(report).toContain('- User agent string: withheld from this report on purpose')
-    expect(report).toContain('- Local database open test: operator-triggered on the Checks sub-tab')
+    expect(report).toContain(
+      '- Local database open test: none is run; the IndexedDB row is confirmed by this app’s own database having loaded',
+    )
     expect(report).toContain('## Browser')
-    expect(report).toContain('- [v] Engine: chromium')
+    expect(report).toContain('- [INFO] Engine: chromium')
   })
 
   it('builds the five blocks it always builds, in order', () => {
@@ -997,21 +1103,30 @@ describe('buildBrowserSection output discipline', () => {
     ])
   })
 
-  it('shows only the probe results tagged for this section, and only when there are some', () => {
-    const none = buildBrowserSection({
-      outcomes: [{ name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' }],
-    })
-    const some = buildBrowserSection({
-      outcomes: [
-        { name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' },
-        { name: 'Local database open', passed: false, detail: 'd', reportDetail: 'r', section: 'browser' },
-      ],
-    })
+  it('renders exactly the checks registered for this section, as rows, and none when no readings are supplied', () => {
+    const readings = readingsFrom({})
+    const mine = readings.filter((reading) => reading.definition.section === 'browser')
+    const without = buildBrowserSection()
+    const withChecks = buildBrowserSection({ checks: readings })
 
-    expect(none.blocks.map((block) => String(block.heading))).not.toContain('Operator-triggered checks')
-    const checks = some.blocks.find((block) => String(block.heading) === 'Operator-triggered checks')
-    expect(checks?.outcomes).toHaveLength(1)
-    expect(checks?.outcomes?.[0]?.name).toBe('Local database open')
+    expect(without.blocks.map((block) => String(block.heading))).not.toContain('Checks')
+
+    const block = withChecks.blocks.find((candidate) => String(candidate.heading) === 'Checks')
+    // The registry decides whether this section has a block at all, so the
+    // expectation is read off the registry rather than written down twice.
+    expect(block !== undefined).toBe(SECTIONS_WITH_CHECKS.includes('browser'))
+    expect((block?.rows ?? []).map((row) => String(row.label))).toEqual(
+      mine.map((reading) => String(reading.definition.title)),
+    )
+    // A check nobody has run is NOT TESTED — never unknown, and never a pass.
+    for (const row of block?.rows ?? []) {
+      expect(row.verdict).toBe('untested')
+      expect(readingOf(row.value)).toBe('untested')
+    }
+    // First, because a tested fact outranks a reported one.
+    if (block !== undefined) {
+      expect(withChecks.blocks[0]).toBe(block)
+    }
   })
 })
 

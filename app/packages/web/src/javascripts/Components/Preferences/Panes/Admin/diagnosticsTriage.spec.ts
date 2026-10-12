@@ -335,7 +335,7 @@ describe('triage', () => {
     expect(result.rowTotal).toBe(SECTION_IDS.length * 4)
     expect(result.rows.answered).toBe(SECTION_IDS.length)
     expect(result.rows.unanswered).toBe(SECTION_IDS.length * 3)
-    expect(result.rows.unpublished).toBe(0)
+    expect(result.rows.unavailable).toBe(0)
   })
 
   /**
@@ -369,8 +369,8 @@ describe('triage', () => {
       sections: { ...sections({}), account: model },
     })
 
-    expect(result.rows.unpublished).toBe(1)
-    expect(describeRowCensus(result)).toContain('1 have no publisher at all')
+    expect(result.rows.unavailable).toBe(1)
+    expect(describeRowCensus(result)).toContain('1 are not available here')
   })
 
   it('merges the report’s own observations with the sections’', () => {
@@ -426,11 +426,20 @@ describe('the rendered lines', () => {
   it('numbers each entry, names its severity and its sources, and prints the fix', () => {
     const lines = actionLines(rankActions([observation('EVENT_QUEUE_SHARED', 'broken', 'Database')])[0], 1).join('\n')
 
-    expect(lines).toContain('### 1. BROKEN — EVENT_QUEUE_SHARED')
+    expect(lines).toContain('### 1. NOT WORKING — EVENT_QUEUE_SHARED')
     expect(lines).toContain('- Seen in: Database')
-    expect(lines).toContain('- Fix (Config + restart): do the thing for EVENT_QUEUE_SHARED')
-    expect(lines).toContain('    - step for EVENT_QUEUE_SHARED')
-    expect(lines).toContain('    - Because: because of EVENT_QUEUE_SHARED')
+    // ONE action, as its own line, and it is the remedy's one-sentence summary.
+    expect(lines).toContain('- Do (Config + restart): do the thing for EVENT_QUEUE_SHARED')
+    // The steps and the reasoning are FOLDED beneath it, not dropped: both are
+    // still in the text, after the fold opens and before it closes.
+    const fold = lines.indexOf('<details>')
+    const close = lines.indexOf('</details>')
+    expect(fold).toBeGreaterThan(lines.indexOf('- Do (Config + restart)'))
+    expect(lines.indexOf('- step for EVENT_QUEUE_SHARED')).toBeGreaterThan(fold)
+    expect(lines.indexOf('- Because: because of EVENT_QUEUE_SHARED')).toBeGreaterThan(fold)
+    expect(lines.indexOf('- Because: because of EVENT_QUEUE_SHARED')).toBeLessThan(close)
+    expect(lines.slice(0, fold)).not.toContain('step for')
+    expect(lines.slice(0, fold)).not.toContain('Because:')
   })
 
   /**
@@ -440,10 +449,10 @@ describe('the rendered lines', () => {
   it('says so when this build has no fix, rather than printing an entry with nothing under it', () => {
     const lines = actionLines(rankActions([observation('X', 'broken', 'A', false)])[0], 2).join('\n')
 
-    expect(lines).toContain('### 2. BROKEN — X')
+    expect(lines).toContain('### 2. NOT WORKING — X')
     expect(lines).toContain(NO_REMEDY_LINE)
     expect(lines).toContain('gap in the client')
-    expect(lines).not.toContain('- Fix (')
+    expect(lines).not.toContain('- Do (')
   })
 
   /**
@@ -477,18 +486,23 @@ describe('the rendered lines', () => {
       triage({ sections: sections({ websocket: [{ code: 'X', verdict: 'broken' }] }) }),
     )
 
-    expect(census).toBe('1 broken, 0 degraded, 0 undetermined, 0 informational')
+    expect(census).toBe('1 not working, 0 degraded, 0 unknown, 0 not tested, 0 info')
     // `healthy` is never a finding, so a constant zero for it would read as a
     // measurement of something nobody raises.
     expect(census).not.toContain('healthy')
   })
 
-  it('names all three readings in the row census, including the zeros', () => {
+  it('names every reading in the row census, including the zeros', () => {
     const census = describeRowCensus(triage({ sections: sections({}, 2) }))
 
-    expect(census).toContain('carried a value')
-    expect(census).toContain('were asked for and nothing came back')
-    expect(census).toContain('0 have no publisher at all')
+    // The EXACT sentence, because the defect it replaces was in the joins: a
+    // comma-separated list whose last phrase carried a clause ("…, so there is
+    // nothing to wait for") that then read as applying to all thirteen
+    // unanswered rows. Each count owns its words and nothing trails.
+    expect(census).toBe(
+      '15 rows: 5 carry a value · 10 were asked for and nothing came back · 0 are not tested yet · 0 have nothing to report · 0 are not available here',
+    )
+    expect(census).not.toContain(', so ')
   })
 
   it('says so rather than printing zeros when no rows were produced at all', () => {
@@ -543,7 +557,7 @@ describe('secrecy', () => {
     expect(rendered).not.toContain('hunter2')
     expect(rendered).not.toMatch(/redis:\/\//)
     // NOT vacuous: the entry the planted fields feed really is rendered.
-    expect(rendered).toContain('### 1. BROKEN — PUSH_BRIDGE_ABSENT')
+    expect(rendered).toContain('### 1. NOT WORKING — PUSH_BRIDGE_ABSENT')
     expect(rendered).toContain('Seen in: WebSocket')
   })
 })

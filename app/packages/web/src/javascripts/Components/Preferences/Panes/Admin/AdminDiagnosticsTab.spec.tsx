@@ -53,12 +53,8 @@ jest.mock('@standardnotes/ui-services', () => ({
   confirmDialog: jest.fn().mockResolvedValue(true),
 }))
 
-import AdminDiagnosticsTab, {
-  clockReadingFor,
-  DIAGNOSIS_CHIP_LABEL,
-  mergeOutcomes,
-  type DiagnosticProbe,
-} from './AdminDiagnosticsTab'
+import AdminDiagnosticsTab, { clockReadingFor } from './AdminDiagnosticsTab'
+import { CHECK_IDS, CHECKS, type CheckId } from './diagnosticChecks'
 // TONE_CHIP is imported from the module that DEFINES it. It used to be declared
 // twice — here and in `diagnosticsPresentation.tsx` — and the tab's copy was
 // deleted rather than re-exported: a re-export would leave the tab looking like a
@@ -66,7 +62,7 @@ import AdminDiagnosticsTab, {
 // gaining members, which is the drift hazard rather than a cure for it.
 import { TONE_CHIP } from './diagnosticsPresentation'
 import { SYNC_ITEMS_CAUSES, TONES } from './syncDiagnostics'
-import { SECTION_IDS, SECTION_TITLE, type SectionTaggedOutcome } from './diagnosticsSections'
+import { SECTION_IDS, SECTION_TITLE } from './diagnosticsSections'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
@@ -387,12 +383,43 @@ const sectionRow = (label: string): string[] => {
   return [...(row?.querySelectorAll('td') ?? [])].map((cell) => cell.textContent ?? '')
 }
 
-/** The cells of one Overview router row, found by the section it routes to. */
+/**
+ * The cells of one summary row, found by the section it routes to.
+ *
+ * In reading order: the STATUS chip, the section title, how many rows carry each
+ * status, the one reason the section has the status it has, and the control that
+ * opens it.
+ */
 const routerRow = (section: string): string[] => {
   const row = container.querySelector(`[data-diagnostics-router-row="${section}"]`)
   expect(row).not.toBeNull()
 
   return [...(row?.querySelectorAll('td') ?? [])].map((cell) => cell.textContent ?? '')
+}
+
+/**
+ * The VERDICT on one summary row, read off the chip's attribute.
+ *
+ * The word on a chip is copy and may change; `data-diagnostics-status` is the
+ * fact, and it is what every "which status is this" assertion below reads.
+ */
+const routerStatus = (section: string): string | null =>
+  container
+    .querySelector(`[data-diagnostics-router-row="${section}"] [data-diagnostics-status]`)
+    ?.getAttribute('data-diagnostics-status') ?? null
+
+/** The verdict on the pane's headline. */
+const headlineStatus = (): string | null =>
+  container.querySelector('[data-diagnostics-headline]')?.getAttribute('data-diagnostics-headline') ?? null
+
+/** The verdict on one row of the open section panel, read off its chip. */
+const sectionRowStatus = (label: string): string | null => {
+  const row = [...activePanel().querySelectorAll('table tbody tr')].find(
+    (element) => element.querySelector('td')?.textContent === label,
+  )
+  expect(row).toBeDefined()
+
+  return row?.getAttribute('data-diagnostics-row-status') ?? null
 }
 
 const reportText = (): string =>
@@ -461,20 +488,29 @@ describe('AdminDiagnosticsTab — the shell', () => {
   })
 
   /**
-   * *** THE ICON HAZARD, HELD SHUT. *** An `Icon` whose `type` is missing from
-   * `IconNameToSvgMapping.ts` renders its own name as literal text, and tsc and
-   * any `Icon`-mocking spec are both blind to it. Nothing in this pane imports
-   * `Icon`: not the tab strip, not the router, not the section renderer (whose own
-   * spec asserts the same thing). `Spinner` is a styled div, so the whole pane
-   * emits no SVG at all and this assertion is exact rather than approximate.
+   * The unmapped-`Icon` hazard, swept across the WHOLE pane. An `Icon` whose name
+   * is missing from `IconNameToSvgMapping` renders that name as text inside a
+   * `label`, and neither tsc nor a spec that mocks `Icon` can see it. This file
+   * does not mock `Icon`. The pane used to assert it drew no svg at all; every
+   * status has an icon now, so the assertion is the hazard itself — on every tab,
+   * every status chip drew exactly one glyph and nothing fell back to a label.
    */
-  it('emits no SVG anywhere, on any tab, so an unmapped icon name cannot reach the screen', async () => {
+  it('draws a real glyph for every status chip on every tab, and falls back to a name for none', async () => {
     await renderTab(makeApplication())
 
+    let chipsSeen = 0
     for (const label of ALL_SUBTABS) {
       await openSubtab(label)
-      expect(container.querySelectorAll('svg')).toHaveLength(0)
+      const chips = [...container.querySelectorAll('[data-diagnostics-status]')]
+      chipsSeen += chips.length
+      for (const chip of chips) {
+        expect(chip.querySelectorAll('svg')).toHaveLength(1)
+      }
+      expect(container.querySelectorAll('label')).toHaveLength(0)
+      // And no icon exists that is not a status chip's.
+      expect(container.querySelectorAll('svg')).toHaveLength(chips.length)
     }
+    expect(chipsSeen).toBeGreaterThan(50)
   })
 })
 
@@ -490,7 +526,11 @@ describe('AdminDiagnosticsTab — the Overview router', () => {
     await renderTab(makeApplication())
 
     for (const id of SECTION_IDS) {
-      expect(routerRow(id)[0]).toBe(SECTION_TITLE[id])
+      expect(routerRow(id)[1]).toBe(SECTION_TITLE[id])
+      // A status, counts, and a reason — none of them empty.
+      expect(routerStatus(id)).not.toBeNull()
+      expect(routerRow(id)[2]).toMatch(/^\d+ /)
+      expect(routerRow(id)[3].length).toBeGreaterThan(10)
     }
     expect(container.querySelectorAll('[data-diagnostics-router-row]')).toHaveLength(SECTION_IDS.length)
   })
@@ -521,26 +561,32 @@ describe('AdminDiagnosticsTab — the Overview router', () => {
   it('reports the WebSocket section as down, never as healthy, on an unbuilt lane', async () => {
     await renderTab(makeApplication())
 
-    expect(routerRow('websocket')[1]).toBe('Down')
-    expect(routerRow('websocket')[1]).not.toBe('OK')
+    expect(routerStatus('websocket')).toBe('broken')
+    expect(routerRow('websocket')[0]).toBe('Not working')
+    // And the headline over it cannot be gentler than its worst section.
+    expect(headlineStatus()).toBe('broken')
   })
 
   it('agrees, verdict for verdict, with the chip each section renders on its own header', async () => {
     await renderTab(makeApplication())
 
-    const fromRouter = SECTION_IDS.map((id) => routerRow(id)[1])
+    const fromRouter = SECTION_IDS.map((id) => routerStatus(id))
 
     const fromSections: string[] = []
     for (const id of SECTION_IDS) {
       await openSubtab(SECTION_TITLE[id])
       const header = activePanel().querySelector(`[data-diagnostics-section="${id}"]`)
       expect(header).not.toBeNull()
-      // The section header is `<Subtitle>{title}</Subtitle><Chip>…</Chip>`, so the
-      // chip is the first span inside the section wrapper's first row.
-      fromSections.push(header?.querySelector('span')?.textContent ?? '')
+      // The section header is `<Subtitle>{title}</Subtitle><StatusChip …/>`, so
+      // the section's own status is the first status chip inside its wrapper.
+      fromSections.push(
+        header?.querySelector('[data-diagnostics-status]')?.getAttribute('data-diagnostics-status') ?? '',
+      )
     }
 
     expect(fromSections).toEqual(fromRouter)
+    // Not vacuous: the five are real verdicts, and not all the same one.
+    expect(fromRouter.every((status) => status !== null && status.length > 0)).toBe(true)
   })
 
   it('says what an absent verdict means instead of leaving a row that reads like a pass', async () => {
@@ -553,8 +599,20 @@ describe('AdminDiagnosticsTab — the Overview router', () => {
     await renderTab(application)
 
     // Nothing was read and nothing measured, so the section established nothing.
-    expect(routerRow('websocket')[1]).toBe('Unknown')
-    expect(routerRow('websocket')[2]).toContain('NOT the same as everything being fine')
+    // Whichever sections lost their readings say so by NAMING what is unknown,
+    // rather than saying only that something is.
+    const unknown = SECTION_IDS.filter((id) => routerStatus(id) === 'undetermined')
+    expect(unknown.length).toBeGreaterThan(0)
+    for (const id of unknown) {
+      expect(routerRow(id)[0]).toBe('Unknown')
+      expect({ id, reason: /^Unknown: .+/.test(routerRow(id)[3]) }).toEqual({ id, reason: true })
+    }
+    // No section is OK on the strength of having read nothing, and so the
+    // headline is not either.
+    for (const id of SECTION_IDS) {
+      expect({ id, healthy: routerStatus(id) === 'healthy' }).toEqual({ id, healthy: false })
+    }
+    expect(headlineStatus()).not.toBe('healthy')
   })
 
   it('keeps the cross-cutting diagnosis on the Overview, beside the router', async () => {
@@ -791,7 +849,11 @@ describe('AdminDiagnosticsTab — WebSocket', () => {
     expect(sectionRow('Connections refused since attach: origin not allowed')[1]).toBe('1')
     // A positive admission is NECESSARY and nowhere near sufficient, so it caps.
     expect(sectionRow('This client’s origin admitted')[1]).toBe('yes')
-    expect(sectionRow('This client’s origin admitted')[2]).toBe('Unknown')
+    // On its own it is never OK. What it reads instead depends on the one direct
+    // observation of a socket from this origin — and this tab is on HTTP here, so
+    // the condition holds while the socket does not: no verdict from this row.
+    expect(sectionRowStatus('This client’s origin admitted')).toBe('informational')
+    expect(sectionRowStatus('This client’s origin admitted')).not.toBe('healthy')
     expect(activePanel().textContent).not.toContain('reported no admission counters at all')
   })
 
@@ -1095,7 +1157,8 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     const text = await openBackend()
 
     expect(sectionRow('Admin status endpoint')[1]).toBe('answered')
-    expect(sectionRow('Why the read failed')[1]).toBe('not reported')
+    expect(sectionRow('Why the read failed')[1]).toBe('nothing to report (the read answered)')
+    expect(sectionRowStatus('Why the read failed')).toBe('not-applicable')
     for (const heading of ['Durable storage', 'Shared cache', 'Internal service communication', 'Event delivery']) {
       expect(text).toContain(heading)
     }
@@ -1136,7 +1199,7 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     )
 
     expect(sectionRow('Database connection state')[1]).toBe('handle-only')
-    expect(sectionRow('Database connection state')[2]).toBe('Down')
+    expect(sectionRow('Database connection state')[2]).toBe('Not working')
     expect(sectionRow('Database write probe')[1]).toBe('accepted')
     // Narrow positive: accepted is a necessary condition, so it is capped.
     expect(sectionRow('Database write probe')[2]).toBe('Unknown')
@@ -1144,7 +1207,7 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     // Absent pool figures inside a block that DID report: the driver keeps none.
     expect(sectionRow('Connection pool in use')[1]).toBe('no pool kept by this driver')
     expect(sectionRow('Queue separation')[1]).toBe('inherited-shared-queue')
-    expect(sectionRow('Queue separation')[2]).toBe('Down')
+    expect(sectionRow('Queue separation')[2]).toBe('Not working')
     expect(sectionRow('Co-resident queue consumers')[1]).toBe('5')
     expect(sectionRow('Co-resident queue consumers')[2]).toBe('Info')
     expect(activePanel().textContent).toContain('Two consumers are reading one event queue')
@@ -1643,7 +1706,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
           '/v1/items/storage-usage': {
             status: 200,
             ok: true,
-            data: { data: { itemBytesUsed: 9_437_184, itemsMeasured: 4812, itemsUnmeasured: 17 } },
+            data: { data: { itemBytesUsed: 9_437_184, itemsMeasured: 4812, itemsUnmeasured: 7391 } },
           },
         }),
       ),
@@ -1653,7 +1716,7 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
     expect(sectionRow('Server item bytes used, whole MB')[1]).toBe('9')
     expect(text).toContain('some of this account’s items carry no recorded size')
     expect(text).not.toContain('4812')
-    expect(text).not.toContain(' 17 ')
+    expect(text).not.toContain('7391')
   })
 
   it('claims nothing about completeness when the server sent no counts', async () => {
@@ -1842,7 +1905,10 @@ describe('AdminDiagnosticsTab — Account, space & requirements', () => {
   it('says in one row that no client surface exposes the role names', async () => {
     await openAccount()
 
-    expect(sectionRow('Roles held by this account')[1]).toBe('not exposed by any client surface')
+    expect(sectionRow('Roles held by this account')[1]).toBe(
+      'not available here (no client surface exposes the role names)',
+    )
+    expect(sectionRowStatus('Roles held by this account')).toBe('not-applicable')
     expect(activePanel().textContent).not.toContain('Roles outside this build’s taxonomy')
     expect(activePanel().textContent).not.toContain('Role: Admin user')
   })
@@ -2003,12 +2069,12 @@ describe('AdminDiagnosticsTab — Checks', () => {
     const application = makeApplication()
     await renderTab(application)
 
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
     const text = await openSubtab('Checks')
 
-    expect(text).toContain('Ticket issuance')
+    expect(text).toContain('Socket ticket')
     expect(text).toContain('SYNC_DISABLED')
-    expect(text).toContain('Live socket negotiation')
+    expect(text).toContain('This tab’s live socket')
     expect(text).toContain('checks passed')
     // The ticket probe must not reuse the client's real sync device id.
     const ticketCall = application.httpOnlyJsonRequest.mock.calls.find(([, path]) => path === '/v1/sockets/sync/ticket')
@@ -2028,7 +2094,7 @@ describe('AdminDiagnosticsTab — Checks', () => {
       syncTransportStatus: { state: 'READY', operations: ['SYNC_ITEMS', 'API_RPC'] },
     })
     await renderTab(application)
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
 
     for (const path of ['/v1/sockets/sync/capabilities', '/v1/sockets/sync/ticket']) {
       expect(application.httpOnlyJsonRequest.mock.calls.some(([, called]) => called === path)).toBe(true)
@@ -2058,57 +2124,73 @@ describe('AdminDiagnosticsTab — Checks', () => {
    * over a reason that is a genuine fault must still read as a failure. A quieter
    * pane that cannot report a real fault is a worse pane.
    */
-  it('reports a tab that does not own the socket as a note rather than a failure', async () => {
+  it('reports a tab that does not own the socket as not applicable here, never as a failure', async () => {
     const application = makeApplication({
       syncTransportStatus: { state: 'HTTP_FALLBACK', operations: [], fallbackReason: 'multi-tab-not-owner' },
     })
     await renderTab(application)
 
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
     const text = await openSubtab('Checks')
+    const item = activePanel().querySelector('[data-diagnostics-probe="negotiation"]')
 
-    expect(text).toContain('Live socket negotiation')
-    expect(text).toContain('Not negotiated here: another tab of this account owns the socket lane')
-    expect(text).toContain('Expected, and not a fault')
+    expect(item?.getAttribute('data-diagnostics-probe-status')).toBe('not-applicable')
+    expect(item?.textContent).toContain('not available here (another tab holds the socket lane)')
+    expect(item?.textContent).toContain('Another tab of this account owns the socket lane')
+    expect(item?.textContent).toContain('Expected, and not a fault')
     // The summary line stops counting it against the run, in either direction.
-    expect(text).toContain('did not apply here')
-    expect(text).not.toContain('no operations are negotiated')
+    expect(text).toContain('had nothing to test here')
+    expect(item?.textContent).not.toContain('on HTTP:')
   })
 
-  it('still fails the negotiation check for every fallback that IS a fault', async () => {
+  /**
+   * A fallback that IS a fault, and it is DEGRADED — not a pass, not "nothing to
+   * test here", and not a failure either. The app is working: every save goes out
+   * as an HTTP request. A screen that called that "not working" sent operators
+   * looking for an outage while their notes were syncing.
+   */
+  it('reports every fallback that IS a fault as degraded, naming the state and the cause', async () => {
     for (const fallbackReason of ['proxy-failed', 'auth-failed', 'worker-error', 'capability-unavailable'] as const) {
       const application = makeApplication({
         syncTransportStatus: { state: 'HTTP_FALLBACK', operations: [], fallbackReason },
       })
       await renderTab(application)
 
-      await clickButton('Test all capabilities')
+      await clickButton('Run all checks')
       const text = await openSubtab('Checks')
+      const item = activePanel().querySelector('[data-diagnostics-probe="negotiation"]')
 
-      expect(text).toContain(`Transport is HTTP_FALLBACK (${fallbackReason}) — no operations are negotiated.`)
-      expect(text).not.toContain('did not apply here')
-      expect(text).not.toContain('another tab of this account')
+      expect(item?.getAttribute('data-diagnostics-probe-status')).toBe('degraded')
+      expect(item?.textContent).toContain(`on HTTP: HTTP_FALLBACK ${fallbackReason}`)
+      expect(item?.textContent).toContain('The app keeps working over HTTP')
+      expect(text).not.toContain('had nothing to test here')
+      expect(item?.textContent).not.toContain('another tab')
     }
   })
 
-  it('still fails the negotiation check with no reason at all, and with no transport at all', async () => {
+  it('reports a fallback with no reason, and no transport at all, as degraded too', async () => {
     const noReason = makeApplication({ syncTransportStatus: { state: 'HTTP_FALLBACK', operations: [] } })
     await renderTab(noReason)
-    await clickButton('Test all capabilities')
-    expect(await openSubtab('Checks')).toContain('Transport is HTTP_FALLBACK — no operations are negotiated.')
+    await clickButton('Run all checks')
+    await openSubtab('Checks')
+    let item = activePanel().querySelector('[data-diagnostics-probe="negotiation"]')
+    expect(item?.getAttribute('data-diagnostics-probe-status')).toBe('degraded')
+    expect(item?.textContent).toContain('on HTTP: HTTP_FALLBACK')
 
     const noTransport = makeApplication({ syncTransportStatus: undefined })
     await renderTab(noTransport)
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
     const text = await openSubtab('Checks')
-    expect(text).toContain('No realtime transport is installed in this client.')
-    expect(text).not.toContain('did not apply here')
+    item = activePanel().querySelector('[data-diagnostics-probe="negotiation"]')
+    expect(item?.getAttribute('data-diagnostics-probe-status')).toBe('degraded')
+    expect(text).toContain('No realtime transport is installed in this client')
+    expect(text).not.toContain('had nothing to test here')
   })
 
   it('does not write, invite or delete anything while testing', async () => {
     const application = makeApplication()
     await renderTab(application)
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
 
     // Only the single, self-expiring ticket mint may POST, and only to /ticket.
     for (const [method, path] of application.httpOnlyJsonRequest.mock.calls) {
@@ -2135,40 +2217,86 @@ describe('AdminDiagnosticsTab — Checks', () => {
   })
 
   /**
-   * *** ONE PLACE TO PRESS THE BUTTON, ONE PLACE TO CONSENT. ***
+   * *** WHAT A RUN WRITES IS SAID AT EVERY CONTROL THAT STARTS ONE. ***
    *
-   * One of these probes mints a real server-side ticket. The paragraph saying so
-   * must appear exactly once in the whole pane — a warning repeated on six tabs
-   * is a warning nobody reads — and the sections show the results read-only.
+   * One of these checks mints a real server-side ticket. The sentence saying so
+   * sits beside "Run all checks" in the header — which is outside the panels and
+   * so is on screen whichever tab is open — and beside that check's own control
+   * on the Checks tab. A section offers no control at all, so it starts nothing.
    */
-  it('keeps the probe consent paragraph on exactly one tab', async () => {
+  it('says what the ticket check writes beside every control that can start it', async () => {
     await renderTab(makeApplication())
-    await clickButton('Test all capabilities')
+    const sentence = 'mint ONE short-lived, single-use socket ticket'
 
-    let seen = 0
+    // 1. the header, beside Run all checks, on every tab
+    const consent = container.querySelector('[data-diagnostics-consent]')
+    expect(consent?.textContent).toContain(sentence)
+    expect(consent?.textContent).toContain('1 of 3 checks write something')
     for (const label of ALL_SUBTABS) {
-      seen += occurrences(await openSubtab(label), 'mints a short-lived, single-use ticket')
+      await openSubtab(label)
+      expect(container.querySelector('[data-diagnostics-consent]')?.textContent).toContain(sentence)
     }
 
-    expect(seen).toBe(1)
+    // 2. the check's own item on the Checks tab, with its own button
+    await openSubtab('Checks')
+    const ticket = activePanel().querySelector('[data-diagnostics-probe="ticket"]')
+    expect(ticket?.textContent).toContain(sentence)
+    expect(ticket?.querySelector('button')).not.toBeNull()
+    // …and it is marked as the one that writes.
+    expect(ticket?.textContent).toContain('writes')
+    expect(activePanel().querySelector('[data-diagnostics-probe="capabilities"]')?.textContent).toContain('read-only')
+
+    // 3. no section panel can start anything
+    for (const id of SECTION_IDS) {
+      await openSubtab(SECTION_TITLE[id])
+      expect([...activePanel().querySelectorAll('button')]).toHaveLength(0)
+    }
   })
 
-  it('shows each probe result inside the section it belongs to, read-only', async () => {
+  it('shows each check as a row inside the section it belongs to, with a status that counts', async () => {
     await renderTab(makeApplication())
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
 
     const websocket = await openSubtab('WebSocket')
-    expect(websocket).toContain('Ticket issuance')
-    expect(websocket).toContain('Results from the last run on the Checks sub-tab')
+    expect(websocket).toContain('Socket ticket')
+    expect(sectionRow('Socket ticket')[1]).toBe('refused: SYNC_DISABLED')
+    expect(sectionRowStatus('Socket ticket')).toBe('broken')
     expect([...activePanel().querySelectorAll('button')]).toHaveLength(0)
+    // The checks block leads the section.
+    expect(activePanel().querySelector('[data-diagnostics-block]')?.getAttribute('data-diagnostics-block')).toBe(
+      'Checks',
+    )
 
     const environment = await openSubtab('Environment & setup')
     expect(environment).toContain('Deployment marker')
-    expect(environment).not.toContain('Ticket issuance')
+    expect(environment).not.toContain('Socket ticket')
 
-    // A section nothing was tagged for shows no check block at all.
-    const browser = await openSubtab('Browser')
-    expect(browser).not.toContain('Results from the last run on the Checks sub-tab')
+    // A section with no check registered shows no checks block at all.
+    await openSubtab('Browser')
+    expect(activePanel().querySelector('[data-diagnostics-block="Checks"]')).toBeNull()
+  })
+
+  /**
+   * The read-only checks need no consent, so they have already run when the pane
+   * opens; the one that writes has NOT, and reads "not tested" until it is asked.
+   */
+  it('runs the read-only checks on open and leaves the one that writes untested', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await openSubtab('Checks')
+    const status = (id: string): string | null =>
+      activePanel().querySelector(`[data-diagnostics-probe="${id}"]`)?.getAttribute('data-diagnostics-probe-status') ??
+      null
+
+    expect(status('ticket')).toBe('untested')
+    for (const id of ['capabilities', 'control-plane', 'negotiation', 'marker']) {
+      expect({ id, untested: status(id) === 'untested' }).toEqual({ id, untested: false })
+    }
+    // Nothing was written to get there.
+    const posts = application.httpOnlyJsonRequest.mock.calls.filter(([method]) => method === 'POST')
+    expect(posts).toHaveLength(0)
+    // And an untested check keeps the headline off OK.
+    expect(headlineStatus()).not.toBe('healthy')
   })
 })
 
@@ -2199,8 +2327,8 @@ describe('AdminDiagnosticsTab — Copyable report', () => {
     for (const id of SECTION_IDS) {
       expect(report).toContain(`## ${SECTION_TITLE[id]}`)
     }
-    // One "Worst verdict" line per section, and the sections' own blocks beneath.
-    expect(occurrences(report, '- Worst verdict: ')).toBe(SECTION_IDS.length)
+    // One status line per section, and the sections' own blocks beneath.
+    expect(occurrences(report, '\n- Status: ')).toBe(SECTION_IDS.length)
     expect(report).toContain('### Socket lane and boot gate')
     expect(report).toContain('### Clock')
     expect(report).toContain('### Durable storage')
@@ -2210,13 +2338,13 @@ describe('AdminDiagnosticsTab — Copyable report', () => {
 
   it('carries the SYNC_ITEMS verdict and the checks into the report', async () => {
     await renderTab(makeApplication())
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
     await openSubtab('Copyable report')
 
     const report = reportText()
     expect(report).toContain('- SYNC_ITEMS advertised: no')
     expect(report).toContain('- SYNC_ITEMS cause: LANE_PRECONDITION_UNMET')
-    expect(report).toContain('[FAIL] Ticket issuance')
+    expect(report).toContain('- [NOT WORKING] Socket ticket: refused: SYNC_DISABLED')
   })
 
   it('copies the whole report to the clipboard and confirms', async () => {
@@ -2253,11 +2381,11 @@ describe('AdminDiagnosticsTab — Copyable report', () => {
 
     expect(writeText).toHaveBeenCalledTimes(1)
     const summary = writeText.mock.calls[0][0] as string
-    expect(summary).toContain('## Verdict')
-    expect(summary).toContain('## What to fix, in order')
+    expect(summary).toContain('## Summary')
+    expect(summary).toContain('## What needs attention')
     expect(summary).toContain('## How to read this')
-    expect(summary).toContain('- Overall:')
-    expect(summary).toContain('- Fix first:')
+    expect(summary).toContain('| Section | Status |')
+    expect(summary).toContain('- Do first:')
     // The evidence is what it leaves out, and these are the five sections plus the
     // three payload blocks the full report carries.
     for (const absent of ['## Topology', '## Boot gate', '## Configuration presence', '## Browser', '## WebSocket']) {
@@ -2293,6 +2421,15 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
 
   it('renders the healthy path without inventing findings', async () => {
     const application = makeApplication({
+      httpOnlyJsonRequest: jest
+        .fn()
+        .mockImplementation(async (_method: string, path: string) =>
+          path === '/v1/sockets/sync/capabilities'
+            ? { status: 200, ok: true, data: { capabilities: [{ id: 'ws-sync' }] } }
+            : path === '/v1/sockets/sync/ticket'
+              ? { status: 200, ok: true, data: {} }
+              : { status: 200, ok: true, data: storageUsagePayload },
+        ),
       serverGetJsonRequest: jest.fn().mockResolvedValue({
         status: 200,
         ok: true,
@@ -2323,9 +2460,12 @@ describe('AdminDiagnosticsTab — failure and secrecy', () => {
 
     const text = await renderTab(application)
 
-    expect(text).toContain('Healthy')
+    // The descriptor a healthy server serves, so the read-only check that runs
+    // on open sees what this payload describes rather than the default fixture's
+    // empty list.
     expect(text).toContain('fully configured and available')
-    expect(routerRow('websocket')[1]).not.toBe('Down')
+    expect(routerStatus('websocket')).not.toBe('broken')
+    expect(routerStatus('websocket')).not.toBe('degraded')
     expect(await openSubtab('WebSocket')).toContain('Socket lane and boot gate')
   })
 
@@ -2538,6 +2678,34 @@ describe('AdminDiagnosticsTab — an unreadable diagnostics endpoint', () => {
       syncTransportStatus: { state: 'READY', operations: ['SYNC_ITEMS', 'API_RPC'] },
     })
 
+  /**
+   * *** UNREAD IS NOT DOWN, AT THE CHECK. *** The control-plane check asks the same
+   * endpoint. A 401, a 403 and a 404 are the server ANSWERING that this session
+   * may not look, or that the build has no such endpoint — reasons the pane is
+   * empty, and no evidence about the lane. Only an answer that is none of those
+   * is the admin surface itself failing.
+   */
+  it('reads a refused control-plane check as unknown, and only a server failure as not working', async () => {
+    const statusOfCheck = async (status: number): Promise<string | null> => {
+      await renderTab(unreadable(status))
+      await openSubtab('Checks')
+
+      return (
+        activePanel()
+          .querySelector('[data-diagnostics-probe="control-plane"]')
+          ?.getAttribute('data-diagnostics-probe-status') ?? null
+      )
+    }
+
+    for (const status of [401, 403, 404]) {
+      expect({ status, check: await statusOfCheck(status) }).toEqual({ status, check: 'undetermined' })
+      expect(activePanel().textContent).toContain('says nothing about whether the deployment is working')
+    }
+    for (const status of [500, 502]) {
+      expect({ status, check: await statusOfCheck(status) }).toEqual({ status, check: 'broken' })
+    }
+  })
+
   it('keeps the live transport verdict and does NOT claim the socket is unavailable', async () => {
     const text = await renderTab(unreadable(401))
 
@@ -2597,47 +2765,6 @@ describe('AdminDiagnosticsTab — an unreadable diagnostics endpoint', () => {
   })
 })
 
-/**
- * The chip mapping, asserted against the REAL tone union (`Tone` is derived from
- * `TONES`). The bug was a ternary chain — `good ? 'Healthy' : warn ? 'Degraded'
- * : 'Unavailable'` — in which every tone that was not good or warn inherited a
- * confident claim that the socket was unavailable. `Record<Tone, string>` makes a
- * new tone a compile error; these make a mapping that compiles and is still
- * wrong a test failure.
- */
-describe('AdminDiagnosticsTab — the diagnosis chip mapping', () => {
-  it('has a label for every tone in the union, with nothing falling through', () => {
-    expect(Object.keys(DIAGNOSIS_CHIP_LABEL).sort()).toEqual([...TONES].sort())
-    for (const tone of TONES) {
-      expect(DIAGNOSIS_CHIP_LABEL[tone]).toBeTruthy()
-      // And every one of them is renderable: Chip reads its styling from the one
-      // shared mapping, which this file now imports from its defining module.
-      expect(TONE_CHIP[tone]).toBeTruthy()
-    }
-  })
-
-  it('lets exactly one tone — the bad one — claim the lane is unavailable', () => {
-    expect(TONES.filter((tone) => DIAGNOSIS_CHIP_LABEL[tone] === 'Unavailable')).toEqual(['bad'])
-  })
-
-  it('gives the no-verdict tone a label of its own', () => {
-    expect(DIAGNOSIS_CHIP_LABEL.neutral).toBe('Unknown')
-    expect(DIAGNOSIS_CHIP_LABEL.neutral).not.toBe(DIAGNOSIS_CHIP_LABEL.bad)
-    expect(DIAGNOSIS_CHIP_LABEL.neutral).not.toBe(DIAGNOSIS_CHIP_LABEL.warn)
-  })
-})
-
-/**
- * *** ONE CHECK AT A TIME. ***
- *
- * The five probes were inline in a single `runTests` that always ran all of them
- * and then re-read the diagnostics endpoint, the server-status endpoint and the
- * transport — so narrowing one failing check meant regenerating the whole report,
- * and an operator watching a flapping ticket mint had no way to ask that one
- * question twice. The registry is what fixed it, and the two properties that make
- * it worth having are pinned separately: a single run must REPLACE only its own
- * result, and it must not re-read anything else.
- */
 describe('AdminDiagnosticsTab — running one check', () => {
   const probeItem = (id: string): HTMLElement => {
     const element = activePanel().querySelector(`[data-diagnostics-probe="${id}"]`)
@@ -2660,29 +2787,40 @@ describe('AdminDiagnosticsTab — running one check', () => {
     await openSubtab('Checks')
 
     const items = [...activePanel().querySelectorAll('[data-diagnostics-probe]')]
-    expect(items).toHaveLength(5)
+    expect(items.map((item) => item.getAttribute('data-diagnostics-probe'))).toEqual([...CHECK_IDS])
     for (const item of items) {
-      expect(item.textContent).toContain('Not run')
-      expect(item.querySelector('button')?.textContent).toBe('Run this check')
+      const id = item.getAttribute('data-diagnostics-probe') as CheckId
+      // Every check says what running it does, BEFORE it is run.
+      expect(item.textContent).toContain(`What it does: ${CHECKS[id].does}`)
+      // A LIVE check sends nothing, so there is nothing to press.
+      expect(item.querySelector('button') === null).toBe(CHECKS[id].mode === 'live')
     }
-    // A check that has never run says so rather than being absent.
-    expect(activePanel().textContent).toContain('Running this one check re-reads nothing else')
+    // The one that writes has not run and says so, with its own control.
+    expect(probeItem('ticket').getAttribute('data-diagnostics-probe-status')).toBe('untested')
+    expect(probeItem('ticket').textContent).toContain('not tested (run it from this pane)')
+    expect(probeItem('ticket').querySelector('button')?.textContent).toBe('Run this check')
   })
 
-  it('runs one check and reports only that one, leaving the others not run', async () => {
+  it('runs one check and reports only that one, re-reading nothing else', async () => {
     const application = makeApplication()
     await renderTab(application)
     await openSubtab('Checks')
 
     await clickProbe('ticket')
 
+    const capabilityCallsBefore = application.httpOnlyJsonRequest.mock.calls.filter(
+      ([, path]) => path === '/v1/sockets/sync/capabilities',
+    ).length
+
     expect(probeItem('ticket').textContent).toContain('SYNC_DISABLED')
+    expect(probeItem('ticket').getAttribute('data-diagnostics-probe-status')).toBe('broken')
     expect(probeItem('ticket').querySelector('button')?.textContent).toBe('Re-run this check')
-    expect(probeItem('capabilities').textContent).toContain('Not run')
-    // And it reached exactly the one endpoint its own probe needs.
+    // And it reached exactly the one endpoint its own check needs: the capability
+    // descriptor was read once when the pane opened and not again for this.
     const paths = application.httpOnlyJsonRequest.mock.calls.map(([, path]) => path)
     expect(paths.filter((path: string) => path === '/v1/sockets/sync/ticket')).toHaveLength(1)
-    expect(paths).not.toContain('/v1/sockets/sync/capabilities')
+    expect(paths.filter((path: string) => path === '/v1/sockets/sync/capabilities')).toHaveLength(capabilityCallsBefore)
+    expect(capabilityCallsBefore).toBe(1)
   })
 
   /**
@@ -2703,21 +2841,25 @@ describe('AdminDiagnosticsTab — running one check', () => {
       }),
     })
     await renderTab(application)
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
     await openSubtab('Checks')
 
     expect(probeItem('capabilities').textContent).toContain('advertises an EMPTY capability list')
     expect(probeItem('ticket').textContent).toContain('SYNC_DISABLED')
+    const others = ['capabilities', 'control-plane', 'negotiation', 'marker']
+    const before = others.map((id) => probeItem(id).getAttribute('data-diagnostics-probe-status'))
 
     // The deployment is repaired; only the ticket check is asked again.
     responses['/v1/sockets/sync/ticket'] = { status: 200, ok: true, data: {} }
     await clickProbe('ticket')
 
     expect(probeItem('ticket').textContent).toContain('A short-lived single-use ticket was issued')
-    // The other four survive untouched rather than reverting to "Not run".
+    expect(probeItem('ticket').getAttribute('data-diagnostics-probe-status')).toBe('healthy')
+    // The other four survive untouched rather than reverting to "not tested".
     expect(probeItem('capabilities').textContent).toContain('advertises an EMPTY capability list')
-    for (const id of ['capabilities', 'control-plane', 'negotiation', 'marker']) {
-      expect(probeItem(id).textContent).not.toContain('Not run')
+    expect(others.map((id) => probeItem(id).getAttribute('data-diagnostics-probe-status'))).toEqual(before)
+    for (const id of others) {
+      expect(probeItem(id).getAttribute('data-diagnostics-probe-status')).not.toBe('untested')
     }
   })
 
@@ -2745,7 +2887,7 @@ describe('AdminDiagnosticsTab — running one check', () => {
 
     // A FULL run still does re-read both: several of its probes change what they
     // answer, so leaving them stale would be the opposite defect.
-    await clickButton('Test all capabilities')
+    await clickButton('Run all checks')
     expect(application.legacyApi.adminGetServerStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore)
   })
 
@@ -2754,66 +2896,20 @@ describe('AdminDiagnosticsTab — running one check', () => {
     await renderTab(application)
     await openSubtab('Checks')
 
-    await clickProbe('marker')
+    // Run out of registry order, on purpose.
+    await clickProbe('control-plane')
+    await clickProbe('ticket')
     await clickProbe('capabilities')
     await openSubtab('Copyable report')
 
     const report = reportText()
-    expect(report.indexOf('Capability descriptor')).toBeLessThan(report.indexOf('Deployment marker'))
+    const checks = report.slice(report.indexOf('## Checks'))
+    const positions = CHECK_IDS.map((id) => checks.indexOf(`] ${CHECKS[id].title}: `))
+    expect(positions.every((position) => position > -1)).toBe(true)
+    expect([...positions].sort((left, right) => left - right)).toEqual(positions)
   })
 })
 
-describe('mergeOutcomes', () => {
-  const probe = (id: string, name: string): DiagnosticProbe => ({
-    id,
-    section: 'websocket',
-    name,
-    run: async () => ({ section: 'websocket', name, passed: true, detail: 'd', reportDetail: 'r' }),
-  })
-  const outcome = (name: string, detail: string): SectionTaggedOutcome => ({
-    section: 'websocket',
-    name,
-    passed: true,
-    detail,
-    reportDetail: detail,
-  })
-  const probes = [probe('a', 'A'), probe('b', 'B'), probe('c', 'C')]
-
-  it('replaces by name and keeps the rest', () => {
-    const merged = mergeOutcomes([outcome('A', 'old'), outcome('B', 'old')], [outcome('B', 'new')], probes)
-
-    expect(merged.map((item) => [item.name, item.detail])).toEqual([
-      ['A', 'old'],
-      ['B', 'new'],
-    ])
-  })
-
-  it('orders by the registry, not by arrival', () => {
-    const merged = mergeOutcomes([outcome('C', 'c')], [outcome('A', 'a')], probes)
-
-    expect(merged.map((item) => item.name)).toEqual(['A', 'C'])
-  })
-
-  it('drops an outcome from a probe that no longer exists', () => {
-    const merged = mergeOutcomes([outcome('GONE', 'x'), outcome('A', 'a')], [], probes)
-
-    expect(merged.map((item) => item.name)).toEqual(['A'])
-  })
-
-  it('returns nothing when nothing has run', () => {
-    expect(mergeOutcomes([], [], probes)).toEqual([])
-  })
-})
-
-/**
- * *** IDENTITY AND CAPTURE TIME, ON THE PANE. ***
- *
- * "Which commit is live" and "how old is this reading" are the first two questions
- * of every incident, and both used to be reachable only by opening the Environment
- * section or scrolling the report. They are on the header now, under the same
- * admission rules the report uses — which is the half that matters: a screen that
- * printed something the report refuses would be a second, looser rule.
- */
 describe('AdminDiagnosticsTab — identity on the header', () => {
   const identity = (): string => container.querySelector('[data-diagnostics-identity]')?.textContent ?? ''
 

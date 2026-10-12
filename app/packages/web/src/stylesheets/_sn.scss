@@ -133,6 +133,10 @@
   }
 }
 
+.bg-success-faded {
+  @include DimmedBackground(var(--sn-stylekit-success-color), 0.08);
+}
+
 .bg-warning-faded {
   @include DimmedBackground(var(--sn-stylekit-warning-color), 0.08);
 }

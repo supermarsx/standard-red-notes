@@ -6,6 +6,8 @@ import {
   KNOWN_SERVICES,
   type BackendSectionInput,
 } from './backendSection'
+import { readingsFrom, SECTIONS_WITH_CHECKS } from './diagnosticChecks'
+import { readingOf } from './diagnosticsSections'
 import type { DeploymentTopology } from './diagnosticRemedies'
 import {
   NOT_PUBLISHED,
@@ -976,7 +978,11 @@ describe('internal service communication', () => {
     // Precondition: the probe really did read green, so this is the "everything
     // looks fine" case rather than one where something else already failed.
     expect(rowOf(healthy(), 'Files service probe').value).toBe('answering')
-    expect(finding?.verdict).toBe('undetermined')
+    // NOT TESTED, not unknown: nothing failed to arrive. A transfer is a thing
+    // that can be tested and has not been, and that is a different instruction.
+    expect(finding?.verdict).toBe('untested')
+    expect(finding?.evidence.kind).toBe('untested')
+    expect(finding?.caveat).toContain('attach a small file')
     expect(finding?.detail).toContain('never as "file transfers work"')
     // It credits the probe with what the readiness route really proves, rather than
     // understating it and sending an operator to re-check cleared ground.
@@ -1495,22 +1501,30 @@ describe('why the status read failed', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('operator-triggered checks', () => {
-  it('shows only the probe results tagged for this section, and only when there are some', () => {
-    const none = buildBackendSection({
-      outcomes: [{ name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' }],
-    })
-    const some = buildBackendSection({
-      outcomes: [
-        { name: 'Ticket mint', passed: true, detail: 'd', reportDetail: 'r', section: 'websocket' },
-        { name: 'Round trip', passed: false, detail: 'd', reportDetail: 'r', section: 'backend' },
-      ],
-    })
+  it('renders exactly the checks registered for this section, as rows, and none when no readings are supplied', () => {
+    const readings = readingsFrom({})
+    const mine = readings.filter((reading) => reading.definition.section === 'backend')
+    const without = buildBackendSection()
+    const withChecks = buildBackendSection({ checks: readings })
 
-    expect(headingsOf(none)).not.toContain('Operator-triggered checks')
-    expect(headingsOf(some)).toContain('Operator-triggered checks')
-    const block = some.blocks.find((candidate) => String(candidate.heading) === 'Operator-triggered checks')
-    expect(block?.outcomes).toHaveLength(1)
-    expect(block?.outcomes?.[0].name).toBe('Round trip')
+    expect(without.blocks.map((block) => String(block.heading))).not.toContain('Checks')
+
+    const block = withChecks.blocks.find((candidate) => String(candidate.heading) === 'Checks')
+    // The registry decides whether this section has a block at all, so the
+    // expectation is read off the registry rather than written down twice.
+    expect(block !== undefined).toBe(SECTIONS_WITH_CHECKS.includes('backend'))
+    expect((block?.rows ?? []).map((row) => String(row.label))).toEqual(
+      mine.map((reading) => String(reading.definition.title)),
+    )
+    // A check nobody has run is NOT TESTED — never unknown, and never a pass.
+    for (const row of block?.rows ?? []) {
+      expect(row.verdict).toBe('untested')
+      expect(readingOf(row.value)).toBe('untested')
+    }
+    // First, because a tested fact outranks a reported one.
+    if (block !== undefined) {
+      expect(withChecks.blocks[0]).toBe(block)
+    }
   })
 })
 
@@ -1565,7 +1579,7 @@ describe('a healthy deployment', () => {
     expect(report).toContain('### Shared cache')
     expect(report).toContain('### Internal service communication')
     expect(report).toContain('### Event delivery and queues')
-    expect(report).toContain('- [v] Auth database round trip: answering')
+    expect(report).toContain('- [OK] Auth database round trip: answering')
     expect(report).toContain('- Addresses: never collected')
     expect(report).toContain('- Per-service failure detail: read by nothing here')
   })
@@ -1802,9 +1816,9 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
     const unreadable = plantedUnreadable().reportLines.join('\n')
 
     expect(report).toContain('## Database & internal comms')
-    expect(report).toContain('- Worst verdict: broken')
-    expect(report).toContain('- [v] Queue separation: other (unrecognised)')
-    expect(unreadable).toContain('- [v] Why the read failed: unreachable')
+    expect(report).toContain('- Status: NOT WORKING')
+    expect(report).toContain('] Queue separation: other (unrecognised)')
+    expect(unreadable).toContain('- [DEGRADED] Why the read failed: unreachable')
     expect(unreadable).toContain('- Status-read error text: never stored or printed')
   })
 
@@ -1895,8 +1909,14 @@ describe('no address, name, detail or error text reaches a row, a finding, a rem
     const model = buildBackendSection({ serverStatus: { services: [] }, statusError: PLANTED_ERROR })
 
     expect(rowOf(model, 'Admin status endpoint').value).toBe('answered')
-    expect(rowOf(model, 'Why the read failed').value).toBe('not reported')
-    expect(rowOf(model, 'Why the read failed').evidence.kind).toBe('absent')
+    // The read ANSWERED, so there is no failure to give a reason for — which is
+    // nothing to report, and not a reason that went missing.
+    expect(rowOf(model, 'Why the read failed').value).toBe('nothing to report (the read answered)')
+    expect(rowOf(model, 'Why the read failed').evidence.kind).toBe('not-applicable')
+    expect(rowOf(model, 'Why the read failed').verdict).toBe('not-applicable')
+    // With NO read at all the reason stays an open question.
+    expect(rowOf(buildBackendSection(), 'Why the read failed').value).toBe('not reported')
+    expect(rowOf(buildBackendSection(), 'Why the read failed').verdict).toBe('undetermined')
     expect(codesOf(model)).not.toContain('BACKEND_STATUS_UNREADABLE')
     expect(JSON.stringify(model)).not.toContain('planted.internal')
   })

@@ -230,9 +230,15 @@ export class LaneDegradationLedger {
   }
 
   view(): LaneLedgerReading {
+    // EVERY status in the closed set, at zero when none was recorded. The view
+    // used to carry only the statuses that had been seen, so a ledger with no
+    // refusals published a total of 0 beside an EMPTY per-status record — and a
+    // reader who (correctly) refuses to treat an absent counter as zero printed
+    // "not reported" for both, directly under the row reading 0. This object
+    // counted them: a zero here is a measurement, and it says so by being there.
     const controlPlaneRejectionsByStatus: Partial<Record<LaneLedgerRejectionStatus, number>> = {}
-    for (const [status, count] of this.rejections) {
-      controlPlaneRejectionsByStatus[status] = count
+    for (const status of LANE_LEDGER_REJECTION_STATUSES) {
+      controlPlaneRejectionsByStatus[status] = this.rejections.get(status) ?? 0
     }
 
     const fallbackCounts: Partial<Record<LaneLedgerReason, number>> = {}

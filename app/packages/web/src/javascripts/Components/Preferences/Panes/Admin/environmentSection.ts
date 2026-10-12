@@ -13,20 +13,22 @@ import {
   type Remedy,
   type RemedyEffort,
 } from './diagnosticRemedies'
+import { buildChecksBlock, witnessFrom, type CheckReading, type WitnessBoard, type WitnessId } from './diagnosticChecks'
 import {
   buildSectionModel,
   diagnosticFinding,
   diagnosticRow,
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
+  evidenceNothingToReport,
   evidenceProxy,
-  outcomesForSection,
   reportLine,
   safeConstant,
   safeCount,
   safeDuration,
   safeEnum,
   safeEnvName,
+  safeNothingToReport,
   safePresence,
   safeState,
   safeToken,
@@ -38,8 +40,8 @@ import {
   type Evidence,
   type SafeValue,
   type SectionModel,
-  type SectionTaggedOutcome,
   type Verdict,
+  type Witness,
 } from './diagnosticsSections'
 import { DEPLOY_REVISION } from './reportAllowlist'
 import { describeDeployment, type DeploymentIdentityView, type TransportFallbackView } from './syncDiagnostics'
@@ -104,9 +106,13 @@ import { describeDeployment, type DeploymentIdentityView, type TransportFallback
  * `evidenceProxy(…, necessaryCondition: true)`, which caps a `healthy` claim to
  * `undetermined` and prints why, while the negative arm of the same proxy
  * survives as `broken` because a necessary condition FAILING is conclusive.
- * Several rows on a perfectly healthy deployment therefore read `Unknown`. That
- * is the intended output: the panel is saying "this is set, which is not the same
- * as this working", and it is the honest reading of a presence map.
+ * On its own a presence row therefore reads `Unknown`, which is the honest
+ * reading of a presence map: "this is set, which is not the same as this
+ * working". What CAN establish that a value is accepted is the thing the value is
+ * for actually working, so each required variable names the direct observation
+ * that would confirm it (`PRESENCE_WITNESS`) and resolves on that — OK when it
+ * was made and held, "not tested" when a check makes it and has not run, and
+ * `Unknown` still wherever nothing can.
  *
  * -------------------------------------------------------------------------------
  * No value, ever — and no length either.
@@ -382,8 +388,14 @@ export type EnvironmentSectionInput = {
   /** `payload.transportFallback`. Absent on a server older than the per-call fallback. */
   fallback?: TransportFallbackView
   runtime?: EnvironmentRuntimeView
-  outcomes?: readonly SectionTaggedOutcome[]
+  /** Every registered check, run or not. This section renders its own as rows. */
+  checks?: readonly CheckReading[]
+  /** The direct observations a capped row here can point at. Absent: none was made. */
+  witnesses?: WitnessBoard
 }
+
+/** How a block reads a witness. Absent board: every witness is unobserved. */
+type WitnessOf = (id: WitnessId) => Witness
 
 /* -------------------------------------------------------------------------- */
 /* Closed vocabularies for the topology fields                                */
@@ -588,12 +600,44 @@ function observedRow(input: {
  * can never render as "working" — the state that produced a green chip over a
  * socket withholding note syncing.
  */
-function presenceProxy(key: string): Evidence {
+function presenceProxy(key: string, confirmedBy?: Witness): Evidence {
   return evidenceProxy({
     observed: `that ${key} is set to a non-empty value`,
     cannotConfirm: 'that its value is one this deployment accepts',
     necessaryCondition: true,
+    ...(confirmedBy === undefined ? {} : { confirmedBy }),
   })
+}
+
+/**
+ * The direct observation that establishes a REQUIRED variable's value is one the
+ * deployment accepts — which is the thing the variable is for, working.
+ *
+ * *** PARTIAL ON PURPOSE, AND EACH ENTRY IS AN ARGUMENT. *** A variable is listed
+ * only where the observation could not have been made with a wrong value:
+ *
+ *   - the connection-token secret signs the socket ticket and verifies it, so a
+ *     live socket in this tab is a ticket that verified;
+ *   - the two keys behind the durable backend are what the handshake's own
+ *     readiness predicate tests before it will offer SYNC_ITEMS, so a socket that
+ *     negotiated SYNC_ITEMS is that predicate having answered yes;
+ *   - the auth gRPC address and the session signing key are both exercised by
+ *     every authenticated request, so the admin read this pane is built from is
+ *     one that went through them;
+ *   - the Redis address is what the gateway's own cache client dialled, so that
+ *     client answering a ping is the address being one that works.
+ *
+ * A variable with no entry keeps `Unknown`. That is correct for the ones left
+ * out: nothing this pane observes without running a transfer establishes that the
+ * files address or the valet secret is right.
+ */
+const PRESENCE_WITNESS: Partial<Record<KnownEnvKey, WitnessId>> = {
+  WEB_SOCKET_CONNECTION_TOKEN_SECRET: 'negotiation',
+  SYNCING_SERVER_GRPC_URL: 'sync-items',
+  SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: 'sync-items',
+  AUTH_SERVER_GRPC_URL: 'admin-read',
+  AUTH_JWT_SECRET: 'admin-read',
+  REDIS_URL: 'gateway-cache',
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1299,6 +1343,7 @@ function decisionNote(reported: string | undefined, decision: ProxyDecision | un
 function buildTransportBlock(
   topology: DeploymentTopology | undefined,
   fallback: TransportFallbackView | undefined,
+  witness: WitnessOf,
 ): DiagnosticBlock {
   const recorded = topology?.recorded === true
   // Read off the TOPOLOGY, where the server puts it. Gated on `recorded` for the
@@ -1312,6 +1357,28 @@ function buildTransportBlock(
   const secret = describeInternalGrpcSecret(decision, secretPresent)
   const totals = laneTotals(fallback)
   const unreachable = decision === 'auth-grpc-unreachable' || decision === 'syncing-grpc-unreachable'
+  /**
+   * Whether the three "most recent failure" rows have nothing to describe.
+   *
+   * ESTABLISHED, NOT ASSUMED: the gateway reported its per-lane counters, both
+   * totals read zero, and it named no last failure. Only then is the absence of
+   * a failure class a fact rather than a gap. Counters that are absent, or
+   * non-zero with no failure named beside them, leave the rows on `not reported`
+   * — a failure nobody described is not a failure that did not happen.
+   */
+  const noFailureRecorded =
+    totals.degraded === 0 &&
+    totals.refused === 0 &&
+    totals.lastClass === undefined &&
+    totals.lastLane === undefined &&
+    totals.lastAgeSeconds === undefined
+  const noFailure = {
+    value: safeNothingToReport('no gRPC failure recorded'),
+    verdict: 'not-applicable' as const,
+    evidence: evidenceNothingToReport(
+      'The gateway reported its gRPC fallback counters and both read zero, so there is no failure for this row to describe.',
+    ),
+  }
 
   const health: GrpcHealthState | undefined =
     bound === 'http'
@@ -1350,6 +1417,10 @@ function buildTransportBlock(
                 observed: 'that no gRPC call has fallen back to HTTP since this process started',
                 cannotConfirm: 'that the gRPC lane is carrying calls at all',
                 necessaryCondition: true,
+                // The session behind every authenticated request is validated over
+                // this lane when gRPC is the bound proxy, so the admin read this
+                // pane is built from IS a call the lane carried.
+                confirmedBy: witness('admin-read'),
               })
             : EVIDENCE_DIRECT,
       note: GRPC_HEALTH_NOTE,
@@ -1368,20 +1439,23 @@ function buildTransportBlock(
     }),
     diagnosticRow({
       label: safeConstant('Most recent gRPC failure'),
-      value: safeEnum(totals.lastClass, GRPC_FAILURE_CLASSES),
-      ...absentOr(totals.lastClass, 'informational'),
+      ...(noFailureRecorded
+        ? noFailure
+        : { value: safeEnum(totals.lastClass, GRPC_FAILURE_CLASSES), ...absentOr(totals.lastClass, 'informational') }),
       note: '"channel-unavailable" is the listener being gone, and is the usual reading. "method-unimplemented" means the two sides disagree about the protocol, which no restart fixes. "application" means the backend deliberately answered that way, and no transport change helps.',
     }),
     diagnosticRow({
       label: safeConstant('Lane of the most recent gRPC failure'),
-      value: safeEnum(totals.lastLane, GRPC_FALLBACK_LANES),
-      ...absentOr(totals.lastLane, 'informational'),
+      ...(noFailureRecorded
+        ? noFailure
+        : { value: safeEnum(totals.lastLane, GRPC_FALLBACK_LANES), ...absentOr(totals.lastLane, 'informational') }),
       note: 'Which call path failed. "session-validation" degrades every authenticated request on this gateway; "items-sync" degrades note syncing only. They are kept apart because the first is a whole-deployment symptom and the second is not.',
     }),
     diagnosticRow({
       label: safeConstant('Time since the last gRPC failure'),
-      value: safeDuration(totals.lastAgeSeconds),
-      ...absentOr(totals.lastAgeSeconds, 'informational'),
+      ...(noFailureRecorded
+        ? noFailure
+        : { value: safeDuration(totals.lastAgeSeconds), ...absentOr(totals.lastAgeSeconds, 'informational') }),
       note: 'How long ago, not when. A failure ten seconds old is a live outage; one that happened hours ago and has not recurred is history — and the counters beside it do not reset on their own.',
     }),
   ]
@@ -1829,16 +1903,18 @@ const GROUP_HEADING_FALLBACK = safeConstant('Other configuration')
  * wire in upper snake case was printed as a row label while differently-shaped
  * ones were refused.
  */
-function configRow(row: EnvironmentRow): DiagnosticRow {
+function configRow(row: EnvironmentRow, witness: WitnessOf): DiagnosticRow {
   const label = safeEnvName(row.key)
   const value = safeTokens(safePresence(row.present), RELEVANCE_SUFFIX[row.relevance])
 
   if (row.relevance === 'required') {
+    const confirming = PRESENCE_WITNESS[row.key]
+
     return diagnosticRow({
       label,
       value,
       verdict: row.present ? 'healthy' : 'broken',
-      evidence: presenceProxy(row.key),
+      evidence: presenceProxy(row.key, confirming === undefined ? undefined : witness(confirming)),
       note:
         row.note ||
         'Read on the branch this topology takes. Presence is all that is known, which is why a positive reading is reported as undetermined rather than as healthy.',
@@ -1897,11 +1973,11 @@ function configRow(row: EnvironmentRow): DiagnosticRow {
   })
 }
 
-function configBlocks(groups: readonly EnvironmentGroup[]): DiagnosticBlock[] {
+function configBlocks(groups: readonly EnvironmentGroup[], witness: WitnessOf): DiagnosticBlock[] {
   return groups.map((group) => ({
     heading: GROUP_HEADING[group.title] ?? GROUP_HEADING_FALLBACK,
     description: `${group.title} — ${group.description}`,
-    rows: group.rows.map(configRow),
+    rows: group.rows.map((row) => configRow(row, witness)),
     findings: [],
   }))
 }
@@ -1969,14 +2045,15 @@ const REPORT_REVISION = reportLine(
  */
 export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): SectionModel {
   const runtime = input.runtime ?? {}
-  const outcomes = outcomesForSection(input.outcomes ?? [], 'environment')
+  const witness = witnessFrom(input.witnesses)
+  const checks = buildChecksBlock('environment', input.checks)
 
   const presence: EnvironmentPresence = buildEnvironmentPresence(input.topology)
-  const configured = configBlocks(presence.groups)
+  const configured = configBlocks(presence.groups, witness)
 
   const blocks: DiagnosticBlock[] = [
     buildShapeBlock(input.topology, runtime),
-    buildTransportBlock(input.topology, input.fallback),
+    buildTransportBlock(input.topology, input.fallback, witness),
     buildSessionBlock(input.topology, runtime),
     buildIdentityBlock(input.topology, input.deploymentMarker),
   ]
@@ -2059,18 +2136,11 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
     }
   }
 
-  // Appended last and OUTSIDE the branch above: a probe result tagged for this
-  // section must survive a server that reported no configuration presence at
-  // all, which is exactly the deployment most likely to have run one.
-  if (outcomes.length > 0) {
-    blocks.push({
-      heading: safeConstant('Operator-triggered checks'),
-      description:
-        'Results from the last run on the Checks sub-tab. Read-only here: a run is started in exactly one place, so the paragraph explaining what it does to your own account appears exactly once.',
-      rows: [],
-      findings: [],
-      outcomes,
-    })
+  // Placed first and OUTSIDE the branch above: a check belonging to this section
+  // must survive a server that reported no configuration presence at all, which
+  // is exactly the deployment most likely to need one.
+  if (checks !== undefined) {
+    blocks.unshift(checks)
   }
 
   return buildSectionModel({

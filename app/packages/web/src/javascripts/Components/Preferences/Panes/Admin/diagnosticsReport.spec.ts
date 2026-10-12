@@ -1,6 +1,24 @@
 import { buildDiagnosticsReport, buildDiagnosticsSummary, type DiagnosticsReportInput } from './diagnosticsReport'
+import {
+  CHECK_IDS,
+  CHECKS,
+  describeMarkerCheck,
+  readingsFrom,
+  type CheckId,
+  type CheckOutcome,
+} from './diagnosticChecks'
 import { CLIENT_KNOWN_OPERATIONS, type SyncDiagnosticsPayload } from './syncDiagnostics'
-import { SECTION_IDS, SECTION_TITLE, type SectionId, type SectionModel } from './diagnosticsSections'
+import {
+  safeConstant,
+  safeCount,
+  safeNotAvailableHere,
+  safeTokens,
+  SECTION_IDS,
+  SECTION_TITLE,
+  type SectionId,
+  type SectionModel,
+  type Verdict,
+} from './diagnosticsSections'
 import { buildWebsocketSection } from './websocketSection'
 import { buildEnvironmentSection } from './environmentSection'
 import { buildBackendSection } from './backendSection'
@@ -100,11 +118,19 @@ const input = (overrides: Partial<DiagnosticsReportInput> = {}): DiagnosticsRepo
   payload,
   transport: { state: 'READY', operations: ['FILES_V1'] },
   deploymentMarker: { revision: 'unstamped', version: 'unstamped' },
-  outcomes: [],
+  checks: readingsFrom({}),
   loadError: null,
   generatedAt: '2026-08-27T12:00:00.000Z',
   ...overrides,
 })
+
+/** One check's outcome, with a closed result and a screen-only detail. */
+const outcomeOf = (
+  id: CheckId,
+  state: CheckOutcome['state'],
+  result: CheckOutcome['result'],
+  detail = 'screen-only detail',
+): CheckOutcome => ({ id, state, result, detail })
 
 /**
  * The five section models, built from the same payload the rest of this file
@@ -125,7 +151,7 @@ describe('buildDiagnosticsReport — what it says', () => {
     const report = buildDiagnosticsReport(input())
 
     for (const heading of [
-      '## Verdict',
+      '## Summary',
       '## Deployment',
       '## Topology',
       '## Boot gate',
@@ -159,7 +185,7 @@ describe('buildDiagnosticsReport — what it says', () => {
   it('carries each section’s own worst verdict and its blocks, not just its heading', () => {
     const report = buildDiagnosticsReport(input({ sections: sections() }))
 
-    expect(report.split('- Worst verdict: ').length - 1).toBe(SECTION_IDS.length)
+    expect(report.split('\n- Status: ').length - 1).toBe(SECTION_IDS.length)
     for (const block of [
       '### Socket lane and boot gate',
       '### Deployment identity',
@@ -331,18 +357,33 @@ describe('buildDiagnosticsReport — what it says', () => {
     expect(report).toContain('(inert)')
   })
 
-  it('says the checks were not run rather than implying they passed', () => {
-    expect(buildDiagnosticsReport(input())).toContain('Not run.')
+  /**
+   * EVERY registered check is listed, run or not, so "which checks exist, and
+   * which were never run" has one answer — and the count is over the registry.
+   * "5 of 5 passed" over a registry of nine is the flattering denominator.
+   */
+  it('lists every registered check as not tested rather than implying any of them passed', () => {
+    const report = buildDiagnosticsReport(input())
+
+    for (const id of CHECK_IDS) {
+      expect(report).toContain(`- [NOT TESTED] ${CHECKS[id].title}: not run`)
+    }
+    expect(report).toContain(`- Checks: 0 of ${CHECK_IDS.length} checks passed, ${CHECK_IDS.length} not run yet.`)
+    expect(report).not.toContain('checks passed.\n- Checks')
   })
 
-  it('reports check outcomes when they have been run', () => {
+  it('reports a check’s closed result under its status once it has run', () => {
     const report = buildDiagnosticsReport(
       input({
-        outcomes: [{ name: 'Ticket issuance', passed: false, detail: 'irrelevant', reportDetail: 'Refused with 503.' }],
+        checks: readingsFrom({
+          ticket: outcomeOf('ticket', 'fail', safeTokens(safeConstant('refused with HTTP'), safeCount(503))),
+        }),
       }),
     )
 
-    expect(report).toContain('[FAIL] Ticket issuance — Refused with 503.')
+    expect(report).toContain('- [NOT WORKING] Socket ticket: refused with HTTP 503')
+    // The screen-only half of the outcome is not in the document at all.
+    expect(report).not.toContain('screen-only detail')
   })
 
   /**
@@ -351,27 +392,27 @@ describe('buildDiagnosticsReport — what it says', () => {
    * ALONGSIDE the two that still mean what they meant: a tag that quietly turned
    * every failure into a note would satisfy half of this on its own.
    */
-  it('tags an informational outcome as a note, and keeps PASS and FAIL meaning what they mean', () => {
+  it('tags a check with nothing to test here as N/A, and keeps OK and NOT WORKING meaning what they mean', () => {
     const report = buildDiagnosticsReport(
       input({
-        outcomes: [
-          { name: 'Capability descriptor', passed: true, detail: 'ok', reportDetail: 'Advertises 1 entry.' },
-          { name: 'Ticket issuance', passed: false, detail: 'no', reportDetail: 'Refused with 503.' },
-          {
-            name: 'Live socket negotiation',
-            passed: false,
-            state: 'informational',
-            detail: 'another tab owns it',
-            reportDetail: 'Not negotiated here: another tab of this account owns the socket lane.',
-          },
-        ],
+        checks: readingsFrom({
+          capabilities: outcomeOf('capabilities', 'pass', safeConstant('advertises 1 capability entry')),
+          ticket: outcomeOf('ticket', 'fail', safeTokens(safeConstant('refused with HTTP'), safeCount(503))),
+          negotiation: outcomeOf(
+            'negotiation',
+            'not-applicable',
+            safeNotAvailableHere('another tab holds the socket lane'),
+          ),
+        }),
       }),
     )
 
-    expect(report).toContain('[NOTE] Live socket negotiation — Not negotiated here')
-    expect(report).toContain('[PASS] Capability descriptor —')
-    expect(report).toContain('[FAIL] Ticket issuance — Refused with 503.')
-    expect(report).not.toContain('[FAIL] Live socket negotiation')
+    expect(report).toContain('- [N/A] This tab’s live socket: not available here (another tab holds the socket lane)')
+    expect(report).toContain('- [OK] Capability descriptor: advertises 1 capability entry')
+    expect(report).toContain('- [NOT WORKING] Socket ticket: refused with HTTP 503')
+    expect(report).not.toContain('[NOT WORKING] This tab’s live socket')
+    // It leaves the denominator, and is named as what it is.
+    expect(report).toContain('1 of 4 checks passed, 2 not run yet, 1 did not pass, 1 had nothing to test here.')
   })
 
   it('says so when the topology was not reported, instead of guessing one', () => {
@@ -433,16 +474,16 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     const report = buildDiagnosticsReport(
       input({
         payload: poisoned,
-        outcomes: [
-          {
-            name: 'Capability descriptor',
-            passed: false,
+        checks: readingsFrom({
+          capabilities: outcomeOf(
+            'capabilities',
+            'fail',
+            safeConstant('the request did not complete'),
             // Exactly the shape a thrown fetch error takes. It is shown on the
             // panel and must not travel into a pasteable report.
-            detail: 'FetchError: request to https://notes.internal.example/v1/sockets failed (10.4.2.9)',
-            reportDetail: 'The request threw before an answer arrived.',
-          },
-        ],
+            'FetchError: request to https://notes.internal.example/v1/sockets failed (10.4.2.9)',
+          ),
+        }),
       }),
     )
 
@@ -454,7 +495,51 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     expect(report).not.toMatch(/\d{1,3}(\.\d{1,3}){3}/)
     // And it still says the useful thing.
     expect(report).toContain('REDIS_UNBOUND')
-    expect(report).toContain('The request threw before an answer arrived.')
+    expect(report).toContain('- [NOT WORKING] Capability descriptor: the request did not complete')
+  })
+
+  /**
+   * *** THE LEAK THE CHECKS BLOCK ACTUALLY HAD. *** A check used to hand the report
+   * a free string described as constant copy, and the marker check built that
+   * string from the marker's revision — a value served by whatever fronts the web
+   * bundle, passed through a denylist that prints anything with no address shape.
+   * So an OPAQUE value in that field reached this document verbatim, twenty lines
+   * below a Deployment block that refused the same value by shape.
+   *
+   * The sentinel is opaque on purpose: an address-shaped one would be caught by
+   * the denylist too, and the test could not tell which mechanism saved it. It is
+   * planted through the REAL check function, so the assertion is about the code
+   * that runs and not about a hand-built outcome.
+   */
+  it('cannot carry a marker value through the checks, however the marker is shaped', () => {
+    // Opaque AND outside the version shape: a version token is admitted by
+    // shape on purpose, so a sentinel that happened to look like one would be
+    // printed by design and prove nothing about the checks.
+    const OPAQUE = ['zq', 'marker', 'sentinel', 'k9x2', 'vv7'].join('~ ')
+    const SHAPED = ['build', 'internal.example.test'].join('@')
+
+    for (const planted of [OPAQUE, SHAPED]) {
+      const marker = { revision: planted, version: planted }
+      const outcome = describeMarkerCheck(marker, 'answered')
+      const report = buildDiagnosticsReport(
+        input({ deploymentMarker: marker, checks: readingsFrom({ marker: { id: 'marker', ...outcome } }) }),
+      )
+
+      // Not a pass, and the result is this build's own words.
+      expect(outcome.state).toBe('unknown')
+      expect(String(outcome.result)).toBe('no usable build identity in the marker')
+      for (const window of [planted, planted.slice(0, 12), planted.slice(-12)]) {
+        expect(report).not.toContain(window)
+      }
+      // Not vacuous: the check's own line is in the document.
+      expect(report).toContain('] Deployment marker: no usable build identity in the marker')
+    }
+
+    // And a REAL revision does print, so the admission is a shape and not a refusal of everything.
+    const real = 'ab3f90'.repeat(6) + 'cdef'
+    const stamped = describeMarkerCheck({ revision: real, version: 'rel-1.2.3' }, 'answered')
+    expect(stamped.state).toBe('pass')
+    expect(String(stamped.result)).toBe(`revision ${real}`)
   })
 
   it('carries capture timestamps only when they are timestamps', () => {
@@ -767,8 +852,8 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
 
   it('answers "is this healthy", "what is wrong" and "what first" before any evidence', () => {
     const report = buildDiagnosticsReport(input({ sections: sections() }))
-    const verdict = report.indexOf('## Verdict')
-    const actions = report.indexOf('## What to fix, in order')
+    const verdict = report.indexOf('## Summary')
+    const actions = report.indexOf('## What needs attention')
 
     expect(verdict).toBeGreaterThan(-1)
     expect(actions).toBeGreaterThan(verdict)
@@ -776,27 +861,88 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
     for (const heading of ['## Deployment', '## Topology', '## Boot gate', '## Capabilities', '## Checks']) {
       expect(report.indexOf(heading)).toBeGreaterThan(actions)
     }
-    expect(report).toContain('- Overall: BROKEN')
-    expect(report).toContain('- Fix first: ')
+    // The headline is the FIRST line under the heading: a status word, then one
+    // sentence saying what the word is worth.
+    const afterHeading = report
+      .slice(verdict)
+      .split('\n')
+      .filter((line) => line.length > 0)[1]
+    expect(afterHeading).toBe(
+      '**NOT WORKING** — At least one thing is not working. The first entry under “What needs attention” says what.',
+    )
+    expect(report).toContain('- Do first: ')
     expect(report).toContain('- Findings needing action: ')
     expect(report).toContain('- Evidence below: ')
-    expect(report).toContain('- Operator checks: ')
+    expect(report).toContain('- Checks: ')
+    expect(report).toContain('- Covers: ')
+    expect(report).toContain('Does not cover: ')
     expect(report).toContain('- Ranked findings this build has no fix for: 0')
+  })
+
+  /**
+   * *** ONE LINE PER SECTION, BEFORE ANY EVIDENCE. *** The first per-section
+   * status used to be 175 lines down, behind five collapsed regions. The table is
+   * parsed back here, cell by cell, and checked against the section MODELS — so a
+   * table that printed a tidy constant, or the wrong section's counts, fails.
+   */
+  it('opens with a table giving each section its status and how many rows carry each one', () => {
+    const models = sections()
+    const report = buildDiagnosticsReport(input({ sections: models }))
+    const table = report
+      .slice(report.indexOf('## Summary'), report.indexOf('## What needs attention'))
+      .split('\n')
+      .filter((line) => line.startsWith('|'))
+    const cells = (line: string): string[] =>
+      line
+        .split('|')
+        .slice(1, -1)
+        .map((cell) => cell.trim())
+
+    const header = cells(table[0])
+    expect(header.slice(0, 2)).toEqual(['Section', 'Status'])
+    // Worst first, and every status has a column.
+    expect(header.slice(2)).toEqual(['NOT WORKING', 'DEGRADED', 'UNKNOWN', 'NOT TESTED', 'OK', 'INFO', 'N/A'])
+    expect(table).toHaveLength(2 + SECTION_IDS.length)
+
+    const verdictOfTag: Record<string, Verdict> = {
+      'NOT WORKING': 'broken',
+      DEGRADED: 'degraded',
+      UNKNOWN: 'undetermined',
+      'NOT TESTED': 'untested',
+      OK: 'healthy',
+      INFO: 'informational',
+      'N/A': 'not-applicable',
+    }
+    SECTION_IDS.forEach((id, index) => {
+      const row = cells(table[2 + index])
+      const model = models[id]
+
+      expect(row[0]).toBe(SECTION_TITLE[id])
+      expect(verdictOfTag[row[1]]).toBe(model.worstVerdict)
+      header.slice(2).forEach((tag, column) => {
+        expect({ id, tag, count: Number(row[2 + column]) }).toEqual({ id, tag, count: model.counts[verdictOfTag[tag]] })
+      })
+      // Not vacuous: the counts add up to the rows the section really has.
+      const total = row.slice(2).reduce((sum, cell) => sum + Number(cell), 0)
+      expect(total).toBe(model.blocks.reduce((sum, block) => sum + block.rows.length, 0))
+      expect(total).toBeGreaterThan(0)
+    })
   })
 
   it('ranks the broken findings above the degraded ones, and numbers them', () => {
     const report = buildDiagnosticsReport(input({ sections: sections() }))
     const first = report.indexOf('### 1. ')
-    const broken = report.indexOf('BROKEN — ')
-    const degraded = report.indexOf('DEGRADED — ')
-    const unknown = report.indexOf('UNKNOWN — ')
+    const list = report.indexOf('## What needs attention')
+    const broken = report.indexOf('NOT WORKING — ', list)
+    const degraded = report.indexOf('DEGRADED — ', list)
+    const unknown = report.indexOf('UNKNOWN — ', list)
 
     expect(first).toBeGreaterThan(-1)
     expect(broken).toBeGreaterThan(-1)
     expect(degraded).toBeGreaterThan(broken)
     expect(unknown).toBeGreaterThan(degraded)
     // The first entry IS the one the Verdict block named.
-    const fixFirst = /- Fix first: ([^,]+),/.exec(report)?.[1]
+    const fixFirst = /- Do first: ([^,]+),/.exec(report)?.[1]
     expect(fixFirst).toBeDefined()
     expect(report.slice(first, first + 120)).toContain(fixFirst as string)
   })
@@ -812,8 +958,40 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
     const entries = occurrences(report, '- Seen in: ')
 
     expect(entries).toBeGreaterThan(0)
-    expect(occurrences(report, '  - Fix (')).toBe(entries)
+    expect(occurrences(report, '\n- Do (')).toBe(entries)
     expect(report).not.toContain('No fix is recorded in this client build')
+  })
+
+  /**
+   * *** ONE ACTION PER ENTRY, AND THE REASONING BEHIND A FOLD. *** The only finding
+   * on a healthy deployment used to arrive as six bullets with the instruction
+   * somewhere among them. Each entry is checked for its SHAPE: the line after
+   * "Seen in" is the action, and every step and every "Because" sits inside the
+   * fold that follows it — present in the text, so nothing is dropped.
+   */
+  it('gives every ranked entry one action line and folds its steps and reasoning beneath', () => {
+    const report = buildDiagnosticsReport(input({ sections: sections() }))
+    const list = report.slice(report.indexOf('## What needs attention'), report.indexOf('## How to read this'))
+    const entries = list.split('\n### ').slice(1)
+
+    expect(entries.length).toBeGreaterThan(3)
+    for (const entry of entries) {
+      const lines = entry.split('\n').filter((line) => line.length > 0)
+
+      expect(lines[1].startsWith('- Seen in: ')).toBe(true)
+      expect(lines[2].startsWith('- Do')).toBe(true)
+      const fold = entry.indexOf('<details>')
+      const close = entry.indexOf('</details>')
+      const because = entry.indexOf('- Because: ')
+      if (because !== -1) {
+        expect(fold).toBeGreaterThan(-1)
+        expect(because).toBeGreaterThan(fold)
+        expect(because).toBeLessThan(close)
+      }
+      // Nothing but the heading, where it was seen and the action comes before the fold.
+      const head = (fold === -1 ? entry : entry.slice(0, fold)).split('\n').filter((line) => line.length > 0)
+      expect(head).toHaveLength(3)
+    }
   })
 
   /**
@@ -864,15 +1042,19 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
     expect(report.split('docker compose up -d --build').length - 1).toBe(1)
   })
 
-  it('tells the reader how to read the severities and the three row markers', () => {
+  it('tells the reader what every status means and which silence a row with no value is', () => {
     const report = buildDiagnosticsReport(input({ sections: sections() }))
-    const legend = report.slice(report.indexOf('## How to read this'))
+    const legend = report.slice(report.indexOf('## How to read this'), report.indexOf('## Deployment'))
 
-    expect(legend).toContain('BROKEN (it is not working)')
-    expect(legend).toContain('NOT a pass')
-    expect(legend).toContain('[v] a value arrived')
-    expect(legend).toContain('[?] this build asked and nothing came back')
-    expect(legend).toContain('[n] nothing publishes this field yet')
+    expect(legend).toContain('NOT WORKING (not working)')
+    expect(legend).toContain('DEGRADED (working, with something lost)')
+    expect(legend).toContain('NOT TESTED (not tested yet')
+    expect(legend).toContain('N/A (not applicable here')
+    // The two quiet statuses that still keep the headline off OK are named as such.
+    expect(legend).toContain('UNKNOWN and NOT TESTED both keep the headline off OK')
+    expect(legend).toContain('"no answer" — this build asked and nothing came back')
+    expect(legend).toContain('"nothing to report" — ')
+    expect(legend).toContain('"not available here" — ')
     expect(legend).toContain('no URL, host, port, token or key')
   })
 
@@ -892,7 +1074,7 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
     // Nothing is omitted: the rows are still in the text.
     expect(report).toContain('- REDIS_URL: set (required)')
     expect(report).toContain('| SYNC_ITEMS |')
-    expect(report).toContain('- [v] Boot gate recorded: yes')
+    expect(report).toContain('- [INFO] Boot gate recorded: yes')
     // And each section's summary names it with its own verdict, so a collapsed
     // document is still an index.
     for (const id of SECTION_IDS) {
@@ -915,16 +1097,21 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
     }
   })
 
-  it('marks every section row with one of exactly three readings', () => {
+  it('tags every section row with exactly one status, from the closed set', () => {
     const report = buildDiagnosticsReport(input({ sections: sections() }))
     const rows = report.split('\n').filter((line) => /^- \[/.test(line))
+    const tags = ['OK', 'DEGRADED', 'NOT WORKING', 'UNKNOWN', 'NOT TESTED', 'N/A', 'INFO']
 
     expect(rows.length).toBeGreaterThan(20)
     for (const row of rows) {
-      expect(['[v]', '[?]', '[n]']).toContain(row.slice(2, 5))
+      const tag = /^- \[([^\]]+)\] /.exec(row)?.[1]
+      expect({ row, known: tags.includes(tag ?? '') }).toEqual({ row, known: true })
     }
-    expect(rows.some((row) => row.startsWith('- [v] '))).toBe(true)
-    expect(rows.some((row) => row.startsWith('- [?] '))).toBe(true)
+    // Not vacuous in either direction: the fixture really has rows that are fine
+    // and rows that are not.
+    expect(rows.some((row) => row.startsWith('- [OK] '))).toBe(true)
+    expect(rows.some((row) => row.startsWith('- [UNKNOWN] '))).toBe(true)
+    expect(rows.some((row) => row.startsWith('- [NOT WORKING] '))).toBe(true)
   })
 
   it('says a healthy deployment has nothing to act on, rather than printing an empty list', () => {
@@ -932,7 +1119,7 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
       payload: undefined,
       transport: { state: 'READY', operations: ['SYNC_ITEMS'] },
       deploymentMarker: { revision: 'ab3f90'.repeat(6) + 'cdef', version: 'rel-1.2.3' },
-      outcomes: [],
+      checks: readingsFrom({}),
       loadError: null,
       generatedAt: '2026-08-27T12:00:00.000Z',
       sections: {
@@ -944,8 +1131,8 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
       },
     })
 
-    expect(healthy).toContain('## What to fix, in order')
-    expect(healthy).toContain('- Fix first: nothing.')
+    expect(healthy).toContain('## What needs attention')
+    expect(healthy).toContain('- Do first: nothing.')
     expect(healthy).toContain('- Findings needing action: 0')
     expect(healthy).toContain('Nothing needs action.')
   })
@@ -959,8 +1146,9 @@ describe('buildDiagnosticsReport — leading with the answer', () => {
   it('opens with UNKNOWN, never HEALTHY, when no sections were supplied', () => {
     const report = buildDiagnosticsReport(input())
 
-    expect(report).toContain('- Overall: UNKNOWN')
-    expect(report).not.toContain('- Overall: HEALTHY')
+    expect(report).toContain('**UNKNOWN** — ')
+    expect(report).toContain('this is NOT a pass')
+    expect(report).not.toContain('**OK**')
     expect(report).toContain('- Coverage: the five topic sections were not supplied')
     expect(report).toContain('five topic sections were not supplied')
   })
@@ -1005,8 +1193,8 @@ describe('buildDiagnosticsSummary', () => {
 
     expect(summary).toContain('# Standard Red Notes — capability diagnostics')
     expect(summary).toContain('Build: revision unstamped')
-    expect(summary).toContain('## Verdict')
-    expect(summary).toContain('## What to fix, in order')
+    expect(summary).toContain('## Summary')
+    expect(summary).toContain('## What needs attention')
     expect(summary).toContain('### 1. ')
     expect(summary).toContain('## How to read this')
     expect(summary).toContain('This is the SUMMARY only.')
@@ -1064,9 +1252,9 @@ describe('buildDiagnosticsSummary', () => {
     expect(summary).not.toMatch(/redis:\/\//)
     expect(summary).not.toContain('[address withheld]')
     // NOT vacuous: the ranked entries the poisoned fields feed are really here.
-    expect(summary).toContain('## What to fix, in order')
+    expect(summary).toContain('## What needs attention')
     expect(summary).toContain('### 1. ')
     expect(summary).toContain('- Seen in: ')
-    expect(summary).toContain('  - Fix (')
+    expect(summary).toContain('\n- Do (')
   })
 })

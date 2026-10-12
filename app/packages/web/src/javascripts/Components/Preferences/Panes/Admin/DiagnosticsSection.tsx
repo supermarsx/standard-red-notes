@@ -3,20 +3,22 @@ import { FunctionComponent, useCallback, useState } from 'react'
 import { Subtitle, Text } from '@/Components/Preferences/PreferencesComponents/Content'
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
-import { Chip, RemedyBlock } from './diagnosticsPresentation'
-import { CAPABILITY_OUTCOME_CHIP, capabilityOutcomeState } from './syncDiagnostics'
+import { FindingCard, StatusChip } from './diagnosticsPresentation'
 import {
   blockWorstVerdict,
-  describeCensus,
+  BLOCKS_OK,
+  describeVerdictCensus,
   isBlockEmpty,
   readingCensus,
   readingOf,
   READING_MEANING,
   READING_TAG,
   ROW_READINGS,
+  verdictCensus,
   VERDICT_CHIP_LABEL,
+  VERDICT_MEANING,
   VERDICT_SEVERITY,
-  TONE_FOR_VERDICT,
+  VERDICTS,
   type DiagnosticBlock,
   type RowReading,
   type SectionModel,
@@ -34,8 +36,9 @@ import {
  *
  *   - The chip beside a row shows the row's CAPPED verdict, never the one the
  *     builder asked for. A builder that claims "healthy" from a signal that does
- *     not establish it gets "Unknown" on screen and the caveat printed beneath —
- *     the whole reason `diagnosticsSections.ts` derives tone from evidence.
+ *     not establish it gets whatever its evidence earned on screen and the caveat
+ *     printed beneath — the whole reason `diagnosticsSections.ts` derives the
+ *     verdict from evidence.
  *   - A block with nothing in it says so, in words. An empty panel is a question
  *     the operator has to answer themselves, and "the server reported nothing"
  *     and "everything is fine" are the two answers they would guess between.
@@ -43,21 +46,18 @@ import {
  *     replaces (`tone === 'good' ? 'OK' : tone === 'bad' ? 'Down' : 'Note'`)
  *     printed "Note" for a row the panel could not determine, which reads as a
  *     footnote rather than as an admission.
- *   - *** THE THREE SILENCES ARE SEPARABLE BY EYE. *** A row whose value arrived,
- *     a row this build asked about and got nothing for, and a row nothing in the
- *     system publishes are three different facts that the pane models carefully
- *     and used to print as two sentences a reader had to parse. The two silences
- *     now carry a tag of their own and every row carries
- *     `data-diagnostics-reading`, and each block states its own census so "this
- *     block reported twelve facts" is distinguishable at a glance from "this
- *     block reported three facts and nine silences".
+ *   - *** THE SILENCES ARE SEPARABLE BY EYE. *** A row whose value arrived, one
+ *     this build asked about and got nothing for, one a check has not tested yet,
+ *     one with nothing to report and one nothing here can produce are five
+ *     different facts. Each silence carries a tag of its own and every row
+ *     carries `data-diagnostics-reading`.
  *   - *** THE NOISE COLLAPSES AND IS NEVER DROPPED. *** A block is open when it
- *     has something to act on — a finding, or a degraded or broken verdict — and
- *     collapsed otherwise. Collapsed means a closed `<details>`: every row stays
- *     in the DOM, so nothing is unreachable, nothing is deleted, and the
- *     poisoned-sentinel sweep over the rendered text still sees every row it is
- *     asserting about. A renderer that omitted the rows would make that sweep
- *     pass vacuously, which is the second-worst outcome available here.
+ *     has something to act on — a finding, or a verdict that keeps the section
+ *     off OK — and collapsed otherwise. Collapsed means a closed `<details>`:
+ *     every row stays in the DOM, so nothing is unreachable, nothing is deleted,
+ *     and the poisoned-sentinel sweep over the rendered text still sees every row
+ *     it is asserting about. A renderer that omitted the rows would make that
+ *     sweep pass vacuously, which is the second-worst outcome available here.
  *
  * ROWS ARE NEVER REORDERED. Grouping them by reading or by verdict would read
  * better in the abstract and would break the prose: more than fifty row notes in
@@ -66,26 +66,25 @@ import {
  * reader to first. The collapse is therefore at BLOCK granularity, where no note
  * depends on the order.
  *
- * NO ICONS. An `Icon` with a `type` missing from `IconNameToSvgMapping.ts`
- * renders its own name as literal text, and tsc and any `Icon`-mocking spec are
- * both blind to it. This renderer is text-only and `DiagnosticsSection.render.spec.tsx`
- * asserts that it emits no SVG at all, so the hazard cannot enter a section
- * without that assertion failing first.
+ * ICONS come from `StatusChip` and from nowhere else in this file: see
+ * `diagnosticsPresentation.tsx` for why an unmapped icon name cannot compile
+ * there, and `DiagnosticsSection.render.spec.tsx` for the assertion that every
+ * status on a rendered section drew a glyph and none fell back to its own name.
  *
- * NO BUTTONS EITHER, and that is also asserted. The disclosure control is a
- * `<summary>`: a `<button>` in a section would be indistinguishable in that
- * assertion from a control that starts a probe run, and probes are started in
- * exactly one place.
+ * NO BUTTONS, and that is asserted. The disclosure control is a `<summary>`: a
+ * `<button>` in a section would be indistinguishable in that assertion from a
+ * control that starts a check, and checks are started from the pane's header and
+ * the Checks tab only.
  */
 
 /**
  * The tag on a row whose value is a silence rather than a reading.
  *
- * Rendered for the two silences and NOT for `answered`, because the value column
+ * Rendered for the silences and NOT for `answered`, because the value column
  * already carries the answer and a tag reading "answered" beside it is ink with
  * no information in it. The legend under the section title says so explicitly, so
- * the absence of a tag is a documented third state rather than something the
- * reader has to infer.
+ * the absence of a tag is a documented state rather than something the reader has
+ * to infer.
  *
  * It sits inside the NOTE cell, not a cell of its own. That is a deliberate
  * constraint rather than a layout preference: the row's four cells are label,
@@ -112,15 +111,18 @@ const ReadingTag: FunctionComponent<{ reading: RowReading }> = ({ reading }) => 
  * Whether a block is worth opening before the operator asks.
  *
  * A finding is always worth opening: it is the thing this pane exists to raise.
- * Beyond that the test is the block's own worst verdict, ranked on the same
- * `VERDICT_SEVERITY` the sub-tab chips and the report's action list use, so the
- * screen and the report cannot come to disagree about what matters. `undetermined`
- * stays CLOSED and `degraded` opens: that is the one judgement here, and it is
- * the pane's own ranking — undetermined is above healthy because it is worth
- * opening, and below degraded because it is not worth opening first.
+ * Beyond that the test is whether any ROW in the block keeps the section off OK —
+ * read from `BLOCKS_OK`, the same record the headline is derived from, so the
+ * screen cannot fold away the reason its own headline gives. A block that is all
+ * OK, context and not-applicable stays CLOSED.
+ *
+ * Asked of the ROWS, not of `blockWorstVerdict`: a block with no rows at all has
+ * a worst verdict of `undetermined` by the empty-list rule, and takes no part in
+ * its section's status because it contributes no verdict to it. Opening it would
+ * put an empty panel in front of the reader as though it were the reason.
  */
 export function blockOpensByDefault(block: DiagnosticBlock): boolean {
-  return block.findings.length > 0 || VERDICT_SEVERITY[blockWorstVerdict(block)] >= VERDICT_SEVERITY.degraded
+  return block.findings.length > 0 || block.rows.some((row) => BLOCKS_OK[row.verdict])
 }
 
 const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => {
@@ -135,6 +137,7 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
     setOpen(event.currentTarget.open)
   }, [])
   const census = readingCensus(block.rows)
+  const verdicts = verdictCensus(block.rows.map((row) => row.verdict))
 
   return (
     <details
@@ -158,9 +161,11 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
       <summary className="list-item cursor-pointer">
         <span className="inline-flex flex-wrap items-center gap-3">
           <span className="text-sm font-semibold">{block.heading}</span>
-          <Chip tone={TONE_FOR_VERDICT[worst]}>{VERDICT_CHIP_LABEL[worst]}</Chip>
+          <StatusChip verdict={worst} />
           {block.rows.length > 0 && (
-            <span className="text-passive-0 text-xs">{`${block.rows.length} rows: ${describeCensus(census)}`}</span>
+            <span className="text-passive-0 text-xs" data-diagnostics-block-counts="true">
+              {describeVerdictCensus(verdicts)}
+            </span>
           )}
           {block.findings.length > 0 && (
             <span className="text-xs font-semibold">{`${block.findings.length} finding(s)`}</span>
@@ -177,6 +182,16 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
         </div>
       )}
 
+      {block.findings.length > 0 && (
+        <ul className="mt-3 flex flex-col gap-2">
+          {block.findings.map((finding) => (
+            <li key={finding.code}>
+              <FindingCard finding={finding} />
+            </li>
+          ))}
+        </ul>
+      )}
+
       {block.rows.length > 0 && (
         <div className="mt-2 overflow-x-auto">
           <table className="w-full min-w-max text-left text-sm">
@@ -186,16 +201,17 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
                   key={row.label}
                   className="border-border border-t align-top"
                   data-diagnostics-reading={readingOf(row.value)}
+                  data-diagnostics-row-status={row.verdict}
                 >
                   <td className="py-2 pr-4 font-semibold">{row.label}</td>
                   <td className="py-2 pr-4 font-mono">{row.value}</td>
                   <td className="py-2 pr-4">
-                    <Chip tone={row.tone}>{VERDICT_CHIP_LABEL[row.verdict]}</Chip>
+                    <StatusChip verdict={row.verdict} />
                   </td>
-                  <td className="text-passive-0 py-2">
+                  <td className="text-passive-0 max-w-xl py-2 whitespace-normal">
                     <ReadingTag reading={readingOf(row.value)} />
+                    {row.caveat !== undefined && <div className="text-text mb-1">{row.caveat}</div>}
                     {row.note}
-                    {row.caveat !== undefined && <div className="mt-1 italic">{row.caveat}</div>}
                   </td>
                 </tr>
               ))}
@@ -203,70 +219,39 @@ const BlockView: FunctionComponent<{ block: DiagnosticBlock }> = ({ block }) => 
           </table>
         </div>
       )}
-
-      {block.findings.length > 0 && (
-        <ul className="mt-3 flex flex-col gap-2">
-          {block.findings.map((finding) => (
-            <li key={finding.code} className="border-border rounded border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Chip tone={finding.tone}>{VERDICT_CHIP_LABEL[finding.verdict]}</Chip>
-                <span className="text-sm font-semibold">{finding.title}</span>
-              </div>
-              <div className="text-passive-0 mt-1 text-sm">{finding.detail}</div>
-              {finding.caveat !== undefined && (
-                <div className="text-passive-0 mt-1 text-sm italic">{finding.caveat}</div>
-              )}
-              {finding.remedy && <RemedyBlock remedy={finding.remedy} />}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {(block.outcomes ?? []).length > 0 && (
-        <>
-          {/* Read-only ON PURPOSE. One of the probes mints a real server-side
-              ticket for the operator's own session, so the consent paragraph and
-              the button that starts a run live in exactly one place — a warning
-              repeated in five sections is a warning nobody reads. */}
-          <div className="mt-3 text-sm font-semibold">Check results</div>
-          <div className="text-passive-0 text-sm">
-            Results from the last run on the Checks sub-tab, which is also the only place a run can be started.
-          </div>
-          <ul className="mt-2 flex flex-col gap-2">
-            {(block.outcomes ?? []).map((outcome) => (
-              <li key={outcome.name} className="border-border rounded border p-3">
-                <div className="flex items-center gap-2">
-                  <Chip tone={CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].tone}>
-                    {CAPABILITY_OUTCOME_CHIP[capabilityOutcomeState(outcome)].label}
-                  </Chip>
-                  <span className="text-sm font-semibold">{outcome.name}</span>
-                </div>
-                <div className="text-passive-0 mt-1 text-sm">{outcome.detail}</div>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
     </details>
   )
 }
 
 /**
- * The row-reading legend, printed once per section.
+ * The legend, printed once per section.
  *
- * Composed from the same exhaustive `Record`s the tags and the copyable report
- * read, so the screen and the paste cannot describe the three states differently.
- * The `answered` entry is spelled out even though it has no tag, because "a row
- * with no tag carried a value" is exactly the inference a reader should not have
- * to make on their own.
+ * Composed from the same exhaustive `Record`s the chips, the tags and the copyable
+ * report read, so the screen and the paste cannot describe a status differently.
+ * Every status is listed WITH its chip, so the legend is also the one place a
+ * reader can see all seven shapes side by side.
  */
-const ReadingLegend: FunctionComponent = () => (
-  <Text className="mt-1">
-    {`Row readings: a value in the value column means ${READING_MEANING.answered}. `}
-    {`${READING_TAG.unanswered} means ${READING_MEANING.unanswered}. `}
-    {`${READING_TAG.unpublished} means ${READING_MEANING.unpublished}. `}
-    {'Blocks with something to act on are open; the rest are collapsed and nothing is omitted.'}
-  </Text>
+const StatusLegend: FunctionComponent = () => (
+  <details className="mt-1" data-diagnostics-legend="true">
+    <summary className="text-passive-0 cursor-pointer text-xs">What the statuses mean</summary>
+    <ul className="mt-2 flex flex-col gap-1 text-sm">
+      {[...VERDICTS]
+        .sort((left, right) => VERDICT_SEVERITY[right] - VERDICT_SEVERITY[left])
+        .map((verdict) => (
+          <li key={verdict} className="flex flex-wrap items-center gap-2">
+            <StatusChip verdict={verdict} />
+            <span className="text-passive-0">{VERDICT_MEANING[verdict]}</span>
+          </li>
+        ))}
+    </ul>
+    <Text className="mt-2">
+      {`A value in the value column means ${READING_MEANING.answered}. `}
+      {ROW_READINGS.filter((reading) => reading !== 'answered')
+        .map((reading) => `“${READING_TAG[reading]}” means ${READING_MEANING[reading]}`)
+        .join('. ')}
+      {'. Blocks with something to act on are open; the rest are collapsed and nothing is omitted.'}
+    </Text>
+  </details>
 )
 
 const DiagnosticsSection: FunctionComponent<{ model: SectionModel }> = ({ model }) => (
@@ -274,15 +259,20 @@ const DiagnosticsSection: FunctionComponent<{ model: SectionModel }> = ({ model 
     <div data-diagnostics-section={model.id} className="flex flex-col">
       <div className="flex flex-wrap items-center gap-3">
         <Subtitle>{model.title}</Subtitle>
-        <Chip tone={model.worst}>{VERDICT_CHIP_LABEL[model.worstVerdict]}</Chip>
+        <StatusChip verdict={model.worstVerdict} />
+        <span className="text-passive-0 text-xs" data-diagnostics-section-counts="true">
+          {describeVerdictCensus(model.counts)}
+        </span>
       </div>
-      {model.headline !== undefined && <Text className="mt-1">{model.headline.title}</Text>}
+      {model.headline !== undefined && (
+        <Text className="mt-1">{`${VERDICT_CHIP_LABEL[model.headline.verdict]}: ${model.headline.title}`}</Text>
+      )}
       {model.blocks.length === 0 && (
         <Text className="mt-2">
           This section produced no blocks, which means nothing it reads was available. No verdict is claimed.
         </Text>
       )}
-      {model.blocks.length > 0 && <ReadingLegend />}
+      {model.blocks.length > 0 && <StatusLegend />}
       {model.blocks.map((block, index) => (
         <div key={block.heading}>
           {index > 0 && <HorizontalSeparator classes="mt-4" />}
