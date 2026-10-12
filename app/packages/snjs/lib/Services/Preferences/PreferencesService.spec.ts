@@ -57,7 +57,7 @@ async function flushAsyncWork(): Promise<void> {
 function createHarness(
   initialLocal: LocalPreferences,
   initialSynced: Map<PrefKey, unknown>,
-  options: { changeItemGate?: Promise<void> } = {},
+  options: { changeItemGate?: Promise<void>; singletonGate?: Promise<void>; noStoredSingleton?: boolean } = {},
 ) {
   let storedLocal: LocalPreferences = { ...initialLocal }
   const synced = new Map(initialSynced)
@@ -75,8 +75,11 @@ function createHarness(
   let preferences = createPreferences()
 
   const singletons = {
-    findSingleton: jest.fn(() => preferences),
-    findOrCreateContentTypeSingleton: jest.fn(async () => preferences),
+    findSingleton: jest.fn(() => (options.noStoredSingleton ? undefined : preferences)),
+    findOrCreateContentTypeSingleton: jest.fn(async () => {
+      await options.singletonGate
+      return preferences
+    }),
   } as unknown as SingletonManager
 
   const items = {
@@ -124,6 +127,7 @@ function createHarness(
     mutator: mutator as jest.Mocked<MutatorClientInterface>,
     sync: sync as jest.Mocked<SyncService>,
     getStoredLocal: () => storedLocal,
+    emitSyncEvent: (event: SyncEvent) => syncObserver?.(event),
     setSyncedValue: (key: PrefKey, value: unknown) => {
       synced.set(key, value)
       preferences = createPreferences()
@@ -138,6 +142,89 @@ function createHarness(
     },
   }
 }
+
+describe('PreferencesService with no preferences item yet', () => {
+  /**
+   * A signed-out app, a new account, the first sign-in on a device: nothing is in
+   * storage, so the item has to be found or created, and that lookup waits for
+   * the first sync. SyncService delivers the full-sync stage from inside that
+   * sync and releases the callers queued behind it only after every observer
+   * has returned. `singletonGate` is that release.
+   */
+  function createHarnessWaitingForTheFirstSync() {
+    let releaseCallersQueuedBehindTheSync: () => void = () => undefined
+    const singletonGate = new Promise<void>((resolve) => {
+      releaseCallersQueuedBehindTheSync = resolve
+    })
+    const harness = createHarness({}, new Map(), { singletonGate, noStoredSingleton: true })
+
+    return { harness, releaseCallersQueuedBehindTheSync: () => releaseCallersQueuedBehindTheSync() }
+  }
+
+  it('does not make the full-sync stage wait for a reload that is itself waiting for that sync to finish', async () => {
+    const { harness, releaseCallersQueuedBehindTheSync } = createHarnessWaitingForTheFirstSync()
+
+    await harness.service.handleEvent(stageEvent(ApplicationStage.StorageDecrypted_09))
+    await harness.service.handleEvent(stageEvent(ApplicationStage.LoadedDatabase_12))
+    harness.emitSyncEvent(SyncEvent.LocalDataIncrementalLoad)
+    await flushAsyncWork()
+
+    let stageHandled = false
+    const stage = harness.service.handleEvent(stageEvent(ApplicationStage.FullSyncCompleted_13)).then(() => {
+      stageHandled = true
+    })
+    await flushAsyncWork()
+
+    expect(stageHandled).toBe(true)
+
+    releaseCallersQueuedBehindTheSync()
+    await stage
+  })
+
+  it('lets a synced preference be written once that sync has released the reload', async () => {
+    const { harness, releaseCallersQueuedBehindTheSync } = createHarnessWaitingForTheFirstSync()
+
+    await harness.service.handleEvent(stageEvent(ApplicationStage.StorageDecrypted_09))
+    await harness.service.handleEvent(stageEvent(ApplicationStage.LoadedDatabase_12))
+    harness.emitSyncEvent(SyncEvent.LocalDataIncrementalLoad)
+    await flushAsyncWork()
+
+    /** Before the item exists a write has nowhere to go, and is dropped. */
+    await harness.service.setValue(PrefKey.AlwaysShowSuperToolbar, false)
+    expect(harness.mutator.changeItem).not.toHaveBeenCalled()
+
+    await harness.service.handleEvent(stageEvent(ApplicationStage.FullSyncCompleted_13))
+    releaseCallersQueuedBehindTheSync()
+    await flushAsyncWork()
+
+    await harness.service.setValue(PrefKey.AlwaysShowSuperToolbar, false)
+
+    expect(harness.mutator.changeItem).toHaveBeenCalledTimes(1)
+    expect(harness.service.getValue(PrefKey.AlwaysShowSuperToolbar, true)).toBe(false)
+  })
+
+  it('still waits, at the full-sync stage, for a reload that the stage starts itself', async () => {
+    const { harness, releaseCallersQueuedBehindTheSync } = createHarnessWaitingForTheFirstSync()
+
+    await harness.service.handleEvent(stageEvent(ApplicationStage.StorageDecrypted_09))
+    await harness.service.handleEvent(stageEvent(ApplicationStage.LoadedDatabase_12))
+
+    let stageHandled = false
+    const stage = harness.service.handleEvent(stageEvent(ApplicationStage.FullSyncCompleted_13)).then(() => {
+      stageHandled = true
+    })
+    await flushAsyncWork()
+
+    expect(stageHandled).toBe(false)
+
+    releaseCallersQueuedBehindTheSync()
+    await stage
+
+    expect(stageHandled).toBe(true)
+    await harness.service.setValue(PrefKey.AlwaysShowSuperToolbar, false)
+    expect(harness.mutator.changeItem).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('PreferencesService synced appearance', () => {
   it('restores the signed-in user appearance after device-local storage was cleared', async () => {

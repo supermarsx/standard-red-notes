@@ -123,6 +123,26 @@ export class PreferencesService
         this.localPreferences = this.storage.getValue(StorageKey.LocalPreferences) ?? {}
         void this.notifyEvent(PreferencesServiceEvent.LocalPreferencesChanged)
       } else if (stage === ApplicationStage.FullSyncCompleted_13) {
+        /**
+         * This stage is delivered from INSIDE the sync that completed it: the sync
+         * awaits its observers before it releases the callers queued behind it. A
+         * reload that began while the database was still loading, before any sync
+         * had run, is one of those callers whenever no preferences item exists yet
+         * (a signed-out app, a new account, the first sign-in on a device): it is
+         * parked in findOrCreateContentTypeSingleton on exactly that sync. Awaiting
+         * it here waits for the sync that is waiting for this handler. The sync
+         * never finishes, the item is never created, and every synced preference
+         * is silently read-only until an item arrives some other way.
+         *
+         * So a reload already in flight is followed, not awaited. A reload that
+         * starts here cannot be parked like that, because a sync has completed and
+         * the singleton lookup no longer waits for one, so it keeps its ordering.
+         */
+        if (this.reloading && this.reloadPromise) {
+          void this.reloadPromise.then(() => this.reconcileAppearancePreference(true)).catch(console.error)
+          return
+        }
+
         await this.reload()
         await this.reconcileAppearancePreference(true)
       }
