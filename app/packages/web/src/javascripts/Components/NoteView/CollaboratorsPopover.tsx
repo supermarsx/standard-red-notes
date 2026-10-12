@@ -10,6 +10,7 @@ import {
   roleLabel,
   SessionPresentation,
   SessionTone,
+  unknownMemberExplanation,
   unknownPresenceReason,
 } from './collaborators'
 
@@ -128,8 +129,22 @@ const CollaboratorsPopover = forwardRef<HTMLDivElement, Props>(
                       size="list"
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="text-text truncate text-sm leading-4 font-medium" title={collaborator.name}>
+                      <div
+                        className="text-text truncate text-sm leading-4 font-medium"
+                        data-collaborator-name
+                        title={
+                          collaborator.accountId ? unknownMemberExplanation(collaborator.accountId) : collaborator.name
+                        }
+                      >
                         {collaborator.name}
+                        {collaborator.accountId && (
+                          // Enough of the id to tell two such people apart, and to find them among the
+                          // vault's members, where there is no hover to show the whole of it.
+                          <span className="text-passive-1 font-normal" data-collaborator-account>
+                            {' '}
+                            {collaborator.accountId.slice(0, 8)}
+                          </span>
+                        )}
                       </div>
                       <div className="text-passive-1 flex flex-wrap gap-x-1 text-xs leading-4">
                         {status && (

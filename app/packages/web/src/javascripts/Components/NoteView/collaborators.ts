@@ -5,8 +5,10 @@
  * Two sources are merged:
  *
  *  - LIVE PRESENCE (`PresenceRegistry`): a peer is listed only while their
- *    awareness state is live on the relay for this note. It is never derived
- *    from a timestamp of ours.
+ *    awareness state is live on the relay for this note, with what the registry
+ *    saw them do: whether they are typing, whether their editor has focus, and
+ *    when they last did anything. Nobody is ever listed, or called reconnecting,
+ *    because they merely stopped being listed.
  *  - THE VAULT ROSTER: everyone the shared vault is shared with, and what each
  *    of them may do. It says who COULD be here, never who is.
  *
@@ -23,11 +25,20 @@ import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collabor
 /** How many avatars the title bar shows before the rest fold into "+N". */
 export const MAX_BAR_AVATARS = 3
 
-/** A cursor that moved this recently counts as typing. */
-export const TYPING_WINDOW_MS = 3_000
-
-/** A peer whose cursor has not moved for this long is idle. */
+/** A peer who has neither edited nor moved their caret for this long is idle. */
 export const IDLE_AFTER_MS = 2 * 60_000
+
+/**
+ * How often the statuses are re-read against the clock. "Idle" is the only one
+ * that changes with time alone, and it is two minutes away, so this is coarse.
+ */
+export const PRESENCE_CLOCK_TICK_MS = 15_000
+
+/** What a vault member is called when this device has no name for them. */
+export const UNKNOWN_MEMBER_NAME = 'Unknown member'
+
+/** How many broadcast names are remembered for people who have since left. */
+const MAX_REMEMBERED_NAMES = 64
 
 /**
  * The local preference key, pinned as a string rather than read off the
@@ -51,17 +62,21 @@ export function normalizeCollaboratorsCollapsed(raw: unknown): boolean {
 }
 
 export type CollaboratorPresence =
-  /** In the live room, and their cursor moved within TYPING_WINDOW_MS. */
+  /** In the live room, and an edit of theirs landed here within the last few seconds. */
   | 'typing'
   /** In the live room with the editor focused. */
   | 'editing'
   /** In the live room with the editor not focused. */
   | 'viewing'
-  /** In the live room, cursor still for IDLE_AFTER_MS. */
+  /** In the live room, with no edit and no caret move for IDLE_AFTER_MS. */
   | 'idle'
   /** In the live room; this client was told nothing more about them. */
   | 'here'
-  /** Was in the live room when this client's own connection dropped. */
+  /**
+   * Listed, but not to be taken as here: either the registry itself reports this
+   * person as reconnecting, or this client's own connection dropped and the
+   * people it last saw may no longer be there.
+   */
   | 'reconnecting'
   /** Could be in the live room and is not. */
   | 'away'
@@ -73,6 +88,12 @@ export type CollaboratorRole = 'admin' | 'write' | 'read'
 export type Collaborator = {
   key: string
   name: string
+  /**
+   * Set only when `name` is UNKNOWN_MEMBER_NAME: the account id that is all this
+   * device knows about them. It is what the vault members screen shows, so it is
+   * kept within reach for telling two such people apart.
+   */
+  accountId?: string
   /** Their cursor colour. */
   color: string
   initials: string
@@ -81,7 +102,7 @@ export type Collaborator = {
   role?: CollaboratorRole
   /** The signed-in account's own row. */
   isSelf: boolean
-  /** Someone ELSE who is in the live room right now. */
+  /** Someone ELSE whom the registry lists for this note — reconnecting included. */
   isPresent: boolean
   /** Own row only: this account also has the note open in another tab or device. */
   openElsewhere?: boolean
@@ -136,26 +157,38 @@ export function roleFromPermission(permission: unknown): CollaboratorRole | unde
   return permission === 'admin' || permission === 'write' || permission === 'read' ? permission : undefined
 }
 
-type LiveActivity = Extract<CollaboratorPresence, 'typing' | 'editing' | 'viewing' | 'idle' | 'here'>
+type PeerState = Extract<CollaboratorPresence, 'typing' | 'editing' | 'viewing' | 'idle' | 'here' | 'reconnecting'>
 
 /**
- * What a present peer is doing, from the optional activity fields a peer's
- * awareness may carry: `typing`, `focusing` and `lastActiveAt`.
+ * What one listed peer is doing, read off exactly what the registry reports
+ * about them and nothing else:
  *
- * `PresentPeer` does not declare them, so they are read by name and
- * type-checked here; a peer that carries none of them is simply `here`. That is
- * the whole degradation path — no field is ever assumed.
+ *  - `reconnecting` — the registry says this peer is only reconnecting. (It does
+ *    not report that yet; the field is read by name, so it shows the day it does.)
+ *  - `typing` — an edit of theirs landed here in the last few seconds. Only this
+ *    flag means typing: a caret move is activity, but it is not typing.
+ *  - `lastActiveAt` — their last edit or caret move, which is what "idle" is
+ *    measured from. A peer who has done nothing since they were first listed has
+ *    none, so `firstSeenAt` — when the registry first listed them — stands in,
+ *    but only for a peer whose activity is being tracked at all (`typing` is a
+ *    boolean). For one that is not, silence is not idleness.
+ *  - `focusing` — whether their editor has keyboard focus.
+ *
+ * A peer that carries none of it is simply `here`.
  */
-export function peerActivity(peer: PresentPeer, now: number): LiveActivity {
+export function peerActivity(peer: PresentPeer, now: number, firstSeenAt?: number): PeerState {
   const fields = peer as unknown as Record<string, unknown>
-  const lastActiveAt =
-    typeof fields.lastActiveAt === 'number' && Number.isFinite(fields.lastActiveAt) ? fields.lastActiveAt : undefined
-  const sinceActive = lastActiveAt === undefined ? undefined : now - lastActiveAt
-
-  if (fields.typing === true || (sinceActive !== undefined && sinceActive >= 0 && sinceActive < TYPING_WINDOW_MS)) {
+  if (fields.reconnecting === true) {
+    return 'reconnecting'
+  }
+  if (fields.typing === true) {
     return 'typing'
   }
-  if (sinceActive !== undefined && sinceActive >= IDLE_AFTER_MS) {
+
+  const lastActiveAt =
+    typeof fields.lastActiveAt === 'number' && Number.isFinite(fields.lastActiveAt) ? fields.lastActiveAt : undefined
+  const quietSince = lastActiveAt ?? (typeof fields.typing === 'boolean' ? firstSeenAt : undefined)
+  if (quietSince !== undefined && now - quietSince >= IDLE_AFTER_MS) {
     return 'idle'
   }
   if (fields.focusing === true) {
@@ -167,9 +200,66 @@ export function peerActivity(peer: PresentPeer, now: number): LiveActivity {
   return 'here'
 }
 
-/** Whether any peer carries a timestamp, i.e. whether statuses can change with the clock alone. */
+/**
+ * Whether a status can change with the clock alone — that is, whether anybody
+ * listed could become idle without the registry saying anything new.
+ */
 export function presenceNeedsClock(peers: PresentPeer[]): boolean {
-  return peers.some((peer) => typeof (peer as unknown as Record<string, unknown>).lastActiveAt === 'number')
+  return peers.some((peer) => {
+    const fields = peer as unknown as Record<string, unknown>
+    return typeof fields.typing === 'boolean' || typeof fields.lastActiveAt === 'number'
+  })
+}
+
+/**
+ * When the registry first listed each peer that is listed now, by yjs client id.
+ * Returns `previous` itself when nobody arrived or left, so it can be held in
+ * state without causing a render of its own.
+ */
+export function trackFirstSeen(
+  previous: ReadonlyMap<number, number>,
+  peers: PresentPeer[],
+  now: number,
+): ReadonlyMap<number, number> {
+  const unchanged = peers.length === previous.size && peers.every((peer) => previous.has(peer.clientId))
+  if (unchanged) {
+    return previous
+  }
+  return new Map(peers.map((peer) => [peer.clientId, previous.get(peer.clientId) ?? now]))
+}
+
+/**
+ * The name each account last broadcast, kept after they leave. A member who is
+ * not a trusted contact has no other name on this device, so without this their
+ * row would turn from their e-mail into "Unknown member" the moment they left.
+ * Returns `previous` itself when nothing new was learnt.
+ */
+export function rememberBroadcastNames(
+  previous: ReadonlyMap<string, string>,
+  peers: PresentPeer[],
+): ReadonlyMap<string, string> {
+  const learnt = new Map<string, string>()
+  for (const peer of peers) {
+    if (peer.userUuid !== undefined && peer.name !== '' && previous.get(peer.userUuid) !== peer.name) {
+      learnt.set(peer.userUuid, peer.name)
+    }
+  }
+  if (learnt.size === 0) {
+    return previous
+  }
+  const next = new Map(previous)
+  for (const [userUuid, name] of learnt) {
+    // Re-inserted, so the names seen most recently are the ones kept at the cap.
+    next.delete(userUuid)
+    next.set(userUuid, name)
+  }
+  for (const oldest of next.keys()) {
+    if (next.size <= MAX_REMEMBERED_NAMES) {
+      break
+    }
+    next.delete(oldest)
+  }
+  return next
 }
 
 const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i
@@ -187,8 +277,8 @@ function cursorColor(broadcast: string | undefined, stableId: string): string {
  * Whether the peers in the registry can be taken at their word. They can while
  * this client is in the room — including a newcomer still waiting for a peer's
  * copy, whose awareness is already live. Once a room that WAS live drops, the
- * registry may keep the last peers for a while, and they are then shown as
- * reconnecting instead of as present.
+ * registry may keep the last peers for a while, and every one of them is then
+ * shown as reconnecting instead of as present: it is this client that lost them.
  */
 function peersAreLive(state: CollaborationRoomState | undefined): boolean {
   if (!state || state.status.kind === 'active') {
@@ -205,6 +295,10 @@ type BuildInput = {
   selfEmail?: string
   state: CollaborationRoomState | undefined
   now: number
+  /** From `trackFirstSeen`. Without it nobody becomes idle before their first move. */
+  firstSeenAt?: ReadonlyMap<number, number>
+  /** From `rememberBroadcastNames`. */
+  rememberedNames?: ReadonlyMap<string, string>
 }
 
 /**
@@ -212,14 +306,24 @@ type BuildInput = {
  * the vault members who are not, then the signed-in account itself.
  *
  * A person with the note open in two tabs is one row, showing the most active
- * of the two. The signed-in account's own other tabs and devices are never
- * counted as a collaborator; they are reported on its own row instead.
+ * of the two — so one tab reconnecting does not make the person reconnecting
+ * while the other is live. The signed-in account's own other tabs and devices
+ * are never counted as a collaborator; they are reported on its own row instead.
  */
-export function buildCollaborators({ peers, members, selfUuid, selfEmail, state, now }: BuildInput): Collaborator[] {
+export function buildCollaborators({
+  peers,
+  members,
+  selfUuid,
+  selfEmail,
+  state,
+  now,
+  firstSeenAt,
+  rememberedNames,
+}: BuildInput): Collaborator[] {
   const live = peersAreLive(state)
   const roster = new Map(members.map((member) => [member.userUuid, member]))
 
-  const present = new Map<string, { peer: PresentPeer; activity: LiveActivity }>()
+  const present = new Map<string, { peer: PresentPeer; activity: PeerState }>()
   let openElsewhere = false
   for (const peer of peers) {
     if (selfUuid !== undefined && peer.userUuid === selfUuid) {
@@ -227,7 +331,7 @@ export function buildCollaborators({ peers, members, selfUuid, selfEmail, state,
       continue
     }
     const key = peer.userUuid ?? `client:${peer.clientId}`
-    const activity = peerActivity(peer, now)
+    const activity = peerActivity(peer, now, firstSeenAt?.get(peer.clientId))
     const existing = present.get(key)
     if (!existing || PRESENCE_ORDER.indexOf(activity) < PRESENCE_ORDER.indexOf(existing.activity)) {
       present.set(key, { peer: existing?.peer ?? peer, activity })
@@ -255,13 +359,15 @@ export function buildCollaborators({ peers, members, selfUuid, selfEmail, state,
     if (member.userUuid === selfUuid || present.has(member.userUuid)) {
       continue
     }
-    // As elsewhere in the app, a member who is not a trusted contact is known only by account id.
-    const name = member.contactName || member.userUuid
+    // The vault knows a member only by account id. A name comes from a trusted contact, or from
+    // what the person broadcast while they were here; failing both, they are not given one.
+    const name = member.contactName || rememberedNames?.get(member.userUuid)
     others.push({
       key: member.userUuid,
-      name,
+      name: name ?? UNKNOWN_MEMBER_NAME,
+      ...(name === undefined ? { accountId: member.userUuid } : {}),
       color: collaboratorColor(member.userUuid),
-      initials: collaboratorInitials(name),
+      initials: name === undefined ? '?' : collaboratorInitials(name),
       presence: roomIsLive && member.role !== 'read' ? 'away' : 'unknown',
       ...(member.role ? { role: member.role } : {}),
       isSelf: false,
@@ -270,11 +376,11 @@ export function buildCollaborators({ peers, members, selfUuid, selfEmail, state,
   }
 
   // Within a status, people with a name come before those known only by account id.
-  const idOnly = (collaborator: Collaborator): number => (collaborator.name === collaborator.key ? 1 : 0)
+  const unnamed = (collaborator: Collaborator): number => (collaborator.accountId === undefined ? 0 : 1)
   others.sort(
     (a, b) =>
       PRESENCE_ORDER.indexOf(a.presence) - PRESENCE_ORDER.indexOf(b.presence) ||
-      idOnly(a) - idOnly(b) ||
+      unnamed(a) - unnamed(b) ||
       a.name.localeCompare(b.name) ||
       a.key.localeCompare(b.key),
   )
@@ -295,6 +401,14 @@ export function buildCollaborators({ peers, members, selfUuid, selfEmail, state,
   }
 
   return others
+}
+
+/**
+ * What there is to say about a member this device cannot name, in the words the
+ * vault members screen uses for the same person ("Not in your contacts").
+ */
+export function unknownMemberExplanation(accountId: string): string {
+  return `Not in your contacts, so this device has no name for them. Account ${accountId}.`
 }
 
 /** Why a status reads "Unknown", for the one row where that needs saying. */
@@ -462,12 +576,27 @@ const MAX_NAMES_IN_LABEL = 3
 export function describeAttendance(collaborators: Collaborator[], roomIsLive: boolean): string {
   const others = collaborators.filter((collaborator) => !collaborator.isSelf)
   const present = others.filter((collaborator) => collaborator.isPresent)
+  const here = present.filter((collaborator) => collaborator.presence !== 'reconnecting')
+  const reconnecting = present.filter((collaborator) => collaborator.presence === 'reconnecting')
+
+  const counted = (people: Collaborator[], what: string): string => {
+    const named = people.slice(0, MAX_NAMES_IN_LABEL).map((collaborator) => collaborator.name)
+    const more = people.length - named.length
+    const names = more > 0 ? `${named.join(', ')} and ${more} more` : named.join(', ')
+    return `${people.length} ${what}: ${names}.`
+  }
 
   if (present.length > 0) {
-    const named = present.slice(0, MAX_NAMES_IN_LABEL).map((collaborator) => collaborator.name)
-    const unnamed = present.length - named.length
-    const names = unnamed > 0 ? `${named.join(', ')} and ${unnamed} more` : named.join(', ')
-    return `${present.length} ${present.length === 1 ? 'collaborator' : 'collaborators'} here now: ${names}.`
+    const sentences: string[] = []
+    if (here.length > 0) {
+      sentences.push(counted(here, `${here.length === 1 ? 'collaborator' : 'collaborators'} here now`))
+    }
+    if (reconnecting.length > 0) {
+      // After "N here now" the noun is understood; standing alone, the sentence has to carry it.
+      const who = here.length > 0 ? '' : reconnecting.length === 1 ? 'collaborator ' : 'collaborators '
+      sentences.push(counted(reconnecting, `${who}reconnecting`))
+    }
+    return sentences.join(' ')
   }
 
   const access =

@@ -29,7 +29,7 @@ import { createRoot, Root } from 'react-dom/client'
  */
 jest.mock('../Popover/Popover', () => ({
   __esModule: true,
-  default: ({ open, children }: { open: boolean; children: ReactNode }) => {
+  default: ({ open, className, children }: { open: boolean; className?: string; children: ReactNode }) => {
     const [isMounted, setIsMounted] = useState(open)
     useEffect(() => {
       if (open) {
@@ -40,7 +40,11 @@ jest.mock('../Popover/Popover', () => ({
       return () => clearTimeout(exit)
     }, [open])
     return open || isMounted
-      ? createElement('div', { 'data-testid': 'collaboration-popover', 'data-open': String(open) }, children)
+      ? createElement(
+          'div',
+          { 'data-testid': 'collaboration-popover', 'data-open': String(open), 'data-surface-class': className },
+          children,
+        )
       : null
   },
 }))
@@ -100,7 +104,7 @@ import CollaborationStatusIndicator, {
 } from './CollaborationStatusIndicator'
 import { CollaboratorAvatarStack } from './CollaboratorAvatars'
 import CollaboratorsPopover from './CollaboratorsPopover'
-import { Collaborator, describeSession } from './collaborators'
+import { Collaborator, describeSession, IDLE_AFTER_MS, PRESENCE_CLOCK_TICK_MS } from './collaborators'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -127,6 +131,8 @@ const fadingPopup = (): HTMLElement | null =>
   container.querySelector<HTMLElement>('[data-open="false"] [role="dialog"]')
 const rows = (): HTMLElement[] => Array.from(popup()?.querySelectorAll<HTMLElement>('ul > li') ?? [])
 const row = (key: string): HTMLElement | undefined => rows().find((li) => li.dataset.collaborator === key)
+const nameOf = (key: string): string | null | undefined =>
+  row(key)?.querySelector('[data-collaborator-name]')?.textContent
 const statusOf = (key: string): string | null | undefined =>
   row(key)?.querySelector('[data-collaborator-status]')?.textContent
 const roleOf = (key: string): string | null | undefined =>
@@ -561,18 +567,152 @@ describe('the collaborators beside the status', () => {
     }
   })
 
-  it('dims collaborators left over from a room that dropped, instead of showing them as present', async () => {
+  it('keeps collaborators left over from a room that dropped in place, drained of colour and counted apart', async () => {
     await render()
     await setPeers(peers(2))
-    expect(chip()?.querySelector('[data-collaborator-avatars]')?.className).not.toContain('opacity-60')
+    expect(avatars().map((avatar) => avatar.hasAttribute('data-collaborator-reconnecting'))).toEqual([false, false])
+    expect(avatars().map((avatar) => avatar.className.includes('grayscale'))).toEqual([false, false])
 
     await act(async () => {
       CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing' })
     })
 
-    expect(chip()?.querySelector('[data-collaborator-avatars]')?.className).toContain('opacity-60')
+    // Still two avatars, in the same places: a drop and a rejoin is routine, and
+    // a cluster that emptied and refilled each time would be noise.
+    expect(avatars().map((avatar) => avatar.dataset.collaboratorAvatar)).toEqual(['peer-1', 'peer-2'])
+    expect(avatars().map((avatar) => avatar.hasAttribute('data-collaborator-reconnecting'))).toEqual([true, true])
+    expect(avatars().map((avatar) => avatar.className.includes('grayscale'))).toEqual([true, true])
+    // Drained, never translucent: the discs overlap, and a see-through one shows its neighbour.
+    expect(avatars().some((avatar) => /opacity-/.test(avatar.className))).toBe(false)
+    expect(label()).toBe(
+      'Reconnecting encrypted collaboration. Your edits are still being saved. ' +
+        '2 collaborators reconnecting: Person 1, Person 2.',
+    )
+
     await click(chip())
     expect(statusOf('peer-1')).toBe('Reconnecting')
+    expect(statusOf('peer-2')).toBe('Reconnecting')
+
+    await act(async () => {
+      CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
+    })
+    expect(avatars().map((avatar) => avatar.hasAttribute('data-collaborator-reconnecting'))).toEqual([false, false])
+    expect(statusOf('peer-1')).toBe('In this note')
+  })
+})
+
+describe('what each collaborator is doing, as the registry reports it', () => {
+  const person = (clientId: number, fields: Partial<PresentPeer> = {}): PresentPeer => ({
+    clientId,
+    userUuid: `peer-${clientId}`,
+    name: `Person ${clientId}`,
+    color: '#2563eb',
+    ...fields,
+  })
+  const typingDots = (): Array<string | undefined> =>
+    avatars()
+      .filter((avatar) => avatar.querySelector('[data-collaborator-typing]') !== null)
+      .map((avatar) => avatar.dataset.collaboratorAvatar)
+
+  beforeEach(() => {
+    CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
+  })
+
+  it('says who is typing, on their avatar and in words, and stops when the registry says they stopped', async () => {
+    await render()
+    await setPeers([person(1, { typing: true, focusing: true }), person(2, { typing: false, focusing: true })])
+    await click(chip())
+
+    expect(typingDots()).toEqual(['peer-1'])
+    expect(statusOf('peer-1')).toBe('Typing')
+    expect(row('peer-1')?.querySelector('[data-collaborator-typing]')).toBeInstanceOf(Element)
+    expect(statusOf('peer-2')).toBe('Editing')
+    expect(row('peer-2')?.querySelector('[data-collaborator-typing]')).toBeNull()
+
+    // The registry re-emits when a peer stops typing; nothing here waits on a clock for it.
+    await setPeers([person(1, { typing: false, focusing: true }), person(2, { typing: false, focusing: true })])
+
+    expect(typingDots()).toEqual([])
+    expect(statusOf('peer-1')).toBe('Editing')
+  })
+
+  it('does not call a caret move typing', async () => {
+    await render()
+    await setPeers([person(1, { typing: false, focusing: true, lastActiveAt: Date.now() })])
+    await click(chip())
+
+    expect(typingDots()).toEqual([])
+    expect(statusOf('peer-1')).toBe('Editing')
+  })
+
+  it('tells someone with the editor focused from someone only looking', async () => {
+    await render()
+    await setPeers([person(1, { typing: false, focusing: true }), person(2, { typing: false, focusing: false })])
+    await click(chip())
+
+    expect(statusOf('peer-1')).toBe('Editing')
+    expect(statusOf('peer-2')).toBe('Viewing')
+  })
+
+  it('calls someone idle once they have done nothing for the idle period, and not before', async () => {
+    await render()
+    await setPeers([person(1, { typing: false, focusing: true })])
+    await click(chip())
+    expect(statusOf('peer-1')).toBe('Editing')
+
+    // They opened the note and walked away: the registry reports nothing new, ever.
+    await advance(IDLE_AFTER_MS - PRESENCE_CLOCK_TICK_MS)
+    expect(statusOf('peer-1')).toBe('Editing')
+
+    await advance(PRESENCE_CLOCK_TICK_MS * 2)
+    expect(statusOf('peer-1')).toBe('Idle')
+
+    // They come back and move the caret.
+    await setPeers([person(1, { typing: false, focusing: true, lastActiveAt: Date.now() })])
+    expect(statusOf('peer-1')).toBe('Editing')
+  })
+
+  it('runs its clock only while somebody listed could turn idle, and only one', async () => {
+    const started = jest.spyOn(globalThis, 'setInterval')
+    const stopped = jest.spyOn(globalThis, 'clearInterval')
+    try {
+      await render()
+      // An older shape of peer: present, with nothing reported about activity.
+      await setPeers([person(1)])
+      expect(started).not.toHaveBeenCalled()
+
+      await setPeers([person(1, { typing: false })])
+      expect(started).toHaveBeenCalledTimes(1)
+      expect(started).toHaveBeenLastCalledWith(expect.any(Function), PRESENCE_CLOCK_TICK_MS)
+
+      // The registry re-emits on every caret move; that must not restart the clock each time.
+      await setPeers([person(1, { typing: true, lastActiveAt: Date.now() })])
+      await setPeers([person(1, { typing: false, lastActiveAt: Date.now() }), person(2, { typing: false })])
+      expect(started).toHaveBeenCalledTimes(1)
+      expect(stopped).not.toHaveBeenCalled()
+
+      await setPeers([])
+      expect(stopped).toHaveBeenCalledTimes(1)
+      expect(started).toHaveBeenCalledTimes(1)
+    } finally {
+      started.mockRestore()
+      stopped.mockRestore()
+    }
+  })
+
+  it('keeps calling a person by what they broadcast after they leave, instead of losing their name', async () => {
+    shareTheNote()
+    await render()
+    await setPeers([person(2, { name: 'grace@example.com' })])
+    await click(chip())
+    expect(nameOf('peer-2')).toBe('grace@example.com')
+    expect(statusOf('peer-2')).toBe('In this note')
+
+    await setPeers([])
+
+    expect(nameOf('peer-2')).toBe('grace@example.com')
+    expect(statusOf('peer-2')).toBe('Not in this note')
+    expect(row('peer-2')?.querySelector('[data-collaborator-account]')).toBeNull()
   })
 })
 
@@ -688,7 +828,7 @@ describe('the popup', () => {
     expect(rows().map((li) => li.dataset.collaborator)).toEqual(['peer-2', 'peer-1', 'reader', 'self-uuid'])
 
     // In the room: named by what they broadcast, since they are not a trusted contact.
-    expect(row('peer-2')?.querySelector('[title]')?.textContent).toBe('grace@example.com')
+    expect(nameOf('peer-2')).toBe('grace@example.com')
     expect(statusOf('peer-2')).toBe('In this note')
     expect(roleOf('peer-2')).toBe('Can edit')
     expect(row('peer-2')?.querySelector<HTMLElement>('[data-collaborator-avatar]')?.style.backgroundColor).toBe(
@@ -697,7 +837,7 @@ describe('the popup', () => {
     expect(row('peer-2')?.querySelector('[data-collaborator-avatar]')?.textContent).toBe('GE')
 
     // Not in the room: named by trusted contact, and knowably absent because this client is in it.
-    expect(row('peer-1')?.querySelector('[title]')?.textContent).toBe('Ada Lovelace')
+    expect(nameOf('peer-1')).toBe('Ada Lovelace')
     expect(statusOf('peer-1')).toBe('Not in this note')
     expect(roleOf('peer-1')).toBe('Can edit')
 
@@ -709,9 +849,46 @@ describe('the popup', () => {
     expect(roleOf('reader')).toBe('Read-only')
 
     // The signed-in account, last, with its own role and no presence claim.
-    expect(row('self-uuid')?.querySelector('[title]')?.textContent).toBe('You')
+    expect(nameOf('self-uuid')).toBe('You')
     expect(roleOf('self-uuid')).toBe('Admin')
     expect(row('self-uuid')?.querySelector('[data-collaborator-status]')).toBeNull()
+  })
+
+  it('does not print an account id as the name of a member this device cannot name', async () => {
+    const accountId = 'ab22360b-9a14-4480-af48-f0309e3dbc3d'
+    mockApplication.vaultUsers.getSharedVaultUsersFromServer.mockResolvedValue([
+      { user_uuid: 'self-uuid', permission: 'admin' },
+      { user_uuid: accountId, permission: 'write' },
+    ])
+    await render()
+    await click(chip())
+
+    const name = row(accountId)?.querySelector('[data-collaborator-name]')
+    expect(name?.firstChild?.textContent).toBe('Unknown member')
+    // Enough of the id to tell two such members apart without a hover, the whole of it on hover,
+    // and the vault members screen's own words for why there is no name.
+    expect(name?.querySelector('[data-collaborator-account]')?.textContent?.trim()).toBe('ab22360b')
+    expect(name?.getAttribute('title')).toBe(
+      `Not in your contacts, so this device has no name for them. Account ${accountId}.`,
+    )
+    expect(name?.textContent).not.toContain(accountId)
+    expect(row(accountId)?.querySelector('[data-collaborator-avatar]')?.textContent).toBe('?')
+    expect(label()).not.toContain(accountId)
+
+    // A member the device CAN name has neither the placeholder nor an id beside the name.
+    expect(nameOf('self-uuid')).toBe('You')
+    expect(row('self-uuid')?.querySelector('[data-collaborator-account]')).toBeNull()
+  })
+
+  it('has a surface of its own, which does not depend on a blur of what is behind it', async () => {
+    await render()
+    await click(chip())
+
+    // jsdom paints nothing, so this is only the request: an opaque background from `md` up, where
+    // Popover would otherwise be translucent, and no backdrop filter. What a browser makes of
+    // it is measured in the built app.
+    const surface = container.querySelector('[data-testid="collaboration-popover"]')?.getAttribute('data-surface-class')
+    expect(surface?.split(' ')).toEqual(expect.arrayContaining(['md:!bg-default', '![backdrop-filter:none]']))
   })
 
   it('puts the session above the list, so there is one place to look', async () => {
@@ -912,9 +1089,7 @@ describe('by keyboard', () => {
   })
 })
 
-describe('the typing cue', () => {
-  // PresenceRegistry does not carry activity yet, so this is rendered from the
-  // finished data the indicator would hand over once it does.
+describe('drawn from finished data', () => {
   const person = (key: string, presence: Collaborator['presence']): Collaborator => ({
     key,
     name: key,
@@ -925,13 +1100,29 @@ describe('the typing cue', () => {
     isPresent: true,
   })
 
-  it('marks only the avatar of whoever is typing, in the title bar', async () => {
+  const renderPopup = async (collaborators: Collaborator[]): Promise<void> => {
     await act(async () => {
       root.render(
-        createElement(CollaboratorAvatarStack, {
-          present: [person('ada', 'typing'), person('grace', 'editing')],
-          dimmed: false,
-        }),
+        createElement(
+          'div',
+          { 'data-open': 'true' },
+          createElement(CollaboratorsPopover, {
+            id: 'popup',
+            session: describeSession({ status: { kind: 'active' }, hasBeenActive: true }, 'quiet'),
+            attendance: '',
+            collaborators,
+            collapsed: false,
+            onLeave: () => undefined,
+          }),
+        ),
+      )
+    })
+  }
+
+  it('gates only the pulse of the typing dot on motion, never the dot', async () => {
+    await act(async () => {
+      root.render(
+        createElement(CollaboratorAvatarStack, { present: [person('ada', 'typing'), person('grace', 'editing')] }),
       )
     })
 
@@ -943,23 +1134,41 @@ describe('the typing cue', () => {
     expect(ada.querySelector('[data-collaborator-typing]')?.className).not.toMatch(/(^|\s)animate-pulse/)
   })
 
-  it('marks the same person in the popup and says so in words', async () => {
+  // The registry does not yet report a collaborator whose own connection dropped, so
+  // that one state is drawn here from the data the control would be handed.
+  it('drains only the avatar of a collaborator who is reconnecting, among others who are here', async () => {
     await act(async () => {
       root.render(
-        createElement(
-          'div',
-          { 'data-open': 'true' },
-          createElement(CollaboratorsPopover, {
-            id: 'popup',
-            session: describeSession({ status: { kind: 'active' }, hasBeenActive: true }, 'quiet'),
-            attendance: '',
-            collaborators: [person('ada', 'typing'), person('grace', 'viewing')],
-            collapsed: false,
-            onLeave: () => undefined,
-          }),
-        ),
+        createElement(CollaboratorAvatarStack, {
+          present: [person('ada', 'editing'), person('grace', 'reconnecting'), person('edsger', 'viewing')],
+        }),
       )
     })
+
+    const drained = Array.from(container.querySelectorAll<HTMLElement>('[data-collaborator-avatar]')).map((avatar) => [
+      avatar.dataset.collaboratorAvatar,
+      avatar.hasAttribute('data-collaborator-reconnecting'),
+      avatar.className.includes('grayscale'),
+    ])
+    expect(drained).toEqual([
+      ['ada', false, false],
+      ['grace', true, true],
+      ['edsger', false, false],
+    ])
+  })
+
+  it('says "Reconnecting" on that person\'s row, and drains their avatar there too', async () => {
+    await renderPopup([person('ada', 'editing'), person('grace', 'reconnecting')])
+
+    expect(statusOf('grace')).toBe('Reconnecting')
+    expect(row('grace')?.dataset.presence).toBe('reconnecting')
+    expect(row('grace')?.querySelector('[data-collaborator-avatar]')?.className).toContain('grayscale')
+    expect(statusOf('ada')).toBe('Editing')
+    expect(row('ada')?.querySelector('[data-collaborator-avatar]')?.className).not.toContain('grayscale')
+  })
+
+  it('marks whoever is typing on their row and says so in words', async () => {
+    await renderPopup([person('ada', 'typing'), person('grace', 'viewing')])
 
     expect(row('ada')?.querySelector('[data-collaborator-typing]')).toBeInstanceOf(Element)
     expect(statusOf('ada')).toBe('Typing')

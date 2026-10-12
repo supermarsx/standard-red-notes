@@ -17,20 +17,29 @@ type AvatarProps = {
 /**
  * One collaborator as a disc of initials in their own cursor colour.
  *
+ * Someone who is only reconnecting keeps their place but loses their colour: a
+ * collaborator's connection dropping and coming back is routine, and a disc that
+ * vanished and reappeared each time would be noise about the transport. It is
+ * drained with a filter rather than made translucent, because the discs in the
+ * title bar overlap and a translucent one shows its neighbour through itself.
+ *
  * Always decorative: the name is carried by whatever the avatar sits in (the
  * trigger's accessible name, or the row's text), so a screen reader is never
  * handed bare initials.
  */
 export const CollaboratorAvatar: FunctionComponent<AvatarProps> = ({ collaborator, size, className, style }) => {
+  const reconnecting = collaborator.presence === 'reconnecting'
   return (
     <span
       aria-hidden
       className={classNames(
         'relative flex flex-shrink-0 items-center justify-center rounded-full font-bold text-white select-none',
         size === 'bar' ? 'h-5 w-5 text-[0.65rem]' : 'h-6 w-6 text-[0.6rem]',
+        reconnecting && 'grayscale',
         className,
       )}
       data-collaborator-avatar={collaborator.key}
+      data-collaborator-reconnecting={reconnecting ? '' : undefined}
       style={{ backgroundColor: collaborator.color, ...style }}
     >
       {size === 'bar' ? Array.from(collaborator.initials)[0] : collaborator.initials}
@@ -46,10 +55,8 @@ export const CollaboratorAvatar: FunctionComponent<AvatarProps> = ({ collaborato
 }
 
 type StackProps = {
-  /** The collaborators who are in the note right now, most active first. */
+  /** The collaborators the registry lists for this note, most active first. */
   present: Collaborator[]
-  /** A dropped connection: these were here a moment ago and may not be now. */
-  dimmed: boolean
 }
 
 /**
@@ -60,16 +67,12 @@ type StackProps = {
  * The trigger renders it only at `md` and up, and only while not collapsed;
  * otherwise it shows the count instead.
  */
-export const CollaboratorAvatarStack: FunctionComponent<StackProps> = ({ present, dimmed }) => {
+export const CollaboratorAvatarStack: FunctionComponent<StackProps> = ({ present }) => {
   const shown = present.slice(0, MAX_BAR_AVATARS)
   const overflow = present.length - shown.length
 
   return (
-    <span
-      aria-hidden
-      className={classNames('isolate ml-1 flex items-center -space-x-1', dimmed && 'opacity-60')}
-      data-collaborator-avatars
-    >
+    <span aria-hidden className="isolate ml-1 flex items-center -space-x-1" data-collaborator-avatars>
       {shown.map((collaborator, index) => (
         <CollaboratorAvatar
           className="ring-default ring-2"

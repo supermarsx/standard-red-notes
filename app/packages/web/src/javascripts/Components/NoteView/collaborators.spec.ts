@@ -16,11 +16,14 @@ import {
   peerActivity,
   presenceLabel,
   presenceNeedsClock,
+  rememberBroadcastNames,
   roleFromPermission,
   roleLabel,
   RosterMember,
   sessionSpeaksForItself,
-  TYPING_WINDOW_MS,
+  trackFirstSeen,
+  UNKNOWN_MEMBER_NAME,
+  unknownMemberExplanation,
   unknownPresenceReason,
 } from './collaborators'
 
@@ -62,36 +65,125 @@ describe('the collapsed preference', () => {
   })
 })
 
-describe('what a present peer is doing', () => {
-  it('is simply "here" when the peer carries no activity fields at all', () => {
+describe('what a listed peer is doing', () => {
+  it('is simply "here" when the registry reports nothing about their activity', () => {
     expect(peerActivity(peer(1), NOW)).toBe('here')
     expect(presenceNeedsClock([peer(1)])).toBe(false)
   })
 
   it('reads focus as editing or viewing', () => {
-    expect(peerActivity(peer(1, { focusing: true }), NOW)).toBe('editing')
-    expect(peerActivity(peer(1, { focusing: false }), NOW)).toBe('viewing')
+    expect(peerActivity(peer(1, { typing: false, focusing: true }), NOW)).toBe('editing')
+    expect(peerActivity(peer(1, { typing: false, focusing: false }), NOW)).toBe('viewing')
   })
 
-  it('reads an explicit typing flag, which outranks focus', () => {
+  it('reads the typing flag, which outranks focus', () => {
     expect(peerActivity(peer(1, { typing: true, focusing: false }), NOW)).toBe('typing')
     expect(peerActivity(peer(1, { typing: false, focusing: true }), NOW)).toBe('editing')
   })
 
-  it('derives typing and idle from a last-active timestamp', () => {
-    expect(peerActivity(peer(1, { lastActiveAt: NOW - 1 }), NOW)).toBe('typing')
-    expect(peerActivity(peer(1, { lastActiveAt: NOW - TYPING_WINDOW_MS + 1 }), NOW)).toBe('typing')
-    expect(peerActivity(peer(1, { lastActiveAt: NOW - TYPING_WINDOW_MS, focusing: true }), NOW)).toBe('editing')
-    expect(peerActivity(peer(1, { lastActiveAt: NOW - IDLE_AFTER_MS + 1, focusing: false }), NOW)).toBe('viewing')
-    expect(peerActivity(peer(1, { lastActiveAt: NOW - IDLE_AFTER_MS, focusing: true }), NOW)).toBe('idle')
-    expect(presenceNeedsClock([peer(1), peer(2, { lastActiveAt: NOW })])).toBe(true)
+  it('does not call a caret move typing, however recent', () => {
+    // `lastActiveAt` covers caret and selection moves too. Only the flag means typing.
+    expect(peerActivity(peer(1, { typing: false, focusing: true, lastActiveAt: NOW }), NOW)).toBe('editing')
+    expect(peerActivity(peer(1, { focusing: false, lastActiveAt: NOW - 1 }), NOW)).toBe('viewing')
+  })
+
+  it('calls someone idle once they have neither edited nor moved for the idle period', () => {
+    const quiet = (ago: number, more: Record<string, unknown> = {}) =>
+      peerActivity(peer(1, { typing: false, focusing: true, lastActiveAt: NOW - ago, ...more }), NOW)
+
+    expect(quiet(IDLE_AFTER_MS - 1)).toBe('editing')
+    expect(quiet(IDLE_AFTER_MS)).toBe('idle')
+    expect(quiet(IDLE_AFTER_MS * 10, { focusing: false })).toBe('idle')
+    // Typing is the registry seeing an edit now; it is not overruled by an old timestamp.
+    expect(quiet(IDLE_AFTER_MS * 10, { typing: true })).toBe('typing')
+  })
+
+  it('measures idle from when a peer was first listed, until they do something', () => {
+    // The registry gives no timestamp to a peer who has done nothing since they arrived —
+    // the person who opens the note and walks away, who is exactly who "idle" is for.
+    const tracked = peer(1, { typing: false, focusing: true })
+
+    expect(peerActivity(tracked, NOW)).toBe('editing')
+    expect(peerActivity(tracked, NOW, NOW - IDLE_AFTER_MS + 1)).toBe('editing')
+    expect(peerActivity(tracked, NOW, NOW - IDLE_AFTER_MS)).toBe('idle')
+    // Once they act, that is what counts, not when they arrived.
+    expect(peerActivity({ ...tracked, lastActiveAt: NOW - 5 } as PresentPeer, NOW, NOW - IDLE_AFTER_MS * 3)).toBe(
+      'editing',
+    )
+  })
+
+  it('does not take silence for idleness from a peer whose activity is not tracked at all', () => {
+    expect(peerActivity(peer(1, { focusing: true }), NOW, NOW - IDLE_AFTER_MS * 3)).toBe('editing')
+    expect(peerActivity(peer(1), NOW, NOW - IDLE_AFTER_MS * 3)).toBe('here')
+  })
+
+  it('reports a peer the registry says is reconnecting as that, whatever else it carries', () => {
+    expect(peerActivity(peer(1, { reconnecting: true, typing: true, focusing: true }), NOW)).toBe('reconnecting')
+    expect(peerActivity(peer(1, { reconnecting: false, typing: false, focusing: true }), NOW)).toBe('editing')
+    expect(peerActivity(peer(1, { reconnecting: 'yes', focusing: true }), NOW)).toBe('editing')
   })
 
   it('ignores fields of the wrong type instead of guessing from them', () => {
-    expect(peerActivity(peer(1, { typing: 'yes', focusing: 'true', lastActiveAt: `${NOW}` }), NOW)).toBe('here')
+    expect(
+      peerActivity(peer(1, { typing: 'yes', focusing: 'true', lastActiveAt: `${NOW - IDLE_AFTER_MS}` }), NOW),
+    ).toBe('here')
     expect(peerActivity(peer(1, { lastActiveAt: Number.NaN }), NOW)).toBe('here')
-    // A timestamp from a clock ahead of ours is not "typing".
-    expect(peerActivity(peer(1, { lastActiveAt: NOW + 60_000 }), NOW)).toBe('here')
+    // A timestamp ahead of this clock is not idle either.
+    expect(peerActivity(peer(1, { typing: false, lastActiveAt: NOW + IDLE_AFTER_MS * 3 }), NOW)).toBe('here')
+  })
+
+  it('needs a clock only while somebody listed could turn idle', () => {
+    expect(presenceNeedsClock([])).toBe(false)
+    expect(presenceNeedsClock([peer(1), peer(2, { focusing: true })])).toBe(false)
+    expect(presenceNeedsClock([peer(1), peer(2, { typing: false })])).toBe(true)
+    expect(presenceNeedsClock([peer(1, { lastActiveAt: NOW })])).toBe(true)
+  })
+})
+
+describe("the registry's history, which it does not keep itself", () => {
+  it('records when each peer was first listed and forgets those who left', () => {
+    const first = trackFirstSeen(new Map(), [peer(1), peer(2)], NOW)
+    expect([...first]).toEqual([
+      [1, NOW],
+      [2, NOW],
+    ])
+
+    const later = trackFirstSeen(first, [peer(2), peer(3)], NOW + 5_000)
+    expect([...later]).toEqual([
+      [2, NOW],
+      [3, NOW + 5_000],
+    ])
+  })
+
+  it('hands back the same map when nobody arrived or left, so holding it costs no render', () => {
+    const first = trackFirstSeen(new Map(), [peer(1), peer(2)], NOW)
+
+    expect(trackFirstSeen(first, [peer(2, { typing: true }), peer(1)], NOW + 5_000)).toBe(first)
+    expect(trackFirstSeen(first, [peer(1)], NOW + 5_000)).not.toBe(first)
+  })
+
+  it('remembers the name each account broadcast, and keeps the latest', () => {
+    const first = rememberBroadcastNames(new Map(), [
+      peer(1, { userUuid: 'eli', name: 'eli@example.com' }),
+      peer(2, { name: 'no account id' }),
+      peer(3, { userUuid: 'blank', name: '' }),
+    ])
+    expect([...first]).toEqual([['eli', 'eli@example.com']])
+
+    expect(rememberBroadcastNames(first, [peer(1, { userUuid: 'eli', name: 'eli@example.com' })])).toBe(first)
+    expect(rememberBroadcastNames(first, [])).toBe(first)
+    expect(rememberBroadcastNames(first, [peer(9, { userUuid: 'eli', name: 'Eli F.' })]).get('eli')).toBe('Eli F.')
+  })
+
+  it('remembers a bounded number of names, dropping the ones seen longest ago', () => {
+    let names: ReadonlyMap<string, string> = new Map()
+    for (let index = 0; index < 70; index++) {
+      names = rememberBroadcastNames(names, [peer(index, { userUuid: `account-${index}`, name: `name-${index}` })])
+    }
+
+    expect(names.size).toBe(64)
+    expect(names.has('account-5')).toBe(false)
+    expect(names.get('account-69')).toBe('name-69')
   })
 })
 
@@ -147,12 +239,49 @@ describe('who is listed', () => {
     const stranger = collaborators.find((collaborator) => collaborator.key === 'stranger')
     expect(stranger).toMatchObject({ name: 'someone@example.com', isPresent: true })
     expect(stranger?.role).toBeUndefined()
+    expect(stranger?.accountId).toBeUndefined()
   })
 
-  it('names an absent member with no trusted contact by account id, as the rest of the app does', () => {
-    const collaborators = buildCollaborators({ peers: [], members: roster, selfUuid: 'self', state: ACTIVE, now: NOW })
+  it('does not pass an account id off as a name for a member this device cannot name', () => {
+    const rex = buildCollaborators({ peers: [], members: roster, selfUuid: 'self', state: ACTIVE, now: NOW }).find(
+      (collaborator) => collaborator.key === 'rex',
+    )
 
-    expect(collaborators.find((collaborator) => collaborator.key === 'rex')?.name).toBe('rex')
+    expect(rex).toMatchObject({ name: UNKNOWN_MEMBER_NAME, accountId: 'rex', initials: '?' })
+    expect(UNKNOWN_MEMBER_NAME).toBe('Unknown member')
+    // The id stays within reach, in the words the vault members screen uses for the same person.
+    expect(unknownMemberExplanation('rex')).toBe(
+      'Not in your contacts, so this device has no name for them. Account rex.',
+    )
+  })
+
+  it('keeps calling someone by what they broadcast after they have left', () => {
+    const rememberedNames = rememberBroadcastNames(new Map(), [peer(1, { userUuid: 'rex', name: 'rex@example.com' })])
+    const rex = buildCollaborators({
+      peers: [],
+      members: roster,
+      selfUuid: 'self',
+      state: ACTIVE,
+      now: NOW,
+      rememberedNames,
+    }).find((collaborator) => collaborator.key === 'rex')
+
+    expect(rex).toMatchObject({ name: 'rex@example.com', initials: 'RE', isPresent: false })
+    expect(rex?.accountId).toBeUndefined()
+  })
+
+  it('prefers the trusted-contact name to a remembered broadcast', () => {
+    const rememberedNames = rememberBroadcastNames(new Map(), [peer(1, { userUuid: 'ada', name: 'ada@example.com' })])
+    const ada = buildCollaborators({
+      peers: [],
+      members: roster,
+      selfUuid: 'self',
+      state: ACTIVE,
+      now: NOW,
+      rememberedNames,
+    }).find((collaborator) => collaborator.key === 'ada')
+
+    expect(ada?.name).toBe('Ada Lovelace')
   })
 
   it('shows one row for a person with the note open twice, as the more active of the two', () => {
@@ -168,6 +297,21 @@ describe('who is listed', () => {
     expect(collaborators[0]).toMatchObject({ key: 'ada', presence: 'typing' })
   })
 
+  it('does not call a person reconnecting while another of their tabs is live', () => {
+    const [ada] = buildCollaborators({
+      peers: [
+        peer(1, { userUuid: 'ada', reconnecting: true }),
+        peer(2, { userUuid: 'ada', typing: false, focusing: false }),
+      ],
+      members: [],
+      selfUuid: 'self',
+      state: ACTIVE,
+      now: NOW,
+    })
+
+    expect(ada).toMatchObject({ key: 'ada', presence: 'viewing', isPresent: true })
+  })
+
   it("never counts the signed-in account's own other tab as a collaborator", () => {
     const collaborators = buildCollaborators({
       peers: [peer(1, { userUuid: 'self' })],
@@ -181,16 +325,17 @@ describe('who is listed', () => {
     expect(collaborators[0]).toMatchObject({ isSelf: true, isPresent: false, openElsewhere: true })
   })
 
-  it('orders those in the room by how active they are', () => {
+  it('orders those in the room by how active they are, with the reconnecting last of them', () => {
     const collaborators = buildCollaborators({
       peers: [
-        peer(1, { userUuid: 'idle', lastActiveAt: NOW - IDLE_AFTER_MS }),
+        peer(6, { userUuid: 'reconnecting', reconnecting: true }),
+        peer(1, { userUuid: 'idle', typing: false, lastActiveAt: NOW - IDLE_AFTER_MS }),
         peer(2, { userUuid: 'here' }),
         peer(3, { userUuid: 'viewing', focusing: false }),
         peer(4, { userUuid: 'editing', focusing: true }),
         peer(5, { userUuid: 'typing', typing: true }),
       ],
-      members: [],
+      members: [{ userUuid: 'absent', contactName: 'Absent', role: 'write' }],
       selfUuid: 'self',
       state: ACTIVE,
       now: NOW,
@@ -202,10 +347,34 @@ describe('who is listed', () => {
       'viewing',
       'here',
       'idle',
+      'reconnecting',
+      'away',
     ])
   })
 
-  it('lists people with a name before those known only by account id, within a status', () => {
+  it('uses first-seen times per tab, by client id', () => {
+    const firstSeenAt = new Map([
+      [1, NOW - IDLE_AFTER_MS],
+      [2, NOW - 1_000],
+    ])
+    const presenceOf = Object.fromEntries(
+      buildCollaborators({
+        peers: [
+          peer(1, { userUuid: 'walked-away', typing: false, focusing: true }),
+          peer(2, { userUuid: 'just-arrived', typing: false, focusing: true }),
+        ],
+        members: [],
+        selfUuid: 'self',
+        state: ACTIVE,
+        now: NOW,
+        firstSeenAt,
+      }).map((collaborator) => [collaborator.key, collaborator.presence]),
+    )
+
+    expect(presenceOf).toEqual({ 'walked-away': 'idle', 'just-arrived': 'editing' })
+  })
+
+  it('lists people with a name before those this device cannot name, within a status', () => {
     const collaborators = buildCollaborators({
       peers: [],
       members: [
@@ -218,7 +387,7 @@ describe('who is listed', () => {
       now: NOW,
     })
 
-    expect(collaborators.map((collaborator) => collaborator.name)).toEqual(['Amy', 'Zed', 'aaaa-id-only'])
+    expect(collaborators.map((collaborator) => collaborator.key)).toEqual(['amy', 'zed', 'aaaa-id-only'])
   })
 
   it('draws a peer in the colour they broadcast only when it is a plain hex colour', () => {
@@ -277,6 +446,13 @@ describe('how strong each status is', () => {
 
   it('shows peers left over from a dropped room as reconnecting, not as present and active', () => {
     expect(presenceOf(RECONNECTING, [peer(1, { userUuid: 'ada', typing: true })]).ada).toBe('reconnecting')
+    expect(presenceOf(PAUSED, [peer(1, { userUuid: 'ada', focusing: true })]).ada).toBe('reconnecting')
+  })
+
+  it('never calls anyone reconnecting merely because they are no longer listed', () => {
+    // A collaborator's own connection dropping is something only the registry can report.
+    expect(presenceOf(ACTIVE, []).ada).toBe('away')
+    expect(presenceOf(ACTIVE, [peer(1, { userUuid: 'ada', reconnecting: true })]).ada).toBe('reconnecting')
   })
 
   it("believes the peers of a newcomer still waiting for a collaborator's copy", () => {
@@ -365,17 +541,20 @@ describe('the session', () => {
 })
 
 describe('the attendance sentence', () => {
-  const people = (present: number, absent: number) =>
+  const people = (present: number, absent: number, reconnecting = 0, state = ACTIVE) =>
     buildCollaborators({
-      peers: Array.from({ length: present }, (_, index) =>
-        peer(index + 1, { userUuid: `p${index}`, name: `P${index}` }),
-      ),
+      peers: [
+        ...Array.from({ length: present }, (_, index) => peer(index + 1, { userUuid: `p${index}`, name: `P${index}` })),
+        ...Array.from({ length: reconnecting }, (_, index) =>
+          peer(100 + index, { userUuid: `r${index}`, name: `R${index}`, reconnecting: true }),
+        ),
+      ],
       members: [
         { userUuid: 'self', role: 'admin' },
         ...Array.from({ length: absent }, (_, index) => ({ userUuid: `m${index}`, role: 'write' as const })),
       ],
       selfUuid: 'self',
-      state: ACTIVE,
+      state,
       now: NOW,
     })
 
@@ -383,6 +562,19 @@ describe('the attendance sentence', () => {
     expect(describeAttendance(people(1, 0), true)).toBe('1 collaborator here now: P0.')
     expect(describeAttendance(people(3, 2), true)).toBe('3 collaborators here now: P0, P1, P2.')
     expect(describeAttendance(people(8, 0), true)).toBe('8 collaborators here now: P0, P1, P2 and 5 more.')
+  })
+
+  it('counts those who are only reconnecting separately from those who are here', () => {
+    expect(describeAttendance(people(2, 0, 1), true)).toBe('2 collaborators here now: P0, P1. 1 reconnecting: R0.')
+    expect(describeAttendance(people(1, 0, 5), true)).toBe(
+      '1 collaborator here now: P0. 5 reconnecting: R0, R1, R2 and 2 more.',
+    )
+    expect(describeAttendance(people(0, 3, 1), true)).toBe('1 collaborator reconnecting: R0.')
+    expect(describeAttendance(people(0, 0, 2), true)).toBe('2 collaborators reconnecting: R0, R1.')
+  })
+
+  it('says everyone it last saw is reconnecting when it is this client that dropped', () => {
+    expect(describeAttendance(people(2, 0, 0, RECONNECTING), false)).toBe('2 collaborators reconnecting: P0, P1.')
   })
 
   it('says nobody is here only when it can know that, and how many could be', () => {

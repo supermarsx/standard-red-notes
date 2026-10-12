@@ -16,8 +16,11 @@ import {
   describeSession,
   FirstPreparationPhase,
   normalizeCollaboratorsCollapsed,
+  PRESENCE_CLOCK_TICK_MS,
   presenceNeedsClock,
+  rememberBroadcastNames,
   sessionSpeaksForItself,
+  trackFirstSeen,
 } from './collaborators'
 import { useVaultRoster } from './useVaultRoster'
 
@@ -53,6 +56,14 @@ export const COLLABORATION_INDICATOR_TEST_ID = 'collaboration-status-indicator'
 
 /** How long to keep trying to move focus into a popup that is still being positioned. */
 const FOCUS_ATTEMPT_FRAMES = 30
+
+/**
+ * The popup's padding, and its own opaque background in place of Popover's
+ * translucent one. Both overrides are `!important` because Popover sets the same
+ * two properties with classes of its own on the same element, and which of two
+ * equal utilities wins is decided by the stylesheet's order, not by this file.
+ */
+export const POPUP_SURFACE_CLASS = 'px-3 py-2 md:!bg-default ![backdrop-filter:none]'
 
 type Props = {
   /** The note whose collaboration room and shared vault this reflects. */
@@ -118,21 +129,33 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
     }
   }, [isFirstPreparation, isAwaitingPeerState])
 
-  // "Typing" and "idle" are derived from a timestamp when a peer carries one, so
-  // they change with the clock alone. No peer carries one -> no timer at all.
+  // The registry says when a peer starts and stops typing, and when they act. The
+  // one status it cannot announce is the absence of anything: somebody becoming
+  // idle. That alone is read off a clock, coarsely, and only while there is
+  // somebody whose activity is being tracked — otherwise there is no timer at all.
   const needsClock = presenceNeedsClock(peers)
   useEffect(() => {
     if (!needsClock) {
       return
     }
-    setNow(Date.now())
-    const tick = setInterval(() => setNow(Date.now()), 1_000)
+    const tick = setInterval(() => setNow(Date.now()), PRESENCE_CLOCK_TICK_MS)
     return () => clearInterval(tick)
-  }, [needsClock, peers])
+  }, [needsClock])
+
+  // Two things the registry does not keep, because they are about its history:
+  // when it first listed each peer (what "idle" is measured from until they act),
+  // and the name each account broadcast (kept for after they leave). Both helpers
+  // hand back the same map when nothing changed, so this costs no render then.
+  const [firstSeenAt, setFirstSeenAt] = useState<ReadonlyMap<number, number>>(() => new Map())
+  const [rememberedNames, setRememberedNames] = useState<ReadonlyMap<string, string>>(() => new Map())
+  useEffect(() => {
+    setFirstSeenAt((previous) => trackFirstSeen(previous, peers, Date.now()))
+    setRememberedNames((previous) => rememberBroadcastNames(previous, peers))
+  }, [peers])
 
   const collaborators = useMemo(
-    () => buildCollaborators({ peers, members, selfUuid, selfEmail, state, now }),
-    [peers, members, selfUuid, selfEmail, state, now],
+    () => buildCollaborators({ peers, members, selfUuid, selfEmail, state, now, firstSeenAt, rememberedNames }),
+    [peers, members, selfUuid, selfEmail, state, now, firstSeenAt, rememberedNames],
   )
   const others = collaborators.filter((collaborator) => !collaborator.isSelf)
   const present = others.filter((collaborator) => collaborator.isPresent)
@@ -264,18 +287,18 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
             </span>
           )}
         </span>
-        {showAvatars && (
-          <CollaboratorAvatarStack
-            dimmed={present.some((collaborator) => collaborator.presence === 'reconnecting')}
-            present={present}
-          />
-        )}
+        {showAvatars && <CollaboratorAvatarStack present={present} />}
       </button>
       <Popover
         title="Collaborators"
         open={isOpen}
         togglePopover={toggle}
-        className="px-3 py-2"
+        // A solid surface, at every width. From `md` up Popover is translucent and
+        // counts on `backdrop-filter` to blur what is behind it; this popup opens
+        // over the editor ribbon, and where the blur does not paint a list of
+        // names sits on top of a row of toolbar labels. A page cannot ask whether
+        // a supported filter was actually painted, so it does not depend on it.
+        className={POPUP_SURFACE_CLASS}
         containerClassName="!min-w-0 !w-auto max-w-[90vw]"
         anchorElement={buttonRef}
         side="bottom"
