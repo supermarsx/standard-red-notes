@@ -42,6 +42,20 @@ const LEASE_CLEANUP_RETRY_BASE_MS = 100
 const LEASE_CLEANUP_RETRY_MAX_MS = 5_000
 export const MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM = 64
 export const COLLABORATION_PRESENCE_TTL_MS = 45_000
+/**
+ * How often a live presence is re-announced to the room.
+ *
+ * A client drops a peer's presence when the `ttlMilliseconds` of the last
+ * `joined` frame it saw runs out; that is its only defence when a `left` frame
+ * is lost. A heartbeat used to refresh the gateway's own expiry and tell the
+ * room nothing, so every client timed every peer out exactly one TTL after
+ * that peer joined -- and took the peer's caret down with it -- while the peer
+ * was still there. A heartbeat therefore re-announces the same presence, at
+ * most this often, so a client that beats faster cannot use the room as an
+ * amplifier. A quarter of the TTL keeps three announcements inside every
+ * window even when one beat is late.
+ */
+export const COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS = Math.floor(COLLABORATION_PRESENCE_TTL_MS / 4)
 // Longer than the client's full-state response/acceptance window. A retry uses
 // a new stateRequestId, so liveness does not require re-granting the same id
 // while a 4 MiB winner may still be encrypting and chunking its response.
@@ -172,6 +186,8 @@ type LocalPresence<S extends SendableSocket> = {
   presenceId: string
   clientId: number
   expiresAt: number
+  /** When the room was last told this presence is alive. */
+  announcedAt: number
 }
 
 interface RedisCommandClient {
@@ -856,6 +872,16 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       }
       existing.expiresAt = now + COLLABORATION_PRESENCE_TTL_MS
       this.schedulePresenceExpiry()
+      if (now - existing.announcedAt >= COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS) {
+        existing.announcedAt = now
+        try {
+          await this.emitPresence(this.joinedPresenceFrame(existing, conn.userUuid))
+        } catch {
+          // The presence is alive either way. A relay that cannot carry the renewal
+          // denies its rooms on its own, and the next beat announces again.
+          existing.announcedAt = 0
+        }
+      }
       return
     }
     if (
@@ -870,25 +896,30 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       presenceId: randomUUID(),
       clientId,
       expiresAt: now + COLLABORATION_PRESENCE_TTL_MS,
+      announcedAt: now,
     }
     this.presences.set(localId, presence)
     try {
-      await this.emitPresence({
-        t: 'room-presence',
-        room,
-        roomEpoch,
-        protocolVersion: 3,
-        action: 'joined',
-        presenceId: presence.presenceId,
-        userUuid: conn.userUuid,
-        clientId,
-        ttlMilliseconds: COLLABORATION_PRESENCE_TTL_MS,
-      })
+      await this.emitPresence(this.joinedPresenceFrame(presence, conn.userUuid))
     } catch (error) {
       this.presences.delete(localId)
       throw error
     }
     this.schedulePresenceExpiry()
+  }
+
+  private joinedPresenceFrame(presence: LocalPresence<S>, userUuid: string): RoomPresenceFrame {
+    return {
+      t: 'room-presence',
+      room: presence.lease.room,
+      roomEpoch: presence.lease.roomEpoch,
+      protocolVersion: 3,
+      action: 'joined',
+      presenceId: presence.presenceId,
+      userUuid,
+      clientId: presence.clientId,
+      ttlMilliseconds: COLLABORATION_PRESENCE_TTL_MS,
+    }
   }
 
   async releaseLease(

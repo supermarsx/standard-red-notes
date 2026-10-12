@@ -4,7 +4,12 @@ import {
   InProcessCollaborationLifecycle,
   IN_PROCESS_ROOM_EPOCH_TOMBSTONE_TTL_MS,
 } from '../src/inProcessCollaborationLifecycle.js'
-import { CollaborationRoomSecurityRevokedError, YJS_RESPONSE_CLAIM_TTL_MS } from '../src/collaborationRedisBridge.js'
+import {
+  CollaborationRoomSecurityRevokedError,
+  COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS,
+  COLLABORATION_PRESENCE_TTL_MS,
+  YJS_RESPONSE_CLAIM_TTL_MS,
+} from '../src/collaborationRedisBridge.js'
 import { CollaborationRoomEpochMismatchError, RoomRegistry, type RoomRelayLifecycle } from '../src/rooms.js'
 import type { Conn, SendableSocket } from '../src/registry.js'
 
@@ -469,7 +474,7 @@ describe('InProcessCollaborationLifecycle', () => {
   })
 
   it('broadcasts presence join and leave to the room without a relay', async () => {
-    const { lifecycle, rooms, now } = setup()
+    const { lifecycle, rooms, now, advance } = setup()
     const broadcast = vi.spyOn(rooms, 'broadcastAll').mockReturnValue(1)
     const conn = connection('conn-1')
     await enterRoom(lifecycle, conn, now, 'lease-1')
@@ -483,9 +488,30 @@ describe('InProcessCollaborationLifecycle', () => {
       userUuid: 'user-conn-1',
     })
 
-    // A repeat heartbeat refreshes rather than re-announcing.
+    // A beat that arrives at once is not an amplifier: it refreshes without re-announcing.
+    const announced = JSON.parse(broadcast.mock.calls.at(-1)![1]) as { presenceId: string }
     await lifecycle.heartbeatPresence(conn, ROOM, 'lease-1', EPOCH, 42)
     expect(broadcast).toHaveBeenCalledTimes(1)
+
+    // A client keeps a peer only for the TTL of the last `joined` frame it saw, so a beat
+    // that told the room nothing let every client time every peer out one TTL after it
+    // joined. A later beat therefore re-announces the SAME presence, with the TTL.
+    advance(COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS)
+    await lifecycle.heartbeatPresence(conn, ROOM, 'lease-1', EPOCH, 42)
+    expect(broadcast).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(broadcast.mock.calls.at(-1)![1])).toEqual({
+      t: 'room-presence',
+      room: ROOM,
+      roomEpoch: EPOCH,
+      protocolVersion: 3,
+      action: 'joined',
+      presenceId: announced.presenceId,
+      userUuid: 'user-conn-1',
+      clientId: 42,
+      ttlMilliseconds: COLLABORATION_PRESENCE_TTL_MS,
+    })
+    // Three announcements must fit inside every TTL window, or one late beat expires a live peer.
+    expect(COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS * 3).toBeLessThan(COLLABORATION_PRESENCE_TTL_MS)
 
     // The same lease may not change its client identity mid-flight.
     await expect(lifecycle.heartbeatPresence(conn, ROOM, 'lease-1', EPOCH, 43)).rejects.toMatchObject({
@@ -650,16 +676,18 @@ describe('InProcessCollaborationLifecycle', () => {
 
       await vi.advanceTimersByTimeAsync(heartbeatIntervalMs)
       await lifecycle.heartbeatPresence(holder, ROOM, 'revoked-lease', EPOCH, 7)
+      // Each later beat re-announces the presence (a `joined`), which is what keeps a
+      // peer's client from timing it out; what must never appear here is a `left`.
       // Precondition: the heartbeat did something OBSERVABLE. Presence would have
       // expired 45 s after the first one, and the reaper has now run past that
       // deadline; no `heartbeat-timeout` means the presence TTL really moved, so
       // this is not a test passing against a heartbeat that no-ops.
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }])
+      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }, { action: 'joined' }])
 
       await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 10_000)
       await lifecycle.heartbeatPresence(holder, ROOM, 'revoked-lease', EPOCH, 7)
-      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }])
+      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }, { action: 'joined' }, { action: 'joined' }])
 
       // One millisecond before the lease's ORIGINAL deadline it is still live --
       // three heartbeats in, the expiry has not moved backwards either.
@@ -677,7 +705,12 @@ describe('InProcessCollaborationLifecycle', () => {
       // presence is still live (its own deadline is 125 s), so the terminal
       // event names the eviction.
       await lifecycle.refreshLeases()
-      expect(presenceEvents(holder)).toEqual([{ action: 'joined' }, { action: 'left', reason: 'revoked' }])
+      expect(presenceEvents(holder)).toEqual([
+        { action: 'joined' },
+        { action: 'joined' },
+        { action: 'joined' },
+        { action: 'left', reason: 'revoked' },
+      ])
     } finally {
       vi.useRealTimers()
     }

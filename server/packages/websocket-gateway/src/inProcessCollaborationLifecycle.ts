@@ -16,6 +16,7 @@ import {
 import {
   CollaborationLifecycleError,
   CollaborationRoomSecurityRevokedError,
+  COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS,
   COLLABORATION_PRESENCE_TTL_MS,
   MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
   YJS_RESPONSE_CLAIM_TTL_MS,
@@ -113,6 +114,8 @@ type InProcessPresence<S extends SendableSocket> = {
   presenceId: string
   clientId: number
   expiresAt: number
+  /** When the room was last told this presence is alive. */
+  announcedAt: number
 }
 
 type RoomState = {
@@ -340,6 +343,13 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
       }
       existing.expiresAt = now + COLLABORATION_PRESENCE_TTL_MS
       this.schedulePresenceExpiry()
+      // Re-announce, exactly as the Redis bridge does: a client keeps a peer only for
+      // the TTL of the last `joined` frame it saw, so a heartbeat that told the room
+      // nothing let every client time every peer out one TTL after it joined.
+      if (now - existing.announcedAt >= COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS) {
+        existing.announcedAt = now
+        this.announcePresence(existing, conn.userUuid)
+      }
       return
     }
     if (
@@ -357,23 +367,28 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
       presenceId: randomUUID(),
       clientId,
       expiresAt: now + COLLABORATION_PRESENCE_TTL_MS,
+      announcedAt: now,
     }
     this.presences.set(localId, presence)
+    this.announcePresence(presence, conn.userUuid)
+    this.schedulePresenceExpiry()
+  }
+
+  private announcePresence(presence: InProcessPresence<S>, userUuid: string): void {
     this.rooms.broadcastAll(
-      room,
+      presence.lease.room,
       JSON.stringify({
         t: 'room-presence',
-        room,
-        roomEpoch,
+        room: presence.lease.room,
+        roomEpoch: presence.lease.roomEpoch,
         protocolVersion: 3,
         action: 'joined',
         presenceId: presence.presenceId,
-        userUuid: conn.userUuid,
-        clientId,
+        userUuid,
+        clientId: presence.clientId,
         ttlMilliseconds: COLLABORATION_PRESENCE_TTL_MS,
       }),
     )
-    this.schedulePresenceExpiry()
   }
 
   async releaseLease(

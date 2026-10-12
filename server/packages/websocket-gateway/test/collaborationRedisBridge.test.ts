@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS,
+  COLLABORATION_PRESENCE_TTL_MS,
   COLLABORATION_RELAY_CHANNEL,
   CollaborationLifecycleError,
   CollaborationRedisBridge,
@@ -488,20 +490,34 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     )
 
     await bridgeA.heartbeatPresence(first, room, 'presence-first', TEST_ROOM_EPOCH, 11)
+    // An immediate second beat refreshes silently: a fast client is not an amplifier.
     await bridgeA.heartbeatPresence(first, room, 'presence-first', TEST_ROOM_EPOCH, 11)
     await bridgeB.heartbeatPresence(second, room, 'presence-second', TEST_ROOM_EPOCH, 22)
+    // A later beat re-announces the SAME presence to every replica. A client keeps a peer
+    // only for the TTL of the last `joined` it saw, so a beat that told the room nothing
+    // let every client time every peer out one TTL after it joined.
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      clock.mockReturnValue(expiresAt - 60_000 + COLLABORATION_PRESENCE_REANNOUNCE_INTERVAL_MS + 1_000)
+      await bridgeA.heartbeatPresence(first, room, 'presence-first', TEST_ROOM_EPOCH, 11)
+    } finally {
+      clock.mockRestore()
+    }
     await bridgeA.releaseLease(first, room, 'presence-first', 'clean-leave')
     await bridgeA.releaseAll(first)
     await bridgeB.releaseAll(second)
 
     const frames = redis.published.map(({ message }) => JSON.parse(message).frame as Record<string, unknown>)
-    expect(frames.map(({ action }) => action)).toEqual(['joined', 'joined', 'left', 'left'])
+    expect(frames.map(({ action }) => action)).toEqual(['joined', 'joined', 'joined', 'left', 'left'])
+    expect(frames[2]).toEqual({ ...frames[0], ttlMilliseconds: COLLABORATION_PRESENCE_TTL_MS })
+    expect(frames[2].presenceId).toBe(frames[0].presenceId)
     expect(frames.filter(({ action }) => action === 'left').map(({ reason }) => reason)).toEqual([
       'clean-leave',
       'disconnect',
     ])
     expect(new Set(frames.map(({ presenceId }) => presenceId)).size).toBe(2)
     expect(frames.filter(({ action }) => action === 'joined').map(({ userUuid }) => userUuid)).toEqual([
+      first.userUuid,
       first.userUuid,
       first.userUuid,
     ])
@@ -2978,17 +2994,19 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
       await vi.advanceTimersByTimeAsync(heartbeatIntervalMs)
       await bridge.heartbeatPresence(holder, room, 'bound-lease', TEST_ROOM_EPOCH, 7)
       expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
+      // Each later beat re-announces the presence (a `joined`), which is what keeps a
+      // peer's client from timing it out; what must never appear here is a `left`.
       // Precondition: the heartbeat did something OBSERVABLE. Presence would have
       // expired 45 s after the first one and the reaper has now run past that
       // deadline; no `heartbeat-timeout` means the presence TTL really moved, so
       // this is not a test passing against a heartbeat that no-ops.
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }, { action: 'joined' }])
 
       await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 10_000)
       await bridge.heartbeatPresence(holder, room, 'bound-lease', TEST_ROOM_EPOCH, 7)
       expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
-      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }, { action: 'joined' }, { action: 'joined' }])
 
       // One millisecond before the lease's ORIGINAL deadline the sweep keeps it:
       // three heartbeats in, the expiry moved neither forwards nor backwards.
@@ -2996,7 +3014,7 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
       expect(Date.now()).toBe(leaseExpiresAt - 1)
       await bridge.refreshLeases()
       expect(redis.leases.size).toBe(1)
-      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }])
+      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }, { action: 'joined' }, { action: 'joined' }])
 
       // At that exact deadline the sweep evicts it and releases the shared key.
       // The three heartbeats bought the lease nothing.
@@ -3004,7 +3022,12 @@ describe('CollaborationRedisBridge current-epoch resolver, cause codes, responde
       expect(Date.now()).toBe(leaseExpiresAt)
       await bridge.refreshLeases()
       expect(redis.leases.size).toBe(0)
-      expect(presenceEvents(redis)).toEqual([{ action: 'joined' }, { action: 'left', reason: 'revoked' }])
+      expect(presenceEvents(redis)).toEqual([
+        { action: 'joined' },
+        { action: 'joined' },
+        { action: 'joined' },
+        { action: 'left', reason: 'revoked' },
+      ])
     } finally {
       vi.useRealTimers()
     }
