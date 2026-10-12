@@ -10,6 +10,10 @@ import usePreference from '@/Hooks/usePreference'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
+import {
+  SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY,
+  normalizeSuperToolbarAutoHide,
+} from '@/Components/SuperEditor/Plugins/ToolbarPlugin/ToolbarAutoHidePreference'
 
 type Props = {
   application: WebApplication
@@ -27,6 +31,10 @@ const Defaults: FunctionComponent<Props> = ({ application }) => {
   const addNoteToParentFolders = usePreference(PrefKey.NoteAddToParentFolders)
 
   const alwaysShowSuperToolbar = usePreference(PrefKey.AlwaysShowSuperToolbar)
+  // The key and what an unset value means both come from
+  // `ToolbarAutoHidePreference.ts`, which is also what the toolbar reads, so this
+  // switch and the toolbar cannot disagree. Only an explicit `true` is on.
+  const superToolbarAutoHide = normalizeSuperToolbarAutoHide(usePreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY))
   const defaultSuperImageAlignment = usePreference(PrefKey.SuperNoteImageAlignment)
   const imageAlignmentOptions = useMemo(
     (): DropdownItem[] => [
@@ -102,6 +110,39 @@ const Defaults: FunctionComponent<Props> = ({ application }) => {
                     .catch(console.error)
                 }}
                 checked={alwaysShowSuperToolbar}
+              />
+            </div>
+            <HorizontalSeparator classes="my-4" />
+            {/* Collapsing belongs to the always-visible toolbar above: the floating
+                toolbar already shows only while text is selected, so with that
+                setting off there is nothing here to hide. The switch is disabled
+                then, and says why, rather than being a control that silently does
+                nothing. It still shows what was chosen, so turning the toolbar
+                back on brings the choice back with it. */}
+            <div className="flex justify-between gap-2 md:items-center" data-test="super-toolbar-auto-hide-setting">
+              <div className="flex flex-col">
+                <Subtitle>Collapse the toolbar in Super notes</Subtitle>
+                <Text>
+                  When enabled, the toolbar at the top of the note shrinks to its row of tabs and gives the rest of the
+                  space to your note. Point at a tab, or click one, to bring its commands back; they hide again when you
+                  return to the note. You can also switch this with the arrow button next to the tabs, and press
+                  Cmd/Ctrl+Shift+K to jump straight into the commands.
+                </Text>
+                {!alwaysShowSuperToolbar && (
+                  <div data-test="super-toolbar-auto-hide-unavailable">
+                    <Text className="text-passive-0 mt-1">
+                      Turn on the always-visible toolbar above to use this. The floating toolbar already appears only
+                      when text is selected.
+                    </Text>
+                  </div>
+                )}
+              </div>
+              <Switch
+                onChange={(enabled) => {
+                  application.setPreference(SUPER_TOOLBAR_AUTO_HIDE_PREF_KEY, enabled).catch(console.error)
+                }}
+                checked={superToolbarAutoHide}
+                disabled={!alwaysShowSuperToolbar}
               />
             </div>
             <HorizontalSeparator classes="my-4" />
