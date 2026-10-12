@@ -3942,34 +3942,46 @@ export class ContainerConfigLoader {
           container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
           // Standard Red Notes: admin-role grant/revoke + reset-mfa/fix-quota
           // panel ops, and the read-only env master switches (see
-          // BaseAdminController). The trailing RBAC group deps remain omitted
-          // here, mirroring the pre-existing home-server behaviour.
+          // BaseAdminController).
           container.get<RoleServiceInterface>(TYPES.Auth_RoleService),
           container.get<FixStorageQuotaForUser>(TYPES.Auth_FixStorageQuotaForUser),
           container.get<boolean>(TYPES.Auth_DISABLE_USER_REGISTRATION),
           container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
-          // Standard Red Notes: the RBAC group + role-management deps stay
-          // undefined on the home-server single-process path (pre-existing
-          // behaviour; those endpoints degrade to "not available" here). They
-          // are passed explicitly as `undefined` only so the trailing
-          // lockRepository — the LAST positional constructor arg — can be wired
-          // by position without pulling the group/RBAC surface in.
-          undefined, // doCreateGroup
-          undefined, // doListGroups
-          undefined, // doDeleteGroup
-          undefined, // doAddUserToGroup
-          undefined, // doRemoveUserFromGroup
-          undefined, // doSetGroupRoles
-          undefined, // doListGroupMembers
-          undefined, // doGetUserEffectivePermissions
-          undefined, // groupHttpMapper
-          undefined, // doListRolesWithPermissions
-          undefined, // doSetRolePermissions
-          undefined, // doCreateCustomRole
-          undefined, // doDeleteCustomRole
-          undefined, // doGetPermissionCatalog
-          undefined, // doGetRoleHolders
-          undefined, // doResolveRoleSetPermissions
+          /**
+           * Standard Red Notes: the RBAC group + role-management dependencies.
+           *
+           * *** THESE SIXTEEN POSITIONS USED TO BE THE LITERAL `undefined`. ***
+           * "Pre-existing behaviour; those endpoints degrade to 'not available'
+           * here", the comment said -- and what that degraded to, measured on a
+           * running all-in-one, was `500 Effective permissions are not available.`
+           * for EVERY account from `GET /v1/admin/users/:uuid/effective-permissions`,
+           * so the Users pane's detail panel printed "Effective roles/permissions
+           * could not be loaded", and a 500 from every request the Groups & roles
+           * tab makes. The multi-container build injects all sixteen through the
+           * annotated controller and was never affected, which is why nothing
+           * went red.
+           *
+           * Nothing here is topology-specific: every use case and the mapper are
+           * bound above for both topologies, the handlers are all registered for
+           * DirectCall, and the sqlite migrations create the same `rbac_*` tables.
+           * The only thing missing was these arguments.
+           */
+          container.get<CreateGroup>(TYPES.Auth_CreateGroup),
+          container.get<ListGroups>(TYPES.Auth_ListGroups),
+          container.get<DeleteGroup>(TYPES.Auth_DeleteGroup),
+          container.get<AddUserToGroup>(TYPES.Auth_AddUserToGroup),
+          container.get<RemoveUserFromGroup>(TYPES.Auth_RemoveUserFromGroup),
+          container.get<SetGroupRoles>(TYPES.Auth_SetGroupRoles),
+          container.get<ListGroupMembers>(TYPES.Auth_ListGroupMembers),
+          container.get<GetUserEffectivePermissions>(TYPES.Auth_GetUserEffectivePermissions),
+          container.get<MapperInterface<Group, GroupHttpProjection>>(TYPES.Auth_GroupHttpMapper),
+          container.get<ListRolesWithPermissions>(TYPES.Auth_ListRolesWithPermissions),
+          container.get<SetRolePermissions>(TYPES.Auth_SetRolePermissions),
+          container.get<CreateCustomRole>(TYPES.Auth_CreateCustomRole),
+          container.get<DeleteCustomRole>(TYPES.Auth_DeleteCustomRole),
+          container.get<GetPermissionCatalog>(TYPES.Auth_GetPermissionCatalog),
+          container.get<GetRoleHolders>(TYPES.Auth_GetRoleHolders),
+          container.get<ResolveRoleSetPermissions>(TYPES.Auth_ResolveRoleSetPermissions),
           // Standard Red Notes: failed-login lock repository, backing the
           // anti-abuse "Locked accounts" list + unlock on the single-container
           // deploy. Auth_LockRepository is always bound (RedisLockRepository
