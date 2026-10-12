@@ -97,7 +97,7 @@ it('renders the collaboration icon immediately before the sync status', async ()
   const collaboration = container.querySelector(`[data-testid="${COLLABORATION_INDICATOR_TEST_ID}"]`)
   const sync = buttons.find((button) => button.textContent?.includes('Note sync status'))
 
-  expect(collaboration).not.toBeNull()
+  expect(collaboration).toBeInstanceOf(Element)
   expect(sync).toBeDefined()
   expect(buttons[0]).toBe(collaboration)
   expect(buttons[1]).toBe(sync)

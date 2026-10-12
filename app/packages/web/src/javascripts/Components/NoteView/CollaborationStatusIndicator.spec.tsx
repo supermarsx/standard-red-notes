@@ -13,15 +13,35 @@
  * State is driven through the REAL registries rather than mocked hooks, so this
  * exercises the actual publish -> subscribe -> render path the Super editor uses.
  * Assertions are on elements, never on a container's text: prose near a control
- * has certified absent controls here before.
+ * has certified absent controls here before. And an element that must exist is
+ * asserted with `toBeInstanceOf(Element)`, never `.not.toBeNull()`: the latter
+ * passes on `undefined`, which is what an optional chain yields when the thing it
+ * starts from is missing.
  */
-import { act, createElement, ReactNode } from 'react'
+import { act, createElement, ReactNode, useEffect, useState } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 
+/**
+ * Like the real Popover, this keeps its content mounted for an exit animation
+ * after `open` goes false. That is the moment focus has to be handed back in: a
+ * stand-in that unmounted at once would drop focus to the body by itself and
+ * hide whether the control did anything.
+ */
 jest.mock('../Popover/Popover', () => ({
   __esModule: true,
   default: ({ open, children }: { open: boolean; children: ReactNode }) => {
-    return open ? createElement('div', { 'data-testid': 'collaboration-popover' }, children) : null
+    const [isMounted, setIsMounted] = useState(open)
+    useEffect(() => {
+      if (open) {
+        setIsMounted(true)
+        return
+      }
+      const exit = setTimeout(() => setIsMounted(false), 75)
+      return () => clearTimeout(exit)
+    }, [open])
+    return open || isMounted
+      ? createElement('div', { 'data-testid': 'collaboration-popover', 'data-open': String(open) }, children)
+      : null
   },
 }))
 
@@ -101,7 +121,10 @@ const avatars = (): HTMLElement[] =>
   Array.from(chip()?.querySelectorAll<HTMLElement>('[data-collaborator-avatars] > [data-collaborator-avatar]') ?? [])
 const overflow = (): HTMLElement | null => chip()?.querySelector<HTMLElement>('[data-collaborator-overflow]') ?? null
 const count = (): HTMLElement | null => chip()?.querySelector<HTMLElement>('[data-collaborator-count]') ?? null
-const popup = (): HTMLElement | null => container.querySelector<HTMLElement>('[role="dialog"]')
+/** The popup while it is open. One that is closed but still fading out is `fadingPopup()`. */
+const popup = (): HTMLElement | null => container.querySelector<HTMLElement>('[data-open="true"] [role="dialog"]')
+const fadingPopup = (): HTMLElement | null =>
+  container.querySelector<HTMLElement>('[data-open="false"] [role="dialog"]')
 const rows = (): HTMLElement[] => Array.from(popup()?.querySelectorAll<HTMLElement>('ul > li') ?? [])
 const row = (key: string): HTMLElement | undefined => rows().find((li) => li.dataset.collaborator === key)
 const statusOf = (key: string): string | null | undefined =>
@@ -139,14 +162,14 @@ const advance = async (ms: number): Promise<void> => {
 }
 
 const click = async (element: Element | null): Promise<void> => {
-  expect(element).not.toBeNull()
+  expect(element).toBeInstanceOf(Element)
   await act(async () => {
     element?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 }
 
 const press = async (element: Element | null, key: string, shiftKey = false): Promise<void> => {
-  expect(element).not.toBeNull()
+  expect(element).toBeInstanceOf(Element)
   await act(async () => {
     element?.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }))
   })
@@ -248,7 +271,7 @@ describe('when collaboration does not apply', () => {
     await render()
 
     await advance(PREPARING_QUIET_PERIOD_MS)
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
 
     // The gateway answers 503 SYNC_DISABLED and preparation never resolves.
     await advance(PREPARING_STAND_DOWN_MS)
@@ -269,7 +292,7 @@ describe('when collaboration does not apply', () => {
     })
     await advance(PREPARING_STAND_DOWN_MS * 5)
 
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
     expect(label()).toContain('Reconnecting')
   })
 })
@@ -282,7 +305,7 @@ describe('the session states, in the chip and at the top of the popup', () => {
 
     await advance(PREPARING_QUIET_PERIOD_MS)
 
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
     expect(label()).toBe('Preparing encrypted collaboration. You can keep editing.')
   })
 
@@ -334,7 +357,7 @@ describe('the session states, in the chip and at the top of the popup', () => {
       CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing' })
     })
 
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
     expect(label()).toContain('Reconnecting')
     expect(dot()?.dataset.collaborationStatusDot).toBe('warning')
   })
@@ -369,7 +392,7 @@ describe('the session states, in the chip and at the top of the popup', () => {
     await render()
     await advance(PREPARING_QUIET_PERIOD_MS * 4)
 
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
     expect(label()).toContain('Encrypted collaboration unavailable')
     expect(label()).toContain('relay is unavailable')
 
@@ -385,11 +408,11 @@ describe('the session states, in the chip and at the top of the popup', () => {
     await render()
 
     await advance(PREPARING_QUIET_PERIOD_MS)
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
     expect(label()).toBe("Waiting for a collaborator's copy of this note. Editing resumes when it arrives.")
 
     await advance(PREPARING_STAND_DOWN_MS * 2)
-    expect(chip()).not.toBeNull()
+    expect(chip()).toBeInstanceOf(Element)
 
     await act(async () => {
       CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
@@ -419,7 +442,7 @@ describe('as a status chip', () => {
     expect(button?.getAttribute('type')).toBe('button')
     expect(button?.textContent).toBe('')
     expect(button?.getAttribute('aria-label')).toBeTruthy()
-    expect(button?.querySelector('svg')).not.toBeNull()
+    expect(button?.querySelector('svg')).toBeInstanceOf(Element)
   })
 
   it('matches the sync indicator chip geometry so the status row reads as one row', async () => {
@@ -450,7 +473,7 @@ describe('as a status chip', () => {
       await act(async () => {
         CollaborationStatusRegistry.setStatus(ROOM, status)
       })
-      expect(dot()?.querySelector('svg')).not.toBeNull()
+      expect(dot()?.querySelector('svg')).toBeInstanceOf(Element)
       expect(chip()?.querySelector('label')).toBeNull()
     }
   })
@@ -627,7 +650,7 @@ describe('collapsed, and at phone width', () => {
     await render()
     await click(chip())
 
-    expect(popup()).not.toBeNull()
+    expect(popup()).toBeInstanceOf(Element)
     expect(collapseButton()).toBeNull()
   })
 })
@@ -698,7 +721,7 @@ describe('the popup', () => {
     const [session, list] = Array.from(popup()?.children ?? [])
     expect(session.getAttribute('data-collaboration-session')).toBe('live')
     expect(session.querySelector('.font-bold')?.textContent).toBe('Encrypted collaboration active')
-    expect(session.querySelector('svg')).not.toBeNull()
+    expect(session.querySelector('svg')).toBeInstanceOf(Element)
     expect(list.tagName).toBe('UL')
   })
 
@@ -725,7 +748,7 @@ describe('a shared note whose live collaboration is not running', () => {
     await render()
 
     expect(dot()?.dataset.collaborationStatusDot).toBe('quiet')
-    expect(dot()?.querySelector('svg')).not.toBeNull()
+    expect(dot()?.querySelector('svg')).toBeInstanceOf(Element)
     expect(avatars()).toHaveLength(0)
     expect(label()).toBe(`Live collaboration paused. ${PAUSED_REASON} 3 other people have access to this note.`)
 
@@ -778,7 +801,7 @@ describe('a shared note whose live collaboration is not running', () => {
 
     await advance(PREPARING_QUIET_PERIOD_MS)
     expect(dot()?.dataset.collaborationStatusDot).toBe('busy')
-    expect(dot()?.querySelector('.animate-spin')).not.toBeNull()
+    expect(dot()?.querySelector('.animate-spin')).toBeInstanceOf(Element)
 
     await advance(PREPARING_STAND_DOWN_MS)
     expect(dot()?.dataset.collaborationStatusDot).toBe('quiet')
@@ -831,6 +854,12 @@ describe('by keyboard', () => {
     await click(chip())
 
     expect(popup()).toBeNull()
+    // Still in the document, fading out — so nothing but the control moved focus.
+    expect(fadingPopup()).toBeInstanceOf(Element)
+    expect(document.activeElement).toBe(chip())
+
+    await advance(75)
+    expect(fadingPopup()).toBeNull()
     expect(document.activeElement).toBe(chip())
   })
 
@@ -864,7 +893,7 @@ describe('by keyboard', () => {
     await act(async () => {
       collapseButton()?.focus()
     })
-    expect(popup()).not.toBeNull()
+    expect(popup()).toBeInstanceOf(Element)
 
     // Tab past the last control.
     await act(async () => {
@@ -907,7 +936,7 @@ describe('the typing cue', () => {
     })
 
     const [ada, grace] = Array.from(container.querySelectorAll<HTMLElement>('[data-collaborator-avatar]'))
-    expect(ada.querySelector('[data-collaborator-typing]')).not.toBeNull()
+    expect(ada.querySelector('[data-collaborator-typing]')).toBeInstanceOf(Element)
     expect(grace.querySelector('[data-collaborator-typing]')).toBeNull()
     // It must read with motion off: the dot is there, and only its pulse is motion-gated.
     expect(ada.querySelector('[data-collaborator-typing]')?.className).toContain('motion-safe:animate-pulse')
@@ -917,18 +946,22 @@ describe('the typing cue', () => {
   it('marks the same person in the popup and says so in words', async () => {
     await act(async () => {
       root.render(
-        createElement(CollaboratorsPopover, {
-          id: 'popup',
-          session: describeSession({ status: { kind: 'active' }, hasBeenActive: true }, 'quiet'),
-          attendance: '',
-          collaborators: [person('ada', 'typing'), person('grace', 'viewing')],
-          collapsed: false,
-          onLeave: () => undefined,
-        }),
+        createElement(
+          'div',
+          { 'data-open': 'true' },
+          createElement(CollaboratorsPopover, {
+            id: 'popup',
+            session: describeSession({ status: { kind: 'active' }, hasBeenActive: true }, 'quiet'),
+            attendance: '',
+            collaborators: [person('ada', 'typing'), person('grace', 'viewing')],
+            collapsed: false,
+            onLeave: () => undefined,
+          }),
+        ),
       )
     })
 
-    expect(row('ada')?.querySelector('[data-collaborator-typing]')).not.toBeNull()
+    expect(row('ada')?.querySelector('[data-collaborator-typing]')).toBeInstanceOf(Element)
     expect(statusOf('ada')).toBe('Typing')
     expect(row('grace')?.querySelector('[data-collaborator-typing]')).toBeNull()
     expect(statusOf('grace')).toBe('Viewing')
