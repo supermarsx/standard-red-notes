@@ -19,6 +19,7 @@ import {
   useMermaidAppTheme,
   useMermaidLabelFontFamily,
 } from './MermaidAppTheme'
+import { renderMermaidDiagram } from './MermaidRuntime'
 import { resolveMermaidRenderTheme, resolveMermaidSurfaceColor, type MermaidRenderTheme } from './MermaidSettings'
 
 /**
@@ -153,16 +154,6 @@ export function buildGanttSource(data: GanttChartData): string {
   return lines.join('\n')
 }
 
-// Lazily loaded mermaid singleton (mirrors MermaidNode) so the heavy library is
-// code-split and only fetched when a chart is actually rendered.
-let mermaidPromise: Promise<typeof import('mermaid').default> | undefined
-function loadMermaid(): Promise<typeof import('mermaid').default> {
-  if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then((m) => m.default)
-  }
-  return mermaidPromise
-}
-
 let renderSeq = 0
 
 // Exported (not just used internally) so its render contract — specifically,
@@ -225,21 +216,16 @@ export function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; n
         return
       }
       try {
-        const mermaid = await loadMermaid()
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: theme.theme,
-          themeVariables: theme.themeVariables,
-          // A CONCRETE stack, never `inherit` — see the comment on `blockRef`.
-          fontFamily,
-        })
         const id = `gantt-${nodeKey}-${renderSeq++}`
-        // THE third argument: measure where the chart is drawn. `undefined`
-        // means mermaid's `document.body` path, which is all there is when the
-        // block has no layout (a collapsed foldable, a hidden pane).
+        // Measure where the chart is drawn. `undefined` means mermaid's
+        // `document.body` path, which is all there is when the block has no
+        // layout (a collapsed foldable, a hidden pane).
         const measureIn = readMermaidMeasurementContainer(measureRef.current)
-        const { svg: rendered } = await mermaid.render(id, code, measureIn)
+        // Through the shared runtime, as the Mermaid block does: the two share
+        // mermaid's one global configuration, so a diagram in a Mermaid block
+        // could otherwise leave this chart unable to draw. `fontFamily` is a
+        // CONCRETE stack, never `inherit` — see the comment on `blockRef`.
+        const { svg: rendered } = await renderMermaidDiagram({ id, text: code, theme, fontFamily, measureIn })
         setSvg(rendered)
         setError(null)
       } catch (e) {

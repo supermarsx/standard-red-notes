@@ -51,6 +51,7 @@ const renderedIds: string[] = []
 jest.mock('mermaid', () => ({
   __esModule: true,
   default: {
+    mermaidAPI: { reset: () => undefined },
     initialize: () => undefined,
     render: async (id: string) => {
       renderedIds.push(id)

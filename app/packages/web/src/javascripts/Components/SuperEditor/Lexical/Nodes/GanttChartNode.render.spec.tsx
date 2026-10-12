@@ -35,7 +35,11 @@ const mermaidRender = jest.fn(async () => ({ svg: GANTT_SVG }))
 jest.mock('@lexical/react/LexicalComposerContext', () => ({ useLexicalComposerContext: () => [mockEditor] }))
 jest.mock('mermaid', () => ({
   __esModule: true,
-  default: { initialize: jest.fn(), render: (...args: unknown[]) => mermaidRender(...(args as [])) },
+  default: {
+    mermaidAPI: { reset: () => undefined },
+    initialize: jest.fn(),
+    render: (...args: unknown[]) => mermaidRender(...(args as [])),
+  },
 }))
 
 class MockResizeObserver {

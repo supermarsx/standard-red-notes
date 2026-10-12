@@ -70,6 +70,7 @@ import {
   useMermaidLabelFontFamily,
 } from './MermaidAppTheme'
 import MermaidCodePane from './MermaidCodePane'
+import { renderMermaidDiagram } from './MermaidRuntime'
 import { useMermaidSourceHighlightingEnabled } from './MermaidSourceHighlightPreference'
 
 const DEFAULT_MERMAID = 'graph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[OK]\n  B -->|No| D[Rethink]'
@@ -99,16 +100,6 @@ const RENDER_DEBOUNCE_MS = 400
  */
 const INTERACTIVE_IN_BLOCK =
   'input, textarea, select, button, a, label, [data-mermaid-width-section="true"], [data-mermaid-settings]'
-
-// Lazily loaded mermaid singleton so the heavy library is code-split and only
-// fetched when a diagram is actually rendered.
-let mermaidPromise: Promise<typeof import('mermaid').default> | undefined
-function loadMermaid(): Promise<typeof import('mermaid').default> {
-  if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then((m) => m.default)
-  }
-  return mermaidPromise
-}
 
 let renderSeq = 0
 
@@ -545,37 +536,23 @@ function MermaidComponent({
         return
       }
       try {
-        const mermaid = await loadMermaid()
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: activeTheme.theme,
-          // The APPLICATION's own design tokens, not mermaid's generic palette.
-          // Absent for a pinned built-in theme: measured against mermaid
-          // 11.16.1, `initialize` rebuilds its config from the defaults rather
-          // than accumulating, so a pinned diagram rendered after an app-themed
-          // one gets mermaid's own clean palette (`mainBkg` back to `#ECECFF`)
-          // and not the previous diagram's overrides.
-          themeVariables: activeTheme.themeVariables,
-          // A CONCRETE stack, never `inherit`. Mermaid sizes every node by
-          // measuring its label in a temporary element, and the finished SVG is
-          // then injected into the editor — so a value that defers to its
-          // parent is resolved twice, against two different fonts, and every
-          // box is sized from metrics the label never had. Still required with
-          // the measuring element below: that element only covers the DOM
-          // measurement, while the print snapshot reparents the finished SVG
-          // under `#srn-print-root` and its own `font-family`. See
-          // resolveMermaidLabelFontFamily.
-          fontFamily,
-        })
         // The prefix is what the reduced-motion exception in
         // stylesheets/_animation.scss recognises a measuring `<svg>` by.
         const id = `${MERMAID_RENDER_ID_PREFIX}${nodeKey}-${renderSeq++}`
-        // THE third argument: measure where the diagram is drawn. `undefined`
-        // means mermaid's `document.body` path, which is all there is when the
-        // block has no layout (a collapsed foldable, a hidden pane).
+        // Measure where the diagram is drawn. `undefined` means mermaid's
+        // `document.body` path, which is all there is when the block has no
+        // layout (a collapsed foldable, a hidden pane).
         const measureIn = readMermaidMeasurementContainer(measureRef.current)
-        const { svg: rendered } = await mermaid.render(id, trimmed, measureIn)
+        // Through the shared runtime, never `mermaid.initialize` here: mermaid's
+        // configuration is global, and MermaidRuntime.ts is what stops one
+        // diagram's settings — or one diagram's error — reaching the next.
+        const { svg: rendered } = await renderMermaidDiagram({
+          id,
+          text: trimmed,
+          theme: activeTheme,
+          fontFamily,
+          measureIn,
+        })
         // Drop the result if a newer render started in the meantime.
         if (token !== renderTokenRef.current) {
           return

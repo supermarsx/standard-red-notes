@@ -50,7 +50,11 @@ const mermaidRender = jest.fn(async () => ({ svg: DIAGRAM_SVG }))
 
 jest.mock('mermaid', () => ({
   __esModule: true,
-  default: { initialize: jest.fn(), render: (...args: unknown[]) => mermaidRender(...(args as [])) },
+  default: {
+    mermaidAPI: { reset: () => undefined },
+    initialize: jest.fn(),
+    render: (...args: unknown[]) => mermaidRender(...(args as [])),
+  },
 }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
