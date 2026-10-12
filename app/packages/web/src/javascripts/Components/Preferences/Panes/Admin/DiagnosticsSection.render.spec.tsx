@@ -277,8 +277,9 @@ describe('DiagnosticsSection', () => {
     expect(fold?.textContent).toContain('The gRPC syncing proxy was not bound at boot.')
 
     // Order in the document: title before action before fold.
-    const order = (element: Element | null | undefined): number =>
-      element ? [...(card?.querySelectorAll('*') ?? [])].indexOf(element) : -1
+    const order = (element: Element | null | undefined): number => {
+      return element ? [...(card?.querySelectorAll('*') ?? [])].indexOf(element) : -1
+    }
     expect(order(card?.querySelector('[data-diagnostics-finding-title]'))).toBeLessThan(order(action))
     expect(order(action)).toBeLessThan(order(fold))
   })

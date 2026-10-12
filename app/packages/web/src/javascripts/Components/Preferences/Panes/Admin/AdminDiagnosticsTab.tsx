@@ -1304,7 +1304,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         },
         progress === null ? [] : [progress.current],
       ),
-    [outcomes, transport, deployment, markerRead, progress],
+    [outcomes, transport, ledger, deployment, markerRead, progress],
   )
 
   /**

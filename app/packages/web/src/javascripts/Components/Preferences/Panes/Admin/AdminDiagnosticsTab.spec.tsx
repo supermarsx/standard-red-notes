@@ -77,13 +77,7 @@ jest.mock('@standardnotes/ui-services', () => ({
 
 import AdminDiagnosticsTab, { clockReadingFor } from './AdminDiagnosticsTab'
 import { CHECK_IDS, CHECKS, type CheckId } from './diagnosticChecks'
-// TONE_CHIP is imported from the module that DEFINES it. It used to be declared
-// twice — here and in `diagnosticsPresentation.tsx` — and the tab's copy was
-// deleted rather than re-exported: a re-export would leave the tab looking like a
-// second source of truth for an exhaustive `Record` over a union that keeps
-// gaining members, which is the drift hazard rather than a cure for it.
-import { TONE_CHIP } from './diagnosticsPresentation'
-import { SYNC_ITEMS_CAUSES, TONES } from './syncDiagnostics'
+import { SYNC_ITEMS_CAUSES } from './syncDiagnostics'
 import { SECTION_IDS, SECTION_TITLE } from './diagnosticsSections'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -2538,9 +2532,9 @@ describe('AdminDiagnosticsTab — Checks', () => {
     const never = new Promise<never>(() => undefined)
     const application = makeApplication()
     const answer = application.httpOnlyJsonRequest.getMockImplementation() as (...args: unknown[]) => Promise<unknown>
-    application.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
-      path === '/v1/sockets/sync/capabilities' ? never : answer(method, path),
-    )
+    application.httpOnlyJsonRequest.mockImplementation((method: string, path: string) => {
+      return path === '/v1/sockets/sync/capabilities' ? never : answer(method, path)
+    })
 
     await renderTab(application)
     // The run that starts when the pane opens is sitting on the first check.
@@ -2568,9 +2562,9 @@ describe('AdminDiagnosticsTab — Checks', () => {
     const never = new Promise<never>(() => undefined)
     const application = makeApplication()
     const answer = application.httpOnlyJsonRequest.getMockImplementation() as (...args: unknown[]) => Promise<unknown>
-    application.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
-      path === '/v1/admin/sync-diagnostics' ? never : answer(method, path),
-    )
+    application.httpOnlyJsonRequest.mockImplementation((method: string, path: string) => {
+      return path === '/v1/admin/sync-diagnostics' ? never : answer(method, path)
+    })
 
     await renderTab(application)
     await act(async () => {

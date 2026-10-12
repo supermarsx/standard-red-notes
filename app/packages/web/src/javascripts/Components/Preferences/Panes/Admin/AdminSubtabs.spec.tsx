@@ -62,11 +62,9 @@ const makeApplication = () => ({
   // Diagnostics tab: reads the admin sync-diagnostics endpoint and the live
   // transport directly off the application, not through legacyApi. The pane's
   // own read of that endpoint goes over plain HTTP, so both helpers answer it.
-  httpOnlyJsonRequest: jest
-    .fn()
-    .mockImplementation(async (_method: string, path: string) =>
-      path === '/v1/admin/sync-diagnostics' ? DIAGNOSTICS_ANSWER : { status: 404, ok: false, data: {} },
-    ),
+  httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
+    return path === '/v1/admin/sync-diagnostics' ? DIAGNOSTICS_ANSWER : { status: 404, ok: false, data: {} }
+  }),
   serverGetJsonRequest: jest.fn().mockResolvedValue(DIAGNOSTICS_ANSWER),
   serverJsonRequest: jest
     .fn()
