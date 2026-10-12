@@ -69,6 +69,13 @@ export const PrefDefaults = {
   // Standard Red Notes: default to the slightly smaller Small toolbar icons;
   // users can bump this to Medium (previous size) or Large.
   [PrefKey.SuperToolbarIconSize]: SuperToolbarIconSize.Small,
+  // Standard Red Notes: the docked Super toolbar does NOT auto-hide unless the
+  // user asks for it, so nobody's toolbar moves on upgrade. As with the mermaid
+  // entry below, web does not read this default at runtime: it pins the literal
+  // in `ToolbarAutoHidePreference.ts` and treats anything but an explicit `true`
+  // as off, because a brand-new member of this file is `undefined` in the
+  // browser until `models` AND the webpack-bundled `snjs` have been rebuilt.
+  [PrefKey.SuperToolbarAutoHide]: false,
   // Standard Red Notes: mermaid source highlighting is ON. A diagram source in
   // one undifferentiated colour is the state the feature exists to end, so the
   // toggle is an escape hatch rather than an opt-in. Note that web does NOT

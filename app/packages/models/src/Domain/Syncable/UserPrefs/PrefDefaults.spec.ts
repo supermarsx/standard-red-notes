@@ -53,6 +53,22 @@ describe('PrefDefaults', () => {
     })
   })
 
+  describe('super toolbar auto-hide', () => {
+    it('stores under the published literal', () => {
+      // Web pins this same string in `ToolbarAutoHidePreference.ts`; its spec
+      // reads this package's source to check the two still agree.
+      expect(PrefKey.SuperToolbarAutoHide).toBe('superToolbarAutoHide')
+    })
+
+    it('defaults OFF, so the toolbar every existing user already has does not start moving', () => {
+      expect(PrefDefaults[PrefKey.SuperToolbarAutoHide]).toBe(false)
+    })
+
+    it('leaves the always-visible toolbar ON by default, which is the mode auto-hide applies to', () => {
+      expect(PrefDefaults[PrefKey.AlwaysShowSuperToolbar]).toBe(true)
+    })
+  })
+
   describe('missed recurrence generation', () => {
     it('stores under the published literals', () => {
       expect(PrefKey.ChecklistAutoGenerateRecurrences).toBe('checklistAutoGenerateRecurrences')

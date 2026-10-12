@@ -134,6 +134,12 @@ export enum PrefKey {
   // Defaults to the (slightly smaller) Small; Medium restores the previous size
   // and Large makes them bigger for easier tap targets.
   SuperToolbarIconSize = 'superToolbarIconSize',
+  // Standard Red Notes: whether the DOCKED Super toolbar (the ribbon shown when
+  // AlwaysShowSuperToolbar is on) tucks itself away while the user is writing
+  // and comes back when they reach for it. Defaults OFF, so the toolbar every
+  // existing user has is unchanged. It has no effect on the floating selection
+  // toolbar or on mobile, which already appear only on demand.
+  SuperToolbarAutoHide = 'superToolbarAutoHide',
   // Standard Red Notes: whether a mermaid diagram block's SOURCE pane (the
   // `code` and `split` view modes) is syntax-highlighted. Defaults ON; turning
   // it off restores the plain, single-colour textarea exactly.
@@ -457,6 +463,7 @@ export type PrefValue = {
   [PrefKey.ActiveComponents]: string[]
   [PrefKey.AlwaysShowSuperToolbar]: boolean
   [PrefKey.SuperToolbarIconSize]: SuperToolbarIconSize
+  [PrefKey.SuperToolbarAutoHide]: boolean
   [PrefKey.SuperMermaidSourceHighlighting]: boolean
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
