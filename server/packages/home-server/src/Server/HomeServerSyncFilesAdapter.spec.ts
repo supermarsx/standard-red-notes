@@ -39,6 +39,7 @@ import {
   HomeServerSyncFilesAdapter,
   HomeServerSyncFilesAdapterError,
   type HomeServerFileResourceAuthorizer,
+  type HomeServerPublishedUpload,
 } from './HomeServerSyncFilesAdapter'
 
 const identity: SyncTicketIdentity = {
@@ -84,6 +85,7 @@ describe('HomeServerSyncFilesAdapter', () => {
       authorize?: HomeServerFileResourceAuthorizer
       maxActiveTransfers?: number
       now?: () => number
+      onUploadPublished?: (upload: HomeServerPublishedUpload) => Promise<void>
     } = {},
   ) {
     const root = options.root ?? (await fs.mkdtemp(join(tmpdir(), 'srn-files-v1-')))
@@ -91,16 +93,18 @@ describe('HomeServerSyncFilesAdapter', () => {
       roots.push(root)
     }
     let counter = 0
+    const published = jest.fn(async (_upload: HomeServerPublishedUpload): Promise<void> => undefined)
     const adapter = new HomeServerSyncFilesAdapter({
       storageRoot: root,
       authorizer: options.authorize ?? authorizer(),
+      onUploadPublished: options.onUploadPublished ?? published,
       maxActiveTransfers: options.maxActiveTransfers,
       now: options.now,
       createTransferId: () => `transfer-${++counter}`,
       createResumeId: () => `resume-${counter}`,
     })
     await adapter.initialize()
-    return { adapter, root }
+    return { adapter, root, published }
   }
 
   afterEach(async () => {
@@ -238,7 +242,11 @@ describe('HomeServerSyncFilesAdapter', () => {
         roots.push(root)
         // createResumeId intentionally NOT overridden: this exercises the
         // real production default, not a test double.
-        const adapter = new HomeServerSyncFilesAdapter({ storageRoot: root, authorizer: authorizer() })
+        const adapter = new HomeServerSyncFilesAdapter({
+          storageRoot: root,
+          authorizer: authorizer(),
+          onUploadPublished: async () => undefined,
+        })
         await adapter.initialize()
 
         const opened = await adapter.openUpload({ identity, descriptor }, new AbortController().signal)
@@ -729,6 +737,161 @@ describe('HomeServerSyncFilesAdapter', () => {
     await expect(
       malicious.adapter.metadata({ identity, resources: [resource] }, new AbortController().signal),
     ).rejects.toMatchObject({ code: 'FILE_PATH_INVALID' })
+  })
+
+  /**
+   * The accounting hook. Until it existed this adapter hard-linked a file into
+   * storage and told nobody: the files server's HTTP lane publishes
+   * `FILE_UPLOADED` when an upload finishes and this lane published nothing, so
+   * on the single container no file a browser uploaded ever reached
+   * `FILE_UPLOAD_BYTES_USED`. Measured on a running container: 800,034 bytes on
+   * disk in two files, no usage figure at all.
+   */
+  describe('announcing a published upload', () => {
+    const signal = () => new AbortController().signal
+    const bytes = Uint8Array.from([1, 2, 3, 4, 5])
+
+    async function stage(
+      adapter: HomeServerSyncFilesAdapter,
+      uploadDescriptor: Parameters<HomeServerSyncFilesAdapter['openUpload']>[0]['descriptor'],
+    ) {
+      const opened = await adapter.openUpload({ identity, descriptor: uploadDescriptor }, signal())
+      await adapter.uploadChunk(
+        {
+          identity,
+          header: {
+            kind: 'UPLOAD_CHUNK' as const,
+            requestId: 'request-1',
+            transferId: opened.transferId,
+            generation: opened.generation,
+            index: 0,
+            offset: 0,
+            declaredSize: bytes.byteLength,
+            byteLength: bytes.byteLength,
+            sha256: digest(bytes),
+            final: true,
+          },
+          bytes,
+        },
+        signal(),
+      )
+
+      return (sha256 = digest(bytes)) =>
+        adapter.finishUpload(
+          {
+            identity,
+            transferId: opened.transferId,
+            generation: opened.generation,
+            declaredSize: bytes.byteLength,
+            sha256,
+          },
+          signal(),
+        )
+    }
+
+    it('announces the file once it is on disk, with the uploader, the owner and the stored byte count', async () => {
+      const { adapter, root, published } = await createAdapter()
+      const finish = await stage(adapter, descriptor)
+
+      // Nothing is counted while the bytes are still private staging.
+      expect(published).not.toHaveBeenCalled()
+
+      await expect(finish()).resolves.toEqual({ sha256: digest(bytes) })
+
+      expect(published).toHaveBeenCalledTimes(1)
+      expect(published).toHaveBeenCalledWith({
+        resource,
+        uploaderUuid: 'user-1',
+        storageOwnerUuid: 'user-1',
+        byteSize: 5,
+      })
+      // The figure announced is the figure stored: a later removal subtracts the
+      // file's size on disk, so anything else here would never cancel out.
+      expect((await fs.stat(join(root, 'user-1', 'remote-1'))).size).toBe(5)
+    })
+
+    it('does not announce the same file again when the finish is replayed', async () => {
+      const { adapter, published } = await createAdapter()
+      const finish = await stage(adapter, descriptor)
+
+      await finish()
+      await expect(finish()).resolves.toEqual({ sha256: digest(bytes) })
+      await expect(finish()).resolves.toEqual({ sha256: digest(bytes) })
+
+      // One file, one announcement: a client that never saw the first answer
+      // replays its FINISH, and counting that would charge the account twice.
+      expect(published).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not announce bytes that were already published when it got there', async () => {
+      const { adapter, root, published } = await createAdapter()
+      const finish = await stage(adapter, descriptor)
+      // The same file arriving first by another route -- the HTTP lane, or an
+      // earlier attempt of this transfer -- which already accounted for it.
+      await fs.mkdir(join(root, 'user-1'), { recursive: true })
+      await fs.writeFile(join(root, 'user-1', 'remote-1'), bytes)
+
+      await expect(finish()).resolves.toEqual({ sha256: digest(bytes) })
+
+      expect(published).not.toHaveBeenCalled()
+    })
+
+    it('does not announce an upload it refused to publish', async () => {
+      const { adapter, root, published } = await createAdapter()
+      const finish = await stage(adapter, descriptor)
+      await fs.mkdir(join(root, 'user-1'), { recursive: true })
+      await fs.writeFile(join(root, 'user-1', 'remote-1'), Uint8Array.from([9, 9, 9, 9, 9]))
+
+      await expect(finish()).rejects.toMatchObject({ code: 'FILE_DESTINATION_CONFLICT' })
+      await expect(finish('0'.repeat(64))).rejects.toMatchObject({ code: 'FILE_INTEGRITY_MISMATCH' })
+
+      expect(published).not.toHaveBeenCalled()
+    })
+
+    it('names the vault as the storage owner and carries the vault owner for a shared-vault file', async () => {
+      const { adapter, root, published } = await createAdapter()
+      const sharedResource = {
+        ownershipType: 'shared-vault' as const,
+        remoteIdentifier: 'shared-file',
+        fileUuid: 'file-2',
+        sharedVaultUuid: 'vault-1',
+        sharedVaultOwnerUuid: 'owner-1',
+      }
+      const finish = await stage(adapter, {
+        ...sharedResource,
+        decryptedSize: 5,
+        declaredSize: 5,
+        mimeType: 'application/octet-stream',
+      })
+
+      await finish()
+
+      // The uploader is a member; the bytes are the vault's and the bill is its
+      // owner's, exactly as the HTTP lane's SHARED_VAULT_FILE_UPLOADED has it.
+      expect(published).toHaveBeenCalledTimes(1)
+      expect(published).toHaveBeenCalledWith({
+        resource: sharedResource,
+        uploaderUuid: 'user-1',
+        storageOwnerUuid: 'vault-1',
+        byteSize: 5,
+      })
+      expect((await fs.stat(join(root, 'vault-1', 'shared-file'))).size).toBe(5)
+    })
+
+    it('still answers the upload when the accountant throws, and does not call it a second time', async () => {
+      const failing = jest.fn(async (_upload: HomeServerPublishedUpload): Promise<void> => {
+        throw new Error('the books are closed')
+      })
+      const { adapter, root } = await createAdapter({ onUploadPublished: failing })
+      const finish = await stage(adapter, descriptor)
+
+      // The bytes are durable, so the client is owed its success either way.
+      await expect(finish()).resolves.toEqual({ sha256: digest(bytes) })
+      await expect(finish()).resolves.toEqual({ sha256: digest(bytes) })
+
+      expect(failing).toHaveBeenCalledTimes(1)
+      expect(await fs.readFile(join(root, 'user-1', 'remote-1'))).toEqual(Buffer.from(bytes))
+    })
   })
 
   // The gateway drives this adapter through SyncFilesSession, never directly.

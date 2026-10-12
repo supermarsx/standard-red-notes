@@ -37,9 +37,53 @@ export interface HomeServerFileResourceAuthorizer {
   ): Promise<HomeServerFileAuthorization | undefined>
 }
 
+/**
+ * Standard Red Notes: one file this adapter has just made durable under its
+ * canonical path, handed to whoever keeps the books.
+ *
+ * `byteSize` is the bytes NOW ON DISK (the encrypted size the client declared and
+ * the adapter verified chunk by chunk), which is the quantity the files server's
+ * HTTP lane reports in `FILE_UPLOADED` and the one a later `FILE_REMOVED`
+ * subtracts. `uploaderUuid` is the authenticated socket identity; for a personal
+ * file it is also the storage owner.
+ */
+export type HomeServerPublishedUpload = {
+  resource: FileResourceReference
+  uploaderUuid: string
+  storageOwnerUuid: string
+  byteSize: number
+}
+
 export type HomeServerSyncFilesAdapterOptions = {
   storageRoot: string
   authorizer: HomeServerFileResourceAuthorizer
+  /**
+   * Standard Red Notes: REQUIRED, and that is the point of it being here.
+   *
+   * *** WHAT WAS BROKEN, MEASURED. *** This adapter publishes a file by
+   * hard-linking it into the same directory the files server's HTTP lane writes
+   * to, and for as long as it has existed it stopped there. The HTTP lane's
+   * `FinishUploadSession` goes on to publish `FILE_UPLOADED`, which is the ONLY
+   * thing that ever writes `FILE_UPLOAD_BYTES_USED`. FILES_V1 is on by default on
+   * the all-in-one container and the web client prefers it, so on the deployment
+   * this project ships by default every file a browser uploaded was stored and
+   * never counted: a fresh account that uploaded 300,017 + 500,017 bytes held
+   * 800,034 bytes on disk and NO usage figure, the admin space report printed
+   * "files Not reported" beside it, a stored upload limit could not bind because
+   * usage never grew, and the first delete (which does go over HTTP and does
+   * subtract) left a stored, measured-looking 0 beside 500,017 bytes of files.
+   * The multi-container adapter was never affected: it finishes through the
+   * files server and inherits its event.
+   *
+   * An optional hook is how that happened -- nothing made a composition supply
+   * the half that keeps the books. A required one cannot be forgotten silently.
+   *
+   * Called at most once per file, after the bytes are durable, and never for a
+   * replayed finish or for bytes that were already there. It must not throw; if
+   * it does the upload still succeeds (the bytes are published, and failing here
+   * would only make the client replay a finish that is then not announced).
+   */
+  onUploadPublished: (upload: HomeServerPublishedUpload) => Promise<void>
   storageReady?: () => boolean
   maxActiveTransfers?: number
   transferTtlMs?: number
@@ -382,6 +426,14 @@ export class HomeServerSyncFilesAdapter implements SyncFilesAdapter {
       }
       const destination = await this.resolveResourcePath(state.storageOwnerUuid, state.resource.remoteIdentifier, true)
       signal.throwIfAborted()
+      // Standard Red Notes: whether THIS call is the one that put the bytes
+      // there. Identical bytes already at the destination were published -- and
+      // accounted for -- by whoever put them there (the HTTP lane, or an earlier
+      // attempt of this transfer), so announcing them again would count one file
+      // twice. Erring that way is the worse direction: an over-count refuses
+      // uploads an account has room for, an under-count is what Recalculate
+      // storage quota repairs.
+      let publishedByThisCall = true
       try {
         await fs.link(state.partialPath, destination)
       } catch (error) {
@@ -393,6 +445,7 @@ export class HomeServerSyncFilesAdapter implements SyncFilesAdapter {
         if (existingSha256 !== actualSha256 || existingStat.size !== state.descriptor.declaredSize) {
           throw new HomeServerSyncFilesAdapterError('FILE_DESTINATION_CONFLICT')
         }
+        publishedByThisCall = false
       }
       await this.syncDirectory(resolve(destination, '..'))
       state.completedSha256 = actualSha256
@@ -400,6 +453,9 @@ export class HomeServerSyncFilesAdapter implements SyncFilesAdapter {
       await fs.rm(state.partialPath, { force: true })
       await fs.rm(state.manifestPath, { force: true })
       this.rememberCompletedUpload(state as CompletedUploadState)
+      if (publishedByThisCall) {
+        await this.announcePublishedUpload(state)
+      }
       return { sha256: actualSha256 }
     })
   }
@@ -577,6 +633,26 @@ export class HomeServerSyncFilesAdapter implements SyncFilesAdapter {
       }
       await this.removeState(state)
     })
+  }
+
+  /**
+   * Standard Red Notes: tell the composition a file is now stored, so its bytes
+   * reach the usage figure (see `onUploadPublished`). Runs after the transfer is
+   * recorded as complete: a replayed finish then answers from that record and
+   * never comes back here, which is what keeps this at most once per file.
+   */
+  private async announcePublishedUpload(state: UploadState): Promise<void> {
+    try {
+      await this.options.onUploadPublished({
+        resource: state.resource,
+        uploaderUuid: state.identity.userUuid,
+        storageOwnerUuid: state.storageOwnerUuid,
+        byteSize: state.descriptor.declaredSize,
+      })
+    } catch {
+      // The bytes are durable and the client is owed a success. The hook owns
+      // reporting its own failure; rethrowing would fail an upload that worked.
+    }
   }
 
   private async authorize(

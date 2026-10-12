@@ -111,6 +111,7 @@ import { WebSocketInProcessBridge } from './WebSocketInProcessBridge'
 import { resolveBundledAdminEmailDeliveryService } from './AdminEmailDeliveryComposition'
 import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerRuntime'
 import { HomeServerSyncFilesAdapter } from './HomeServerSyncFilesAdapter'
+import { createFileUploadAccountant } from './HomeServerFileUploadAccounting'
 import {
   INTERNAL_DIAGNOSTICS_BIND_ADDRESS,
   INTERNAL_DIAGNOSTICS_PATH,
@@ -1308,7 +1309,13 @@ export class HomeServer implements HomeServerInterface {
               directCallPublisher: directCallDomainEventPublisher,
             })
             inviteDomainEventBridge.start()
-            filesAdapter = await this.createSyncFilesAdapter(env, serviceContainer, container, logger)
+            filesAdapter = await this.createSyncFilesAdapter(
+              env,
+              serviceContainer,
+              container,
+              logger,
+              directCallDomainEventPublisher,
+            )
             // Home server owns canonical file storage in-process, so the FILES_V1
             // waiver here is never about a missing URL or valet secret — the
             // adapter either constructed or it did not.
@@ -1646,6 +1653,7 @@ export class HomeServer implements HomeServerInterface {
     serviceContainer: ServiceContainer,
     container: Container,
     logger: winston.Logger,
+    domainEventPublisher: DirectCallDomainEventPublisher,
   ): Promise<HomeServerSyncFilesAdapter | undefined> {
     if (!parseWebSocketFilesEnabled(env.get('WEBSOCKET_FILES_ENABLED', true) || undefined)) {
       logger.info('WebSocket FILES_V1 transport disabled by WEBSOCKET_FILES_ENABLED.')
@@ -1678,6 +1686,10 @@ export class HomeServer implements HomeServerInterface {
           env.get('WEBSOCKET_FILES_MAX_ACTIVE_TRANSFERS', true) || undefined,
           4_096,
         ),
+        // Standard Red Notes: the same in-process publisher the files service's
+        // HTTP lane publishes on, so a socket upload reaches the same handlers
+        // (auth's storage quota, syncing's shared-vault usage) and is counted.
+        onUploadPublished: createFileUploadAccountant(domainEventPublisher, logger),
       })
       await adapter.initialize()
       logger.info('WebSocket FILES_V1 transport enabled on the realtime sync socket.')
