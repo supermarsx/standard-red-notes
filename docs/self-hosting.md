@@ -439,18 +439,27 @@ stays upgradable:
 # Find the network your proxy already uses
 docker network ls
 
-# Deploy onto it (the deploy script applies the overlay for you)
+# Deploy onto it. Say it once: the deploy script remembers it.
 ./deploy.sh --proxy-network=npm_default
 
-# Or by hand
-docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+# Every later deploy, including after a git pull
+./deploy.sh
 ```
+
+The usual mistake is the network's name. A proxy started with Docker Compose
+sits on `<its-project>_default` - `npm_default` for a Nginx Proxy Manager stack
+kept in a directory called `npm` - and not on anything called `proxy`. On a
+first install with a terminal attached and no proxy flag, `./deploy.sh` asks
+whether the stack sits behind a containerised proxy and lists the networks on
+the host, with the ones a recognisable proxy container (Nginx Proxy Manager,
+Traefik, Caddy, nginx, OpenResty, HAProxy) is attached to first. It never asks
+under `--yes`, under `--dry-run`, or without a terminal; there, pass the flag.
 
 Then point the proxy at `http://standard-red-notes-app:8080`. Compose also
 registers the plain service name `app` as an alias, but `app` is a name many
-stacks on a shared proxy network will claim, so prefer the explicit one. Set
-`SRN_PROXY_ALIAS` to change it, and `SRN_PROXY_NETWORK` if you are applying the
-overlay without the deploy script.
+stacks on a shared proxy network will claim, so prefer the explicit one.
+`--proxy-alias` (or `SRN_PROXY_ALIAS`) changes it, and `SRN_PROXY_NETWORK`
+names the network if you are applying the overlay without the deploy script.
 
 The overlay makes three changes:
 
@@ -486,10 +495,136 @@ docker network connect npm_default <your-proxy-container>
 `PUBLIC_URL` and `PUBLIC_FILES_SERVER_URL` are the other two silent ones. Left
 at `http://localhost:3001`, the gateway hands browsers links, redirects and
 file URLs pointing at the container instead of your domain, and the websocket
-origin allowlist derived from `PUBLIC_URL` rejects your real origin. `./deploy.sh
---proxy-network` warns about these, and about `ENFORCE_HTTPS_FROM_PROXY` and
+origin allowlist derived from `PUBLIC_URL` rejects your real origin. In proxy
+mode `./deploy.sh` warns about these, and about `ENFORCE_HTTPS_FROM_PROXY` and
 `TRUST_PROXY` disagreeing with the rest of the configuration, but it never
 edits `.env`.
+
+#### What the deploy script remembers
+
+`./deploy.sh` used to forget everything between runs. A plain `./deploy.sh`
+after `./deploy.sh --proxy-network=npm_default` recreated the app container
+**off** the proxy network and **with** its host port published on
+`APP_BIND_ADDRESS` again: the site went dark behind the proxy, an unproxied
+port opened, and the script reported success. The choices that say which stack
+this is and how it is reached are therefore written to `.deploy-state`, beside
+`deploy.sh`, just before the stack is started:
+
+| Remembered                                                   | Said with                                             |
+| ------------------------------------------------------------ | ----------------------------------------------------- |
+| Which Compose file                                           | `--single`, `--file`                                  |
+| The Compose project name                                     | `-p`, or `COMPOSE_PROJECT_NAME` in the environment    |
+| The proxy network, its alias, and the optional loopback port | `--proxy-network`, `--proxy-alias`, `--publish-ports` |
+
+Every run prints the file it read and what it took from it before it does
+anything else:
+
+```text
+Remembered settings
+File:   /srv/standard-red-notes/.deploy-state (saved 2026-10-12T11:46:54Z)
+Loaded: the multi-container stack (docker-compose.yml), Compose's default project name
+        behind reverse-proxy network 'npm_default' as 'standard-red-notes-app', no host port
+This run: as remembered.
+```
+
+`.deploy-state` is a short `key=value` file you can read. It holds no secrets -
+those stay in `.env`, which the script still never writes - and Git ignores it,
+so it survives `git pull` and never shows up as a local change. It is parsed
+strictly and never executed: a line the script does not understand stops the
+deploy instead of being guessed at. `--dry-run` prints what would be written
+and writes nothing. A deployment that never used any of these flags gets no
+file at all and behaves exactly as it did before.
+
+A deployment that was already behind a proxy network before settings were
+remembered has no `.deploy-state`. The first plain `./deploy.sh` reads the
+answer off the app container - Compose records which files a container was
+created from - carries the proxy network forward, and saves it. A network you
+attached by hand with `docker network connect` does not count.
+
+#### Changing or leaving the proxy network
+
+Nothing about the proxy changes unless you say so on the command line. What you
+say is announced before anything is pulled or built, and is then remembered in
+turn:
+
+```bash
+./deploy.sh --proxy-network=other_default   # move to another proxy network
+./deploy.sh --publish-ports                 # also publish 127.0.0.1:APP_PORT
+./deploy.sh --no-publish-ports              # stop doing that
+./deploy.sh --no-proxy                      # leave: publish the host port again
+```
+
+`--no-proxy` is the only way out of proxy mode. In particular, a remembered
+network that no longer exists - the proxy stack was removed, or its network
+renamed - **stops the deploy**, names the network, and leaves the running stack
+untouched. It does not fall back to publishing a port. Either move the
+deployment with `--proxy-network=<its-network>`, or leave deliberately with
+`--no-proxy`; if the proxy stack is merely stopped, start it and re-run.
+
+`--single`, `--file` and `-p` are different in kind: they say _which_
+deployment this is. A command line that names a different one from the one
+remembered is refused rather than merged, because carrying one stack's proxy
+settings over to another would put two app containers on the proxy network
+under the same name. To run a second deployment from the same checkout, give it
+its own file with `--state-file .deploy-state.staging` on every run. To replace
+the remembered deployment, delete `.deploy-state` and run the new command.
+
+Deleting `.deploy-state` is not a way off a proxy network. While the stack
+exists, the next run reads the network back off the app container. Only when
+the file is deleted _and_ the containers are gone (`docker compose down`) is
+there nothing left to read, and that run needs `--proxy-network` again.
+
+#### Starting and restarting by hand
+
+A hand-typed Compose command can lose the proxy network the same way a
+forgetful deploy did. `docker compose up -d` does not merely start what is
+stopped: it recreates every container whose configuration differs from the
+files it is given, and without the overlay that is the app container, off the
+proxy network and with its host port published.
+
+For the multi-container stack the deploy script closes that gap. From what it
+remembers it generates `docker-compose.override.yml`, the one file Compose
+loads by itself, so a bare command in the checkout acts on the same project, on
+the same network:
+
+```bash
+docker compose up -d        # safe once ./deploy.sh has run in proxy mode
+docker compose logs -f app
+```
+
+The script keeps that file only after asking Compose to render both a bare
+invocation and its own and finding them identical, and its closing summary says
+which it is (`By hand: ...`). It never touches an override file it did not
+generate: if you keep your own, or set `COMPOSE_FILE`, the summary tells you
+that a bare command is **not** covered. Git ignores the generated file.
+
+Two cases it cannot cover, because Compose is told not to load the override:
+
+- an explicit `-f`, such as `docker compose -f docker-compose.yml up -d`;
+- the all-in-one stack, which is always addressed with
+  `-f docker-compose.single.yml`.
+
+For those, use `./deploy.sh`, or repeat every file and the network name:
+
+```bash
+SRN_PROXY_NETWORK=npm_default docker compose \
+  -f docker-compose.yml -f docker-compose.proxy.yml up -d
+```
+
+#### The all-in-one container behind a proxy
+
+The all-in-one topology takes the same treatment, with an overlay of its own
+because it has no internal network to keep:
+
+```bash
+./deploy.sh --single --proxy-network=npm_default
+./deploy.sh        # later: still the all-in-one stack, still on npm_default
+```
+
+`docker-compose.single.proxy.yml` joins the container to the proxy network
+under the same alias and removes its published port; `--publish-ports` works
+here too. `--single` is remembered like everything else, so a later plain
+`./deploy.sh` cannot start the multi-container stack beside it by mistake.
 
 ### Standard Red Notes external host
 
@@ -707,6 +842,12 @@ shared Docker network and let the proxy reach it by service name.
 `docker network create proxy`, then uncomment the `# - proxy` network line (and
 the Traefik `labels:` block) on the `app` service. Leaving the examples
 commented keeps the default flow unchanged.
+
+If you deploy with `./deploy.sh`, prefer
+[the overlay](#attaching-to-the-proxys-docker-network) to editing
+`docker-compose.yml`. It makes the same change without touching the base file -
+which the script would otherwise refuse to deploy as an uncommitted change -
+and the script remembers it on every later run.
 
 ### nginx example
 
@@ -940,6 +1081,11 @@ real request to the readiness endpoint and confirms the live deployment
 identity is the commit it just built. On a host with no `.env` it runs
 `scripts/setup.sh` first; it never overwrites an existing one. `--dry-run`
 prints every command it would run, and `./deploy.sh --help` lists the flags.
+
+It also remembers how the stack was deployed - which Compose file, which
+project name, and which reverse-proxy network - so the same plain `./deploy.sh`
+redeploys the same way after every `git pull`. See
+[What the deploy script remembers](#what-the-deploy-script-remembers).
 
 This source-build path remains the default. `./scripts/setup.sh --up` and
 `./scripts/setup.ps1 -Up` still build the checked-out `app` and `server`

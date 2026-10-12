@@ -530,7 +530,17 @@
             - title: Required environment
               url: /self-hosting.html#required-environment
             - title: Proxy Docker network
-              url: /self-hosting.html#attaching-to-the-proxys-docker-network
+              items:
+                - title: Proxy Docker network overview
+                  url: /self-hosting.html#attaching-to-the-proxys-docker-network
+                - title: What the deploy script remembers
+                  url: /self-hosting.html#what-the-deploy-script-remembers
+                - title: Changing or leaving the network
+                  url: /self-hosting.html#changing-or-leaving-the-proxy-network
+                - title: Starting and restarting by hand
+                  url: /self-hosting.html#starting-and-restarting-by-hand
+                - title: All-in-one container behind a proxy
+                  url: /self-hosting.html#the-all-in-one-container-behind-a-proxy
             - title: External host
               url: /self-hosting.html#standard-red-notes-external-host
             - title: Worker WebSocket sync
