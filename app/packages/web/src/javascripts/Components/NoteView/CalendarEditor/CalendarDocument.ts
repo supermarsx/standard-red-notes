@@ -13,9 +13,34 @@
  * in). This keeps a Calendar note round-tripping and syncing like any other note
  * with no models/snjs changes — the note is marked as a calendar purely via
  * `note.editorIdentifier`.
+ *
+ * ## A reader keeps what it does not understand
+ *
+ * Desktop and mobile builds lag the web build, so a calendar note is routinely
+ * opened by a build older than the one that last wrote it. A reader that drops
+ * the fields it does not know erases them for every device the next time it
+ * saves. So reading here never discards: a key this build does not recognise is
+ * carried in `unknownFields` (on the event or on the document), an entry of
+ * `events` it cannot use as an event is carried in `unrecognizedEntries`, and
+ * {@link serializeCalendarDocument} writes both back where they were. Known keys
+ * are still validated and normalised exactly as before.
  */
 
 export const CALENDAR_DOCUMENT_VERSION = 1
+
+/** Keys a reader did not recognise, with the values exactly as they were stored. */
+export type CalendarUnknownFields = Record<string, unknown>
+
+/**
+ * An entry of the stored `events` array that this build cannot show as an event
+ * (no usable id or date, or an id an earlier entry already has). It is not
+ * rendered and not editable, and it is written back at `position`, its index in
+ * the stored array.
+ */
+export type CalendarUnrecognizedEntry = {
+  position: number
+  raw: unknown
+}
 
 export type CalendarRecurrenceFreq = 'daily' | 'weekly' | 'monthly' | 'yearly'
 
@@ -49,11 +74,17 @@ export type CalendarEvent = {
   end?: string
   /** Optional repeat rule. Absent means a one-shot event. */
   recurrence?: CalendarRecurrence
+  /** Stored keys this build does not know. Never read, always written back. */
+  unknownFields?: CalendarUnknownFields
 }
 
 export type CalendarDocument = {
   version: number
   events: CalendarEvent[]
+  /** Stored top-level keys this build does not know. Never read, always written back. */
+  unknownFields?: CalendarUnknownFields
+  /** Stored entries of `events` this build cannot show. Never read, always written back. */
+  unrecognizedEntries?: CalendarUnrecognizedEntry[]
 }
 
 export const createEmptyCalendarDocument = (): CalendarDocument => ({
@@ -150,11 +181,51 @@ export const sanitizeRecurrence = (raw: unknown): CalendarRecurrence | undefined
   return interval && interval > 1 ? { freq, interval } : { freq }
 }
 
+const EVENT_KEYS: ReadonlySet<string> = new Set([
+  'id',
+  'date',
+  'title',
+  'color',
+  'allDay',
+  'start',
+  'end',
+  'recurrence',
+])
+
+const DOCUMENT_KEYS: ReadonlySet<string> = new Set(['version', 'events'])
+
+/**
+ * Assign an OWN property. A plain assignment of the key `__proto__` sets the
+ * object's prototype instead, so a stored key of that name would vanish on the
+ * way through; JSON.parse produces it as an own key and so must this.
+ */
+const setOwn = (target: Record<string, unknown>, key: string, value: unknown): void => {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
+}
+
+const unknownFieldsOf = (
+  candidate: Record<string, unknown>,
+  known: ReadonlySet<string>,
+): CalendarUnknownFields | undefined => {
+  let unknown: CalendarUnknownFields | undefined
+  for (const key of Object.keys(candidate)) {
+    if (known.has(key)) {
+      continue
+    }
+    unknown = unknown ?? {}
+    setOwn(unknown, key, candidate[key])
+  }
+  return unknown
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
 const sanitizeEvent = (raw: unknown): CalendarEvent | null => {
-  if (typeof raw !== 'object' || raw === null) {
+  if (!isRecord(raw)) {
     return null
   }
-  const candidate = raw as Record<string, unknown>
+  const candidate = raw
   if (typeof candidate.id !== 'string' || candidate.id.length === 0) {
     return null
   }
@@ -190,6 +261,11 @@ const sanitizeEvent = (raw: unknown): CalendarEvent | null => {
     event.recurrence = recurrence
   }
 
+  const unknownFields = unknownFieldsOf(candidate, EVENT_KEYS)
+  if (unknownFields) {
+    event.unknownFields = unknownFields
+  }
+
   return event
 }
 
@@ -213,45 +289,192 @@ export const parseCalendarDocument = (
     return { document: createEmptyCalendarDocument(), recovered: false }
   }
 
-  if (typeof parsed !== 'object' || parsed === null) {
+  if (!isRecord(parsed)) {
     return { document: createEmptyCalendarDocument(), recovered: false }
   }
 
-  const candidate = parsed as Record<string, unknown>
+  const candidate = parsed
 
   // A calendar document must at least expose an events array; otherwise it is
   // probably some other note format being switched into Calendar, so treat it as
   // a fresh calendar but flag it as not-recovered.
-  const looksLikeCalendar = Array.isArray(candidate.events)
-  if (!looksLikeCalendar) {
+  const storedEvents = candidate.events
+  if (!Array.isArray(storedEvents)) {
     return { document: createEmptyCalendarDocument(), recovered: false }
   }
 
   const events: CalendarEvent[] = []
+  const unrecognizedEntries: CalendarUnrecognizedEntry[] = []
   const seenIds = new Set<string>()
-  for (const rawEvent of candidate.events as unknown[]) {
+  storedEvents.forEach((rawEvent: unknown, position: number) => {
     const event = sanitizeEvent(rawEvent)
     if (event && !seenIds.has(event.id)) {
       seenIds.add(event.id)
       events.push(event)
+    } else {
+      unrecognizedEntries.push({ position, raw: rawEvent })
     }
+  })
+
+  const document: CalendarDocument = {
+    version: isFiniteNumber(candidate.version) ? candidate.version : CALENDAR_DOCUMENT_VERSION,
+    events,
+  }
+  const unknownFields = unknownFieldsOf(candidate, DOCUMENT_KEYS)
+  if (unknownFields) {
+    document.unknownFields = unknownFields
+  }
+  if (unrecognizedEntries.length > 0) {
+    document.unrecognizedEntries = unrecognizedEntries
   }
 
-  return {
-    document: {
-      version: isFiniteNumber(candidate.version) ? candidate.version : CALENDAR_DOCUMENT_VERSION,
-      events,
-    },
-    recovered: true,
+  return { document, recovered: true }
+}
+
+/**
+ * The stored form of one event: known keys in a fixed order, then the keys this
+ * build did not recognise. The order is fixed so that the same document always
+ * serializes to the same text, whichever sequence of edits produced it.
+ */
+const eventToStored = (event: CalendarEvent): Record<string, unknown> => {
+  const stored: Record<string, unknown> = { id: event.id, date: event.date, title: event.title }
+  if (event.color !== undefined) {
+    stored.color = event.color
   }
+  if (event.allDay !== undefined) {
+    stored.allDay = event.allDay
+  }
+  if (event.start !== undefined) {
+    stored.start = event.start
+  }
+  if (event.end !== undefined) {
+    stored.end = event.end
+  }
+  if (event.recurrence !== undefined) {
+    stored.recurrence = event.recurrence
+  }
+  if (event.unknownFields) {
+    for (const key of Object.keys(event.unknownFields)) {
+      if (!EVENT_KEYS.has(key)) {
+        setOwn(stored, key, event.unknownFields[key])
+      }
+    }
+  }
+  return stored
 }
 
 /** Serialize a CalendarDocument to the string stored in `note.text`. */
 export const serializeCalendarDocument = (document: CalendarDocument): string => {
-  return JSON.stringify({
+  const entries: unknown[] = document.events.map(eventToStored)
+  // Ascending by stored position, so each entry lands at the index it was read from.
+  const unrecognized = [...(document.unrecognizedEntries ?? [])].sort((a, b) => a.position - b.position)
+  for (const entry of unrecognized) {
+    entries.splice(Math.min(Math.max(entry.position, 0), entries.length), 0, entry.raw)
+  }
+
+  const stored: Record<string, unknown> = {
     version: document.version ?? CALENDAR_DOCUMENT_VERSION,
-    events: document.events,
-  })
+    events: entries,
+  }
+  if (document.unknownFields) {
+    for (const key of Object.keys(document.unknownFields)) {
+      if (!DOCUMENT_KEYS.has(key)) {
+        setOwn(stored, key, document.unknownFields[key])
+      }
+    }
+  }
+  return JSON.stringify(stored)
+}
+
+const sameStoredValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+/**
+ * Merge one event that both sides may have changed since `base`, key by key: a
+ * key `mine` changed keeps mine, any other key takes theirs. `base` is absent
+ * when both sides added the event.
+ */
+const mergeStoredEvent = (
+  base: Record<string, unknown> | undefined,
+  mine: Record<string, unknown>,
+  theirs: Record<string, unknown>,
+): Record<string, unknown> => {
+  const merged: Record<string, unknown> = {}
+  for (const key of new Set([...Object.keys(theirs), ...Object.keys(mine)])) {
+    const mineChanged = !sameStoredValue(mine[key], base?.[key])
+    const value = mineChanged ? mine[key] : theirs[key]
+    if (value !== undefined) {
+      setOwn(merged, key, value)
+    }
+  }
+  return merged
+}
+
+/**
+ * Three-way merge of a calendar this editor holds (`mine`) with a version of the
+ * note that someone else wrote (`theirs`), given the last version both agreed on
+ * (`base`). Used when the note changes underneath an open editor: another
+ * device, or other code on this device such as a background sync.
+ *
+ *  - An event only one side touched takes that side's version.
+ *  - An event both touched is merged key by key; where both changed the same
+ *    key, `mine` wins, because it is what the person at this editor just did.
+ *  - An edit beats a deletion, whichever side made which.
+ *  - Their order is kept; events only `mine` has follow, in mine's order.
+ *
+ * Everything outside the events (version, unknown keys, unrecognised entries)
+ * is theirs: this editor cannot change any of it.
+ */
+export const mergeCalendarDocuments = (
+  base: CalendarDocument,
+  mine: CalendarDocument,
+  theirs: CalendarDocument,
+): CalendarDocument => {
+  const baseById = new Map(base.events.map((event) => [event.id, event]))
+  const mineById = new Map(mine.events.map((event) => [event.id, event]))
+  const theirIds = new Set(theirs.events.map((event) => event.id))
+
+  const events: CalendarEvent[] = []
+  for (const theirEvent of theirs.events) {
+    const baseEvent = baseById.get(theirEvent.id)
+    const myEvent = mineById.get(theirEvent.id)
+    if (!myEvent) {
+      // Deleted here. That stands only if they left the event as it was.
+      const theyChanged = !baseEvent || !sameStoredValue(eventToStored(theirEvent), eventToStored(baseEvent))
+      if (theyChanged) {
+        events.push(theirEvent)
+      }
+      continue
+    }
+    const merged = sanitizeEvent(
+      mergeStoredEvent(
+        baseEvent ? eventToStored(baseEvent) : undefined,
+        eventToStored(myEvent),
+        eventToStored(theirEvent),
+      ),
+    )
+    events.push(merged ?? myEvent)
+  }
+  for (const myEvent of mine.events) {
+    if (theirIds.has(myEvent.id)) {
+      continue
+    }
+    const baseEvent = baseById.get(myEvent.id)
+    // Absent from theirs. Added here, or deleted there: the deletion stands only
+    // if this side left the event as it was.
+    const iChanged = !baseEvent || !sameStoredValue(eventToStored(myEvent), eventToStored(baseEvent))
+    if (iChanged) {
+      events.push(myEvent)
+    }
+  }
+
+  const merged: CalendarDocument = { version: Math.max(theirs.version, mine.version), events }
+  if (theirs.unknownFields) {
+    merged.unknownFields = theirs.unknownFields
+  }
+  if (theirs.unrecognizedEntries) {
+    merged.unrecognizedEntries = theirs.unrecognizedEntries
+  }
+  return merged
 }
 
 // ---------------------------------------------------------------------------

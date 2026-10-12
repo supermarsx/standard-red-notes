@@ -1,5 +1,4 @@
 import { WebApplication } from '@/Application/WebApplication'
-import { isPayloadSourceRetrieved } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
@@ -17,6 +16,7 @@ import {
   expandEventsForWindow,
   isTimedEvent,
   localIsoDateOf,
+  mergeCalendarDocuments,
   parseCalendarDocument,
   serializeCalendarDocument,
   todayIso,
@@ -81,15 +81,37 @@ export const CalendarEditor: FunctionComponent<Props> = ({
   /** The day (ISO) whose event list is currently expanded for editing. */
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
 
-  const ignoreNextChange = useRef(false)
+  /**
+   * The note text this editor last took in: what it loaded, or the last version
+   * of the note it has seen. A note change carrying any other text was written
+   * by someone — this editor's own save landing (`savingText`), another device,
+   * or other code on this device — and is read whatever its source. Comparing
+   * text, rather than arming a "skip the next change" flag, is what keeps a
+   * change this editor did not make from being mistaken for the echo of its own
+   * save and dropped.
+   */
+  const agreedText = useRef(controller.item.text)
+  /** The text of a save this editor has handed over that the note does not hold yet. */
+  const savingText = useRef<string | undefined>(undefined)
+  /** The calendar as this editor shows it, including edits not yet saved. */
+  const currentDocument = useRef(initialParse.document)
+  /** True from an edit until the note is seen to hold it. */
+  const hasUnsavedEdit = useRef(false)
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
   const persistDocument = useCallback(
     (doc: CalendarDocument) => {
-      ignoreNextChange.current = true
+      const text = serializeCalendarDocument(doc)
+      // Nothing to write — unless an earlier save is still queued, in which case
+      // this one has to go out to replace it.
+      if (text === agreedText.current && savingText.current === undefined) {
+        hasUnsavedEdit.current = false
+        return
+      }
+      savingText.current = text
       void controller.saveAndAwaitLocalPropagation({
-        text: serializeCalendarDocument(doc),
+        text,
         isUserModified: true,
         previews: {
           previewPlain: `Calendar: ${doc.events.length} ${doc.events.length === 1 ? 'event' : 'events'}`,
@@ -108,33 +130,58 @@ export const CalendarEditor: FunctionComponent<Props> = ({
 
   const updateDocument = useCallback(
     (updater: (doc: CalendarDocument) => CalendarDocument) => {
-      setDocument((prev) => {
-        const next = updater(prev)
-        persist(next)
-        return next
-      })
+      if (isReadonly) {
+        return
+      }
+      const next = updater(currentDocument.current)
+      currentDocument.current = next
+      hasUnsavedEdit.current = true
+      setDocument(next)
+      persist(next)
     },
-    [persist],
+    [isReadonly, persist],
   )
 
-  // Sync external (remote/retrieved) changes into the local calendar.
+  // Take in every version of the note, including ones this editor did not write.
   useEffect(() => {
-    const disposer = controller.addNoteInnerValueChangeObserver((updatedNote, source) => {
+    const disposer = controller.addNoteInnerValueChangeObserver((updatedNote) => {
       if (updatedNote.uuid !== note.current.uuid) {
         return
       }
       note.current = updatedNote
-      if (ignoreNextChange.current) {
-        ignoreNextChange.current = false
+      const text = updatedNote.text
+      if (text === savingText.current) {
+        // This editor's own save has landed.
+        savingText.current = undefined
+        agreedText.current = text
+        hasUnsavedEdit.current = serializeCalendarDocument(currentDocument.current) !== text
         return
       }
-      if (isPayloadSourceRetrieved(source)) {
-        const { document: parsed } = parseCalendarDocument(updatedNote.text)
-        setDocument(parsed)
+      if (text === agreedText.current) {
+        return
       }
+
+      const theirs = parseCalendarDocument(text).document
+      if (!hasUnsavedEdit.current) {
+        agreedText.current = text
+        currentDocument.current = theirs
+        setDocument(theirs)
+        return
+      }
+      // An edit made here is not in the note yet. Showing `theirs` alone would
+      // take it off the screen, and its save — still waiting, or already queued
+      // — would then overwrite what just arrived. Merge the two, and put the
+      // merge in place of both the waiting edit and the queued save.
+      const base = parseCalendarDocument(agreedText.current).document
+      const merged = mergeCalendarDocuments(base, currentDocument.current, theirs)
+      agreedText.current = text
+      currentDocument.current = merged
+      setDocument(merged)
+      persist(merged)
+      controller.flushEditorSerialize()
     })
     return disposer
-  }, [controller])
+  }, [controller, persist])
 
   const grid = useMemo(() => buildMonthGrid(view.year, view.month), [view])
 
@@ -216,14 +263,10 @@ export const CalendarEditor: FunctionComponent<Props> = ({
     (event: CalendarEvent, allDay: boolean) => {
       replaceEvent(event.id, (prev) => {
         if (allDay) {
-          const next: CalendarEvent = { id: prev.id, date: prev.date, title: prev.title }
-          if (prev.color) {
-            next.color = prev.color
-          }
-          if (prev.recurrence) {
-            next.recurrence = prev.recurrence
-          }
-          return next
+          // Drop only what makes the event timed. Everything else it carries,
+          // including keys this build does not know, stays.
+          const { allDay: _allDay, start: _start, end: _end, ...rest } = prev
+          return rest
         }
         const start = prev.start && isTimedEvent(prev) ? prev.start : `${prev.date}T09:00`
         const startIso = new Date(start).toISOString()
