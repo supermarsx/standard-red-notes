@@ -15,6 +15,8 @@ import {
 } from './diagnosticChecks'
 import type { FileTransferResult } from './diagnosticFileTransfer'
 import {
+  ALL_IN_ONE_DIAGNOSTICS,
+  ALL_IN_ONE_SERVER_STATUS,
   COMPOSE_GRPC_DIAGNOSTICS,
   COMPOSE_GRPC_SERVER_STATUS,
   NEGOTIATED_OPERATIONS,
@@ -213,6 +215,8 @@ const sectionsFor = (
   serverStatus: unknown,
   checks: readonly CheckReading[],
   observed: AccountObservations = account,
+  /** What differs by deployment and is not in either payload. */
+  options: { servedOverHttps?: boolean; gatewayCachePing?: boolean | null } = {},
 ): Record<SectionId, SectionModel> => {
   const fileCheckRan = checks.some((reading) => reading.definition.id === 'file-transfer' && reading.outcome)
   const witnesses = buildWitnessBoard({
@@ -226,7 +230,8 @@ const sectionsFor = (
     adminRead: true,
     cryptoWorks: true,
     localDatabaseLoaded: true,
-    gatewayCachePing: true,
+    // `null` is a gateway that holds no cache client at all, which is no reading.
+    ...(options.gatewayCachePing === null ? {} : { gatewayCachePing: options.gatewayCachePing ?? true }),
   })
 
   return {
@@ -236,6 +241,7 @@ const sectionsFor = (
       deploymentMarker: MARKER,
       fallback: payload.transportFallback,
       runtime: payload.runtime,
+      ...(options.servedOverHttps === undefined ? {} : { servedOverHttps: options.servedOverHttps }),
       checks,
       witnesses,
     }),
@@ -567,5 +573,95 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
     expect(top).not.toContain('so there is nothing to wait for')
     // Not a single row of the five sections carries the old reading markers.
     expect(report).not.toMatch(/^- \[(v|\?|n)\] /m)
+  })
+})
+
+/**
+ * *** THE OTHER SHIPPED TOPOLOGY, WHICH READ "NOT WORKING" WITH NOTHING WRONG. ***
+ *
+ * A stock single container, captured live: one process, no Redis, the service
+ * proxy `direct-call`, served over plain HTTP on a LAN. Before these checks it
+ * raised REQUIRED_CONFIG_ABSENT for two variables it does not need, called three
+ * in-process services "did not connect", and called the only cookie setting that
+ * works on plain HTTP a degradation. Nothing here is the compose fixture with a
+ * flag flipped: the payloads are this topology's own.
+ */
+describe('a healthy single container, served over plain HTTP', () => {
+  const PLAIN_HTTP = { servedOverHttps: false, gatewayCachePing: null } as const
+  const payload = ALL_IN_ONE_DIAGNOSTICS as unknown as SyncDiagnosticsPayload
+  const run = sectionsFor(payload, ALL_IN_ONE_SERVER_STATUS, checksWith(true), account, PLAIN_HTTP)
+  const notRun = sectionsFor(payload, ALL_IN_ONE_SERVER_STATUS, checksWith(false), account, PLAIN_HTTP)
+
+  it('is the single-container capture and not the compose one', () => {
+    expect(ALL_IN_ONE_DIAGNOSTICS.deployment?.mode).toBe('home-server')
+    expect(ALL_IN_ONE_DIAGNOSTICS.deployment?.boundServiceProxy).toBe('direct-call')
+    expect(payload.runtime?.cookieSecure).toBe(false)
+    expect(everyRow(run).length).toBeGreaterThan(180)
+  })
+
+  it('has nothing not working and nothing degraded, before the checks run or after', () => {
+    for (const sections of [run, notRun]) {
+      const alarming = everyRow(sections).filter(({ row }) => row.verdict === 'broken' || row.verdict === 'degraded')
+
+      expect(labelsOf(alarming)).toEqual([])
+      expect(triage({ sections }).counts.broken).toBe(0)
+      expect(triage({ sections }).counts.degraded).toBe(0)
+    }
+  })
+
+  it('reaches OK once every check has passed, with nothing left unestablished', () => {
+    const blocking = everyRow(run).filter(({ row }) => BLOCKS_OK[row.verdict])
+
+    expect(labelsOf(blocking)).toEqual([])
+    for (const id of SECTION_IDS) {
+      expect({ id, worst: run[id].worstVerdict }).toEqual({ id, worst: 'healthy' })
+    }
+    expect(triage({ sections: run }).sectionWorst).toBe('healthy')
+  })
+
+  it('is kept off OK before the checks run only by rows a check settles', () => {
+    const blocking = everyRow(notRun).filter(({ row }) => BLOCKS_OK[row.verdict])
+
+    expect(blocking.length).toBeGreaterThan(0)
+    for (const { section, row } of blocking) {
+      expect({ label: `${section}: ${row.label}`, verdict: row.verdict }).toEqual({
+        label: `${section}: ${row.label}`,
+        verdict: 'untested',
+      })
+    }
+  })
+
+  /**
+   * Each of the three false alarms, by the row that raised it — and each is
+   * settled by what this topology IS, so the same rows on the compose stack
+   * (asserted above, from its own payload) still mean what they meant.
+   */
+  it('does not raise the three alarms a stock single container used to', () => {
+    const value = (section: SectionId, label: string) => {
+      const found = everyRow(run).find((entry) => entry.section === section && String(entry.row.label) === label)
+      return { value: String(found?.row.value), verdict: found?.row.verdict }
+    }
+    const codes = SECTION_IDS.flatMap((id) => run[id].blocks.flatMap((block) => block.findings.map((f) => f.code)))
+
+    // 1. Two variables a single container does not need.
+    expect(value('environment', 'REDIS_HOST')).toEqual({ value: 'not set (optional)', verdict: 'informational' })
+    expect(value('environment', 'WEBSOCKET_SYNC_FILES_URL')).toEqual({
+      value: 'not set (optional)',
+      verdict: 'informational',
+    })
+    expect(codes).not.toContain('REQUIRED_CONFIG_ABSENT')
+
+    // 2. Three services with no separate process to probe.
+    for (const label of ['Syncing server probe', 'Files service probe', 'Revisions service probe']) {
+      expect(value('backend', label).verdict).toBe('not-applicable')
+    }
+    expect(codes).not.toContain('INTERNAL_SERVICE_PROBE_FAILED')
+    // …and what establishes those services instead is the check that uses each.
+    for (const label of ['Sync round trip', 'Revision history read', 'File transfer round trip']) {
+      expect(value('backend', label).verdict).toBe('healthy')
+    }
+
+    // 3. The only cookie setting that works on plain HTTP.
+    expect(value('environment', 'Cookie Secure flag')).toEqual({ value: 'off', verdict: 'informational' })
   })
 })

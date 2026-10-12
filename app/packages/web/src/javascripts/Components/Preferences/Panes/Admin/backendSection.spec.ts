@@ -450,10 +450,17 @@ describe('a zero counter means measured none, an absent one means did not ask', 
     // looking for a pool that does not exist) nor `0 of 0` (a saturation reading
     // nobody took).
     const noPool = buildBackendSection({ datastore: { connectionState: 'connected' } })
-    expect(rowOf(noPool, 'Connection pool in use').value).toBe('no pool kept by this driver')
+    expect(rowOf(noPool, 'Connection pool in use').value).toBe(
+      'not available here (this database driver keeps no pool)',
+    )
     expect(rowOf(noPool, 'Connection pool in use').value).not.toBe('not reported')
     expect(rowOf(noPool, 'Connection pool in use').value).not.toContain('0')
-    expect(rowOf(noPool, 'Connection pool in use').evidence.kind).toBe('absent')
+    // *** AN ANSWER, SCORED AS ONE. *** The value said the driver keeps no pool
+    // while the verdict said the reading had not arrived, so every SQLite
+    // deployment carried an "unknown" for a figure that cannot exist there.
+    expect(rowOf(noPool, 'Connection pool in use').evidence.kind).toBe('unavailable')
+    expect(rowOf(noPool, 'Connection pool in use').verdict).toBe('not-applicable')
+    expect(readingOf(rowOf(noPool, 'Connection pool in use').value)).toBe('unavailable')
     expect(rowOf(noPool, 'Connection pool in use').note).toContain('NO FIGURES IS NOT AN EMPTY POOL')
     expect(rowOf(quiet, 'Connection pool in use').value).toBe('4 of 10')
     expect(rowOf(quiet, 'Connection pool in use').verdict).toBe('informational')
@@ -949,6 +956,119 @@ describe('internal service communication', () => {
       expect(rowOf(healthy(), label).claimed).toBe('healthy')
       expect(rowOf(healthy(), label).verdict).toBe('undetermined')
     }
+  })
+
+  /**
+   * *** A HEALTHY SINGLE CONTAINER, WHICH READ "NOT WORKING". *** The gateway
+   * probes each backend service at the port it listens on as a separate process.
+   * On a single container three of them are not separate processes, nothing
+   * listens there, and the probe "did not connect" on every healthy one. The
+   * fixture is what a stock single container really sends.
+   */
+  /**
+   * No census is taken where there is no queue. The server SAYS events fan out
+   * in-process; "not reported" beside that was a question nobody had asked, and
+   * it kept every stock single container off OK.
+   */
+  it('has no queue consumers to count where the server says events fan out in-process', () => {
+    const consumers = (queues: Record<string, unknown>) =>
+      rowOf(buildBackendSection({ queues }), 'Co-resident queue consumers')
+
+    expect(String(consumers({ separation: 'in-process-fan-out' }).value)).toBe(
+      'nothing to report (events fan out in-process; no queue is consumed)',
+    )
+    expect(consumers({ separation: 'in-process-fan-out' }).verdict).toBe('not-applicable')
+    // A count that DID arrive is printed, whatever the separation says.
+    expect(String(consumers({ separation: 'in-process-fan-out', consumerCount: 2 }).value)).toBe('2')
+    // And an absent count beside a queue, or beside nothing, is still a census nobody took.
+    for (const queues of [{ separation: 'own-prefixed-queue' }, { separation: 'inherited-shared-queue' }, {}]) {
+      expect({ queues, verdict: consumers(queues).verdict }).toEqual({ queues, verdict: 'undetermined' })
+      expect(String(consumers(queues).value)).toBe('not reported')
+    }
+  })
+
+  describe('services a single container runs inside the gateway', () => {
+    const down = (name: string) => ({
+      name,
+      reachable: false,
+      status: 'down',
+      detail: 'unreachable',
+      responseTimeMs: 8,
+    })
+    const singleContainer = (services: readonly Record<string, unknown>[]) =>
+      buildBackendSection({
+        topology: topology({ mode: 'home-server', boundServiceProxy: 'direct-call' }),
+        serverStatus: serverStatus({ services }),
+      })
+    const stock = [
+      { name: 'api-gateway', reachable: true, status: 'ok' },
+      { name: 'auth', reachable: true, status: 'ok', responseTimeMs: 4 },
+      down('syncing-server'),
+      down('files'),
+      down('revisions'),
+      { name: 'websocket-gateway', reachable: false, status: 'unknown', detail: 'not configured' },
+    ]
+    const IN_PROCESS = ['Syncing server probe', 'Files service probe', 'Revisions service probe']
+
+    it('says there is nothing to probe, instead of calling three in-process services down', () => {
+      const model = singleContainer(stock)
+
+      for (const label of IN_PROCESS) {
+        const row = rowOf(model, label)
+
+        expect({ label, value: String(row.value), verdict: row.verdict }).toEqual({
+          label,
+          value: 'not available here (runs inside this process; there is nothing to probe)',
+          verdict: 'not-applicable',
+        })
+        expect(readingOf(row.value)).toBe('unavailable')
+        expect(row.caveat).toContain('calls this service in-process')
+      }
+      expect(codesOf(model)).not.toContain('INTERNAL_SERVICE_PROBE_FAILED')
+      expect(model.worstVerdict).not.toBe('broken')
+    })
+
+    /**
+     * The control, three ways. The reading is conditional on BOTH facts — the
+     * server says the proxy is direct-call AND the probe found no listener — so
+     * none of these may be quietened by it.
+     */
+    it('still reports the same failed probe as not working where the service IS a separate process', () => {
+      const model = buildBackendSection({
+        topology: topology({ boundServiceProxy: 'grpc' }),
+        serverStatus: serverStatus({ services: stock }),
+      })
+
+      for (const label of IN_PROCESS) {
+        expect({ label, verdict: rowOf(model, label).verdict }).toEqual({ label, verdict: 'broken' })
+      }
+      expect(codesOf(model)).toContain('INTERNAL_SERVICE_PROBE_FAILED')
+    })
+
+    it('still reports auth as not working on a single container, where auth does have a listener', () => {
+      const model = singleContainer([...stock.filter((entry) => entry.name !== 'auth'), down('auth')])
+
+      expect(rowOf(model, 'Auth service probe').value).toBe('did not connect')
+      expect(rowOf(model, 'Auth service probe').verdict).toBe('broken')
+      expect(codesOf(model)).toContain('INTERNAL_SERVICE_PROBE_FAILED')
+    })
+
+    it('reads a probe that answered as the answer it is, even on a single container', () => {
+      const answering = singleContainer([
+        ...stock.filter((entry) => entry.name !== 'files'),
+        { name: 'files', reachable: true, status: 'degraded', detail: 'readiness reported unavailable' },
+      ])
+
+      // Somebody pointed the probe at a real listener, and it said "not ready".
+      expect(rowOf(answering, 'Files service probe').value).toBe('answering, not ready')
+      expect(rowOf(answering, 'Files service probe').verdict).toBe('degraded')
+    })
+
+    it('makes no such claim when the topology was not reported', () => {
+      const model = buildBackendSection({ serverStatus: serverStatus({ services: stock }) })
+
+      expect(rowOf(model, 'Syncing server probe').verdict).toBe('broken')
+    })
   })
 
   it('still reports a probe that FAILED as broken, on direct evidence', () => {

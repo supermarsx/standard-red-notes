@@ -1359,7 +1359,7 @@ describe('AdminDiagnosticsTab — Database & internal comms', () => {
     expect(sectionRow('Database write probe')[2]).toBe('Info')
     expect(sectionRow('Schema migrations')[1]).toBe('yes')
     // Absent pool figures inside a block that DID report: the driver keeps none.
-    expect(sectionRow('Connection pool in use')[1]).toBe('no pool kept by this driver')
+    expect(sectionRow('Connection pool in use')[1]).toBe('not available here (this database driver keeps no pool)')
     expect(sectionRow('Queue separation')[1]).toBe('inherited-shared-queue')
     expect(sectionRow('Queue separation')[2]).toBe('Not working')
     expect(sectionRow('Co-resident queue consumers')[1]).toBe('5')

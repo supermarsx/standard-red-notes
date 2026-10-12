@@ -388,6 +388,12 @@ export type EnvironmentSectionInput = {
   /** `payload.transportFallback`. Absent on a server older than the per-call fallback. */
   fallback?: TransportFallbackView
   runtime?: EnvironmentRuntimeView
+  /**
+   * Whether THIS PAGE was served over HTTPS, as the browser reports it. The one
+   * client-side fact the cookie rows need: a Secure flag that is off is the
+   * correct setting on plain HTTP and a fault on HTTPS. Absent: not established.
+   */
+  servedOverHttps?: boolean
   /** Every registered check, run or not. This section renders its own as rows. */
   checks?: readonly CheckReading[]
   /** The direct observations a capped row here can point at. Absent: none was made. */
@@ -1085,10 +1091,37 @@ function secretRow(
   state: GrpcSecretState | undefined,
   present: boolean | undefined,
   witness: WitnessOf,
+  durableBackendInProcess: boolean,
 ): DiagnosticRow {
   // What NO reading of the secret on one side can say — that both sides hold the
   // same one — is exactly what a sync committed over the durable lane shows.
   const sameOnBothSides = witness('durable-sync')
+
+  /**
+   * *** A SECRET FOR A LANE THIS DEPLOYMENT DOES NOT HAVE. *** The internal gRPC
+   * secret authenticates the gateway to a SEPARATE syncing server. A single
+   * container has none: the server reports its service proxy as `direct-call`,
+   * the durable backend is called in-process, and no gRPC adapter is ever
+   * constructed. This row read "not set" there and scored it NOT WORKING — the
+   * one red row of the section on a stock single container — while the
+   * configuration block beneath it correctly called the same variable "never read
+   * here".
+   *
+   * ONLY on the server's own report of `direct-call`. Every topology that has a
+   * separate syncing server keeps this row exactly as it was: a deployment that
+   * asked for gRPC and did not get it is the case the row exists to explain.
+   */
+  if (durableBackendInProcess) {
+    return diagnosticRow({
+      label: SECRET_LABEL,
+      value: safeNothingToReport('the durable backend runs in this process'),
+      verdict: 'not-applicable',
+      evidence: evidenceNothingToReport(
+        'The server reports its service proxy as direct-call: the gateway calls the durable backend in-process, so no internal gRPC secret is read and there is none to judge.',
+      ),
+      note: SECRET_NOTE,
+    })
+  }
 
   if (state === undefined) {
     return diagnosticRow({
@@ -1417,7 +1450,7 @@ function buildTransportBlock(
       ...absentOr(reportedDecision, decision === 'no-secret' || unreachable ? 'degraded' : 'informational'),
       note: decisionNote(reportedDecision, decision),
     }),
-    secretRow(secret, secretPresent, witness),
+    secretRow(secret, secretPresent, witness, recorded && bound === 'direct-call'),
     secretOriginRow(secretOrigin),
     diagnosticRow({
       label: safeConstant('gRPC transport health'),
@@ -1591,9 +1624,17 @@ function buildTransportBlock(
 /* Block 3: how sessions are held                                             */
 /* -------------------------------------------------------------------------- */
 
-function buildSessionBlock(topology: DeploymentTopology | undefined, runtime: EnvironmentRuntimeView): DiagnosticBlock {
+function buildSessionBlock(
+  topology: DeploymentTopology | undefined,
+  runtime: EnvironmentRuntimeView,
+  servedOverHttps: boolean | undefined,
+): DiagnosticBlock {
   const jwtSecret = presenceOf(topology, 'AUTH_JWT_SECRET')
   const partitionedWithoutSecure = runtime.cookiePartitioned === true && runtime.cookieSecure === false
+  const secureOffOnPlainHttp =
+    runtime.cookieSecure === false && servedOverHttps === false
+      ? ' THIS page was served over plain HTTP, where "off" is the setting sign-in needs: a browser does not send a Secure cookie over HTTP at all. So it is not counted against this deployment — what it is missing is HTTPS, which the Browser section reports.'
+      : ''
 
   /**
    * *** THREE EMPTY ROWS OR ONE SENTENCE — AND THEY RETURN NOW. ***
@@ -1626,8 +1667,21 @@ function buildSessionBlock(topology: DeploymentTopology | undefined, runtime: En
         diagnosticRow({
           label: safeConstant('Cookie Secure flag'),
           value: safeState(runtime.cookieSecure, 'on', 'off'),
-          ...absentOr(runtime.cookieSecure, runtime.cookieSecure === false ? 'degraded' : 'informational'),
-          note: 'The EFFECTIVE value, read off the attributes the auth process actually puts on the session cookie — not whether COOKIE_SECURE is set. The distinction is the whole reason this is asked of the server: the variable defaults to true when unset, so "not set" and "off" are opposite answers and a presence boolean would invert the diagnosis. It is not observable from here either: the session cookie is HttpOnly, and a cookie\'s attributes are never exposed to a page even when the cookie is. Off is legitimate on a plain-HTTP local trial and wrong on anything reachable from elsewhere.',
+          // *** "OFF" IS ONLY A FAULT WHERE THE PAGE IS SERVED OVER HTTPS. *** A
+          // browser will not send a Secure cookie over plain HTTP, so on a
+          // deployment served that way "off" is the one setting under which
+          // sign-in works at all — and this row called it a degradation, which
+          // made every plain-HTTP deployment read "working, with something lost"
+          // over a correct setting. What is lost there is HTTPS, and the Browser
+          // section's secure-context row is where that is said. Unknown how the
+          // page was served: the cautious reading stands.
+          ...absentOr(
+            runtime.cookieSecure,
+            runtime.cookieSecure === false && servedOverHttps !== false ? 'degraded' : 'informational',
+          ),
+          note:
+            'The EFFECTIVE value, read off the attributes the auth process actually puts on the session cookie — not whether COOKIE_SECURE is set. The distinction is the whole reason this is asked of the server: the variable defaults to true when unset, so "not set" and "off" are opposite answers and a presence boolean would invert the diagnosis. It is not observable from here either: the session cookie is HttpOnly, and a cookie\'s attributes are never exposed to a page even when the cookie is. Off is legitimate on a plain-HTTP local trial and wrong on anything reachable from elsewhere.' +
+            secureOffOnPlainHttp,
         }),
         diagnosticRow({
           label: safeConstant('Cookie Partitioned flag'),
@@ -2073,7 +2127,7 @@ export function buildEnvironmentSection(input: EnvironmentSectionInput = {}): Se
   const blocks: DiagnosticBlock[] = [
     buildShapeBlock(input.topology, runtime),
     buildTransportBlock(input.topology, input.fallback, witness),
-    buildSessionBlock(input.topology, runtime),
+    buildSessionBlock(input.topology, runtime, input.servedOverHttps),
     buildIdentityBlock(input.topology, input.deploymentMarker),
   ]
 

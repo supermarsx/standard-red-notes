@@ -270,9 +270,16 @@ function classify(
 
   if (key === 'REDIS_HOST') {
     if (homeServer) {
+      // *** NOT REQUIRED, AND IT USED TO SAY IT WAS. *** A single container keeps
+      // realtime state in the one process that holds the sockets, so the lane
+      // comes up with no Redis at all — measured: a stock single container with
+      // this unset negotiates every operation. Marking it `required` raised
+      // REQUIRED_CONFIG_ABSENT, a red "not working", on every healthy one.
       return {
-        relevance: 'required',
-        note: present ? '' : 'This is what the home-server realtime lane reads for shared state.',
+        relevance: 'optional',
+        note: present
+          ? 'Set, so the home-server realtime lane shares its state through this Redis instead of keeping it in the process.'
+          : 'Not needed on a single container: realtime state lives in the one process holding the sockets. Set it only to keep that state in a Redis instead.',
       }
     }
 
@@ -327,6 +334,19 @@ function classify(
       note: present
         ? 'Set, which is the evidence that this gateway has a queue of its own rather than the one the workers consume. Presence only — no address is read — and it cannot show that the two queues are actually different, nor that a second consumer exists.'
         : 'Not set, so this gateway reads whatever the bare SQS_QUEUE_URL points at. That is correct on a deployment with no other consumer and is the measured defect on one with workers: a queue delivers each message once, so two consumers SPLIT the traffic instead of each seeing it. The Database & internal comms section reads this same pair as a prefix state.',
+    }
+  }
+
+  // The address the socket's file lane reaches a SEPARATE files service on. On a
+  // single container there is no separate one: the lane is composed with the
+  // files service in-process and negotiates FILES_V1 with this unset — measured,
+  // a file read back over that lane on a stock single container.
+  if (key === 'WEBSOCKET_SYNC_FILES_URL' && homeServer) {
+    return {
+      relevance: 'optional',
+      note: present
+        ? 'Set, and a single container does not need it: the socket’s file lane reaches the files service in this same process.'
+        : 'Not needed on a single container: the socket’s file lane reaches the files service in this same process, with no address to configure.',
     }
   }
 

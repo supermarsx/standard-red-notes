@@ -1463,6 +1463,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         deploymentMarker: deployment,
         fallback: payload?.transportFallback,
         runtime: payload?.runtime,
+        // How THIS page was served, off the browser's own location. Read once per
+        // render and never stored: it is a scheme, not an address.
+        ...(typeof window === 'undefined' ? {} : { servedOverHttps: window.location.protocol === 'https:' }),
         checks: readings,
         witnesses,
       }),

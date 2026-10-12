@@ -7,6 +7,7 @@ import {
   EVIDENCE_ABSENT,
   EVIDENCE_DIRECT,
   evidenceNothingToReport,
+  evidenceNotAvailableHere,
   evidenceProxy,
   evidenceUntested,
   safeNothingToReport,
@@ -15,6 +16,7 @@ import {
   safeCount,
   safeDuration,
   safeEnum,
+  safeNotAvailableHere,
   safePercentBucket,
   safePresence,
   safeState,
@@ -1172,7 +1174,17 @@ const MIGRATION_COUNT_UNREPORTED = safeConstant('(count not reported)')
  * rows on a deployment that has no pool, and rendering it as `0 of 0` would be
  * worse: a fabricated saturation reading over a driver that cannot saturate.
  */
-const NO_POOL = safeConstant('no pool kept by this driver')
+const NO_POOL = safeNotAvailableHere('this database driver keeps no pool')
+
+/**
+ * *** "NO POOL" IS AN ANSWER, AND IT WAS SCORED AS A MISSING ONE. *** The value
+ * said the driver keeps no pool and the verdict beside it said the reading had
+ * not arrived, so every SQLite deployment — every stock single container —
+ * carried an "unknown" for a figure that cannot exist there.
+ */
+const NO_POOL_EVIDENCE = evidenceNotAvailableHere(
+  'The service reported its database block with no pool figure of either kind, which is a driver that keeps no pool — SQLite. There is nothing to saturate, so there is nothing to judge.',
+)
 
 /** The schema could not be read at all, which is not "nothing is pending". */
 const SCHEMA_UNREADABLE = safeConstant('schema not readable')
@@ -1362,14 +1374,15 @@ function buildDatabaseBlock(
          * arrive is still a fact, and NO_POOL there would claim the driver has no
          * pool over a server that just told us its maximum.
          */
-        value:
-          datastore.poolInUse === undefined && datastore.poolSize === undefined
-            ? NO_POOL
-            : safeTokens(safeCount(poolInUse), OF, safeCount(poolSize)),
-        ...absentOr(
-          poolReported ? true : undefined,
-          poolSaturation !== undefined && poolSaturation >= 0.9 ? 'degraded' : 'informational',
-        ),
+        ...(datastore.poolInUse === undefined && datastore.poolSize === undefined
+          ? { value: NO_POOL, verdict: 'not-applicable' as const, evidence: NO_POOL_EVIDENCE }
+          : {
+              value: safeTokens(safeCount(poolInUse), OF, safeCount(poolSize)),
+              ...absentOr(
+                poolReported ? true : undefined,
+                poolSaturation !== undefined && poolSaturation >= 0.9 ? 'degraded' : 'informational',
+              ),
+            }),
         note: 'Connections checked out against the pool maximum. Exhaustion presents as latency rather than as an error — every query waits for a free connection and then succeeds — which is the symptom this pane is least able to attribute from a readiness probe alone. Two counts, never a connection string. NO FIGURES IS NOT AN EMPTY POOL: a driver that keeps no pool reports neither, which is the complete and correct answer on the SQLite the bundled single container runs, and there is nothing to exhaust there.',
       }),
       diagnosticRow({
@@ -1844,6 +1857,52 @@ const FILES_PROBE_TARGET_NOTE: Record<FilesProbeTarget, string> = {
     ' Whether a probe address was configured could not be established: this deployment reported no presence entry for FILES_SERVER_PROBE_URL. On the shipped topologies the fallback reaches the files process anyway, so nothing is claimed either way.',
 }
 
+/**
+ * The services a single container runs INSIDE the gateway's own process.
+ *
+ * *** A PROBE WITH NOTHING TO DIAL IS NOT A SERVICE THAT IS DOWN. *** The
+ * gateway probes each backend service's readiness route at an address, and the
+ * address defaults to the port that service listens on when it is a separate
+ * process. On a single container these three are not separate processes: the
+ * gateway calls them in-process (the bound service proxy is `direct-call`), and
+ * nothing listens on those ports. So the probe "did not connect" on every
+ * healthy single container, three rows read "not working", and the section —
+ * and the headline — went red over a deployment with nothing wrong with it.
+ *
+ * Auth is NOT on this list: it has a loopback health listener of its own on this
+ * topology precisely so that its probe has something to ask. Nor is the
+ * websocket gateway, which reports "not configured" and has its own finding.
+ *
+ * Conditional on BOTH facts: the server says the proxy is direct-call, AND the
+ * probe found nothing. A probe that answered — somebody pointed it at a real
+ * listener — is read as the answer it is.
+ */
+const IN_PROCESS_ON_DIRECT_CALL: ReadonlySet<KnownService> = new Set<KnownService>([
+  'syncing-server',
+  'files',
+  'revisions',
+])
+
+const IN_PROCESS_VALUE = safeNotAvailableHere('runs inside this process; there is nothing to probe')
+
+const IN_PROCESS_EVIDENCE = evidenceNotAvailableHere(
+  'On a single container the gateway calls this service in-process, so its readiness route has no listener for the probe to dial. A probe that did not connect therefore says nothing about the service. The check that exercises it — a sync, a revision read, a file round trip — is what reports on it.',
+)
+
+function runsInProcess(
+  service: KnownService,
+  outcome: ServiceOutcome | undefined,
+  topology: DeploymentTopology | undefined,
+): boolean {
+  return (
+    topology?.boundServiceProxy === 'direct-call' &&
+    IN_PROCESS_ON_DIRECT_CALL.has(service) &&
+    // Only the two outcomes that mean NOTHING ANSWERED. A probe that reached a
+    // listener and was told "not ready", or was refused, reached something.
+    (outcome === 'unreachable' || outcome === 'not-configured')
+  )
+}
+
 function buildCommunicationBlock(
   services: ServicesReading,
   topology: DeploymentTopology | undefined,
@@ -1856,6 +1915,19 @@ function buildCommunicationBlock(
 
   for (const service of KNOWN_SERVICES) {
     const outcome = services.byName[service]?.outcome
+
+    if (runsInProcess(service, outcome, topology)) {
+      rows.push(
+        diagnosticRow({
+          label: SERVICE_LABEL[service],
+          value: IN_PROCESS_VALUE,
+          verdict: 'not-applicable',
+          evidence: IN_PROCESS_EVIDENCE,
+          note: SERVICE_NOTE[service],
+        }),
+      )
+      continue
+    }
 
     if (service === 'api-gateway') {
       // A hardcoded `reachable: true` must never paint green. The row keeps the
@@ -2020,7 +2092,13 @@ function buildCommunicationBlock(
 
   const failed = KNOWN_SERVICES.filter((service) => {
     const outcome = services.byName[service]?.outcome
-    return service !== 'api-gateway' && outcome !== undefined && SERVICE_FAILED[outcome]
+    return (
+      service !== 'api-gateway' &&
+      outcome !== undefined &&
+      SERVICE_FAILED[outcome] &&
+      // A probe with no listener to dial has not failed; see `runsInProcess`.
+      !runsInProcess(service, outcome, topology)
+    )
   })
 
   if (failed.length > 0) {
@@ -2181,8 +2259,18 @@ function buildQueueBlock(topology: DeploymentTopology | undefined, queues: Queue
     }),
     diagnosticRow({
       label: safeConstant('Co-resident queue consumers'),
-      value: safeCount(consumers),
-      ...absentOr(consumers, 'informational'),
+      // No census is taken where there is no queue: the server said events fan
+      // out in-process, which is the reading, and "not reported" beside it was a
+      // question nobody had asked.
+      ...(consumers === undefined && separation === 'in-process-fan-out'
+        ? {
+            value: safeNothingToReport('events fan out in-process; no queue is consumed'),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNothingToReport(
+              'The server reported that this deployment fans events out in-process, with no queue configured. There are no queue consumers to count.',
+            ),
+          }
+        : { value: safeCount(consumers), ...absentOr(consumers, 'informational') }),
       note: 'How many queue consumers live in THIS process group: the gateway, when a queue is configured for it, plus one for each supervisord worker beside it. A cardinality, never an address, and SUPPORTING EVIDENCE rather than a verdict — which is why it carries no tone whatever it reads. A ONE DOES NOT MEAN "NO COLLISION": it means "the only consumer I can see", which is exactly what a deployment whose workers run in another container reports. ABSENT DOES NOT MEAN ZERO OR ONE either: nothing at all means the control channel did not answer, so no census was taken. The verdict this feeds is the row below, which the server derives from this count and the queue presence pair together, once, so the two cannot disagree.',
     }),
     diagnosticRow({

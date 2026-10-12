@@ -54,13 +54,43 @@ describe('buildEnvironmentPresence', () => {
     expect(rowFor(presence, 'REDIS_URL')?.relevance).toBe('required')
   })
 
-  it('inverts that judgement in home-server mode, where REDIS_HOST is the one that counts', () => {
+  it('inverts that judgement in home-server mode, where REDIS_HOST is the one that is read', () => {
     const presence = buildEnvironmentPresence(
       topology({ mode: 'home-server', presence: { REDIS_HOST: true, REDIS_URL: true } }),
     )
 
-    expect(rowFor(presence, 'REDIS_HOST')?.relevance).toBe('required')
+    // READ, and not REQUIRED: a single container keeps realtime state in the one
+    // process holding the sockets and comes up with no Redis at all.
+    expect(rowFor(presence, 'REDIS_HOST')?.relevance).toBe('optional')
     expect(rowFor(presence, 'REDIS_URL')?.relevance).toBe('inert')
+  })
+
+  /**
+   * *** A STOCK SINGLE CONTAINER, WHICH READ "NOT WORKING". *** Neither variable
+   * is set on one and neither is needed: the realtime lane and the socket's file
+   * lane are both composed in-process. They were classified `required`, so every
+   * healthy single container raised REQUIRED_CONFIG_ABSENT in red. Measured on a
+   * stock container with both unset: every operation negotiated, FILES_V1
+   * included, and a file read back over the socket lane.
+   */
+  it('requires neither REDIS_HOST nor WEBSOCKET_SYNC_FILES_URL on a single container, set or not', () => {
+    for (const set of [false, true]) {
+      const presence = buildEnvironmentPresence(
+        topology({ mode: 'home-server', presence: { REDIS_HOST: set, WEBSOCKET_SYNC_FILES_URL: set } }),
+      )
+
+      for (const key of ['REDIS_HOST', 'WEBSOCKET_SYNC_FILES_URL']) {
+        expect({ key, set, relevance: rowFor(presence, key)?.relevance }).toEqual({ key, set, relevance: 'optional' })
+        // And each says WHY, rather than leaving an unexplained "optional".
+        expect((rowFor(presence, key)?.note ?? '').length).toBeGreaterThan(40)
+      }
+    }
+  })
+
+  it('still requires the file lane’s address where the files service is a separate process', () => {
+    const presence = buildEnvironmentPresence(topology({ presence: { WEBSOCKET_SYNC_FILES_URL: false } }))
+
+    expect(rowFor(presence, 'WEBSOCKET_SYNC_FILES_URL')?.relevance).toBe('required')
   })
 
   it('marks REDIS_URL inert while CACHE_TYPE selects the memory cache', () => {

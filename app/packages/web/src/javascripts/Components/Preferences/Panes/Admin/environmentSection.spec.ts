@@ -528,6 +528,60 @@ describe('the internal gRPC auth secret', () => {
       }),
     })
 
+  /**
+   * *** A SECRET FOR A LANE THE DEPLOYMENT DOES NOT HAVE. *** On a single
+   * container the server reports its service proxy as `direct-call`: the durable
+   * backend is called in-process and no gRPC adapter exists. This row read "not
+   * set" there and scored it NOT WORKING, on every stock single container.
+   */
+  it('has nothing to judge where the durable backend runs in the gateway’s own process', () => {
+    for (const present of [false, true]) {
+      const row = rowOf(
+        buildEnvironmentSection({
+          topology: topology({
+            mode: 'home-server',
+            boundServiceProxy: 'direct-call',
+            presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: present },
+          }),
+        }),
+        'Internal gRPC auth secret',
+      )
+
+      expect({ present, value: String(row.value), verdict: row.verdict }).toEqual({
+        present,
+        value: 'nothing to report (the durable backend runs in this process)',
+        verdict: 'not-applicable',
+      })
+    }
+  })
+
+  it('keeps every word of the row wherever the syncing server is a separate process', () => {
+    // The same absent secret, on the two proxies that DO cross a process boundary.
+    for (const boundServiceProxy of ['grpc', 'http'] as const) {
+      const row = rowOf(
+        buildEnvironmentSection({
+          topology: topology({
+            boundServiceProxy,
+            presence: { SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: false },
+            serviceProxyDecision: 'no-secret',
+          }),
+        }),
+        'Internal gRPC auth secret',
+      )
+
+      expect({ boundServiceProxy, value: String(row.value), verdict: row.verdict }).toEqual({
+        boundServiceProxy,
+        value: 'not set',
+        verdict: 'broken',
+      })
+    }
+    // And a topology nobody reported makes no such claim either.
+    const unreported = buildEnvironmentSection({
+      topology: { recorded: false, boundServiceProxy: 'direct-call' } as DeploymentTopology,
+    })
+    expect(rowOf(unreported, 'Internal gRPC auth secret').verdict).not.toBe('not-applicable')
+  })
+
   it('separates a short secret from an absent one, on direct evidence', () => {
     const short = sectionFor('no-secret', true)
     const absent = sectionFor('no-secret', false)
@@ -1617,6 +1671,47 @@ describe('sessions and cookies', () => {
     expect(findingOf(model, 'COOKIE_PARTITIONED_WITHOUT_SECURE')?.verdict).toBe('broken')
     expect(findingOf(model, 'COOKIE_PARTITIONED_WITHOUT_SECURE')?.remedy?.effort).toBe('restart')
     expect(model.worstVerdict).toBe('broken')
+  })
+
+  /**
+   * *** "OFF" IS THE CORRECT SETTING ON PLAIN HTTP. *** A browser does not send a
+   * Secure cookie over HTTP, so on a deployment served that way "off" is the one
+   * value under which anybody can sign in. The row called it a degradation
+   * regardless, and a healthy plain-HTTP deployment read "working, with
+   * something lost" over the setting that makes it work.
+   */
+  it('counts a Secure flag that is off against the deployment only where the page is on HTTPS', () => {
+    const off = (servedOverHttps: boolean | undefined) =>
+      rowOf(
+        buildEnvironmentSection({
+          topology: topology(),
+          runtime: runtime({ cookieSecure: false, cookiePartitioned: false }),
+          ...(servedOverHttps === undefined ? {} : { servedOverHttps }),
+        }),
+        'Cookie Secure flag',
+      )
+
+    expect(off(true).verdict).toBe('degraded')
+    expect(off(false).verdict).toBe('informational')
+    expect(off(false).note).toContain('THIS page was served over plain HTTP')
+    expect(off(true).note).not.toContain('THIS page was served over plain HTTP')
+    // Not established how the page was served: the cautious reading stands.
+    expect(off(undefined).verdict).toBe('degraded')
+    // And the value is the value, whatever the verdict.
+    for (const served of [true, false, undefined]) {
+      expect(String(off(served).value)).toBe('off')
+    }
+  })
+
+  it('does not let plain HTTP excuse Partitioned without Secure, which drops the cookie on any scheme', () => {
+    const model = buildEnvironmentSection({
+      topology: topology(),
+      runtime: runtime({ cookieSecure: false, cookiePartitioned: true }),
+      servedOverHttps: false,
+    })
+
+    expect(rowOf(model, 'Cookie Partitioned flag').verdict).toBe('broken')
+    expect(codesOf(model)).toContain('COOKIE_PARTITIONED_WITHOUT_SECURE')
   })
 
   it('leaves a coherent pair alone, in either direction', () => {
