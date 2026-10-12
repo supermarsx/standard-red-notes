@@ -667,6 +667,8 @@
           items:
             - title: Realtime health overview
               url: /monitoring-and-troubleshooting.html#realtime-health-in-the-admin-panel
+            - title: The verdict and the checks
+              url: /monitoring-and-troubleshooting.html#the-verdict-and-the-checks
             - title: Boot gate versus attach outcome
               url: /monitoring-and-troubleshooting.html#boot-gate-versus-attach-outcome
             - title: The six realtime health rows

@@ -133,6 +133,65 @@ deliberately not gated on any of it, because a container that restarts itself on
 a Redis blip turns ten seconds of degradation into an outage. The panel's job is
 to make a degradation visible, not to act on it.
 
+### The verdict and the checks
+
+The pane opens on one headline, and every section, row and finding under it uses
+the same set of statuses:
+
+| Status      | Means                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| OK          | It was checked and it works.                                                             |
+| Degraded    | It works, with something lost. The first entry under **What needs attention** says what. |
+| Not working | It does not work.                                                                        |
+| Unknown     | A reading that should have arrived did not. Not a pass: it keeps the headline off OK.    |
+| Not tested  | A check settles it and that check has not been run. The row says which one.              |
+| N/A         | Nothing to judge here, such as a setting this topology never reads.                      |
+| Info        | Context. It carries no verdict and never changes the headline.                           |
+
+The headline reads OK only when nothing under it is not working, degraded,
+unknown or untested. A healthy deployment therefore opens on **Not tested** and
+reaches **OK** after **Run all checks**, because two of the checks write
+something and are never run for you.
+
+Opening the pane writes nothing. The read-only checks run when it opens: the
+capability descriptor, an authenticated control-plane read (reported with the
+lane that carried it and how long it took), one ordinary sync (reported with the
+lane that carried it), a revision-history read, and a comparison of the web app's
+build with the API server's. Two checks run only from **Run all checks** or from
+the **Checks** tab, and the pane says what they do before they do it:
+
+- **Socket ticket** mints one short-lived, single-use socket ticket. It is never
+  redeemed and expires on its own.
+- **File transfer round trip** uploads one throwaway 16 KiB object of random
+  bytes, reads it back in ranged requests and, where this tab's socket negotiated
+  the file lane, over the socket as well, compares every byte, and deletes it. No
+  file item is created, so nothing appears in your files and none of your own
+  files is read, changed or removed. The delete is attempted even when an earlier
+  step fails, and a delete that fails is reported.
+
+**Refresh** re-reads everything the pane is told and re-runs the read-only
+checks. It writes nothing.
+
+Some of what the pane reports is a fact about the tab or the browser it is open
+in, which the server cannot know:
+
+- **A stale tab.** The web bundle carries the commit it was built from, and the
+  pane compares it with the build the server serves now. A tab left open across a
+  deployment reads Degraded until it is reloaded.
+- **Web app and server from different builds.** The two images are built
+  separately and nothing forces them to match.
+- **Content-Security-Policy refusals.** Counted per directive since the page
+  loaded. The blocked address is never recorded; the browser console has it.
+- **Which tab holds the socket.** One tab per account holds the realtime socket
+  and the others stand by on HTTP by design. A second tab says so and still reads
+  OK.
+- **Reduced motion**, as the browser reports it, so "the panel does not animate"
+  is not mistaken for a fault.
+
+The **Copyable report** opens with the same summary and carries every row with
+its status. It holds variable names, booleans, closed status codes, counts,
+durations and build revisions, and no URL, host, port, token or key.
+
 ### Boot gate versus attach outcome
 
 The **Boot gate** section shows separate verdicts rather than one combined
