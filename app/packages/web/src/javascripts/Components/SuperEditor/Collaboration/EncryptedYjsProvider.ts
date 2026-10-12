@@ -7,6 +7,7 @@ import {
   removeAwarenessStates,
 } from 'y-protocols/awareness'
 import * as decoding from 'lib0/decoding'
+import * as encoding from 'lib0/encoding'
 import type { Provider } from '@lexical/yjs'
 import {
   COLLABORATION_MAX_TRANSFER_BYTES,
@@ -156,6 +157,7 @@ export class EncryptedYjsProvider implements Provider {
   private readonly yAwareness: Awareness
   private readonly listeners: Record<string, Set<Listener>> = {}
   private readonly canonicalReadyListeners = new Set<(ready: boolean) => void>()
+  private readonly peerEditListeners = new Set<(clientId: number) => void>()
   private unsubscribe: (() => void) | null = null
   private unsubscribeStatus: (() => void) | null = null
   private connected = false
@@ -293,6 +295,43 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   /** Product-only readiness: true means this Y.Doc has proved canonical state. */
+  /**
+   * A peer's document edit has just been applied here. The Yjs client id that authored an
+   * update is the id that peer's awareness is keyed by, so "who is typing" is read off the
+   * edits themselves: no extra frame, nothing a peer has to remember to send, and it holds
+   * for a peer running a client that predates this.
+   */
+  onPeerEdit(listener: (clientId: number) => void): () => void {
+    this.peerEditListeners.add(listener)
+    return () => {
+      this.peerEditListeners.delete(listener)
+    }
+  }
+
+  private notifyPeerEdits(update: Uint8Array): void {
+    if (this.peerEditListeners.size === 0) {
+      return
+    }
+    let authors: number[]
+    try {
+      authors = [...Y.parseUpdateMeta(update).to.keys()]
+    } catch {
+      return
+    }
+    for (const clientId of authors) {
+      if (clientId === this.doc.clientID) {
+        continue
+      }
+      for (const listener of [...this.peerEditListeners]) {
+        try {
+          listener(clientId)
+        } catch {
+          // A presence observer cannot be allowed to interrupt the document path.
+        }
+      }
+    }
+  }
+
   onCanonicalReadyChange(listener: (ready: boolean) => void): () => void {
     this.canonicalReadyListeners.add(listener)
     return () => this.canonicalReadyListeners.delete(listener)
@@ -934,8 +973,20 @@ export class EncryptedYjsProvider implements Provider {
     if (!this.validateLiveAttachment()) {
       return
     }
-    const changed = [...changes.added, ...changes.updated, ...changes.removed]
-    const update = encodeAwarenessUpdate(this.yAwareness, changed)
+    // Only this client's own state is this client's to announce. The change set also names
+    // every REMOTE client this client has just dropped locally (a presence that timed out,
+    // an outdated state, a cleared room), and announcing those told each peer that it had
+    // itself left: the peer rejected a frame naming its own client id and cleared every
+    // remote caret it held, then announced that in turn.
+    const localClientId = this.doc.clientID
+    if (
+      !changes.added.includes(localClientId) &&
+      !changes.updated.includes(localClientId) &&
+      !changes.removed.includes(localClientId)
+    ) {
+      return
+    }
+    const update = encodeAwarenessUpdate(this.yAwareness, [localClientId])
     this.enqueueLocalAwarenessUpdate(update)
   }
 
@@ -1496,7 +1547,9 @@ export class EncryptedYjsProvider implements Provider {
     )
   }
 
-  private validateInboundAwareness(update: Uint8Array): { update: Uint8Array; liveClientIds: number[] } | undefined {
+  private validateInboundAwareness(
+    update: Uint8Array,
+  ): { update: Uint8Array; liveClientIds: number[]; empty?: true } | undefined {
     if (update.byteLength === 0 || update.byteLength > MAX_AWARENESS_PLAINTEXT_BYTES) {
       return undefined
     }
@@ -1508,6 +1561,8 @@ export class EncryptedYjsProvider implements Provider {
       }
       const clientIds: number[] = []
       const seen = new Set<number>()
+      const entries: Array<{ clientId: number; clock: number; state: string }> = []
+      let namesThisClient = false
       for (let index = 0; index < count; index += 1) {
         const clientId = decoding.readVarUint(decoder)
         const clock = decoding.readVarUint(decoder)
@@ -1515,18 +1570,39 @@ export class EncryptedYjsProvider implements Provider {
           !Number.isSafeInteger(clientId) ||
           clientId < 0 ||
           clientId > MAX_YJS_CLIENT_ID ||
-          clientId === this.doc.clientID ||
           !Number.isSafeInteger(clock) ||
           seen.has(clientId)
         ) {
           return undefined
         }
         seen.add(clientId)
+        const state = decoding.readVarString(decoder)
+        if (clientId === this.doc.clientID) {
+          // A peer is never the authority on this client's own presence, so that entry is
+          // dropped. It used to invalidate the whole frame, and an invalid frame clears
+          // every remote caret: one peer announcing a stale view of this client took all
+          // the carets in the room down with it. The rest of the frame is still honest.
+          namesThisClient = true
+          continue
+        }
         clientIds.push(clientId)
-        decoding.readVarString(decoder)
+        entries.push({ clientId, clock, state })
       }
       if (decoding.hasContent(decoder)) {
         return undefined
+      }
+      if (namesThisClient) {
+        const encoder = encoding.createEncoder()
+        encoding.writeVarUint(encoder, entries.length)
+        for (const entry of entries) {
+          encoding.writeVarUint(encoder, entry.clientId)
+          encoding.writeVarUint(encoder, entry.clock)
+          encoding.writeVarString(encoder, entry.state)
+        }
+        update = encoding.toUint8Array(encoder)
+      }
+      if (clientIds.length === 0) {
+        return { update, liveClientIds: [], empty: true }
       }
 
       let stateIndex = 0
@@ -1703,7 +1779,14 @@ export class EncryptedYjsProvider implements Provider {
             // carries the server's presence TTL (R31).
             this.adoptPresenceHeartbeatInterval(frame.ttlMilliseconds)
           }
-          this.ephemeralPresence?.accept(frame)
+          const arrival = frame.action === 'joined' && this.ephemeralPresence?.knows(frame.presenceId) === false
+          const accepted = this.ephemeralPresence?.accept(frame)
+          if (arrival && accepted) {
+            // Awareness is otherwise sent only when it changes and renewed every 15 s, so
+            // whoever opened the note second was told "no one else is editing" until the
+            // people already in it next moved their carets.
+            this.track(this.broadcastLocalAwareness())
+          }
         }
         break
       case 'room-sync':
@@ -1737,6 +1820,10 @@ export class EncryptedYjsProvider implements Provider {
             ) {
               if (!this.applyRemoteUpdateWithinBudget(update)) {
                 return
+              }
+              // Only an incremental frame is somebody typing; a state transfer is history.
+              if (frame.stateRequestId === undefined && frame.transferId === undefined) {
+                this.notifyPeerEdits(update)
               }
               this.markRecoveryStateApplied(frame.stateRequestId)
               if (
@@ -1808,6 +1895,9 @@ export class EncryptedYjsProvider implements Provider {
               // R32: the frame carries no attributable client id, so the whole remote cursor
               // set goes and the session stays joined.
               this.dropRemoteAwareness('invalid-remote-awareness')
+              return
+            }
+            if (validated.empty) {
               return
             }
             const resultingRemoteIds = this.remoteAwarenessClientIds()

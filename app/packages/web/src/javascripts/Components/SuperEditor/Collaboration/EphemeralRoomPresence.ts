@@ -144,6 +144,11 @@ export class EphemeralRoomPresence {
     return this.sessions.size
   }
 
+  /** Whether this presence session has been announced here before; false means someone has just arrived. */
+  knows(presenceId: string): boolean {
+    return this.sessions.has(presenceId)
+  }
+
   private acceptJoined(frame: Extract<PresenceFrame, { action: 'joined' }>): boolean {
     if (
       !this.isBoundedIdentifier(frame.presenceId, MAX_PRESENCE_ID_LENGTH) ||

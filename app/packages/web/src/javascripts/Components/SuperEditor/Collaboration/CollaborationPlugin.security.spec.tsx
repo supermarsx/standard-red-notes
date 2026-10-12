@@ -42,6 +42,8 @@ import {
   SUPER_COLLABORATION_CRYPTO_UNAVAILABLE_REASON,
 } from './CollaborationAvailability'
 import { CollaborationConfig, SuperCollaborationPlugin } from './CollaborationPlugin'
+import { PEER_TYPING_LINGER_MS } from './PeerActivity'
+import { PresenceRegistry } from './PresenceRegistry'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -49,6 +51,9 @@ let container: HTMLElement
 let root: Root
 let providerDestroy: jest.Mock
 let providerCanonicalReadyListener: ((ready: boolean) => void) | undefined
+let providerPeerEditListener: ((clientId: number) => void) | undefined
+let awarenessStates: Map<number, Record<string, unknown>>
+let awarenessChangeListeners: Set<() => void>
 let replayLedger: { scope: string }
 let collabChannel: { id: string }
 let roomCipher: { id: string }
@@ -73,6 +78,9 @@ beforeEach(() => {
   root = createRoot(container)
   providerDestroy = jest.fn()
   providerCanonicalReadyListener = undefined
+  providerPeerEditListener = undefined
+  awarenessStates = new Map()
+  awarenessChangeListeners = new Set()
   /**
    * `resetMocks: true` clears factory-level implementations, so set them per test.
    *
@@ -92,11 +100,19 @@ beforeEach(() => {
       ({
         awareness: {
           clientID: 1,
-          getStates: () => new Map(),
-          on: jest.fn(),
-          off: jest.fn(),
+          getStates: () => awarenessStates,
+          on: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.add(listener)),
+          off: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.delete(listener)),
         },
         destroy: providerDestroy,
+        onPeerEdit: jest.fn((listener: (clientId: number) => void) => {
+          providerPeerEditListener = listener
+          return () => {
+            if (providerPeerEditListener === listener) {
+              providerPeerEditListener = undefined
+            }
+          }
+        }),
         onCanonicalReadyChange: jest.fn((listener: (ready: boolean) => void) => {
           providerCanonicalReadyListener = listener
           return () => {
@@ -273,6 +289,98 @@ describe('Super collaboration security gate', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(onCanonicalReadyChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('shows a peer as typing from the edits applied here, and takes it down when they stop', async () => {
+    jest.useFakeTimers()
+    const room = 'typing-note'
+    const lease = {
+      requestId: 'typing-lease',
+      shouldBootstrap: true,
+      protocolVersion: 3 as const,
+      maxTransferBytes: 4 * 1024 * 1024,
+      roomEpoch: 'room_epoch_0000000000000001',
+      release: jest.fn(),
+      validateAttachment: jest.fn(() => true),
+      isAttached: jest.fn(() => true),
+      reactivate: jest.fn(),
+      fail: jest.fn(),
+      retryBootstrap: jest.fn(),
+    }
+    const caret = (clock: number) => ({ type: null, tname: 'root', item: { client: 7, clock }, assoc: 0 })
+    const announce = () => act(() => awarenessChangeListeners.forEach((listener) => listener()))
+    try {
+      await act(async () => {
+        root.render(
+          createElement(SuperCollaborationPlugin, {
+            application: {} as never,
+            config: {
+              room,
+              roomKey: {} as CryptoKey,
+              roomEpoch: 'room_epoch_0000000000000001',
+              editorLease: lease,
+              username: 'Alice',
+              cursorColor: '#ff0000',
+              shouldBootstrap: true,
+            },
+          }),
+        )
+      })
+      // Precondition: the plugin is listening for applied edits at all.
+      expect(providerPeerEditListener).toEqual(expect.any(Function))
+
+      awarenessStates.set(7, {
+        name: 'Bob',
+        color: '#2563eb',
+        focusing: true,
+        anchorPos: caret(1),
+        focusPos: caret(1),
+        awarenessData: { userUuid: 'bob-uuid' },
+      })
+      announce()
+      expect(PresenceRegistry.getPeers(room)).toEqual([
+        { clientId: 7, name: 'Bob', color: '#2563eb', userUuid: 'bob-uuid', focusing: true, typing: false },
+      ])
+
+      // An edit authored by Bob's Yjs client is applied: he is typing, as of now.
+      const startedAt = Date.now()
+      act(() => providerPeerEditListener?.(7))
+      expect(PresenceRegistry.getPeers(room)).toEqual([
+        {
+          clientId: 7,
+          name: 'Bob',
+          color: '#2563eb',
+          userUuid: 'bob-uuid',
+          focusing: true,
+          typing: true,
+          lastActiveAt: startedAt,
+        },
+      ])
+
+      // Nothing arrives to say he stopped. The registry must say so by itself.
+      act(() => {
+        jest.advanceTimersByTime(PEER_TYPING_LINGER_MS)
+      })
+      expect(PresenceRegistry.getPeers(room)[0]).toMatchObject({ typing: false, lastActiveAt: startedAt })
+
+      // Moving the caret is activity, and is not typing; leaving the editor clears `focusing`.
+      act(() => {
+        jest.advanceTimersByTime(5_000)
+      })
+      awarenessStates.set(7, { ...awarenessStates.get(7), anchorPos: caret(9), focusPos: caret(9), focusing: false })
+      announce()
+      expect(PresenceRegistry.getPeers(room)[0]).toMatchObject({
+        typing: false,
+        focusing: false,
+        lastActiveAt: startedAt + PEER_TYPING_LINGER_MS + 5_000,
+      })
+
+      act(() => root.unmount())
+      expect(PresenceRegistry.getPeers(room)).toEqual([])
+      expect(providerPeerEditListener).toBeUndefined()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('cancels terminal destroy during StrictMode replay and destroys exactly once on genuine unmount', async () => {

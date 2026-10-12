@@ -12,6 +12,7 @@ import { createCollaborationRoomCipher, getCollaborationReplayLedger } from './R
 import { MAX_PRESENT_PEERS_PER_ROOM, PresenceRegistry, PresentPeer } from './PresenceRegistry'
 import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 import { showCollaborationPresenceActivity } from './CollaborationPresenceNotification'
+import { PeerActivityTracker } from './PeerActivity'
 import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
 import {
   notifyChecklistMutationBridgeReadiness,
@@ -45,6 +46,9 @@ export type CollaborationConfig = {
 type AwarenessUserState = {
   name?: string
   color?: string
+  focusing?: boolean
+  anchorPos?: unknown
+  focusPos?: unknown
   awarenessData?: { userUuid?: string }
 }
 
@@ -233,8 +237,13 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
     const awareness = provider.awareness as unknown as AwarenessLike
     const room = config.room
 
-    const publish = (): void => {
+    // Who is typing is read off the edits this client applies and the carets in awareness;
+    // the tracker calls back when a peer STOPS typing, which no inbound frame announces.
+    const activity = new PeerActivityTracker(() => publish())
+
+    function publish(): void {
       const peers: PresentPeer[] = []
+      const present = new Set<number>()
       awareness.getStates().forEach((state, clientId) => {
         if (peers.length >= MAX_PRESENT_PEERS_PER_ROOM) {
           return
@@ -245,21 +254,29 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         if (!state || (!state.name && !state.awarenessData?.userUuid)) {
           return
         }
+        present.add(clientId)
+        activity.observeCaret(clientId, state.anchorPos, state.focusPos)
         peers.push({
           userUuid: state.awarenessData?.userUuid,
           name: state.name ?? 'Collaborator',
           color: state.color ?? '#888888',
           clientId,
+          ...(typeof state.focusing === 'boolean' ? { focusing: state.focusing } : {}),
+          ...activity.describe(clientId),
         })
       })
+      activity.retain(present)
       PresenceRegistry.setPeers(room, peers)
     }
 
+    const stopObservingEdits = provider.onPeerEdit((clientId) => activity.noteEdit(clientId))
     awareness.on('change', publish)
     publish()
 
     return () => {
+      stopObservingEdits()
       awareness.off('change', publish)
+      activity.dispose()
       PresenceRegistry.clearRoom(room)
     }
     // Re-bind when the room changes (a new provider is created per room).

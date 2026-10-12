@@ -3,6 +3,9 @@
  */
 import { webcrypto } from 'node:crypto'
 import * as Y from 'yjs'
+import * as decoding from 'lib0/decoding'
+import * as encoding from 'lib0/encoding'
+import { Awareness, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness'
 import {
   EncryptedYjsProvider,
   MAX_ACTIVE_INBOUND_CRYPTO,
@@ -3275,5 +3278,284 @@ maybe('RoomCrypto (AES-GCM, requires WebCrypto)', () => {
     await expect(cipher.decrypt(payload, metadata)).resolves.toEqual(plaintext)
     await expect(cipher.decrypt(payload, new TextEncoder().encode('room|transfer|1|2|131073'))).rejects.toBeDefined()
     await expect(cipher.decrypt(payload)).rejects.toBeDefined()
+  })
+})
+
+/** The Yjs client ids an awareness frame carries, read straight off the (base64) test transport. */
+function awarenessClientIds(frame: CollabFrame): number[] {
+  if (frame.t !== 'awareness') {
+    return []
+  }
+  const decoder = decoding.createDecoder(new Uint8Array(Buffer.from(frame.payload, 'base64')))
+  const ids: number[] = []
+  const count = decoding.readVarUint(decoder)
+  for (let index = 0; index < count; index += 1) {
+    ids.push(decoding.readVarUint(decoder))
+    decoding.readVarUint(decoder)
+    decoding.readVarString(decoder)
+  }
+  return ids
+}
+
+/** An awareness frame exactly as a real peer's y-protocols Awareness would encode it. */
+function awarenessFrameFrom(room: string, clientId: number, state: Record<string, unknown> | null): CollabFrame {
+  const peerDocument = new Y.Doc()
+  peerDocument.clientID = clientId
+  const peer = new Awareness(peerDocument)
+  peer.setLocalState(state)
+  const payload = Buffer.from(encodeAwarenessUpdate(peer, [clientId])).toString('base64')
+  peer.destroy()
+  peerDocument.destroy()
+  return { t: 'awareness', room, payload }
+}
+
+/** A hand-built awareness frame, for entries no honest Awareness instance would produce. */
+function rawAwarenessFrame(
+  room: string,
+  entries: Array<{ clientId: number; clock: number; state: Record<string, unknown> | null }>,
+): CollabFrame {
+  const encoder = encoding.createEncoder()
+  encoding.writeVarUint(encoder, entries.length)
+  for (const entry of entries) {
+    encoding.writeVarUint(encoder, entry.clientId)
+    encoding.writeVarUint(encoder, entry.clock)
+    encoding.writeVarString(encoder, JSON.stringify(entry.state))
+  }
+  return { t: 'awareness', room, payload: Buffer.from(encoding.toUint8Array(encoder)).toString('base64') }
+}
+
+const PEER_STATE = {
+  name: 'Bob',
+  color: '#2563eb',
+  focusing: true,
+  anchorPos: null,
+  focusPos: null,
+  awarenessData: { userUuid: 'remote-user' },
+}
+
+describe('EncryptedYjsProvider presence between people who are both here', () => {
+  const localAwareness = (provider: EncryptedYjsProvider) =>
+    provider.awareness as unknown as {
+      getStates(): Map<number, Record<string, unknown>>
+      getLocalState(): Record<string, unknown> | null
+      setLocalState(state: Record<string, unknown> | null): void
+    }
+
+  it('never announces that a PEER left: dropping a peer locally sends nothing that names it', async () => {
+    const room = 'own-awareness-only-room'
+    const { provider, sent, inbound } = createPresenceProvider(room)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const local = provider.doc.clientID
+      const remote = local === 7_001 ? 7_002 : 7_001
+      localAwareness(provider).setLocalState({ ...PEER_STATE, name: 'Alice', awarenessData: { userUuid: 'me' } })
+      await provider.flush()
+
+      inbound.deliver(awarenessFrameFrom(room, remote, PEER_STATE))
+      await provider.flush()
+      // Precondition: the peer's caret really is held, so its removal below is a real one.
+      expect(localAwareness(provider).getStates().has(remote)).toBe(true)
+
+      const joined = { ...remotePresenceJoin(room, local, 30_000), clientId: remote }
+      inbound.deliver(joined)
+      await provider.flush()
+      const before = sent.length
+      // The gateway says the peer's presence ended; this client drops that peer's caret.
+      inbound.deliver({
+        t: 'room-presence',
+        room,
+        roomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: 3,
+        action: 'left',
+        presenceId: joined.presenceId,
+        userUuid: joined.userUuid,
+        clientId: remote,
+        reason: 'heartbeat-timeout',
+      })
+      await provider.flush()
+
+      expect(localAwareness(provider).getStates().has(remote)).toBe(false)
+      const announced = sent.slice(before).flatMap(awarenessClientIds)
+      // Telling the room "client <remote> is gone" is telling <remote> that it left itself.
+      expect(announced).not.toContain(remote)
+      expect(sent.flatMap(awarenessClientIds).every((clientId) => clientId === local)).toBe(true)
+
+      // One change set that names BOTH this client and a peer: only this client's half is sent.
+      inbound.deliver(awarenessFrameFrom(room, remote, PEER_STATE))
+      await provider.flush()
+      expect(localAwareness(provider).getStates().has(remote)).toBe(true)
+      const beforeMixed = sent.length
+      removeAwarenessStates(provider.awareness as unknown as Awareness, [remote, local], 'mixed-change-set')
+      await provider.flush()
+      const mixed = sent.slice(beforeMixed).flatMap(awarenessClientIds)
+      expect(mixed).toEqual([local])
+    } finally {
+      provider.destroy()
+    }
+  })
+
+  it('drops only the entry of a frame that names this client, and keeps every caret it holds', async () => {
+    const room = 'frame-names-me-room'
+    const { provider, inbound, onFatal } = createPresenceProvider(room)
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const local = provider.doc.clientID
+      const bob = local === 7_101 ? 7_103 : 7_101
+      const carol = local === 7_102 ? 7_104 : 7_102
+      localAwareness(provider).setLocalState({ ...PEER_STATE, name: 'Alice', awarenessData: { userUuid: 'me' } })
+      inbound.deliver(awarenessFrameFrom(room, bob, PEER_STATE))
+      await provider.flush()
+      expect(localAwareness(provider).getStates().has(bob)).toBe(true)
+
+      // What a peer running the previous build sends when its own view of this client expires:
+      // "client <local> is gone" -- here alongside an honest entry for a third person.
+      inbound.deliver(
+        rawAwarenessFrame(room, [
+          { clientId: local, clock: 99, state: null },
+          { clientId: carol, clock: 1, state: { ...PEER_STATE, name: 'Carol' } },
+        ]),
+      )
+      await provider.flush()
+
+      const states = localAwareness(provider).getStates()
+      expect(states.has(bob)).toBe(true)
+      expect(states.get(carol)).toMatchObject({ name: 'Carol' })
+      expect(localAwareness(provider).getLocalState()).toMatchObject({ name: 'Alice' })
+
+      // Nor may a peer REWRITE this client's own state: y-protocols guards a removal of the
+      // local state, but would store any other state a frame supplied for the local client id.
+      inbound.deliver(
+        rawAwarenessFrame(room, [
+          { clientId: local, clock: 1_000, state: { ...PEER_STATE, name: 'Mallory' } },
+          { clientId: carol, clock: 2, state: { ...PEER_STATE, name: 'Carol again' } },
+        ]),
+      )
+      await provider.flush()
+      expect(localAwareness(provider).getLocalState()).toMatchObject({ name: 'Alice' })
+      expect(localAwareness(provider).getStates().get(local)).toMatchObject({ name: 'Alice' })
+      expect(localAwareness(provider).getStates().get(carol)).toMatchObject({ name: 'Carol again' })
+
+      // A frame that names nobody else changes nothing and is not an error.
+      inbound.deliver(rawAwarenessFrame(room, [{ clientId: local, clock: 100, state: null }]))
+      await provider.flush()
+      expect(localAwareness(provider).getStates().has(bob)).toBe(true)
+      expect(localAwareness(provider).getStates().has(carol)).toBe(true)
+      expect(localAwareness(provider).getLocalState()).toMatchObject({ name: 'Alice' })
+      expect(errors.mock.calls.flat().join(' ')).not.toContain('invalid-remote-awareness')
+      expect(onFatal).not.toHaveBeenCalled()
+    } finally {
+      errors.mockRestore()
+      provider.destroy()
+    }
+  })
+
+  it('still rejects a frame that is malformed in any other way', async () => {
+    const room = 'still-invalid-room'
+    const { provider, inbound } = createPresenceProvider(room)
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const local = provider.doc.clientID
+      const bob = local === 7_201 ? 7_202 : 7_201
+      inbound.deliver(awarenessFrameFrom(room, bob, PEER_STATE))
+      await provider.flush()
+
+      // The same client twice in one frame is not something to repair.
+      inbound.deliver(
+        rawAwarenessFrame(room, [
+          { clientId: bob, clock: 5, state: PEER_STATE },
+          { clientId: bob, clock: 6, state: PEER_STATE },
+        ]),
+      )
+      await provider.flush()
+
+      expect(localAwareness(provider).getStates().has(bob)).toBe(false)
+      expect(errors.mock.calls.flat().join(' ')).toContain('invalid-remote-awareness')
+    } finally {
+      errors.mockRestore()
+      provider.destroy()
+    }
+  })
+
+  it('tells someone who has just arrived that it is here, once, and not on every renewal', async () => {
+    const room = 'greet-newcomer-room'
+    const { provider, sent, inbound } = createPresenceProvider(room)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const local = provider.doc.clientID
+      localAwareness(provider).setLocalState({ ...PEER_STATE, name: 'Alice', awarenessData: { userUuid: 'me' } })
+      await provider.flush()
+      const countAwareness = () => sent.filter((frame) => frame.t === 'awareness').length
+      const before = countAwareness()
+
+      const joined = remotePresenceJoin(room, local, 30_000)
+      inbound.deliver(joined)
+      await provider.flush()
+      // Awareness is otherwise sent on change and renewed every 15 s; without this the
+      // newcomer reads "no one else is editing" although this client is in the note.
+      expect(countAwareness()).toBe(before + 1)
+      expect(awarenessClientIds(sent.filter((frame) => frame.t === 'awareness').at(-1)!)).toEqual([local])
+
+      // The gateway re-announces a live presence on every heartbeat; that is a renewal.
+      inbound.deliver(joined)
+      inbound.deliver(joined)
+      await provider.flush()
+      expect(countAwareness()).toBe(before + 1)
+
+      // The gateway also echoes this client's own join; that is nobody arriving.
+      inbound.deliver({ ...joined, presenceId: 'own-presence', clientId: local })
+      await provider.flush()
+      expect(countAwareness()).toBe(before + 1)
+    } finally {
+      provider.destroy()
+    }
+  })
+
+  it('reports who authored an edit that has just been applied, and nothing for a state transfer', async () => {
+    const room = 'peer-edit-room'
+    const { provider, inbound } = createPresenceProvider(room)
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const local = provider.doc.clientID
+      const author = local === 7_301 ? 7_302 : 7_301
+      const edits: number[] = []
+      const stop = provider.onPeerEdit((clientId) => edits.push(clientId))
+      const editBy = (clientId: number, text: string): string => {
+        const peerDocument = new Y.Doc()
+        peerDocument.clientID = clientId
+        peerDocument.getText('typing-probe').insert(0, text)
+        return Buffer.from(Y.encodeStateAsUpdate(peerDocument)).toString('base64')
+      }
+
+      // Each step waits for the update to be APPLIED (the text holds it), so "no report" below
+      // is about an update that arrived, not one that was never processed.
+      const applied = () => provider.doc.getText('typing-probe').toString()
+
+      inbound.deliver({ t: 'yjs', room, payload: editBy(author, 'h') })
+      await flushMicrotasksUntil(() => applied().includes('h'))
+      expect(applied()).toBe('h')
+      expect(edits).toEqual([author])
+
+      // A whole-document transfer is history arriving, not somebody typing.
+      inbound.deliver({ t: 'yjs', room, payload: editBy(author + 10, 'S'), stateRequestId: 'state-request-1' })
+      inbound.deliver({ t: 'yjs', room, payload: editBy(author + 20, 'T'), transferId: 'transfer-1' })
+      await flushMicrotasksUntil(() => applied().includes('S') && applied().includes('T'))
+      expect(applied()).toHaveLength(3)
+      expect(edits).toEqual([author])
+
+      stop()
+      inbound.deliver({ t: 'yjs', room, payload: editBy(author + 30, 'L') })
+      await flushMicrotasksUntil(() => applied().includes('L'))
+      expect(applied()).toHaveLength(4)
+      expect(edits).toEqual([author])
+    } finally {
+      provider.destroy()
+    }
   })
 })

@@ -21,6 +21,18 @@ export type PresentPeer = {
   color: string
   /** yjs awareness clientID — unique per open editor instance. */
   clientId: number
+  /**
+   * A document edit by this peer was applied on this client within PEER_TYPING_LINGER_MS. The
+   * registry re-emits when it turns false, so a view need not poll to take the indication down.
+   */
+  typing?: boolean
+  /** The peer's editor has keyboard focus; its caret is drawn only while this is true. */
+  focusing?: boolean
+  /**
+   * When this client last saw the peer edit or move its caret, on this client's own clock
+   * (epoch milliseconds). Absent until the peer has done something since it was first seen.
+   */
+  lastActiveAt?: number
 }
 
 export const MAX_PRESENT_PEERS_PER_ROOM = 64
@@ -73,6 +85,11 @@ class PresenceRegistryImpl {
             name: peer.name,
             color: peer.color,
             ...(peer.userUuid ? { userUuid: peer.userUuid } : {}),
+            ...(typeof peer.typing === 'boolean' ? { typing: peer.typing } : {}),
+            ...(typeof peer.focusing === 'boolean' ? { focusing: peer.focusing } : {}),
+            ...(typeof peer.lastActiveAt === 'number' && Number.isFinite(peer.lastActiveAt)
+              ? { lastActiveAt: peer.lastActiveAt }
+              : {}),
           })
         }
       }

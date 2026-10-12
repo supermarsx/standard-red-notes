@@ -108,6 +108,27 @@ describe('EphemeralRoomPresence', () => {
     expect(activities).toHaveBeenCalledTimes(2)
   })
 
+  it('knows a presence it has been told about, so a renewal is not mistaken for an arrival', () => {
+    const presence = new EphemeralRoomPresence({
+      room,
+      roomEpoch,
+      localClientId: 1,
+      resolveEncryptedAwarenessIdentity: () => undefined,
+      onActivity: () => undefined,
+    })
+    try {
+      expect(presence.knows('presence-1')).toBe(false)
+      expect(presence.accept(joinedFrame())).toBe(true)
+      expect(presence.knows('presence-1')).toBe(true)
+      expect(presence.knows('presence-2')).toBe(false)
+
+      expect(presence.accept(leftFrame())).toBe(true)
+      expect(presence.knows('presence-1')).toBe(false)
+    } finally {
+      presence.clear()
+    }
+  })
+
   it('says nothing at all when a timed-out collaborator rejoins inside the grace window', () => {
     // R31. A backgrounded tab misses heartbeats and comes straight back; "Alice left" followed
     // by "Alice joined" describes our transport, not anything Alice did.
