@@ -110,6 +110,8 @@ const roleOf = (key: string): string | null | undefined =>
   row(key)?.querySelector('[data-collaborator-role]')?.textContent
 const collapseButton = (): HTMLButtonElement | null =>
   popup()?.querySelector<HTMLButtonElement>('[data-collaborators-collapse]') ?? null
+const guards = (): HTMLElement[] =>
+  Array.from(container.querySelectorAll<HTMLElement>('[data-collaborators-focus-guard]'))
 
 const rgb = (hex: string): string => {
   const value = Number.parseInt(hex.slice(1), 16)
@@ -474,7 +476,8 @@ describe('the collaborators beside the status', () => {
 
     expect(avatars()).toHaveLength(1)
     expect(avatars()[0].style.backgroundColor).toBe(rgb(collaboratorColor('peer-1')))
-    expect(avatars()[0].textContent).toBe('P1')
+    // One initial in the bar, where the discs overlap; both in the popup, where they do not.
+    expect(avatars()[0].textContent).toBe('P')
     expect(overflow()).toBeNull()
     expect(count()).toBeNull()
     expect(label()).toContain('1 collaborator here now: Person 1.')
@@ -668,6 +671,7 @@ describe('the popup', () => {
     expect(row('peer-2')?.querySelector<HTMLElement>('[data-collaborator-avatar]')?.style.backgroundColor).toBe(
       rgb('#16a34a'),
     )
+    expect(row('peer-2')?.querySelector('[data-collaborator-avatar]')?.textContent).toBe('GE')
 
     // Not in the room: named by trusted contact, and knowably absent because this client is in it.
     expect(row('peer-1')?.querySelector('[title]')?.textContent).toBe('Ada Lovelace')
@@ -844,25 +848,36 @@ describe('by keyboard', () => {
     editor.remove()
   })
 
-  it('closes and returns to the trigger when Tab leaves the popup at either end', async () => {
+  it('closes and returns to the trigger when Tab steps past either end of the popup', async () => {
+    // The popup is portalled, so what follows it in the document is arbitrary. A
+    // focusable guard sits immediately before and after it; reaching one is how
+    // the browser reports that Tab or Shift+Tab has left the popup.
     await render()
     await setPeers(peers(1))
     await click(chip())
-    expect(collapseButton()).not.toBeNull()
 
-    // Tab from the popup itself moves on to its one control: nothing to intercept.
-    await press(popup(), 'Tab')
+    expect(guards()).toHaveLength(2)
+    expect(guards()[0].nextElementSibling).toBe(popup())
+    expect(popup()?.nextElementSibling).toBe(guards()[1])
+    expect(guards().map((guard) => guard.tabIndex)).toEqual([0, 0])
+    // Moving within the popup closes nothing.
+    await act(async () => {
+      collapseButton()?.focus()
+    })
     expect(popup()).not.toBeNull()
 
-    // Tab past the last control leaves the popup.
-    collapseButton()?.focus()
-    await press(collapseButton(), 'Tab')
+    // Tab past the last control.
+    await act(async () => {
+      guards()[1].focus()
+    })
     expect(popup()).toBeNull()
     expect(document.activeElement).toBe(chip())
 
-    // Shift+Tab from the top of the popup leaves it too.
+    // Shift+Tab from the top.
     await click(chip())
-    await press(popup(), 'Tab', true)
+    await act(async () => {
+      guards()[0].focus()
+    })
     expect(popup()).toBeNull()
     expect(document.activeElement).toBe(chip())
   })
@@ -908,7 +923,7 @@ describe('the typing cue', () => {
           attendance: '',
           collaborators: [person('ada', 'typing'), person('grace', 'viewing')],
           collapsed: false,
-          onKeyDown: () => undefined,
+          onLeave: () => undefined,
         }),
       )
     })

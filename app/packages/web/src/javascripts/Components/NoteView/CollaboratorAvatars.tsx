@@ -4,7 +4,11 @@ import { Collaborator, MAX_BAR_AVATARS } from './collaborators'
 
 type AvatarProps = {
   collaborator: Collaborator
-  /** `bar` is sized to the title bar's 20px status chips; `list` to a popup row. */
+  /**
+   * `bar` is sized to the title bar's 20px status chips and shows ONE initial:
+   * the discs overlap there, and two letters lose an edge to the disc on top.
+   * `list` is a popup row's disc, with both.
+   */
   size: 'bar' | 'list'
   className?: string
   style?: CSSProperties
@@ -23,13 +27,13 @@ export const CollaboratorAvatar: FunctionComponent<AvatarProps> = ({ collaborato
       aria-hidden
       className={classNames(
         'relative flex flex-shrink-0 items-center justify-center rounded-full font-bold text-white select-none',
-        size === 'bar' ? 'h-5 w-5 text-[0.55rem]' : 'h-6 w-6 text-[0.6rem]',
+        size === 'bar' ? 'h-5 w-5 text-[0.65rem]' : 'h-6 w-6 text-[0.6rem]',
         className,
       )}
       data-collaborator-avatar={collaborator.key}
       style={{ backgroundColor: collaborator.color, ...style }}
     >
-      {collaborator.initials}
+      {size === 'bar' ? Array.from(collaborator.initials)[0] : collaborator.initials}
       {collaborator.presence === 'typing' && (
         // The dot IS the cue, so it reads with motion off; the pulse is only added where motion is welcome.
         <span
@@ -63,7 +67,7 @@ export const CollaboratorAvatarStack: FunctionComponent<StackProps> = ({ present
   return (
     <span
       aria-hidden
-      className={classNames('isolate ml-1 flex items-center -space-x-1.5', dimmed && 'opacity-60')}
+      className={classNames('isolate ml-1 flex items-center -space-x-1', dimmed && 'opacity-60')}
       data-collaborator-avatars
     >
       {shown.map((collaborator, index) => (
@@ -77,8 +81,9 @@ export const CollaboratorAvatarStack: FunctionComponent<StackProps> = ({ present
         />
       ))}
       {overflow > 0 && (
+        // Padded on the left by what the last disc and its ring cover, so the "+" is never under them.
         <span
-          className="bg-contrast text-text ring-default relative flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded-full px-1 text-[0.6rem] font-bold ring-2 select-none"
+          className="bg-contrast text-text ring-default relative flex h-5 min-w-5 flex-shrink-0 items-center justify-center rounded-full pr-1 pl-2 text-[0.6rem] font-bold ring-2 select-none"
           data-collaborator-overflow
         >
           +{overflow}

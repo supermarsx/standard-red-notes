@@ -215,27 +215,11 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
     }
   }, [])
 
-  const onDialogKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Tab') {
-      return
-    }
-    const dialog = dialogRef.current
-    if (!dialog) {
-      return
-    }
-    // Tabbing past either end of the popup closes it and lands on the trigger,
-    // instead of wandering off into whatever follows a portal in the document.
-    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled])'))
-    const active = document.activeElement
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    const leavingBackwards = event.shiftKey && (active === dialog || active === first)
-    const leavingForwards = !event.shiftKey && (last === undefined ? active === dialog : active === last)
-    if (leavingBackwards || leavingForwards) {
-      event.preventDefault()
-      setIsOpen(false)
-      buttonRef.current?.focus({ preventScroll: true })
-    }
+  // Tabbing past either end of the popup closes it and lands on the trigger,
+  // instead of wandering off into whatever follows a portal in the document.
+  const leavePopup = useCallback(() => {
+    setIsOpen(false)
+    buttonRef.current?.focus({ preventScroll: true })
   }, [])
 
   const toggleCollapsed = useCallback(() => {
@@ -305,7 +289,7 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
           collaborators={collaborators}
           collapsed={collapsed}
           id={dialogId}
-          onKeyDown={onDialogKeyDown}
+          onLeave={leavePopup}
           onToggleCollapsed={isDesktopScreen && others.length > 0 ? toggleCollapsed : undefined}
           ref={dialogRef}
           session={session}

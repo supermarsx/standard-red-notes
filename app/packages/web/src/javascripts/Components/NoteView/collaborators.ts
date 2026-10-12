@@ -269,9 +269,12 @@ export function buildCollaborators({ peers, members, selfUuid, selfEmail, state,
     })
   }
 
+  // Within a status, people with a name come before those known only by account id.
+  const idOnly = (collaborator: Collaborator): number => (collaborator.name === collaborator.key ? 1 : 0)
   others.sort(
     (a, b) =>
       PRESENCE_ORDER.indexOf(a.presence) - PRESENCE_ORDER.indexOf(b.presence) ||
+      idOnly(a) - idOnly(b) ||
       a.name.localeCompare(b.name) ||
       a.key.localeCompare(b.key),
   )

@@ -205,22 +205,42 @@ describe('who is listed', () => {
     ])
   })
 
-  it('draws a peer in the colour they broadcast only when it is a plain hex colour', () => {
-    const [plain, hostile, missing] = buildCollaborators({
-      peers: [
-        peer(1, { userUuid: 'a', name: 'a', color: '#e11d48' }),
-        peer(2, { userUuid: 'b', name: 'b', color: 'url(https://example.com/x.png)' }),
-        peer(3, { name: 'c', color: '' }),
+  it('lists people with a name before those known only by account id, within a status', () => {
+    const collaborators = buildCollaborators({
+      peers: [],
+      members: [
+        { userUuid: 'aaaa-id-only', role: 'write' },
+        { userUuid: 'zed', contactName: 'Zed', role: 'write' },
+        { userUuid: 'amy', contactName: 'Amy', role: 'write' },
       ],
-      members: [],
       selfUuid: 'self',
       state: ACTIVE,
       now: NOW,
     })
 
-    expect(plain.color).toBe('#e11d48')
-    expect(hostile.color).toBe(collaboratorColor('b'))
-    expect(missing.color).toBe(collaboratorColor('3'))
+    expect(collaborators.map((collaborator) => collaborator.name)).toEqual(['Amy', 'Zed', 'aaaa-id-only'])
+  })
+
+  it('draws a peer in the colour they broadcast only when it is a plain hex colour', () => {
+    const colourOf = Object.fromEntries(
+      buildCollaborators({
+        peers: [
+          peer(1, { userUuid: 'plain', color: '#e11d48' }),
+          peer(2, { userUuid: 'hostile', color: 'url(https://example.com/x.png)' }),
+          peer(3, { color: '' }),
+        ],
+        members: [],
+        selfUuid: 'self',
+        state: ACTIVE,
+        now: NOW,
+      }).map((collaborator) => [collaborator.key, collaborator.color]),
+    )
+
+    expect(colourOf).toEqual({
+      plain: '#e11d48',
+      hostile: collaboratorColor('hostile'),
+      'client:3': collaboratorColor('3'),
+    })
   })
 })
 
