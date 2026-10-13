@@ -14,6 +14,10 @@ import { EditorSaveTimeoutDebounce } from '../Components/NoteView/Controller/Edi
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 import { LargeNoteThreshold } from '@/Constants/Constants'
 import { NoteStatus } from '@/Components/NoteView/NoteStatusIndicator'
+import {
+  carryCollaborationRevisionStamp,
+  removeCollaborationRevisionStamp,
+} from '@/Components/SuperEditor/Collaboration/CollaborationRevisionStamp'
 import { action, makeObservable, observable, runInAction } from 'mobx'
 
 const NotePreviewCharLimit = 160
@@ -473,6 +477,11 @@ export class NoteSyncController {
         }
 
         const noteMutator = mutator as NoteMutator
+        if (params.text != undefined) {
+          // A collaboration stamp describes the body it was saved with. A new body starts
+          // without one; the collaborative editor's own mutation, next, writes the stamp for it.
+          removeCollaborationRevisionStamp(noteMutator)
+        }
         if (params.customMutate) {
           params.customMutate(noteMutator)
         }
@@ -483,6 +492,10 @@ export class NoteSyncController {
 
         if (params.text != undefined) {
           noteMutator.text = params.text
+        } else if (params.isUserModified) {
+          // A save that leaves the body alone (a rename) still moves the note's modified date,
+          // and a collaboration stamp is only read while that date is the stamp's own.
+          carryCollaborationRevisionStamp(noteMutator, Date.now())
         }
 
         if (params.previews) {

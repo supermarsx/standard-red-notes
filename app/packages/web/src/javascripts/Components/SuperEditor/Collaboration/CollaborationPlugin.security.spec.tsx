@@ -44,6 +44,7 @@ import {
 import { CollaborationConfig, SuperCollaborationPlugin } from './CollaborationPlugin'
 import { PEER_TYPING_LINGER_MS } from './PeerActivity'
 import { PresenceRegistry } from './PresenceRegistry'
+import { CollaborativeDocumentRegistry } from './CollaborativeDocumentRegistry'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -54,6 +55,12 @@ let providerCanonicalReadyListener: ((ready: boolean) => void) | undefined
 let providerPeerEditListener: ((clientId: number) => void) | undefined
 let awarenessStates: Map<number, Record<string, unknown>>
 let awarenessChangeListeners: Set<() => void>
+let providerCanonicalReady: boolean
+let providerDocument:
+  | {
+      getText(name: string): { insert(index: number, text: string): void; delete(index: number, length: number): void }
+    }
+  | undefined
 let replayLedger: { scope: string }
 let collabChannel: { id: string }
 let roomCipher: { id: string }
@@ -81,6 +88,8 @@ beforeEach(() => {
   providerPeerEditListener = undefined
   awarenessStates = new Map()
   awarenessChangeListeners = new Set()
+  providerCanonicalReady = false
+  providerDocument = undefined
   /**
    * `resetMocks: true` clears factory-level implementations, so set them per test.
    *
@@ -95,34 +104,35 @@ beforeEach(() => {
   jest.mocked(getCollaborationReplayLedger).mockReturnValue(replayLedger as never)
   jest.mocked(createGatewayCollabChannel).mockReturnValue(collabChannel as never)
   jest.mocked(createCollaborationRoomCipher).mockReturnValue(roomCipher as never)
-  jest.mocked(EncryptedYjsProvider).mockImplementation(
-    () =>
-      ({
-        awareness: {
-          clientID: 1,
-          getStates: () => awarenessStates,
-          on: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.add(listener)),
-          off: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.delete(listener)),
-        },
-        destroy: providerDestroy,
-        onPeerEdit: jest.fn((listener: (clientId: number) => void) => {
-          providerPeerEditListener = listener
-          return () => {
-            if (providerPeerEditListener === listener) {
-              providerPeerEditListener = undefined
-            }
+  jest.mocked(EncryptedYjsProvider).mockImplementation((document) => {
+    providerDocument = document as never
+    return {
+      isCanonicalReady: () => providerCanonicalReady,
+      awareness: {
+        clientID: 1,
+        getStates: () => awarenessStates,
+        on: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.add(listener)),
+        off: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.delete(listener)),
+      },
+      destroy: providerDestroy,
+      onPeerEdit: jest.fn((listener: (clientId: number) => void) => {
+        providerPeerEditListener = listener
+        return () => {
+          if (providerPeerEditListener === listener) {
+            providerPeerEditListener = undefined
           }
-        }),
-        onCanonicalReadyChange: jest.fn((listener: (ready: boolean) => void) => {
-          providerCanonicalReadyListener = listener
-          return () => {
-            if (providerCanonicalReadyListener === listener) {
-              providerCanonicalReadyListener = undefined
-            }
+        }
+      }),
+      onCanonicalReadyChange: jest.fn((listener: (ready: boolean) => void) => {
+        providerCanonicalReadyListener = listener
+        return () => {
+          if (providerCanonicalReadyListener === listener) {
+            providerCanonicalReadyListener = undefined
           }
-        }),
-      }) as never,
-  )
+        }
+      }),
+    } as never
+  })
   ;(window as { enableSuperCollaboration?: boolean }).enableSuperCollaboration = true
 })
 
@@ -381,6 +391,68 @@ describe('Super collaboration security gate', () => {
     } finally {
       jest.useRealTimers()
     }
+  })
+
+  it('registers its live document so a stored revision can be told from the document, and withdraws it', async () => {
+    const room = 'registered-note'
+    const lease = {
+      requestId: 'registry-lease',
+      shouldBootstrap: true,
+      protocolVersion: 3 as const,
+      maxTransferBytes: 4 * 1024 * 1024,
+      roomEpoch: 'room_epoch_0000000000000007',
+      release: jest.fn(),
+      validateAttachment: jest.fn(() => true),
+      isAttached: jest.fn(() => true),
+      reactivate: jest.fn(),
+      fail: jest.fn(),
+      retryBootstrap: jest.fn(),
+    }
+    expect(CollaborativeDocumentRegistry.get(room)).toBeUndefined()
+
+    await act(async () => {
+      root.render(
+        createElement(SuperCollaborationPlugin, {
+          application: {} as never,
+          config: {
+            room,
+            roomKey: {} as CryptoKey,
+            roomEpoch: lease.roomEpoch,
+            editorLease: lease,
+            username: 'Alice',
+            cursorColor: '#ff0000',
+            shouldBootstrap: true,
+          },
+        }),
+      )
+    })
+
+    const registered = CollaborativeDocumentRegistry.get(room)
+    expect(registered?.epoch).toBe(lease.roomEpoch)
+    // A document that has not established its state says nothing about what it contains.
+    expect(registered?.state()).toBeUndefined()
+
+    providerCanonicalReady = true
+    const updates = jest.fn()
+    const stopListening = registered?.subscribe(updates)
+    act(() => providerDocument?.getText('probe').insert(0, 'four'))
+    // It is the provider's own document: an edit shows up in its state and reaches a subscriber.
+    expect([...(registered?.state()?.stateVector ?? new Map()).values()]).toEqual([4])
+    expect(registered?.state()?.deleted.size).toBe(0)
+    expect(updates).toHaveBeenCalledTimes(1)
+    stopListening?.()
+    act(() => providerDocument?.getText('probe').insert(0, 'more'))
+    expect(updates).toHaveBeenCalledTimes(1)
+    // ...and so does a deletion, which the vector alone would not show.
+    act(() => providerDocument?.getText('probe').delete(0, 3))
+    expect([...(registered?.state()?.stateVector ?? new Map()).values()]).toEqual([8])
+    expect([...(registered?.state()?.deleted ?? new Map()).values()]).toEqual([[[4, 3]]])
+
+    act(() => root.unmount())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(CollaborativeDocumentRegistry.get(room)).toBeUndefined()
   })
 
   it('cancels terminal destroy during StrictMode replay and destroys exactly once on genuine unmount', async () => {

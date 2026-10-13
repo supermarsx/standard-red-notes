@@ -17,4 +17,13 @@ export enum AppDataField {
    * uploaded, the flag itself never reaches the server. See SyncService.itemsNeedingSync.
    */
   LocalOnly = 'localOnly',
+  /**
+   * Which state of a live shared document a note's body is: the room epoch, the Yjs state
+   * vector and a fingerprint of the body, written by the collaborative editor on every save it
+   * makes from such a document (web: CollaborationRevisionStamp). It is bookkeeping ABOUT the
+   * body, not part of what the note says: two people saving the same body a moment apart write
+   * different vectors, and that must not make the two saves different content. It is therefore
+   * ignored when contents are compared (DecryptedItem.appDataContentKeysToIgnoreWhenCheckingEquality).
+   */
+  CollaborationRevision = 'collaborationRevision',
 }

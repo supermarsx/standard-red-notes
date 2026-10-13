@@ -112,7 +112,7 @@ export class DecryptedItem<C extends ItemContent = ItemContent>
 
   /** Same as `contentKeysToIgnoreWhenCheckingEquality`, but keys inside appData[Item.AppDomain] */
   public appDataContentKeysToIgnoreWhenCheckingEquality(): AppDataField[] {
-    return [AppDataField.UserModifiedDate]
+    return [AppDataField.UserModifiedDate, AppDataField.CollaborationRevision]
   }
 
   public getContentCopy() {

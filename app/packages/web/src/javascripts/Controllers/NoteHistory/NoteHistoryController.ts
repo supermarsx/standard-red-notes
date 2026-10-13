@@ -1,4 +1,5 @@
 import { RevisionType } from '@/Components/RevisionHistoryModal/RevisionType'
+import { writeCollaborationRevisionStamp } from '@/Components/SuperEditor/Collaboration/CollaborationRevisionStamp'
 import { sortRevisionListIntoGroups } from '@/Components/RevisionHistoryModal/utils'
 import { STRING_RESTORE_LOCKED_ATTEMPT } from '@/Constants/Strings'
 import { confirmDialog } from '@standardnotes/ui-services'
@@ -656,6 +657,12 @@ export class NoteHistoryController {
         originalNote,
         (mutator) => {
           mutator.setCustomContent(revision.payload.content)
+          // The revision carries the collaboration stamp it was saved with, and a stamp says
+          // "this body is an older state of the live document". A restore is the opposite: a
+          // decision to go back. Left in place, every editor that has the note open in a live
+          // document would recognise the body as something it already contains and carry on
+          // over it without a trace; without it the restored body is kept, as it always was.
+          writeCollaborationRevisionStamp(mutator, undefined)
         },
         true,
         PayloadEmitSource.RemoteRetrieved,

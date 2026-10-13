@@ -60,6 +60,12 @@ import { flushChecklistMutationDurability } from './Checklist/ChecklistMutationB
 import { createChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
 import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
 import { collaboratorColor } from './Collaboration/collaboratorColor'
+import { CollaborativeDocumentRegistry } from './Collaboration/CollaborativeDocumentRegistry'
+import {
+  createCollaborationRevisionStamp,
+  readCollaborationRevisionStamp,
+  writeCollaborationRevisionStamp,
+} from './Collaboration/CollaborationRevisionStamp'
 import {
   matchesNoteEncryptionIdentity,
   resolveNoteEncryptionIdentity,
@@ -84,6 +90,15 @@ import {
 } from './Collaboration/RetrievedNoteReconciliation'
 
 export const SuperNotePreviewCharLimit = 160
+
+/**
+ * How long a retrieved revision that the live document does not yet contain is given to be
+ * merged through the relay before it is kept as a conflicted copy. Its author is, in the
+ * ordinary case, reconnecting: the stored revision arrives first and the operations behind it a
+ * moment later. Long enough for a rejoin (authorize, reserve, join, state exchange), short enough
+ * that a body nobody can merge is still preserved promptly.
+ */
+export const RETRIEVED_REVISION_MERGE_WAIT_MS = 10_000
 
 function cloneJsonValue<Value>(value: Value): Value {
   return JSON.parse(JSON.stringify(value)) as Value
@@ -610,9 +625,36 @@ export const SuperEditor: FunctionComponent<Props> = ({
         return
       }
 
+      // Say which state of the shared document this body is.
+      //
+      // The state is read when the note is mutated, a task after this serialization, and not
+      // here. A state AHEAD of the body is harmless: whoever has applied everything in it has
+      // applied everything the body was made from. One BEHIND it would vouch for less than the
+      // body contains, and that is what reading it here risks, because this callback is one
+      // listener of the editor update among several and the one that copies the update into the
+      // shared document may not have run yet.
+      //
+      // With no live document, one that had not established its state when the body was
+      // serialized, or one that was replaced before the save, the stamp is REMOVED: a body saved
+      // outside the shared document is not a state of it.
+      const liveDocument = CollaborativeDocumentRegistry.get(retrievedLifetime.noteUuid)
+      const serializedFromEstablishedDocument = liveDocument?.state() !== undefined
+      const stampForSavedBody = () => {
+        if (
+          !liveDocument ||
+          !serializedFromEstablishedDocument ||
+          CollaborativeDocumentRegistry.get(retrievedLifetime.noteUuid) !== liveDocument
+        ) {
+          return undefined
+        }
+        const state = liveDocument.state()
+        return state ? createCollaborationRevisionStamp(liveDocument.epoch, state, value, Date.now()) : undefined
+      }
+
       void controller.saveAndAwaitLocalPropagation({
         text: value,
         isUserModified: true,
+        customMutate: (mutator) => writeCollaborationRevisionStamp(mutator, stampForSavedBody()),
         // Standard Red Notes (last-edit-loss fix): a lifecycle flush
         // (note-switch/blur/unmount/logout/unload) forwards bypassDebounce=true so the
         // edit is dirtied + persisted immediately instead of waiting out the 700ms sync
@@ -776,8 +818,26 @@ export const SuperEditor: FunctionComponent<Props> = ({
             surfaceOwner.current === expectedSurfaceOwner && retrievedLifetimeRef.current === retrievedLifetime,
           preserveDivergentRetrieved:
             expectedIdentity && receiptLease && incomingContentSnapshot
-              ? () => {
+              ? async () => {
                   const capturedIncomingContent = incomingContentSnapshot
+                  // A stored revision always lags the live document while anyone types, so "its
+                  // text is not the editor's text" is true of nearly every revision that arrives
+                  // and says nothing about whether it holds anything the document lacks. Its
+                  // stamp does: if the live document has applied every insertion and deletion
+                  // the revision was serialized from -- now, or once the relay has delivered what
+                  // its author did while away -- there is nothing in it to preserve, and no copy
+                  // is made.
+                  const incomingStamp = readCollaborationRevisionStamp(capturedIncomingContent)
+                  if (
+                    incomingStamp &&
+                    (await CollaborativeDocumentRegistry.whenCovers(
+                      expectedIdentity.noteUuid,
+                      incomingStamp,
+                      RETRIEVED_REVISION_MERGE_WAIT_MS,
+                    ))
+                  ) {
+                    return true
+                  }
                   let incomingConflict: SNNote | undefined
                   const currentOriginal = () => application.items.findItem<SNNote>(expectedIdentity.noteUuid)
                   const originalIsWritable = () =>

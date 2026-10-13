@@ -13,6 +13,7 @@ import { MAX_PRESENT_PEERS_PER_ROOM, PresenceRegistry, PresentPeer } from './Pre
 import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 import { showCollaborationPresenceActivity } from './CollaborationPresenceNotification'
 import { PeerActivityTracker } from './PeerActivity'
+import { CollaborativeDocumentRegistry, documentStateOf } from './CollaborativeDocumentRegistry'
 import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
 import {
   notifyChecklistMutationBridgeReadiness,
@@ -128,6 +129,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   const providerRef = useRef<EncryptedYjsProvider | null>(null)
   const providerReadinessDisposerRef = useRef<(() => void) | null>(null)
   const providerDurabilityDisposerRef = useRef<(() => void) | null>(null)
+  const providerDocumentDisposerRef = useRef<(() => void) | null>(null)
   const pendingProviderDestroyRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
@@ -145,6 +147,8 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         providerReadinessDisposerRef.current = null
         providerDurabilityDisposerRef.current?.()
         providerDurabilityDisposerRef.current = null
+        providerDocumentDisposerRef.current?.()
+        providerDocumentDisposerRef.current = null
         onCanonicalReadyChange?.(false)
         providerRef.current?.destroy()
         providerRef.current = null
@@ -209,6 +213,18 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         },
         () => provider.isCanonicalReady() && provider.isRoomJoined(),
       )
+      // What the rest of the app may know of this document: its epoch, how much it holds, and
+      // when that changes. It is how a stored revision of the note is told from the document.
+      const sharedDocument = doc
+      providerDocumentDisposerRef.current?.()
+      providerDocumentDisposerRef.current = CollaborativeDocumentRegistry.set(config.room, {
+        epoch: config.roomEpoch,
+        state: () => (provider.isCanonicalReady() ? documentStateOf(sharedDocument) : undefined),
+        subscribe: (listener) => {
+          sharedDocument.on('update', listener)
+          return () => sharedDocument.off('update', listener)
+        },
+      })
       providerRef.current = provider
       return provider
     }
