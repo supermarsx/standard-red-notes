@@ -827,6 +827,17 @@ export class EncryptionService
 
   private async handleFullSyncCompletion() {
     /** Always create a new items key after full sync, if no items key is found */
+    await this.createDefaultItemsKeyIfNoneExists()
+  }
+
+  /**
+   * Nothing can be written to the local database without a default items key, and until the first
+   * one exists the only thing that used to create it was the end of a full sync - which is after
+   * that sync has already tried, and failed, to save whatever was created in the meantime. The sync
+   * service therefore calls this before it saves anything, in every sync that cannot first be
+   * handed the account's own keys by the server (see SyncService.performSync).
+   */
+  public async createDefaultItemsKeyIfNoneExists(): Promise<void> {
     const currentItemsKey = this._findDefaultItemsKey.execute(this.itemsEncryption.getItemsKeys()).getValue()
     if (!currentItemsKey) {
       await this.createNewDefaultItemsKey()

@@ -861,6 +861,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
   let logger: jest.Mocked<LoggerInterface>
   let getDirtyItems: jest.Mock
   let persistPayloads: jest.Mock
+  let createDefaultItemsKeyIfNoneExists: jest.Mock
   let online: jest.Mock
 
   beforeAll(() => {
@@ -907,6 +908,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     getDirtyItems = jest.fn().mockReturnValue(dirtyItems)
     online = jest.fn().mockReturnValue(true)
     persistPayloads = jest.fn().mockResolvedValue(undefined)
+    createDefaultItemsKeyIfNoneExists = jest.fn().mockResolvedValue(undefined)
 
     const itemManager = {
       getDirtyItems,
@@ -927,7 +929,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     const service = new SyncService(
       itemManager as never,
       sessionManager as never,
-      {} as never,
+      { createDefaultItemsKeyIfNoneExists } as never,
       { savePayloads: persistPayloads } as never,
       {} as never,
       {} as never,
@@ -950,15 +952,24 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
   const callPrepareForSync = (
     service: SyncService,
     options: Record<string, unknown> = {},
-  ): Promise<{ items: DecryptedItemInterface[]; neverSyncedDeleted: DecryptedItemInterface[] }> =>
+    online = false,
+  ): Promise<{
+    items: DecryptedItemInterface[]
+    neverSyncedDeleted: DecryptedItemInterface[]
+    localOnlyPersistedItems: DecryptedItemInterface[]
+  }> =>
     (
       service as unknown as {
-        prepareForSync: (o: Record<string, unknown>) => Promise<{
+        prepareForSync: (
+          o: Record<string, unknown>,
+          online: boolean,
+        ) => Promise<{
           items: DecryptedItemInterface[]
           neverSyncedDeleted: DecryptedItemInterface[]
+          localOnlyPersistedItems: DecryptedItemInterface[]
         }>
       }
-    ).prepareForSync(options)
+    ).prepareForSync(options, online)
 
   const persistedUuids = (): string[] => (persistPayloads.mock.calls[0][0] as { uuid: string }[]).map((p) => p.uuid)
 
@@ -1006,6 +1017,30 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeDefined()
   })
 
+  /**
+   * With a session a failed sync is retried on a backoff. Without one the result used to be ignored
+   * as "benign offline", so a note that could not be written waited for the next edit or the next
+   * 30 s tick - and for nothing at all if the tab was closed first.
+   */
+  it('schedules its own retry when a local save fails and there is no session', async () => {
+    const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+    online.mockReturnValue(false)
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    persistPayloads.mockRejectedValueOnce(quota)
+    const pendingRetry = () => (service as unknown as { failureBackoffTimeout?: unknown }).failureBackoffTimeout
+
+    expect(pendingRetry()).toBeUndefined()
+
+    await expect(service.sync({ source: SyncSource.External })).resolves.toBeUndefined()
+
+    try {
+      expect(pendingRetry()).toBeDefined()
+    } finally {
+      ;(service as unknown as { cancelFailureBackoff: () => void }).cancelFailureBackoff()
+    }
+  })
+
   it('rejects a failed acknowledged pre-sync save so the component caller can report save-error', async () => {
     const service = createService([makeDirtyItem(NORMAL_UUID, false)])
     const quota = new Error('The quota has been exceeded.')
@@ -1033,17 +1068,74 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     const keyError = new Error('Cannot find items key to use for encryption')
     persistPayloads.mockRejectedValueOnce(keyError).mockResolvedValueOnce(undefined)
 
-    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst })).resolves.toBeDefined()
+    // Signed in, first download not yet complete: the account's keys may still arrive.
+    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst }, true)).resolves.toBeDefined()
 
     expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeUndefined()
 
-    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst })).resolves.toBeDefined()
+    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst }, true)).resolves.toBeDefined()
 
     expect(persistPayloads).toHaveBeenCalledTimes(2)
     expect((persistPayloads.mock.calls[1][0] as { uuid: string }[]).map((payload) => payload.uuid)).toContain(
       NORMAL_UUID,
     )
     expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeDefined()
+  })
+
+  /**
+   * A save that finds no key was let through in EVERY sync, on the reasoning that the key is on its
+   * way from the server. With no session there is no server, and after the first download there is
+   * nothing left to arrive: the sync carried on, the offline "upload" reported the payloads saved,
+   * and their dirty flag was cleared with nothing on disk. On a first launch that lost the note.
+   */
+  it.each([
+    ['there is no session', false, false],
+    ['the account keys have already been downloaded', true, true],
+  ])(
+    'rejects a pre-sync save that finds no key when %s, and writes the same payloads on the retry',
+    async (_state, isOnline, downloadCompleted) => {
+      const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+      service.completedOnlineDownloadFirstSync = downloadCompleted
+      const keyError = new Error('Cannot find items key to use for encryption')
+      persistPayloads.mockRejectedValueOnce(keyError).mockResolvedValueOnce(undefined)
+
+      await expect(callPrepareForSync(service, {}, isOnline)).rejects.toBe(keyError)
+
+      expect(
+        (service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave,
+      ).toBeUndefined()
+
+      await expect(callPrepareForSync(service, {}, isOnline)).resolves.toBeDefined()
+
+      expect(persistPayloads).toHaveBeenCalledTimes(2)
+      expect((persistPayloads.mock.calls[1][0] as { uuid: string }[]).map((payload) => payload.uuid)).toContain(
+        NORMAL_UUID,
+      )
+    },
+  )
+
+  it('rejects it in a download-first sync too when there is no session to download from', async () => {
+    const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+    const keyError = new Error('Cannot find items key to use for encryption')
+    persistPayloads.mockRejectedValueOnce(keyError)
+
+    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst }, false)).rejects.toBe(keyError)
+  })
+
+  /**
+   * A local-only item is never uploaded, so the pre-sync save is the only place it is ever written.
+   * Clearing its dirty flag after a save that was allowed to fail left it saved nowhere.
+   */
+  it('offers a local-only item for dirty-clearing only once its pre-sync save has committed', async () => {
+    const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true)])
+    const keyError = new Error('Cannot find items key to use for encryption')
+    persistPayloads.mockRejectedValueOnce(keyError).mockResolvedValueOnce(undefined)
+
+    const tolerated = await callPrepareForSync(service, { mode: SyncMode.DownloadFirst }, true)
+    expect(tolerated.localOnlyPersistedItems).toEqual([])
+
+    const committed = await callPrepareForSync(service, { mode: SyncMode.DownloadFirst }, true)
+    expect(committed.localOnlyPersistedItems.map((item) => item.uuid)).toEqual([LOCAL_ONLY_UUID])
   })
 
   /**
@@ -1089,6 +1181,42 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     expect(persistedUuids()).toContain(LOCAL_ONLY_UUID)
     expect(uploadItems.map((i) => i.uuid)).not.toContain(LOCAL_ONLY_UUID)
     expect(uploadItems.map((i) => i.uuid)).toContain(NORMAL_UUID)
+  })
+
+  /**
+   * The default items key used to be created only when a full sync had COMPLETED, which is after
+   * that sync had already failed to save. It has to exist before the first save instead.
+   */
+  it('makes sure a default items key exists BEFORE the pre-sync save when there is no session', async () => {
+    const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+    online.mockReturnValue(false)
+    const order: string[] = []
+    createDefaultItemsKeyIfNoneExists.mockImplementation(async () => {
+      order.push('key')
+    })
+    persistPayloads.mockImplementation(async () => {
+      order.push('save')
+    })
+
+    await captureUploadSetViaPerformSync(service)
+
+    expect(order).toEqual(['key', 'save'])
+  })
+
+  it('leaves the key to the download-first sync while signed in and nothing has been downloaded yet', async () => {
+    const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+    online.mockReturnValue(true)
+
+    await captureUploadSetViaPerformSync(service)
+
+    // Creating a key here would add a second default key beside the one the server is about to send.
+    expect(createDefaultItemsKeyIfNoneExists).not.toHaveBeenCalled()
+    expect(persistPayloads).toHaveBeenCalledTimes(1)
+
+    service.completedOnlineDownloadFirstSync = true
+    await captureUploadSetViaPerformSync(service)
+
+    expect(createDefaultItemsKeyIfNoneExists).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -2072,7 +2200,7 @@ describe('SyncService no-session sync status (no-login "syncing" bug)', () => {
     const service = new SyncService(
       {} as never, // itemManager
       sessionManager as never,
-      {} as never, // encryptionService
+      { createDefaultItemsKeyIfNoneExists: async () => undefined } as never, // encryptionService
       {} as never, // storageService
       {} as never, // payloadManager
       apiService as never,
@@ -2199,7 +2327,7 @@ describe('SyncService read-only session convergence', () => {
     const service = new SyncService(
       itemManager as never,
       sessionManager as never,
-      {} as never,
+      { createDefaultItemsKeyIfNoneExists: async () => undefined } as never,
       {} as never,
       {} as never,
       {} as never,
@@ -2310,7 +2438,7 @@ describe('SyncService read-only session convergence', () => {
         online: jest.fn().mockReturnValue(true),
         isCurrentSessionReadOnly: jest.fn().mockReturnValue(true),
       } as never,
-      {} as never,
+      { createDefaultItemsKeyIfNoneExists: async () => undefined } as never,
       {} as never,
       {} as never,
       {} as never,
@@ -2799,6 +2927,43 @@ describe('SyncService D4: download-page persist failure must not advance the syn
 
     expect(setSyncTokens).toHaveBeenCalledWith('server-token-NEXT', undefined)
   })
+
+  /**
+   * That allowance exists for the first download of an account whose key is derived only once the
+   * download completes. After it has completed nothing more is coming, and letting the failure
+   * through would leave a change the server accepted marked clean here with nothing on disk.
+   */
+  it('a key-lookup failure REJECTS once the account keys have been downloaded, and the change stays dirty', async () => {
+    const keyError = new Error('Cannot find items key to use for encryption')
+    const { service, local, livePayloads, setSyncTokens } = buildService(keyError)
+    service.completedOnlineDownloadFirstSync = true
+
+    await expect(invoke(service, buildOperation(), buildResponse(local))).rejects.toBe(keyError)
+
+    expect(setSyncTokens).not.toHaveBeenCalled()
+    expect(livePayloads.get(local.uuid)).toBe(local)
+    expect(livePayloads.get(local.uuid)?.dirty).toBe(true)
+  })
+
+  it('even then, a key-lookup failure over payloads that were not waiting to be saved is let through', async () => {
+    const keyError = new Error('Cannot find items key to use for encryption')
+    const { service, livePayloads, savePayloads } = buildService(keyError)
+    service.completedOnlineDownloadFirstSync = true
+    const fromServer = createNote()
+
+    await expect(
+      (
+        service as unknown as {
+          emitDeltasAndPersist: (emits: unknown[], options: unknown) => Promise<unknown>
+        }
+      ).emitDeltasAndPersist([{ emits: [fromServer], source: PayloadEmitSource.RemoteRetrieved }], {
+        accountKeysMayStillBeDownloaded: false,
+      }),
+    ).resolves.toEqual([fromServer])
+
+    expect(savePayloads).toHaveBeenCalledTimes(1)
+    expect(livePayloads.get(fromServer.uuid)).toBe(fromServer)
+  })
 })
 
 describe('SyncService offline persistence failure', () => {
@@ -2806,7 +2971,22 @@ describe('SyncService offline persistence failure', () => {
     SNLog.onError = jest.fn()
   })
 
-  it('rejects the write and leaves the live payload dirty for retry', async () => {
+  /**
+   * Offline, a save IS the sync: the operation hands back whatever it was given as 'saved' and the
+   * dirty flag is cleared on that word alone. The write that follows is the only thing standing
+   * between a note and its loss, so its failure has to undo the clearing whatever kind it is. A
+   * missing key used to be exempt, as 'the key is being downloaded' - which is never true offline.
+   */
+  const quotaExceeded = () => {
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    return quota
+  }
+
+  it.each([
+    ['the device refuses the write', quotaExceeded()],
+    ['no items key can be found to encrypt with', new Error('Cannot find items key to use for encryption')],
+  ])('rejects the write and leaves the live payload dirty for retry when %s', async (_reason, failure) => {
     const logger = {
       debug: jest.fn(),
       info: jest.fn(),
@@ -2834,9 +3014,7 @@ describe('SyncService offline persistence failure', () => {
       .fn()
       .mockImplementation(async (emit: { emits: FullyFormedPayloadInterface[] }) => applyPayloads(emit.emits))
     const emitPayloads = jest.fn().mockImplementation(applyPayloads)
-    const quota = new Error('The quota has been exceeded.')
-    quota.name = 'QuotaExceededError'
-    const savePayloads = jest.fn().mockRejectedValue(quota)
+    const savePayloads = jest.fn().mockRejectedValue(failure)
 
     const service = new SyncService(
       {} as never,
@@ -2874,7 +3052,7 @@ describe('SyncService offline persistence failure', () => {
           handleOfflineResponse: (response: unknown) => Promise<void>
         }
       ).handleOfflineResponse(response),
-    ).rejects.toBe(quota)
+    ).rejects.toBe(failure)
 
     expect(savePayloads).toHaveBeenCalledTimes(1)
     expect(emitDeltaEmit).toHaveBeenCalledTimes(1)
@@ -3005,7 +3183,7 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
     const service = new SyncService(
       itemManager as never,
       sessionManager as never,
-      {} as never,
+      { createDefaultItemsKeyIfNoneExists: async () => undefined } as never,
       { savePayloads: persistPayloads } as never,
       payloadManager as never,
       {} as never,
@@ -3117,6 +3295,23 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
       (payloads as { uuid: string; dirty?: boolean }[]).some((p) => p.uuid === LOCAL_ONLY_UUID && p.dirty === false),
     )
     expect(clearedPersist).toBeDefined()
+  }, 8000)
+
+  /**
+   * A failed local save with no session starts its own retry backoff. A save that then lands has to
+   * end it, or every later, unrelated failure would start from an ever longer delay.
+   */
+  it('FULL DRIVE (offline): a sync that completes ends a local-save retry loop', async () => {
+    const h = buildHarness([makeItem(LOCAL_ONLY_UUID, true, getIncrementedDirtyIndex())])
+    const retryState = h.service as unknown as { consecutiveFailureCount: number; failureBackoffTimeout?: unknown }
+    ;(h.service as unknown as { handleOnlineSyncFailure: () => void }).handleOnlineSyncFailure()
+    expect(retryState.consecutiveFailureCount).toBe(1)
+    expect(retryState.failureBackoffTimeout).toBeDefined()
+
+    await expect(withTimeout(h.service.sync({ source: SyncSource.BackoffRetry }), 3000)).resolves.toBeUndefined()
+
+    expect(retryState.consecutiveFailureCount).toBe(0)
+    expect(retryState.failureBackoffTimeout).toBeUndefined()
   }, 8000)
 
   it('is the precise INVERSE of the loop: potentiallySyncAgain would re-spawn BEFORE the clear, and does NOT after', async () => {

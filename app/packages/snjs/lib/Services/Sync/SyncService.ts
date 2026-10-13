@@ -158,6 +158,13 @@ const FOCUS_SYNC_THROTTLE_MS = 5_000
 
 const SYNC_POSITION_CHECKPOINT_VERSION = 1 as const
 
+type PersistPayloadsOptions = {
+  throwError: boolean
+  rethrowGenuineWriteFailure?: boolean
+  /** Treat a save that cannot find its key as the failed write it is. See persistPayloadsWithResult. */
+  rethrowKeyLookupFailure?: boolean
+}
+
 type SyncPositionCheckpoint = {
   version: typeof SYNC_POSITION_CHECKPOINT_VERSION
   revision: number
@@ -1599,7 +1606,18 @@ export class SyncService
     return this.lastSyncInvokationPromise
   }
 
-  private async prepareForSync(options: SyncOptions) {
+  /**
+   * True while the account's own items keys may still be on their way from the server: signed in,
+   * and no download-first sync has completed yet. Until then a save can fail to find a key for a
+   * reason the download itself resolves. In every other state - no session at all, or a session whose
+   * keys have been downloaded - nothing further is coming, and a key that cannot be found is a
+   * failed write like any other.
+   */
+  private accountKeysMayStillBeDownloaded(online: boolean): boolean {
+    return online && !this.completedOnlineDownloadFirstSync
+  }
+
+  private async prepareForSync(options: SyncOptions, online = false) {
     const items = this.itemsNeedingSync()
 
     /**
@@ -1686,6 +1704,12 @@ export class SyncService
     const hidePersistErrorDueToWaitingOnKeyDownload = options.mode === SyncMode.DownloadFirst
     const didPersistPayloads = await this.persistPayloadsWithResult(payloadsNeedingSave, {
       throwError: !hidePersistErrorDueToWaitingOnKeyDownload,
+      /**
+       * Carrying on after a save that found no key is only right while the key may still be
+       * downloaded. Otherwise the rest of this sync would go on to report these very payloads as
+       * saved - offline that is all an "upload" is - and clear their dirty flag over nothing.
+       */
+      rethrowKeyLookupFailure: !this.accountKeysMayStillBeDownloaded(online),
     })
     /**
      * Advance the pre-sync persistence watermark only AFTER the write commits. Advancing it
@@ -1720,9 +1744,15 @@ export class SyncService
      * dirty forever, which makes itemsNeedingSync() perpetually non-empty and
      * potentiallySyncAgainAfterSyncCompletion re-spawn sync endlessly (sync() never resolves).
      * Thread them to handleSyncOperationFinish so their dirty state is cleared locally, race-safely.
+     *
+     * Only when that write committed. A save that was allowed to fail (the key is still to be
+     * downloaded) has put nothing on disk, and these items have no upload to fall back on: clearing
+     * their dirty flag then would leave them saved nowhere at all.
      */
-    const localOnlyPersistedItems = items.filter(
-      (item) => !isDeletedItem(item) && (item as DecryptedItemInterface).localOnly === true,
+    const localOnlyPersistedItems = (
+      didPersistPayloads
+        ? items.filter((item) => !isDeletedItem(item) && (item as DecryptedItemInterface).localOnly === true)
+        : []
     ) as DecryptedItemInterface[]
 
     return { items: uploadItems, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems }
@@ -2023,7 +2053,16 @@ export class SyncService
       this.opStatus.setDidEnd()
     }
     this.opStatus.setError(error as Error)
-    this.applyOnlineSyncResult(true, online)
+    const retryScheduled = this.applyOnlineSyncResult(true, online)
+    /**
+     * A save that failed on this device has nothing to do with whether there is a server, but with
+     * no session the result above is ignored: what could not be written - still dirty, still only
+     * in memory - would then wait for the next edit or the next auto-sync tick. Retry it on the
+     * same backoff instead, so that it is written as soon as whatever blocked it clears.
+     */
+    if (!retryScheduled && this.isLocalPersistenceFailure(error)) {
+      this.handleOnlineSyncFailure()
+    }
     this.notifyEventDetached(SyncEvent.SyncError, error, 'sync failure')
   }
 
@@ -2108,12 +2147,31 @@ export class SyncService
       }
 
       /**
+       * The pre-sync save below encrypts with the default items key. On a first launch there is
+       * none: it used to be created only once a full sync had completed, which is after that sync
+       * had already failed to save whatever was created since launch. Create it first instead,
+       * unless the account's own keys may still be downloaded - then the download-first sync
+       * decides, as it always has (EncryptionService.handleDownloadFirstSyncCompletion).
+       *
+       * This is also what makes it safe for the application to report itself launched before its
+       * database has loaded: an item created that early is held dirty in memory, no sync runs until
+       * the database has loaded, and the first one that does can now always write it.
+       */
+      if (!this.accountKeysMayStillBeDownloaded(online)) {
+        await this.encryptionService.createDefaultItemsKeyIfNoneExists()
+      }
+
+      if (this.dealloced) {
+        return
+      }
+
+      /**
        * Preparing includes the durability-critical pre-sync save. It must be inside
        * this owner's finally block so an encryption/IndexedDB failure cannot wedge the
        * service's lock for the remainder of the session.
        */
       const { items, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems } =
-        await this.prepareForSync(options)
+        await this.prepareForSync(options, online)
       presyncSaveCompleted = true
       const isReadOnlySession = this.sessionManager.isCurrentSessionReadOnly() === true
 
@@ -2200,6 +2258,11 @@ export class SyncService
       )
 
       this.applyOnlineSyncResult(hasError, online)
+
+      if (!hasError && !online) {
+        /** A local-save retry loop started with no session (handleThrownSyncFailure) ends here. */
+        this.handleOnlineSyncSuccess()
+      }
 
       if (hasError) {
         this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
@@ -2403,7 +2466,9 @@ export class SyncService
      * emitDeltasAndPersist restores any dirty payloads it tentatively finalized, while
      * preserving a newer edit that lands during the write.
      */
-    await this.emitDeltasAndPersist(emits)
+    await this.emitDeltasAndPersist(emits, {
+      accountKeysMayStillBeDownloaded: this.accountKeysMayStillBeDownloaded(true),
+    })
 
     if (!operation.options.sharedVaultUuids) {
       await this.setSyncTokens(response.lastSyncToken as string, response.paginationToken as string | undefined)
@@ -2870,7 +2935,10 @@ export class SyncService
    * the disk write is pending replaces the emitted object, so the identity check
    * deliberately leaves that newer dirty revision untouched.
    */
-  private async emitDeltasAndPersist(emits: DeltaEmit[]): Promise<FullyFormedPayloadInterface[]> {
+  private async emitDeltasAndPersist(
+    emits: DeltaEmit[],
+    options: { accountKeysMayStillBeDownloaded: boolean } = { accountKeysMayStillBeDownloaded: false },
+  ): Promise<FullyFormedPayloadInterface[]> {
     const originals = new Map<string, FullyFormedPayloadInterface | undefined>()
     const baseCollection = this.payloadManager.getMasterCollection()
 
@@ -2889,7 +2957,22 @@ export class SyncService
         appliedPayloads.push(...(await this.payloadManager.emitDeltaEmit(emit)))
       }
 
-      await this.persistPayloads(appliedPayloads)
+      /**
+       * A save that finds no key is let through for what the server sent (an account whose key is
+       * derived only once its first download completes), and the token still advances. It is never
+       * let through when this emit has just turned a change that was waiting to be saved into one
+       * that looks saved: with nothing on disk and the dirty flag gone, no later sync would write
+       * it and the next launch would not have it. That is rolled back and rejected like any other
+       * failed write, so the change stays pending and the sync that carried it reports failure.
+       */
+      const clearsUnsavedLocalChange = appliedPayloads.some(
+        (applied) => originals.get(applied.uuid)?.dirty === true && applied.dirty !== true,
+      )
+
+      await this.persistPayloads(appliedPayloads, {
+        throwError: true,
+        rethrowKeyLookupFailure: clearsUnsavedLocalChange && !options.accountKeysMayStillBeDownloaded,
+      })
       return appliedPayloads
     } catch (error) {
       await this.restorePayloadsAfterFailedPersistence(originals, appliedPayloads)
@@ -2948,14 +3031,14 @@ export class SyncService
 
   public async persistPayloads(
     payloads: FullyFormedPayloadInterface[],
-    options: { throwError: boolean; rethrowGenuineWriteFailure?: boolean } = { throwError: true },
+    options: PersistPayloadsOptions = { throwError: true },
   ): Promise<void> {
     await this.persistPayloadsWithResult(payloads, options)
   }
 
   private async persistPayloadsWithResult(
     payloads: FullyFormedPayloadInterface[],
-    options: { throwError: boolean; rethrowGenuineWriteFailure?: boolean } = { throwError: true },
+    options: PersistPayloadsOptions = { throwError: true },
   ): Promise<boolean> {
     if (payloads.length === 0 || this.dealloced) {
       return payloads.length === 0
@@ -2983,7 +3066,14 @@ export class SyncService
          * any non-key (write/quota/IO) failure even when throwError is false, so the UI can react and
          * the user isn't left with unsaved data they believe is saved.
          */
-        const isSuppressibleKeyError = SyncService.isSuppressibleKeyLookupError(error)
+        /**
+         * A key lookup failure is only the expected, self-healing kind while the key it is looking
+         * for can still arrive. A caller that knows it cannot - there is no server to download it
+         * from, or the download has already happened - says so with rethrowKeyLookupFailure, and
+         * the failure is then surfaced and rejected exactly as a failed write is.
+         */
+        const isSuppressibleKeyError =
+          SyncService.isSuppressibleKeyLookupError(error) && options.rethrowKeyLookupFailure !== true
         if (options.throwError || !isSuppressibleKeyError) {
           this.notifyEventDetached(SyncEvent.DatabaseWriteError, error, 'payload persistence failure')
           SNLog.error(error)
@@ -3199,7 +3289,9 @@ export class SyncService
 
       const emits = resolver.result()
 
-      await this.emitDeltasAndPersist(emits)
+      await this.emitDeltasAndPersist(emits, {
+        accountKeysMayStillBeDownloaded: this.accountKeysMayStillBeDownloaded(true),
+      })
 
       // Advance the sync token EXACTLY as an HTTP pull would, so the next HTTP
       // sync starts from the new server position and we don't re-pull the change.
@@ -3316,7 +3408,9 @@ export class SyncService
 
     const emit = delta.result()
 
-    await this.emitDeltasAndPersist([emit])
+    await this.emitDeltasAndPersist([emit], {
+      accountKeysMayStillBeDownloaded: this.accountKeysMayStillBeDownloaded(true),
+    })
   }
 
   async syncSharedVaultsFromScratch(sharedVaultUuids: string[]): Promise<void> {
