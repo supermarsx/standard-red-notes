@@ -235,7 +235,7 @@ describe('CalendarEditor and a note that changes underneath it', () => {
       allDay: false,
       start: new Date(`${today}T09:00`).toISOString(),
       end: new Date(`${today}T10:00`).toISOString(),
-      unknownFields: { location: 'Room 4', attendees: [{ name: 'Sam' }] },
+      unknownFields: { geo: [38.72, -9.14], attendees: [{ name: 'Sam' }] },
     }
     const editor = mount(calendar([timed]))
     openToday()
@@ -249,7 +249,7 @@ describe('CalendarEditor and a note that changes underneath it', () => {
     expect(JSON.parse(editor.saves[0])).toStrictEqual({
       version: 1,
       events: [
-        { id: 'a', date: today, title: 'Alpha', color: '#ef4444', location: 'Room 4', attendees: [{ name: 'Sam' }] },
+        { id: 'a', date: today, title: 'Alpha', color: '#ef4444', geo: [38.72, -9.14], attendees: [{ name: 'Sam' }] },
       ],
     })
   })

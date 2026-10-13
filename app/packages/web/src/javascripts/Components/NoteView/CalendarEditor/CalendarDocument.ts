@@ -24,9 +24,47 @@
  * `events` it cannot use as an event is carried in `unrecognizedEntries`, and
  * {@link serializeCalendarDocument} writes both back where they were. Known keys
  * are still validated and normalised exactly as before.
+ *
+ * ## Version 2: enough to hold a calendar from another app
+ *
+ * Version 1 has "a day" and "an instant". A calendar made elsewhere also has
+ * events that last several days, times that belong to a zone, times that belong
+ * to none, a description, a place, and repeat rules far beyond "every N weeks".
+ * Version 2 adds those, under two rules that keep older builds harmless:
+ *
+ *  - Every version 1 key keeps its meaning. A timed event still has `start` and
+ *    `end` as UTC instants, so an older build shows it at the right moment, and
+ *    an all-day event still has its first day in `date`.
+ *  - `localStart` and `zone` say how the event's own calendar reads the clock.
+ *    They are what this build shows and compares; the instants beside them are
+ *    the same moments for builds that know only version 1. Keeping the wall
+ *    time, rather than deriving it from the instant on each device, is what
+ *    stops two devices with different zone databases from disagreeing about an
+ *    event neither of them changed.
+ *  - When an older build changes an event, what the person did there wins. Such
+ *    a build can only change version 1 keys, so `localOf` records which
+ *    instants the wall times were worked out for: once `start` or `end` no
+ *    longer match it, the instants are what the person set and the wall times
+ *    are read afresh from them. And an all-day event's length is kept as a
+ *    count of days, not as an end day, so moving its `date` moves all of it.
+ *  - `recurrence` and `rrule` are never both present.
  */
 
-export const CALENDAR_DOCUMENT_VERSION = 1
+import {
+  addDays,
+  daysBetween,
+  daysInRange,
+  deviceZone,
+  instantToWall,
+  isIsoDate,
+  isKnownZone,
+  isWallTime,
+  utcMsFromWall,
+  wallFromUtcMs,
+  wallToInstant,
+} from '@/Timezone/wallClock'
+
+export const CALENDAR_DOCUMENT_VERSION = 2
 
 /** Keys a reader did not recognise, with the values exactly as they were stored. */
 export type CalendarUnknownFields = Record<string, unknown>
@@ -51,7 +89,62 @@ export type CalendarRecurrence = {
   interval?: number
 }
 
-export type CalendarEvent = {
+export type CalendarEventStatus = 'tentative' | 'confirmed' | 'cancelled'
+
+/**
+ * What one occurrence of an event looks like: the version 2 keys an event and a
+ * changed occurrence of a series have in common.
+ */
+export type CalendarOccurrenceFields = {
+  /**
+   * All-day events only: how many days the event lasts, when more than one. A
+   * length and not an end day, so that an older build which moves `date` moves
+   * the whole event.
+   */
+  days?: number
+  /**
+   * Timed events only: the zone whose clock the event is read on. `UTC`, an
+   * IANA name, or the name of a zone defined by the calendar the event came
+   * from. Absent on an event made by the version 1 editor, which is read on the
+   * clock of whichever device shows it.
+   */
+  zone?: string
+  /** The zone `localEnd` is read in, when it is not `zone` (a flight, say). */
+  endZone?: string
+  /**
+   * The event is tied to no zone at all: "09:00, wherever you are". `zone` then
+   * only fixes the instant stored in `start` for builds that know nothing else.
+   */
+  floating?: boolean
+  /** The start as its own calendar's clock shows it: `YYYY-MM-DDTHH:MM:SS` in `zone`. */
+  localStart?: string
+  /** The end, likewise, in `endZone` or else `zone`. */
+  localEnd?: string
+  description?: string
+  location?: string
+  status?: CalendarEventStatus
+  /**
+   * Present when the title, description or location held here is the beginning
+   * of a longer text kept on the calendar the event came from: a digest of the
+   * whole. Such a text is not edited here.
+   */
+  clipped?: string
+}
+
+/** One occurrence of a repeating event that was changed on its own. */
+export type CalendarOccurrenceOverride = CalendarOccurrenceFields & {
+  /**
+   * The occurrence this replaces, as the series' own clock names it: YYYY-MM-DD
+   * for an all-day series, else a wall time in the series' zone.
+   */
+  rid: string
+  /** The day this occurrence now starts on, on its own calendar's clock. */
+  date: string
+  title: string
+  unknownFields?: CalendarUnknownFields
+}
+
+export type CalendarEvent = CalendarOccurrenceFields & {
   id: string
   /**
    * ISO date string, normalized to YYYY-MM-DD (day granularity). This is the
@@ -74,6 +167,29 @@ export type CalendarEvent = {
   end?: string
   /** Optional repeat rule. Absent means a one-shot event. */
   recurrence?: CalendarRecurrence
+  /**
+   * The instants `localStart` and `localEnd` were worked out for, in whole
+   * seconds since the epoch: `[start]` or `[start, end]`. While `start` and
+   * `end` still match it, the wall times stand, whatever this device's zone
+   * database would make of them. Once they do not, a build that knows only
+   * version 1 has changed the event, and the instants are what the person set.
+   */
+  localOf?: number[]
+  /**
+   * A repeat rule the simple form above cannot express, as an iCalendar RRULE
+   * value (`FREQ=MONTHLY;BYDAY=-1FR`). Never present together with `recurrence`.
+   */
+  rrule?: string
+  /** Occurrences taken out of the series, named as `rid` is. A bare date takes out that whole day. */
+  exdates?: string[]
+  /** Occurrences added to the series, named as `rid` is. */
+  rdates?: string[]
+  /** Occurrences that were changed on their own. */
+  overrides?: CalendarOccurrenceOverride[]
+  /** Other people are invited to this event on the calendar it came from. */
+  guests?: boolean
+  /** The event has a reminder on the calendar it came from. */
+  alarm?: boolean
   /** Stored keys this build does not know. Never read, always written back. */
   unknownFields?: CalendarUnknownFields
 }
@@ -181,6 +297,22 @@ export const sanitizeRecurrence = (raw: unknown): CalendarRecurrence | undefined
   return interval && interval > 1 ? { freq, interval } : { freq }
 }
 
+/** The version 2 keys an event and a changed occurrence share, in the order they are stored. */
+const OCCURRENCE_KEYS = [
+  'days',
+  'zone',
+  'endZone',
+  'floating',
+  'localStart',
+  'localEnd',
+  'description',
+  'location',
+  'status',
+  'clipped',
+] as const
+
+const SERIES_KEYS = ['rrule', 'exdates', 'rdates', 'overrides', 'guests', 'alarm'] as const
+
 const EVENT_KEYS: ReadonlySet<string> = new Set([
   'id',
   'date',
@@ -190,7 +322,12 @@ const EVENT_KEYS: ReadonlySet<string> = new Set([
   'start',
   'end',
   'recurrence',
+  ...OCCURRENCE_KEYS,
+  'localOf',
+  ...SERIES_KEYS,
 ])
+
+const OVERRIDE_KEYS: ReadonlySet<string> = new Set(['rid', 'date', 'title', ...OCCURRENCE_KEYS])
 
 const DOCUMENT_KEYS: ReadonlySet<string> = new Set(['version', 'events'])
 
@@ -220,6 +357,157 @@ const unknownFieldsOf = (
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const EVENT_STATUSES: ReadonlySet<string> = new Set(['tentative', 'confirmed', 'cancelled'])
+
+export const MAX_ZONE_NAME_LENGTH = 128
+export const MAX_RULE_LENGTH = 1_000
+/** Ten years. Longer than any event, short enough that a wrong number cannot stall a loop. */
+export const MAX_EVENT_DAYS = 3_660
+
+const zoneNameOf = (value: unknown): string | undefined => {
+  return isString(value) && value.length > 0 && value.length <= MAX_ZONE_NAME_LENGTH ? value : undefined
+}
+
+const textOf = (value: unknown): string | undefined => (isString(value) && value.length > 0 ? value : undefined)
+
+/**
+ * The version 2 keys of an event or of a changed occurrence. `timed` says
+ * whether the thing has a time of day, which decides which keys can apply: an
+ * end day belongs to an all-day event, a zone and wall times to a timed one.
+ */
+const readOccurrenceFields = (candidate: Record<string, unknown>, timed: boolean): CalendarOccurrenceFields => {
+  const fields: CalendarOccurrenceFields = {}
+  if (!timed) {
+    const days = candidate.days
+    if (typeof days === 'number' && Number.isInteger(days) && days >= 2 && days <= MAX_EVENT_DAYS) {
+      fields.days = days
+    }
+  } else {
+    const zone = zoneNameOf(candidate.zone)
+    if (zone && isWallTime(candidate.localStart)) {
+      fields.zone = zone
+      const endZone = zoneNameOf(candidate.endZone)
+      if (endZone && endZone !== zone && isWallTime(candidate.localEnd)) {
+        fields.endZone = endZone
+      }
+      if (candidate.floating === true) {
+        fields.floating = true
+      }
+      fields.localStart = candidate.localStart
+      if (isWallTime(candidate.localEnd)) {
+        fields.localEnd = candidate.localEnd
+      }
+    }
+  }
+  const description = textOf(candidate.description)
+  if (description !== undefined) {
+    fields.description = description
+  }
+  const location = textOf(candidate.location)
+  if (location !== undefined) {
+    fields.location = location
+  }
+  if (isString(candidate.status) && EVENT_STATUSES.has(candidate.status)) {
+    fields.status = candidate.status as CalendarEventStatus
+  }
+  const clipped = textOf(candidate.clipped)
+  if (clipped !== undefined) {
+    fields.clipped = clipped
+  }
+  return fields
+}
+
+const wholeSeconds = (instant: string): number => Math.floor(Date.parse(instant) / 1000)
+
+/**
+ * Decide between an event's wall times and its instants, and leave the event
+ * holding both in agreement.
+ *
+ * The wall times stand while `localOf` still names the instants the event has:
+ * nobody has touched `start` or `end` since the wall times were written, so a
+ * difference between them can only be this device's zone database, and the
+ * event must not move for that. Otherwise a build that knows only version 1
+ * changed the instants, the person's change wins, and the wall times are read
+ * afresh from them in the event's zone.
+ */
+const settleWallTimes = (event: CalendarEvent, storedLocalOf: unknown): void => {
+  if (!event.zone || !event.localStart || !event.start) {
+    return
+  }
+  const instants = event.end ? [wholeSeconds(event.start), wholeSeconds(event.end)] : [wholeSeconds(event.start)]
+  const vouchedFor =
+    Array.isArray(storedLocalOf) &&
+    instants.every((seconds, index) => storedLocalOf[index] === seconds) &&
+    (event.localEnd !== undefined) === (event.end !== undefined)
+  if (!vouchedFor) {
+    const localStart = instantToWall(event.zone, instants[0] * 1000)
+    const localEnd = event.end ? instantToWall(event.endZone ?? event.zone, instants[1] * 1000) : undefined
+    if (localStart === '' || localEnd === '') {
+      // The zone is one this platform cannot read an instant in. Only the instants are left to go by,
+      // which is what an event with no zone of its own has always been.
+      delete event.zone
+      delete event.endZone
+      delete event.floating
+      delete event.localStart
+      delete event.localEnd
+      return
+    }
+    event.localStart = localStart
+    if (localEnd === undefined) {
+      delete event.localEnd
+      delete event.endZone
+    } else {
+      event.localEnd = localEnd
+    }
+  }
+  event.localOf = instants
+}
+
+const isSeriesTime = (value: unknown): value is string => isIsoDate(value) || isWallTime(value)
+
+/** A list of occurrences named by date or wall time: only real ones, each once, in order. */
+const sanitizeSeriesTimes = (raw: unknown): string[] | undefined => {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const times = [...new Set(raw.filter(isSeriesTime))].sort()
+  return times.length > 0 ? times : undefined
+}
+
+const sanitizeOverride = (raw: unknown): CalendarOccurrenceOverride | null => {
+  if (!isRecord(raw) || !isSeriesTime(raw.rid) || !isIsoDate(raw.date)) {
+    return null
+  }
+  const timed = isWallTime(raw.localStart) && zoneNameOf(raw.zone) !== undefined
+  const override: CalendarOccurrenceOverride = {
+    rid: raw.rid,
+    date: raw.date,
+    title: isString(raw.title) ? raw.title : '',
+    ...readOccurrenceFields(raw, timed),
+  }
+  const unknownFields = unknownFieldsOf(raw, OVERRIDE_KEYS)
+  if (unknownFields) {
+    override.unknownFields = unknownFields
+  }
+  return override
+}
+
+/** Changed occurrences: only readable ones, one per occurrence, in order. */
+const sanitizeOverrides = (raw: unknown): CalendarOccurrenceOverride[] | undefined => {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const byRid = new Map<string, CalendarOccurrenceOverride>()
+  for (const entry of raw) {
+    const override = sanitizeOverride(entry)
+    if (override && !byRid.has(override.rid)) {
+      byRid.set(override.rid, override)
+    }
+  }
+  const overrides = [...byRid.values()].sort((a, b) => (a.rid < b.rid ? -1 : a.rid > b.rid ? 1 : 0))
+  return overrides.length > 0 ? overrides : undefined
+}
 
 const sanitizeEvent = (raw: unknown): CalendarEvent | null => {
   if (!isRecord(raw)) {
@@ -256,9 +544,34 @@ const sanitizeEvent = (raw: unknown): CalendarEvent | null => {
     }
   }
 
+  Object.assign(event, readOccurrenceFields(candidate, event.allDay === false))
+  settleWallTimes(event, candidate.localOf)
+
   const recurrence = sanitizeRecurrence(candidate.recurrence)
   if (recurrence) {
     event.recurrence = recurrence
+  } else if (isString(candidate.rrule) && candidate.rrule.length > 0 && candidate.rrule.length <= MAX_RULE_LENGTH) {
+    // The simple rule is the one an older build can set, so where both are
+    // stored it is the newer statement and the long rule is not read.
+    event.rrule = candidate.rrule
+  }
+  const exdates = sanitizeSeriesTimes(candidate.exdates)
+  if (exdates) {
+    event.exdates = exdates
+  }
+  const rdates = sanitizeSeriesTimes(candidate.rdates)
+  if (rdates) {
+    event.rdates = rdates
+  }
+  const overrides = sanitizeOverrides(candidate.overrides)
+  if (overrides) {
+    event.overrides = overrides
+  }
+  if (candidate.guests === true) {
+    event.guests = true
+  }
+  if (candidate.alarm === true) {
+    event.alarm = true
   }
 
   const unknownFields = unknownFieldsOf(candidate, EVENT_KEYS)
@@ -336,6 +649,36 @@ export const parseCalendarDocument = (
  * build did not recognise. The order is fixed so that the same document always
  * serializes to the same text, whichever sequence of edits produced it.
  */
+const storeOccurrenceFields = (stored: Record<string, unknown>, fields: CalendarOccurrenceFields): void => {
+  for (const key of OCCURRENCE_KEYS) {
+    if (fields[key] !== undefined) {
+      stored[key] = fields[key]
+    }
+  }
+}
+
+const storeUnknownFields = (
+  stored: Record<string, unknown>,
+  unknownFields: CalendarUnknownFields | undefined,
+  known: ReadonlySet<string>,
+): void => {
+  if (!unknownFields) {
+    return
+  }
+  for (const key of Object.keys(unknownFields)) {
+    if (!known.has(key)) {
+      setOwn(stored, key, unknownFields[key])
+    }
+  }
+}
+
+const overrideToStored = (override: CalendarOccurrenceOverride): Record<string, unknown> => {
+  const stored: Record<string, unknown> = { rid: override.rid, date: override.date, title: override.title }
+  storeOccurrenceFields(stored, override)
+  storeUnknownFields(stored, override.unknownFields, OVERRIDE_KEYS)
+  return stored
+}
+
 const eventToStored = (event: CalendarEvent): Record<string, unknown> => {
   const stored: Record<string, unknown> = { id: event.id, date: event.date, title: event.title }
   if (event.color !== undefined) {
@@ -353,13 +696,29 @@ const eventToStored = (event: CalendarEvent): Record<string, unknown> => {
   if (event.recurrence !== undefined) {
     stored.recurrence = event.recurrence
   }
-  if (event.unknownFields) {
-    for (const key of Object.keys(event.unknownFields)) {
-      if (!EVENT_KEYS.has(key)) {
-        setOwn(stored, key, event.unknownFields[key])
-      }
-    }
+  storeOccurrenceFields(stored, event)
+  if (event.localOf !== undefined) {
+    stored.localOf = event.localOf
   }
+  if (event.rrule !== undefined) {
+    stored.rrule = event.rrule
+  }
+  if (event.exdates !== undefined) {
+    stored.exdates = event.exdates
+  }
+  if (event.rdates !== undefined) {
+    stored.rdates = event.rdates
+  }
+  if (event.overrides !== undefined) {
+    stored.overrides = event.overrides.map(overrideToStored)
+  }
+  if (event.guests !== undefined) {
+    stored.guests = event.guests
+  }
+  if (event.alarm !== undefined) {
+    stored.alarm = event.alarm
+  }
+  storeUnknownFields(stored, event.unknownFields, EVENT_KEYS)
   return stored
 }
 
@@ -376,13 +735,7 @@ export const serializeCalendarDocument = (document: CalendarDocument): string =>
     version: document.version ?? CALENDAR_DOCUMENT_VERSION,
     events: entries,
   }
-  if (document.unknownFields) {
-    for (const key of Object.keys(document.unknownFields)) {
-      if (!DOCUMENT_KEYS.has(key)) {
-        setOwn(stored, key, document.unknownFields[key])
-      }
-    }
-  }
+  storeUnknownFields(stored, document.unknownFields, DOCUMENT_KEYS)
   return JSON.stringify(stored)
 }
 
@@ -559,16 +912,25 @@ export const createCalendarId = (prefix: string): string => {
 // Event normalization & recurrence expansion (pure logic).
 // ---------------------------------------------------------------------------
 
-/** A normalized, fully-resolved view of an event for a single occurrence day. */
+/** One day of one occurrence of an event, as a month grid shows it. */
 export type CalendarOccurrence = {
   /** The originating event (shared across all occurrences of a recurring event). */
   event: CalendarEvent
-  /** YYYY-MM-DD of this occurrence. */
+  /** YYYY-MM-DD of the day this sits on. */
   date: string
   /** Whether this occurrence is all-day. */
   allDay: boolean
-  /** Local "HH:MM" time-of-day for a timed occurrence, else null. */
+  /** "HH:MM" on the day a timed occurrence starts, else null. */
   time: string | null
+  /** What this occurrence is called. A changed occurrence may have its own title. */
+  title: string
+  /** Which occurrence of its series this is: its original start, as the series' own clock names it. */
+  occurrence: string
+  /** False on the day an occurrence starts, true on each later day it runs into. */
+  continuation: boolean
+  cancelled: boolean
+  /** The changed occurrence this is, when it is one. */
+  override?: CalendarOccurrenceOverride
 }
 
 /**
@@ -590,112 +952,369 @@ export const eventTimeOfDay = (event: CalendarEvent): string | null => {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
-/** Parse "YYYY-MM-DD" into a local Date at midnight, or null. */
-const parseIsoDateLocal = (iso: string): Date | null => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!m) {
-    return null
-  }
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-  return Number.isNaN(d.getTime()) ? null : d
-}
-
-/** Whether a recurring event with given anchor falls on `target` (both local dates). */
-const recurrenceHitsDate = (anchor: Date, target: Date, recurrence: CalendarRecurrence): boolean => {
-  if (target.getTime() < anchor.getTime()) {
+/** Whether a repeating event anchored on `anchor` falls on `target` (both YYYY-MM-DD). */
+const simpleRecurrenceHits = (anchor: string, target: string, recurrence: CalendarRecurrence): boolean => {
+  if (target < anchor) {
     return false
   }
   const interval = recurrence.interval && recurrence.interval >= 1 ? Math.floor(recurrence.interval) : 1
-  const dayMs = 24 * 60 * 60 * 1000
+  const [anchorYear, anchorMonth, anchorDay] = anchor.split('-').map(Number)
+  const [year, month, day] = target.split('-').map(Number)
   switch (recurrence.freq) {
-    case 'daily': {
-      const diffDays = Math.round((target.getTime() - anchor.getTime()) / dayMs)
-      return diffDays % interval === 0
-    }
+    case 'daily':
+      return daysBetween(anchor, target) % interval === 0
     case 'weekly': {
-      if (target.getDay() !== anchor.getDay()) {
-        return false
-      }
-      const diffWeeks = Math.round((target.getTime() - anchor.getTime()) / (dayMs * 7))
-      return diffWeeks % interval === 0
+      const days = daysBetween(anchor, target)
+      return days % 7 === 0 && (days / 7) % interval === 0
     }
-    case 'monthly': {
-      if (target.getDate() !== anchor.getDate()) {
-        return false
-      }
-      const diffMonths = (target.getFullYear() - anchor.getFullYear()) * 12 + (target.getMonth() - anchor.getMonth())
-      return diffMonths >= 0 && diffMonths % interval === 0
-    }
-    case 'yearly': {
-      if (target.getDate() !== anchor.getDate() || target.getMonth() !== anchor.getMonth()) {
-        return false
-      }
-      const diffYears = target.getFullYear() - anchor.getFullYear()
-      return diffYears >= 0 && diffYears % interval === 0
-    }
+    case 'monthly':
+      return day === anchorDay && ((year - anchorYear) * 12 + (month - anchorMonth)) % interval === 0
+    case 'yearly':
+      return day === anchorDay && month === anchorMonth && (year - anchorYear) % interval === 0
     default:
       return false
   }
 }
 
-/** Safety cap on how many cells one recurring event may be tested against. */
+/** Safety cap on how many occurrences one event may contribute to one window. */
 export const MAX_RECURRENCE_CELLS = 42
+
+/** The longest run of days any one loop here walks. A month grid is 42; a year view would be 371. */
+const MAX_WINDOW_DAYS = 400
+
+/** Converts between a wall time in a zone and an instant. */
+export type CalendarZoneRules = {
+  knows(zone: string): boolean
+  /** Milliseconds since the epoch, or NaN. */
+  toInstant(zone: string, wall: string): number
+  /** `YYYY-MM-DDTHH:MM:SS`, or `''`. */
+  toWall(zone: string, epochMs: number): string
+}
+
+/**
+ * What showing an event needs beyond this file: expanding a repeat rule that is
+ * more than "every N weeks", and reading a zone the platform has no name for.
+ * Both need the iCalendar library, which is loaded only when a calendar holds
+ * such an event ({@link needsSeriesTools}).
+ */
+export type CalendarSeriesTools = {
+  /**
+   * The starts of the occurrences `rule` produces for a series starting at
+   * `start`, from `from` to `to` inclusive. All three are dates for an all-day
+   * series and wall times otherwise. `zone` is the series' zone, used only to
+   * read an end date the rule states in UTC.
+   */
+  occurrencesOfRule(series: { rule: string; start: string; zone?: string; from: string; to: string }): string[]
+  zones: CalendarZoneRules
+}
+
+export type ExpandOptions = {
+  /** The zone whose days and clock the grid shows. The device's own when absent. */
+  displayZone?: string
+  series?: CalendarSeriesTools
+}
+
+const platformZones: CalendarZoneRules = { knows: isKnownZone, toInstant: wallToInstant, toWall: instantToWall }
+
+const isRepeating = (event: CalendarEvent): boolean =>
+  event.recurrence !== undefined || event.rrule !== undefined || (event.rdates?.length ?? 0) > 0
+
+/** Whether showing these events correctly needs {@link CalendarSeriesTools}. */
+export const needsSeriesTools = (events: CalendarEvent[]): boolean =>
+  events.some(
+    (event) =>
+      event.rrule !== undefined ||
+      (isRepeating(event) && event.zone !== undefined && event.floating !== true && !isKnownZone(event.zone)),
+  )
+
+type SeriesOccurrence = { occurrence: string; override?: CalendarOccurrenceOverride }
+
+const overrideFor = (
+  overrides: Map<string, CalendarOccurrenceOverride>,
+  occurrence: string,
+): CalendarOccurrenceOverride | undefined => overrides.get(occurrence) ?? overrides.get(occurrence.slice(0, 10))
+
+/**
+ * The occurrences of one event whose ORIGINAL start lies between `from` and
+ * `to`, plus every changed occurrence (which may have been moved anywhere).
+ * `start`, `from` and `to` are all dates, or all wall times on the series' clock.
+ */
+const occurrencesOfSeries = (
+  event: CalendarEvent,
+  start: string,
+  from: string,
+  to: string,
+  zone: string | undefined,
+  options: ExpandOptions,
+): SeriesOccurrence[] => {
+  const starts = new Set<string>()
+  // The first occurrence is the start itself, whatever the rule says.
+  if (start >= from && start <= to) {
+    starts.add(start)
+  }
+  if (event.recurrence) {
+    const [startDay, timeOfDay] = [start.slice(0, 10), start.slice(10)]
+    const firstDay = from.slice(0, 10) > startDay ? from.slice(0, 10) : startDay
+    for (const day of daysInRange(firstDay, to.slice(0, 10), MAX_WINDOW_DAYS)) {
+      if (simpleRecurrenceHits(startDay, day, event.recurrence)) {
+        starts.add(`${day}${timeOfDay}`)
+      }
+    }
+  } else if (event.rrule && options.series) {
+    for (const occurrence of options.series.occurrencesOfRule({ rule: event.rrule, start, zone, from, to })) {
+      starts.add(occurrence)
+    }
+  }
+  for (const added of event.rdates ?? []) {
+    // An added occurrence given as a bare date takes the series' time of day.
+    const occurrence = added.length === 10 && start.length > 10 ? `${added}${start.slice(10)}` : added
+    if (occurrence >= from && occurrence <= to) {
+      starts.add(occurrence)
+    }
+  }
+  for (const removed of event.exdates ?? []) {
+    for (const occurrence of [...starts]) {
+      if (occurrence === removed || (removed.length === 10 && occurrence.slice(0, 10) === removed)) {
+        starts.delete(occurrence)
+      }
+    }
+  }
+
+  const overrides = new Map((event.overrides ?? []).map((override) => [override.rid, override]))
+  const matched = new Set<CalendarOccurrenceOverride>()
+  const occurrences: SeriesOccurrence[] = []
+  for (const occurrence of [...starts].sort()) {
+    const override = overrideFor(overrides, occurrence)
+    if (override) {
+      matched.add(override)
+      occurrences.push({ occurrence, override })
+    } else {
+      occurrences.push({ occurrence })
+    }
+  }
+  // A changed occurrence is shown where it was moved to, even when the day it
+  // was moved from is nowhere near the days being shown.
+  for (const override of overrides.values()) {
+    if (!matched.has(override)) {
+      occurrences.push({ occurrence: override.rid, override })
+    }
+  }
+  return occurrences
+}
+
+type PlacedOccurrence = {
+  /** The first and last day it is shown on. */
+  firstDay: string
+  lastDay: string
+  allDay: boolean
+  time: string | null
+}
+
+const placeAllDay = (date: string, days: number | undefined): PlacedOccurrence => ({
+  firstDay: date,
+  lastDay: days && days > 1 ? addDays(date, days - 1) : date,
+  allDay: true,
+  time: null,
+})
+
+/**
+ * Where a timed occurrence falls on the grid: its start and end instants, read
+ * on the clock of the zone being shown. A floating time is not converted at
+ * all; it is the same wall time everywhere.
+ */
+const placeTimed = (
+  startMs: number,
+  endMs: number,
+  floating: boolean,
+  displayZone: string,
+): PlacedOccurrence | null => {
+  const read = (ms: number): string => (floating ? wallFromUtcMs(ms) : instantToWall(displayZone, ms))
+  const startWall = read(startMs)
+  if (startWall === '') {
+    return null
+  }
+  // An event that ends at midnight does not run into the day that starts then.
+  const endWall = endMs > startMs ? read(endMs - 1000) : startWall
+  return {
+    firstDay: startWall.slice(0, 10),
+    lastDay: (endWall || startWall).slice(0, 10),
+    allDay: false,
+    time: startWall.slice(11, 16),
+  }
+}
+
+/** The instant of a wall time on an event's own clock, by whichever rules know its zone. */
+const instantOn = (zone: string, wall: string, event: CalendarEvent, options: ExpandOptions): number => {
+  if (event.floating) {
+    return utcMsFromWall(wall)
+  }
+  const rules = isKnownZone(zone) ? platformZones : options.series?.zones.knows(zone) ? options.series.zones : null
+  if (rules) {
+    return rules.toInstant(zone, wall)
+  }
+  // No rules for this zone yet. The stored instant fixes its offset at the
+  // series' start; holding that offset is right except across a clock change.
+  if (event.start && event.localStart) {
+    return utcMsFromWall(wall) + (Date.parse(event.start) - utcMsFromWall(event.localStart))
+  }
+  return Number.NaN
+}
 
 /**
  * Expand a list of events into per-day occurrences across the given window of
- * ISO dates (typically the 42 cells of a month grid). Non-recurring events emit
- * a single occurrence on their anchor day (only if that day is in the window).
- * Recurring events emit one occurrence per window day they fall on, capped at
- * {@link MAX_RECURRENCE_CELLS} per event so a pathological rule can't blow up.
+ * ISO dates (typically the 42 cells of a month grid).
  *
- * Pure: returns a Map keyed by ISO date -> occurrences (input order preserved
- * within a day). The window order does not affect membership.
+ *  - An event with no repeat rule appears once; one that lasts several days
+ *    appears on each of them.
+ *  - A repeating event appears on every day of the window an occurrence falls
+ *    on, capped at {@link MAX_RECURRENCE_CELLS} occurrences per event so a
+ *    pathological rule can't blow up. Occurrences are worked out on the event's
+ *    own clock and only then read on the clock being shown, which is what keeps
+ *    a weekly 09:00 at 09:00 across a daylight-saving change.
+ *  - An event the version 1 editor made has no zone of its own and is shown as
+ *    that editor always showed it: on its `date`, at the device's local time.
+ *
+ * Pure: returns a Map keyed by ISO date -> occurrences, all-day first, then by
+ * time, input order otherwise. The window order does not affect membership.
  */
 export const expandEventsForWindow = (
   events: CalendarEvent[],
   windowDates: string[],
+  options: ExpandOptions = {},
 ): Map<string, CalendarOccurrence[]> => {
   const result = new Map<string, CalendarOccurrence[]>()
-  const windowSet = new Set(windowDates)
-  const windowParsed = windowDates
-    .map((iso) => ({ iso, date: parseIsoDateLocal(iso) }))
-    .filter((w): w is { iso: string; date: Date } => w.date !== null)
+  const windowSet = new Set(windowDates.filter((date) => isIsoDate(date)))
+  if (windowSet.size === 0) {
+    return result
+  }
+  const sortedWindow = [...windowSet].sort()
+  const [firstDay, lastDay] = [sortedWindow[0], sortedWindow[sortedWindow.length - 1]]
+  const displayZone = options.displayZone ?? deviceZone()
 
-  const push = (date: string, occ: CalendarOccurrence): void => {
-    const existing = result.get(date)
-    if (existing) {
-      existing.push(occ)
-    } else {
-      result.set(date, [occ])
+  const emit = (event: CalendarEvent, series: SeriesOccurrence, placed: PlacedOccurrence): void => {
+    const source = series.override ?? event
+    const from = placed.firstDay > firstDay ? placed.firstDay : firstDay
+    const to = placed.lastDay < lastDay ? placed.lastDay : lastDay
+    for (const day of daysInRange(from, to, MAX_WINDOW_DAYS)) {
+      if (!windowSet.has(day)) {
+        continue
+      }
+      const occurrence: CalendarOccurrence = {
+        event,
+        date: day,
+        allDay: placed.allDay,
+        time: day === placed.firstDay ? placed.time : null,
+        title: source.title,
+        occurrence: series.occurrence,
+        continuation: day !== placed.firstDay,
+        cancelled: source.status === 'cancelled',
+      }
+      if (series.override) {
+        occurrence.override = series.override
+      }
+      const existing = result.get(day)
+      if (existing) {
+        existing.push(occurrence)
+      } else {
+        result.set(day, [occurrence])
+      }
     }
   }
 
-  for (const event of events) {
-    const allDay = !isTimedEvent(event)
-    const time = eventTimeOfDay(event)
+  /** A changed occurrence has its own time and place, whatever the series has. */
+  const placeOverride = (event: CalendarEvent, override: CalendarOccurrenceOverride): PlacedOccurrence | null => {
+    if (!override.localStart || !override.zone) {
+      return placeAllDay(override.date, override.days)
+    }
+    const asEvent: CalendarEvent = { ...event, floating: override.floating }
+    const startMs = instantOn(override.zone, override.localStart, asEvent, options)
+    const endMs = override.localEnd
+      ? instantOn(override.endZone ?? override.zone, override.localEnd, asEvent, options)
+      : startMs
+    return Number.isNaN(startMs)
+      ? null
+      : placeTimed(startMs, Number.isNaN(endMs) ? startMs : endMs, override.floating === true, displayZone)
+  }
 
-    if (!event.recurrence) {
-      if (windowSet.has(event.date)) {
-        push(event.date, { event, date: event.date, allDay, time })
+  for (const event of events) {
+    const timed = isTimedEvent(event)
+
+    if (timed && !(event.zone && event.localStart)) {
+      // A version 1 timed event: anchored on its `date`, at the local time of its start.
+      const time = instantToWall(displayZone, Date.parse(event.start as string)).slice(11, 16) || null
+      const from = event.date > firstDay ? event.date : firstDay
+      let emitted = 0
+      for (const series of occurrencesOfSeries(event, event.date, from, lastDay, undefined, options)) {
+        if (emitted >= MAX_RECURRENCE_CELLS) {
+          break
+        }
+        const day = series.override ? series.override.date : series.occurrence
+        emit(event, series, { firstDay: day, lastDay: day, allDay: false, time })
+        emitted += 1
       }
       continue
     }
 
-    const anchor = parseIsoDateLocal(event.date)
-    if (!anchor) {
+    if (!timed) {
+      const lengthInDays = event.days && event.days > 1 ? event.days : 1
+      const from = addDays(firstDay, 1 - lengthInDays)
+      if (!isRepeating(event) && !event.overrides && (event.date > lastDay || event.date < from)) {
+        continue
+      }
+      let emitted = 0
+      for (const series of occurrencesOfSeries(event, event.date, from, lastDay, undefined, options)) {
+        if (emitted >= MAX_RECURRENCE_CELLS) {
+          break
+        }
+        const placed = series.override
+          ? placeOverride(event, series.override)
+          : placeAllDay(series.occurrence, lengthInDays)
+        if (placed && placed.lastDay >= firstDay && placed.firstDay <= lastDay) {
+          emit(event, series, placed)
+          emitted += 1
+        }
+      }
+      continue
+    }
+
+    // A timed event with a clock of its own.
+    const zone = event.zone as string
+    const localStart = event.localStart as string
+    const lengthMs = event.end && event.start ? Math.max(0, Date.parse(event.end) - Date.parse(event.start)) : 0
+    // Two days of slack either side cover any difference between its zone and the one shown.
+    const slackDays = 2 + Math.ceil(lengthMs / 86_400_000)
+    const from = `${addDays(firstDay, -slackDays)}T00:00:00`
+    const to = `${addDays(lastDay, 2)}T23:59:59`
+    if (!isRepeating(event) && !event.overrides && (localStart > to || localStart < from)) {
       continue
     }
     let emitted = 0
-    for (const { iso, date } of windowParsed) {
+    for (const series of occurrencesOfSeries(event, localStart, from, to, event.floating ? undefined : zone, options)) {
       if (emitted >= MAX_RECURRENCE_CELLS) {
         break
       }
-      if (recurrenceHitsDate(anchor, date, event.recurrence)) {
-        push(iso, { event, date: iso, allDay, time })
+      let placed: PlacedOccurrence | null
+      if (series.override) {
+        placed = placeOverride(event, series.override)
+      } else {
+        const startMs = instantOn(zone, series.occurrence, event, options)
+        placed = Number.isNaN(startMs)
+          ? null
+          : placeTimed(startMs, startMs + lengthMs, event.floating === true, displayZone)
+      }
+      if (placed && placed.lastDay >= firstDay && placed.firstDay <= lastDay) {
+        emit(event, series, placed)
         emitted += 1
       }
     }
   }
 
+  for (const occurrences of result.values()) {
+    // Array.prototype.sort is stable, so equal entries keep their input order.
+    occurrences.sort((a, b) => {
+      const [aTime, bTime] = [a.time ?? '', b.time ?? '']
+      return aTime < bTime ? -1 : aTime > bTime ? 1 : 0
+    })
+  }
   return result
 }
