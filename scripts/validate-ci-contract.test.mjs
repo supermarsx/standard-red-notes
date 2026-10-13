@@ -1043,6 +1043,375 @@ test("the gRPC browser sign-in cannot run outside the gRPC phase", () => {
   );
 });
 
+function withOccurrenceChanged(file, fragment, occurrence, replacement) {
+  return withFileChanged(file, (content) => {
+    let seen = -1;
+    return content.replaceAll(fragment, (match) => {
+      seen += 1;
+      return seen === occurrence ? replacement : match;
+    });
+  });
+}
+
+test("the Firefox and Chromium engine check cannot be silently disarmed", () => {
+  // `firefox` sat in playwright.config.ts for months while every per-push
+  // browser step said `--project=chromium`, and two Firefox-only defects reached
+  // the owner's browser under an all-green pipeline. Each way of taking Firefox
+  // back out of this step has to be refused, and each fragment has to occur
+  // once, or flipping it here would leave a second copy satisfying the rule.
+  for (const [current, replacement, expected] of [
+    [
+      "--project=firefox --project=chromium --reporter=list,json",
+      "--project=chromium --reporter=list,json",
+      /container-smoke must apply the engine check in both Firefox and Chromium exactly 1 times, found 0/,
+    ],
+    [
+      "playwright install --with-deps chromium firefox\n",
+      "playwright install --with-deps chromium\n",
+      /container-smoke must apply the installation of Playwright's Firefox beside Chromium exactly 1 times, found 0/,
+    ],
+    [
+      "--min-expected-in firefox=6",
+      "--min-expected-in firefox=0",
+      /container-smoke must apply the floor on the engine tests that passed in Firefox exactly 1 times, found 0/,
+    ],
+    [
+      "--min-expected-in chromium=6",
+      "--min-expected-in chromium=0",
+      /container-smoke must apply the floor on the engine tests that passed in Chromium exactly 1 times, found 0/,
+    ],
+    [
+      "--report e2e/artifacts/playwright-engines.json",
+      "--report e2e/artifacts/playwright-smoke.json",
+      /container-smoke must apply the Firefox and Chromium engine report written and then verified exactly 2 times, found 1/,
+    ],
+    [
+      "PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-engines.json",
+      "PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-smoke.json",
+      /container-smoke must apply the Firefox and Chromium engine report written and then verified exactly 2 times, found 1/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.equal(content.split(current).length - 1, 1, current);
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("neither engine step can lose one of its two specs", () => {
+  // The pair occurs twice: Playwright's Firefox and Chromium, then stock
+  // Firefox. Dropping a spec from EITHER step alone has to be caught, which a
+  // presence rule over the job could not do.
+  const pair =
+    "tests/reduced-motion-mermaid-layout.spec.ts tests/socket-lane-file-download.spec.ts";
+  assert.equal(
+    baseline.get(".github/workflows/ci.yml").split(pair).length - 1,
+    2,
+  );
+  for (const occurrence of [0, 1]) {
+    for (const survivor of [
+      "tests/reduced-motion-mermaid-layout.spec.ts",
+      "tests/socket-lane-file-download.spec.ts",
+    ]) {
+      const files = withOccurrenceChanged(
+        ".github/workflows/ci.yml",
+        pair,
+        occurrence,
+        survivor,
+      );
+      assert.match(
+        validateCiContract(files).join("\n"),
+        /container-smoke must apply the Mermaid layout and socket file lane specs, together, in the engine check and in the stock Firefox check exactly 2 times, found 1/,
+      );
+    }
+  }
+});
+
+test("a commented-out engine check does not count as one", () => {
+  // The presence rules in this file read comments too, so a step that has been
+  // commented out still "contains" every fragment of itself. These rules count
+  // on the block with its comments removed.
+  const active =
+    "          --project=firefox --project=chromium --reporter=list,json\n";
+  const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+    assert.equal(content.split(active).length - 1, 1);
+    return content.replace(active, `          # ${active.trimStart()}`);
+  });
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /container-smoke must apply the engine check in both Firefox and Chromium exactly 1 times, found 0/,
+  );
+});
+
+test("the stock Firefox check can neither be made unable to fail nor able to block on a missing browser", () => {
+  // Its three outcomes are the design: no browser and an undrivable browser
+  // are warnings, a browser that was driven and showed the app wrong fails the
+  // job. Remove the preflight and the only safe choices left are to ignore its
+  // failures or to let a runner image update block publication.
+  for (const [current, replacement, expected] of [
+    [
+      "node helpers/stock-firefox-preflight.mjs",
+      "true",
+      /container-smoke must apply the preflight that tells a stock Firefox that cannot be driven from one that shows the app wrong exactly 1 times, found 0/,
+    ],
+    [
+      "--project=stock-firefox --reporter=list,json",
+      "--project=firefox --reporter=list,json",
+      /container-smoke must apply the engine check in the runner's stock Firefox exactly 1 times, found 0/,
+    ],
+    [
+      "if: steps.stock_firefox.outputs.ran == 'true'",
+      "if: always()",
+      /container-smoke must apply the stock Firefox report assertion bound to the check having run exactly 1 times, found 0/,
+    ],
+    [
+      "--min-expected-in stock-firefox=6",
+      "--min-expected-in stock-firefox=0",
+      /container-smoke must apply the floor on the engine tests that passed in stock Firefox exactly 1 times, found 0/,
+    ],
+    [
+      "--report e2e/artifacts/playwright-stock-firefox.json",
+      "--report e2e/artifacts/playwright-engines.json",
+      /container-smoke must apply the stock Firefox engine report written and then verified exactly 2 times, found 1/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) => {
+      assert.equal(content.split(current).length - 1, 1, current);
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("the engine checks cannot run before the stack, out of order, or after publication", () => {
+  const ordering =
+    /must start the stack, run the Firefox and Chromium engine check, reject an incomplete one, and only then run and verify the stock Firefox check, all before publication/;
+  const stepStart = (content, name) => {
+    const marker = `      - name: ${name}\n`;
+    assert.equal(content.split(marker).length - 1, 1, name);
+    return content.indexOf(marker);
+  };
+  const engineCheck =
+    "Verify Mermaid layout and socket file downloads in Firefox and Chromium";
+  const engineVerify =
+    "Reject a skipped, incomplete or Firefox-less engine check";
+  const stockCheck =
+    "Run the same engine check in the runner's stock Firefox when it can be driven";
+  const stockVerify = "Reject a skipped or incomplete stock Firefox check";
+
+  // Moves the four steps, as one block, to just before `beforeStep`.
+  const withEngineBlockBefore = (beforeStep) =>
+    withFileChanged(".github/workflows/ci.yml", (content) => {
+      const start = content.lastIndexOf(
+        "      # FIREFOX, AND REDUCED MOTION.",
+        stepStart(content, engineCheck),
+      );
+      const end = stepStart(content, "Verify MariaDB backup and restore");
+      assert.ok(start > 0 && end > start);
+      const block = content.slice(start, end);
+      const without = content.slice(0, start) + content.slice(end);
+      const target = stepStart(without, beforeStep);
+      return without.slice(0, target) + block + without.slice(target);
+    });
+
+  // Before the stack exists there is nothing to open. (The image build is the
+  // nearest step ahead of the stack whose name only this job has.)
+  assert.match(
+    validateCiContract(withEngineBlockBefore("Build hardened app image")).join(
+      "\n",
+    ),
+    ordering,
+  );
+  // After the images have been exported, a red check can no longer stop them.
+  assert.match(
+    validateCiContract(
+      withEngineBlockBefore("Collect stack diagnostics"),
+    ).join("\n"),
+    ordering,
+  );
+
+  // The verifier ahead of the run it verifies reads the previous run's absence.
+  const swapped = (first, second) =>
+    withFileChanged(".github/workflows/ci.yml", (content) =>
+      content
+        .replace(`- name: ${first}\n`, "- name: <held>\n")
+        .replace(`- name: ${second}\n`, `- name: ${first}\n`)
+        .replace("- name: <held>\n", `- name: ${second}\n`),
+    );
+  assert.match(
+    validateCiContract(swapped(engineCheck, engineVerify)).join("\n"),
+    ordering,
+  );
+  // Playwright's own Firefox is the gate: the stock check may not run ahead of
+  // it, where its failure would stop the gate from reporting.
+  assert.match(
+    validateCiContract(swapped(engineVerify, stockCheck)).join("\n"),
+    ordering,
+  );
+  assert.match(
+    validateCiContract(swapped(stockCheck, stockVerify)).join("\n"),
+    ordering,
+  );
+});
+
+test("the Mermaid layout spec cannot stop asking what was missed", () => {
+  // Every measurement that declared the defect fixed was taken in a browser
+  // that was not in reduced-motion mode. Turning the mode on is half of it; the
+  // other half is asking the page, which is the only thing that noticed when
+  // the runner's option was silently ignored over WebDriver BiDi.
+  for (const [current, replacement, expected] of [
+    [
+      "reducedMotion: 'reduce'",
+      "reducedMotion: 'no-preference'",
+      /missing reduced motion turned on for the page/,
+    ],
+    [
+      "matchMedia('(prefers-reduced-motion: reduce)').matches",
+      "true",
+      /missing question to the page whether reduced motion is really on/,
+    ],
+    [
+      "expect(motion.reduce,",
+      "void (motion.reduce,",
+      /missing assertion that the page is in reduced-motion mode/,
+    ],
+    [
+      "expect.soft(layout.viewBox.w,",
+      "void (layout.viewBox.w,",
+      /missing assertion on the diagram's natural width/,
+    ],
+    [
+      "expect.soft(layout.viewBox.h,",
+      "void (layout.viewBox.h,",
+      /missing assertion on the diagram's natural height/,
+    ],
+    [
+      "expect.soft(layout.scale,",
+      "void (layout.scale,",
+      /missing assertion on the painted scale/,
+    ],
+    [
+      "expect.soft(arrow.endGap,",
+      "void (arrow.endGap,",
+      /missing assertion that each arrow ends on a box/,
+    ],
+    [
+      "expect.soft(label.spill,",
+      "void (label.spill,",
+      /missing assertion that each label fits the slot sized for it/,
+    ],
+  ]) {
+    const files = withFileChanged(
+      "e2e/tests/reduced-motion-mermaid-layout.spec.ts",
+      (content) => {
+        assert.ok(content.includes(current), current);
+        return content.split(current).join(replacement);
+      },
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("the socket file lane spec cannot fall back to checking only the bytes", () => {
+  // On the build before the fix, Firefox reported a 16 KiB file downloaded with
+  // the right SHA-256 while the lane had delivered none of it: the client fell
+  // back to HTTP. A spec that kept only the byte comparison would be green
+  // there, so the lane's own account of the download is pinned, line by line.
+  for (const [current, replacement, expected] of [
+    [
+      "expect.soft(lane.outcome,",
+      "void (lane.outcome,",
+      /missing assertion on the lane's own outcome for each download/,
+    ],
+    [
+      "toBe('completed')",
+      "toBeDefined()",
+      /missing requirement that the lane answered completed/,
+    ],
+    [
+      ".soft(lane.deliveredBytes,",
+      ".soft(lane.declaredSize,",
+      /missing assertion that the lane delivered every encrypted byte/,
+    ],
+    [
+      ".toBe(lane.declaredSize)",
+      ".toBeGreaterThanOrEqual(0)",
+      /missing comparison of the delivered bytes with the size that was asked for/,
+    ],
+    [
+      "expect.soft(httpDownloads.slice(before),",
+      "void (httpDownloads.slice(before),",
+      /missing assertion that no HTTP download stood in for the lane/,
+    ],
+    [
+      "expect.soft(download.sha256,",
+      "void (download.sha256,",
+      /missing comparison of the downloaded bytes with the uploaded ones/,
+    ],
+    [
+      ".poll(() => fileLaneNegotiated(reader.page),",
+      ".poll(() => true,",
+      /missing requirement that the lane was negotiated, as a failure and not a skip/,
+    ],
+  ]) {
+    const files = withFileChanged(
+      "e2e/tests/socket-lane-file-download.spec.ts",
+      (content) => {
+        assert.ok(content.includes(current), current);
+        return content.split(current).join(replacement);
+      },
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("neither Firefox spec can be skipped for an engine, and neither may be retried", () => {
+  for (const specPath of [
+    "e2e/tests/reduced-motion-mermaid-layout.spec.ts",
+    "e2e/tests/socket-lane-file-download.spec.ts",
+  ]) {
+    for (const marker of [
+      "test.skip(",
+      "test.fixme(",
+      "test.fail(",
+      "test.describe.only(",
+    ]) {
+      const files = withFileChanged(
+        specPath,
+        (content) =>
+          `${content}\n${marker}({ browserName }) => browserName === 'firefox', 'later')\n`,
+      );
+      assert.match(
+        validateCiContract(files).join("\n"),
+        new RegExp(
+          `${specPath.replaceAll(".", "\\.")}: must not use ${marker
+            .replace("test.describe", "")
+            .slice(0, -1)
+            .replaceAll(".", "\\.")}`,
+        ),
+      );
+    }
+  }
+
+  // The download defect was a race. A retry turns a race into `flaky`, and
+  // `flaky` into something people stop reading.
+  for (const [current, replacement, expected] of [
+    ["retries: 0,", "retries: 2,", /missing zero-retry Playwright configuration/],
+    [
+      "firefoxUserPrefs: { 'ui.prefersReducedMotion': STOCK_FIREFOX_REDUCED_MOTION }",
+      "firefoxUserPrefs: {}",
+      /missing reduced motion set by preference in the stock Firefox project/,
+    ],
+  ]) {
+    const files = withFileChanged("e2e/playwright.config.ts", (content) => {
+      assert.equal(content.split(current).length - 1, 1, current);
+      return content.replace(current, replacement);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
 test("the socket lane sign-in cannot stop confirming it got a cookie session", () => {
   // THE WHOLE POINT OF THE STEP. Under `E2E_TESTING=true` auth forces legacy
   // header-based sessions, and the entire e2e suite historically ran that way —

@@ -29,7 +29,7 @@ green.
 | `check`              | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                               |  45 min |
 | `build`              | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                             |  45 min |
 | `desktop-electron`   | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                           |  45 min |
-| `container-smoke`    | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, the realtime mint boundaries and Redis push delivery, a cross-device push round trip through the public front door, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, image/container hardening assertions, and a closing gRPC phase that proves `SYNC_ITEMS` and the oversized-result contract. |  70 min |
+| `container-smoke`    | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, the realtime mint boundaries and Redis push delivery, a cross-device push round trip through the public front door, Chromium app-open checks, Mermaid layout and socket file downloads in Firefox and Chromium with reduced motion on, bounded parallel sync and Redis operations, MariaDB backup/restore, image/container hardening assertions, and a closing gRPC phase that proves `SYNC_ITEMS` and the oversized-result contract. |  70 min |
 | `production-gate`    | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                            |   5 min |
 | `publish-containers` | On an accepted first-party `main` push only, verify and publish the exact app/server archive produced by `container-smoke`, re-pull both images, verify their identities and labels, attest both registry digests, and record digest-pinned deployment references.                                                                     |  45 min |
 
@@ -38,6 +38,53 @@ sync/Redis test. The generated JSON report must contain at least four expected
 tests and exactly zero skipped, unexpected, or flaky tests. The stack uses a
 run-specific Compose project and generated credentials, then removes its
 containers and volumes even after a failure.
+
+### Firefox and reduced motion
+
+Those tests run in Chromium with no motion preference, and two defects reached
+a Firefox user while they were green: Mermaid diagrams were laid out about
+twelve times too large in Firefox whenever `prefers-reduced-motion: reduce` was
+on (a Remote Desktop session turns it on), and file downloads over the socket
+file lane failed in Firefox alone. The required stack therefore also runs two
+specs in **both Firefox and Chromium**, with the same assertions in each:
+
+- `reduced-motion-mermaid-layout.spec.ts` turns reduced motion on, asks the
+  page whether it took, and then reads the layout the browser drew for a
+  flowchart, a sequence diagram and a flowchart with long labels: the natural
+  size, the painted size, whether each arrow ends on a box and whether each
+  label is inside the box sized for it.
+- `socket-lane-file-download.spec.ts` stores three files from one browser and
+  downloads them in a second, and asserts the lane's own account of each
+  download — asked once, answered `completed`, every encrypted byte handed
+  over, no HTTP download made — as well as the bytes. The bytes alone are not
+  enough: on the build before the fix the client fell back to HTTP and still
+  produced the right file.
+
+The report must contain twelve expected tests, **six of them in the `firefox`
+project and six in `chromium`**, and zero skipped, unexpected, or flaky ones.
+The per-project floors are what make "Firefox ran" a checked fact; a total can
+be reached by one browser alone. Retries stay off: the download defect was a
+race.
+
+The same two specs then run in the runner's **stock Firefox**, driven over
+WebDriver BiDi through Playwright's `moz-firefox` channel with reduced motion
+set by the browser's own preference. That browser belongs to the runner image,
+so the step has three outcomes: no `firefox` on the runner, or one that will
+not answer Playwright, produces a warning annotation and passes; a Firefox that
+was driven and showed the app wrong fails the lane. Playwright's own Firefox
+remains the gate either way.
+
+This is Playwright's Firefox, and stock Firefox, on Linux. It is not Firefox on
+Windows following the operating system's own setting, and it is not Safari. To
+run either spec against a local stack in the Firefox you have installed:
+
+```sh
+cd e2e
+export STOCK_FIREFOX="C:/Program Files/Mozilla Firefox/firefox.exe"   # /usr/bin/firefox on Linux
+APP_URL=http://127.0.0.1:3001 npx playwright test tests/reduced-motion-mermaid-layout.spec.ts --project=stock-firefox
+```
+
+`STOCK_FIREFOX_REDUCED_MOTION=0` runs that project with reduced motion off.
 
 Before browser work begins, the required stack proves that the checkout is
 clean and exactly `GITHUB_SHA`, builds both images with the same validated

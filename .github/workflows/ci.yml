@@ -341,8 +341,8 @@ jobs:
         run: yarn install --immutable
       - name: Install pinned Playwright test runner
         run: npm --prefix e2e ci --no-audit --no-fund --ignore-scripts
-      - name: Install Chromium
-        run: npm --prefix e2e exec -- playwright install --with-deps chromium
+      - name: Install Chromium and Firefox
+        run: npm --prefix e2e exec -- playwright install --with-deps chromium firefox
       - name: Lint tracked Dockerfiles
         run: |
           set -euo pipefail
@@ -524,6 +524,114 @@ jobs:
         run: npx playwright test tests/app-opens.spec.ts tests/ops-load.spec.ts --project=chromium --reporter=list,json
       - name: Reject skipped or incomplete required browser tests
         run: yarn ci:verify-playwright --report e2e/artifacts/playwright-smoke.json --min-expected 4 --max-skipped 0
+      # FIREFOX, AND REDUCED MOTION. Every browser step in this job ran Chromium
+      # with no motion preference, and two defects reached the owner's browser
+      # with all of them green. Mermaid diagrams were drawn about twelve times too
+      # large in Firefox whenever prefers-reduced-motion was on -- which a Remote
+      # Desktop session turns on -- for weeks, and were reported fixed three times
+      # on Chromium numbers (85fdee25). File downloads over the socket's FILES_V1
+      # lane failed in Firefox on every attempt and worked in Chromium on every
+      # attempt (76e9ad0a). `firefox` had been a project in playwright.config.ts
+      # throughout; no step named it.
+      #
+      # Both specs run in Firefox AND Chromium with the same assertions, so one
+      # engine disagreeing with the other is a failure by itself. The Mermaid spec
+      # turns reduced motion on and asks the PAGE whether it took before trusting
+      # anything, then reads the layout the browser drew: natural size, painted
+      # size, arrows on their boxes, labels inside theirs. The download spec asserts
+      # the lane's OWN account of each download -- asked once, answered
+      # `completed`, every encrypted byte handed over, no HTTP download made -- and
+      # not merely that the bytes arrived: on the build before the fix, Firefox
+      # reported a 16 KiB file downloaded with the right SHA-256 while the lane had
+      # delivered none of it, because the client fell back to HTTP.
+      #
+      # Proven on this stack with each old web bundle in front of the same server,
+      # in the browser builds this job installs: at 91988013 Firefox fails the two
+      # flowcharts (natural size 3200 x 4286 where 260 x 363 is right) and passes
+      # the sequence diagram while Chromium passes all three; at a13e3e9d Firefox
+      # completes none of the three downloads over the lane and Chromium all of
+      # them. No retries: the download defect was a race.
+      #
+      # `--output` keeps the pictures and traces under e2e/artifacts, which is
+      # uploaded, instead of e2e/test-results, which the next `playwright test`
+      # in this job empties.
+      #
+      # WHAT IT IS NOT: Playwright's Firefox on Linux with reduced motion emulated
+      # is not stock Firefox on Windows following the operating system.
+      - name: Verify Mermaid layout and socket file downloads in Firefox and Chromium
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-engines.json
+        run: >-
+          npx playwright test
+          tests/reduced-motion-mermaid-layout.spec.ts tests/socket-lane-file-download.spec.ts
+          --project=firefox --project=chromium --reporter=list,json
+          --output artifacts/engine-check
+      # A total cannot say which browser ran: twelve passing tests satisfy
+      # `--min-expected 12` whether or not any of them was in Firefox. The
+      # per-project floors are what make "Firefox ran" a checked fact.
+      - name: Reject a skipped, incomplete or Firefox-less engine check
+        run: >-
+          yarn ci:verify-playwright
+          --report e2e/artifacts/playwright-engines.json
+          --min-expected 12
+          --min-expected-in firefox=6
+          --min-expected-in chromium=6
+          --max-skipped 0
+      # THE SAME TWO SPECS IN STOCK FIREFOX -- the browser people install, driven
+      # over WebDriver BiDi through Playwright's `moz-firefox` channel, with
+      # reduced motion set by the browser's own preference (over BiDi Playwright's
+      # emulation is silently ignored; the `stock-firefox` project sets
+      # ui.prefersReducedMotion instead).
+      #
+      # This step has three outcomes on purpose, because the browser is whatever
+      # the runner image ships and changes with the image, not with this
+      # repository:
+      #   - no `firefox` on PATH: a warning annotation, and the step passes;
+      #   - a firefox that will not answer Playwright (the preflight launches it
+      #     and loads nothing of ours): a warning annotation, and the step passes;
+      #   - a firefox that answers: the specs run, and a failure FAILS THE JOB.
+      # So an image that drops or changes its browser cannot block publication,
+      # and a browser that was driven and showed the app wrong can. Playwright's
+      # own Firefox, in the step above, stays the gate either way.
+      #
+      # Read, not run: the ubuntu-24.04 image installs Firefox as the apt package
+      # from ppa:mozillateam/ppa (/usr/bin/firefox), not as a snap. Run locally in
+      # the Playwright 1.64.0 image with that same package added: Firefox 157.0,
+      # six of six passing, and red on both old bundles as above.
+      - name: Run the same engine check in the runner's stock Firefox when it can be driven
+        id: stock_firefox
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-stock-firefox.json
+        run: |
+          set -euo pipefail
+          not_checked() {
+            echo "::warning title=Stock Firefox was NOT checked::$1 The Mermaid layout and socket file lane checks did not run in stock Firefox on this run. Playwright's own Firefox, earlier in this job, is the gate and did run."
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if ! command -v firefox > /dev/null; then
+            not_checked "This runner has no firefox on PATH."
+          fi
+          STOCK_FIREFOX="$(command -v firefox)"
+          export STOCK_FIREFOX
+          if ! node helpers/stock-firefox-preflight.mjs; then
+            not_checked "The firefox at ${STOCK_FIREFOX} did not answer Playwright over WebDriver BiDi."
+          fi
+          echo "ran=true" >> "$GITHUB_OUTPUT"
+          npx playwright test \
+            tests/reduced-motion-mermaid-layout.spec.ts tests/socket-lane-file-download.spec.ts \
+            --project=stock-firefox --reporter=list,json \
+            --output artifacts/stock-firefox-check
+      - name: Reject a skipped or incomplete stock Firefox check
+        if: steps.stock_firefox.outputs.ran == 'true'
+        run: >-
+          yarn ci:verify-playwright
+          --report e2e/artifacts/playwright-stock-firefox.json
+          --min-expected 6
+          --min-expected-in stock-firefox=6
+          --max-skipped 0
       - name: Verify MariaDB backup and restore
         run: yarn ops:backup-restore
       - name: Verify image and live-container hardening

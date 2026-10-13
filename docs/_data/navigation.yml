@@ -1005,6 +1005,8 @@
           url: /ci-production-gates.html
         - title: Required lanes
           url: /ci-production-gates.html#required-lanes
+        - title: Firefox and reduced motion
+          url: /ci-production-gates.html#firefox-and-reduced-motion
         - title: Realtime proofs
           items:
             - title: Realtime proofs overview

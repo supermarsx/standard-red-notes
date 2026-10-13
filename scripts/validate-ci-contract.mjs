@@ -34,6 +34,12 @@ export const CI_CONTRACT_FILES = Object.freeze([
   // pinned here alongside the step.
   "e2e/tests/grpc-auth-session.spec.ts",
   "e2e/helpers/session.ts",
+  // The Firefox checks, for the same reason: a step that still runs a spec which
+  // has stopped asking the question is green and worthless. What each spec must
+  // keep asking is pinned beside the step that runs it.
+  "e2e/playwright.config.ts",
+  "e2e/tests/reduced-motion-mermaid-layout.spec.ts",
+  "e2e/tests/socket-lane-file-download.spec.ts",
 ]);
 
 // Both aggregates are `yarn workspaces foreach ... run lint`, which SKIPS a
@@ -1402,6 +1408,80 @@ export function validateCiContract(files) {
       2,
       "gRPC sign-in report written and then verified",
     ],
+    // THE FIREFOX CHECKS. Every browser step in this job ran Chromium with no
+    // motion preference while two defects reached the owner's Firefox: Mermaid
+    // diagrams laid out twelve times too large under reduced motion, and socket
+    // file downloads that failed in Firefox alone. `firefox` was a declared
+    // Playwright project the whole time and no step named it, which is the
+    // shape these rules close. They are counts on the block with its comments
+    // removed, not presence: this file's presence rules read comments too, and
+    // a step that has been commented out still "contains" every word of itself.
+    [
+      "playwright install --with-deps chromium firefox",
+      1,
+      "installation of Playwright's Firefox beside Chromium",
+    ],
+    [
+      "--project=firefox --project=chromium --reporter=list,json",
+      1,
+      "engine check in both Firefox and Chromium",
+    ],
+    [
+      // Once in Playwright's Firefox and Chromium, once in stock Firefox. A
+      // step that kept its name and its report but lost a spec would satisfy
+      // every other rule here.
+      "tests/reduced-motion-mermaid-layout.spec.ts tests/socket-lane-file-download.spec.ts",
+      2,
+      "Mermaid layout and socket file lane specs, together, in the engine check and in the stock Firefox check",
+    ],
+    [
+      // Written by the run, read by the verifier. Either half alone is a check
+      // nobody reads or a verifier pointed at a file no step writes.
+      "playwright-engines.json",
+      2,
+      "Firefox and Chromium engine report written and then verified",
+    ],
+    [
+      // A total cannot say which browser ran: twelve passing tests satisfy
+      // `--min-expected 12` with none of them in Firefox. These two floors are
+      // what make "Firefox ran" a checked fact rather than a flag on a command.
+      "--min-expected-in firefox=6",
+      1,
+      "floor on the engine tests that passed in Firefox",
+    ],
+    [
+      "--min-expected-in chromium=6",
+      1,
+      "floor on the engine tests that passed in Chromium",
+    ],
+    [
+      "--project=stock-firefox --reporter=list,json",
+      1,
+      "engine check in the runner's stock Firefox",
+    ],
+    [
+      // What lets that step fail the job at all. The browser is whatever the
+      // runner image ships; without the preflight the only safe options are to
+      // ignore its failures or to let an image update block publication.
+      "node helpers/stock-firefox-preflight.mjs",
+      1,
+      "preflight that tells a stock Firefox that cannot be driven from one that shows the app wrong",
+    ],
+    [
+      "playwright-stock-firefox.json",
+      2,
+      "stock Firefox engine report written and then verified",
+    ],
+    [
+      "if: steps.stock_firefox.outputs.ran == 'true'",
+      1,
+      "stock Firefox report assertion bound to the check having run",
+    ],
+    [
+      "--min-expected-in stock-firefox=6",
+      1,
+      "floor on the engine tests that passed in stock Firefox",
+    ],
     ["github.event_name == 'push'", 3, "main-push archive event guard"],
     ["github.ref == 'refs/heads/main'", 3, "main branch archive guard"],
     [
@@ -1492,6 +1572,36 @@ export function validateCiContract(files) {
   ) {
     errors.push(
       `${file}: container-smoke must assert the live gRPC proxy configuration, then sign in through the browser, then reject a skipped sign-in, all inside the gRPC phase and before publication`,
+    );
+  }
+
+  // The engine check needs the stack, its verifier has to follow it or a run
+  // that executed nothing reads green, and the stock Firefox pair comes after
+  // BOTH: Playwright's own Firefox is the gate, and a step that may fail on a
+  // runner-supplied browser must not be able to stop the gate from reporting.
+  const stackStartIndex = containerSmokeBlock.indexOf("Start disposable stack");
+  const engineCheckIndex = containerSmokeBlock.indexOf(
+    "Verify Mermaid layout and socket file downloads in Firefox and Chromium",
+  );
+  const engineVerifyIndex = containerSmokeBlock.indexOf(
+    "Reject a skipped, incomplete or Firefox-less engine check",
+  );
+  const stockCheckIndex = containerSmokeBlock.indexOf(
+    "Run the same engine check in the runner's stock Firefox when it can be driven",
+  );
+  const stockVerifyIndex = containerSmokeBlock.indexOf(
+    "Reject a skipped or incomplete stock Firefox check",
+  );
+  if (
+    stackStartIndex < 0 ||
+    engineCheckIndex <= stackStartIndex ||
+    engineVerifyIndex <= engineCheckIndex ||
+    stockCheckIndex <= engineVerifyIndex ||
+    stockVerifyIndex <= stockCheckIndex ||
+    identityIndex <= stockVerifyIndex
+  ) {
+    errors.push(
+      `${file}: container-smoke must start the stack, run the Firefox and Chromium engine check, reject an incomplete one, and only then run and verify the stock Firefox check, all before publication`,
     );
   }
 
@@ -2208,6 +2318,139 @@ export function validateCiContract(files) {
       description,
     );
   }
+
+  // THE FIREFOX CHECKS ARE ONLY WORTH THEIR RUNTIME WHILE THEY ASK THE QUESTIONS
+  // THAT WERE MISSED. Each fragment below is one of those questions, and each
+  // was shown to matter on a real build before it was pinned here.
+  //
+  // The Mermaid defect needed reduced motion to be ON, and every measurement
+  // that declared it fixed was taken in a browser that was not in that mode. So
+  // the spec has to turn the mode on AND ask the page whether it took: over
+  // WebDriver BiDi the runner's option is silently ignored, and the page-side
+  // question is the only thing that noticed.
+  const mermaidLayoutSpecPath =
+    "e2e/tests/reduced-motion-mermaid-layout.spec.ts";
+  const mermaidLayoutSpec = files.get(mermaidLayoutSpecPath) ?? "";
+  for (const [fragment, description] of [
+    ["reducedMotion: 'reduce'", "reduced motion turned on for the page"],
+    [
+      "matchMedia('(prefers-reduced-motion: reduce)').matches",
+      "question to the page whether reduced motion is really on",
+    ],
+    [
+      "expect(motion.reduce,",
+      "assertion that the page is in reduced-motion mode",
+    ],
+    [
+      "expect.soft(layout.viewBox.w,",
+      "assertion on the diagram's natural width",
+    ],
+    [
+      "expect.soft(layout.viewBox.h,",
+      "assertion on the diagram's natural height",
+    ],
+    ["expect.soft(layout.scale,", "assertion on the painted scale"],
+    ["expect.soft(arrow.endGap,", "assertion that each arrow ends on a box"],
+    [
+      "expect.soft(label.spill,",
+      "assertion that each label fits the slot sized for it",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      mermaidLayoutSpecPath,
+      mermaidLayoutSpec,
+      fragment,
+      description,
+    );
+  }
+
+  // The download defect was invisible to "the right bytes arrived": the client
+  // falls back to HTTP when the lane delivers nothing, so on the broken build a
+  // 16 KiB file came back with the right SHA-256 while the lane had carried
+  // none of it. The lane's OWN outcome and byte count are the predicate; the
+  // bytes are only the last line of it.
+  const fileLaneSpecPath = "e2e/tests/socket-lane-file-download.spec.ts";
+  const fileLaneSpec = files.get(fileLaneSpecPath) ?? "";
+  for (const [fragment, description] of [
+    [
+      "expect.soft(lane.outcome,",
+      "assertion on the lane's own outcome for each download",
+    ],
+    ["toBe('completed')", "requirement that the lane answered completed"],
+    [
+      ".soft(lane.deliveredBytes,",
+      "assertion that the lane delivered every encrypted byte",
+    ],
+    [
+      ".toBe(lane.declaredSize)",
+      "comparison of the delivered bytes with the size that was asked for",
+    ],
+    [
+      "expect.soft(httpDownloads.slice(before),",
+      "assertion that no HTTP download stood in for the lane",
+    ],
+    [
+      "expect.soft(download.sha256,",
+      "comparison of the downloaded bytes with the uploaded ones",
+    ],
+    [
+      ".poll(() => fileLaneNegotiated(reader.page),",
+      "requirement that the lane was negotiated, as a failure and not a skip",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      fileLaneSpecPath,
+      fileLaneSpec,
+      fragment,
+      description,
+    );
+  }
+
+  // Neither spec may be skipped for an engine or marked as expected to fail: a
+  // skip here is how "Firefox is covered" becomes false with every step green.
+  // (The verifier's --max-skipped 0 catches a skip at run time; this catches it
+  // in review.)
+  for (const [specPath, spec] of [
+    [mermaidLayoutSpecPath, mermaidLayoutSpec],
+    [fileLaneSpecPath, fileLaneSpec],
+  ]) {
+    for (const marker of [
+      "test.skip(",
+      "test.fixme(",
+      "test.fail(",
+      ".only(",
+    ]) {
+      if (spec.includes(marker)) {
+        errors.push(
+          `${specPath}: must not use ${marker.slice(0, -1)}, which would take the check out of an engine while its CI step stays green`,
+        );
+      }
+    }
+  }
+
+  // No retries, anywhere these run. The download defect was a race, and a retry
+  // is how a race is reported as flakiness and then as green. The verifier
+  // refuses a `flaky` outcome; this refuses the setting that produces one.
+  const playwrightConfig = files.get("e2e/playwright.config.ts") ?? "";
+  requireFragment(
+    errors,
+    "e2e/playwright.config.ts",
+    playwrightConfig,
+    "retries: 0,",
+    "zero-retry Playwright configuration",
+  );
+  // And the stock Firefox project has to keep setting the mode by preference:
+  // without it that project runs with reduced motion off on a runner, and only
+  // the spec's first test would say so.
+  requireFragment(
+    errors,
+    "e2e/playwright.config.ts",
+    playwrightConfig,
+    "firefoxUserPrefs: { 'ui.prefersReducedMotion': STOCK_FIREFOX_REDUCED_MOTION }",
+    "reduced motion set by preference in the stock Firefox project",
+  );
 
   return errors;
 }
