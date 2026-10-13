@@ -14,6 +14,7 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { useLexicalEditable } from '@lexical/react/useLexicalEditable'
 import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import Icon from '@/Components/Icon/Icon'
 import {
@@ -838,6 +839,39 @@ function MermaidComponent({
     setPendingTemplateId(null)
   }, [pendingTemplateId, applyTemplate])
 
+  // --- The Build control ---------------------------------------------------
+  // The builder had ONE way in: click the picture, which selects the block,
+  // which makes a "Mermaid" tab appear on the editor toolbar, and press
+  // "Builder" there. Nothing on the diagram said it existed; somebody typing
+  // the diagram's text never selects the block at all (see the click handler
+  // above); and a collapsed or floating toolbar hides that tab's commands. So
+  // the block carries the door itself.
+  //
+  // It is a toggle on the SAME stored value the toolbar's Source cluster
+  // writes — `viewMode` — so the two are one setting seen twice, not two
+  // settings. Closing the builder from here goes back to the mode it was
+  // opened from, which is the one thing a bare `viewMode` cannot say.
+  //
+  // Only in a note that can be edited: the builder is an editing surface, and
+  // this button writes to the note. A locked note and the public share page
+  // show the diagram and its text.
+  const isEditable = useLexicalEditable()
+  const modeBeforeBuilderRef = useRef<MermaidViewMode>(DEFAULT_MERMAID_VIEW_MODE)
+  useEffect(() => {
+    if (viewMode !== 'graphical') {
+      modeBeforeBuilderRef.current = viewMode
+    }
+  }, [viewMode])
+  const toggleBuilder = useCallback(() => {
+    const next: MermaidViewMode = viewMode === 'graphical' ? modeBeforeBuilderRef.current : 'graphical'
+    editor.update(() => {
+      const node = $getNodeByKey(nodeKey)
+      if ($isMermaidNode(node)) {
+        node.setViewMode(next)
+      }
+    })
+  }, [editor, nodeKey, viewMode])
+
   const showCode = viewMode === 'split' || viewMode === 'code'
   // The BUILDER SHOWS THE DIAGRAM. `graphical` used to be the one mode with no
   // preview at all, so the "visual" builder was a blind form: you edited nodes
@@ -860,8 +894,9 @@ function MermaidComponent({
       // on a block narrower than the column, which is the only case with slack.
       style={{ width, maxWidth: '100%', ...mermaidAlignmentStyle(settings.alignment) }}
     >
-      {/* THE CHART'S OWN TOP BAR — the block's identity, plus the two actions on
-          its SOURCE: pick a template, re-render. No configuration. Every mermaid
+      {/* THE CHART'S OWN TOP BAR — the block's identity, plus the three actions
+          on its SOURCE: build it instead of typing it, pick a template,
+          re-render. No configuration. Every mermaid
           setting now has exactly ONE home, the editor toolbar's Mermaid section
           (ToolbarPlugin), which appears while the diagram is selected; the user
           asked for it not to be offered twice. The shared control definitions
@@ -875,6 +910,26 @@ function MermaidComponent({
       >
         <span className="font-semibold">Mermaid diagram</span>
         <div className="flex flex-wrap items-center gap-2">
+          {isEditable ? (
+            <button
+              type="button"
+              className={
+                'border-border flex items-center gap-1 rounded border px-2 py-0.5 ' +
+                (showGraphical ? 'bg-info text-info-contrast' : 'text-foreground hover:bg-contrast')
+              }
+              data-mermaid-build-toggle="true"
+              aria-pressed={showGraphical}
+              onClick={toggleBuilder}
+              title={
+                showGraphical
+                  ? 'Close the builder and go back to the diagram’s text'
+                  : 'Build this diagram from boxes and links instead of typing its text'
+              }
+            >
+              <Icon type="draw" size="small" />
+              Build
+            </button>
+          ) : null}
           <label className="flex items-center gap-1">
             Templates
             <select
