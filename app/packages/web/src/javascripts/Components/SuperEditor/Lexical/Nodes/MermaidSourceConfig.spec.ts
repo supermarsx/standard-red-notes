@@ -871,15 +871,74 @@ describe('what a value is written as', () => {
       'é ü 日本',
     ]
     for (const value of awkward) {
-      const text = patched(FLOW, [set('themeVariables.fontFamilyProbe', value)])
+      const text = patched(FLOW, [set('sequence.awkwardProbe', value)])
       expect([value, valueOfRaw(text)]).toEqual([value, value])
     }
   })
 
   const valueOfRaw = (text: string) =>
-    listMermaidFrontmatterConfig(readMermaidSourceConfig(text)).find(
-      (item) => item.key === 'themeVariables.fontFamilyProbe',
-    )?.value
+    listMermaidFrontmatterConfig(readMermaidSourceConfig(text)).find((item) => item.key === 'sequence.awkwardProbe')
+      ?.value
+
+  /**
+   * Mermaid has two filters of its own on what a diagram's text may set, and a
+   * value either one removes would sit in the text looking like a setting and
+   * do nothing. The writer refuses to produce one; the reader says "unknown"
+   * for one somebody typed. That these ARE mermaid's filters is checked against
+   * the library, character by character, in scripts/MermaidConfigContract.mjs.
+   */
+  describe('a value mermaid would throw away', () => {
+    it('is not written into a theme variable: only letters, digits, spaces and " # % ( ) , . ; survive there', () => {
+      for (const value of ['calc(1px + 2px)', 'a_b', 'a-b', "it's", 'é', 'var(--x)', '12px!', '']) {
+        const refusal = refusalOf(FLOW, [set('themeVariables.fontSize', value)])
+        expect([value, refusal.code, refusal.key]).toEqual([value, 'value-mermaid-discards', 'themeVariables.fontSize'])
+        expect(refusal.message).toContain('Nothing was changed')
+      }
+    })
+
+    it('IS written when it is a value mermaid keeps', () => {
+      for (const value of ['20px', '#ffcc00', 'rgb(1, 2, 3)', '50%', 'Trebuchet MS', 'hsl(10, 20%, 30%)']) {
+        const text = patched(FLOW, [set('themeVariables.primaryColor', value)])
+        expect([value, valueOf(text, 'themeVariables', 'primaryColor')]).toEqual([
+          value,
+          { state: 'set', value, from: 'frontmatter', line: 4 },
+        ])
+      }
+    })
+
+    it('is not held to the theme-variable rule anywhere else', () => {
+      expect(patched(FLOW, [set('theme', 'neo-dark')])).toContain('  theme: neo-dark')
+      expect(patched(FLOW, [set('gantt.axisFormat', '%Y-%m-%d')])).toContain('    axisFormat: "%Y-%m-%d"')
+    })
+
+    it('is not written for ANY option when it holds an angle bracket or a data URL', () => {
+      for (const [key, value] of [
+        ['theme', '<forest>'],
+        ['look', 'a>b'],
+        ['flowchart.curve', 'url(data:x)'],
+        ['themeVariables.fontSize', '12px<'],
+      ]) {
+        expect([key, refusalOf(FLOW, [set(key, value)]).code]).toEqual([key, 'value-mermaid-discards'])
+      }
+    })
+
+    it('is reported as unknown, never as the diagram’s setting, when somebody typed it', () => {
+      const text = fm(
+        'config:\n  theme: "<forest>"\n  themeVariables:\n    fontSize: "calc(1px + 2px)"\n    primaryColor: "#ffcc00"',
+      )
+      expect(valueOf(text, 'theme')).toEqual({
+        state: 'unknown',
+        reason: 'Line 3 gives "theme" a value mermaid discards.',
+      })
+      expect(valueOf(text, 'themeVariables', 'fontSize').state).toBe('unknown')
+      expect(valueOf(text, 'themeVariables', 'primaryColor')).toMatchObject({ state: 'set', value: '#ffcc00' })
+    })
+
+    it('never concerns a number or a boolean, which mermaid does not filter', () => {
+      expect(patched(FLOW, [set('themeVariables.fontSize', 20)])).toContain('    fontSize: 20')
+      expect(patched(FLOW, [set('themeVariables.darkMode', true)])).toContain('    darkMode: true')
+    })
+  })
 
   it('will not write a change that is not one', () => {
     for (const change of [

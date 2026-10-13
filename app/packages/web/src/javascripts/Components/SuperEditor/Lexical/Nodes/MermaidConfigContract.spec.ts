@@ -41,6 +41,10 @@ const EXPECTED_CHECKS = [
   'every control and every preset, on every kind, leaves a diagram mermaid reads as chosen',
   'still true of this mermaid: the class renderer takes its spacing from the state group',
   'still true of this mermaid: the sequence renderer ignores messageMargin and its own three font sizes',
+  'a string is written so that mermaid reads the identical string back, however awkward',
+  'still true of this mermaid: a bare true, number or null is NOT a string to it',
+  'the characters mermaid keeps in a theme variable are exactly the ones this app says it keeps',
+  'still true of this mermaid: an angle bracket or a data URL in ANY option’s value deletes the option',
 ]
 
 let status: number | null = null
@@ -120,6 +124,17 @@ describe('the installed mermaid, asked what a diagram’s own configuration mean
     expect(counts.sampleKinds).toBe(18)
     expect(counts.controlsApplied).toBeGreaterThanOrEqual(176)
     expect(counts.controlsUnavailable).toBeGreaterThan(0)
+    // Every awkward spelling of a string, for every string-typed key: read back
+    // identical, or refused because mermaid would discard it — and SOME written
+    // bare, or the check would only show that quoting works.
+    expect(counts.awkwardStrings).toBeGreaterThanOrEqual(71)
+    expect(counts.awkwardReadBack).toBeGreaterThanOrEqual(394)
+    expect(counts.awkwardRefused).toBeGreaterThan(0)
+    expect(counts.writtenBare).toBeGreaterThanOrEqual(12)
+    // The theme-variable filter, one character at a time: some kept, some not.
+    expect(counts.themeCharactersProbed).toBeGreaterThanOrEqual(101)
+    expect(counts.themeCharactersKept).toBeGreaterThan(60)
+    expect(counts.themeCharactersKept).toBeLessThan(counts.themeCharactersProbed)
   })
 
   it('says which mermaid and which Node it judged', () => {

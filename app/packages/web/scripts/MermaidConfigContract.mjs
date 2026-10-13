@@ -95,6 +95,7 @@ const FLOW = lines('flowchart LR', '  A[Alpha] -->|feeds| B[Beta]')
 const SEQUENCE = lines('sequenceDiagram', '  Alice->>Bob: Hello', '  Bob-->>Alice: Hi')
 const BACKSLASH = String.fromCharCode(92)
 const TAB = String.fromCharCode(9)
+const BACKTICK = String.fromCharCode(96)
 
 /**
  * What mermaid takes from a text, asked the way the app asks: configured as
@@ -751,6 +752,162 @@ await check(
       'the catalogue no longer writes the root fontSize for a sequence diagram',
     )
     return 'text size is the root `fontSize`; spacing is `actorMargin` and `boxMargin`'
+  },
+)
+
+// ===========================================================================
+// 4. A string is written so that mermaid reads the identical string back.
+// ===========================================================================
+
+/**
+ * Every spelling a YAML reader could take for something other than the string
+ * it is: the booleans and nulls, each form of number, the YAML 1.1 words,
+ * padding, and a value that starts with (or contains) each YAML indicator.
+ * A simple word is written BARE by this app; these must not be.
+ */
+const AWKWARD_STRINGS = [
+  ...['true', 'false', 'True', 'False', 'TRUE', 'FALSE', 'null', 'Null', 'NULL', '~'],
+  ...['20', '-3', '0', '1e3', '1E3', '0x10', '0o17', '0b11', '.5', '5.', '+5', '1_000', '012', '.inf', '-.inf', '.NaN'],
+  ...['yes', 'no', 'on', 'off', 'y', 'n', 'Yes', 'NO', 'On', 'OFF', 'Y', 'N'],
+  ...[' forest', 'forest ', ' ', '  padded  '],
+  ...['- x', '? x', ': x', '# x', 'x # y', 'x: y', 'x:', '[x]', '{x}', '&x', '*x', '!x', '|', '>-', '%x', '@x'],
+  ...[`${BACKTICK}x${BACKTICK}`, '"x"', "'x'", "x'y", 'a,b', `a${BACKSLASH}b`, '---', '...', 'é ü'],
+  // And the plain words, which ARE written bare: the control that this is not
+  // a test of "everything is quoted".
+  ...['forest', 'handDrawn', 'neo-dark', 'catmullRom'],
+]
+
+await check('a string is written so that mermaid reads the identical string back, however awkward', async () => {
+  const stringKeys = Catalog.MERMAID_CONFIG_CATALOG.filter((entry) => entry.type.kind !== 'number')
+  assert(stringKeys.length >= 7, `only ${stringKeys.length} string keys in the catalogue`)
+  let readBack = 0
+  let refused = 0
+  let bare = 0
+  for (const entry of stringKeys) {
+    const name = entry.path.join('.')
+    for (const value of AWKWARD_STRINGS) {
+      const result = SourceConfig.patchMermaidSourceConfig(FLOW, [{ path: entry.path, value }])
+      if (!SourceConfig.mermaidKeepsConfigValue(entry.path, value)) {
+        // Mermaid would throw this value away, so it must not be written at all.
+        assert(
+          !result.ok && result.refusal.code === 'value-mermaid-discards',
+          `${name} = ${JSON.stringify(value)}: written although mermaid discards it`,
+        )
+        refused++
+        continue
+      }
+      assert(result.ok, `${name} = ${JSON.stringify(value)}: refused (${result.refusal?.code})`)
+      const taken = await mermaidReads(result.text)
+      assert(taken !== null, `${name} = ${JSON.stringify(value)}: mermaid rejects ${JSON.stringify(result.text)}`)
+      const got = at(taken, entry.path)
+      assert(
+        typeof got === 'string' && got === value,
+        `${name}: wrote the string ${JSON.stringify(value)}, mermaid read ${typeof got} ${JSON.stringify(got)} from ${JSON.stringify(result.text)}`,
+      )
+      if (result.text.includes(`: ${value}\n`)) {
+        bare++
+      }
+      readBack++
+    }
+  }
+  // The plain words went out bare — otherwise this proves only that quoting works.
+  assert(bare >= stringKeys.length, `only ${bare} values were written bare`)
+  counts.awkwardStrings = AWKWARD_STRINGS.length
+  counts.awkwardReadBack = readBack
+  counts.awkwardRefused = refused
+  counts.writtenBare = bare
+  return `${stringKeys.length} keys x ${AWKWARD_STRINGS.length} values: ${readBack} read back identical (${bare} of them bare), ${refused} refused because mermaid discards them`
+})
+
+await check('still true of this mermaid: a bare true, number or null is NOT a string to it', async () => {
+  // What the check above guards against. If mermaid's YAML reader ever took
+  // these for strings, quoting them would be ceremony.
+  const typed = {}
+  for (const bareWord of ['true', '20', '1e3', '0x10', '.5', '~', 'null']) {
+    const taken = await mermaidReads(`---\nconfig:\n  theme: ${bareWord}\n---\n${FLOW}`)
+    typed[bareWord] = taken === null ? 'rejected' : taken.theme === undefined ? 'dropped' : typeof taken.theme
+  }
+  for (const [bareWord, type] of Object.entries(typed)) {
+    assert(type !== 'string', `mermaid now reads a bare ${bareWord} as a string`)
+  }
+  // And the YAML 1.1 words, which its reader does NOT type: recorded, so the
+  // day that changes is visible here.
+  const yes = await mermaidReads(`---\nconfig:\n  theme: yes\n---\n${FLOW}`)
+  return `${JSON.stringify(typed)}; bare yes reads as ${typeof yes?.theme}`
+})
+
+// ===========================================================================
+// 5. What mermaid throws away is what this app says it throws away.
+// ===========================================================================
+
+await check(
+  'the characters mermaid keeps in a theme variable are exactly the ones this app says it keeps',
+  async () => {
+    // Written by hand, past the writer's own refusal, so that mermaid decides.
+    const probe = (value) => `---\nconfig:\n  themeVariables:\n    fontSize: ${JSON.stringify(value)}\n---\n${FLOW}`
+    const characters = []
+    for (let code = 32; code <= 126; code++) {
+      characters.push(String.fromCharCode(code))
+    }
+    characters.push('é', 'ß', '–', '’', '日', ' ')
+    let kept = 0
+    const disagreements = []
+    for (const character of characters) {
+      const value = `12px${character}`
+      const taken = await mermaidReads(probe(value))
+      assert(taken !== null, `mermaid rejects a theme variable containing ${JSON.stringify(character)}`)
+      const mermaidKeeps = taken.themeVariables?.fontSize === value
+      const appSays = SourceConfig.mermaidKeepsConfigValue(['themeVariables', 'fontSize'], value)
+      if (mermaidKeeps !== appSays) {
+        disagreements.push(
+          `${JSON.stringify(character)}: mermaid ${mermaidKeeps ? 'keeps' : 'discards'}, the app says ${appSays ? 'keeps' : 'discards'}`,
+        )
+      }
+      kept += mermaidKeeps ? 1 : 0
+      // And the reader then never reports a discarded value as the setting.
+      const mine = SourceConfig.readMermaidConfigValue(SourceConfig.readMermaidSourceConfig(probe(value)), [
+        'themeVariables',
+        'fontSize',
+      ])
+      assert(
+        mermaidKeeps ? mine.state === 'set' && mine.value === value : mine.state === 'unknown',
+        `${JSON.stringify(character)}: the reader says ${JSON.stringify(mine)}`,
+      )
+    }
+    assert(disagreements.length === 0, disagreements.join('; '))
+    assert(kept > 60 && kept < characters.length, `mermaid kept ${kept} of ${characters.length} characters`)
+    counts.themeCharactersProbed = characters.length
+    counts.themeCharactersKept = kept
+    return `${characters.length} characters probed, mermaid keeps ${kept}`
+  },
+)
+
+await check(
+  'still true of this mermaid: an angle bracket or a data URL in ANY option’s value deletes the option',
+  async () => {
+    for (const [path, value] of [
+      [['theme'], '<forest>'],
+      [['look'], 'a>b'],
+      [['flowchart', 'curve'], 'url(data:x)'],
+    ]) {
+      const name = path.join('.')
+      assert(!SourceConfig.mermaidKeepsConfigValue(path, value), `the app says mermaid keeps ${name} = ${value}`)
+      const refused = SourceConfig.patchMermaidSourceConfig(FLOW, [{ path, value }])
+      assert(!refused.ok && refused.refusal.code === 'value-mermaid-discards', `${name} = ${value} was written`)
+      const yaml =
+        path.length === 1
+          ? `  ${path[0]}: ${JSON.stringify(value)}`
+          : `  ${path[0]}:\n    ${path[1]}: ${JSON.stringify(value)}`
+      const taken = await mermaidReads(`---\nconfig:\n${yaml}\n---\n${FLOW}`)
+      assert(
+        taken !== null && at(taken, path) === undefined,
+        `mermaid now keeps ${name} = ${value}: ${JSON.stringify(taken)}`,
+      )
+    }
+    // The same characters elsewhere in a value are fine.
+    const fine = await mermaidReads(`---\nconfig:\n  theme: "url(x)"\n---\n${FLOW}`)
+    assert(fine?.theme === 'url(x)', 'mermaid now deletes a plain url()')
+    return 'three options, each deleted by mermaid and refused by the writer'
   },
 )
 

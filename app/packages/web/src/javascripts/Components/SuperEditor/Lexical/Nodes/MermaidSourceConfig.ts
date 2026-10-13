@@ -78,6 +78,7 @@ export type MermaidConfigRefusalCode =
   | 'key-holds-a-mapping'
   | 'directive-sets-key'
   | 'invalid-change'
+  | 'value-mermaid-discards'
 
 export type MermaidConfigRefusal = {
   code: MermaidConfigRefusalCode
@@ -670,18 +671,36 @@ function directiveValue(
  * 11.17.2): a value with any character outside this set is replaced by an empty
  * string before it is used. So `fontSize: "calc(1px + 2px)"` is in the text and
  * sets nothing, and reporting it as the diagram's font size would be wrong.
+ *
+ * THE ONE COPY of that set in this app. The reader uses it to say "mermaid
+ * discards this" instead of reporting a value that sets nothing; the writer
+ * uses it to refuse to write one; and `scripts/MermaidConfigContract.mjs` holds
+ * it to the installed library character by character, because an upgrade can
+ * move it.
  */
 const THEME_VARIABLE_MERMAID_KEEPS = /^[\d "#%(),.;A-Za-z]+$/
+
+/**
+ * Would mermaid keep this value for this key, as written? Two of its own
+ * filters say no, and only ever to a string: a theme variable with a character
+ * outside the set above is blanked, and ANY option whose value contains an
+ * angle bracket or a `url(data:` is deleted outright (`sanitize`, config.ts).
+ */
+export function mermaidKeepsConfigValue(path: MermaidConfigPath, value: MermaidConfigScalar): boolean {
+  if (typeof value !== 'string') {
+    return true
+  }
+  if (value.includes('<') || value.includes('>') || value.includes('url(data:')) {
+    return false
+  }
+  return path[0] !== 'themeVariables' || THEME_VARIABLE_MERMAID_KEEPS.test(value)
+}
 
 function asMermaidKeepsIt(
   path: MermaidConfigPath,
   reading: Extract<MermaidConfigValueReading, { state: 'set' }>,
 ): MermaidConfigValueReading {
-  if (
-    path[0] === 'themeVariables' &&
-    typeof reading.value === 'string' &&
-    !THEME_VARIABLE_MERMAID_KEEPS.test(reading.value)
-  ) {
+  if (!mermaidKeepsConfigValue(path, reading.value)) {
     return {
       state: 'unknown',
       reason: `Line ${reading.line} gives "${dotted(path)}" a value mermaid discards.`,
@@ -949,6 +968,20 @@ export function patchMermaidSourceConfig(
         refusal: refusal('invalid-change', `"${dotted(change.path)}" is not an option this panel can write.`, {
           key: dotted(change.path),
         }),
+      }
+    }
+    if (change.value !== undefined && !mermaidKeepsConfigValue(change.path, change.value)) {
+      // Written, it would sit in the diagram's text looking like a setting and
+      // do nothing: mermaid throws it away before use.
+      return {
+        ok: false,
+        refusal: refusal(
+          'value-mermaid-discards',
+          `Mermaid discards the value ${JSON.stringify(change.value)} for "${dotted(
+            change.path,
+          )}", so it would be written and then ignored. Nothing was changed.`,
+          { key: dotted(change.path) },
+        ),
       }
     }
   }
