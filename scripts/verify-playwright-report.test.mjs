@@ -287,3 +287,140 @@ test("CLI throws with every validation error listed", () => {
     },
   );
 });
+
+function projectReport(passingByProject, extraTests = []) {
+  const tests = [...extraTests];
+  for (const [projectName, count] of Object.entries(passingByProject)) {
+    for (let index = 0; index < count; index += 1) {
+      tests.push({ projectName, status: "expected", annotations: [] });
+    }
+  }
+  const count = (status) =>
+    tests.filter((entry) => entry.status === status).length;
+  return {
+    errors: [],
+    stats: {
+      expected: count("expected"),
+      skipped: count("skipped"),
+      unexpected: count("unexpected"),
+      flaky: count("flaky"),
+    },
+    suites: [{ title: "suite", specs: [{ title: "spec", tests }] }],
+  };
+}
+
+test("accepts a report in which every required project ran its share", () => {
+  const result = validatePlaywrightReport(
+    projectReport({ firefox: 6, chromium: 6 }),
+    {
+      minExpected: 12,
+      maxSkipped: 0,
+      minExpectedByProject: { firefox: 6, chromium: 6 },
+    },
+  );
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.expectedByProject, { firefox: 6, chromium: 6 });
+});
+
+test("a total reached by one browser alone does not stand in for the other", () => {
+  // The whole reason for the per-project floor: twelve passing tests, none of
+  // them in Firefox, satisfies `--min-expected 12` on its own.
+  const result = validatePlaywrightReport(projectReport({ chromium: 12 }), {
+    minExpected: 12,
+    maxSkipped: 0,
+    minExpectedByProject: { firefox: 6, chromium: 6 },
+  });
+  assert.deepEqual(result.errors, [
+    'expected at least 6 passing tests in project "firefox", found 0',
+  ]);
+  assert.deepEqual(result.expectedByProject, { firefox: 0, chromium: 12 });
+});
+
+test("only passing tests count towards a project's floor", () => {
+  const result = validatePlaywrightReport(
+    projectReport({ firefox: 5, chromium: 6 }, [
+      { projectName: "firefox", status: "unexpected", annotations: [] },
+      { projectName: "firefox", status: "flaky", annotations: [] },
+      {
+        projectName: "firefox",
+        status: "skipped",
+        annotations: [{ type: "skip", description: "not here" }],
+      },
+    ]),
+    { minExpected: 1, minExpectedByProject: { firefox: 6 } },
+  );
+  assert.deepEqual(result.errors, [
+    "expected zero unexpected tests, found 1",
+    "expected zero flaky tests, found 1",
+    'expected at least 6 passing tests in project "firefox", found 5',
+  ]);
+});
+
+test("a project name is matched whole, not by prefix", () => {
+  const result = validatePlaywrightReport(
+    projectReport({ "stock-firefox": 6 }),
+    { minExpected: 6, minExpectedByProject: { firefox: 6 } },
+  );
+  assert.deepEqual(result.errors, [
+    'expected at least 6 passing tests in project "firefox", found 0',
+  ]);
+});
+
+test("CLI takes one --min-expected-in per project and reports each count", () => {
+  const logged = [];
+  const originalLog = console.log;
+  console.log = (message) => logged.push(message);
+  try {
+    withReportFile(projectReport({ firefox: 6, chromium: 6 }), (file) =>
+      runPlaywrightReportValidation([
+        "--report",
+        file,
+        "--min-expected",
+        "12",
+        "--min-expected-in",
+        "firefox=6",
+        "--min-expected-in",
+        "chromium=6",
+        "--max-skipped",
+        "0",
+      ]),
+    );
+  } finally {
+    console.log = originalLog;
+  }
+  assert.match(
+    logged[0],
+    /^Playwright report valid: 12 expected, 0 explicitly bounded skips, 0 unexpected, 0 flaky\. Expected per required project: firefox 6, chromium 6\.$/,
+  );
+});
+
+test("CLI fails when a required project is missing from the report", () => {
+  assert.throws(
+    () =>
+      withReportFile(projectReport({ chromium: 12 }), (file) =>
+        runPlaywrightReportValidation([
+          "--report",
+          file,
+          "--min-expected",
+          "12",
+          "--min-expected-in",
+          "firefox=6",
+        ]),
+      ),
+    /- expected at least 6 passing tests in project "firefox", found 0/,
+  );
+});
+
+test("CLI rejects a malformed --min-expected-in", () => {
+  for (const value of ["firefox", "=6", "firefox=", "firefox=many"]) {
+    assert.throws(
+      () => runPlaywrightReportValidation(["--min-expected-in", value]),
+      /--min-expected-in requires/,
+      value,
+    );
+  }
+  assert.throws(
+    () => runPlaywrightReportValidation(["--min-expected-in"]),
+    /--min-expected-in requires <project>=<non-negative integer>/,
+  );
+});

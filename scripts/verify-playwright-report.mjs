@@ -46,6 +46,26 @@ export function validatePlaywrightReport(report, options = {}) {
     );
   }
 
+  // A total cannot say WHICH browser ran. A step that names two projects and
+  // loses one still produces a report, and a total that the surviving project
+  // can reach alone reads as complete — the way `firefox` sat declared in the
+  // Playwright config for months while no step ran it. Counted from the
+  // serialized tests, not from `stats`, which has no per-project breakdown.
+  const expectedByProject = {};
+  for (const [project, minimum] of Object.entries(
+    options.minExpectedByProject ?? {},
+  )) {
+    const found = tests.filter(
+      (entry) => entry.projectName === project && entry.status === "expected",
+    ).length;
+    expectedByProject[project] = found;
+    if (found < minimum) {
+      errors.push(
+        `expected at least ${minimum} passing tests in project "${project}", found ${found}`,
+      );
+    }
+  }
+
   if (options.requireExplicitSkips) {
     const implicitSkips = tests.filter(
       (entry) =>
@@ -75,7 +95,17 @@ export function validatePlaywrightReport(report, options = {}) {
   return {
     errors,
     summary: { expected, skipped, unexpected, flaky, total: outcomeCount },
+    expectedByProject,
   };
+}
+
+function parseProjectMinimum(value, flag) {
+  const separator = String(value ?? "").lastIndexOf("=");
+  const project = separator > 0 ? value.slice(0, separator) : "";
+  if (!project) {
+    throw new Error(`${flag} requires <project>=<non-negative integer>`);
+  }
+  return [project, parseNonNegativeInteger(value.slice(separator + 1), flag)];
 }
 
 function parseNonNegativeInteger(value, flag) {
@@ -96,6 +126,12 @@ function parseArgs(argv) {
       result.minExpected = parseNonNegativeInteger(argv[++index], flag);
     } else if (flag === "--max-skipped") {
       result.maxSkipped = parseNonNegativeInteger(argv[++index], flag);
+    } else if (flag === "--min-expected-in") {
+      const [project, minimum] = parseProjectMinimum(argv[++index], flag);
+      result.minExpectedByProject = {
+        ...result.minExpectedByProject,
+        [project]: minimum,
+      };
     } else if (flag === "--require-explicit-skips") {
       result.requireExplicitSkips = true;
     } else if (flag === "--help" || flag === "-h") {
@@ -111,7 +147,7 @@ export function runPlaywrightReportValidation(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     console.log(
-      "Usage: node scripts/verify-playwright-report.mjs --report <json> [--min-expected N] [--max-skipped N] [--require-explicit-skips]",
+      "Usage: node scripts/verify-playwright-report.mjs --report <json> [--min-expected N] [--min-expected-in <project>=N]... [--max-skipped N] [--require-explicit-skips]",
     );
     return null;
   }
@@ -129,9 +165,13 @@ export function runPlaywrightReportValidation(argv = process.argv.slice(2)) {
   }
 
   const summary = result.summary;
+  const perProject = Object.entries(result.expectedByProject)
+    .map(([project, found]) => `${project} ${found}`)
+    .join(", ");
   console.log(
     `Playwright report valid: ${summary.expected} expected, ${summary.skipped} explicitly bounded skips, ` +
-      `${summary.unexpected} unexpected, ${summary.flaky} flaky.`,
+      `${summary.unexpected} unexpected, ${summary.flaky} flaky.` +
+      (perProject ? ` Expected per required project: ${perProject}.` : ""),
   );
   return summary;
 }
