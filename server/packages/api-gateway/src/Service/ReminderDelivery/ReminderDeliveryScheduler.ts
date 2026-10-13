@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 import { ReminderDeliveryService } from './ReminderDeliveryService'
 
 /**
@@ -23,7 +24,7 @@ import { ReminderDeliveryService } from './ReminderDeliveryService'
 
 export interface SchedulerLogger {
   info(message: string): void
-  error(message: string): void
+  error(message: string, metadata?: Record<string, unknown>): void
 }
 
 export class ReminderDeliveryScheduler {
@@ -77,7 +78,10 @@ export class ReminderDeliveryScheduler {
         )
       }
     } catch (error) {
-      this.logger?.error(`Reminder delivery tick failed: ${(error as Error).message}`)
+      // A tick reaches the store and every provider; their messages can carry a
+      // file path, a destination or a provider's reply. The class and code are
+      // logged, and the next tick retries.
+      this.logger?.error('Reminder delivery tick failed.', safeErrorLogMetadata(error))
     } finally {
       this.running = false
     }
