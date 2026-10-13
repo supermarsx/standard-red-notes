@@ -632,6 +632,35 @@ describe('making an edit', () => {
     }
   })
 
+  it('starts from an inspection the caller already holds, and still asks mermaid about the result', async () => {
+    const asked: string[] = []
+    const counting = async (text: string): Promise<MermaidFlowReadResult> => {
+      asked.push(text)
+      return read(text)
+    }
+    const known = await inspectMermaidFlowchart(SIMPLE, read)
+    const outcome = await applyMermaidFlowEdit(SIMPLE, appendBox('  C[Three]', 'C', 'Three'), counting, known)
+    expect(outcome.ok).toBe(true)
+    // One reading, and it is of the text the edit produced.
+    expect(asked).toEqual([SIMPLE + '\n  C[Three]'])
+  })
+
+  it('does not trust an inspection of another text, or one that said the diagram cannot be edited', async () => {
+    const asked: string[] = []
+    const counting = async (text: string): Promise<MermaidFlowReadResult> => {
+      asked.push(text)
+      return read(text)
+    }
+    const other = await inspectMermaidFlowchart(src('flowchart LR', '  X --> Y'), read)
+    await applyMermaidFlowEdit(SIMPLE, appendBox('  C[Three]', 'C', 'Three'), counting, other)
+    expect(asked).toEqual([SIMPLE, SIMPLE + '\n  C[Three]'])
+    asked.length = 0
+    const refused = await inspectMermaidFlowchart(src('flowchart LR', '  A -->'), read)
+    expect(refused.ok).toBe(false)
+    await applyMermaidFlowEdit(SIMPLE, appendBox('  C[Three]', 'C', 'Three'), counting, refused)
+    expect(asked).toEqual([SIMPLE, SIMPLE + '\n  C[Three]'])
+  })
+
   it('does not ask mermaid about a result that is the text it started from', async () => {
     let asked = 0
     const counting = async (text: string): Promise<MermaidFlowReadResult> => {

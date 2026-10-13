@@ -69,12 +69,12 @@ export type MermaidSourcePiece = {
   /** For a token: the name mermaid's grammar gives it (`NODE_STRING`, `LINK`, …). */
   token?: string
   /**
-   * True when the piece does not stand for its characters one to one. Either it
+   * True when the piece does not stand for a whole token one to one. Either it
    * begins or ends inside an entity code (`#quot;`), which mermaid replaces
-   * with a longer placeholder before lexing; or it has text inside it that
-   * mermaid removed — a link token runs across line ends, so a comment line
-   * between a box and the arrow that continues its statement is INSIDE the
-   * link's piece. Such a piece is never edited.
+   * with a longer placeholder before lexing; or it is one part of a token that
+   * has text mermaid removed in the middle of it — a link token runs across
+   * line ends, so a comment line between a box and the arrow that continues its
+   * statement lies between two parts of the link. Such a piece is never edited.
    */
   irregular?: boolean
 }
@@ -176,6 +176,15 @@ type Production = {
   shape: string | null
 }
 
+/**
+ * A lexer condition, ready to run. Jison tries a condition's rules one after
+ * another and takes the first that matches; an alternation tried at a fixed
+ * position does exactly that, in one pass instead of one per rule. Each rule is
+ * a capture group of the alternation, and the rule that matched is the one
+ * whose group took part.
+ */
+type LexCondition = { pattern: RegExp; rules: number[]; groups: number[] }
+
 /** One entry of the parser's stack: a symbol, the pieces it covers, and its value. */
 export type MermaidSourceEntry = { symbol: number; first: number; last: number; value: unknown }
 
@@ -193,8 +202,8 @@ export type MermaidCompiledGrammar<Reader> = {
   productions: Production[]
   actionKind: Uint8Array
   actionTarget: Int32Array
-  rules: RegExp[]
-  conditions: Map<string, number[]>
+  /** Per lexer condition: one expression that tries its rules in order, and which capture group each rule is. */
+  conditions: Map<string, LexCondition>
   lexOperations: LexOperation[][]
   handlers: (MermaidSourceHandler<Reader> | undefined)[]
   /** Reachable productions that have neither a handler nor a place on the pass-through list. */
@@ -253,9 +262,23 @@ export function compileMermaidGrammar<Reader>(
     }
   })
 
-  const conditions = new Map<string, number[]>()
-  for (const [name, rules] of Object.entries(data.lexConditions)) {
-    conditions.set(name, rules === '' ? [] : rules.split(',').map(Number))
+  // How many capture groups a rule has of its own: an expression that also
+  // matches nothing is run on nothing, and the groups are counted.
+  const capturesIn = (body: string): number => (new RegExp(`${body}|`).exec('')?.length ?? 1) - 1
+  const conditions = new Map<string, LexCondition>()
+  for (const [name, list] of Object.entries(data.lexConditions)) {
+    const rules = list === '' ? [] : list.split(',').map(Number)
+    const groups: number[] = []
+    let next = 1
+    for (const rule of rules) {
+      groups.push(next)
+      next += 1 + capturesIn(data.lexRules[rule])
+    }
+    // Sticky, at an offset: the same match jison makes against a slice, for
+    // rules that cannot look behind their first character (the generator
+    // refuses any that could).
+    const alternation = rules.map((rule) => `(${data.lexRules[rule]})`).join('|')
+    conditions.set(name, { pattern: new RegExp(alternation === '' ? '(?!)' : alternation, 'y'), rules, groups })
   }
 
   const lexOperations = data.lexActions.map((action) =>
@@ -308,10 +331,6 @@ export function compileMermaidGrammar<Reader>(
     productions,
     actionKind,
     actionTarget,
-    // Sticky, at an offset: the same match jison makes against a slice, for
-    // rules that cannot look behind their first character (the generator
-    // refuses any that could).
-    rules: data.lexRules.map((body) => new RegExp(body, 'y')),
     conditions,
     lexOperations,
     handlers: bound,
@@ -542,17 +561,20 @@ function lex<Reader>(text: string, compiled: MermaidCompiledGrammar<Reader>): Le
     if (position >= text.length) {
       done = true
     }
-    const rules = compiled.conditions.get(stack[stack.length - 1]) ?? []
+    const condition = compiled.conditions.get(stack[stack.length - 1])
     let matchedRule = -1
     let matchedText = ''
-    for (const rule of rules) {
-      const pattern = compiled.rules[rule]
-      pattern.lastIndex = position
-      const found = pattern.exec(text)
+    if (condition) {
+      condition.pattern.lastIndex = position
+      const found = condition.pattern.exec(text)
       if (found) {
-        matchedRule = rule
         matchedText = found[0]
-        break
+        for (let index = 0; index < condition.rules.length; index++) {
+          if (found[condition.groups[index]] !== undefined) {
+            matchedRule = condition.rules[index]
+            break
+          }
+        }
       }
     }
     if (matchedRule < 0) {
@@ -777,21 +799,15 @@ export function parseMermaidSource<Reader extends MermaidSourceReader, Result>(
   // Pieces: every lexer match traced back to the characters it stands for,
   // and between them whatever mermaid took out before lexing.
   const pieces: MermaidSourcePiece[] = []
-  const tokens: { symbol: number; piece: number; value: string; stranger?: string }[] = []
+  // A token and the pieces `[first, last)` that are its characters; -1 for the end of input, which has none.
+  const tokens: { symbol: number; first: number; last: number; value: string; stranger?: string }[] = []
   let cursor = 0
   for (const match of matches) {
     if (match.symbol === EOF_SENTINEL) {
-      tokens.push({ symbol: compiled.endOfInput, piece: -1, value: '' })
+      tokens.push({ symbol: compiled.endOfInput, first: -1, last: -1, value: '' })
       continue
     }
     const isEmpty = match.until === match.at
-    const wantedStart = match.at < mapped.text.length ? mapped.from[match.at] : source.length
-    const wantedEnd = isEmpty ? wantedStart : mapped.to[match.until - 1]
-    const start = Math.max(wantedStart, cursor)
-    const end = Math.max(wantedEnd, start)
-    if (start > cursor) {
-      fillRemoved(source, pieces, removals, cursor, start)
-    }
     // A match that begins or ends part-way through a placeholder shares its
     // source characters with a neighbour; neither can be edited on its own.
     const sharesStart =
@@ -804,29 +820,58 @@ export function parseMermaidSource<Reader extends MermaidSourceReader, Result>(
       match.until < mapped.text.length &&
       mapped.from[match.until] === mapped.from[match.until - 1] &&
       mapped.to[match.until] === mapped.to[match.until - 1]
-    const piece: MermaidSourcePiece = {
-      kind: match.symbol === -1 ? 'skipped' : 'token',
-      text: source.slice(start, end),
-      start,
-      end,
+    // The characters of a match are not always next to each other in the
+    // source. A link token runs across line ends, so a comment line mermaid
+    // removed can lie INSIDE one; and the newline mermaid appends to every
+    // text joins the last real newline across whatever was removed after it.
+    // Each run of adjacent characters becomes a piece, and what was removed
+    // between two runs becomes a piece of its own between them.
+    const runs: { from: number; until: number }[] = []
+    let runStart = match.at
+    for (let index = match.at; index < match.until; index++) {
+      const isLast = index + 1 === match.until
+      const adjacent =
+        !isLast &&
+        (mapped.to[index] === mapped.from[index + 1] ||
+          (mapped.from[index] === mapped.from[index + 1] && mapped.to[index] === mapped.to[index + 1]))
+      if (!adjacent) {
+        runs.push({ from: runStart, until: index + 1 })
+        runStart = index + 1
+      }
+    }
+    if (isEmpty) {
+      runs.push({ from: match.at, until: match.at })
+    }
+    let first = -1
+    for (const run of runs) {
+      const wantedStart = run.from < mapped.text.length ? mapped.from[run.from] : source.length
+      const wantedEnd = run.until > run.from ? mapped.to[run.until - 1] : wantedStart
+      const start = Math.max(wantedStart, cursor)
+      const end = Math.max(wantedEnd, start)
+      if (start > cursor) {
+        fillRemoved(source, pieces, removals, cursor, start)
+      }
+      const piece: MermaidSourcePiece = {
+        kind: match.symbol === -1 ? 'skipped' : 'token',
+        text: source.slice(start, end),
+        start,
+        end,
+      }
+      if (match.symbol !== -1) {
+        piece.token = match.stranger ?? compiled.symbols[match.symbol]
+      }
+      if (wantedStart !== start || sharesStart || sharesEnd || runs.length > 1) {
+        piece.irregular = true
+      }
+      if (first < 0) {
+        first = pieces.length
+      }
+      pieces.push(piece)
+      cursor = end
     }
     if (match.symbol !== -1) {
-      piece.token = match.stranger ?? compiled.symbols[match.symbol]
-      tokens.push({ symbol: match.symbol, piece: pieces.length, value: match.value, stranger: match.stranger })
+      tokens.push({ symbol: match.symbol, first, last: pieces.length, value: match.value, stranger: match.stranger })
     }
-    // And a match whose characters are not next to each other in the source
-    // has text mermaid removed INSIDE it — a comment line between a box and
-    // the arrow that continues its statement on the next line.
-    let holdsRemovedText = false
-    for (let index = match.at; index + 1 < match.until && !holdsRemovedText; index++) {
-      const sameRegion = mapped.from[index] === mapped.from[index + 1] && mapped.to[index] === mapped.to[index + 1]
-      holdsRemovedText = !sameRegion && mapped.to[index] !== mapped.from[index + 1]
-    }
-    if (wantedStart !== start || sharesStart || sharesEnd || holdsRemovedText) {
-      piece.irregular = true
-    }
-    pieces.push(piece)
-    cursor = end
   }
   if (cursor < source.length) {
     if (failedAt === null) {
@@ -868,7 +913,7 @@ export function parseMermaidSource<Reader extends MermaidSourceReader, Result>(
   let next = 0
   const offsetOfToken = (index: number): number => {
     const token = tokens[Math.min(index, tokens.length - 1)]
-    return token.piece >= 0 ? pieces[token.piece].start : source.length
+    return token.first >= 0 ? pieces[token.first].start : source.length
   }
   for (;;) {
     const token = tokens[Math.min(next, tokens.length - 1)]
@@ -880,11 +925,10 @@ export function parseMermaidSource<Reader extends MermaidSourceReader, Result>(
     const kind = compiled.actionKind[cell]
     if (kind === SHIFT) {
       states.push(compiled.actionTarget[cell])
-      const piece = token.piece >= 0 ? token.piece : pieces.length
       entries.push({
         symbol: token.symbol,
-        first: piece,
-        last: token.piece >= 0 ? piece + 1 : piece,
+        first: token.first >= 0 ? token.first : pieces.length,
+        last: token.first >= 0 ? token.last : pieces.length,
         value: token.value,
       })
       next++
@@ -894,7 +938,7 @@ export function parseMermaidSource<Reader extends MermaidSourceReader, Result>(
       const production = compiled.productions[compiled.actionTarget[cell]]
       const kids = production.length > 0 ? entries.splice(entries.length - production.length) : []
       states.length -= production.length
-      const upcoming = token.piece >= 0 ? token.piece : pieces.length
+      const upcoming = token.first >= 0 ? token.first : pieces.length
       const first = kids.length > 0 ? kids[0].first : upcoming
       const last = kids.length > 0 ? kids[kids.length - 1].last : upcoming
       const handler = compiled.handlers[compiled.actionTarget[cell]]
@@ -921,7 +965,7 @@ export function parseMermaidSource<Reader extends MermaidSourceReader, Result>(
     }
     if (kind === NO_ACTION || kind === GOTO) {
       const at = offsetOfToken(next)
-      const piece = token.piece >= 0 ? pieces[token.piece] : undefined
+      const piece = token.first >= 0 ? pieces[token.first] : undefined
       const written = piece?.text.trim() ?? ''
       const shown =
         written !== ''

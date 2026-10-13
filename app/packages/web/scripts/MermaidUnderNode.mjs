@@ -57,6 +57,52 @@ export const mermaid = (await import('mermaid')).default
 export const api = mermaid.mermaidAPI
 export const mermaidVersion = require('mermaid/package.json').version
 
+/**
+ * What a contract script is built from: named checks that either pass or say
+ * why not, counts of what was actually exercised, and one line of JSON on
+ * stdout at the end for the jest spec that started the script to read.
+ */
+export function contractKit() {
+  const checks = []
+  const counts = {}
+  const check = async (name, body) => {
+    try {
+      const detail = await body()
+      checks.push({ name, ok: true, detail: detail ?? '' })
+    } catch (error) {
+      checks.push({ name, ok: false, detail: String(error?.message ?? error) })
+    }
+  }
+  /** Print each check for a person, the summary for the spec, and exit 0 only if every check passed. */
+  const finish = (extra = {}) => {
+    const failed = checks.filter((entry) => !entry.ok)
+    for (const entry of checks) {
+      console.error(`${entry.ok ? 'ok  ' : 'FAIL'} ${entry.name}${entry.detail ? ' — ' + entry.detail : ''}`)
+    }
+    console.log(
+      JSON.stringify({
+        ok: failed.length === 0,
+        mermaid: mermaidVersion,
+        node: process.version,
+        ...extra,
+        checks,
+        counts,
+      }),
+    )
+    process.exit(failed.length === 0 ? 0 : 1)
+  }
+  return { checks, counts, check, finish }
+}
+
+export const assert = (condition, message) => {
+  if (!condition) {
+    throw new Error(message)
+  }
+}
+export const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+export const quoted = (text) => JSON.stringify(text.length > 160 ? text.slice(0, 160) + '…' : text)
+export const lines = (...parts) => parts.join('\n')
+
 /** The directory the app's Mermaid sources live in, relative to this file. */
 export const NODES = '../src/javascripts/Components/SuperEditor/Lexical/Nodes'
 

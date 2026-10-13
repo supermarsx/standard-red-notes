@@ -630,13 +630,21 @@ export async function inspectMermaidFlowchart(
 /**
  * Make one edit to a diagram's text, or refuse. The text comes back changed
  * only when mermaid reads the result as exactly what the edit said it would be.
+ *
+ * `known` is an inspection the caller already holds — the builder inspects a
+ * diagram to show it, and every edit starts from the diagram shown. It is used
+ * only if it is an inspection of this very text; mermaid's reading of a large
+ * diagram is the slow half of an edit, and this is the one reading of the two
+ * that need not be taken twice. The reading AFTER the edit is always taken.
  */
 export async function applyMermaidFlowEdit(
   text: string,
   edit: MermaidFlowEdit,
   read: MermaidFlowReader = readMermaidFlowchart,
+  known?: MermaidFlowInspection,
 ): Promise<MermaidFlowEditOutcome> {
-  const inspection = await inspectMermaidFlowchart(text, read)
+  const inspection =
+    known?.ok === true && known.document.source === text ? known : await inspectMermaidFlowchart(text, read)
   if (!inspection.ok) {
     return {
       ok: false,

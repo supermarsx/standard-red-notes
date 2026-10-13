@@ -252,6 +252,35 @@ describe('the bench an operation works at', () => {
     })
   })
 
+  it('splits a token that has a comment inside it, so the comment is a piece of its own and neither half is edited', () => {
+    // Mermaid's link token takes the whitespace before it, line ends included,
+    // and the comment line is gone before the lexer runs: the one token is the
+    // newline after `A` and, two lines down, the arrow.
+    const source = src('flowchart LR', '  A', '  %% between', '    --> B')
+    const { bench, document } = benchFor(source)
+    const around = document.pieces.filter((piece) => piece.token === 'LINK' || piece.kind === 'comment')
+    expect(around.map((piece) => [piece.kind, piece.text, piece.irregular ?? false])).toEqual([
+      ['token', '\n', true],
+      ['comment', '  %% between\n', false],
+      ['token', '    --> ', true],
+    ])
+    // Either half on its own is not something to rewrite, even without the comment in the range.
+    const arrow = source.indexOf('    -->')
+    expect(bench.isClean({ start: arrow, end: arrow + 8 })).toBe(false)
+    expect(printMermaidSourceDocument(document)).toBe(source)
+  })
+
+  it('finds a comment on the last line of a text that does not end in a line ending', () => {
+    // The newline mermaid appends joins the last real one into a single token
+    // across the comment; the comment still comes out as a piece.
+    const source = src('flowchart LR', '  A --> B', '  %% the end')
+    const { document } = benchFor(source)
+    expect(document.pieces.filter((piece) => piece.kind === 'comment').map((piece) => piece.text)).toEqual([
+      '  %% the end',
+    ])
+    expect(printMermaidSourceDocument(document)).toBe(source)
+  })
+
   it('will not rewrite half of an entity code', () => {
     // Outside a label, mermaid's placeholder for `#9829;` is lexed as several
     // tokens that all stand for the same six characters.

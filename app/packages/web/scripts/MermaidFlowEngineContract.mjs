@@ -19,10 +19,13 @@
 //   node scripts/MermaidFlowEngineContract.mjs          what the gate runs
 //   node scripts/MermaidFlowEngineContract.mjs --all    every single-character deletion of every corpus text
 //
+// The operations the builder makes on a text are checked the same way by its
+// sibling, scripts/MermaidFlowEditsContract.mjs.
+//
 // The gate runs every deletion of the 37 common forms and every seventh of the
 // longer samples; --all runs all of them and takes about a minute.
 import { buildMermaidFlowGrammar } from './GenerateMermaidFlowGrammar.mjs'
-import { api, flowParser, mermaidVersion, NODES } from './MermaidUnderNode.mjs'
+import { api, assert, contractKit, flowParser, lines, NODES, quoted, same } from './MermaidUnderNode.mjs'
 
 const Grammar = await import(`${NODES}/MermaidFlowGrammar.ts`)
 const FlowDoc = await import(`${NODES}/MermaidFlowDoc.ts`)
@@ -33,23 +36,7 @@ const Corpus = await import(`${NODES}/MermaidFlowCorpus.fixture.ts`)
 const everyDeletion = process.argv.includes('--all')
 const SAMPLE_STRIDE = 7
 
-const checks = []
-const counts = {}
-const check = async (name, body) => {
-  try {
-    const detail = await body()
-    checks.push({ name, ok: true, detail: detail ?? '' })
-  } catch (error) {
-    checks.push({ name, ok: false, detail: String(error?.message ?? error) })
-  }
-}
-const assert = (condition, message) => {
-  if (!condition) {
-    throw new Error(message)
-  }
-}
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
-const quoted = (text) => JSON.stringify(text.length > 160 ? text.slice(0, 160) + '…' : text)
+const { checks, counts, check, finish } = contractKit()
 
 // ---------------------------------------------------------------------------
 // The texts: the corpus, and texts one character short of a corpus entry —
@@ -241,7 +228,6 @@ await check('printing every text gives it back, byte for byte', async () => {
 // 3. Mermaid's database, read through the app's one adapter, and the reading
 //    the builder makes of the same text.
 // ===========================================================================
-const lines = (...parts) => parts.join('\n')
 
 await check('mermaid’s flowchart database is the shape the builder’s one adapter reads', async () => {
   // Through the app's own path — MermaidRuntime's queue, then the adapter — on
@@ -460,18 +446,4 @@ await check('a text the builder reads and mermaid rejects is not editable', asyn
   return `${refused} texts: mermaid asked first, no operation run, no text returned`
 })
 
-const failed = checks.filter((entry) => !entry.ok)
-for (const entry of checks) {
-  console.error(`${entry.ok ? 'ok  ' : 'FAIL'} ${entry.name}${entry.detail ? ' — ' + entry.detail : ''}`)
-}
-console.log(
-  JSON.stringify({
-    ok: failed.length === 0,
-    mermaid: mermaidVersion,
-    node: process.version,
-    everyDeletion,
-    checks,
-    counts,
-  }),
-)
-process.exit(failed.length === 0 ? 0 : 1)
+finish({ everyDeletion })

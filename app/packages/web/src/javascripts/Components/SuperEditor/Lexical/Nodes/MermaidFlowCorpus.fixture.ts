@@ -378,6 +378,28 @@ export const MERMAID_FLOW_SAMPLES: MermaidFlowCorpusEntry[] = [
     source: lines('%%{init: {"theme":"dark"}}%%', '%%{wrap}%%', 'graph LR', '  A --> B'),
   },
   {
+    // The app locks these keys: a diagram's own text may not set raw CSS, its
+    // font or its label mode, and they are ignored when it is drawn. They stay
+    // in the text all the same, and an edit has to leave them exactly there.
+    name: 'configuration the app does not honour',
+    source: lines(
+      '---',
+      'config:',
+      '  themeCSS: ".node rect { fill: red }"',
+      '  fontFamily: "Comic Sans MS"',
+      '  htmlLabels: false',
+      '  flowchart:',
+      '    htmlLabels: false',
+      '  sequence:',
+      '    actorFontFamily: monospace',
+      '---',
+      '%%{init: {"themeCSS": ".label { color: blue }", "fontFamily": "serif"}}%%',
+      'flowchart LR',
+      '  A[One] --> B[Two]',
+      '  B --> C',
+    ),
+  },
+  {
     name: 'indented frontmatter and leading blank lines',
     source: lines('  ---', '  title: Indented', '  ---', '', '', '  flowchart LR', '    A --> B'),
   },
