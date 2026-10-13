@@ -52,6 +52,12 @@ const STATE_READY_AWARENESS_FIELD = 'srnStateReady'
 export const MAX_OUTBOUND_YJS_PENDING_OPERATIONS = 512
 export const MAX_OUTBOUND_YJS_PENDING_INPUT_BYTES = MAX_YJS_TRANSFER_BYTES
 export const MAX_AWARENESS_PLAINTEXT_BYTES = 64 * 1024
+/**
+ * Local caret/selection frames go out at most once per this interval: the first change is sent at
+ * once, later ones inside the window collapse into one trailing frame carrying the newest state. A
+ * selection drag otherwise sent a frame per mouse move; this keeps a caret within ~50 ms of real.
+ */
+export const LOCAL_AWARENESS_MIN_INTERVAL_MS = 40
 const MAX_AWARENESS_ENCODED_BYTES = Math.ceil((MAX_AWARENESS_PLAINTEXT_BYTES + 64) / 3) * 4 + 512
 export const MAX_AWARENESS_CLIENTS_PER_UPDATE = 32
 export const MAX_REMOTE_AWARENESS_CLIENTS = 64
@@ -227,6 +233,8 @@ export class EncryptedYjsProvider implements Provider {
   private pendingLocalYjsOperations = 0
   private pendingLocalYjsInputBytes = 0
   private pendingLocalAwarenessUpdate: Uint8Array | undefined
+  private lastLocalAwarenessSentAt = Number.NEGATIVE_INFINITY
+  private localAwarenessThrottleTimeout: ReturnType<typeof setTimeout> | undefined
   private localOutboundRetryTimeout: ReturnType<typeof setTimeout> | undefined
   private localOutboundRetryBlocked = false
   private localOutboundFailureAttempts = 0
@@ -987,6 +995,10 @@ export class EncryptedYjsProvider implements Provider {
       return
     }
     const update = encodeAwarenessUpdate(this.yAwareness, [localClientId])
+    if (changes.removed.includes(localClientId)) {
+      // Leaving (tab closing) is announced at once: no trailing timer survives the page.
+      this.lastLocalAwarenessSentAt = Number.NEGATIVE_INFINITY
+    }
     this.enqueueLocalAwarenessUpdate(update)
   }
 
@@ -1047,9 +1059,13 @@ export class EncryptedYjsProvider implements Provider {
       this.pendingLocalYjsOperations = 0
       this.pendingLocalYjsInputBytes = 0
     } else if (this.pendingLocalAwarenessUpdate) {
+      if (!this.localAwarenessSendDue()) {
+        return
+      }
       kind = 'awareness'
       update = this.pendingLocalAwarenessUpdate
       this.pendingLocalAwarenessUpdate = undefined
+      this.lastLocalAwarenessSentAt = Date.now()
     } else {
       return
     }
@@ -1082,6 +1098,21 @@ export class EncryptedYjsProvider implements Provider {
         this.drainLocalOutboundQueue()
       }),
     )
+  }
+
+  /** Whether the throttle window has passed; if not, arranges the one trailing send. */
+  private localAwarenessSendDue(): boolean {
+    const wait = this.lastLocalAwarenessSentAt + LOCAL_AWARENESS_MIN_INTERVAL_MS - Date.now()
+    if (wait <= 0) {
+      return true
+    }
+    if (this.localAwarenessThrottleTimeout === undefined) {
+      this.localAwarenessThrottleTimeout = setTimeout(() => {
+        this.localAwarenessThrottleTimeout = undefined
+        this.drainLocalOutboundQueue()
+      }, wait)
+    }
+    return false
   }
 
   private requeueFailedLocalYjsUpdate(
@@ -1136,6 +1167,10 @@ export class EncryptedYjsProvider implements Provider {
     if (this.localOutboundRetryTimeout !== undefined) {
       clearTimeout(this.localOutboundRetryTimeout)
       this.localOutboundRetryTimeout = undefined
+    }
+    if (this.localAwarenessThrottleTimeout !== undefined) {
+      clearTimeout(this.localAwarenessThrottleTimeout)
+      this.localAwarenessThrottleTimeout = undefined
     }
     this.localOutboundRetryBlocked = false
     this.localOutboundFailureAttempts = 0
