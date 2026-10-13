@@ -17,12 +17,14 @@ import {
   describeRevisionsRead,
   describeServerBuildCheck,
   describeSyncRound,
+  describeSyncWorkerBuildCheck,
   howToRun,
   LIVE_CHECK_IDS,
   PASSIVE_WITNESS_IDS,
   readingsFrom,
   RUNNABLE_CHECK_IDS,
   summarizeChecks,
+  SYNC_WORKER_ANNOUNCE_GRACE_MS,
   UNOBSERVED_BOARD,
   WITNESS_IDS,
   witnessFrom,
@@ -1076,5 +1078,94 @@ describe('a check that never answers', () => {
     expect(outcome.detail).toContain('That is not a refusal')
     expect(String(describeCheckTimeout(45_400).result)).toBe('no answer within 45 s')
     expect(String(describeCheckTimeout(0).result)).toBe('no answer within 1 s')
+  })
+})
+
+/**
+ * *** THE PAGE CAN BE CURRENT AND ITS WORKER NOT. *** Found in a built image:
+ * the page, the deployment marker and the readiness route all named the commit
+ * the image was built from, and the sync worker beside them had come out of a
+ * stale build cache, from before a fix that lived in it. Nothing in the pane
+ * could see it. The worker now says which build it is and this compares.
+ */
+describe('describeSyncWorkerBuildCheck', () => {
+  const reported = (revision: string) => ({ state: 'reported', revision }) as const
+
+  it('passes when the worker names the page’s own build', () => {
+    const outcome = describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: reported(NEW_BUILD) })
+
+    expect(outcome.state).toBe('pass')
+    expect(String(outcome.result)).toBe('the sync worker is the same build as this page')
+  })
+
+  it('is not working when the worker is another build, and names both', () => {
+    const outcome = describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: reported(OLD_BUILD) })
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).toBe(`the page is build ${NEW_BUILD} but its sync worker is build ${OLD_BUILD}`)
+  })
+
+  it('reads a worker that never says which build it is as a worker from before it could', () => {
+    const justStarted = describeSyncWorkerBuildCheck({
+      bundleRevision: NEW_BUILD,
+      worker: { state: 'silent', silentForMs: SYNC_WORKER_ANNOUNCE_GRACE_MS - 1 },
+    })
+    const silent = describeSyncWorkerBuildCheck({
+      bundleRevision: NEW_BUILD,
+      worker: { state: 'silent', silentForMs: SYNC_WORKER_ANNOUNCE_GRACE_MS },
+    })
+
+    // An open question for as long as a worker of this build could still be
+    // starting, and an answer after that: it does not block for ever, and it
+    // does not accuse a worker that has had no time to speak.
+    expect(justStarted.state).toBe('unknown')
+    expect(silent.state).toBe('fail')
+    expect(String(silent.result)).toBe(
+      `the page is build ${NEW_BUILD} and its sync worker did not say which build it is`,
+    )
+  })
+
+  it('is not working when the worker was built without a revision and the page was not', () => {
+    const outcome = describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: reported('') })
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).toContain('its sync worker carries no build revision')
+  })
+
+  it('has nothing to test with no worker, or on a page that carries no revision itself', () => {
+    const cases = [
+      describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: undefined }),
+      describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: { state: 'no-worker' } }),
+      describeSyncWorkerBuildCheck({ bundleRevision: '', worker: reported('') }),
+      describeSyncWorkerBuildCheck({ bundleRevision: '', worker: reported(OLD_BUILD) }),
+    ]
+
+    for (const outcome of cases) {
+      expect(outcome.state).toBe('not-applicable')
+      expect(readingOf(outcome.result)).toBe('unavailable')
+    }
+  })
+
+  it('admits a revision by shape only, so a worker cannot put text into the result', () => {
+    const planted = 'https://deploy.internal.example/?token=hunter2'
+    const outcome = describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: reported(planted) })
+
+    expect(outcome.state).toBe('fail')
+    expect(String(outcome.result)).not.toContain('hunter2')
+    expect(String(outcome.result)).not.toContain('internal.example')
+  })
+
+  it('raises one finding, not working, with what to do about an image that carries an old worker', () => {
+    const failed = {
+      id: 'sync-worker' as const,
+      ...describeSyncWorkerBuildCheck({ bundleRevision: NEW_BUILD, worker: reported(OLD_BUILD) }),
+    }
+    const block = buildChecksBlock('environment', readingsFrom({ 'sync-worker': failed }))
+    const finding = block?.findings.find((candidate) => String(candidate.code) === 'SYNC_WORKER_IS_ANOTHER_BUILD')
+
+    expect(finding?.verdict).toBe('broken')
+    expect(finding?.title).toBe('This page and its sync worker are different builds')
+    expect(finding?.remedy?.summary).toContain('Reload this tab')
+    expect(finding?.remedy?.summary).toContain('rebuild the web image without its build cache')
   })
 })

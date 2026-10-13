@@ -273,6 +273,11 @@ export type BrowserObservations = {
   shellUpdateWaiting?: boolean
   /** How many of this app's shell caches this browser holds. Absent: no Cache Storage here. */
   shellCacheCount?: number
+  /**
+   * Whose build the shell caches belong to, as against THIS page's. Absent: no
+   * Cache Storage here, or the page carries no revision to compare with.
+   */
+  shellCacheBuild?: ShellCacheBuild
   /** `prefers-reduced-motion: reduce` matches. Absent: this browser cannot be asked. */
   reducedMotion?: boolean
   notificationPermission?: string
@@ -632,13 +637,28 @@ async function observeServiceWorker(
 const SHELL_CACHE_PREFIX = 'srn-shell-'
 
 /**
- * How many of this app's shell caches this browser holds.
+ * Whose build the service worker's shell caches belong to, as against the page.
  *
- * Only the COUNT is kept. A cache name carries the build it belongs to, and the
- * name is read here solely to tell the app's own caches from anything else on
- * the origin.
+ * The service worker is a file of its own and names its cache after the build
+ * that installed it, so the cache says which build's worker has been in control.
  */
-async function observeShellCaches(runtime: BrowserRuntime, timeoutMs: number): Promise<Partial<BrowserObservations>> {
+export const SHELL_CACHE_BUILDS = ['this-build', 'another-build', 'this-build-and-older', 'none'] as const
+export type ShellCacheBuild = (typeof SHELL_CACHE_BUILDS)[number]
+
+const BUILD_REVISION = /^[0-9a-f]{40}$/
+
+/**
+ * How many of this app's shell caches this browser holds, and whose they are.
+ *
+ * Only the COUNT and a closed word are kept. A cache name carries the build it
+ * belongs to, and the name is read here solely to tell the app's own caches from
+ * anything else on the origin and this page's build from another.
+ */
+async function observeShellCaches(
+  runtime: BrowserRuntime,
+  timeoutMs: number,
+  buildRevision?: string,
+): Promise<Partial<BrowserObservations>> {
   const storage = reading(() => runtime.caches)
   const keysFn = storage.ok ? storage.value?.keys : undefined
   if (typeof keysFn !== 'function') {
@@ -650,10 +670,24 @@ async function observeShellCaches(runtime: BrowserRuntime, timeoutMs: number): P
     return {}
   }
 
-  return {
-    shellCacheCount: attempted.value.filter((name) => typeof name === 'string' && name.startsWith(SHELL_CACHE_PREFIX))
-      .length,
+  const shells = attempted.value.filter(
+    (name): name is string => typeof name === 'string' && name.startsWith(SHELL_CACHE_PREFIX),
+  )
+  if (buildRevision === undefined || !BUILD_REVISION.test(buildRevision)) {
+    return { shellCacheCount: shells.length }
   }
+
+  const mine = shells.filter((name) => name.endsWith(`-${buildRevision}`)).length
+  const shellCacheBuild: ShellCacheBuild =
+    shells.length === 0
+      ? 'none'
+      : mine === 0
+        ? 'another-build'
+        : mine === shells.length
+          ? 'this-build'
+          : 'this-build-and-older'
+
+  return { shellCacheCount: shells.length, shellCacheBuild }
 }
 
 function observeReducedMotion(runtime: BrowserRuntime): Partial<BrowserObservations> {
@@ -753,7 +787,8 @@ function platformBucket(navigatorLike: NavigatorLike | undefined): PlatformBucke
  */
 export async function observeBrowserCapabilities(
   runtime: BrowserRuntime,
-  options: { timeoutMs?: number } = {},
+  /** `buildRevision`: the commit compiled into this page, to tell its own shell cache from another build's. */
+  options: { timeoutMs?: number; buildRevision?: string } = {},
 ): Promise<BrowserObservations> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
   const navigatorLike = reading(() => runtime.navigator).value
@@ -777,7 +812,7 @@ export async function observeBrowserCapabilities(
     ...(await observeWebCrypto(runtime, timeoutMs)),
     ...(await observeStorageManager(navigatorLike, timeoutMs)),
     ...(await observeServiceWorker(navigatorLike, timeoutMs)),
-    ...(await observeShellCaches(runtime, timeoutMs)),
+    ...(await observeShellCaches(runtime, timeoutMs, options.buildRevision)),
     ...observeReducedMotion(runtime),
     webSocketPresent: booleanOf(reading(() => typeof runtime.WebSocket === 'function').value),
     workerPresent: booleanOf(reading(() => typeof runtime.Worker === 'function').value),
@@ -1781,6 +1816,40 @@ function buildPolicyBlock(
             ...absentOr(observed.shellCacheCount, 'informational'),
           }),
       note: 'How many of this app’s shell caches this browser holds. One per build, and the previous build’s is deleted when a new worker takes over — so one is the ordinary reading, none is a page that has not been cached yet, and more than one is an older shell that was not cleared. A count only: a cache’s name is read to recognise it and is never shown.',
+    }),
+    /**
+     * *** THE SERVICE WORKER IS A BUILD OF ITS OWN TOO. *** It is a separate file,
+     * it names its cache after the build that installed it, and a page of one
+     * build can go on being served by the worker of another: the new worker never
+     * installed, or has not taken over. The count above cannot tell that from the
+     * ordinary case — one cache either way.
+     */
+    diagnosticRow({
+      label: safeConstant('The service worker’s shell cache is this page’s build'),
+      ...(observed.shellCacheBuild === undefined && collected
+        ? {
+            value: safeNotAvailableHere(
+              observed.shellCacheCount === undefined
+                ? 'this page has no Cache Storage'
+                : 'this page carries no build revision to compare with',
+            ),
+            verdict: 'not-applicable' as const,
+            evidence: evidenceNotAvailableHere(
+              'There is no shell cache to read here, or the code of this page was built without a revision, so whose build a cache belongs to cannot be asked.',
+            ),
+          }
+        : {
+            value: safeEnum(observed.shellCacheBuild, SHELL_CACHE_BUILDS),
+            ...absentOr(
+              observed.shellCacheBuild,
+              observed.shellCacheBuild === 'another-build'
+                ? 'degraded'
+                : observed.shellCacheBuild === 'this-build'
+                  ? 'healthy'
+                  : 'informational',
+            ),
+          }),
+      note: 'Whose build the app shell cached by the service worker belongs to. "this-build" is the ordinary reading. "another-build" means the service worker in control of this page was installed by a different build and this build’s has not taken over: reload every open tab of the app, and if it reads the same afterwards use “Reload app and clear cached files” in General preferences, which clears program files only. "this-build-and-older" is an older cache that has not been cleared yet, and "none" is a page that has not been cached.',
     }),
   )
 

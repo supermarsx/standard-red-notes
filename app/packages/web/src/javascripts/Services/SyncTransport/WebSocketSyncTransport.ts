@@ -65,6 +65,14 @@ const SyncTransportWorker = ((SyncTransportWorkerModule as { default?: { new ():
 
 const BARRIER_TIMEOUT_MS = 5_000
 
+/** A build revision as the bundles carry it: a full commit, or empty for a build made without one. */
+const WORKER_BUILD_REVISION = /^(?:[0-9a-f]{40})?$/
+
+export type SyncWorkerBuildReading =
+  | { readonly state: 'no-worker' }
+  | { readonly state: 'silent'; readonly silentForMs: number }
+  | { readonly state: 'reported'; readonly revision: string }
+
 export type AuthenticatedSyncScopeInput = {
   applicationIdentifier: string
   host: string
@@ -473,6 +481,8 @@ function normalizeCommittedResult(result: unknown): TransportResponse | undefine
 /** Main-thread facade. The worker receives only short-lived tickets and opaque sync bodies. */
 export class WebSocketSyncTransport implements AccountSyncTransportInterface<TransportResponse> {
   private worker?: SyncWorkerLike
+  /** When the current worker was started, and the build it has said it is. */
+  private workerBuildReport?: { readonly startedAtMs: number; readonly revision?: string }
   private workerSessionScope?: string
   private readonly pending = new Map<string, PendingExecution>()
   private readonly pendingCollaboration = new Map<string, PendingCollaborationAuthorization>()
@@ -603,6 +613,26 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     this.setTransportState(this.state, reason, true)
+  }
+
+  /**
+   * Which build this tab's sync worker says it is.
+   *
+   * Three answers, kept apart because they mean different things to whoever
+   * reads them: there is no worker; there is one and it has said; there is one
+   * and it has not said for `silentForMs` — which, past the moment a worker
+   * needs to start, is a worker from before it could say anything.
+   */
+  get workerBuild(): SyncWorkerBuildReading {
+    const report = this.workerBuildReport
+    if (this.worker === undefined || report === undefined) {
+      return { state: 'no-worker' }
+    }
+    if (report.revision === undefined) {
+      return { state: 'silent', silentForMs: Math.max(0, Date.now() - report.startedAtMs) }
+    }
+
+    return { state: 'reported', revision: report.revision }
   }
 
   get transportStatus(): {
@@ -1425,6 +1455,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       worker.onmessage = (event) => void this.onWorkerMessage(event.data)
       worker.onerror = () => void this.onWorkerError()
       this.worker = worker
+      this.workerBuildReport = { startedAtMs: Date.now() }
       this.workerSessionScope = sessionScope
       this.registerPageHideRelease()
       return worker
@@ -1463,6 +1494,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private terminateWorker(): void {
     const worker = this.worker
     this.worker = undefined
+    this.workerBuildReport = undefined
     this.workerSessionScope = undefined
     this.negotiated = undefined
     worker?.terminate()
@@ -1674,6 +1706,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   }
 
   private async onWorkerMessage(message: SyncWorkerToMainMessage): Promise<void> {
+    if (message.type === 'WORKER_BUILD') {
+      // Admitted by shape. It is a value from another bundle, and what it is
+      // compared with is a commit: anything else is "it did not say".
+      if (this.workerBuildReport !== undefined && WORKER_BUILD_REVISION.test(message.revision)) {
+        this.workerBuildReport = { ...this.workerBuildReport, revision: message.revision }
+      }
+      return
+    }
     if (message.type === 'SHUTDOWN_COMPLETE') {
       this.shutdownBarrier?.()
       return

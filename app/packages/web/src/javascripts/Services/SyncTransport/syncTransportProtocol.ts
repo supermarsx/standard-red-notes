@@ -971,6 +971,19 @@ export function syncFallbackDisposition(reason: SyncFallbackReason): SyncFallbac
 }
 
 export type SyncWorkerToMainMessage =
+  /**
+   * Standard Red Notes: the commit the WORKER's own bundle was built from, said
+   * once when the worker starts.
+   *
+   * The worker is a separate bundle. An image was found whose entry bundle,
+   * deployment marker and readiness route all named one commit while the worker
+   * file beside them had been built from an older one (a stale build cache), so
+   * a fix that lived in the worker was absent from a deployment every identity
+   * check called current. Only the worker can say which build the worker is.
+   * Forty lowercase hexadecimal characters, or empty for a build made without a
+   * revision; the transport admits it by that shape and nothing else.
+   */
+  | { type: 'WORKER_BUILD'; revision: string }
   | { type: 'NEED_TICKET'; clientRequestId: string; reconnect: boolean }
   /**
    * Standard Red Notes: re-mint a ticket for a LIVE socket whose frozen credential

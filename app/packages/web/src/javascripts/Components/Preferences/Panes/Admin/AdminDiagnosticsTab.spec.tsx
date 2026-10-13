@@ -453,6 +453,8 @@ const makeApplicationWith = (counting: ReturnType<typeof countingSync>) => ({
   // One note, so there is a revision history to ask for; no files.
   items: { getItems: (type?: string) => (type === 'Note' ? [{ uuid: 'a-note' }] : []) },
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
+  // The sync worker of this page's own build (the BuildRevision mock above).
+  syncTransportWorkerBuild: { state: 'reported', revision: 'c'.repeat(40) },
 })
 
 let container: HTMLElement
@@ -3462,6 +3464,55 @@ describe('AdminDiagnosticsTab — running one check', () => {
     // answer, so leaving them stale would be the opposite defect.
     await clickButton('Run all checks')
     expect(application.legacyApi.adminGetServerStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore)
+  })
+
+  /**
+   * *** THE PAGE IS ONE BUILD AND ITS SYNC WORKER ANOTHER. *** The image that
+   * prompted this named one commit in its page, its marker and its readiness
+   * route, and ran a sync worker from an older one. The pane has to say so first,
+   * as not working, with the one thing to do.
+   */
+  it('says the page and its sync worker are different builds, first and as not working', async () => {
+    const page = 'c'.repeat(40)
+    const worker = 'd'.repeat(40)
+    await renderTab(makeApplication({ syncTransportWorkerBuild: { state: 'reported', revision: worker } }))
+
+    expect(headlineStatus()).toBe('broken')
+    const first = container.querySelector('[data-diagnostics-attention] [data-diagnostics-finding]')
+    expect(first?.getAttribute('data-diagnostics-finding')).toBe('SYNC_WORKER_IS_ANOTHER_BUILD')
+    expect(first?.getAttribute('data-diagnostics-finding-status')).toBe('broken')
+    expect(first?.querySelector('[data-diagnostics-finding-title]')?.textContent).toBe(
+      'This page and its sync worker are different builds',
+    )
+    expect(first?.querySelector('[data-diagnostics-finding-action]')?.textContent).toContain('Reload this tab')
+
+    await openSubtab('Environment & setup')
+    expect(sectionRow('Sync worker this tab is running')[1]).toBe(
+      `the page is build ${page} but its sync worker is build ${worker}`,
+    )
+    expect(sectionRowStatus('Sync worker this tab is running')).toBe('broken')
+  })
+
+  it('reads the sync worker as the page’s own build when it says so, and follows it when it changes', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+    await openSubtab('Environment & setup')
+
+    expect(sectionRow('Sync worker this tab is running')[1]).toBe('the sync worker is the same build as this page')
+    expect(sectionRowStatus('Sync worker this tab is running')).toBe('healthy')
+
+    // The transport replaced its worker and the new one has not spoken for a minute.
+    ;(application as { syncTransportWorkerBuild: unknown }).syncTransportWorkerBuild = {
+      state: 'silent',
+      silentForMs: 60_000,
+    }
+    await act(async () => {
+      jest.advanceTimersByTime(2_100)
+    })
+    await settle()
+
+    expect(sectionRowStatus('Sync worker this tab is running')).toBe('broken')
+    expect(sectionRow('Sync worker this tab is running')[1]).toContain('did not say which build it is')
   })
 
   /**

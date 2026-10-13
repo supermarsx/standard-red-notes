@@ -474,6 +474,15 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Standard Red Notes: which build this tab's sync WORKER says it is, for the
+   * diagnostics pane to compare with the build of the page. Undefined when no
+   * realtime transport is installed at all.
+   */
+  public get syncTransportWorkerBuild(): WebSocketSyncTransport['workerBuild'] | undefined {
+    return this._webSocketSyncTransport?.workerBuild
+  }
+
+  /**
    * Standard Red Notes: the socket's file lane, READ side only, for the
    * diagnostics pane's file round trip.
    *

@@ -48,12 +48,14 @@ import {
   describeRevisionsRead,
   describeServerBuildCheck,
   describeSyncRound,
+  describeSyncWorkerBuildCheck,
   readingsFrom,
   RUNNABLE_CHECK_IDS,
   summarizeChecks,
   type CheckId,
   type CheckOutcome,
   type RunnableCheckId,
+  type SyncWorkerBuildInput,
 } from './diagnosticChecks'
 import {
   BLOCKS_OK,
@@ -524,9 +526,13 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   // is the history half of the question that row answers, and two readings taken a
   // tick apart would let the block disagree with the row above it.
   const [ledger, setLedger] = useState<LaneLedgerSectionView | undefined>(undefined)
+  // Which build the sync worker says it is, on the same tick: a worker that has
+  // only just started says so within the poll, and the check must follow it.
+  const [workerBuild, setWorkerBuild] = useState<SyncWorkerBuildInput | undefined>(undefined)
   const readTransport = useCallback(() => {
     const status = application.syncTransportStatus
     setTransport(status ? { ...status, operations: [...status.operations] } : undefined)
+    setWorkerBuild(application.syncTransportWorkerBuild)
     // Passed through RAW, with no `?? {}` and no zeroed stand-in. A client with no
     // realtime transport installed has no ledger, and the block says so in its own
     // sentence; a fabricated empty one would claim this client watched the lane and
@@ -1043,7 +1049,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   useEffect(() => {
     let cancelled = false
-    void observeBrowserCapabilities(injectedBrowserRuntime()).then((result) => {
+    void observeBrowserCapabilities(injectedBrowserRuntime(), { buildRevision: WebBuildRevision }).then((result) => {
       if (!cancelled) {
         setBrowserObservations(result)
       }
@@ -1323,10 +1329,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
                   ...describeAppShellCheck({ bundleRevision: WebBuildRevision, marker: deployment, markerRead }),
                 },
               }),
+          'sync-worker': {
+            id: 'sync-worker',
+            ...describeSyncWorkerBuildCheck({ bundleRevision: WebBuildRevision, worker: workerBuild }),
+          },
         },
         progress === null ? [] : [progress.current],
       ),
-    [outcomes, transport, ledger, deployment, markerRead, progress],
+    [outcomes, transport, ledger, deployment, markerRead, progress, workerBuild],
   )
 
   /**

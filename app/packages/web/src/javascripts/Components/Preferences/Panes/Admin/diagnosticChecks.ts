@@ -84,6 +84,7 @@ export const CHECK_IDS = [
   'control-plane',
   'marker',
   'app-shell',
+  'sync-worker',
   'server-build',
   'sync',
   'revisions',
@@ -100,7 +101,12 @@ export type CheckId = (typeof CHECK_IDS)[number]
  * at `RunnableCheckId`'s one consumer, the runner table, instead of reaching the
  * screen as a row nothing can ever fill in.
  */
-export const LIVE_CHECK_IDS = ['negotiation', 'marker', 'app-shell'] as const satisfies readonly CheckId[]
+export const LIVE_CHECK_IDS = [
+  'negotiation',
+  'marker',
+  'app-shell',
+  'sync-worker',
+] as const satisfies readonly CheckId[]
 
 export type LiveCheckId = (typeof LIVE_CHECK_IDS)[number]
 
@@ -196,6 +202,14 @@ export const CHECKS: Record<CheckId, CheckDefinition> = {
     mode: 'live',
     does: 'Sends nothing more. Compares the commit compiled into the code THIS TAB is running with the commit the server that serves this page says it is — the deployment marker this pane already fetched, which is never served from a cache.',
     establishes: 'this tab is running the build the server serves',
+  },
+  'sync-worker': {
+    id: 'sync-worker',
+    section: 'environment',
+    title: safeConstant('Sync worker this tab is running'),
+    mode: 'live',
+    does: 'Sends nothing. Compares the commit compiled into the code of this page with the commit this tab’s sync worker — a separate file, which does the realtime sync and the file transfers — said it was built from when it started.',
+    establishes: 'this page and its sync worker are the same build',
   },
   'server-build': {
     id: 'server-build',
@@ -408,6 +422,19 @@ const CHECK_FAILURE: Partial<Record<CheckId, CheckFailureCopy>> = {
         'Reload this tab, and every other open tab of the app. If it still reads stale after a reload, the browser is serving an old app shell from its cache: use “Reload app and clear cached files” in General preferences, which clears program files only and none of your data.',
     },
     effort: { fail: 'device', degraded: 'device' },
+  },
+  'sync-worker': {
+    code: safeConstant('SYNC_WORKER_IS_ANOTHER_BUILD'),
+    title: {
+      fail: 'This page and its sync worker are different builds',
+      degraded: 'This page and its sync worker are different builds',
+    },
+    summary: {
+      fail: 'Reload this tab. If it reads the same after a reload, the deployed image itself carries a sync worker from another build: rebuild the web image without its build cache (docker builder prune --filter type=exec.cachemount --force, then deploy again) and reload every open tab. Until then fixes to sync and to file transfers that live in the worker are not running, whatever build the page says it is.',
+      degraded:
+        'Reload this tab. If it reads the same after a reload, the deployed image itself carries a sync worker from another build: rebuild the web image without its build cache (docker builder prune --filter type=exec.cachemount --force, then deploy again) and reload every open tab. Until then fixes to sync and to file transfers that live in the worker are not running, whatever build the page says it is.',
+    },
+    effort: { fail: 'rebuild', degraded: 'rebuild' },
   },
   'server-build': {
     code: safeConstant('WEB_AND_SERVER_BUILDS_DIFFER'),
@@ -992,6 +1019,107 @@ export function describeAppShellCheck(input: {
       revisionToken(served),
     ),
     detail: `This tab is running code built from ${input.bundleRevision}, and the server that serves this page is now serving ${served}. The tab was opened before the deployment changed, or the browser is handing it an older app shell from its cache. Fixes in the newer build are not running here.`,
+  }
+}
+
+/**
+ * How long a sync worker may take to say which build it is before its silence
+ * is an answer. It says so in its first statement, before it opens a socket, so
+ * this is generous; a worker that is still silent after it was built before it
+ * could say anything.
+ */
+export const SYNC_WORKER_ANNOUNCE_GRACE_MS = 15_000
+
+/** What the transport reports about its worker's build. Structural, so the pane imports no transport type. */
+export type SyncWorkerBuildInput =
+  | { readonly state: 'no-worker' }
+  | { readonly state: 'silent'; readonly silentForMs: number }
+  | { readonly state: 'reported'; readonly revision: string }
+
+/**
+ * Whether this page and its sync worker are the same build.
+ *
+ * *** THE PAGE CAN BE CURRENT AND ITS WORKER NOT. *** The worker is a file of its
+ * own. An image was found whose page, deployment marker and readiness route all
+ * named the commit it was built from while the worker beside them came out of a
+ * stale build cache, from before a fix that lived in the worker: file downloads
+ * went on failing in one browser on a deployment every other check here called
+ * current. The stale-tab check compares the PAGE's revision with the server's and
+ * could not see it. Only the worker can say which build the worker is, so it
+ * does, and this compares.
+ *
+ * NOT WORKING, not "something lost": the realtime sync and the file transfers run
+ * in the worker, and a worker from another build makes every other reading of
+ * them here a reading of code that is not the code in front of the reader.
+ */
+export function describeSyncWorkerBuildCheck(input: {
+  readonly bundleRevision: string
+  readonly worker: SyncWorkerBuildInput | undefined
+}): Omit<CheckOutcome, 'id'> {
+  const { worker } = input
+  if (worker === undefined || worker.state === 'no-worker') {
+    return {
+      state: 'not-applicable',
+      result: safeNotAvailableHere('this tab has started no sync worker'),
+      detail:
+        'This tab is not running a sync worker — no realtime transport is installed, or it has not been needed yet — so there is no second build to compare with the page’s.',
+    }
+  }
+  if (!DEPLOY_REVISION.test(input.bundleRevision)) {
+    return {
+      state: 'not-applicable',
+      result: safeNotAvailableHere('this page carries no build revision'),
+      detail:
+        'The code of this page was built without a revision, so there is nothing to compare its sync worker’s with. The stale-tab check above says the same of the page itself.',
+    }
+  }
+  if (worker.state === 'silent') {
+    if (worker.silentForMs < SYNC_WORKER_ANNOUNCE_GRACE_MS) {
+      return {
+        state: 'unknown',
+        result: safeConstant('the sync worker has only just started'),
+        detail: 'The sync worker says which build it is as soon as it starts, and it has not had time to yet.',
+      }
+    }
+
+    return {
+      state: 'fail',
+      result: safeTokens(
+        safeConstant('the page is build'),
+        revisionToken(input.bundleRevision),
+        safeConstant('and its sync worker did not say which build it is'),
+      ),
+      detail: `This page was built from ${input.bundleRevision}. Its sync worker has been running for ${Math.round(worker.silentForMs / 1000)} seconds and has not said which build it is, which a worker of this build does before anything else. It is a worker file from an older build.`,
+    }
+  }
+  if (worker.revision === input.bundleRevision) {
+    return {
+      state: 'pass',
+      result: safeConstant('the sync worker is the same build as this page'),
+      detail: `This page and its sync worker both name revision ${worker.revision}.`,
+    }
+  }
+  if (!DEPLOY_REVISION.test(worker.revision)) {
+    return {
+      state: 'fail',
+      result: safeTokens(
+        safeConstant('the page is build'),
+        revisionToken(input.bundleRevision),
+        safeConstant('and its sync worker carries no build revision'),
+      ),
+      detail: `This page was built from ${input.bundleRevision} and its sync worker was built without a revision, so the two did not come out of one build.`,
+    }
+  }
+
+  return {
+    state: 'fail',
+    result: safeTokens(
+      safeConstant('the page is build'),
+      revisionToken(input.bundleRevision),
+      safeConstant('but its sync worker is build'),
+      revisionToken(worker.revision),
+    ),
+    detail: `This page was built from ${input.bundleRevision} and its sync worker from ${worker.revision}. The worker does the realtime sync and the file transfers, so fixes to either that are in the page’s build are not running in this tab.`,
   }
 }
 

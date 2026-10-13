@@ -123,6 +123,43 @@ describe('WebSocketSyncTransport', () => {
     expect(beforeRefresh).not.toContain('session-a')
   })
 
+  /**
+   * *** ONLY THE WORKER CAN SAY WHICH BUILD THE WORKER IS. *** An image was found
+   * whose page named one commit and whose sync worker had been built from an
+   * older one. The worker announces its revision when it starts; the transport
+   * keeps three answers apart — no worker, one that has said, one that has not.
+   */
+  it('reports which build its worker says it is, and tells silence from having no worker', async () => {
+    const revision = 'ab12'.repeat(10)
+    const transport = createTransport()
+
+    expect(transport.workerBuild).toEqual({ state: 'no-worker' })
+
+    void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+    await flush()
+    // A worker exists and has said nothing yet.
+    expect(transport.workerBuild.state).toBe('silent')
+
+    worker.emit({ type: 'WORKER_BUILD', revision })
+    expect(transport.workerBuild).toEqual({ state: 'reported', revision })
+  })
+
+  it('admits a worker’s revision by shape, and an unstamped build as an answer of its own', async () => {
+    const transport = createTransport()
+    void transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+    await flush()
+
+    // Not a commit: it is "did not say", never a value to compare or print.
+    worker.emit({ type: 'WORKER_BUILD', revision: 'https://deploy.internal.example/?token=hunter2' })
+    expect(transport.workerBuild.state).toBe('silent')
+    worker.emit({ type: 'WORKER_BUILD', revision: 'AB12'.repeat(10) })
+    expect(transport.workerBuild.state).toBe('silent')
+
+    // A build made without a revision says so with an empty one.
+    worker.emit({ type: 'WORKER_BUILD', revision: '' })
+    expect(transport.workerBuild).toEqual({ state: 'reported', revision: '' })
+  })
+
   it('negotiates capability/ticket, returns a committed result, and acknowledges only after local checkpoint', async () => {
     const transport = createTransport()
     const fallback = jest.fn().mockResolvedValue(response('http'))

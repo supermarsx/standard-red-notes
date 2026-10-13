@@ -1009,7 +1009,7 @@ describe('buildBrowserSection with nothing observed', () => {
     const model = buildBrowserSection()
     const rows = allRows(model)
 
-    expect(rows).toHaveLength(42)
+    expect(rows).toHaveLength(43)
     for (const row of rows) {
       expect({ label: String(row.label), kind: row.evidence.kind, verdict: row.verdict }).toEqual({
         label: String(row.label),
@@ -1362,5 +1362,115 @@ describe('the page’s policy and app shell', () => {
     expect(rowOf(model, 'App shell caches held by this browser').value).toBe('2')
     expect(JSON.stringify(model)).not.toContain('aaaaaaaa')
     expect(JSON.stringify(model)).not.toContain('workbox-precache')
+  })
+})
+
+/**
+ * *** THE SERVICE WORKER IS A BUILD OF ITS OWN TOO. *** The service worker names
+ * its cache `srn-shell-<version>-<build id>`, and in a deployed image the build id
+ * is the commit the image was built from (web.webpack.config.js). One cache reads
+ * the same in the count row whether it is this page's build or another's; this
+ * row tells them apart, and prints only a closed word.
+ */
+describe('whose build the shell cache is', () => {
+  const PAGE = 'c'.repeat(40)
+  const OTHER = 'd'.repeat(40)
+  const SHELL_ROW = 'The service worker’s shell cache is this page’s build'
+  const shellOf = (revision: string) => `srn-shell-1.0.0-${revision}`
+
+  const observedWith = async (names: readonly string[] | undefined, buildRevision?: string) =>
+    observeBrowserCapabilities(
+      healthyRuntime({
+        caches: names === undefined ? undefined : { keys: () => Promise.resolve([...names]) },
+      }),
+      buildRevision === undefined ? {} : { buildRevision },
+    )
+  const sectionWith = async (names: readonly string[] | undefined, buildRevision?: string) =>
+    buildBrowserSection({ observations: await observedWith(names, buildRevision), csp: QUIET_CSP })
+
+  it('reads a cache named after this page’s build as healthy', async () => {
+    const observed = await observedWith([shellOf(PAGE), 'some-extension-cache'], PAGE)
+    const model = buildBrowserSection({ observations: observed, csp: QUIET_CSP })
+
+    expect(observed.shellCacheBuild).toBe('this-build')
+    expect(rowOf(model, SHELL_ROW).value).toBe('this-build')
+    expect(rowOf(model, SHELL_ROW).verdict).toBe('healthy')
+    expect(rowOf(model, SHELL_ROW).evidence.kind).not.toBe('absent')
+  })
+
+  it('reads a cache of another build only as something lost, with what to do in the note', async () => {
+    const observed = await observedWith([shellOf(OTHER)], PAGE)
+    const model = buildBrowserSection({ observations: observed, csp: QUIET_CSP })
+
+    expect(observed.shellCacheBuild).toBe('another-build')
+    expect(rowOf(model, SHELL_ROW).value).toBe('another-build')
+    expect(rowOf(model, SHELL_ROW).verdict).toBe('degraded')
+    expect(rowOf(model, SHELL_ROW).note).toContain('reload every open tab')
+    // The count alone could not tell: one cache either way.
+    expect(rowOf(model, 'App shell caches held by this browser').value).toBe('1')
+  })
+
+  it('reads this build’s cache beside an older one as context, not a fault', async () => {
+    const observed = await observedWith([shellOf(OTHER), shellOf(PAGE)], PAGE)
+    const model = buildBrowserSection({ observations: observed, csp: QUIET_CSP })
+
+    expect(observed.shellCacheBuild).toBe('this-build-and-older')
+    expect(rowOf(model, SHELL_ROW).value).toBe('this-build-and-older')
+    expect(rowOf(model, SHELL_ROW).verdict).toBe('informational')
+  })
+
+  it('reads no shell cache at all as "none", whatever else the origin holds', async () => {
+    const observed = await observedWith(['workbox-precache-someone-else', 'srn-other'], PAGE)
+    const model = buildBrowserSection({ observations: observed, csp: QUIET_CSP })
+
+    expect(observed.shellCacheBuild).toBe('none')
+    expect(rowOf(model, SHELL_ROW).value).toBe('none')
+    expect(rowOf(model, SHELL_ROW).verdict).toBe('informational')
+  })
+
+  it('does not take a revision that merely ends a longer one as this build', async () => {
+    // A cache whose build id is this page's revision with something before it
+    // but no separating dash is not this build's.
+    const observed = await observedWith([`srn-shell-1.0.0-x${PAGE}`], PAGE)
+
+    expect(observed.shellCacheBuild).toBe('another-build')
+  })
+
+  it('has nothing to compare with on a page without a revision, or with one of the wrong shape', async () => {
+    for (const buildRevision of [undefined, '', 'C'.repeat(40), 'c'.repeat(39), `${PAGE}0`, 'not-a-commit']) {
+      const observed = await observedWith([shellOf(PAGE)], buildRevision)
+      const model = buildBrowserSection({ observations: observed, csp: QUIET_CSP })
+      const row = rowOf(model, SHELL_ROW)
+
+      expect({ buildRevision, shellCacheBuild: observed.shellCacheBuild }).toEqual({
+        buildRevision,
+        shellCacheBuild: undefined,
+      })
+      // Still counted: the comparison is what is missing, not the cache.
+      expect(observed.shellCacheCount).toBe(1)
+      expect({ buildRevision, verdict: row.verdict }).toEqual({ buildRevision, verdict: 'not-applicable' })
+      expect(readingOf(row.value)).toBe('unavailable')
+      expect(String(row.value)).toContain('no build revision')
+    }
+  })
+
+  it('says there is no Cache Storage to read, rather than no revision, where there is none', async () => {
+    const model = await sectionWith(undefined, PAGE)
+    const row = rowOf(model, SHELL_ROW)
+
+    expect(row.verdict).toBe('not-applicable')
+    expect(readingOf(row.value)).toBe('unavailable')
+    expect(String(row.value)).toContain('no Cache Storage')
+  })
+
+  it('never puts a cache name or a revision into the model', async () => {
+    for (const names of [[shellOf(PAGE)], [shellOf(OTHER)], [shellOf(OTHER), shellOf(PAGE)]]) {
+      const serialised = JSON.stringify(await sectionWith([...names, 'workbox-precache-someone-else'], PAGE))
+
+      expect(serialised).not.toContain('srn-shell-')
+      expect(serialised).not.toContain(PAGE)
+      expect(serialised).not.toContain(OTHER)
+      expect(serialised).not.toContain('workbox-precache')
+    }
   })
 })

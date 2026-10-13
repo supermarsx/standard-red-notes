@@ -11,6 +11,7 @@ import {
   describeRevisionsRead,
   describeServerBuildCheck,
   describeSyncRound,
+  describeSyncWorkerBuildCheck,
   readingsFrom,
   type CheckOutcome,
   type CheckReading,
@@ -188,7 +189,10 @@ const passed = (id: CheckOutcome['id'], result: string): CheckOutcome => ({
 })
 
 /** Every registered check, with the ones that need running either run and passed, or not run. */
-const checksWith = (run: boolean): readonly CheckReading[] =>
+const checksWith = (
+  run: boolean,
+  syncWorker: Parameters<typeof describeSyncWorkerBuildCheck>[0]['worker'] = { state: 'reported', revision: REVISION },
+): readonly CheckReading[] =>
   readingsFrom({
     negotiation: { id: 'negotiation', ...describeLiveSocketCheck(transport) },
     marker: { id: 'marker', ...describeMarkerCheck(MARKER, 'answered') },
@@ -197,6 +201,11 @@ const checksWith = (run: boolean): readonly CheckReading[] =>
     'app-shell': {
       id: 'app-shell',
       ...describeAppShellCheck({ bundleRevision: REVISION, marker: MARKER, markerRead: 'answered' }),
+    },
+    // …and its sync worker said it is that same build.
+    'sync-worker': {
+      id: 'sync-worker',
+      ...describeSyncWorkerBuildCheck({ bundleRevision: REVISION, worker: syncWorker }),
     },
     ...(run
       ? {
@@ -489,6 +498,18 @@ describe('a healthy compose deployment with the gRPC proxy, as the operator saw 
     // The read that rode the socket lane carried no origin.
     expect(blockingIn(sectionsFor(AS_THE_OPERATOR_SAW_IT, COMPOSE_GRPC_SERVER_STATUS, checksWith(true)))).toEqual([
       'websocket: This client’s origin admitted',
+    ])
+
+    // A sync worker from another build than the page: everything else on this
+    // deployment is still healthy, and it is not OK.
+    const staleWorker = checksWith(true, { state: 'reported', revision: 'f'.repeat(40) })
+    expect(blockingIn(sectionsFor(AS_THE_TAB_READS_IT, COMPOSE_GRPC_SERVER_STATUS, staleWorker))).toEqual([
+      'environment: Sync worker this tab is running',
+    ])
+    // And one that never said: the same row, on its own.
+    const silentWorker = checksWith(true, { state: 'silent', silentForMs: 60_000 })
+    expect(blockingIn(sectionsFor(AS_THE_TAB_READS_IT, COMPOSE_GRPC_SERVER_STATUS, silentWorker))).toEqual([
+      'environment: Sync worker this tab is running',
     ])
 
     // The flags read that did not unwrap the gateway's envelope carried neither flag.
