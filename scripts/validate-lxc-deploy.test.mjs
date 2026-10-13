@@ -225,6 +225,18 @@ function validate(files) {
   ) {
     errors.push("staged acceptance must require the exact deployment revision");
   }
+  // The web bundle compiles its own revision in; the build has to be handed the
+  // one the release is sealed with, or a running tab has no identity to compare
+  // with the marker.
+  if (
+    !installer.includes(
+      'SRN_DEPLOY_REVISION="${DEPLOY_COMMIT}" CI=true NODE_OPTIONS=--no-deprecation yarn build:web',
+    )
+  ) {
+    errors.push(
+      "web build must compile the exact deployment revision into the bundle",
+    );
+  }
   if (
     !installer.includes("verify_live_deployment_identity") ||
     !installer.includes(
@@ -1433,6 +1445,12 @@ test("every remaining LXC rule reports when its invariant is actually broken", (
         'git -C "${SOURCE_DIR}" fetch',
       ),
       /source fetch must be explicit and fail closed/,
+    ],
+    // Built without the revision, the bundle carries no identity: the marker
+    // names the release and the code in the tab cannot be compared with it.
+    [
+      mutate("installer", 'SRN_DEPLOY_REVISION="${DEPLOY_COMMIT}" CI=true', "CI=true"),
+      /web build must compile the exact deployment revision into the bundle/,
     ],
     // `cat-file -t` prints a type for any object; only `-e` proves the
     // resolved ref IS the expected commit.

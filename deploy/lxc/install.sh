@@ -320,7 +320,13 @@ log "Building the web app bundle"
   cd "${DEPLOY_ROOT}/app"
   printf -- '--ignore-engines true\n' > "${HOME:-/root}/.yarnrc"
   CI=true yarn workspaces focus @standardnotes/web
-  CI=true NODE_OPTIONS=--no-deprecation yarn build:web
+  # The revision reaches the BUILD, not only the sealed marker: the bundle
+  # compiles it in, which is how a running tab can be told apart from a stale
+  # one, and the service worker keys its cache name on it. Both image builds
+  # pass it; this one did not, so on an LXC install the bundle carried no
+  # identity and the admin Diagnostics pane could not say whether a tab was
+  # current. DEPLOY_COMMIT is already proven to be a full commit SHA above.
+  SRN_DEPLOY_REVISION="${DEPLOY_COMMIT}" CI=true NODE_OPTIONS=--no-deprecation yarn build:web
 )
 
 [ -f "${DEPLOY_ROOT}/app/packages/web/dist/index.html" ] || die "Staged web bundle is missing index.html."
