@@ -7,6 +7,7 @@ import { RoleName, SettingName } from '@standardnotes/domain-core'
 import { davRefusal } from '../../Service/DavBridge/DavBridgeRefusal'
 import { DavBridgeCaller, DavBridgeService } from '../../Service/DavBridge/DavBridgeService'
 import { DavRelayAbortedError } from '../../Service/DavBridge/DavRelay'
+import { GatewayUserDataPurger } from '../../Service/UserData/GatewayUserDataPurger'
 import { AdminDavBridgeController, DavBridgeController } from './DavBridgeController'
 
 const USER = '11111111-1111-4111-8111-111111111111'
@@ -439,8 +440,60 @@ describe('AdminDavBridgeController', () => {
     await controller.view(request(), response)
 
     expect(response.sentStatus).toBe(200)
-    expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [] })
+    expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [], pendingAccountPurges: 0 })
     expect(response.sentHeaders['cache-control']).toBe('no-store')
+  })
+
+  describe('with deleted accounts whose gateway data has not been removed yet', () => {
+    let pendingCount: jest.Mock
+    let withPurger: AdminDavBridgeController
+
+    beforeEach(() => {
+      pendingCount = jest.fn().mockResolvedValue(3)
+      withPurger = new AdminDavBridgeController(service as unknown as DavBridgeService, logger, {
+        pendingCount,
+      } as unknown as GatewayUserDataPurger)
+    })
+
+    it('says how many are waiting, in the view', async () => {
+      const response = fakeResponse(adminLocals())
+
+      await withPurger.view(request(), response)
+
+      expect(response.sentStatus).toBe(200)
+      expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [], pendingAccountPurges: 3 })
+    })
+
+    it('says how many are waiting, in the answer to a saved setting', async () => {
+      pendingCount.mockResolvedValue(2)
+      service.adminUpdate.mockResolvedValue(['davBridge.enabled'])
+      const response = fakeResponse(adminLocals())
+
+      await withPurger.update(request({ enabled: true }), response)
+
+      expect(response.sentStatus).toBe(200)
+      expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [], pendingAccountPurges: 2 })
+    })
+
+    it('says the number is unknown, not zero, when the gateway cannot read its record', async () => {
+      pendingCount.mockResolvedValue(null)
+      const response = fakeResponse(adminLocals())
+
+      await withPurger.view(request(), response)
+
+      expect(response.sentStatus).toBe(200)
+      expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [], pendingAccountPurges: null })
+    })
+
+    it('does not tell anyone who is not an administrator', async () => {
+      const response = fakeResponse({ user: { uuid: USER }, roles: [{ name: RoleName.NAMES.CoreUser }] })
+
+      await withPurger.view(request(), response)
+
+      expect(response.sentStatus).toBe(403)
+      expect(pendingCount).not.toHaveBeenCalled()
+      expect(JSON.stringify(response.sentBody)).not.toContain('pendingAccountPurges')
+    })
   })
 
   it('saves settings, answers with the new view, and audits the NAMES that changed, never the values', async () => {
@@ -450,7 +503,7 @@ describe('AdminDavBridgeController', () => {
     await controller.update(request({ enabled: true, allowedPrivateOrigins: ['http://nextcloud.lan'] }), response)
 
     expect(service.adminUpdate).toHaveBeenCalledWith({ enabled: true, allowedPrivateOrigins: ['http://nextcloud.lan'] })
-    expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [] })
+    expect(response.sentBody).toEqual({ settings: { enabled: true }, users: [], pendingAccountPurges: 0 })
     expect(logger.info).toHaveBeenCalledWith('admin dav-bridge settings updated', {
       audit: 'admin.dav-bridge.update',
       adminUuid: USER,

@@ -70,8 +70,10 @@ const endpointResolver = {
 } as unknown as EndpointResolverInterface
 
 const purgerSpy = (): { purger: GatewayUserDataPurger; purge: jest.Mock } => {
+  // `purge` here is the entry point for a DELETED account: the one that
+  // records the deletion first and clears the record only when it is done.
   const purge = jest.fn().mockResolvedValue({ stores: {}, removed: 0, failed: 0 })
-  return { purger: { purge } as unknown as GatewayUserDataPurger, purge }
+  return { purger: { purgeDeletedAccount: purge } as unknown as GatewayUserDataPurger, purge }
 }
 
 const request = (params: Record<string, string>, body?: unknown): Request =>
@@ -132,7 +134,9 @@ describe('deleting an account removes what the gateway stores about it', () => {
 
     it('still answers with the success when the purge itself fails', async () => {
       const { proxy } = proxyAnswering(200)
-      const purger = { purge: jest.fn().mockRejectedValue(new Error('disk full')) } as unknown as GatewayUserDataPurger
+      const purger = {
+        purgeDeletedAccount: jest.fn().mockRejectedValue(new Error('disk full')),
+      } as unknown as GatewayUserDataPurger
       const response = responseStub()
 
       await expect(controller(proxy, purger).deleteUser(request({ userUuid: USER }), response)).resolves.toBeUndefined()

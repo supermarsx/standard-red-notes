@@ -1,5 +1,5 @@
 import { AccountDeletionRequestedEvent, DomainEventHandlerInterface } from '@standardnotes/domain-events'
-import { Uuid } from '@standardnotes/domain-core'
+import { DeletedAccountMarkers, Uuid } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { EphemeralSessionRepositoryInterface } from '../Session/EphemeralSessionRepositoryInterface'
@@ -14,6 +14,13 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
     private ephemeralSessionRepository: EphemeralSessionRepositoryInterface,
     private revokedSessionRepository: RevokedSessionRepositoryInterface,
     private logger: Logger,
+    // Standard Red Notes: where the fact of a deletion is written down for
+    // services that keep per-user data outside the database (the api-gateway's
+    // JSON stores). Every deletion reaches this handler, whichever route or
+    // command started it, which is why the note is written here and not at
+    // each entry point. Optional: absent in tests and where no shared location
+    // is configured.
+    private deletedAccountMarkers?: DeletedAccountMarkers,
   ) {}
 
   async handle(event: AccountDeletionRequestedEvent): Promise<void> {
@@ -29,6 +36,10 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
 
     if (user === null) {
       this.logger.warn('Could not find user.', { userId: userUuid.value })
+      // The account is gone already (a redelivered event, or a deletion that
+      // finished elsewhere). What other services hold about it still has to
+      // go, and recording it twice is harmless.
+      await this.recordDeletion(userUuid.value)
 
       return
     }
@@ -37,9 +48,23 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
 
     await this.userRepository.remove(user)
 
+    // Only now: a marker means "this account is gone, remove what you hold".
+    await this.recordDeletion(userUuid.value)
+
     this.logger.info('Finished account cleanup.', {
       userId: userUuid.value,
     })
+  }
+
+  private async recordDeletion(userUuid: string): Promise<void> {
+    if (this.deletedAccountMarkers === undefined || !this.deletedAccountMarkers.isConfigured()) {
+      return
+    }
+    if (!(await this.deletedAccountMarkers.add(userUuid))) {
+      // The account is deleted either way. Without the note the api-gateway
+      // keeps what it holds for this user until an administrator purges it.
+      this.logger.warn('Could not record the account deletion for other services.', { userId: userUuid })
+    }
   }
 
   private async removeSessions(userUuid: string): Promise<void> {

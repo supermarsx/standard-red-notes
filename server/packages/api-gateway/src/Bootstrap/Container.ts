@@ -64,7 +64,7 @@ import { CaldavService } from '../Service/Caldav/CaldavService'
 import { createDavBridgeService } from '../Service/DavBridge/DavBridgeFactory'
 import { DavBridgeService } from '../Service/DavBridge/DavBridgeService'
 import { DavSharedCounterStore } from '../Service/DavBridge/DavRelayLimiter'
-import { GatewayUserDataPurger } from '../Service/UserData/GatewayUserDataPurger'
+import { GatewayUserDataPurger, startGatewayUserDataPurger } from '../Service/UserData/GatewayUserDataPurger'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
 import { CalendarProjectionStore } from '../Service/Caldav/CalendarProjectionStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
@@ -1111,9 +1111,16 @@ export class ContainerConfigLoader {
     // account is deleted. Every per-user JSON store of the gateway is listed
     // here; a store added later belongs in this list, or a deleted account
     // leaves it behind (which is what all of these did before this existed).
+    //
+    // A deletion that does not pass through the gateway (srn-admin on the
+    // command line) is written down by auth as a marker beside the shared
+    // settings file, and a purge that fails part-way leaves its marker in
+    // place; the purger works through them shortly after start and every
+    // minute. Started here, in the one place both the standalone gateway and
+    // the home-server load, so that neither entry point can forget it.
     container.bind<GatewayUserDataPurger>(TYPES.ApiGateway_GatewayUserDataPurger).toConstantValue(
-      new GatewayUserDataPurger(
-        [
+      startGatewayUserDataPurger({
+        stores: [
           {
             name: 'dav-bridge-accounts',
             purge: (userUuid) =>
@@ -1132,7 +1139,8 @@ export class ContainerConfigLoader {
           },
         ],
         logger,
-      ),
+        serverSettingsPath,
+      }),
     )
 
     // Standard Red Notes: THE IP ALLOW/BLOCK LISTS AND THROTTLE TELEMETRY on the

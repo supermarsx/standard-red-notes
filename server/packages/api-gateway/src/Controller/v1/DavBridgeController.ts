@@ -8,6 +8,7 @@ import { TYPES } from '../../Bootstrap/Types'
 import { DavBridgeRefusal, davRefusal } from '../../Service/DavBridge/DavBridgeRefusal'
 import { DavBridgeCaller, DavBridgeService } from '../../Service/DavBridge/DavBridgeService'
 import { DavRelayAbortedError } from '../../Service/DavBridge/DavRelay'
+import { GatewayUserDataPurger } from '../../Service/UserData/GatewayUserDataPurger'
 
 interface DavBridgeControllerLogger {
   error(message: string, meta?: Record<string, unknown>): void
@@ -224,8 +225,22 @@ export class AdminDavBridgeController extends BaseHttpController {
   constructor(
     @inject(TYPES.ApiGateway_DavBridgeService) private davBridgeService: DavBridgeService,
     @inject(TYPES.ApiGateway_Logger) @optional() private logger?: DavBridgeControllerLogger,
+    @inject(TYPES.ApiGateway_GatewayUserDataPurger) @optional() private userDataPurger?: GatewayUserDataPurger,
   ) {
     super()
+  }
+
+  /**
+   * The view, plus how many DELETED accounts still have gateway data waiting
+   * to be removed (a purge that failed, or a deletion the next sweep has not
+   * reached yet). Zero is the normal state; a number that stays above zero is
+   * something an administrator should see, and so is `null`, which means the
+   * gateway cannot read its record and does not know.
+   */
+  private async viewBody(): Promise<Record<string, unknown>> {
+    const view = await this.davBridgeService.adminView()
+    const pendingAccountPurges = this.userDataPurger === undefined ? 0 : await this.userDataPurger.pendingCount()
+    return { ...view, pendingAccountPurges }
   }
 
   private requestorIsAdmin(response: Response): boolean {
@@ -248,7 +263,7 @@ export class AdminDavBridgeController extends BaseHttpController {
     if (this.refuseNonAdmin(response)) {
       return
     }
-    await respond(response, this.logger, async () => ({ body: await this.davBridgeService.adminView() }))
+    await respond(response, this.logger, async () => ({ body: await this.viewBody() }))
   }
 
   @httpPut('/', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
@@ -266,7 +281,7 @@ export class AdminDavBridgeController extends BaseHttpController {
           changedSettings,
         })
       }
-      return { body: await this.davBridgeService.adminView() }
+      return { body: await this.viewBody() }
     })
   }
 

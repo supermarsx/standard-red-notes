@@ -21,7 +21,13 @@ import { ProviderRegistry } from '../ReminderDelivery/Providers/ProviderRegistry
 import { PublishedRemindersStore } from '../ReminderDelivery/PublishedRemindersStore'
 import { ReminderDeliveryService } from '../ReminderDelivery/ReminderDeliveryService'
 import { ServerSettingsStore } from '../ServerSettings/ServerSettingsStore'
-import { GatewayUserDataPurger, GatewayUserDataStore, purgeGatewayUserDataAfterDeletion } from './GatewayUserDataPurger'
+import { DeletedAccountMarkers, deletedAccountMarkersDirectory } from '@standardnotes/domain-core'
+import {
+  GatewayUserDataPurger,
+  GatewayUserDataStore,
+  purgeGatewayUserDataAfterDeletion,
+  startGatewayUserDataPurger,
+} from './GatewayUserDataPurger'
 
 const USER = '11111111-1111-4111-8111-111111111111'
 
@@ -171,6 +177,69 @@ describe('GatewayUserDataPurger', () => {
       expect(await caldav.listTodos(bob)).toHaveLength(2)
     })
 
+    it('when the token store cannot be purged: the deletion stays on record, the live token is KNOWN, and the next sweep kills it', async () => {
+      const alice = newUserUuid()
+      const bob = newUserUuid()
+      await fill(alice)
+      await fill(bob)
+      const token = await caldav.createToken(alice, 'Phone')
+      const bobBefore = await tracesOf(directory, bob)
+      // Beside the settings file, where a deployment keeps it.
+      const markers = new DeletedAccountMarkers(path.join(directory, 'deleted-accounts'))
+      let tokenStoreBroken = true
+      const withRecord = new GatewayUserDataPurger(
+        [
+          { name: 'dav-bridge-accounts', purge: (userUuid) => davBridge.forgetUser(userUuid) },
+          {
+            name: 'caldav',
+            // The real store, behind a delete that fails the way a locked file does.
+            purge: async (userUuid) => {
+              if (tokenStoreBroken) {
+                throw new Error(`EBUSY: resource busy or locked, tokens.json (${userUuid})`)
+              }
+              return caldav.forgetUser(userUuid)
+            },
+          },
+          {
+            name: 'reminder-delivery',
+            purge: async (userUuid) => {
+              await reminders.optOut(userUuid)
+              return 0
+            },
+          },
+        ],
+        logger,
+        markers,
+      )
+
+      const result = await withRecord.purgeDeletedAccount(alice)
+
+      // The stored password went although the token store failed...
+      expect(result.stores).toEqual({ 'dav-bridge-accounts': 1, caldav: 'failed', 'reminder-delivery': 0 })
+      expect(await davBridge.listAccounts(caller(alice))).toEqual([])
+      // ...the token of the deleted account still works, which is the hole...
+      expect((await caldav.verifyToken(token.token))?.userUuid).toBe(alice)
+      // ...and it is not a quiet one: on record, counted, and logged by store name.
+      expect(await markers.list()).toEqual([alice])
+      expect(await withRecord.pendingCount()).toBe(1)
+      expect(logger.lines).toEqual([
+        {
+          level: 'warn',
+          message: 'gateway user data purge incomplete after account deletion',
+          meta: { userId: alice, removed: 1, failedStores: ['caldav'] },
+        },
+      ])
+
+      tokenStoreBroken = false
+      expect(await withRecord.sweep()).toEqual({ found: 1, completed: 1, stillPending: 0 })
+
+      expect(await caldav.verifyToken(token.token)).toBeNull()
+      // Nothing names the deleted user any more, the record included.
+      expect(await tracesOf(directory, alice)).toEqual([])
+      expect(await tracesOf(directory, bob)).toEqual(bobBefore)
+      expect(await withRecord.pendingCount()).toBe(0)
+    })
+
     it("stops a deleted user's CalDAV token from working", async () => {
       const alice = newUserUuid()
       const created = await caldav.createToken(alice, 'Phone')
@@ -308,7 +377,7 @@ describe('GatewayUserDataPurger', () => {
 describe('purgeGatewayUserDataAfterDeletion', () => {
   const purgerSpy = (): { purger: GatewayUserDataPurger; purge: jest.Mock } => {
     const purge = jest.fn().mockResolvedValue({ stores: {}, removed: 0, failed: 0 })
-    return { purger: { purge } as unknown as GatewayUserDataPurger, purge }
+    return { purger: { purgeDeletedAccount: purge } as unknown as GatewayUserDataPurger, purge }
   }
 
   it.each([200, 201, 204])('purges after the deletion was answered with %i', async (statusCode) => {
@@ -349,10 +418,375 @@ describe('purgeGatewayUserDataAfterDeletion', () => {
   })
 
   it('never throws into a route whose answer has already gone out', async () => {
-    const purger = { purge: jest.fn().mockRejectedValue(new Error('disk full')) } as unknown as GatewayUserDataPurger
+    const purger = {
+      purgeDeletedAccount: jest.fn().mockRejectedValue(new Error('disk full')),
+    } as unknown as GatewayUserDataPurger
 
     await expect(
       purgeGatewayUserDataAfterDeletion(purger, { statusCode: 200, headersSent: true }, USER),
     ).resolves.toBeUndefined()
+  })
+})
+
+describe('a deletion is recorded until every store has been purged', () => {
+  let root: string
+  let markers: DeletedAccountMarkers
+  let logger: ReturnType<typeof capturingLogger>
+
+  /** A store that fails until it is told to recover, and remembers what it removed. */
+  const flakyStore = (name: string): GatewayUserDataStore & { broken: boolean; purged: string[] } => {
+    const store = {
+      name,
+      broken: false,
+      purged: [] as string[],
+      purge: async (userUuid: string): Promise<number> => {
+        if (store.broken) {
+          throw new Error(`cannot lock the ${name} file for ${userUuid}`)
+        }
+        store.purged.push(userUuid)
+        return 1
+      },
+    }
+    return store
+  }
+
+  beforeEach(async () => {
+    root = await temporaryDirectory('purge-markers')
+    markers = new DeletedAccountMarkers(path.join(root, 'deleted-accounts'))
+    logger = capturingLogger()
+  })
+
+  afterEach(async () => {
+    await removeDirectory(root)
+  })
+
+  it('leaves no record behind when every store was purged', async () => {
+    const purger = new GatewayUserDataPurger([flakyStore('a'), flakyStore('b')], logger, markers)
+
+    const result = await purger.purgeDeletedAccount(USER)
+
+    expect(result).toEqual({ stores: { a: 1, b: 1 }, removed: 2, failed: 0 })
+    expect(await markers.list()).toEqual([])
+    expect(await purger.pendingCount()).toBe(0)
+  })
+
+  it('writes the record BEFORE it purges, so a process that dies mid-purge is not a silent leftover', async () => {
+    const seen: string[][] = []
+    const purger = new GatewayUserDataPurger(
+      [
+        {
+          name: 'watches',
+          purge: async () => {
+            seen.push(await markers.list())
+            return 0
+          },
+        },
+      ],
+      logger,
+      markers,
+    )
+
+    await purger.purgeDeletedAccount(USER)
+
+    expect(seen).toEqual([[USER]])
+  })
+
+  it('keeps the record when ONE store fails, purges the others, and tells the administrator how many are waiting', async () => {
+    const tokens = flakyStore('tokens')
+    const passwords = flakyStore('passwords')
+    tokens.broken = true
+    const purger = new GatewayUserDataPurger([tokens, passwords], logger, markers)
+
+    const result = await purger.purgeDeletedAccount(USER)
+
+    // The account is deleted and one store still holds its data. That is not
+    // left unsaid: the other store WAS purged, the deletion stays on record,
+    // the count is visible, and the log names the store.
+    expect(result).toEqual({ stores: { tokens: 'failed', passwords: 1 }, removed: 1, failed: 1 })
+    expect(passwords.purged).toEqual([USER])
+    expect(await markers.list()).toEqual([USER])
+    expect(await purger.pendingCount()).toBe(1)
+    expect(logger.lines).toEqual([
+      {
+        level: 'warn',
+        message: 'gateway user data purge incomplete after account deletion',
+        meta: { userId: USER, removed: 1, failedStores: ['tokens'] },
+      },
+    ])
+  })
+
+  it('retries on the next sweep and clears the record once the failing store works again', async () => {
+    const tokens = flakyStore('tokens')
+    const passwords = flakyStore('passwords')
+    tokens.broken = true
+    const purger = new GatewayUserDataPurger([tokens, passwords], logger, markers)
+    await purger.purgeDeletedAccount(USER)
+
+    // Still broken: the sweep tries, fails, keeps the record and says so again.
+    expect(await purger.sweep()).toEqual({ found: 1, completed: 0, stillPending: 1 })
+    expect(await purger.pendingCount()).toBe(1)
+    expect(logger.lines[logger.lines.length - 1]).toEqual({
+      level: 'warn',
+      message: 'gateway user data of deleted accounts is still waiting to be removed',
+      meta: { waiting: 1, completed: 0 },
+    })
+
+    tokens.broken = false
+
+    expect(await purger.sweep()).toEqual({ found: 1, completed: 1, stillPending: 0 })
+    expect(tokens.purged).toEqual([USER])
+    expect(await purger.pendingCount()).toBe(0)
+    expect(await purger.sweep()).toEqual({ found: 0, completed: 0, stillPending: 0 })
+  })
+
+  it('counts a deletion as still waiting when its record could not be cleared, and says so', async () => {
+    class StuckMarkers extends DeletedAccountMarkers {
+      override async remove(): Promise<boolean> {
+        return false
+      }
+    }
+    const store = flakyStore('tokens')
+    const stuck = new StuckMarkers(path.join(root, 'deleted-accounts'))
+    const purger = new GatewayUserDataPurger([store], logger, stuck)
+    await stuck.add(USER)
+
+    expect(await purger.sweep()).toEqual({ found: 1, completed: 0, stillPending: 1 })
+
+    // The data did go; what is left is the record, and that is reported, not hidden.
+    expect(store.purged).toEqual([USER])
+    expect(await purger.pendingCount()).toBe(1)
+    expect(logger.lines[logger.lines.length - 1]).toEqual({
+      level: 'warn',
+      message: 'gateway user data of deleted accounts is still waiting to be removed',
+      meta: { waiting: 1, completed: 0 },
+    })
+  })
+
+  it('purges an account whose deletion never passed through the gateway, from the record auth wrote', async () => {
+    const store = flakyStore('tokens')
+    const purger = new GatewayUserDataPurger([store], logger, markers)
+    const deletedOnTheCommandLine = '33333333-3333-4333-8333-333333333333'
+    // What auth's deletion handler does, in another process.
+    await new DeletedAccountMarkers(path.join(root, 'deleted-accounts')).add(deletedOnTheCommandLine)
+
+    expect(await purger.sweep()).toEqual({ found: 1, completed: 1, stillPending: 0 })
+
+    expect(store.purged).toEqual([deletedOnTheCommandLine])
+    expect(await markers.list()).toEqual([])
+  })
+
+  it('does not purge an id that has no record', async () => {
+    const store = flakyStore('tokens')
+    const purger = new GatewayUserDataPurger([store], logger, markers)
+    await fs.mkdir(path.join(root, 'deleted-accounts'), { recursive: true })
+    await fs.writeFile(path.join(root, 'deleted-accounts', 'not-an-account-id'), '')
+    await fs.writeFile(path.join(root, 'deleted-accounts', `${USER}.tmp`), '')
+
+    expect(await purger.sweep()).toEqual({ found: 0, completed: 0, stillPending: 0 })
+    expect(store.purged).toEqual([])
+  })
+
+  it('runs one sweep at a time', async () => {
+    let running = 0
+    let overlapped = false
+    const slow: GatewayUserDataStore = {
+      name: 'slow',
+      purge: async () => {
+        running += 1
+        overlapped = overlapped || running > 1
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        running -= 1
+        return 0
+      },
+    }
+    const purger = new GatewayUserDataPurger([slow], logger, markers)
+    await markers.add(USER)
+
+    const results = await Promise.all([purger.sweep(), purger.sweep(), purger.sweep()])
+
+    expect(overlapped).toBe(false)
+    expect(results).toEqual([
+      { found: 1, completed: 1, stillPending: 0 },
+      { found: 1, completed: 1, stillPending: 0 },
+      { found: 1, completed: 1, stillPending: 0 },
+    ])
+  })
+
+  describe('on a timer', () => {
+    beforeEach(() => {
+      jest.useFakeTimers()
+    })
+
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    it('sweeps shortly after start and then on the interval, until stopped', async () => {
+      const purger = new GatewayUserDataPurger([], logger, markers)
+      const sweep = jest.spyOn(purger, 'sweep').mockResolvedValue({ found: 0, completed: 0, stillPending: 0 })
+
+      const stop = purger.startSweeping(60_000, 5_000)
+      expect(sweep).toHaveBeenCalledTimes(0)
+      jest.advanceTimersByTime(5_000)
+      expect(sweep).toHaveBeenCalledTimes(1)
+      jest.advanceTimersByTime(60_000)
+      expect(sweep).toHaveBeenCalledTimes(2)
+      jest.advanceTimersByTime(120_000)
+      expect(sweep).toHaveBeenCalledTimes(4)
+
+      stop()
+      jest.advanceTimersByTime(600_000)
+      expect(sweep).toHaveBeenCalledTimes(4)
+    })
+
+    it('starts no timer where no record location is configured, or with no interval', () => {
+      const unconfigured = new GatewayUserDataPurger([], logger)
+      const sweepUnconfigured = jest.spyOn(unconfigured, 'sweep')
+      const noInterval = new GatewayUserDataPurger([], logger, markers)
+      const sweepNoInterval = jest.spyOn(noInterval, 'sweep')
+
+      unconfigured.startSweeping(60_000, 0)()
+      noInterval.startSweeping(0, 0)()
+      jest.advanceTimersByTime(600_000)
+
+      expect(sweepUnconfigured).not.toHaveBeenCalled()
+      expect(sweepNoInterval).not.toHaveBeenCalled()
+      expect(jest.getTimerCount()).toBe(0)
+    })
+  })
+
+  describe('when the record itself cannot be used', () => {
+    let blocked: DeletedAccountMarkers
+
+    beforeEach(async () => {
+      // A file sits where the directory should be: nothing can be recorded and
+      // nothing can be listed. A directory owned by another user answers the same.
+      const inTheWay = path.join(root, 'in-the-way')
+      await fs.writeFile(inTheWay, 'x')
+      blocked = new DeletedAccountMarkers(inTheWay)
+    })
+
+    it('says a failed purge will NOT be retried, instead of leaving it to look like the others', async () => {
+      const tokens = flakyStore('tokens')
+      tokens.broken = true
+      const purger = new GatewayUserDataPurger([tokens], logger, blocked)
+
+      const result = await purger.purgeDeletedAccount(USER)
+
+      expect(result.failed).toBe(1)
+      expect(logger.lines.map((line) => [line.level, line.message, line.meta])).toEqual([
+        [
+          'warn',
+          'gateway user data purge incomplete after account deletion',
+          { userId: USER, removed: 0, failedStores: ['tokens'] },
+        ],
+        ['warn', 'gateway user data purge will NOT be retried: the deletion could not be recorded', { userId: USER }],
+      ])
+    })
+
+    it('says nothing of the kind when the purge succeeded, or when it failed and IS on record', async () => {
+      const working = new GatewayUserDataPurger([flakyStore('tokens')], logger, blocked)
+      await working.purgeDeletedAccount(USER)
+      const tokens = flakyStore('tokens')
+      tokens.broken = true
+      await new GatewayUserDataPurger([tokens], logger, markers).purgeDeletedAccount(USER)
+
+      expect(logger.lines.map((line) => line.message).filter((message) => message.includes('NOT be retried'))).toEqual(
+        [],
+      )
+    })
+
+    it('reports the number waiting as unknown, never as zero, and says so on every sweep', async () => {
+      const purger = new GatewayUserDataPurger([flakyStore('tokens')], logger, blocked)
+
+      expect(await purger.pendingCount()).toBeNull()
+      expect(await purger.sweep()).toEqual({ found: 0, completed: 0, stillPending: 0 })
+      expect(await purger.sweep()).toEqual({ found: 0, completed: 0, stillPending: 0 })
+
+      expect(logger.lines).toEqual([
+        {
+          level: 'warn',
+          message:
+            'the record of deleted accounts cannot be read: gateway user data of deleted accounts is not being removed',
+          meta: undefined,
+        },
+        {
+          level: 'warn',
+          message:
+            'the record of deleted accounts cannot be read: gateway user data of deleted accounts is not being removed',
+          meta: undefined,
+        },
+      ])
+    })
+  })
+
+  describe('the purger a running gateway uses', () => {
+    const deletedOnTheCommandLine = '44444444-4444-4444-8444-444444444444'
+
+    it('reads the record auth writes beside the shared settings file', async () => {
+      const settingsPath = path.join(root, 'server-settings.json')
+      const store = flakyStore('tokens')
+      // What auth does, given nothing but the same settings path.
+      await new DeletedAccountMarkers(deletedAccountMarkersDirectory(settingsPath)).add(deletedOnTheCommandLine)
+
+      const purger = startGatewayUserDataPurger({ stores: [store], logger, serverSettingsPath: settingsPath })
+
+      expect(await purger.pendingCount()).toBe(1)
+      expect(await purger.sweep()).toEqual({ found: 1, completed: 1, stillPending: 0 })
+      expect(store.purged).toEqual([deletedOnTheCommandLine])
+      expect(await fs.readdir(path.join(root, 'deleted-accounts'))).toEqual([])
+    })
+
+    it('is already sweeping: thirty seconds after start, then every minute', () => {
+      jest.useFakeTimers()
+      try {
+        const purger = startGatewayUserDataPurger({
+          stores: [],
+          logger,
+          serverSettingsPath: path.join(root, 'server-settings.json'),
+        })
+        const sweep = jest.spyOn(purger, 'sweep').mockResolvedValue({ found: 0, completed: 0, stillPending: 0 })
+
+        jest.advanceTimersByTime(29_999)
+        expect(sweep).toHaveBeenCalledTimes(0)
+        jest.advanceTimersByTime(1)
+        expect(sweep).toHaveBeenCalledTimes(1)
+        jest.advanceTimersByTime(60_000 - 30_000 - 1)
+        expect(sweep).toHaveBeenCalledTimes(1)
+        jest.advanceTimersByTime(1)
+        expect(sweep).toHaveBeenCalledTimes(2)
+        jest.advanceTimersByTime(60_000)
+        expect(sweep).toHaveBeenCalledTimes(3)
+        jest.advanceTimersByTime(10 * 60_000)
+        expect(sweep).toHaveBeenCalledTimes(13)
+      } finally {
+        jest.clearAllTimers()
+        jest.useRealTimers()
+      }
+    })
+
+    it('holds no timer where the deployment has no shared settings path', () => {
+      jest.useFakeTimers()
+      try {
+        const purger = startGatewayUserDataPurger({ stores: [], logger, serverSettingsPath: undefined })
+        const sweep = jest.spyOn(purger, 'sweep')
+
+        jest.advanceTimersByTime(60 * 60 * 1000)
+
+        expect(sweep).not.toHaveBeenCalled()
+        expect(jest.getTimerCount()).toBe(0)
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+  })
+
+  it('still purges, without a record, where no record location is configured', async () => {
+    const store = flakyStore('tokens')
+    const purger = new GatewayUserDataPurger([store], logger)
+
+    expect((await purger.purgeDeletedAccount(USER)).removed).toBe(1)
+    expect(await purger.pendingCount()).toBe(0)
+    expect(await purger.sweep()).toEqual({ found: 0, completed: 0, stillPending: 0 })
   })
 })

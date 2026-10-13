@@ -187,6 +187,8 @@ import {
   CacheEntryRepositoryInterface,
   ControllerContainer,
   ControllerContainerInterface,
+  DeletedAccountMarkers,
+  deletedAccountMarkersDirectory,
   MapperInterface,
   PinnedHttpTransport,
   RuntimeLogLevelApplier,
@@ -3427,6 +3429,10 @@ export class ContainerConfigLoader {
           container.get<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository),
           container.get<RevokedSessionRepositoryInterface>(TYPES.Auth_RevokedSessionRepository),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          // Beside the shared server settings file, the one location every
+          // process of a deployment is pointed at. Unset means nothing is
+          // recorded, exactly as before.
+          new DeletedAccountMarkers(deletedAccountMarkersDirectory(env.get('SERVER_SETTINGS_PATH', true))),
         ),
       )
     container
