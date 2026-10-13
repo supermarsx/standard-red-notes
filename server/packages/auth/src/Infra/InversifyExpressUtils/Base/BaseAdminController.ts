@@ -139,6 +139,23 @@ const AI_LIMIT_ADMIN_SETTINGS = new Set<string>([
   SettingName.NAMES.AiWeeklyTokenLimit,
 ])
 
+/**
+ * Standard Red Notes: the admin write endpoints used to read their body
+ * leniently, and a malformed request did not fail, it wrote a default: an
+ * empty body to the registration switch opened sign-ups, a feature flag sent
+ * without a value was cleared, a role or group sent without its list was
+ * stripped of every permission or role. These read the body strictly instead;
+ * a missing or mistyped field is refused with 400 and nothing is written.
+ */
+function adminRequestBody(request: Request): Record<string, unknown> {
+  const body: unknown = request.body
+  return typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {}
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+}
+
 export class BaseAdminController extends BaseHttpController {
   constructor(
     protected doDeleteSetting: DeleteSetting,
@@ -549,7 +566,27 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     const { userUuid } = request.params as Record<string, string>
-    const { name, value } = request.body as { name?: string; value?: string | null }
+    const body = adminRequestBody(request)
+    const name = body.name
+    const value = body.value
+
+    if (typeof name !== 'string' || name.length === 0) {
+      return this.json({ error: { message: 'A setting `name` is required.' } }, 400)
+    }
+    // Clearing a setting is a deliberate `"value": null`. A value that is
+    // absent (JSON has no undefined) is a malformed request, not a clear.
+    if (value === undefined) {
+      return this.json(
+        { error: { message: `A \`value\` is required for ${name}: a string, or null to clear the setting.` } },
+        400,
+      )
+    }
+    if (value !== null && typeof value !== 'string') {
+      return this.json(
+        { error: { message: `The \`value\` for ${name} must be a string, or null to clear the setting.` } },
+        400,
+      )
+    }
 
     // Standard Red Notes: the per-user SERVER storage limit is a SUBSCRIPTION
     // setting and takes a dedicated write path (SetSettingValue rejects
@@ -1542,7 +1579,12 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: 'Missing admin context.' } }, 400)
     }
 
-    const { registrationDisabled } = request.body as { registrationDisabled?: boolean }
+    // An empty body used to be read as "registration enabled" and opened
+    // sign-ups; a string "false" was truthy and closed them.
+    const { registrationDisabled } = adminRequestBody(request)
+    if (typeof registrationDisabled !== 'boolean') {
+      return this.json({ error: { message: 'A boolean `registrationDisabled` flag is required.' } }, 400)
+    }
 
     const result = await this.setSettingValue.execute({
       settingName: SettingName.NAMES.RegistrationDisabled,
@@ -1555,7 +1597,7 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: result.getError() } }, 400)
     }
 
-    return this.json({ success: true, registrationDisabled: Boolean(registrationDisabled) })
+    return this.json({ success: true, registrationDisabled })
   }
 
   /**
@@ -1618,11 +1660,25 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     const { roleUuid } = request.params as Record<string, string>
-    const { permissionNames } = request.body as { permissionNames?: string[] }
+    // A body without the list used to replace the role's permissions with
+    // none. An explicit empty array is still accepted: it is what the Groups &
+    // roles pane sends when every permission is unticked.
+    const { permissionNames } = adminRequestBody(request)
+    if (!isStringArray(permissionNames)) {
+      return this.json(
+        {
+          error: {
+            message:
+              'A `permissionNames` array of permission names is required (an empty array removes every permission from the role).',
+          },
+        },
+        400,
+      )
+    }
 
     const result = await this.doSetRolePermissions.execute({
       roleUuid,
-      permissionNames: permissionNames ?? [],
+      permissionNames,
     })
     if (result.isFailed()) {
       return this.json({ error: { message: result.getError() } }, 400)
@@ -1669,6 +1725,10 @@ export class BaseAdminController extends BaseHttpController {
       name?: string
       description?: string | null
       permissionNames?: string[]
+    }
+    // Optional on create (a new role may start empty), but never a non-list.
+    if (permissionNames !== undefined && !isStringArray(permissionNames)) {
+      return this.json({ error: { message: '`permissionNames` must be an array of permission names.' } }, 400)
     }
 
     const result = await this.doCreateCustomRole.execute({
@@ -1844,6 +1904,10 @@ export class BaseAdminController extends BaseHttpController {
       description?: string | null
       roleNames?: string[]
     }
+    // Optional on create (a new group may confer nothing yet), but never a non-list.
+    if (roleNames !== undefined && !isStringArray(roleNames)) {
+      return this.json({ error: { message: '`roleNames` must be an array of role names.' } }, 400)
+    }
 
     const result = await this.doCreateGroup.execute({
       name: name ?? '',
@@ -1914,9 +1978,23 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     const { groupUuid } = request.params as Record<string, string>
-    const { roleNames } = request.body as { roleNames?: string[] }
+    // A body without the list used to strip every role from the group. An
+    // explicit empty array is still accepted: it is what the pane sends when
+    // the last role is unticked.
+    const { roleNames } = adminRequestBody(request)
+    if (!isStringArray(roleNames)) {
+      return this.json(
+        {
+          error: {
+            message:
+              'A `roleNames` array of role names is required (an empty array removes every role from the group).',
+          },
+        },
+        400,
+      )
+    }
 
-    const result = await this.doSetGroupRoles.execute({ groupUuid, roleNames: roleNames ?? [] })
+    const result = await this.doSetGroupRoles.execute({ groupUuid, roleNames })
     if (result.isFailed()) {
       return this.json({ error: { message: result.getError() } }, 400)
     }
