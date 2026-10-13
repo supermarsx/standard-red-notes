@@ -767,6 +767,114 @@ test("deployment marker requests bypass the service worker and every cache", () 
   assert.equal(cacheCalls, 0);
 });
 
+// After a redeploy a page ran the NEW app.js beside the PREVIOUS build's lazy
+// chunks: the worker's "network-first" branches were a plain fetch(request),
+// which the HTTP cache answered from copies stored before nginx sent
+// Cache-Control. Every shell and bundle fetch must make the HTTP cache
+// revalidate, and going offline must still serve this build's cached copy.
+function serviceWorkerHarness({ online }) {
+  const listeners = new Map();
+  const fetched = [];
+  const cached = new Map([
+    ["https://notes.example.test/5632.app.js", "cached chunk"],
+    ["https://notes.example.test/app.js", "cached entry"],
+    ["https://notes.example.test/", "cached shell"],
+  ]);
+  const keyOf = (request) =>
+    typeof request === "string"
+      ? new URL(request, "https://notes.example.test").href
+      : request.url;
+  const context = {
+    URL,
+    Request,
+    Response,
+    Promise,
+    fetch: async (input) => {
+      fetched.push(input);
+      if (!online) {
+        throw new TypeError("NetworkError");
+      }
+      return new Response("network body", { status: 200 });
+    },
+    caches: {
+      open: async () => ({
+        put: async () => undefined,
+        match: async (request) => {
+          const body = cached.get(keyOf(request));
+          return body === undefined ? undefined : new Response(body);
+        },
+      }),
+      match: async () => {
+        throw new Error("the fallback must stay scoped to this build's cache");
+      },
+    },
+    self: {
+      location: { origin: "https://notes.example.test" },
+      addEventListener: (type, listener) => listeners.set(type, listener),
+    },
+  };
+  runInNewContext(serviceWorker, context);
+  const respond = async (request) => {
+    let responsePromise;
+    listeners.get("fetch")({
+      request,
+      respondWith: (value) => {
+        responsePromise = Promise.resolve(value);
+      },
+    });
+    assert.ok(responsePromise, `${request.url} must be intercepted`);
+    return responsePromise;
+  };
+  return { fetched, respond };
+}
+
+test("the worker makes the HTTP cache revalidate every shell and bundle fetch", async () => {
+  const { fetched, respond } = serviceWorkerHarness({ online: true });
+  for (const url of [
+    "https://notes.example.test/app.js",
+    "https://notes.example.test/app.css",
+    "https://notes.example.test/5632.app.js",
+    "https://notes.example.test/12.0123456789abcdef0123.app.css",
+  ]) {
+    const response = await respond(new Request(url));
+    assert.equal(await response.text(), "network body", url);
+  }
+  // A navigation-shaped request: a real one cannot be constructed outside a
+  // browser, and the worker must not throw on either shape.
+  const navigation = new Request("https://notes.example.test/");
+  Object.defineProperty(navigation, "mode", { value: "navigate" });
+  assert.equal(await (await respond(navigation)).text(), "network body");
+
+  assert.equal(fetched.length, 5);
+  for (const request of fetched) {
+    assert.ok(request instanceof Request, String(request));
+    assert.equal(
+      request.cache,
+      "no-cache",
+      `${request.url} was fetched with cache "${request.cache}"; the HTTP cache may answer it with a previous build's copy`,
+    );
+  }
+});
+
+test("offline, the revalidating worker still serves this build's cached shell and chunks", async () => {
+  const { respond } = serviceWorkerHarness({ online: false });
+  assert.equal(
+    await (
+      await respond(new Request("https://notes.example.test/5632.app.js"))
+    ).text(),
+    "cached chunk",
+  );
+  assert.equal(
+    await (
+      await respond(new Request("https://notes.example.test/app.js"))
+    ).text(),
+    "cached entry",
+  );
+  const navigation = new Request("https://notes.example.test/");
+  Object.defineProperty(navigation, "mode", { value: "navigate" });
+  assert.equal(await (await respond(navigation)).text(), "cached shell");
+});
+
 test("the app script policy is byte-identical across all three topologies", () => {
   // One security policy, three hand-maintained copies (compose, single container,
   // LXC). The stale script-src-attr hash removed alongside this guard survived

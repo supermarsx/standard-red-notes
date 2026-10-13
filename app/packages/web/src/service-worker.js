@@ -83,6 +83,23 @@ self.addEventListener('message', (event) => {
   }
 })
 
+// The same request, but one the browser's HTTP cache must REVALIDATE before
+// answering (a conditional request; a 304 still costs no body). A plain
+// `fetch(request)` lets the HTTP cache answer without touching the network, and
+// copies stored before nginx sent `Cache-Control: no-cache` are heuristically
+// fresh: that is how a page ran the new app.js beside a previous build's lazy
+// chunks after a redeploy. Re-initialising a navigation request turns its mode
+// into "same-origin" (Fetch spec) and keeps its redirect mode; an engine that
+// still refuses to re-initialise one gets the plain request rather than an
+// exception, which is no worse than before.
+function revalidating(request) {
+  try {
+    return new Request(request, { cache: 'no-cache' })
+  } catch (error) {
+    return request
+  }
+}
+
 function isApiRequest(url) {
   // Versioned sync-server endpoints and any auth/subscription/websocket paths.
   return (
@@ -126,9 +143,10 @@ self.addEventListener('fetch', (event) => {
 
   // HTML navigations: network-first so users get the freshest shell when
   // online, falling back to the cached shell (then index.html) when offline.
+  // Revalidated, so "network-first" cannot be answered by a stale HTTP-cache copy.
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
-      fetch(request)
+      fetch(revalidating(request))
         .then((response) => {
           // Only a real app shell may enter the cache. A reverse proxy that is
           // between releases answers navigations with its own 502/503/504 HTML;
@@ -171,9 +189,11 @@ self.addEventListener('fetch', (event) => {
   // references chunks whose STALE cache-first copies the SW returns —
   // "Loading chunk N failed" for lazy components (e.g. the Super editor), or a
   // blank page for the entry. Falls back to the cached copy when offline.
+  // Revalidated for the same reason as navigations: the HTTP cache may hold the
+  // previous build's copy under the same name.
   if (url.pathname.endsWith('app.js') || url.pathname.endsWith('app.css')) {
     event.respondWith(
-      fetch(request)
+      fetch(revalidating(request))
         .then((response) => {
           if (response && response.status === 200 && response.type === 'basic') {
             const copy = response.clone()
