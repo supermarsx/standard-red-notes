@@ -40,6 +40,8 @@ const EXPECTED_CHECKS = [
   'a link that goes takes its number with it: every surviving link keeps the style it had, for every operation that removes links',
   'the defect is real in this mermaid: a linkStyle past the last link stops the diagram',
   'a text with configuration the app does not honour comes through every operation with those lines untouched',
+  'every shape the builder can give a box is one mermaid draws, in the classic and the hand-drawn look',
+  'the defect is real in this mermaid: it reads an ellipse and cannot draw it',
 ]
 
 let status: number | null = null
@@ -106,6 +108,12 @@ describe('the builder’s operations, judged by the installed mermaid', () => {
     expect(counts.commonFormsWithARefusal).toBeLessThanOrEqual(4)
     expect(counts.styledRemovals).toBeGreaterThanOrEqual(25)
     expect(counts.lockedConfigOperations).toBeGreaterThanOrEqual(40)
+    // Drawn, not only read: all fourteen shapes, each set on a box and given
+    // to a new one, in both looks; and the one shape mermaid reads and cannot
+    // draw, which the builder therefore never writes.
+    expect(counts.shapesDrawn).toBe(14)
+    expect(counts.shapeDrawings).toBe(14 * 2 * 2)
+    expect(counts.shapesReadAndNotDrawn).toBe(1)
   })
 
   it('says which mermaid and which Node it judged', () => {

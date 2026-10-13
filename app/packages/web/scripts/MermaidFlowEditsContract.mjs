@@ -6,7 +6,7 @@
 // on every text of the corpus, with the installed library — not the builder's
 // own reading — saying what the result means.
 //
-// Four things are held, each by a named check:
+// Five things are held, each by a named check:
 //
 //   - no operation is ever "altered": mermaid either reads the result as
 //     exactly what was asked, or the operation was refused, by name, and the
@@ -16,7 +16,10 @@
 //     shares nothing with the operation's own expectation;
 //   - an accepted operation changes only the lines it owns;
 //   - the four ways the previous builder changed a diagram without saying so,
-//     and the `linkStyle` failure, cannot happen.
+//     and the `linkStyle` failure, cannot happen;
+//   - what the builder writes, mermaid DRAWS. Reading is not drawing: mermaid
+//     reads `A(-x-)` as an ellipse and then has no shape to draw it with, so
+//     the last checks call `mermaid.render` on what the builder wrote.
 //
 // MermaidFlowEditsContract.spec.ts starts it as a child process, so it runs
 // wherever `yarn test` runs, and reads its exit code and the JSON summary on
@@ -24,7 +27,17 @@
 //
 //   node scripts/MermaidFlowEditsContract.mjs          what the gate runs: a few operations of every kind per text
 //   node scripts/MermaidFlowEditsContract.mjs --all    every operation on every box, link and group of every text
-import { api, assert, contractKit, lines, NODES, quoted, same } from './MermaidUnderNode.mjs'
+import {
+  api,
+  assert,
+  contractKit,
+  installLayoutStandIns,
+  lines,
+  mermaid,
+  NODES,
+  quoted,
+  same,
+} from './MermaidUnderNode.mjs'
 
 const FlowDoc = await import(`${NODES}/MermaidFlowDoc.ts`)
 await FlowDoc.loadMermaidFlowGrammar()
@@ -89,7 +102,7 @@ const LEVELS = {
 // which would otherwise reset and configure the library again. The app's own
 // path through MermaidRuntime's queue is what the named checks at the end use.
 api.reset()
-;(await import('./MermaidUnderNode.mjs')).mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' })
+mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' })
 const FLOWCHART_TYPES = new Set(['flowchart', 'flowchart-v2'])
 const readDirectly = async (text) => {
   try {
@@ -274,7 +287,7 @@ function operationsFor(reading, document, level) {
           : [`${id} reads "${after.nodes.find((node) => node.id === id)?.text}"`]),
       ])
     }
-    for (const shape of ['lean_right', 'round', 'ellipse', 'doublecircle'].slice(0, level.shapes)) {
+    for (const shape of ['lean_right', 'round', 'hexagon', 'doublecircle'].slice(0, level.shapes)) {
       add('reshape', `reshape ${id} ${shape}`, Edits.reshapeMermaidFlowNode(id, shape), named, (before, after) => {
         const was = before.nodes.find((node) => node.id === id)
         const is = after.nodes.find((node) => node.id === id)
@@ -1045,5 +1058,109 @@ await check(
     return `${accepted} operations, ${head.length} characters of configuration identical after each`
   },
 )
+
+// ===========================================================================
+// Drawing. Everything above asks mermaid what a text MEANS. These ask it to
+// draw what the builder wrote, because the two can differ: the grammar reads a
+// form the renderer has no shape for, the database says nothing is wrong, and
+// the diagram is an error on the page.
+// ===========================================================================
+
+installLayoutStandIns()
+const LOOKS = [
+  ['classic', { look: 'classic' }],
+  ['hand-drawn', { look: 'handDrawn', handDrawnSeed: 7 }],
+]
+let drawings = 0
+/** Draw a text with the installed mermaid; null when it draws, mermaid's own words when it does not. */
+const drawingProblem = async (text, config) => {
+  // The app's own path configures mermaid for each reading, so the look is set
+  // again before every drawing.
+  api.reset()
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', ...config })
+  try {
+    const { svg } = await mermaid.render(`edits-contract-${drawings++}`, text)
+    return svg.includes('<svg') ? null : 'mermaid returned no picture'
+  } catch (error) {
+    return String(error?.message ?? error).split('\n')[0]
+  }
+}
+
+await check(
+  'every shape the builder can give a box is one mermaid draws, in the classic and the hand-drawn look',
+  async () => {
+    const shapes = Object.keys(Edits.MERMAID_FLOW_BRACKET_SHAPES)
+    assert(shapes.length >= 14, `only ${shapes.length} shapes are offered`)
+    let drawn = 0
+    for (const shape of shapes) {
+      // Set on a box that is there, and given to a new one: the two ways a shape is written.
+      const reshaped = await Oracle.applyMermaidFlowEdit(
+        lines('flowchart LR', '  A[Start] --> B'),
+        Edits.reshapeMermaidFlowNode('A', shape),
+      )
+      const added = await Oracle.applyMermaidFlowEdit(
+        lines('flowchart LR', '  A --> B'),
+        Edits.addMermaidFlowNode({ label: 'Is it "new"?', shape, linkFrom: 'B' }),
+      )
+      for (const [how, outcome] of [
+        ['set', reshaped],
+        ['added', added],
+      ]) {
+        assert(outcome.ok, `${shape} ${how}: ${outcome.stage}: ${outcome.reason}`)
+        for (const [look, config] of LOOKS) {
+          const problem = await drawingProblem(outcome.text, config)
+          assert(
+            problem === null,
+            `the builder writes ${quoted(outcome.text)} for "${shape}", and mermaid cannot draw it (${look}): ${problem}`,
+          )
+          drawn++
+        }
+      }
+    }
+    counts.shapesDrawn = shapes.length
+    counts.shapeDrawings = drawn
+    return `${shapes.length} shapes, each set and added, ${drawn} drawings`
+  },
+)
+
+await check('the defect is real in this mermaid: it reads an ellipse and cannot draw it', async () => {
+  // Why the ellipse is not a shape the builder writes. If a later mermaid
+  // draws it, this fails, and the shape can go back on the list.
+  const said = []
+  const undrawn = Object.entries(Edits.MERMAID_FLOW_UNDRAWN_SHAPES)
+  assert(undrawn.length > 0, 'no shape is listed as read and not drawn: this check is guarding nothing')
+  for (const [shape, [open, close]] of undrawn) {
+    const text = lines('flowchart LR', `  A${open}Label${close} --> B`)
+    const reading = await Oracle.readMermaidFlowchart(text)
+    assert(reading.ok, `mermaid no longer reads ${quoted(text)}: ${reading.message}`)
+    assert(
+      reading.reading.nodes[0].type === shape,
+      `mermaid reads ${quoted(text)} as "${reading.reading.nodes[0].type}", not "${shape}"`,
+    )
+    for (const [look, config] of LOOKS) {
+      const problem = await drawingProblem(text, config)
+      assert(
+        problem !== null,
+        `mermaid now draws "${shape}" (${look}): move it from MERMAID_FLOW_UNDRAWN_SHAPES to MERMAID_FLOW_BRACKET_SHAPES`,
+      )
+      assert(/No such shape/.test(problem), `mermaid fails on "${shape}" (${look}) for another reason: ${problem}`)
+      said.push(problem)
+    }
+    // And the builder will not write it, however it is asked.
+    for (const edit of [Edits.reshapeMermaidFlowNode('B', shape), Edits.addMermaidFlowNode({ label: 'Oval', shape })]) {
+      const outcome = await Oracle.applyMermaidFlowEdit(text, edit)
+      assert(
+        !outcome.ok && outcome.stage === 'refused',
+        `the builder wrote a "${shape}": ${quoted(outcome.ok ? outcome.text : outcome.reason)}`,
+      )
+    }
+    // It can be given a shape that draws: the repair.
+    const repaired = await Oracle.applyMermaidFlowEdit(text, Edits.reshapeMermaidFlowNode('A', 'stadium'))
+    assert(repaired.ok, `an "${shape}" could not be reshaped: ${repaired.reason}`)
+    assert((await drawingProblem(repaired.text, LOOKS[0][1])) === null, `${quoted(repaired.text)} still does not draw`)
+  }
+  counts.shapesReadAndNotDrawn = undrawn.length
+  return said[0]
+})
 
 finish({ everything })

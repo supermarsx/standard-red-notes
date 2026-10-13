@@ -26,7 +26,9 @@ import {
   addMermaidFlowNode,
   deleteMermaidFlowNode,
   isMermaidFlowBracketShape,
+  isMermaidFlowUndrawnShape,
   MERMAID_FLOW_BRACKET_SHAPES,
+  MERMAID_FLOW_UNDRAWN_SHAPES,
   mermaidFlowArrow,
   type MermaidFlowBracketShape,
   mermaidFlowIdProblem,
@@ -181,11 +183,46 @@ describe('drawing a box as another shape', () => {
     expect(readingOf(text).nodes[0]).toMatchObject({ id: 'A', type: shape, text: 'Start' })
   })
 
-  it('offers all fifteen shapes mermaid writes with brackets', () => {
-    expect(brackets).toHaveLength(15)
+  it('offers the fourteen shapes mermaid writes with brackets and draws', () => {
+    expect(brackets).toHaveLength(14)
     expect(isMermaidFlowBracketShape('lean_left')).toBe(true)
     expect(isMermaidFlowBracketShape('cyl')).toBe(false)
     expect(isMermaidFlowBracketShape('toString')).toBe(false)
+  })
+
+  // Mermaid 11 reads `A(-x-)` as an ellipse and then cannot draw it: the whole
+  // diagram becomes "No such shape: ellipse". Mermaid's READING of such a result
+  // is exactly what was asked, so nothing downstream of the operation would stop
+  // it; the operation is where it stops.
+  it('never writes the ellipse, which mermaid reads and cannot draw', async () => {
+    expect(isMermaidFlowBracketShape('ellipse')).toBe(false)
+    expect(Object.keys(MERMAID_FLOW_UNDRAWN_SHAPES)).toEqual(['ellipse'])
+    expect(['ellipse', 'round', 'toString', undefined].map(isMermaidFlowUndrawnShape)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ])
+    const asked = 'ellipse' as MermaidFlowBracketShape
+    const reshaped = await refusal(src('flowchart LR', '  A[Start] --> B'), reshapeMermaidFlowNode('A', asked))
+    expect(reshaped.reason).toBe(
+      'Mermaid reads the shape "ellipse" and cannot draw it, so the builder does not set it.',
+    )
+    const added = await refusal(src('flowchart LR', '  A --> B'), addMermaidFlowNode({ label: 'Oval', shape: asked }))
+    expect(added.reason).toBe('Mermaid reads the shape "ellipse" and cannot draw it, so the builder does not set it.')
+    const unknown = await refusal(
+      src('flowchart LR', '  A --> B'),
+      reshapeMermaidFlowNode('A', 'constructor' as MermaidFlowBracketShape),
+    )
+    expect(unknown.reason).toBe('"constructor" is not a shape the builder sets.')
+  })
+
+  it('gives a box that is written as an ellipse another shape, which is the repair', async () => {
+    const broken = src('flowchart LR', '  A(-Oval-) --> B')
+    expect(readingOf(broken).nodes[0]).toMatchObject({ id: 'A', type: 'ellipse', text: 'Oval' })
+    expect(await edited(broken, reshapeMermaidFlowNode('A', 'stadium'))).toBe(src('flowchart LR', '  A([Oval]) --> B'))
+    // And its text can be changed where it stands: the builder does not make the diagram worse.
+    expect(await edited(broken, relabelMermaidFlowNode('A', 'Egg'))).toBe(src('flowchart LR', '  A(-Egg-) --> B'))
   })
 
   it('quotes a label that is only safe between plain brackets', async () => {

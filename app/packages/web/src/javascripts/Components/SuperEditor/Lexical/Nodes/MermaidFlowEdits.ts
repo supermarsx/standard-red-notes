@@ -62,9 +62,19 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * The shapes mermaid writes with brackets, by mermaid's own names, each with
- * the delimiters it is written in. The other shapes mermaid knows are written
- * as `@{ shape: … }`; the builder shows and keeps those, and does not set them.
+ * The shapes mermaid writes with brackets AND draws, by mermaid's own names,
+ * each with the delimiters it is written in. The other shapes mermaid knows
+ * are written as `@{ shape: … }`; the builder shows and keeps those, and does
+ * not set them.
+ *
+ * The ellipse, `A(-text-)`, is not in this list, and that is deliberate.
+ * Mermaid 11 reads it — its database says the box is an `ellipse`, so asking
+ * mermaid what the text means finds nothing wrong — and then cannot draw it:
+ * `render` stops with "No such shape: ellipse" and the whole diagram is an
+ * error. A shape set by the builder must never do that to a diagram, so it
+ * never writes one. scripts/MermaidFlowEditsContract.mjs draws every shape
+ * listed here with the installed mermaid, and fails by name on the day the
+ * ellipse is drawn too.
  */
 export const MERMAID_FLOW_BRACKET_SHAPES = {
   square: ['[', ']'],
@@ -81,12 +91,42 @@ export const MERMAID_FLOW_BRACKET_SHAPES = {
   trapezoid: ['[/', '\\]'],
   inv_trapezoid: ['[\\', '/]'],
   doublecircle: ['(((', ')))'],
-  ellipse: ['(-', '-)'],
 } as const
 export type MermaidFlowBracketShape = keyof typeof MERMAID_FLOW_BRACKET_SHAPES
 
 export function isMermaidFlowBracketShape(value: unknown): value is MermaidFlowBracketShape {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(MERMAID_FLOW_BRACKET_SHAPES, value)
+}
+
+/**
+ * Shapes mermaid's grammar reads and its renderer has no drawing for, each
+ * with the way it is written. A diagram with a box of one of these shows an
+ * error instead of a picture. The builder still reads such a box, and gives
+ * it another shape when asked — which is the repair — so the outline can say
+ * on the box itself what is wrong with the diagram.
+ */
+export const MERMAID_FLOW_UNDRAWN_SHAPES: Readonly<Record<string, readonly [string, string]>> = {
+  ellipse: ['(-', '-)'],
+}
+
+/** A box's shape as mermaid names it: one mermaid reads and cannot draw? */
+export function isMermaidFlowUndrawnShape(type: string | undefined): boolean {
+  return type !== undefined && Object.prototype.hasOwnProperty.call(MERMAID_FLOW_UNDRAWN_SHAPES, type)
+}
+
+/**
+ * The brackets a shape is written in. Whatever the caller's types said, a
+ * shape that is not in the list is refused here: the list is what is drawn.
+ */
+const bracketsOf = (shape: string): readonly [string, string] => {
+  if (isMermaidFlowBracketShape(shape)) {
+    return MERMAID_FLOW_BRACKET_SHAPES[shape]
+  }
+  throw new MermaidEditRefusal(
+    isMermaidFlowUndrawnShape(shape)
+      ? `Mermaid reads the shape "${shape}" and cannot draw it, so the builder does not set it.`
+      : `"${shape}" is not a shape the builder sets.`,
+  )
 }
 
 export const MERMAID_FLOW_LINK_STROKES = ['normal', 'thick', 'dotted', 'invisible'] as const
@@ -915,7 +955,7 @@ export const reshapeMermaidFlowNode = (id: string, shape: MermaidFlowBracketShap
   operation((bench, reading) => {
     requireNode(reading, id)
     refuseShapeData(bench, id, 'change its shape')
-    const [open, close] = MERMAID_FLOW_BRACKET_SHAPES[shape]
+    const [open, close] = bracketsOf(shape)
     const mentions = bench.mentionsOf(id)
     const shaped = [...mentions].reverse().find((mention) => mention.shape !== null)
     if (shaped?.shape) {
@@ -1064,7 +1104,7 @@ export const addMermaidFlowNode = (options: MermaidFlowNewNode): MermaidFlowEdit
       return refuse(problem)
     }
     const shape = options.shape ?? 'square'
-    const [open, close] = MERMAID_FLOW_BRACKET_SHAPES[shape]
+    const [open, close] = bracketsOf(shape)
     const written = writeLabel(options.label, 'text')
     const box = `${id}${open}${written.source}${close}`
     const node = {
