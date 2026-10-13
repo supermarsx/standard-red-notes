@@ -1,7 +1,7 @@
 # Rolling release pipeline for the Standard Red Notes DESKTOP app (electron-builder).
 #
 # Electron apps are built on native runners (no cross-compile). Stages:
-#   impact -> identity -> build -> decide -> fan-in -> release
+#   impact -> signing -> identity -> build -> decide -> fan-in -> release
 #
 # Trigger: push to `main` touching any packaged app workspace or dependency
 # manifest, or manual dispatch. The desktop embeds the web UI and its shared
@@ -26,6 +26,10 @@
 # Authenticode signature from the configured certificate. The hooks still
 # allow unsigned local/non-publishing builds unless
 # REQUIRE_DESKTOP_AUTHENTICITY=true is set explicitly.
+#
+# Publication needs every signing secret. While any is missing the `signing`
+# job ends the run green before a release is reserved or anything is built,
+# and names the missing secrets; once they all exist the same run publishes.
 name: srn-desktop
 
 on:
@@ -133,12 +137,94 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Desktop installers are published signed and notarized, or not at all, and
+  # the credentials for that are not always configured. Unless every one of
+  # them is, the run stops here: nothing is reserved, nothing is built, and the
+  # run concludes green with an annotation that names what is missing.
+  # Configuring the secrets is all it takes to switch publication on.
+  signing:
+    name: check signing credentials
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release-production
+    outputs:
+      configured: ${{ steps.signing.outputs.configured }}
+    steps:
+      - id: signing
+        name: Skip the release unless every signing credential is configured
+        env:
+          # Presence only. No secret value enters this job.
+          HAS_MAC_CI_KEYS: ${{ secrets.MAC_CI_KEYS != '' }}
+          HAS_MAC_CI_KEYS_PASSWORD: ${{ secrets.MAC_CI_KEYS_PASSWORD != '' }}
+          HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          HAS_NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID != '' }}
+          HAS_NOTARIZE_APPLE_ID_PASSWORD: ${{ secrets.NOTARIZE_APPLE_ID_PASSWORD != '' }}
+          HAS_SM_HOST: ${{ secrets.SM_HOST != '' }}
+          HAS_SM_API_KEY: ${{ secrets.SM_API_KEY != '' }}
+          HAS_SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 != '' }}
+          HAS_SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD != '' }}
+          HAS_SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS != '' }}
+          HAS_SM_CODE_SIGNING_CERT_SHA1_HASH: ${{ secrets.SM_CODE_SIGNING_CERT_SHA1_HASH != '' }}
+          HAS_SM_CLIENT_TOOLS_MSI_SHA256: ${{ secrets.SM_CLIENT_TOOLS_MSI_SHA256 != '' }}
+        run: |
+          set -euo pipefail
+          required=(
+            MAC_CI_KEYS
+            MAC_CI_KEYS_PASSWORD
+            APPLE_TEAM_ID
+            NOTARIZE_APPLE_ID
+            NOTARIZE_APPLE_ID_PASSWORD
+            SM_HOST
+            SM_API_KEY
+            SM_CLIENT_CERT_FILE_B64
+            SM_CLIENT_CERT_PASSWORD
+            SM_KEYPAIR_ALIAS
+            SM_CODE_SIGNING_CERT_SHA1_HASH
+            SM_CLIENT_TOOLS_MSI_SHA256
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            presence="HAS_${name}"
+            case "${!presence:-}" in
+              true) ;;
+              false) missing+=("$name") ;;
+              *)
+                echo "::error title=${TOOL} signing check failed::${presence} is '${!presence:-}', neither true nor false; the workflow does not report whether secret ${name} is configured."
+                exit 1
+                ;;
+            esac
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "All ${#required[@]} desktop signing secrets are configured; the release proceeds." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          printf -v names '%s, ' "${missing[@]}"
+          names="${names%, }"
+          # Some but not all is a configuration in progress or a mistake, not
+          # the state the owner chose; say it more loudly, and still do not fail.
+          level=notice
+          if [ "${#missing[@]}" -ne "${#required[@]}" ]; then
+            level=warning
+          fi
+          message="desktop release skipped: signing secrets not configured (${#missing[@]} of ${#required[@]} missing): ${names}"
+          echo "::${level} title=${TOOL} release skipped::${message}. Nothing was reserved or built. Add the missing secrets to the repository or to its release-production environment and the next run publishes."
+          {
+            echo "### ${TOOL} release skipped"
+            echo
+            echo "${message}."
+            echo
+            echo "Nothing was reserved or built, and no draft release was created. Desktop installers are only published signed and notarized. Add the missing secrets to the repository or to its \`release-production\` environment and the next run publishes; no workflow change is needed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Reserve a commit-and-intent-bound draft before native packaging. The same
   # workflow run reuses it on retry; a new forced invocation gets a new YY.N.
   identity:
     name: reserve release identity
-    needs: impact
-    if: needs.impact.outputs.changed == 'true'
+    needs: [impact, signing]
+    if: needs.impact.outputs.changed == 'true' && needs.signing.outputs.configured == 'true'
     runs-on: ubuntu-latest
     environment: release-production
     permissions:

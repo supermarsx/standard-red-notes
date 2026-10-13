@@ -5458,3 +5458,304 @@ test(
     }
   },
 );
+
+// Desktop requires signing secrets; absent, it skips before reservation.
+const DESKTOP_SIGNING_SECRET_NAMES = Object.freeze([
+  "MAC_CI_KEYS",
+  "MAC_CI_KEYS_PASSWORD",
+  "APPLE_TEAM_ID",
+  "NOTARIZE_APPLE_ID",
+  "NOTARIZE_APPLE_ID_PASSWORD",
+  "SM_HOST",
+  "SM_API_KEY",
+  "SM_CLIENT_CERT_FILE_B64",
+  "SM_CLIENT_CERT_PASSWORD",
+  "SM_KEYPAIR_ALIAS",
+  "SM_CODE_SIGNING_CERT_SHA1_HASH",
+  "SM_CLIENT_TOOLS_MSI_SHA256",
+]);
+
+test("desktop skips before reservation unless every signing secret is configured", () => {
+  const file = ".github/workflows/srn-desktop.yml";
+  for (const [jobName, nextJobName, fragment, replacement, expected] of [
+    [
+      "signing",
+      "identity",
+      "          HAS_SM_API_KEY: ${{ secrets.SM_API_KEY != '' }}\n",
+      "",
+      [
+        /missing presence-only read of SM_API_KEY/,
+        /the signing check may read only whether each signing secret is set, never a value/,
+      ],
+    ],
+    [
+      "signing",
+      "identity",
+      "HAS_SM_API_KEY: ${{ secrets.SM_API_KEY != '' }}",
+      "HAS_SM_API_KEY: ${{ secrets.SM_API_KEY }}",
+      [
+        /missing presence-only read of SM_API_KEY/,
+        /the signing check may read only whether each signing secret is set, never a value/,
+      ],
+    ],
+    [
+      "signing",
+      "identity",
+      "            SM_HOST\n",
+      "",
+      [/missing SM_HOST among the required signing secrets/],
+    ],
+    [
+      "signing",
+      "identity",
+      'echo "configured=false" >> "$GITHUB_OUTPUT"',
+      "exit 1",
+      [
+        /missing unconfigured signing result/,
+        /a missing signing secret must skip the release, not fail the run/,
+      ],
+    ],
+    [
+      "signing",
+      "identity",
+      'echo "::${level} title=${TOOL} release skipped::${message}.',
+      'echo "${message}.',
+      [/missing skipped desktop release annotation/],
+    ],
+    [
+      "signing",
+      "identity",
+      "level=notice",
+      "level=error",
+      [/missing notice when no signing secret is configured/],
+    ],
+    [
+      "signing",
+      "identity",
+      "    environment: release-production\n",
+      "",
+      [
+        /missing signing protected production environment/,
+        /desktop production environment must be scoped exactly to the signing check, identity, authenticated build, unchanged-draft deletion, and release/,
+      ],
+    ],
+    [
+      "signing",
+      "identity",
+      "    environment: release-production\n",
+      "    environment: release-production\n    permissions:\n      contents: write\n",
+      [/the signing check must not write, call GitHub, or run an action/],
+    ],
+    [
+      "identity",
+      "build",
+      "needs: [impact, signing]",
+      "needs: impact",
+      [
+        /missing desktop identity dependency on impact analysis and the signing check/,
+        /identity dependencies must be exactly impact, signing; found impact/,
+      ],
+    ],
+    [
+      "identity",
+      "build",
+      " && needs.signing.outputs.configured == 'true'",
+      "",
+      [/missing desktop identity source-impact and signing-credential guard/],
+    ],
+    [
+      "build",
+      "decide",
+      "CSC_LINK: ${{ secrets.MAC_CI_KEYS }}",
+      "CSC_LINK: ${{ secrets.MAC_CI_KEYS_V2 }}",
+      [
+        /the signing check must cover exactly the secrets the workflow uses; unchecked=MAC_CI_KEYS_V2; unused=none/,
+      ],
+    ],
+  ]) {
+    const files = withJobChanged(file, jobName, nextJobName, (job) =>
+      job.replace(fragment, replacement),
+    );
+    const errors = validateReleaseContract(files).join("\n");
+    for (const pattern of expected) {
+      assert.match(errors, pattern, `${jobName}: ${fragment}`);
+    }
+  }
+
+  const withoutGate = withFileChanged(file, (content) => {
+    const start = content.indexOf("\n  signing:");
+    const end = content.indexOf("\n  identity:", start);
+    return `${content.slice(0, start)}${content.slice(end)}`;
+  });
+  assert.match(
+    validateReleaseContract(withoutGate).join("\n"),
+    /missing desktop signing-credential check before reservation/,
+  );
+});
+
+test("the desktop signing requirement stays documented", () => {
+  const file = "docs/releases-and-upgrades.md";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("Its `signing` job runs before any", "A job runs before any")
+      .replace(
+        "Desktop publication is therefore off until the secrets exist",
+        "Desktop publication may be off",
+      )
+      .replace("`SM_KEYPAIR_ALIAS`", "a key pair alias"),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /releases-and-upgrades\.md: missing documented desktop signing check before reservation/,
+  );
+  assert.match(
+    errors,
+    /releases-and-upgrades\.md: missing documented desktop skip without signing secrets/,
+  );
+  assert.match(
+    errors,
+    /releases-and-upgrades\.md: missing documented desktop signing secret SM_KEYPAIR_ALIAS/,
+  );
+});
+
+function runDesktopSigningCheck(presence) {
+  assert.equal(reservationShellProblemFound, null);
+  const root = mkdtempSync(path.join(os.tmpdir(), "srn-signing-"));
+  try {
+    const script = path.join(root, "step.sh");
+    const output = path.join(root, "github-output.txt");
+    const summary = path.join(root, "github-step-summary.md");
+    writeFileSync(
+      script,
+      reservationRunBlock(
+        ".github/workflows/srn-desktop.yml",
+        "Skip the release unless every signing credential is configured",
+      ),
+    );
+    writeFileSync(output, "");
+    writeFileSync(summary, "");
+    const result = spawnSync(
+      "bash",
+      ["--noprofile", "--norc", "-e", "-o", "pipefail", script],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          TOOL: "srn-desktop",
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary,
+          ...presence,
+        },
+      },
+    );
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      outputText: readFileSync(output, "utf8"),
+      summary: readFileSync(summary, "utf8"),
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const desktopSigningPresence = (configured) =>
+  Object.fromEntries(
+    DESKTOP_SIGNING_SECRET_NAMES.map((name) => [
+      `HAS_${name}`,
+      String(configured(name)),
+    ]),
+  );
+const desktopSigningSkipped = (missing) =>
+  `desktop release skipped: signing secrets not configured (${missing.length} of 12 missing): ${missing.join(", ")}`;
+const desktopSigningSkippedSummary = (missing) =>
+  [
+    "### srn-desktop release skipped",
+    "",
+    `${desktopSigningSkipped(missing)}.`,
+    "",
+    "Nothing was reserved or built, and no draft release was created. Desktop installers are only published signed and notarized. Add the missing secrets to the repository or to its `release-production` environment and the next run publishes; no workflow change is needed.",
+    "",
+  ].join("\n");
+
+test(
+  "srn-desktop signing check: with no signing secret the release is skipped green and all twelve are named",
+  reservationRuns,
+  () => {
+    const result = runDesktopSigningCheck(desktopSigningPresence(() => false));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputText, "configured=false\n");
+    assert.equal(
+      result.stdout,
+      `::notice title=srn-desktop release skipped::${desktopSigningSkipped(DESKTOP_SIGNING_SECRET_NAMES)}. Nothing was reserved or built. Add the missing secrets to the repository or to its release-production environment and the next run publishes.\n`,
+    );
+    assert.equal(result.stderr, "");
+    assert.equal(
+      result.summary,
+      desktopSigningSkippedSummary(DESKTOP_SIGNING_SECRET_NAMES),
+    );
+  },
+);
+
+test(
+  "srn-desktop signing check: with every signing secret the release proceeds and nothing is announced",
+  reservationRuns,
+  () => {
+    const result = runDesktopSigningCheck(desktopSigningPresence(() => true));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputText, "configured=true\n");
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+    assert.equal(
+      result.summary,
+      "All 12 desktop signing secrets are configured; the release proceeds.\n",
+    );
+  },
+);
+
+test(
+  "srn-desktop signing check: with only some signing secrets the release is skipped green with a warning naming the rest",
+  reservationRuns,
+  () => {
+    const missing = DESKTOP_SIGNING_SECRET_NAMES.filter((name) =>
+      name.startsWith("SM_"),
+    );
+    const result = runDesktopSigningCheck(
+      desktopSigningPresence((name) => !name.startsWith("SM_")),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputText, "configured=false\n");
+    assert.equal(
+      result.stdout,
+      `::warning title=srn-desktop release skipped::${desktopSigningSkipped(missing)}. Nothing was reserved or built. Add the missing secrets to the repository or to its release-production environment and the next run publishes.\n`,
+    );
+    assert.equal(result.summary, desktopSigningSkippedSummary(missing));
+  },
+);
+
+test(
+  "srn-desktop signing check: a presence value that is not a boolean fails instead of guessing",
+  reservationRuns,
+  () => {
+    for (const presence of [
+      { ...desktopSigningPresence(() => true), HAS_SM_HOST: "" },
+      Object.fromEntries(
+        Object.entries(desktopSigningPresence(() => true)).filter(
+          ([name]) => name !== "HAS_SM_HOST",
+        ),
+      ),
+    ]) {
+      const result = runDesktopSigningCheck(presence);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.outputText, "");
+      assert.equal(result.summary, "");
+      assert.equal(
+        result.stdout,
+        "::error title=srn-desktop signing check failed::HAS_SM_HOST is '', neither true nor false; the workflow does not report whether secret SM_HOST is configured.\n",
+      );
+    }
+  },
+);

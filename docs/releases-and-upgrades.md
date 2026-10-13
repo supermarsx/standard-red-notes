@@ -373,6 +373,20 @@ revision for the version, recovery stops: the available Snapcraft metadata does
 not prove remote byte equality, so version/channel identity alone is not
 accepted as idempotency evidence.
 
+The root publisher only publishes signed and notarized installers, so it needs
+twelve signing secrets: `MAC_CI_KEYS`, `MAC_CI_KEYS_PASSWORD`, `APPLE_TEAM_ID`,
+`NOTARIZE_APPLE_ID`, and `NOTARIZE_APPLE_ID_PASSWORD` for macOS, and `SM_HOST`,
+`SM_API_KEY`, `SM_CLIENT_CERT_FILE_B64`, `SM_CLIENT_CERT_PASSWORD`,
+`SM_KEYPAIR_ALIAS`, `SM_CODE_SIGNING_CERT_SHA1_HASH`, and
+`SM_CLIENT_TOOLS_MSI_SHA256` for Windows. Its `signing` job runs before any
+release identity is reserved and reads only whether each secret is set, never
+a value. If any is missing, the run ends successfully there: no draft is
+created, nothing is built, and the job summary and an annotation list the
+missing names. Desktop publication is therefore off until the secrets exist,
+and switches on with no workflow change on the first run after they are added
+to the repository or to its `release-production` environment. The
+per-platform credential checks in the build job remain and still fail closed.
+
 The root publisher deliberately retains an empty automatic draft when a build
 fails after identity allocation, so rerunning failed jobs for the same source
 continues to use the original release ID. Before a different source or release

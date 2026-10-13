@@ -410,6 +410,119 @@ function validateReservationReporting(errors, file, identityJob, stepName) {
   }
 }
 
+const DESKTOP_SIGNING_SECRETS = Object.freeze([
+  "MAC_CI_KEYS",
+  "MAC_CI_KEYS_PASSWORD",
+  "APPLE_TEAM_ID",
+  "NOTARIZE_APPLE_ID",
+  "NOTARIZE_APPLE_ID_PASSWORD",
+  "SM_HOST",
+  "SM_API_KEY",
+  "SM_CLIENT_CERT_FILE_B64",
+  "SM_CLIENT_CERT_PASSWORD",
+  "SM_KEYPAIR_ALIAS",
+  "SM_CODE_SIGNING_CERT_SHA1_HASH",
+  "SM_CLIENT_TOOLS_MSI_SHA256",
+]);
+
+// Desktop requires signing secrets; absent, it skips before reservation. The
+// signing job reads only whether each secret is set. When any is missing it
+// ends green, names what is missing, and leaves identity, the build, and the
+// release skipped, so no draft is reserved for a run that cannot publish.
+function validateDesktopSigningGate(errors, file, workflow) {
+  const gate = jobBlock(workflow, "signing");
+  if (!gate) {
+    errors.push(
+      `${file}: missing desktop signing-credential check before reservation`,
+    );
+    return;
+  }
+  for (const [fragment, description] of [
+    ["needs: impact", "signing check dependency on impact analysis"],
+    [
+      "if: needs.impact.outputs.changed == 'true'",
+      "signing check source-impact guard",
+    ],
+    [
+      "configured: ${{ steps.signing.outputs.configured }}",
+      "signing check result output",
+    ],
+    ['echo "configured=true" >> "$GITHUB_OUTPUT"', "configured signing result"],
+    [
+      'echo "configured=false" >> "$GITHUB_OUTPUT"',
+      "unconfigured signing result",
+    ],
+    [
+      'message="desktop release skipped: signing secrets not configured (${#missing[@]} of ${#required[@]} missing): ${names}"',
+      "skipped desktop release message naming the missing secrets",
+    ],
+    [
+      'echo "::${level} title=${TOOL} release skipped::${message}.',
+      "skipped desktop release annotation",
+    ],
+    ["level=notice", "notice when no signing secret is configured"],
+    ['} >> "$GITHUB_STEP_SUMMARY"', "skipped desktop release job summary"],
+  ]) {
+    requireFragment(errors, file, gate, fragment, description);
+  }
+  for (const name of DESKTOP_SIGNING_SECRETS) {
+    requireFragment(
+      errors,
+      file,
+      gate,
+      `HAS_${name}: \${{ secrets.${name} != '' }}`,
+      `presence-only read of ${name}`,
+    );
+    requireFragment(
+      errors,
+      file,
+      gate,
+      `\n            ${name}\n`,
+      `${name} among the required signing secrets`,
+    );
+  }
+  if (
+    countOccurrences(gate, "secrets.") !== DESKTOP_SIGNING_SECRETS.length ||
+    countOccurrences(gate, " != '' }}") !== DESKTOP_SIGNING_SECRETS.length
+  ) {
+    errors.push(
+      `${file}: the signing check may read only whether each signing secret is set, never a value`,
+    );
+  }
+  const used = new Set(
+    [
+      ...workflowWithoutJob(workflow, "signing").matchAll(
+        /secrets\.([A-Za-z0-9_]+)/g,
+      ),
+    ].map(([, name]) => name),
+  );
+  used.delete("GITHUB_TOKEN");
+  const unchecked = [...used].filter(
+    (name) => !DESKTOP_SIGNING_SECRETS.includes(name),
+  );
+  const unused = DESKTOP_SIGNING_SECRETS.filter((name) => !used.has(name));
+  if (unchecked.length > 0 || unused.length > 0) {
+    errors.push(
+      `${file}: the signing check must cover exactly the secrets the workflow uses; unchecked=${unchecked.join(",") || "none"}; unused=${unused.join(",") || "none"}`,
+    );
+  }
+  if (
+    gate.includes("contents: write") ||
+    gate.includes("uses: ") ||
+    gate.includes("gh api") ||
+    gate.includes("gh release")
+  ) {
+    errors.push(
+      `${file}: the signing check must not write, call GitHub, or run an action`,
+    );
+  }
+  if (countOccurrences(gate, "exit 1") !== 1) {
+    errors.push(
+      `${file}: a missing signing secret must skip the release, not fail the run`,
+    );
+  }
+}
+
 function sourceSection(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
   if (start < 0) {
@@ -999,6 +1112,7 @@ export function validateReleaseContract(files) {
       ".github/workflows/srn-desktop.yml",
       [
         "impact",
+        "signing",
         "identity",
         "build",
         "decide",
@@ -3675,7 +3789,13 @@ export function validateReleaseContract(files) {
       description,
     );
   }
-  for (const jobName of ["identity", "build", "discard_unchanged", "release"]) {
+  for (const jobName of [
+    "signing",
+    "identity",
+    "build",
+    "discard_unchanged",
+    "release",
+  ]) {
     requireFragment(
       errors,
       rootDesktopFile,
@@ -3684,11 +3804,12 @@ export function validateReleaseContract(files) {
       `${jobName} protected production environment`,
     );
   }
-  if (countOccurrences(rootDesktop, "environment: release-production") !== 4) {
+  if (countOccurrences(rootDesktop, "environment: release-production") !== 5) {
     errors.push(
-      `${rootDesktopFile}: desktop production environment must be scoped exactly to identity, authenticated build, unchanged-draft deletion, and release`,
+      `${rootDesktopFile}: desktop production environment must be scoped exactly to the signing check, identity, authenticated build, unchanged-draft deletion, and release`,
     );
   }
+  validateDesktopSigningGate(errors, rootDesktopFile, rootDesktop);
 
   for (const value of [
     ...desktopContract.rootTargets,
@@ -3751,10 +3872,13 @@ export function validateReleaseContract(files) {
 
   const rootDesktopIdentity = jobBlock(rootDesktop, "identity");
   for (const [fragment, description] of [
-    ["needs: impact", "desktop identity dependency on impact analysis"],
     [
-      "if: needs.impact.outputs.changed == 'true'",
-      "desktop identity source-impact guard",
+      "needs: [impact, signing]",
+      "desktop identity dependency on impact analysis and the signing check",
+    ],
+    [
+      "if: needs.impact.outputs.changed == 'true' && needs.signing.outputs.configured == 'true'",
+      "desktop identity source-impact and signing-credential guard",
     ],
     ["contents: write", "desktop draft reservation permission"],
     ["persist-credentials: false", "nonpersisted desktop write token"],
@@ -4732,9 +4856,17 @@ export function validateReleaseContract(files) {
       rootDesktopFile,
       rootDesktop,
       rootDesktopRoleJobs[role],
-      dependencies.map((dependency) => rootDesktopRoleJobs[dependency]),
+      [
+        ...dependencies.map((dependency) => rootDesktopRoleJobs[dependency]),
+        // The signing check is not a publication stage. It decides whether
+        // any stage runs, so identity waits on it as well.
+        ...(role === "release-identity" ? ["signing"] : []),
+      ],
     );
   }
+  requireExactJobDependencies(errors, rootDesktopFile, rootDesktop, "signing", [
+    "impact",
+  ]);
 
   // GitHub's "Latest release" pointer is REPO-GLOBAL, and electron-updater
   // resolves the desktop update channel through it: it GETs /releases/latest,
@@ -7542,6 +7674,18 @@ export function validateReleaseContract(files) {
     ["--signer-workflow", "documented OpenClaw signer verification"],
     ["manual-only recovery path", "honest standalone desktop recovery scope"],
     ["not prove remote byte equality", "honest Snap remote-byte limitation"],
+    [
+      "Its `signing` job runs before any",
+      "documented desktop signing check before reservation",
+    ],
+    [
+      "Desktop publication is therefore off until the secrets exist",
+      "documented desktop skip without signing secrets",
+    ],
+    ...DESKTOP_SIGNING_SECRETS.map((name) => [
+      `\`${name}\``,
+      `documented desktop signing secret ${name}`,
+    ]),
     ["```mermaid", "release decision diagram"],
   ]) {
     requireFragment(

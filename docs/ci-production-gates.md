@@ -276,7 +276,11 @@ offline self-test response. The draft is bound to a sorted
 name/SHA-256/size-manifest marker before any remote asset deletion or upload.
 
 The root desktop publisher applies the same exact-main authorization, protected
-environment, and 30-day handoff policy. Desktop fan-in verifies each updater
+environment, and 30-day handoff policy. It requires all twelve signing secrets:
+before reserving an identity it checks, by presence only, that each one is set,
+and when any is missing the run ends successfully without reserving or building
+anything and names the missing secrets in the job summary and an annotation.
+Desktop fan-in verifies each updater
 entry's exact basename, size, and Base64 SHA-512 plus real package format and
 architecture across NSIS, AppImage, ZIP/DMG, and DEB artifacts. If packaging
 fails after reserving an automatic draft, that exact draft remains available to
