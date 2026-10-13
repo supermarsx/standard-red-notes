@@ -38,6 +38,7 @@ import {
   SyncClientFrame,
   SyncFallbackReason,
   isPermanentSyncFallbackReason,
+  isSyncCommandRefusalCode,
   syncCloseFallbackReason,
   syncFallbackDisposition,
   SyncServerFrame,
@@ -304,6 +305,16 @@ const RESTATABLE_COMMAND_REFUSAL_CODES = new Set(['BACKEND_TIMEOUT'])
 /** Two, then the pre-existing fallback. Bounded so a stuck lease cannot spin. */
 const MAX_COMMAND_REFUSAL_RETRIES = 2
 const COMMAND_REFUSAL_RETRY_DELAY_MS = 1_000
+
+/**
+ * How long saves stay on HTTP after the gateway refused one before executing it
+ * (`SYNC_COMMAND_REFUSAL_CODES`): 30 s, doubling per consecutive refusal, capped at
+ * ten minutes. A refusal such as a shared vault missing from auth's replicated
+ * membership copy holds until someone repairs it, so without this every keystroke's
+ * save paid one refused socket round trip before going to HTTP anyway.
+ */
+const SAVE_REFUSAL_HOLD_BASE_MS = 30_000
+const SAVE_REFUSAL_HOLD_MAX_MS = 10 * 60_000
 
 /**
  * The local send buffer never drained inside the deadline.
@@ -676,6 +687,18 @@ export class SyncTransportWorkerRuntime {
   /** Retries spent on a retryable command refusal, per command. */
   private commandRefusalRetries = 0
   /**
+   * The request id of the COMMAND frame most recently put on the wire for the
+   * active command, and undefined once a STATUS has been sent for it. A refusal is
+   * proof of "not executed" only when it answers THIS frame: the same codes can
+   * answer a STATUS asked after an ambiguous outcome, and there they prove nothing
+   * about the command.
+   */
+  private commandFrameRequestId?: string
+  /** Consecutive pre-execution save refusals. Reset only by a save the socket commits. */
+  private saveRefusals = 0
+  /** While this is in the future, saves go straight to HTTP (see SAVE_REFUSAL_HOLD_BASE_MS). */
+  private saveRefusalHeldUntil?: number
+  /**
    * Set once the server answers `LIVE_SYNC_DISABLED`: item sync is refused for this
    * account for the rest of the worker's life, so later commands go to HTTP without
    * spending a socket round trip, while every other lane keeps using the socket.
@@ -1003,6 +1026,14 @@ export class SyncTransportWorkerRuntime {
         return
       }
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+      return
+    }
+    // The gateway refused a recent save before executing it. Nothing is persisted
+    // for this one, so plain HTTP owns it, and no ticket is spent and no socket round
+    // trip is paid to be refused again. Silent on purpose: the refusal itself was
+    // announced with its code and the length of this window.
+    if (this.saveRefusalHeldUntil !== undefined && this.now() < this.saveRefusalHeldUntil) {
+      this.postFallback(clientRequestId, normalizedBody, 'save-refused')
       return
     }
     this.active = { clientRequestId, sessionScope, mode: 'execute', body: normalizedBody, context }
@@ -2205,6 +2236,10 @@ export class SyncTransportWorkerRuntime {
       // would refresh for as long as the tab is open. `sessionRefreshUnsupported`
       // is deliberately NOT cleared — the two refusals that set it are structural.
       this.sessionRefreshAttempts = 0
+      // A fresh socket (a redeploy, a repaired membership) gets the next save at
+      // once. The refusal COUNT is kept, so a refusal that survives the reconnect
+      // still escalates: at most one refused round trip per reconnect.
+      this.saveRefusalHeldUntil = undefined
       this.socketAuthenticatedAt = this.now()
       // The reconnect budget is per connected session, not per tab. Without this
       // reset one bad patch of network spent it permanently, and every command
@@ -2463,6 +2498,13 @@ export class SyncTransportWorkerRuntime {
         // to use again; routing them to the ERROR default closed it and took the
         // other five lanes down with it.
         if (this.retryRefusedCommand(frame.payload.code)) {
+          break
+        }
+        // A refusal that proves the command never executed is ONE save's problem:
+        // HTTP takes it now and the socket stays up. Routing it to the default below
+        // closed the socket, re-dialled, asked STATUS, got UNKNOWN and replayed over
+        // HTTP anyway — once per keystroke, reported as `server-kill`.
+        if (this.sendRefusedSaveOverHttp(frame.requestId, frame.payload.code)) {
           break
         }
         // ERROR RESULT_TOO_LARGE now means only "your COMMAND frame was too large
@@ -3652,6 +3694,7 @@ export class SyncTransportWorkerRuntime {
       await this.outbox.put(dispatchingRecord)
       this.outboxRecord = dispatchingRecord
       this.commandSent = true
+      this.commandFrameRequestId = frame.requestId
       await this.sendWithBackpressure(dispatchingRecord.bytes)
       this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
     } catch (error) {
@@ -3797,10 +3840,80 @@ export class SyncTransportWorkerRuntime {
    */
   private resequencedCommand(record: SyncOutboxRecord): string {
     const frame = JSON.parse(record.bytes) as SyncClientFrame
-    return JSON.stringify({ ...frame, requestId: this.uuid(), sequence: this.sequence++ })
+    const requestId = this.uuid()
+    this.commandFrameRequestId = requestId
+    return JSON.stringify({ ...frame, requestId, sequence: this.sequence++ })
+  }
+
+  /**
+   * The gateway refused the active save's COMMAND frame before executing it: send
+   * that save over HTTP now, keep the socket, and hold later saves on HTTP for a
+   * growing window. Returns false — leaving the caller's existing path in charge —
+   * for anything that is not provably "not executed".
+   *
+   * *** WHY EACH GUARD. ***
+   *   - the code must be one of `SYNC_COMMAND_REFUSAL_CODES`, which the gateway only
+   *     sends before `backend.execute`;
+   *   - the ERROR must answer the COMMAND frame (its request id). The same codes can
+   *     answer a STATUS asked after an ambiguous outcome (a BACKEND_TIMEOUT, a
+   *     reconnect), and there they say nothing about whether the command applied;
+   *   - `execute` mode only: a `recover` command never put a COMMAND on this socket,
+   *     and its earlier attempt's outcome is exactly what is unknown.
+   *
+   * The HTTP request carries the command id and digest, so even if a stale journal
+   * entry existed for them the server answers it idempotently.
+   *
+   * No STATE transition: the socket did not move. The main thread records one lane
+   * stand-down and says the refusal's code. Synchronous for the reason given on
+   * `retryRefusedCommand`.
+   */
+  private sendRefusedSaveOverHttp(requestId: string, code: unknown): boolean {
+    const active = this.active
+    const record = this.outboxRecord
+    if (
+      !isSyncCommandRefusalCode(code) ||
+      !active ||
+      active.mode !== 'execute' ||
+      !record ||
+      record.sessionScope !== active.sessionScope ||
+      record.revoked === true ||
+      this.commandFrameRequestId === undefined ||
+      requestId !== this.commandFrameRequestId
+    ) {
+      return false
+    }
+    this.clearAckDeadline()
+    this.cancelCommandRetry()
+    this.saveRefusals += 1
+    const holdForMilliseconds = Math.min(
+      SAVE_REFUSAL_HOLD_BASE_MS * 2 ** Math.min(this.saveRefusals - 1, 10),
+      SAVE_REFUSAL_HOLD_MAX_MS,
+    )
+    this.saveRefusalHeldUntil = this.now() + holdForMilliseconds
+    this.dependencies.postMessage({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: active.clientRequestId,
+      reason: 'save-refused',
+      body: parseStoredBody(record) ?? active.body,
+      command: {
+        id: record.commandId,
+        digest: record.digest,
+        sequence: record.sequence,
+        ...(record.operationId ? { operationId: record.operationId } : {}),
+      },
+      refusal: { code, holdForMilliseconds },
+    })
+    this.active = undefined
+    this.outboxRecord = undefined
+    this.resultDelivered = false
+    this.accepted = false
+    this.commandSent = false
+    this.commandFrameRequestId = undefined
+    return true
   }
 
   private async sendStatus(record: SyncOutboxRecord): Promise<void> {
+    this.commandFrameRequestId = undefined
     const payload = {}
     const frame: SyncClientFrame = {
       version: SYNC_PROTOCOL_VERSION,
@@ -3864,6 +3977,9 @@ export class SyncTransportWorkerRuntime {
       return
     }
     this.resultDelivered = true
+    // The socket committed a save, so whatever refused earlier ones has cleared.
+    this.saveRefusals = 0
+    this.saveRefusalHeldUntil = undefined
     this.dependencies.postMessage({
       type: 'RESULT',
       clientRequestId: this.active.clientRequestId,

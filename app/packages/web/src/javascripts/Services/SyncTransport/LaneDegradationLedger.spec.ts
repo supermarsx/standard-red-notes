@@ -254,7 +254,7 @@ describe('LaneDegradationLedger', () => {
     }
 
     expect(Object.keys(ledger.view().fallbackCounts).sort()).toEqual([...reasons].sort())
-    expect(reasons).toHaveLength(22)
+    expect(reasons).toHaveLength(23)
   })
 
   it('collapses a reason this build cannot name, rather than carrying its text', () => {

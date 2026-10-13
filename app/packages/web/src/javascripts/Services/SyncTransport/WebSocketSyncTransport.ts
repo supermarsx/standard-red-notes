@@ -22,6 +22,7 @@ import {
   DEFAULT_RPC_CREDIT_BYTES,
   DEFAULT_RPC_DEADLINE_MS,
   isSocketFileResourceReference,
+  isSyncCommandRefusalCode,
   MainToSyncWorkerMessage,
   MAX_RPC_CREDIT_BYTES,
   SocketFileResourceReference,
@@ -1686,6 +1687,33 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     )
   }
 
+  /**
+   * The gateway refused one save before executing it, with a code that names why.
+   *
+   * One lane standing down on a socket that stays up, so it is a ledger stand-down
+   * and never a transition. Logged once per refusal — never per held save: the
+   * worker holds later saves on HTTP for at least 30 s after each one, so this line
+   * cannot repeat per keystroke.
+   *
+   * SECURITY: the code is admitted by enum membership and the window by shape; an
+   * unrecognised value is reported as such, never echoed.
+   */
+  private announceSaveRefusal(refusal: { code: unknown; holdForMilliseconds: unknown }): void {
+    this.recordLaneStandDown('save-refused')
+    const code = isSyncCommandRefusalCode(refusal.code) ? refusal.code : 'an unrecognised code'
+    const hold =
+      typeof refusal.holdForMilliseconds === 'number' &&
+      Number.isSafeInteger(refusal.holdForMilliseconds) &&
+      refusal.holdForMilliseconds > 0
+        ? ` for the next ${Math.max(1, Math.round(refusal.holdForMilliseconds / 1000))}s`
+        : ' for a while'
+    console.warn(
+      `[sync-transport] Socket save refused: ${code}; sent over HTTP.` +
+        ' The gateway refused it before executing it, so nothing was lost.' +
+        ` The socket stays up for every other lane; saves go over HTTP${hold}, then the socket is tried again.`,
+    )
+  }
+
   /** The counterpart: a successful negotiation, with what the socket actually carries. */
   private announceNegotiation(operations: readonly SyncNegotiatedOperation[]): void {
     const signature = `NEGOTIATED:${[...operations].join(',')}`
@@ -1940,6 +1968,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         pending.reject(transportError('Durable sync recovery must complete before a new command can execute.'))
         break
       case 'HTTP_FALLBACK':
+        if (message.refusal !== undefined) {
+          this.announceSaveRefusal(message.refusal)
+        }
         await this.resolveHttpFallback(message.clientRequestId, pending, message.body, message.command)
         break
       case 'RESULT': {

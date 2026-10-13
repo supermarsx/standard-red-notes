@@ -1999,6 +1999,68 @@ describe('WebSocketSyncTransport', () => {
       expect(hold).not.toBe(gap)
     })
 
+    /**
+     * *** A REFUSED SAVE USED TO READ AS A KILLED SOCKET. *** The console said
+     * `server-kill`, then `reconnect-gap`, per keystroke, and never the code the
+     * gateway actually sent — so nobody could tell a missing vault membership from a
+     * read-only account from a broken gateway.
+     */
+    it('names the refusal code of a save the gateway refused, and keeps the transport READY', async () => {
+      const transport = createTransport()
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+      const execution = transport.execute(request(), fallback)
+      await flush()
+      worker.emit({ type: 'STATE', state: 'READY' })
+      await flush()
+      const execute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+
+      worker.emit({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: execute.clientRequestId,
+        reason: 'save-refused',
+        body: request(),
+        refusal: { code: 'NOT_AUTHORIZED', holdForMilliseconds: 30_000 },
+      })
+      await expect(execution).resolves.toEqual({ response: response('http') })
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0][0])
+      expect(line).toContain('[sync-transport] Socket save refused: NOT_AUTHORIZED; sent over HTTP.')
+      expect(line).toContain('30s')
+      expect(line).not.toContain('server-kill')
+      expect(transport.transportStatus.state).toBe('READY')
+      expect(transport.transportStatus.fallbackReason).toBeUndefined()
+      expect(transport.laneDegradationLedger.laneStandDownCounts).toEqual({ 'save-refused': 1 })
+      expect(transport.laneDegradationLedger.fallbackCounts).toEqual({})
+    })
+
+    it('never echoes a refusal code it does not recognise', async () => {
+      const transport = createTransport()
+      const execution = transport.execute(request(), jest.fn().mockResolvedValue(response('http')))
+      await flush()
+      const execute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+
+      worker.emit({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: execute.clientRequestId,
+        reason: 'save-refused',
+        body: request(),
+        refusal: { code: '<script>secret</script>', holdForMilliseconds: Number.NaN } as never,
+      })
+      await execution
+
+      const line = String(warn.mock.calls[0][0])
+      expect(line).toContain('Socket save refused: an unrecognised code')
+      expect(line).not.toContain('secret')
+      expect(line).toContain('for a while')
+    })
+
     it('names the state and the reason when saves fall back to HTTP', async () => {
       await connectWorker()
 

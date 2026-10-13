@@ -711,6 +711,54 @@ export type SyncFallbackReason =
    * here the limit is the server's and other devices count toward it.
    */
   | 'socket-limit'
+  /**
+   * The gateway refused ONE save command before executing it — an authorization,
+   * read-only, content-limit or readiness refusal (see
+   * `SYNC_COMMAND_REFUSAL_CODES`). That save went over HTTP at once, the socket
+   * stayed up, and later saves use HTTP for a backoff window. A per-request
+   * outcome, never a transport state: no STATE message carries it.
+   */
+  | 'save-refused'
+
+/**
+ * Standard Red Notes: the gateway's ERROR codes that prove a SYNC_ITEMS COMMAND was
+ * NOT executed, so its save may go over HTTP at once with no STATUS round trip.
+ *
+ * Read off `server/packages/websocket-gateway/src/syncCommandHandler.ts`
+ * (`handleCommand`), and admitted ONLY when the ERROR answers the COMMAND frame
+ * itself (its request id), never a STATUS:
+ *
+ *   - `OPERATION_UNAVAILABLE` — sent before a command lease is even taken.
+ *   - `NOT_AUTHORIZED`, `READ_ONLY`, `CONTENT_LIMIT`, `SESSION_STALE` — the
+ *     `publicAuthorizationCode` of the first (pre-ACCEPTED) or second
+ *     (post-ACCEPTED, pre-execute) `authorizeCommand`; both run before
+ *     `backend.execute`. `NOT_AUTHORIZED` also stands for the private
+ *     `SHARED_VAULT_FORBIDDEN`, `SESSION_REVOKED` and `SHADOW_BANNED` verdicts —
+ *     e.g. a shared vault missing from auth's replicated membership copy.
+ *
+ * Deliberately NOT here, because the gateway sends them from a point where the
+ * durable write may already have happened: `BACKEND_ERROR` (the `catch` around the
+ * whole lease body, `backend.execute` included), `LEASE_LOST` (renewal can fail mid
+ * execute), `COMMAND_ID_CONFLICT` (also sent after `execute` on a digest mismatch)
+ * and `BACKEND_TIMEOUT` (asked about with STATUS instead). `BUSY` and
+ * `LIVE_SYNC_DISABLED` have handling of their own.
+ *
+ * Mirrored rather than imported: the worker bundle takes no server dependency.
+ */
+export const SYNC_COMMAND_REFUSAL_CODES = [
+  'NOT_AUTHORIZED',
+  'READ_ONLY',
+  'CONTENT_LIMIT',
+  'SESSION_STALE',
+  'OPERATION_UNAVAILABLE',
+] as const
+
+export type SyncCommandRefusalCode = (typeof SYNC_COMMAND_REFUSAL_CODES)[number]
+
+/** Admits a value off the wire by enum membership only; anything else is "not a refusal". */
+export function isSyncCommandRefusalCode(code: unknown): code is SyncCommandRefusalCode {
+  return typeof code === 'string' && (SYNC_COMMAND_REFUSAL_CODES as readonly string[]).includes(code)
+}
 
 /**
  * One plain-language sentence per fallback reason, in terms of what the reader can
@@ -751,6 +799,8 @@ export const SYNC_FALLBACK_REASON_EXPLANATIONS: Record<SyncFallbackReason, strin
     'The gateway is restarting, draining, or a store it needs to admit a socket was not ready. Retryable, and usually short-lived.',
   'socket-limit':
     'This account already holds as many sync sockets as the deployment allows, counting its other devices, or this socket lost its reservation.',
+  'save-refused':
+    'The gateway refused a save before executing it (not authorized, read-only, content limit or not ready). That save went over HTTP and the socket stayed up; saves use HTTP for a backoff window before the socket is tried again.',
 }
 
 /**
@@ -1014,6 +1064,12 @@ export type SyncWorkerToMainMessage =
       reason: SyncFallbackReason
       body: AccountSyncTransportRequest
       command?: AccountSyncCommandMetadata
+      /**
+       * Present only on the save the gateway refused before executing it
+       * (`save-refused`): the refusal's code and how long later saves stay on HTTP.
+       * Absent on the saves the backoff itself sends to HTTP.
+       */
+      refusal?: { code: SyncCommandRefusalCode; holdForMilliseconds: number }
     }
   | { type: 'RESULT'; clientRequestId: string; commandId: string; result: unknown }
   | { type: 'RECOVERY_EMPTY'; clientRequestId: string }

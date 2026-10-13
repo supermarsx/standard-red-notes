@@ -4563,19 +4563,26 @@ describe('SyncTransportWorkerRuntime', () => {
       expect(socket.readyState).toBe(1)
     })
 
-    it('still tears the socket down for a stable policy refusal, which a retry cannot change', async () => {
-      // Not a blanket "never close": READ_ONLY, CONTENT_LIMIT,
-      // SHARED_VAULT_FORBIDDEN, NOT_AUTHORIZED, LEASE_LOST, BACKEND_ERROR and
-      // COMMAND_ID_CONFLICT all describe a condition a retry would only reproduce.
-      for (const code of ['READ_ONLY', 'NOT_AUTHORIZED', 'CONTENT_LIMIT', 'LEASE_LOST', 'COMMAND_ID_CONFLICT']) {
+    it('still demands durable recovery for a refusal the gateway may send after executing', async () => {
+      // Not a blanket "never close": LEASE_LOST, BACKEND_ERROR and
+      // COMMAND_ID_CONFLICT can all be sent after `backend.execute` ran, so the
+      // command's effect is unknown and only STATUS may settle it. The pre-execution
+      // refusals (READ_ONLY, NOT_AUTHORIZED, …) are covered by 'a save the gateway
+      // refused before executing it' below.
+      for (const code of ['LEASE_LOST', 'BACKEND_ERROR', 'COMMAND_ID_CONFLICT']) {
         const harness = setup()
         const socket = await authorize(harness)
+        const command = framesOf(socket, 'COMMAND')[0]
 
-        refuse(socket, code)
+        socket.receive({
+          ...serverFrame('ERROR', command.commandId, { code, retryable: true }, command.digest),
+          requestId: command.requestId,
+        })
         await flush()
         await flush()
 
         expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+        expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
         expect(socket.readyState).toBe(3)
         expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
       }
@@ -4595,6 +4602,205 @@ describe('SyncTransportWorkerRuntime', () => {
       // The close path owns the command from here; a retry writing to a dead socket
       // would be a second owner for one operation.
       expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // *** A SAVE REFUSED BEFORE EXECUTION IS ONE SAVE'S PROBLEM, NOT THE SOCKET'S. ***
+  //
+  // The gateway answers NOT_AUTHORIZED (e.g. a shared vault missing from auth's
+  // replicated membership copy), READ_ONLY, CONTENT_LIMIT or OPERATION_UNAVAILABLE
+  // before `backend.execute`. Every one fell through the ERROR default to
+  // `fallback('server-kill')`: the client closed its own socket, re-dialled, asked
+  // STATUS, got UNKNOWN and replayed over HTTP as `reconnect-gap` — once per
+  // keystroke, with "Durable sync recovery must complete" in the console each time.
+  // ---------------------------------------------------------------------------
+  describe('a save the gateway refused before executing it', () => {
+    type SentFrame = { type: string; requestId: string; commandId: string; digest?: string }
+    const framesOf = (socket: FakeSocket, type: string) =>
+      socket.sent.map((entry) => JSON.parse(entry) as SentFrame).filter((frame) => frame.type === type)
+    /** The gateway's `sendError(frame.requestId, …)`: the ERROR answers the frame it refuses. */
+    const answer = (socket: FakeSocket, frame: SentFrame, code: string) =>
+      socket.receive({
+        ...serverFrame('ERROR', frame.commandId, { code, retryable: false }, frame.digest),
+        requestId: frame.requestId,
+      })
+    const httpFallbacks = (harness: ReturnType<typeof setup>) =>
+      harness.messages.filter(
+        (message): message is Extract<SyncWorkerToMainMessage, { type: 'HTTP_FALLBACK' }> =>
+          message.type === 'HTTP_FALLBACK',
+      )
+    const stateReasons = (harness: ReturnType<typeof setup>) =>
+      harness.messages.flatMap((message) => (message.type === 'STATE' ? [message.reason] : []))
+    const checkpoint = async (harness: ReturnType<typeof setup>, commandId: string) => {
+      await harness.runtime.handle({
+        type: 'CHECKPOINT_DURABLE',
+        requestId: `checkpoint-${commandId}`,
+        sessionScope: SESSION_A,
+        commandId,
+      })
+      await flush()
+    }
+    /** Let the clock run with the gateway answering every heartbeat, as a live one does. */
+    const elapse = async (socket: FakeSocket, milliseconds: number) => {
+      for (let left = milliseconds; left > 0; left -= 10_000) {
+        const pings = framesOf(socket, 'PING').length
+        jest.advanceTimersByTime(Math.min(left, 10_000))
+        await flush()
+        if (framesOf(socket, 'PING').length > pings) {
+          socket.receive(serverFrame('PONG', 'heartbeat', {}))
+          await flush()
+        }
+      }
+    }
+    const executeAgain = async (harness: ReturnType<typeof setup>, clientRequestId: string) => {
+      await harness.runtime.handle({ type: 'EXECUTE', clientRequestId, body: body('b'), sessionScope: SESSION_A })
+      await flush()
+      await flush()
+    }
+
+    it.each(['NOT_AUTHORIZED', 'READ_ONLY', 'CONTENT_LIMIT', 'OPERATION_UNAVAILABLE'])(
+      'sends a save refused %s over HTTP at once and keeps the socket',
+      async (code) => {
+        const harness = setup()
+        const socket = await authorize(harness)
+        const command = framesOf(socket, 'COMMAND')[0]
+
+        answer(socket, command, code)
+        await flush()
+        await flush()
+
+        // BEFORE: RECOVERY_REQUIRED, the client's own close, a re-dial and a STATUS.
+        expect(httpFallbacks(harness)).toEqual([
+          {
+            type: 'HTTP_FALLBACK',
+            clientRequestId: 'client-1',
+            reason: 'save-refused',
+            body: body(),
+            // The identity rides along, so the server journal answers it idempotently.
+            command: { id: command.commandId, digest: STUB_DIGEST_HEX, sequence: 1 },
+            refusal: { code, holdForMilliseconds: 30_000 },
+          },
+        ])
+        expect(harness.messages.some((message) => message.type === 'RECOVERY_REQUIRED')).toBe(false)
+        expect(stateReasons(harness)).not.toContain('server-kill')
+        expect(socket.readyState).toBe(1)
+        expect(socket.closes).toEqual([])
+        expect(harness.sockets).toHaveLength(1)
+        // Definitively not executed, so no STATUS round trip is spent on it.
+        expect(framesOf(socket, 'STATUS')).toHaveLength(0)
+      },
+    )
+
+    it('holds later saves on HTTP for a growing window, and a socket commit resets it', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const first = framesOf(socket, 'COMMAND')[0]
+      answer(socket, first, 'NOT_AUTHORIZED')
+      await flush()
+      await checkpoint(harness, first.commandId)
+
+      // Inside the 30 s window: straight to HTTP, no COMMAND, no ticket, no refusal line.
+      await executeAgain(harness, 'client-2')
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(1)
+      expect(httpFallbacks(harness).at(-1)).toEqual({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: 'client-2',
+        reason: 'save-refused',
+        body: body('b'),
+      })
+      expect(
+        harness.messages.some((message) => message.type === 'NEED_TICKET' && message.clientRequestId === 'client-2'),
+      ).toBe(false)
+
+      // Window over: the socket is tried again, and a repeat refusal doubles it.
+      await elapse(socket, 30_000)
+      await executeAgain(harness, 'client-3')
+      const second = framesOf(socket, 'COMMAND')[1]
+      expect(second).toBeDefined()
+      answer(socket, second, 'NOT_AUTHORIZED')
+      await flush()
+      expect(httpFallbacks(harness).at(-1)?.refusal).toEqual({ code: 'NOT_AUTHORIZED', holdForMilliseconds: 60_000 })
+      await checkpoint(harness, second.commandId)
+
+      await elapse(socket, 59_000)
+      await executeAgain(harness, 'client-4')
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(2)
+      expect(httpFallbacks(harness).at(-1)?.clientRequestId).toBe('client-4')
+
+      // The cause is repaired: the next socket save commits and the backoff resets.
+      await elapse(socket, 1_000)
+      await executeAgain(harness, 'client-5')
+      const third = framesOf(socket, 'COMMAND')[2]
+      socket.receive(serverFrame('COMMITTED', third.commandId, { result: { retrieved_items: [] } }, third.digest))
+      await flush()
+      await checkpoint(harness, third.commandId)
+
+      await executeAgain(harness, 'client-6')
+      const fourth = framesOf(socket, 'COMMAND')[3]
+      answer(socket, fourth, 'READ_ONLY')
+      await flush()
+      expect(httpFallbacks(harness).at(-1)?.refusal).toEqual({ code: 'READ_ONLY', holdForMilliseconds: 30_000 })
+      expect(socket.readyState).toBe(1)
+      expect(harness.sockets).toHaveLength(1)
+    })
+
+    it('caps the window at ten minutes', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const holds: number[] = []
+      for (let attempt = 0; attempt < 7; attempt++) {
+        if (attempt > 0) {
+          await elapse(socket, holds[holds.length - 1])
+          await executeAgain(harness, `client-${attempt + 1}`)
+        }
+        const command = framesOf(socket, 'COMMAND')[attempt]
+        answer(socket, command, 'CONTENT_LIMIT')
+        await flush()
+        holds.push(httpFallbacks(harness).at(-1)?.refusal?.holdForMilliseconds ?? -1)
+        await checkpoint(harness, command.commandId)
+      }
+      expect(holds).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000])
+    })
+
+    /**
+     * The same code answering a STATUS proves nothing about the command: after a
+     * BACKEND_TIMEOUT the write may have landed, and STATUS is asked precisely
+     * because it is unknown. Only the existing durable path may settle that.
+     */
+    it('keeps durable recovery when the refusal answers a STATUS, not the COMMAND', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const command = framesOf(socket, 'COMMAND')[0]
+      answer(socket, command, 'BACKEND_TIMEOUT')
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+      await flush()
+      const status = framesOf(socket, 'STATUS')[0]
+      expect(status).toBeDefined()
+
+      answer(socket, status, 'NOT_AUTHORIZED')
+      await flush()
+      await flush()
+
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(httpFallbacks(harness)).toEqual([])
+    })
+
+    it('keeps durable recovery for a refusal that cannot be tied to the COMMAND frame', async () => {
+      const harness = setup()
+      const socket = await authorize(harness)
+      const command = framesOf(socket, 'COMMAND')[0]
+
+      socket.receive(
+        serverFrame('ERROR', command.commandId, { code: 'NOT_AUTHORIZED', retryable: false }, command.digest),
+      )
+      await flush()
+      await flush()
+
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(httpFallbacks(harness)).toEqual([])
     })
   })
 

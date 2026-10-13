@@ -253,6 +253,8 @@ export const SOCKET_FALLBACK_REASONS = [
   'server-policy',
   'server-unavailable',
   'socket-limit',
+  // One save refused before execution; counted as a lane stand-down, never a state.
+  'save-refused',
 ] as const satisfies readonly SyncFallbackReason[]
 
 type UnlistedFallbackReason = Exclude<SyncFallbackReason, (typeof SOCKET_FALLBACK_REASONS)[number]>
