@@ -97,14 +97,52 @@ Each account may hold 16 simultaneous realtime sockets by default; operators may
 set `WEBSOCKET_MAX_CONNECTIONS_PER_USER` to another positive whole number. This
 allows normal tabs and devices while bounding per-account connection fan-out.
 
-WebSocket delivery is best-effort, not the durable record. Local edits and
-comments persist through ordinary encrypted item sync, so a gateway outage
-falls back to normal save/sync behavior and reconnecting editors can converge
-again.
+WebSocket delivery is best-effort; encrypted item sync holds the durable record.
+A live Super note has one saving device, chosen from canonical-ready editors
+whose socket save lane works. That device holds a server lease for the note.
+Other participants contribute through the encrypted relay without saving
+competing whole-note copies. A replacement obtains the lease and retrieves
+the current server revision before saving. The database serializes ownership
+changes with note writes, including a save already in flight.
 
-On desktop, mobile and the browser extension the live relay rides the legacy
-socket the app derives from the server it syncs with. Item sync on those
-platforms stays on HTTP by design, which does not affect co-editing.
+Live collaboration saves stay on the socket, including queued recovery after
+an editor closes. If no participant can obtain and maintain the saving lease,
+the room becomes read-only until a saver returns. Editors also pause when the
+server has not acknowledged the retained document state for 15 seconds.
+On deployments with a collaboration gateway, eligible shared Super notes keep
+their body and title read-only while joining or retrying the room. Editing starts
+after the canonical document and its saving device are ready.
+Ordinary notes outside live collaboration retain normal HTTP fallback. Comments
+continue to use their own encrypted item sync.
+
+The live relay rides the legacy socket derived from the configured sync server.
+An HTTP-only participant can contribute while a socket-capable saving device
+is present; it cannot become the room's saver. Only the saving device can edit
+the note title, which is separate from the shared document body.
+
+Remote carets repaint on movement, editor changes, scrolling and resizing, and
+are clipped to the visible editor. Other tabs or devices on your own account
+appear as separate cursors.
+
+### Shared-vault membership repair
+
+Syncing-server's membership table is authoritative. Socket item sync checks
+that table rather than rejecting members based on auth's replicated token
+scope. Auth refreshes its copy at startup, every minute, on membership events,
+and before minting a cross-service token. Reconciliation repairs missing members,
+removes stale members and deleted-vault rows, and aligns permissions and survivor
+flags. Events request a fresh authority read; delayed event payloads cannot
+restore a removed member. An unavailable authority yields a retryable service
+failure instead of a token carrying unverified grants.
+
+Separate services use a signed internal snapshot endpoint at syncing-server's
+configured `SYNCING_SERVER_URL`. Auth can override that address with
+`SHARED_VAULT_MEMBERSHIP_AUTHORITY_URL`. The combined HomeServer reads authority
+directly. Both services share `AUTH_JWT_SECRET` for the internal signature;
+these internal endpoints should remain behind the deployment's private network.
+Snapshots larger than 100,000 memberships are rejected without changing the
+replica. Apply the auth membership uniqueness and replica-generation migrations,
+and the syncing-server saving-lease migration, when upgrading.
 
 ### Realtime topology and Redis
 
@@ -145,9 +183,10 @@ keeps the collaboration plane, the push bridge and the sync lane's ticket, lease
 and socket-budget state in that same process. Co-editing, presence and live
 comments work out of the box. Two properties follow from a plane that lives in
 memory: realtime state is lost on restart, so collaborators re-discover their
-rooms and resync, and a client that was offline across a restart catches up over
-HTTP rather than over the socket. Nothing durable is at stake either way, because
-edits and comments persist through ordinary encrypted item sync.
+rooms and resync. Clients can download persisted content over HTTP, but retained
+collaboration edits require a healthy socket save lane. Editing pauses until a
+device acquires the room's saving lease and refreshes its server base. Comments
+continue to persist through their own encrypted item sync.
 
 Set `REDIS_HOST` on those topologies only to run several gateway replicas against
 one database. The multi-container stack ships Redis and has the relay on by

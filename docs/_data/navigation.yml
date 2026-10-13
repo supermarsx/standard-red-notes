@@ -440,6 +440,8 @@
           items:
             - title: Realtime overview
               url: /sharing-and-collaboration.html#realtime-collaboration
+            - title: Shared-vault membership repair
+              url: /sharing-and-collaboration.html#shared-vault-membership-repair
             - title: Realtime topology and Redis
               url: /sharing-and-collaboration.html#realtime-topology-and-redis
         - title: Comments and mentions
