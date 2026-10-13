@@ -1,4 +1,5 @@
 import { ItemHash } from '../../../Item/ItemHash'
+import type { CollaborationSaveWriteContext } from '../../../../Infra/TypeORM/SQLCollaborationSaveFence'
 
 export interface SaveItemsDTO {
   itemHashes: ItemHash[]
@@ -12,4 +13,5 @@ export interface SaveItemsDTO {
   // Standard Red Notes: when false, suppress the realtime websocket push to the
   // user's own clients. The save itself still succeeds. Default true.
   liveSyncEnabled: boolean
+  collaborationSaveFence?: CollaborationSaveWriteContext
 }

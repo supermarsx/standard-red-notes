@@ -16,6 +16,7 @@ import { ExecuteSyncCommand } from '../../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../../Domain/SyncCommand/GetSyncCommandStatus'
 import { SyncCommandProtocolError } from '../../Domain/SyncCommand/SyncCommandTypes'
 import { INTERNAL_GRPC_AUTH_METADATA, InternalGrpcAuthScope, InternalGrpcServiceAuth } from '@standardnotes/security'
+import { SQLCollaborationSaveFence } from '../TypeORM/SQLCollaborationSaveFence'
 
 export class SyncingServer {
   private readonly internalGrpcAuth: InternalGrpcServiceAuth
@@ -36,6 +37,7 @@ export class SyncingServer {
     private executeSyncCommand?: ExecuteSyncCommand,
     private getSyncCommandStatusUseCase?: GetSyncCommandStatus,
     internalGrpcAuthSecret = '',
+    private collaborationSaveFence?: SQLCollaborationSaveFence,
   ) {
     this.internalGrpcAuth = new InternalGrpcServiceAuth(internalGrpcAuthSecret)
   }
@@ -51,6 +53,29 @@ export class SyncingServer {
       const hasContentLimit = call.metadata.get('x-has-content-limit').pop() === 'true'
       const command = call.request.hasCommand() ? call.request.getCommand() : undefined
       const canonicalDigest = this.singleMetadata(call.metadata, 'x-sync-canonical-digest')
+      const proofJson = this.singleMetadata(call.metadata, 'x-collaboration-save-proof-json')
+      let collaborationSaveFence
+      if (proofJson !== undefined) {
+        if (!this.collaborationSaveFence || Buffer.byteLength(proofJson) > 8 * 1024) {
+          throw new SyncCommandProtocolError(
+            'invalid_collaboration_save_fence',
+            'Invalid collaboration saver proof.',
+            400,
+          )
+        }
+        try {
+          collaborationSaveFence = this.collaborationSaveFence.readWriteContext(JSON.parse(proofJson), userUuid)
+        } catch (error) {
+          if (error instanceof SyncCommandProtocolError) {
+            throw error
+          }
+          throw new SyncCommandProtocolError(
+            'invalid_collaboration_save_fence',
+            'Invalid collaboration saver proof.',
+            400,
+          )
+        }
+      }
       if (command) {
         this.assertDurableGrpcAuthentication(call.metadata, {
           method: 'syncItems',
@@ -143,6 +168,7 @@ export class SyncingServer {
         hasContentLimit,
         liveSyncEnabled,
         shadowBanned,
+        collaborationSaveFence,
       }
       const execute = async (): Promise<SyncResponse20200115> => {
         const syncResult = await this.syncItemsUseCase.execute(syncDto)
@@ -175,7 +201,10 @@ export class SyncingServer {
             id: command?.getId() ?? '',
             digest: command?.getDigest() ?? '',
           },
-          canonicalPayload: this.createCanonicalPayload(call.request),
+          canonicalPayload: {
+            ...this.createCanonicalPayload(call.request),
+            ...(collaborationSaveFence ? { collaboration_save_fences: collaborationSaveFence.proofs } : {}),
+          },
           canonicalDigest: canonicalDigest ?? undefined,
           beforeExecute: () => this.checkTrafficAbuse(userUuid, isFreeUser),
           execute,

@@ -13,6 +13,7 @@ import {
   type RoomDeniedReason,
   type RoomRegistry,
   type RoomRelayLifecycle,
+  type SaverEditorIdentity,
 } from './rooms.js'
 import type { Logger } from './redisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
@@ -116,6 +117,7 @@ function asLifecycleError(error: unknown): Error {
 }
 
 type DenialOperation =
+  | 'saver-editor-validation'
   | 'current-room-epoch'
   | 'responder-lookup'
   | 'lease-renewal'
@@ -134,6 +136,7 @@ type DenialOperation =
  * redacted classification.
  */
 const WARN_LINES: Readonly<Record<DenialOperation, string>> = Object.freeze({
+  'saver-editor-validation': '[collab-redis] saver editor validation unavailable',
   'current-room-epoch': '[collab-redis] current room epoch unavailable',
   'responder-lookup': '[collab-redis] responder lookup unavailable',
   'lease-renewal': '[collab-redis] lease renewal unavailable; denying collaboration',
@@ -337,6 +340,7 @@ for _, leaseKey in ipairs(members) do
 end
 if active > tonumber(ARGV[4]) then return -2 end
 if redis.call('PEXPIRE', KEYS[2], ARGV[1]) ~= 1 then return -3 end
+if ARGV[7] and ARGV[7] ~= '' then redis.call('SET', KEYS[2], ARGV[7], 'PX', ARGV[1]) end
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 redis.call('PEXPIRE', KEYS[3], ARGV[6])
 return 1
@@ -355,6 +359,22 @@ for _, leaseKey in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   if not own[leaseKey] and redis.call('EXISTS', leaseKey) == 1 then count = count + 1 end
 end
 return count
+`
+
+const VALIDATE_SAVER_EDITOR_SCRIPT = `
+-- SRN_VALIDATE_SAVER_EDITOR_V1
+local state = redis.call('GET', KEYS[2])
+if not state then return 0 end
+local first = string.find(state, ':', 1, true)
+local second = first and string.find(state, ':', first + 1, true)
+if not second or string.sub(state, 1, first - 1) ~= ARGV[1] then return 0 end
+local securityEpoch = string.sub(state, first + 1, second - 1)
+local suffix = ':active:' .. ARGV[2] .. ':' .. ARGV[1] .. ':' .. securityEpoch
+for _, leaseKey in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  local value = redis.call('GET', leaseKey)
+  if value and string.sub(value, -string.len(suffix)) == suffix and redis.call('PTTL', leaseKey) > 0 then return 1 end
+end
+return 0
 `
 
 const CLAIM_YJS_RESPONSE_SCRIPT = `
@@ -632,6 +652,40 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     }
   }
 
+  async validateSaverEditor(identity: SaverEditorIdentity): Promise<boolean> {
+    if (
+      !this.relayHealthy ||
+      !isValidEpoch(identity.roomEpoch) ||
+      [identity.room, identity.leaseId, identity.userUuid, identity.sessionUuid].some(
+        (value) => typeof value !== 'string' || value.length === 0,
+      )
+    ) {
+      return false
+    }
+    try {
+      const actor = digest(
+        `${identity.room}\u0000${identity.userUuid}\u0000${identity.sessionUuid}\u0000${identity.leaseId}`,
+      )
+      return (
+        Number(
+          await bounded(
+            this.commands.eval(
+              VALIDATE_SAVER_EDITOR_SCRIPT,
+              2,
+              this.roomSetKey(identity.room),
+              this.roomStateKey(identity.room),
+              identity.roomEpoch,
+              actor,
+            ),
+          ),
+        ) === 1
+      )
+    } catch (error) {
+      this.warnDenial('saver-editor-validation', error)
+      return false
+    }
+  }
+
   async reserveEditorLease(
     conn: Conn<S>,
     room: string,
@@ -826,7 +880,10 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     lease.collaborationAuthorizationIssuedAt = collaborationAuthorizationIssuedAt
     lease.reservedRevision = serverUpdatedAtTimestamp
     try {
-      await this.refresh(lease, this.leaseTtl(expiresAt))
+      const actor = digest(`${room}\u0000${conn.userUuid}\u0000${conn.sessionUuid}\u0000${requestId}`)
+      const activeValue = `${lease.redisValue}:active:${actor}:${roomEpoch}:${collaborationSecurityEpoch}`
+      await this.refresh(lease, this.leaseTtl(expiresAt), activeValue)
+      lease.redisValue = activeValue
     } catch (rawError) {
       const error = asLifecycleError(rawError)
       this.warnDenial('lease-activation', error)
@@ -1378,7 +1435,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     this.schedulePresenceExpiry()
   }
 
-  private async refresh(lease: LocalLease<S>, ttl: number): Promise<void> {
+  private async refresh(lease: LocalLease<S>, ttl: number, replacementValue = ''): Promise<void> {
     // Never recreate a missing key/set entry here. A Redis restart or eviction
     // loses the distributed election state, so preserving a stale local
     // shouldBootstrap decision would permit multiple bootstrappers.
@@ -1396,6 +1453,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
           MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
           lease.roomStatePrefix,
           ROOM_EPOCH_TOMBSTONE_TTL_MS,
+          replacementValue,
         ),
       ),
     )

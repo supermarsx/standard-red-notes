@@ -1,6 +1,7 @@
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 
 @Entity({ name: 'auth_shared_vault_users' })
+@Index('unique_membership_on_auth_shared_vault_users', ['sharedVaultUuid', 'userUuid'], { unique: true })
 export class TypeORMSharedVaultUser {
   @PrimaryGeneratedColumn('uuid')
   declare uuid: string

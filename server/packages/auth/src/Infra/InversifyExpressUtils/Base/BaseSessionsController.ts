@@ -84,7 +84,7 @@ export class BaseSessionsController extends BaseHttpController {
             message: resultOrError.getError(),
           },
         },
-        400,
+        resultOrError.getError() === 'Could not verify shared-vault memberships' ? 503 : 400,
       )
     }
 

@@ -1,5 +1,7 @@
 import { Result, SharedVaultUserPermission, Timestamps, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
+import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { DomainEventFactoryInterface } from '../../../Event/DomainEventFactoryInterface'
 
 import { SharedVaultRepositoryInterface } from '../../../SharedVault/SharedVaultRepositoryInterface'
 import { TransferSharedVaultDTO } from './TransferSharedVaultDTO'
@@ -12,6 +14,8 @@ export class TransferSharedVault implements UseCaseInterface<void> {
     private sharedVaultUserRepository: SharedVaultUserRepositoryInterface,
     private transferSharedVaultItems: TransferSharedVaultItems,
     private timer: TimerInterface,
+    private domainEventPublisher?: DomainEventPublisherInterface,
+    private domainEventFactory?: DomainEventFactoryInterface,
   ) {}
 
   async execute(dto: TransferSharedVaultDTO): Promise<Result<void>> {
@@ -59,6 +63,7 @@ export class TransferSharedVault implements UseCaseInterface<void> {
       return Result.fail(`Could not transfer items: ${transferingItemsResult.getError()}`)
     }
 
+    const previousPermission = newOwner.props.permission.value
     newOwner.props.isDesignatedSurvivor = false
     newOwner.props.permission = SharedVaultUserPermission.create(SharedVaultUserPermission.PERMISSIONS.Admin).getValue()
     newOwner.props.timestamps = Timestamps.create(
@@ -76,6 +81,18 @@ export class TransferSharedVault implements UseCaseInterface<void> {
 
     await this.sharedVaultRepository.save(sharedVault)
 
+    if (this.domainEventPublisher && this.domainEventFactory) {
+      await this.domainEventPublisher.publish(
+        this.domainEventFactory.createUserPermissionChangedInSharedVaultEvent({
+          sharedVaultUuid: sharedVaultUuid.value,
+          userUuid: toUserUuid.value,
+          permission: newOwner.props.permission.value,
+          previousPermission,
+          originatorUuid: fromUserUuid.value,
+          updatedAt: newOwner.props.timestamps.updatedAt,
+        }),
+      )
+    }
     return Result.ok()
   }
 }

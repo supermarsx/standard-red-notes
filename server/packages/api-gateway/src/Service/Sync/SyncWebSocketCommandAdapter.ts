@@ -1,10 +1,12 @@
 import { Request, Response } from 'express'
 import { verify } from 'jsonwebtoken'
+import { signCollaborationSaveProof } from './CollaborationSaveFenceDispatch'
 import { CrossServiceTokenData } from '@standardnotes/security'
 import { RoleName } from '@standardnotes/domain-core'
 import {
   classifyPresentedSessionCredential,
   credentialCanAuthenticateSession,
+  SyncCommandBackendRefusalError,
   type JsonObject,
   type PresentedSessionCredentialOutcome,
   type SyncAuthorizationDecision,
@@ -256,7 +258,12 @@ export class SyncWebSocketCommandAdapter
   async execute(input: SyncBackendCommandInput, signal: AbortSignal, session?: unknown): Promise<SyncBackendCommit> {
     const durableSync = this.requireDurableSync()
     const validated = this.reusableSession(session, input.identity) ?? (await this.validate(input.identity, signal))
-    const body = this.commandBody(input.payload)
+    const body = signCollaborationSaveProof(
+      this.commandBody(input.payload),
+      input.identity.userUuid,
+      input.identity.deviceId,
+      this.authJwtSecret,
+    )
     const { request, response } = this.httpContext(validated.locals, body, SYNC_ITEMS_ROUTE)
     const result = await abortable(
       durableSync.sync(request, response, {
@@ -265,6 +272,10 @@ export class SyncWebSocketCommandAdapter
       }),
       signal,
     )
+    if (result.status === 409 && this.isJsonObject(result.data) && this.isJsonObject(result.data.error) &&
+      result.data.error.code === 'collaboration_save_fence_lost') {
+      throw new SyncCommandBackendRefusalError()
+    }
     if (result.status < 200 || result.status >= 300 || !this.isJsonObject(result.data)) {
       throw new Error('Durable sync command failed.')
     }

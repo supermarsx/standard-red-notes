@@ -7,6 +7,7 @@ import {
   collaborationErrorCode,
   roomDeniedReasonFor,
   type CollaborationLifecycleErrorCode,
+  type SaverEditorIdentity,
   type RelayFrame,
   type RoomDeniedReason,
   type RoomPresenceLeaveReason,
@@ -133,6 +134,7 @@ type RoomState = {
  * written against the decisions rather than against Redis.
  */
 export interface CollaborationPlane<S extends SendableSocket = SendableSocket> extends RoomRelayLifecycle<S> {
+  validateSaverEditor(identity: SaverEditorIdentity): Promise<boolean>
   isRelayHealthy(): boolean
   currentRoomEpoch(room: string, collaborationSecurityEpoch: string): Promise<string | undefined>
   releaseAll(conn: Conn<S>): Promise<void>
@@ -169,6 +171,26 @@ export class InProcessCollaborationLifecycle<S extends SendableSocket> implement
    */
   isRelayHealthy(): boolean {
     return !this.stopped
+  }
+
+  async validateSaverEditor(identity: SaverEditorIdentity): Promise<boolean> {
+    if (!this.isRelayHealthy()) {
+      return false
+    }
+    const now = this.now()
+    const state = this.stateOf(identity.room, now)
+    return [...this.leases.values()].some(
+      (lease) =>
+        lease.activated &&
+        lease.expiresAt > now &&
+        lease.room === identity.room &&
+        lease.roomEpoch === identity.roomEpoch &&
+        lease.requestId === identity.leaseId &&
+        lease.conn.userUuid === identity.userUuid &&
+        lease.conn.sessionUuid === identity.sessionUuid &&
+        state?.epoch === lease.roomEpoch &&
+        state.securityEpoch === lease.collaborationSecurityEpoch,
+    )
   }
 
   /**

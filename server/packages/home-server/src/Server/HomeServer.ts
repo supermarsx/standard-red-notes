@@ -79,6 +79,7 @@ import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import {
   Service as AuthService,
+  SharedVaultMembershipReconciler,
   AuthServiceInterface,
   type AuthReadinessSources,
   type AuthRuntimeDiagnosticsSources,
@@ -89,7 +90,11 @@ import {
   resolveAuthReadinessReport,
   resolveAuthRuntimeDiagnosticsReport,
 } from '@standardnotes/auth-server'
-import { Service as SyncingService } from '@standardnotes/syncing-server'
+import {
+  Service as SyncingService,
+  SharedVaultMembershipAuthority,
+  SQLCollaborationSaveFence,
+} from '@standardnotes/syncing-server'
 import { Service as RevisionsService } from '@standardnotes/revisions-server'
 import { Container } from 'inversify'
 import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
@@ -618,6 +623,7 @@ export class HomeServer implements HomeServerInterface {
   private internalDiagnosticsServer: http.Server | undefined
   private logStream: PassThrough | undefined
   private runtimeLogLevelApplier: RuntimeLogLevelApplier | undefined
+  private membershipReconciler: SharedVaultMembershipReconciler | undefined
   private starting = false
   private stopPromise: Promise<Result<string>> | undefined
   private readonly loggerNames = [
@@ -741,6 +747,10 @@ export class HomeServer implements HomeServerInterface {
         environmentOverrides,
         container,
       })
+      const membershipReconciler = container.get(SharedVaultMembershipReconciler)
+      membershipReconciler.setReader((userUuid) => container.get(SharedVaultMembershipAuthority).read(userUuid))
+      membershipReconciler.start()
+      this.membershipReconciler = membershipReconciler
       await revisionsService.getContainer({
         logger: winston.loggers.get('revisions-server'),
         environmentOverrides,
@@ -1370,6 +1380,17 @@ export class HomeServer implements HomeServerInterface {
                 origin: `http://127.0.0.1:${port}`,
                 operations: ['API_RPC', 'STREAM_ASSISTANT'],
               }),
+              collaborationSaveFence: async (input) => {
+                try {
+                  return { status: 200, body: await container.get(SQLCollaborationSaveFence).request(input) }
+                } catch (error) {
+                  const failure = error as { httpStatus?: number; code?: string }
+                  return {
+                    status: failure.httpStatus ?? 503,
+                    body: { error: { code: failure.code ?? 'collaboration_save_fence_unavailable' } },
+                  }
+                }
+              },
               metrics: createLoggerSyncCommandMetrics(gatewayLogger),
               inviteEvents: inviteEventComposition.gatewayAdapter,
               inviteEventDispatcher: inviteEventComposition.dispatcher,
@@ -1604,6 +1625,8 @@ export class HomeServer implements HomeServerInterface {
 
       return Result.ok('Server started.')
     } catch (error) {
+      this.membershipReconciler?.stop()
+      this.membershipReconciler = undefined
       const startupError = error as Error
       let cleanupError: string | undefined
       if (this.runtime.isActive() || this.logStream !== undefined) {
@@ -1711,6 +1734,8 @@ export class HomeServer implements HomeServerInterface {
   }
 
   private async stopRunningServer(): Promise<Result<string>> {
+    this.membershipReconciler?.stop()
+    this.membershipReconciler = undefined
     const errors: Error[] = []
     try {
       await this.runtime.stop()

@@ -96,6 +96,54 @@ async function enterRoom(
 }
 
 describe('InProcessCollaborationLifecycle', () => {
+  it('validates only the exact activated, unexpired saver editor identity', async () => {
+    const { lifecycle, now, advance } = setup()
+    const conn = connection('saver')
+    const identity = {
+      room: ROOM,
+      roomEpoch: EPOCH,
+      leaseId: 'lease-saver',
+      userUuid: conn.userUuid,
+      sessionUuid: conn.sessionUuid,
+    }
+    const pending = await lifecycle.reserveEditorLease(
+      conn,
+      ROOM,
+      identity.leaseId,
+      now() + 60_000,
+      3,
+      1,
+      EPOCH,
+      SECURITY_EPOCH,
+      now(),
+    )
+    expect(await lifecycle.validateSaverEditor(identity)).toBe(false)
+    await lifecycle.activateEditorLease(
+      conn,
+      ROOM,
+      identity.leaseId,
+      now() + 60_000,
+      3,
+      1,
+      pending.bootstrapChallenge,
+      EPOCH,
+      SECURITY_EPOCH,
+      now(),
+    )
+    expect(await lifecycle.validateSaverEditor(identity)).toBe(true)
+    for (const wrong of [
+      { userUuid: 'other' },
+      { sessionUuid: 'other' },
+      { leaseId: 'other' },
+      { roomEpoch: OTHER_EPOCH },
+    ]) {
+      expect(await lifecycle.validateSaverEditor({ ...identity, ...wrong })).toBe(false)
+    }
+    advance(60_001)
+    expect(await lifecycle.validateSaverEditor(identity)).toBe(false)
+    await lifecycle.stop()
+  })
+
   it('satisfies the RoomRelayLifecycle contract the relay handler drives', () => {
     const { lifecycle } = setup()
     const asLifecycle: RoomRelayLifecycle<FakeSocket> = lifecycle

@@ -1,4 +1,5 @@
 import { ItemHash } from '../../../Item/ItemHash'
+import type { CollaborationSaveWriteContext } from '../../../../Infra/TypeORM/SQLCollaborationSaveFence'
 
 export type SyncItemsDTO = {
   userUuid: string
@@ -17,6 +18,7 @@ export type SyncItemsDTO = {
   hasContentLimit: boolean
   // Standard Red Notes: per-user live-sync gating. Default true.
   liveSyncEnabled: boolean
+  collaborationSaveFence?: CollaborationSaveWriteContext
   /**
    * Standard Red Notes: SHADOW-BAN. When true this sync is silently degraded —
    * a reduced page size + content-transfer allowance (threaded into GetItems)

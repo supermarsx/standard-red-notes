@@ -2,6 +2,7 @@ import { Result } from '@standardnotes/domain-core'
 import { DataSource } from 'typeorm'
 
 import { SyncCommandTransactionContext } from '../../Infra/TypeORM/SyncCommandTransactionContext'
+import { inSyncingTransaction } from '../../Infra/TypeORM/InSyncingTransaction'
 
 type OutboxWakeup = { wake(): void }
 
@@ -27,7 +28,7 @@ export class InviteMutationTransactionRunner {
     let result: Result<T>
 
     try {
-      result = await this.dataSource.transaction((manager) =>
+      result = await inSyncingTransaction(this.dataSource, (manager) =>
         this.transactionContext.runInviteMutation(manager, async () => {
           const operationResult = await operation()
           if (operationResult.isFailed()) {

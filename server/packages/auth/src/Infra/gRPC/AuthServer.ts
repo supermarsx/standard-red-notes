@@ -53,6 +53,19 @@ export class AuthServer implements IAuthServer {
         sessionUuid: token.sessionUuid,
       })
       if (resultOrError.isFailed()) {
+        if (resultOrError.getError() === 'Could not verify shared-vault memberships') {
+          const metadata = new grpc.Metadata()
+          metadata.set('x-auth-error-response-code', '503')
+          return callback(
+            {
+              code: Status.UNAVAILABLE,
+              message: 'Membership authority temporarily unavailable',
+              name: 'UNAVAILABLE',
+              metadata,
+            },
+            null,
+          )
+        }
         // Standard Red Notes: RECORDED, not implied by silence. This branch had
         // no log at all, and the mint it guards used to answer a token with no
         // `session` claim and no error when the connection token's session no
@@ -166,6 +179,19 @@ export class AuthServer implements IAuthServer {
         applicationVersion,
       })
       if (resultOrError.isFailed()) {
+        if (resultOrError.getError() === 'Could not verify shared-vault memberships') {
+          const metadata = new grpc.Metadata()
+          metadata.set('x-auth-error-response-code', '503')
+          return callback(
+            {
+              code: Status.UNAVAILABLE,
+              message: 'Membership authority temporarily unavailable',
+              name: 'UNAVAILABLE',
+              metadata,
+            },
+            null,
+          )
+        }
         const metadata = new grpc.Metadata()
         metadata.set('x-auth-error-message', resultOrError.getError())
         metadata.set('x-auth-error-response-code', '400')

@@ -19,6 +19,7 @@ export type CollaborationScriptName =
   | 'SRN_RELEASE_LEASE_V3'
   | 'SRN_CLAIM_YJS_RESPONSE_V1'
   | 'SRN_COUNT_OTHER_LEASES_V1'
+  | 'SRN_VALIDATE_SAVER_EDITOR_V1'
 
 type MessageHandler = (channel: string, message: string) => void
 type SubscriptionCallback = (error: Error | null | undefined, count?: unknown) => void
@@ -29,6 +30,7 @@ const SCRIPT_NAMES: CollaborationScriptName[] = [
   'SRN_RELEASE_LEASE_V3',
   'SRN_CLAIM_YJS_RESPONSE_V1',
   'SRN_COUNT_OTHER_LEASES_V1',
+  'SRN_VALIDATE_SAVER_EDITOR_V1',
 ]
 
 function scriptNameOf(script: string): CollaborationScriptName {
@@ -91,6 +93,13 @@ export class RecordingCollaborationRedis {
           const own = new Set(args.slice(1).map(String))
           return [...members].filter((leaseKey) => !own.has(leaseKey) && this.leases.has(leaseKey)).length
         }
+        if (name === 'SRN_VALIDATE_SAVER_EDITOR_V1') {
+          const state = this.roomStates.get(String(args[1]))?.split(':')
+          if (state?.[0] !== String(args[2])) {return 0}
+          const suffix = `:active:${String(args[3])}:${state[0]}:${state[1]}`
+          const members = this.sets.get(String(args[0])) ?? new Set<string>()
+          return [...members].some((key) => this.leases.has(key) && this.leaseValues.get(key)?.endsWith(suffix)) ? 1 : 0
+        }
         const roomSetKey = String(args[0])
         const leaseKey = String(args[1])
         const roomStateKey = String(args[2])
@@ -129,6 +138,7 @@ export class RecordingCollaborationRedis {
             return -3
           }
           this.leases.set(leaseKey, ttl)
+          if (args[9]) {this.leaseValues.set(leaseKey, String(args[9]))}
           return 1
         }
 

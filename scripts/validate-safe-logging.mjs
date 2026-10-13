@@ -124,7 +124,7 @@ export const reviewedSafeLoggingAllowlist = [
   },
   {
     file: "server/packages/websocket-gateway/src/gateway.ts",
-    line: 1625,
+    line: 1628,
     rule: "forwarded-message-not-literal",
     call: [
       "logRefusal(",
@@ -140,7 +140,7 @@ export const reviewedSafeLoggingAllowlist = [
   },
   {
     file: "server/packages/websocket-gateway/src/gateway.ts",
-    line: 1778,
+    line: 1781,
     rule: "forwarded-message-not-literal",
     call: [
       "logRefusal(",

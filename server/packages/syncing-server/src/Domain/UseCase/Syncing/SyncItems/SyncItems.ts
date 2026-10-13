@@ -58,6 +58,7 @@ export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
         // the user (their other devices fall back to slower manual/HTTP sync).
         // Achieved by forcing live-sync off here — SaveItems needs no change.
         liveSyncEnabled: dto.liveSyncEnabled && dto.shadowBanned !== true,
+        collaborationSaveFence: dto.collaborationSaveFence,
       })
       if (saveItemsResultOrError.isFailed()) {
         return Result.fail(saveItemsResultOrError.getError())

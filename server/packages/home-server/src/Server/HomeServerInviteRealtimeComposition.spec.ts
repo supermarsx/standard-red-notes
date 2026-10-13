@@ -11,6 +11,14 @@ const mockLogger = {
 }
 
 const mockInviteDispatcher = { dispatch: jest.fn() }
+class MembershipReconcilerDouble {}
+class MembershipAuthorityDouble {}
+class CollaborationSaveFenceDouble {}
+const mockMembershipReconciler = { setReader: jest.fn(), start: jest.fn(), stop: jest.fn() }
+const mockMembershipAuthority = { read: jest.fn().mockResolvedValue([]) }
+const mockCollaborationSaveFence = {
+  request: jest.fn().mockResolvedValue({ room: 'note', token: 'proof', expiresAt: 123 }),
+}
 const mockInviteGatewayAdapter = { ready: jest.fn(() => true) }
 const mockCreateSharedInviteEventComposition = jest.fn(() => ({
   dispatcher: mockInviteDispatcher,
@@ -374,6 +382,7 @@ const mockAuthReadinessUnavailableReport = jest.fn(() => ({
 }))
 jest.mock('@standardnotes/auth-server', () => ({
   Service: ServiceDouble,
+  SharedVaultMembershipReconciler: MembershipReconcilerDouble,
   readAuthRuntimeDiagnosticsSources: mockReadAuthRuntimeDiagnosticsSources,
   resolveAuthRuntimeDiagnosticsReport: mockResolveAuthRuntimeDiagnosticsReport,
   readAuthReadinessSources: mockReadAuthReadinessSources,
@@ -401,12 +410,25 @@ jest.mock('./InternalDiagnosticsListener', () => ({
 }))
 jest.mock('@standardnotes/files-server', () => ({ Service: ServiceDouble }))
 jest.mock('@standardnotes/revisions-server', () => ({ Service: ServiceDouble }))
-jest.mock('@standardnotes/syncing-server', () => ({ Service: ServiceDouble }))
+jest.mock('@standardnotes/syncing-server', () => ({
+  Service: ServiceDouble,
+  SharedVaultMembershipAuthority: MembershipAuthorityDouble,
+  SQLCollaborationSaveFence: CollaborationSaveFenceDouble,
+}))
 
 jest.mock('inversify', () => ({
   Container: class {
     isBound = jest.fn(() => false)
     get = jest.fn((token: symbol) => {
+      if ((token as unknown) === MembershipReconcilerDouble) {
+        return mockMembershipReconciler
+      }
+      if ((token as unknown) === MembershipAuthorityDouble) {
+        return mockMembershipAuthority
+      }
+      if ((token as unknown) === CollaborationSaveFenceDouble) {
+        return mockCollaborationSaveFence
+      }
       if (token === mockTypes.ApiGateway_ReadinessState) {
         return mockReadiness
       }
@@ -481,6 +503,32 @@ function createServer(): HomeServerInstance {
 }
 
 describe('HomeServer invite realtime composition', () => {
+  it('starts direct membership reconciliation and stops its scan with the server', async () => {
+    const server = createServer()
+    const result = await server.start(configuration)
+    expect(result.isFailed()).toBe(false)
+    expect(mockMembershipReconciler.start).toHaveBeenCalledTimes(1)
+    const reader = mockMembershipReconciler.setReader.mock.calls[0][0]
+    await reader('00000000-0000-4000-8000-000000000001')
+    expect(mockMembershipAuthority.read).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001')
+    const attachment = latest(mockWebSocketRuntimeInstances).attach.mock.calls[0][0]
+    const claim = {
+      room: 'note',
+      roomEpoch: 'epoch',
+      leaseId: 'lease',
+      userUuid: 'user',
+      deviceId: 'device',
+      action: 'claim',
+    }
+    expect(await attachment.sync.collaborationSaveFence(claim)).toEqual({
+      status: 200,
+      body: { room: 'note', token: 'proof', expiresAt: 123 },
+    })
+    expect(mockCollaborationSaveFence.request).toHaveBeenCalledWith(claim)
+    await server.stop()
+    expect(mockMembershipReconciler.stop).toHaveBeenCalledTimes(1)
+  })
+
   beforeEach(() => {
     jest.clearAllMocks()
     mockAvailabilityInstances.length = 0

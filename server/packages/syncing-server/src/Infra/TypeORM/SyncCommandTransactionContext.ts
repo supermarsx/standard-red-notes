@@ -63,8 +63,12 @@ export class SyncCommandTransactionContext {
    * statement is sent at all -- including the one that would store the command's result,
    * which is how the executor finds out and starts over.
    */
-  run<T>(manager: EntityManager, callback: () => Promise<T>): Promise<T> {
-    const state: TransactionState = { manager, mode: 'sync-command', afterCommitOperations: [] }
+  run<T>(
+    manager: EntityManager,
+    callback: () => Promise<T>,
+    mode: TransactionState['mode'] = 'sync-command',
+  ): Promise<T> {
+    const state: TransactionState = { manager, mode, afterCommitOperations: [] }
     const queryRunner = manager.queryRunner
     if (!queryRunner || typeof queryRunner.query !== 'function') {
       return this.storage.run(state, callback)
@@ -95,7 +99,7 @@ export class SyncCommandTransactionContext {
   }
 
   runInviteMutation<T>(manager: EntityManager, callback: () => Promise<T>): Promise<T> {
-    return this.storage.run({ manager, mode: 'invite-mutation', afterCommitOperations: [] }, callback)
+    return this.run(manager, callback, 'invite-mutation')
   }
 
   get manager(): EntityManager | undefined {
@@ -114,7 +118,11 @@ export class SyncCommandTransactionContext {
   }
 
   assertOutboxHealthy(): void {
-    const failure = this.storage.getStore()?.outboxFailure
+    const state = this.storage.getStore()
+    if (state?.abortedBy !== undefined) {
+      throw new SyncCommandTransactionAbortedError(state.abortedBy)
+    }
+    const failure = state?.outboxFailure
     if (failure !== undefined) {
       throw failure
     }

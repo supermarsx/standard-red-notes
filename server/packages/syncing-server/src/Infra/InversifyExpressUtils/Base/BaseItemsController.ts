@@ -29,6 +29,7 @@ import { GetUserStorageUsage } from '../../../Domain/UseCase/Syncing/GetUserStor
 import { GetUsersStorageUsage } from '../../../Domain/UseCase/Syncing/GetUsersStorageUsage/GetUsersStorageUsage'
 import { SyncCommandMetadata, SyncCommandProtocolError } from '../../../Domain/SyncCommand/SyncCommandTypes'
 import { SyncResponse20200115 } from '../../../Domain/Item/SyncResponse/SyncResponse20200115'
+import { SQLCollaborationSaveFence, type CollaborationSaveWriteContext } from '../../TypeORM/SQLCollaborationSaveFence'
 
 /**
  * Standard Red Notes: the most accounts one admin storage-usage request may name.
@@ -73,6 +74,7 @@ export class BaseItemsController extends BaseHttpController {
     // when it is absent — an unwired dependency must never look like a fleet of
     // accounts holding nothing.
     protected getUsersStorageUsage?: GetUsersStorageUsage,
+    protected collaborationSaveFence?: SQLCollaborationSaveFence,
   ) {
     super()
 
@@ -146,6 +148,22 @@ export class BaseItemsController extends BaseHttpController {
     if (commandMetadata instanceof SyncCommandProtocolError) {
       return this.syncCommandError(response, commandMetadata)
     }
+    let collaborationSaveFence: CollaborationSaveWriteContext | undefined
+    try {
+      if (request.body.collaboration_save_fences !== undefined && !this.collaborationSaveFence) {
+        throw new SyncCommandProtocolError(
+          'collaboration_save_fence_unavailable',
+          'The collaboration saver is unavailable.',
+          503,
+        )
+      }
+      collaborationSaveFence = this.collaborationSaveFence?.readWriteContext(request.body, locals.user.uuid)
+    } catch (error) {
+      if (error instanceof SyncCommandProtocolError) {
+        return this.syncCommandError(response, error)
+      }
+      throw error
+    }
     if (commandMetadata === undefined) {
       const abuseError = await this.trafficAbuseError(locals)
       if (abuseError) {
@@ -196,6 +214,7 @@ export class BaseItemsController extends BaseHttpController {
       hasContentLimit: !!locals.hasContentLimit,
       // Standard Red Notes: per-user live-sync gating. Absent ⇒ enabled.
       liveSyncEnabled: locals.liveSyncEnabled !== false,
+      collaborationSaveFence,
       // Standard Red Notes: SHADOW-BAN — silently degrade this user's sync.
       shadowBanned: locals.shadowBanned === true,
     }
@@ -269,7 +288,15 @@ export class BaseItemsController extends BaseHttpController {
       }
     }
 
-    const syncResult = await this.syncItems.execute(syncDto)
+    let syncResult: Awaited<ReturnType<SyncItems['execute']>>
+    try {
+      syncResult = await this.syncItems.execute(syncDto)
+    } catch (error) {
+      if (error instanceof SyncCommandProtocolError) {
+        return this.syncCommandError(response, error)
+      }
+      throw error
+    }
     if (syncResult.isFailed()) {
       return this.json({ error: { message: syncResult.getError() } }, HttpStatusCode.BadRequest)
     }
@@ -580,7 +607,13 @@ export class BaseItemsController extends BaseHttpController {
   }
 
   private logicalSyncPayload(body: Record<string, unknown>): Record<string, unknown> {
-    const { command: _command, ...payload } = body
+    const {
+      command: _command,
+      collaboration_save_fence_device_id: _device,
+      collaboration_save_fence_timestamp: _timestamp,
+      collaboration_save_fence_signature: _signature,
+      ...payload
+    } = body
     return payload
   }
 

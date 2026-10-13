@@ -1,4 +1,6 @@
 import { TimerInterface } from '@standardnotes/time'
+import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { DomainEventFactoryInterface } from '../../../Event/DomainEventFactoryInterface'
 import { Result, SharedVaultUser, SharedVaultUserPermission, Timestamps, Uuid } from '@standardnotes/domain-core'
 
 import { SharedVaultRepositoryInterface } from '../../../SharedVault/SharedVaultRepositoryInterface'
@@ -46,6 +48,30 @@ describe('TransferSharedVault', () => {
 
     transferSharedVaultItems = {} as jest.Mocked<TransferSharedVaultItems>
     transferSharedVaultItems.execute = jest.fn().mockResolvedValue(Result.ok())
+  })
+
+  it('publishes the promoted owner permission so replica consumers refresh it', async () => {
+    const publisher = { publish: jest.fn() } as unknown as DomainEventPublisherInterface
+    const factory = {
+      createUserPermissionChangedInSharedVaultEvent: jest.fn().mockReturnValue({ type: 'role' }),
+    } as unknown as DomainEventFactoryInterface
+    const result = await new TransferSharedVault(
+      sharedVaultRepository,
+      sharedVaultUserRepository,
+      transferSharedVaultItems,
+      timer,
+      publisher,
+      factory,
+    ).execute({
+      sharedVaultUid: '00000000-0000-0000-0000-000000000000',
+      fromUserUuid: '00000000-0000-0000-0000-000000000000',
+      toUserUuid: '00000000-0000-0000-0000-000000000000',
+    })
+    expect(result.isFailed()).toBe(false)
+    expect(factory.createUserPermissionChangedInSharedVaultEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ permission: 'admin', previousPermission: 'read' }),
+    )
+    expect(publisher.publish).toHaveBeenCalledWith({ type: 'role' })
   })
 
   it('should transfer shared vault to another user', async () => {

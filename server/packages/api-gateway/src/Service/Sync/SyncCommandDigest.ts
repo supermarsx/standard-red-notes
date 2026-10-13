@@ -20,7 +20,13 @@ export function canonicalSyncCommandJson(value: unknown): string {
 }
 
 export function logicalSyncCommandPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  const { command: _command, ...logicalPayload } = payload
+  const {
+    command: _command,
+    collaboration_save_fence_device_id: _device,
+    collaboration_save_fence_timestamp: _timestamp,
+    collaboration_save_fence_signature: _signature,
+    ...logicalPayload
+  } = payload
   return logicalPayload
 }
 

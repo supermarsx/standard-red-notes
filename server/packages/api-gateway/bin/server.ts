@@ -1,5 +1,6 @@
 import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
+import { createCollaborationSaveFenceDispatch } from '../src/Service/Sync/CollaborationSaveFenceDispatch'
 
 import '../src/Controller/HealthCheckController'
 
@@ -789,6 +790,9 @@ void container
             authorization: syncAdapter,
             backend: syncAdapter,
             collaborationAuthorization: syncAdapter,
+            collaborationSaveFence: createCollaborationSaveFenceDispatch(
+              env.get('SYNCING_SERVER_JS_URL'), env.get('AUTH_JWT_SECRET'),
+            ),
             apiRpc: new LoopbackSyncApiRpcAdapter({
               origin: `http://127.0.0.1:${env.get('PORT', true) || '3000'}`,
               operations: ['API_RPC', 'STREAM_ASSISTANT'],

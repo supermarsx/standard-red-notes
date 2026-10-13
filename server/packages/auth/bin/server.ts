@@ -40,6 +40,7 @@ import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
+import { SharedVaultMembershipReconciler } from '../src/Infra/SharedVaultMembershipReconciler'
 import { AuthServer } from '../src/Infra/gRPC/AuthServer'
 import { AuthService } from '@standardnotes/grpc'
 import { AuthenticateRequest } from '../src/Domain/UseCase/AuthenticateRequest'
@@ -111,6 +112,9 @@ void container
 
     const logger: winston.Logger = container.get(TYPES.Auth_Logger)
     fatalLogger = logger
+    const membershipReconciler = container.get(SharedVaultMembershipReconciler)
+    membershipReconciler.start()
+    process.on('SIGTERM', () => membershipReconciler.stop())
 
     server.setErrorConfig((app) => {
       app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {

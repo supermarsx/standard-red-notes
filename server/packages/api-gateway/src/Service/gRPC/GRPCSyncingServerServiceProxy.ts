@@ -158,6 +158,18 @@ export class GRPCSyncingServerServiceProxy {
         metadata.set('x-has-content-limit', locals.hasContentLimit ? 'true' : 'false')
         metadata.set('x-live-sync-enabled', locals.liveSyncEnabled === false ? 'false' : 'true')
         metadata.set('x-shadow-banned', locals.shadowBanned === true ? 'true' : 'false')
+        if (payload && typeof payload !== 'string' && Array.isArray(payload.collaboration_save_fences)) {
+          const proof = JSON.stringify({
+            collaboration_save_fences: payload.collaboration_save_fences,
+            collaboration_save_fence_device_id: payload.collaboration_save_fence_device_id,
+            collaboration_save_fence_timestamp: payload.collaboration_save_fence_timestamp,
+            collaboration_save_fence_signature: payload.collaboration_save_fence_signature,
+          })
+          if (payload.collaboration_save_fences.length > 32 || Buffer.byteLength(proof) > 8_192) {
+            throw new Error('Collaboration save proof is too large')
+          }
+          metadata.set('x-collaboration-save-proof-json', proof)
+        }
         if (canonicalDigest) {
           metadata.set('x-sync-canonical-digest', canonicalDigest)
         }

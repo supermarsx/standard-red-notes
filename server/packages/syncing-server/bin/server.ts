@@ -8,6 +8,8 @@ import '../src/Infra/InversifyExpressUtils/AnnotatedMessagesController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSharedVaultInvitesController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSharedVaultUsersController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedSharedVaultsController'
+import '../src/Infra/InversifyExpressUtils/AnnotatedMembershipSnapshotController'
+import '../src/Infra/InversifyExpressUtils/AnnotatedCollaborationSaveFenceController'
 
 import helmet from 'helmet'
 import cors from 'cors'
@@ -30,6 +32,7 @@ import { ExecuteSyncCommand } from '../src/Domain/SyncCommand/ExecuteSyncCommand
 import { GetSyncCommandStatus } from '../src/Domain/SyncCommand/GetSyncCommandStatus'
 import { SyncCommandOutboxDispatcher } from '../src/Domain/SyncCommand/SyncCommandOutboxDispatcher'
 import { CleanupSyncCommands } from '../src/Domain/SyncCommand/CleanupSyncCommands'
+import { SQLCollaborationSaveFence } from '../src/Infra/TypeORM/SQLCollaborationSaveFence'
 
 // Standard Red Notes: fail-fast global crash handlers. Transient DB/Redis blips
 // self-heal via the ioredis retryStrategy / TypeORM pool; but a genuinely
@@ -162,6 +165,7 @@ void container
       container.get<ExecuteSyncCommand>(TYPES.Sync_ExecuteSyncCommand),
       container.get<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus),
       env.get('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET', true) || '',
+      container.get(SQLCollaborationSaveFence),
     )
 
     grpcServer.addService(SyncingService, {

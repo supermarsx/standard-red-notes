@@ -36,6 +36,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     // existing tests that construct this use case with the original arity keep
     // compiling; when absent, tokens carry direct roles only (previous behavior).
     private groupRepository?: GroupRepositoryInterface,
+    private refreshSharedVaultMemberships?: (userUuid: string) => Promise<void>,
   ) {}
 
   /**
@@ -134,6 +135,16 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     // role-gated server features (full revision history, unlimited shared vaults,
     // etc.) are unlocked for everyone.
     const hasContentLimit = false
+
+    if (this.refreshSharedVaultMemberships) {
+      try {
+        await this.refreshSharedVaultMemberships(user.uuid)
+      } catch {
+        // Revisions trust this scope. Never mint grants from a stale replica
+        // when the authority cannot confirm the user's current memberships.
+        return Result.fail('Could not verify shared-vault memberships')
+      }
+    }
 
     const sharedVaultAssociations = await this.sharedVaultUserRepository.findByUserUuid(
       Uuid.create(user.uuid).getValue(),

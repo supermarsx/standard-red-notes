@@ -1469,6 +1469,14 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 }
 
+export type SaverEditorIdentity = {
+  room: string
+  roomEpoch: string
+  leaseId: string
+  userUuid: string
+  sessionUuid: string
+}
+
 export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
   reserveEditorLease(
     conn: Conn<S>,

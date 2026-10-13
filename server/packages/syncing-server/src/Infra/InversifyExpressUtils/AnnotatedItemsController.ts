@@ -18,6 +18,7 @@ import { ExecuteSyncCommand } from '../../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../../Domain/SyncCommand/GetSyncCommandStatus'
 import { GetUserStorageUsage } from '../../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
 import { GetUsersStorageUsage } from '../../Domain/UseCase/Syncing/GetUsersStorageUsage/GetUsersStorageUsage'
+import { SQLCollaborationSaveFence } from '../TypeORM/SQLCollaborationSaveFence'
 
 @controller('/items', TYPES.Sync_AuthMiddleware)
 export class AnnotatedItemsController extends BaseItemsController {
@@ -46,6 +47,7 @@ export class AnnotatedItemsController extends BaseItemsController {
     @inject(TYPES.Sync_GetSyncCommandStatus) override getSyncCommandStatusUseCase: GetSyncCommandStatus,
     @inject(TYPES.Sync_GetUserStorageUsage) override getUserStorageUsage: GetUserStorageUsage,
     @inject(TYPES.Sync_GetUsersStorageUsage) override getUsersStorageUsage: GetUsersStorageUsage,
+    @inject(SQLCollaborationSaveFence) override collaborationSaveFence: SQLCollaborationSaveFence,
   ) {
     super(
       checkForTrafficAbuse,
@@ -68,6 +70,7 @@ export class AnnotatedItemsController extends BaseItemsController {
       getSyncCommandStatusUseCase,
       getUserStorageUsage,
       getUsersStorageUsage,
+      collaborationSaveFence,
     )
   }
 

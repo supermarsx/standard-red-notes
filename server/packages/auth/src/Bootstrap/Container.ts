@@ -458,6 +458,10 @@ import { TypeORMSharedVaultUser } from '../Infra/TypeORM/TypeORMSharedVaultUser'
 import { SharedVaultUserPersistenceMapper } from '../Mapping/SharedVaultUserPersistenceMapper'
 import { SharedVaultUserRepositoryInterface } from '../Domain/SharedVault/SharedVaultUserRepositoryInterface'
 import { TypeORMSharedVaultUserRepository } from '../Infra/TypeORM/TypeORMSharedVaultUserRepository'
+import {
+  SharedVaultMembershipReconciler,
+  remoteMembershipSnapshotReader,
+} from '../Infra/SharedVaultMembershipReconciler'
 import { AddSharedVaultUser } from '../Domain/UseCase/AddSharedVaultUser/AddSharedVaultUser'
 import { RemoveSharedVaultUser } from '../Domain/UseCase/RemoveSharedVaultUser/RemoveSharedVaultUser'
 import { UserAddedToSharedVaultEventHandler } from '../Domain/Handler/UserAddedToSharedVaultEventHandler'
@@ -1309,6 +1313,17 @@ export class ContainerConfigLoader {
           ),
         ),
       )
+
+    const membershipReconciler = new SharedVaultMembershipReconciler(
+      container.get<Repository<TypeORMSharedVaultUser>>(TYPES.Auth_ORMSharedVaultUserRepository),
+      logger,
+    )
+    const membershipAuthorityUrl =
+      env.get('SHARED_VAULT_MEMBERSHIP_AUTHORITY_URL', true) || env.get('SYNCING_SERVER_URL', true)
+    if (membershipAuthorityUrl) {
+      membershipReconciler.setReader(remoteMembershipSnapshotReader(membershipAuthorityUrl, env.get('AUTH_JWT_SECRET')))
+    }
+    container.bind(SharedVaultMembershipReconciler).toConstantValue(membershipReconciler)
 
     // Projectors
     container.bind<SessionProjector>(TYPES.Auth_SessionProjector).to(SessionProjector)
@@ -3102,6 +3117,7 @@ export class ContainerConfigLoader {
         // Standard Red Notes: RBAC groups — tokens carry group-conferred roles
         // (direct ∪ group) so e.g. admin granted via a group works.
         container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),
+        (userUuid) => container.get(SharedVaultMembershipReconciler).reconcile(userUuid),
       ),
     )
     container.bind<ProcessUserRequest>(TYPES.Auth_ProcessUserRequest).to(ProcessUserRequest)
@@ -3715,6 +3731,23 @@ export class ContainerConfigLoader {
       ['ITEM_DELETED', container.get(TYPES.Auth_WebhookItemDeletedEventHandler)],
       ['ITEMS_CHANGED_ON_SERVER', container.get(TYPES.Auth_WebhookItemsChangedEventHandler)],
     ])
+
+    for (const name of [
+      'USER_ADDED_TO_SHARED_VAULT',
+      'USER_REMOVED_FROM_SHARED_VAULT',
+      'USER_PERMISSION_CHANGED_IN_SHARED_VAULT',
+      'USER_DESIGNATED_AS_SURVIVOR_IN_SHARED_VAULT',
+    ]) {
+      eventHandlers.set(name, {
+        handle: async (event) => {
+          const userUuid = (event.payload as { userUuid?: string }).userUuid
+          if (!userUuid) {
+            throw new Error('Shared-vault membership event has no user UUID')
+          }
+          await membershipReconciler.reconcile(userUuid)
+        },
+      })
+    }
 
     if (isConfiguredForHomeServer) {
       const directCallEventMessageHandler = new DirectCallEventMessageHandler(

@@ -415,6 +415,14 @@ export interface SyncCommandBackendAdapter {
   ): Promise<SyncBackendStatus>
 }
 
+/** A trusted backend proved that the transaction made no item writes. */
+export class SyncCommandBackendRefusalError extends Error {
+  constructor() {
+    super('The collaboration save fence refused this command before writing items.')
+    this.name = 'SyncCommandBackendRefusalError'
+  }
+}
+
 export type SyncCollaborationAuthorizationResult =
   | {
       authorized: false
@@ -2357,6 +2365,11 @@ export class SyncCommandHandler {
         this.options.metrics?.increment('command', 'committed')
       })
     } catch (error) {
+      if (error instanceof Error && error.name === 'SyncCommandBackendRefusalError') {
+        this.options.metrics?.increment('authorization', 'NOT_AUTHORIZED')
+        this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
+        return
+      }
       const leaseLost = error instanceof SyncLeaseLostError || controller.signal.reason instanceof SyncLeaseLostError
       const timedOut = controller.signal.aborted && !leaseLost && !this.closed
       this.options.metrics?.increment(
@@ -2875,7 +2888,8 @@ function isAllowedRpcRequest(
   const pathname = new URL(frame.payload.path, 'http://rpc.invalid').pathname
   return (
     (pathname === '/v1/assistant/stream' && operations.includes('STREAM_ASSISTANT')) ||
-    pathname === '/v1/collaboration/authorize'
+    pathname === '/v1/collaboration/authorize' ||
+    pathname === '/v1/collaboration/save-fence'
   )
 }
 

@@ -96,6 +96,24 @@ const collaborationInput = {
 }
 
 describe('SyncWebSocketCommandAdapter', () => {
+  it('distinguishes a rolled-back save-fence refusal from an uncertain backend error', async () => {
+    const { adapter, durable } = build()
+    ;(durable.sync as jest.Mock).mockResolvedValueOnce({
+      status: 409,
+      data: { error: { code: 'collaboration_save_fence_lost' } },
+    })
+    await expect(
+      adapter.execute(
+        {
+          identity,
+          commandId: 'old-fence',
+          digest: 'a'.repeat(64),
+          payload: { command: 'SYNC_ITEMS', body: { api: '20240226', items: [] } },
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ name: 'SyncCommandBackendRefusalError' })
+  })
   // ---------------------------------------------------------------------------
   // Session readiness vs durable readiness are two independent questions on one
   // object. While a single `ready()` answered both, an unbound gRPC proxy -- or

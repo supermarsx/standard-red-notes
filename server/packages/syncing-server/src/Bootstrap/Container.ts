@@ -1,4 +1,6 @@
 import * as winston from 'winston'
+import { SharedVaultMembershipAuthority } from '../Infra/readSharedVaultMembershipSnapshot'
+import { SQLCollaborationSaveFence } from '../Infra/TypeORM/SQLCollaborationSaveFence'
 import Redis from 'ioredis'
 import { Container, ResolutionContext } from 'inversify'
 
@@ -285,6 +287,15 @@ export class ContainerConfigLoader {
     container
       .bind<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext)
       .toConstantValue(new SyncCommandTransactionContext())
+    container
+      .bind(SQLCollaborationSaveFence)
+      .toConstantValue(
+        new SQLCollaborationSaveFence(
+          appDataSource.dataSource,
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+          env.get('AUTH_JWT_SECRET'),
+        ),
+      )
 
     const isConfiguredForHomeServer = env.get('MODE', true) === 'home-server'
     const isConfiguredForSelfHosting = env.get('MODE', true) === 'self-hosted'
@@ -995,6 +1006,7 @@ export class ContainerConfigLoader {
         parseWebsocketSyncPushMaxItems(env.get('WEBSOCKET_SYNC_PUSH_MAX_ITEMS', true)),
         parseWebsocketSyncPushMaxBytes(env.get('WEBSOCKET_SYNC_PUSH_MAX_BYTES', true)),
         container.get<Logger>(TYPES.Sync_Logger),
+        container.get(SQLCollaborationSaveFence),
       ),
     )
     container
@@ -1255,6 +1267,8 @@ export class ContainerConfigLoader {
           container.get<SharedVaultUserRepositoryInterface>(TYPES.Sync_SharedVaultUserRepository),
           container.get<TransferSharedVaultItems>(TYPES.Sync_TransferSharedVaultItems),
           container.get<TimerInterface>(TYPES.Sync_Timer),
+          container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
+          container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
         ),
       )
     container
@@ -1552,6 +1566,7 @@ export class ContainerConfigLoader {
             container.get<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus),
             container.get<GetUserStorageUsage>(TYPES.Sync_GetUserStorageUsage),
             container.get<GetUsersStorageUsage>(TYPES.Sync_GetUsersStorageUsage),
+            container.get(SQLCollaborationSaveFence),
           ),
         )
       container
@@ -1612,6 +1627,9 @@ export class ContainerConfigLoader {
         )
     }
 
+    container
+      .bind(SharedVaultMembershipAuthority)
+      .toConstantValue(new SharedVaultMembershipAuthority(container.get(TYPES.Sync_ORMSharedVaultUserRepository)))
     logger.debug('Configuration complete')
 
     return container

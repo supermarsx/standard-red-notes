@@ -27,6 +27,7 @@ import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpReprese
 import { DomainEventInterface } from '@standardnotes/domain-events'
 import { ConcurrentItemUpdateError } from '../../../Item/ConcurrentItemUpdateError'
 import { encodeSyncToken } from '../SyncToken'
+import { SQLCollaborationSaveFence } from '../../../../Infra/TypeORM/SQLCollaborationSaveFence'
 
 /**
  * `WEBSOCKET_SYNC_PUSH_ENABLED` parser. Only the exact string 'true' turns the
@@ -96,9 +97,28 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     // notification.
     private websocketSyncPushMaxBytes: number,
     private logger: Logger,
+    private collaborationSaveFence?: SQLCollaborationSaveFence,
   ) {}
 
   async execute(dto: SaveItemsDTO): Promise<Result<SaveItemsResult>> {
+    if (this.collaborationSaveFence) {
+      return this.collaborationSaveFence.run(
+        dto.userUuid,
+        dto.itemHashes.map((item) => item.props.uuid),
+        dto.collaborationSaveFence,
+        () => this.executeUnfenced(dto),
+        dto.itemHashes
+          .filter(
+            (item) =>
+              item.props.content_type === 'Note' || item.props.content_type === null || item.props.deleted === true,
+          )
+          .map((item) => item.props.uuid),
+      )
+    }
+    return this.executeUnfenced(dto)
+  }
+
+  private async executeUnfenced(dto: SaveItemsDTO): Promise<Result<SaveItemsResult>> {
     const savedItems: Array<Item> = []
     const conflicts: Array<ItemConflict> = []
 

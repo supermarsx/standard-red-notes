@@ -9,6 +9,7 @@ import {
 } from '../src/registry.js'
 import {
   SyncCommandHandler,
+  SyncCommandBackendRefusalError,
   type SyncApiRpcAdapter,
   type SyncCollaborationAuthorizationAdapter,
   type SyncCommandBackendAdapter,
@@ -354,6 +355,19 @@ async function authenticatedHandler(
 }
 
 describe('SyncCommandHandler', () => {
+  it('reports a proved fence refusal without retaining an uncertain backend failure', async () => {
+    const backend: SyncCommandBackendAdapter = {
+      ready: () => true,
+      execute: vi.fn().mockRejectedValue(new SyncCommandBackendRefusalError()),
+      status: vi.fn(),
+    }
+    const { handler, socket } = await authenticatedHandler({ backend })
+    enqueue(handler, commandFrame('fence-refused', 1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toMatchObject({ code: 'NOT_AUTHORIZED' }))
+    expect(socket.frames.some((frame) => frame.type === 'COMMITTED')).toBe(false)
+    expect(socket.closes).toHaveLength(0)
+    await handler.stop()
+  })
   it('rejects invalid distributed renewal intervals at construction', () => {
     const base = {
       socket: new FakeSocket(),

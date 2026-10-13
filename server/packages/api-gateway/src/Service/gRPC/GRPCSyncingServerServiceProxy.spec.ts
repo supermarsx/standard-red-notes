@@ -17,6 +17,7 @@ import { SyncResponseHttpRepresentation } from '../../Mapping/Sync/Http/SyncResp
 import { GRPCSyncingServerServiceProxy } from './GRPCSyncingServerServiceProxy'
 import { SyncRequestGRPCMapper } from '../../Mapping/Sync/GRPC/SyncRequestGRPCMapper'
 import { computeSyncCommandDigest, logicalSyncCommandPayload } from '../Sync/SyncCommandDigest'
+import { signCollaborationSaveProof } from '../Sync/CollaborationSaveFenceDispatch'
 
 describe('GRPCSyncingServerServiceProxy', () => {
   let syncingClient: jest.Mocked<ISyncingClient>
@@ -113,6 +114,23 @@ describe('GRPCSyncingServerServiceProxy', () => {
 
     expect(capturedMetadata?.get('x-live-sync-enabled')).toEqual(['true'])
     expect(capturedMetadata?.get('x-shadow-banned')).toEqual(['false'])
+  })
+
+  it('carries socket saver proofs through gRPC without changing the client digest', async () => {
+    const logical = {
+      api: '20240226',
+      items: [],
+      collaboration_save_fences: [{ room: '00000000-0000-4000-8000-000000000001', token: 'b'.repeat(64) }],
+    }
+    const signed = signCollaborationSaveProof(logical, 'user-1', 'device-1', 'secret')
+    const digest = computeSyncCommandDigest(logical)
+    await createProxy().sync(request, responseWith(), { ...signed, command: { id: 'fenced-command', digest } })
+    expect(capturedMetadata?.get('x-sync-canonical-digest')).toEqual([digest])
+    const proof = JSON.parse(capturedMetadata?.get('x-collaboration-save-proof-json')[0] as string)
+    expect(proof.collaboration_save_fences).toEqual(logical.collaboration_save_fences)
+    expect(proof.collaboration_save_fence_device_id).toBe('device-1')
+    expect(proof.collaboration_save_fence_signature).toBe(signed.collaboration_save_fence_signature)
+    expect(capturedRequest?.getCommand()?.getDigest()).toBe(digest)
   })
 
   it('maps a successful gRPC response without exposing the request payload', async () => {

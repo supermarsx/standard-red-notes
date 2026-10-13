@@ -35,6 +35,17 @@ describe('AuthServer', () => {
       request: { getToken: () => token } as unknown as WebsocketConnectionAuthorizationHeader,
     }) as unknown as grpc.ServerUnaryCall<WebsocketConnectionAuthorizationHeader, ConnectionValidationResponse>
 
+  it('reports membership authority failure as retryable service unavailable', async () => {
+    createCrossServiceToken.execute = jest
+      .fn()
+      .mockResolvedValue(Result.fail('Could not verify shared-vault memberships'))
+    const callback = jest.fn()
+    await createServer().validateWebsocket(websocketCall('valid'), callback)
+    expect(callback.mock.calls[0][0].code).toBe(Status.UNAVAILABLE)
+    expect(callback.mock.calls[0][0].metadata.get('x-auth-error-response-code')).toEqual(['503'])
+    expect(callback.mock.calls[0][1]).toBeNull()
+  })
+
   beforeEach(() => {
     authenticateRequest = {} as jest.Mocked<AuthenticateRequest>
     authenticateRequest.execute = jest.fn()

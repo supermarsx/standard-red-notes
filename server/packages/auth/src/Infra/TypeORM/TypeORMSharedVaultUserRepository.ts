@@ -63,10 +63,21 @@ export class TypeORMSharedVaultUserRepository implements SharedVaultUserReposito
   async save(sharedVaultUser: SharedVaultUser): Promise<void> {
     const persistence = this.mapper.toProjection(sharedVaultUser)
 
-    await this.ormRepository.save(persistence)
+    await this.ormRepository.upsert(persistence, ['sharedVaultUuid', 'userUuid'])
   }
 
   async remove(sharedVaultUser: SharedVaultUser): Promise<void> {
     await this.ormRepository.remove(this.mapper.toProjection(sharedVaultUser))
+  }
+
+  async removeByUserUuidAndSharedVaultUuid(dto: { userUuid: Uuid; sharedVaultUuid: Uuid }): Promise<number> {
+    const result = await this.ormRepository
+      .createQueryBuilder()
+      .delete()
+      .where('user_uuid = :userUuid', { userUuid: dto.userUuid.value })
+      .andWhere('shared_vault_uuid = :sharedVaultUuid', { sharedVaultUuid: dto.sharedVaultUuid.value })
+      .execute()
+
+    return result.affected ?? 0
   }
 }

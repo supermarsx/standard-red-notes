@@ -1,6 +1,7 @@
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
+import { withCollaborationSaveFenceRpc, type CollaborationSaveFenceDispatch } from './collaborationSaveFenceRpc.js'
 import {
   classifyConnectionTokenError,
   decodeCrossServiceToken,
@@ -232,6 +233,8 @@ export interface SyncGatewayOptions {
   collaborationRoomEpochResolver?: (room: string, collaborationSecurityEpoch: string) => Promise<string | undefined>
   /** Optional same-origin authenticated API RPC adapter. */
   apiRpc?: SyncApiRpcAdapter
+  /** Internal, authenticated dispatch after the room plane confirms an activated editor. */
+  collaborationSaveFence?: CollaborationSaveFenceDispatch
   /** Fleet-shared durable invitation/membership/application-state stream. */
   inviteEvents?: SyncInviteEventsAdapter
   /** Durable dispatcher used by the single production SQS consumer before ACK. */
@@ -1817,7 +1820,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         onHandshakeRejected: (): void => {
           handshakeRejected += 1
         },
-        apiRpc: syncOptions!.apiRpc,
+        apiRpc: syncOptions!.apiRpc
+          ? withCollaborationSaveFenceRpc(
+              syncOptions!.apiRpc,
+              async (input) => collaborationPlane.validateSaverEditor?.(input) ?? false,
+              syncOptions!.collaborationSaveFence,
+            )
+          : undefined,
         inviteEvents: socketInviteEvents,
         files: syncOptions!.files,
         requireSharedState: syncOptions!.requireSharedState,
@@ -2353,6 +2362,7 @@ export type { Logger } from './redisBridge.js'
 // authorization, FILES_V1 authorization) shares a single table instead of
 // growing its own.
 export { classifyPresentedSessionCredential, credentialCanAuthenticateSession } from './syncCommandHandler.js'
+export { SyncCommandBackendRefusalError } from './syncCommandHandler.js'
 // The periodic-revalidation bounds, exported so a host or a live probe can
 // state the figure it is relying on instead of duplicating it.
 export { SYNC_SESSION_REVALIDATION_INTERVAL_MS, SYNC_SOCKET_MAX_LIFETIME_MS } from './syncCommandHandler.js'
@@ -2376,6 +2386,7 @@ export type {
   SyncSessionRefreshDecision,
 } from './syncCommandHandler.js'
 export type { SyncTicketIdentity } from './auth.js'
+export type { CollaborationSaveFenceDispatch, CollaborationSaveFenceInput } from './collaborationSaveFenceRpc.js'
 export {
   classifyConnectionTokenError,
   DEFAULT_CONNECTION_TOKEN_TTL,

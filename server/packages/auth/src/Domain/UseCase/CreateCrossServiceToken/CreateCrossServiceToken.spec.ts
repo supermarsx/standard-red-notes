@@ -1,4 +1,9 @@
 import 'reflect-metadata'
+import { DataSource } from 'typeorm'
+import { Logger } from 'winston'
+import { SharedVaultMembershipReconciler } from '../../../Infra/SharedVaultMembershipReconciler'
+import { TypeORMSharedVaultUser } from '../../../Infra/TypeORM/TypeORMSharedVaultUser'
+import { authSharedVaultReplicaLock1791936000001 } from '../../../../migrations/sqlite/1791936000001-auth-shared-vault-replica-lock'
 
 import { TokenEncoderInterface, CrossServiceTokenData } from '@standardnotes/security'
 import { ProjectorInterface } from '../../../Projection/ProjectorInterface'
@@ -50,6 +55,7 @@ describe('CreateCrossServiceToken', () => {
   const createUseCase = (
     applicationVersionThresholdForTokenVersion2?: string,
     applicationVersionThresholdForTokenVersion3?: string,
+    refreshMemberships?: (userUuid: string) => Promise<void>,
   ) =>
     new CreateCrossServiceToken(
       userProjector,
@@ -65,7 +71,46 @@ describe('CreateCrossServiceToken', () => {
       applicationVersionThresholdForTokenVersion2,
       applicationVersionThresholdForTokenVersion3,
       getSetting,
+      undefined,
+      refreshMemberships,
     )
+
+  it('refuses to mint stale membership grants when the authority cannot be reached', async () => {
+    const refresh = jest.fn().mockRejectedValue(new Error('unavailable'))
+    const result = await createUseCase(undefined, undefined, refresh).execute({ user })
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe('Could not verify shared-vault memberships')
+    expect(refresh).toHaveBeenCalledWith(user.uuid)
+    expect(tokenEncoder.encodeExpirableToken).not.toHaveBeenCalled()
+    expect(sharedVaultUserRepository.findByUserUuid).not.toHaveBeenCalled()
+  })
+
+  it('mints twenty concurrent tokens using twenty serialized fresh membership reads', async () => {
+    const database = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [TypeORMSharedVaultUser],
+      synchronize: true,
+    })
+    await database.initialize()
+    try {
+      const runner = database.createQueryRunner()
+      await new authSharedVaultReplicaLock1791936000001().up(runner)
+      await runner.release()
+      const reconciler = new SharedVaultMembershipReconciler(database.getRepository(TypeORMSharedVaultUser), {
+        error: jest.fn(),
+      } as unknown as Logger)
+      const reader = jest.fn().mockResolvedValue([])
+      reconciler.setReader(reader)
+      const useCase = createUseCase(undefined, undefined, (userUuid) => reconciler.reconcile(userUuid))
+      const results = await Promise.all(Array.from({ length: 20 }, () => useCase.execute({ user })))
+      expect(results.every((result) => !result.isFailed())).toBe(true)
+      expect(reader).toHaveBeenCalledTimes(20)
+      expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledTimes(20)
+    } finally {
+      await database.destroy()
+    }
+  })
 
   beforeEach(() => {
     permission = {

@@ -3,6 +3,17 @@ import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { SharedVaultUserRepositoryInterface } from '../../SharedVault/SharedVaultUserRepositoryInterface'
 import { RemoveSharedVaultUserDTO } from './RemoveSharedVaultUserDTO'
 
+/**
+ * Mirrors a `USER_REMOVED_FROM_SHARED_VAULT` into `auth_shared_vault_users`.
+ *
+ * Deletes EVERY row for the (shared_vault_uuid, user_uuid) pair. It used to find
+ * one row and delete it, so a duplicate left by a redelivered add survived and
+ * the removed member kept the vault in `belongs_to_shared_vaults` -- which the
+ * revisions service trusts as its only authorization scope.
+ *
+ * A removal with nothing to remove is success: the mirror already says what the
+ * event says, and a redelivered removal must not be logged as a failure.
+ */
 export class RemoveSharedVaultUser implements UseCaseInterface<void> {
   constructor(private sharedVaultUserRepository: SharedVaultUserRepositoryInterface) {}
 
@@ -23,15 +34,10 @@ export class RemoveSharedVaultUser implements UseCaseInterface<void> {
     }
 
     if (sharedVaultUuid) {
-      const sharedVaultUser = await this.sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid({
+      await this.sharedVaultUserRepository.removeByUserUuidAndSharedVaultUuid({
         userUuid,
         sharedVaultUuid,
       })
-      if (!sharedVaultUser) {
-        return Result.fail('Shared vault user not found')
-      }
-
-      await this.sharedVaultUserRepository.remove(sharedVaultUser)
     } else {
       const sharedVaultUsers = await this.sharedVaultUserRepository.findByUserUuid(userUuid)
       for (const sharedVaultUser of sharedVaultUsers) {

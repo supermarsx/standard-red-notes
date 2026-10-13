@@ -1,4 +1,5 @@
 export * from './Bootstrap'
+export * from './Infra/SharedVaultMembershipReconciler'
 // Standard Red Notes: the one composition of the `/healthcheck/diagnostics`
 // answer. Exported because the bundled home-server serves that route from a
 // loopback-only internal listener of its own — auth has no HTTP port on that

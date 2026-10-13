@@ -1,4 +1,11 @@
-import { Result, SharedVaultUserPermission, Timestamps, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import {
+  Result,
+  SharedVaultUser,
+  SharedVaultUserPermission,
+  Timestamps,
+  UseCaseInterface,
+  Uuid,
+} from '@standardnotes/domain-core'
 
 import { SharedVaultUserRepositoryInterface } from '../../SharedVault/SharedVaultUserRepositoryInterface'
 import { UpdateSharedVaultUserPermissionDTO } from './UpdateSharedVaultUserPermissionDTO'
@@ -15,11 +22,15 @@ import { UpdateSharedVaultUserPermissionDTO } from './UpdateSharedVaultUserPermi
  * would therefore grant item writes while leaving shared-vault FILE uploads refused, with
  * nothing anywhere reporting a disagreement.
  *
- * It UPDATES the row it finds rather than creating one. `AddSharedVaultUser` mints a
- * fresh `UniqueEntityId` on every call, and `auth_shared_vault_users` has no unique index
- * on (user_uuid, shared_vault_uuid), so reusing it here would leave two rows for one
- * membership and `findByUserUuid` would project whichever the query happened to return
- * first -- a permission that flips between requests.
+ * It UPDATES the row it finds, keeping its uuid and createdAt. When the mirror has NO row
+ * it CREATES one: the event is published by the syncing-server only after it changed a
+ * membership row that exists there, so a missing mirror row means an earlier
+ * `USER_ADDED_TO_SHARED_VAULT` was lost -- and refusing would keep the member out of the
+ * token for good. (`auth_shared_vault_users` is unique on (shared_vault_uuid, user_uuid),
+ * so this cannot become a second row.)
+ *
+ * An event OLDER than the row is acknowledged and dropped, so two permission changes
+ * delivered out of order still leave the later one in place.
  */
 export class UpdateSharedVaultUserPermission implements UseCaseInterface<void> {
   constructor(private sharedVaultUserRepository: SharedVaultUserRepositoryInterface) {}
@@ -48,7 +59,28 @@ export class UpdateSharedVaultUserPermission implements UseCaseInterface<void> {
       sharedVaultUuid,
     })
     if (!sharedVaultUser) {
-      return Result.fail('User is not a member of the shared vault')
+      const timestampsOrError = Timestamps.create(dto.updatedAt, dto.updatedAt)
+      if (timestampsOrError.isFailed()) {
+        return Result.fail(timestampsOrError.getError())
+      }
+      const createdOrError = SharedVaultUser.create({
+        userUuid,
+        sharedVaultUuid,
+        permission,
+        timestamps: timestampsOrError.getValue(),
+        isDesignatedSurvivor: false,
+      })
+      if (createdOrError.isFailed()) {
+        return Result.fail(createdOrError.getError())
+      }
+
+      await this.sharedVaultUserRepository.save(createdOrError.getValue())
+
+      return Result.ok()
+    }
+
+    if (sharedVaultUser.props.timestamps.updatedAt > dto.updatedAt) {
+      return Result.ok()
     }
 
     const timestampsOrError = Timestamps.create(sharedVaultUser.props.timestamps.createdAt, dto.updatedAt)

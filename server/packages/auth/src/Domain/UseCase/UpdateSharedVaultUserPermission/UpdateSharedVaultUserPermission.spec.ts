@@ -1,4 +1,5 @@
 import {
+  Result,
   SharedVaultUser,
   SharedVaultUserPermission,
   Timestamps,
@@ -78,7 +79,10 @@ describe('auth UpdateSharedVaultUserPermission (membership mirror)', () => {
     expect(saved.props.permission.value).toEqual('read')
   })
 
-  it('refuses rather than inventing a membership when the mirror has no row', async () => {
+  // The syncing-server publishes this only after changing a membership row it HAS,
+  // so a missing mirror row means the add event was lost. Refusing kept the member
+  // out of `belongs_to_shared_vaults` for good.
+  it('creates the mirror row when the add event never arrived', async () => {
     sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(null)
 
     const result = await createUseCase().execute({
@@ -88,8 +92,60 @@ describe('auth UpdateSharedVaultUserPermission (membership mirror)', () => {
       updatedAt: 5_000,
     })
 
+    expect(result.isFailed()).toBe(false)
+    expect(sharedVaultUserRepository.save).toHaveBeenCalledTimes(1)
+    const saved = (sharedVaultUserRepository.save as jest.Mock).mock.calls[0][0] as SharedVaultUser
+    expect(saved.props.userUuid.value).toEqual(MEMBER_UUID)
+    expect(saved.props.sharedVaultUuid.value).toEqual(VAULT_UUID)
+    expect(saved.props.permission.value).toEqual('write')
+    expect(saved.props.timestamps.createdAt).toEqual(5_000)
+    expect(saved.props.timestamps.updatedAt).toEqual(5_000)
+    expect(saved.props.isDesignatedSurvivor).toBe(false)
+  })
+
+  it('keeps a later change when an earlier one is delivered after it', async () => {
+    const result = await createUseCase().execute({
+      sharedVaultUuid: VAULT_UUID,
+      userUuid: MEMBER_UUID,
+      permission: SharedVaultUserPermission.PERMISSIONS.Write,
+      updatedAt: 999,
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(sharedVaultUserRepository.save).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['timestamps', () => jest.spyOn(Timestamps, 'create').mockReturnValue(Result.fail('bad timestamps'))],
+    ['membership', () => jest.spyOn(SharedVaultUser, 'create').mockReturnValue(Result.fail('bad membership'))],
+  ])('refuses to create a mirror row from invalid %s', async (_label, breakIt) => {
+    sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid = jest.fn().mockResolvedValue(null)
+    const spy = breakIt()
+
+    const result = await createUseCase().execute({
+      sharedVaultUuid: VAULT_UUID,
+      userUuid: MEMBER_UUID,
+      permission: SharedVaultUserPermission.PERMISSIONS.Write,
+      updatedAt: 5_000,
+    })
+
+    spy.mockRestore()
     expect(result.isFailed()).toBe(true)
-    expect(result.getError()).toEqual('User is not a member of the shared vault')
+    expect(sharedVaultUserRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('refuses to update from invalid timestamps', async () => {
+    const spy = jest.spyOn(Timestamps, 'create').mockReturnValue(Result.fail('bad timestamps'))
+
+    const result = await createUseCase().execute({
+      sharedVaultUuid: VAULT_UUID,
+      userUuid: MEMBER_UUID,
+      permission: SharedVaultUserPermission.PERMISSIONS.Write,
+      updatedAt: 5_000,
+    })
+
+    spy.mockRestore()
+    expect(result.isFailed()).toBe(true)
     expect(sharedVaultUserRepository.save).not.toHaveBeenCalled()
   })
 

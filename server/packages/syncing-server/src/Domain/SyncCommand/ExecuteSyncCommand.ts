@@ -17,6 +17,7 @@ import {
   SyncCommandTransactionContext,
 } from '../../Infra/TypeORM/SyncCommandTransactionContext'
 import { SyncCommandOutboxDispatcher } from './SyncCommandOutboxDispatcher'
+import { inSyncingTransaction } from '../../Infra/TypeORM/InSyncingTransaction'
 
 /**
  * How many times one command's execution is attempted when the database aborts it.
@@ -60,7 +61,7 @@ export class ExecuteSyncCommand {
     const sessionUuid = dto.sessionUuid ?? ''
     const now = Date.now()
 
-    await this.dataSource.transaction((manager) =>
+    await inSyncingTransaction(this.dataSource, (manager) =>
       this.transactionContext.run(manager, async () => {
         await this.commandRepository.insertAcceptedIfAbsent({
           uuid: randomUUID(),
@@ -220,7 +221,7 @@ export class ExecuteSyncCommand {
     if (databaseType === 'mysql' || databaseType === 'mariadb') {
       return this.dataSource.transaction('READ COMMITTED', run)
     }
-    return this.dataSource.transaction(run)
+    return inSyncingTransaction(this.dataSource, run)
   }
 
   private wasAbortedByDatabase(error: unknown): boolean {

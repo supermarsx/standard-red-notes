@@ -126,6 +126,18 @@ describe('SyncCommandTransactionContext', () => {
       }),
     ).resolves.toBe(true)
   })
+
+  it('refuses an HTTP or invite commit when the final item swallowed a database rollback', async () => {
+    const context = new SyncCommandTransactionContext()
+    const { manager, queryRunner } = transactionThatAbortsOn('UPDATE last-item')
+    await expect(
+      context.runInviteMutation(manager, async () => {
+        expect(context.defersDomainEventsUntilCommit).toBe(true)
+        await queryRunner.query('UPDATE last-item').catch(() => undefined)
+        context.assertOutboxHealthy()
+      }),
+    ).rejects.toBeInstanceOf(SyncCommandTransactionAbortedError)
+  })
 })
 
 describe('abortsDatabaseTransaction', () => {

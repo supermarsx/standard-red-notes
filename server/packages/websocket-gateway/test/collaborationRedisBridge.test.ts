@@ -215,6 +215,13 @@ class FakeRedisNetwork {
           const own = new Set(args.slice(1).map(String))
           return [...members].filter((leaseKey) => !own.has(leaseKey) && this.leases.has(leaseKey)).length
         }
+        if (script.includes('SRN_VALIDATE_SAVER_EDITOR_V1')) {
+          const state = this.roomStates.get(String(args[1]))?.split(':')
+          if (state?.[0] !== String(args[2])) {return 0}
+          const suffix = `:active:${String(args[3])}:${state[0]}:${state[1]}`
+          const members = this.sets.get(String(args[0])) ?? new Set<string>()
+          return [...members].some((key) => this.leases.has(key) && this.leaseValues.get(key)?.endsWith(suffix)) ? 1 : 0
+        }
         if (script.includes('SRN_CLAIM_YJS_RESPONSE_V1')) {
           const leaseKey = String(args[0])
           const roomSetKey = String(args[1])
@@ -269,6 +276,7 @@ class FakeRedisNetwork {
           const ttl = Number(args[3])
           this.leaseTtls.push(ttl)
           this.leases.set(leaseKey, ttl)
+          if (args[9]) {this.leaseValues.set(leaseKey, String(args[9]))}
           return 1
         }
         if (script.includes('SRN_RESERVE_LEASE_V3')) {
@@ -416,6 +424,71 @@ function presenceEvents(redis: FakeRedisNetwork): Array<{ action: unknown; reaso
 }
 
 describe('CollaborationRedisBridge multi-replica relay', () => {
+  it('validates an activated saver lease across replicas and rejects pending, stale or different identities', async () => {
+    const redis = new FakeRedisNetwork()
+    const bridgeA = new CollaborationRedisBridge(
+      new RoomRegistry<SendableSocket>(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('saver-a'),
+    )
+    const bridgeB = new CollaborationRedisBridge(
+      new RoomRegistry<SendableSocket>(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('saver-b'),
+    )
+    const conn = connection('saver')
+    const expiresAt = Date.now() + 60_000
+    const identity = {
+      room: 'saver-room',
+      roomEpoch: TEST_ROOM_EPOCH,
+      leaseId: 'lease-saver',
+      userUuid: conn.userUuid,
+      sessionUuid: conn.sessionUuid,
+    }
+    const pending = await bridgeA.reserveEditorLease(
+      conn,
+      identity.room,
+      identity.leaseId,
+      expiresAt,
+      3,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    expect(await bridgeB.validateSaverEditor(identity)).toBe(false)
+    await bridgeA.activateEditorLease(
+      conn,
+      identity.room,
+      identity.leaseId,
+      expiresAt,
+      3,
+      1,
+      pending.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+    )
+    expect(await bridgeB.validateSaverEditor(identity)).toBe(true)
+    for (const wrong of [
+      { userUuid: 'other' },
+      { sessionUuid: 'other' },
+      { leaseId: 'other' },
+      { roomEpoch: 'room_epoch_different' },
+    ]) {
+      expect(await bridgeB.validateSaverEditor({ ...identity, ...wrong })).toBe(false)
+    }
+    redis.failEval = true
+    expect(await bridgeB.validateSaverEditor(identity)).toBe(false)
+    redis.failEval = false
+    await bridgeA.releaseAll(conn)
+    expect(await bridgeB.validateSaverEditor(identity)).toBe(false)
+    await bridgeA.stop()
+    await bridgeB.stop()
+  })
+
   it('emits bounded server-identity presence for two sessions and exactly one clean/abrupt terminal event each', async () => {
     const redis = new FakeRedisNetwork()
     const roomsA = new RoomRegistry<SendableSocket>()
