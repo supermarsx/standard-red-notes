@@ -32,6 +32,7 @@ const contractSourceFiles = [
   "server/packages/api-gateway/src/Service/Http/HttpServiceProxy.ts",
   "server/packages/api-gateway/src/Service/gRPC/GRPCServiceProxy.ts",
   "server/packages/api-gateway/src/Service/gRPC/GRPCSyncingServerServiceProxy.ts",
+  "server/packages/api-gateway/src/Service/DavBridge/SecretString.ts",
   "server/packages/websocket-gateway/src/index.ts",
   "server/packages/websocket-gateway/src/logger.ts",
   "server/packages/websocket-gateway/src/gateway.ts",
@@ -249,6 +250,30 @@ const forbiddenRules = [
 ];
 
 export const requiredRules = [
+  // The DAV bridge holds an external account's password in a SecretString so
+  // that none of the ways a value is implicitly turned into text can spill it.
+  // Each of these pins one of those ways answering the redaction marker.
+  {
+    id: "dav-secret-held-in-private-field",
+    file: "server/packages/api-gateway/src/Service/DavBridge/SecretString.ts",
+    pattern: /readonly #value: string/,
+  },
+  {
+    id: "dav-secret-redacted-to-string",
+    file: "server/packages/api-gateway/src/Service/DavBridge/SecretString.ts",
+    pattern: /toString\(\): string \{\s*return REDACTED\s*\}/,
+  },
+  {
+    id: "dav-secret-redacted-to-json",
+    file: "server/packages/api-gateway/src/Service/DavBridge/SecretString.ts",
+    pattern: /toJSON\(\): string \{\s*return REDACTED\s*\}/,
+  },
+  {
+    id: "dav-secret-redacted-on-inspect",
+    file: "server/packages/api-gateway/src/Service/DavBridge/SecretString.ts",
+    pattern:
+      /\[Symbol\.for\('nodejs\.util\.inspect\.custom'\)\]\(\): string \{\s*return REDACTED\s*\}/,
+  },
   {
     id: "gateway-fixed-online-subscription-route",
     file: "server/packages/api-gateway/src/Controller/SubscriptionTokenAuthMiddleware.ts",
@@ -730,6 +755,261 @@ function applyReviewedAllowlist(findings, allowlist) {
   return { allowedFindings, failures };
 }
 
+/**
+ * The DAV bridge (server/packages/api-gateway/src/Service/DavBridge) makes this
+ * server open connections to addresses users typed, carrying passwords it
+ * stores for them. Its logging is held to a stricter contract than the
+ * repository-wide rules above, because here the dangerous values are not only
+ * errors and tokens: a request PATH names a user and a calendar, a HOST names
+ * something on somebody's network, and anything the remote server sent is
+ * attacker-controlled text.
+ *
+ *   1. Every log call in the bridge has a fixed, literal message and metadata
+ *      that is an object literal whose keys come from the closed list below.
+ *      No spread, no computed key, no variable handed over whole.
+ *   2. No metadata VALUE refers to a path, an address, a header, a body, a
+ *      username, a secret or an error's text.
+ *   3. The stored secret is revealed at an audited, counted set of call sites
+ *      and nowhere else in the api-gateway.
+ *   4. The rules above are checked against something: a minimum number of log
+ *      calls must be found, and the two per-request lines must be among them.
+ *      A contract that matched no call would pass for ever.
+ *
+ * Optional chaining (`logger?.info(`) is recognised here. The repository-wide
+ * extractor above does not see such a call at all.
+ */
+export const davBridgeLoggingPrefixes = Object.freeze([
+  "server/packages/api-gateway/src/Service/DavBridge/",
+  "server/packages/api-gateway/src/Controller/v1/DavBridgeController.ts",
+]);
+
+export const davBridgeAllowedLogFields = Object.freeze([
+  "userId",
+  "accountId",
+  "method",
+  "status",
+  "durationMs",
+  "requestBytes",
+  "responseBytes",
+  "tag",
+  "reason",
+  "accounts",
+  "errorType",
+  "ignored",
+  // Administrator audit lines: setting NAMES and counts, never values.
+  "audit",
+  "adminUuid",
+  "changedSettings",
+  "scope",
+  "purgedUsers",
+  "purgedAccounts",
+]);
+
+/** file -> exact number of `.reveal()` calls. Everything else in the api-gateway must have none. */
+export const davBridgeSecretRevealSites = Object.freeze({
+  // The Authorization header: once for a bearer token, once for Basic.
+  "server/packages/api-gateway/src/Service/DavBridge/DavRelay.ts": 2,
+  // Sealing the secret for storage.
+  "server/packages/api-gateway/src/Service/DavBridge/DavSecretCipher.ts": 1,
+});
+
+export const davBridgeRequiredLogMessages = Object.freeze([
+  "dav bridge request relayed",
+  "dav bridge request refused",
+]);
+
+export const davBridgeMinimumLogCalls = 8;
+
+const davBridgeForbiddenValueWords =
+  /\b(?:path|paths|pathname|url|href|origin|host|hostname|address|headers?|body|username|secret|password|authorization|location|message|stack|envelope|entryPath|principalPath|calendarHomePath|reveal)\b/;
+
+function isDavBridgeLoggingSource(file) {
+  return davBridgeLoggingPrefixes.some(
+    (prefix) => file === prefix || file.startsWith(prefix),
+  );
+}
+
+function splitTopLevel(text) {
+  const parts = [];
+  let depth = 0;
+  let quote;
+  let escaped = false;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+    } else if ("([{".includes(character)) {
+      depth += 1;
+    } else if (")]}".includes(character)) {
+      depth -= 1;
+    } else if (character === "," && depth === 0) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+function extractDavBridgeLogCalls(source) {
+  const calls = [];
+  const callStart =
+    /\b(?:console|(?:[A-Za-z_$][\w$]*\??\.)*(?:logger|[A-Za-z_$][\w$]*Logger))\??\.(?:debug|error|info|log|warn)\s*\(/g;
+  let match;
+  while ((match = callStart.exec(source)) !== null) {
+    const openParenthesis = source.indexOf("(", match.index);
+    let depth = 0;
+    let quote;
+    let escaped = false;
+    let end = source.length;
+    for (let index = openParenthesis; index < source.length; index += 1) {
+      const character = source[index];
+      if (quote !== undefined) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === quote) {
+          quote = undefined;
+        }
+        continue;
+      }
+      if (character === "'" || character === '"' || character === "`") {
+        quote = character;
+      } else if (character === "(") {
+        depth += 1;
+      } else if (character === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = index + 1;
+          break;
+        }
+      }
+    }
+    calls.push({
+      head: source.slice(match.index, openParenthesis),
+      args: source.slice(openParenthesis + 1, end - 1),
+      line: offsetToLine(source, match.index),
+    });
+    callStart.lastIndex = end;
+  }
+  return calls;
+}
+
+export function validateDavBridgeLogging(sources) {
+  const failures = [];
+  const allowedFields = new Set(davBridgeAllowedLogFields);
+  const messages = [];
+  let callCount = 0;
+
+  for (const [file, source] of Object.entries(sources)) {
+    if (source === undefined) {
+      continue;
+    }
+
+    if (file.startsWith("server/packages/api-gateway/")) {
+      const reveals = (source.match(/\.reveal\(\)/g) ?? []).length;
+      const expected = davBridgeSecretRevealSites[file] ?? 0;
+      if (reveals !== expected) {
+        failures.push(
+          `${file}: the stored DAV account secret is revealed ${reveals} time(s) here; the audited number for this file is ${expected}`,
+        );
+      }
+    }
+
+    if (!isDavBridgeLoggingSource(file)) {
+      continue;
+    }
+
+    for (const { head, args, line } of extractDavBridgeLogCalls(source)) {
+      callCount += 1;
+      if (head.startsWith("console")) {
+        failures.push(`${file}:${line}: the DAV bridge must not log through console`);
+        continue;
+      }
+
+      const parts = splitTopLevel(args);
+      const message = parts[0] ?? "";
+      const literal = /^'([^'\\$]*)'$/.exec(message);
+      if (literal === null) {
+        failures.push(
+          `${file}:${line}: a DAV bridge log message must be a fixed single-quoted literal`,
+        );
+      } else {
+        messages.push(literal[1]);
+      }
+
+      if (parts.length > 2) {
+        failures.push(`${file}:${line}: a DAV bridge log call takes a message and one metadata object`);
+      }
+      if (parts.length < 2) {
+        continue;
+      }
+
+      const metadata = parts[1];
+      if (!metadata.startsWith("{") || !metadata.endsWith("}")) {
+        failures.push(
+          `${file}:${line}: DAV bridge log metadata must be an object literal written at the call`,
+        );
+        continue;
+      }
+      for (const property of splitTopLevel(metadata.slice(1, -1))) {
+        if (property.startsWith("...")) {
+          failures.push(`${file}:${line}: DAV bridge log metadata must not spread an object`);
+          continue;
+        }
+        const colon = property.indexOf(":");
+        const key = (colon < 0 ? property : property.slice(0, colon)).trim();
+        const value = colon < 0 ? property : property.slice(colon + 1).trim();
+        if (!/^[A-Za-z_$][\w$]*$/.test(key)) {
+          failures.push(`${file}:${line}: DAV bridge log metadata has a key that is not a plain name`);
+          continue;
+        }
+        if (!allowedFields.has(key)) {
+          failures.push(`${file}:${line}: DAV bridge log field "${key}" is not on the closed list`);
+        }
+        if (davBridgeForbiddenValueWords.test(value)) {
+          failures.push(
+            `${file}:${line}: DAV bridge log field "${key}" is built from a path, address, header, body, name, secret or error text`,
+          );
+        }
+      }
+    }
+  }
+
+  const bridgeFilesProvided = Object.keys(sources).some(isDavBridgeLoggingSource);
+  if (bridgeFilesProvided) {
+    if (callCount < davBridgeMinimumLogCalls) {
+      failures.push(
+        `DAV bridge logging contract found ${callCount} log call(s); at least ${davBridgeMinimumLogCalls} are expected, so the contract is not looking at the code it describes`,
+      );
+    }
+    for (const required of davBridgeRequiredLogMessages) {
+      if (!messages.includes(required)) {
+        failures.push(`DAV bridge logging contract did not find the "${required}" line`);
+      }
+    }
+    for (const file of Object.keys(davBridgeSecretRevealSites)) {
+      if (sources[file] === undefined) {
+        failures.push(`${file}: an audited secret-reveal site was not among the sources checked`);
+      }
+    }
+  }
+
+  return failures;
+}
+
 export async function discoverLiveSourceFiles(root) {
   const discovered = [];
 
@@ -854,6 +1134,7 @@ export async function validateSafeLogging(root = repositoryRoot) {
   const repositoryWideResult =
     validateRepositoryWideSafeLoggingSources(sources);
   failures.push(...repositoryWideResult.failures);
+  failures.push(...validateDavBridgeLogging(sources));
 
   if (failures.length > 0) {
     throw new Error(

@@ -6,9 +6,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  davBridgeAllowedLogFields,
+  davBridgeMinimumLogCalls,
+  davBridgeSecretRevealSites,
   discoverLiveSourceFiles,
   guardedRuntimeRoots,
   requiredRules,
+  validateDavBridgeLogging,
   validateRepositoryWideSafeLoggingSources,
   validateSafeLoggingSources,
 } from "./validate-safe-logging.mjs";
@@ -506,4 +510,367 @@ test("the standalone gateway console boundary contracts point at the file that o
       [`${loggerFile}: missing required contract ${id}`],
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// The DAV bridge logging contract.
+
+const davRoot = "server/packages/api-gateway/src/Service/DavBridge/";
+const davServiceFile = `${davRoot}DavBridgeService.ts`;
+const davRelayFile = `${davRoot}DavRelay.ts`;
+const davCipherFile = `${davRoot}DavSecretCipher.ts`;
+const davSecretFile = `${davRoot}SecretString.ts`;
+const davControllerFile =
+  "server/packages/api-gateway/src/Controller/v1/DavBridgeController.ts";
+
+async function readDavBridgeSources() {
+  const discovered = (await discoverLiveSourceFiles(repoRoot)).filter((file) =>
+    file.startsWith("server/packages/api-gateway/"),
+  );
+  return Object.fromEntries(
+    await Promise.all(
+      discovered.map(async (file) => [
+        file,
+        await readFile(join(repoRoot, file), "utf8"),
+      ]),
+    ),
+  );
+}
+
+/** A synthetic bridge with enough well-formed lines to satisfy the denominators. */
+function syntheticDavBridge(extraLine = "") {
+  const lines = [
+    "this.logger.debug('dav bridge request relayed', { userId: caller.userUuid, accountId: account.id, method, status })",
+    "this.logger.info('dav bridge request refused', { userId: caller.userUuid, tag: error.tag, reason: error.logTag })",
+  ];
+  for (let index = 0; index < davBridgeMinimumLogCalls; index += 1) {
+    lines.push(
+      `this.logger.info('dav bridge account created', { userId: caller.userUuid, accountId: created.id })`,
+    );
+  }
+  return {
+    [davServiceFile]: `${lines.join("\n")}\n${extraLine}\n`,
+    [davRelayFile]:
+      "return `Bearer ${target.secret.reveal()}`\nreturn Buffer.from(target.secret.reveal())\n",
+    [davCipherFile]: "return this.cipher.encrypt({ secret: secret.reveal() })\n",
+  };
+}
+
+test("the DAV bridge as written satisfies its logging contract", async () => {
+  const sources = await readDavBridgeSources();
+
+  for (const file of [
+    davServiceFile,
+    davRelayFile,
+    davCipherFile,
+    davSecretFile,
+    davControllerFile,
+  ]) {
+    assert.ok(sources[file] !== undefined, `expected to read ${file}`);
+  }
+  assert.deepEqual(validateDavBridgeLogging(sources), []);
+});
+
+test("the DAV bridge contract accepts a well-formed synthetic bridge, so its failures below are about the one line changed", () => {
+  assert.deepEqual(validateDavBridgeLogging(syntheticDavBridge()), []);
+});
+
+test("the DAV bridge contract rejects a request path, a host, a header, a body, a name or error text in a log line", () => {
+  for (const [line, expected] of [
+    [
+      "this.logger.debug('dav bridge request relayed', { userId: caller.userUuid, path: request.path })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "path" is not on the closed list`,
+        `${davServiceFile}:11: DAV bridge log field "path" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge request refused', { reason: error.message })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "reason" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge request refused', { reason: account.origin })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "reason" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge request refused', { reason: url.hostname })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "reason" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge account created', { userId: account.username })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "userId" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge request refused', { tag: response.headers.get('www-authenticate') })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "tag" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge request relayed', { status: answer.body.length })",
+      [
+        `${davServiceFile}:11: DAV bridge log field "status" is built from a path, address, header, body, name, secret or error text`,
+      ],
+    ],
+    [
+      "this.logger.info('dav bridge account created', { remote: 1 })",
+      [`${davServiceFile}:11: DAV bridge log field "remote" is not on the closed list`],
+    ],
+  ]) {
+    assert.deepEqual(validateDavBridgeLogging(syntheticDavBridge(line)), expected, line);
+  }
+});
+
+test("the DAV bridge contract rejects metadata it cannot read field by field", () => {
+  for (const [line, expected] of [
+    [
+      "this.logger.info('dav bridge account created', { ...account })",
+      `${davServiceFile}:11: DAV bridge log metadata must not spread an object`,
+    ],
+    [
+      "this.logger.info('dav bridge account created', account)",
+      `${davServiceFile}:11: DAV bridge log metadata must be an object literal written at the call`,
+    ],
+    [
+      "this.logger.info('dav bridge account created', { [key]: 1 })",
+      `${davServiceFile}:11: DAV bridge log metadata has a key that is not a plain name`,
+    ],
+    [
+      "this.logger.info(`dav bridge account ${account.id}`, { userId: caller.userUuid })",
+      `${davServiceFile}:11: a DAV bridge log message must be a fixed single-quoted literal`,
+    ],
+    [
+      "this.logger.info(message, { userId: caller.userUuid })",
+      `${davServiceFile}:11: a DAV bridge log message must be a fixed single-quoted literal`,
+    ],
+    [
+      "this.logger.info('dav bridge account created', { userId: caller.userUuid }, account)",
+      `${davServiceFile}:11: a DAV bridge log call takes a message and one metadata object`,
+    ],
+    [
+      "console.log('dav bridge account created', { userId: caller.userUuid })",
+      `${davServiceFile}:11: the DAV bridge must not log through console`,
+    ],
+  ]) {
+    assert.deepEqual(validateDavBridgeLogging(syntheticDavBridge(line)), [expected], line);
+  }
+});
+
+test("the DAV bridge contract sees a call made through optional chaining", () => {
+  // The repository-wide extractor does not match `logger?.info(`; a contract
+  // that shared that blind spot would wave this line through.
+  for (const line of [
+    "logger?.error('dav bridge request failed', { reason: error.message })",
+    "this.logger?.info('admin dav-bridge settings updated', { reason: error.message })",
+  ]) {
+    assert.deepEqual(validateDavBridgeLogging(syntheticDavBridge(line)), [
+      `${davServiceFile}:11: DAV bridge log field "reason" is built from a path, address, header, body, name, secret or error text`,
+    ]);
+  }
+  assert.deepEqual(
+    validateRepositoryWideSafeLoggingSources(
+      { [davServiceFile]: "logger?.error('x', { reason: error.message })\n" },
+      [],
+    ).failures,
+    [],
+    "if this starts failing, the repository-wide extractor has learnt optional chaining and the comment above can go",
+  );
+});
+
+test("the DAV bridge contract holds the controller to the same rules as the service", () => {
+  const sources = {
+    ...syntheticDavBridge(),
+    [davControllerFile]:
+      "logger.error('dav bridge request failed', { reason: 'internal', errorType: error.message })\n",
+  };
+
+  assert.deepEqual(validateDavBridgeLogging(sources), [
+    `${davControllerFile}:1: DAV bridge log field "errorType" is built from a path, address, header, body, name, secret or error text`,
+  ]);
+});
+
+test("the DAV bridge contract counts where the stored secret is revealed", () => {
+  const base = syntheticDavBridge();
+
+  assert.deepEqual(davBridgeSecretRevealSites, {
+    [davRelayFile]: 2,
+    [davCipherFile]: 1,
+  });
+
+  // A new reveal anywhere else in the api-gateway.
+  assert.deepEqual(
+    validateDavBridgeLogging({
+      ...base,
+      "server/packages/api-gateway/src/Controller/v1/AdminController.ts":
+        "const password = account.secret.reveal()\n",
+    }),
+    [
+      "server/packages/api-gateway/src/Controller/v1/AdminController.ts: the stored DAV account secret is revealed 1 time(s) here; the audited number for this file is 0",
+    ],
+  );
+  // A third reveal inside an audited file.
+  assert.deepEqual(
+    validateDavBridgeLogging({
+      ...base,
+      [davRelayFile]: `${base[davRelayFile]}logger.debug(target.secret.reveal())\n`,
+    }).filter((failure) => failure.includes("revealed")),
+    [
+      `${davRelayFile}: the stored DAV account secret is revealed 3 time(s) here; the audited number for this file is 2`,
+    ],
+  );
+  // A reveal in the service itself.
+  assert.deepEqual(
+    validateDavBridgeLogging(syntheticDavBridge("const leaked = secret.reveal()")),
+    [
+      `${davServiceFile}: the stored DAV account secret is revealed 1 time(s) here; the audited number for this file is 0`,
+    ],
+  );
+  // An audited site that was not checked at all is reported, not assumed fine.
+  const withoutCipher = { ...base };
+  delete withoutCipher[davCipherFile];
+  assert.deepEqual(validateDavBridgeLogging(withoutCipher), [
+    `${davCipherFile}: an audited secret-reveal site was not among the sources checked`,
+  ]);
+});
+
+test("the DAV bridge contract fails when it is looking at nothing", () => {
+  assert.deepEqual(
+    validateDavBridgeLogging({
+      ...syntheticDavBridge(),
+      [davServiceFile]: "// every log call was moved or renamed\n",
+    }),
+    [
+      `DAV bridge logging contract found 0 log call(s); at least ${davBridgeMinimumLogCalls} are expected, so the contract is not looking at the code it describes`,
+      'DAV bridge logging contract did not find the "dav bridge request relayed" line',
+      'DAV bridge logging contract did not find the "dav bridge request refused" line',
+    ],
+  );
+  // Sources that contain no bridge file at all say nothing about the bridge.
+  assert.deepEqual(
+    validateDavBridgeLogging({ "server/packages/auth/src/index.ts": "export {}\n" }),
+    [],
+  );
+});
+
+test("the DAV bridge contract catches each deliberate fault in the real sources", async () => {
+  const sources = await readDavBridgeSources();
+  assert.deepEqual(validateDavBridgeLogging(sources), []);
+
+  for (const [file, find, replaceWith, expected] of [
+    [
+      davServiceFile,
+      "        method,\n        status,\n",
+      "        method,\n        status,\n        path: outcome.answer.path,\n",
+      /DAV bridge log field "path" is not on the closed list/,
+    ],
+    [
+      davServiceFile,
+      "reason: error.logTag,",
+      "reason: error.message,",
+      /DAV bridge log field "reason" is built from a path, address, header, body, name, secret or error text/,
+    ],
+    [
+      davControllerFile,
+      "errorType: error instanceof Error ? error.constructor.name : typeof error,",
+      "errorType: error instanceof Error ? error.message : typeof error,",
+      /DAV bridge log field "errorType" is built from/,
+    ],
+    [
+      davServiceFile,
+      "this.logger.info('dav bridge account created', { userId: caller.userUuid, accountId: created.id })",
+      "this.logger.info('dav bridge account created', { userId: caller.userUuid, accountId: created.id, origin: created.origin })",
+      /DAV bridge log field "origin" is not on the closed list/,
+    ],
+  ]) {
+    assert.ok(sources[file].includes(find), `${file} no longer contains: ${find}`);
+    const failures = validateDavBridgeLogging({
+      ...sources,
+      [file]: sources[file].replace(find, replaceWith),
+    });
+    assert.ok(
+      failures.some((failure) => expected.test(failure)),
+      `expected ${expected} after changing ${find} in ${file}; got ${JSON.stringify(failures)}`,
+    );
+  }
+});
+
+test("the SecretString redactions are pinned as required contracts", async () => {
+  const source = await readFile(join(repoRoot, davSecretFile), "utf8");
+  const secretRules = requiredRules.filter((rule) => rule.file === davSecretFile);
+
+  assert.deepEqual(
+    secretRules.map((rule) => rule.id),
+    [
+      "dav-secret-held-in-private-field",
+      "dav-secret-redacted-to-string",
+      "dav-secret-redacted-to-json",
+      "dav-secret-redacted-on-inspect",
+    ],
+  );
+  assert.deepEqual(
+    validateSafeLoggingSources(
+      { [davSecretFile]: source },
+      { forbiddenRules: [], requiredRules: secretRules },
+    ),
+    [],
+  );
+
+  for (const [find, replaceWith, id] of [
+    ["readonly #value: string", "readonly value: string", "dav-secret-held-in-private-field"],
+    [
+      "toString(): string {\n    return REDACTED",
+      "toString(): string {\n    return this.#value",
+      "dav-secret-redacted-to-string",
+    ],
+    [
+      "toJSON(): string {\n    return REDACTED",
+      "toJSON(): string {\n    return this.#value",
+      "dav-secret-redacted-to-json",
+    ],
+    [
+      "[Symbol.for('nodejs.util.inspect.custom')](): string {\n    return REDACTED",
+      "[Symbol.for('nodejs.util.inspect.custom')](): string {\n    return this.#value",
+      "dav-secret-redacted-on-inspect",
+    ],
+  ]) {
+    assert.ok(source.includes(find), `SecretString.ts no longer contains ${find}`);
+    assert.deepEqual(
+      validateSafeLoggingSources(
+        { [davSecretFile]: source.replace(find, replaceWith) },
+        { forbiddenRules: [], requiredRules: secretRules },
+      ),
+      [`${davSecretFile}: missing required contract ${id}`],
+    );
+  }
+});
+
+test("the closed list of DAV bridge log fields has no field that could carry content", () => {
+  assert.deepEqual([...davBridgeAllowedLogFields].sort(), [
+    "accountId",
+    "accounts",
+    "adminUuid",
+    "audit",
+    "changedSettings",
+    "durationMs",
+    "errorType",
+    "ignored",
+    "method",
+    "purgedAccounts",
+    "purgedUsers",
+    "reason",
+    "requestBytes",
+    "responseBytes",
+    "scope",
+    "status",
+    "tag",
+    "userId",
+  ]);
 });
