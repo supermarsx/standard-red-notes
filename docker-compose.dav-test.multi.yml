@@ -1,0 +1,39 @@
+# =============================================================================
+# TEST-ONLY overlay: the multi-container Standard Red Notes stack, with its
+# `server` container joined to the DAV bridge test network
+# (docker-compose.dav-test.yml) and the bridge on.
+#
+# It is an OVERLAY for docker-compose.yml, never used by itself:
+#
+#   docker compose -f docker-compose.dav-test.yml up -d --wait
+#   docker compose -p srn-davtest-multi --env-file <generated env> \
+#     -f docker-compose.yml -f docker-compose.dav-test.multi.yml \
+#     up -d --build --wait
+#
+# scripts/verify-dav-bridge.mjs does both, from a clean export of one commit,
+# and generates the env file (throwaway secrets, front door on 127.0.0.1:3992).
+#
+# Only the `server` container joins the test network: the api-gateway inside it
+# is what opens connections to a user's CalDAV server. The database, the cache
+# and the web container stay on the stack's own network, exactly as deployed.
+#
+# The three test origins are on the operator's list because they are private
+# addresses over plain http, which the bridge refuses otherwise. The verify
+# script empties the list first and checks that the same addresses are refused.
+# =============================================================================
+services:
+  server:
+    environment:
+      DAV_BRIDGE_ENABLED: "true"
+      # The read-only CalDAV feed too: the verify script proves that a feed
+      # token stops working when the account it belongs to is deleted.
+      CALDAV_ENABLED: "true"
+      DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS: "http://radicale:5232,http://nextcloud,http://baikal"
+    networks:
+      - standard-red-notes
+      - davtest
+
+networks:
+  davtest:
+    external: true
+    name: srn-davtest-net

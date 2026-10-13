@@ -1,0 +1,174 @@
+# =============================================================================
+# Standard Red Notes — TEST-ONLY CalDAV servers for the DAV bridge.
+#
+# NOT part of any deployment. Nothing here is started by docker-compose.yml or
+# docker-compose.single.yml, and every password below is a published fixture.
+#
+# What it is for: the DAV bridge (two-way calendar and task sync with a user's
+# own Nextcloud or CalDAV account) has to be proven against REAL servers, by an
+# observer that talks to those servers directly and not through the bridge.
+# This file starts the servers; scripts/verify-dav-bridge.mjs drives them.
+#
+#   docker compose -f docker-compose.dav-test.yml up -d --wait
+#   node scripts/verify-dav-bridge.mjs --help
+#   docker compose -f docker-compose.dav-test.yml down -v
+#
+# Three CalDAV servers, chosen to disagree with each other:
+#
+#   radicale   Small and strict. It rejects sloppy requests that sabre-based
+#              servers forgive, and it has no /remote.php or /dav.php prefix:
+#              the calendar home is /<user>/ at the root.
+#   nextcloud  The one the feature is named after. Real discovery redirect
+#              (/.well-known/caldav -> /remote.php/dav/), real app passwords,
+#              real brute-force throttling of the SOURCE address.
+#   baikal     Plain sabre/dav with a third layout (/dav.php/...).
+#
+# And one listener that is not a CalDAV server at all:
+#
+#   canary     Counts every request it receives. The network-policy checks aim
+#              the relay at it and at things it redirects to; "the relay
+#              refused" is then a count of zero here, not a status code there.
+#
+# NETWORK. One bridge network with a fixed private subnet. An SRN stack under
+# test joins it (see docker-compose.dav-test.single.yml and
+# docker-compose.dav-test.multi.yml) and reaches these servers by NAME over
+# plain http, which the bridge allows only for origins on the operator's list.
+# So the test stack itself exercises that list: with the list empty the same
+# address must be refused and the canary must have recorded no hit.
+#
+# The fixed addresses exist so that a test can aim at a literal private IP.
+#
+# HOST PORTS (loopback only) are for the observer, never for the bridge:
+#   127.0.0.1:3993 radicale    127.0.0.1:3994 nextcloud
+#   127.0.0.1:3995 baikal      127.0.0.1:3996 canary
+# =============================================================================
+name: srn-davtest
+
+services:
+  radicale:
+    image: tomsquest/docker-radicale:3.5.4.0
+    restart: "no"
+    init: true
+    read_only: true
+    # Straight in as the image's unprivileged user. Its entrypoint otherwise
+    # starts as root to chown /data and then drops; started this way it needs
+    # no capability at all.
+    user: "2999:2999"
+    environment:
+      TAKE_FILE_OWNERSHIP: "false"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    volumes:
+      - ./e2e/dav-fixtures/radicale:/config:ro
+    tmpfs:
+      # Collections live in memory: every `up` starts from an empty server.
+      - /data:uid=2999,gid=2999,mode=0700
+      - /tmp
+    ports:
+      - "127.0.0.1:${DAVTEST_RADICALE_PORT:-3993}:5232"
+    networks:
+      davtest:
+        ipv4_address: 10.250.77.11
+    healthcheck:
+      # Unauthenticated root answers 200 or 401 depending on the client; either
+      # proves the server is serving. `curl --fail` would call a 401 unhealthy.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5232/ | grep -Eq '^(200|301|302|401)$'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+  nextcloud:
+    image: nextcloud:33.0.9-apache
+    restart: "no"
+    init: true
+    environment:
+      SQLITE_DATABASE: nextcloud
+      NEXTCLOUD_ADMIN_USER: ncadmin
+      NEXTCLOUD_ADMIN_PASSWORD: ncadmin-fixture-password-7Kq
+      # The names the server is reached by: `nextcloud` from an SRN container
+      # on this network, `localhost` / 127.0.0.1 from the observer on the host.
+      NEXTCLOUD_TRUSTED_DOMAINS: "nextcloud localhost 127.0.0.1 10.250.77.12"
+      # No outbound calls from a test fixture.
+      NEXTCLOUD_UPDATE: "0"
+    volumes:
+      - nextcloud-data:/var/www/html
+    ports:
+      - "127.0.0.1:${DAVTEST_NEXTCLOUD_PORT:-3994}:80"
+    networks:
+      davtest:
+        ipv4_address: 10.250.77.12
+    healthcheck:
+      # `installed:true` appears only when the first-run install has finished;
+      # Apache answers long before that.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/status.php | grep -q '\"installed\":true'"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+
+  baikal:
+    image: ckulka/baikal:0.10.1-nginx
+    restart: "no"
+    init: true
+    # Baikal waits for a person to click through an install wizard. The
+    # fixture script writes what the wizard would have written (configuration,
+    # an initialised SQLite database, two users) and then hands over to the
+    # image's own entrypoint.
+    entrypoint: ["/bin/sh", "/fixture/start.sh"]
+    volumes:
+      - ./e2e/dav-fixtures/baikal:/fixture:ro
+      - baikal-config:/var/www/baikal/config
+      - baikal-data:/var/www/baikal/Specific
+    ports:
+      - "127.0.0.1:${DAVTEST_BAIKAL_PORT:-3995}:80"
+    networks:
+      davtest:
+        ipv4_address: 10.250.77.13
+    healthcheck:
+      # 401 from the DAV endpoint means sabre is serving and asking for a
+      # password; the install wizard would answer with a redirect instead.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' -X PROPFIND http://127.0.0.1/dav.php/ | grep -q '^401$'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+  canary:
+    image: node:24-alpine
+    restart: "no"
+    init: true
+    read_only: true
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    command: ["node", "/fixture/canary.mjs"]
+    volumes:
+      - ./e2e/dav-fixtures/canary:/fixture:ro
+    ports:
+      - "127.0.0.1:${DAVTEST_CANARY_PORT:-3996}:8080"
+    networks:
+      davtest:
+        ipv4_address: 10.250.77.10
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/__hits').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+networks:
+  davtest:
+    name: srn-davtest-net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.250.77.0/24
+
+volumes:
+  nextcloud-data:
+  baikal-config:
+  baikal-data:

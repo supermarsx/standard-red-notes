@@ -1,0 +1,32 @@
+# Radicale for the DAV bridge test stack (docker-compose.dav-test.yml).
+# TEST FIXTURE: the users file beside this one holds published passwords.
+
+[server]
+hosts = 0.0.0.0:5232
+max_connections = 64
+max_content_length = 16000000
+timeout = 30
+
+[auth]
+type = htpasswd
+htpasswd_filename = /config/users
+# Plain on purpose: a fixture, and it keeps the image free of a bcrypt wheel.
+htpasswd_encryption = plain
+# No artificial delay after a failed sign-in: the suite provokes failures on
+# purpose and must not spend its time waiting for them.
+delay = 0
+
+[rights]
+# Each user sees their own collections and nothing else. A request for
+# another user's path is answered 403, which is what the relay must pass
+# through without treating it as a rejected password.
+type = owner_only
+
+[storage]
+filesystem_folder = /data/collections
+
+[logging]
+# One line per request, so the independent observer can count what the server
+# actually received.
+level = info
+mask_passwords = True
