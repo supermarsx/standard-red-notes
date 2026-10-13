@@ -2,6 +2,7 @@ import { Component, ErrorInfo, ReactNode } from 'react'
 import { addToast, ToastType } from '@standardnotes/toast'
 import Button from '@/Components/Button/Button'
 import { isDev } from '@/Utils'
+import { isChunkLoadFailure, reportIfStaleBuild } from '@/Utils/StaleBuildNotice'
 import { isCachedLazyRejection } from './isCachedLazyRejection'
 import { reloadPage } from './reloadPage'
 
@@ -33,15 +34,16 @@ type State = {
 /**
  * Heuristic: does this error look like webpack's dynamic `import()` failing to
  * fetch a code-split chunk? Usually a stale chunk manifest after a deploy, which
- * a fresh page load fixes. We match either the conventional `ChunkLoadError`
- * name or webpack's generated message.
+ * a fresh page load fixes. The signatures (webpack's `ChunkLoadError`, the
+ * lazy-CSS failure, a native dynamic-import failure) live in
+ * `isChunkLoadFailure`, shared with the app-wide stale-build notice.
  *
  * It is only a heuristic, and it under-matches on purpose: a chunk can fail to
  * arrive without producing either marker (see {@link isCachedLazyRejection}).
  * Treat a miss as "unknown", never as "a reset will fix it".
  */
 function isChunkLoadError(error: Error): boolean {
-  return error.name === 'ChunkLoadError' || /Loading chunk [\w-]+ failed/i.test(error.message)
+  return isChunkLoadFailure(error)
 }
 
 /**
@@ -111,6 +113,12 @@ export class ComponentErrorBoundary extends Component<Props, State> {
 
     if (!this.toastShownForError) {
       this.toastShownForError = true
+      // A chunk that never arrived means this tab's build is older than the
+      // server's: show the app-wide "older version — reload" notice (once,
+      // however many regions fail) instead of a per-region toast.
+      if (reportIfStaleBuild(error)) {
+        return
+      }
       addToast({
         type: ToastType.Error,
         message: `${context} failed to load. You can keep using the rest of the app.`,

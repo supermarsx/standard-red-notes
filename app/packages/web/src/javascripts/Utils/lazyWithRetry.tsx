@@ -1,4 +1,5 @@
 import { ComponentType, lazy } from 'react'
+import { reportIfStaleBuild } from './StaleBuildNotice'
 
 /**
  * React's own declaration is `lazy<T extends ComponentType<any>>`, and that
@@ -70,6 +71,9 @@ export function lazyWithRetry<T extends AnyComponent>(
         if (retryError instanceof Error && retryError.cause === undefined) {
           retryError.cause = firstError
         }
+        // The chunk is gone, not slow: this tab's build no longer matches the
+        // server's. Say so app-wide (a toast with Reload, never a reload).
+        reportIfStaleBuild(retryError)
         throw retryError
       }
     }

@@ -48,6 +48,13 @@ import './Utils/CspViolationLedger'
 // recoverFromBlankShell.ts.
 import './recoverFromBlankShell'
 
+// A code-split chunk that fails to load, from a dynamic import() nothing else
+// handles, becomes a "this tab is running an older version — reload" toast.
+// Never an automatic reload. Armed before the application evaluates, like the
+// two listeners above. See Utils/StaleBuildNotice.ts.
+import { installStaleBuildNotice } from './Utils/StaleBuildNotice'
+installStaleBuildNotice()
+
 // entry point
 import './App'
 
