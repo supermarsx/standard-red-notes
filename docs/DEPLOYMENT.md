@@ -331,6 +331,45 @@ restart is admin-gated and audit-logged (`admin.container-control`). To turn the
 feature back off, unset `SERVICE_CONTROL_DOCKER_ENABLED` and stop the proxy
 (`docker compose --profile ops stop docker-socket-proxy`).
 
+## Browser caching across redeploys
+
+Every release rebuilds the web app. The entry files keep their names
+(`index.html`, `app.js`, `app.css`, `service-worker.js`,
+`manifest.webmanifest`), so the nginx in all three modes serves them, and
+everything else without a content hash in its name, with
+`Cache-Control: no-cache`: the browser keeps its copy but asks the server
+before using it again, and gets a short `304 Not Modified` when nothing
+changed. Lazy-loaded parts of the app are named `<id>.<content hash>.app.js`
+(and `.app.css`), and the hashed web workers `<content hash>.worker.js`;
+a name like that can never change its contents, so those are served
+`public, max-age=31536000, immutable`. A script, stylesheet, source map or
+`.wasm` file that does not exist is a `404`, never the app page.
+
+A tab that stays open across a redeploy keeps running the version it loaded.
+When it next needs a part of the app it has not loaded yet, that file no
+longer exists on the server, and the tab shows **"This tab is running an older
+version of the app"** with a **Reload** button. It never reloads by itself; if
+anything is not saved yet, the browser asks before leaving.
+
+{% include safety-alert.html
+  level="caution"
+  title="Keep proxy-side asset caching off"
+  body="A reverse proxy or CDN in front of the app must pass these Cache-Control headers through and must not cache .js or .css files on its own. In Nginx Proxy Manager, leave Cache Assets OFF on the proxy host: it caches css and js for 30 minutes and strips Cache-Control and Last-Modified, which brings back a page that runs the new app.js beside the previous release's files."
+%}
+
+To check what your public origin sends (replace the host; the chunk name is
+any `*.app.js` other than `app.js` from the browser's network panel):
+
+```sh
+BASE=https://notes.example.com
+curl -sI "$BASE/" | grep -i '^cache-control'                    # no-cache
+curl -sI "$BASE/app.js" | grep -i '^cache-control'              # no-cache
+curl -sI "$BASE/1234.0123456789abcdef0123.app.js" -o /dev/null -w '%{http_code}\n'   # 404 for a name that does not exist
+```
+
+If `cache-control` is missing or different on the public origin but correct on
+the container's own port, something in front of the app is rewriting it.
+
 ## Verifying the CSP self-heal
 
 All three modes serve the SPA with a Content-Security-Policy that pins the single
