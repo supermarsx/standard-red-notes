@@ -15,10 +15,13 @@
  * file names ran — a check deleted from the script must not pass by being
  * absent — over a number of texts that has not quietly gone to zero.
  *
- * If this fails after a mermaid upgrade with "was generated from mermaid …":
- * that is the gate working. Regenerate the grammar as the message says, and
- * the remaining checks then say whether the builder still reads diagrams the
- * way the new version does.
+ * THE DRIFT GUARD. MermaidFlowGrammar.ts is generated from one mermaid version
+ * and committed; the script's first check regenerates it from the INSTALLED
+ * mermaid and compares. If this spec fails after a mermaid upgrade with "was
+ * generated from mermaid …": that is the guard working. Run
+ * `node scripts/GenerateMermaidFlowGrammar.mjs --write` in app/packages/web,
+ * commit the file, and the remaining checks then say whether the builder still
+ * reads diagrams the way the new version does.
  */
 import { spawnSync } from 'node:child_process'
 import * as path from 'node:path'
@@ -39,6 +42,7 @@ const EXPECTED_CHECKS = [
   'mermaid’s flowchart database is the shape the builder’s one adapter reads',
   'every corpus text reads the same to the builder and to mermaid',
   'one character short of a corpus text, the builder never reads something mermaid does not',
+  'a text the builder reads and mermaid rejects is not editable',
 ]
 
 let status: number | null = null
@@ -108,6 +112,9 @@ describe('the builder’s engine, checked against the installed mermaid', () => 
     expect(counts.deletionsSameReading).toBeGreaterThanOrEqual(1000)
     expect(counts.deletionsBothRefuse).toBeGreaterThanOrEqual(500)
     expect(counts.deletionsMermaidRefusesYaml).toBeLessThanOrEqual(40)
+    // Every one of those, and three written for the purpose, offered to the
+    // builder: refused before any operation ran.
+    expect(counts.rejectedNotEditable).toBeGreaterThanOrEqual(3 + counts.deletionsMermaidRefusesYaml)
   })
 
   it('says which mermaid and which Node it judged', () => {

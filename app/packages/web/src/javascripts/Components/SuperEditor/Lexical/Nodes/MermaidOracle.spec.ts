@@ -25,8 +25,12 @@ import {
   readMermaidFlowchart,
   UnfamiliarMermaidDatabase,
 } from './MermaidOracle'
+import { loadMermaidFlowGrammar, type MermaidFlowReading, parseMermaidFlowSource } from './MermaidFlowDoc'
 import { renderMermaidDiagram } from './MermaidRuntime'
-import { type MermaidFlowReading, parseMermaidFlowSource } from './MermaidSourceDoc'
+
+// The tests below use the builder's own reading as a stand-in for mermaid's,
+// and reading needs the grammar, which the app fetches on first use.
+beforeAll(() => loadMermaidFlowGrammar())
 
 const src = (...lines: string[]): string => lines.join('\n')
 
@@ -533,6 +537,41 @@ describe('making an edit', () => {
       reason: 'Parse error on line 2:',
       line: undefined,
       details: ['Parse error on line 2:\nMermaid does not expect the text to end here.'],
+    })
+  })
+
+  it('a diagram the builder reads and mermaid rejects is not editable: mermaid is asked first, and no operation runs', async () => {
+    // The one place the two disagree in the unsafe direction. The document does
+    // not parse YAML, so it reads a diagram whose `@{ … }` names a shape
+    // mermaid does not have; mermaid refuses the whole diagram.
+    const source = src('flowchart TD', '  A@{ shape: cy } --> B')
+    expect(parseMermaidFlowSource(source).problem).toBeNull()
+    const rejecting = async (): Promise<MermaidFlowReadResult> => ({
+      ok: false,
+      kind: 'rejected',
+      message: 'No such shape: cy.',
+    })
+    let operations = 0
+    const counted: MermaidFlowEdit = (document, reading) => {
+      operations++
+      return appendBox('  C[Three]', 'C', 'Three')(document, reading)
+    }
+    const outcome = await applyMermaidFlowEdit(source, counted, rejecting)
+    expect(outcome).toEqual({
+      ok: false,
+      stage: 'unreadable',
+      reason: 'No such shape: cy.',
+      line: undefined,
+      details: ['No such shape: cy.'],
+    })
+    expect(operations).toBe(0)
+    expect('text' in outcome).toBe(false)
+    // And the builder is not offered the diagram as editable either.
+    expect(await inspectMermaidFlowchart(source, rejecting)).toEqual({
+      ok: false,
+      stage: 'unreadable',
+      reason: 'No such shape: cy.',
+      details: ['No such shape: cy.'],
     })
   })
 

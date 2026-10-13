@@ -25,7 +25,8 @@ import { buildMermaidFlowGrammar } from './GenerateMermaidFlowGrammar.mjs'
 import { api, flowParser, mermaidVersion, NODES } from './MermaidUnderNode.mjs'
 
 const Grammar = await import(`${NODES}/MermaidFlowGrammar.ts`)
-const SourceDoc = await import(`${NODES}/MermaidSourceDoc.ts`)
+const FlowDoc = await import(`${NODES}/MermaidFlowDoc.ts`)
+await FlowDoc.loadMermaidFlowGrammar()
 const Oracle = await import(`${NODES}/MermaidOracle.ts`)
 const Corpus = await import(`${NODES}/MermaidFlowCorpus.fixture.ts`)
 
@@ -129,23 +130,41 @@ const mermaidTokens = (text) => {
 // 1. The grammar.
 // ===========================================================================
 await check('the grammar the builder runs is the installed mermaid’s, rule for rule and state for state', async () => {
+  // Regenerated HERE, from the package this run has installed, and compared
+  // with the committed file field by field. This is the drift guard: after a
+  // mermaid upgrade the committed copy is the old grammar, and this fails.
   const installed = await buildMermaidFlowGrammar()
   const embedded = Grammar.MERMAID_FLOW_GRAMMAR
+  // A lexer rule is compared as the regular expression it compiles to, not as
+  // the characters it was written with: how `RegExp.prototype.source` escapes
+  // a pattern is the JavaScript engine's choice, and the file may have been
+  // generated under another Node than the one checking it.
+  const asCompiled = (rules) => rules.map((body) => new RegExp(body).source)
   for (const key of Object.keys(installed)) {
+    const matches =
+      key === 'lexRules'
+        ? same(asCompiled(installed[key]), asCompiled(embedded[key] ?? []))
+        : same(installed[key], embedded[key])
     assert(
-      same(installed[key], embedded[key]),
-      `MermaidFlowGrammar.ts was generated from mermaid ${embedded.mermaid} and its "${key}" is not what mermaid ${installed.mermaid} has. ` +
-        'Run `node scripts/GenerateMermaidFlowGrammar.mjs --write`, then this contract again.',
+      matches,
+      `MermaidFlowGrammar.ts was generated from mermaid ${embedded.mermaid} and its "${key}" is not what the installed mermaid ${installed.mermaid} has. ` +
+        'The builder would read flowcharts with a stale grammar. Run `node scripts/GenerateMermaidFlowGrammar.mjs --write` ' +
+        'in app/packages/web, commit MermaidFlowGrammar.ts, and run this contract again: the checks after this one say ' +
+        'whether the builder still reads diagrams the way the new mermaid does.',
     )
   }
   assert(same(Object.keys(installed).sort(), Object.keys(embedded).sort()), 'the two grammars have different fields')
+  assert(
+    FlowDoc.mermaidFlowGrammarVersion() === installed.mermaid,
+    `the grammar the document loaded says mermaid ${FlowDoc.mermaidFlowGrammarVersion()}, the installed one is ${installed.mermaid}`,
+  )
   counts.lexRules = embedded.lexRules.length
   counts.parserStates = embedded.table.length
   return `mermaid ${installed.mermaid}: ${embedded.lexRules.length} lexer rules, ${embedded.table.length} parser states`
 })
 
 await check('every production of that grammar has a meaning in the document', async () => {
-  const unhandled = SourceDoc.unhandledMermaidFlowProductions()
+  const unhandled = FlowDoc.unhandledMermaidFlowProductions()
   assert(unhandled.length === 0, `no handler and not a pass-through: ${unhandled.join(' | ')}`)
 })
 
@@ -157,7 +176,7 @@ for (const entry of texts) {
   observed.push({
     ...entry,
     mermaid: await parsedTextOf(entry.text),
-    document: SourceDoc.parseMermaidFlowSource(entry.text),
+    document: FlowDoc.parseMermaidFlowSource(entry.text),
   })
 }
 
@@ -182,11 +201,11 @@ await check('the builder’s tokens are mermaid’s tokens, name for name and ch
   let compared = 0
   let tokens = 0
   for (const { name, text, document } of observed) {
-    if (document.problem?.kind === 'not-flowchart') {
+    if (document.problem?.kind === 'other-kind') {
       continue
     }
     const theirs = mermaidTokens(document.parsedText)
-    const ours = SourceDoc.lexMermaidFlowSource(text).filter((token) => token.token !== null)
+    const ours = FlowDoc.lexMermaidFlowSource(text).filter((token) => token.token !== null)
     const lexicalError = theirs.length > 0 && theirs[theirs.length - 1].token === '!lexical error'
     if (lexicalError) {
       // Mermaid's lexer threw: the builder's must have stopped at the same token.
@@ -213,7 +232,7 @@ await check('the builder’s tokens are mermaid’s tokens, name for name and ch
 
 await check('printing every text gives it back, byte for byte', async () => {
   for (const { name, text, document } of observed) {
-    assert(SourceDoc.printMermaidFlowDocument(document) === text, `${name}: printed differently`)
+    assert(FlowDoc.printMermaidFlowDocument(document) === text, `${name}: printed differently`)
   }
   return `${observed.length} texts`
 })
@@ -331,7 +350,7 @@ await check('every corpus text reads the same to the builder and to mermaid', as
       document.problem === null,
       `${name}: the builder refuses it — ${document.problem?.kind}: ${document.problem?.message}`,
     )
-    const differences = SourceDoc.compareMermaidFlowReadings(document.reading, mermaid.reading)
+    const differences = FlowDoc.compareMermaidFlowReadings(document.reading, mermaid.reading)
     assert(differences.length === 0, `${name}: ${differences.join(' ;; ')} — source ${quoted(text)}`)
     assert(
       document.edges.length === mermaid.reading.edges.length,
@@ -345,6 +364,9 @@ await check('every corpus text reads the same to the builder and to mermaid', as
   counts.commonFormsRead = common
   return `${compared} texts, ${common} of them the common forms`
 })
+
+/** Texts the builder's document reads and mermaid rejects: the one disagreement in the unsafe direction. */
+const readByBuilderAlone = []
 
 await check('one character short of a corpus text, the builder never reads something mermaid does not', async () => {
   // Four outcomes are possible for a damaged text. Two are fine: both read it
@@ -372,13 +394,14 @@ await check('one character short of a corpus text, the builder never reads somet
         `${name}: the builder reads a text mermaid refuses (${mermaid.failed ?? mermaid.type}) — source ${quoted(text)}`,
       )
       yamlOnly++
+      readByBuilderAlone.push({ name, text })
       continue
     }
     assert(
       document.problem === null,
       `${name}: the builder refuses (${document.problem?.kind}: ${document.problem?.message}) a text mermaid reads — source ${quoted(text)}`,
     )
-    const differences = SourceDoc.compareMermaidFlowReadings(document.reading, mermaid.reading)
+    const differences = FlowDoc.compareMermaidFlowReadings(document.reading, mermaid.reading)
     assert(differences.length === 0, `${name}: ${differences.join(' ;; ')} — source ${quoted(text)}`)
     assert(document.edges.length === mermaid.reading.edges.length, `${name}: link count`)
     sameReading++
@@ -389,6 +412,52 @@ await check('one character short of a corpus text, the builder never reads somet
   assert(sameReading >= 1000, `only ${sameReading} damaged texts were still read by both`)
   assert(bothRefuse >= 500, `only ${bothRefuse} damaged texts were refused by both`)
   return `${sameReading} read the same, ${bothRefuse} refused by both, ${yamlOnly} refused by mermaid alone for their YAML`
+})
+
+await check('a text the builder reads and mermaid rejects is not editable', async () => {
+  // The document does not parse YAML, so it reads a diagram whose frontmatter
+  // or `@{ … }` is broken; mermaid refuses the whole diagram. Whatever the
+  // document thinks, such a text must never reach an operation: mermaid is
+  // asked first, and its refusal ends the matter with the text untouched.
+  const fixtures = [
+    { name: 'a shape mermaid does not know', text: lines('flowchart TD', '  A@{ shape: cy } --> B') },
+    { name: 'shape data that is not YAML', text: lines('flowchart TD', '  A@{ shape: cyl label: "DB" } --> B') },
+    {
+      name: 'a frontmatter that is not YAML',
+      text: lines('---', 'title T', 'config:', '  theme: forest', '---', 'flowchart LR', '  A --> B'),
+    },
+  ]
+  let refused = 0
+  for (const { name, text } of [...fixtures, ...readByBuilderAlone]) {
+    const document = FlowDoc.parseMermaidFlowSource(text)
+    assert(
+      document.problem === null,
+      `${name}: the builder no longer reads this, so it has stopped testing the refusal`,
+    )
+    const inspection = await Oracle.inspectMermaidFlowchart(text)
+    assert(
+      !inspection.ok && inspection.stage === 'unreadable' && inspection.reading === undefined,
+      `${name}: inspected as ${JSON.stringify({ ok: inspection.ok, stage: inspection.stage })}`,
+    )
+    let asked = 0
+    const outcome = await Oracle.applyMermaidFlowEdit(text, (edited) => {
+      asked++
+      return {
+        ok: true,
+        text: edited.source + '\n  Z[Never]',
+        expectation: { reading: edited.reading, created: [], relabelled: [], reordered: [] },
+      }
+    })
+    assert(asked === 0, `${name}: an operation was run on a text mermaid rejects`)
+    assert(
+      !outcome.ok && outcome.stage === 'unreadable' && !('text' in outcome),
+      `${name}: the edit came back as ${JSON.stringify(outcome).slice(0, 200)}`,
+    )
+    refused++
+  }
+  assert(refused >= fixtures.length, 'nothing was tested')
+  counts.rejectedNotEditable = refused
+  return `${refused} texts: mermaid asked first, no operation run, no text returned`
 })
 
 const failed = checks.filter((entry) => !entry.ok)

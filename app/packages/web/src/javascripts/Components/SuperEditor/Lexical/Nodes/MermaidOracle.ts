@@ -25,17 +25,18 @@
  * to fail there, loudly, rather than quietly leave the builder with nothing to
  * check itself against.
  */
-import { readMermaidDiagram } from './MermaidRuntime'
 import {
   compareMermaidFlowReadings,
+  loadMermaidFlowGrammar,
   type MermaidFlowDocument,
   type MermaidFlowEdgeReading,
   type MermaidFlowGroupReading,
   type MermaidFlowNodeReading,
   type MermaidFlowReading,
   parseMermaidFlowSource,
-  plainMermaidLabel,
-} from './MermaidSourceDoc'
+} from './MermaidFlowDoc'
+import { readMermaidDiagram } from './MermaidRuntime'
+import { plainMermaidLabel } from './MermaidSourceDoc'
 
 // ---------------------------------------------------------------------------
 // Reading mermaid's database
@@ -592,10 +593,15 @@ export async function inspectMermaidFlowchart(
   text: string,
   read: MermaidFlowReader = readMermaidFlowchart,
 ): Promise<MermaidFlowInspection> {
+  // Mermaid is asked FIRST, and a text it rejects goes no further: the builder's
+  // own reading is never enough to make a diagram editable. (It reads a few
+  // texts mermaid refuses — a frontmatter or an `@{ … }` whose YAML is broken —
+  // because it does not parse YAML.)
   const before = await read(text)
   if (!before.ok) {
     return { ok: false, stage: 'unreadable', reason: firstLine(before.message), details: [before.message] }
   }
+  await loadMermaidFlowGrammar()
   const document = parseMermaidFlowSource(text)
   if (document.problem || !document.reading) {
     const problem = document.problem
