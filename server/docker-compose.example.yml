@@ -4,6 +4,9 @@ services:
     env_file: .env
     container_name: server_self_hosted
     restart: unless-stopped
+    depends_on:
+      floci:
+        condition: service_healthy
     ports:
       - 3000:3000
       - 3125:3104
@@ -22,8 +25,19 @@ services:
     expose:
       - 4566
     restart: unless-stopped
+    environment:
+      # floci restarts the emulator (losing every queue) when the bootstrap
+      # hook outlives this limit; the default is 30 s.
+      FLOCI_INIT_HOOKS_TIMEOUT_SECONDS: 180
     volumes:
       - ./localstack_bootstrap.sh:/etc/localstack/init/ready.d/localstack_bootstrap.sh
+    healthcheck:
+      # Healthy only once every topic, queue and subscription exists.
+      test: ["CMD", "bash", "/etc/localstack/init/ready.d/localstack_bootstrap.sh", "--check"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 180s
     networks:
       standardnotes_self_hosted:
         # Old hostname kept answering for anything still pointing at `localstack`.

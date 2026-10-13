@@ -899,14 +899,14 @@ services:
     #
     # ESCAPE HATCH — to switch back to current LocalStack, replace `image` below
     # with `localstack/localstack:2026.06.3`; add `LOCALSTACK_AUTH_TOKEN`,
-    # `SERVICES: sns,sqs`, and `LS_LOG: warn` under `environment:`; change the
-    # healthcheck to `awslocal sqs list-queues`; and raise the mem limit to 512m.
-    # The bootstrap script and URLs remain compatible (the service keeps the
+    # `SERVICES: sns,sqs`, and `LS_LOG: warn` under `environment:`; and raise
+    # the mem limit to 512m. The bootstrap script (plain curl against the
+    # SNS/SQS Query API) and URLs remain compatible (the service keeps the
     # `localstack` network alias below).
     #
-    # The -compat image variant ships the AWS CLI + awslocal, which the
-    # bootstrap init script (and the old LocalStack tooling muscle memory,
-    # e.g. `docker compose exec floci awslocal sqs list-queues`) relies on.
+    # The -compat image variant ships bash and curl, which the bootstrap init
+    # script and the health check use, plus the AWS CLI + awslocal for manual
+    # inspection (e.g. `docker compose exec floci awslocal sqs list-queues`).
     image: ${FLOCI_IMAGE:-floci/floci:1.5.33-compat}
     restart: unless-stopped
     # Hardening: internal-only (no host port published) and no privilege
@@ -919,16 +919,26 @@ services:
       - ALL
     mem_limit: ${FLOCI_MEM_LIMIT:-256m}
     pids_limit: 512
+    environment:
+      # floci shuts the emulator down when a ready hook outlives this limit
+      # (default 30 s); the restarted emulator starts empty and runs the hook
+      # again. The bootstrap takes about a second, so the limit is only a
+      # backstop for a badly overloaded host — a restart there would lose every
+      # topic and subscription and start the same race over.
+      FLOCI_INIT_HOOKS_TIMEOUT_SECONDS: ${FLOCI_INIT_HOOKS_TIMEOUT_SECONDS:-180}
     volumes:
       - ./server/docker/localstack_bootstrap.sh:/etc/localstack/init/ready.d/localstack_bootstrap.sh:ro
     healthcheck:
-      # floci serves a LocalStack-compatible health endpoint; the sqs service
-      # reports "running" once the emulator is up (init hooks run right after).
-      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"sqs\":\"running\"' || exit 1"]
-      interval: 15s
+      # Healthy means events can be delivered: the bootstrap's --check mode
+      # verifies every topic, queue, subscription and the websocket redrive
+      # policy the bootstrap creates (one topology, read in both modes). The
+      # emulator's own /_localstack/health turns green before the bootstrap
+      # has run and stays green while it restart-loops, so it is not used.
+      test: ["CMD", "bash", "/etc/localstack/init/ready.d/localstack_bootstrap.sh", "--check"]
+      interval: 10s
       timeout: 10s
-      retries: 20
-      start_period: 30s
+      retries: 6
+      start_period: 180s
     networks:
       standard-red-notes:
         # Keep the old hostname answering too: server images built before the

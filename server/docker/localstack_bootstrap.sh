@@ -1,54 +1,181 @@
 #!/usr/bin/env bash
 
 # SNS/SQS bootstrap for the local AWS emulator. Historically written for
-# LocalStack; it now runs unchanged under floci (floci/floci:*-compat), which
-# executes the same /etc/localstack/init/ready.d hooks and ships awslocal.
-# floci's SNS/SQS state is in-memory, so this runs on EVERY emulator start —
-# all calls below are idempotent (create-queue/create-topic/subscribe).
+# LocalStack; it now runs under floci (floci/floci:*-compat), which executes
+# the same /etc/localstack/init/ready.d hooks.
+#
+# Two modes, one topology. The topology below is written once and read in
+# both modes, so the health check can never drift from what is created:
+#
+#   (no argument)  floci runs this as its ready hook on EVERY emulator start
+#                  (SNS/SQS state is in-memory) and it creates every topic,
+#                  queue, subscription and redrive policy. All calls are
+#                  idempotent: re-running it changes nothing.
+#   --check        the compose health check runs this. It creates nothing; it
+#                  exits non-zero, naming the first thing missing, unless every
+#                  topic, queue, subscription and the redrive policy exist. So
+#                  "healthy" means "events can be delivered", not merely "the
+#                  emulator answers HTTP".
+#
+# Speed is the point. floci kills the emulator when a ready hook outlives
+# floci.init-hooks.timeout-seconds (30 s by default; compose raises it), and
+# the restarted emulator starts with empty state and runs the hook again. Each
+# `awslocal` call starts the Python AWS CLI (about 1.7 s on an idle host, far
+# more on a loaded one), and the ~30 calls here overran 30 s on a loaded host:
+# the emulator restart-looped forever while every container reported healthy
+# and no event was ever delivered. The calls below speak the SNS/SQS Query
+# API with plain curl instead: a few milliseconds each, about one second for
+# the whole topology even under load, with no sleeps. Each call is bounded
+# (connect/total timeouts) and retried a few times for a transient failure.
 
 set -euo pipefail
+
+BOOTSTRAP_MODE=create
+if [[ "${1:-}" == "--check" ]]; then
+  BOOTSTRAP_MODE=check
+  # The topology body below narrates what it does on stdout; a health check
+  # only reports what is missing (on stderr), so Docker's health log stays
+  # readable.
+  exec >/dev/null
+fi
 
 echo "configuring sns/sqs"
 echo "==================="
 LOCALSTACK_HOST=localhost
 AWS_REGION=us-east-1
 LOCALSTACK_DUMMY_ID=000000000000
+EMULATOR_ENDPOINT="http://${LOCALSTACK_HOST}:4566/"
 
-get_all_queues() {
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sqs list-queues
+# One SNS or SQS Query API call. floci does not validate signatures, but the
+# credential scope names the service, so routing never depends on guessing it
+# from the action name. Parameters are passed as name=value and URL-encoded.
+emulator_query() {
+  local SERVICE=$1
+  local API_VERSION=$2
+  shift 2
+  local FORM=(--data-urlencode "Version=${API_VERSION}")
+  local PARAMETER
+  for PARAMETER in "$@"; do
+    FORM+=(--data-urlencode "${PARAMETER}")
+  done
+  local RETRY=(--retry 4 --retry-delay 1 --retry-connrefused --retry-max-time 20)
+  if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+    # A health check reports the current state; Docker repeats it.
+    RETRY=()
+  fi
+  curl --silent --show-error --fail-with-body \
+    --connect-timeout 2 --max-time 5 "${RETRY[@]}" \
+    -H "Authorization: AWS4-HMAC-SHA256 Credential=floci/20000101/${AWS_REGION}/${SERVICE}/aws4_request, SignedHeaders=host, Signature=0" \
+    "${FORM[@]}" "${EMULATOR_ENDPOINT}"
 }
 
-create_queue() {
-  local QUEUE_NAME_TO_CREATE=$1
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sqs create-queue --queue-name ${QUEUE_NAME_TO_CREATE}
+sqs_query() {
+  emulator_query sqs 2012-11-05 "$@"
+}
+
+sns_query() {
+  emulator_query sns 2010-03-31 "$@"
+}
+
+# Report a missing piece of the topology and fail the health check.
+check_failed() {
+  echo "queue emulator not ready: $*" >&2
+  return 1
+}
+
+get_all_queues() {
+  sqs_query Action=ListQueues
 }
 
 get_all_topics() {
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sns list-topics
+  sns_query Action=ListTopics
+}
+
+# Every subscription, following NextToken pages, one <member> per line.
+get_all_subscriptions() {
+  local NEXT_TOKEN=""
+  local PAGE
+  local TOKEN_PATTERN='<NextToken>([^<]+)</NextToken>'
+  while :; do
+    if [[ -n "${NEXT_TOKEN}" ]]; then
+      PAGE=$(sns_query Action=ListSubscriptions "NextToken=${NEXT_TOKEN}")
+    else
+      PAGE=$(sns_query Action=ListSubscriptions)
+    fi
+    PAGE=${PAGE//$'\n'/}
+    printf '%s\n' "${PAGE//<\/member>/$'\n'}"
+    if [[ "${PAGE}" =~ ${TOKEN_PATTERN} ]]; then
+      NEXT_TOKEN=${BASH_REMATCH[1]}
+    else
+      return 0
+    fi
+  done
+}
+
+if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+  # Read the emulator's state once; every check below looks it up here.
+  EXISTING_QUEUES=$(get_all_queues)
+  EXISTING_TOPICS=$(get_all_topics)
+  EXISTING_SUBSCRIPTIONS=$(get_all_subscriptions)
+fi
+
+create_queue() {
+  local QUEUE_NAME_TO_CREATE=$1
+  if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+    [[ "${EXISTING_QUEUES}" == *"/${LOCALSTACK_DUMMY_ID}/${QUEUE_NAME_TO_CREATE}</QueueUrl>"* ]] ||
+      check_failed "queue ${QUEUE_NAME_TO_CREATE} does not exist"
+    return
+  fi
+  sqs_query Action=CreateQueue "QueueName=${QUEUE_NAME_TO_CREATE}"
 }
 
 create_topic() {
   local TOPIC_NAME_TO_CREATE=$1
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sns create-topic --name ${TOPIC_NAME_TO_CREATE}
+  if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+    [[ "${EXISTING_TOPICS}" == *"<TopicArn>$(get_topic_arn_from_name "${TOPIC_NAME_TO_CREATE}")</TopicArn>"* ]] ||
+      check_failed "topic ${TOPIC_NAME_TO_CREATE} does not exist"
+    return
+  fi
+  sns_query Action=CreateTopic "Name=${TOPIC_NAME_TO_CREATE}"
+}
+
+check_subscription() {
+  local TOPIC_ARN_TO_LINK=$1
+  local QUEUE_ARN_TO_LINK=$2
+  local MEMBER
+  while IFS= read -r MEMBER; do
+    if [[ "${MEMBER}" == *"<TopicArn>${TOPIC_ARN_TO_LINK}</TopicArn>"* &&
+      "${MEMBER}" == *"<Endpoint>${QUEUE_ARN_TO_LINK}</Endpoint>"* ]]; then
+      return 0
+    fi
+  done <<<"${EXISTING_SUBSCRIPTIONS}"
+  check_failed "${QUEUE_ARN_TO_LINK} is not subscribed to ${TOPIC_ARN_TO_LINK}"
 }
 
 link_queue_and_topic() {
   local TOPIC_ARN_TO_LINK=$1
   local QUEUE_ARN_TO_LINK=$2
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sns subscribe --topic-arn ${TOPIC_ARN_TO_LINK} --protocol sqs --notification-endpoint ${QUEUE_ARN_TO_LINK}
+  if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+    check_subscription "${TOPIC_ARN_TO_LINK}" "${QUEUE_ARN_TO_LINK}"
+    return
+  fi
+  sns_query Action=Subscribe "TopicArn=${TOPIC_ARN_TO_LINK}" Protocol=sqs "Endpoint=${QUEUE_ARN_TO_LINK}"
 }
 
 # Subscribe with an SNS FilterPolicy so the queue receives ONLY the listed
 # event types (matched against the `event` message attribute every
-# SNSDomainEventPublisher stamps). Attribute values are JSON strings, hence the
-# nested encoding.
+# SNSDomainEventPublisher stamps). The policy is created by the same Subscribe
+# call as the subscription, so the check only has to find the subscription.
 link_queue_and_topic_filtered() {
   local TOPIC_ARN_TO_LINK=$1
   local QUEUE_ARN_TO_LINK=$2
   local FILTER_POLICY=$3
-  local FILTER_POLICY_ATTRIBUTES
-  FILTER_POLICY_ATTRIBUTES=$(printf '{"FilterPolicy":"%s"}' "${FILTER_POLICY//\"/\\\"}")
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sns subscribe --topic-arn ${TOPIC_ARN_TO_LINK} --protocol sqs --notification-endpoint ${QUEUE_ARN_TO_LINK} --attributes "${FILTER_POLICY_ATTRIBUTES}"
+  if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+    check_subscription "${TOPIC_ARN_TO_LINK}" "${QUEUE_ARN_TO_LINK}"
+    return
+  fi
+  sns_query Action=Subscribe "TopicArn=${TOPIC_ARN_TO_LINK}" Protocol=sqs "Endpoint=${QUEUE_ARN_TO_LINK}" \
+    Attributes.entry.1.key=FilterPolicy "Attributes.entry.1.value=${FILTER_POLICY}"
 }
 
 # Point a queue's redrive policy at a dead-letter queue: a message the consumer
@@ -58,9 +185,17 @@ set_queue_redrive_policy() {
   local QUEUE_URL_TO_CONFIGURE=$1
   local DEAD_LETTER_QUEUE_ARN=$2
   local MAX_RECEIVE_COUNT=$3
-  local REDRIVE_ATTRIBUTES
-  REDRIVE_ATTRIBUTES=$(printf '{"RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"%s\\",\\"maxReceiveCount\\":\\"%s\\"}"}' "${DEAD_LETTER_QUEUE_ARN}" "${MAX_RECEIVE_COUNT}")
-  awslocal --endpoint-url=http://${LOCALSTACK_HOST}:4566 sqs set-queue-attributes --queue-url ${QUEUE_URL_TO_CONFIGURE} --attributes "${REDRIVE_ATTRIBUTES}"
+  local REDRIVE_POLICY
+  REDRIVE_POLICY=$(printf '{"deadLetterTargetArn":"%s","maxReceiveCount":"%s"}' "${DEAD_LETTER_QUEUE_ARN}" "${MAX_RECEIVE_COUNT}")
+  if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+    local ATTRIBUTES
+    ATTRIBUTES=$(sqs_query Action=GetQueueAttributes "QueueUrl=${QUEUE_URL_TO_CONFIGURE}" AttributeName.1=RedrivePolicy)
+    [[ "${ATTRIBUTES}" == *"${DEAD_LETTER_QUEUE_ARN}"* ]] ||
+      check_failed "${QUEUE_URL_TO_CONFIGURE} has no redrive policy to ${DEAD_LETTER_QUEUE_ARN}"
+    return
+  fi
+  sqs_query Action=SetQueueAttributes "QueueUrl=${QUEUE_URL_TO_CONFIGURE}" \
+    Attribute.1.Name=RedrivePolicy "Attribute.1.Value=${REDRIVE_POLICY}"
 }
 
 get_queue_arn_from_name() {
@@ -281,8 +416,14 @@ LINKING_RESULT=$(link_queue_and_topic_filtered $AUTH_TOPIC_ARN $WEBSOCKET_QUEUE_
 echo "linking done:"
 echo "$LINKING_RESULT"
 
+if [[ "${BOOTSTRAP_MODE}" == "check" ]]; then
+  exit 0
+fi
+
 echo "all topics are:"
 echo "$(get_all_topics)"
 
 echo "all queues are:"
 echo "$(get_all_queues)"
+
+echo "sns/sqs topology ready after ${SECONDS}s"

@@ -124,6 +124,20 @@ start (all its calls are idempotent) — there is no emulator data volume to
 manage. See [Troubleshooting](#troubleshooting) if realtime updates aren't
 flowing.
 
+The bootstrap talks to the emulator with plain `curl` and finishes in about a
+second. floci stops the emulator when a ready hook outlives
+`FLOCI_INIT_HOOKS_TIMEOUT_SECONDS` (floci's default is 30 seconds; compose sets
+180), and a restarted emulator starts empty and runs the hook again. An older
+bootstrap started the Python AWS CLI once per resource and could overrun 30
+seconds on a busy host, so the emulator restarted in a loop and no event
+reached any service. The same script with `--check` is floci's health check: it
+creates nothing and passes only when every topic, queue, subscription and the
+websocket redrive policy exists, so `floci` is healthy only when events can be
+delivered and `server` waits for that. The server's queue consumers keep
+polling through an emulator restart, logging an error for each failed poll,
+and resume on their own once the bootstrap has recreated their queues; events
+published while the emulator was down are lost.
+
 ## Prerequisites
 
 - **Docker** with the **Compose v2** plugin (`docker compose`, not the legacy
@@ -1356,11 +1370,24 @@ looks wrong, just restart the emulator:
 docker compose restart floci
 ```
 
-Confirm the queues exist (the `-compat` image ships `awslocal`):
+Confirm the whole topology exists (this is the emulator's health check; it
+prints what is missing and exits non-zero):
 
 ```bash
-docker compose exec floci awslocal sqs list-queues
+docker compose exec floci bash /etc/localstack/init/ready.d/localstack_bootstrap.sh --check && echo topology ok
 ```
+
+Check that the emulator is not restart-looping. A restart count that keeps
+rising, or `Hook script timed out` in its log, means the bootstrap is
+overrunning floci's hook limit and every restart empties the queues:
+
+```bash
+docker inspect -f 'restarts={{.RestartCount}}' "$(docker compose ps -q floci)"
+docker compose logs --no-log-prefix floci 2>&1 | grep -E 'Hook script timed out|topology ready'
+```
+
+The `-compat` image also ships `awslocal` for manual inspection, for example
+`docker compose exec floci awslocal sqs list-queues`.
 
 Restarting the emulator drops whatever was in flight, and nothing re-drives
 those pushes; connected clients pick the changes up on their next sync, which

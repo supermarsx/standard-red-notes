@@ -37,6 +37,7 @@ import {
   validatePairingDockerfileContract,
   validateReadinessAcceptanceContract,
   validateReadinessBootContract,
+  validateQueueEmulatorContract,
   validateRealtimeQueueBootstrapContract,
   validateRealtimeQueueIsolationContract,
   validateRealtimeSwitchComposeContract,
@@ -2260,10 +2261,100 @@ test("filters and dead-letters the websocket queue in the emulator bootstrap", (
   );
   assert.match(
     validateRealtimeQueueBootstrapContract(
-      bootstrap.replace('--attributes "${FILTER_POLICY_ATTRIBUTES}"', ""),
+      bootstrap.replace(
+        'Attributes.entry.1.key=FilterPolicy "Attributes.entry.1.value=${FILTER_POLICY}"',
+        "",
+      ),
       options,
     ).join("\n"),
     /must pass the FilterPolicy as a subscription attribute/,
+  );
+});
+
+test("keeps the queue emulator bootstrap fast and its health meaning the topology exists", () => {
+  const bootstrap = readFileSync(
+    resolve("server/docker/localstack_bootstrap.sh"),
+    "utf8",
+  );
+  const bootstrapTarget = "/etc/localstack/init/ready.d/localstack_bootstrap.sh";
+  const config = () => ({
+    services: {
+      floci: {
+        environment: { FLOCI_INIT_HOOKS_TIMEOUT_SECONDS: "180" },
+        volumes: [
+          {
+            type: "bind",
+            source: "F:\\repo\\server\\docker\\localstack_bootstrap.sh",
+            target: bootstrapTarget,
+            read_only: true,
+          },
+        ],
+        healthcheck: { test: ["CMD", "bash", bootstrapTarget, "--check"] },
+      },
+      server: {
+        depends_on: { floci: { condition: "service_healthy" } },
+      },
+    },
+  });
+  const options = { label: "multi compose" };
+  assert.deepEqual(validateQueueEmulatorContract(config(), bootstrap, options), []);
+
+  const failures = (mutate, source = bootstrap) => {
+    const mutated = config();
+    mutate(mutated);
+    return validateQueueEmulatorContract(mutated, source, options).join("\n");
+  };
+
+  assert.match(
+    failures(() => {}, `${bootstrap}\nawslocal sqs list-queues\n`),
+    /must not call awslocal/,
+  );
+  assert.match(
+    failures(() => {}, bootstrap.replace('if [[ "${1:-}" == "--check" ]]; then', "if false; then")),
+    /must offer the --check mode/,
+  );
+  assert.match(
+    failures(() => {}, `${bootstrap}\nsleep 2\n`),
+    /must not sleep inside the ready hook/,
+  );
+  assert.match(
+    failures((c) => {
+      delete c.services.floci.environment;
+    }),
+    /FLOCI_INIT_HOOKS_TIMEOUT_SECONDS must be at least 120/,
+  );
+  assert.match(
+    failures((c) => {
+      c.services.floci.environment.FLOCI_INIT_HOOKS_TIMEOUT_SECONDS = "30";
+    }),
+    /FLOCI_INIT_HOOKS_TIMEOUT_SECONDS must be at least 120/,
+  );
+  assert.match(
+    failures((c) => {
+      c.services.floci.volumes = [];
+    }),
+    /must mount server\/docker\/localstack_bootstrap.sh/,
+  );
+  assert.match(
+    failures((c) => {
+      c.services.floci.healthcheck.test = [
+        "CMD-SHELL",
+        "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"sqs\":\"running\"'",
+      ];
+    }),
+    /healthcheck must run the bootstrap --check/,
+  );
+  assert.match(
+    failures((c) => {
+      c.services.server.depends_on.floci.condition = "service_started";
+    }),
+    /server: must wait for floci to be healthy/,
+  );
+  assert.match(
+    failures((c) => {
+      delete c.services.floci;
+    }),
+    /service floci is missing/,
   );
 });
 

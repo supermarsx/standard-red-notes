@@ -1368,7 +1368,11 @@ export function validateRealtimeQueueBootstrapContract(
       `${label}: must define WEBSOCKET_QUEUE_FILTER_POLICY as exactly the two gateway event types`,
     );
   }
-  if (!/--attributes "\$\{FILTER_POLICY_ATTRIBUTES\}"/.test(source)) {
+  if (
+    !/Attributes\.entry\.1\.key=FilterPolicy "Attributes\.entry\.1\.value=\$\{FILTER_POLICY\}"/.test(
+      source,
+    )
+  ) {
     errors.push(
       `${label}: link_queue_and_topic_filtered must pass the FilterPolicy as a subscription attribute`,
     );
@@ -1399,6 +1403,89 @@ export function validateRealtimeQueueBootstrapContract(
   ) {
     errors.push(
       `${label}: must park unacknowledged websocket messages in websocket-local-dlq after 5 receives`,
+    );
+  }
+  return errors;
+}
+
+const QUEUE_EMULATOR_BOOTSTRAP_TARGET =
+  "/etc/localstack/init/ready.d/localstack_bootstrap.sh";
+const MINIMUM_QUEUE_EMULATOR_HOOK_TIMEOUT_SECONDS = 120;
+
+/**
+ * The queue emulator restart-looped on a loaded host: its ready hook (one
+ * Python AWS CLI start per resource) outlived floci's 30 s hook limit, floci
+ * shut the emulator down, and the restarted, empty emulator ran the hook
+ * again. Its health check only asked whether the emulator answered HTTP, so
+ * every container reported healthy while no event was ever delivered. This
+ * keeps the three parts of the fix: a hook that does not start a CLI per
+ * call, a hook limit with headroom, and a health check that means "the
+ * topology exists" so the server waits for it.
+ */
+export function validateQueueEmulatorContract(
+  config,
+  bootstrapSource,
+  { label, serviceName = "floci", dependentService = "server" },
+) {
+  const errors = [];
+  const source = String(bootstrapSource);
+  if (/^(?![ \t]*#).*\bawslocal\b/m.test(source)) {
+    errors.push(
+      `${label} bootstrap: must not call awslocal (one Python CLI start per resource overran the hook limit)`,
+    );
+  }
+  if (!/^\s*if \[\[ "\$\{1:-\}" == "--check" \]\]; then$/m.test(source)) {
+    errors.push(`${label} bootstrap: must offer the --check mode the health check runs`);
+  }
+  if (/^\s*sleep\b/m.test(source)) {
+    errors.push(`${label} bootstrap: must not sleep inside the ready hook`);
+  }
+
+  const emulator = config?.services?.[serviceName];
+  if (!emulator) {
+    errors.push(`${label}: service ${serviceName} is missing`);
+    return errors;
+  }
+  const hookTimeout = Number(
+    emulator.environment?.FLOCI_INIT_HOOKS_TIMEOUT_SECONDS,
+  );
+  if (
+    !Number.isFinite(hookTimeout) ||
+    hookTimeout < MINIMUM_QUEUE_EMULATOR_HOOK_TIMEOUT_SECONDS
+  ) {
+    errors.push(
+      `${label} ${serviceName}: FLOCI_INIT_HOOKS_TIMEOUT_SECONDS must be at least ${MINIMUM_QUEUE_EMULATOR_HOOK_TIMEOUT_SECONDS} (floci's 30 s default restart-loops a loaded host)`,
+    );
+  }
+  const mountsBootstrap = (emulator.volumes ?? []).some(
+    (volume) =>
+      volume?.target === QUEUE_EMULATOR_BOOTSTRAP_TARGET &&
+      String(volume?.source ?? "").replaceAll("\\", "/").endsWith(
+        "server/docker/localstack_bootstrap.sh",
+      ),
+  );
+  if (!mountsBootstrap) {
+    errors.push(
+      `${label} ${serviceName}: must mount server/docker/localstack_bootstrap.sh at ${QUEUE_EMULATOR_BOOTSTRAP_TARGET}`,
+    );
+  }
+  const healthTest = emulator.healthcheck?.test;
+  const healthCommand = Array.isArray(healthTest)
+    ? healthTest.join(" ")
+    : String(healthTest ?? "");
+  if (
+    !healthCommand.includes(`${QUEUE_EMULATOR_BOOTSTRAP_TARGET} --check`)
+  ) {
+    errors.push(
+      `${label} ${serviceName}: healthcheck must run the bootstrap --check (the emulator's own health endpoint is green while no queue exists)`,
+    );
+  }
+  if (
+    config?.services?.[dependentService]?.depends_on?.[serviceName]
+      ?.condition !== "service_healthy"
+  ) {
+    errors.push(
+      `${label} ${dependentService}: must wait for ${serviceName} to be healthy`,
     );
   }
   return errors;
@@ -2438,6 +2525,9 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     ),
     ...validateRealtimeQueueBootstrapContract(emulatorBootstrap, {
       label: "emulator bootstrap",
+    }),
+    ...validateQueueEmulatorContract(multiConfig, emulatorBootstrap, {
+      label: "multi compose",
     }),
     ...validateSupervisorStopGroupContract(multiSupervisorSource, {
       label: "multi supervisord",

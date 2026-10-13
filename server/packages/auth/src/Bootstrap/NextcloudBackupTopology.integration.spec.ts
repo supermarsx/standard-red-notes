@@ -8,15 +8,15 @@ describe('local SNS/SQS bootstrap execution', () => {
     const directory = mkdtempSync(join(tmpdir(), 'srn-awslocal-'))
     const callLog = join(directory, 'calls.log')
     const bashHarness = `
-export AWSLOCAL_CALL_LOG="$2"
-awslocal() {
+export EMULATOR_CALL_LOG="$2"
+curl() {
 set -euo pipefail
-printf '%s\\n' "$*" >> "$AWSLOCAL_CALL_LOG"
-if [[ "$*" == *"sqs list-queues"* ]]; then echo '{"QueueUrls":[]}'
-elif [[ "$*" == *"sns list-topics"* ]]; then echo '{"Topics":[]}'
-elif [[ "$*" == *"sqs create-queue"* ]]; then echo '{"QueueUrl":"test"}'
-elif [[ "$*" == *"sns create-topic"* ]]; then echo '{"TopicArn":"test"}'
-elif [[ "$*" == *"sns subscribe"* ]]; then echo '{"SubscriptionArn":"test"}'
+printf '%s\\n' "$*" >> "$EMULATOR_CALL_LOG"
+if [[ "$*" == *"Action=ListQueues"* ]]; then echo '<ListQueuesResponse/>'
+elif [[ "$*" == *"Action=ListTopics"* ]]; then echo '<ListTopicsResponse/>'
+elif [[ "$*" == *"Action=CreateQueue"* ]]; then echo '<QueueUrl>test</QueueUrl>'
+elif [[ "$*" == *"Action=CreateTopic"* ]]; then echo '<TopicArn>test</TopicArn>'
+elif [[ "$*" == *"Action=Subscribe"* ]]; then echo '<SubscriptionArn>test</SubscriptionArn>'
 fi
 }
 source "$1"
@@ -52,13 +52,14 @@ source "$1"
 
       const subscriptions = readFileSync(callLog, 'utf8')
         .split(/\r?\n/)
-        .filter((line) => line.includes('sns subscribe'))
-      expect(subscriptions.every((line) => line.includes('--notification-endpoint arn:aws:sqs:'))).toBe(true)
+        .filter((line) => line.includes('Action=Subscribe'))
+      expect(subscriptions.length).toBeGreaterThan(0)
+      expect(subscriptions.every((line) => line.includes('--data-urlencode Endpoint=arn:aws:sqs:'))).toBe(true)
 
       const dedicated = subscriptions.filter((line) => line.includes(':nextcloud-backup-local-topic'))
       expect(dedicated).toHaveLength(1)
       expect(dedicated[0]).toContain(
-        '--notification-endpoint arn:aws:sqs:us-east-1:000000000000:syncing-server-local-queue',
+        '--data-urlencode Endpoint=arn:aws:sqs:us-east-1:000000000000:syncing-server-local-queue',
       )
       expect(
         subscriptions.some(
