@@ -752,6 +752,42 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # A run that stops here can leave its reserved draft behind, and while that
+          # draft exists every later push is refused a version. Say so on the run page,
+          # with the command that finishes this release and the one that discards it.
+          failed_line=""
+          failed_command=""
+          publication_stopped() {
+            local text annotation
+            if [ "$1" -eq 0 ]; then return 0; fi
+            text="${TOOL} ${RELEASE_VERSION} was not published: the step stopped with exit status ${1}"
+            if [ -n "$failed_line" ]; then
+              text+=" at the command that ends at line ${failed_line} of its script (for a pipeline, its last stage):"$'\n'"${failed_command}"
+            else
+              text+=" after printing its reason, which is the last output in the step log."
+            fi
+            if [ "${draft:-}" = "false" ]; then
+              text+=$'\n'"Release ${RELEASE_ID} (${RELEASE_TAG}) is already published; this run could not verify it."
+            else
+              text+=$'\n'"Draft release ${RELEASE_ID} (${RELEASE_TAG}) stays reserved for commit ${GITHUB_SHA} unless it was published, and while it is a draft every later push is refused a version."
+              text+=$'\n'"  finish it: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY} (the packaged files are kept for 30 days)"
+              text+=$'\n'"  or discard it: gh api --method DELETE repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+            fi
+            annotation="${text//'%'/%25}"
+            annotation="${annotation//$'\r'/%0D}"
+            annotation="${annotation//$'\n'/%0A}"
+            echo "::error title=${TOOL} release not published::${annotation}"
+            {
+              echo "### ${TOOL} ${RELEASE_VERSION} was not published"
+              echo
+              echo '```text'
+              printf '%s\n' "$text"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          set -E
+          trap 'failed_line=$LINENO; failed_command=$BASH_COMMAND' ERR
+          trap 'publication_stopped "$?"' EXIT
           test "$RELEASE_TAG" = "${TOOL}-v${RELEASE_VERSION}"
           [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
           [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
@@ -907,7 +943,20 @@ jobs:
           shopt -s nullglob
           files=(out/*)
           test "${#files[@]}" -eq "$(wc -l < "$expected_assets")"
-          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          # One failed upload would leave the draft reserved and block every later
+          # push, so a transient error is retried. --clobber replaces whatever an
+          # earlier attempt left, and the digest verification below still decides
+          # whether anything is published.
+          upload_attempt=1
+          until gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"; do
+            if [ "$upload_attempt" -ge 3 ]; then
+              echo "Asset upload failed ${upload_attempt} times; the draft is left as it is." >&2
+              exit 1
+            fi
+            echo "::warning title=${TOOL} asset upload retried::Upload attempt ${upload_attempt} of 3 failed; trying again in $((upload_attempt * 30)) seconds."
+            sleep "$((upload_attempt * 30))"
+            upload_attempt=$((upload_attempt + 1))
+          done
           verify_directory out
 
           # No fallible command follows publication. If the response is lost

@@ -410,6 +410,58 @@ function validateReservationReporting(errors, file, identityJob, stepName) {
   }
 }
 
+// A publication that stops can leave its reserved draft behind, and that draft
+// makes every later push refuse to reserve. The stopped step has to say so
+// itself, with the command that finishes the release and the one that discards
+// it, and one failed asset upload is retried a bounded number of times before
+// the unchanged digest verification decides whether anything is published.
+function validatePublicationReporting(errors, file, releaseJob) {
+  for (const [fragment, description] of [
+    ["publication_stopped() {", "stopped publication reporter"],
+    [`trap 'publication_stopped "$?"' EXIT`, "stopped publication exit report"],
+    [
+      "trap 'failed_line=$LINENO; failed_command=$BASH_COMMAND' ERR",
+      "failed publication command capture",
+    ],
+    [
+      'echo "::error title=${TOOL} release not published::${annotation}"',
+      "stopped publication annotation",
+    ],
+    ['} >> "$GITHUB_STEP_SUMMARY"', "stopped publication job summary"],
+    [
+      "Draft release ${RELEASE_ID} (${RELEASE_TAG}) stays reserved for commit ${GITHUB_SHA}",
+      "reserved draft named by a stopped publication",
+    ],
+    [
+      "finish it: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}",
+      "same-run recovery command",
+    ],
+    [
+      "or discard it: gh api --method DELETE repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}",
+      "reserved draft discard command",
+    ],
+    [
+      'until gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"; do',
+      "retried native asset upload",
+    ],
+    [
+      'if [ "$upload_attempt" -ge 3 ]; then',
+      "bounded native asset upload attempts",
+    ],
+    [
+      'sleep "$((upload_attempt * 30))"',
+      "pause between native asset upload attempts",
+    ],
+  ]) {
+    requireFragment(errors, file, releaseJob, fragment, description);
+  }
+  if (countOccurrences(releaseJob, "gh release upload") !== 1) {
+    errors.push(
+      `${file}: native assets must be uploaded by the one retried, replacing upload`,
+    );
+  }
+}
+
 const DESKTOP_SIGNING_SECRETS = Object.freeze([
   "MAC_CI_KEYS",
   "MAC_CI_KEYS_PASSWORD",
@@ -2096,9 +2148,19 @@ export function validateReleaseContract(files) {
     const identityValidationIndex = releaseJob.indexOf(
       'jq -e --arg tag "$RELEASE_TAG"',
     );
+    // The quoted route is the command that runs. The unquoted one is the
+    // discard instruction a stopped publication prints.
     const unexpectedAssetCleanupIndex = releaseJob.indexOf(
-      "gh api --method DELETE",
+      'gh api --method DELETE "',
     );
+    if (
+      countOccurrences(releaseJob, 'gh api --method DELETE "') !== 1 ||
+      countOccurrences(releaseJob, "gh api --method DELETE") !== 2
+    ) {
+      errors.push(
+        `${file}: native publication may delete only unexpected draft assets, and print one discard instruction`,
+      );
+    }
     const uploadIndex = releaseJob.indexOf("gh release upload");
     const hashEqualityIndex = releaseJob.lastIndexOf("verify_directory out");
     const manifestBindingIndex = releaseJob.indexOf("bind_asset_manifest out");
@@ -2132,6 +2194,7 @@ export function validateReleaseContract(files) {
         `${file}: native draft publication must follow remote asset hash verification`,
       );
     }
+    validatePublicationReporting(errors, file, releaseJob);
 
     const smokeJob = jobBlock(workflow, "smoke");
     const nativeSource = files.get(nativeInput.entrypoint) ?? "";
@@ -7674,6 +7737,18 @@ export function validateReleaseContract(files) {
     ["--signer-workflow", "documented OpenClaw signer verification"],
     ["manual-only recovery path", "honest standalone desktop recovery scope"],
     ["not prove remote byte equality", "honest Snap remote-byte limitation"],
+    [
+      "retried up to three times within the run",
+      "documented bounded asset upload retry",
+    ],
+    [
+      "`gh run rerun <run id> --failed`",
+      "documented same-run recovery of a stopped publication",
+    ],
+    [
+      "`gh api --method DELETE repos/<owner>/<repo>/releases/<release id>`",
+      "documented discard of a reserved draft",
+    ],
     [
       "Its `signing` job runs before any",
       "documented desktop signing check before reservation",

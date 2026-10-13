@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -4046,10 +4047,13 @@ const reservationRuns = {
       : false,
 };
 
-// Serves the four release requests the reservation steps make from a JSON
-// file, records every invocation, and fails on anything it does not know.
+// Serves the release requests the reservation and publication steps make from
+// a JSON file, records every invocation, and fails on anything it does not
+// know.
 const RESERVATION_FAKE_GH = String.raw`#!/usr/bin/env node
+const crypto = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const statePath = process.env.FAKE_GH_STATE;
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
 const args = process.argv.slice(2);
@@ -4060,6 +4064,87 @@ const fail = (message, code = 1) => {
   process.stderr.write(message + "\n");
   process.exit(code);
 };
+const base = "repos/" + state.repository + "/releases";
+// Scripted interference: what happens just before the nth request of a kind.
+const interfere = (kind) => {
+  state.counts[kind] = (state.counts[kind] || 0) + 1;
+  const events = state.events.filter(
+    (event) => event.on === kind && event.nth === state.counts[kind],
+  );
+  for (const event of events) {
+    if (event.add) state.releases.unshift(event.add);
+    if (event.patch) {
+      Object.assign(
+        state.releases.find((release) => release.id === event.patch.id),
+        event.patch.fields,
+      );
+    }
+  }
+  return events;
+};
+const uploads = path.join(path.dirname(statePath), "gh-uploads");
+
+if (args[0] === "release" && (args[1] === "upload" || args[1] === "download")) {
+  const tag = args[2];
+  const rest = args.slice(3);
+  const repositoryIndex = rest.indexOf("--repo");
+  if (repositoryIndex < 0 || rest[repositoryIndex + 1] !== state.repository) {
+    fail("fake gh: release commands must name the repository", 97);
+  }
+  rest.splice(repositoryIndex, 2);
+  const release = state.releases.find((candidate) => candidate.tag_name === tag);
+  if (!release) fail("release not found");
+  if (args[1] === "download") {
+    const directoryIndex = rest.indexOf("--dir");
+    if (directoryIndex < 0 || rest.length !== 2) {
+      fail("fake gh: unsupported download arguments: " + rest.join(" "), 97);
+    }
+    interfere("download");
+    for (const asset of release.assets) {
+      fs.copyFileSync(
+        path.join(uploads, tag, asset.name),
+        path.join(rest[directoryIndex + 1], asset.name),
+      );
+    }
+    save();
+    process.exit(0);
+  }
+  const clobberIndex = rest.indexOf("--clobber");
+  if (clobberIndex < 0) fail("fake gh: uploads must replace with --clobber", 97);
+  rest.splice(clobberIndex, 1);
+  if (rest.some((argument) => argument.startsWith("-"))) {
+    fail("fake gh: unsupported upload arguments: " + rest.join(" "), 97);
+  }
+  const events = interfere("upload");
+  const failure = events.find((event) => event.fail);
+  // A failing upload may still have stored some of the files.
+  const files = failure ? rest.slice(0, failure.stored || 0) : rest;
+  fs.mkdirSync(path.join(uploads, tag), { recursive: true });
+  for (const file of files) {
+    const name = path.basename(file);
+    const content = fs.readFileSync(file);
+    const corrupted = events.some((event) => event.corrupt === name);
+    fs.copyFileSync(file, path.join(uploads, tag, name));
+    release.assets = release.assets.filter((asset) => asset.name !== name);
+    release.assets.push({
+      id: state.nextAssetId,
+      name,
+      state: "uploaded",
+      size: content.length,
+      digest:
+        "sha256:" +
+        crypto
+          .createHash("sha256")
+          .update(corrupted ? Buffer.concat([content, Buffer.from("x")]) : content)
+          .digest("hex"),
+    });
+    state.nextAssetId += 1;
+  }
+  if (failure) fail(failure.fail);
+  save();
+  process.exit(0);
+}
+
 if (args[0] !== "api") fail("fake gh: unsupported command: " + args.join(" "), 97);
 let method = "GET";
 let route = null;
@@ -4086,47 +4171,59 @@ for (let index = 1; index < args.length; index += 1) {
     fail("fake gh: unsupported argument: " + argument, 97);
   }
 }
-const base = "repos/" + state.repository + "/releases";
-const byId = route.startsWith(base + "/") && /^[0-9]+$/.test(route.slice(base.length + 1));
+const numbered = (prefix, suffix) => {
+  if (!route.startsWith(prefix) || !route.endsWith(suffix)) return null;
+  const id = route.slice(prefix.length, route.length - suffix.length);
+  return /^[0-9]+$/.test(id) ? Number(id) : null;
+};
+const releaseId = numbered(base + "/", "");
+const assetsOf = numbered(base + "/", "/assets?per_page=100");
+const assetId = numbered(base + "/assets/", "");
 const kind =
   method === "GET" && route === base + "?per_page=100"
     ? "list"
-    : method === "GET" && byId
+    : method === "GET" && releaseId !== null
       ? "get"
-      : method === "POST" && route === base
-        ? "create"
-        : method === "DELETE" && byId
-          ? "delete"
-          : null;
+      : method === "GET" && assetsOf !== null
+        ? "assets"
+        : method === "POST" && route === base
+          ? "create"
+          : method === "PATCH" && releaseId !== null
+            ? "update"
+            : method === "DELETE" && releaseId !== null
+              ? "delete"
+              : method === "DELETE" && assetId !== null
+                ? "delete-asset"
+                : null;
 if (kind === null) fail("fake gh: unsupported request: " + method + " " + route, 97);
-state.counts[kind] = (state.counts[kind] || 0) + 1;
-// Scripted interference: what another actor does just before the nth request of a kind.
-for (const event of state.events) {
-  if (event.on !== kind || event.nth !== state.counts[kind]) continue;
-  if (event.fail) fail(event.fail);
-  if (event.add) state.releases.unshift(event.add);
-  if (event.patch) {
-    Object.assign(
-      state.releases.find((release) => release.id === event.patch.id),
-      event.patch.fields,
-    );
+const failure = interfere(kind).find((event) => event.fail);
+if (failure) fail(failure.fail);
+const pages = (items) => {
+  if (!paginate || !slurp) fail("fake gh: inventories must be read with --paginate --slurp", 97);
+  const result = [];
+  for (let offset = 0; offset < items.length; offset += 100) {
+    result.push(items.slice(offset, offset + 100));
   }
-}
-if (kind === "list") {
-  if (!paginate || !slurp) fail("fake gh: the inventory must be read with --paginate --slurp", 97);
-  const pages = [];
-  for (let offset = 0; offset < state.releases.length; offset += 100) {
-    pages.push(state.releases.slice(offset, offset + 100));
-  }
-  if (pages.length === 0) pages.push([]);
-  save();
-  process.stdout.write(JSON.stringify(pages) + "\n");
-} else if (kind === "get") {
-  const id = Number(route.slice(base.length + 1));
+  if (result.length === 0) result.push([]);
+  return JSON.stringify(result) + "\n";
+};
+const found = (id) => {
   const release = state.releases.find((candidate) => candidate.id === id);
   if (!release) fail("gh: Not Found (HTTP 404)");
+  return release;
+};
+if (kind === "list") {
+  const output = pages(state.releases);
+  save();
+  process.stdout.write(output);
+} else if (kind === "get") {
+  const release = found(releaseId);
   save();
   process.stdout.write(JSON.stringify(release) + "\n");
+} else if (kind === "assets") {
+  const output = pages(found(assetsOf).assets);
+  save();
+  process.stdout.write(output);
 } else if (kind === "create") {
   const release = {
     id: state.nextId,
@@ -4152,11 +4249,30 @@ if (kind === "list") {
   state.releases.unshift(release);
   save();
   process.stdout.write(JSON.stringify(release) + "\n");
+} else if (kind === "update") {
+  const release = found(releaseId);
+  for (const [name, value] of Object.entries(fields)) {
+    if (name === "make_latest") continue;
+    if (!["tag_name", "body", "draft"].includes(name)) {
+      fail("fake gh: unsupported release field: " + name, 97);
+    }
+    release[name] = value;
+  }
+  if (release.draft === false && release.published_at === null) {
+    release.published_at = "2026-01-01T00:10:00Z";
+  }
+  save();
+  process.stdout.write(JSON.stringify(release) + "\n");
+} else if (kind === "delete") {
+  found(releaseId);
+  state.releases = state.releases.filter((candidate) => candidate.id !== releaseId);
+  save();
 } else {
-  const id = Number(route.slice(base.length + 1));
-  const before = state.releases.length;
-  state.releases = state.releases.filter((candidate) => candidate.id !== id);
-  if (state.releases.length === before) fail("gh: Not Found (HTTP 404)");
+  const release = state.releases.find((candidate) =>
+    candidate.assets.some((asset) => asset.id === assetId),
+  );
+  if (!release) fail("gh: Not Found (HTTP 404)");
+  release.assets = release.assets.filter((asset) => asset.id !== assetId);
   save();
 }
 `;
@@ -4255,6 +4371,7 @@ function reservationFixture({
       repository: RESERVATION_REPOSITORY,
       releases: resolve(releases),
       nextId: 900000001,
+      nextAssetId: 500001,
       calls: [],
       counts: {},
       events: resolve(events),
@@ -5756,6 +5873,687 @@ test(
         result.stdout,
         "::error title=srn-desktop signing check failed::HAS_SM_HOST is '', neither true nor false; the workflow does not report whether secret SM_HOST is configured.\n",
       );
+    }
+  },
+);
+
+// Publication. One failed asset upload on 2026-08-27 left a draft reserved and
+// stopped srn-home-server for seven weeks, so a stopped publication has to
+// name the draft it leaves and both ways out, and the upload is retried.
+const NATIVE_PUBLICATION_STEP = "Validate, upload, and publish exact release";
+const NATIVE_PUBLISHERS = Object.freeze([
+  "srn-home-server",
+  "srn-admin",
+  "srn-client",
+  "srn-mcp",
+  "srn-server",
+]);
+
+test("a stopped native publication names the draft it leaves and retries a failed upload", () => {
+  for (const tool of NATIVE_PUBLISHERS) {
+    const file = `.github/workflows/${tool}.yml`;
+    for (const [fragment, replacement, expected] of [
+      [
+        `trap 'publication_stopped "$?"' EXIT`,
+        "trap - EXIT",
+        /missing stopped publication exit report/,
+      ],
+      [
+        'echo "::error title=${TOOL} release not published::${annotation}"',
+        'echo "${annotation}" >&2',
+        /missing stopped publication annotation/,
+      ],
+      [
+        "finish it: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}",
+        "finish it: run it again",
+        /missing same-run recovery command/,
+      ],
+      [
+        "or discard it: gh api --method DELETE repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}",
+        "or discard it by hand",
+        /missing reserved draft discard command/,
+      ],
+      [
+        'until gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"; do',
+        'until gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"; do',
+        /missing retried native asset upload/,
+      ],
+      [
+        'if [ "$upload_attempt" -ge 3 ]; then',
+        'if [ "$upload_attempt" -ge 300 ]; then',
+        /missing bounded native asset upload attempts/,
+      ],
+      [
+        "          upload_attempt=1\n",
+        '          upload_attempt=1\n          gh release upload "$RELEASE_TAG" out/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY"\n',
+        /native assets must be uploaded by the one retried, replacing upload/,
+      ],
+      [
+        "          shopt -s nullglob\n",
+        '          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"\n          shopt -s nullglob\n',
+        /native publication may delete only unexpected draft assets, and print one discard instruction/,
+      ],
+    ]) {
+      const files = withTerminalJobChanged(file, "release", (job) =>
+        job.replace(fragment, replacement),
+      );
+      assert.match(
+        validateReleaseContract(files).join("\n"),
+        expected,
+        `${file}: ${fragment}`,
+      );
+    }
+  }
+});
+
+test("the way out of a stopped publication stays documented", () => {
+  const file = "docs/releases-and-upgrades.md";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("retried up to three times within the run", "retried")
+      .replace("`gh run rerun <run id> --failed`", "a rerun")
+      .replace(
+        "`gh api --method DELETE repos/<owner>/<repo>/releases/<release id>`",
+        "deleting it",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /releases-and-upgrades\.md: missing documented bounded asset upload retry/,
+  );
+  assert.match(
+    errors,
+    /releases-and-upgrades\.md: missing documented same-run recovery of a stopped publication/,
+  );
+  assert.match(
+    errors,
+    /releases-and-upgrades\.md: missing documented discard of a reserved draft/,
+  );
+});
+
+test("every native publisher publishes with the script exercised for srn-home-server", () => {
+  const exercised = reservationRunBlock(
+    ".github/workflows/srn-home-server.yml",
+    NATIVE_PUBLICATION_STEP,
+  );
+  assert.equal(exercised.includes("${{"), false);
+  for (const tool of ["srn-admin", "srn-client", "srn-server"]) {
+    assert.equal(
+      reservationRunBlock(
+        `.github/workflows/${tool}.yml`,
+        NATIVE_PUBLICATION_STEP,
+      ),
+      exercised,
+      `${tool} publishes with a different script and needs its own cases`,
+    );
+  }
+  // srn-mcp first proves the audited commit and lockfile, then does the same.
+  const audited = [
+    'test "$(git rev-parse HEAD)" = "$AUDITED_SHA"',
+    'test "$AUDITED_SHA" = "$GITHUB_SHA"',
+    `test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"`,
+    "",
+  ].join("\n");
+  const mcp = reservationRunBlock(
+    ".github/workflows/srn-mcp.yml",
+    NATIVE_PUBLICATION_STEP,
+  );
+  assert.equal(mcp.split(audited).length, 2);
+  assert.equal(mcp.replace(audited, ""), exercised);
+});
+
+const PUBLICATION_RELEASE_ID = 377935393;
+const PUBLICATION_LOCKFILE = "# lockfile\n";
+const sha256 = (content) => createHash("sha256").update(content).digest("hex");
+
+function publicationAssets(tool) {
+  const names = [
+    "SHA256SUMS.txt",
+    `${tool}.fingerprint`,
+    ...[
+      "windows-x64.exe",
+      "windows-arm64.exe",
+      "macos-x64",
+      "macos-arm64",
+      "linux-x64",
+      "linux-arm64",
+    ].map((leg) => `${tool}-${leg}`),
+    ...(tool === "srn-home-server" ? [`${tool}-migrations.zip`] : []),
+  ].sort();
+  const contents = new Map(
+    names
+      .filter((name) => name !== "SHA256SUMS.txt")
+      .map((name) => [
+        name,
+        name.endsWith(".fingerprint")
+          ? `${RESERVATION_FINGERPRINT}\n`
+          : `packaged ${name}\n`,
+      ]),
+  );
+  contents.set(
+    "SHA256SUMS.txt",
+    [...contents]
+      .map(([name, content]) => `${sha256(content)}  ${name}\n`)
+      .join(""),
+  );
+  return names.map((name) => ({ name, content: contents.get(name) }));
+}
+
+// A draft reserved for HEAD, the packaged files in out/, and stand-ins for gh
+// and for sleep, which records the pause it was asked for and returns.
+function publicationFixture(tool, { events = [], assets = [] } = {}) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "srn-publication-"));
+  const work = path.join(root, "work");
+  const origin = path.join(root, "origin.git");
+  const bin = path.join(root, "bin");
+  mkdirSync(path.join(work, "out"), { recursive: true });
+  mkdirSync(bin);
+  reservationGit(root, "init", "--quiet", "--bare", origin);
+  reservationGit(work, "init", "--quiet", "--initial-branch=main");
+  writeFileSync(path.join(work, "yarn.lock"), PUBLICATION_LOCKFILE);
+  reservationGit(work, "add", "yarn.lock");
+  reservationGit(work, "commit", "--quiet", "-m", "head");
+  const headSha = reservationGit(work, "rev-parse", "HEAD");
+  reservationGit(work, "remote", "add", "origin", origin);
+  reservationGit(work, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+  const packaged = publicationAssets(tool);
+  for (const { name, content } of packaged) {
+    writeFileSync(path.join(work, "out", name), content);
+  }
+  writeFileSync(path.join(bin, "gh"), RESERVATION_FAKE_GH);
+  writeFileSync(
+    path.join(bin, "sleep"),
+    '#!/usr/bin/env bash\necho "$1" >> "$FAKE_SLEEP_LOG"\n',
+  );
+  chmodSync(path.join(bin, "gh"), 0o755);
+  chmodSync(path.join(bin, "sleep"), 0o755);
+  const tag = `${tool}-v${RESERVATION_YEAR}.31`;
+  const reserved = reservedRelease({
+    id: PUBLICATION_RELEASE_ID,
+    tool,
+    n: 31,
+    sha: headSha,
+    body: nativeReservationMarker(tool, headSha),
+    assets,
+  });
+  const statePath = path.join(root, "gh-state.json");
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      repository: RESERVATION_REPOSITORY,
+      releases: [reserved],
+      nextId: 900000001,
+      nextAssetId: 500001,
+      calls: [],
+      counts: {},
+      events,
+      createOverride: null,
+    }),
+  );
+  // jq -cS of the manifest the step binds: one compact line, keys sorted.
+  const manifest = JSON.stringify(
+    packaged.map(({ name, content }) => ({
+      digest: `sha256:${sha256(content)}`,
+      name,
+      size: Buffer.byteLength(content),
+    })),
+  );
+  return {
+    root,
+    work,
+    bin,
+    statePath,
+    headSha,
+    tool,
+    tag,
+    packaged,
+    // What one `sha256sum --check SHA256SUMS.txt` prints. The step checks the
+    // packaged files before the upload and again when it verifies them.
+    checksumsOk: packaged
+      .filter(({ name }) => name !== "SHA256SUMS.txt")
+      .map(({ name }) => `${name}: OK\n`)
+      .join(""),
+    boundBody: `${reserved.body}\n<!-- srn-release-assets-sha256:${sha256(`${manifest}\n`)} -->`,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+function runPublicationStep(fixture, environment = {}) {
+  assert.equal(reservationShellProblemFound, null);
+  const script = path.join(fixture.root, "step.sh");
+  const summary = path.join(fixture.root, "github-step-summary.md");
+  const pauses = path.join(fixture.root, "sleep.log");
+  writeFileSync(
+    script,
+    reservationRunBlock(
+      `.github/workflows/${fixture.tool}.yml`,
+      NATIVE_PUBLICATION_STEP,
+    ),
+  );
+  writeFileSync(summary, "");
+  writeFileSync(pauses, "");
+  const before = JSON.parse(readFileSync(fixture.statePath, "utf8"));
+  writeFileSync(fixture.statePath, JSON.stringify({ ...before, calls: [] }));
+  const result = spawnSync(
+    "bash",
+    ["--noprofile", "--norc", "-e", "-o", "pipefail", script],
+    {
+      cwd: fixture.work,
+      encoding: "utf8",
+      env: {
+        PATH: `${fixture.bin}${path.delimiter}${process.env.PATH}`,
+        HOME: fixture.root,
+        TMPDIR: fixture.root,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        FAKE_GH_STATE: fixture.statePath,
+        FAKE_SLEEP_LOG: pauses,
+        GH_TOKEN: "not-a-token",
+        GITHUB_REPOSITORY: RESERVATION_REPOSITORY,
+        GITHUB_SHA: fixture.headSha,
+        GITHUB_RUN_ID: "4242",
+        GITHUB_STEP_SUMMARY: summary,
+        TOOL: fixture.tool,
+        RELEASE_VERSION: `${RESERVATION_YEAR}.31`,
+        RELEASE_TAG: fixture.tag,
+        RELEASE_ID: String(PUBLICATION_RELEASE_ID),
+        IDENTITY_PUBLISHED: "false",
+        EXPECTED_FINGERPRINT: RESERVATION_FINGERPRINT,
+        FORCED: "false",
+        IMPACT_RESULT: impactHandOff(fixture.headSha),
+        // Read by srn-mcp only.
+        AUDITED_SHA: fixture.headSha,
+        AUDITED_LOCK_SHA256: sha256(PUBLICATION_LOCKFILE),
+        ...environment,
+      },
+    },
+  );
+  const state = JSON.parse(readFileSync(fixture.statePath, "utf8"));
+  const stdout = result.stdout ?? "";
+  return {
+    status: result.status,
+    stdout,
+    stderr: result.stderr ?? "",
+    annotationText: stdout
+      .replaceAll("%0A", "\n")
+      .replaceAll("%0D", "\r")
+      .replaceAll("%25", "%"),
+    summary: readFileSync(summary, "utf8"),
+    pauses: readFileSync(pauses, "utf8").split("\n").filter(Boolean),
+    calls: state.calls,
+    release: state.releases.find(({ id }) => id === PUBLICATION_RELEASE_ID),
+  };
+}
+
+// The exact gh command lines behind the short names the cases use.
+function publicationCalls(fixture, names) {
+  const releases = `repos/${RESERVATION_REPOSITORY}/releases`;
+  const release = `${releases}/${PUBLICATION_RELEASE_ID}`;
+  return names.map((name) => {
+    if (name === "read") {
+      return ["api", release];
+    }
+    if (name === "bind") {
+      return [
+        "api",
+        "--method",
+        "PATCH",
+        release,
+        "-f",
+        `tag_name=${fixture.tag}`,
+        "-f",
+        `body=${fixture.boundBody}`,
+      ];
+    }
+    if (name === "assets") {
+      return ["api", `${release}/assets?per_page=100`, "--paginate", "--slurp"];
+    }
+    if (name === "upload") {
+      return [
+        "release",
+        "upload",
+        fixture.tag,
+        ...fixture.packaged.map((asset) => `out/${asset.name}`),
+        "--clobber",
+        "--repo",
+        RESERVATION_REPOSITORY,
+      ];
+    }
+    if (name.startsWith("remove ")) {
+      return [
+        "api",
+        "--method",
+        "DELETE",
+        `${releases}/assets/${name.slice("remove ".length)}`,
+      ];
+    }
+    assert.equal(name, "publish");
+    return [
+      "api",
+      "--method",
+      "PATCH",
+      release,
+      "-F",
+      "draft=false",
+      "-f",
+      "make_latest=false",
+    ];
+  });
+}
+
+const publishesCleanly = [
+  "read",
+  "read",
+  "bind",
+  "assets",
+  "upload",
+  "read",
+  "assets",
+  "publish",
+];
+const uploadFailure = (nth, stored) => ({
+  on: "upload",
+  nth,
+  stored,
+  fail: "HTTP 400: 400 Bad Request (https://uploads.github.com/)",
+});
+
+function assertPublished(fixture, result, calls) {
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.deepEqual(result.calls, publicationCalls(fixture, calls));
+  assert.equal(result.release.draft, false);
+  assert.equal(result.release.body, fixture.boundBody);
+  assert.deepEqual(
+    result.release.assets.map(({ name, digest, size, state }) => ({
+      name,
+      digest,
+      size,
+      state,
+    })),
+    fixture.packaged.map(({ name, content }) => ({
+      name,
+      digest: `sha256:${sha256(content)}`,
+      size: Buffer.byteLength(content),
+      state: "uploaded",
+    })),
+  );
+}
+
+function assertNotPublished(fixture, result, fragments) {
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.release.draft, true);
+  const annotations = result.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("::error "));
+  assert.equal(annotations.length, 1, result.stdout);
+  assert.match(
+    annotations[0],
+    new RegExp(`^::error title=${fixture.tool} release not published::`),
+  );
+  const repository = RESERVATION_REPOSITORY;
+  for (const fragment of [
+    `${fixture.tool} ${RESERVATION_YEAR}.31 was not published: the step stopped with exit status 1`,
+    ...fragments,
+    `Draft release ${PUBLICATION_RELEASE_ID} (${fixture.tag}) stays reserved for commit ${fixture.headSha} unless it was published, and while it is a draft every later push is refused a version.`,
+    `  finish it: gh run rerun 4242 --failed --repo ${repository} (the packaged files are kept for 30 days)`,
+    `  or discard it: gh api --method DELETE repos/${repository}/releases/${PUBLICATION_RELEASE_ID}`,
+  ]) {
+    assert.ok(
+      result.annotationText.includes(fragment),
+      `annotation lacks ${JSON.stringify(fragment)}:\n${result.annotationText}`,
+    );
+    assert.ok(
+      result.summary.includes(fragment),
+      `job summary lacks ${JSON.stringify(fragment)}:\n${result.summary}`,
+    );
+  }
+}
+
+for (const tool of NATIVE_PUBLISHERS) {
+  test(
+    `${tool} publication: a complete package is uploaded once, verified, and published with nothing announced`,
+    reservationRuns,
+    () => {
+      const fixture = publicationFixture(tool);
+      try {
+        const result = runPublicationStep(fixture);
+        assertPublished(fixture, result, publishesCleanly);
+        assert.equal(result.stdout, fixture.checksumsOk.repeat(2));
+        assert.equal(result.summary, "");
+        assert.deepEqual(result.pauses, []);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  test(
+    `${tool} publication: an upload that fails every time leaves the draft named with both ways out, and the same run then finishes it`,
+    reservationRuns,
+    () => {
+      const fixture = publicationFixture(tool, {
+        events: [uploadFailure(1, 3), uploadFailure(2, 0), uploadFailure(3, 1)],
+      });
+      try {
+        const stopped = runPublicationStep(fixture);
+        assert.deepEqual(
+          stopped.calls,
+          publicationCalls(fixture, [
+            "read",
+            "read",
+            "bind",
+            "assets",
+            "upload",
+            "upload",
+            "upload",
+          ]),
+        );
+        assert.deepEqual(stopped.pauses, ["30", "60"]);
+        assertNotPublished(fixture, stopped, [
+          "after printing its reason, which is the last output in the step log.",
+        ]);
+        assert.ok(
+          stopped.stderr.includes(
+            "Asset upload failed 3 times; the draft is left as it is.",
+          ),
+        );
+        assert.equal(
+          stopped.stderr.split("HTTP 400: 400 Bad Request").length - 1,
+          3,
+        );
+        assert.deepEqual(
+          stopped.stdout
+            .split("\n")
+            .filter((line) => line.startsWith("::warning ")),
+          [
+            `::warning title=${tool} asset upload retried::Upload attempt 1 of 3 failed; trying again in 30 seconds.`,
+            `::warning title=${tool} asset upload retried::Upload attempt 2 of 3 failed; trying again in 60 seconds.`,
+          ],
+        );
+
+        // "Re-run failed jobs": the same step again, on the draft as it was left.
+        const rerun = runPublicationStep(fixture);
+        assertPublished(fixture, rerun, [
+          "read",
+          "read",
+          "assets",
+          "upload",
+          "read",
+          "assets",
+          "publish",
+        ]);
+        assert.equal(rerun.stdout, fixture.checksumsOk.repeat(2));
+        assert.equal(rerun.summary, "");
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+}
+
+test(
+  "srn-home-server publication: an upload that fails once is retried after a pause and the release is published",
+  reservationRuns,
+  () => {
+    const fixture = publicationFixture("srn-home-server", {
+      events: [uploadFailure(1, 4)],
+    });
+    try {
+      const result = runPublicationStep(fixture);
+      assertPublished(fixture, result, [
+        "read",
+        "read",
+        "bind",
+        "assets",
+        "upload",
+        "upload",
+        "read",
+        "assets",
+        "publish",
+      ]);
+      assert.equal(
+        result.stdout,
+        `${fixture.checksumsOk}::warning title=srn-home-server asset upload retried::Upload attempt 1 of 3 failed; trying again in 30 seconds.\n${fixture.checksumsOk}`,
+      );
+      assert.deepEqual(result.pauses, ["30"]);
+      assert.equal(result.summary, "");
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "srn-home-server publication: leftovers on the draft are removed or replaced before it is published",
+  reservationRuns,
+  () => {
+    const leftover = (id, name) => ({
+      id,
+      name,
+      state: "uploaded",
+      size: 1,
+      digest: `sha256:${"0".repeat(64)}`,
+    });
+    const fixture = publicationFixture("srn-home-server", {
+      assets: [
+        leftover(400001, "srn-home-server-linux-x64"),
+        leftover(400002, "unexpected.bin"),
+      ],
+    });
+    try {
+      assertPublished(fixture, runPublicationStep(fixture), [
+        "read",
+        "read",
+        "bind",
+        "assets",
+        "remove 400002",
+        "upload",
+        "read",
+        "assets",
+        "publish",
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "srn-home-server publication: a draft that is not this run's is left alone and the failed check is shown",
+  reservationRuns,
+  () => {
+    const fixture = publicationFixture("srn-home-server");
+    try {
+      const state = JSON.parse(readFileSync(fixture.statePath, "utf8"));
+      state.releases[0].name = "renamed";
+      writeFileSync(fixture.statePath, JSON.stringify(state));
+      const result = runPublicationStep(fixture);
+      assert.deepEqual(result.calls, publicationCalls(fixture, ["read"]));
+      assertNotPublished(fixture, result, [
+        " at the command that ends at line ",
+        'jq -e --arg tag "$RELEASE_TAG" --arg name "$expected_name" --arg sha "$GITHUB_SHA" --arg marker "$marker"',
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "srn-home-server publication: an asset stored with another digest is not published",
+  reservationRuns,
+  () => {
+    const fixture = publicationFixture("srn-home-server", {
+      events: [{ on: "upload", nth: 1, corrupt: "srn-home-server-macos-x64" }],
+    });
+    try {
+      const result = runPublicationStep(fixture);
+      assert.deepEqual(
+        result.calls,
+        publicationCalls(fixture, [
+          "read",
+          "read",
+          "bind",
+          "assets",
+          "upload",
+          "read",
+          "assets",
+        ]),
+      );
+      assertNotPublished(fixture, result, [
+        'test "$digest" = "sha256:${actual}"',
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "srn-home-server publication: a release published by an earlier attempt is verified from its own assets",
+  reservationRuns,
+  () => {
+    const fixture = publicationFixture("srn-home-server");
+    try {
+      assertPublished(fixture, runPublicationStep(fixture), publishesCleanly);
+      // GitHub creates the tag on publication, and a later attempt has no
+      // packaged files: identity reports the release published and they are
+      // not downloaded.
+      reservationGit(
+        fixture.work,
+        "push",
+        "--quiet",
+        "origin",
+        `${fixture.headSha}:refs/tags/${fixture.tag}`,
+      );
+      rmSync(path.join(fixture.work, "out"), { recursive: true });
+      const again = runPublicationStep(fixture, { IDENTITY_PUBLISHED: "true" });
+      assert.equal(again.status, 0, `${again.stdout}\n${again.stderr}`);
+      assert.equal(again.stdout, fixture.checksumsOk);
+      assert.equal(
+        again.summary,
+        `${fixture.tag} was already published by this workflow run; verified exact assets.\n`,
+      );
+      assert.equal(again.calls.length, 4);
+      assert.deepEqual(
+        [again.calls[0], again.calls[2], again.calls[3]],
+        publicationCalls(fixture, ["read", "read", "assets"]),
+      );
+      assert.deepEqual(
+        [...again.calls[1].slice(0, 4), ...again.calls[1].slice(5)],
+        [
+          "release",
+          "download",
+          fixture.tag,
+          "--dir",
+          "--repo",
+          RESERVATION_REPOSITORY,
+        ],
+      );
+    } finally {
+      fixture.cleanup();
     }
   },
 );

@@ -348,6 +348,16 @@ after those checks pass does it publish the draft with `make_latest=false`. A
 rerun therefore repairs the same manifest-bound draft rather than silently
 incrementing to a new `YY.N` or publishing a mixture of old and new assets.
 
+A failed asset upload is retried up to three times within the run, replacing
+whatever the failed attempt left. If publication still stops, the draft stays
+reserved for its commit, and because a version is never allocated past an
+unpublished draft, every later commit is refused one until that draft is
+published or discarded. Both the stopped run and each refused run say so in an
+error annotation and the job summary, with the release ID and the two commands
+that resolve it: `gh run rerun <run id> --failed` finishes the release from its
+retained packages, and `gh api --method DELETE repos/<owner>/<repo>/releases/<release id>`
+discards the draft so the next commit can reserve.
+
 OpenClaw uses a separate attestation-first publisher with the same stable-draft
 principle. Its identity job creates or adopts exactly one draft bound to the
 source commit, package fingerprint, and retry intent. The attestation job writes
