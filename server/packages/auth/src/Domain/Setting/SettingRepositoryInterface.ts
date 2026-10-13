@@ -15,7 +15,7 @@ export interface SettingRepositoryInterface {
   // by a user holding the given role. Used by Register to consult the instance-wide
   // REGISTRATION_DISABLED flag while ignoring any row not owned by an admin, so a
   // non-admin can never disable registration by persisting the flag on their own
-  // record (see the CLIENT_IMMUTABLE_SETTINGS note in SettingsAssociationService).
+  // record (see REGISTRATION_DISABLED in SettingWriter.ts).
   countAllByNameAndValueOwnedByRole(dto: { name: SettingName; value: string; roleName: string }): Promise<number>
   findAllByNameAndValue(dto: { name: SettingName; value: string; offset: number; limit: number }): Promise<Setting[]>
   findAllByName(dto: { name: SettingName; offset: number; limit: number }): Promise<Setting[]>

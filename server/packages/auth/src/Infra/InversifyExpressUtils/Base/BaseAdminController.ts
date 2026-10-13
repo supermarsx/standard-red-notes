@@ -65,8 +65,12 @@ import { RejectUser } from '../../../Domain/UseCase/RejectUser/RejectUser'
  * Standard Red Notes: settings an admin (ADMIN_USER) is allowed to set
  * on behalf of another user via the admin panel. Keep this allow-list tight so
  * the admin endpoints can never be used to mutate arbitrary/sensitive settings.
+ *
+ * Exported so SettingWriter.spec.ts can hold it against the declaration of who
+ * may write each setting: everything here must be declared as something an
+ * administrator may set, and every gate declared there must be settable here.
  */
-const ADMIN_MANAGEABLE_SETTINGS: string[] = [
+export const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   SettingName.NAMES.AiEnabled,
   SettingName.NAMES.AiRequestLimit,
   SettingName.NAMES.AiFiveHourTokenLimit,

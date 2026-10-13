@@ -3,6 +3,7 @@ import 'reflect-metadata'
 import { PermissionName } from '@standardnotes/features'
 
 import { SettingsAssociationService } from './SettingsAssociationService'
+import { settingsWrittenBy } from './SettingWriter'
 import { EncryptionVersion } from '../Encryption/EncryptionVersion'
 import { SettingDescription } from './SettingDescription'
 import { SettingName } from '@standardnotes/domain-core'
@@ -77,17 +78,13 @@ describe('SettingsAssociationService', () => {
   })
 
   describe('administrator-managed cross-service authorization gates', () => {
-    const gateSettings = [
-      SettingName.NAMES.AiEnabled,
-      SettingName.NAMES.AiRequestLimit,
-      SettingName.NAMES.AiFiveHourTokenLimit,
-      SettingName.NAMES.AiWeeklyTokenLimit,
-      SettingName.NAMES.CollaborationEnabled,
-      SettingName.NAMES.LiveSyncEnabled,
-      // Opt-in rather than opt-out, and still administrator-only: a user who
-      // could write it would be granting themselves a server-side request relay.
-      SettingName.NAMES.DavBridgeAllowed,
-    ]
+    // Derived from the declaration of who writes each setting, so a gate added
+    // tomorrow is held to this without anybody extending a list here. (A
+    // subscription setting is written through another path and is not a
+    // cross-service gate.)
+    const gateSettings = settingsWrittenBy('administrator').filter(
+      (name) => !SettingName.create(name).getValue().isASubscriptionSetting(),
+    )
 
     it.each(gateSettings)('%s is plaintext, non-sensitive, and client-immutable', (name) => {
       const settingName = SettingName.create(name).getValue()

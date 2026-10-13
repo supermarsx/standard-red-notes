@@ -7,6 +7,7 @@ import { EncryptionVersion } from '../Encryption/EncryptionVersion'
 import { SettingDescription } from './SettingDescription'
 
 import { SettingsAssociationServiceInterface } from './SettingsAssociationServiceInterface'
+import { isWritableByItsOwner } from './SettingWriter'
 
 @injectable()
 export class SettingsAssociationService implements SettingsAssociationServiceInterface {
@@ -128,54 +129,6 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.RegistrationDisabled,
   ]
 
-  private readonly CLIENT_IMMUTABLE_SETTINGS = [
-    // These gates are controlled by an administrator. Letting the owning client
-    // write or delete them would let it restore access after an administrative
-    // disable (unset means enabled for AI/collaboration/live sync).
-    SettingName.NAMES.AiEnabled,
-    SettingName.NAMES.AiRequestLimit,
-    SettingName.NAMES.AiFiveHourTokenLimit,
-    SettingName.NAMES.AiWeeklyTokenLimit,
-    SettingName.NAMES.CollaborationEnabled,
-    SettingName.NAMES.LiveSyncEnabled,
-    // Standard Red Notes: the DAV bridge gate decides whether the SERVER may
-    // open connections to an address this user typed, carrying a stored
-    // password. Opt-in flags are otherwise safe to leave client-writable (a
-    // user can only switch a feature on for themselves), but this one would let
-    // any signed-in user grant themselves a server-side request relay the
-    // administrator had not given them.
-    SettingName.NAMES.DavBridgeAllowed,
-    SettingName.NAMES.ListedAuthorSecrets,
-    SettingName.NAMES.FileUploadBytesLimit,
-    SettingName.NAMES.FileUploadBytesUsed,
-    // Standard Red Notes: last-sent bookkeeping for scheduled email backups is
-    // written only by the server-side trigger job; clients may not mutate it.
-    SettingName.NAMES.EmailBackupLastSent,
-    // Contains deterministic delivery ids and exact protected attachment
-    // references needed for post-provider reconciliation. It is encrypted,
-    // sensitive, and writable only by server-side delivery bookkeeping.
-    SettingName.NAMES.EmailBackupDeliveryState,
-    // Standard Red Notes: last-run bookkeeping for scheduled Nextcloud backups is
-    // written only by the server-side trigger job; clients may not mutate it.
-    SettingName.NAMES.NextcloudBackupLastRun,
-    SettingName.NAMES.NextcloudBackupDeliveryState,
-    // Standard Red Notes: the instance-wide "registration disabled" flag is an
-    // ADMIN-ONLY control. It must NOT be writable through the ordinary user
-    // settings endpoint (BaseSettingsController's user-settings PUT, which lets a
-    // user write their OWN settings with checkUserPermissions:true) — otherwise a
-    // normal authenticated user could persist REGISTRATION_DISABLED='true' on their
-    // own record and disable signups instance-wide (a persistent DoS). Marking it
-    // client-immutable makes isSettingMutableByClient() return false so
-    // SetSettingValue.userHasPermissionToUpdateSetting() refuses that client write.
-    // The admin panel write path (BaseAdminController.setRegistrationFlag) is
-    // unaffected: it calls SetSettingValue with checkUserPermissions:false, which
-    // bypasses the client-permission check entirely, so the admin can still toggle
-    // it. Register additionally only counts admin-owned REGISTRATION_DISABLED rows
-    // (see Register.registrationDisabledBySetting), so any stale non-admin row
-    // written before this fix is ignored.
-    SettingName.NAMES.RegistrationDisabled,
-  ]
-
   private readonly permissionsAssociatedWithSettings = new Map<string, PermissionName>([
     [SettingName.NAMES.EmailBackupFrequency, PermissionName.DailyEmailBackup],
     [SettingName.NAMES.MuteSignInEmails, PermissionName.SignInAlerts],
@@ -208,12 +161,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     ],
   ])
 
+  // Who may write a setting is declared once, for every setting, in
+  // SettingWriter.ts. There is no list of exceptions here to forget to extend.
   isSettingMutableByClient(settingName: SettingName): boolean {
-    if (this.CLIENT_IMMUTABLE_SETTINGS.includes(settingName.value)) {
-      return false
-    }
-
-    return true
+    return isWritableByItsOwner(settingName.value)
   }
 
   getSensitivityForSetting(settingName: SettingName): boolean {
