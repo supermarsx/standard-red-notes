@@ -548,6 +548,7 @@ export type SyncTicket = {
 }
 
 export type MainToSyncWorkerMessage =
+  | { type: 'SET_COLLABORATION_SAVER'; room: string; canSave: boolean }
   | {
       type: 'EXECUTE'
       clientRequestId: string
@@ -1231,6 +1232,25 @@ export type SyncWorkerToMainMessage =
    * absolute time lines one deployment's logs up against another's for no gain.
    */
   | { type: 'DIAL_HOLD_ARMED'; holdForMilliseconds: number; handshakes: number }
+  /**
+   * Standard Red Notes: whether saves may currently ride the socket, as far as the
+   * WORKER's own holds are concerned. Posted when that changes, never per save.
+   *
+   * `held: true` with a refusal `code` and `holdForMilliseconds` when the gateway
+   * refused a save before executing it and later saves go to HTTP for that window;
+   * with `LIVE_SYNC_DISABLED` and no duration when the server switched item sync off
+   * for this session. `held: false` when a socket commit or a fresh socket cleared
+   * the hold. The socket's state and negotiated operations arrive in their own
+   * messages; the main thread combines the three (see
+   * `WebSocketSyncTransport.saveLane`). A DURATION, never an instant, for the reason
+   * `DIAL_HOLD_ARMED` gives.
+   */
+  | {
+      type: 'SAVE_LANE'
+      held: boolean
+      code?: SyncCommandRefusalCode | 'LIVE_SYNC_DISABLED'
+      holdForMilliseconds?: number
+    }
   /** The hold elapsed; the next request dials again. The counterpart line. */
   | { type: 'DIAL_HOLD_ENDED' }
   /**

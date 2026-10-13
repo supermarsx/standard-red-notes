@@ -13,6 +13,7 @@ import {
 } from '@standardnotes/snjs'
 import { NativeFeatureIdentifier, NoteType } from '@standardnotes/features'
 import { NoteViewController } from './NoteViewController'
+import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
 
 describe('note view controller', () => {
   let application: WebApplication
@@ -200,6 +201,40 @@ describe('note view controller', () => {
     controller.flushEditorSerialize()
     await controller.flushAndAwaitPendingSave()
     expect(flush).not.toHaveBeenCalled()
+  })
+
+  it('keeps a non-saver mounted when peer durability fails and reports its retained unsaved state', async () => {
+    const note = { uuid: 'collab-note', text: 'old durable body', dirty: false } as SNNote
+    application.items.findItem = jest.fn().mockReturnValue(note)
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+    CollaborationSaverRegistry.set(note.uuid, {
+      active: true,
+      isSaver: false,
+      paused: false,
+      leaseId: 'viewer',
+      saveRequest: 0,
+    })
+    CollaborationSaverRegistry.setPendingReader(note.uuid, () => true)
+    const failure = new Error('peer has not acknowledged the retained edit')
+    controller.registerEditorFlush(jest.fn(), () => false)
+    controller.registerEditorDurabilityFlush(jest.fn().mockRejectedValue(failure))
+    expect(controller.editorHasPendingChanges()).toBe(true)
+    await expect(controller.flushAndAwaitPendingSave()).rejects.toBe(failure)
+    expect(controller.dealloced).toBe(false)
+    expect(application.mutator.changeItem).toBeUndefined()
+    CollaborationSaverRegistry.clear(note.uuid, 'viewer')
+    controller.deinit()
   })
 
   it('strict Todo durability retains and retries the exact failed local state before provider flush', async () => {

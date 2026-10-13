@@ -11,6 +11,7 @@ import {
   MAX_ACTIVE_INBOUND_CRYPTO,
   MAX_INBOUND_CHUNK_DECRYPTS,
   MAX_YJS_TRANSFER_BYTES,
+  LOCAL_AWARENESS_MIN_INTERVAL_MS,
   YJS_CHUNK_PLAINTEXT_BYTES,
   YJS_TRANSFER_TIMEOUT_MS,
 } from './EncryptedYjsProvider'
@@ -3340,6 +3341,55 @@ describe('EncryptedYjsProvider presence between people who are both here', () =>
       getLocalState(): Record<string, unknown> | null
       setLocalState(state: Record<string, unknown> | null): void
     }
+
+  it('relays bounded saver capabilities and rejects malformed election advertisements', async () => {
+    const room = 'saver-capability-awareness-room'
+    const { provider, inbound, sent } = createPresenceProvider(room)
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const saver = { userUuid: 'remote-user', leaseId: 'remote-lease', canSaveOverSocket: true, canonicalReady: true }
+    try {
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+      const remote = provider.doc.clientID === 7_111 ? 7_112 : 7_111
+      inbound.deliver(awarenessFrameFrom(room, remote, { ...PEER_STATE, saver }))
+      await provider.flush()
+      expect(localAwareness(provider).getStates().get(remote)?.saver).toEqual(saver)
+      localAwareness(provider).setLocalState({ ...PEER_STATE, saver })
+      await provider.flush()
+      expect(
+        sent
+          .filter((frame) => frame.t === 'awareness')
+          .some((frame) =>
+            Buffer.from((frame as { payload: string }).payload, 'base64')
+              .toString('utf8')
+              .includes('"leaseId":"remote-lease"'),
+          ),
+      ).toBe(true)
+      inbound.deliver(
+        rawAwarenessFrame(room, [
+          { clientId: remote, clock: 10, state: { ...PEER_STATE, saver: { ...saver, canSaveOverSocket: 'yes' } } },
+        ]),
+      )
+      await provider.flush()
+      expect(localAwareness(provider).getStates().has(remote)).toBe(false)
+      expect(errors.mock.calls.flat().join(' ')).toContain('invalid-remote-awareness')
+      localAwareness(provider).setLocalState({ ...PEER_STATE, saver: null })
+      await new Promise((resolve) => setTimeout(resolve, LOCAL_AWARENESS_MIN_INTERVAL_MS + 1))
+      await provider.flush()
+      expect(
+        sent
+          .filter((frame) => frame.t === 'awareness')
+          .some((frame) =>
+            Buffer.from((frame as { payload: string }).payload, 'base64')
+              .toString('utf8')
+              .includes('"saver":null'),
+          ),
+      ).toBe(true)
+    } finally {
+      provider.destroy()
+      errors.mockRestore()
+    }
+  })
 
   it('never announces that a PEER left: dropping a peer locally sends nothing that names it', async () => {
     const room = 'own-awareness-only-room'

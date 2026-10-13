@@ -110,11 +110,14 @@ import {
   deriveOpaqueSyncSessionScope,
   SyncCapability,
   SyncControlPlaneRefusal,
+  SyncSaveLane,
   SyncTicketResponse,
   WebSocketSyncTransport,
 } from '@/Services/SyncTransport/WebSocketSyncTransport'
 import { LANE_STATE_CARRIER } from '@/Services/SyncTransport/LaneDegradationLedger'
 import { syncFallbackDisposition } from '@/Services/SyncTransport/syncTransportProtocol'
+import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
+import { collaborationConflictPolicy } from '@/Components/SuperEditor/Collaboration/CollaborationConflictPolicy'
 import { installTabCensusResponder } from '@/Utils/TabCensus'
 import { InviteRealtimeApplicationLifecycle } from './InviteRealtimeApplicationLifecycle'
 
@@ -460,6 +463,47 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Standard Red Notes: whether a save made now would ride the realtime socket
+   * (see `WebSocketSyncTransport.saveLane`). With no transport installed every save
+   * goes over HTTP, so the lane reads unusable rather than undefined: the one
+   * consumer, live collaboration, must never mistake "cannot know" for "socket".
+   */
+  public get syncSaveLane(): SyncSaveLane {
+    return this._webSocketSyncTransport?.saveLane ?? { usable: false, code: 'SOCKET_NOT_READY' }
+  }
+
+  /** Observe `syncSaveLane`. Returns an unsubscribe; a no-op when no transport is installed. */
+  public subscribeSyncSaveLane(listener: (lane: SyncSaveLane) => void): () => void {
+    return this._webSocketSyncTransport?.subscribeSaveLane(listener) ?? (() => undefined)
+  }
+
+  public requireSocketSavesForItem(uuid: string): boolean {
+    return this._webSocketSyncTransport?.requireSocketSavesForItem(uuid) ?? false
+  }
+
+  public releaseSocketSavesForItem(uuid: string, serverAcknowledged: boolean): void {
+    this._webSocketSyncTransport?.releaseSocketSavesForItem(uuid, serverAcknowledged)
+  }
+
+  public setCollaborationSaver(room: string, canSave: boolean): void {
+    this._webSocketSyncTransport?.setCollaborationSaver(room, canSave)
+  }
+
+  public async collaborationSaveFenceRequest(body: unknown): Promise<{ status: number; body: unknown }> {
+    if (!this._webSocketSyncTransport) {
+      throw new Error('The collaboration socket is unavailable.')
+    }
+    const response = await this._webSocketSyncTransport.openAuthenticatedRpcStream({
+      method: 'POST',
+      path: '/v1/collaboration/save-fence',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      idempotencyKey: crypto.randomUUID(),
+      body,
+    })
+    return { status: response.status, body: response.body }
+  }
+
+  /**
    * Standard Red Notes: what this client has WATCHED the realtime lane do, as
    * opposed to where it is now.
    *
@@ -505,6 +549,12 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     const deviceId = getOrCreateSyncDeviceId(this.identifier)
     const transport = new WebSocketSyncTransport({
       deviceId,
+      isItemServerAcknowledged: (uuid) => this.items.findItem(uuid)?.dirty === false,
+      getCollaborationSaveFence: (uuid) => CollaborationSaverRegistry.get(uuid)?.saveFence,
+      canSaveCollaborativeItem: (uuid) => {
+        const saver = CollaborationSaverRegistry.get(uuid)
+        return !saver || saver.isSaver
+      },
       getConfiguredWebSocketUrl: () => this.sockets.getConfiguredWebSocketUrl(),
       getAuthenticatedSessionScope: () => this.getOpaqueAuthenticatedSyncSessionScope(),
       controlPlane: {
@@ -514,6 +564,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     })
     this._webSocketSyncTransport = transport
     this.sync.setAccountSyncTransport(transport)
+    this.sync.setConflictPolicy(collaborationConflictPolicy)
+    this.sync.setOnlineUploadPolicy((uuid) => transport.isCollaborativeItemUploadAllowed(uuid))
 
     /**
      * Answer other tabs that ask where this one stands on the socket lane.

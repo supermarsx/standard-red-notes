@@ -28,6 +28,7 @@ import { log, LoggingDomain } from '@/Logging'
 import { NoteSaveFunctionParams, NoteSyncController } from '../../../Controllers/NoteSyncController'
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 import { NoteStatus } from '../NoteStatusIndicator'
+import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
 
 export type EditorValues = {
   title: string
@@ -374,7 +375,7 @@ export class NoteViewController implements ItemViewControllerInterface {
       return false
     }
     try {
-      return this.editorHasPending?.() ?? false
+      return (this.editorHasPending?.() ?? false) || CollaborationSaverRegistry.hasUndurableState(this.item.uuid)
     } catch {
       return false
     }
@@ -532,6 +533,11 @@ export class NoteViewController implements ItemViewControllerInterface {
     try {
       await this.editorDurabilityFlush?.()
     } catch (error) {
+      if (CollaborationSaverRegistry.get(this.item.uuid)) {
+        // A non-saver never dirties the account item. Only the room's remote
+        // acknowledgement can prove its retained edits are safe to discard.
+        throw error
+      }
       await this.retainNoteAfterDurabilityFlushFailure(error)
     }
   }

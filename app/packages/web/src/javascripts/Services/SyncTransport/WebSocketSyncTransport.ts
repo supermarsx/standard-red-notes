@@ -23,6 +23,7 @@ import {
   DEFAULT_RPC_DEADLINE_MS,
   isSocketFileResourceReference,
   isSyncCommandRefusalCode,
+  type SyncCommandRefusalCode,
   MainToSyncWorkerMessage,
   MAX_RPC_CREDIT_BYTES,
   SocketFileResourceReference,
@@ -165,6 +166,9 @@ export type WebSocketSyncTransportOptions = {
   getAuthenticatedSessionScope: () => Promise<string | undefined>
   deviceId: string
   isHttpOnly?: () => boolean
+  isItemServerAcknowledged?: (uuid: string) => boolean
+  canSaveCollaborativeItem?: (uuid: string) => boolean
+  getCollaborationSaveFence?: (uuid: string) => { room: string; token: string } | undefined
   workerFactory?: () => SyncWorkerLike
   environment?: {
     hasWorker: boolean
@@ -479,6 +483,21 @@ function normalizeCommittedResult(result: unknown): TransportResponse | undefine
   return { status: 200, data: result as RawSyncResponse } as TransportResponse
 }
 
+/**
+ * Whether saves currently ride the socket. `code` says why not: a gateway refusal
+ * code or `LIVE_SYNC_DISABLED` (a worker hold), `SOCKET_NOT_READY`, or
+ * `SYNC_ITEMS_UNAVAILABLE` (the socket negotiated no item sync). `heldUntil`, epoch
+ * milliseconds on this client's clock, is when a refusal window ends.
+ */
+export type SyncSaveLane = {
+  usable: boolean
+  code?: SyncCommandRefusalCode | 'LIVE_SYNC_DISABLED' | 'SOCKET_NOT_READY' | 'SYNC_ITEMS_UNAVAILABLE'
+  heldUntil?: number
+}
+
+/** The window given to a SAVE_LANE hold whose fields this build cannot read: the worker's shortest. */
+const UNREADABLE_SAVE_LANE_HOLD_MS = 30_000
+
 /** Main-thread facade. The worker receives only short-lived tickets and opaque sync bodies. */
 export class WebSocketSyncTransport implements AccountSyncTransportInterface<TransportResponse> {
   private worker?: SyncWorkerLike
@@ -535,8 +554,26 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
    * `LaneDegradationLedger` for why it does not survive a reload.
    */
   private readonly ledger = new LaneDegradationLedger({ baselineState: 'HTTP_ONLY' })
+  /** The worker's refusal hold as last reported; `heldUntil` undefined means until further notice. */
+  private saveLaneHold?: { code: NonNullable<SyncSaveLane['code']>; heldUntil?: number }
+  private saveLaneTimer?: ReturnType<typeof setTimeout>
+  private publishedSaveLane?: SyncSaveLane
+  private readonly saveLaneListeners = new Set<(lane: SyncSaveLane) => void>()
 
-  constructor(private readonly options: WebSocketSyncTransportOptions) {}
+  constructor(private readonly options: WebSocketSyncTransportOptions) {
+    try {
+      const stored: unknown = JSON.parse(globalThis.localStorage.getItem(this.socketOnlyStorageKey) ?? '[]')
+      if (Array.isArray(stored)) {
+        for (const uuid of stored) {
+          if (typeof uuid === 'string' && uuid.length <= 128) {
+            this.socketOnlyItems.add(uuid)
+          }
+        }
+      }
+    } catch {
+      /* Storage can be unavailable; new live rooms fail closed below. */
+    }
+  }
 
   get transportState(): SyncTransportState {
     return this.state
@@ -588,6 +625,94 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.state = state
     this.fallbackReason = reason
     this.ledger.recordTransition(state, reason, socketPreserved)
+    this.publishSaveLane()
+  }
+
+  /**
+   * Whether a save made now would ride the socket: the socket is READY, it
+   * negotiated SYNC_ITEMS, and the worker holds no refusal window or
+   * live-sync-disabled verdict. Anything else sends saves over HTTP.
+   *
+   * Read by live collaboration, which must never let a room's body be saved over
+   * HTTP while other people are in it (see `CollaborationSaverElection`). When a
+   * refusal window runs out the lane reads usable again: the next save probes it,
+   * and a repeated refusal starts a new, longer window.
+   */
+  get saveLane(): SyncSaveLane {
+    const hold = this.saveLaneHold
+    if (hold && (hold.heldUntil === undefined || Date.now() < hold.heldUntil)) {
+      return { usable: false, code: hold.code, ...(hold.heldUntil !== undefined ? { heldUntil: hold.heldUntil } : {}) }
+    }
+    if (this.state !== 'READY') {
+      return { usable: false, code: 'SOCKET_NOT_READY' }
+    }
+    if (!this.negotiated?.operations.has('SYNC_ITEMS')) {
+      return { usable: false, code: 'SYNC_ITEMS_UNAVAILABLE' }
+    }
+    return { usable: true }
+  }
+
+  /** Called with the new reading whenever `saveLane` changes. Returns an unsubscribe. */
+  subscribeSaveLane(listener: (lane: SyncSaveLane) => void): () => void {
+    this.saveLaneListeners.add(listener)
+    return () => {
+      this.saveLaneListeners.delete(listener)
+    }
+  }
+
+  private publishSaveLane(): void {
+    if (this.saveLaneTimer !== undefined) {
+      clearTimeout(this.saveLaneTimer)
+      this.saveLaneTimer = undefined
+    }
+    const lane = this.saveLane
+    // A window that is still running ends by the clock, which posts nothing.
+    if (lane.heldUntil !== undefined && !this.deinitialized) {
+      this.saveLaneTimer = setTimeout(
+        () => {
+          this.saveLaneTimer = undefined
+          this.publishSaveLane()
+        },
+        Math.max(0, lane.heldUntil - Date.now()),
+      )
+    }
+    const previous = this.publishedSaveLane
+    if (
+      previous &&
+      previous.usable === lane.usable &&
+      previous.code === lane.code &&
+      previous.heldUntil === lane.heldUntil
+    ) {
+      return
+    }
+    this.publishedSaveLane = lane
+    for (const listener of [...this.saveLaneListeners]) {
+      try {
+        listener(lane)
+      } catch (error) {
+        console.error('[sync-transport] A save-lane observer threw.', error)
+      }
+    }
+  }
+
+  private applySaveLaneMessage(message: Extract<SyncWorkerToMainMessage, { type: 'SAVE_LANE' }>): void {
+    if (!message.held) {
+      this.saveLaneHold = undefined
+    } else if (message.code === 'LIVE_SYNC_DISABLED') {
+      this.saveLaneHold = { code: 'LIVE_SYNC_DISABLED' }
+    } else if (
+      isSyncCommandRefusalCode(message.code) &&
+      typeof message.holdForMilliseconds === 'number' &&
+      Number.isSafeInteger(message.holdForMilliseconds) &&
+      message.holdForMilliseconds > 0
+    ) {
+      this.saveLaneHold = { code: message.code, heldUntil: Date.now() + message.holdForMilliseconds }
+    } else {
+      // Admitted by shape only. A hold this build cannot read is still a hold; it
+      // is given the shortest window the worker ever uses rather than none.
+      this.saveLaneHold = { code: 'NOT_AUTHORIZED', heldUntil: Date.now() + UNREADABLE_SAVE_LANE_HOLD_MS }
+    }
+    this.publishSaveLane()
   }
 
   /**
@@ -673,11 +798,16 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     httpFallback: AccountSyncHttpFallback<TransportResponse>,
     context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
+    const socketOnly = context?.socketOnly === true || this.containsSocketOnlyItems(request)
+    context = { ...context, ...(socketOnly ? { socketOnly: true } : {}) }
     let servedOverHttp: boolean | undefined
     // EVERY argument is forwarded, by spread and not by name. The fallback takes
     // the durable command's metadata as a second argument on a replay, and a
     // wrapper declared with one parameter compiles and silently drops it.
     const observedFallback: AccountSyncHttpFallback<TransportResponse> = async (...args) => {
+      if (socketOnly || this.containsSocketOnlyItems(args[0])) {
+        throw transportError('Live collaboration saves require the socket save lane.')
+      }
       const response = await httpFallback(...args)
       servedOverHttp = isSuccessfulSyncResponse(response)
       return response
@@ -686,12 +816,92 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     return this.enqueue(() => this.executeOrdered(request, observedFallback, context)).then(
       (result) => {
         this.ledger.recordSyncRound(servedOverHttp === undefined ? 'socket' : servedOverHttp ? 'http' : 'failed')
-        return result
+        const complete = () => {
+          if (!isSuccessfulSyncResponse(result.response)) {
+            return
+          }
+          const data = result.response.data
+          for (const saved of (data && 'saved_items' in data ? data.saved_items : []) ?? []) {
+            if (!this.activeSocketOnlyItems.has(saved.uuid) && this.options.isItemServerAcknowledged?.(saved.uuid)) {
+              this.socketOnlyItems.delete(saved.uuid)
+            }
+          }
+          this.persistSocketOnlyItems()
+        }
+        const checkpoint = result.markCheckpointDurable
+        if (!checkpoint) {
+          complete()
+          return result
+        }
+        return {
+          ...result,
+          markCheckpointDurable: async () => {
+            await checkpoint?.()
+            complete()
+          },
+        }
       },
       (error: unknown) => {
         this.ledger.recordSyncRound('failed')
         throw error
       },
+    )
+  }
+
+  // Keep the constraint after the editor unmounts: a delayed dirty batch must not
+  // become an HTTP write simply because its originating room has disappeared.
+  private readonly socketOnlyItems = new Set<string>()
+  private readonly activeSocketOnlyItems = new Set<string>()
+  private readonly collaborationSaverPermissions = new Map<string, boolean>()
+
+  setCollaborationSaver(room: string, canSave: boolean): void {
+    this.collaborationSaverPermissions.set(room, canSave)
+    this.worker?.postMessage({ type: 'SET_COLLABORATION_SAVER', room, canSave })
+  }
+
+  isCollaborativeItemUploadAllowed(uuid: string): boolean {
+    if (!this.socketOnlyItems.has(uuid)) {
+      return true
+    }
+    return this.activeSocketOnlyItems.has(uuid)
+      ? this.collaborationSaverPermissions.get(uuid) === true
+      : this.saveLane.usable
+  }
+
+  private get socketOnlyStorageKey(): string {
+    return `standardnotes-collaboration-socket-only:${this.options.deviceId}`
+  }
+
+  private persistSocketOnlyItems(): boolean {
+    try {
+      globalThis.localStorage.setItem(this.socketOnlyStorageKey, JSON.stringify([...this.socketOnlyItems]))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  requireSocketSavesForItem(uuid: string): boolean {
+    this.socketOnlyItems.add(uuid)
+    this.activeSocketOnlyItems.add(uuid)
+    return this.persistSocketOnlyItems()
+  }
+
+  releaseSocketSavesForItem(uuid: string, serverAcknowledged: boolean): void {
+    this.activeSocketOnlyItems.delete(uuid)
+    if (serverAcknowledged) {
+      this.socketOnlyItems.delete(uuid)
+      this.persistSocketOnlyItems()
+    }
+  }
+
+  private containsSocketOnlyItems(request: AccountSyncTransportRequest): boolean {
+    return request.items.some(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as { uuid?: unknown }).uuid === 'string' &&
+        this.socketOnlyItems.has((item as { uuid: string }).uuid),
     )
   }
 
@@ -1265,9 +1475,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.failAllFileDownloads('SHUTDOWN')
     this.failAllFileUploads('SHUTDOWN')
     this.negotiated = undefined
+    this.saveLaneHold = undefined
     this.rejectAllBarriers(error)
     // A deliberate shutdown is not a fallback and must not leave one reported.
     this.setTransportState('HTTP_ONLY', undefined)
+    this.saveLaneListeners.clear()
+    if (this.saveLaneTimer !== undefined) {
+      clearTimeout(this.saveLaneTimer)
+      this.saveLaneTimer = undefined
+    }
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -1357,6 +1573,43 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
     const normalizedRequest = normalizeSyncRequestForWire(request)
+    for (const item of normalizedRequest.items) {
+      if (typeof item !== 'object' || item === null) {
+        continue
+      }
+      const uuid = (item as { uuid?: unknown }).uuid
+      if (
+        typeof uuid === 'string' &&
+        this.socketOnlyItems.has(uuid) &&
+        !this.activeSocketOnlyItems.has(uuid) &&
+        this.saveLane.usable
+      ) {
+        // A departed room's retained local body may recover as an ordinary
+        // socket-only write. The DB fence still refuses it while a room saver
+        // owns the note; after release/expiry CAS handles true divergences.
+        this.setCollaborationSaver(uuid, true)
+      }
+    }
+    const proofs = normalizedRequest.items.flatMap((item) => {
+      const proof =
+        typeof item === 'object' && item !== null
+          ? this.options.getCollaborationSaveFence?.((item as { uuid: string }).uuid)
+          : undefined
+      return proof ? [proof] : []
+    })
+    if (proofs.length > 0) {
+      normalizedRequest.collaboration_save_fences = proofs
+    }
+    if (
+      normalizedRequest.items.some(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          this.options.canSaveCollaborativeItem?.((item as { uuid: string }).uuid) === false,
+      )
+    ) {
+      throw transportError('Only the elected collaboration saver may dispatch this note.')
+    }
     if (this.deinitialized) {
       this.setTransportState('HTTP_ONLY', undefined)
       return { response: await httpFallback(normalizedRequest) }
@@ -1393,6 +1646,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
 
     const clientRequestId = this.nextRequestId('sync')
+    // A room can become live while this request waits in the ordered queue or
+    // for session/worker setup. Persist its current transport constraint with
+    // the command, independently of the main thread's retained UUID marker.
+    if (this.containsSocketOnlyItems(normalizedRequest) || normalizedRequest.collaboration_save_fences?.length) {
+      context = { ...context, socketOnly: true }
+    }
+    for (const [room, canSave] of this.collaborationSaverPermissions) {
+      worker.postMessage({ type: 'SET_COLLABORATION_SAVER', room, canSave })
+    }
     return new Promise<AccountSyncTransportResult<TransportResponse>>((resolve, reject) => {
       this.pending.set(clientRequestId, {
         mode: 'execute',
@@ -1498,7 +1760,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     this.workerBuildReport = undefined
     this.workerSessionScope = undefined
     this.negotiated = undefined
+    // The hold lived in that worker; the next one starts without it.
+    this.saveLaneHold = undefined
     worker?.terminate()
+    this.publishSaveLane()
   }
 
   /** Terminates on `SHUTDOWN_COMPLETE`, or when the grace window runs out. */
@@ -1754,6 +2019,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       this.announceDialHoldEnded()
       return
     }
+    if (message.type === 'SAVE_LANE') {
+      this.applySaveLaneMessage(message)
+      return
+    }
     if (message.type === 'STATE') {
       this.setTransportState(message.state, message.reason, message.socketPreserved === true)
       this.announceTransition(message.state, message.reason)
@@ -1788,6 +2057,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       ) {
         this.negotiated = undefined
       }
+      this.publishSaveLane()
       return
     }
     if (message.type === 'NEGOTIATED') {
@@ -1800,6 +2070,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       this.ticketFailureCache = undefined
       this.fallbackReason = undefined
       this.announceNegotiation(message.operations)
+      this.publishSaveLane()
       return
     }
     if (message.type === 'CHECKPOINT_CLEARED' || message.type === 'CHECKPOINT_FAILED') {
@@ -2502,6 +2773,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
     this.pending.delete(clientRequestId)
     try {
+      if (this.containsSocketOnlyItems(body)) {
+        throw transportError('Live collaboration saves require the socket save lane.')
+      }
       const response = await pending.httpFallback(body, command)
       const result: AccountSyncTransportResult<TransportResponse> = {
         response,

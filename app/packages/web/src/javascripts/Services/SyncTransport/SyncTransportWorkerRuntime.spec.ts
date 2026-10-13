@@ -331,7 +331,7 @@ describe('SyncTransportWorkerRuntime', () => {
     ticket = 't'.repeat(40),
     sessionScope = SESSION_A,
     operations: string[] = ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
-    context?: { operationId: string; operationIndex: number },
+    context?: { operationId?: string; operationIndex?: number; socketOnly?: boolean },
   ) => {
     await harness.runtime.handle({
       type: 'EXECUTE',
@@ -4659,6 +4659,89 @@ describe('SyncTransportWorkerRuntime', () => {
       await flush()
     }
 
+    it('never falls back a refused live save and deletes only its proven unexecuted command', async () => {
+      const harness = setup()
+      const socket = await authorize(
+        harness,
+        body(),
+        't'.repeat(40),
+        SESSION_A,
+        ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+        { socketOnly: true },
+      )
+      const command = framesOf(socket, 'COMMAND')[0]
+      expect(harness.outbox.records.get(command.commandId)?.socketOnly).toBe(true)
+      answer(socket, command, 'NOT_AUTHORIZED')
+      await flush()
+      expect(httpFallbacks(harness)).toEqual([])
+      expect(harness.outbox.records.has(command.commandId)).toBe(false)
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+      expect(socket.readyState).toBe(1)
+    })
+
+    it('stops a command whose local saver permission changed before dispatch', async () => {
+      const harness = setup()
+      await harness.runtime.handle({ type: 'SET_COLLABORATION_SAVER', room: 'note-a', canSave: false })
+      const socket = await authorize(
+        harness,
+        body(),
+        't'.repeat(40),
+        SESSION_A,
+        ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+        { socketOnly: true },
+      )
+      expect(framesOf(socket, 'COMMAND')).toHaveLength(0)
+      expect(httpFallbacks(harness)).toEqual([])
+      expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId: 'client-1' })
+    })
+
+    it('a strict recovered command proven UNKNOWN frees the outbox for a fresh socket proof', async () => {
+      const shared = new FakeOutbox()
+      const first = setup(shared)
+      const original = await authorize(
+        first,
+        body(),
+        't'.repeat(40),
+        SESSION_A,
+        ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+        { socketOnly: true },
+      )
+      const command = framesOf(original, 'COMMAND')[0]
+      await first.runtime.handle({ type: 'SHUTDOWN' })
+      const second = setup(shared)
+      await second.runtime.handle({ type: 'RECOVER', clientRequestId: 'recover', sessionScope: SESSION_A })
+      await second.runtime.handle({
+        type: 'CONNECT',
+        clientRequestId: 'recover',
+        sessionScope: SESSION_A,
+        authorization: {
+          endpoint: 'wss://sync.example.test/sockets/sync',
+          ticket: 'n'.repeat(40),
+          expiresAt: Date.now() + 30_000,
+          deviceId: 'device-1',
+        },
+      })
+      const socket = second.sockets[0]
+      socket.open()
+      const auth = framesOf(socket, 'AUTH')[0]
+      socket.receive(
+        serverFrame('AUTHENTICATED', auth.commandId, {
+          capability: 'ws-sync',
+          protocolVersion: 1,
+          operations: ['SYNC_ITEMS'],
+          nextClientSequence: 2,
+        }),
+      )
+      await flush()
+      expect(framesOf(socket, 'STATUS')).toHaveLength(1)
+      socket.receive(serverFrame('STATUS', command.commandId, { status: 'UNKNOWN' }, command.digest))
+      await flush()
+      expect(httpFallbacks(second)).toEqual([])
+      expect(shared.records.has(command.commandId)).toBe(false)
+      expect(second.messages).toContainEqual({ type: 'RECOVERY_EMPTY', clientRequestId: 'recover' })
+      expect(socket.readyState).toBe(1)
+    })
+
     it.each(['NOT_AUTHORIZED', 'READ_ONLY', 'CONTENT_LIMIT', 'OPERATION_UNAVAILABLE'])(
       'sends a save refused %s over HTTP at once and keeps the socket',
       async (code) => {
@@ -4761,6 +4844,82 @@ describe('SyncTransportWorkerRuntime', () => {
         await checkpoint(harness, command.commandId)
       }
       expect(holds).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000])
+    })
+
+    /**
+     * Live collaboration chooses the client that saves for a room among those whose
+     * saves ride the socket, so the main thread must hear when this hold starts and
+     * when something other than the clock ends it.
+     */
+    describe('the save lane the main thread is told about', () => {
+      const saveLanes = (harness: ReturnType<typeof setup>) =>
+        harness.messages.filter(
+          (message): message is Extract<SyncWorkerToMainMessage, { type: 'SAVE_LANE' }> => message.type === 'SAVE_LANE',
+        )
+
+      it('says the lane is held, with the code and window, before the save goes over HTTP', async () => {
+        const harness = setup()
+        const socket = await authorize(harness)
+        answer(socket, framesOf(socket, 'COMMAND')[0], 'NOT_AUTHORIZED')
+        await flush()
+
+        expect(saveLanes(harness)).toEqual([
+          { type: 'SAVE_LANE', held: true, code: 'NOT_AUTHORIZED', holdForMilliseconds: 30_000 },
+        ])
+        const lane = harness.messages.findIndex((message) => message.type === 'SAVE_LANE')
+        const fallback = harness.messages.findIndex((message) => message.type === 'HTTP_FALLBACK')
+        expect(lane).toBeLessThan(fallback)
+
+        // Saves held on HTTP inside the window say nothing more.
+        await checkpoint(harness, framesOf(socket, 'COMMAND')[0].commandId)
+        await executeAgain(harness, 'client-2')
+        expect(saveLanes(harness)).toHaveLength(1)
+      })
+
+      it('says the lane is free again when the socket commits a save', async () => {
+        const harness = setup()
+        const socket = await authorize(harness)
+        const first = framesOf(socket, 'COMMAND')[0]
+        answer(socket, first, 'NOT_AUTHORIZED')
+        await flush()
+        await checkpoint(harness, first.commandId)
+
+        await elapse(socket, 30_000)
+        await executeAgain(harness, 'client-3')
+        const second = framesOf(socket, 'COMMAND')[1]
+        socket.receive(serverFrame('COMMITTED', second.commandId, { result: { retrieved_items: [] } }, second.digest))
+        await flush()
+
+        expect(saveLanes(harness).at(-1)).toEqual({ type: 'SAVE_LANE', held: false })
+        await checkpoint(harness, second.commandId)
+
+        // Nothing was held, so a further commit says nothing.
+        await executeAgain(harness, 'client-4')
+        const third = framesOf(socket, 'COMMAND')[2]
+        socket.receive(serverFrame('COMMITTED', third.commandId, { result: { retrieved_items: [] } }, third.digest))
+        await flush()
+        expect(saveLanes(harness)).toHaveLength(2)
+      })
+
+      it('says nothing about a lane that was never held', async () => {
+        const harness = setup()
+        const socket = await authorize(harness)
+        const command = framesOf(socket, 'COMMAND')[0]
+        socket.receive(serverFrame('COMMITTED', command.commandId, { result: { retrieved_items: [] } }, command.digest))
+        await flush()
+
+        expect(saveLanes(harness)).toEqual([])
+      })
+
+      it('says the lane is held for good when the server switches live sync off', async () => {
+        const harness = setup()
+        const socket = await authorize(harness)
+        answer(socket, framesOf(socket, 'COMMAND')[0], 'LIVE_SYNC_DISABLED')
+        await flush()
+        await flush()
+
+        expect(saveLanes(harness)).toEqual([{ type: 'SAVE_LANE', held: true, code: 'LIVE_SYNC_DISABLED' }])
+      })
     })
 
     /**

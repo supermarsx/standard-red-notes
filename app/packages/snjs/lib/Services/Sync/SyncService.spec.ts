@@ -2288,117 +2288,187 @@ describe('SyncService no-session sync status (no-login "syncing" bug)', () => {
   })
 })
 
-describe('SyncService read-only session convergence', () => {
-  it('performs one download pull, retains local dirty data, and does not recursively spawn empty uploads', async () => {
-    const logger = {
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
-    } as unknown as jest.Mocked<LoggerInterface>
-    const noop = () => undefined
-    const payload = new DecryptedPayload<NoteContent>(
-      {
-        uuid: 'read-only-dirty-note',
-        content_type: ContentType.TYPES.Note,
-        content: FillItemContent<NoteContent>({ title: 'Local edit', text: 'must remain dirty' }),
-        dirty: true,
-        dirtyIndex: getIncrementedDirtyIndex(),
-        ...PayloadTimestampDefaults(),
-      },
-      PayloadSource.Constructor,
-    )
-    const dirtyItem = {
-      uuid: payload.uuid,
-      localOnly: false,
-      neverSynced: false,
-      payload,
-      payloadRepresentation: () => payload,
-    } as unknown as DecryptedItemInterface
-    const itemManager = {
-      getDirtyItems: jest.fn().mockReturnValue([dirtyItem]),
+describe('SyncService pull-only barrier', () => {
+  it('keeps non-saver collaboration payloads locally dirty while unrelated items remain uploadable', async () => {
+    const service = Object.create(SyncService.prototype) as {
+      sessionManager: unknown
+      completedOnlineDownloadFirstSync: boolean
+      logger: unknown
+      itemManager: unknown
+      syncBackoffService: unknown
+      payloadsByPreparingForServer: jest.Mock
+      createServerSyncOperation: jest.Mock
+      setOnlineUploadPolicy(policy: (uuid: string) => boolean): void
+      itemsNeedingSync(forUpload?: boolean): Array<{ uuid: string }>
+      createSyncOperation(payloads: never[], online: boolean, options: unknown): Promise<unknown>
     }
-    const sessionManager = {
-      online: jest.fn().mockReturnValue(true),
-      isCurrentSessionReadOnly: jest.fn().mockReturnValue(true),
-    }
-    const run = jest.fn().mockResolvedValue(undefined)
-
-    const service = new SyncService(
-      itemManager as never,
-      sessionManager as never,
-      { createDefaultItemsKeyIfNoneExists: async () => undefined } as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      'test-identifier',
-      {} as never,
-      logger,
-      {} as never,
-      { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) } as never,
-      { isItemInBackoff: jest.fn().mockReturnValue(false) } as never,
-      { addEventHandler: noop } as never,
-    )
-
-    const prepareForSyncExecution = jest.fn().mockResolvedValue([])
-    const handleSyncOperationFinish = jest.fn().mockResolvedValue({ hasError: false })
-    const syncAgainByHandlingNewDirtyItems = jest.fn().mockResolvedValue(undefined)
-    const notifyEvent = jest.fn().mockResolvedValue(undefined)
-    const notifyEventSync = jest.fn().mockResolvedValue(undefined)
-    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
-    ;(service as unknown as { opStatus: { syncInProgress: boolean } }).opStatus = {
-      syncInProgress: false,
-    } as never
-    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
-      items: [dirtyItem],
-      beginDate: new Date(),
-      frozenDirtyIndex: getCurrentDirtyIndex(),
-      neverSyncedDeleted: [],
-      localOnlyPersistedItems: [],
-    })
-    ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = prepareForSyncExecution
-    ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
-      operation: { run, numberOfItemsInvolved: 0 },
-      mode: SyncMode.DownloadFirst,
-    })
-    ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish =
-      handleSyncOperationFinish
-    ;(service as unknown as { syncAgainByHandlingNewDirtyItems: jest.Mock }).syncAgainByHandlingNewDirtyItems =
-      syncAgainByHandlingNewDirtyItems
-    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = notifyEvent
-    ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = notifyEventSync
-
-    await expect(service.sync({ source: SyncSource.External })).resolves.toBeUndefined()
-
-    expect(run).toHaveBeenCalledTimes(1)
-    expect(prepareForSyncExecution).toHaveBeenCalledWith(
-      [],
-      expect.any(Array),
-      expect.any(Date),
-      expect.any(Number),
-      true,
-    )
-    expect(handleSyncOperationFinish).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ source: SyncSource.External }),
-      [],
-      SyncMode.DownloadFirst,
-      [],
-      expect.any(Number),
-      true,
-    )
-    expect(syncAgainByHandlingNewDirtyItems).not.toHaveBeenCalled()
-    expect(payload.dirty).toBe(true)
-    expect(service.completedOnlineDownloadFirstSync).toBe(true)
-    expect(notifyEvent).toHaveBeenCalledWith(SyncEvent.DownloadFirstSyncCompleted)
-    expect(notifyEventSync).not.toHaveBeenCalledWith(
-      SyncEvent.SyncCompletedWithAllItemsUploadedAndDownloaded,
-      expect.anything(),
-    )
-    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+    const room = { uuid: 'room', dirty: true, payload: {} }
+    const personal = { uuid: 'personal', dirty: true, payload: {} }
+    service.sessionManager = { isCurrentSessionReadOnly: () => false }
+    service.completedOnlineDownloadFirstSync = true
+    service.logger = { debug: jest.fn() }
+    service.itemManager = { getDirtyItems: () => [room, personal] }
+    service.syncBackoffService = { isItemInBackoff: () => false }
+    service.payloadsByPreparingForServer = jest.fn().mockImplementation(async (payloads) => payloads)
+    service.createServerSyncOperation = jest.fn().mockResolvedValue({})
+    service.setOnlineUploadPolicy((uuid) => uuid !== 'room')
+    expect(service.itemsNeedingSync().map((item) => item.uuid)).toEqual(['room', 'personal'])
+    expect(service.itemsNeedingSync(true).map((item) => item.uuid)).toEqual(['personal'])
+    await service.createSyncOperation([room, personal] as never[], true, { source: SyncSource.External })
+    expect(service.payloadsByPreparingForServer).toHaveBeenCalledWith([personal])
+    expect(service.createServerSyncOperation).toHaveBeenCalledWith([personal], expect.anything(), SyncMode.Default)
+    expect(room.dirty).toBe(true)
   })
+  it('sends no dirty payloads without encrypting them, while an ordinary sync still uploads', async () => {
+    const service = Object.create(SyncService.prototype) as {
+      sessionManager: unknown
+      completedOnlineDownloadFirstSync: boolean
+      logger: unknown
+      payloadsByPreparingForServer: jest.Mock
+      createServerSyncOperation: jest.Mock
+      createSyncOperation(payloads: never[], online: boolean, options: unknown): Promise<unknown>
+    }
+    service.sessionManager = { isCurrentSessionReadOnly: () => false }
+    service.completedOnlineDownloadFirstSync = true
+    service.logger = { debug: jest.fn() }
+    service.payloadsByPreparingForServer = jest.fn().mockResolvedValue(['encrypted-body'])
+    service.createServerSyncOperation = jest.fn().mockResolvedValue({})
+    const dirtyPayloads = [{ uuid: 'pending-room-body' }] as never[]
+    await service.createSyncOperation(dirtyPayloads, true, { source: SyncSource.External, downloadOnly: true })
+    expect(service.payloadsByPreparingForServer).not.toHaveBeenCalled()
+    expect(service.createServerSyncOperation).toHaveBeenLastCalledWith([], expect.anything(), SyncMode.Default)
+    await service.createSyncOperation(dirtyPayloads, true, { source: SyncSource.External })
+    expect(service.payloadsByPreparingForServer).toHaveBeenCalledWith(dirtyPayloads)
+    expect(service.createServerSyncOperation).toHaveBeenLastCalledWith(
+      ['encrypted-body'],
+      expect.anything(),
+      SyncMode.Default,
+    )
+  })
+})
+
+describe('SyncService read-only session convergence', () => {
+  it.each([false, true])(
+    'performs one read-only pull and retains dirty data (downloadOnly=%s)',
+    async (downloadOnly) => {
+      const logger = {
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+      } as unknown as jest.Mocked<LoggerInterface>
+      const noop = () => undefined
+      const payload = new DecryptedPayload<NoteContent>(
+        {
+          uuid: 'read-only-dirty-note',
+          content_type: ContentType.TYPES.Note,
+          content: FillItemContent<NoteContent>({ title: 'Local edit', text: 'must remain dirty' }),
+          dirty: true,
+          dirtyIndex: getIncrementedDirtyIndex(),
+          ...PayloadTimestampDefaults(),
+        },
+        PayloadSource.Constructor,
+      )
+      const dirtyItem = {
+        uuid: payload.uuid,
+        localOnly: false,
+        neverSynced: false,
+        payload,
+        payloadRepresentation: () => payload,
+      } as unknown as DecryptedItemInterface
+      const itemManager = {
+        getDirtyItems: jest.fn().mockReturnValue([dirtyItem]),
+      }
+      const sessionManager = {
+        online: jest.fn().mockReturnValue(true),
+        isCurrentSessionReadOnly: jest.fn().mockReturnValue(!downloadOnly),
+      }
+      const run = jest.fn().mockResolvedValue(undefined)
+
+      const service = new SyncService(
+        itemManager as never,
+        sessionManager as never,
+        { createDefaultItemsKeyIfNoneExists: async () => undefined } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        'test-identifier',
+        {} as never,
+        logger,
+        {} as never,
+        { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) } as never,
+        { isItemInBackoff: jest.fn().mockReturnValue(false) } as never,
+        { addEventHandler: noop } as never,
+      )
+
+      const prepareForSyncExecution = jest.fn().mockResolvedValue([])
+      const handleSyncOperationFinish = jest.fn().mockResolvedValue({ hasError: false })
+      const syncAgainByHandlingNewDirtyItems = jest.fn().mockResolvedValue(undefined)
+      const notifyEvent = jest.fn().mockResolvedValue(undefined)
+      const notifyEventSync = jest.fn().mockResolvedValue(undefined)
+      ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+      ;(service as unknown as { opStatus: { syncInProgress: boolean } }).opStatus = {
+        syncInProgress: false,
+      } as never
+      ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
+        items: [dirtyItem],
+        beginDate: new Date(),
+        frozenDirtyIndex: getCurrentDirtyIndex(),
+        neverSyncedDeleted: [],
+        localOnlyPersistedItems: [],
+      })
+      ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = prepareForSyncExecution
+      ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
+        operation: { run, numberOfItemsInvolved: 0 },
+        mode: SyncMode.DownloadFirst,
+      })
+      ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish =
+        handleSyncOperationFinish
+      ;(service as unknown as { syncAgainByHandlingNewDirtyItems: jest.Mock }).syncAgainByHandlingNewDirtyItems =
+        syncAgainByHandlingNewDirtyItems
+      ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = notifyEvent
+      ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = notifyEventSync
+
+      const recoverPending = jest.fn()
+      if (downloadOnly) {
+        ;(service as unknown as { accountSyncTransport: unknown }).accountSyncTransport = { recoverPending }
+      }
+
+      await expect(service.sync({ source: SyncSource.External, downloadOnly })).resolves.toEqual(
+        downloadOnly ? { downloadOnly: true, successful: true } : undefined,
+      )
+
+      expect(run).toHaveBeenCalledTimes(1)
+      expect(prepareForSyncExecution).toHaveBeenCalledWith(
+        [],
+        expect.any(Array),
+        expect.any(Date),
+        expect.any(Number),
+        true,
+      )
+      expect(handleSyncOperationFinish).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ source: SyncSource.External }),
+        [],
+        SyncMode.DownloadFirst,
+        [],
+        expect.any(Number),
+        true,
+      )
+      expect(syncAgainByHandlingNewDirtyItems).not.toHaveBeenCalled()
+      expect(recoverPending).not.toHaveBeenCalled()
+      expect(payload.dirty).toBe(true)
+      expect(service.completedOnlineDownloadFirstSync).toBe(true)
+      expect(notifyEvent).toHaveBeenCalledWith(SyncEvent.DownloadFirstSyncCompleted)
+      expect(notifyEventSync).not.toHaveBeenCalledWith(
+        SyncEvent.SyncCompletedWithAllItemsUploadedAndDownloaded,
+        expect.anything(),
+      )
+      expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+    },
+  )
 
   it('drains a caller queued during read-only DownloadFirst without recursively retrying dirty uploads', async () => {
     const logger = {

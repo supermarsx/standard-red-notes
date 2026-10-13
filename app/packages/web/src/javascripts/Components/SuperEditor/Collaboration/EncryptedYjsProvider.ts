@@ -1482,11 +1482,37 @@ export class EncryptedYjsProvider implements Provider {
       throw new Error('invalid-awareness-state')
     }
     const value = state as Record<string, unknown>
-    const allowed = new Set(['name', 'color', 'focusing', 'anchorPos', 'focusPos', 'awarenessData'])
+    const allowed = new Set(['name', 'color', 'focusing', 'anchorPos', 'focusPos', 'awarenessData', 'saver'])
     if (Object.keys(value).some((key) => !allowed.has(key))) {
       throw new Error('invalid-awareness-field')
     }
     const normalized: Record<string, unknown> = {}
+    if (value.saver !== undefined) {
+      if (value.saver === null) {
+        normalized.saver = null
+      } else {
+        if (typeof value.saver !== 'object' || Array.isArray(value.saver)) {
+          throw new Error('invalid-awareness-saver')
+        }
+        const saver = value.saver as Record<string, unknown>
+        if (
+          Object.keys(saver).some(
+            (key) => !['userUuid', 'leaseId', 'canSaveOverSocket', 'canonicalReady', 'saving'].includes(key),
+          ) ||
+          typeof saver.userUuid !== 'string' ||
+          saver.userUuid.length > 128 ||
+          typeof saver.leaseId !== 'string' ||
+          saver.leaseId.length === 0 ||
+          saver.leaseId.length > 128 ||
+          typeof saver.canSaveOverSocket !== 'boolean' ||
+          typeof saver.canonicalReady !== 'boolean' ||
+          (saver.saving !== undefined && typeof saver.saving !== 'boolean')
+        ) {
+          throw new Error('invalid-awareness-saver')
+        }
+        normalized.saver = { ...saver }
+      }
+    }
     if (value.name !== undefined) {
       if (typeof value.name !== 'string' || value.name.length > MAX_AWARENESS_NAME_LENGTH) {
         throw new Error('invalid-awareness-name')

@@ -27,6 +27,8 @@ import { WebApplication } from '@/Application/WebApplication'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { NoteViewController } from './Controller/NoteViewController'
 import NoteView from './NoteView'
+import { CollaborationSaverRegistry } from '../SuperEditor/Collaboration/CollaborationSaverElection'
+import { CollaborationStatusRegistry } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -129,12 +131,67 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  CollaborationSaverRegistry.clear('note-1', 'local-lease')
+  CollaborationStatusRegistry.clearRoom('note-1')
   act(() => {
     while (roots.length > 0) {
       roots.pop()?.unmount()
     }
   })
   document.body.innerHTML = ''
+})
+
+describe('collaboration title saves', () => {
+  it('keeps a joining shared room title read-only before a saver is installed', () => {
+    const view = createViewFor('note-1', 'Existing title')
+    const originalTitle = view.state.editorTitle
+    view.controller.saveAndAwaitLocalPropagation = jest.fn()
+    CollaborationStatusRegistry.setStatus('note-1', { kind: 'preparing', readonly: true })
+    view.onTitleChange({ currentTarget: { value: 'Early title' } } as never)
+    expect(view.controller.saveAndAwaitLocalPropagation).not.toHaveBeenCalled()
+    expect(view.state.editorTitle).toBe(originalTitle)
+  })
+
+  it.each([false, true])('refuses a title change when the room saver is unavailable (paused=%s)', (paused) => {
+    const view = createViewFor('note-1', 'Existing title')
+    const originalTitle = view.state.editorTitle
+    const save = jest.fn()
+    view.controller.saveAndAwaitLocalPropagation = save
+    CollaborationSaverRegistry.set('note-1', {
+      active: true,
+      leaseId: 'local-lease',
+      isSaver: paused,
+      paused,
+      saveRequest: 0,
+    })
+    view.onTitleChange({ currentTarget: { value: 'Racing title' } } as never)
+    expect(save).not.toHaveBeenCalled()
+    expect(view.state.editorTitle).toBe(originalTitle)
+  })
+
+  it('flushes the elected saver body before saving its title and leaves ordinary notes editable', () => {
+    const view = createViewFor('note-1', 'Existing title')
+    const calls: string[] = []
+    view.setState = jest.fn()
+    view.controller.flushEditorSerialize = jest.fn(() => {
+      calls.push('body')
+    })
+    view.controller.saveAndAwaitLocalPropagation = jest.fn(async () => {
+      calls.push('title')
+    })
+    CollaborationSaverRegistry.set('note-1', {
+      active: true,
+      leaseId: 'local-lease',
+      isSaver: true,
+      paused: false,
+      saveRequest: 0,
+    })
+    view.onTitleChange({ currentTarget: { value: 'New title' } } as never)
+    expect(calls).toEqual(['body', 'title'])
+    CollaborationSaverRegistry.clear('note-1', 'local-lease')
+    view.onTitleChange({ currentTarget: { value: 'Ordinary title' } } as never)
+    expect(calls).toEqual(['body', 'title', 'title'])
+  })
 })
 
 describe('focusTitle with more than one note open', () => {

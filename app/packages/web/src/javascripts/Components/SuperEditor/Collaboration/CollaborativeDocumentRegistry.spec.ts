@@ -4,13 +4,36 @@
 import * as Y from 'yjs'
 import {
   CollaborativeDocumentRegistryImpl,
+  CollaborativeDocumentRegistry,
+  captureDocumentRevisionForSave,
   documentStateOf,
   type LiveCollaborativeDocument,
 } from './CollaborativeDocumentRegistry'
-import { createCollaborationRevisionStamp, type CollaborationRevisionStamp } from './CollaborationRevisionStamp'
+import {
+  createCollaborationRevisionStamp,
+  revisionStampCoversDocumentState,
+  type CollaborationRevisionStamp,
+} from './CollaborationRevisionStamp'
 
 const EPOCH = 'room_epoch_0000000000000001'
 const ROOM = 'note-uuid'
+
+it('a delayed save stamps the serialized snapshot, never intervening unsaved operations', () => {
+  const document = new Y.Doc()
+  document.getText('body').insert(0, 'serialized')
+  const stop = CollaborativeDocumentRegistry.set(ROOM, {
+    epoch: EPOCH,
+    state: () => documentStateOf(document),
+    subscribe: () => () => undefined,
+  })
+  const stampLater = captureDocumentRevisionForSave(ROOM, 'serialized')
+  document.getText('body').insert(10, ' plus later edits')
+  const stamp = stampLater()!
+  expect(revisionStampCoversDocumentState(stamp, documentStateOf(document))).toBe(false)
+  stop()
+  expect(stampLater()).toBeUndefined()
+  document.destroy()
+})
 
 /** A clock the test moves by hand. */
 function manualClock() {

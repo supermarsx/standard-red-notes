@@ -1,10 +1,12 @@
 import { FunctionComponent, ReactNode, useEffect, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { CollaborationPlugin } from '@lexical/react/LexicalCollaborationPlugin'
 import { LexicalCollaboration, useCollaborationContext } from '@lexical/react/LexicalCollaborationContext'
 import type { InitialEditorStateType } from '@lexical/react/LexicalComposer'
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
 import type { Provider } from '@lexical/yjs'
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { WebApplication } from '@/Application/WebApplication'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
@@ -15,6 +17,8 @@ import { showCollaborationPresenceActivity } from './CollaborationPresenceNotifi
 import { PeerActivityTracker } from './PeerActivity'
 import { CollaborativeDocumentRegistry, documentStateOf } from './CollaborativeDocumentRegistry'
 import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
+import { createCollaborationCursorTracking } from './CollaborationCursors'
+import { installCollaborationSaver } from './CollaborationSaverElection'
 import {
   notifyChecklistMutationBridgeReadiness,
   registerChecklistMutationDurabilityFlusher,
@@ -120,6 +124,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   checklistOwnerLeaseId,
   onCanonicalReadyChange,
 }) => {
+  const [editor] = useLexicalComposerContext()
   const effectiveChecklistOwnerLeaseId = checklistOwnerLeaseId ?? config.editorLease.requestId
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])
 
@@ -130,6 +135,9 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   const providerReadinessDisposerRef = useRef<(() => void) | null>(null)
   const providerDurabilityDisposerRef = useRef<(() => void) | null>(null)
   const providerDocumentDisposerRef = useRef<(() => void) | null>(null)
+  const providerSaverDisposerRef = useRef<(() => void) | null>(null)
+  const cursorsContainerRef = useRef<HTMLDivElement | null>(null)
+  const cursorTrackingRef = useRef<ReturnType<typeof createCollaborationCursorTracking> | null>(null)
   const pendingProviderDestroyRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
@@ -143,12 +151,18 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
       // setup replay cancels this terminal path before the next macrotask.
       pendingProviderDestroyRef.current = setTimeout(() => {
         pendingProviderDestroyRef.current = undefined
+        // Let the saver capture its retained document/proof before the registry
+        // and readiness subscriptions are withdrawn.
+        providerSaverDisposerRef.current?.()
+        providerSaverDisposerRef.current = null
         providerReadinessDisposerRef.current?.()
         providerReadinessDisposerRef.current = null
         providerDurabilityDisposerRef.current?.()
         providerDurabilityDisposerRef.current = null
         providerDocumentDisposerRef.current?.()
         providerDocumentDisposerRef.current = null
+        cursorTrackingRef.current?.dispose()
+        cursorTrackingRef.current = null
         onCanonicalReadyChange?.(false)
         providerRef.current?.destroy()
         providerRef.current = null
@@ -192,8 +206,10 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
           onPresenceActivity: showCollaborationPresenceActivity,
         },
       )
+      let everCanonicalReady = provider.isCanonicalReady()
       providerReadinessDisposerRef.current?.()
       providerReadinessDisposerRef.current = provider.onCanonicalReadyChange((ready) => {
+        everCanonicalReady ||= ready
         onCanonicalReadyChange?.(ready)
         notifyChecklistMutationBridgeReadiness(application)
       })
@@ -219,23 +235,49 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
       providerDocumentDisposerRef.current?.()
       providerDocumentDisposerRef.current = CollaborativeDocumentRegistry.set(config.room, {
         epoch: config.roomEpoch,
-        state: () => (provider.isCanonicalReady() ? documentStateOf(sharedDocument) : undefined),
+        state: () => {
+          const ready = provider.isCanonicalReady()
+          everCanonicalReady ||= ready
+          return ready ? documentStateOf(sharedDocument) : undefined
+        },
+        retainedState: () => {
+          everCanonicalReady ||= provider.isCanonicalReady()
+          return everCanonicalReady ? documentStateOf(sharedDocument) : undefined
+        },
         subscribe: (listener) => {
           sharedDocument.on('update', listener)
           return () => sharedDocument.off('update', listener)
         },
       })
       providerRef.current = provider
-      return provider
+      providerSaverDisposerRef.current?.()
+      providerSaverDisposerRef.current = installCollaborationSaver(
+        application,
+        config.room,
+        config.userUuid,
+        config.editorLease.requestId,
+        provider,
+        config.roomEpoch,
+      )
+      cursorTrackingRef.current?.dispose()
+      cursorTrackingRef.current = createCollaborationCursorTracking(
+        provider,
+        editor,
+        () => cursorsContainerRef.current,
+        config.userUuid,
+      )
+      return cursorTrackingRef.current.provider
     }
   }, [
     application,
     channel,
+    editor,
     config.editorLease,
     config.room,
     config.roomEpoch,
     config.roomKey,
     config.shouldBootstrap,
+    config.userUuid,
     effectiveChecklistOwnerLeaseId,
     onCanonicalReadyChange,
   ])
@@ -299,15 +341,28 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   }, [config.room])
 
   return (
-    <CollaborationPlugin
-      id={config.room}
-      providerFactory={providerFactory}
-      shouldBootstrap={config.shouldBootstrap}
-      initialEditorState={config.initialEditorState}
-      username={config.username}
-      cursorColor={config.cursorColor}
-      awarenessData={awarenessData}
-    />
+    <>
+      {/* Lexical portals its own inner cursor div here. Its offsetParent is this
+          fixed outer div, giving the renderer viewport coordinates. */}
+      {createPortal(
+        <div
+          ref={cursorsContainerRef}
+          aria-hidden="true"
+          style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 10, visibility: 'hidden' }}
+        />,
+        document.body,
+      )}
+      <CollaborationPlugin
+        id={config.room}
+        providerFactory={providerFactory}
+        shouldBootstrap={config.shouldBootstrap}
+        initialEditorState={config.initialEditorState}
+        username={config.username}
+        cursorColor={config.cursorColor}
+        awarenessData={awarenessData}
+        cursorsContainerRef={cursorsContainerRef}
+      />
+    </>
   )
 }
 

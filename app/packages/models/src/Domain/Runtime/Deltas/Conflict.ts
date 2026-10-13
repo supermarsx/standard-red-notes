@@ -19,12 +19,18 @@ import { SourcelessSyncDeltaEmit } from './Abstract/DeltaEmit'
 import { payloadByFinalizingSyncState } from './Utilities/ApplyDirtyState'
 import { getIncrementedDirtyIndex } from '../DirtyCounter/DirtyCounter'
 
+export type SyncConflictPolicy = (
+  base: FullyFormedPayloadInterface,
+  incoming: FullyFormedPayloadInterface,
+) => ConflictStrategy.KeepBase | ConflictStrategy.KeepApply | undefined
+
 export class ConflictDelta {
   constructor(
     protected readonly baseCollection: ImmutablePayloadCollection,
     protected readonly basePayload: FullyFormedPayloadInterface,
     protected readonly applyPayload: FullyFormedPayloadInterface,
     protected readonly historyMap: HistoryMap,
+    protected readonly conflictPolicy?: SyncConflictPolicy,
   ) {}
 
   public result(): SourcelessSyncDeltaEmit {
@@ -71,6 +77,19 @@ export class ConflictDelta {
         return ConflictStrategy.KeepApply
       }
     } else if (isDecryptedPayload(this.basePayload)) {
+      // An app that retains an authenticated live document may prove this is a
+      // covered CRDT revision. With no such proof the ordinary rules apply.
+      if (isDecryptedPayload(this.applyPayload)) {
+        let override: ReturnType<SyncConflictPolicy>
+        try {
+          override = this.conflictPolicy?.(this.basePayload, this.applyPayload)
+        } catch {
+          override = undefined
+        }
+        if (override === ConflictStrategy.KeepBase || override === ConflictStrategy.KeepApply) {
+          return override
+        }
+      }
       /**
        * Ensure no conflict has already been created with the incoming content.
        * This can occur in a multi-page sync request where in the middle of the request,

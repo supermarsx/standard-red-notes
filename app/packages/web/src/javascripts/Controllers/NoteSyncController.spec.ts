@@ -77,6 +77,16 @@ describe('NoteSyncController save cancellation', () => {
     expect((controller as unknown as { item?: SNNote }).item).toBeUndefined()
   })
 
+  it('cancels a queued body save when saver leadership changes during its debounce', async () => {
+    let elected = true
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'old saver body', canSave: () => elected })
+    elected = false
+    await jest.runOnlyPendingTimersAsync()
+    await expect(save).resolves.toBeUndefined()
+    expect(mutator.changeItem).not.toHaveBeenCalled()
+    expect(sync.sync).not.toHaveBeenCalled()
+  })
+
   it('settles a superseded debounce without persisting or reporting the stale value', async () => {
     const firstPropagation = jest.fn()
     const secondPropagation = jest.fn()

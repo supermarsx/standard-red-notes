@@ -1,4 +1,6 @@
 export type SyncOutboxRecord = {
+  /** Durable transport constraint, retained across editor teardown and worker restarts. */
+  socketOnly?: boolean
   /** Opaque authenticated user + session epoch; never a raw credential. */
   sessionScope: string
   /** Session-scoped endpoint/device ownership key. */

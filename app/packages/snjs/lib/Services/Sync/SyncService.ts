@@ -65,6 +65,7 @@ import {
   getIncrementedDirtyIndex,
   getCurrentDirtyIndex,
   ItemContent,
+  type SyncConflictPolicy,
   KeySystemItemsKeyContent,
   KeySystemItemsKeyInterface,
   FullyFormedTransferPayload,
@@ -529,6 +530,17 @@ export class SyncService
       this.accountSyncTransport?.deinit?.()
       this.accountSyncTransport = transport
     }
+  }
+
+  private conflictPolicy?: SyncConflictPolicy
+
+  public setConflictPolicy(policy: SyncConflictPolicy | undefined): void {
+    this.conflictPolicy = policy
+  }
+  private onlineUploadPolicy?: (uuid: string) => boolean
+
+  public setOnlineUploadPolicy(policy: ((uuid: string) => boolean) | undefined): void {
+    this.onlineUploadPolicy = policy
   }
 
   public isOutOfSync(): boolean {
@@ -1289,7 +1301,7 @@ export class SyncService
     })
   }
 
-  private itemsNeedingSync() {
+  private itemsNeedingSync(forOnlineUpload = false) {
     const dirtyItems = this.itemManager.getDirtyItems()
 
     /**
@@ -1321,7 +1333,9 @@ export class SyncService
      * dropped from disk and lost on reload). Local-only exclusion is applied ONLY to the UPLOAD set,
      * at the return of prepareForSync — see SyncService.excludeLocalOnlyItems.
      */
-    return itemsWithoutBackoffPenalty
+    return forOnlineUpload && this.onlineUploadPolicy
+      ? itemsWithoutBackoffPenalty.filter((item) => this.onlineUploadPolicy?.(item.uuid) !== false)
+      : itemsWithoutBackoffPenalty
   }
 
   /**
@@ -1504,8 +1518,8 @@ export class SyncService
       source: SyncSource.SpawnQueue,
       ...promise.options,
     })
-      .then(() => {
-        promise.resolve()
+      .then((result) => {
+        promise.resolve(result)
       })
       .catch(() => {
         promise.reject()
@@ -1948,6 +1962,7 @@ export class SyncService
   private async getOnlineSyncParameters(
     payloads: (DecryptedPayloadInterface | DeletedPayloadInterface)[],
     mode: SyncMode = SyncMode.Default,
+    downloadOnly = false,
   ): Promise<{
     uploadPayloads: ServerSyncPushContextualPayload[]
     syncMode: SyncMode
@@ -1959,13 +1974,17 @@ export class SyncService
     }
 
     const isReadOnlySession = this.sessionManager.isCurrentSessionReadOnly()
-    if (isReadOnlySession) {
-      this.logger.debug('Skipping upload payloads because session is read-only.')
+    if (isReadOnlySession || downloadOnly) {
+      this.logger.debug('Skipping upload payloads for a read-only sync.')
       return { uploadPayloads: [], syncMode: useMode }
     }
 
     const uploadPayloads: ServerSyncPushContextualPayload[] =
-      useMode === SyncMode.Default ? await this.payloadsByPreparingForServer(payloads) : []
+      useMode === SyncMode.Default
+        ? await this.payloadsByPreparingForServer(
+            payloads.filter((payload) => this.onlineUploadPolicy?.(payload.uuid) !== false),
+          )
+        : []
 
     return { uploadPayloads, syncMode: useMode }
   }
@@ -2008,7 +2027,8 @@ export class SyncService
         syncToken,
         paginationToken,
         sharedVaultUuids: options.sharedVaultUuids,
-        transport: this.accountSyncTransport,
+        // A pull-only barrier must not recover or replay an earlier upload.
+        transport: options.downloadOnly ? undefined : this.accountSyncTransport,
         operationId: options.operationId,
       },
     )
@@ -2032,7 +2052,11 @@ export class SyncService
     options: SyncOptions,
   ): Promise<{ operation: AccountSyncOperation | OfflineSyncOperation; mode: SyncMode }> {
     if (online) {
-      const { uploadPayloads, syncMode } = await this.getOnlineSyncParameters(payloads, options.mode)
+      const { uploadPayloads, syncMode } = await this.getOnlineSyncParameters(
+        payloads,
+        options.mode,
+        options.downloadOnly,
+      )
 
       return {
         operation: await this.createServerSyncOperation(uploadPayloads, options, syncMode),
@@ -2123,7 +2147,12 @@ export class SyncService
        * the current dirty set; only then may this sync build a fresh request
        * from the post-recovery tokens and collection state.
        */
-      if (online && options.mode !== SyncMode.LocalOnly && this.accountSyncTransport?.recoverPending) {
+      if (
+        online &&
+        !options.downloadOnly &&
+        options.mode !== SyncMode.LocalOnly &&
+        this.accountSyncTransport?.recoverPending
+      ) {
         try {
           const recoveryOperation = await this.createServerSyncOperation([], options, options.mode)
           const recovery = await recoveryOperation.recoverPending()
@@ -2173,7 +2202,7 @@ export class SyncService
       const { items, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems } =
         await this.prepareForSync(options, online)
       presyncSaveCompleted = true
-      const isReadOnlySession = this.sessionManager.isCurrentSessionReadOnly() === true
+      const isReadOnlySession = this.sessionManager.isCurrentSessionReadOnly() === true || options.downloadOnly === true
 
       if (options.mode === SyncMode.LocalOnly) {
         this.logger.debug('Syncing local only, skipping remote sync request')
@@ -2194,7 +2223,11 @@ export class SyncService
        * and must not surface as server "syncing".
        */
       const latestItems = await this.prepareForSyncExecution(
-        isReadOnlySession ? [] : items,
+        isReadOnlySession
+          ? []
+          : online
+            ? items.filter((item) => this.onlineUploadPolicy?.(item.uuid) !== false)
+            : items,
         inTimeResolveQueue,
         beginDate,
         frozenDirtyIndex,
@@ -2202,7 +2235,7 @@ export class SyncService
       )
 
       if (isReadOnlySession && items.length > 0) {
-        this.logger.debug('Read-only session detected, retaining dirty items locally and skipping their upload.')
+        this.logger.debug('Read-only sync requested, retaining dirty items locally and skipping their upload.')
       }
 
       const { operation, mode: syncMode } = await this.createSyncOperation(
@@ -2287,7 +2320,7 @@ export class SyncService
         syncRoundExhaustedWithoutProgress,
       )
       if (didSyncAgain) {
-        return
+        return options.downloadOnly && online ? { downloadOnly: true, successful: true } : undefined
       }
 
       if (options.checkIntegrity && online) {
@@ -2298,7 +2331,7 @@ export class SyncService
 
       const hasUnuploadableReadOnlyDirtyItems =
         isReadOnlySession && (this.itemsNeedingSync().length > 0 || this.dirtyLiteItems().length > 0)
-      if (!hasUnuploadableReadOnlyDirtyItems) {
+      if (!hasUnuploadableReadOnlyDirtyItems && !options.downloadOnly) {
         await this.notifyEventSync(SyncEvent.SyncCompletedWithAllItemsUploadedAndDownloaded, {
           source: options.source,
           options,
@@ -2307,7 +2340,7 @@ export class SyncService
 
       this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
 
-      return undefined
+      return options.downloadOnly && online ? { downloadOnly: true, successful: true } : undefined
     } catch (error) {
       if (!this.dealloced) {
         this.logger.error('Sync failed before completion', safeErrorLogMetadata(error))
@@ -2452,6 +2485,7 @@ export class SyncService
       masterCollection,
       operation.payloadsSavedOrSaving,
       historyMap,
+      this.conflictPolicy,
     )
 
     this.logger.debug('Online sync response applied', {
@@ -2698,7 +2732,7 @@ export class SyncService
 
     await this.clearDirtyStateForPersistedLocalOnlyItems(localOnlyPersistedItems, frozenDirtyIndex)
 
-    if (syncMode !== SyncMode.DownloadFirst && !isReadOnlySession) {
+    if (syncMode !== SyncMode.DownloadFirst && !isReadOnlySession && !options.downloadOnly) {
       await this.notifyEvent(SyncEvent.SyncCompletedWithAllItemsUploaded, {
         source: options.source,
       })
@@ -2765,7 +2799,7 @@ export class SyncService
     syncRoundExhaustedWithoutProgress = false,
   ) {
     if (syncMode === SyncMode.DownloadFirst) {
-      if (isReadOnlySession) {
+      if (isReadOnlySession || options.downloadOnly) {
         if (online) {
           this.completedOnlineDownloadFirstSync = true
         }
@@ -2793,9 +2827,9 @@ export class SyncService
       return true
     }
 
-    const newItemsNeedingSync = this.itemsNeedingSync()
+    const newItemsNeedingSync = this.itemsNeedingSync(true)
     if (newItemsNeedingSync.length > 0) {
-      if (isReadOnlySession) {
+      if (isReadOnlySession || options.downloadOnly) {
         this.logger.debug('Read-only session still has local dirty items; not spawning an unbounded empty sync.')
         return false
       }
@@ -3285,6 +3319,7 @@ export class SyncService
         masterCollection,
         [],
         historyMap,
+        this.conflictPolicy,
       )
 
       const emits = resolver.result()

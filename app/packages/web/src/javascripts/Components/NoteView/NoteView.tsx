@@ -99,6 +99,8 @@ import {
 import { BOOKMARK_INSERT_DOM_EVENT } from '../SuperEditor/Plugins/BookmarkPlugin/BookmarkPlugin'
 import { BOOKMARK_SPOT_COMMAND } from '../../Bookmarks/bookmarkCommand'
 import { HERO_AFFORDANCE_HEIGHT, shouldShowHeroBanner } from './heroBannerScroll'
+import { CollaborationSaverRegistry } from '../SuperEditor/Collaboration/CollaborationSaverElection'
+import { CollaborationStatusRegistry } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'
 
 function sortAlphabetically(array: ComponentInterface[]): ComponentInterface[] {
   return array.sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1))
@@ -114,6 +116,7 @@ type State = {
   editorLineWidth: EditorLineWidth
   noteLocked: boolean
   readonly?: boolean
+  collaborationTitleReadonly?: boolean
   noteStatus?: NoteStatus
   saveError?: boolean
   showProtectedWarning: boolean
@@ -277,6 +280,13 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
   override componentDidMount(): void {
     super.componentDidMount()
+
+    const refreshTitlePermission = () => {
+      this.setState({ collaborationTitleReadonly: this.isCollaborationTitleReadonly() })
+    }
+    this.#observers.push(CollaborationSaverRegistry.subscribe(this.note.uuid, refreshTitlePermission))
+    this.#observers.push(CollaborationStatusRegistry.subscribe(this.note.uuid, refreshTitlePermission))
+    refreshTitlePermission()
 
     // The cover banner lives above the note's scroll container, so it can only
     // learn about scrolling by listening. `scroll` does not bubble but it does
@@ -771,7 +781,22 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     this.plainEditorRef?.focus()
   }
 
+  private isCollaborationTitleReadonly(): boolean {
+    const saver = CollaborationSaverRegistry.get(this.note.uuid)
+    const status = CollaborationStatusRegistry.getState(this.note.uuid)?.status
+    return (
+      (!!saver && (!saver.isSaver || saver.paused)) || (!!status && 'readonly' in status && status.readonly === true)
+    )
+  }
+
   onTitleChange: ChangeEventHandler<HTMLInputElement> = ({ currentTarget }) => {
+    const saver = CollaborationSaverRegistry.get(this.note.uuid)
+    if (this.isCollaborationTitleReadonly()) {
+      return
+    }
+    if (saver) {
+      this.controller.flushEditorSerialize()
+    }
     log(LoggingDomain.NoteView, 'Performing save after title change')
 
     // Uncommitted local changes now exist in the field; a retrieved title must not clobber them.
@@ -1418,7 +1443,12 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                     ref={this.titleInputRef}
                     className="input text-lg"
                     data-srn-note-uuid={this.note.uuid}
-                    disabled={this.state.noteLocked || this.state.readonly}
+                    disabled={this.state.noteLocked || this.state.readonly || this.state.collaborationTitleReadonly}
+                    title={
+                      this.state.collaborationTitleReadonly
+                        ? 'The room’s saving device can change the title'
+                        : undefined
+                    }
                     id={ElementIds.NoteTitleEditor}
                     onChange={this.onTitleChange}
                     onFocus={this.onTitleFocus}

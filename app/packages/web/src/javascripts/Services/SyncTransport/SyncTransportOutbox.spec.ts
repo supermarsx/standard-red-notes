@@ -1,4 +1,4 @@
-import { IndexedDbSyncOutbox, SyncOutboxUnavailableError } from './SyncTransportOutbox'
+import { IndexedDbSyncOutbox, SyncOutboxUnavailableError, type SyncOutboxRecord } from './SyncTransportOutbox'
 
 type Lease = { transportScope: string; sessionScope: string; ownerId: string; expiresAt: number }
 
@@ -31,20 +31,53 @@ class FakeStore {
   }
 }
 
+class FakeCommandStore {
+  constructor(private readonly rows: Map<string, SyncOutboxRecord>) {}
+
+  index(name: string): { getAll: (sessionScope: string) => FakeIdbRequest<SyncOutboxRecord[]> } {
+    if (name !== 'sessionScope') {
+      throw new Error('Unknown command index')
+    }
+    return {
+      getAll: (sessionScope) => {
+        const request = new FakeIdbRequest<SyncOutboxRecord[]>()
+        queueMicrotask(() => {
+          request.result = [...this.rows.values()]
+            .filter((record) => record.sessionScope === sessionScope)
+            .map((record) => ({ ...record }))
+          request.onsuccess?.()
+        })
+        return request
+      },
+    }
+  }
+
+  put(record: SyncOutboxRecord): void {
+    this.rows.set(`${record.sessionScope}|${record.commandId}`, { ...record })
+  }
+
+  delete(key: [string, string]): void {
+    this.rows.delete(`${key[0]}|${key[1]}`)
+  }
+}
+
 class FakeTransaction {
   oncomplete: (() => void) | null = null
   onerror: (() => void) | null = null
   onabort: (() => void) | null = null
 
-  constructor(private readonly rows: Map<string, Lease>) {
+  constructor(
+    private readonly rows: Map<string, Lease>,
+    private readonly commands: Map<string, SyncOutboxRecord>,
+  ) {
     // A real transaction completes after its last request settles; a macrotask
     // is the closest ordering available here and leaves the awaits in `database()`
     // time to attach their handlers.
     setTimeout(() => this.oncomplete?.(), 0)
   }
 
-  objectStore(): FakeStore {
-    return new FakeStore(this.rows)
+  objectStore(name: string): FakeStore | FakeCommandStore {
+    return name === 'commands-v2' ? new FakeCommandStore(this.commands) : new FakeStore(this.rows)
   }
 }
 
@@ -53,13 +86,16 @@ class FakeDatabase {
   onversionchange: (() => void) | null = null
   objectStoreNames = { contains: () => true }
 
-  constructor(private readonly rows: Map<string, Lease>) {}
+  constructor(
+    private readonly rows: Map<string, Lease>,
+    private readonly commands: Map<string, SyncOutboxRecord>,
+  ) {}
 
   transaction(): FakeTransaction {
     if (this.closed) {
       throw new Error('InvalidStateError')
     }
-    return new FakeTransaction(this.rows)
+    return new FakeTransaction(this.rows, this.commands)
   }
 
   createObjectStore(): { createIndex: () => void } {
@@ -76,6 +112,7 @@ class FakeFactory {
   failNextOpen = false
   blockNextOpen = false
   rows = new Map<string, Lease>()
+  commands = new Map<string, SyncOutboxRecord>()
   databases: FakeDatabase[] = []
 
   open(): FakeIdbRequest<FakeDatabase> & { onblocked: (() => void) | null; onupgradeneeded: (() => void) | null } {
@@ -100,7 +137,7 @@ class FakeFactory {
         request.onerror?.()
         return
       }
-      const database = new FakeDatabase(this.rows)
+      const database = new FakeDatabase(this.rows, this.commands)
       this.databases.push(database)
       request.result = database
       request.onsuccess?.()
@@ -114,6 +151,57 @@ const SESSION = 'sync-session-v1:abc'
 
 describe('IndexedDbSyncOutbox', () => {
   const outboxFor = (factory: FakeFactory) => new IndexedDbSyncOutbox(factory as unknown as IDBFactory)
+
+  const command = (
+    commandId: string,
+    createdAt: number,
+    sequence: number,
+    sessionScope = SESSION,
+  ): SyncOutboxRecord => ({
+    sessionScope,
+    transportScope: SCOPE,
+    commandId,
+    digest: 'a'.repeat(64),
+    bytes: '{}',
+    createdAt,
+    sequence,
+    socketOnly: true,
+  })
+
+  it('recovers the oldest unrevoked command in its session, preserving socket-only metadata', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    await outbox.put(command('later', 20, 1))
+    await outbox.put(command('same-time-higher-sequence', 10, 3))
+    await outbox.put(command('oldest', 10, 2))
+    await outbox.put({ ...command('revoked', 1, 1), revoked: true })
+    await outbox.put(command('other-account', 0, 0, 'another-session'))
+    await expect(outbox.oldest(SESSION)).resolves.toMatchObject({ commandId: 'oldest', socketOnly: true })
+    await expect(outbox.oldest('another-session')).resolves.toMatchObject({
+      commandId: 'other-account',
+      socketOnly: true,
+    })
+    await outbox.delete(SESSION, 'oldest')
+    await expect(outbox.oldest(SESSION)).resolves.toMatchObject({ commandId: 'same-time-higher-sequence' })
+    outbox.close()
+  })
+
+  it('quarantines every command in a revoked session without destroying another session or the transport constraint', async () => {
+    const factory = new FakeFactory()
+    const outbox = outboxFor(factory)
+    await outbox.put(command('first', 1, 1))
+    await outbox.put(command('second', 2, 2))
+    await outbox.put(command('other-account', 0, 0, 'another-session'))
+    await outbox.quarantineSessionScope(SESSION)
+    await expect(outbox.oldest(SESSION)).resolves.toBeUndefined()
+    expect(factory.commands.get(`${SESSION}|first`)).toMatchObject({ revoked: true, socketOnly: true })
+    expect(factory.commands.get(`${SESSION}|second`)).toMatchObject({ revoked: true, socketOnly: true })
+    await expect(outbox.oldest('another-session')).resolves.toMatchObject({
+      commandId: 'other-account',
+      socketOnly: true,
+    })
+    outbox.close()
+  })
 
   it('does not remember an open that failed', async () => {
     const factory = new FakeFactory()

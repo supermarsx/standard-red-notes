@@ -10,6 +10,8 @@ export type AccountSyncTransportRequest = {
   cursor_token?: string
   limit: number
   shared_vault_uuids?: string[]
+  /** Server-issued exclusive saver proofs for live collaborative item writes. */
+  collaboration_save_fences?: Array<{ room: string; token: string }>
 }
 
 /** Stable idempotency metadata shared by websocket and HTTP replay paths. */
@@ -22,6 +24,8 @@ export type AccountSyncCommandMetadata = {
 }
 
 export type AccountSyncTransportContext = {
+  /** Live collaborative writes must never be replayed through HTTP. Persist with the command. */
+  socketOnly?: boolean
   /** Opaque stable ID shared by retries of one user action. */
   operationId?: string
   /** Zero-based request index when one action requires paginated sync commands. */

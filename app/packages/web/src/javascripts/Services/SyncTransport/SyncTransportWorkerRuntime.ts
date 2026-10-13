@@ -696,6 +696,7 @@ export class SyncTransportWorkerRuntime {
   private commandFrameRequestId?: string
   /** Consecutive pre-execution save refusals. Reset only by a save the socket commits. */
   private saveRefusals = 0
+  private readonly collaborationSavers = new Map<string, boolean>()
   /** While this is in the future, saves go straight to HTTP (see SAVE_REFUSAL_HOLD_BASE_MS). */
   private saveRefusalHeldUntil?: number
   /**
@@ -780,6 +781,9 @@ export class SyncTransportWorkerRuntime {
 
   async handle(message: MainToSyncWorkerMessage): Promise<void> {
     switch (message.type) {
+      case 'SET_COLLABORATION_SAVER':
+        this.collaborationSavers.set(message.room, message.canSave)
+        break
       case 'EXECUTE':
         await this.execute(message.clientRequestId, message.body, message.sessionScope, message.context)
         break
@@ -2239,7 +2243,7 @@ export class SyncTransportWorkerRuntime {
       // A fresh socket (a redeploy, a repaired membership) gets the next save at
       // once. The refusal COUNT is kept, so a refusal that survives the reconnect
       // still escalates: at most one refused round trip per reconnect.
-      this.saveRefusalHeldUntil = undefined
+      this.clearSaveRefusalHold()
       this.socketAuthenticatedAt = this.now()
       // The reconnect budget is per connected session, not per tab. Without this
       // reset one bad patch of network spent it permanently, and every command
@@ -2451,6 +2455,29 @@ export class SyncTransportWorkerRuntime {
           }
           this.deliverResult(frame.payload.result)
         } else if (frame.payload.status === 'UNKNOWN') {
+          if (
+            this.outboxRecord?.socketOnly &&
+            this.active &&
+            (this.active.mode === 'execute' || this.active.mode === 'recover')
+          ) {
+            const active = this.active
+            const record = this.outboxRecord
+            // The server proved this command never applied. Keep the account
+            // item dirty, but discard the old body/proof so the current elected
+            // saver can issue a fresh socket command after its read barrier.
+            await this.outbox.delete(record.sessionScope, record.commandId)
+            this.active = undefined
+            this.outboxRecord = undefined
+            this.resultDelivered = false
+            this.accepted = false
+            this.commandSent = false
+            this.commandFrameRequestId = undefined
+            this.dependencies.postMessage({
+              type: active.mode === 'recover' ? 'RECOVERY_EMPTY' : 'RECOVERY_REQUIRED',
+              clientRequestId: active.clientRequestId,
+            })
+            break
+          }
           // The durable backend explicitly confirmed that the command did not
           // take effect. Only this result permits HTTP replay.
           await this.fallback('reconnect-gap', this.outboxRecord, false, true)
@@ -2489,6 +2516,9 @@ export class SyncTransportWorkerRuntime {
           }
         }
         if (frame.payload.code === 'LIVE_SYNC_DISABLED') {
+          if (!this.liveSyncDisabled) {
+            this.dependencies.postMessage({ type: 'SAVE_LANE', held: true, code: 'LIVE_SYNC_DISABLED' })
+          }
           this.liveSyncDisabled = true
           await this.fallback('live-sync-disabled', this.outboxRecord, true, true)
           break
@@ -3665,6 +3695,7 @@ export class SyncTransportWorkerRuntime {
         return
       }
       const record: SyncOutboxRecord = {
+        ...(active.context?.socketOnly ? { socketOnly: true } : {}),
         sessionScope: active.sessionScope,
         transportScope: this.transportScope,
         commandId: frame.commandId,
@@ -3890,6 +3921,20 @@ export class SyncTransportWorkerRuntime {
       SAVE_REFUSAL_HOLD_MAX_MS,
     )
     this.saveRefusalHeldUntil = this.now() + holdForMilliseconds
+    this.dependencies.postMessage({ type: 'SAVE_LANE', held: true, code, holdForMilliseconds })
+    if (record.socketOnly) {
+      // This ERROR proves the command never executed. Drop that identity so a
+      // healthy elected saver can persist the merged document with its own base.
+      void this.outbox.delete(record.sessionScope, record.commandId).catch(() => undefined)
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId: active.clientRequestId })
+      this.active = undefined
+      this.outboxRecord = undefined
+      this.resultDelivered = false
+      this.accepted = false
+      this.commandSent = false
+      this.commandFrameRequestId = undefined
+      return true
+    }
     this.dependencies.postMessage({
       type: 'HTTP_FALLBACK',
       clientRequestId: active.clientRequestId,
@@ -3910,6 +3955,22 @@ export class SyncTransportWorkerRuntime {
     this.commandSent = false
     this.commandFrameRequestId = undefined
     return true
+  }
+
+  /**
+   * End the refusal hold and tell the main thread, once. Live collaboration reads
+   * the lane to decide who in a room may save (see `WebSocketSyncTransport.saveLane`),
+   * so a hold that ended silently would keep this client out of that role until
+   * the window it was given ran out.
+   */
+  private clearSaveRefusalHold(): void {
+    if (this.saveRefusalHeldUntil === undefined) {
+      return
+    }
+    this.saveRefusalHeldUntil = undefined
+    if (!this.liveSyncDisabled) {
+      this.dependencies.postMessage({ type: 'SAVE_LANE', held: false })
+    }
   }
 
   private async sendStatus(record: SyncOutboxRecord): Promise<void> {
@@ -3945,6 +4006,22 @@ export class SyncTransportWorkerRuntime {
         throw new Error('Sync socket changed before write.')
       }
     }
+    const frame = JSON.parse(bytes) as {
+      type?: string
+      payload?: { command?: string; body?: AccountSyncTransportRequest }
+    }
+    if (
+      frame.type === 'COMMAND' &&
+      frame.payload?.command === 'SYNC_ITEMS' &&
+      frame.payload.body?.items.some(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          this.collaborationSavers.get((item as { uuid: string }).uuid) === false,
+      )
+    ) {
+      throw new Error('The live collaboration saver lease changed before dispatch.')
+    }
     socket.send(bytes)
   }
 
@@ -3979,7 +4056,7 @@ export class SyncTransportWorkerRuntime {
     this.resultDelivered = true
     // The socket committed a save, so whatever refused earlier ones has cleared.
     this.saveRefusals = 0
-    this.saveRefusalHeldUntil = undefined
+    this.clearSaveRefusalHold()
     this.dependencies.postMessage({
       type: 'RESULT',
       clientRequestId: this.active.clientRequestId,
@@ -4485,6 +4562,10 @@ export class SyncTransportWorkerRuntime {
       return
     }
     const recordBelongsToActive = record?.sessionScope === active.sessionScope
+    if ((recordBelongsToActive && record?.socketOnly) || active.context?.socketOnly) {
+      await this.requireDurableRecovery(active.clientRequestId, reason)
+      return
+    }
     // A permanent reason answered to a recovery can never be resolved by STATUS
     // (no socket will ever exist for it), so the only exit is the identity-bearing
     // HTTP replay, which the server journal makes idempotent.
@@ -4681,6 +4762,9 @@ export class SyncTransportWorkerRuntime {
     this.inviteSubscription = undefined
     this.cancelDeferredInviteWatch()
     this.outboxRecord = undefined
+    if (this.liveSyncDisabled) {
+      this.dependencies.postMessage({ type: 'SAVE_LANE', held: false })
+    }
     this.liveSyncDisabled = false
     this.inviteEventsUnavailable = false
     this.lastTransportScope = undefined

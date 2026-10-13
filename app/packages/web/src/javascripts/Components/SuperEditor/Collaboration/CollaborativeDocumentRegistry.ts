@@ -1,6 +1,7 @@
 import * as Y from 'yjs'
 import {
   documentStateCovers,
+  createCollaborationRevisionStamp,
   type CollaborationRevisionStamp,
   type CollaborativeDocumentState,
 } from './CollaborationRevisionStamp'
@@ -17,6 +18,8 @@ export type LiveCollaborativeDocument = {
    * empty document, and an empty document proves nothing about what it will contain).
    */
   state(): CollaborativeDocumentState | undefined
+  /** Established document retained during a transport loss, for lifecycle preservation only. */
+  retainedState?(): CollaborativeDocumentState | undefined
   /** Called after every update applied to the document, local or remote. */
   subscribe(listener: () => void): () => void
 }
@@ -150,3 +153,27 @@ export class CollaborativeDocumentRegistryImpl {
 
 /** App-wide singleton. */
 export const CollaborativeDocumentRegistry = new CollaborativeDocumentRegistryImpl()
+
+/** Bind the serialized body to the state observed beside it, never a later mutation's state. */
+export function captureDocumentRevisionForSave(
+  room: string,
+  body: string,
+): () => CollaborationRevisionStamp | undefined {
+  const document = CollaborativeDocumentRegistry.get(room)
+  const state = document?.state()
+  if (!document || !state) {
+    return () => undefined
+  }
+  const captured: CollaborativeDocumentState = {
+    stateVector: new Map(state.stateVector),
+    deleted: new Map(
+      [...state.deleted].map(([clientId, runs]) => [clientId, runs.map(([clock, length]) => [clock, length] as const)]),
+    ),
+  }
+  return () => {
+    if (CollaborativeDocumentRegistry.get(room) !== document) {
+      return undefined
+    }
+    return createCollaborationRevisionStamp(document.epoch, captured, body, Date.now())
+  }
+}

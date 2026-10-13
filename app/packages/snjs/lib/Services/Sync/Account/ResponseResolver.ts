@@ -11,6 +11,7 @@ import {
   DeltaRemoteUuidConflicts,
   DeltaRemoteRejected,
   DeltaEmit,
+  type SyncConflictPolicy,
 } from '@standardnotes/models'
 import { DecryptedServerConflictMap } from './ServerConflictMap'
 
@@ -32,6 +33,7 @@ export class ServerSyncResponseResolver {
     private baseCollection: ImmutablePayloadCollection<FullyFormedPayloadInterface>,
     private payloadsSavedOrSaving: ServerSyncPushContextualPayload[],
     private historyMap: HistoryMap,
+    private conflictPolicy?: SyncConflictPolicy,
   ) {}
 
   public result(): DeltaEmit[] {
@@ -55,7 +57,13 @@ export class ServerSyncResponseResolver {
   private processRetrievedPayloads(): DeltaEmit {
     const collection = ImmutablePayloadCollection.WithPayloads(this.payloadSet.retrievedPayloads)
 
-    const delta = new DeltaRemoteRetrieved(this.baseCollection, collection, this.payloadsSavedOrSaving, this.historyMap)
+    const delta = new DeltaRemoteRetrieved(
+      this.baseCollection,
+      collection,
+      this.payloadsSavedOrSaving,
+      this.historyMap,
+      this.conflictPolicy,
+    )
 
     return delta.result()
   }
@@ -71,6 +79,7 @@ export class ServerSyncResponseResolver {
       this.baseCollection,
       this.getConflictsForType(ConflictType.ConflictingData),
       this.historyMap,
+      this.conflictPolicy,
     )
 
     return delta.result()

@@ -318,6 +318,26 @@ export function documentStateCovers(
   return true
 }
 
+/** Reverse coverage: a server-acknowledged revision contains the pending live state. */
+export function revisionStampCoversDocumentState(
+  stamp: Pick<CollaborationRevisionStamp, 'sv' | 'ds'>,
+  state: CollaborativeDocumentState,
+): boolean {
+  const deleted = new Map<number, Array<[number, number]>>()
+  for (const [clientId, runs] of stamp.ds) {
+    let end = 0
+    const absolute: Array<[number, number]> = []
+    for (let index = 0; index < runs.length; index += 2) {
+      const start = end + runs[index]
+      absolute.push([start, runs[index + 1]])
+      end = start + runs[index + 1]
+    }
+    deleted.set(clientId, absolute)
+  }
+  const target = createCollaborationRevisionStamp('coverage', state, '', 0)
+  return target !== undefined && documentStateCovers({ stateVector: new Map(stamp.sv), deleted }, target)
+}
+
 /** Whether every clock in the flat `gap, length` runs lies inside one of `local`'s ascending runs. */
 function deletedRunsContain(local: ReadonlyArray<readonly [number, number]>, runs: number[]): boolean {
   let localIndex = 0

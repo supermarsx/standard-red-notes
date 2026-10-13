@@ -1,4 +1,4 @@
-import { ConflictDelta } from './Conflict'
+import { ConflictDelta, type SyncConflictPolicy } from './Conflict'
 import { FullyFormedPayloadInterface, PayloadEmitSource } from '../../Abstract/Payload'
 import { ImmutablePayloadCollection } from '../Collection/Payload/ImmutablePayloadCollection'
 import { HistoryMap } from '../History'
@@ -12,6 +12,7 @@ export class DeltaRemoteDataConflicts implements SyncDeltaInterface {
     readonly baseCollection: ImmutablePayloadCollection,
     readonly conflicts: ConflictConflictingDataParams<FullyFormedPayloadInterface>[],
     readonly historyMap: HistoryMap,
+    readonly conflictPolicy?: SyncConflictPolicy,
   ) {}
 
   public result(): SyncDeltaEmit {
@@ -39,7 +40,13 @@ export class DeltaRemoteDataConflicts implements SyncDeltaInterface {
         continue
       }
 
-      const delta = new ConflictDelta(this.baseCollection, base, conflict.server_item, this.historyMap)
+      const delta = new ConflictDelta(
+        this.baseCollection,
+        base,
+        conflict.server_item,
+        this.historyMap,
+        this.conflictPolicy,
+      )
 
       extendSyncDelta(result, delta.result())
     }

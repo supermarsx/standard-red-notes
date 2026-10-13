@@ -5,6 +5,7 @@ import {
   DecryptedPayloadInterface,
   DeletedItemInterface,
   FullyFormedPayloadInterface,
+  SyncConflictPolicy,
 } from '@standardnotes/models'
 import { SyncOptions } from './SyncOptions'
 import { AbstractService } from '../Service/AbstractService'
@@ -15,6 +16,8 @@ import { AccountSyncTransportInterface } from './AccountSyncTransport'
 
 export interface SyncServiceInterface extends AbstractService<SyncEvent> {
   sync(options?: Partial<SyncOptions>): Promise<unknown>
+  setConflictPolicy(policy: SyncConflictPolicy | undefined): void
+  setOnlineUploadPolicy(policy: ((uuid: string) => boolean) | undefined): void
   getRawSyncRequestForExternalUse(
     items: (DecryptedItemInterface | DeletedItemInterface)[],
   ): Promise<HttpRequest | undefined>

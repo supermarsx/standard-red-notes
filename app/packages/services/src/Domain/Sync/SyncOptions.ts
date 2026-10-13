@@ -16,6 +16,8 @@ export type SyncOptions = {
   operationId?: string
   /** Whether to await any sync requests that may be queued from this call. */
   awaitAll?: boolean
+  /** Retrieve server changes without uploading dirty items or spawning a dirty-item upload. */
+  downloadOnly?: boolean
   /**
    * A callback that is triggered after pre-sync save completes,
    * and before the sync request is network dispatched

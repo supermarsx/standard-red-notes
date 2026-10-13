@@ -19,11 +19,14 @@ import {
   removeCollaborationRevisionStamp,
 } from '@/Components/SuperEditor/Collaboration/CollaborationRevisionStamp'
 import { action, makeObservable, observable, runInAction } from 'mobx'
+import { CollaborationSaverRegistry } from '@/Components/SuperEditor/Collaboration/CollaborationSaverElection'
 
 const NotePreviewCharLimit = 160
 const MinimumStatusChangeDuration = 400
 
 export type NoteSaveFunctionParams = {
+  /** Rechecked after the debounce and inside the mutation, so a handoff cancels stale writes. */
+  canSave?: () => boolean
   title?: string
   text?: string
   bypassDebouncer?: boolean
@@ -250,6 +253,9 @@ export class NoteSyncController {
     if (this.noteIsGone) {
       return
     }
+    if (!this.maySave(params)) {
+      return
+    }
 
     const supersededOperation = this.queuedSaveOperation
     const operation: SaveOperation = { completion: Deferred<void>() }
@@ -454,6 +460,10 @@ export class NoteSyncController {
   }
 
   private async undebouncedMutateAndSync(params: NoteSaveFunctionParams & { localOnly: boolean }): Promise<void> {
+    if (!this.maySave(params)) {
+      params.onLocalPropagationComplete?.()
+      return
+    }
     if (!this.items.findItem(this.item.uuid)) {
       this.handleNoteDiscoveredGone()
       /**
@@ -472,7 +482,7 @@ export class NoteSyncController {
         // A mutator implementation can defer invoking this callback. Once a
         // security teardown crosses the boundary, never write the retained
         // plaintext even if an already-started changeItem call resumes later.
-        if (this.deallocated) {
+        if (this.deallocated || !this.maySave(params)) {
           return
         }
 
@@ -522,6 +532,14 @@ export class NoteSyncController {
     this.queueLargeNoteSyncIfNeeded()
 
     params.onLocalPropagationComplete?.()
+  }
+
+  private maySave(params: NoteSaveFunctionParams): boolean {
+    if (params.canSave && !params.canSave()) {
+      return false
+    }
+    const saver = CollaborationSaverRegistry.get(this.item.uuid)
+    return !saver || (saver.isSaver && !saver.paused)
   }
 
   public syncOnlyIfLargeNote(): void {

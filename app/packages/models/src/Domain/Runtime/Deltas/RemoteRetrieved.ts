@@ -1,5 +1,5 @@
 import { ImmutablePayloadCollection } from './../Collection/Payload/ImmutablePayloadCollection'
-import { ConflictDelta } from './Conflict'
+import { ConflictDelta, type SyncConflictPolicy } from './Conflict'
 import {
   isErrorDecryptingPayload,
   isDecryptedPayload,
@@ -21,6 +21,7 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
     readonly applyCollection: ImmutablePayloadCollection,
     private itemsSavedOrSaving: ServerSyncPushContextualPayload[],
     readonly historyMap: HistoryMap,
+    readonly conflictPolicy?: SyncConflictPolicy,
   ) {}
 
   private isUuidOfPayloadCurrentlySavingOrSaved(uuid: string): boolean {
@@ -139,7 +140,7 @@ export class DeltaRemoteRetrieved implements SyncDeltaInterface {
         continue
       }
 
-      const delta = new ConflictDelta(this.baseCollection, base, conflict, this.historyMap)
+      const delta = new ConflictDelta(this.baseCollection, base, conflict, this.historyMap, this.conflictPolicy)
 
       extendSyncDelta(result, delta.result())
     }

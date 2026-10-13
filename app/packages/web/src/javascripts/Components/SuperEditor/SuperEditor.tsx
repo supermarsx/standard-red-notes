@@ -60,14 +60,18 @@ import { flushChecklistMutationDurability } from './Checklist/ChecklistMutationB
 import { createChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
 import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
 import { collaboratorColor } from './Collaboration/collaboratorColor'
-import { CollaborativeDocumentRegistry } from './Collaboration/CollaborativeDocumentRegistry'
 import {
-  createCollaborationRevisionStamp,
+  CollaborativeDocumentRegistry,
+  captureDocumentRevisionForSave,
+} from './Collaboration/CollaborativeDocumentRegistry'
+import { CollaborationSaverRegistry } from './Collaboration/CollaborationSaverElection'
+import {
   readCollaborationRevisionStamp,
   writeCollaborationRevisionStamp,
 } from './Collaboration/CollaborationRevisionStamp'
 import {
   matchesNoteEncryptionIdentity,
+  resolveCollaborationKeySource,
   resolveNoteEncryptionIdentity,
 } from './Collaboration/CollaborationKeyDerivation'
 import {
@@ -395,9 +399,10 @@ export const SuperEditor: FunctionComponent<Props> = ({
       return
     }
     const noteUuid = authorizedEditorNote.uuid
-    return controller.registerEditorDurabilityFlush(() =>
-      flushChecklistMutationDurability(application, noteUuid, effectiveChecklistOwnerLeaseId),
-    )
+    return controller.registerEditorDurabilityFlush(async () => {
+      await flushChecklistMutationDurability(application, noteUuid, effectiveChecklistOwnerLeaseId)
+      await CollaborationSaverRegistry.awaitDurable(noteUuid)
+    })
   }, [application, authorizedEditorNote, controller, effectiveChecklistOwnerLeaseId])
 
   const reloadFeatureStatus = useCallback(() => {
@@ -428,7 +433,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
   }, [application, reloadFeatureStatus])
 
   const keyboardService = application.keyboardService
-  const isEditorReadonly =
+  const baseEditorReadonly =
     !authorizedEditorNote ||
     authorizedEditorNote.locked ||
     Boolean(readonly) ||
@@ -443,6 +448,13 @@ export const SuperEditor: FunctionComponent<Props> = ({
     collaborationAccess.sessionUser === retrievedLifetime.identity.sessionUser
       ? retrievedLifetime.identity
       : undefined
+
+  const [collaborationSaver, setCollaborationSaver] = useState(() => CollaborationSaverRegistry.get(lifetimeNote.uuid))
+  useEffect(() => {
+    const update = () => setCollaborationSaver(CollaborationSaverRegistry.get(lifetimeNote.uuid))
+    update()
+    return CollaborationSaverRegistry.subscribe(lifetimeNote.uuid, update)
+  }, [lifetimeNote.uuid])
   // The elected bootstrapper may seed only the clean, revision-matched body
   // returned by the freshness barrier; never fall back to a render-time note.
   const collaboration =
@@ -463,6 +475,32 @@ export const SuperEditor: FunctionComponent<Props> = ({
           initialEditorState: collaborationAccess.initialEditorState,
         }
       : undefined
+  // A shared note must not expose a temporary ordinary editor while joining:
+  // its pending serialization could race the clean bootstrap snapshot and be
+  // discarded when the authoritative editor replaces that surface.
+  const sharedCollaborationJoining =
+    Boolean(lifetimeNote.shared_vault_uuid) &&
+    !collaboration &&
+    application.sockets.hasConfiguredWebSocketUrl?.() !== false &&
+    resolveCollaborationKeySource(application, lifetimeNote).available
+  const isEditorReadonly =
+    baseEditorReadonly ||
+    sharedCollaborationJoining ||
+    (Boolean(collaboration) && (!collaborationSaver || collaborationSaver.paused))
+  const editorSavePermission = useRef({ noteUuid: lifetimeNote.uuid, readonly: isEditorReadonly, live: false })
+  editorSavePermission.current = {
+    noteUuid: lifetimeNote.uuid,
+    readonly: isEditorReadonly,
+    live: Boolean(collaboration),
+  }
+  const mayPersistEditorBody = useCallback((noteUuid: string) => {
+    const permission = editorSavePermission.current
+    return (
+      permission.noteUuid === noteUuid &&
+      !permission.readonly &&
+      (!permission.live || CollaborationSaverRegistry.get(noteUuid)?.isSaver === true)
+    )
+  }, [])
 
   /**
    * Publish collaboration state for the title-bar status chip.
@@ -489,17 +527,34 @@ export const SuperEditor: FunctionComponent<Props> = ({
     collaborationAccess.status === 'disabled' && collaborationAccess.retriesExhausted === true
   const publishedCollaborationStatus = useMemo<CollaborationRoomStatus>(() => {
     if (collaborationIsLive) {
-      return collaborationIsCanonical ? { kind: 'active' } : { kind: 'preparing', awaitingPeerState: true }
+      if (collaborationSaver?.paused) {
+        return {
+          kind: 'unavailable',
+          readonly: true,
+          reason: 'Live collaboration is read-only while the room is waiting for a socket saver.',
+        }
+      }
+      return collaborationIsCanonical
+        ? { kind: 'active' }
+        : { kind: 'preparing', awaitingPeerState: true, readonly: true }
     }
     if (collaborationUnavailableReason !== undefined) {
       return {
         kind: 'unavailable',
         reason: collaborationUnavailableReason,
+        ...(sharedCollaborationJoining ? { readonly: true } : {}),
         ...(collaborationRetriesExhausted ? { retriesExhausted: true } : {}),
       }
     }
-    return { kind: 'preparing' }
-  }, [collaborationIsLive, collaborationIsCanonical, collaborationUnavailableReason, collaborationRetriesExhausted])
+    return { kind: 'preparing', ...(sharedCollaborationJoining ? { readonly: true } : {}) }
+  }, [
+    collaborationIsLive,
+    collaborationIsCanonical,
+    collaborationSaver?.paused,
+    collaborationUnavailableReason,
+    collaborationRetriesExhausted,
+    sharedCollaborationJoining,
+  ])
 
   useEffect(() => {
     if (!interactiveOwner) {
@@ -621,37 +676,25 @@ export const SuperEditor: FunctionComponent<Props> = ({
         ignoreNextChange.current = undefined
         return
       }
-      if (isEditorReadonly) {
+      if (isEditorReadonly || !mayPersistEditorBody(retrievedLifetime.noteUuid)) {
+        return
+      }
+      if (collaborationIsLive && !CollaborationSaverRegistry.get(retrievedLifetime.noteUuid)?.isSaver) {
+        // Peers' edits already travel through Yjs. They must never dirty an
+        // account item, including lifecycle serialization on blur or unmount.
+        if (bypassDebounce) {
+          void CollaborationSaverRegistry.flush(retrievedLifetime.noteUuid)
+        }
         return
       }
 
-      // Say which state of the shared document this body is.
-      //
-      // The state is read when the note is mutated, a task after this serialization, and not
-      // here. A state AHEAD of the body is harmless: whoever has applied everything in it has
-      // applied everything the body was made from. One BEHIND it would vouch for less than the
-      // body contains, and that is what reading it here risks, because this callback is one
-      // listener of the editor update among several and the one that copies the update into the
-      // shared document may not have run yet.
-      //
-      // With no live document, one that had not established its state when the body was
-      // serialized, or one that was replaced before the save, the stamp is REMOVED: a body saved
-      // outside the shared document is not a state of it.
-      const liveDocument = CollaborativeDocumentRegistry.get(retrievedLifetime.noteUuid)
-      const serializedFromEstablishedDocument = liveDocument?.state() !== undefined
-      const stampForSavedBody = () => {
-        if (
-          !liveDocument ||
-          !serializedFromEstablishedDocument ||
-          CollaborativeDocumentRegistry.get(retrievedLifetime.noteUuid) !== liveDocument
-        ) {
-          return undefined
-        }
-        const state = liveDocument.state()
-        return state ? createCollaborationRevisionStamp(liveDocument.epoch, state, value, Date.now()) : undefined
-      }
+      // A later mutation must not stamp a vector ahead of this serialized body:
+      // that would falsely acknowledge intervening edits that it never saved.
+      // A conservative snapshot behind the body only asks the saver to save again.
+      const stampForSavedBody = captureDocumentRevisionForSave(retrievedLifetime.noteUuid, value)
 
       void controller.saveAndAwaitLocalPropagation({
+        canSave: () => mayPersistEditorBody(retrievedLifetime.noteUuid),
         text: value,
         isUserModified: true,
         customMutate: (mutator) => writeCollaborationRevisionStamp(mutator, stampForSavedBody()),
@@ -666,8 +709,28 @@ export const SuperEditor: FunctionComponent<Props> = ({
         },
       })
     },
-    [controller, isEditorReadonly, latestEditorPreview, latestEditorText, nextSurfaceOwner, retrievedLifetime],
+    [
+      collaborationIsLive,
+      controller,
+      isEditorReadonly,
+      mayPersistEditorBody,
+      latestEditorPreview,
+      latestEditorText,
+      nextSurfaceOwner,
+      retrievedLifetime,
+    ],
   )
+
+  const collaborationSaveRef = useRef(handleChange)
+  collaborationSaveRef.current = handleChange
+  useEffect(() => {
+    if (!collaborationSaver?.isSaver || latestEditorText.current === undefined) {
+      return
+    }
+    // Becoming saver must persist the retained document even if there is no
+    // subsequent edit (the former saver may have vanished mid-debounce).
+    void collaborationSaveRef.current(latestEditorText.current, latestEditorPreview.current?.previewPlain ?? '', true)
+  }, [collaborationSaver?.saveRequest, collaborationSaver?.isSaver, latestEditorText, latestEditorPreview])
 
   /**
    * Standard Red Notes (last-edit-loss fix): register the editor's debounce control

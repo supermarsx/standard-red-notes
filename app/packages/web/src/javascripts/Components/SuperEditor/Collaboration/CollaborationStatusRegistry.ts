@@ -18,11 +18,12 @@
 
 export type CollaborationRoomStatus =
   /**
-   * The room is being derived/authorized; the editor is usable meanwhile. With
+   * The room is being derived/authorized. `readonly` protects shared notes
+   * during their initial authorization. With
    * `awaitingPeerState` the lease is live but the provider still waits for a
    * collaborator's copy of the note, and the editor is read-only until it lands.
    */
-  | { kind: 'preparing'; awaitingPeerState?: boolean }
+  | { kind: 'preparing'; awaitingPeerState?: boolean; readonly?: boolean }
   /** A live encrypted room owns the editor right now. */
   | { kind: 'active' }
   /**
@@ -30,7 +31,7 @@ export type CollaborationRoomStatus =
    * `retriesExhausted` says the automatic retries have stood down and only user
    * activity (focus, an edit) or a transport change will start them again.
    */
-  | { kind: 'unavailable'; reason: string; retriesExhausted?: boolean }
+  | { kind: 'unavailable'; reason: string; retriesExhausted?: boolean; readonly?: boolean }
 
 export type CollaborationRoomState = {
   status: CollaborationRoomStatus
@@ -49,10 +50,10 @@ function sameStatus(a: CollaborationRoomStatus, b: CollaborationRoomStatus): boo
     return false
   }
   if (a.kind === 'unavailable' && b.kind === 'unavailable') {
-    return a.reason === b.reason && a.retriesExhausted === b.retriesExhausted
+    return a.reason === b.reason && a.retriesExhausted === b.retriesExhausted && a.readonly === b.readonly
   }
   if (a.kind === 'preparing' && b.kind === 'preparing') {
-    return a.awaitingPeerState === b.awaitingPeerState
+    return a.awaitingPeerState === b.awaitingPeerState && a.readonly === b.readonly
   }
   return true
 }
@@ -81,9 +82,14 @@ class CollaborationStatusRegistryImpl {
             kind: 'unavailable',
             reason: String(status.reason ?? '').slice(0, MAX_REASON_LENGTH),
             ...(status.retriesExhausted === true ? { retriesExhausted: true } : {}),
+            ...(status.readonly === true ? { readonly: true } : {}),
           }
         : status.kind === 'preparing'
-          ? { kind: 'preparing', ...(status.awaitingPeerState === true ? { awaitingPeerState: true } : {}) }
+          ? {
+              kind: 'preparing',
+              ...(status.awaitingPeerState === true ? { awaitingPeerState: true } : {}),
+              ...(status.readonly === true ? { readonly: true } : {}),
+            }
           : status
     const previous = this.rooms.get(room)
     const next: CollaborationRoomState = {

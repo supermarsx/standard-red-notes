@@ -21,6 +21,9 @@ const nullPlugin = () => null
 
 let mockCollaborationAccess: CollaborationRoomAccessState
 let mockEditorOnChange: ((value: string, preview: string, bypassDebounce?: boolean) => void | Promise<void>) | undefined
+let mockEditorReadonly: boolean | undefined
+let mockGatewayConfigured = true
+let mockCollaborationKeyAvailable = true
 const mockSessionUser = { uuid: 'user-uuid' }
 
 jest.mock('./Collaboration/useCollaborationRoomAccess', () => ({
@@ -28,6 +31,7 @@ jest.mock('./Collaboration/useCollaborationRoomAccess', () => ({
 }))
 
 jest.mock('./Collaboration/CollaborationKeyDerivation', () => ({
+  resolveCollaborationKeySource: () => ({ available: mockCollaborationKeyAvailable }),
   resolveNoteEncryptionIdentity: (_application: unknown, note: { uuid: string }) => ({
     noteUuid: note.uuid,
     userUuid: 'user-uuid',
@@ -43,8 +47,9 @@ jest.mock('./BlocksEditorComposer', () => ({
   BlocksEditorComposer: ({ children }: { children?: React.ReactNode }) => createElement('div', null, children),
 }))
 jest.mock('./BlocksEditor', () => ({
-  BlocksEditor: ({ onChange }: { onChange?: typeof mockEditorOnChange }) => {
+  BlocksEditor: ({ onChange, readonly }: { onChange?: typeof mockEditorOnChange; readonly?: boolean }) => {
     mockEditorOnChange = onChange
+    mockEditorReadonly = readonly
     return null
   },
 }))
@@ -71,9 +76,11 @@ import {
   MAX_STAMP_DELETED_RUNS,
   createCollaborationRevisionStamp,
   fingerprintText,
+  revisionStampCoversDocumentState,
   type CollaborationRevisionStamp,
 } from './Collaboration/CollaborationRevisionStamp'
 import { CollaborationStatusRegistry } from './Collaboration/CollaborationStatusRegistry'
+import { CollaborationSaverRegistry } from './Collaboration/CollaborationSaverElection'
 import { RETRIEVED_REVISION_MERGE_WAIT_MS, SuperEditor } from './SuperEditor'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -104,6 +111,7 @@ type TestNote = {
   preview_html: string
   serverUpdatedAtTimestamp: number
   user_uuid: string
+  shared_vault_uuid?: string
   payload: { content: Record<string, unknown>; ejected(): { content: Record<string, unknown> } }
 }
 
@@ -151,6 +159,7 @@ let documentListeners: Set<() => void>
 
 const application = {
   platform: 'web',
+  sockets: { hasConfiguredWebSocketUrl: () => mockGatewayConfigured },
   sessions: {
     isSignedIn: () => true,
     getUser: () => mockSessionUser,
@@ -213,6 +222,19 @@ const liveRoom = (): CollaborationRoomAccessState =>
   }) as unknown as CollaborationRoomAccessState
 
 const renderEditor = async (): Promise<void> => {
+  // Lexical/provider children are stubbed in this suite. Model their established
+  // authoritative saver contract so explicit editor changes use the real save path.
+  if (mockCollaborationAccess.status === 'ready') {
+    CollaborationSaverRegistry.set(NOTE_UUID, {
+      active: true,
+      isSaver: true,
+      paused: false,
+      leaseId: 'lease-1',
+      saverLeaseId: 'lease-1',
+      saveRequest: 0,
+      saveFence: { room: NOTE_UUID, token: 'a'.repeat(64) },
+    })
+  }
   const controller = {
     item: currentNote,
     isTemplateNote: false,
@@ -238,6 +260,9 @@ const renderEditor = async (): Promise<void> => {
       }),
     )
   })
+  // Initial saver serialization is covered by election tests. Each scenario here
+  // starts after that bootstrap and inspects its own subsequent body mutation.
+  save.mockClear()
 }
 
 /** Register the live shared document the collaboration plugin would have registered. */
@@ -284,6 +309,9 @@ beforeEach(() => {
   jest.useFakeTimers()
   mockCollaborationAccess = liveRoom()
   mockEditorOnChange = undefined
+  mockEditorReadonly = undefined
+  mockGatewayConfigured = true
+  mockCollaborationKeyAvailable = true
   observeNote = undefined
   save = jest.fn(() => Promise.resolve())
   duplicateItem = jest.fn(() =>
@@ -297,9 +325,69 @@ beforeEach(() => {
   liveDeleted = new Map()
   documentListeners = new Set()
   CollaborationStatusRegistry.clearRoom(NOTE_UUID)
+  CollaborationSaverRegistry.clear(NOTE_UUID, 'lease-1')
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
+})
+
+describe('shared note preparation protects the editor before the provider mounts', () => {
+  it('keeps an eligible shared note read-only through preparation and retries', async () => {
+    currentNote.shared_vault_uuid = 'shared-vault'
+    mockCollaborationAccess = { status: 'preparing' }
+    await renderEditor()
+    expect(mockEditorReadonly).toBe(true)
+    expect(CollaborationStatusRegistry.getState(NOTE_UUID)?.status).toEqual({ kind: 'preparing', readonly: true })
+    await typeIntoEditor('an early callback cannot replace the canonical body')
+    expect(save).not.toHaveBeenCalled()
+
+    mockCollaborationAccess = { status: 'disabled', reason: 'Relay unavailable', retriesExhausted: true }
+    await renderEditor()
+    expect(mockEditorReadonly).toBe(true)
+    expect(CollaborationStatusRegistry.getState(NOTE_UUID)?.status).toMatchObject({ readonly: true })
+    await typeIntoEditor('retrying cannot fall back to an ordinary write')
+    expect(save).not.toHaveBeenCalled()
+
+    mockCollaborationAccess = liveRoom()
+    await renderEditor()
+    expect(mockEditorReadonly).toBe(false)
+    await typeIntoEditor('the authoritative editor can now save')
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps ordinary notes editable while collaboration prepares', async () => {
+    mockCollaborationAccess = { status: 'preparing' }
+    await renderEditor()
+    expect(mockEditorReadonly).toBe(false)
+    await typeIntoEditor('ordinary authoring')
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps shared notes editable on deployments without a gateway', async () => {
+    currentNote.shared_vault_uuid = 'shared-vault'
+    mockGatewayConfigured = false
+    mockCollaborationAccess = { status: 'disabled', reason: 'No gateway configured' }
+    await renderEditor()
+    expect(mockEditorReadonly).toBe(false)
+    await typeIntoEditor('ordinary encrypted persistence')
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a queued ordinary mutation once the shared joining guard becomes active', async () => {
+    currentNote.shared_vault_uuid = 'shared-vault'
+    mockGatewayConfigured = false
+    mockCollaborationAccess = { status: 'preparing' }
+    await renderEditor()
+    const oldChange = mockEditorOnChange
+    await typeIntoEditor('queued before joining')
+    const canSave = save.mock.calls[0][0].canSave as () => boolean
+    expect(canSave()).toBe(true)
+    mockGatewayConfigured = true
+    await renderEditor()
+    expect(canSave()).toBe(false)
+    await act(async () => oldChange?.('late unmount serialization', '', true))
+    expect(save).not.toHaveBeenCalled()
+  })
 })
 
 afterEach(() => {
@@ -310,6 +398,7 @@ afterEach(() => {
   unregisterDocument?.()
   unregisterDocument = undefined
   CollaborationStatusRegistry.clearRoom(NOTE_UUID)
+  CollaborationSaverRegistry.clear(NOTE_UUID, 'lease-1')
   jest.useRealTimers()
 })
 
@@ -396,27 +485,25 @@ describe('a save from a collaborative editor says which state of the shared docu
     expect(stampWrittenBy(save.mock.calls[0])).toBeUndefined()
   })
 
-  it('reads the vector when the note is mutated, never earlier than the body it describes', async () => {
+  it('stamps the captured serialized snapshot without acknowledging intervening unsaved edits', async () => {
     registerLiveDocument()
     await renderEditor()
 
     await typeIntoEditor('the body as typed')
-    // The save is a task later than the serialization. In between, the listener that copies this
-    // very keystroke into the shared document runs, and a peer's keystroke arrives.
-    liveVector = new Map([
-      [1, 11],
-      [2, 9],
-    ])
+    // The later mutation must retain a copied vector even if the source map is
+    // changed in place by local/peer operations after this body was serialized.
+    liveVector.set(1, 11)
+    liveVector.set(2, 9)
 
-    // A vector ahead of the body vouches for nothing the body lacks; the one read at
-    // serialization, [1, 10], would have left the keystroke that IS in the body unaccounted for.
-    expect(stampWrittenBy(save.mock.calls[0])).toMatchObject({
+    const stamped = stampWrittenBy(save.mock.calls[0]) as CollaborationRevisionStamp
+    expect(stamped).toMatchObject({
       sv: [
-        [1, 11],
-        [2, 9],
+        [1, 10],
+        [2, 7],
       ],
       text: fingerprintText('the body as typed'),
     })
+    expect(revisionStampCoversDocumentState(stamped, { stateVector: liveVector, deleted: liveDeleted })).toBe(false)
   })
 
   it('removes the stamp when the document was replaced between the serialization and the save', async () => {
@@ -442,7 +529,7 @@ describe('a save from a collaborative editor says which state of the shared docu
     expect(stampWrittenBy(save.mock.calls[0])).toBeUndefined()
   })
 
-  it('removes the stamp when the document stopped vouching for its state before the save', async () => {
+  it('retains the captured proof when the same established document loses current readiness before mutation', async () => {
     let established = true
     registerLiveDocument({ ready: () => established })
     await renderEditor()
@@ -450,7 +537,13 @@ describe('a save from a collaborative editor says which state of the shared docu
     await typeIntoEditor('typed just before the room was lost')
     established = false
 
-    expect(stampWrittenBy(save.mock.calls[0])).toBeUndefined()
+    expect(stampWrittenBy(save.mock.calls[0])).toMatchObject({
+      epoch: EPOCH,
+      sv: [
+        [1, 10],
+        [2, 7],
+      ],
+    })
   })
 })
 

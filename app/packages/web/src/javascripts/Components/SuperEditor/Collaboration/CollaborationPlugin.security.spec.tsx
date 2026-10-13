@@ -5,6 +5,18 @@ import { webcrypto } from 'node:crypto'
 import { act, createElement, StrictMode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 
+jest.mock('@lexical/react/LexicalComposerContext', () => {
+  const editor = {
+    getRootElement: () => null,
+    registerRootListener: () => () => undefined,
+    registerUpdateListener: () => () => undefined,
+    registerEditableListener: () => () => undefined,
+    isEditable: () => true,
+  }
+  return { useLexicalComposerContext: () => [editor] }
+})
+jest.mock('./CollaborationSaverElection', () => ({ installCollaborationSaver: jest.fn() }))
+
 jest.mock('@lexical/react/LexicalCollaborationPlugin', () => ({
   CollaborationPlugin: (props: {
     id: string
@@ -111,6 +123,8 @@ beforeEach(() => {
       awareness: {
         clientID: 1,
         getStates: () => awarenessStates,
+        getLocalState: () => null,
+        setLocalStateField: jest.fn(),
         on: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.add(listener)),
         off: jest.fn((_event: string, listener: () => void) => awarenessChangeListeners.delete(listener)),
       },
@@ -431,6 +445,7 @@ describe('Super collaboration security gate', () => {
     expect(registered?.epoch).toBe(lease.roomEpoch)
     // A document that has not established its state says nothing about what it contains.
     expect(registered?.state()).toBeUndefined()
+    expect(registered?.retainedState?.()).toBeUndefined()
 
     providerCanonicalReady = true
     const updates = jest.fn()
@@ -439,6 +454,10 @@ describe('Super collaboration security gate', () => {
     // It is the provider's own document: an edit shows up in its state and reaches a subscriber.
     expect([...(registered?.state()?.stateVector ?? new Map()).values()]).toEqual([4])
     expect(registered?.state()?.deleted.size).toBe(0)
+    providerCanonicalReady = false
+    expect(registered?.state()).toBeUndefined()
+    expect([...(registered?.retainedState?.()?.stateVector ?? new Map()).values()]).toEqual([4])
+    providerCanonicalReady = true
     expect(updates).toHaveBeenCalledTimes(1)
     stopListening?.()
     act(() => providerDocument?.getText('probe').insert(0, 'more'))
