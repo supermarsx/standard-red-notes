@@ -45,6 +45,11 @@ const EXPECTED_CHECKS = [
   'still true of this mermaid: a bare true, number or null is NOT a string to it',
   'the characters mermaid keeps in a theme variable are exactly the ones this app says it keeps',
   'still true of this mermaid: an angle bracket or a data URL in ANY option’s value deletes the option',
+  'the three keys the app locks are on the list it hands mermaid',
+  'a diagram that sets themeCSS, fontFamily or htmlLabels is drawn exactly as the same diagram without it',
+  'by the same comparison, a key the app does NOT lock changes the drawing',
+  'still true of this mermaid: it is the lock that does it — off the list, each of the three changes the drawing',
+  'the lock is by exact name: it covers the key at every depth, and no key that merely contains the name',
 ]
 
 let status: number | null = null
@@ -135,6 +140,12 @@ describe('the installed mermaid, asked what a diagram’s own configuration mean
     expect(counts.themeCharactersProbed).toBeGreaterThanOrEqual(101)
     expect(counts.themeCharactersKept).toBeGreaterThan(60)
     expect(counts.themeCharactersKept).toBeLessThan(counts.themeCharactersProbed)
+    // The lock, DRAWN: ten ways of spelling the three keys on three kinds of
+    // diagram, each compared with the same diagram without the key — and keys
+    // that are not locked, which the same comparison must tell apart.
+    expect(counts.lockedForms).toBeGreaterThanOrEqual(10)
+    expect(counts.lockedDrawings).toBeGreaterThanOrEqual(30)
+    expect(counts.unlockedDrawings).toBeGreaterThanOrEqual(5)
   })
 
   it('says which mermaid and which Node it judged', () => {

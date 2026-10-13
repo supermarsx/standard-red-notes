@@ -555,11 +555,11 @@ await check('every key in the list is one mermaid has, and none gets through by 
     assert(api.getConfig()[key] !== 'srn-contract-marker', `"${key}" is in the list and still reached mermaid's config`)
   }
   // And the marker technique can fail: an unlocked key carries it through.
-  const unlocked = PROBES.find((probe) => !LOCKED.includes(probe.key) && probe.key === 'themeCSS')
-  if (unlocked) {
-    await render(frontmatter('themeCSS: "srn-contract-marker"', FLOW))
-    assert(api.getConfig().themeCSS === 'srn-contract-marker', 'the marker did not reach config for an unlocked key')
-  }
+  // `look`, which the Customise panel writes and so must never be locked —
+  // this used to be `themeCSS`, until the app locked it.
+  assert(!LOCKED.includes('look'), '`look` is on the locked list, and the Customise panel writes it')
+  await render(frontmatter('look: "srn-contract-marker"', FLOW))
+  assert(api.getConfig().look === 'srn-contract-marker', 'the marker did not reach config for an unlocked key')
   return LOCKED.join(', ')
 })
 

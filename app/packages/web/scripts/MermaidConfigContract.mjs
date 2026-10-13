@@ -911,6 +911,251 @@ await check(
   },
 )
 
+// ===========================================================================
+// 6. The three keys a diagram's text may no longer set: drawn, not just parsed.
+// ===========================================================================
+//
+// Everything above asks mermaid what it READS. This section has it DRAW, through
+// the app's own MermaidRuntime, and compares the SVG it returns. jsdom has no
+// layout, so every box here is a made-up size (`fakeGeometry` below) and nothing
+// may be concluded about where anything is. What can be concluded is exactly
+// what is asserted: two texts produced the SAME drawing, byte for byte, or they
+// did not. Only kinds whose output is the same from one render to the next are
+// used (a sequence diagram carries random ids).
+const fakeGeometry = function () {
+  const characters = (this.textContent || '').length
+  return {
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: 8 * characters,
+    bottom: 18,
+    width: 8 * Math.max(characters, 1),
+    height: 18,
+  }
+}
+for (const prototype of [
+  dom.window.SVGElement.prototype,
+  dom.window.HTMLElement.prototype,
+  dom.window.Element.prototype,
+]) {
+  Object.defineProperty(prototype, 'getBBox', { value: fakeGeometry, configurable: true, writable: true })
+  Object.defineProperty(prototype, 'getBoundingClientRect', { value: fakeGeometry, configurable: true, writable: true })
+  Object.defineProperty(prototype, 'getComputedTextLength', {
+    value() {
+      return 8 * (this.textContent || '').length
+    },
+    configurable: true,
+    writable: true,
+  })
+}
+
+const DRAWN_FONT = 'Georgia, serif'
+let drawn = 0
+/**
+ * An id of constant LENGTH. The faked geometry sizes a box by its text, the id
+ * is repeated through the diagram's stylesheet, and so the tenth drawing came
+ * out wider than the ninth for no other reason than "10" being longer than "9".
+ */
+const drawingId = () => `mermaid-config-contract-${String(drawn++).padStart(6, '0')}`
+/** Draw `text` through the app's runtime and return the SVG with its own id taken out. */
+const draw = async (text) => {
+  const id = drawingId()
+  const { svg } = await Runtime.renderMermaidDiagram({
+    id,
+    text,
+    theme: { theme: 'base' },
+    fontFamily: DRAWN_FONT,
+    measureIn: undefined,
+  })
+  return svg.split(id).join('ID')
+}
+/** The same, with a secure list of the caller's choosing in place of the app's. */
+const drawWithSecure = async (text, secure) => {
+  const id = drawingId()
+  api.reset()
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', secure, theme: 'base', fontFamily: DRAWN_FONT })
+  const { svg } = await mermaid.render(id, text)
+  return svg.split(id).join('ID')
+}
+
+const DRAWN_KINDS = {
+  flowchart: FLOW,
+  state: Fixtures.MERMAID_SAMPLE_DIAGRAMS.state,
+  pie: Fixtures.MERMAID_SAMPLE_DIAGRAMS.pie,
+}
+/** Each of the three keys, every way a text can spell it: at the root and nested, as frontmatter and as a directive. */
+const LOCKED_FORMS = [
+  {
+    key: 'themeCSS',
+    name: 'themeCSS, frontmatter',
+    wrap: (body) => `---\nconfig:\n  themeCSS: ".node rect, .pieCircle { fill: red; stroke-width: 9px }"\n---\n${body}`,
+  },
+  {
+    key: 'themeCSS',
+    name: 'themeCSS, init directive',
+    wrap: (body) => `%%{init: {"themeCSS": ".node rect, .pieCircle { fill: red; stroke-width: 9px }"}}%%\n${body}`,
+  },
+  {
+    key: 'fontFamily',
+    name: 'fontFamily, frontmatter',
+    wrap: (body) => `---\nconfig:\n  fontFamily: "Comic Sans MS"\n---\n${body}`,
+  },
+  {
+    key: 'fontFamily',
+    name: 'fontFamily, init directive',
+    wrap: (body) => `%%{init: {"fontFamily": "Comic Sans MS"}}%%\n${body}`,
+  },
+  {
+    key: 'fontFamily',
+    name: 'themeVariables.fontFamily, frontmatter',
+    wrap: (body) => `---\nconfig:\n  themeVariables:\n    fontFamily: "Comic Sans MS"\n---\n${body}`,
+  },
+  {
+    key: 'fontFamily',
+    name: 'themeVariables.fontFamily, init directive',
+    wrap: (body) => `%%{init: {"themeVariables": {"fontFamily": "Comic Sans MS"}}}%%\n${body}`,
+  },
+  {
+    key: 'htmlLabels',
+    name: 'htmlLabels, frontmatter',
+    wrap: (body) => `---\nconfig:\n  htmlLabels: false\n---\n${body}`,
+  },
+  {
+    key: 'htmlLabels',
+    name: 'htmlLabels, init directive',
+    wrap: (body) => `%%{init: {"htmlLabels": false}}%%\n${body}`,
+  },
+  {
+    key: 'htmlLabels',
+    name: 'flowchart.htmlLabels, frontmatter',
+    wrap: (body) => `---\nconfig:\n  flowchart:\n    htmlLabels: false\n---\n${body}`,
+  },
+  {
+    key: 'htmlLabels',
+    name: 'flowchart.htmlLabels, init directive',
+    wrap: (body) => `%%{init: {"flowchart": {"htmlLabels": false}}}%%\n${body}`,
+  },
+]
+const APP_LOCK = ['themeCSS', 'fontFamily', 'htmlLabels']
+
+await check('the three keys the app locks are on the list it hands mermaid', async () => {
+  for (const key of APP_LOCK) {
+    assert(Runtime.MERMAID_APP_SECURE_KEYS.includes(key), `${key} is not in MERMAID_APP_SECURE_KEYS`)
+  }
+  for (const [kind, body] of Object.entries(DRAWN_KINDS)) {
+    assert(
+      (await draw(body)) === (await draw(body)),
+      `${kind}: two renders of the same text differ, so nothing can be compared`,
+    )
+  }
+  return APP_LOCK.join(', ')
+})
+
+await check(
+  'a diagram that sets themeCSS, fontFamily or htmlLabels is drawn exactly as the same diagram without it',
+  async () => {
+    let compared = 0
+    for (const [kind, body] of Object.entries(DRAWN_KINDS)) {
+      const without = await draw(body)
+      assert(without.includes('<svg'), `${kind}: nothing was drawn`)
+      for (const form of LOCKED_FORMS) {
+        const withKey = await draw(form.wrap(body))
+        assert(
+          withKey === without,
+          `${kind}, ${form.name}: the drawing changed (${without.length} characters without the key, ${withKey.length} with it)`,
+        )
+        compared++
+      }
+    }
+    counts.lockedForms = LOCKED_FORMS.length
+    counts.lockedDrawings = compared
+    return `${LOCKED_FORMS.length} spellings on ${Object.keys(DRAWN_KINDS).length} kinds: ${compared} drawings, each identical to the one without the key`
+  },
+)
+
+await check('by the same comparison, a key the app does NOT lock changes the drawing', async () => {
+  // The control: without it, "identical" above could be a comparison that can
+  // never tell two drawings apart.
+  const unlocked = [
+    ['flowchart', 'look', (body) => `---\nconfig:\n  look: handDrawn\n  handDrawnSeed: 7\n---\n${body}`],
+    ['flowchart', 'flowchart.curve', (body) => `---\nconfig:\n  flowchart:\n    curve: linear\n---\n${body}`],
+    ['flowchart', 'theme', (body) => `%%{init: {"theme": "forest"}}%%\n${body}`],
+    [
+      'state',
+      'theme base with a colour of its own',
+      (body) => `---\nconfig:\n  theme: base\n  themeVariables:\n    primaryColor: "#ffcc00"\n---\n${body}`,
+    ],
+    ['pie', 'pie.textPosition', (body) => `---\nconfig:\n  pie:\n    textPosition: 0.5\n---\n${body}`],
+  ]
+  for (const [kind, name, wrap] of unlocked) {
+    const without = await draw(DRAWN_KINDS[kind])
+    const withKey = await draw(wrap(DRAWN_KINDS[kind]))
+    assert(withKey !== without, `${kind}, ${name}: the drawing did not change`)
+  }
+  counts.unlockedDrawings = unlocked.length
+  return unlocked.map(([kind, name]) => `${name} (${kind})`).join(', ')
+})
+
+await check(
+  'still true of this mermaid: it is the lock that does it — off the list, each of the three changes the drawing',
+  async () => {
+    // Drawn by mermaid directly, with the app's list MINUS the three. If a key
+    // changed nothing here, its "identical" above would prove nothing about the
+    // lock; and the day mermaid stops honouring one by itself, this says so.
+    const withoutLock = Runtime.MERMAID_APP_SECURE_KEYS.filter((key) => !APP_LOCK.includes(key))
+    const withLock = [...Runtime.MERMAID_APP_SECURE_KEYS]
+    const effective = {}
+    for (const form of LOCKED_FORMS) {
+      // A pie has no boxes for a label mode to apply to; the other two keys are
+      // tried on every kind.
+      const kinds = form.key === 'htmlLabels' ? ['flowchart'] : Object.keys(DRAWN_KINDS)
+      for (const kind of kinds) {
+        const body = DRAWN_KINDS[kind]
+        const changes =
+          (await drawWithSecure(form.wrap(body), withoutLock)) !== (await drawWithSecure(body, withoutLock))
+        const locked = (await drawWithSecure(form.wrap(body), withLock)) === (await drawWithSecure(body, withLock))
+        assert(locked, `${kind}, ${form.name}: still changes the drawing with the key on the list`)
+        effective[form.name] = effective[form.name] || changes
+      }
+    }
+    const inert = Object.entries(effective)
+      .filter(([, changes]) => !changes)
+      .map(([name]) => name)
+    assert(inert.length === 0, `unlocked, these change nothing, so their lock is unproven: ${inert.join('; ')}`)
+    return `${Object.keys(effective).length} spellings, each changes a drawing when unlocked and none when locked`
+  },
+)
+
+await check(
+  'the lock is by exact name: it covers the key at every depth, and no key that merely contains the name',
+  async () => {
+    const inForce = async (text) => {
+      await draw(text)
+      return api.getConfig()
+    }
+    const base = await inForce(FLOW)
+    const nested = await inForce(
+      `---\nconfig:\n  themeVariables:\n    fontFamily: "Comic Sans MS"\n  flowchart:\n    htmlLabels: false\n---\n${FLOW}`,
+    )
+    assert(
+      nested.themeVariables.fontFamily === base.themeVariables.fontFamily,
+      `themeVariables.fontFamily reached mermaid: ${nested.themeVariables.fontFamily}`,
+    )
+    assert(
+      nested.flowchart.htmlLabels === base.flowchart.htmlLabels,
+      `flowchart.htmlLabels reached mermaid: ${nested.flowchart.htmlLabels}`,
+    )
+    assert(base.fontFamily === DRAWN_FONT, `the app's own font did not reach mermaid: ${base.fontFamily}`)
+    // NOT covered, and said so in MermaidRuntime.ts: the per-diagram font keys
+    // have names of their own.
+    const perDiagram = await inForce(`---\nconfig:\n  sequence:\n    actorFontFamily: "Comic Sans MS"\n---\n${FLOW}`)
+    assert(perDiagram.sequence.actorFontFamily === 'Comic Sans MS', 'sequence.actorFontFamily is now refused as well')
+    return 'themeVariables.fontFamily and flowchart.htmlLabels refused; sequence.actorFontFamily still honoured'
+  },
+)
+
 const failed = checks.filter((entry) => !entry.ok)
 for (const entry of checks) {
   console.error(`${entry.ok ? 'ok  ' : 'FAIL'} ${entry.name}${entry.detail ? ' — ' + entry.detail : ''}`)

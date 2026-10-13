@@ -338,6 +338,9 @@ describe('what reaches mermaid', () => {
     // the app adds to it.
     expect(initialized[0].secure).toEqual([...MERMAID_APP_SECURE_KEYS])
     expect(MERMAID_APP_SECURE_KEYS).toEqual(expect.arrayContaining(['securityLevel', 'maxTextSize', 'maxEdges']))
+    // The three the app locks on its own account: a diagram's text may not
+    // restyle itself with raw CSS, choose its font or switch its label mode.
+    expect(MERMAID_APP_SECURE_KEYS).toEqual(expect.arrayContaining(['themeCSS', 'fontFamily', 'htmlLabels']))
   })
 
   it('hands a pinned theme over with no palette at all', async () => {

@@ -109,11 +109,12 @@ describe('the catalogue of keys', () => {
   })
 
   /**
-   * The owner has not decided whether a diagram's text may set raw CSS, a font
-   * or the label mode. Until then the panel must not write any of them — and it
-   * must never write a key the app locks, which mermaid would silently ignore.
+   * A diagram's text may not set raw CSS, a font or the label mode: the app
+   * locks all three (MERMAID_APP_SECURE_KEYS), so the panel must not write any
+   * of them — mermaid would silently ignore the line. Nor any other key on that
+   * list, nor the ones the plan rules out for other reasons.
    */
-  it('offers none of the keys that are locked or still undecided', () => {
+  it('offers none of the keys the app locks, nor the ones ruled out for other reasons', () => {
     const forbidden = [
       ...MERMAID_APP_SECURE_KEYS,
       'themeCSS',
@@ -139,7 +140,8 @@ describe('the catalogue of keys', () => {
         ])
       }
     }
-    expect(MERMAID_APP_SECURE_KEYS.length).toBeGreaterThanOrEqual(6)
+    expect(MERMAID_APP_SECURE_KEYS).toEqual(expect.arrayContaining(['themeCSS', 'fontFamily', 'htmlLabels']))
+    expect(MERMAID_APP_SECURE_KEYS.length).toBeGreaterThanOrEqual(9)
   })
 
   it('has a label for every theme and every line style it offers', () => {

@@ -61,16 +61,33 @@ export function loadMermaid(): Promise<MermaidLibrary> {
  * pins it), so a key added here is locked and a key removed here is not thereby
  * unlocked.
  *
- * Today it restates mermaid's built-in list and nothing more, so it changes
- * what no existing diagram renders: these are the trust level, the
+ * The first six restate mermaid's built-in list: the trust level, the
  * denial-of-service limits and the error handling this app relies on (it keeps
- * the last good diagram), which a diagram could not set yesterday either.
- * Stating them here means that stays true if a mermaid upgrade trims its own
- * list.
+ * the last good diagram). A diagram could never set those; stating them here
+ * means that stays true if a mermaid upgrade trims its own list.
  *
- * To lock another key — `themeCSS`, say — add its name. That one line is the
- * whole change: the contract test reads this list and expects every key in it
- * to be refused and every other key it knows about to be honoured.
+ * The last three are this app's own, and they DO change what an existing
+ * diagram renders: a diagram whose text sets one of them is now drawn as if it
+ * had not. Each was honoured until this, and each let a diagram's text — which
+ * in a shared note is somebody else's — reach past the diagram:
+ *
+ *  - `themeCSS` is arbitrary CSS, scoped to the diagram but free to restyle or
+ *    hide anything in it, and mermaid lets a `url(https://…)` through in it.
+ *  - `fontFamily` replaced the font this app hands mermaid — the one resolved
+ *    from the Editor Font preference, which every box is measured in — and so
+ *    resized every box for a font the app had not loaded or checked.
+ *  - `htmlLabels` switches how labels are drawn. Labels as SVG text were
+ *    evaluated here and rejected (wrapping and markdown labels are lost, long
+ *    labels overflow); the app draws HTML labels and fits the diagram to them.
+ *
+ * Mermaid applies the list at every depth of a diagram's config, so
+ * `themeVariables.fontFamily` and `flowchart.htmlLabels` are refused with them.
+ * It is a list of exact names: `sequence.actorFontFamily` and the other
+ * per-diagram font keys are NOT covered by `fontFamily`.
+ *
+ * To lock another key, add its name. That one line is the whole change: the
+ * contract tests read this list and expect every key in it to be refused and
+ * every other key they know about to be honoured.
  */
 export const MERMAID_APP_SECURE_KEYS: readonly string[] = [
   'secure',
@@ -79,6 +96,9 @@ export const MERMAID_APP_SECURE_KEYS: readonly string[] = [
   'maxTextSize',
   'suppressErrorRendering',
   'maxEdges',
+  'themeCSS',
+  'fontFamily',
+  'htmlLabels',
 ]
 
 /** What one block asks for. */
