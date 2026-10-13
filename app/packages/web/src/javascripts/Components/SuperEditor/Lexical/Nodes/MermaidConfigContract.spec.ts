@@ -49,7 +49,12 @@ const EXPECTED_CHECKS = [
   'a diagram that sets themeCSS, fontFamily or htmlLabels is drawn exactly as the same diagram without it',
   'by the same comparison, a key the app does NOT lock changes the drawing',
   'still true of this mermaid: it is the lock that does it — off the list, each of the three changes the drawing',
-  'the lock is by exact name: it covers the key at every depth, and no key that merely contains the name',
+  'the lock covers a locked name at every depth, and leaves the other font options beside it alone',
+  'the names the app hands mermaid as locked are exactly these, for this mermaid',
+  'every key in mermaid’s configuration that names a font is refused from a diagram’s text, wherever it sits',
+  'still true of this mermaid: with only the fixed names locked, a per-diagram font key reaches it',
+  'a diagram that chooses a per-diagram font is drawn exactly as the same diagram without it',
+  'no name in mermaid’s type file is a font or a label mode a diagram’s text can still set',
 ]
 
 let status: number | null = null
@@ -146,6 +151,12 @@ describe('the installed mermaid, asked what a diagram’s own configuration mean
     expect(counts.lockedForms).toBeGreaterThanOrEqual(10)
     expect(counts.lockedDrawings).toBeGreaterThanOrEqual(30)
     expect(counts.unlockedDrawings).toBeGreaterThanOrEqual(5)
+    // Every name mermaid gives a font: the exact set is pinned inside the
+    // script; these are the floors under what it then tried.
+    expect(counts.lockedNames).toBe(35)
+    expect(counts.fontFamilyPaths).toBeGreaterThanOrEqual(31)
+    expect(counts.fontFamilyRefusals).toBeGreaterThanOrEqual(62)
+    expect(counts.fontFamilyOpenWithoutRule).toBeGreaterThanOrEqual(20)
   })
 
   it('says which mermaid and which Node it judged', () => {

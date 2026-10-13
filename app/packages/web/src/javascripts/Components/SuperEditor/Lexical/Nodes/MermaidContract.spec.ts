@@ -103,9 +103,12 @@ describe('the installed mermaid, asked directly', () => {
     expect(counts.ownPages).toBe(11)
     expect(counts.preCheckTexts).toBeGreaterThanOrEqual(15)
     expect(counts.secureProbes).toBeGreaterThanOrEqual(12)
-    // Mermaid's own six, and the three this app adds: themeCSS, fontFamily and
-    // htmlLabels. Fewer is a key quietly taken off the list.
-    expect(counts.lockedKeys).toBeGreaterThanOrEqual(9)
+    // Mermaid's own six, the three this app adds (themeCSS, fontFamily,
+    // htmlLabels) and every other name mermaid gives a font, which the app
+    // finds in the library's own configuration: 35 in 11.17.2. Fewer is a key
+    // quietly taken off the list. The exact names are pinned in
+    // scripts/MermaidConfigContract.mjs.
+    expect(counts.lockedKeys).toBeGreaterThanOrEqual(35)
     expect(counts.roundTripModelled).toBeGreaterThanOrEqual(25)
     expect(counts.roundTripRefused).toBeGreaterThanOrEqual(15)
     expect(counts.styledRemovals).toBeGreaterThanOrEqual(19)

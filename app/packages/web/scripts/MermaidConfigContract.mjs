@@ -1129,7 +1129,7 @@ await check(
 )
 
 await check(
-  'the lock is by exact name: it covers the key at every depth, and no key that merely contains the name',
+  'the lock covers a locked name at every depth, and leaves the other font options beside it alone',
   async () => {
     const inForce = async (text) => {
       await draw(text)
@@ -1148,13 +1148,231 @@ await check(
       `flowchart.htmlLabels reached mermaid: ${nested.flowchart.htmlLabels}`,
     )
     assert(base.fontFamily === DRAWN_FONT, `the app's own font did not reach mermaid: ${base.fontFamily}`)
-    // NOT covered, and said so in MermaidRuntime.ts: the per-diagram font keys
-    // have names of their own.
-    const perDiagram = await inForce(`---\nconfig:\n  sequence:\n    actorFontFamily: "Comic Sans MS"\n---\n${FLOW}`)
-    assert(perDiagram.sequence.actorFontFamily === 'Comic Sans MS', 'sequence.actorFontFamily is now refused as well')
-    return 'themeVariables.fontFamily and flowchart.htmlLabels refused; sequence.actorFontFamily still honoured'
+    // The rule is the END of the name. A diagram may still size and weight its
+    // text — the Customise panel writes a size itself — and those keys sit right
+    // beside the font families, differing by one word.
+    const beside = await inForce(
+      `---\nconfig:\n  fontSize: 31\n  sequence:\n    actorFontSize: 31\n    actorFontWeight: 700\n    actorFontFamily: "Comic Sans MS"\n---\n${FLOW}`,
+    )
+    assert(beside.fontSize === 31, `the root fontSize did not reach mermaid: ${beside.fontSize}`)
+    assert(
+      beside.sequence.actorFontSize === 31,
+      `sequence.actorFontSize did not reach mermaid: ${beside.sequence.actorFontSize}`,
+    )
+    assert(beside.sequence.actorFontWeight === 700, 'sequence.actorFontWeight did not reach mermaid')
+    assert(beside.sequence.actorFontFamily !== 'Comic Sans MS', 'sequence.actorFontFamily reached mermaid')
+    return 'themeVariables.fontFamily, flowchart.htmlLabels and sequence.actorFontFamily refused; fontSize, actorFontSize and actorFontWeight honoured'
   },
 )
+
+// ===========================================================================
+// 7. Every name mermaid gives a font, and the one it gives the label mode.
+// ===========================================================================
+//
+// `fontFamily` is locked, and a diagram's text could still choose its font:
+// mermaid has a font-family key of its own for the actors of a sequence
+// diagram, the tasks of a journey, each of twenty-two parts of a C4 diagram.
+// The app locks every key whose name ends in `FontFamily`, found at run time in
+// the library's own default configuration (MermaidRuntime.resolveMermaidSecureKeys).
+
+/**
+ * THE exact set of names the app hands mermaid 11.17.2 as locked. Written out,
+ * not computed, on purpose: the list is derived from whatever mermaid is
+ * installed, so an upgrade that adds, drops or renames a font key would
+ * otherwise only make it silently longer or shorter. Here it is a diff.
+ */
+const PINNED_LOCKED_NAMES = [
+  // mermaid's own six
+  'secure',
+  'securityLevel',
+  'startOnLoad',
+  'maxTextSize',
+  'suppressErrorRendering',
+  'maxEdges',
+  // the app's three
+  'themeCSS',
+  'fontFamily',
+  'htmlLabels',
+  // every other name mermaid gives a font: sequence, journey and timeline…
+  'actorFontFamily',
+  'noteFontFamily',
+  'messageFontFamily',
+  'taskFontFamily',
+  'titleFontFamily',
+  // …and C4
+  'personFontFamily',
+  'external_personFontFamily',
+  'systemFontFamily',
+  'external_systemFontFamily',
+  'system_dbFontFamily',
+  'external_system_dbFontFamily',
+  'system_queueFontFamily',
+  'external_system_queueFontFamily',
+  'boundaryFontFamily',
+  'containerFontFamily',
+  'external_containerFontFamily',
+  'container_dbFontFamily',
+  'external_container_dbFontFamily',
+  'container_queueFontFamily',
+  'external_container_queueFontFamily',
+  'componentFontFamily',
+  'external_componentFontFamily',
+  'component_dbFontFamily',
+  'external_component_dbFontFamily',
+  'component_queueFontFamily',
+  'external_component_queueFontFamily',
+]
+
+const RESOLVED_LOCKED_NAMES = Runtime.resolveMermaidSecureKeys(api.defaultConfig)
+
+/** Every path in mermaid's default configuration whose last name ends in FontFamily. */
+const fontFamilyPaths = []
+const collectFontFamilyPaths = (value, path) => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return
+  }
+  for (const [name, nested] of Object.entries(value)) {
+    if (/fontfamily$/i.test(name)) {
+      fontFamilyPaths.push([...path, name])
+    }
+    collectFontFamilyPaths(nested, [...path, name])
+  }
+}
+collectFontFamilyPaths(api.defaultConfig, [])
+
+await check('the names the app hands mermaid as locked are exactly these, for this mermaid', async () => {
+  const resolved = [...RESOLVED_LOCKED_NAMES].sort()
+  const pinned = [...PINNED_LOCKED_NAMES].sort()
+  const added = resolved.filter((name) => !pinned.includes(name))
+  const gone = pinned.filter((name) => !resolved.includes(name))
+  assert(
+    added.length === 0 && gone.length === 0,
+    `mermaid ${mermaidVersion}: now locked and not pinned [${added.join(', ')}]; pinned and no longer found [${gone.join(', ')}]`,
+  )
+  assert(new Set(resolved).size === resolved.length, 'a name is on the list twice')
+  for (const name of RESOLVED_LOCKED_NAMES) {
+    assert(Runtime.isMermaidLockedKey(name), `${name} is on the list and isMermaidLockedKey says it is not locked`)
+  }
+  counts.lockedNames = resolved.length
+  return `${resolved.length} names`
+})
+
+/** `['sequence', 'actorFontFamily']` + value -> the YAML and the JSON a text would carry. */
+const yamlFor = (path, value) =>
+  path
+    .map(
+      (name, depth) =>
+        `${'  '.repeat(depth + 1)}${name}:${depth === path.length - 1 ? ' ' + JSON.stringify(value) : ''}`,
+    )
+    .join('\n')
+const jsonFor = (path, value) => JSON.stringify(path.reduceRight((inner, name) => ({ [name]: inner }), value))
+
+await check(
+  'every key in mermaid’s configuration that names a font is refused from a diagram’s text, wherever it sits',
+  async () => {
+    const marker = 'Srn Contract Font'
+    let refused = 0
+    for (const path of fontFamilyPaths) {
+      const name = path.join('.')
+      for (const text of [
+        `---\nconfig:\n${yamlFor(path, marker)}\n---\n${FLOW}`,
+        `%%{init: ${jsonFor(path, marker)}}%%\n${FLOW}`,
+      ]) {
+        await draw(text)
+        assert(
+          at(api.getConfig(), path) !== marker,
+          `${name} reached mermaid from ${JSON.stringify(text.split('\n')[0])}…`,
+        )
+        refused++
+      }
+    }
+    assert(
+      fontFamilyPaths.length >= 31,
+      `only ${fontFamilyPaths.length} font-family paths found in mermaid's default configuration`,
+    )
+    counts.fontFamilyPaths = fontFamilyPaths.length
+    counts.fontFamilyRefusals = refused
+    return `${fontFamilyPaths.length} paths, each as frontmatter and as a directive`
+  },
+)
+
+await check(
+  'still true of this mermaid: with only the fixed names locked, a per-diagram font key reaches it',
+  async () => {
+    // The control. `fontFamily` alone on the list — which is what the app shipped
+    // for a day — left every one of these open.
+    const marker = 'Srn Contract Font'
+    const open = []
+    for (const path of fontFamilyPaths) {
+      if (Runtime.MERMAID_APP_SECURE_KEYS.includes(path[path.length - 1])) {
+        continue
+      }
+      await drawWithSecure(`---\nconfig:\n${yamlFor(path, marker)}\n---\n${FLOW}`, [...Runtime.MERMAID_APP_SECURE_KEYS])
+      if (at(api.getConfig(), path) === marker) {
+        open.push(path.join('.'))
+      }
+    }
+    assert(open.length >= 20, `only ${open.length} per-diagram font keys reach mermaid when they are not on the list`)
+    assert(
+      open.includes('sequence.actorFontFamily'),
+      'sequence.actorFontFamily does not reach mermaid even when unlocked',
+    )
+    counts.fontFamilyOpenWithoutRule = open.length
+    return `${open.length} keys reach mermaid when only the fixed names are locked`
+  },
+)
+
+await check('a diagram that chooses a per-diagram font is drawn exactly as the same diagram without it', async () => {
+  // A journey and a timeline, whose output is the same from one render to the next.
+  const cases = [
+    ['journey', ['journey', 'taskFontFamily']],
+    ['journey', ['journey', 'titleFontFamily']],
+    ['timeline', ['timeline', 'taskFontFamily']],
+  ]
+  for (const [kind, path] of cases) {
+    const body = Fixtures.MERMAID_SAMPLE_DIAGRAMS[kind]
+    const text = `---\nconfig:\n${yamlFor(path, 'Comic Sans MS')}\n---\n${body}`
+    assert((await draw(body)) === (await draw(body)), `${kind}: two renders of the same text differ`)
+    assert((await draw(text)) === (await draw(body)), `${path.join('.')}: the drawing changed`)
+  }
+  // And it is the rule that does it: with only the fixed names locked, a font
+  // chosen this way changes a drawing.
+  const fixedOnly = [...Runtime.MERMAID_APP_SECURE_KEYS]
+  let changed = 0
+  for (const [kind, path] of cases) {
+    const body = Fixtures.MERMAID_SAMPLE_DIAGRAMS[kind]
+    const text = `---\nconfig:\n${yamlFor(path, 'Comic Sans MS')}\n---\n${body}`
+    changed += (await drawWithSecure(text, fixedOnly)) === (await drawWithSecure(body, fixedOnly)) ? 0 : 1
+  }
+  assert(changed > 0, 'no per-diagram font key changes a drawing even when unlocked, so identical proves nothing')
+  return `${cases.length} keys drawn; ${changed} of them change the drawing when only the fixed names are locked`
+})
+
+await check('no name in mermaid’s type file is a font or a label mode a diagram’s text can still set', async () => {
+  const declared = readFileSync(
+    join(dirname(require.resolve('mermaid/package.json')), 'dist', 'config.type.d.ts'),
+    'utf8',
+  )
+  const fontNames = [
+    ...new Set([...declared.matchAll(/^\s*(\w*[Ff]ont[Ff]amily)\??:/gm)].map((match) => match[1])),
+  ].sort()
+  assert(fontNames.length >= 27, `only ${fontNames.length} font-family names in the type file`)
+  const unlocked = fontNames.filter((name) => !RESOLVED_LOCKED_NAMES.includes(name))
+  // Declared, not locked: allowed only if mermaid will not take it from a text
+  // at all (it has no default for it, and drops such keys first).
+  for (const name of unlocked) {
+    await draw(`---\nconfig:\n  ${name}: "Srn Contract Font"\n---\n${FLOW}`)
+    assert(api.getConfig()[name] !== 'Srn Contract Font', `${name} is declared, not locked, and reaches mermaid`)
+  }
+  // The label mode has exactly one name. Another spelling of it would be a way
+  // round the lock on `htmlLabels`.
+  const htmlNames = [
+    ...new Set([...declared.matchAll(/^\s*(\w*(?:[Hh]tml|HTML)\w*)\??:/gm)].map((match) => match[1])),
+  ].sort()
+  assert(same(htmlNames, ['htmlLabels']), `the type file now has these names for label modes: ${htmlNames.join(', ')}`)
+  assert(RESOLVED_LOCKED_NAMES.includes('htmlLabels'), 'htmlLabels is not locked')
+  return `${fontNames.length} font names declared, ${unlocked.length} not locked and not settable (${unlocked.join(', ') || 'none'}); label mode: ${htmlNames.join(', ')}`
+})
 
 const failed = checks.filter((entry) => !entry.ok)
 for (const entry of checks) {

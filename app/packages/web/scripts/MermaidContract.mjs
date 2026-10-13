@@ -512,7 +512,9 @@ const PROBES = [
   },
   { key: 'secure', yaml: 'secure: []', reached: (c) => Array.isArray(c.secure) && c.secure.length === 0 },
 ]
-const LOCKED = [...Runtime.MERMAID_APP_SECURE_KEYS]
+// The list the app actually hands mermaid: the fixed names plus every font-family
+// key found in the library's own default configuration.
+const LOCKED = Runtime.resolveMermaidSecureKeys(api.defaultConfig)
 const knownKeys = new Set()
 const collectKeys = (value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)) {

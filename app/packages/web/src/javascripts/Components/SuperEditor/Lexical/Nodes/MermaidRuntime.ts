@@ -82,12 +82,13 @@ export function loadMermaid(): Promise<MermaidLibrary> {
  *
  * Mermaid applies the list at every depth of a diagram's config, so
  * `themeVariables.fontFamily` and `flowchart.htmlLabels` are refused with them.
- * It is a list of exact names: `sequence.actorFontFamily` and the other
- * per-diagram font keys are NOT covered by `fontFamily`.
+ * It is a list of exact NAMES, though, and `fontFamily` is not the only name a
+ * font goes by: see `resolveMermaidSecureKeys` below, which is what is actually
+ * handed to mermaid.
  *
  * To lock another key, add its name. That one line is the whole change: the
- * contract tests read this list and expect every key in it to be refused and
- * every other key they know about to be honoured.
+ * contract tests read the resolved list and expect every key in it to be
+ * refused and every other key they know about to be honoured.
  */
 export const MERMAID_APP_SECURE_KEYS: readonly string[] = [
   'secure',
@@ -100,6 +101,47 @@ export const MERMAID_APP_SECURE_KEYS: readonly string[] = [
   'fontFamily',
   'htmlLabels',
 ]
+
+/**
+ * Is this the name of a key the app locks? The names listed above — and ANY
+ * key whose name ends in `FontFamily`.
+ *
+ * "A diagram's text does not choose its font" has to hold for every name mermaid
+ * gives a font. In 11.17.2 that is `fontFamily` and twenty-six more, one or
+ * several per kind of diagram: `sequence.actorFontFamily`,
+ * `journey.taskFontFamily`, the twenty-two of a C4 diagram. Listing them by
+ * hand would be right until the next mermaid adds one, so the rule is the
+ * suffix, and the contract script pins the exact set it yields for the installed
+ * version — an upgrade that adds or renames one shows there as a diff.
+ */
+export function isMermaidLockedKey(name: string): boolean {
+  return MERMAID_APP_SECURE_KEYS.includes(name) || /fontfamily$/i.test(name)
+}
+
+/**
+ * THE list handed to mermaid as `secure`: the fixed names, plus every key in
+ * mermaid's own default configuration that `isMermaidLockedKey` names, at
+ * whatever depth it sits. Derived from the library that is actually loaded, so
+ * it cannot fall behind it. (A key mermaid has no default for cannot be set
+ * from a diagram's text at all — it drops those before this list is consulted —
+ * so the default configuration is every key that could be.)
+ */
+export function resolveMermaidSecureKeys(defaultConfig: unknown): string[] {
+  const names = new Set<string>(MERMAID_APP_SECURE_KEYS)
+  const collect = (value: unknown): void => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return
+    }
+    for (const [name, nested] of Object.entries(value)) {
+      if (isMermaidLockedKey(name)) {
+        names.add(name)
+      }
+      collect(nested)
+    }
+  }
+  collect(defaultConfig)
+  return [...names]
+}
 
 /** What one block asks for. */
 export type MermaidRenderRequest = {
@@ -158,7 +200,6 @@ function siteConfig(request: MermaidRenderRequest, withAppPalette: boolean): Mer
   return {
     startOnLoad: false,
     securityLevel: 'strict',
-    secure: [...MERMAID_APP_SECURE_KEYS],
     theme: request.theme.theme,
     // The APPLICATION's own design tokens, not mermaid's generic palette.
     // Absent for a pinned built-in theme: `initialize` rebuilds its config from
@@ -181,10 +222,14 @@ function siteConfig(request: MermaidRenderRequest, withAppPalette: boolean): Mer
  * Everything mermaid remembers, replaced. `reset` FIRST: it drops the previous
  * diagram's directives, and `initialize` would otherwise recompute the config
  * from them — and throw, if one of them is the bad colour described above.
+ *
+ * The locked-key list is set HERE and nowhere else, over whatever the caller
+ * passed: this is the one function every path into mermaid goes through, so no
+ * caller can configure it with a shorter list, or with none.
  */
 function configure(mermaid: MermaidLibrary, config: MermaidSiteConfig): void {
   mermaid.mermaidAPI.reset()
-  mermaid.initialize(config)
+  mermaid.initialize({ ...config, secure: resolveMermaidSecureKeys(mermaid.mermaidAPI.defaultConfig) })
 }
 
 // The tail of the line. A failed render must not hold up the one behind it, so

@@ -17,9 +17,11 @@
  * in, which is the whole fix.
  */
 import {
+  isMermaidLockedKey,
   MERMAID_APP_SECURE_KEYS,
   mermaidTextMayCarryConfig,
   renderMermaidDiagram,
+  resolveMermaidSecureKeys,
   type MermaidRenderRequest,
 } from './MermaidRuntime'
 
@@ -64,6 +66,8 @@ const fakeMermaid = {
       calls.push('reset')
       storedDirective = null
     },
+    /** Mermaid's own default configuration — absent unless a test supplies one. */
+    defaultConfig: undefined as unknown,
   },
   initialize: (config: Record<string, unknown>) => {
     calls.push(`initialize ${String(config.theme)}${config.themeVariables === undefined ? '' : ' +palette'}`)
@@ -106,7 +110,12 @@ const fakeMermaid = {
 jest.mock('mermaid', () => ({
   __esModule: true,
   default: {
-    mermaidAPI: { reset: () => fakeMermaid.mermaidAPI.reset() },
+    mermaidAPI: {
+      reset: () => fakeMermaid.mermaidAPI.reset(),
+      get defaultConfig() {
+        return fakeMermaid.mermaidAPI.defaultConfig
+      },
+    },
     initialize: (config: Record<string, unknown>) => fakeMermaid.initialize(config),
     parse: (text: string) => fakeMermaid.parse(text),
     render: (id: string, text: string, measureIn: unknown) => fakeMermaid.render(id, text, measureIn),
@@ -134,6 +143,7 @@ beforeEach(() => {
   storedDirective = null
   held = null
   holdNextRender = false
+  fakeMermaid.mermaidAPI.defaultConfig = undefined
 })
 
 describe('one bad diagram does not break the next', () => {
@@ -341,6 +351,71 @@ describe('what reaches mermaid', () => {
     // The three the app locks on its own account: a diagram's text may not
     // restyle itself with raw CSS, choose its font or switch its label mode.
     expect(MERMAID_APP_SECURE_KEYS).toEqual(expect.arrayContaining(['themeCSS', 'fontFamily', 'htmlLabels']))
+  })
+
+  /**
+   * "A diagram's text does not choose its font" has to hold for every name
+   * mermaid gives a font, and it has twenty-seven of them: `fontFamily`, and one
+   * or several per kind of diagram. They are not listed by hand — the next
+   * mermaid would add one — but found in the library's own default
+   * configuration, which is every key a diagram's text could set at all.
+   */
+  it('adds every font-family key mermaid’s own configuration has, at any depth', async () => {
+    fakeMermaid.mermaidAPI.defaultConfig = {
+      fontFamily: '"trebuchet ms"',
+      fontSize: 16,
+      sequence: { actorFontFamily: 'x', actorFontSize: 14, messageFontFamily: 'x', mirrorActors: true },
+      journey: { taskFontFamily: 'x', titleFontFamily: 'x' },
+      c4: { external_system_dbFontFamily: 'x', external_system_dbFontSize: 14, wrap: true },
+      themeVariables: { fontFamily: 'x', primaryColor: '#fff' },
+      flowchart: { htmlLabels: null, curve: 'basis' },
+    }
+    await renderMermaidDiagram(request())
+    const secure = initialized[0].secure as string[]
+    expect(secure).toEqual(expect.arrayContaining([...MERMAID_APP_SECURE_KEYS]))
+    expect([...secure].sort()).toEqual(
+      [
+        ...MERMAID_APP_SECURE_KEYS,
+        'actorFontFamily',
+        'messageFontFamily',
+        'taskFontFamily',
+        'titleFontFamily',
+        'external_system_dbFontFamily',
+      ].sort(),
+    )
+    // Not a key that merely mentions a font, and not one twice.
+    expect(secure).not.toContain('actorFontSize')
+    expect(secure).not.toContain('fontSize')
+    expect(new Set(secure).size).toBe(secure.length)
+  })
+
+  it('hands that list over on EVERY configure, the second one of a self-themed diagram included', async () => {
+    fakeMermaid.mermaidAPI.defaultConfig = { sequence: { actorFontFamily: 'x' } }
+    await renderMermaidDiagram(request({ id: 'mermaid-3-0', text: withFrontmatter('forest') }))
+    expect(initialized).toHaveLength(2)
+    for (const config of initialized) {
+      expect(config.secure).toEqual([...MERMAID_APP_SECURE_KEYS, 'actorFontFamily'])
+    }
+  })
+
+  it('falls back to the fixed list when the library exposes no default configuration', () => {
+    for (const nothing of [undefined, null, 'x', 3, []]) {
+      expect(resolveMermaidSecureKeys(nothing)).toEqual([...MERMAID_APP_SECURE_KEYS])
+    }
+  })
+
+  it('names a key as locked by the same rule the list is built with', () => {
+    for (const name of [
+      ...MERMAID_APP_SECURE_KEYS,
+      'actorFontFamily',
+      'titleFontFamily',
+      'external_container_queueFontFamily',
+    ]) {
+      expect([name, isMermaidLockedKey(name)]).toEqual([name, true])
+    }
+    for (const name of ['fontSize', 'actorFontSize', 'fontFamilyProbe', 'theme', 'look', 'curve', 'themeVariables']) {
+      expect([name, isMermaidLockedKey(name)]).toEqual([name, false])
+    }
   })
 
   it('hands a pinned theme over with no palette at all', async () => {
