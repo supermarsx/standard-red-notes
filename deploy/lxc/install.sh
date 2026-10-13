@@ -748,6 +748,20 @@ install_nginx_site() {
   cat > "${conf}" <<EOF
 map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
 
+# Browser caching and missing-asset policy, the same maps as
+# app/docker/nginx.conf (which carries the full rationale): no-cache
+# (revalidate) on everything except content-hashed file names, and a 404 --
+# never the SPA shell -- for a missing script/stylesheet/map/wasm.
+map \$uri \$srn_static_cache_control {
+  default                                  "no-cache";
+  "~^/[0-9a-f]{20}\.worker\.js\$"           "public, max-age=31536000, immutable";
+  "~^/[^/]+\.[0-9a-f]{20}\.app\.(js|css)\$" "public, max-age=31536000, immutable";
+}
+map \$uri \$srn_missing_asset {
+  default                       0;
+  "~*\.(js|mjs|css|map|wasm)\$"  1;
+}
+
 server {
   listen ${HTTP_PORT};
   server_name _;
@@ -827,16 +841,27 @@ server {
   # override to that generated asset directory; do not replace mime.types.
   location ~ ^/assets/pdf/[^/]+\.mjs\$ {
     default_type application/javascript;
+    add_header Cache-Control "no-cache" always;
     try_files \$uri =404;
   }
 
   location / {
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'none'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' blob: https: http://localhost:* http://127.0.0.1:* ws://\$http_host wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
-    try_files \$uri \$uri/ /index.html;
+    add_header Cache-Control \$srn_static_cache_control always;
+    try_files \$uri \$uri/ @srn_spa_fallback;
+  }
+
+  # Shell for client-side routes, 404 for a missing asset.
+  location @srn_spa_fallback {
+    if (\$srn_missing_asset) {
+      return 404;
+    }
+    rewrite ^ /index.html last;
   }
 
   location = /sandbox.html {
     add_header Content-Security-Policy "default-src 'none'; script-src 'unsafe-eval' 'sha256-EPrJb6puQWQD5nA7xTakXxjOrf6gHNhgb9Eom8L9Oe8='; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; sandbox allow-scripts" always;
+    add_header Cache-Control "no-cache" always;
     try_files /sandbox.html =404;
   }
 }

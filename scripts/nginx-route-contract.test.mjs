@@ -9,6 +9,7 @@ import {
   forwardingContractErrors,
   nginxProxyRoutes,
   parseNginxBlocks,
+  staticCacheContractErrors,
   stripNginxComments,
 } from "./nginx-route-contract.mjs";
 
@@ -261,5 +262,106 @@ test("every shipped nginx configuration satisfies the derived forwarding contrac
       lineOffset: extracted.lineOffset,
     }),
     [],
+  );
+});
+
+// After a redeploy on one origin, a page ran the NEW app.js beside the PREVIOUS
+// build's lazy chunks: nothing was served with Cache-Control (so the browser
+// reused heuristically-fresh copies without asking), and a missing chunk was
+// answered 200 with index.html. These pin the policy in all three topologies.
+function shippedSites() {
+  const extracted = extractLxcNginxSite(read("deploy/lxc/install.sh"));
+  assert.ok(extracted, "the install.sh nginx heredoc must be locatable");
+  return [
+    ["app/docker/nginx.conf", read("app/docker/nginx.conf")],
+    ["app/docker/single/nginx.conf", read("app/docker/single/nginx.conf")],
+    ["deploy/lxc/install.sh", extracted.site],
+  ];
+}
+
+test("every shipped nginx configuration revalidates unhashed files and 404s a missing asset", () => {
+  const cacheMaps = new Set();
+  for (const [label, site] of shippedSites()) {
+    assert.deepEqual(staticCacheContractErrors(site, { label }), [], label);
+    const maps = [
+      /map \$uri \$srn_static_cache_control \{[\s\S]*?\n\}/,
+      /map \$uri \$srn_missing_asset \{[\s\S]*?\n\}/,
+    ].map((pattern) => site.replace(/\r\n/g, "\n").match(pattern)?.[0]);
+    assert.ok(maps.every(Boolean), `${label}: both maps must be present`);
+    cacheMaps.add(maps.join("\n"));
+  }
+  // One policy, three copies: a drifted copy is a topology that caches
+  // differently from the others.
+  assert.equal(cacheMaps.size, 1, [...cacheMaps].join("\n----\n"));
+});
+
+test("the caching contract names each way the policy can be broken", () => {
+  const [, multi] = shippedSites()[0];
+  const broken = (from, to) => {
+    assert.ok(multi.includes(from), `fixture text missing: ${from}`);
+    return staticCacheContractErrors(multi.split(from).join(to), {
+      label: "fixture",
+    }).join("\n");
+  };
+  assert.match(
+    broken(
+      'default                                  "no-cache";',
+      'default                                  "max-age=3600";',
+    ),
+    /must default to "no-cache"/,
+  );
+  // An unhashed chunk name made immutable: the exact staleness this prevents.
+  assert.match(
+    broken(
+      '"~^/[^/]+\\.[0-9a-f]{20}\\.app\\.(js|css)$" "public, max-age=31536000, immutable";',
+      '"~^/[^/]+\\.app\\.(js|css)$" "public, max-age=31536000, immutable";',
+    ),
+    /only an anchored pattern that requires a \[0-9a-f\]\{20\} content hash/,
+  );
+  assert.match(
+    broken(
+      "    add_header Cache-Control $srn_static_cache_control always;\n",
+      "",
+    ),
+    /location \/ must send/,
+  );
+  assert.match(
+    broken(
+      "try_files $uri $uri/ @srn_spa_fallback;",
+      "try_files $uri $uri/ /index.html;",
+    ),
+    /location \/ must fall back through @srn_spa_fallback/,
+  );
+  assert.match(
+    broken("      return 404;\n", ""),
+    /must `return 404` inside `if \(\$srn_missing_asset\)`/,
+  );
+  assert.match(
+    broken('"~*\\.(js|mjs|css|map|wasm)$"  1;', '"~*\\.(js|mjs|css)$"  1;'),
+    /must flag \/app\.js\.map[\s\S]*must flag \/libsodium\.wasm/,
+  );
+  assert.match(
+    broken(
+      '"~*\\.(js|mjs|css|map|wasm)$"  1;',
+      '"~*(js|mjs|css|map|wasm)$"  1;',
+    ),
+    /flags the client-side route \/tags\/js/,
+  );
+  // A location that declares its own add_header inherits none, so dropping
+  // the sandbox's Cache-Control is a real loss even though `location /` has one.
+  assert.match(
+    broken(
+      '    add_header Strict-Transport-Security $srn_hsts_header always;\n    add_header Cache-Control "no-cache" always;\n    try_files /sandbox.html =404;',
+      "    add_header Strict-Transport-Security $srn_hsts_header always;\n    try_files /sandbox.html =404;",
+    ),
+    /"location = \/sandbox\.html" serves files without a Cache-Control header/,
+  );
+  // A Cache-Control in a comment is not one nginx sends.
+  assert.match(
+    broken(
+      '    add_header Cache-Control "no-cache" always;\n    add_header Strict-Transport-Security $srn_hsts_header always;\n    try_files $uri =404;',
+      '    # add_header Cache-Control "no-cache" always;\n    add_header Strict-Transport-Security $srn_hsts_header always;\n    try_files $uri =404;',
+    ),
+    /"location ~ \^\/assets\/pdf\/\[\^\/\]\+\\\.mjs\$" serves files without a Cache-Control header/,
   );
 });
