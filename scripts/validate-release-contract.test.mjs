@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { githubOutputs } from "./analyze-release-impact.mjs";
 import { approvedWorkflowAction } from "./validate-ci-contract.mjs";
 import {
   loadReleaseContractFiles,
@@ -3900,3 +3910,1551 @@ test("release workflow job inventories reject hidden extra jobs", () => {
     );
   }
 });
+
+test("a reservation step cannot stop without saying why", () => {
+  for (const [file, nextJobName] of [
+    [".github/workflows/srn-home-server.yml", "package"],
+    [".github/workflows/srn-admin.yml", "package"],
+    [".github/workflows/srn-client.yml", "package"],
+    [".github/workflows/srn-mcp.yml", "package"],
+    [".github/workflows/srn-server.yml", "package"],
+    [".github/workflows/srn-desktop.yml", "build"],
+  ]) {
+    for (const [fragment, replacement, expected] of [
+      [
+        'echo "::error title=${TOOL} release reservation refused::${annotation}"',
+        'echo "${annotation}"',
+        /missing reservation refusal annotation/,
+      ],
+      [
+        '} >> "$GITHUB_STEP_SUMMARY"\n            exit 1',
+        "} > /dev/null\n            exit 1",
+        /missing reservation refusal job summary/,
+      ],
+      [
+        `trap 'step_stopped "$?"' EXIT`,
+        "trap - EXIT",
+        /missing failed reservation command exit report/,
+      ],
+      [
+        "trap 'failed_line=$LINENO; failed_command=$BASH_COMMAND' ERR",
+        "trap - ERR",
+        /missing failed reservation command capture/,
+      ],
+      [
+        'echo "::error title=${TOOL} release reservation failed::${annotation}"',
+        'echo "${annotation}" >&2',
+        /missing failed reservation command annotation/,
+      ],
+      [
+        "created \\(.created_at)\\t\\(.assets | length) asset(s)\\t\\(.html_url)",
+        "stale",
+        /missing stale draft age, asset count, and page in the refusal/,
+      ],
+      [
+        "gh api --method DELETE repos/",
+        "gh release delete ",
+        /missing stale draft discard command in the refusal/,
+      ],
+      [
+        "re-run the failed jobs of the run that reserved it, listed by gh run list --repo",
+        "re-run the run that reserved it",
+        /missing stale draft finishing route in the refusal/,
+      ],
+      [
+        '            refuse "more than one release is reserved',
+        '            echo "ambiguous" >&2\n            exit 1\n            refuse "more than one release is reserved',
+        /every reservation refusal must go through refuse\(\), the only exit 1 in the step/,
+      ],
+      [
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA" ||\n            refuse',
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n          true ||\n            refuse',
+        /reservation assertions must report through refuse\(\): test "\$\(git rev-parse HEAD\)" = "\$GITHUB_SHA"/,
+      ],
+      [
+        '\' <<< "$IMPACT_RESULT" >/dev/null ||\n            refuse',
+        '\' <<< "$IMPACT_RESULT" >/dev/null\n          true ||\n            refuse',
+        /reservation assertions must report through refuse\(\): ' <<< "\$IMPACT_RESULT" >\/dev\/null/,
+      ],
+      [
+        '[[ "$FORCED" == "true" || "$FORCED" == "false" ]] ||\n            refuse',
+        '[[ "$FORCED" == "true" || "$FORCED" == "false" ]]\n          true ||\n            refuse',
+        /reservation assertions must report through refuse\(\): \[\[ "\$FORCED" == "true" \|\| "\$FORCED" == "false" \]\]/,
+      ],
+      [
+        'git show-ref --verify --quiet "refs/tags/${tag}" ||\n                refuse',
+        'git show-ref --verify --quiet "refs/tags/${tag}"\n              true ||\n                refuse',
+        /reservation assertions must report through refuse\(\): git show-ref --verify --quiet "refs\/tags\/\$\{tag\}"/,
+      ],
+    ]) {
+      const files = withJobChanged(file, "identity", nextJobName, (job) =>
+        job.replaceAll(fragment, replacement),
+      );
+      assert.match(
+        validateReleaseContract(files).join("\n"),
+        expected,
+        `${file}: ${fragment}`,
+      );
+    }
+  }
+});
+
+// The reservation steps are inline shell. Everything below runs each step's
+// actual `run:` block under bash, exactly as the hosted runner starts it,
+// against a stand-in for `gh` and a throwaway Git repository, so the decisions
+// and the refusal text are exercised rather than pattern-matched. That needs
+// a bash with mapfile, jq, and git. CI has them; where they are missing
+// outside CI each of these tests is skipped by name with the reason.
+const RESERVATION_REPOSITORY = "example-owner/example-repo";
+const RESERVATION_BOT = Object.freeze({
+  login: "github-actions[bot]",
+  id: 41898282,
+  type: "Bot",
+});
+const RESERVATION_FINGERPRINT = "a".repeat(64);
+const RESERVATION_YEAR = String(new Date().getUTCFullYear() % 100).padStart(
+  2,
+  "0",
+);
+
+function reservationShellProblem() {
+  if (process.platform === "win32") {
+    return "the reservation steps are bash scripts for a Linux runner";
+  }
+  for (const [command, args] of [
+    [
+      "bash",
+      ["-c", 'mapfile -t probe < <(printf "a\\n"); test "${probe[0]}" = a'],
+    ],
+    ["jq", ["--version"]],
+    ["git", ["--version"]],
+  ]) {
+    if (spawnSync(command, args, { stdio: "ignore" }).status !== 0) {
+      return `${command} is missing or too old`;
+    }
+  }
+  return null;
+}
+
+const reservationShellProblemFound = reservationShellProblem();
+const reservationRuns = {
+  skip:
+    reservationShellProblemFound !== null &&
+    process.env.CI !== "true" &&
+    process.env.GITHUB_ACTIONS !== "true"
+      ? `${reservationShellProblemFound}; CI executes these`
+      : false,
+};
+
+// Serves the four release requests the reservation steps make from a JSON
+// file, records every invocation, and fails on anything it does not know.
+const RESERVATION_FAKE_GH = String.raw`#!/usr/bin/env node
+const fs = require("node:fs");
+const statePath = process.env.FAKE_GH_STATE;
+const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+const args = process.argv.slice(2);
+state.calls.push(args);
+const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
+const fail = (message, code = 1) => {
+  save();
+  process.stderr.write(message + "\n");
+  process.exit(code);
+};
+if (args[0] !== "api") fail("fake gh: unsupported command: " + args.join(" "), 97);
+let method = "GET";
+let route = null;
+let paginate = false;
+let slurp = false;
+const fields = {};
+for (let index = 1; index < args.length; index += 1) {
+  const argument = args[index];
+  if (argument === "--method") {
+    method = args[(index += 1)];
+  } else if (argument === "-f" || argument === "-F") {
+    const pair = args[(index += 1)];
+    const separator = pair.indexOf("=");
+    const raw = pair.slice(separator + 1);
+    fields[pair.slice(0, separator)] =
+      argument === "-F" && (raw === "true" || raw === "false") ? raw === "true" : raw;
+  } else if (argument === "--paginate") {
+    paginate = true;
+  } else if (argument === "--slurp") {
+    slurp = true;
+  } else if (!argument.startsWith("-") && route === null) {
+    route = argument;
+  } else {
+    fail("fake gh: unsupported argument: " + argument, 97);
+  }
+}
+const base = "repos/" + state.repository + "/releases";
+const byId = route.startsWith(base + "/") && /^[0-9]+$/.test(route.slice(base.length + 1));
+const kind =
+  method === "GET" && route === base + "?per_page=100"
+    ? "list"
+    : method === "GET" && byId
+      ? "get"
+      : method === "POST" && route === base
+        ? "create"
+        : method === "DELETE" && byId
+          ? "delete"
+          : null;
+if (kind === null) fail("fake gh: unsupported request: " + method + " " + route, 97);
+state.counts[kind] = (state.counts[kind] || 0) + 1;
+// Scripted interference: what another actor does just before the nth request of a kind.
+for (const event of state.events) {
+  if (event.on !== kind || event.nth !== state.counts[kind]) continue;
+  if (event.fail) fail(event.fail);
+  if (event.add) state.releases.unshift(event.add);
+  if (event.patch) {
+    Object.assign(
+      state.releases.find((release) => release.id === event.patch.id),
+      event.patch.fields,
+    );
+  }
+}
+if (kind === "list") {
+  if (!paginate || !slurp) fail("fake gh: the inventory must be read with --paginate --slurp", 97);
+  const pages = [];
+  for (let offset = 0; offset < state.releases.length; offset += 100) {
+    pages.push(state.releases.slice(offset, offset + 100));
+  }
+  if (pages.length === 0) pages.push([]);
+  save();
+  process.stdout.write(JSON.stringify(pages) + "\n");
+} else if (kind === "get") {
+  const id = Number(route.slice(base.length + 1));
+  const release = state.releases.find((candidate) => candidate.id === id);
+  if (!release) fail("gh: Not Found (HTTP 404)");
+  save();
+  process.stdout.write(JSON.stringify(release) + "\n");
+} else if (kind === "create") {
+  const release = {
+    id: state.nextId,
+    tag_name: fields.tag_name,
+    name: fields.name,
+    target_commitish: fields.target_commitish,
+    draft: fields.draft,
+    prerelease: fields.prerelease,
+    immutable: false,
+    created_at: "2026-01-01T00:00:00Z",
+    published_at: null,
+    html_url: "https://github.com/" + state.repository + "/releases/tag/untagged-" + state.nextId,
+    author: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
+    assets: [],
+    body:
+      fields.body +
+      (fields.generate_release_notes
+        ? "\n\n**Full Changelog**: https://github.com/" + state.repository + "/commits/" + fields.tag_name
+        : ""),
+    ...(state.createOverride || {}),
+  };
+  state.nextId += 1;
+  state.releases.unshift(release);
+  save();
+  process.stdout.write(JSON.stringify(release) + "\n");
+} else {
+  const id = Number(route.slice(base.length + 1));
+  const before = state.releases.length;
+  state.releases = state.releases.filter((candidate) => candidate.id !== id);
+  if (state.releases.length === before) fail("gh: Not Found (HTTP 404)");
+  save();
+}
+`;
+
+function reservationRunBlock(file, stepName) {
+  const lines = baseline.get(file).replaceAll("\r\n", "\n").split("\n");
+  const nameIndex = lines.findIndex(
+    (line) => line.trim().replace(/^- /, "") === `name: ${stepName}`,
+  );
+  assert.notEqual(nameIndex, -1, `${file} must contain step ${stepName}`);
+  const runIndex = lines.findIndex(
+    (line, index) => index > nameIndex && /^\s+run: \|$/.test(line),
+  );
+  assert.notEqual(runIndex, -1, `${file}: ${stepName} must have a run block`);
+  assert.equal(
+    lines.slice(nameIndex + 1, runIndex).some((line) => /^\s+- /.test(line)),
+    false,
+    `${file}: the run block must belong to ${stepName}`,
+  );
+  const indent = lines[runIndex].indexOf("run:") + 2;
+  const body = [];
+  for (const line of lines.slice(runIndex + 1)) {
+    if (line.trim() !== "" && line.length - line.trimStart().length < indent) {
+      break;
+    }
+    body.push(line.trim() === "" ? "" : line.slice(indent));
+  }
+  while (body.at(-1) === "") {
+    body.pop();
+  }
+  return `${body.join("\n")}\n`;
+}
+
+function reservationGit(cwd, ...args) {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      PATH: process.env.PATH,
+      HOME: cwd,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "Release Contract Tests",
+      GIT_AUTHOR_EMAIL: "release-contract@example.invalid",
+      GIT_COMMITTER_NAME: "Release Contract Tests",
+      GIT_COMMITTER_EMAIL: "release-contract@example.invalid",
+    },
+  }).trim();
+}
+
+// `tags` are [name, "head" | "previous"] and exist only on the remote, so the
+// step's own fetch has to bring them in, as on a fresh runner checkout.
+// `releases`, `events`, and `createOverride` may be functions of the two SHAs.
+function reservationFixture({
+  releases = [],
+  tags = [],
+  events = [],
+  createOverride = null,
+} = {}) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "srn-reservation-"));
+  const work = path.join(root, "work");
+  const origin = path.join(root, "origin.git");
+  const bin = path.join(root, "bin");
+  mkdirSync(work);
+  mkdirSync(bin);
+  reservationGit(root, "init", "--quiet", "--bare", origin);
+  reservationGit(work, "init", "--quiet", "--initial-branch=main");
+  writeFileSync(path.join(work, "source.txt"), "previous\n");
+  reservationGit(work, "add", "source.txt");
+  reservationGit(work, "commit", "--quiet", "-m", "previous");
+  const previousSha = reservationGit(work, "rev-parse", "HEAD");
+  writeFileSync(path.join(work, "source.txt"), "head\n");
+  reservationGit(work, "commit", "--quiet", "-am", "head");
+  const headSha = reservationGit(work, "rev-parse", "HEAD");
+  reservationGit(work, "remote", "add", "origin", origin);
+  reservationGit(work, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+  for (const [name, at] of tags) {
+    reservationGit(
+      work,
+      "push",
+      "--quiet",
+      "origin",
+      `${at === "head" ? headSha : previousSha}:refs/tags/${name}`,
+    );
+  }
+  writeFileSync(path.join(bin, "gh"), RESERVATION_FAKE_GH);
+  chmodSync(path.join(bin, "gh"), 0o755);
+  const shas = { headSha, previousSha };
+  const resolve = (value) =>
+    typeof value === "function" ? value(shas) : value;
+  const statePath = path.join(root, "gh-state.json");
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      repository: RESERVATION_REPOSITORY,
+      releases: resolve(releases),
+      nextId: 900000001,
+      calls: [],
+      counts: {},
+      events: resolve(events),
+      createOverride: resolve(createOverride),
+    }),
+  );
+  return {
+    root,
+    work,
+    bin,
+    statePath,
+    headSha,
+    previousSha,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+function runReservationStep(fixture, runBlock, environment) {
+  const script = path.join(fixture.root, "step.sh");
+  const output = path.join(fixture.root, "github-output.txt");
+  const summary = path.join(fixture.root, "github-step-summary.md");
+  writeFileSync(script, runBlock);
+  writeFileSync(output, "");
+  writeFileSync(summary, "");
+  const result = spawnSync(
+    "bash",
+    // The shell line the hosted runner prints for these steps.
+    ["--noprofile", "--norc", "-e", "-o", "pipefail", script],
+    {
+      cwd: fixture.work,
+      encoding: "utf8",
+      env: {
+        PATH: `${fixture.bin}${path.delimiter}${process.env.PATH}`,
+        HOME: fixture.root,
+        TMPDIR: fixture.root,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        FAKE_GH_STATE: fixture.statePath,
+        GH_TOKEN: "not-a-token",
+        GITHUB_REPOSITORY: RESERVATION_REPOSITORY,
+        GITHUB_SHA: fixture.headSha,
+        GITHUB_RUN_ID: "4242",
+        GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: summary,
+        ...environment,
+      },
+    },
+  );
+  const state = JSON.parse(readFileSync(fixture.statePath, "utf8"));
+  const stdout = result.stdout ?? "";
+  const annotations = stdout
+    .split("\n")
+    .filter((line) => line.startsWith("::error "));
+  return {
+    status: result.status,
+    spawnError: result.error?.code ?? null,
+    stdout,
+    stderr: result.stderr ?? "",
+    annotations,
+    // What the run page shows once the runner has decoded the annotation.
+    annotationText: annotations
+      .join("\n")
+      .replaceAll("%0A", "\n")
+      .replaceAll("%0D", "\r")
+      .replaceAll("%25", "%"),
+    outputText: readFileSync(output, "utf8"),
+    summary: readFileSync(summary, "utf8"),
+    // Every gh invocation, argument for argument, in the order it was made.
+    calls: state.calls,
+  };
+}
+
+// The exact gh command lines behind the short request names the cases use.
+function reservationCall(request, { tool, sha, marker }) {
+  const releases = `repos/${RESERVATION_REPOSITORY}/releases`;
+  const [kind, subject] = request.split(" ");
+  if (kind === "list") {
+    return ["api", `${releases}?per_page=100`, "--paginate", "--slurp"];
+  }
+  if (kind === "get") {
+    return ["api", `${releases}/${subject}`];
+  }
+  if (kind === "DELETE") {
+    return ["api", "--method", "DELETE", `${releases}/${subject}`];
+  }
+  assert.equal(kind, "POST");
+  return [
+    "api",
+    "--method",
+    "POST",
+    releases,
+    "-f",
+    `tag_name=${subject}`,
+    "-f",
+    `target_commitish=${sha}`,
+    "-f",
+    `name=${tool} ${subject.slice(`${tool}-v`.length)}`,
+    "-f",
+    `body=${marker}`,
+    "-F",
+    "draft=true",
+    "-F",
+    "prerelease=false",
+    "-F",
+    "generate_release_notes=true",
+  ];
+}
+
+function reservedRelease({
+  id,
+  tool,
+  n,
+  sha,
+  body,
+  draft = true,
+  assets = [],
+  author = RESERVATION_BOT,
+  immutable = false,
+  tag = `${tool}-v${RESERVATION_YEAR}.${n}`,
+  name = `${tool} ${RESERVATION_YEAR}.${n}`,
+}) {
+  return {
+    id,
+    tag_name: tag,
+    name,
+    target_commitish: sha,
+    draft,
+    prerelease: false,
+    immutable,
+    created_at: "2026-08-27T15:32:13Z",
+    published_at: draft ? null : "2026-08-27T16:00:00Z",
+    html_url: `https://github.com/${RESERVATION_REPOSITORY}/releases/tag/${draft ? `untagged-${id}` : tag}`,
+    author,
+    assets,
+    // GitHub appends generated notes to the marker a draft was created with.
+    body: draft
+      ? `${body}\n\n**Full Changelog**: https://github.com/${RESERVATION_REPOSITORY}/commits/${tag}`
+      : body,
+  };
+}
+
+const nativeReservationMarker = (
+  tool,
+  sha,
+  fingerprint = RESERVATION_FINGERPRINT,
+  intent = "automatic",
+) =>
+  `<!-- srn-release-reservation tool=${tool} commit=${sha} fingerprint=${fingerprint} intent=${intent} -->`;
+const desktopReservationMarker = (sha, intent = "automatic") =>
+  `<!-- srn-release-reservation tool=srn-desktop commit=${sha} intent=${intent} -->`;
+
+// The hand-off exactly as the impact job writes it, so the step is tested
+// against what the analyzer really emits.
+function impactHandOff(headSha, forced = false, forceReason = null) {
+  return githubOutputs({
+    schemaVersion: 1,
+    mode: "single",
+    identity: "fixture",
+    changed: true,
+    forced,
+    forceReason,
+    firstRelease: false,
+    noAncestorBaseline: false,
+    baselineStatus: "ancestor",
+    publicationGate: forced ? "force-requested" : "build-and-compare",
+    baseRef: null,
+    baseSha: null,
+    excludedReleaseRef: null,
+    headSha,
+    matchedFiles: ["packages/fixture/src/index.ts"],
+    reasons: [{ code: "target-package-change", paths: ["a"] }],
+  }).result_json;
+}
+
+function publishedReservationHistory(tool, numbers) {
+  return {
+    releases: ({ previousSha }) =>
+      numbers.map((n) =>
+        reservedRelease({
+          id: 100 + n,
+          tool,
+          n,
+          sha: previousSha,
+          draft: false,
+          body: `${tool} ${RESERVATION_YEAR}.${n}`,
+        }),
+      ),
+    tags: numbers.map((n) => [`${tool}-v${RESERVATION_YEAR}.${n}`, "previous"]),
+  };
+}
+
+// A step that reserves or reuses leaves exactly these bytes behind and prints
+// nothing: the gh commands it ran, the outputs later jobs read, and its
+// summary. A step that stops runs exactly the listed gh commands, writes no
+// output, and says why where a person will look.
+function assertReservation(runBlock, scenario) {
+  assert.equal(reservationShellProblemFound, null);
+  const fixture = reservationFixture(scenario.fixture);
+  try {
+    const result = runReservationStep(
+      fixture,
+      runBlock,
+      scenario.environment(fixture),
+    );
+    const expected = scenario.expected;
+    const context = `${result.stdout}\n${result.stderr}`;
+    const intent = expected.intent ?? "automatic";
+    assert.equal(result.spawnError, null, context);
+    assert.deepEqual(
+      result.calls,
+      expected.requests.map((request) =>
+        reservationCall(request, {
+          tool: scenario.tool,
+          sha: fixture.headSha,
+          marker: scenario.marker(fixture.headSha, intent),
+        }),
+      ),
+      context,
+    );
+    const outputs = expected.reserves ?? expected.reuses;
+    if (outputs) {
+      assert.equal(result.status, 0, context);
+      assert.equal(result.stdout, "");
+      assert.equal(
+        result.outputText,
+        Object.entries(outputs)
+          .map(([name, value]) => `${name}=${value}\n`)
+          .join(""),
+      );
+      assert.equal(
+        result.summary,
+        [
+          ...(expected.summary ?? []),
+          scenario.reservedSummary(fixture.headSha, intent, outputs),
+          "",
+        ].join("\n"),
+      );
+      return;
+    }
+    assert.equal(result.status, 1, context);
+    assert.equal(result.outputText, "", context);
+    assert.equal(result.annotations.length, 1, context);
+    const refused = expected.refuses !== undefined;
+    assert.match(
+      result.annotations[0],
+      new RegExp(
+        `^::error title=${scenario.tool} release reservation ${refused ? "refused" : "failed"}::`,
+      ),
+    );
+    for (const fragment of (expected.refuses ?? expected.fails)(fixture)) {
+      assert.ok(
+        result.annotationText.includes(fragment),
+        `annotation lacks ${JSON.stringify(fragment)}:\n${result.annotationText}`,
+      );
+      if (refused) {
+        assert.ok(
+          result.summary.includes(fragment),
+          `job summary lacks ${JSON.stringify(fragment)}:\n${result.summary}`,
+        );
+        assert.ok(
+          result.stderr.includes(fragment),
+          `log lacks ${JSON.stringify(fragment)}:\n${result.stderr}`,
+        );
+      }
+    }
+    for (const fragment of expected.log ?? []) {
+      assert.ok(result.stderr.includes(fragment), context);
+    }
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+// The two ways out of a stale draft, as the refusal prints them.
+const staleDraftExits = (tool, id, sha) => [
+  `  discard ${id}: gh api --method DELETE repos/${RESERVATION_REPOSITORY}/releases/${id}`,
+  `  or finish ${id}: re-run the failed jobs of the run that reserved it, listed by gh run list --repo ${RESERVATION_REPOSITORY} --workflow ${tool} --commit ${sha}`,
+];
+
+function nativeReservation(tool) {
+  return {
+    tool,
+    marker: (sha, intent) =>
+      nativeReservationMarker(tool, sha, RESERVATION_FINGERPRINT, intent),
+    reservedSummary: (sha, intent, outputs) =>
+      `Reserved ${outputs.tag} for ${sha} at ${RESERVATION_FINGERPRINT} with intent ${intent} (release id ${outputs.release_id}; reused=${outputs.reused}; published=${outputs.published})`,
+  };
+}
+
+const desktopReservation = Object.freeze({
+  tool: "srn-desktop",
+  marker: (sha, intent) => desktopReservationMarker(sha, intent),
+  reservedSummary: (sha, intent, outputs) =>
+    `Reserved ${outputs.tag} for ${sha} with intent ${intent} (id ${outputs.release_id}; reused=${outputs.reused}; published=${outputs.published}).`,
+});
+
+function nativeReservationScenarios(tool) {
+  const year = RESERVATION_YEAR;
+  const environment = (fixture) => ({
+    TOOL: tool,
+    EXPECTED_FINGERPRINT: RESERVATION_FINGERPRINT,
+    FORCED: "false",
+    IMPACT_RESULT: impactHandOff(fixture.headSha),
+  });
+  const history = publishedReservationHistory(tool, [1, 2, 3]);
+  const withHistory = (extra, extraTags = []) => ({
+    releases: (shas) => [...extra(shas), ...history.releases(shas)],
+    tags: [...history.tags, ...extraTags],
+  });
+  const reserved = (n, overrides = {}) => ({
+    version: `${year}.${n}`,
+    tag: `${tool}-v${year}.${n}`,
+    release_id: "900000001",
+    reused: "false",
+    published: "false",
+    ...overrides,
+  });
+  const own =
+    (id, overrides = {}) =>
+    ({ headSha }) => [
+      reservedRelease({
+        id,
+        tool,
+        n: 4,
+        sha: headSha,
+        body: nativeReservationMarker(tool, headSha),
+        ...overrides,
+      }),
+    ];
+  return [
+    {
+      name: "no release of the tool yet reserves YY.1",
+      fixture: {},
+      environment,
+      expected: {
+        reserves: reserved(1),
+        requests: ["list", `POST ${tool}-v${year}.1`],
+      },
+    },
+    {
+      name: "published history reserves the next number",
+      fixture: history,
+      environment,
+      expected: {
+        reserves: reserved(4),
+        requests: ["list", `POST ${tool}-v${year}.4`],
+      },
+    },
+    {
+      name: "a draft for this commit, fingerprint, and intent is reused",
+      fixture: withHistory(own(500)),
+      environment,
+      expected: {
+        reuses: reserved(4, { release_id: "500", reused: "true" }),
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a release already published from this commit is reported as published",
+      fixture: withHistory(own(500, { draft: false }), [
+        [`${tool}-v${year}.4`, "head"],
+      ]),
+      environment,
+      expected: {
+        reuses: reserved(4, {
+          release_id: "500",
+          reused: "true",
+          published: "true",
+        }),
+        requests: ["list"],
+      },
+    },
+    {
+      // The state that stopped srn-home-server from 2026-08-27: a draft left
+      // by a run whose upload failed, and every later commit refused.
+      name: "a draft reserved for another commit is refused with its id, age, assets, and both ways out",
+      fixture: withHistory(({ previousSha }) => [
+        reservedRelease({
+          id: 377935393,
+          tool,
+          n: 4,
+          sha: previousSha,
+          body: nativeReservationMarker(tool, previousSha),
+          assets: [{ id: 1, name: `${tool}-linux-x64` }],
+        }),
+      ]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          `a draft ${tool} release is still reserved for another commit, fingerprint or intent`,
+          `this run reserves: commit=${fixture.headSha} fingerprint=${RESERVATION_FINGERPRINT} intent=automatic`,
+          `  377935393\t${tool}-v${year}.4\t${fixture.previousSha}\tcreated 2026-08-27T15:32:13Z\t1 asset(s)\thttps://github.com/${RESERVATION_REPOSITORY}/releases/tag/untagged-377935393`,
+          "Reconcile or delete the stale drafts explicitly, then rerun. For each draft, one of:",
+          ...staleDraftExits(tool, 377935393, fixture.previousSha),
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a draft for this commit with another fingerprint is refused",
+      fixture: withHistory(({ headSha }) => [
+        reservedRelease({
+          id: 501,
+          tool,
+          n: 4,
+          sha: headSha,
+          body: nativeReservationMarker(tool, headSha, "b".repeat(64)),
+        }),
+      ]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          `  501\t${tool}-v${year}.4\t${fixture.headSha}\tcreated 2026-08-27T15:32:13Z\t0 asset(s)`,
+          ...staleDraftExits(tool, 501, fixture.headSha),
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "another tool's draft is ignored",
+      fixture: withHistory(({ previousSha }) => [
+        reservedRelease({
+          id: 502,
+          tool: "srn-other",
+          n: 9,
+          sha: previousSha,
+          body: nativeReservationMarker("srn-other", previousSha),
+        }),
+      ]),
+      environment,
+      expected: {
+        reserves: reserved(4),
+        requests: ["list", `POST ${tool}-v${year}.4`],
+      },
+    },
+    {
+      name: "a published release holding the next number is allocated past",
+      fixture: withHistory(({ previousSha }) => [
+        reservedRelease({
+          id: 503,
+          tool,
+          n: 4,
+          sha: previousSha,
+          draft: false,
+          body: "published without a fetched tag",
+        }),
+      ]),
+      environment,
+      expected: {
+        reserves: reserved(5),
+        requests: ["list", `POST ${tool}-v${year}.5`],
+      },
+    },
+    {
+      name: "a Git tag ahead of every release is allocated past",
+      fixture: withHistory(() => [], [[`${tool}-v${year}.7`, "previous"]]),
+      environment,
+      expected: {
+        reserves: reserved(8),
+        requests: ["list", `POST ${tool}-v${year}.8`],
+      },
+    },
+    {
+      name: "two releases reserved for this exact run are refused by id",
+      fixture: withHistory(({ headSha }) => [
+        ...own(504)({ headSha }),
+        reservedRelease({
+          id: 505,
+          tool,
+          n: 5,
+          sha: headSha,
+          body: nativeReservationMarker(tool, headSha),
+        }),
+      ]),
+      environment,
+      expected: {
+        refuses: () => [
+          "more than one release is reserved for this exact commit, fingerprint and intent",
+          "release ids: 504 505",
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a published reservation tagged at another commit is refused with both commits",
+      fixture: withHistory(own(506, { draft: false }), [
+        [`${tool}-v${year}.4`, "previous"],
+      ]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "the release for this run is published from a different commit",
+          `tag ${tool}-v${year}.4: ${fixture.previousSha}`,
+          `GITHUB_SHA: ${fixture.headSha}`,
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a published reservation without its Git tag is refused",
+      fixture: withHistory(own(507, { draft: false })),
+      environment,
+      expected: {
+        refuses: () => [
+          "published but its Git tag does not exist",
+          "release id: 507",
+          `tag: ${tool}-v${year}.4`,
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a draft reservation whose tag already exists in Git is refused",
+      fixture: withHistory(own(508), [[`${tool}-v${year}.4`, "head"]]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "uses a tag that already exists in Git",
+          "draft release id: 508",
+          `tag ${tool}-v${year}.4: ${fixture.headSha}`,
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a reservation renamed by hand is refused with what was found",
+      fixture: withHistory(own(509, { name: "renamed" })),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "the release reserved for this run no longer matches it",
+          `expected: tag_name=${tool}-v${year}.4 name=${tool} ${year}.4 target_commitish=${fixture.headSha} prerelease=false`,
+          '"name":"renamed"',
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a reservation sharing its tag with another release is refused with both",
+      fixture: withHistory(({ headSha, previousSha }) => [
+        ...own(510)({ headSha }),
+        reservedRelease({
+          id: 511,
+          tool,
+          n: 4,
+          sha: previousSha,
+          draft: false,
+          body: "same tag",
+        }),
+      ]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "is used by 2 releases instead of 1",
+          `510\t${fixture.headSha}\tdraft=true`,
+          `511\t${fixture.previousSha}\tdraft=false`,
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "an impact analysis for another commit is refused with both commits",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        IMPACT_RESULT: impactHandOff(fixture.previousSha),
+      }),
+      expected: {
+        refuses: (fixture) => [
+          "the impact analysis handed to this job does not describe this run",
+          `expected: headSha=${fixture.headSha} forced=false forceReason=null`,
+          `received: {"headSha":"${fixture.previousSha}","forced":false,"forceReason":null}`,
+        ],
+        requests: [],
+      },
+    },
+    {
+      name: "an impact analysis that is not JSON is refused",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        IMPACT_RESULT: '{"headSha":',
+      }),
+      expected: {
+        refuses: () => ["does not describe this run", "received: jq: "],
+        requests: [],
+      },
+    },
+    {
+      name: "a force state that is not a boolean is refused",
+      fixture: history,
+      environment: (fixture) => ({ ...environment(fixture), FORCED: "yes" }),
+      expected: {
+        refuses: () => ["neither true nor false", "FORCED: yes"],
+        requests: [],
+      },
+    },
+    {
+      name: "a malformed fingerprint is refused",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        EXPECTED_FINGERPRINT: "not-a-fingerprint",
+      }),
+      expected: {
+        refuses: () => [
+          "not 64 lowercase hexadecimal characters",
+          "EXPECTED_FINGERPRINT: not-a-fingerprint",
+        ],
+        requests: [],
+      },
+    },
+    {
+      name: "a checkout of another commit is refused with both commits",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        GITHUB_SHA: fixture.previousSha,
+        IMPACT_RESULT: impactHandOff(fixture.previousSha),
+      }),
+      expected: {
+        refuses: (fixture) => [
+          "checked out a different commit than the one the run was started for",
+          `checked out: ${fixture.headSha}`,
+          `GITHUB_SHA:  ${fixture.previousSha}`,
+        ],
+        requests: [],
+      },
+    },
+    {
+      name: "a forced release reserves under an intent named after the run",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        FORCED: "true",
+        IMPACT_RESULT: impactHandOff(fixture.headSha, true, "signing fix"),
+      }),
+      expected: {
+        intent: "forced-4242",
+        reserves: reserved(4),
+        requests: ["list", `POST ${tool}-v${year}.4`],
+      },
+    },
+    {
+      name: "a forced release with a blank reason is refused",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        FORCED: "true",
+        IMPACT_RESULT: JSON.stringify({
+          headSha: fixture.headSha,
+          forced: true,
+          forceReason: "   ",
+        }),
+      }),
+      expected: {
+        refuses: () => [
+          "does not describe this run",
+          "forced=true forceReason=a non-blank string",
+          '"forceReason":"   "',
+        ],
+        requests: [],
+      },
+    },
+    {
+      name: "an unreadable release inventory fails with the command named and reserves nothing",
+      fixture: {
+        ...history,
+        events: [
+          {
+            on: "list",
+            nth: 1,
+            fail: "gh: No server is currently available to service your request. (HTTP 503)",
+          },
+        ],
+      },
+      environment,
+      expected: {
+        fails: () => [
+          "The step stopped with exit status 1 at the command that ends at line ",
+          "jq 'flatten' > \"$releases_file\"",
+          "This is a command that failed, not a refusal",
+        ],
+        log: ["(HTTP 503)"],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a reservation GitHub rejects fails with the command named",
+      fixture: {
+        ...history,
+        events: [
+          { on: "create", nth: 1, fail: "gh: Validation Failed (HTTP 422)" },
+        ],
+      },
+      environment,
+      expected: {
+        fails: () => [
+          "The step stopped with exit status 1 at the command that ends at line ",
+          'gh api --method POST "repos/${GITHUB_REPOSITORY}/releases"',
+        ],
+        log: ["(HTTP 422)"],
+        requests: ["list", `POST ${tool}-v${year}.4`],
+      },
+    },
+    {
+      name: "a reservation GitHub answers with another release is refused with both",
+      fixture: { ...history, createOverride: { draft: false } },
+      environment,
+      expected: {
+        refuses: () => [
+          "does not match what was asked for",
+          "draft=true prerelease=false",
+          '"draft":false',
+        ],
+        requests: ["list", `POST ${tool}-v${year}.4`],
+      },
+    },
+  ];
+}
+
+const NATIVE_RESERVATION_STEP = "Reserve or reuse exact draft release";
+const nativeReservationFile = ".github/workflows/srn-home-server.yml";
+
+for (const scenario of nativeReservationScenarios("srn-home-server")) {
+  test(`srn-home-server reservation: ${scenario.name}`, reservationRuns, () => {
+    assertReservation(
+      reservationRunBlock(nativeReservationFile, NATIVE_RESERVATION_STEP),
+      { ...scenario, ...nativeReservation("srn-home-server") },
+    );
+  });
+}
+
+// The other four native publishers carry the same script; the cases above
+// stand for them for as long as that stays true.
+test("every native publisher reserves with the script exercised for srn-home-server", () => {
+  const exercised = reservationRunBlock(
+    nativeReservationFile,
+    NATIVE_RESERVATION_STEP,
+  );
+  assert.equal(exercised.includes("${{"), false);
+  for (const tool of ["srn-admin", "srn-client", "srn-mcp", "srn-server"]) {
+    assert.equal(
+      reservationRunBlock(
+        `.github/workflows/${tool}.yml`,
+        NATIVE_RESERVATION_STEP,
+      ),
+      exercised,
+      `${tool} reserves with a different script and needs its own cases`,
+    );
+  }
+});
+
+// Each of them still runs its own copy under its own name on every path
+// that succeeds today, and on the refusal that stopped srn-home-server.
+for (const tool of ["srn-admin", "srn-client", "srn-mcp", "srn-server"]) {
+  const scenarios = nativeReservationScenarios(tool).filter(
+    ({ expected, name }) =>
+      (expected.reserves ?? expected.reuses) !== undefined ||
+      name.startsWith("a draft reserved for another commit is refused"),
+  );
+  assert.equal(scenarios.length, 9);
+  for (const scenario of scenarios) {
+    test(`${tool} reservation: ${scenario.name}`, reservationRuns, () => {
+      assertReservation(
+        reservationRunBlock(
+          `.github/workflows/${tool}.yml`,
+          NATIVE_RESERVATION_STEP,
+        ),
+        { ...scenario, ...nativeReservation(tool) },
+      );
+    });
+  }
+}
+
+function desktopReservationScenarios() {
+  const tool = "srn-desktop";
+  const year = RESERVATION_YEAR;
+  const environment = (fixture) => ({
+    TOOL: tool,
+    FORCED: "false",
+    IMPACT_RESULT: impactHandOff(fixture.headSha),
+  });
+  const history = publishedReservationHistory(tool, [1, 2, 3, 4, 5]);
+  const withHistory = (extra, extraTags = []) => ({
+    releases: (shas) => [...extra(shas), ...history.releases(shas)],
+    tags: [...history.tags, ...extraTags],
+  });
+  const reserved = (overrides = {}) => ({
+    version: `${year}.6`,
+    app_version: `${year}.6.0`,
+    tag: `${tool}-v${year}.6`,
+    release_id: "900000001",
+    reused: "false",
+    published: "false",
+    ...overrides,
+  });
+  const stale =
+    (overrides = {}) =>
+    ({ previousSha }) => [
+      reservedRelease({
+        id: 371520012,
+        tool,
+        n: 6,
+        sha: previousSha,
+        body: desktopReservationMarker(previousSha),
+        ...overrides,
+      }),
+    ];
+  const reconciles = [
+    "list",
+    "get 371520012",
+    "list",
+    "get 371520012",
+    "DELETE 371520012",
+    "list",
+    `POST ${tool}-v${year}.6`,
+  ];
+  const removed = `Removed superseded empty automatic draft ${tool}-v${year}.6; the exact current source may now reserve that version.`;
+  const notRemovable = (...found) => ({
+    refuses: (fixture) => [
+      "a stale srn-desktop draft is not one this job may remove",
+      `this run reserves: commit=${fixture.headSha} intent=automatic`,
+      "removable only if: tag srn-desktop-vYY.N",
+      ...found,
+      "Reconcile or delete the stale draft explicitly, then rerun. One of:",
+      ...staleDraftExits(tool, 371520012, fixture.previousSha),
+    ],
+    requests: ["list"],
+  });
+  return [
+    {
+      name: "no release yet reserves YY.1 and its semver app version",
+      fixture: {},
+      environment,
+      expected: {
+        reserves: reserved({
+          version: `${year}.1`,
+          app_version: `${year}.1.0`,
+          tag: `${tool}-v${year}.1`,
+        }),
+        requests: ["list", `POST ${tool}-v${year}.1`],
+      },
+    },
+    {
+      name: "published history reserves the next number",
+      fixture: history,
+      environment,
+      expected: {
+        reserves: reserved(),
+        requests: ["list", `POST ${tool}-v${year}.6`],
+      },
+    },
+    {
+      name: "a draft for this commit and intent is reused",
+      fixture: withHistory(({ headSha }) => [
+        reservedRelease({
+          id: 600,
+          tool,
+          n: 6,
+          sha: headSha,
+          body: desktopReservationMarker(headSha),
+        }),
+      ]),
+      environment,
+      expected: {
+        reuses: reserved({ release_id: "600", reused: "true" }),
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a release already published from this commit is reported as published",
+      fixture: withHistory(
+        ({ headSha }) => [
+          reservedRelease({
+            id: 600,
+            tool,
+            n: 6,
+            sha: headSha,
+            draft: false,
+            body: desktopReservationMarker(headSha),
+          }),
+        ],
+        [[`${tool}-v${year}.6`, "head"]],
+      ),
+      environment,
+      expected: {
+        reuses: reserved({
+          release_id: "600",
+          reused: "true",
+          published: "true",
+        }),
+        requests: ["list"],
+      },
+    },
+    {
+      name: "one empty automatic draft for another commit is removed and its number reserved",
+      fixture: withHistory(stale()),
+      environment,
+      expected: {
+        reserves: reserved(),
+        requests: reconciles,
+        summary: [removed],
+      },
+    },
+    {
+      name: "a stale draft holding an asset is refused with what was found",
+      fixture: withHistory(stale({ assets: [{ id: 7, name: "partial.dmg" }] })),
+      environment,
+      expected: notRemovable('"id":371520012', '"assets":1'),
+    },
+    {
+      name: "a stale draft from a forced run is refused",
+      fixture: withHistory(({ previousSha }) => [
+        reservedRelease({
+          id: 371520012,
+          tool,
+          n: 6,
+          sha: previousSha,
+          body: desktopReservationMarker(previousSha, "forced-99"),
+        }),
+      ]),
+      environment,
+      expected: notRemovable("intent=forced-99"),
+    },
+    {
+      name: "a stale draft written by a person is refused",
+      fixture: withHistory(
+        stale({ author: { login: "someone", id: 5, type: "User" } }),
+      ),
+      environment,
+      expected: notRemovable('"login":"someone"'),
+    },
+    {
+      name: "a stale immutable draft is refused",
+      fixture: withHistory(stale({ immutable: true })),
+      environment,
+      expected: notRemovable('"immutable":true'),
+    },
+    {
+      name: "a stale draft whose tag exists in Git is refused",
+      fixture: withHistory(stale(), [[`${tool}-v${year}.6`, "previous"]]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "tag exists in Git, so the draft is not removed",
+          "draft release id: 371520012",
+          `tag ${tool}-v${year}.6: ${fixture.previousSha}`,
+        ],
+        requests: ["list", "get 371520012", "list"],
+      },
+    },
+    {
+      // The state recorded on 2026-10-12: three drafts under one tag.
+      name: "several stale drafts are refused and each one is named with both ways out",
+      fixture: withHistory(({ previousSha }) => [
+        ...stale()({ previousSha }),
+        ...[
+          [371790900, "e5f24d6d2694829b057cc140724fb52c55879830"],
+          [371803349, "d24bf886404dbabd8f483eb93149c01d27c58b3f"],
+        ].map(([id, sha]) =>
+          reservedRelease({
+            id,
+            tool,
+            n: 6,
+            sha,
+            body: desktopReservationMarker(sha),
+          }),
+        ),
+      ]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "3 unpublished srn-desktop drafts are reserved for another commit or intent",
+          `this run reserves: commit=${fixture.headSha} intent=automatic`,
+          `  371520012\t${tool}-v${year}.6\t${fixture.previousSha}\tcreated 2026-08-27T15:32:13Z\t0 asset(s)\t`,
+          `  371790900\t${tool}-v${year}.6\te5f24d6d2694829b057cc140724fb52c55879830`,
+          `  371803349\t${tool}-v${year}.6\td24bf886404dbabd8f483eb93149c01d27c58b3f`,
+          "Reconcile or delete the stale drafts explicitly, then rerun. For each draft, one of:",
+          ...staleDraftExits(tool, 371520012, fixture.previousSha),
+          ...staleDraftExits(
+            tool,
+            371790900,
+            "e5f24d6d2694829b057cc140724fb52c55879830",
+          ),
+          ...staleDraftExits(
+            tool,
+            371803349,
+            "d24bf886404dbabd8f483eb93149c01d27c58b3f",
+          ),
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a stale draft sharing its tag with a published release is refused",
+      fixture: withHistory(({ previousSha }) => [
+        reservedRelease({
+          id: 371520012,
+          tool,
+          n: 5,
+          sha: previousSha,
+          body: desktopReservationMarker(previousSha),
+        }),
+      ]),
+      environment,
+      expected: {
+        refuses: (fixture) => [
+          "tag is used by more than one release, so the draft is not removed",
+          `tag: ${tool}-v${year}.5`,
+          `105\t${fixture.previousSha}\tdraft=false`,
+        ],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a stale draft that gains an asset before the read by id is refused with both snapshots",
+      fixture: {
+        ...withHistory(stale()),
+        events: [
+          {
+            on: "get",
+            nth: 1,
+            patch: {
+              id: 371520012,
+              fields: { assets: [{ id: 9, name: "late.dmg" }] },
+            },
+          },
+        ],
+      },
+      environment,
+      expected: {
+        refuses: () => [
+          "changed between the inventory and a read by release id, so it is not removed",
+          '"asset_ids":[]',
+          '"asset_ids":[9]',
+        ],
+        requests: ["list", "get 371520012"],
+      },
+    },
+    {
+      name: "a second draft appearing under the tag during the checks is refused",
+      fixture: {
+        ...withHistory(stale()),
+        events: ({ previousSha }) => [
+          {
+            on: "list",
+            nth: 2,
+            add: reservedRelease({
+              id: 371790900,
+              tool,
+              n: 6,
+              sha: previousSha,
+              body: desktopReservationMarker(previousSha),
+            }),
+          },
+        ],
+      },
+      environment,
+      expected: {
+        refuses: () => [
+          "the release inventory changed while the stale srn-desktop draft",
+          "371790900",
+        ],
+        requests: ["list", "get 371520012", "list"],
+      },
+    },
+    {
+      name: "a stale draft edited after its tag was checked is refused before any deletion",
+      fixture: {
+        ...withHistory(stale()),
+        events: [
+          {
+            on: "get",
+            nth: 2,
+            patch: { id: 371520012, fields: { name: "edited" } },
+          },
+        ],
+      },
+      environment,
+      expected: {
+        refuses: () => [
+          "changed after its tag was checked, so it is not removed",
+          '"name":"edited"',
+        ],
+        requests: ["list", "get 371520012", "list", "get 371520012"],
+      },
+    },
+    {
+      name: "an impact analysis for another commit is refused with both commits",
+      fixture: history,
+      environment: (fixture) => ({
+        ...environment(fixture),
+        IMPACT_RESULT: impactHandOff(fixture.previousSha),
+      }),
+      expected: {
+        refuses: (fixture) => [
+          "the impact analysis handed to this job does not describe this run",
+          `expected: headSha=${fixture.headSha} forced=false forceReason=null`,
+          `received: {"headSha":"${fixture.previousSha}","forced":false,"forceReason":null}`,
+        ],
+        requests: [],
+      },
+    },
+    {
+      // load_releases is a function; a failure inside one must be reported too.
+      name: "an unreadable release inventory fails with the command named and reserves nothing",
+      fixture: {
+        ...history,
+        events: [
+          {
+            on: "list",
+            nth: 1,
+            fail: "gh: No server is currently available to service your request. (HTTP 503)",
+          },
+        ],
+      },
+      environment,
+      expected: {
+        fails: () => [
+          "The step stopped with exit status 1 at the command that ends at line ",
+          "jq 'flatten' > \"$releases_file\"",
+        ],
+        log: ["(HTTP 503)"],
+        requests: ["list"],
+      },
+    },
+    {
+      name: "a forced release removes an empty automatic draft and reserves under its own intent",
+      fixture: withHistory(stale()),
+      environment: (fixture) => ({
+        ...environment(fixture),
+        FORCED: "true",
+        IMPACT_RESULT: impactHandOff(fixture.headSha, true, "rebuild"),
+      }),
+      expected: {
+        intent: "forced-4242",
+        reserves: reserved(),
+        requests: reconciles,
+        summary: [removed],
+      },
+    },
+  ];
+}
+
+for (const scenario of desktopReservationScenarios()) {
+  test(`srn-desktop reservation: ${scenario.name}`, reservationRuns, () => {
+    assertReservation(
+      reservationRunBlock(
+        ".github/workflows/srn-desktop.yml",
+        "Reserve or reuse exact desktop draft",
+      ),
+      { ...scenario, ...desktopReservation },
+    );
+  });
+}
+
+// srn-desktop stopped on 2026-09-26 when its hand-off passed the size of one
+// environment string. The analyzer's bound has to stay on the working side of
+// that limit for the step that receives it.
+test(
+  "the largest hand-off the analyzer may emit still starts the reservation step",
+  reservationRuns,
+  () => {
+    assert.equal(reservationShellProblemFound, null);
+    const runBlock = reservationRunBlock(
+      ".github/workflows/srn-desktop.yml",
+      "Reserve or reuse exact desktop draft",
+    );
+    const padded = (headSha, bytes) => {
+      const handOff = JSON.parse(impactHandOff(headSha));
+      const overhead = Buffer.byteLength(
+        JSON.stringify({ ...handOff, padding: "" }),
+      );
+      return JSON.stringify({
+        ...handOff,
+        padding: "x".repeat(bytes - overhead),
+      });
+    };
+    for (const [bytes, starts] of [
+      [30000, true],
+      // What srn-desktop carried at bee44c36. Linux caps one environment
+      // string at 131072 bytes; other systems draw the line elsewhere.
+      ...(process.platform === "linux" ? [[210104, false]] : []),
+    ]) {
+      const fixture = reservationFixture();
+      try {
+        const handOff = padded(fixture.headSha, bytes);
+        assert.equal(Buffer.byteLength(handOff), bytes);
+        const result = runReservationStep(fixture, runBlock, {
+          TOOL: "srn-desktop",
+          FORCED: "false",
+          IMPACT_RESULT: handOff,
+        });
+        assert.equal(result.spawnError, starts ? null : "E2BIG");
+        assert.equal(result.status, starts ? 0 : null, result.stderr);
+        assert.equal(result.calls.length, starts ? 2 : 0);
+      } finally {
+        fixture.cleanup();
+      }
+    }
+  },
+);

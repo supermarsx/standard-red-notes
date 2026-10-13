@@ -347,6 +347,69 @@ function requireFragment(errors, file, text, fragment, description) {
   errors.push(`${file}: missing ${description}`);
 }
 
+// A reservation that stops without saying why leaves "exit code 1" as the only
+// thing on the run page. Every refusal goes through refuse(), which raises an
+// error annotation and writes the job summary with the values it compared; a
+// command that fails is annotated on exit; and no assertion may fail bare.
+function validateReservationReporting(errors, file, identityJob, stepName) {
+  const step = workflowStepBlock(identityJob, stepName);
+  for (const [fragment, description] of [
+    ["refuse() {", "reservation refusal reporter"],
+    [
+      'echo "::error title=${TOOL} release reservation refused::${annotation}"',
+      "reservation refusal annotation",
+    ],
+    ['} >> "$GITHUB_STEP_SUMMARY"', "reservation refusal job summary"],
+    [
+      "trap 'failed_line=$LINENO; failed_command=$BASH_COMMAND' ERR",
+      "failed reservation command capture",
+    ],
+    [`trap 'step_stopped "$?"' EXIT`, "failed reservation command exit report"],
+    [
+      'echo "::error title=${TOOL} release reservation failed::${annotation}"',
+      "failed reservation command annotation",
+    ],
+    [
+      "created \\(.created_at)\\t\\(.assets | length) asset(s)\\t\\(.html_url)",
+      "stale draft age, asset count, and page in the refusal",
+    ],
+    [
+      "Reconcile or delete the stale drafts explicitly, then rerun.",
+      "stale draft recovery instruction",
+    ],
+    [
+      "gh api --method DELETE repos/",
+      "stale draft discard command in the refusal",
+    ],
+    [
+      "re-run the failed jobs of the run that reserved it, listed by gh run list --repo",
+      "stale draft finishing route in the refusal",
+    ],
+  ]) {
+    requireFragment(errors, file, step, fragment, description);
+  }
+  if (countOccurrences(step, "exit 1") !== 1) {
+    errors.push(
+      `${file}: every reservation refusal must go through refuse(), the only exit 1 in the step`,
+    );
+  }
+  const silent = step
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (statement) =>
+        (/^(?:test |\[\[ |git show-ref )/.test(statement) &&
+          !statement.endsWith(" ||")) ||
+        (statement.includes(">/dev/null") &&
+          !/(?: \|\||; then)$/.test(statement)),
+    );
+  if (silent.length > 0) {
+    errors.push(
+      `${file}: reservation assertions must report through refuse(): ${silent.join(" | ")}`,
+    );
+  }
+}
+
 function sourceSection(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
   if (start < 0) {
@@ -1646,6 +1709,12 @@ export function validateReleaseContract(files) {
       ]) {
         requireFragment(errors, file, identityJob, fragment, description);
       }
+      validateReservationReporting(
+        errors,
+        file,
+        identityJob,
+        "Reserve or reuse exact draft release",
+      );
     }
     if (identityJob.includes("GITHUB_RUN_ATTEMPT")) {
       errors.push(
@@ -3858,6 +3927,12 @@ export function validateReleaseContract(files) {
       description,
     );
   }
+  validateReservationReporting(
+    errors,
+    rootDesktopFile,
+    rootDesktopIdentity,
+    "Reserve or reuse exact desktop draft",
+  );
   if (rootDesktopIdentity.includes("GITHUB_RUN_ATTEMPT")) {
     errors.push(
       `${rootDesktopFile}: forced desktop identity must remain stable across rerun attempts`,

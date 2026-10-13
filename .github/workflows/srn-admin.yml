@@ -260,9 +260,55 @@ jobs:
           IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$FORCED" == "true" || "$FORCED" == "false" ]]
+          # A refusal has to be readable from the run page: it is raised as an error
+          # annotation and copied to the job summary, and it names the condition that
+          # failed and the values that were compared.
+          refused=""
+          refuse() {
+            local text annotation
+            refused=yes
+            text="$(printf '%s\n' "$@")"
+            printf '%s release reservation refused: %s\n' "$TOOL" "$text" >&2
+            annotation="${text//'%'/%25}"
+            annotation="${annotation//$'\r'/%0D}"
+            annotation="${annotation//$'\n'/%0A}"
+            echo "::error title=${TOOL} release reservation refused::${annotation}"
+            {
+              echo "### ${TOOL} release reservation refused"
+              echo
+              echo '```text'
+              printf '%s\n' "$text"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          # Anything else that stops this step is a command that failed, not a
+          # refusal. Say which, so the run page does not read "exit code 1" alone.
+          failed_line=""
+          failed_command=""
+          step_stopped() {
+            local annotation
+            if [ "$1" -eq 0 ] || [ -n "$refused" ]; then return 0; fi
+            annotation="The step stopped with exit status ${1} at the command that ends at line ${failed_line:-?} of its script (for a pipeline, its last stage):"$'\n'"${failed_command:-not recorded}"$'\n'"This is a command that failed, not a refusal; its own message is the last output in the step log."
+            annotation="${annotation//'%'/%25}"
+            annotation="${annotation//$'\r'/%0D}"
+            annotation="${annotation//$'\n'/%0A}"
+            echo "::error title=${TOOL} release reservation failed::${annotation}"
+          }
+          set -E
+          trap 'failed_line=$LINENO; failed_command=$BASH_COMMAND' ERR
+          trap 'step_stopped "$?"' EXIT
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" ||
+            refuse "this job checked out a different commit than the one the run was started for" \
+              "checked out: $(git rev-parse HEAD)" \
+              "GITHUB_SHA:  ${GITHUB_SHA}"
+          [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]] ||
+            refuse "the build fingerprint is not 64 lowercase hexadecimal characters" \
+              "EXPECTED_FINGERPRINT: ${EXPECTED_FINGERPRINT}"
+          [[ "$FORCED" == "true" || "$FORCED" == "false" ]] ||
+            refuse "the force state from impact analysis is neither true nor false" \
+              "FORCED: ${FORCED}"
           jq -e --arg sha "$GITHUB_SHA" --argjson forced "$FORCED" '
             .headSha == $sha
             and .forced == $forced
@@ -270,9 +316,14 @@ jobs:
               ($forced and (.forceReason | type == "string") and ((.forceReason | gsub("^\\s+|\\s+$"; "")) | length > 0))
               or (($forced | not) and .forceReason == null)
             )
-          ' <<< "$IMPACT_RESULT" >/dev/null
+          ' <<< "$IMPACT_RESULT" >/dev/null ||
+            refuse "the impact analysis handed to this job does not describe this run" \
+              "expected: headSha=${GITHUB_SHA} forced=${FORCED} forceReason=$([ "$FORCED" = "true" ] && echo "a non-blank string" || echo "null")" \
+              "received: $(jq -c '{headSha, forced, forceReason}' <<< "$IMPACT_RESULT" 2>&1 | head -c 800)"
           if [ "$FORCED" = "true" ]; then
-            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] ||
+              refuse "a forced release needs a numeric run id to name its intent" \
+                "GITHUB_RUN_ID: ${GITHUB_RUN_ID}"
             intent="forced-${GITHUB_RUN_ID}"
           else
             intent="automatic"
@@ -306,18 +357,29 @@ jobs:
                   and (.tag_name | startswith($tool_prefix))
                   and ((.body // "") | contains($marker))
                 ) | not)
-              | "\(.id)\t\(.tag_name)\t\(.target_commitish)"
+              | "\(.id)\t\(.tag_name)\t\(.target_commitish)\tcreated \(.created_at)\t\(.assets | length) asset(s)\t\(.html_url)"
             ' "$releases_file"
           )
           if [ "${#stale_reservations[@]}" -gt 0 ]; then
-            echo "Refusing to allocate past stale ${TOOL} draft reservations:" >&2
-            printf '  %s\n' "${stale_reservations[@]}" >&2
-            echo "Reconcile or delete the stale drafts explicitly, then rerun." >&2
-            exit 1
+            stale_exits=()
+            for stale in "${stale_reservations[@]}"; do
+              IFS=$'\t' read -r stale_id _ stale_sha _ <<< "$stale"
+              stale_exits+=(
+                "  discard ${stale_id}: gh api --method DELETE repos/${GITHUB_REPOSITORY}/releases/${stale_id}"
+                "  or finish ${stale_id}: re-run the failed jobs of the run that reserved it, listed by gh run list --repo ${GITHUB_REPOSITORY} --workflow ${TOOL} --commit ${stale_sha}"
+              )
+            done
+            refuse "a draft ${TOOL} release is still reserved for another commit, fingerprint or intent, and a new version is never allocated past an unpublished one" \
+              "this run reserves: commit=${GITHUB_SHA} fingerprint=${EXPECTED_FINGERPRINT} intent=${intent}" \
+              "stale drafts (release id, tag, target commit, created, assets, page):" \
+              "${stale_reservations[@]/#/  }" \
+              "Reconcile or delete the stale drafts explicitly, then rerun. For each draft, one of:" \
+              "${stale_exits[@]}"
           fi
           if [ "${#reservations[@]}" -gt 1 ]; then
-            echo "Multiple reservations match ${TOOL}, ${GITHUB_SHA}, ${EXPECTED_FINGERPRINT}, and ${intent}" >&2
-            exit 1
+            refuse "more than one release is reserved for this exact commit, fingerprint and intent" \
+              "marker: ${marker}" \
+              "release ids: ${reservations[*]}"
           fi
 
           reused=false
@@ -327,7 +389,10 @@ jobs:
             tag="$(jq -r '.tag_name' <<< "$release")"
             version="${tag#"${TOOL}-v"}"
             name="${TOOL} ${version}"
-            [[ "$version" =~ ^[0-9]{2}\.[1-9][0-9]*$ ]]
+            [[ "$version" =~ ^[0-9]{2}\.[1-9][0-9]*$ ]] ||
+              refuse "the release reserved for this run does not carry a rolling ${TOOL}-vYY.N tag" \
+                "release id: ${release_id}" \
+                "tag: ${tag}"
             jq -e --arg tag "$tag" --arg name "$name" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
               .tag_name == $tag
               and .name == $name
@@ -335,16 +400,29 @@ jobs:
               and (.draft == true or .draft == false)
               and .prerelease == false
               and ((.body // "") | contains($marker))
-            ' <<< "$release" >/dev/null
+            ' <<< "$release" >/dev/null ||
+              refuse "the release reserved for this run no longer matches it" \
+                "expected: tag_name=${tag} name=${name} target_commitish=${GITHUB_SHA} prerelease=false, body holding ${marker}" \
+                "found:    $(jq -c '{id, tag_name, name, target_commitish, draft, prerelease, body: ((.body // "")[0:300])}' <<< "$release")"
             tag_count="$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")"
-            test "$tag_count" -eq 1
+            test "$tag_count" -eq 1 ||
+              refuse "the tag reserved for this run is used by ${tag_count} releases instead of 1" \
+                "tag: ${tag}" \
+                "$(jq -r --arg tag "$tag" '.[] | select(.tag_name == $tag) | "  \(.id)\t\(.target_commitish)\tdraft=\(.draft)"' "$releases_file")"
             published="$(jq -r '.draft | not' <<< "$release")"
             if [ "$published" = "true" ]; then
-              git show-ref --verify --quiet "refs/tags/${tag}"
-              test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"
+              git show-ref --verify --quiet "refs/tags/${tag}" ||
+                refuse "the release for this run is published but its Git tag does not exist" \
+                  "release id: ${release_id}" \
+                  "tag: ${tag}"
+              test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA" ||
+                refuse "the release for this run is published from a different commit" \
+                  "tag ${tag}: $(git rev-list -n 1 "$tag")" \
+                  "GITHUB_SHA: ${GITHUB_SHA}"
             elif git show-ref --verify --quiet "refs/tags/${tag}"; then
-              echo "Draft reservation ${tag} collides with an existing Git tag" >&2
-              exit 1
+              refuse "the draft reserved for this run uses a tag that already exists in Git" \
+                "draft release id: ${release_id}" \
+                "tag ${tag}: $(git rev-list -n 1 "$tag")"
             fi
             reused=true
           else
@@ -365,11 +443,13 @@ jobs:
             tag="${TOOL}-v${version}"
             name="${TOOL} ${version}"
             if git show-ref --verify --quiet "refs/tags/${tag}"; then
-              echo "Refusing to reserve existing tag ${tag}" >&2
-              exit 1
+              refuse "the next rolling version is already a Git tag" \
+                "tag ${tag}: $(git rev-list -n 1 "$tag")"
             fi
             tag_count="$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")"
-            test "$tag_count" -eq 0
+            test "$tag_count" -eq 0 ||
+              refuse "the next rolling version is already used by ${tag_count} release(s)" \
+                "tag: ${tag}"
             created="$(
               gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
                 -f tag_name="$tag" \
@@ -390,7 +470,10 @@ jobs:
               and .draft == true
               and .prerelease == false
               and ((.body // "") | contains($marker))
-            ' <<< "$created" >/dev/null
+            ' <<< "$created" >/dev/null ||
+              refuse "GitHub answered the reservation with a release that does not match what was asked for" \
+                "asked for: tag_name=${tag} name=${name} target_commitish=${GITHUB_SHA} draft=true prerelease=false, body holding ${marker}" \
+                "received:  $(jq -c '{id, tag_name, name, target_commitish, draft, prerelease, body: ((.body // "")[0:300])}' <<< "$created" 2>&1 | head -c 1200)"
           fi
 
           {
