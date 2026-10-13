@@ -10,8 +10,12 @@ import {
   davBridgeMinimumLogCalls,
   davBridgeSecretRevealSites,
   discoverLiveSourceFiles,
+  findRepositoryWideFindings,
   guardedRuntimeRoots,
+  listTrackedFiles,
+  messageForwardingWrappers,
   requiredRules,
+  reviewedSafeLoggingAllowlist,
   validateDavBridgeLogging,
   validateRepositoryWideSafeLoggingSources,
   validateSafeLoggingSources,
@@ -680,9 +684,197 @@ test("the DAV bridge contract sees a call made through optional chaining", () =>
       { [davServiceFile]: "logger?.error('x', { reason: error.message })\n" },
       [],
     ).failures,
-    [],
-    "if this starts failing, the repository-wide extractor has learnt optional chaining and the comment above can go",
+    [`${davServiceFile}:1: unreviewed repository-wide finding raw-error-detail`],
   );
+});
+
+test("the repository-wide extractor sees every optional-chaining form of a log call", () => {
+  // Until the extractor allowed the `?`, each of these lines was invisible to
+  // every repository-wide rule, and this repository writes `this.logger?.` in
+  // every use case whose logger is optional.
+  const file = "server/packages/auth/src/Domain/UseCase/Unsafe.ts";
+  const lines = [
+    "logger?.error(`failed: ${error.message}`)",
+    "this.logger?.error(`failed: ${error.message}`)",
+    "deps?.logger.warn(`failed: ${error.message}`)",
+    "this.deps?.routingLogger?.info(`failed: ${error.message}`)",
+    "logger.error?.(`failed: ${error.message}`)",
+  ];
+  // The last form, `logger.error?.(`, is a call the pattern does not claim to
+  // see; it is listed so that a change to that is a decision, not an accident.
+  const result = validateRepositoryWideSafeLoggingSources(
+    { [file]: lines.join("\n") },
+    [],
+  );
+  assert.deepEqual(result.failures, [
+    `${file}:1: unreviewed repository-wide finding raw-error-detail`,
+    `${file}:2: unreviewed repository-wide finding raw-error-detail`,
+    `${file}:3: unreviewed repository-wide finding raw-error-detail`,
+    `${file}:4: unreviewed repository-wide finding raw-error-detail`,
+  ]);
+
+  // The same calls with the error projected through the shared boundary pass.
+  assert.deepEqual(
+    validateRepositoryWideSafeLoggingSources(
+      {
+        [file]: [
+          "logger?.error('failed', safeErrorLogMetadata(error))",
+          "this.logger?.error('failed', { userId, ...safeErrorLogMetadata(error) })",
+        ].join("\n"),
+      },
+      [],
+    ).failures,
+    [],
+  );
+});
+
+test("errorName is a reviewed boundary only while its implementation is the pinned one", async () => {
+  const runtimeFile =
+    "server/packages/api-gateway/src/Service/EmailDelivery/EmailDeliveryRuntime.ts";
+  assert.deepEqual(
+    validateRepositoryWideSafeLoggingSources(
+      {
+        "server/packages/api-gateway/src/Service/Mail.ts":
+          "this.logger?.error('relay failed', { errorType: errorName(error) })",
+      },
+      [],
+    ).failures,
+    [],
+  );
+
+  const rule = requiredRules.find(
+    (candidate) => candidate.id === "email-delivery-error-name-projection",
+  );
+  assert.ok(rule);
+  const source = await readFile(resolve(repoRoot, runtimeFile), "utf8");
+  const pinned = { forbiddenRules: [], requiredRules: [rule] };
+  assert.deepEqual(validateSafeLoggingSources({ [runtimeFile]: source }, pinned), []);
+
+  // An errorName that returned the message would make every call above a leak.
+  const projection = source.match(rule.pattern)?.[0];
+  assert.ok(projection, "EmailDeliveryRuntime.ts no longer contains the pinned errorName");
+  assert.deepEqual(
+    validateSafeLoggingSources(
+      {
+        [runtimeFile]: source.replace(
+          projection,
+          "function errorName(error: unknown): string {\n  return error instanceof Error ? error.message : 'UnknownError'\n}",
+        ),
+      },
+      pinned,
+    ),
+    [`${runtimeFile}: missing required contract email-delivery-error-name-projection`],
+  );
+});
+
+test("a declared message-forwarding wrapper is checked through its callers", () => {
+  const wrapperFile = "server/packages/websocket-gateway/src/refusals.ts";
+  const callerFile = "server/packages/websocket-gateway/src/caller.ts";
+  const wrapper = {
+    file: wrapperFile,
+    forwards: "logger.warn(message, { cause })",
+    invocations: [{ file: callerFile, pattern: /\blogRefusal\(/g }],
+  };
+  const wrapperSource =
+    "const logRefusal = (message, cause) => logger.warn(message, { cause })\n";
+  const findings = (callerSource, sources = {}) =>
+    findRepositoryWideFindings(
+      { [wrapperFile]: wrapperSource, [callerFile]: callerSource, ...sources },
+      [wrapper],
+    ).map(({ file, line, rule }) => `${file}:${line}:${rule}`);
+
+  // The wrapper's own `logger.warn(message, …)` is not a dynamic message while
+  // every caller passes a literal, or a choice between two literals.
+  assert.deepEqual(
+    findings(
+      [
+        "logRefusal('[ws] connection rejected: unknown path', 'unknown-path')",
+        "logRefusal(",
+        "  secret",
+        "    ? '[token] mint refused: bad token'",
+        "    : '[token] mint refused: no secret configured',",
+        "  'mint',",
+        ")",
+      ].join("\n"),
+    ),
+    [],
+  );
+
+  // A caller that builds the message is the dynamic message, wherever it is.
+  assert.deepEqual(findings("logRefusal(`refused: ${req.url}`, 'x')"), [
+    `${callerFile}:1:forwarded-message-not-literal`,
+  ]);
+  assert.deepEqual(findings("logRefusal(reason ? reason : 'fallback', 'x')"), [
+    `${callerFile}:1:forwarded-message-not-literal`,
+  ]);
+  // Callers are held to the content rules a log call is held to.
+  assert.deepEqual(
+    findings("logRefusal('refused', `${error.message}`)"),
+    [`${callerFile}:1:raw-error-detail`],
+  );
+
+  // A declaration that no longer matches the code is stale, and one that is
+  // never invoked protects nothing.
+  assert.deepEqual(
+    findRepositoryWideFindings(
+      {
+        [wrapperFile]: "const logRefusal = (message) => logger.warn(message)\n",
+        [callerFile]: "logRefusal('refused', 'x')",
+      },
+      [wrapper],
+    ).map(({ rule }) => rule),
+    ["dynamic-error-message", "stale-forwarding-wrapper"],
+  );
+  assert.deepEqual(findings("nothing()"), [
+    `${wrapperFile}:1:forwarding-wrapper-never-invoked`,
+  ]);
+  assert.deepEqual(
+    findRepositoryWideFindings({ [wrapperFile]: wrapperSource }, [wrapper]).map(
+      ({ file, rule }) => `${file}:${rule}`,
+    ),
+    [
+      `${callerFile}:forwarding-wrapper-caller-not-checked`,
+      `${wrapperFile}:forwarding-wrapper-never-invoked`,
+    ],
+  );
+});
+
+test("the declared forwarding wrappers and reviewed residuals match the repository as written", async () => {
+  const files = new Set([
+    ...messageForwardingWrappers.flatMap((wrapper) => [
+      wrapper.file,
+      ...wrapper.invocations.map((invocation) => invocation.file),
+    ]),
+    ...reviewedSafeLoggingAllowlist.map((entry) => entry.file),
+  ]);
+  const sources = Object.fromEntries(
+    await Promise.all(
+      [...files].map(async (file) => [
+        file,
+        await readFile(join(repoRoot, file), "utf8"),
+      ]),
+    ),
+  );
+  const result = validateRepositoryWideSafeLoggingSources(sources);
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.allowedFindings.length, reviewedSafeLoggingAllowlist.length);
+  for (const entry of reviewedSafeLoggingAllowlist) {
+    assert.ok(entry.reason.length > 40, `${entry.file}:${entry.line} needs a reason`);
+  }
+});
+
+test("only files git tracks are checked from a work tree, and every discovered file outside one", async () => {
+  const tracked = await listTrackedFiles(repoRoot);
+  assert.ok(tracked instanceof Set);
+  assert.ok(tracked.has("server/packages/websocket-gateway/src/gateway.ts"));
+  assert.ok(![...tracked].some((file) => file.includes("\\")));
+
+  const outside = await mkdtemp(join(tmpdir(), "safe-log-untracked-"));
+  try {
+    assert.equal(await listTrackedFiles(outside), undefined);
+  } finally {
+    await rm(outside, { force: true, recursive: true });
+  }
 });
 
 test("the DAV bridge contract holds the controller to the same rules as the service", () => {

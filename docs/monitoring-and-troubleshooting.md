@@ -117,12 +117,23 @@ native-bridge-message, and crypto-error logging patterns. Allowlist entries are
 exact and stale-checked: changing or removing an intentional match without
 updating the review record fails the gate.
 
+A call through optional chaining (`this.logger?.error(…)`) is a log call like
+any other. A helper that takes the log message as a parameter and hands it on
+is declared in `messageForwardingWrappers`, and the gate then checks each
+caller's message instead: it must be a literal, or a choice between two
+literals. Run from a git work tree, the gate checks the files git tracks; an
+untracked scratch file in a shared working tree is not part of the repository
+it guards.
+
 Other app package roots are not claimed by this gate yet. Their coverage must be
 enabled atomically with the corresponding consumer migrations and tests.
 
-The reviewed-residual list is intentionally empty. WebSocket bridges record
-`originExcluded` as structured boolean metadata, never the underlying session
-UUID, so those diagnostics need no exception.
+The reviewed-residual list holds two entries, both realtime gateway refusal
+lines whose message is built only from closed sets of constants (a
+`SocketRejectionCode`, `SyncUnavailabilityReason` values, and event names the
+gateway itself passes). `--report-allowlist` prints them with their reasons.
+WebSocket bridges record `originExcluded` as structured boolean metadata, never
+the underlying session UUID, so those diagnostics need no exception.
 
 ## Realtime health in the admin panel
 

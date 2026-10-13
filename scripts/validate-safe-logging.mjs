@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -33,6 +35,7 @@ const contractSourceFiles = [
   "server/packages/api-gateway/src/Service/gRPC/GRPCServiceProxy.ts",
   "server/packages/api-gateway/src/Service/gRPC/GRPCSyncingServerServiceProxy.ts",
   "server/packages/api-gateway/src/Service/DavBridge/SecretString.ts",
+  "server/packages/api-gateway/src/Service/EmailDelivery/EmailDeliveryRuntime.ts",
   "server/packages/websocket-gateway/src/index.ts",
   "server/packages/websocket-gateway/src/logger.ts",
   "server/packages/websocket-gateway/src/gateway.ts",
@@ -105,7 +108,38 @@ const ignoredFilePattern =
  * both new findings and stale entries, so this is an auditable exception list
  * rather than a blanket suppression.
  */
-export const reviewedSafeLoggingAllowlist = [];
+export const reviewedSafeLoggingAllowlist = [
+  {
+    file: "server/packages/websocket-gateway/src/gateway.ts",
+    line: 1625,
+    rule: "forwarded-message-not-literal",
+    call: [
+      "logRefusal(",
+      "      `[ws-sync] ${event}: unmet preconditions ${reasons.join(', ') || 'none'}`,",
+      "      `${event}:${reasons.join()}`,",
+      "      {",
+      "        reasons,",
+      "      },",
+      "    )",
+    ].join("\n"),
+    reason:
+      "`event` is a parameter of logSyncRefusal, whose only callers pass string literals, and `reasons` is a SyncUnavailabilityReason[], a closed union of constants. Nothing a client sent reaches the message.",
+  },
+  {
+    file: "server/packages/websocket-gateway/src/gateway.ts",
+    line: 1778,
+    rule: "forwarded-message-not-literal",
+    call: [
+      "logRefusal(",
+      "          `[ws-sync] connection rejected: ${rejection}`,",
+      "          `connection:${rejection}:${unavailability.join()}`,",
+      "          unavailability.length > 0 ? { rejection, reasons: unavailability } : { rejection },",
+      "        )",
+    ].join("\n"),
+    reason:
+      "`rejection` is a SocketRejectionCode, a member of the closed SOCKET_REJECTION_CODES tuple, chosen by the gateway; the URL and origin it was derived from are not logged.",
+  },
+];
 
 function isProtectedLoggingSource(_file) {
   // Every source supplied to the repository-wide validator is protected. The
@@ -250,6 +284,15 @@ const forbiddenRules = [
 ];
 
 export const requiredRules = [
+  // `errorName(error)` is accepted below as a projection of an error, not the
+  // error. That is only true of this implementation: a class name that matches
+  // a short identifier pattern, or a constant.
+  {
+    id: "email-delivery-error-name-projection",
+    file: "server/packages/api-gateway/src/Service/EmailDelivery/EmailDeliveryRuntime.ts",
+    pattern:
+      /function errorName\(error: unknown\): string \{\s*return error instanceof Error && \/\^\[A-Za-z\]\[A-Za-z0-9_\.-\]\{0,63\}\$\/\.test\(error\.name\) \? error\.name : 'UnknownError'\s*\}/,
+  },
   // The DAV bridge holds an external account's password in a SecretString so
   // that none of the ways a value is implicitly turned into text can spill it.
   // Each of these pins one of those ways answering the redaction marker.
@@ -495,6 +538,8 @@ const repositoryWideCallRules = [
         "redactSensitiveText",
         "redactForAudit",
         "boundedBootFailureText",
+        // A bounded class name; its implementation is pinned in requiredRules.
+        "errorName",
       ]);
 
       return /(?:\(|,)\s*(?:err|error|exception|failure|cleanupError|rollbackError|startupError)\s*[,)]/.test(
@@ -630,11 +675,12 @@ function offsetToLine(source, offset) {
   return source.slice(0, offset).split("\n").length;
 }
 
-function extractLogCalls(source) {
+// The whole call that starts at each match of `callStart`, from the match to
+// the parenthesis that closes its argument list, skipping string contents.
+function extractCalls(source, callStart) {
   const calls = [];
-  const callStart =
-    /\b(?:console|(?:[A-Za-z_$][\w$]*\.)*(?:logger|[A-Za-z_$][\w$]*Logger))\.(?:debug|error|info|log|warn)\s*\(/g;
   let match;
+  callStart.lastIndex = 0;
 
   while ((match = callStart.exec(source)) !== null) {
     const openParenthesis = source.indexOf("(", match.index);
@@ -672,6 +718,7 @@ function extractLogCalls(source) {
 
     calls.push({
       call: source.slice(match.index, end),
+      args: source.slice(openParenthesis + 1, end - 1),
       line: offsetToLine(source, match.index),
     });
     callStart.lastIndex = end;
@@ -680,16 +727,181 @@ function extractLogCalls(source) {
   return calls;
 }
 
-export function findRepositoryWideFindings(sources) {
+// A receiver or a method reached through optional chaining is the same call:
+// `logger?.info(`, `this.logger?.error(`, `deps?.logger.warn(`. Until this
+// pattern allowed the `?`, every such call was invisible to the rules below.
+const logCallStart =
+  /\b(?:console|(?:[A-Za-z_$][\w$]*\??\.)*(?:logger|[A-Za-z_$][\w$]*Logger))\??\.(?:debug|error|info|log|warn)\s*\(/g;
+
+function extractLogCalls(source) {
+  return extractCalls(source, logCallStart);
+}
+
+/**
+ * A function that takes the log message as its own parameter and hands it on
+ * is not logging a dynamic message, as long as every caller passes a string
+ * literal. Each such wrapper is declared here with its exact forwarding call
+ * and with how it is invoked. The validator then reads the callers instead of
+ * taking the declaration on trust: an invocation whose message is not a
+ * literal fails, every invocation is held to the content rules a log call is
+ * held to, and a declaration that no longer matches the code fails as stale.
+ */
+export const messageForwardingWrappers = Object.freeze([
+  {
+    file: "server/packages/websocket-gateway/src/gateway.ts",
+    forwards:
+      "logger.warn(message, JSON.stringify({ ...(metadata ?? {}), suppressedSinceLastLog: decision.suppressed }))",
+    invocations: [
+      {
+        file: "server/packages/websocket-gateway/src/gateway.ts",
+        pattern: /\blogRefusal\(/g,
+      },
+      {
+        file: "server/packages/websocket-gateway/src/syncCommandHandler.ts",
+        pattern: /\blogRefusal\?\.\(/g,
+      },
+    ],
+  },
+  {
+    file: "server/packages/auth/src/Domain/Invite/InviteEventOutboxDispatcher.ts",
+    forwards: "this.logger?.error(message, safeErrorLogMetadata(error))",
+    invocations: [
+      {
+        file: "server/packages/auth/src/Domain/Invite/InviteEventOutboxDispatcher.ts",
+        pattern: /\bthis\.report\(/g,
+      },
+    ],
+  },
+]);
+
+// An error handed to a wrapper is the wrapper's to project, and its own log
+// call is checked for that; the message is checked as a literal instead.
+const rulesNotAppliedToWrapperInvocations = new Set([
+  "raw-error-object",
+  "dynamic-error-message",
+]);
+
+function normalizeCall(call) {
+  return call.replace(/\s+/g, " ").trim();
+}
+
+const singleQuotedLiteral = /'(?:[^'\\\n]|\\.)*'/;
+const doubleQuotedLiteral = /"(?:[^"\\\n]|\\.)*"/;
+const plainTemplateLiteral = /`(?:[^`\\$]|\\.|\$(?!\{))*`/;
+const anyStringLiteral = `(?:${singleQuotedLiteral.source}|${doubleQuotedLiteral.source}|${plainTemplateLiteral.source})`;
+const stringLiteralPattern = new RegExp(`^${anyStringLiteral}$`);
+// `condition ? 'one literal' : 'another'`: either way the message is a literal.
+// The condition may hold no quote, so it cannot carry a string of its own.
+const conditionalBetweenLiteralsPattern = new RegExp(
+  `^[^'"\`?:]+\\?\\s*${anyStringLiteral}\\s*:\\s*${anyStringLiteral}$`,
+);
+
+function isStringLiteral(text) {
+  return stringLiteralPattern.test(text);
+}
+
+function isLiteralMessage(text) {
+  return isStringLiteral(text) || conditionalBetweenLiteralsPattern.test(text);
+}
+
+function ruleAppliesTo(rule, file) {
+  if (rule.protectedOnly && !isProtectedLoggingSource(file)) {
+    return false;
+  }
+  return !rule.appOnly || isGuardedAppLoggingSource(file);
+}
+
+function findForwardingWrapperFindings(sources, wrappers) {
+  const findings = [];
+
+  for (const wrapper of wrappers) {
+    const source = sources[wrapper.file];
+    if (source === undefined) {
+      continue;
+    }
+
+    const forwarding = extractLogCalls(source).find(
+      ({ call }) => normalizeCall(call) === wrapper.forwards,
+    );
+    if (forwarding === undefined) {
+      findings.push({
+        file: wrapper.file,
+        line: 1,
+        rule: "stale-forwarding-wrapper",
+        source: wrapper.forwards,
+      });
+    }
+
+    let invocationCount = 0;
+    for (const { file, pattern } of wrapper.invocations) {
+      const invoking = sources[file];
+      if (invoking === undefined) {
+        findings.push({
+          file,
+          line: 1,
+          rule: "forwarding-wrapper-caller-not-checked",
+          source: wrapper.forwards,
+        });
+        continue;
+      }
+
+      for (const { call, args, line } of extractCalls(invoking, pattern)) {
+        invocationCount += 1;
+        if (!isLiteralMessage((splitTopLevel(args)[0] ?? "").trim())) {
+          findings.push({
+            file,
+            line,
+            rule: "forwarded-message-not-literal",
+            source: call,
+          });
+        }
+        for (const rule of repositoryWideCallRules) {
+          if (
+            !rulesNotAppliedToWrapperInvocations.has(rule.id) &&
+            ruleAppliesTo(rule, file) &&
+            rule.matches(call, file)
+          ) {
+            findings.push({ file, line, rule: rule.id, source: call });
+          }
+        }
+      }
+    }
+
+    if (invocationCount === 0) {
+      findings.push({
+        file: wrapper.file,
+        line: forwarding?.line ?? 1,
+        rule: "forwarding-wrapper-never-invoked",
+        source: wrapper.forwards,
+      });
+    }
+  }
+
+  return findings;
+}
+
+export function findRepositoryWideFindings(
+  sources,
+  wrappers = messageForwardingWrappers,
+) {
   const findings = [];
 
   for (const [file, source] of Object.entries(sources)) {
+    const forwardingCalls = new Set(
+      wrappers
+        .filter((wrapper) => wrapper.file === file)
+        .map((wrapper) => wrapper.forwards),
+    );
+
     for (const { call, line } of extractLogCalls(source)) {
       for (const rule of repositoryWideCallRules) {
-        if (rule.protectedOnly && !isProtectedLoggingSource(file)) {
+        if (!ruleAppliesTo(rule, file)) {
           continue;
         }
-        if (rule.appOnly && !isGuardedAppLoggingSource(file)) {
+        if (
+          rule.id === "dynamic-error-message" &&
+          forwardingCalls.has(normalizeCall(call))
+        ) {
           continue;
         }
         if (rule.matches(call, file)) {
@@ -699,10 +911,7 @@ export function findRepositoryWideFindings(sources) {
     }
 
     for (const rule of repositoryWideSourceRules) {
-      if (rule.protectedOnly && !isProtectedLoggingSource(file)) {
-        continue;
-      }
-      if (rule.appOnly && !isGuardedAppLoggingSource(file)) {
+      if (!ruleAppliesTo(rule, file)) {
         continue;
       }
       rule.pattern.lastIndex = 0;
@@ -717,6 +926,8 @@ export function findRepositoryWideFindings(sources) {
       }
     }
   }
+
+  findings.push(...findForwardingWrapperFindings(sources, wrappers));
 
   return findings;
 }
@@ -775,8 +986,8 @@ function applyReviewedAllowlist(findings, allowlist) {
  *      calls must be found, and the two per-request lines must be among them.
  *      A contract that matched no call would pass for ever.
  *
- * Optional chaining (`logger?.info(`) is recognised here. The repository-wide
- * extractor above does not see such a call at all.
+ * Optional chaining (`logger?.info(`) is recognised here, as it is by the
+ * repository-wide extractor above.
  */
 export const davBridgeLoggingPrefixes = Object.freeze([
   "server/packages/api-gateway/src/Service/DavBridge/",
@@ -1115,8 +1326,35 @@ export function validateRepositoryWideSafeLoggingSources(
   return applyReviewedAllowlist(findRepositoryWideFindings(sources), allowlist);
 }
 
+const execFileAsync = promisify(execFile);
+
+/**
+ * The paths git tracks under the guarded roots, or undefined when `root` is
+ * not a git work tree. A CI checkout contains only tracked files, so there
+ * this changes nothing; in a shared working tree it keeps somebody else's
+ * uncommitted scratch file from failing a gate that is about the repository.
+ * A file staged with `git add -N` is tracked and is checked.
+ */
+export async function listTrackedFiles(root) {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["ls-files", "-z", "--cached", "--", ...guardedRuntimeRoots],
+      { cwd: root, maxBuffer: 256 * 1024 * 1024 },
+    );
+    return new Set(stdout.split("\0").filter((file) => file.length > 0));
+  } catch {
+    return undefined;
+  }
+}
+
 export async function validateSafeLogging(root = repositoryRoot) {
-  const liveSourceFiles = await discoverLiveSourceFiles(root);
+  const discoveredFiles = await discoverLiveSourceFiles(root);
+  const tracked = await listTrackedFiles(root);
+  const liveSourceFiles =
+    tracked === undefined
+      ? discoveredFiles
+      : discoveredFiles.filter((file) => tracked.has(file));
   const filesToRead = [
     ...new Set([...liveSourceFiles, ...contractSourceFiles]),
   ];
@@ -1145,6 +1383,7 @@ export async function validateSafeLogging(root = repositoryRoot) {
   return {
     allowedFindings: repositoryWideResult.allowedFindings,
     sourceFileCount: liveSourceFiles.length,
+    untrackedSkippedCount: discoveredFiles.length - liveSourceFiles.length,
   };
 }
 
@@ -1155,7 +1394,7 @@ const invokedAsScript =
 if (invokedAsScript) {
   const result = await validateSafeLogging();
   process.stdout.write(
-    `Safe logging validation passed (${result.sourceFileCount} live source files; ${result.allowedFindings.length} reviewed residuals).\n`,
+    `Safe logging validation passed (${result.sourceFileCount} live source files; ${result.allowedFindings.length} reviewed residuals; ${result.untrackedSkippedCount} untracked files not checked).\n`,
   );
   if (process.argv.includes("--report-allowlist")) {
     for (const finding of result.allowedFindings) {
