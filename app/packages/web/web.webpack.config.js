@@ -64,19 +64,20 @@ module.exports = (env) => {
   }
 
   return {
-    // Standard Red Notes: persistent on-disk build cache. Subsequent builds only
-    // recompile changed modules, turning the cold ~minutes-long compile into a
-    // fraction of that. Invalidated automatically when this config changes. In
-    // Docker, mount node_modules/.cache to persist it across image builds.
+    // Standard Red Notes: persistent on-disk build cache, for a developer's own
+    // repeated builds of one working tree. Subsequent builds only recompile
+    // changed modules. Invalidated automatically when this config changes.
+    //
+    // The IMAGE builds do not persist it. Both Dockerfiles used to mount this
+    // directory as a BuildKit cache shared by every build on the daemon, and an
+    // image built that way shipped a sync worker older than its own sources —
+    // see app/Dockerfile. An image is built cold; so is the LXC release, which
+    // builds in a fresh export every time.
     cache: {
       type: 'filesystem',
-      // Pin the cache dir to the workspace-root node_modules/.cache so a Docker
-      // build can persist it across image builds via a BuildKit cache mount
-      // (`--mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache`
-      // in app/Dockerfile). Without an explicit path webpack resolves the nearest
-      // node_modules from the compiler context, which may land in
-      // packages/web/node_modules and silently miss the mounted directory —
-      // making the persistent cache a no-op inside Docker. __dirname is
+      // Pinned to the workspace-root node_modules/.cache. Without an explicit
+      // path webpack resolves the nearest node_modules from the compiler context,
+      // which may land in packages/web/node_modules. __dirname is
       // .../app/packages/web, so ../../node_modules is the hoisted app root.
       cacheDirectory: path.resolve(__dirname, '../../node_modules/.cache/webpack'),
       buildDependencies: {

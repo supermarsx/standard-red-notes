@@ -105,12 +105,27 @@ RUN --mount=type=cache,target=/opt/standard-red-notes/app/.yarn/cache,sharing=lo
 # Now bring in the source and build. Only this layer rebuilds on a code change;
 # the dependency layer above stays cached.
 COPY . .
-# Persist the webpack filesystem cache (and any other node_modules/.cache tool
-# state) across image builds via a BuildKit cache mount. `COPY . .` invalidates
-# this layer on ANY source change, so without the mount every rebuild ran webpack
-# from a COLD cache — the dominant recurring cost. With it, webpack recompiles
-# only the changed modules. Cache location is pinned in web.webpack.config.js
-# (cacheDirectory) to match this mount target.
+# *** THE WEB BUNDLE IS BUILT COLD, ON PURPOSE. *** This step used to carry
+# `--mount=type=cache,target=…/node_modules/.cache`, which kept webpack's
+# filesystem cache between image builds and saved about four minutes a rebuild.
+# It is gone because an image built that way was caught carrying OLD code: an
+# all-in-one image built from a commit that contained a fix shipped the sync
+# worker from before the fix (`03e62a95….worker.js` where the same source, built
+# cold, gives `5662d1da….worker.js`), while the entry bundle, the deployment
+# marker and the readiness route all named the new commit. Webpack reported 6111
+# modules restored from the cache in that build.
+#
+# How the cache came to hold a worker that did not match its sources is NOT
+# established, and it has not been reproduced on demand. The leading suspect is
+# that a cache mount is keyed by its target path alone, so every build on a
+# daemon — of any commit, several at once — read and wrote the one directory.
+# That is a suspicion, not a finding. What is established is the outcome, and an
+# image that runs old code while every identity check says "current" costs far
+# more than a slower build. node_modules is excluded from the build context, so
+# with no mount there is no cache for this step to restore from.
+#
+# Do not put the mount back without a test that builds two different commits
+# against one cache and compares every emitted file with a cold build.
 # The revision reaches the BUILD, not only the marker. Two things read it there
 # (see packages/web/web.webpack.config.js): the bundle compiles it in, so a
 # running tab can say which build it is and be told apart from a stale shell;
@@ -120,8 +135,7 @@ COPY . .
 # identity at all. Scoped to this one command — it is not an ENV, so nothing
 # else in the stage is invalidated by it — and empty is still a valid build.
 ARG SRN_DEPLOY_REVISION
-RUN --mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache \
-  SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
+RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
 
 # Hardening: run the runtime image as a NON-ROOT user. The unprivileged nginx
 # image is a drop-in for nginx:alpine that runs the master process as the

@@ -106,9 +106,12 @@ RUN --mount=type=cache,target=/opt/app/.yarn/cache,sharing=locked \
 # The revision reaches the web BUILD as well as the marker: the bundle compiles
 # it in and the service worker keys its cache name on it. Mirrors app/Dockerfile,
 # which says why.
+#
+# Built COLD, with no cache mount on node_modules/.cache: this is the image that
+# was caught shipping a sync worker older than the commit it was built from.
+# app/Dockerfile carries the account of it; do not restore the mount here either.
 ARG SRN_DEPLOY_REVISION
-RUN --mount=type=cache,target=/opt/app/node_modules/.cache \
-  SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
+RUN SRN_DEPLOY_REVISION="${SRN_DEPLOY_REVISION}" yarn build:web
 
 # -----------------------------------------------------------------------------
 # RUNTIME — node + nginx + supervisord, no compiler toolchain. Runs as `srn`.
