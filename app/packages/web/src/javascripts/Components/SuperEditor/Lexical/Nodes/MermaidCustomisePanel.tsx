@@ -378,11 +378,27 @@ export const MermaidCustomisePanel: React.FunctionComponent<MermaidCustomisePane
       aria-label="Customise the diagram"
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="font-semibold">Customise</span>
-        <span className="text-passive-1 text-[0.7rem]" data-mermaid-customise-kind={kind}>
-          {mermaidKindPhrase(kind)}
+      {/* Reset sits in the header, not at the foot: the popover this panel is
+          shown in is only as tall as the window leaves it and scrolls the
+          rest, and the way back must not be the thing that scrolls away. */}
+      <div className="flex items-center justify-between gap-2">
+        <span>
+          <span className="font-semibold">Customise</span>{' '}
+          <span className="text-passive-1 text-[0.7rem]" data-mermaid-customise-kind={kind}>
+            {mermaidKindPhrase(kind)}
+          </span>
         </span>
+        <button
+          type="button"
+          className="border-border hover:bg-contrast shrink-0 rounded border px-1.5 py-0.5 disabled:opacity-50"
+          data-mermaid-customise-reset="true"
+          disabled={!mermaidCustomisationCanReset(code, themeMode)}
+          title="Take every option this panel manages out of the diagram’s text, and follow the app’s theme"
+          onMouseDown={keepEditorFocus}
+          onClick={() => commit(resetMermaidCustomisation(code))}
+        >
+          Reset
+        </button>
       </div>
 
       {refused !== undefined ? (
@@ -651,21 +667,8 @@ export const MermaidCustomisePanel: React.FunctionComponent<MermaidCustomisePane
         </div>
       )}
 
-      <div className="border-border mt-3 flex items-start justify-between gap-2 border-t pt-2">
-        <span className={HINT_CLASS + ' mt-0'}>
-          Choices are written at the top of the diagram’s own text, so they travel with it.
-        </span>
-        <button
-          type="button"
-          className="border-border hover:bg-contrast shrink-0 rounded border px-1.5 py-0.5 disabled:opacity-50"
-          data-mermaid-customise-reset="true"
-          disabled={!mermaidCustomisationCanReset(code, themeMode)}
-          title="Take every option this panel manages out of the diagram’s text, and follow the app’s theme"
-          onMouseDown={keepEditorFocus}
-          onClick={() => commit(resetMermaidCustomisation(code))}
-        >
-          Reset
-        </button>
+      <div className={HINT_CLASS + ' border-border mt-2 border-t pt-1.5'}>
+        Choices are written at the top of the diagram’s own text, so they travel with it.
       </div>
     </div>
   )

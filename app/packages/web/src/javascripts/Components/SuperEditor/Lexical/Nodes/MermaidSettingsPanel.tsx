@@ -3,6 +3,13 @@ import { useCallback } from 'react'
 import Icon from '@/Components/Icon/Icon'
 import { MermaidWidthSection } from './MermaidBlockControls'
 import {
+  keepEditorFocus as keepFocus,
+  MERMAID_GROUP_CLASS as GROUP_CLASS,
+  MERMAID_SELECT_CLASS as SELECT_CLASS,
+  mermaidSegmentClass as segmentClass,
+} from './MermaidControlStyles'
+import { MermaidCustomiseButton, MermaidEffectiveThemeSelect, type MermaidStyleEdit } from './MermaidCustomisePanel'
+import {
   analyzeMermaidSource,
   appendGraphEdge,
   appendGraphNode,
@@ -19,8 +26,6 @@ import {
   MERMAID_FIT_MODE_LABELS,
   MERMAID_FIT_MODES,
   MERMAID_MAX_HEIGHT_NONE,
-  MERMAID_THEME_MODE_LABELS,
-  MERMAID_THEME_MODES,
   MERMAID_VIEW_MODE_LABELS,
   MERMAID_VIEW_MODES,
   MermaidAlignment,
@@ -28,12 +33,12 @@ import {
   MermaidFitMode,
   MermaidMaxHeight,
   MermaidSettings,
-  MermaidThemeMode,
   MermaidViewMode,
   MAX_MERMAID_MAX_HEIGHT_PX,
   MIN_MERMAID_MAX_HEIGHT_PX,
   normalizeMermaidMaxHeight,
 } from './MermaidSettings'
+import { type MermaidConfigRefusal } from './MermaidSourceConfig'
 
 /**
  * Standard Red Notes — the Mermaid diagram's configuration controls.
@@ -73,16 +78,6 @@ const ALIGNMENT_ICONS: Record<MermaidAlignment, 'align-left' | 'align-center' | 
   center: 'align-center',
   right: 'align-right',
 }
-
-const SELECT_CLASS =
-  'rounded border border-border bg-default px-1 py-0.5 text-foreground outline-none focus:border-info'
-const GROUP_CLASS = 'border-border flex overflow-hidden rounded border text-xs'
-
-const segmentClass = (active: boolean) =>
-  'px-1.5 py-0.5 ' + (active ? 'bg-info text-info-contrast' : 'hover:bg-contrast')
-
-/** Keeps the caret in the editor when a control inside the toolbar is clicked. */
-const keepFocus = (event: React.MouseEvent) => event.preventDefault()
 
 /** Whether the mermaid SOURCE is shown beside the diagram, and in what form. */
 export const MermaidViewModeGroup: React.FunctionComponent<{
@@ -148,25 +143,6 @@ export const MermaidAlignmentGroup: React.FunctionComponent<{
       </button>
     ))}
   </div>
-)
-
-/** The diagram's theme, including "follow the application's theme". */
-export const MermaidThemeSelect: React.FunctionComponent<{
-  themeMode: MermaidThemeMode
-  onChange: (next: MermaidThemeMode) => void
-}> = ({ themeMode, onChange }) => (
-  <select
-    className={SELECT_CLASS}
-    value={themeMode}
-    aria-label="Diagram theme"
-    onChange={(event) => onChange(event.target.value as MermaidThemeMode)}
-  >
-    {MERMAID_THEME_MODES.map((mode) => (
-      <option key={mode} value={mode}>
-        {MERMAID_THEME_MODE_LABELS[mode]}
-      </option>
-    ))}
-  </select>
 )
 
 /** How the maximum-height setting is being expressed. */
@@ -419,6 +395,23 @@ export type MermaidSettingsPanelProps = {
    */
   code: string
   onCodeChange: (next: string) => void
+  /**
+   * A change to the diagram's STYLE: its new text and the block's theme, which
+   * the caller must write in ONE editor update. A theme chosen here goes into
+   * the diagram's own text and the block's stored theme follows it; two updates
+   * would be two undo steps with a contradiction between them.
+   */
+  onStyleEdit: (edit: MermaidStyleEdit) => void
+  /** Whether the Customise panel is open — its button then shows as pressed. */
+  customiseOpen: boolean
+  /**
+   * Open the Customise panel, or close it when its own button is pressed again.
+   * `anchor` is that button. A request with a `notice` and no anchor is a theme
+   * choice that could not be written: the panel is where the reason has room.
+   */
+  onCustomise: (request: { anchor?: HTMLElement; notice?: MermaidConfigRefusal }) => void
+  /** The Customise button's own element, for a caller that anchors a popover to it. */
+  customiseButtonRef?: React.Ref<HTMLButtonElement>
   /** The block's stored width, already normalized, or undefined for "fit". */
   width: string | undefined
   onWidthChange: (next: string | undefined) => void
@@ -491,8 +484,16 @@ export function mermaidSettingsControls(props: MermaidSettingsPanelProps): {
     {
       key: 'theme',
       caption: 'Theme',
+      // The theme the diagram is DRAWN in — its own text's, when the text names
+      // one — and a choice here is written into that text. See
+      // MermaidEffectiveThemeSelect.
       node: (
-        <MermaidThemeSelect themeMode={settings.themeMode} onChange={(themeMode) => onSettingsChange({ themeMode })} />
+        <MermaidEffectiveThemeSelect
+          code={code}
+          themeMode={settings.themeMode}
+          onApply={props.onStyleEdit}
+          onRefused={(notice) => props.onCustomise({ notice })}
+        />
       ),
     },
     {
@@ -502,6 +503,21 @@ export function mermaidSettingsControls(props: MermaidSettingsPanelProps): {
         <MermaidBackgroundSelect
           background={settings.background}
           onChange={(background) => onSettingsChange({ background })}
+        />
+      ),
+    },
+    {
+      // The door to everything else about the diagram's look: presets, mermaid's
+      // eleven themes, the hand-drawn look, text size, spacing, line style. One
+      // entry in THIS list, so the settings popover holds it without being told
+      // and the ribbon shows it by naming its key.
+      key: 'customise',
+      caption: 'Customise',
+      node: (
+        <MermaidCustomiseButton
+          open={props.customiseOpen}
+          onToggle={(anchor) => props.onCustomise({ anchor })}
+          buttonRef={props.customiseButtonRef}
         />
       ),
     },

@@ -177,6 +177,11 @@ import {
   type MermaidSettingsPanelProps,
   mermaidSettingsControls,
 } from '../../Lexical/Nodes/MermaidSettingsPanel'
+// Standard Red Notes: the Customise panel — presets, mermaid's eleven themes, the
+// hand-drawn look, text size, spacing, line style. It writes into the diagram's own
+// text, and keeps its own state: see the note on MERMAID_INLINE_SEGMENT_KEYS.
+import { MermaidCustomisePanel, type MermaidStyleEdit } from '../../Lexical/Nodes/MermaidCustomisePanel'
+import { type MermaidConfigRefusal } from '../../Lexical/Nodes/MermaidSourceConfig'
 import {
   DEFAULT_MERMAID_SETTINGS,
   DEFAULT_MERMAID_VIEW_MODE,
@@ -632,8 +637,24 @@ const CONTEXTUAL_TAB_ID = 'contextual'
  * fights the app theme is the thing you notice first. What deliberately stays
  * condensed is the genuinely advanced half: maximum height, pan & zoom and the
  * width strip.
+ *
+ * CUSTOMISE is here because "fully customise a diagram" was the request, and a
+ * door two clicks down inside the settings popover is a door nobody finds. The
+ * segment is one button; the panel it opens is a popover of its own. That panel
+ * holds ALL of its own state — where a slider is while it is dragged, which
+ * refusal it is showing. Nothing about it is `useState` in this component
+ * except whether it is open: a state change here re-renders the whole toolbar,
+ * which once made a single hover take most of a second.
  */
-const MERMAID_INLINE_SEGMENT_KEYS = ['source', 'builder', 'fit', 'alignment', 'theme', 'background'] as const
+const MERMAID_INLINE_SEGMENT_KEYS = [
+  'source',
+  'builder',
+  'fit',
+  'alignment',
+  'theme',
+  'background',
+  'customise',
+] as const
 
 const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   const { t } = useTranslation('editor')
@@ -699,6 +720,25 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   } | null>(null)
   const [isMermaidSettingsMenuOpen, setIsMermaidSettingsMenuOpen] = useState(false)
   const mermaidSettingsAnchorRef = useRef<HTMLButtonElement>(null)
+  /**
+   * Standard Red Notes — the Customise panel, when it is open: the element it
+   * hangs off, the diagram it was opened for, and a refusal to show in it (a
+   * theme chosen on the ribbon that could not be written).
+   *
+   * The anchor is held as an ELEMENT, not a ref, because there are two buttons
+   * that open the panel — the ribbon's own and the row inside the settings
+   * popover — and it has to hang off whichever was pressed. `Popover` stamps
+   * `aria-expanded` on that element, which is the signal a collapsed ribbon
+   * keeps its revealed panel open on (useToolbarAutoHide).
+   */
+  const [mermaidCustomise, setMermaidCustomise] = useState<{
+    anchor: HTMLElement
+    nodeKey: string
+    notice?: MermaidConfigRefusal
+  } | null>(null)
+  const mermaidCustomiseButtonRef = useRef<HTMLButtonElement>(null)
+  /** The floating toolbar's flat settings button, which is its only Mermaid control. */
+  const mermaidSettingsFlatAnchorRef = useRef<HTMLButtonElement>(null)
   const [activeBlockKey, setActiveBlockKey] = useState<string | null>(null)
   const [activeBlockLabel, setActiveBlockLabel] = useState<string>('Block')
   const [zoomBlockKey, setZoomBlockKey] = useState<string | null>(null)
@@ -3096,6 +3136,25 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
    * `mermaidSelection` is set) and exist so the object is well-typed at the point
    * of definition rather than rebuilt per branch.
    */
+  /**
+   * Open for the diagram that is selected NOW, and still hanging off something
+   * on the page. Derived on every render rather than cleared by an effect: a
+   * selection that moves to another diagram, or a ribbon tab that takes the
+   * button away, closes the panel without a second render to say so.
+   */
+  const isMermaidCustomiseOpen =
+    mermaidCustomise !== null &&
+    mermaidSelection !== null &&
+    mermaidCustomise.nodeKey === mermaidSelection.nodeKey &&
+    mermaidCustomise.anchor.isConnected
+  /** Where a panel opened from INSIDE the settings popover hangs: the button that opened that popover. */
+  const mermaidSettingsAnchor = () => mermaidSettingsAnchorRef.current ?? mermaidSettingsFlatAnchorRef.current
+  const openMermaidCustomise = (anchor: HTMLElement | null, notice?: MermaidConfigRefusal) => {
+    const nodeKey = mermaidSelection?.nodeKey
+    if (anchor && nodeKey) {
+      setMermaidCustomise({ anchor, nodeKey, notice })
+    }
+  }
   const mermaidSettingsPanelProps: MermaidSettingsPanelProps = {
     variant: 'panel',
     settings: mermaidSelection?.settings ?? DEFAULT_MERMAID_SETTINGS,
@@ -3104,6 +3163,30 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     onViewModeChange: (next) => updateMermaidNode((node) => node.setViewMode(next)),
     code: mermaidSelection?.code ?? '',
     onCodeChange: (next) => updateMermaidNode((node) => node.setCode(next)),
+    // ONE update for both halves of a style edit: the diagram's text names a
+    // theme and the block's stored theme agrees with it, or neither does — and
+    // undo takes both back together.
+    onStyleEdit: (edit: MermaidStyleEdit) =>
+      updateMermaidNode((node) => {
+        if (node.getCode() !== edit.code) {
+          node.setCode(edit.code)
+        }
+        if (node.getSettings().themeMode !== edit.themeMode) {
+          node.setSettings({ themeMode: edit.themeMode })
+        }
+      }),
+    customiseOpen: isMermaidCustomiseOpen,
+    // The ribbon's own button: pressed again while its panel is open, it closes
+    // it. A request with no anchor is a refused theme choice asking for the
+    // panel, which then opens under that button with the reason in it.
+    onCustomise: ({ anchor, notice }) => {
+      if (anchor && notice === undefined && isMermaidCustomiseOpen && mermaidCustomise?.anchor === anchor) {
+        setMermaidCustomise(null)
+        return
+      }
+      openMermaidCustomise(anchor ?? mermaidCustomiseButtonRef.current ?? mermaidSettingsAnchor(), notice)
+    },
+    customiseButtonRef: mermaidCustomiseButtonRef,
     width: mermaidSelection?.width,
     onWidthChange: (next) => updateMermaidNode((node) => node.setWidth(next)),
     height: mermaidSelection?.height,
@@ -3317,6 +3400,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
             name="Mermaid settings"
             iconName="tune"
             onSelect={() => setIsMermaidSettingsMenuOpen(!isMermaidSettingsMenuOpen)}
+            ref={mermaidSettingsFlatAnchorRef}
           />,
         )
         break
@@ -5110,7 +5194,65 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
         documentElement={popoverDocumentElement}
       >
         <div className="w-80 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
-          <MermaidSettingsPanel {...mermaidSettingsPanelProps} />
+          <MermaidSettingsPanel
+            {...mermaidSettingsPanelProps}
+            // This copy of the Customise button is inside the popover it is
+            // about to replace, so it is no anchor: the settings popover
+            // closes and the panel hangs off the button that opened it.
+            customiseButtonRef={undefined}
+            onCustomise={({ notice }) => {
+              setIsMermaidSettingsMenuOpen(false)
+              openMermaidCustomise(mermaidSettingsAnchor(), notice)
+            }}
+          />
+        </div>
+      </Popover>
+      {/* Standard Red Notes — the Customise panel. A second popover beside the
+          settings one rather than a section inside it, because it is the larger
+          half of "configure this diagram" and deserves the room. Anchored to
+          the element that opened it, and rendered in place (`portal={false}`)
+          exactly as the settings popover is, so it stacks above a collapsed
+          ribbon's revealed panel instead of being clipped by it.
+
+          Two things about it are not the other popovers' defaults, both seen in
+          the picture and not on paper:
+
+          OPAQUE. A popover here is translucent, and this one lies over the very
+          diagram it restyles — which "Monochrome" or "Print-safe" turns into a
+          white page inside a dark app. Its grey captions on a see-through sheet
+          over white were not readable.
+
+          AS TALL AS THE EDITOR LEAVES IT. `Popover` works out the room below
+          its anchor as the editor's HEIGHT minus the anchor's bottom edge in
+          the WINDOW, which comes up short by however far down the window the
+          editor starts — about 115px here, enough to cut this panel's last
+          control off behind a scroll. The editor's own top is added back. */}
+      <Popover
+        title="Customise diagram"
+        anchorElement={mermaidCustomise?.anchor ?? null}
+        open={isMermaidCustomiseOpen}
+        togglePopover={() => setMermaidCustomise(null)}
+        side={isMobile ? 'top' : 'bottom'}
+        align="start"
+        className="md:!bg-default py-1 ![backdrop-filter:none]"
+        maxHeight={
+          isMobile
+            ? undefined
+            : (calculated) => calculated + Math.max(0, popoverDocumentElement.getBoundingClientRect().top)
+        }
+        disableMobileFullscreenTakeover
+        disableFlip
+        containerClassName="md:!min-w-0 md:!w-auto"
+        portal={false}
+        documentElement={popoverDocumentElement}
+      >
+        <div className="w-80 max-w-full px-3 py-2" onKeyDown={(event) => event.stopPropagation()}>
+          <MermaidCustomisePanel
+            code={mermaidSelection?.code ?? ''}
+            themeMode={(mermaidSelection?.settings ?? DEFAULT_MERMAID_SETTINGS).themeMode}
+            onApply={mermaidSettingsPanelProps.onStyleEdit}
+            notice={mermaidCustomise?.notice}
+          />
         </div>
       </Popover>
       <Popover

@@ -46,13 +46,38 @@ import {
   DEFAULT_MERMAID_THEME_MODE,
   DEFAULT_MERMAID_VIEW_MODE,
   MERMAID_BACKGROUNDS,
-  MERMAID_THEME_MODE_LABELS,
-  MERMAID_THEME_MODES,
+  MERMAID_LIBRARY_THEMES,
   MERMAID_VIEW_MODE_LABELS,
   MermaidBackground,
-  MermaidThemeMode,
 } from '../../Lexical/Nodes/MermaidSettings'
 import { MermaidSettingsPanelProps, mermaidSettingsControls } from '../../Lexical/Nodes/MermaidSettingsPanel'
+// The theme LABELS for all eleven of mermaid's themes, and the slider's commit
+// delay, come from where they are declared rather than being retyped here.
+import { MERMAID_LIBRARY_THEME_LABELS } from '../../Lexical/Nodes/MermaidConfigCatalog'
+import { MERMAID_SLIDER_COMMIT_DELAY_MS } from '../../Lexical/Nodes/MermaidCustomisePanel'
+
+/**
+ * A COUNTER ON THE TOOLBAR'S OWN RENDERS. While a diagram is selected,
+ * ToolbarPlugin calls `mermaidSettingsControls` exactly once per render, and
+ * nothing else in this tree calls the exported binding (the settings panel
+ * calls its own, internal one). So the number of calls to this spy is the
+ * number of times the 5,900-line component re-rendered — which is what a
+ * slider in the Customise panel must not cause on every tick.
+ */
+jest.mock('../../Lexical/Nodes/MermaidSettingsPanel', () => {
+  const actual = jest.requireActual('../../Lexical/Nodes/MermaidSettingsPanel')
+  // A plain counter, not a jest.fn: this package resets every mock before each
+  // test, which would leave a spy returning undefined to the toolbar.
+  const toolbarRenders = { count: 0 }
+  return {
+    ...actual,
+    toolbarRenders,
+    mermaidSettingsControls: (props: unknown) => {
+      toolbarRenders.count++
+      return actual.mermaidSettingsControls(props)
+    },
+  }
+})
 
 /**
  * Desktop layout — `isMobile` reads the MUTUALLY EXCLUSIVE `sm` query, which is
@@ -131,6 +156,7 @@ const fakeApp = {
 let container: HTMLElement
 let root: Root
 let editor: LexicalEditor | null
+let originalAnimate: typeof HTMLElement.prototype.animate
 
 const CaptureEditor = () => {
   const [lexicalEditor] = useLexicalComposerContext()
@@ -156,6 +182,16 @@ beforeEach(() => {
     removeEventListener: () => undefined,
     dispatchEvent: () => false,
   })) as never
+  // jsdom has no Web Animations API, and a Popover animates its way OUT. The
+  // tests that only ever opened one never met this; closing one throws without
+  // it. Finished at once: nothing here is about the fade.
+  originalAnimate = HTMLElement.prototype.animate
+  HTMLElement.prototype.animate = (() =>
+    ({
+      finished: Promise.resolve(),
+      cancel: () => undefined,
+      currentTime: 0,
+    }) as unknown as Animation) as typeof HTMLElement.prototype.animate
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -165,6 +201,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  HTMLElement.prototype.animate = originalAnimate
 })
 
 const mount = async () => {
@@ -267,6 +304,9 @@ const probeControlProps = (): MermaidSettingsPanelProps => ({
   onViewModeChange: () => undefined,
   code: 'graph TD\n  A["A"]',
   onCodeChange: () => undefined,
+  onStyleEdit: () => undefined,
+  customiseOpen: false,
+  onCustomise: () => undefined,
   width: undefined,
   onWidthChange: () => undefined,
   height: undefined,
@@ -322,7 +362,26 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     expect(captions).toContain('Align')
     expect(captions).toContain('Theme')
     expect(captions).toContain('Background')
+    expect(captions).toContain('Customise')
     expect(captions).toContain('Diagram')
+  })
+
+  it('renders the Customise button on the ribbon as a glyph and a word, never the icon’s name', async () => {
+    await mount()
+    await insertAndSelectMermaid()
+    await activateMermaidTab()
+    const group = Array.from(container.querySelectorAll('.super-toolbar-group')).find(
+      (candidate) => candidate.getAttribute('aria-label') === 'Customise',
+    )
+    expect(group).toBeDefined()
+    const button = group!.querySelector('button[aria-label="Customise the diagram"]')
+    expect(button).not.toBeNull()
+    expect(button!.querySelector('svg')).not.toBeNull()
+    // A mapping miss renders `<label>themes</label>` in place of the glyph.
+    expect(button!.querySelector('label')).toBeNull()
+    expect(button!.textContent).toBe('Customise…')
+    // Closed until it is pressed: the ribbon carries the door, not the room.
+    expect(document.querySelector('[data-mermaid-customise="panel"]')).toBeNull()
   })
 
   it('renders the three fit modes as pressable buttons, one of them active', async () => {
@@ -384,7 +443,17 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
     // The generic trailing segment's caption comes from the `block` translation
     // key, which is lower-case — asserted as rendered, not as prose.
     expect(captions).toContain('block')
-    expect(captions).toEqual(['Source', 'Build', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
+    expect(captions).toEqual([
+      'Source',
+      'Build',
+      'Fit',
+      'Align',
+      'Theme',
+      'Background',
+      'Customise',
+      'Diagram',
+      'block',
+    ])
   })
 })
 
@@ -399,10 +468,13 @@ describe('the Mermaid section renders its captioned segments — the vanish guar
  * clicked — the popover assertions further down are a separate guarantee and
  * would pass with the inline segment deleted again.
  *
- * Nothing here hardcodes a theme NAME. The options are compared against
- * MERMAID_THEME_MODES / MERMAID_THEME_MODE_LABELS, which is where the theme
- * vocabulary lives, so a mode added there (an `auto`/`system` mode, say) is
+ * The OPTIONS are compared against MERMAID_LIBRARY_THEMES and its labels,
+ * which is where the theme vocabulary lives, so a theme mermaid adds is
  * asserted to appear rather than asserted away.
+ *
+ * Since the Customise work the control shows the theme the diagram is DRAWN
+ * in — the one its own text names, when it names one — and a choice is written
+ * into that text. It used to show, and write, the block's stored theme only.
  */
 describe('the theming controls are inline in the section, not only in its popover', () => {
   /** The ribbon's captioned segment wrapper, by caption. */
@@ -430,49 +502,129 @@ describe('the theming controls are inline in the section, not only in its popove
     expect(themeSegment!.querySelector('label')).toBeNull()
   })
 
-  it('offers exactly the theme vocabulary MermaidSettings declares', async () => {
+  const themeSelect = () =>
+    captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
+
+  /** Write to the real node from outside the toolbar, as an undo or a collaborator would. */
+  const writeNode = async (write: (node: MermaidNode) => void) => {
+    await act(async () => {
+      ;(editor as LexicalEditor).update(() => {
+        write(
+          $getRoot()
+            .getChildren()
+            .find((candidate) => $isMermaidNode(candidate)) as MermaidNode,
+        )
+      })
+      await Promise.resolve()
+    })
+  }
+
+  it('offers the app theme and every theme mermaid ships', async () => {
     await openSection()
-    const select = captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
-    expect(Array.from(select.options).map((option) => option.value)).toEqual([...MERMAID_THEME_MODES])
-    expect(Array.from(select.options).map((option) => option.textContent)).toEqual(
-      MERMAID_THEME_MODES.map((mode) => MERMAID_THEME_MODE_LABELS[mode]),
-    )
+    const select = themeSelect()
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['app', ...MERMAID_LIBRARY_THEMES])
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'App theme',
+      ...MERMAID_LIBRARY_THEMES.map((theme) => MERMAID_LIBRARY_THEME_LABELS[theme]),
+    ])
+    expect(select.options).toHaveLength(12)
     // It shows the node's own theme, so the control is not write-only.
     expect(select.value).toBe(readNode((node) => node.getSettings().themeMode))
   })
 
-  it('writes a theme chosen on the ribbon to the real node', async () => {
+  /**
+   * ONE editor update for both halves of a theme choice. Two — the text in
+   * one, the block's theme in the next — would be two undo steps with, between
+   * them, a diagram whose text names a theme its block contradicts; and to a
+   * collaborator, two separate edits.
+   */
+  it('writes a theme chosen on the ribbon into the diagram’s text AND the block, in one update', async () => {
     await openSection()
-    const select = captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
-    const target = MERMAID_THEME_MODES.find((mode) => mode !== DEFAULT_MERMAID_THEME_MODE) as MermaidThemeMode
     expect(readNode((node) => node.getSettings().themeMode)).toBe(DEFAULT_MERMAID_THEME_MODE)
-
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-    await act(async () => {
-      setter?.call(select, target)
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-      await Promise.resolve()
-    })
-
-    // A control wired to nothing renders identically to a wired one.
-    expect(readNode((node) => node.getSettings().themeMode)).toBe(target)
-    expect(readNode((node) => node.getKey())).toBe(mermaidKey)
-  })
-
-  it('reflects a theme set on the node back onto the ribbon control', async () => {
-    await openSection()
-    const target = MERMAID_THEME_MODES.find((mode) => mode !== DEFAULT_MERMAID_THEME_MODE) as MermaidThemeMode
-    await act(async () => {
-      ;(editor as LexicalEditor).update(() => {
+    const original = readNode((node) => node.getCode())
+    const seen: { code: string; themeMode: string }[] = []
+    const stop = (editor as LexicalEditor).registerUpdateListener(({ editorState }) => {
+      editorState.read(() => {
         const node = $getRoot()
           .getChildren()
           .find((candidate) => $isMermaidNode(candidate)) as MermaidNode
-        node.setSettings({ themeMode: target })
+        seen.push({ code: node.getCode(), themeMode: node.getSettings().themeMode })
       })
-      await Promise.resolve()
     })
-    const select = captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement
-    expect(select.value).toBe(target)
+
+    await setSelectValue(themeSelect(), 'forest')
+    stop()
+
+    const written = '---' + String.fromCharCode(10) + 'config:' + String.fromCharCode(10) + '  theme: forest'
+    expect(readNode((node) => node.getCode())).toBe(
+      written + String.fromCharCode(10) + '---' + String.fromCharCode(10) + original,
+    )
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('forest')
+    expect(readNode((node) => node.getKey())).toBe(mermaidKey)
+    // Never a state with one half written and not the other.
+    const halfWritten = seen.filter((state) => (state.code === original) !== (state.themeMode === 'app'))
+    expect(halfWritten).toEqual([])
+    expect(seen.length).toBeGreaterThan(0)
+    expect(themeSelect().value).toBe('forest')
+  })
+
+  it('gives the block a theme of the same polarity for one of mermaid’s six newer themes', async () => {
+    await openSection()
+    await setSelectValue(themeSelect(), 'redux-dark')
+    expect(readNode((node) => node.getCode())).toContain('  theme: redux-dark')
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('dark')
+    expect(themeSelect().value).toBe('redux-dark')
+  })
+
+  it('goes back to the app theme by taking the theme out of the text again', async () => {
+    await openSection()
+    const original = readNode((node) => node.getCode())
+    await setSelectValue(themeSelect(), 'forest')
+    await setSelectValue(themeSelect(), 'app')
+    expect(readNode((node) => node.getCode())).toBe(original)
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('app')
+  })
+
+  it('reflects a theme pinned on the block back onto the ribbon control', async () => {
+    await openSection()
+    await writeNode((node) => node.setSettings({ themeMode: 'neutral' }))
+    expect(themeSelect().value).toBe('neutral')
+  })
+
+  /**
+   * THE defect this control had: a block pinned to Forest whose text says
+   * `theme: dark` is DRAWN dark, and the ribbon went on saying Forest.
+   */
+  it('shows the theme the diagram’s own text names, over the block’s', async () => {
+    await openSection()
+    await writeNode((node) => {
+      node.setSettings({ themeMode: 'forest' })
+      node.setCode(['---', 'config:', '  theme: dark', '---', 'graph TD', '  A --> B'].join(String.fromCharCode(10)))
+    })
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('forest')
+    expect(themeSelect().value).toBe('dark')
+    expect(themeSelect().getAttribute('title')).toBe('Written in the diagram’s text, line 3.')
+  })
+
+  it('opens the Customise panel with the reason when a theme chosen on the ribbon cannot be written', async () => {
+    await openSection()
+    const directed = ['%%{init: {"theme":"forest"}}%%', 'graph TD', '  A --> B'].join(String.fromCharCode(10))
+    await writeNode((node) => node.setCode(directed))
+    expect(themeSelect().value).toBe('forest')
+    expect(document.querySelector('[data-mermaid-customise="panel"]')).toBeNull()
+
+    await setSelectValue(themeSelect(), 'dark')
+
+    // Nothing was written...
+    expect(readNode((node) => node.getCode())).toBe(directed)
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('app')
+    expect(themeSelect().value).toBe('forest')
+    // ...and the person is told why, where there is room to say it.
+    const panel = document.querySelector('[data-mermaid-customise="panel"]')
+    expect(panel).not.toBeNull()
+    const refusal = panel!.querySelector('[role="alert"]')
+    expect(refusal?.getAttribute('data-mermaid-customise-refusal')).toBe('directive-sets-key')
+    expect(refusal?.textContent).toContain('Line 1 is an init directive that sets "theme" itself')
   })
 
   it('puts the background control on the ribbon too, and it writes to the node', async () => {
@@ -868,6 +1020,7 @@ describe('every setting the chart no longer shows is reachable from this section
       'select[aria-label="Maximum diagram height"]',
       'select[aria-label="Diagram theme"]',
       'select[aria-label="Diagram background"]',
+      'button[aria-label="Customise the diagram"]',
       'button[aria-label="Pan and zoom over the diagram"]',
       '[data-mermaid-width-section="true"]',
       'input[aria-label="Diagram width"]',
@@ -876,11 +1029,12 @@ describe('every setting the chart no longer shows is reachable from this section
     }
   })
 
-  it('writes the theme to the node — the control exists on no other surface', async () => {
+  it('writes the theme to the node from the popover too: the text and the block together', async () => {
     await openPanel()
     expect(readNode((node) => node.getSettings().themeMode)).toBe('app')
     await setFieldValue(inPanel('select[aria-label="Diagram theme"]') as HTMLSelectElement, 'forest')
     expect(readNode((node) => node.getSettings().themeMode)).toBe('forest')
+    expect(readNode((node) => node.getCode())).toContain('  theme: forest')
   })
 
   it('writes the maximum height to the node, and offers the pixel field once fixed', async () => {
@@ -948,6 +1102,236 @@ describe('every setting the chart no longer shows is reachable from this section
       await Promise.resolve()
     })
     expect(readNode((node) => node.getWidth())).toBeUndefined()
+  })
+})
+
+/**
+ * THE CUSTOMISE PANEL, through the real toolbar. MermaidCustomisePanel.spec.tsx
+ * mounts the panel alone; what only this file can show is the wiring: that the
+ * ribbon button opens it, that what it hands on reaches the SELECTED node in
+ * one update, that it marks its anchor the way a collapsed ribbon needs, and
+ * that dragging a slider in it does not re-render the toolbar.
+ */
+describe('the Customise panel opens from the section and writes to the selected diagram', () => {
+  const captionedSegment = (caption: string) =>
+    Array.from(container.querySelectorAll('.super-toolbar-group')).find(
+      (group) => group.getAttribute('aria-label') === caption,
+    )
+  const customiseButton = () =>
+    captionedSegment('Customise')!.querySelector('button[aria-label="Customise the diagram"]') as HTMLButtonElement
+  const settingsButton = () => captionedSegment('Diagram')!.querySelector('button') as HTMLButtonElement
+  /** The popover renders outside `container`, so it is found on the document. */
+  const customisePanel = () => document.querySelector('[data-mermaid-customise="panel"]') as HTMLElement | null
+  const settingsPanel = () => document.querySelector('[data-mermaid-settings="panel"]') as HTMLElement | null
+  const preset = (id: string) => customisePanel()!.querySelector(`[data-mermaid-preset="${id}"]`) as HTMLButtonElement
+
+  /**
+   * A click, and then a turn of the event loop: a popover that closes leaves
+   * the page only when its exit animation's promise has settled.
+   */
+  const press = async (button: HTMLElement | null) => {
+    expect(button).not.toBeNull()
+    await act(async () => {
+      button!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+
+  const settle = async () => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+
+  const openSection = async () => {
+    await mount()
+    await insertAndSelectMermaid()
+    await activateMermaidTab()
+  }
+
+  const NEWLINE = String.fromCharCode(10)
+  const SOURCE = 'graph TD' + NEWLINE + '  A --> B'
+  const frontmatter = (...yaml: string[]) => ['---', ...yaml, '---', SOURCE].join(NEWLINE)
+
+  it('opens under the ribbon button, and closes when that button is pressed again', async () => {
+    await openSection()
+    expect(customisePanel()).toBeNull()
+    await press(customiseButton())
+    expect(customisePanel()).not.toBeNull()
+    expect(customisePanel()!.textContent).toContain('a flowchart')
+    await press(customiseButton())
+    expect(customisePanel()).toBeNull()
+  })
+
+  /**
+   * A COLLAPSED ribbon keeps its revealed panel open for as long as a control
+   * inside it carries `aria-expanded="true"` (useToolbarAutoHide). Without the
+   * mark on this button, the commands would slide away from under the popover
+   * 400ms after the pointer moved into it.
+   */
+  it('marks the button it hangs off as expanded, which is what holds a collapsed ribbon open', async () => {
+    await openSection()
+    expect(customiseButton().getAttribute('aria-expanded')).toBeNull()
+    await press(customiseButton())
+    expect(customiseButton().getAttribute('aria-expanded')).toBe('true')
+    expect(customiseButton().className).toContain('bg-info')
+    await press(customiseButton())
+    expect(customiseButton().getAttribute('aria-expanded')).toBeNull()
+  })
+
+  it('writes a preset into the SELECTED diagram’s text, and shows it as the one in force', async () => {
+    await openSection()
+    await press(customiseButton())
+    expect(readNode((node) => node.getCode())).toBe(SOURCE)
+    await press(preset('presentation'))
+    expect(readNode((node) => node.getCode())).toBe(
+      frontmatter(
+        'config:',
+        '  themeVariables:',
+        '    fontSize: "20px"',
+        '  flowchart:',
+        '    nodeSpacing: 80',
+        '    rankSpacing: 80',
+      ),
+    )
+    expect(readNode((node) => node.getKey())).toBe(mermaidKey)
+    // The panel stays open across its own write, and reads the new text back.
+    expect(preset('presentation').getAttribute('aria-pressed')).toBe('true')
+    expect(preset('app').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('writes a themed preset to the text and the block together, and Reset takes both back to the byte', async () => {
+    await openSection()
+    await press(customiseButton())
+    await press(preset('monochrome'))
+    expect(readNode((node) => node.getCode())).toBe(frontmatter('config:', '  theme: neutral'))
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('neutral')
+    // The ribbon's own Theme control, beside the panel, agrees at once.
+    expect(
+      (captionedSegment('Theme')!.querySelector('select[aria-label="Diagram theme"]') as HTMLSelectElement).value,
+    ).toBe('neutral')
+
+    await press(customisePanel()!.querySelector('[data-mermaid-customise-reset="true"]') as HTMLButtonElement)
+    expect(readNode((node) => node.getCode())).toBe(SOURCE)
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('app')
+  })
+
+  it('refuses a frontmatter it cannot keep exactly, in the panel, and leaves the node alone', async () => {
+    await openSection()
+    const commented = ['---', '# agreed with Sam', 'config:', '  look: classic', '---', SOURCE].join(NEWLINE)
+    await act(async () => {
+      ;(editor as LexicalEditor).update(() => {
+        ;(
+          $getRoot()
+            .getChildren()
+            .find((candidate) => $isMermaidNode(candidate)) as MermaidNode
+        ).setCode(commented)
+      })
+      await Promise.resolve()
+    })
+    await press(customiseButton())
+    expect(customisePanel()!.querySelector('[data-mermaid-customise-standing="frontmatter"]')).not.toBeNull()
+    await press(preset('monochrome'))
+    const refusal = customisePanel()!.querySelector('[role="alert"]')
+    expect(refusal?.getAttribute('data-mermaid-customise-refusal')).toBe('yaml-comment')
+    expect(refusal?.textContent).toContain('a YAML comment on line 2')
+    expect(readNode((node) => node.getCode())).toBe(commented)
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('app')
+  })
+
+  it('goes away with the selection, and does not come back for the next diagram', async () => {
+    await openSection()
+    await press(customiseButton())
+    expect(customisePanel()).not.toBeNull()
+    await clearSelection()
+    await settle()
+    expect(customisePanel()).toBeNull()
+    await insertAndSelectMermaid()
+    await settle()
+    expect(customisePanel()).toBeNull()
+  })
+
+  /**
+   * From INSIDE the settings popover the panel replaces that popover, and hangs
+   * off the button that opened it — the row it was pressed on is about to be
+   * unmounted, and a popover anchored to nothing lands in the corner of the page.
+   */
+  it('replaces the settings popover when opened from inside it, hanging off the settings button', async () => {
+    await openSection()
+    await press(settingsButton())
+    expect(settingsPanel()).not.toBeNull()
+    await press(settingsPanel()!.querySelector('button[aria-label="Customise the diagram"]') as HTMLButtonElement)
+    expect(settingsPanel()).toBeNull()
+    expect(customisePanel()).not.toBeNull()
+    expect(settingsButton().getAttribute('aria-expanded')).toBe('true')
+    expect(settingsButton().isConnected).toBe(true)
+    // And it works from there.
+    await press(preset('compact'))
+    expect(readNode((node) => node.getCode())).toContain('    fontSize: "14px"')
+  })
+
+  it('is reachable from the floating toolbar too, through its settings button', async () => {
+    docked = false
+    await mount()
+    await insertAndSelectMermaid()
+    const flat = Array.from(container.querySelectorAll('[aria-label="Mermaid tools"] button')).find(
+      (button) =>
+        (button.getAttribute('aria-labelledby')
+          ? (document.getElementById(button.getAttribute('aria-labelledby') as string)?.textContent ?? '')
+          : '') === 'Mermaid settings',
+    ) as HTMLButtonElement | undefined
+    expect(flat).toBeDefined()
+    await press(flat as HTMLButtonElement)
+    expect(settingsPanel()).not.toBeNull()
+    await press(settingsPanel()!.querySelector('button[aria-label="Customise the diagram"]') as HTMLButtonElement)
+    expect(customisePanel()).not.toBeNull()
+    expect((flat as HTMLButtonElement).getAttribute('aria-expanded')).toBe('true')
+    await press(preset('monochrome'))
+    expect(readNode((node) => node.getSettings().themeMode)).toBe('neutral')
+  })
+
+  /**
+   * THE PER-TICK TRAP. A `useState` in ToolbarPlugin once made a single hover
+   * take most of a second, because every change re-rendered the whole toolbar.
+   * A slider fires an `input` event for every pixel of a drag. The panel keeps
+   * that movement in its own state and writes once when the drag has ended.
+   */
+  it('does not re-render the toolbar while a slider is dragged, and writes once when it is let go', async () => {
+    const toolbarRenders = () =>
+      (jest.requireMock('../../Lexical/Nodes/MermaidSettingsPanel') as { toolbarRenders: { count: number } })
+        .toolbarRenders.count
+    await openSection()
+    await press(customiseButton())
+    const slider = customisePanel()!.querySelector('input[aria-label="Text size, fine"]') as HTMLInputElement
+    expect(slider).not.toBeNull()
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    const before = toolbarRenders()
+    expect(before).toBeGreaterThan(0)
+
+    for (const size of [17, 18, 19, 20, 21, 22, 23, 24]) {
+      await act(async () => {
+        setter?.call(slider, String(size))
+        slider.dispatchEvent(new Event('input', { bubbles: true }))
+        await Promise.resolve()
+      })
+    }
+    // Eight ticks: the readout has followed the thumb...
+    expect(customisePanel()!.querySelector('[data-mermaid-customise-row="Text size"] output')?.textContent).toBe(
+      '150% · 24px',
+    )
+    // ...the toolbar has not rendered once, and the diagram has not been touched.
+    expect(toolbarRenders()).toBe(before)
+    expect(readNode((node) => node.getCode())).toBe(SOURCE)
+
+    // The drag ends: one native `change`, then the commit delay.
+    await act(async () => {
+      slider.dispatchEvent(new Event('change', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, MERMAID_SLIDER_COMMIT_DELAY_MS + 60))
+    })
+    expect(readNode((node) => node.getCode())).toBe(frontmatter('config:', '  themeVariables:', '    fontSize: "24px"'))
+    // The write itself re-renders the toolbar, as any change to the diagram does.
+    expect(toolbarRenders()).toBeGreaterThan(before)
+    expect(toolbarRenders() - before).toBeLessThanOrEqual(3)
   })
 })
 

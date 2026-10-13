@@ -25,15 +25,19 @@ import {
   mermaidSettingsControls,
   SUGGESTED_FIXED_MERMAID_MAX_HEIGHT_PX,
 } from './MermaidSettingsPanel'
+import { MERMAID_LIBRARY_THEME_LABELS } from './MermaidConfigCatalog'
+import { MermaidStyleEdit } from './MermaidCustomisePanel'
 import {
   DEFAULT_MERMAID_BACKGROUND,
   DEFAULT_MERMAID_SETTINGS,
   MERMAID_BACKGROUND_LABELS,
   MERMAID_BACKGROUNDS,
+  MERMAID_LIBRARY_THEMES,
   MERMAID_MAX_HEIGHT_NONE,
   MERMAID_VIEW_MODE_LABELS,
   MermaidSettings,
 } from './MermaidSettings'
+import { MermaidConfigRefusal } from './MermaidSourceConfig'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -43,6 +47,9 @@ let patches: Partial<MermaidSettings>[]
 let viewModes: string[]
 let widths: (string | undefined)[]
 let sources: string[]
+/** Style edits: the diagram's text and the block's theme, handed on together. */
+let styleEdits: MermaidStyleEdit[]
+let customiseRequests: { anchor?: HTMLElement; notice?: MermaidConfigRefusal }[]
 
 /** A two-node flowchart the Build cluster can actually model. */
 const BUILDER_SOURCE = 'graph TD\n  A["Start"]\n  B["End"]\n  A --> B'
@@ -55,6 +62,9 @@ const baseProps = (overrides: Partial<MermaidSettingsPanelProps> = {}): MermaidS
   onViewModeChange: (next) => viewModes.push(next),
   code: BUILDER_SOURCE,
   onCodeChange: (next) => sources.push(next),
+  onStyleEdit: (edit) => styleEdits.push(edit),
+  customiseOpen: false,
+  onCustomise: (request) => customiseRequests.push(request),
   width: undefined,
   onWidthChange: (next) => widths.push(next),
   height: undefined,
@@ -71,6 +81,8 @@ beforeEach(() => {
   viewModes = []
   widths = []
   sources = []
+  styleEdits = []
+  customiseRequests = []
 })
 
 afterEach(() => {
@@ -87,7 +99,17 @@ const render = (props: MermaidSettingsPanelProps) => {
 const group = (label: string) => container.querySelector(`[role="group"][aria-label="${label}"]`) as HTMLElement | null
 const byLabel = (label: string) => container.querySelector(`[aria-label="${label}"]`) as HTMLElement | null
 
-const CONTROL_KEYS = ['source', 'builder', 'fit', 'maxHeight', 'alignment', 'theme', 'background', 'zoomPan']
+const CONTROL_KEYS = [
+  'source',
+  'builder',
+  'fit',
+  'maxHeight',
+  'alignment',
+  'theme',
+  'background',
+  'customise',
+  'zoomPan',
+]
 
 /**
  * Set an input's value the way a user does. Assigning `.value` directly is seen
@@ -133,6 +155,9 @@ describe('both variants render the same controls — only the arrangement differ
     expect(byLabel('Diagram theme')).not.toBeNull()
     expect(byLabel('Diagram background')).not.toBeNull()
     expect(byLabel('Pan and zoom over the diagram')).not.toBeNull()
+    // The door to the Customise panel: one entry in the shared list, so both
+    // arrangements carry it.
+    expect(byLabel('Customise the diagram')).not.toBeNull()
     // The BUILD cluster — the one that writes the diagram's source rather than
     // its appearance. It is the control the user reported as missing.
     expect(byLabel('Add a diagram node')).not.toBeNull()
@@ -182,14 +207,98 @@ describe('every control writes, and writes only its own field', () => {
     expect(patches).toEqual([{ alignment: 'right' }])
   })
 
-  it('the theme', () => {
+  /**
+   * A theme is no longer a field of the block alone. A named theme is written
+   * into the diagram's own TEXT, where every export and every other mermaid
+   * tool will find it, and the block's stored theme follows — both in one edit,
+   * handed to `onStyleEdit`, and nothing at all to `onSettingsChange`, which
+   * would have been a second editor update and a second undo step.
+   */
+  it('the theme: into the diagram’s text and the block’s theme together, as one edit', () => {
     render(baseProps())
     const select = byLabel('Diagram theme') as HTMLSelectElement
     act(() => {
       select.value = 'forest'
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    expect(patches).toEqual([{ themeMode: 'forest' }])
+    expect(styleEdits).toEqual([{ code: `---\nconfig:\n  theme: forest\n---\n${BUILDER_SOURCE}`, themeMode: 'forest' }])
+    expect(patches).toEqual([])
+    expect(sources).toEqual([])
+  })
+
+  it('the theme, back to the app’s: out of the text, and the block unpinned', () => {
+    render(
+      baseProps({
+        code: `---\nconfig:\n  theme: forest\n---\n${BUILDER_SOURCE}`,
+        settings: { ...DEFAULT_MERMAID_SETTINGS, themeMode: 'forest' },
+      }),
+    )
+    const select = byLabel('Diagram theme') as HTMLSelectElement
+    expect(select.value).toBe('forest')
+    act(() => {
+      select.value = 'app'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(styleEdits).toEqual([{ code: BUILDER_SOURCE, themeMode: 'app' }])
+  })
+
+  it('offers the app theme and all eleven of mermaid’s', () => {
+    render(baseProps())
+    const select = byLabel('Diagram theme') as HTMLSelectElement
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['app', ...MERMAID_LIBRARY_THEMES])
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'App theme',
+      ...MERMAID_LIBRARY_THEMES.map((theme) => MERMAID_LIBRARY_THEME_LABELS[theme]),
+    ])
+    expect(select.options).toHaveLength(12)
+  })
+
+  /**
+   * THE defect this control had: it showed the block's stored theme while the
+   * picture showed the theme the diagram's own text names. A block pinned to
+   * Forest whose text says `theme: dark` is drawn dark.
+   */
+  it('shows the theme the diagram is drawn in — the text’s, not the block’s', () => {
+    render(
+      baseProps({
+        code: `---\nconfig:\n  theme: dark\n---\n${BUILDER_SOURCE}`,
+        settings: { ...DEFAULT_MERMAID_SETTINGS, themeMode: 'forest' },
+      }),
+    )
+    const select = byLabel('Diagram theme') as HTMLSelectElement
+    expect(select.value).toBe('dark')
+    expect(select.getAttribute('title')).toBe('Written in the diagram’s text, line 3.')
+  })
+
+  it('a theme that cannot be written: nothing is handed on, and the panel is asked for with the reason', () => {
+    render(baseProps({ code: `%%{init: {"theme":"forest"}}%%\n${BUILDER_SOURCE}` }))
+    const select = byLabel('Diagram theme') as HTMLSelectElement
+    expect(select.value).toBe('forest')
+    act(() => {
+      select.value = 'dark'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(styleEdits).toEqual([])
+    expect(patches).toEqual([])
+    expect(customiseRequests).toHaveLength(1)
+    expect(customiseRequests[0].anchor).toBeUndefined()
+    expect(customiseRequests[0].notice).toMatchObject({ code: 'directive-sets-key', line: 1, key: 'theme' })
+  })
+
+  it('the Customise button: asks for the panel, with itself as the thing to hang it off', () => {
+    render(baseProps())
+    const button = byLabel('Customise the diagram') as HTMLButtonElement
+    act(() => button.click())
+    expect(customiseRequests).toEqual([{ anchor: button }])
+    expect(patches).toEqual([])
+    expect(styleEdits).toEqual([])
+  })
+
+  it('the Customise button shows as pressed while its panel is open', () => {
+    render(baseProps({ customiseOpen: true }))
+    expect((byLabel('Customise the diagram') as HTMLButtonElement).className).toContain('bg-info')
+    render(baseProps({ customiseOpen: false }))
+    expect((byLabel('Customise the diagram') as HTMLButtonElement).className).not.toContain('bg-info')
   })
 
   /**
@@ -314,6 +423,15 @@ describe('the maximum height is the configurable cap, in three expressible state
 })
 
 describe('no control renders its icon name as text (the mapping-miss trap)', () => {
+  it('draws a real svg glyph on the Customise button, beside its word', () => {
+    render(baseProps({ variant: 'panel' }))
+    const button = byLabel('Customise the diagram') as HTMLButtonElement
+    expect(button.querySelector('svg')).not.toBeNull()
+    // A mapping miss renders `<label>themes</label>` in place of the glyph.
+    expect(button.querySelector('label')).toBeNull()
+    expect(button.textContent).toBe('Customise…')
+  })
+
   it('draws real svg glyphs for the alignment buttons', () => {
     render(baseProps())
     const buttons = Array.from(group('Diagram alignment')!.querySelectorAll('button'))

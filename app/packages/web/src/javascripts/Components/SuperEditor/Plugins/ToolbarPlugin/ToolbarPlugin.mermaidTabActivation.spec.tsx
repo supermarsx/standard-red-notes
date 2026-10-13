@@ -327,7 +327,19 @@ describe('1. selecting a diagram activates its ribbon tab', () => {
     const captions = Array.from(container.querySelectorAll('.super-toolbar-group')).map((group) =>
       group.getAttribute('aria-label'),
     )
-    expect(captions).toEqual(['Source', 'Build', 'Fit', 'Align', 'Theme', 'Background', 'Diagram', 'block'])
+    // And the door to the Customise panel is on that same first click.
+    expect(container.querySelector('button[aria-label="Customise the diagram"]')).not.toBeNull()
+    expect(captions).toEqual([
+      'Source',
+      'Build',
+      'Fit',
+      'Align',
+      'Theme',
+      'Background',
+      'Customise',
+      'Diagram',
+      'block',
+    ])
   })
 
   it('activates again on a second diagram selection, so the latch resets', async () => {
