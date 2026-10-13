@@ -284,8 +284,42 @@ describe('SyncWebSocketCommandAdapter', () => {
     ).resolves.toEqual({ authorized: false, code })
   })
 
-  it('rejects a shared-vault command absent from the freshly validated membership claims', async () => {
-    const { adapter } = build({ belongs_to_shared_vaults: [] })
+  // The token's `belongs_to_shared_vaults` is built from auth's event-replicated
+  // copy of the membership table, which can miss rows the syncing server has.
+  // The syncing server re-checks every item's vault and the read scope against
+  // its own table on this lane exactly as on HTTP, so the gateway refusing here
+  // only ever refused members HTTP accepts. Vault membership is not a gateway
+  // decision for SYNC_ITEMS.
+  it('leaves shared-vault membership of a command to the syncing server, not the token claims', async () => {
+    const { adapter, durable } = build({ belongs_to_shared_vaults: [] })
+    const digest = 'a'.repeat(64)
+    const payload = {
+      command: 'SYNC_ITEMS',
+      body: {
+        api: '20200115',
+        shared_vault_uuids: ['vault-1'],
+        items: [{ uuid: 'vault-note', shared_vault_uuid: 'vault-2' }],
+      },
+    }
+    const authorization = await adapter.authorize(
+      { identity, operation: 'COMMAND', commandId: 'command-1', digest, payloadLength: 1, payload },
+      new AbortController().signal,
+    )
+    expect(authorization).toEqual({ authorized: true, session: expect.any(Object) })
+
+    await adapter.execute(
+      { identity, commandId: 'command-1', digest, payload },
+      new AbortController().signal,
+      (authorization as { session: unknown }).session,
+    )
+    expect(durable.sync).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      ...payload.body,
+      command: { id: 'command-1', digest },
+    })
+  })
+
+  it('still refuses a shadow-banned session whose command touches a shared vault', async () => {
+    const { adapter } = build({ belongs_to_shared_vaults: [], shadow_banned: true })
     await expect(
       adapter.authorize(
         {
@@ -298,7 +332,7 @@ describe('SyncWebSocketCommandAdapter', () => {
         },
         new AbortController().signal,
       ),
-    ).resolves.toEqual({ authorized: false, code: 'SHARED_VAULT_FORBIDDEN' })
+    ).resolves.toEqual({ authorized: false, code: 'SHADOW_BANNED' })
   })
 
   // R9 / contract C6. A session token rotated or refreshed mid-socket used to

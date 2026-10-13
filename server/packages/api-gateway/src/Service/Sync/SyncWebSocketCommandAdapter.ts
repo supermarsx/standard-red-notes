@@ -241,9 +241,15 @@ export class SyncWebSocketCommandAdapter
     if (validated.locals.shadowBanned) {
       return { authorized: false, code: 'SHADOW_BANNED' }
     }
-    if (input.payload && !this.hasSharedVaultAccess(input.payload, validated.token)) {
-      return { authorized: false, code: 'SHARED_VAULT_FORBIDDEN' }
-    }
+    // Shared-vault membership is deliberately NOT decided here. The token's
+    // `belongs_to_shared_vaults` comes from auth's event-replicated copy of the
+    // membership table, which loses rows whenever a membership event is lost;
+    // refusing on it refused legitimate members' whole commands while HTTP
+    // accepted the same save. The syncing server's `SyncItems` -- reached by
+    // this lane's gRPC call and by HTTP alike -- checks every item's vault
+    // (`SharedVaultFilter`) and the requested read scope (`GetItems`) against
+    // its own `shared_vault_users`, the source of truth, so dropping the
+    // pre-check grants nothing HTTP does not already grant.
     return { authorized: true, session: validated }
   }
 
@@ -571,30 +577,6 @@ export class SyncWebSocketCommandAdapter
     }
     this.issuedSessions.add(validated)
     return validated
-  }
-
-  private hasSharedVaultAccess(payload: JsonObject, token: CrossServiceTokenData): boolean {
-    const body = this.commandBody(payload)
-    const requested = new Set<string>()
-    if (Array.isArray(body.shared_vault_uuids)) {
-      for (const uuid of body.shared_vault_uuids) {
-        if (typeof uuid === 'string') {
-          requested.add(uuid)
-        }
-      }
-    }
-    if (Array.isArray(body.items)) {
-      for (const item of body.items) {
-        if (this.isJsonObject(item) && typeof item.shared_vault_uuid === 'string') {
-          requested.add(item.shared_vault_uuid)
-        }
-      }
-    }
-    if (requested.size === 0) {
-      return true
-    }
-    const allowed = new Set((token.belongs_to_shared_vaults ?? []).map((vault) => vault.shared_vault_uuid))
-    return [...requested].every((uuid) => allowed.has(uuid))
   }
 
   private commandBody(payload: JsonObject): JsonObject {
