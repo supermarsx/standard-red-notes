@@ -17,6 +17,22 @@ describe('PublishedCalendarStore', () => {
     await fs.rm(dir, { recursive: true, force: true })
   })
 
+  it('removes everything a user published in one write and leaves other users alone', async () => {
+    const store = new PublishedCalendarStore(filePath)
+    await store.publish('alice', { uid: 'a', summary: 'First' })
+    await store.publish('alice', { uid: 'b', summary: 'Second' })
+    await store.publish('bob', { uid: 'c', summary: 'Third' })
+
+    expect(await store.removeAllForUser('alice')).toBe(2)
+
+    expect(await store.listForUser('alice')).toEqual([])
+    expect((await store.listForUser('bob')).map((todo) => todo.uid)).toEqual(['c'])
+    // The user's key is gone from the file, not left behind as an empty object.
+    expect(Object.keys(JSON.parse(await fs.readFile(filePath, 'utf8')) as object)).toEqual(['bob'])
+    expect(await store.removeAllForUser('alice')).toBe(0)
+    expect(await store.removeAllForUser('__proto__')).toBe(0)
+  })
+
   it('sorts output deterministically and preserves creation time across updates', async () => {
     let now = 1_000
     const store = new PublishedCalendarStore(filePath, { clock: () => now })

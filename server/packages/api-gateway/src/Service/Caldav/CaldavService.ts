@@ -45,6 +45,19 @@ export class CaldavService {
     return this.tokenStore.revokeAllForUser(userUuid)
   }
 
+  /**
+   * Remove everything this feature holds for a user: access tokens, published
+   * items and projection settings. Called when the user's account is deleted,
+   * so that a token issued to a deleted account stops working and nothing the
+   * user published stays readable on the server. Returns how many records.
+   */
+  async forgetUser(userUuid: string): Promise<number> {
+    const tokens = await this.tokenStore.revokeAllForUser(userUuid)
+    const todos = await this.publishedStore.removeAllForUser(userUuid)
+    const projection = await this.projectionStore.resetForUser(userUuid)
+    return tokens + todos + (projection ? 1 : 0)
+  }
+
   /** Verify a Basic-auth password (the plaintext CalDAV token). */
   async verifyToken(plaintext: string): Promise<CaldavTokenMetadata | null> {
     return this.tokenStore.verify(plaintext)

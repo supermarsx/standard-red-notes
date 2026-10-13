@@ -1,5 +1,5 @@
 import { Request, Response } from 'express'
-import { inject } from 'inversify'
+import { inject, optional } from 'inversify'
 import {
   all,
   BaseHttpController,
@@ -17,6 +17,7 @@ import { TokenAuthenticationMethod } from '../TokenAuthenticationMethod'
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 import { ResponseLocals } from '../ResponseLocals'
 import { SubscriptionResponseLocals } from '../SubscriptionResponseLocals'
+import { GatewayUserDataPurger, purgeGatewayUserDataAfterDeletion } from '../../Service/UserData/GatewayUserDataPurger'
 
 @controller('/v1/users')
 export class UsersController extends BaseHttpController {
@@ -24,6 +25,12 @@ export class UsersController extends BaseHttpController {
     @inject(TYPES.ApiGateway_ServiceProxy) private httpService: ServiceProxyInterface,
     @inject(TYPES.ApiGateway_EndpointResolver) private endpointResolver: EndpointResolverInterface,
     @inject(TYPES.ApiGateway_Logger) private logger: Logger,
+    // Standard Red Notes: removes what the gateway itself stores about a user
+    // once their account is deleted. Optional so the controller still
+    // constructs where it is not bound (unit tests).
+    @inject(TYPES.ApiGateway_GatewayUserDataPurger)
+    @optional()
+    private userDataPurger?: GatewayUserDataPurger,
   ) {
     super()
   }
@@ -264,6 +271,10 @@ export class UsersController extends BaseHttpController {
         request.params.userUuid as string,
       ),
     )
+    // The auth service has answered. If it deleted the account, the gateway's
+    // own stores (a connected account's encrypted password, CalDAV tokens,
+    // published items, delivery destinations) must not outlive it.
+    await purgeGatewayUserDataAfterDeletion(this.userDataPurger, response, request.params.userUuid)
   }
 
   @httpPost('/:userUuid/requests', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)

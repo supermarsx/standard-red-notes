@@ -64,6 +64,7 @@ import { CaldavService } from '../Service/Caldav/CaldavService'
 import { createDavBridgeService } from '../Service/DavBridge/DavBridgeFactory'
 import { DavBridgeService } from '../Service/DavBridge/DavBridgeService'
 import { DavSharedCounterStore } from '../Service/DavBridge/DavRelayLimiter'
+import { GatewayUserDataPurger } from '../Service/UserData/GatewayUserDataPurger'
 import { CaldavTokenStore } from '../Service/Caldav/CaldavTokenStore'
 import { CalendarProjectionStore } from '../Service/Caldav/CalendarProjectionStore'
 import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore'
@@ -1104,6 +1105,34 @@ export class ContainerConfigLoader {
           ? (container.get<RateLimitStore>(TYPES.ApiGateway_RateLimitStore) as DavSharedCounterStore)
           : undefined,
       }),
+    )
+
+    // Standard Red Notes: WHAT THE GATEWAY HOLDS ABOUT A USER, removed when the
+    // account is deleted. Every per-user JSON store of the gateway is listed
+    // here; a store added later belongs in this list, or a deleted account
+    // leaves it behind (which is what all of these did before this existed).
+    container.bind<GatewayUserDataPurger>(TYPES.ApiGateway_GatewayUserDataPurger).toConstantValue(
+      new GatewayUserDataPurger(
+        [
+          {
+            name: 'dav-bridge-accounts',
+            purge: (userUuid) =>
+              container.get<DavBridgeService>(TYPES.ApiGateway_DavBridgeService).forgetUser(userUuid),
+          },
+          {
+            name: 'caldav',
+            purge: (userUuid) => container.get<CaldavService>(TYPES.ApiGateway_CaldavService).forgetUser(userUuid),
+          },
+          {
+            name: 'reminder-delivery',
+            purge: async (userUuid) => {
+              await reminderDeliveryService.optOut(userUuid)
+              return 0
+            },
+          },
+        ],
+        logger,
+      ),
     )
 
     // Standard Red Notes: THE IP ALLOW/BLOCK LISTS AND THROTTLE TELEMETRY on the

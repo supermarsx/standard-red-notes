@@ -105,6 +105,9 @@ export const TYPES = {
   // Standard Red Notes: the DAV bridge (two-way calendar and task sync with a
   // user's own Nextcloud/CalDAV account; the gateway relays, stores nothing).
   ApiGateway_DavBridgeService: Symbol.for('ApiGateway_DavBridgeService'),
+  // Standard Red Notes: removes what the gateway's own JSON stores hold about a
+  // user when that user's account is deleted.
+  ApiGateway_GatewayUserDataPurger: Symbol.for('ApiGateway_GatewayUserDataPurger'),
   // Standard Red Notes: server-side reminder DELIVERY of EXPLICITLY published reminders.
   ApiGateway_REMINDER_DELIVERY_ENABLED: Symbol.for('ApiGateway_REMINDER_DELIVERY_ENABLED'),
   ApiGateway_ReminderDeliveryService: Symbol.for('ApiGateway_ReminderDeliveryService'),

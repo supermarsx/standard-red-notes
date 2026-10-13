@@ -59,6 +59,7 @@ import {
 } from '../../Service/Diagnostics/RuntimeDiagnostics'
 import { admissionProbeFromHeaders, readGatewayAdmission } from '../../Service/Diagnostics/AdmissionDiagnostics'
 import { withCanonicalAdminUuids } from '../AdminUuidCanonicalizer'
+import { GatewayUserDataPurger, purgeGatewayUserDataAfterDeletion } from '../../Service/UserData/GatewayUserDataPurger'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -252,6 +253,11 @@ export class AdminController extends BaseHttpController {
     @inject(TYPES.ApiGateway_AdminEmailDeliveryService)
     @optional()
     private adminEmailDeliveryService?: AdminEmailDeliveryService,
+    // Standard Red Notes: removes what the gateway itself stores about a user
+    // once an administrator has deleted their account. Appended last, optional.
+    @inject(TYPES.ApiGateway_GatewayUserDataPurger)
+    @optional()
+    private userDataPurger?: GatewayUserDataPurger,
   ) {
     super()
   }
@@ -878,6 +884,9 @@ export class AdminController extends BaseHttpController {
       ),
       request.body,
     )
+    // Only after auth answered with a success: a refused deletion (last admin,
+    // wrong confirmation, not an admin) leaves the gateway's stores alone.
+    await purgeGatewayUserDataAfterDeletion(this.userDataPurger, response, request.params.userUuid)
   }
 
   /**

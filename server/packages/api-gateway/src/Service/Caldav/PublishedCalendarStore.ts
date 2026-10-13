@@ -280,6 +280,21 @@ export class PublishedCalendarStore {
     return removed
   }
 
+  /** Remove every published todo of a user in one durable write. Returns how many there were. */
+  async removeAllForUser(userUuid: string): Promise<number> {
+    if (!isSafeRecordKey(userUuid)) {
+      return 0
+    }
+    let removed = 0
+    await this.mutate((data) => {
+      if (data[userUuid] !== undefined) {
+        removed = Object.keys(data[userUuid]).length
+        delete data[userUuid]
+      }
+    })
+    return removed
+  }
+
   private async read(): Promise<StoreShape> {
     return (await this.store.read()) ?? {}
   }
