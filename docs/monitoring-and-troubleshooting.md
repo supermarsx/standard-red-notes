@@ -128,10 +128,14 @@ it guards.
 Other app package roots are not claimed by this gate yet. Their coverage must be
 enabled atomically with the corresponding consumer migrations and tests.
 
-The reviewed-residual list holds two entries, both realtime gateway refusal
+The reviewed-residual list holds three entries. Two are realtime gateway refusal
 lines whose message is built only from closed sets of constants (a
 `SocketRejectionCode`, `SyncUnavailabilityReason` values, and event names the
-gateway itself passes). `--report-allowlist` prints them with their reasons.
+gateway itself passes). The third is the syncing-server line that names an item
+withheld from integrity reporting together with the column value that made it
+unmappable: it reads only identifier, content-type and timestamp columns, and
+that value is what the operator must repair. `--report-allowlist` prints each
+with its reason.
 WebSocket bridges record `originExcluded` as structured boolean metadata, never
 the underlying session UUID, so those diagnostics need no exception.
 

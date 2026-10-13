@@ -110,6 +110,19 @@ const ignoredFilePattern =
  */
 export const reviewedSafeLoggingAllowlist = [
   {
+    file: "server/packages/syncing-server/src/Infra/TypeORM/SQLItemRepository.ts",
+    line: 390,
+    rule: "raw-domain-result-error",
+    call: [
+      "this.logger.error(",
+      "          `Withheld unmappable item ${row.uuid} for user ${userUuid} from integrity reporting, ` +",
+      "            `because no sync can deliver it: ${partsOrError.getError()}`,",
+      "        )",
+    ].join("\n"),
+    reason:
+      "The Result error comes from parseItemProjection over ITEM_MAPPABILITY_COLUMNS only (identifiers, content type, timestamps; never content, keys or credentials), and naming the bad column value is the operator's repair instruction. SQLItemRepository.unmappableRow.integration.spec.ts pins that the reason is logged.",
+  },
+  {
     file: "server/packages/websocket-gateway/src/gateway.ts",
     line: 1625,
     rule: "forwarded-message-not-literal",
