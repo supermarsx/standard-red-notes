@@ -182,15 +182,17 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // The app bundle (`/app.js`, `/app.css`, AND the lazy chunks `<id>.app.js`) is
-  // rebuilt on EVERY deploy but the chunk filenames are NOT content-hashed, so a
-  // chunk keeps its name while its content changes. Serve all of them
-  // network-first like the HTML: otherwise a fresh, network-first `app.js`
-  // references chunks whose STALE cache-first copies the SW returns —
+  // The app bundle (`/app.js`, `/app.css`, AND the lazy chunks
+  // `<id>.<contenthash>.app.js` / `.app.css`) is rebuilt on EVERY deploy. The
+  // entry keeps its name while its content changes, and chunks were unhashed
+  // `<id>.app.js` until recently - a browser may still hold those. Serve all of
+  // them network-first like the HTML: otherwise a fresh, network-first `app.js`
+  // references chunks whose STALE cache-first copies the SW returns -
   // "Loading chunk N failed" for lazy components (e.g. the Super editor), or a
   // blank page for the entry. Falls back to the cached copy when offline.
   // Revalidated for the same reason as navigations: the HTTP cache may hold the
-  // previous build's copy under the same name.
+  // previous build's copy under the same name. (A hashed chunk revalidates
+  // cheaply: nginx marks it immutable, and a 304 carries no body.)
   if (url.pathname.endsWith('app.js') || url.pathname.endsWith('app.css')) {
     event.respondWith(
       fetch(revalidating(request))

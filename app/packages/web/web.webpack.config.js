@@ -91,6 +91,17 @@ module.exports = (env) => {
     performance: { hints: false },
     output: {
       filename: process.env.BUILD_TARGET === 'clipper' ? './[name].bundle.js' : './app.js',
+      // Lazy chunks carry a hash of their own content, so a chunk's URL changes
+      // whenever its bytes do. With the default (`[id].app.js`) a redeploy kept
+      // the names and swapped the contents, and a tab still running the previous
+      // app.js could load the NEW build's chunk under the old name and fail deep
+      // in webpack ("e[r] is undefined"). Now that tab asks for a file the new
+      // build does not have, nginx answers 404, and the app shows its "older
+      // version - reload" notice (Utils/StaleBuildNotice.ts). The hash length is
+      // pinned because the nginx configs mark exactly `<id>.<20 hex>.app.js` /
+      // `.app.css` immutable; the entry `app.js` keeps its name (index.html
+      // loads it literally) and is revalidated instead.
+      ...(process.env.BUILD_TARGET === 'clipper' ? {} : { chunkFilename: './[id].[contenthash:20].app.js' }),
       // Evaluate dependency import.meta.url references against the browser at
       // runtime. Webpack's default folds them to file:/// paths on the build
       // machine, leaking host paths and triggering Firefox local-file loads.
@@ -152,6 +163,9 @@ module.exports = (env) => {
       new MiniCssExtractPlugin({
         // Options similar to the same options in webpackOptions.output
         filename: './app.css',
+        // Lazy stylesheets are content-hashed for the same reason as the lazy
+        // scripts (see output.chunkFilename).
+        chunkFilename: './[id].[contenthash:20].app.css',
         ignoreOrder: true, // Enable to remove warnings about conflicting order
       }),
       new CopyWebpackPlugin({

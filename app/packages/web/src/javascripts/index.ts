@@ -21,12 +21,14 @@ initializeI18n()
 // The commit this bundle was built from, pinned into the ENTRY chunk and stamped
 // on <html>. The import is the point: a module first reached from a lazy chunk
 // is bundled INTO that chunk, and the diagnostics pane — the only thing that
-// reads this — lives in one. Chunk file names are not content-hashed, so a tab
-// that has been open across a deployment loads its lazy chunks fresh from the
-// new build while its entry stays the old one: read from the chunk, the
-// revision would be the NEW one, and the stale-shell check would report
-// "current" in exactly the case it exists for. Measured: built without this
-// line, the revision was in 2499.app.js and nowhere in app.js.
+// reads this — lives in one. When chunk file names were not content-hashed, a
+// tab open across a deployment loaded its lazy chunks fresh from the new build
+// while its entry stayed the old one: read from the chunk, the revision would
+// be the NEW one, and the stale-shell check would report "current" in exactly
+// the case it exists for. Measured: built without this line, the revision was
+// in 2499.app.js and nowhere in app.js. The names are hashed now (such a tab
+// gets a 404 and the stale-build notice instead), but the tab's revision is
+// still a property of its entry, so it stays here.
 import { WebBuildRevision } from './Constants/BuildRevision'
 document.documentElement.setAttribute('data-srn-build', WebBuildRevision === '' ? 'unstamped' : WebBuildRevision)
 

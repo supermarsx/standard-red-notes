@@ -1577,6 +1577,32 @@ test("activating a new build evicts every previous shell cache and nothing else"
   assert.equal(claimed, 1, "the fresh worker must claim open clients");
 });
 
+test("lazy chunk names carry exactly the content hash nginx marks immutable", () => {
+  // A chunk whose name survives a redeploy while its bytes change lets a tab
+  // run the new build's chunk beside its old entry. The names must change with
+  // the content, and their shape must be the one the nginx maps make immutable;
+  // a longer or shorter hash would silently fall back to no-cache, and an
+  // unhashed name marked immutable would be the original bug forever.
+  assert.match(
+    webWebpack,
+    /chunkFilename: '\.\/\[id\]\.\[contenthash:20\]\.app\.js'/,
+  );
+  assert.match(
+    webWebpack,
+    /chunkFilename: '\.\/\[id\]\.\[contenthash:20\]\.app\.css'/,
+  );
+  const immutable =
+    /"~\^\/\[\^\/\]\+\\\.\[0-9a-f\]\{20\}\\\.app\\\.\(js\|css\)\\?\$"\s+"public, max-age=31536000, immutable";/;
+  for (const { relativePath, source } of configs) {
+    assert.match(source, immutable, relativePath);
+  }
+  // The worker branch still recognises the hashed chunks as bundle files.
+  assert.match(
+    serviceWorker,
+    /url\.pathname\.endsWith\('app\.js'\) \|\| url\.pathname\.endsWith\('app\.css'\)/,
+  );
+});
+
 test("the shell cache name is stamped from the build, never a hand-bumped constant", () => {
   // A human-maintained version constant gets forgotten and the stale-shell bug
   // returns silently, so the token must be substituted at build time.
