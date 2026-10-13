@@ -259,9 +259,15 @@ export function loadCiContractFiles(repositoryRoot = defaultRepositoryRoot) {
   );
 }
 
-// The six gates `yarn ci:contracts` is responsible for, in order. They stay
+// The gates `yarn ci:contracts` is responsible for, in order. They stay
 // spelled out in package.json so the script reads as what it runs and the
 // release contract can still find its own legs in it.
+//
+// The safe-logging gate was documented as the check to run before merging a
+// change to any logging surface and was run by no CI job, so the first sweep
+// after its extractor learnt `logger?.` found seventeen raw error logs that
+// had been merged under green pipelines. It is a leg here rather than a step
+// of its own so that a red in an earlier leg cannot hide its verdict.
 export const CONTRACT_GATE_LEGS = Object.freeze([
   "yarn test:ci-tools",
   "node scripts/validate-ci-contract.mjs",
@@ -269,6 +275,7 @@ export const CONTRACT_GATE_LEGS = Object.freeze([
   "yarn test:release-contract:run",
   "yarn release:contract:run",
   "yarn docs:check",
+  "yarn ci:safe-logging",
 ]);
 
 /**
@@ -2087,14 +2094,18 @@ export function validateCiContract(files) {
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   const expectedScripts = {
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
+    "ci:safe-logging": "node scripts/validate-safe-logging.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "deps:security:production":
       "node scripts/audit-production-dependencies.mjs",
     "release:contract:run": "node scripts/validate-release-contract.mjs",
     "release:policy:install":
       "npm ci --prefix scripts --ignore-scripts --no-audit --no-fund",
+    // The safe-logging validator's own tests run with the other CI tools: a
+    // rule that silently stopped matching would otherwise pass the gate above
+    // by finding nothing.
     "test:ci-tools":
-      "node --test scripts/audit-production-dependencies.test.mjs scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/verify-playwright-report.test.mjs",
+      "node --test scripts/audit-production-dependencies.test.mjs scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/validate-safe-logging.test.mjs scripts/verify-playwright-report.test.mjs",
     "test:release-contract:run":
       "node --test scripts/validate-release-contract.test.mjs",
     "test:release-impact:run":

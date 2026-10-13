@@ -100,7 +100,9 @@ allowlisted error tag. Thrown or untrusted 5xx failures return a stable generic
 service error rather than reflecting an upstream body, header, or exception
 message.
 
-Before merging changes to these surfaces, run the source regression gate:
+Before merging changes to these surfaces, run the source regression gate. The
+`contracts` CI lane runs it on every push as the `yarn ci:safe-logging` leg of
+`yarn ci:contracts`, and its tests with `yarn test:ci-tools`:
 
 ```bash
 node scripts/validate-safe-logging.mjs

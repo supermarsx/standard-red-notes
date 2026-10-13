@@ -2220,6 +2220,48 @@ test("ci:contracts cannot go back to an && chain that hides later gates", () => 
   }
 });
 
+test("the safe-logging gate and its own tests cannot fall out of the contracts lane", () => {
+  // Documented as the check to run before merging a logging change, and run by
+  // no CI job: seventeen raw error logs were merged under green pipelines.
+  assert.ok(CONTRACT_GATE_LEGS.includes("yarn ci:safe-logging"));
+
+  for (const [script, current, replacement, expected] of [
+    [
+      "ci:safe-logging",
+      "node scripts/validate-safe-logging.mjs",
+      "node scripts/validate-safe-logging.mjs || true",
+      /package\.json: ci:safe-logging script is not wired to the CI contract/,
+    ],
+    [
+      "test:ci-tools",
+      " scripts/validate-safe-logging.test.mjs",
+      "",
+      /package\.json: test:ci-tools script is not wired to the CI contract/,
+    ],
+    [
+      "ci:contracts",
+      " --leg 'yarn ci:safe-logging'",
+      "",
+      /ci:contracts must run the yarn ci:safe-logging gate/,
+    ],
+  ]) {
+    const files = withFileChanged("package.json", (content) => {
+      const packageJson = JSON.parse(content);
+      assert.equal(
+        packageJson.scripts[script].split(current).length - 1,
+        1,
+        `${script} contains ${current} once`,
+      );
+      packageJson.scripts[script] = packageJson.scripts[script].replace(
+        current,
+        replacement,
+      );
+      return JSON.stringify(packageJson);
+    });
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
 test("the contract gate runner runs every gate, even after one fails", () => {
   const legs = parseLegs([
     "--prerequisite",
