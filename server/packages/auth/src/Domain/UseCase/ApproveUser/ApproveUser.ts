@@ -1,6 +1,7 @@
 import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 import { User } from '../../User/User'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { SendApprovalNotification } from '../SendApprovalNotification/SendApprovalNotification'
@@ -18,7 +19,7 @@ export class ApproveUser implements UseCaseInterface<User> {
     private timer: TimerInterface,
     private sendApprovalNotification?: SendApprovalNotification,
     private signInUrl?: string,
-    private logger?: { error: (message: string) => void },
+    private logger?: { error: (message: string, metadata?: Record<string, unknown>) => void },
   ) {}
 
   async execute(dto: { userUuid: string; approvalNote?: string | null }): Promise<Result<User>> {
@@ -49,7 +50,12 @@ export class ApproveUser implements UseCaseInterface<User> {
           signInUrl: this.signInUrl,
         })
       } catch (error) {
-        this.logger?.error(`Could not send approval notification: ${(error as Error).message}`)
+        // A mail transport's message can carry the recipient or the relay's
+        // reply; the class and code are what an operator acts on.
+        this.logger?.error('Could not send approval notification.', {
+          userId: saved.uuid.toString(),
+          ...safeErrorLogMetadata(error),
+        })
       }
     }
 

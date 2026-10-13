@@ -3,6 +3,7 @@ import { RoleName, SettingName, SubscriptionPlanName, Username } from '@standard
 import { v4 as uuidv4 } from 'uuid'
 import { TimerInterface } from '@standardnotes/time'
 
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 import { User } from '../User/User'
 import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
 import { RegisterDTO } from './RegisterDTO'
@@ -65,7 +66,10 @@ export class Register implements UseCaseInterface {
     // param so existing call sites / specs keep compiling; when absent, no
     // confirmation email is ever sent (feature effectively off).
     private sendEmailConfirmation?: SendEmailConfirmation,
-    private logger?: { error: (message: string) => void; warn?: (message: string) => void },
+    private logger?: {
+      error: (message: string, metadata?: Record<string, unknown>) => void
+      warn?: (message: string) => void
+    },
     // Standard Red Notes: SIGNUP CAPS (part of the admin anti-abuse surface).
     // The rate limiter backs the per-IP + per-device SOFT caps (atomic Redis
     // INCR/EXPIRE, fail-open); the resolver supplies the effective cap policy
@@ -324,7 +328,12 @@ export class Register implements UseCaseInterface {
           registrationConfig,
         })
       } catch (error) {
-        this.logger?.error(`Could not send registration confirmation email: ${(error as Error).message}`)
+        // A mail transport's message can carry the recipient address or the
+        // relay's reply; the class and code are what an operator acts on.
+        this.logger?.error('Could not send registration confirmation email.', {
+          userId: user.uuid,
+          ...safeErrorLogMetadata(error),
+        })
       }
     }
 
@@ -485,7 +494,7 @@ export class Register implements UseCaseInterface {
           return { success: false, errorMessage: 'User registration is currently not allowed.' }
         }
       } catch (error) {
-        this.logger?.error(`Signup per-week cap check failed (allowing signup): ${(error as Error).message}`)
+        this.logger?.error('Signup per-week cap check failed (allowing signup).', safeErrorLogMetadata(error))
       }
     }
 
@@ -570,7 +579,7 @@ export class Register implements UseCaseInterface {
           return { success: false, errorMessage: 'User registration is currently not allowed.' }
         }
       } catch (error) {
-        this.logger?.error(`Signup total-accounts cap check failed (allowing signup): ${(error as Error).message}`)
+        this.logger?.error('Signup total-accounts cap check failed (allowing signup).', safeErrorLogMetadata(error))
       }
     }
 

@@ -317,7 +317,13 @@ describe('UpdateStorageQuotaUsedForUser', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('FOREIGN KEY constraint failed'))
+    // Logged by subscription and error class, never by the driver's text,
+    // which quotes SQL and values.
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not set file upload bytes used for subscription 00000000-0000-0000-0000-000000000000',
+      { errorType: 'Error' },
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('FOREIGN KEY')
   })
 
   it('contains a thrown READ of the existing total as well', async () => {
@@ -329,7 +335,11 @@ describe('UpdateStorageQuotaUsedForUser', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database unavailable'))
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not set file upload bytes used for subscription 00000000-0000-0000-0000-000000000000',
+      { errorType: 'Error' },
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
   })
 
   it('should not do anything if a user uuid is invalid', async () => {

@@ -15,6 +15,7 @@ import { TriggerPostSettingUpdateActions } from '../../../Domain/UseCase/Trigger
 import { ResolveFileQuotaScope } from '../../../Domain/UseCase/ResolveFileQuotaScope/ResolveFileQuotaScope'
 import { FileQuotaScope } from '../../../Domain/UseCase/ResolveFileQuotaScope/FileQuotaScope'
 import { SubscriptionSettingsAssociationServiceInterface } from '../../../Domain/Setting/SubscriptionSettingsAssociationServiceInterface'
+import { safeErrorLogMetadata } from '../../../Domain/Logging/SafeLog'
 
 export class BaseSubscriptionSettingsController extends BaseHttpController {
   constructor(
@@ -199,9 +200,8 @@ export class BaseSubscriptionSettingsController extends BaseHttpController {
         )
       } catch (error) {
         this.logger.error(
-          `Could not determine the default file upload limit for plan ${scope.activePlanName}: ${
-            (error as Error).message
-          }`,
+          `Could not determine the default file upload limit for plan ${scope.activePlanName}`,
+          safeErrorLogMetadata(error),
         )
 
         return undefined

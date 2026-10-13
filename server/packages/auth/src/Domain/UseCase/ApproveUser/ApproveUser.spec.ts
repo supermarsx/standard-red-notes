@@ -59,6 +59,23 @@ describe('ApproveUser', () => {
     expect(result.isFailed()).toBe(false)
   })
 
+  it('logs a failed approval email by account and error class, never by the transport text', async () => {
+    sendApprovalNotification.execute = jest
+      .fn()
+      .mockRejectedValue(new Error('550 p@example.com: mailbox unavailable'))
+    const logger = { error: jest.fn() }
+
+    await new ApproveUser(userRepository, timer, sendApprovalNotification, 'https://app', logger).execute({
+      userUuid: validUuid,
+    })
+
+    expect(logger.error).toHaveBeenCalledWith('Could not send approval notification.', {
+      userId: validUuid,
+      errorType: 'Error',
+    })
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('p@example.com')
+  })
+
   it('fails for a missing user', async () => {
     userRepository.findOneByUuid = jest.fn().mockResolvedValue(null)
 

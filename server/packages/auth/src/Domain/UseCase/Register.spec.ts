@@ -1157,6 +1157,22 @@ describe('Register', () => {
       expect(authResponseFactory.createResponse).not.toHaveBeenCalled()
     })
 
+    it('logs a failed confirmation send by account and error class, never by the transport text', async () => {
+      // A mail transport's message can carry the recipient or the relay's reply.
+      const sender = {
+        execute: jest.fn().mockRejectedValue(new Error('550 person@example.com: mailbox unavailable')),
+      }
+      const logger = { error: jest.fn(), warn: jest.fn() }
+
+      await createWith(makeResolver({ emailConfirmationEnabled: true }), sender, logger).execute(dto)
+
+      expect(logger.error).toHaveBeenCalledWith('Could not send registration confirmation email.', {
+        userId: expect.any(String),
+        errorType: 'Error',
+      })
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain('person@example.com')
+    })
+
     it('withholds the session when confirmation delivery returns a failure result', async () => {
       const sender = { execute: jest.fn().mockResolvedValue(Result.fail('smtp unavailable')) }
       const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)

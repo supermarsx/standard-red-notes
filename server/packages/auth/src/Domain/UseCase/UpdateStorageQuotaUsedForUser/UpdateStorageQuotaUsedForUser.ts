@@ -1,5 +1,6 @@
 import { Result, SettingName, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 import { UserSubscription } from '../../Subscription/UserSubscription'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { UpdateStorageQuotaUsedForUserDTO } from './UpdateStorageQuotaUsedForUserDTO'
@@ -193,8 +194,11 @@ export class UpdateStorageQuotaUsedForUser implements UseCaseInterface<void> {
         this.logger.error(`Could not set file upload bytes used for subscription ${userSubscriptionUuid}`)
       }
     } catch (error) {
+      // A driver's message quotes SQL and values; the class and code are enough
+      // to tell a constraint from an outage.
       this.logger.error(
-        `Could not set file upload bytes used for subscription ${userSubscriptionUuid}: ${(error as Error).message}`,
+        `Could not set file upload bytes used for subscription ${userSubscriptionUuid}`,
+        safeErrorLogMetadata(error),
       )
     }
   }
