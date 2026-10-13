@@ -140,6 +140,32 @@ describe('buildHomeServerEnvironmentOverrides', () => {
     expect(environment.SERVER_SETTINGS_PATH).toBe('/mnt/runtime/server-settings.json')
   })
 
+  it('keeps DAV bridge account files inside the data directory, so they are on the volume', () => {
+    const environment = buildHomeServerEnvironmentOverrides('/srv/notes', undefined)
+
+    // Without this default the gateway falls back to a directory beside the
+    // code, and connected accounts are lost when the container is recreated.
+    expect(environment.DAV_BRIDGE_DATA_PATH).toBe('/srv/notes/dav-bridge')
+  })
+
+  it('preserves an explicit DAV bridge data path and passes the other DAV bridge settings through', () => {
+    const environment = buildHomeServerEnvironmentOverrides('/srv/notes', {
+      DAV_BRIDGE_DATA_PATH: '/mnt/runtime/dav-bridge',
+      DAV_BRIDGE_ENABLED: 'true',
+      DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS: 'http://nextcloud',
+    })
+
+    expect(environment.DAV_BRIDGE_DATA_PATH).toBe('/mnt/runtime/dav-bridge')
+    expect(environment.DAV_BRIDGE_ENABLED).toBe('true')
+    expect(environment.DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS).toBe('http://nextcloud')
+  })
+
+  it('does not switch the DAV bridge on by default', () => {
+    const environment = buildHomeServerEnvironmentOverrides('/srv/notes', undefined)
+
+    expect(environment.DAV_BRIDGE_ENABLED).toBeUndefined()
+  })
+
   it('defaults current Standard Red Notes clients to password and TOTP capable v3 tokens', () => {
     const environment = buildHomeServerEnvironmentOverrides('data', undefined)
 

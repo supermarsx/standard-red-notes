@@ -141,6 +141,18 @@ put_opt CALDAV_ENABLED "${CALDAV_ENABLED:-}"
 # self-service.
 put_opt CALDAV_BASE_PATH "${CALDAV_BASE_PATH:-}"
 put REMINDER_DELIVERY_DATA_PATH "${DATA_DIR}/reminder-delivery"
+# The DAV bridge (two-way sync with a user's own Nextcloud/CalDAV account).
+# Its account files live on the data volume. As with CALDAV_ENABLED above, a
+# variable that is not written here never reaches the api-gateway on this
+# topology, however it is set on the container: every DAV_BRIDGE_* name the
+# gateway reads has to be listed, or that setting is silently dead here.
+put DAV_BRIDGE_DATA_PATH "${DATA_DIR}/dav-bridge"
+put_opt DAV_BRIDGE_ENABLED "${DAV_BRIDGE_ENABLED:-}"
+put_opt DAV_BRIDGE_MODE "${DAV_BRIDGE_MODE:-}"
+put_opt DAV_BRIDGE_ALLOW_ALL_USERS "${DAV_BRIDGE_ALLOW_ALL_USERS:-}"
+put_opt DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS "${DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS:-}"
+put_opt DAV_BRIDGE_ALLOWLIST_ENV_ONLY "${DAV_BRIDGE_ALLOWLIST_ENV_ONLY:-}"
+put_opt DAV_BRIDGE_MAX_ACCOUNTS_PER_USER "${DAV_BRIDGE_MAX_ACCOUNTS_PER_USER:-}"
 
 # Cookies: defaults suit an http://localhost self-host (host-only cookie).
 put COOKIE_DOMAIN "${COOKIE_DOMAIN:-}"

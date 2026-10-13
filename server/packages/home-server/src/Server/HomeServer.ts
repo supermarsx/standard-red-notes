@@ -236,6 +236,13 @@ export function buildHomeServerEnvironmentOverrides(
     // with the rest of the instance. The feature stays OFF until
     // REMINDER_DELIVERY_ENABLED=true.
     REMINDER_DELIVERY_DATA_PATH: `${dataDirectoryPath}/reminder-delivery`,
+    // Standard Red Notes: the DAV bridge keeps one small file per user (the
+    // external account's address and its ENCRYPTED password) here, under the
+    // data dir, so connected accounts survive a container being recreated.
+    // Without this the gateway's fallback is a directory beside the code,
+    // which is not on the volume. The feature stays OFF until an operator
+    // sets DAV_BRIDGE_ENABLED=true or an administrator switches it on.
+    DAV_BRIDGE_DATA_PATH: `${dataDirectoryPath}/dav-bridge`,
     /**
      * Standard Red Notes: where the gateway's two auth probes should dial on
      * this topology.

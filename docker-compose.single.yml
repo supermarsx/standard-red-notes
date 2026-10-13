@@ -70,6 +70,26 @@ services:
       # prefix would shadow the API.
       CALDAV_ENABLED: ${CALDAV_ENABLED:-false}
       CALDAV_BASE_PATH: ${CALDAV_BASE_PATH:-/dav}
+      # Two-way calendar and task sync with a user's OWN Nextcloud or CalDAV
+      # account (the "DAV bridge"). The app does the syncing; this server
+      # stores the account's password (encrypted under the instance's
+      # generated encryption key, kept on the /data volume), checks every
+      # address against the policy below and forwards one request at a time.
+      # It keeps NO copy of calendar content. OFF unless set to true here or
+      # switched on by an administrator in Preferences; each user also needs
+      # the DAV_BRIDGE_ALLOWED permission unless DAV_BRIDGE_ALLOW_ALL_USERS is
+      # true. `relay` is the only implemented DAV_BRIDGE_MODE.
+      DAV_BRIDGE_ENABLED: ${DAV_BRIDGE_ENABLED:-false}
+      DAV_BRIDGE_MODE: ${DAV_BRIDGE_MODE:-relay}
+      DAV_BRIDGE_ALLOW_ALL_USERS: ${DAV_BRIDGE_ALLOW_ALL_USERS:-false}
+      # Exact origins (scheme://host[:port], comma separated) users may
+      # connect to although they are on a private network, use plain http or
+      # a non-standard port, e.g. http://nextcloud,https://cloud.home.lan:8443.
+      # Loopback and the cloud metadata address are refused whatever is listed:
+      # reach a Nextcloud on this machine by its LAN or Docker-network name.
+      DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS: ${DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS:-}
+      DAV_BRIDGE_ALLOWLIST_ENV_ONLY: ${DAV_BRIDGE_ALLOWLIST_ENV_ONLY:-false}
+      DAV_BRIDGE_MAX_ACCOUNTS_PER_USER: ${DAV_BRIDGE_MAX_ACCOUNTS_PER_USER:-5}
       # Current SRN clients can provide password (v2) and TOTP (v3) step-up proof.
       APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: ${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}
       APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: ${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}

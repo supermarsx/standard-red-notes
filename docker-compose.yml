@@ -69,6 +69,30 @@ x-server-env: &server-env
   # location, and pointing it at an existing API prefix would shadow the API.
   CALDAV_ENABLED: ${CALDAV_ENABLED:-false}
   CALDAV_BASE_PATH: ${CALDAV_BASE_PATH:-/dav}
+  # Two-way calendar and task sync with a user's OWN Nextcloud or CalDAV account
+  # (the "DAV bridge"). The app does the syncing; this server stores the
+  # account's password (encrypted under AUTH_SERVER_ENCRYPTION_SERVER_KEY),
+  # checks every address against the policy below and forwards one request at a
+  # time. It keeps NO copy of calendar content. OFF unless set to true here or
+  # switched on by an administrator in Preferences; each user also needs the
+  # DAV_BRIDGE_ALLOWED permission unless DAV_BRIDGE_ALLOW_ALL_USERS is true.
+  # DAV_BRIDGE_MODE names how the server takes part; `relay` (forward, store
+  # nothing) is the only implemented value, and any other value makes the
+  # bridge refuse to run rather than fall back.
+  DAV_BRIDGE_ENABLED: ${DAV_BRIDGE_ENABLED:-false}
+  DAV_BRIDGE_MODE: ${DAV_BRIDGE_MODE:-relay}
+  DAV_BRIDGE_ALLOW_ALL_USERS: ${DAV_BRIDGE_ALLOW_ALL_USERS:-false}
+  # Exact origins (scheme://host[:port], comma separated, nothing after the
+  # port) that users may connect to although they are on a private network,
+  # use plain http or a non-standard port: the Nextcloud on your LAN or on a
+  # Docker network, e.g. http://nextcloud,https://cloud.home.lan:8443. Any
+  # other private address is refused. Loopback, the cloud metadata address
+  # and this stack's own services (server, db, cache, ...) are refused
+  # whatever is listed here.
+  DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS: ${DAV_BRIDGE_ALLOWED_PRIVATE_ORIGINS:-}
+  # true = the list above can be changed only here, not from the admin pane.
+  DAV_BRIDGE_ALLOWLIST_ENV_ONLY: ${DAV_BRIDGE_ALLOWLIST_ENV_ONLY:-false}
+  DAV_BRIDGE_MAX_ACCOUNTS_PER_USER: ${DAV_BRIDGE_MAX_ACCOUNTS_PER_USER:-5}
   # Optional analytics report recipients. This does not grant authorization;
   # administrator access is a persisted ADMIN_USER role managed with srn-admin.
   ADMIN_EMAILS: ${ADMIN_EMAILS:-}
