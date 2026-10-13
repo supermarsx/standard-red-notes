@@ -9,7 +9,7 @@ import {
   RawStorageKey,
   ApplicationEvent,
 } from '@standardnotes/services'
-import { UuidGenerator } from '@standardnotes/utils'
+import { safeErrorLogMetadata, UuidGenerator } from '@standardnotes/utils'
 import { AppGroupCallback } from './AppGroupCallback'
 import { ApplicationGroupEvent, ApplicationGroupEventData } from './ApplicationGroupEvent'
 import { DescriptorRecord } from './DescriptorRecord'
@@ -137,7 +137,7 @@ export class SNApplicationGroup<D extends DeviceInterface = DeviceInterface> ext
         await this.removeDescriptor(this.descriptorForApplication(application))
       } catch (error) {
         /** The in-memory descriptor is already removed; stale metadata must not strand the reset. */
-        console.error('Failed to persist descriptor removal before device reset.', error)
+        console.error('Failed to persist descriptor removal before device reset.', safeErrorLogMetadata(error))
       }
     }
 
@@ -159,7 +159,7 @@ export class SNApplicationGroup<D extends DeviceInterface = DeviceInterface> ext
          * Fail stopped: reloading after an incomplete clear could rehydrate
          * credentials that the user explicitly asked us to remove.
          */
-        console.error('Failed to clear all device data before reset.', error)
+        console.error('Failed to clear all device data before reset.', safeErrorLogMetadata(error))
         return
       }
     }
@@ -171,13 +171,13 @@ export class SNApplicationGroup<D extends DeviceInterface = DeviceInterface> ext
      * able to block the security reset by hanging or rejecting.
      */
     void this.notifyEvent(ApplicationGroupEvent.DeviceWillRestart, { source, mode }).catch((error) => {
-      console.error('Failed to notify observers before device reset.', error)
+      console.error('Failed to notify observers before device reset.', safeErrorLogMetadata(error))
     })
 
     try {
       this.deinit()
     } catch (error) {
-      console.error('Failed to deinitialize application group before device reset.', error)
+      console.error('Failed to deinitialize application group before device reset.', safeErrorLogMetadata(error))
     }
 
     try {
@@ -187,7 +187,7 @@ export class SNApplicationGroup<D extends DeviceInterface = DeviceInterface> ext
         await device.performSoftReset()
       }
     } catch (error) {
-      console.error('Failed to reset device after application deinit.', error)
+      console.error('Failed to reset device after application deinit.', safeErrorLogMetadata(error))
     }
   }
 

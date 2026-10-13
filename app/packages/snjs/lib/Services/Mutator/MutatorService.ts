@@ -53,7 +53,7 @@ import {
   TransactionalMutation,
   VaultListingInterface,
 } from '@standardnotes/models'
-import { UuidGenerator, Uuids } from '@standardnotes/utils'
+import { safeErrorLogMetadata, UuidGenerator, Uuids } from '@standardnotes/utils'
 
 export class MutatorService extends AbstractService implements MutatorClientInterface {
   /**
@@ -142,7 +142,7 @@ export class MutatorService extends AbstractService implements MutatorClientInte
       try {
         full = await this.liteContentRehydrator(item.uuid)
       } catch (error) {
-        console.error('Failed to re-hydrate lite item before mutation', item.uuid, error)
+        console.error('Failed to re-hydrate lite item before mutation', item.uuid, safeErrorLogMetadata(error))
         continue
       }
 

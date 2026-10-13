@@ -91,8 +91,10 @@ describe('SNApplicationGroup runtime resets', () => {
       expect(lifecycle).toEqual(['device-deinit', 'hard-reset'])
       expect(consoleError).toHaveBeenCalledWith(
         'Failed to notify observers before device reset.',
-        expect.objectContaining({ message: 'observer failed' }),
+        expect.objectContaining({ errorType: 'Error' }),
       )
+      // The projection, not the error: an observer's message is not ours to log.
+      expect(JSON.stringify(consoleError.mock.calls)).not.toContain('observer failed')
     } finally {
       consoleError.mockRestore()
     }
@@ -123,8 +125,9 @@ describe('SNApplicationGroup runtime resets', () => {
       expect(lifecycle).toEqual(['device-deinit', 'hard-reset'])
       expect(consoleError).toHaveBeenCalledWith(
         'Failed to persist descriptor removal before device reset.',
-        expect.objectContaining({ message: 'storage unavailable' }),
+        expect.objectContaining({ errorType: 'Error' }),
       )
+      expect(JSON.stringify(consoleError.mock.calls)).not.toContain('storage unavailable')
     } finally {
       consoleError.mockRestore()
     }
@@ -149,8 +152,9 @@ describe('SNApplicationGroup runtime resets', () => {
       expect(lifecycle).toEqual([])
       expect(consoleError).toHaveBeenCalledWith(
         'Failed to clear all device data before reset.',
-        expect.objectContaining({ message: 'disk clear failed' }),
+        expect.objectContaining({ errorType: 'Error' }),
       )
+      expect(JSON.stringify(consoleError.mock.calls)).not.toContain('disk clear failed')
     } finally {
       consoleError.mockRestore()
     }

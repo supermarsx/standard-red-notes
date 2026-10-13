@@ -38,6 +38,7 @@ import {
   ColorSchemeMode,
 } from '@standardnotes/services'
 import { ContentType } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata } from '@standardnotes/utils'
 
 export class PreferencesService
   extends AbstractService<PreferencesServiceEvent>
@@ -73,7 +74,9 @@ export class PreferencesService
 
     this.removeSyncObserver = sync.addEventObserver((event) => {
       if (event === SyncEvent.SyncCompletedWithAllItemsUploaded || event === SyncEvent.LocalDataIncrementalLoad) {
-        void this.reload().catch(console.error)
+        void this.reload().catch((error) => {
+          console.error('Failed to reload preferences after a sync.', safeErrorLogMetadata(error))
+        })
       }
     })
   }
@@ -139,7 +142,14 @@ export class PreferencesService
          * the singleton lookup no longer waits for one, so it keeps its ordering.
          */
         if (this.reloading && this.reloadPromise) {
-          void this.reloadPromise.then(() => this.reconcileAppearancePreference(true)).catch(console.error)
+          void this.reloadPromise
+            .then(() => this.reconcileAppearancePreference(true))
+            .catch((error) => {
+              console.error(
+                'Failed to reconcile the appearance preference after a full sync.',
+                safeErrorLogMetadata(error),
+              )
+            })
           return
         }
 
@@ -278,7 +288,7 @@ export class PreferencesService
         this.appearanceWriteScheduled = false
         await this.queueAppearancePreferenceWrite(this.createAppearancePreferenceFromLocal())
       } catch (error) {
-        console.error(error)
+        console.error('Failed to write the appearance preference.', safeErrorLogMetadata(error))
       } finally {
         this.appearanceWriteScheduled = false
       }
