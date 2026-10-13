@@ -1,0 +1,222 @@
+{
+  "server": "Radicale 3.5.4 (tomsquest/docker-radicale:3.5.4.0)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/far%20future.ics</href><propstat><prop><getetag>\"c47f4fef2628a7f5bbead90cde92cc4e5295bb34c1042c5bd60de9f40a054b74\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/long%20past.ics</href><propstat><prop><getetag>\"b41e8a8bc9eb235ac97885054bf3328e1fe93819cf9199003375eb7f38caa2c7\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/inside.ics</href><propstat><prop><getetag>\"e23571d140669754b599e2c0d87832ee1760aaf1674edde28a5d535074e303fc\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:time-range start=\"20260912T000000Z\" end=\"20271012T000000Z\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/inside.ics</href><propstat><prop><getetag>\"e23571d140669754b599e2c0d87832ee1760aaf1674edde28a5d535074e303fc\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><cs:getctag/><d:sync-token/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8",
+            "dav": "1, 2, 3, calendar-access, addressbook, extended-mkcol"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\" xmlns:CS=\"http://calendarserver.org/ns/\"><response><href>/bob/window/</href><propstat><prop><CS:getctag>\"46b57a69a9356d9d529ed529ac39278a423f7927e00b0db9f2dd145a7f74e6b5\"</CS:getctag><sync-token>http://radicale.org/ns/sync/4c66668be2b4b5272de7f9fd342b8153121670b3e424b46177ca4bbfe3041749</sync-token></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/><c:calendar-data/></d:prop><d:href>/bob/window/inside.ics</d:href><d:href>/bob/window/far%20future.ics</d:href><d:href>/bob/window/never%20existed.ics</d:href></c:calendar-multiget>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\"><response><href>/bob/window/never%20existed.ics</href><status>HTTP/1.1 404 Not Found</status></response><response><href>/bob/window/inside.ics</href><propstat><prop><getetag>\"e23571d140669754b599e2c0d87832ee1760aaf1674edde28a5d535074e303fc\"</getetag><C:calendar-data>BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//SRN//dav-session//EN\r\nBEGIN:VEVENT\r\nUID:inside@srn\r\nDTSTART:20261020T090000Z\r\nDTSTAMP:20261001T000000Z\r\nSUMMARY:Inside the window\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/far%20future.ics</href><propstat><prop><getetag>\"c47f4fef2628a7f5bbead90cde92cc4e5295bb34c1042c5bd60de9f40a054b74\"</getetag><C:calendar-data>BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//SRN//dav-session//EN\r\nBEGIN:VEVENT\r\nUID:future@srn\r\nDTSTART:20310110T090000Z\r\nDTSTAMP:20261001T000000Z\r\nSUMMARY:Far future\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><cs:getctag/><d:sync-token/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8",
+            "dav": "1, 2, 3, calendar-access, addressbook, extended-mkcol"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\" xmlns:CS=\"http://calendarserver.org/ns/\"><response><href>/bob/window/</href><propstat><prop><CS:getctag>\"b2e1e933fcd0b6fe34b560643b1ca80a3d0400734553b53162c23030062177c8\"</CS:getctag><sync-token>http://radicale.org/ns/sync/98dd4552ef664d79bf55faea9722e352b2563f51a19be24384e73eec63bf7be0</sync-token></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:time-range start=\"20260912T000000Z\" end=\"20271012T000000Z\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/added.ics</href><propstat><prop><getetag>\"7a74e6d4d7d9dd074219f442c94d9f248e5e0ac0c5e841fdd1259ebcfca42186\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/inside.ics</href><propstat><prop><getetag>\"c0a1d3a5467e84078ffc87c0b0fbec4eff8dbf864e604928e260b10011d277d3\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/added.ics</href><propstat><prop><getetag>\"7a74e6d4d7d9dd074219f442c94d9f248e5e0ac0c5e841fdd1259ebcfca42186\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/inside.ics</href><propstat><prop><getetag>\"c0a1d3a5467e84078ffc87c0b0fbec4eff8dbf864e604928e260b10011d277d3\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/long%20past.ics</href><propstat><prop><getetag>\"b41e8a8bc9eb235ac97885054bf3328e1fe93819cf9199003375eb7f38caa2c7\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/window/",
+          "redirects": 0
+        }
+      }
+    }
+  ],
+  "observations": [
+    {
+      "status": 207,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/</href><propstat><prop><getetag>\"b2e1e933fcd0b6fe34b560643b1ca80a3d0400734553b53162c23030062177c8\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/added.ics</href><propstat><prop><getetag>\"7a74e6d4d7d9dd074219f442c94d9f248e5e0ac0c5e841fdd1259ebcfca42186\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/inside.ics</href><propstat><prop><getetag>\"c0a1d3a5467e84078ffc87c0b0fbec4eff8dbf864e604928e260b10011d277d3\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/window/long%20past.ics</href><propstat><prop><getetag>\"b41e8a8bc9eb235ac97885054bf3328e1fe93819cf9199003375eb7f38caa2c7\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/added.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/inside.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/long%20past.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"e23571d140669754b599e2c0d87832ee1760aaf1674edde28a5d535074e303fc\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"b41e8a8bc9eb235ac97885054bf3328e1fe93819cf9199003375eb7f38caa2c7\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"c47f4fef2628a7f5bbead90cde92cc4e5295bb34c1042c5bd60de9f40a054b74\""
+    },
+    {
+      "status": 204,
+      "body": "",
+      "etag": "\"c0a1d3a5467e84078ffc87c0b0fbec4eff8dbf864e604928e260b10011d277d3\""
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/window/far%20future.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"7a74e6d4d7d9dd074219f442c94d9f248e5e0ac0c5e841fdd1259ebcfca42186\""
+    }
+  ]
+}

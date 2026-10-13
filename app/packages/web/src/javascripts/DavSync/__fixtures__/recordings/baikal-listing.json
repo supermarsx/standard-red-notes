@@ -1,0 +1,247 @@
+{
+  "server": "Baikal 0.10.1 (ckulka/baikal:0.10.1-nginx)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:propstat><d:prop><d:getetag>&quot;59d5efb0bc54d6085c540cccbe410b1d&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/long%20past.ics</d:href><d:propstat><d:prop><d:getetag>&quot;fb5f7a33d3b949220c786cb90b788b72&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/far%20future.ics</d:href><d:propstat><d:prop><d:getetag>&quot;f5a454dc66ec74b719b081441f3f0409&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:time-range start=\"20260912T000000Z\" end=\"20271012T000000Z\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:propstat><d:prop><d:getetag>&quot;59d5efb0bc54d6085c540cccbe410b1d&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><cs:getctag/><d:sync-token/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8",
+            "dav": "1, 3, extended-mkcol, access-control, calendarserver-principal-property-search, calendar-access, calendar-proxy, calendar-auto-schedule, calendar-availability, resource-sharing, calendarserver-sharing"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/</d:href><d:propstat><d:prop><cs:getctag>http://sabre.io/ns/sync/10</cs:getctag><d:sync-token>http://sabre.io/ns/sync/10</d:sync-token></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/><c:calendar-data/></d:prop><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:href>/dav.php/calendars/bob/window/far%20future.ics</d:href><d:href>/dav.php/calendars/bob/window/never%20existed.ics</d:href></c:calendar-multiget>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:propstat><d:prop><d:getetag>&quot;59d5efb0bc54d6085c540cccbe410b1d&quot;</d:getetag><cal:calendar-data>BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//SRN//dav-session//EN\nBEGIN:VEVENT\nUID:inside@srn\nDTSTAMP:20261001T000000Z\nDTSTART:20261020T090000Z\nSUMMARY:Inside the window\nEND:VEVENT\nEND:VCALENDAR\n</cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/far%20future.ics</d:href><d:propstat><d:prop><d:getetag>&quot;f5a454dc66ec74b719b081441f3f0409&quot;</d:getetag><cal:calendar-data>BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//SRN//dav-session//EN\nBEGIN:VEVENT\nUID:future@srn\nDTSTAMP:20261001T000000Z\nDTSTART:20310110T090000Z\nSUMMARY:Far future\nEND:VEVENT\nEND:VCALENDAR\n</cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/dav.php/calendars/bob/window/never%20existed.ics",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><d:getetag/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8",
+            "dav": "1, 3, extended-mkcol, access-control, calendarserver-principal-property-search, calendar-access, calendar-proxy, calendar-auto-schedule, calendar-availability, resource-sharing, calendarserver-sharing"
+          },
+          "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:error xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\">\n  <s:sabredav-version>4.7.0</s:sabredav-version>\n  <s:exception>Sabre\\DAV\\Exception\\NotFound</s:exception>\n  <s:message>Calendar object not found</s:message>\n</d:error>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/never%20existed.ics",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><cs:getctag/><d:sync-token/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8",
+            "dav": "1, 3, extended-mkcol, access-control, calendarserver-principal-property-search, calendar-access, calendar-proxy, calendar-auto-schedule, calendar-availability, resource-sharing, calendarserver-sharing"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/</d:href><d:propstat><d:prop><cs:getctag>http://sabre.io/ns/sync/13</cs:getctag><d:sync-token>http://sabre.io/ns/sync/13</d:sync-token></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:time-range start=\"20260912T000000Z\" end=\"20271012T000000Z\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:propstat><d:prop><d:getetag>&quot;7a6045e102f3d2cd65b9e0ac80c921b3&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/added.ics</d:href><d:propstat><d:prop><d:getetag>&quot;d00c84d5cfdcf0b7ee5b2a241c8ef603&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/window/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:propstat><d:prop><d:getetag>&quot;7a6045e102f3d2cd65b9e0ac80c921b3&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/long%20past.ics</d:href><d:propstat><d:prop><d:getetag>&quot;fb5f7a33d3b949220c786cb90b788b72&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/added.ics</d:href><d:propstat><d:prop><d:getetag>&quot;d00c84d5cfdcf0b7ee5b2a241c8ef603&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/window/",
+          "redirects": 0
+        }
+      }
+    }
+  ],
+  "observations": [
+    {
+      "status": 207,
+      "body": "<?xml version=\"1.0\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\"><d:response><d:href>/dav.php/calendars/bob/window/</d:href><d:propstat><d:prop><d:getetag/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/inside.ics</d:href><d:propstat><d:prop><d:getetag>&quot;59d5efb0bc54d6085c540cccbe410b1d&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/long%20past.ics</d:href><d:propstat><d:prop><d:getetag>&quot;fb5f7a33d3b949220c786cb90b788b72&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/dav.php/calendars/bob/window/far%20future.ics</d:href><d:propstat><d:prop><d:getetag>&quot;f5a454dc66ec74b719b081441f3f0409&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>\n"
+    },
+    {
+      "status": 204,
+      "body": ""
+    },
+    {
+      "status": 204,
+      "body": ""
+    },
+    {
+      "status": 204,
+      "body": ""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"59d5efb0bc54d6085c540cccbe410b1d\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"fb5f7a33d3b949220c786cb90b788b72\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"f5a454dc66ec74b719b081441f3f0409\""
+    },
+    {
+      "status": 204,
+      "body": "",
+      "etag": "\"7a6045e102f3d2cd65b9e0ac80c921b3\""
+    },
+    {
+      "status": 204,
+      "body": ""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"d00c84d5cfdcf0b7ee5b2a241c8ef603\""
+    }
+  ]
+}

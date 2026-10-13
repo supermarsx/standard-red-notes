@@ -1,0 +1,79 @@
+{
+  "server": "Baikal 0.10.1 (ckulka/baikal:0.10.1-nginx)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/no-such-calendar/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:error xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\">\n  <s:sabredav-version>4.7.0</s:sabredav-version>\n  <s:exception>Sabre\\DAV\\Exception\\NotFound</s:exception>\n  <s:message>Node with name 'no-such-calendar' could not be found</s:message>\n</d:error>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/no-such-calendar/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/dav.php/calendars/bob/no-such-calendar/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><cs:getctag/><d:sync-token/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8",
+            "dav": "1, 3, extended-mkcol, access-control, calendarserver-principal-property-search, calendar-access, calendar-proxy, calendar-auto-schedule, calendar-availability, resource-sharing, calendarserver-sharing"
+          },
+          "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:error xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\">\n  <s:sabredav-version>4.7.0</s:sabredav-version>\n  <s:exception>Sabre\\DAV\\Exception\\NotFound</s:exception>\n  <s:message>Node with name 'no-such-calendar' could not be found</s:message>\n</d:error>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/no-such-calendar/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/dav.php/calendars/bob/no-such-calendar/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/><c:calendar-data/></d:prop><d:href>/dav.php/calendars/bob/no-such-calendar/a.ics</d:href></c:calendar-multiget>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "application/xml; charset=utf-8"
+          },
+          "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:error xmlns:d=\"DAV:\" xmlns:s=\"http://sabredav.org/ns\">\n  <s:sabredav-version>4.7.0</s:sabredav-version>\n  <s:exception>Sabre\\DAV\\Exception\\NotFound</s:exception>\n  <s:message>Node with name 'no-such-calendar' could not be found</s:message>\n</d:error>\n",
+          "bodyEncoding": "utf8",
+          "path": "/dav.php/calendars/bob/no-such-calendar/",
+          "redirects": 0
+        }
+      }
+    }
+  ],
+  "observations": []
+}

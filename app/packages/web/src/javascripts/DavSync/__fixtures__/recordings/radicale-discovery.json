@@ -1,0 +1,94 @@
+{
+  "server": "Radicale 3.5.4 (tomsquest/docker-radicale:3.5.4.0)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/.well-known/caldav",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><d:current-user-principal/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8",
+            "dav": "1, 2, 3, calendar-access, addressbook, extended-mkcol"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/</href><propstat><prop><current-user-principal><href>/bob/</href></current-user-principal></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/",
+          "redirects": 1
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/bob/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><c:calendar-home-set/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8",
+            "dav": "1, 2, 3, calendar-access, addressbook, extended-mkcol"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\"><response><href>/bob/</href><propstat><prop><C:calendar-home-set><href>/bob/</href></C:calendar-home-set></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/bob/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><d:resourcetype/><d:displayname/><c:supported-calendar-component-set/><d:current-user-privilege-set/><cs:getctag/><d:sync-token/><ic:calendar-color/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8",
+            "dav": "1, 2, 3, calendar-access, addressbook, extended-mkcol"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\" xmlns:CS=\"http://calendarserver.org/ns/\" xmlns:ICAL=\"http://apple.com/ns/ical/\"><response><href>/bob/</href><propstat><prop><resourcetype><principal /><collection /></resourcetype><current-user-privilege-set><privilege><read /></privilege><privilege><all /></privilege><privilege><write /></privilege><privilege><write-properties /></privilege><privilege><write-content /></privilege></current-user-privilege-set></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><displayname /><C:supported-calendar-component-set /><CS:getctag /><sync-token /><ICAL:calendar-color /></prop><status>HTTP/1.1 404 Not Found</status></propstat></response><response><href>/bob/window/</href><propstat><prop><resourcetype><C:calendar /><collection /></resourcetype><displayname>Window</displayname><C:supported-calendar-component-set><C:comp name=\"VEVENT\" /></C:supported-calendar-component-set><current-user-privilege-set><privilege><read /></privilege><privilege><all /></privilege><privilege><write /></privilege><privilege><write-properties /></privilege><privilege><write-content /></privilege></current-user-privilege-set><CS:getctag>\"b2e1e933fcd0b6fe34b560643b1ca80a3d0400734553b53162c23030062177c8\"</CS:getctag><sync-token>http://radicale.org/ns/sync/ab4a3e338d99cc2f4bb855644c13d25d09a8fbe4770c1831e23d92e7e59305fd</sync-token></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><ICAL:calendar-color /></prop><status>HTTP/1.1 404 Not Found</status></propstat></response><response><href>/bob/both%20kinds/</href><propstat><prop><resourcetype><C:calendar /><collection /></resourcetype><displayname>Both kinds</displayname><C:supported-calendar-component-set><C:comp name=\"VEVENT\" /><C:comp name=\"VTODO\" /></C:supported-calendar-component-set><current-user-privilege-set><privilege><read /></privilege><privilege><all /></privilege><privilege><write /></privilege><privilege><write-properties /></privilege><privilege><write-content /></privilege></current-user-privilege-set><CS:getctag>\"38084a182a6f9705d34a0675c59f93267b8f3c4087b44afb76fe6d3d88830caa\"</CS:getctag><sync-token>http://radicale.org/ns/sync/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</sync-token></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><ICAL:calendar-color /></prop><status>HTTP/1.1 404 Not Found</status></propstat></response><response><href>/bob/tasks/</href><propstat><prop><resourcetype><C:calendar /><collection /></resourcetype><displayname>Tasks</displayname><C:supported-calendar-component-set><C:comp name=\"VTODO\" /></C:supported-calendar-component-set><current-user-privilege-set><privilege><read /></privilege><privilege><all /></privilege><privilege><write /></privilege><privilege><write-properties /></privilege><privilege><write-content /></privilege></current-user-privilege-set><CS:getctag>\"e8253faa45e08388c196d20b303665a885a1d78b6f0dcfd2cf9772841f882c3e\"</CS:getctag><sync-token>http://radicale.org/ns/sync/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</sync-token></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><ICAL:calendar-color /></prop><status>HTTP/1.1 404 Not Found</status></propstat></response><response><href>/bob/work/</href><propstat><prop><resourcetype><C:calendar /><collection /></resourcetype><displayname>Work</displayname><C:supported-calendar-component-set><C:comp name=\"VEVENT\" /></C:supported-calendar-component-set><current-user-privilege-set><privilege><read /></privilege><privilege><all /></privilege><privilege><write /></privilege><privilege><write-properties /></privilege><privilege><write-content /></privilege></current-user-privilege-set><CS:getctag>\"fc7621d5b67c5b95f38cfc36bb2091e290243bfa09f1a8080f5829fd6c6b7f22\"</CS:getctag><sync-token>http://radicale.org/ns/sync/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</sync-token><ICAL:calendar-color>#3b82f6ff</ICAL:calendar-color></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/</href><propstat><prop><resourcetype><C:calendar /><collection /></resourcetype><displayname>Series</displayname><C:supported-calendar-component-set><C:comp name=\"VEVENT\" /></C:supported-calendar-component-set><current-user-privilege-set><privilege><read /></privilege><privilege><all /></privilege><privilege><write /></privilege><privilege><write-properties /></privilege><privilege><write-content /></privilege></current-user-privilege-set><CS:getctag>\"bd762df61bf7ad73821a1fdc5f26dd2c074c3196f3191dab53aa3d3b233187fd\"</CS:getctag><sync-token>http://radicale.org/ns/sync/f2c05b0fcc40a972edad7a07d1e81611afb835a94885bf86aff164e6600b50cc</sync-token></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><ICAL:calendar-color /></prop><status>HTTP/1.1 404 Not Found</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/",
+          "redirects": 0
+        }
+      }
+    }
+  ],
+  "observations": [
+    {
+      "status": 207,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/work/</href><propstat><prop><getetag>\"fc7621d5b67c5b95f38cfc36bb2091e290243bfa09f1a8080f5829fd6c6b7f22\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>"
+    },
+    {
+      "status": 207,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/tasks/</href><propstat><prop><getetag>\"e8253faa45e08388c196d20b303665a885a1d78b6f0dcfd2cf9772841f882c3e\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>"
+    },
+    {
+      "status": 207,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/both%20kinds/</href><propstat><prop><getetag>\"38084a182a6f9705d34a0675c59f93267b8f3c4087b44afb76fe6d3d88830caa\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>"
+    }
+  ]
+}

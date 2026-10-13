@@ -1,0 +1,131 @@
+{
+  "server": "Radicale 3.5.4 (tomsquest/docker-radicale:3.5.4.0)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/series/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:time-range start=\"20260912T000000Z\" end=\"20271012T000000Z\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/single-inside.ics</href><propstat><prop><getetag>\"e820db25eb47e44301e45e0400a6f420c704aedb934e11a7c7da6df8d977395e\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/only-an-exception.ics</href><propstat><prop><getetag>\"5ec724c34909935dc7425fc2cf6afb399c9b8d60bcb3918ac5102108338fc915\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/until-inside.ics</href><propstat><prop><getetag>\"019c02255cb4cd312641af4e39e672163bb30cd49f4f94e02008cc52798523da\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/still-going.ics</href><propstat><prop><getetag>\"2a326de1017bca86c7038dbad2f14e830ca5fc052f8f8b9a67f0fea523b68186\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/series/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/series/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"><c:prop-filter name=\"RRULE\"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 207,
+          "headers": {
+            "content-type": "text/xml; charset=utf-8"
+          },
+          "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/all-inside-removed.ics</href><propstat><prop><getetag>\"255aed183dfbff51d7374b1546f1e4e2a6b8ad756a29abe18d9a70f6d911db76\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/only-an-exception.ics</href><propstat><prop><getetag>\"5ec724c34909935dc7425fc2cf6afb399c9b8d60bcb3918ac5102108338fc915\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/until-inside.ics</href><propstat><prop><getetag>\"019c02255cb4cd312641af4e39e672163bb30cd49f4f94e02008cc52798523da\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/until-before.ics</href><propstat><prop><getetag>\"3b8aaa3c3bf0cb80220a7736fa9180f1d234967aaf9da5756dfae9e20f8bfd3c\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/ended-by-count.ics</href><propstat><prop><getetag>\"d9a0b7297c8924f2683094d70de67218a3b799215fc247c7856c91c6956f4ae4\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/still-going.ics</href><propstat><prop><getetag>\"2a326de1017bca86c7038dbad2f14e830ca5fc052f8f8b9a67f0fea523b68186\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>",
+          "bodyEncoding": "utf8",
+          "path": "/bob/series/",
+          "redirects": 0
+        }
+      }
+    }
+  ],
+  "observations": [
+    {
+      "status": 207,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/</href><propstat><prop><getetag>\"bd762df61bf7ad73821a1fdc5f26dd2c074c3196f3191dab53aa3d3b233187fd\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/single-outside.ics</href><propstat><prop><getetag>\"39532d725362fa87dc64f7bcc4a32639056f99e4bcc6584f48dca8929e495a4e\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/single-inside.ics</href><propstat><prop><getetag>\"e820db25eb47e44301e45e0400a6f420c704aedb934e11a7c7da6df8d977395e\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/all-inside-removed.ics</href><propstat><prop><getetag>\"255aed183dfbff51d7374b1546f1e4e2a6b8ad756a29abe18d9a70f6d911db76\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/only-an-exception.ics</href><propstat><prop><getetag>\"5ec724c34909935dc7425fc2cf6afb399c9b8d60bcb3918ac5102108338fc915\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/until-inside.ics</href><propstat><prop><getetag>\"019c02255cb4cd312641af4e39e672163bb30cd49f4f94e02008cc52798523da\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/until-before.ics</href><propstat><prop><getetag>\"3b8aaa3c3bf0cb80220a7736fa9180f1d234967aaf9da5756dfae9e20f8bfd3c\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/ended-by-count.ics</href><propstat><prop><getetag>\"d9a0b7297c8924f2683094d70de67218a3b799215fc247c7856c91c6956f4ae4\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/bob/series/still-going.ics</href><propstat><prop><getetag>\"2a326de1017bca86c7038dbad2f14e830ca5fc052f8f8b9a67f0fea523b68186\"</getetag></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/single-outside.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/single-inside.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/all-inside-removed.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/only-an-exception.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/until-inside.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/until-before.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/ended-by-count.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 200,
+      "body": "<?xml version='1.0' encoding='utf-8'?>\n<multistatus xmlns=\"DAV:\"><response><href>/bob/series/still-going.ics</href><status>HTTP/1.1 200 OK</status></response></multistatus>"
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"2a326de1017bca86c7038dbad2f14e830ca5fc052f8f8b9a67f0fea523b68186\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"d9a0b7297c8924f2683094d70de67218a3b799215fc247c7856c91c6956f4ae4\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"3b8aaa3c3bf0cb80220a7736fa9180f1d234967aaf9da5756dfae9e20f8bfd3c\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"019c02255cb4cd312641af4e39e672163bb30cd49f4f94e02008cc52798523da\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"5ec724c34909935dc7425fc2cf6afb399c9b8d60bcb3918ac5102108338fc915\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"255aed183dfbff51d7374b1546f1e4e2a6b8ad756a29abe18d9a70f6d911db76\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"e820db25eb47e44301e45e0400a6f420c704aedb934e11a7c7da6df8d977395e\""
+    },
+    {
+      "status": 201,
+      "body": "",
+      "etag": "\"39532d725362fa87dc64f7bcc4a32639056f99e4bcc6584f48dca8929e495a4e\""
+    }
+  ]
+}

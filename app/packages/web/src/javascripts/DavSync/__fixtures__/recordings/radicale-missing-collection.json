@@ -1,0 +1,78 @@
+{
+  "server": "Radicale 3.5.4 (tomsquest/docker-radicale:3.5.4.0)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/no-such-calendar/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-query xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name=\"VCALENDAR\"><c:comp-filter name=\"VEVENT\"></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=utf-8"
+          },
+          "body": "The requested resource could not be found.",
+          "bodyEncoding": "utf8",
+          "path": "/bob/no-such-calendar/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PROPFIND",
+        "path": "/bob/no-such-calendar/",
+        "headers": {
+          "depth": "0",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\"><d:prop><cs:getctag/><d:sync-token/></d:prop></d:propfind>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=utf-8"
+          },
+          "body": "The requested resource could not be found.",
+          "bodyEncoding": "utf8",
+          "path": "/bob/no-such-calendar/",
+          "redirects": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "REPORT",
+        "path": "/bob/no-such-calendar/",
+        "headers": {
+          "depth": "1",
+          "content-type": "application/xml; charset=utf-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\"><d:prop><d:getetag/><c:calendar-data/></d:prop><d:href>/bob/no-such-calendar/a.ics</d:href></c:calendar-multiget>"
+      },
+      "result": {
+        "kind": "remote",
+        "remote": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=utf-8"
+          },
+          "body": "The requested resource could not be found.",
+          "bodyEncoding": "utf8",
+          "path": "/bob/no-such-calendar/",
+          "redirects": 0
+        }
+      }
+    }
+  ],
+  "observations": []
+}
