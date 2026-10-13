@@ -8,7 +8,7 @@ jest.mock('otplib', () => ({
 }))
 
 import { randomUUID } from 'crypto'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ControllerContainer, RoleName } from '@standardnotes/domain-core'
@@ -23,6 +23,62 @@ import { User } from '../Domain/User/User'
 
 type DirectCallResult = { statusCode: number; json: Record<string, unknown> }
 type DirectCallMethod = (request: never, response: never) => Promise<DirectCallResult>
+
+/**
+ * The real controller container, which also remembers every method name it was
+ * handed. That list is what the container ACTUALLY registered on this topology,
+ * so the checks below are about the handlers that exist rather than about the
+ * handlers somebody remembered to write down here.
+ */
+class RecordingControllerContainer extends ControllerContainer {
+  readonly registered: string[] = []
+
+  override register(methodIdentifier: string, binding: (request: never, response: never) => Promise<unknown>): void {
+    this.registered.push(methodIdentifier)
+    super.register(methodIdentifier, binding)
+  }
+}
+
+/**
+ * The fifteen handlers that were dead. They are NOT the list under test any
+ * more -- both lists below are derived -- they are the floor under the
+ * derivation: if the recorded registrations or the gateway's table ever stop
+ * containing these, it is the deriving that broke, and a check over an empty
+ * list must not be allowed to pass for that reason.
+ */
+const HANDLERS_THAT_WERE_DEAD = [
+  'admin.listGroups',
+  'admin.createGroup',
+  'admin.deleteGroup',
+  'admin.setGroupRoles',
+  'admin.listGroupMembers',
+  'admin.addUserToGroup',
+  'admin.removeUserFromGroup',
+  'admin.getUserEffectivePermissions',
+  'admin.listRolesWithPermissions',
+  'admin.setRolePermissions',
+  'admin.createCustomRole',
+  'admin.deleteCustomRole',
+  'admin.getPermissionCatalog',
+  'admin.getRoleHolders',
+  'admin.resolveRoleSetPermissions',
+]
+
+/**
+ * Every `admin.*` method the gateway resolves a route to on the all-in-one, read
+ * from the gateway's own table (`['[GET]:admin/...', 'admin.lookupUser']`). The
+ * gateway reaches auth by these names and nothing else there, so a name in that
+ * table that auth never registers is a route that answers 500 on this topology
+ * only.
+ */
+const adminMethodsTheGatewayResolves = (): string[] => {
+  const resolver = readFileSync(
+    join(__dirname, '..', '..', '..', 'api-gateway', 'src', 'Service', 'Resolver', 'EndpointResolver.ts'),
+    'utf8',
+  )
+
+  return [...resolver.matchAll(/'\[[A-Z]+\]:[^']*',\s*'(admin\.[A-Za-z]+)'/g)].map((match) => match[1])
+}
 
 /**
  * Standard Red Notes: the auth container EXACTLY as the all-in-one container
@@ -46,7 +102,7 @@ type DirectCallMethod = (request: never, response: never) => Promise<DirectCallR
 describe('admin RBAC endpoints on the all-in-one (home-server) container', () => {
   let directory: string
   let container: Container
-  let controllers: ControllerContainer
+  let controllers: RecordingControllerContainer
   let userUuid: string
   const adminUuid = randomUUID()
 
@@ -66,7 +122,7 @@ describe('admin RBAC endpoints on the all-in-one (home-server) container', () =>
 
   beforeAll(async () => {
     directory = mkdtempSync(join(tmpdir(), 'srn-auth-home-server-'))
-    controllers = new ControllerContainer()
+    controllers = new RecordingControllerContainer()
     container = await new ContainerConfigLoader('server').load({
       controllerConatiner: controllers,
       directCallDomainEventPublisher: new DirectCallDomainEventPublisher(),
@@ -207,30 +263,53 @@ describe('admin RBAC endpoints on the all-in-one (home-server) container', () =>
   })
 
   /**
-   * Every endpoint that sits behind one of the sixteen positions. None may answer
-   * the unwired "... not available" 500; a 400 for the deliberately empty request
-   * is the handler's own validation and proves it ran.
+   * *** EVERY admin handler this container registers, not a list of them. ***
+   * This used to be fifteen names typed out here, which guarded exactly those
+   * fifteen: a sixteenth handler added tomorrow and left unwired would have been
+   * as invisible to this suite as the fifteen were to every other one. The names
+   * now come from the container, so a new handler is under test the moment it is
+   * registered, with nothing to remember.
+   *
+   * Each is called with an empty request. None may answer a 500 or the unwired
+   * "... not available"; a 400 is the handler's own validation and proves it ran
+   * past its dependency guard. A handler that THROWS on an empty request fails
+   * too, which is how a dependency missing with no guard in front of it shows.
    */
-  it.each([
-    'admin.listGroups',
-    'admin.createGroup',
-    'admin.deleteGroup',
-    'admin.setGroupRoles',
-    'admin.listGroupMembers',
-    'admin.addUserToGroup',
-    'admin.removeUserFromGroup',
-    'admin.getUserEffectivePermissions',
-    'admin.listRolesWithPermissions',
-    'admin.setRolePermissions',
-    'admin.createCustomRole',
-    'admin.deleteCustomRole',
-    'admin.getPermissionCatalog',
-    'admin.getRoleHolders',
-    'admin.resolveRoleSetPermissions',
-  ])('%s is wired on this topology', async (method) => {
-    const result = await call(method)
+  it('leaves no admin handler it registers unwired on this topology', async () => {
+    const adminMethods = controllers.registered.filter((method) => method.startsWith('admin.'))
+    expect(adminMethods).toEqual(expect.arrayContaining(HANDLERS_THAT_WERE_DEAD))
 
-    expect(JSON.stringify(result.json)).not.toMatch(/not available/i)
-    expect(result.statusCode).not.toBe(500)
+    // The one handler that cannot take an empty request: it mints a token for
+    // `params.userUuid` without checking it is there, and sqlite refuses the row.
+    const requests: Record<string, Record<string, unknown>> = {
+      'admin.createToken': { params: { userUuid } },
+    }
+
+    const unwired: string[] = []
+    for (const method of adminMethods) {
+      try {
+        const result = await call(method, requests[method])
+        if (result.statusCode === 500 || /not available/i.test(JSON.stringify(result.json))) {
+          unwired.push(`${method} answered ${result.statusCode} ${JSON.stringify(result.json)}`)
+        }
+      } catch (error) {
+        unwired.push(`${method} threw ${String(error)}`)
+      }
+    }
+
+    expect(unwired).toEqual([])
+  })
+
+  /**
+   * The other way a handler goes missing here. The gateway reaches auth on this
+   * topology by method name only, so a route it resolves to a name auth never
+   * registered answers 500 on the all-in-one while the multi-container build,
+   * which routes the same request over HTTP to the annotated controller, is fine.
+   */
+  it('registers every admin method the gateway resolves', () => {
+    const resolved = adminMethodsTheGatewayResolves()
+    expect(resolved).toEqual(expect.arrayContaining(HANDLERS_THAT_WERE_DEAD))
+
+    expect(resolved.filter((method) => controllers.get(method) === undefined)).toEqual([])
   })
 })

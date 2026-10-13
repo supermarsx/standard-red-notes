@@ -19,6 +19,7 @@ type UAParserInstance = InstanceType<typeof UAParser>
 import { Env } from './Env'
 import { createS3ClientConfig } from './S3ClientConfigFactory'
 import TYPES from './Types'
+import { constructWithEveryDependency } from './ConstructWithEveryDependency'
 import { createSafeLogFormat } from '../Domain/Logging/SafeLog'
 import { AuthenticateUser } from '../Domain/UseCase/AuthenticateUser'
 import { Repository } from 'typeorm'
@@ -3775,10 +3776,16 @@ export class ContainerConfigLoader {
 
     // Inversify Controllers
     if (isConfiguredForHomeServer) {
+      // Standard Red Notes: every controller in this block is built by position,
+      // and through `constructWithEveryDependency` rather than a bare `new`, so a
+      // dependency nobody passes -- or a literal `undefined` -- is a compile error
+      // here instead of a 500 that only this topology answers. See that function
+      // for what it cost when it was not.
       container
         .bind<BaseAuthenticatorsController>(TYPES.Auth_BaseAuthenticatorsController)
         .toConstantValue(
-          new BaseAuthenticatorsController(
+          constructWithEveryDependency(
+            BaseAuthenticatorsController,
             container.get(TYPES.Auth_AuthenticatorsController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3786,7 +3793,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseAppPasswordsController>(TYPES.Auth_BaseAppPasswordsController)
         .toConstantValue(
-          new BaseAppPasswordsController(
+          constructWithEveryDependency(
+            BaseAppPasswordsController,
             container.get(TYPES.Auth_AppPasswordsController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3798,7 +3806,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseMeInviteLinksController>(TYPES.Auth_BaseMeInviteLinksController)
         .toConstantValue(
-          new BaseMeInviteLinksController(
+          constructWithEveryDependency(
+            BaseMeInviteLinksController,
             container.get(TYPES.Auth_RegistrationConfigResolver),
             container.get(TYPES.Auth_SignupInviteLinkRepository),
             container.get(TYPES.Auth_SignupInviteUseRepository),
@@ -3811,7 +3820,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseMcpTokensController>(TYPES.Auth_BaseMcpTokensController)
         .toConstantValue(
-          new BaseMcpTokensController(
+          constructWithEveryDependency(
+            BaseMcpTokensController,
             container.get(TYPES.Auth_McpTokensController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3819,7 +3829,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseWebhooksController>(TYPES.Auth_BaseWebhooksController)
         .toConstantValue(
-          new BaseWebhooksController(
+          constructWithEveryDependency(
+            BaseWebhooksController,
             container.get(TYPES.Auth_WebhooksController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3827,7 +3838,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSharesController>(TYPES.Auth_BaseSharesController)
         .toConstantValue(
-          new BaseSharesController(
+          constructWithEveryDependency(
+            BaseSharesController,
             container.get(TYPES.Auth_SharesController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3835,7 +3847,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseDeadManSwitchesController>(TYPES.Auth_BaseDeadManSwitchesController)
         .toConstantValue(
-          new BaseDeadManSwitchesController(
+          constructWithEveryDependency(
+            BaseDeadManSwitchesController,
             container.get(TYPES.Auth_DeadManSwitchesController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3843,7 +3856,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseEmailRemindersController>(TYPES.Auth_BaseEmailRemindersController)
         .toConstantValue(
-          new BaseEmailRemindersController(
+          constructWithEveryDependency(
+            BaseEmailRemindersController,
             container.get(TYPES.Auth_EmailRemindersController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3851,7 +3865,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseTrustedDevicesController>(TYPES.Auth_BaseTrustedDevicesController)
         .toConstantValue(
-          new BaseTrustedDevicesController(
+          constructWithEveryDependency(
+            BaseTrustedDevicesController,
             container.get(TYPES.Auth_TrustedDevicesController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3859,7 +3874,8 @@ export class ContainerConfigLoader {
       container
         .bind<BasePendingMfaApprovalsController>(TYPES.Auth_BasePendingMfaApprovalsController)
         .toConstantValue(
-          new BasePendingMfaApprovalsController(
+          constructWithEveryDependency(
+            BasePendingMfaApprovalsController,
             container.get(TYPES.Auth_PendingMfaApprovalsController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3867,7 +3883,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseMagicLinkController>(TYPES.Auth_BaseMagicLinkController)
         .toConstantValue(
-          new BaseMagicLinkController(
+          constructWithEveryDependency(
+            BaseMagicLinkController,
             container.get(TYPES.Auth_MagicLinkController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3875,7 +3892,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSubscriptionInvitesController>(TYPES.Auth_BaseSubscriptionInvitesController)
         .toConstantValue(
-          new BaseSubscriptionInvitesController(
+          constructWithEveryDependency(
+            BaseSubscriptionInvitesController,
             container.get(TYPES.Auth_SubscriptionInvitesController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3883,7 +3901,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseUserRequestsController>(TYPES.Auth_BaseUserRequestsController)
         .toConstantValue(
-          new BaseUserRequestsController(
+          constructWithEveryDependency(
+            BaseUserRequestsController,
             container.get(TYPES.Auth_UserRequestsController),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3891,7 +3910,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSessionsController>(TYPES.Auth_BaseSessionsController)
         .toConstantValue(
-          new BaseSessionsController(
+          constructWithEveryDependency(
+            BaseSessionsController,
             container.get(TYPES.Auth_GetActiveSessionsForUser),
             container.get(TYPES.Auth_AuthenticateRequest),
             container.get(TYPES.Auth_SessionProjector),
@@ -3902,7 +3922,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseValetTokenController>(TYPES.Auth_BaseValetTokenController)
         .toConstantValue(
-          new BaseValetTokenController(
+          constructWithEveryDependency(
+            BaseValetTokenController,
             container.get(TYPES.Auth_CreateValetToken),
             container.get(TYPES.Auth_ControllerContainer),
           ),
@@ -3910,7 +3931,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseUsersController>(TYPES.Auth_BaseUsersController)
         .toConstantValue(
-          new BaseUsersController(
+          constructWithEveryDependency(
+            BaseUsersController,
             container.get<DeleteAccount>(TYPES.Auth_DeleteAccount),
             container.get<GetUserSubscription>(TYPES.Auth_GetUserSubscription),
             container.get<ClearLoginAttempts>(TYPES.Auth_ClearLoginAttempts),
@@ -3922,7 +3944,8 @@ export class ContainerConfigLoader {
           ),
         )
       container.bind<BaseAdminController>(TYPES.Auth_BaseAdminController).toConstantValue(
-        new BaseAdminController(
+        constructWithEveryDependency(
+          BaseAdminController,
           container.get<DeleteSetting>(TYPES.Auth_DeleteSetting),
           container.get<GetSetting>(TYPES.Auth_GetSetting),
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
@@ -4014,7 +4037,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSubscriptionTokensController>(TYPES.Auth_BaseSubscriptionTokensController)
         .toConstantValue(
-          new BaseSubscriptionTokensController(
+          constructWithEveryDependency(
+            BaseSubscriptionTokensController,
             container.get<CreateSubscriptionToken>(TYPES.Auth_CreateSubscriptionToken),
             container.get<AuthenticateSubscriptionToken>(TYPES.Auth_AuthenticateSubscriptionToken),
             container.get<GetSetting>(TYPES.Auth_GetSetting),
@@ -4028,7 +4052,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSubscriptionSettingsController>(TYPES.Auth_BaseSubscriptionSettingsController)
         .toConstantValue(
-          new BaseSubscriptionSettingsController(
+          constructWithEveryDependency(
+            BaseSubscriptionSettingsController,
             container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
             container.get<GetSharedOrRegularSubscriptionForUser>(TYPES.Auth_GetSharedOrRegularSubscriptionForUser),
             container.get<SetSubscriptionSettingValue>(TYPES.Auth_SetSubscriptionSettingValue),
@@ -4047,7 +4072,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSettingsController>(TYPES.Auth_BaseSettingsController)
         .toConstantValue(
-          new BaseSettingsController(
+          constructWithEveryDependency(
+            BaseSettingsController,
             container.get<GetAllSettingsForUser>(TYPES.Auth_GetAllSettingsForUser),
             container.get<GetSetting>(TYPES.Auth_GetSetting),
             container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
@@ -4068,7 +4094,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseSessionController>(TYPES.Auth_BaseSessionController)
         .toConstantValue(
-          new BaseSessionController(
+          constructWithEveryDependency(
+            BaseSessionController,
             container.get<DeleteSessionForUser>(TYPES.Auth_DeleteSessionForUser),
             container.get<DeleteOtherSessionsForUser>(TYPES.Auth_DeleteOtherSessionsForUser),
             container.get<RefreshSessionToken>(TYPES.Auth_RefreshSessionToken),
@@ -4079,7 +4106,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseOfflineController>(TYPES.Auth_BaseOfflineController)
         .toConstantValue(
-          new BaseOfflineController(
+          constructWithEveryDependency(
+            BaseOfflineController,
             container.get(TYPES.Auth_GetUserFeatures),
             container.get(TYPES.Auth_GetUserOfflineSubscription),
             container.get(TYPES.Auth_CreateOfflineSubscriptionToken),
@@ -4093,7 +4121,8 @@ export class ContainerConfigLoader {
       container
         .bind<BaseFeaturesController>(TYPES.Auth_BaseFeaturesController)
         .toConstantValue(
-          new BaseFeaturesController(
+          constructWithEveryDependency(
+            BaseFeaturesController,
             container.get(TYPES.Auth_GetUserFeatures),
             container.get(TYPES.Auth_ControllerContainer),
           ),
