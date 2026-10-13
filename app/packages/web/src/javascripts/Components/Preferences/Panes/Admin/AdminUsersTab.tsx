@@ -102,6 +102,59 @@ const FILE_UPLOAD_BYTES_LIMIT = 'FILE_UPLOAD_BYTES_LIMIT'
 const BYTES_IN_ONE_MEGABYTE = 1_048_576
 const BYTES_IN_ONE_GIGABYTE = 1_073_741_824
 
+/**
+ * Standard Red Notes: after a recount is requested, the gaps (ms) between the
+ * pane's further re-reads of that user's stored usage. Thirty seconds in all.
+ *
+ * *** WHY THERE IS MORE THAN ONE READ. *** The server answers "Recalculate
+ * storage quota" as soon as the recount is REQUESTED. On the all-in-one container
+ * the recount has already run by then. On the multi-container build it runs in a
+ * worker, and the corrected figure is stored whenever that worker gets to it.
+ *
+ * The pane used to read the usage exactly once, the moment the request was
+ * answered, under a toast that said "the refreshed usage appears here once the
+ * server finishes". Measured on a quiet compose stack the worker won that race
+ * every time: 14 of 14, the request answered in about 90 ms and the figure stored
+ * by about 180 ms. Measured with the worker restarting, the figure was stored 18
+ * seconds after the click, and thirty seconds after it the pane still read "Not
+ * reported" beneath a sentence saying the figure would appear. Nothing was going
+ * to bring it in short of selecting the user again.
+ *
+ * So the pane keeps reading for a bounded while and stops the moment the figure
+ * changes. Bounded is the best it can do: the server publishes no "recount
+ * finished" signal, and a recount that confirms the stored figure looks exactly
+ * like one that has not run yet. What the pane says about a recount is therefore
+ * only ever what it read, and when it stops looking it says so and says how to
+ * look again.
+ */
+export const ADMIN_QUOTA_RECOUNT_REREAD_DELAYS_MS = [1000, 2000, 4000, 8000, 15000]
+
+const ADMIN_QUOTA_RECOUNT_WINDOW_SECONDS =
+  ADMIN_QUOTA_RECOUNT_REREAD_DELAYS_MS.reduce((total, delay) => total + delay, 0) / 1000
+
+/**
+ * What the pane has READ since it asked for a recount. Every member is a
+ * statement about readings, never about whether the server's recount ran.
+ */
+type AdminQuotaRecountStatus =
+  | { state: 'watching'; used: string }
+  | { state: 'changed'; usedBefore: string; usedNow: string }
+  | { state: 'unchanged'; used: string }
+  | { state: 'unread' }
+
+const describeQuotaRecount = (status: AdminQuotaRecountStatus): string => {
+  switch (status.state) {
+    case 'watching':
+      return `Recount requested. The stored usage still reads ${status.used}; this panel re-reads it for up to ${ADMIN_QUOTA_RECOUNT_WINDOW_SECONDS} seconds.`
+    case 'changed':
+      return `Recount requested. The stored usage read ${status.usedBefore} before it and ${status.usedNow} after it.`
+    case 'unchanged':
+      return `Recount requested. ${ADMIN_QUOTA_RECOUNT_WINDOW_SECONDS} seconds later the stored usage still read ${status.used}. Either that was already right or the recount has not finished: select this user again to re-read it.`
+    case 'unread':
+      return 'Recount requested, but the usage could not be re-read just now. Select this user again to re-read it.'
+  }
+}
+
 // The admin (internal team) role name — must match the server's
 // RoleName.NAMES.AdminUser value.
 const ADMIN_USER = 'ADMIN_USER'
@@ -563,16 +616,22 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   // Panel equivalents of the srn-admin CLI's reset-mfa / fix-quota commands.
   const [resettingMfa, setResettingMfa] = useState(false)
   const [fixingQuota, setFixingQuota] = useState(false)
+  // What the pane has read since it last asked for a recount for this user;
+  // null until it asks. See ADMIN_QUOTA_RECOUNT_REREAD_DELAYS_MS.
+  const [quotaRecount, setQuotaRecount] = useState<AdminQuotaRecountStatus | null>(null)
 
+  // Resolves to the storage figures it put on the panel (`null` when the server
+  // cannot report them), or to `undefined` when it put none there: the read
+  // failed, or a newer load had taken the panel over before this one answered.
   const loadFlags = useCallback(
-    async (userUuid: string) => {
+    async (userUuid: string): Promise<AdminUserStorageUsage | null | undefined> => {
       const generation = ++flagsLoadGeneration.current
       setFlagsLoading(true)
       setStorageReading({ state: 'loading' })
       try {
         const response = await application.legacyApi.adminGetUserFeatureFlags(userUuid)
         if (generation !== flagsLoadGeneration.current) {
-          return
+          return undefined
         }
         if (isErrorResponse(response)) {
           addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
@@ -586,7 +645,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             state: 'failed',
             message: typeof status === 'number' ? `HTTP ${status}` : null,
           })
-          return
+          return undefined
         }
         const data = (response as { data?: AdminUserFeatureFlagsResponse }).data
         const flags = data?.flags ?? {}
@@ -625,6 +684,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           setStorageLimitUnit('MB')
           setStorageLimitValue(formatLimitAmount(currentLimit / BYTES_IN_ONE_MEGABYTE))
         }
+        return storage
       } catch (error) {
         if (generation === flagsLoadGeneration.current) {
           console.error(error)
@@ -633,6 +693,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
             message: error instanceof Error && error.message ? error.message : null,
           })
         }
+        return undefined
       } finally {
         if (generation === flagsLoadGeneration.current) {
           setFlagsLoading(false)
@@ -818,6 +879,10 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     setStorageReading({ state: 'not-attempted' })
     setStorageLimitUnit('unlimited')
     setStorageLimitValue('')
+    // What was read after a recount of the PREVIOUS user is not a fact about
+    // this one, and selecting the same user again is how a late figure is
+    // re-read, so the line it replaces goes too.
+    setQuotaRecount(null)
     // Same rule as the file half above, and for the same reason: a note-bytes
     // figure read for the PREVIOUS user must not stay on screen attributed to
     // this one while the new read is in flight or after it fails.
@@ -1731,6 +1796,75 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     }
   }, [application, user, patchUserRow])
 
+  /**
+   * Re-read ONE thing, the selected user's stored usage, and leave the rest of
+   * the panel alone. `loadFlags` cannot be the read that repeats: it puts the
+   * readout back to "reading" and re-seeds every editor from the server, which
+   * would wipe whatever the administrator typed in the seconds after asking for
+   * a recount. A read that fails, or that a newer load has overtaken, changes
+   * nothing and resolves to `undefined`.
+   */
+  const rereadStorageQuietly = useCallback(
+    async (userUuid: string, generation: number): Promise<AdminUserStorageUsage | null | undefined> => {
+      try {
+        const response = await application.legacyApi.adminGetUserFeatureFlags(userUuid)
+        if (generation !== flagsLoadGeneration.current || isErrorResponse(response)) {
+          return undefined
+        }
+        const storage = (response as { data?: AdminUserFeatureFlagsResponse }).data?.storage ?? null
+        if (storage !== null) {
+          setStorageReading({ state: 'reported', storage })
+          // The row above is the same account's same figure, read earlier by
+          // the list; it must not go on saying what the panel no longer does.
+          patchUserRow(userUuid, { storageUsedBytes: storage.uploadBytesUsed })
+        }
+        return storage
+      } catch (error) {
+        console.error(error)
+        return undefined
+      }
+    },
+    [application, patchUserRow],
+  )
+
+  // Keeps re-reading after a recount was requested and the usage had not
+  // changed yet. Stops when it does, when the window closes, or when the panel
+  // belongs to another load (another user, a reload, the pane gone).
+  const watchQuotaRecount = useCallback(
+    async (userUuid: string, usedAtRequest: number | null, generation: number) => {
+      const used = describeAdminStorageUsed(usedAtRequest).label
+      for (const delay of ADMIN_QUOTA_RECOUNT_REREAD_DELAYS_MS) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay))
+        if (generation !== flagsLoadGeneration.current) {
+          return
+        }
+        const storage = await rereadStorageQuietly(userUuid, generation)
+        if (generation !== flagsLoadGeneration.current) {
+          return
+        }
+        if (storage != null && storage.uploadBytesUsed !== usedAtRequest) {
+          setQuotaRecount({
+            state: 'changed',
+            usedBefore: used,
+            usedNow: describeAdminStorageUsed(storage.uploadBytesUsed).label,
+          })
+          return
+        }
+      }
+      setQuotaRecount({ state: 'unchanged', used })
+    },
+    [rereadStorageQuietly],
+  )
+
+  // A watch outlives the click that started it. It must not outlive the pane,
+  // and retiring the generation is what stops it.
+  useEffect(() => {
+    const generation = flagsLoadGeneration
+    return () => {
+      generation.current += 1
+    }
+  }, [])
+
   const fixQuota = useCallback(async () => {
     if (!user) {
       return
@@ -1746,26 +1880,59 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     }
 
     setFixingQuota(true)
+    setQuotaRecount(null)
     try {
+      const usedAtRequest = storageReading.state === 'reported' ? storageReading.storage.uploadBytesUsed : undefined
+      const panelAtRequest = flagsLoadGeneration.current
       const response = await application.legacyApi.adminFixUserQuota(user.uuid)
       if (isErrorResponse(response)) {
         const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
         addToast({ type: ToastType.Error, message: message ?? 'Failed to fix storage quota.' })
         return
       }
-      addToast({
-        type: ToastType.Success,
-        message: 'Quota recalculation requested. The refreshed usage appears here once the server finishes.',
-      })
-      // Re-read so the usage display picks up the (asynchronously) fresh value.
-      await loadFlags(user.uuid)
+      // The server has ACCEPTED the request, which is all this can say: see
+      // ADMIN_QUOTA_RECOUNT_REREAD_DELAYS_MS. What was read afterwards goes on
+      // the panel, under the button, where it stays.
+      addToast({ type: ToastType.Success, message: `Recount requested for ${user.email}.` })
+      if (panelAtRequest !== flagsLoadGeneration.current) {
+        // The panel was loaded again while the request was in flight: another
+        // user is on it now, or this one afresh. Reading THIS user's figures
+        // into it would attribute them to whoever is selected.
+        return
+      }
+      // The read the pane has always made: the whole panel, straight away. On
+      // the all-in-one container this one already holds the recounted figure.
+      // `loadFlags` takes its generation before it first awaits, so the value
+      // read on the next line is this load's own.
+      const reading = loadFlags(user.uuid)
+      const generation = flagsLoadGeneration.current
+      const storage = await reading
+      if (generation !== flagsLoadGeneration.current) {
+        // Another user was selected meanwhile. Nothing here is about them.
+        return
+      }
+      if (storage == null) {
+        setQuotaRecount({ state: 'unread' })
+        return
+      }
+      patchUserRow(user.uuid, { storageUsedBytes: storage.uploadBytesUsed })
+      if (usedAtRequest !== undefined && storage.uploadBytesUsed !== usedAtRequest) {
+        setQuotaRecount({
+          state: 'changed',
+          usedBefore: describeAdminStorageUsed(usedAtRequest).label,
+          usedNow: describeAdminStorageUsed(storage.uploadBytesUsed).label,
+        })
+        return
+      }
+      setQuotaRecount({ state: 'watching', used: describeAdminStorageUsed(storage.uploadBytesUsed).label })
+      void watchQuotaRecount(user.uuid, storage.uploadBytesUsed, generation)
     } catch (error) {
       console.error(error)
       addToast({ type: ToastType.Error, message: 'Failed to fix storage quota.' })
     } finally {
       setFixingQuota(false)
     }
-  }, [application, user, loadFlags])
+  }, [application, user, storageReading, loadFlags, patchUserRow, watchQuotaRecount])
 
   return (
     <PreferencesSegment>
@@ -2852,8 +3019,15 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   <Subtitle>Recalculate storage quota</Subtitle>
                   <Text>
                     Recomputes the "storage used" counter from this user's actually stored files. Use when the usage
-                    shown above looks wrong (e.g. after interrupted uploads). Runs asynchronously on the server.
+                    shown above looks wrong (e.g. after interrupted uploads). The server may finish a moment after it
+                    accepts the request, so this panel keeps re-reading the usage for up to{' '}
+                    {ADMIN_QUOTA_RECOUNT_WINDOW_SECONDS} seconds afterwards.
                   </Text>
+                  {quotaRecount !== null && (
+                    <div data-test-id="admin-quota-recount-status" role="status">
+                      <Text className="text-passive-1">{describeQuotaRecount(quotaRecount)}</Text>
+                    </div>
+                  )}
                 </div>
                 <Button
                   className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap"
