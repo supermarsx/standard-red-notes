@@ -247,6 +247,20 @@ const CaldavTokenPaths = {
   caldavProjection: '/v1/caldav/projection',
 }
 
+// Standard Red Notes: the CalDAV bridge. A user connects an account on a
+// Nextcloud or any other CalDAV server; the gateway keeps that account's
+// password and relays one request at a time to it. It keeps no calendar
+// content: the app does the syncing. Authed gateway routes; `/config` says
+// whether the feature is available to this user and why not when it is not.
+const DavBridgePaths = {
+  davBridgeConfig: '/v1/dav-bridge/config',
+  davBridgeAccounts: '/v1/dav-bridge/accounts',
+  davBridgeAccount: (accountId: string) => `/v1/dav-bridge/accounts/${encodeURIComponent(accountId)}`,
+  davBridgeAccountSecret: (accountId: string) => `/v1/dav-bridge/accounts/${encodeURIComponent(accountId)}/secret`,
+  davBridgeAccountPin: (accountId: string) => `/v1/dav-bridge/accounts/${encodeURIComponent(accountId)}/pin`,
+  davBridgeAccountRelay: (accountId: string) => `/v1/dav-bridge/accounts/${encodeURIComponent(accountId)}/relay`,
+}
+
 const SubscriptionPaths = {
   offlineFeatures: '/v1/offline/features',
   purchase: '/v1/purchase',
@@ -278,6 +292,7 @@ export const Paths = {
     ...EmailReminderPaths,
     ...ReminderDeliveryPaths,
     ...CaldavTokenPaths,
+    ...DavBridgePaths,
     // Standard Red Notes: SAME-ORIGIN plugins (extensions) gallery proxy. The
     // gateway fetches the operator-configured plugins repo server-side and returns
     // the index (and package files) from this origin, so the strict CSP

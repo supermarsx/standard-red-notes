@@ -2457,6 +2457,115 @@ export class LegacyApiService
     })
   }
 
+  /**
+   * Standard Red Notes: the CalDAV bridge. The gateway keeps the password of an
+   * account on a Nextcloud or other CalDAV server and relays one request at a
+   * time to it; the app does the syncing and the server keeps no calendar
+   * content. A relayed request the remote answered comes back as HTTP 200 with a
+   * `remote` object, whatever the remote's own status was. A request the relay
+   * refused is never 200 and carries `error.tag` beginning `dav-`.
+   */
+  async getDavBridgeConfig(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.davBridgeConfig),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to load the calendar sync settings.',
+    })
+  }
+
+  async listDavBridgeAccounts(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccounts),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list the connected calendar accounts.',
+    })
+  }
+
+  /** The password is write-only: no response ever carries it back. */
+  async createDavBridgeAccount(body: {
+    kind: 'nextcloud' | 'caldav'
+    url: string
+    username: string
+    secret: string
+    credentialKind?: 'basic' | 'bearer'
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccounts),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to connect the calendar account.',
+      params: body,
+    })
+  }
+
+  async replaceDavBridgeAccountSecret(
+    accountId: string,
+    body: { secret: string; username?: string; credentialKind?: 'basic' | 'bearer' },
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccountSecret(accountId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to replace the stored password.',
+      params: body,
+    })
+  }
+
+  /** Limit what the relay forwards for this account to its principal and calendar home. */
+  async pinDavBridgeAccount(
+    accountId: string,
+    body: { principalPath: string; calendarHomePath: string },
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Put,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccountPin(accountId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to save which calendars this account can reach.',
+      params: body,
+    })
+  }
+
+  async deleteDavBridgeAccount(accountId: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccount(accountId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to remove the calendar account.',
+    })
+  }
+
+  /** Remove every account, and its stored password, that the server holds for the current user. */
+  async deleteAllDavBridgeAccounts(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccounts),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to remove the calendar accounts.',
+    })
+  }
+
+  /**
+   * `timeoutMs` must be longer than the time the relay itself allows the remote
+   * (`limits.requestTimeoutMs` of the config), or this request is given up on at
+   * the moment the relay's own answer, "the remote timed out", is on its way.
+   */
+  async relayDavBridgeRequest(
+    accountId: string,
+    envelope: { method: string; path: string; headers?: Record<string, string>; body?: string },
+    timeoutMs?: number,
+  ): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.davBridgeAccountRelay(accountId)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to reach the calendar server.',
+      params: envelope,
+      timeoutMs,
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,
