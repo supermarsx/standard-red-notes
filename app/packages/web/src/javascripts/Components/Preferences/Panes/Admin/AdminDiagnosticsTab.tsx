@@ -1,5 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ContentType, isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, isErrorResponse, PrefKey, SettingName } from '@standardnotes/snjs'
 import { convertTimestampToMilliseconds } from '@standardnotes/utils'
 
 import { WebApplication } from '@/Application/WebApplication'
@@ -237,6 +237,15 @@ export type CheckProgress = { readonly done: number; readonly total: number; rea
 
 /** What a check runner returns. The id is added by the one loop that calls it. */
 type CheckFinding = Omit<CheckOutcome, 'id'>
+type DiagnosticRun = {
+  controller: AbortController
+  generation: number
+  owner?: string
+  application: WebApplication
+  section?: SectionId
+  remaining?: number
+  timer?: ReturnType<typeof setTimeout>
+}
 
 /** A request that threw before any answer arrived. Closed copy; the message stays on screen. */
 const REQUEST_DID_NOT_COMPLETE = safeConstant('the request did not complete')
@@ -345,22 +354,45 @@ const injectedBrowserRuntime = (): BrowserRuntime => globalThis
 const PANE_READ_DEADLINE_MS = 20_000
 
 const TIMED_OUT = Symbol('timed out')
+const CANCELLED = Symbol('cancelled')
 
 /**
  * Settle with the work, or with `TIMED_OUT` once the deadline passes — whichever
  * is first. The timer is cleared when the work settles, so a run of checks does
  * not leave one armed behind each of them.
  */
-async function withDeadline<T>(work: Promise<T>, deadlineMs: number): Promise<T | typeof TIMED_OUT> {
+function withDeadline<T>(work: Promise<T>, deadlineMs: number): Promise<T | typeof TIMED_OUT>
+function withDeadline<T>(
+  work: Promise<T>,
+  deadlineMs: number,
+  signal: AbortSignal,
+): Promise<T | typeof TIMED_OUT | typeof CANCELLED>
+async function withDeadline<T>(
+  work: Promise<T>,
+  deadlineMs: number,
+  signal?: AbortSignal,
+): Promise<T | typeof TIMED_OUT | typeof CANCELLED> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+    onAbort = () => resolve(CANCELLED)
+    if (signal?.aborted) {
+      onAbort()
+    } else {
+      signal?.addEventListener('abort', onAbort, { once: true })
+    }
+  })
   const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
     timer = setTimeout(() => resolve(TIMED_OUT), deadlineMs)
   })
 
   try {
-    return await Promise.race([work, deadline])
+    return await Promise.race([work, deadline, cancelled])
   } finally {
     clearTimeout(timer)
+    if (onAbort) {
+      signal?.removeEventListener('abort', onAbort)
+    }
   }
 }
 
@@ -462,6 +494,50 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   const [progress, setProgress] = useState<CheckProgress | null>(null)
   /** Guards re-entry without waiting for a render: two clicks must not start two runs. */
   const runInFlight = useRef(false)
+  const activeRun = useRef<DiagnosticRun | undefined>(undefined)
+  const mounted = useRef(true)
+  const sessionGeneration = useRef(0)
+  const paneReadGeneration = useRef({ diagnostics: 0, deployment: 0, serverStatus: 0 })
+  const paneApplication = useRef(application)
+  paneApplication.current = application
+  const paneReads = useRef(new Set<AbortController>())
+  const [collectionRevision, setCollectionRevision] = useState({ account: 0, browser: 0 })
+  const [collectionProgress, setCollectionProgress] = useState<{
+    section: SectionId
+    done: number
+    total: number
+  } | null>(null)
+  const [runMessage, setRunMessage] = useState<string | null>(null)
+  const cancelRun = useCallback(() => {
+    for (const read of paneReads.current) {
+      read.abort()
+    }
+    paneReads.current.clear()
+    clearTimeout(activeRun.current?.timer)
+    activeRun.current?.controller.abort()
+    activeRun.current = undefined
+    runInFlight.current = false
+    setProgress(null)
+    setCollectionProgress(null)
+    setRunMessage(
+      'Cancelled. Later checks were not started. Requests already sent may finish; temporary file cleanup continues.',
+    )
+  }, [])
+  useEffect(() => {
+    mounted.current = true
+    const reads = paneReads.current
+    return () => {
+      mounted.current = false
+      for (const read of reads) {
+        read.abort()
+      }
+      reads.clear()
+      clearTimeout(activeRun.current?.timer)
+      activeRun.current?.controller.abort()
+      activeRun.current = undefined
+      runInFlight.current = false
+    }
+  }, [application])
   /**
    * Which copy button last succeeded, so the confirmation sits beside the button
    * that was pressed. A single boolean put "Copied" next to both.
@@ -515,6 +591,89 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   const [flagsReading, setFlagsReading] = useState<AccountFlagsReading | undefined>(undefined)
 
+  const collectionCurrent = useCallback(
+    (run: DiagnosticRun | undefined, owner: string | undefined, generation = sessionGeneration.current) =>
+      mounted.current &&
+      (run?.generation ?? generation) === sessionGeneration.current &&
+      observed(() => application.sessions.getUser()?.uuid) === owner &&
+      (run === undefined || (activeRun.current === run && !run.controller.signal.aborted)),
+    [application],
+  )
+  const finishCollection = useCallback(
+    (run: DiagnosticRun | undefined) => {
+      if (!run || activeRun.current !== run || run.controller.signal.aborted) {
+        return
+      }
+      if (!collectionCurrent(run, run.owner)) {
+        cancelRun()
+        return
+      }
+      run.remaining = (run.remaining ?? 1) - 1
+      if (run.remaining === 0) {
+        clearTimeout(run.timer)
+        activeRun.current = undefined
+        runInFlight.current = false
+        setCollectionProgress(null)
+        setRunMessage('Section readings refreshed.')
+      } else {
+        setCollectionProgress((previous) => (previous ? { ...previous, done: previous.done + 1 } : null))
+      }
+    },
+    [cancelRun, collectionCurrent],
+  )
+  const refreshSectionReadings = useCallback(
+    (section: 'account' | 'browser') => {
+      if (runInFlight.current) {
+        return
+      }
+      const run: DiagnosticRun = {
+        controller: new AbortController(),
+        generation: sessionGeneration.current,
+        application,
+        owner: observed(() => application.sessions.getUser()?.uuid),
+        section,
+        remaining: section === 'account' ? 4 : 1,
+      }
+      activeRun.current = run
+      runInFlight.current = true
+      setRunMessage(null)
+      setCollectionProgress({ section, done: 0, total: run.remaining! })
+      if (section === 'account') {
+        setSpaceReading(undefined)
+        setItemUsage(undefined)
+        setFlagsReading(undefined)
+        setLocalUsageBytes(undefined)
+      } else {
+        setBrowserObservations(undefined)
+      }
+      run.timer = setTimeout(() => {
+        if (activeRun.current === run) {
+          cancelRun()
+          setRunMessage('Section readings timed out. Unfinished results were discarded.')
+        }
+      }, PANE_READ_DEADLINE_MS)
+      setCollectionRevision((previous) => ({ ...previous, [section]: previous[section] + 1 }))
+    },
+    [application, cancelRun],
+  )
+
+  useEffect(
+    () =>
+      application.addEventObserver?.(async (event) => {
+        if (event === ApplicationEvent.SignedIn || event === ApplicationEvent.SignedOut) {
+          sessionGeneration.current += 1
+          cancelRun()
+          setOutcomes({})
+          setFileTransfer(undefined)
+          setPayload(undefined)
+          setSpaceReading(undefined)
+          setItemUsage(undefined)
+          setFlagsReading(undefined)
+        }
+      }),
+    [application, cancelRun],
+  )
+
   const tabState = useTabState({ defaultTab: 'diag-overview' })
   const { setActiveTab } = tabState
 
@@ -530,6 +689,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   // only just started says so within the poll, and the check must follow it.
   const [workerBuild, setWorkerBuild] = useState<SyncWorkerBuildInput | undefined>(undefined)
   const readTransport = useCallback(() => {
+    const run = activeRun.current
+    if (run && observed(() => application.sessions.getUser()?.uuid) !== run.owner) {
+      cancelRun()
+      setOutcomes({})
+      setFileTransfer(undefined)
+    }
     const status = application.syncTransportStatus
     setTransport(status ? { ...status, operations: [...status.operations] } : undefined)
     setWorkerBuild(application.syncTransportWorkerBuild)
@@ -540,7 +705,7 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     setLedger(application.syncTransportLedger)
     // The same tick, for the same reason: it is this page's own running count.
     setCsp(readCspViolations())
-  }, [application])
+  }, [application, cancelRun])
 
   /**
    * Ask the other tabs where they stand. Taken when the pane opens and again
@@ -565,6 +730,21 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
   }, [readTransport])
 
   const loadDiagnostics = useCallback(async () => {
+    const epoch = sessionGeneration.current
+    const generation = ++paneReadGeneration.current.diagnostics
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const controller = new AbortController()
+    const current = () =>
+      mounted.current &&
+      epoch === sessionGeneration.current &&
+      generation === paneReadGeneration.current.diagnostics &&
+      paneApplication.current === application &&
+      !controller.signal.aborted &&
+      observed(() => application.sessions.getUser()?.uuid) === owner
+    if (!current()) {
+      return
+    }
+    paneReads.current.add(controller)
     setLoading(true)
     setLoadError(null)
     setReadFailure(undefined)
@@ -586,9 +766,18 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
        * question, and it asks it separately, on purpose.
        */
       const response = await withDeadline(
-        application.httpOnlyJsonRequest<SyncDiagnosticsPayload>('GET', '/v1/admin/sync-diagnostics'),
+        application.httpOnlyJsonRequest<SyncDiagnosticsPayload>(
+          'GET',
+          '/v1/admin/sync-diagnostics',
+          undefined,
+          controller.signal,
+        ),
         PANE_READ_DEADLINE_MS,
+        controller.signal,
       )
+      if (!current() || response === CANCELLED) {
+        return
+      }
       if (response === TIMED_OUT) {
         // Not a status and not a refusal: the server took the request and said
         // nothing. The previous reading is dropped rather than left on screen
@@ -621,6 +810,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       setPayload(response.data)
       setClock(clockReadingFor(response.data?.capturedAt, localReceivedAtMs))
     } catch (error) {
+      if (!current()) {
+        return
+      }
       console.error(error)
       // No status: the request never completed, which is a different fact from
       // any status the server could have sent, and gets its own guidance.
@@ -628,23 +820,57 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       setClock(undefined)
       setLoadError('Could not reach the sync diagnostics endpoint.')
     } finally {
-      setLoading(false)
+      paneReads.current.delete(controller)
+      if (
+        mounted.current &&
+        paneApplication.current === application &&
+        generation === paneReadGeneration.current.diagnostics
+      ) {
+        setLoading(false)
+      }
     }
   }, [application, noteIfForbidden, takeCensus])
 
   const loadDeployment = useCallback(async () => {
+    const epoch = sessionGeneration.current
+    const generation = ++paneReadGeneration.current.deployment
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const controller = new AbortController()
+    const current = () =>
+      mounted.current &&
+      epoch === sessionGeneration.current &&
+      generation === paneReadGeneration.current.deployment &&
+      paneApplication.current === application &&
+      !controller.signal.aborted &&
+      observed(() => application.sessions.getUser()?.uuid) === owner
+    if (!current()) {
+      return
+    }
+    paneReads.current.add(controller)
     try {
       // Same-origin static marker, served beside the web bundle rather than by
       // the api-gateway, so it is fetched directly rather than through the
       // authenticated helpers.
-      const response = await fetch('/.well-known/srn-deployment.json', { headers: { Accept: 'application/json' } })
-      setDeployment(response.ok ? await response.json() : {})
+      const response = await fetch('/.well-known/srn-deployment.json', {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      const body = response.ok ? await response.json() : {}
+      if (!current()) {
+        return
+      }
+      setDeployment(body)
       setMarkerRead(response.ok ? 'answered' : 'failed')
     } catch {
+      if (!current()) {
+        return
+      }
       setDeployment({})
       setMarkerRead('failed')
+    } finally {
+      paneReads.current.delete(controller)
     }
-  }, [])
+  }, [application])
 
   /**
    * The server-status read the Database & internal comms section needs.
@@ -664,9 +890,31 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * the endpoint did not answer.
    */
   const loadServerStatus = useCallback(async () => {
+    const epoch = sessionGeneration.current
+    const generation = ++paneReadGeneration.current.serverStatus
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const controller = new AbortController()
+    const current = () =>
+      mounted.current &&
+      epoch === sessionGeneration.current &&
+      generation === paneReadGeneration.current.serverStatus &&
+      paneApplication.current === application &&
+      !controller.signal.aborted &&
+      observed(() => application.sessions.getUser()?.uuid) === owner
+    if (!current()) {
+      return
+    }
+    paneReads.current.add(controller)
     setStatusError(null)
     try {
-      const response = await withDeadline(application.legacyApi.adminGetServerStatus(), PANE_READ_DEADLINE_MS)
+      const response = await withDeadline(
+        application.legacyApi.adminGetServerStatus(),
+        PANE_READ_DEADLINE_MS,
+        controller.signal,
+      )
+      if (!current() || response === CANCELLED) {
+        return
+      }
       if (response === TIMED_OUT) {
         setServerStatus(undefined)
         setStatusError(
@@ -684,9 +932,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       }
       setServerStatus((response as { data?: unknown }).data)
     } catch (error) {
+      if (!current()) {
+        return
+      }
       console.error(error)
       setServerStatus(undefined)
       setStatusError('Could not reach the server status endpoint.')
+    } finally {
+      paneReads.current.delete(controller)
     }
   }, [application, noteIfForbidden])
 
@@ -755,6 +1008,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   useEffect(() => {
     let cancelled = false
+    const generation = sessionGeneration.current
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const collection = activeRun.current?.section === 'account' ? activeRun.current : undefined
 
     /**
      * `async`, and the setting NAME is resolved inside it rather than at the call
@@ -795,27 +1051,29 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       return settled.status === 'fulfilled' ? settled.value : {}
     }
 
-    void Promise.allSettled([readFigure('FileUploadBytesUsed'), readFigure('FileUploadBytesLimit')]).then((settled) => {
-      if (cancelled) {
-        return
-      }
+    void Promise.allSettled([readFigure('FileUploadBytesUsed'), readFigure('FileUploadBytesLimit')])
+      .then((settled) => {
+        if (cancelled || !collectionCurrent(collection, owner, generation)) {
+          return
+        }
 
-      const used = figureOf(settled[0]).value
-      const allowance = figureOf(settled[1])
-      const threw = settled.some((result) => result.status === 'rejected')
+        const used = figureOf(settled[0]).value
+        const allowance = figureOf(settled[1])
+        const threw = settled.some((result) => result.status === 'rejected')
 
-      setSpaceReading({
-        source: threw ? 'read-threw' : 'read-carried-no-figure',
-        ...(used === undefined ? {} : { used }),
-        ...(allowance.value === undefined ? {} : { limit: allowance.value }),
-        ...(allowance.origin === undefined ? {} : { limitOrigin: allowance.origin }),
+        setSpaceReading({
+          source: threw ? 'read-threw' : 'read-carried-no-figure',
+          ...(used === undefined ? {} : { used }),
+          ...(allowance.value === undefined ? {} : { limit: allowance.value }),
+          ...(allowance.origin === undefined ? {} : { limitOrigin: allowance.origin }),
+        })
       })
-    })
+      .finally(() => finishCollection(collection))
 
     return () => {
       cancelled = true
     }
-  }, [application])
+  }, [application, collectionRevision.account, collectionCurrent, finishCollection])
 
   /**
    * This account's STORED ITEM BYTES, read on mount.
@@ -842,6 +1100,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   useEffect(() => {
     let cancelled = false
+    const generation = sessionGeneration.current
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const collection = activeRun.current?.section === 'account' ? activeRun.current : undefined
 
     type StorageUsageBody = { itemBytesUsed?: unknown; itemsMeasured?: unknown; itemsUnmeasured?: unknown }
 
@@ -871,6 +1132,8 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       const response = await application.httpOnlyJsonRequest<StorageUsageBody & { data?: StorageUsageBody }>(
         'GET',
         '/v1/items/storage-usage',
+        undefined,
+        collection?.controller.signal,
       )
 
       if (response.status === 404) {
@@ -919,15 +1182,16 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
     void read()
       .catch((): AccountItemUsageReading => ({ reading: 'read-threw' }))
       .then((result) => {
-        if (!cancelled) {
+        if (!cancelled && collectionCurrent(collection, owner, generation)) {
           setItemUsage(result)
         }
       })
+      .finally(() => finishCollection(collection))
 
     return () => {
       cancelled = true
     }
-  }, [application])
+  }, [application, collectionRevision.account, collectionCurrent, finishCollection])
 
   /**
    * The origin's own storage usage, for the soft-cap row that has never had a
@@ -940,11 +1204,14 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   useEffect(() => {
     let cancelled = false
+    const generation = sessionGeneration.current
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const collection = activeRun.current?.section === 'account' ? activeRun.current : undefined
 
     void estimateStorage()
       .catch(() => undefined)
       .then((estimate) => {
-        if (cancelled || estimate === undefined) {
+        if (cancelled || !collectionCurrent(collection, owner, generation) || estimate === undefined) {
           return
         }
         const usage = estimate.usage
@@ -952,11 +1219,12 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
           setLocalUsageBytes(usage)
         }
       })
+      .finally(() => finishCollection(collection))
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [application, collectionRevision.account, collectionCurrent, finishCollection])
 
   /**
    * This account's own per-account feature flags, read on mount.
@@ -978,6 +1246,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   useEffect(() => {
     let cancelled = false
+    const generation = sessionGeneration.current
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const collection = activeRun.current?.section === 'account' ? activeRun.current : undefined
 
     const readFlags = async (): Promise<AccountFlagsReading> => {
       const userUuid = observed(() => application.sessions.getUser()?.uuid)
@@ -1020,24 +1291,26 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       }
     }
 
-    readFlags().then(
-      (result) => {
-        if (!cancelled) {
-          setFlagsReading(result)
-        }
-      },
-      (error: unknown) => {
-        console.error(error)
-        if (!cancelled) {
-          setFlagsReading({ reading: 'read-threw' })
-        }
-      },
-    )
+    readFlags()
+      .then(
+        (result) => {
+          if (!cancelled && collectionCurrent(collection, owner, generation)) {
+            setFlagsReading(result)
+          }
+        },
+        (error: unknown) => {
+          console.error(error)
+          if (!cancelled && collectionCurrent(collection, owner, generation)) {
+            setFlagsReading({ reading: 'read-threw' })
+          }
+        },
+      )
+      .finally(() => finishCollection(collection))
 
     return () => {
       cancelled = true
     }
-  }, [application])
+  }, [application, collectionRevision.account, collectionCurrent, finishCollection])
 
   /**
    * One browser collection run, on mount.
@@ -1049,16 +1322,21 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   useEffect(() => {
     let cancelled = false
-    void observeBrowserCapabilities(injectedBrowserRuntime(), { buildRevision: WebBuildRevision }).then((result) => {
-      if (!cancelled) {
-        setBrowserObservations(result)
-      }
-    })
+    const generation = sessionGeneration.current
+    const owner = observed(() => application.sessions.getUser()?.uuid)
+    const collection = activeRun.current?.section === 'browser' ? activeRun.current : undefined
+    void observeBrowserCapabilities(injectedBrowserRuntime(), { buildRevision: WebBuildRevision })
+      .then((result) => {
+        if (!cancelled && collectionCurrent(collection, owner, generation)) {
+          setBrowserObservations(result)
+        }
+      })
+      .finally(() => finishCollection(collection))
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [application, collectionRevision.browser, collectionCurrent, finishCollection])
 
   /**
    * The checks that DO something, one runner each.
@@ -1079,142 +1357,158 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    * state: a runner closed over a two-second-old status would report the lane a
    * request rode from a reading taken before the request was made.
    */
-  const runners: Record<RunnableCheckId, () => Promise<CheckFinding>> = useMemo(
-    () => ({
-      capabilities: async () => {
-        try {
-          // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
-          // websocket RPC lane (routing the handshake through the transport it
-          // establishes is circular), and that refusal is not safe-to-fallback —
-          // through the ordinary helper this check would throw and be reported as
-          // FAILED precisely when the socket is healthy.
-          const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
-            'GET',
-            '/v1/sockets/sync/capabilities',
-          )
-          if (!response.ok) {
-            return {
-              state: 'fail',
-              result: answeredStatus(response.status),
-              detail: `The capability descriptor answered ${response.status}.`,
+  const runners: Record<RunnableCheckId, (signal: AbortSignal, isCurrent: () => boolean) => Promise<CheckFinding>> =
+    useMemo(
+      () => ({
+        capabilities: async (signal) => {
+          try {
+            // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
+            // websocket RPC lane (routing the handshake through the transport it
+            // establishes is circular), and that refusal is not safe-to-fallback —
+            // through the ordinary helper this check would throw and be reported as
+            // FAILED precisely when the socket is healthy.
+            const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
+              'GET',
+              '/v1/sockets/sync/capabilities',
+              undefined,
+              signal,
+            )
+            if (!response.ok) {
+              return {
+                state: 'fail',
+                result: answeredStatus(response.status),
+                detail: `The capability descriptor answered ${response.status}.`,
+              }
             }
-          }
 
-          const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
-          if (advertised === 0) {
-            return {
-              state: 'fail',
-              result: safeConstant('reachable, and advertises nothing'),
-              detail:
-                'Reachable, but advertises an EMPTY capability list — the client will not attempt a socket at all.',
+            const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
+            if (advertised === 0) {
+              return {
+                state: 'fail',
+                result: safeConstant('reachable, and advertises nothing'),
+                detail:
+                  'Reachable, but advertises an EMPTY capability list — the client will not attempt a socket at all.',
+              }
             }
-          }
 
-          const noun = advertised === 1 ? 'capability entry' : 'capability entries'
+            const noun = advertised === 1 ? 'capability entry' : 'capability entries'
 
-          return {
-            state: 'pass',
-            result: safeTokens(
-              safeConstant('advertises'),
-              safeCount(advertised),
-              advertised === 1 ? safeConstant('capability entry') : safeConstant('capability entries'),
-            ),
-            detail: `The server advertises ${advertised} ${noun}.`,
-          }
-        } catch (error) {
-          return requestThrew(error)
-        }
-      },
-      ticket: async () => {
-        try {
-          // HTTP-only for the same reason as the capability check above.
-          const response = await application.httpOnlyJsonRequest<{ error?: { code?: string } }>(
-            'POST',
-            '/v1/sockets/sync/ticket',
-            { deviceId: probeDeviceId() },
-          )
-          if (response.ok) {
             return {
               state: 'pass',
-              result: safeConstant('issued; never redeemed, and it expires on its own'),
-              detail: 'A short-lived single-use ticket was issued. It is not redeemed, and expires on its own.',
+              result: safeTokens(
+                safeConstant('advertises'),
+                safeCount(advertised),
+                advertised === 1 ? safeConstant('capability entry') : safeConstant('capability entries'),
+              ),
+              detail: `The server advertises ${advertised} ${noun}.`,
             }
+          } catch (error) {
+            return requestThrew(error)
           }
-          if (response.data?.error?.code === 'SYNC_DISABLED') {
+        },
+        ticket: async (signal) => {
+          try {
+            // HTTP-only for the same reason as the capability check above.
+            const response = await application.httpOnlyJsonRequest<{ error?: { code?: string } }>(
+              'POST',
+              '/v1/sockets/sync/ticket',
+              { deviceId: probeDeviceId() },
+              signal,
+            )
+            if (response.ok) {
+              return {
+                state: 'pass',
+                result: safeConstant('issued; never redeemed, and it expires on its own'),
+                detail: 'A short-lived single-use ticket was issued. It is not redeemed, and expires on its own.',
+              }
+            }
+            if (response.data?.error?.code === 'SYNC_DISABLED') {
+              return {
+                state: 'fail',
+                result: safeConstant('refused: SYNC_DISABLED'),
+                detail:
+                  'Refused with SYNC_DISABLED — the sync lane was not composed at boot. The unmet boot conditions in this section say why.',
+              }
+            }
+
             return {
               state: 'fail',
-              result: safeConstant('refused: SYNC_DISABLED'),
-              detail:
-                'Refused with SYNC_DISABLED — the sync lane was not composed at boot. The unmet boot conditions in this section say why.',
+              result: safeTokens(safeConstant('refused with HTTP'), safeCount(response.status)),
+              detail: `The ticket request was refused with ${response.status}.`,
             }
+          } catch (error) {
+            return requestThrew(error)
           }
+        },
+        'control-plane': async (signal) => {
+          try {
+            const started = performance.now()
+            const response = await application.serverGetJsonRequestObservingLane<SyncDiagnosticsPayload>(
+              '/v1/admin/sync-diagnostics',
+              signal,
+            )
+            const elapsedMs = performance.now() - started
+            const status = application.syncTransportStatus
 
-          return {
-            state: 'fail',
-            result: safeTokens(safeConstant('refused with HTTP'), safeCount(response.status)),
-            detail: `The ticket request was refused with ${response.status}.`,
+            return describeControlPlaneRead({
+              status: response.status,
+              ok: response.ok,
+              carriedBy: response.carriedBy,
+              apiRpcNegotiated: status?.state === 'READY' && status.operations.includes('API_RPC'),
+              elapsedMs,
+            })
+          } catch (error) {
+            return requestThrew(error)
           }
-        } catch (error) {
-          return requestThrew(error)
-        }
-      },
-      'control-plane': async () => {
-        try {
-          const started = performance.now()
-          const response =
-            await application.serverGetJsonRequestObservingLane<SyncDiagnosticsPayload>('/v1/admin/sync-diagnostics')
-          const elapsedMs = performance.now() - started
+        },
+        'server-build': async (signal) => {
+          try {
+            // Plain HTTP on purpose: the readiness route is public, and it is the
+            // API server's own statement about itself — the lane it rides is not
+            // the question.
+            const response = await application.httpOnlyJsonRequest<unknown>(
+              'GET',
+              '/healthcheck/readiness',
+              undefined,
+              signal,
+            )
+            // The marker is read again here rather than taken from state, so the
+            // comparison is between two answers of the same moment.
+            const marker = await fetch('/.well-known/srn-deployment.json', {
+              headers: { Accept: 'application/json' },
+              signal,
+            })
+
+            return describeServerBuildCheck({
+              marker: marker.ok ? await marker.json() : {},
+              markerRead: marker.ok ? 'answered' : 'failed',
+              readiness: { status: response.status, body: response.data },
+            })
+          } catch (error) {
+            return requestThrew(error)
+          }
+        },
+        sync: async () => {
           const status = application.syncTransportStatus
+          const round = await runSyncRound(application)
 
-          return describeControlPlaneRead({
-            status: response.status,
-            ok: response.ok,
-            carriedBy: response.carriedBy,
-            apiRpcNegotiated: status?.state === 'READY' && status.operations.includes('API_RPC'),
-            elapsedMs,
+          return describeSyncRound({
+            ...round,
+            socketCarriesSync: status?.state === 'READY' && status.operations.includes('SYNC_ITEMS'),
           })
-        } catch (error) {
-          return requestThrew(error)
-        }
-      },
-      'server-build': async () => {
-        try {
-          // Plain HTTP on purpose: the readiness route is public, and it is the
-          // API server's own statement about itself — the lane it rides is not
-          // the question.
-          const response = await application.httpOnlyJsonRequest<unknown>('GET', '/healthcheck/readiness')
-          // The marker is read again here rather than taken from state, so the
-          // comparison is between two answers of the same moment.
-          const marker = await fetch('/.well-known/srn-deployment.json', { headers: { Accept: 'application/json' } })
+        },
+        revisions: async () => describeRevisionsRead(await readRevisionsOfOneNote(application)),
+        'file-transfer': async (signal, isCurrent) => {
+          const result = await runFileTransferCheck(fileTransferPortFor(application, signal))
+          if (isCurrent()) {
+            setFileTransfer(result)
+          }
 
-          return describeServerBuildCheck({
-            marker: marker.ok ? await marker.json() : {},
-            markerRead: marker.ok ? 'answered' : 'failed',
-            readiness: { status: response.status, body: response.data },
-          })
-        } catch (error) {
-          return requestThrew(error)
-        }
-      },
-      sync: async () => {
-        const status = application.syncTransportStatus
-        const round = await runSyncRound(application)
-
-        return describeSyncRound({
-          ...round,
-          socketCarriesSync: status?.state === 'READY' && status.operations.includes('SYNC_ITEMS'),
-        })
-      },
-      revisions: async () => describeRevisionsRead(await readRevisionsOfOneNote(application)),
-      'file-transfer': async () => {
-        const result = await runFileTransferCheck(fileTransferPortFor(application))
-        setFileTransfer(result)
-
-        return describeFileTransfer(result)
-      },
-    }),
-    [application],
-  )
+          return describeFileTransfer(result)
+        },
+      }),
+      [application],
+    )
 
   /**
    * Run some checks, in order, one at a time.
@@ -1239,36 +1533,80 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
         return
       }
       runInFlight.current = true
-
+      const run = {
+        controller: new AbortController(),
+        generation: sessionGeneration.current,
+        application,
+        owner: observed(() => application.sessions.getUser()?.uuid),
+      }
+      activeRun.current = run
+      setRunMessage(null)
+      setOutcomes((previous) =>
+        Object.fromEntries(Object.entries(previous).filter(([id]) => !ids.includes(id as RunnableCheckId))),
+      )
+      if (ids.includes('file-transfer')) {
+        setFileTransfer(undefined)
+      }
+      const isCurrent = () =>
+        mounted.current &&
+        activeRun.current === run &&
+        run.generation === sessionGeneration.current &&
+        !run.controller.signal.aborted &&
+        observed(() => application.sessions.getUser()?.uuid) === run.owner
       try {
         for (let index = 0; index < ids.length; index++) {
+          if (!isCurrent()) {
+            break
+          }
           const id = ids[index]
+          const check = new AbortController()
+          const abortCheck = () => check.abort()
+          run.controller.signal.addEventListener('abort', abortCheck, { once: true })
           setProgress({ done: index, total: ids.length, current: id })
-
           let finding: CheckFinding
           try {
-            // Against its own deadline: a check whose request is never answered
-            // must end, say so, and let the checks behind it run.
-            const settled = await withDeadline(runners[id](), CHECK_DEADLINE_MS[id])
+            const settled = await withDeadline(
+              runners[id](check.signal, () => isCurrent() && !check.signal.aborted),
+              CHECK_DEADLINE_MS[id],
+              check.signal,
+            )
+            if (!isCurrent() || settled === CANCELLED) {
+              break
+            }
             finding = settled === TIMED_OUT ? describeCheckTimeout(CHECK_DEADLINE_MS[id]) : settled
           } catch (error) {
+            if (!isCurrent()) {
+              break
+            }
             finding = requestThrew(error)
+          } finally {
+            check.abort()
+            run.controller.signal.removeEventListener('abort', abortCheck)
           }
-
-          setOutcomes((previous) => ({ ...previous, [id]: { id, ...finding } }))
+          if (isCurrent()) {
+            setOutcomes((previous) => ({ ...previous, [id]: { id, ...finding } }))
+          }
         }
       } finally {
-        runInFlight.current = false
-        setProgress(null)
-        readTransport()
-        if (reload) {
-          void loadDiagnostics()
-          void loadServerStatus()
-          void loadDeployment()
+        if (activeRun.current === run) {
+          const current = isCurrent()
+          activeRun.current = undefined
+          runInFlight.current = false
+          if (mounted.current) {
+            setProgress(null)
+          }
+          if (current) {
+            readTransport()
+            if (reload) {
+              void loadDiagnostics()
+              void loadServerStatus()
+              void loadDeployment()
+            }
+          }
         }
       }
     },
-    [loadDeployment, loadDiagnostics, loadServerStatus, readTransport, runners],
+    [application, loadDeployment, loadDiagnostics, loadServerStatus, readTransport, runners],
   )
 
   const runAllChecks = useCallback(() => runChecks(RUNNABLE_CHECK_IDS, true), [runChecks])
@@ -1747,11 +2085,27 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
    */
   const overall: Verdict = useMemo(() => triage({ sections }).sectionWorst, [sections])
   const ranked = useMemo(() => rankFindings(sections), [sections])
-  const busy = progress !== null
+  const busy = progress !== null || collectionProgress !== null
   const operatorChecks = RUNNABLE_CHECK_IDS.filter((id) => CHECKS[id].mode === 'operator')
 
   return (
     <>
+      {busy && (
+        <div className="mb-2 flex items-center gap-2">
+          <Button onClick={cancelRun}>Cancel diagnostics</Button>
+          {collectionProgress && (
+            <span role="status">
+              Refreshing {SECTION_TITLE[collectionProgress.section]}: {collectionProgress.done} of{' '}
+              {collectionProgress.total}
+            </span>
+          )}
+        </div>
+      )}
+      {runMessage && (
+        <p role="status" className="mb-2 text-sm">
+          {runMessage}
+        </p>
+      )}
       <PreferencesSegment>
         <Title>Capability diagnostics</Title>
 
@@ -1961,6 +2315,33 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
           paints any model that conforms. */}
       {SECTION_IDS.map((id) => (
         <TabPanel key={id} state={tabState} id={sectionTabId(id)}>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            {id === 'account' || id === 'browser' ? (
+              <Button onClick={() => refreshSectionReadings(id)} disabled={busy}>
+                Refresh section readings
+              </Button>
+            ) : (
+              <Button
+                onClick={() =>
+                  void runChecks(
+                    RUNNABLE_CHECK_IDS.filter((check) => CHECKS[check].section === id),
+                    false,
+                  )
+                }
+                disabled={busy}
+              >
+                Run section checks
+              </Button>
+            )}
+            {busy && <Button onClick={cancelRun}>Cancel diagnostics</Button>}
+          </div>
+          {RUNNABLE_CHECK_IDS.some((check) => CHECKS[check].section === id && CHECKS[check].mode === 'operator') && (
+            <p data-diagnostics-section-effects className="mb-3 text-sm">
+              {RUNNABLE_CHECK_IDS.filter((check) => CHECKS[check].section === id && CHECKS[check].mode === 'operator')
+                .map((check) => CHECKS[check].does)
+                .join(' ')}
+            </p>
+          )}
           <DiagnosticsSection model={sections[id]} />
         </TabPanel>
       ))}
@@ -2003,6 +2384,11 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
                     <Chip tone={definition.mode === 'operator' ? 'warn' : 'neutral'}>
                       {definition.mode === 'operator' ? 'writes' : definition.mode === 'live' ? 'live' : 'read-only'}
                     </Chip>
+                    {reading.running === true && (
+                      <Button small onClick={cancelRun}>
+                        Cancel this check
+                      </Button>
+                    )}
                     {runnable !== undefined && (
                       <Button small onClick={() => void runChecks([runnable], false)} disabled={busy}>
                         {reading.running === true

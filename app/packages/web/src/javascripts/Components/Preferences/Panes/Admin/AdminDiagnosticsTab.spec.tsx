@@ -34,6 +34,7 @@ jest.mock('@standardnotes/snjs', () => ({
   isErrorResponse: (response: unknown) => Boolean((response as { error?: unknown })?.error),
   classNames: (...values: unknown[]) => values.filter(Boolean).join(' '),
   PrefKey: { StorageMaxUsageBytes: 'storageMaxUsageBytes' },
+  ApplicationEvent: { SignedIn: 'signed-in', SignedOut: 'signed-out' },
   // `SettingName.create(name)` returns a RESULT, and `.getValue()` unwraps it to a
   // SettingName OBJECT — not to the string. Both levels are modelled, because a
   // one-level double resolves the string straight through and then every space row
@@ -2656,7 +2657,7 @@ describe('AdminDiagnosticsTab — Checks', () => {
    * One of these checks mints a real server-side ticket. The sentence saying so
    * sits beside "Run all checks" in the header — which is outside the panels and
    * so is on screen whichever tab is open — and beside that check's own control
-   * on the Checks tab. A section offers no control at all, so it starts nothing.
+   * on the Checks tab. Section controls state only their mapped write effects.
    */
   it('says what the ticket check writes beside every control that can start it', async () => {
     await renderTab(makeApplication())
@@ -2690,10 +2691,16 @@ describe('AdminDiagnosticsTab — Checks', () => {
     expect(ticket?.textContent).toContain('writes')
     expect(activePanel().querySelector('[data-diagnostics-probe="capabilities"]')?.textContent).toContain('read-only')
 
-    // 3. no section panel can start anything
+    // 3. every topic has its scoped control, and write sections disclose effects
     for (const id of SECTION_IDS) {
       await openSubtab(SECTION_TITLE[id])
-      expect([...activePanel().querySelectorAll('button')]).toHaveLength(0)
+      expect([...activePanel().querySelectorAll('button')]).toHaveLength(1)
+      if (id === 'websocket') {
+        expect(activePanel().querySelector('[data-diagnostics-section-effects]')?.textContent).toContain(sentence)
+      }
+      if (id === 'backend') {
+        expect(activePanel().querySelector('[data-diagnostics-section-effects]')?.textContent).toContain('16 KiB')
+      }
     }
   })
 
@@ -2705,7 +2712,7 @@ describe('AdminDiagnosticsTab — Checks', () => {
     expect(websocket).toContain('Socket ticket')
     expect(sectionRow('Socket ticket')[1]).toBe('refused: SYNC_DISABLED')
     expect(sectionRowStatus('Socket ticket')).toBe('broken')
-    expect([...activePanel().querySelectorAll('button')]).toHaveLength(0)
+    expect([...activePanel().querySelectorAll('button')]).toHaveLength(1)
     // The checks block leads the section.
     expect(activePanel().querySelector('[data-diagnostics-block]')?.getAttribute('data-diagnostics-block')).toBe(
       'Checks',
@@ -3627,5 +3634,243 @@ describe('AdminDiagnosticsTab — identity on the header', () => {
     await renderTab(application)
 
     expect(identity()).toContain('captured not reported')
+  })
+})
+
+describe('Diagnostics run scopes and cancellation', () => {
+  const probe = (id: string) => container.querySelector(`[data-diagnostics-probe="${id}"]`) as HTMLElement
+  const clickProbe = async (id: string) => {
+    await act(async () =>
+      probe(id)
+        .querySelector('button')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+    )
+    await settle()
+  }
+  it('runs only checks mapped to the chosen section', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    app.httpOnlyJsonRequest.mockClear()
+    app.sync.sync.mockClear()
+    app.serverGetJsonRequestObservingLane.mockClear()
+    await openSubtab(SECTION_TITLE.websocket)
+    await clickButton('Run section checks')
+    expect(app.httpOnlyJsonRequest.mock.calls.map(([, path]) => path)).toEqual([
+      '/v1/sockets/sync/capabilities',
+      '/v1/sockets/sync/ticket',
+    ])
+    expect(app.serverGetJsonRequestObservingLane).toHaveBeenCalledTimes(1)
+    expect(app.legacyApi.startUploadSession).not.toHaveBeenCalled()
+    expect(app.sync.sync).not.toHaveBeenCalled()
+  })
+  it('aborts the current request, stops successors and ignores late completion after a new run', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    let resolve!: (value: Answer) => void
+    const pending = new Promise<Answer>((done) => {
+      resolve = done
+    })
+    const normal = app.httpOnlyJsonRequest.getMockImplementation()!
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
+      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
+    )
+    app.httpOnlyJsonRequest.mockClear()
+    await clickButton('Run all checks')
+    const signal = app.httpOnlyJsonRequest.mock.calls[0][3] as AbortSignal
+    await clickButton('Cancel diagnostics')
+    expect(signal.aborted).toBe(true)
+    expect(app.httpOnlyJsonRequest.mock.calls.some(([, path]) => path === '/v1/sockets/sync/ticket')).toBe(false)
+    await openSubtab('Checks')
+    app.httpOnlyJsonRequest.mockImplementation(normal)
+    await clickProbe('capabilities')
+    const fresh = probe('capabilities').textContent
+    await act(async () => resolve({ status: 200, ok: true, data: { capabilities: ['one', 'two', 'three'] } }))
+    await settle()
+    expect(probe('capabilities').textContent).toBe(fresh)
+    expect(app.legacyApi.startUploadSession).not.toHaveBeenCalled()
+  })
+  it('stops file substeps but cleans up the temporary object after cancellation', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    await openSubtab('Checks')
+    let complete!: (value: boolean) => void
+    const pending = new Promise<boolean>((resolve) => {
+      complete = resolve
+    })
+    app.legacyApi.uploadFileBytes.mockImplementationOnce(() => pending)
+    await clickProbe('file-transfer')
+    expect(app.legacyApi.startUploadSession).toHaveBeenCalledTimes(1)
+    await clickButton('Cancel this check')
+    await act(async () => complete(true))
+    await settle()
+    expect(app.legacyApi.uploadFileBytes).toHaveBeenCalledTimes(1)
+    expect(app.legacyApi.closeUploadSession).not.toHaveBeenCalled()
+    expect(app.legacyApi.deleteFile).toHaveBeenCalledTimes(1)
+    expect(app.legacyApi.objects.size).toBe(0)
+    expect(probe('file-transfer').getAttribute('data-diagnostics-probe-status')).toBe('untested')
+  })
+  it('withdraws a pending run when the account changes', async () => {
+    let owner = 'first'
+    const app = makeApplication({
+      sessions: { isSignedIn: () => true, isSignedIntoFirstPartyServer: () => true, getUser: () => ({ uuid: owner }) },
+    })
+    await renderTab(app)
+    let complete!: (value: Answer) => void
+    const pending = new Promise<Answer>((resolve) => {
+      complete = resolve
+    })
+    const normal = app.httpOnlyJsonRequest.getMockImplementation()!
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
+      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
+    )
+    app.httpOnlyJsonRequest.mockClear()
+    await clickButton('Run all checks')
+    owner = 'second'
+    await act(async () => {
+      jest.advanceTimersByTime(2000)
+    })
+    await act(async () => complete({ status: 200, ok: true, data: { capabilities: ['old'] } }))
+    await settle()
+    expect(app.httpOnlyJsonRequest.mock.calls.some(([, path]) => path === '/v1/sockets/sync/ticket')).toBe(false)
+    await openSubtab('Checks')
+    expect(probe('capabilities').getAttribute('data-diagnostics-probe-status')).toBe('untested')
+  })
+  it('refreshes Account readings only and ignores cancelled collector responses', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    await openSubtab(SECTION_TITLE.account)
+    app.httpOnlyJsonRequest.mockClear()
+    let complete!: (value: { value: string }) => void
+    const pending = new Promise<{ value: string }>((resolve) => {
+      complete = resolve
+    })
+    app.settings.getSubscriptionSettingDetail.mockImplementation(() => pending)
+    await clickButton('Refresh section readings')
+    expect(app.httpOnlyJsonRequest.mock.calls.map(([, path]) => path)).toEqual(['/v1/items/storage-usage'])
+    await clickButton('Cancel diagnostics')
+    await act(async () => complete({ value: '999999999999' }))
+    await settle()
+    expect(container.textContent).not.toContain('Section readings refreshed.')
+    expect(container.textContent).toContain('Cancelled.')
+    expect(app.legacyApi.startUploadSession).not.toHaveBeenCalled()
+  })
+  it('refreshes Browser observations without server probes', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    await openSubtab(SECTION_TITLE.browser)
+    app.httpOnlyJsonRequest.mockClear()
+    await clickButton('Refresh section readings')
+    expect(app.httpOnlyJsonRequest).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Section readings refreshed.')
+  })
+  it('aborts on unmount and never starts subsequent work', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    let complete!: (value: Answer) => void
+    const pending = new Promise<Answer>((resolve) => {
+      complete = resolve
+    })
+    const normal = app.httpOnlyJsonRequest.getMockImplementation()!
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
+      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
+    )
+    app.httpOnlyJsonRequest.mockClear()
+    await clickButton('Run all checks')
+    const signal = app.httpOnlyJsonRequest.mock.calls[0][3] as AbortSignal
+    act(() => root.unmount())
+    root = createRoot(container)
+    expect(signal.aborted).toBe(true)
+    await act(async () => complete({ status: 200, ok: true, data: { capabilities: ['late'] } }))
+    await settle()
+    expect(app.httpOnlyJsonRequest.mock.calls.some(([, path]) => path === '/v1/sockets/sync/ticket')).toBe(false)
+  })
+})
+
+describe('Diagnostics session-generation guard', () => {
+  it('ignores results from a previous login to the same account', async () => {
+    let event!: (value: string) => Promise<void>
+    const app = makeApplication({
+      sessions: {
+        isSignedIn: () => true,
+        isSignedIntoFirstPartyServer: () => true,
+        getUser: () => ({ uuid: 'same-account' }),
+      },
+      addEventObserver: (callback: typeof event) => {
+        event = callback
+        return () => {}
+      },
+    })
+    await renderTab(app)
+    let resolve!: (value: Answer) => void
+    const pending = new Promise<Answer>((done) => {
+      resolve = done
+    })
+    const normal = app.httpOnlyJsonRequest.getMockImplementation()!
+    app.httpOnlyJsonRequest.mockImplementation((method: string, path: string) =>
+      path === '/v1/sockets/sync/capabilities' ? pending : normal(method, path),
+    )
+    app.httpOnlyJsonRequest.mockClear()
+    await clickButton('Run all checks')
+    await act(async () => {
+      await event('signed-out')
+      await event('signed-in')
+    })
+    await act(async () => {
+      resolve({ status: 200, ok: true, data: { capabilities: ['old-session'] } })
+    })
+    await settle()
+    expect(app.httpOnlyJsonRequest.mock.calls.some(([, path]) => path === '/v1/sockets/sync/ticket')).toBe(false)
+    await openSubtab('Checks')
+    expect(
+      activePanel()
+        .querySelector('[data-diagnostics-probe="capabilities"]')
+        ?.getAttribute('data-diagnostics-probe-status'),
+    ).toBe('untested')
+  })
+
+  it('does not let the initial Account collector overwrite a newer manual refresh', async () => {
+    const app = makeApplication()
+    let resolve!: (value: { value: string }) => void
+    const pending = new Promise<{ value: string }>((done) => {
+      resolve = done
+    })
+    app.settings.getSubscriptionSettingDetail
+      .mockImplementationOnce(() => pending)
+      .mockImplementationOnce(() => pending)
+    await renderTab(app)
+    await openSubtab(SECTION_TITLE.account)
+    await clickButton('Refresh section readings')
+    const fresh = activePanel().textContent
+    expect(container.textContent).toContain('Section readings refreshed.')
+    await act(async () => {
+      resolve({ value: '999999999999' })
+    })
+    await settle()
+    expect(activePanel().textContent).toBe(fresh)
+  })
+})
+
+describe('Diagnostics native transfer cancellation', () => {
+  it('forwards cancellation to the HTTP byte request and retains cleanup', async () => {
+    const app = makeApplication()
+    await renderTab(app)
+    await openSubtab('Checks')
+    let resolve!: () => void
+    const pending = new Promise<void>((done) => {
+      resolve = done
+    })
+    app.legacyApi.downloadFile.mockImplementationOnce(() => pending)
+    const row = activePanel().querySelector('[data-diagnostics-probe="file-transfer"]') as HTMLElement
+    await act(async () => row.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await settle()
+    const signal = app.legacyApi.downloadFile.mock.calls[0][0].abortSignal as AbortSignal
+    expect(signal.aborted).toBe(false)
+    await clickButton('Cancel this check')
+    expect(signal.aborted).toBe(true)
+    await act(async () => resolve())
+    await settle()
+    expect(app.legacyApi.deleteFile).toHaveBeenCalledTimes(1)
+    expect(app.legacyApi.objects.size).toBe(0)
+    expect(row.getAttribute('data-diagnostics-probe-status')).toBe('untested')
   })
 })

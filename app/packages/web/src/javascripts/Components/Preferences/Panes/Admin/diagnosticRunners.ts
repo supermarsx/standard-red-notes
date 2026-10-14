@@ -43,30 +43,42 @@ const concatenate = (parts: readonly Uint8Array[]): Uint8Array => {
   return joined
 }
 
-export function fileTransferPortFor(application: WebApplication): FileTransferPort {
+export function fileTransferPortFor(application: WebApplication, signal?: AbortSignal): FileTransferPort {
   const api = application.legacyApi
+  const ensureActive = () => signal?.throwIfAborted()
 
   return {
     newIdentifier: () => UuidGenerator.GenerateUuid(),
     randomBytes: (length) => crypto.getRandomValues(new Uint8Array(length)),
 
     authorize: async (remoteIdentifier, operation, bytes) => {
+      if (operation !== 'delete') {
+        ensureActive()
+      }
       const token = await api.createUserFileValetToken(remoteIdentifier, valetOperation(operation), bytes)
 
       return typeof token === 'string' && token.length > 0 ? token : undefined
     },
 
     open: async (token) => {
+      ensureActive()
       const response = await api.startUploadSession(token, OWNERSHIP)
 
       return !isErrorResponse(response) && Boolean(response.data?.uploadId)
     },
 
-    send: (token, chunkId, bytes) => api.uploadFileBytes(token, OWNERSHIP, chunkId, bytes),
+    send: (token, chunkId, bytes) => {
+      ensureActive()
+      return api.uploadFileBytes(token, OWNERSHIP, chunkId, bytes)
+    },
 
-    close: async (token) => (await api.closeUploadSession(token, OWNERSHIP)) === true,
+    close: async (token) => {
+      ensureActive()
+      return (await api.closeUploadSession(token, OWNERSHIP)) === true
+    },
 
     readOverHttp: async (token, object) => {
+      ensureActive()
       const parts: Uint8Array[] = []
       // `downloadFile` issues ONE ranged request per declared chunk, so two
       // chunks is two `Range:` requests — which is the part of a download a
@@ -81,8 +93,10 @@ export function fileTransferPortFor(application: WebApplication): FileTransferPo
         chunkIndex: 0,
         valetToken: token,
         ownershipType: OWNERSHIP,
+        abortSignal: signal,
         contentRangeStart: 0,
         onBytesReceived: async (bytes) => {
+          ensureActive()
           // Copied: the caller may reuse the buffer it hands over.
           parts.push(bytes.slice())
         },
@@ -94,6 +108,7 @@ export function fileTransferPortFor(application: WebApplication): FileTransferPo
     socketLaneNegotiated: () => application.syncTransportFileLane?.isFileLaneAvailable() === true,
 
     readOverSocket: async (object) => {
+      ensureActive()
       const lane = application.syncTransportFileLane
       if (lane === undefined) {
         return 'unavailable'
@@ -104,7 +119,9 @@ export function fileTransferPortFor(application: WebApplication): FileTransferPo
         remoteIdentifier: object.remoteIdentifier,
         fileUuid: object.fileUuid,
         declaredSize: object.bytes,
+        signal,
         onBytes: async (bytes) => {
+          ensureActive()
           parts.push(bytes.slice())
         },
       })
@@ -118,6 +135,9 @@ export function fileTransferPortFor(application: WebApplication): FileTransferPo
     remove: async (token) => !isErrorResponse(await api.deleteFile(token, OWNERSHIP)),
 
     usedBytes: async () => {
+      if (signal?.aborted) {
+        return undefined
+      }
       const name = SettingName.create(SettingName.NAMES.FileUploadBytesUsed).getValue()
       const detail = await application.settings.getSubscriptionSettingDetail(name)
       // No row until a first upload succeeds: that is a measured zero, and it is
