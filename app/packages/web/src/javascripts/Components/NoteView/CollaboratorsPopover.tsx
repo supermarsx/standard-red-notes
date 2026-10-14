@@ -6,6 +6,7 @@ import { CollaboratorAvatar } from './CollaboratorAvatars'
 import {
   Collaborator,
   CollaboratorPresence,
+  connectedDeviceLabel,
   presenceLabel,
   roleLabel,
   SessionPresentation,
@@ -147,6 +148,9 @@ const CollaboratorsPopover = forwardRef<HTMLDivElement, Props>(
                         )}
                       </div>
                       <div className="text-passive-1 flex flex-wrap gap-x-1 text-xs leading-4">
+                        {connectedDeviceLabel(collaborator) && (
+                          <span data-collaborator-devices>{connectedDeviceLabel(collaborator)}</span>
+                        )}
                         {status && (
                           <span
                             className={collaborator.isSelf ? undefined : PRESENCE_CLASS[collaborator.presence]}

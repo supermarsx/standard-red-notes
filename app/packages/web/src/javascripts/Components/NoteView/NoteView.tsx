@@ -282,7 +282,10 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     super.componentDidMount()
 
     const refreshTitlePermission = () => {
-      this.setState({ collaborationTitleReadonly: this.isCollaborationTitleReadonly() })
+      const collaborationTitleReadonly = this.isCollaborationTitleReadonly()
+      if (collaborationTitleReadonly !== this.state.collaborationTitleReadonly) {
+        this.setState({ collaborationTitleReadonly })
+      }
     }
     this.#observers.push(CollaborationSaverRegistry.subscribe(this.note.uuid, refreshTitlePermission))
     this.#observers.push(CollaborationStatusRegistry.subscribe(this.note.uuid, refreshTitlePermission))
@@ -323,13 +326,27 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
       const isFocusModeEnabled = this.application.paneController.focusModeEnabled
       const didFocusModeChange = this.state.focusModeEnabled !== isFocusModeEnabled
 
-      this.setState({
-        showProtectedWarning: this.application.notesController.showProtectedWarning,
-        noteStatus: syncStatus,
-        saveError: syncStatus?.type === 'error',
-        syncTakingTooLong: false,
-        focusModeEnabled: isFocusModeEnabled,
-      })
+      const showProtectedWarning = this.application.notesController.showProtectedWarning
+      const saveError = syncStatus?.type === 'error'
+      const statusChanged =
+        syncStatus?.type !== this.state.noteStatus?.type ||
+        syncStatus?.message !== this.state.noteStatus?.message ||
+        syncStatus?.description !== this.state.noteStatus?.description
+      if (
+        showProtectedWarning !== this.state.showProtectedWarning ||
+        statusChanged ||
+        saveError !== this.state.saveError ||
+        this.state.syncTakingTooLong ||
+        didFocusModeChange
+      ) {
+        this.setState({
+          showProtectedWarning,
+          noteStatus: syncStatus,
+          saveError,
+          syncTakingTooLong: false,
+          focusModeEnabled: isFocusModeEnabled,
+        })
+      }
 
       if (!isFocusModeEnabled && didFocusModeChange) {
         this.controller.syncOnlyIfLargeNote()
@@ -985,9 +1002,9 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
     }
     const editorLineWidth = this.application.notesController.getEditorWidthForNote(this.note)
 
-    this.setState({
-      editorLineWidth,
-    })
+    if (editorLineWidth !== this.state.editorLineWidth) {
+      this.setState({ editorLineWidth })
+    }
   }
 
   reloadAppearanceColors(note: SNNote) {

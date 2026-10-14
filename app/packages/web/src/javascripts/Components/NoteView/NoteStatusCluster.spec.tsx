@@ -41,6 +41,13 @@ jest.mock('../Popover/Popover', () => ({
 import { CollaborationStatusRegistry } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'
 import { COLLABORATION_INDICATOR_TEST_ID } from './CollaborationStatusIndicator'
 import NoteStatusCluster from './NoteStatusCluster'
+import type { NoteStatus } from './NoteStatusIndicator'
+import * as Y from 'yjs'
+import {
+  CollaborativeDocumentRegistry,
+  documentStateOf,
+} from '../SuperEditor/Collaboration/CollaborativeDocumentRegistry'
+import { COLLABORATION_ACTIVITY_PULSE_MS } from './useCollaborationActivity'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -49,14 +56,19 @@ const note = { uuid: ROOM, lastSyncEnd: undefined } as never
 
 let container: HTMLElement
 let root: Root
+let removeDocument: (() => void) | undefined
+let document: Y.Doc | undefined
 
-const renderCluster = async (): Promise<void> => {
+const renderCluster = async (
+  status: NoteStatus | undefined = { type: 'saved', message: 'All changes saved' },
+  syncTakingTooLong = false,
+): Promise<void> => {
   await act(async () => {
     root.render(
       createElement(NoteStatusCluster, {
         note,
-        status: { type: 'saved', message: 'All changes saved' },
-        syncTakingTooLong: false,
+        status,
+        syncTakingTooLong,
         updateSavingIndicator: true,
       }),
     )
@@ -73,8 +85,8 @@ beforeEach(() => {
     addListener: () => undefined,
     removeListener: () => undefined,
   })) as unknown as typeof window.matchMedia
-  container = document.createElement('div')
-  document.body.appendChild(container)
+  container = window.document.createElement('div')
+  window.document.body.appendChild(container)
   root = createRoot(container)
 })
 
@@ -84,6 +96,85 @@ afterEach(() => {
   })
   container.remove()
   CollaborationStatusRegistry.clearRoom(ROOM)
+  removeDocument?.()
+  removeDocument = undefined
+  document?.destroy()
+  document = undefined
+  jest.useRealTimers()
+})
+
+const establishDocument = () => {
+  document = new Y.Doc()
+  document.getText('body').insert(0, 'Initial body')
+  const liveDocument = document
+  removeDocument = CollaborativeDocumentRegistry.set(ROOM, {
+    epoch: 'room_epoch_0000000000000001',
+    state: () => documentStateOf(liveDocument),
+    subscribe: (listener) => {
+      liveDocument.on('update', listener)
+      return () => liveDocument.off('update', listener)
+    },
+  })
+  CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
+  return liveDocument
+}
+
+it('pulses actual local and remote changes, including deletion, without spinning for save acknowledgements', async () => {
+  jest.useFakeTimers()
+  const live = establishDocument()
+  await renderCluster()
+  const activity = container.querySelector('[data-collaboration-activity]')
+  expect(activity).toBeInstanceOf(Element)
+  expect(activity?.getAttribute('data-collaboration-activity')).toBe('idle')
+  expect(container.querySelector('.animate-spin')).toBeNull()
+
+  await renderCluster({ type: 'saving', message: 'Saving changes' })
+  expect(activity?.getAttribute('data-collaboration-activity')).toBe('idle')
+  act(() => live.getText('body').insert(0, 'Local '))
+  expect(activity?.getAttribute('data-collaboration-activity')).toBe('pulsing')
+  act(() => jest.advanceTimersByTime(COLLABORATION_ACTIVITY_PULSE_MS))
+  expect(activity?.getAttribute('data-collaboration-activity')).toBe('idle')
+
+  const remote = new Y.Doc()
+  Y.applyUpdate(remote, Y.encodeStateAsUpdate(live))
+  remote.getText('body').delete(0, 1)
+  act(() => Y.applyUpdate(live, Y.encodeStateAsUpdate(remote)))
+  expect(activity?.getAttribute('data-collaboration-activity')).toBe('pulsing')
+  act(() => jest.advanceTimersByTime(COLLABORATION_ACTIVITY_PULSE_MS))
+  await renderCluster({ type: 'saved', message: 'All changes saved' })
+  expect(activity?.getAttribute('data-collaboration-activity')).toBe('idle')
+  remote.destroy()
+})
+
+it('keeps the activity control and focused DOM stable throughout healthy save cycles', async () => {
+  establishDocument()
+  await renderCluster()
+  const activity = container.querySelector('[data-collaboration-activity]')
+  const button = activity?.closest('button') as HTMLButtonElement
+  button.focus()
+  await renderCluster({ type: 'saving', message: 'Saving changes' })
+  await renderCluster({ type: 'saved', message: 'All changes saved' })
+  expect(container.querySelector('[data-collaboration-activity]')).toBe(activity)
+  expect(activity?.closest('button')).toBe(button)
+  expect(window.document.activeElement).toBe(button)
+  expect(button.classList.contains('h-5')).toBe(true)
+  expect(button.classList.contains('w-5')).toBe(true)
+})
+
+it('retains errors, delayed saves and offline collaboration states', async () => {
+  establishDocument()
+  await renderCluster({ type: 'error', message: 'Saving failed' })
+  expect(container.querySelector('[data-collaboration-activity]')).toBeNull()
+  expect(container.querySelector('.bg-danger')).toBeInstanceOf(Element)
+  await renderCluster({ type: 'waiting', message: 'Waiting to save' })
+  expect(container.querySelector('[data-collaboration-activity]')).toBeNull()
+  expect(container.querySelector('.bg-warning')).toBeInstanceOf(Element)
+  await renderCluster({ type: 'saving', message: 'Saving changes' }, true)
+  expect(container.querySelector('[data-collaboration-activity]')).toBeNull()
+  act(() => CollaborationStatusRegistry.setStatus(ROOM, { kind: 'unavailable', reason: 'Socket unavailable' }))
+  await renderCluster({ type: 'saving', message: 'Saving changes' })
+  expect(container.querySelector('[data-collaboration-activity]')).toBeNull()
+  expect(container.querySelector('.animate-spin')).toBeInstanceOf(Element)
 })
 
 it('renders the collaboration icon immediately before the sync status', async () => {

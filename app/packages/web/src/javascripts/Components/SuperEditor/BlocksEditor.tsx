@@ -48,6 +48,8 @@ import { CollaborationEditabilityPlugin } from './Collaboration/CollaborationEdi
 import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
 import { AssistantStructuralBridgePlugin } from './Plugins/AssistantStructuralBridgePlugin'
 import { AssistantChangeDecorationsPlugin } from './Plugins/AssistantChangeDecorationsPlugin'
+import { EditorResumePlugin } from './Plugins/EditorResume/EditorResumePlugin'
+import { editorResumeStorageKey } from './Plugins/EditorResume/EditorResumeStorage'
 
 type BlocksEditorProps = {
   /** Exact note lifetime owned by this composer; required for aggregate todo mutations. */
@@ -310,6 +312,16 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
 
   return (
     <>
+      {noteUuid && application && (
+        <EditorResumePlugin
+          storageKey={editorResumeStorageKey(
+            application.identifier,
+            application.sessions.getUser()?.uuid ?? 'offline',
+            noteUuid,
+          )}
+          ready={collaborationCanonicalReady && (!readonly || Boolean(collaboration))}
+        />
+      )}
       {noteUuid && <AssistantStructuralBridgePlugin noteUuid={noteUuid} />}
       {noteUuid && <AssistantChangeDecorationsPlugin noteUuid={noteUuid} />}
       {!isMobile && <ToolbarPlugin noteUuid={noteUuid} />}

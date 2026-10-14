@@ -106,6 +106,10 @@ export type Collaborator = {
   isPresent: boolean
   /** Own row only: this account also has the note open in another tab or device. */
   openElsewhere?: boolean
+  /** Known live browser profiles; absent when older peers lack a device identity. */
+  connectedDevices?: number
+  /** Live editor sessions, including this one for the signed-in account. */
+  connectedSessions?: number
 }
 
 /** A member of the note's shared vault, as much as the app knows about them. */
@@ -293,6 +297,7 @@ type BuildInput = {
   selfUuid: string | undefined
   /** Used only for the initials on the signed-in account's own row. */
   selfEmail?: string
+  selfDeviceId?: string
   state: CollaborationRoomState | undefined
   now: number
   /** From `trackFirstSeen`. Without it nobody becomes idle before their first move. */
@@ -315,6 +320,7 @@ export function buildCollaborators({
   members,
   selfUuid,
   selfEmail,
+  selfDeviceId,
   state,
   now,
   firstSeenAt,
@@ -323,23 +329,27 @@ export function buildCollaborators({
   const live = peersAreLive(state)
   const roster = new Map(members.map((member) => [member.userUuid, member]))
 
-  const present = new Map<string, { peer: PresentPeer; activity: PeerState }>()
+  const present = new Map<string, { peer: PresentPeer; activity: PeerState; peers: PresentPeer[] }>()
+  const selfPeers: PresentPeer[] = []
   let openElsewhere = false
   for (const peer of peers) {
     if (selfUuid !== undefined && peer.userUuid === selfUuid) {
       openElsewhere = true
+      selfPeers.push(peer)
       continue
     }
     const key = peer.userUuid ?? `client:${peer.clientId}`
     const activity = peerActivity(peer, now, firstSeenAt?.get(peer.clientId))
     const existing = present.get(key)
     if (!existing || PRESENCE_ORDER.indexOf(activity) < PRESENCE_ORDER.indexOf(existing.activity)) {
-      present.set(key, { peer: existing?.peer ?? peer, activity })
+      present.set(key, { peer: existing?.peer ?? peer, activity, peers: [...(existing?.peers ?? []), peer] })
+    } else {
+      existing.peers.push(peer)
     }
   }
 
   const others: Collaborator[] = []
-  for (const [key, { peer, activity }] of present) {
+  for (const [key, { peer, activity, peers: sessions }] of present) {
     const member = peer.userUuid === undefined ? undefined : roster.get(peer.userUuid)
     const name = member?.contactName || peer.name
     others.push({
@@ -351,6 +361,7 @@ export function buildCollaborators({
       ...(member?.role ? { role: member.role } : {}),
       isSelf: false,
       isPresent: true,
+      ...(live ? countConnections(sessions) : {}),
     })
   }
 
@@ -397,10 +408,41 @@ export function buildCollaborators({
       isSelf: true,
       isPresent: false,
       ...(openElsewhere ? { openElsewhere: true } : {}),
+      ...(state?.status.kind === 'active' ? countConnections(selfPeers, selfDeviceId, true) : {}),
     })
   }
 
   return others
+}
+
+function countConnections(
+  peers: PresentPeer[],
+  localDeviceId?: string,
+  includeLocal = false,
+): Pick<Collaborator, 'connectedDevices' | 'connectedSessions'> {
+  const sessions = new Map(peers.map((peer) => [peer.clientId, peer]))
+  const deviceIds = new Set([...sessions.values()].map((peer) => peer.deviceId).filter((id): id is string => !!id))
+  if (localDeviceId) {
+    deviceIds.add(localDeviceId)
+  }
+  const allKnown = [...sessions.values()].every((peer) => !!peer.deviceId) && (!includeLocal || !!localDeviceId)
+  return {
+    connectedSessions: sessions.size + Number(includeLocal),
+    ...(allKnown ? { connectedDevices: deviceIds.size } : {}),
+  }
+}
+
+export function connectedDeviceLabel(collaborator: Collaborator): string | undefined {
+  const sessions = collaborator.connectedSessions
+  if (!sessions) {
+    return undefined
+  }
+  if (collaborator.connectedDevices === undefined) {
+    return `${sessions} connection${sessions === 1 ? '' : 's'}`
+  }
+  const devices = collaborator.connectedDevices
+  const label = `${devices} device${devices === 1 ? '' : 's'}`
+  return sessions > devices ? `${label} · ${sessions} tabs` : label
 }
 
 /**

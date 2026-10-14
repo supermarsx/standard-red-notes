@@ -7,6 +7,7 @@ import Icon from '../Icon/Icon'
 import Popover from '../Popover/Popover'
 import { usePresence } from '../SuperEditor/Collaboration/usePresence'
 import { useCollaborationStatus } from '../SuperEditor/Collaboration/useCollaborationStatus'
+import { collaborationDeviceId } from '../SuperEditor/Collaboration/CollaborationDeviceIdentity'
 import { CollaboratorAvatarStack } from './CollaboratorAvatars'
 import CollaboratorsPopover, { SESSION_TONE_CLASS } from './CollaboratorsPopover'
 import {
@@ -153,9 +154,21 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ note }) => {
     setRememberedNames((previous) => rememberBroadcastNames(previous, peers))
   }, [peers])
 
+  const selfDeviceId = useMemo(() => (selfUuid ? collaborationDeviceId() : undefined), [selfUuid])
   const collaborators = useMemo(
-    () => buildCollaborators({ peers, members, selfUuid, selfEmail, state, now, firstSeenAt, rememberedNames }),
-    [peers, members, selfUuid, selfEmail, state, now, firstSeenAt, rememberedNames],
+    () =>
+      buildCollaborators({
+        peers,
+        members,
+        selfUuid,
+        selfEmail,
+        selfDeviceId,
+        state,
+        now,
+        firstSeenAt,
+        rememberedNames,
+      }),
+    [peers, members, selfUuid, selfEmail, selfDeviceId, state, now, firstSeenAt, rememberedNames],
   )
   const others = collaborators.filter((collaborator) => !collaborator.isSelf)
   const present = others.filter((collaborator) => collaborator.isPresent)

@@ -315,6 +315,12 @@ export class ItemListController
 
   lastSelectedItem: ListableContentItem | undefined
   selectedUuids: Set<UuidString> = observable(new Set<UuidString>())
+  private didRestorePersistedSelection = false
+  private hasUserSelectionIntent = false
+  private pendingPersistedSelection?: SelectionControllerPersistableValue
+  private restoringPersistedSelection = false
+  private retryPersistedSelection = false
+  private readonly persistedSelectionLifetime = {}
   selectedItems: Record<UuidString, ListableContentItem> = {}
 
   isMultipleSelectionMode = false
@@ -584,23 +590,77 @@ export class ItemListController
   }
 
   getPersistableValue = (): SelectionControllerPersistableValue => {
+    const selectedUuids = Array.from(this.selectedUuids)
+    const active = this.activeControllerItem
+    const selected = selectedUuids.length === 1 ? this.itemManager.findItem(selectedUuids[0]) : undefined
+    // Switching an existing editor tab does not change the list's highlighted
+    // row. Resume the committed note on screen, preserving real file and
+    // multiple selections rather than substituting a background note for them.
+    if (
+      selectedUuids.length <= 1 &&
+      active?.content_type === ContentType.TYPES.Note &&
+      (selectedUuids.length === 0 || selected?.content_type === ContentType.TYPES.Note)
+    ) {
+      return { selectedUuids: [active.uuid] }
+    }
     return {
-      selectedUuids: Array.from(this.selectedUuids),
+      selectedUuids,
     }
   }
 
   hydrateFromPersistedValue = (state: SelectionControllerPersistableValue | undefined): void => {
-    if (!state) {
+    if (!this.itemControllerGroup || !state || this.didRestorePersistedSelection || this.hasUserSelectionIntent) {
       return
     }
 
-    if (!this.selectedUuids.size && state.selectedUuids.length > 0) {
-      if (!this.options.allowNoteSelectionStatePersistence) {
-        const items = this.itemManager.findItems(state.selectedUuids).filter((item) => !isNote(item))
-        void this.selectUuids(Uuids(items))
-      } else {
-        void this.selectUuids(state.selectedUuids)
+    this.pendingPersistedSelection = state
+    if (this.restoringPersistedSelection) {
+      this.retryPersistedSelection = true
+      return
+    }
+    if (state.selectedUuids.length > 0) {
+      const remembered = this.itemManager.findItems(state.selectedUuids)
+      if (remembered.length !== state.selectedUuids.length) {
+        return
       }
+      const uuids = this.options.allowNoteSelectionStatePersistence
+        ? state.selectedUuids
+        : Uuids(remembered.filter((item) => !isNote(item)))
+      this.restoringPersistedSelection = true
+      const lifetime = this.persistedSelectionLifetime
+      const isCurrent = () => this.persistedSelectionLifetime === lifetime && !this.hasUserSelectionIntent
+      const canCommit = () =>
+        this.persistedSelectionLifetime === lifetime &&
+        (!this.hasUserSelectionIntent ||
+          (uuids.length === 1 && this.selectedUuids?.size === 1 && this.selectedUuids.has(uuids[0])))
+      void this.selectUuids(uuids, false, canCommit)
+        .then(() => {
+          if (!isCurrent()) {
+            return
+          }
+          // Startup authorization can invalidate an editor open while the
+          // database/session finishes loading. A highlight is not a committed
+          // editor; leave restoration retryable until the intended note opens.
+          if (uuids.length !== 1 || this.activeControllerItem?.uuid === uuids[0]) {
+            this.didRestorePersistedSelection = true
+            this.pendingPersistedSelection = undefined
+          }
+        })
+        .catch((error) => {
+          if (isCurrent()) {
+            console.error(error)
+          }
+        })
+        .finally(() => {
+          if (this.persistedSelectionLifetime !== lifetime) {
+            return
+          }
+          this.restoringPersistedSelection = false
+          if (this.retryPersistedSelection) {
+            this.retryPersistedSelection = false
+            this.hydrateFromPersistedValue(this.pendingPersistedSelection)
+          }
+        })
     }
   }
 
@@ -614,6 +674,7 @@ export class ItemListController
 
       case CrossControllerEvent.ActiveEditorChanged: {
         await this.handleEditorChange()
+        await this.publishCrossControllerEventSync(CrossControllerEvent.RequestValuePersistence)
         break
       }
 
@@ -662,6 +723,7 @@ export class ItemListController
       case ApplicationEvent.CompletedFullSync: {
         if (!this.completedFullSync) {
           void this.reloadItems(ItemsReloadSource.SyncEvent).then(() => {
+            this.hydrateFromPersistedValue(this.pendingPersistedSelection)
             if (
               this.notes.length === 0 &&
               this.navigationController.selected instanceof SmartView &&
@@ -691,7 +753,7 @@ export class ItemListController
     return this.getActiveItemController()?.item
   }
 
-  async openNote(uuid: string): Promise<void> {
+  async openNote(uuid: string, canCommit?: () => boolean): Promise<void> {
     if (this.activeControllerItem?.uuid === uuid) {
       return
     }
@@ -703,7 +765,7 @@ export class ItemListController
     }
 
     try {
-      await this.itemControllerGroup.createItemController({ note })
+      await this.itemControllerGroup.createItemController({ note, canCommit })
     } catch (error) {
       // Reload/selection work may already be obsolete when an account, vault,
       // or exact-note security boundary cancels its in-flight editor open. The
@@ -713,6 +775,10 @@ export class ItemListController
         return
       }
       throw error
+    }
+
+    if (!this.itemControllerGroup || (canCommit && !canCommit())) {
+      return
     }
 
     this.handOffEditorColumnToOpenedNote()
@@ -2560,6 +2626,7 @@ export class ItemListController
   }
 
   selectAll = () => {
+    this.hasUserSelectionIntent = true
     const allItems = this.items.filter((item) => !item.protected)
     const lastItem = allItems[allItems.length - 1]
     this.setSelectedUuids(new Set(Uuids(allItems)))
@@ -2574,14 +2641,22 @@ export class ItemListController
     this.lastSelectedItem = undefined
   }
 
-  openSingleSelectedItem = async ({ userTriggered } = { userTriggered: true }) => {
+  openSingleSelectedItem = async (
+    { userTriggered, canCommit }: { userTriggered: boolean; canCommit?: () => boolean } = { userTriggered: true },
+  ) => {
+    if (userTriggered) {
+      this.hasUserSelectionIntent = true
+    }
     if (this.selectedItemsCount === 1) {
       const item = this.firstSelectedItem
 
       if (item.content_type === ContentType.TYPES.Note) {
-        await this.openNote(item.uuid)
+        await this.openNote(item.uuid, canCommit)
       } else if (item.content_type === ContentType.TYPES.File) {
         await this.openFile(item.uuid)
+      }
+      if (!this.itemControllerGroup || (canCommit && !canCommit())) {
+        return
       }
       this.recents.add(item.uuid)
 
@@ -2603,6 +2678,9 @@ export class ItemListController
     item: ListableContentItem,
     userTriggered?: boolean,
   ): Promise<{ didSelect: boolean }> => {
+    if (userTriggered) {
+      this.hasUserSelectionIntent = true
+    }
     const uuid = item.uuid
 
     log(LoggingDomain.Selection, 'Select item', uuid)
@@ -2717,7 +2795,10 @@ export class ItemListController
     })
   }
 
-  selectUuids = async (uuids: UuidString[], userTriggered = false) => {
+  selectUuids = async (uuids: UuidString[], userTriggered = false, canCommit?: () => boolean) => {
+    if (userTriggered) {
+      this.hasUserSelectionIntent = true
+    }
     const itemsForUuids = this.itemManager.findItems(uuids).filter((item) => !isFile(item))
 
     if (itemsForUuids.length < 1) {
@@ -2731,7 +2812,7 @@ export class ItemListController
     this.setSelectedUuids(new Set(Uuids(itemsForUuids)))
 
     if (itemsForUuids.length === 1) {
-      void this.openSingleSelectedItem({ userTriggered })
+      await this.openSingleSelectedItem({ userTriggered, canCommit })
     }
   }
 

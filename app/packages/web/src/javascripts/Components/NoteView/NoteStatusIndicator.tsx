@@ -8,6 +8,8 @@ import { VisuallyHidden } from '@ariakit/react'
 import Button from '../Button/Button'
 import Popover from '../Popover/Popover'
 import { getRelativeTimeString } from '@/Utils/GetRelativeTimeString'
+import { useCollaborationStatus } from '../SuperEditor/Collaboration/useCollaborationStatus'
+import { useCollaborationActivity } from './useCollaborationActivity'
 
 export type NoteStatus = {
   type: 'saving' | 'saved' | 'error' | 'waiting'
@@ -23,6 +25,7 @@ const IndicatorWithTooltip = ({
   setIsTooltipVisible,
   children,
   animateIcon = false,
+  activity,
 }: {
   className: string
   onClick: () => void
@@ -31,6 +34,7 @@ const IndicatorWithTooltip = ({
   setIsTooltipVisible: React.Dispatch<React.SetStateAction<boolean>>
   children: ReactNode
   animateIcon?: boolean
+  activity?: boolean
 }) => {
   const buttonRef = useRef<HTMLButtonElement>(null)
 
@@ -41,7 +45,18 @@ const IndicatorWithTooltip = ({
         onClick={onClick}
         ref={buttonRef}
       >
-        <Icon className={animateIcon ? 'animate-spin' : ''} type={icon} size="small" />
+        {activity !== undefined ? (
+          <span
+            aria-hidden="true"
+            data-collaboration-activity={activity ? 'pulsing' : 'idle'}
+            className={classNames(
+              'h-2 w-2 rounded-full bg-current transition-[opacity,transform] duration-200 motion-reduce:transition-none',
+              activity ? 'scale-125 opacity-100' : 'scale-75 opacity-40',
+            )}
+          />
+        ) : (
+          <Icon className={animateIcon ? 'animate-spin' : ''} type={icon} size="small" />
+        )}
         <VisuallyHidden>Note sync status</VisuallyHidden>
       </button>
       <Popover
@@ -77,6 +92,9 @@ const NoteStatusIndicator = ({
   updateSavingIndicator = PrefDefaults[PrefKey.UpdateSavingStatusIndicator],
 }: Props) => {
   const application = useApplication()
+  const collaboration = useCollaborationStatus(note.uuid)
+  const collaborationActive = collaboration?.status.kind === 'active'
+  const collaborationActivity = useCollaborationActivity(note.uuid, collaborationActive)
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
 
   const toggleTooltip = useCallback(() => {
@@ -87,7 +105,7 @@ const NoteStatusIndicator = ({
     void application.setPreference(PrefKey.UpdateSavingStatusIndicator, !updateSavingIndicator)
   }, [application, updateSavingIndicator])
 
-  if (updateSavingIndicator && !status) {
+  if (updateSavingIndicator && !status && !collaborationActive) {
     return null
   }
 
@@ -123,6 +141,23 @@ const NoteStatusIndicator = ({
         ) : (
           <div className="text-warning text-sm font-bold">Sync taking too long</div>
         )}
+      </IndicatorWithTooltip>
+    )
+  }
+
+  if (collaborationActive && (!status || status.type === 'saving' || status.type === 'saved')) {
+    return (
+      <IndicatorWithTooltip
+        className="text-info"
+        onClick={toggleTooltip}
+        icon="check"
+        activity={collaborationActivity}
+        isTooltipVisible={isTooltipVisible}
+        setIsTooltipVisible={setIsTooltipVisible}
+      >
+        <div className="text-sm font-bold">{status?.message ?? 'Live collaboration'}</div>
+        {status?.description && <div className="mt-0.5">{status.description}</div>}
+        <div className="mt-0.5">The dot pulses when the shared note changes.</div>
       </IndicatorWithTooltip>
     )
   }

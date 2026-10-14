@@ -49,6 +49,8 @@ export class ChecklistEditorOwnershipError extends Error {}
 export class ChecklistEditorOpeningCanceledError extends ChecklistEditorOwnershipError {}
 
 export type CreateItemControllerContext = {
+  /** Startup restoration can become obsolete when the user chooses another note. */
+  canCommit?: () => boolean
   file?: FileItem
   note?: SNNote
   templateOptions?: TemplateNoteViewControllerOptions
@@ -299,6 +301,12 @@ export class ItemGroupController {
     context: CreateItemControllerContext,
     reservation?: VisibleChecklistReservation,
   ): Promise<NoteViewController | FileViewController> {
+    const assertCanCommit = () => {
+      if (context.canCommit && !context.canCommit()) {
+        throw new ChecklistEditorOpeningCanceledError('The startup editor selection was superseded.')
+      }
+    }
+    assertCanCommit()
     /**
      * Default (legacy) behavior replaces the active tile, so that selecting a note in the
      * list reuses the single open editor. When `openInNewTile` is set we keep the existing
@@ -338,8 +346,10 @@ export class ItemGroupController {
        */
       await this.flushOutgoingItemControllerForHandover(
         outgoing,
-        reservation ? () => this.visibleChecklistReservationIsCurrent(reservation) : undefined,
+        () =>
+          (!reservation || this.visibleChecklistReservationIsCurrent(reservation)) && (context.canCommit?.() ?? true),
       )
+      assertCanCommit()
       if (reservation) {
         this.assertVisibleChecklistReservationCurrent(reservation)
       }
@@ -380,6 +390,7 @@ export class ItemGroupController {
 
     try {
       await controller.initialize()
+      assertCanCommit()
       if (reservation) {
         this.assertVisibleChecklistReservationCurrent(reservation)
       }

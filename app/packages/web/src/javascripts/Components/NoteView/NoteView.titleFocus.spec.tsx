@@ -22,7 +22,7 @@ global.CSS = {}
 
 import { ReactElement, ReactNode, act, isValidElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { NoteType, SNNote } from '@standardnotes/snjs'
+import { NoteType, PayloadEmitSource, SNNote } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { NoteViewController } from './Controller/NoteViewController'
@@ -142,6 +142,27 @@ afterEach(() => {
 })
 
 describe('collaboration title saves', () => {
+  it('leaves an unchanged retrieved title and focused input untouched during body acknowledgements', () => {
+    const view = createViewFor('note-1', 'Existing title')
+    Object.assign(view.state, { editorTitle: 'Existing title' })
+    Object.assign(view.application.notesController, {
+      getSpellcheckStateForNote: () => view.state.spellcheck,
+      getEditorWidthForNote: () => view.state.editorLineWidth,
+    })
+    const input = mountTitleInput(view)
+    input.focus()
+    input.setSelectionRange(2, 5)
+    const setState = jest.spyOn(view, 'setState')
+    const reloadEditor = jest.spyOn(view, 'reloadEditorComponent')
+    view.onNoteInnerChange(buildNote('note-1', 'Existing title'), PayloadEmitSource.RemoteRetrieved)
+    view.onNoteInnerChange(buildNote('note-1', 'Existing title'), PayloadEmitSource.RemoteRetrieved)
+    expect(setState).not.toHaveBeenCalled()
+    expect(reloadEditor).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(input)
+    expect(input.selectionStart).toBe(2)
+    expect(input.selectionEnd).toBe(5)
+  })
+
   it('keeps a joining shared room title read-only before a saver is installed', () => {
     const view = createViewFor('note-1', 'Existing title')
     const originalTitle = view.state.editorTitle

@@ -1,11 +1,11 @@
-import { FunctionComponent, ReactNode, useEffect, useMemo, useRef } from 'react'
+import { FunctionComponent, ReactNode, useCallback, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { CollaborationPlugin } from '@lexical/react/LexicalCollaborationPlugin'
 import { LexicalCollaboration, useCollaborationContext } from '@lexical/react/LexicalCollaborationContext'
 import type { InitialEditorStateType } from '@lexical/react/LexicalComposer'
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
-import type { Provider } from '@lexical/yjs'
+import { syncCursorPositions, type Provider, type SyncCursorPositionsFn } from '@lexical/yjs'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { WebApplication } from '@/Application/WebApplication'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
@@ -19,6 +19,12 @@ import { CollaborativeDocumentRegistry, documentStateOf } from './CollaborativeD
 import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
 import { createCollaborationCursorTracking } from './CollaborationCursors'
 import { installCollaborationSaver } from './CollaborationSaverElection'
+import { collaborationDeviceId } from './CollaborationDeviceIdentity'
+import {
+  trackEditorResumeCollaboration,
+  trackEditorResumeProvider,
+  clearEditorResumeCollaboration,
+} from '../Plugins/EditorResume/EditorResumeCollaboration'
 import {
   notifyChecklistMutationBridgeReadiness,
   registerChecklistMutationDurabilityFlusher,
@@ -54,7 +60,7 @@ type AwarenessUserState = {
   focusing?: boolean
   anchorPos?: unknown
   focusPos?: unknown
-  awarenessData?: { userUuid?: string }
+  awarenessData?: { userUuid?: string; deviceId?: string }
 }
 
 type AwarenessLike = {
@@ -125,6 +131,10 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   onCanonicalReadyChange,
 }) => {
   const [editor] = useLexicalComposerContext()
+  const syncResumeCursors = useCallback<SyncCursorPositionsFn>((binding, provider, options) => {
+    trackEditorResumeCollaboration(binding, provider)
+    syncCursorPositions(binding, provider, options)
+  }, [])
   const effectiveChecklistOwnerLeaseId = checklistOwnerLeaseId ?? config.editorLease.requestId
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])
 
@@ -163,12 +173,13 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         providerDocumentDisposerRef.current = null
         cursorTrackingRef.current?.dispose()
         cursorTrackingRef.current = null
+        clearEditorResumeCollaboration(editor)
         onCanonicalReadyChange?.(false)
         providerRef.current?.destroy()
         providerRef.current = null
       }, 0)
     }
-  }, [onCanonicalReadyChange])
+  }, [editor, onCanonicalReadyChange])
 
   const providerFactory = useMemo(() => {
     return (id: string, yjsDocMap: Map<string, Doc>): Provider => {
@@ -206,6 +217,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
           onPresenceActivity: showCollaborationPresenceActivity,
         },
       )
+      trackEditorResumeProvider(editor, provider)
       let everCanonicalReady = provider.isCanonicalReady()
       providerReadinessDisposerRef.current?.()
       providerReadinessDisposerRef.current = provider.onCanonicalReadyChange((ready) => {
@@ -282,7 +294,10 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
     onCanonicalReadyChange,
   ])
 
-  const awarenessData = useMemo(() => (config.userUuid ? { userUuid: config.userUuid } : undefined), [config.userUuid])
+  const awarenessData = useMemo(
+    () => (config.userUuid ? { userUuid: config.userUuid, deviceId: collaborationDeviceId() } : undefined),
+    [config.userUuid],
+  )
 
   // Mirror live awareness (who else has this note open) into the registry so the
   // presence sidebar can show genuinely-online collaborators. Excludes the local
@@ -316,6 +331,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         activity.observeCaret(clientId, state.anchorPos, state.focusPos)
         peers.push({
           userUuid: state.awarenessData?.userUuid,
+          deviceId: state.awarenessData?.deviceId,
           name: state.name ?? 'Collaborator',
           color: state.color ?? '#888888',
           clientId,
@@ -361,6 +377,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         cursorColor={config.cursorColor}
         awarenessData={awarenessData}
         cursorsContainerRef={cursorsContainerRef}
+        syncCursorPositionsFn={syncResumeCursors}
       />
     </>
   )

@@ -15,7 +15,8 @@ import { NavigationController } from '../Navigation/NavigationController'
 import { ItemListController } from '../ItemList/ItemListController'
 
 export class PersistenceService implements InternalEventHandlerInterface {
-  private didHydrateOnce = false
+  private capturedStartupState = false
+  private startupState?: PersistedStateValue
 
   constructor(
     private itemListController: ItemListController,
@@ -34,10 +35,9 @@ export class PersistenceService implements InternalEventHandlerInterface {
   async handleEvent(event: InternalEventInterface): Promise<void> {
     switch (event.type) {
       case ApplicationEvent.LocalDataLoaded: {
-        if (!this.didHydrateOnce) {
-          this.hydratePersistedValues()
-          this.didHydrateOnce = true
-        }
+        // The first incremental batch may not contain the remembered note.
+        // Retry after the complete database load even if a fallback was shown.
+        this.hydratePersistedValues()
         break
       }
 
@@ -49,7 +49,6 @@ export class PersistenceService implements InternalEventHandlerInterface {
         }
 
         this.hydratePersistedValues()
-        this.didHydrateOnce = true
         break
       }
 
@@ -70,9 +69,13 @@ export class PersistenceService implements InternalEventHandlerInterface {
   }
 
   hydratePersistedValues = () => {
+    if (!this.capturedStartupState) {
+      this.startupState = this.persistenceEnabled ? this.getPersistedValues() : undefined
+      this.capturedStartupState = true
+    }
     this.eventBus.publish({
       type: CrossControllerEvent.HydrateFromPersistedValues,
-      payload: this.persistenceEnabled ? this.getPersistedValues() : undefined,
+      payload: this.persistenceEnabled ? this.startupState : undefined,
     })
   }
 

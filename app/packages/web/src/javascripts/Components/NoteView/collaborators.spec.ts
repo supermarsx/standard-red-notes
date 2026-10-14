@@ -7,6 +7,7 @@ import { PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
 import { collaboratorColor } from '../SuperEditor/Collaboration/collaboratorColor'
 import {
   buildCollaborators,
+  connectedDeviceLabel,
   COLLABORATORS_COLLAPSED_PREF_KEY,
   describeAttendance,
   describeSession,
@@ -184,6 +185,50 @@ describe("the registry's history, which it does not keep itself", () => {
     expect(names.size).toBe(64)
     expect(names.has('account-5')).toBe(false)
     expect(names.get('account-69')).toBe('name-69')
+  })
+})
+
+describe('connected device counts', () => {
+  const list = (peers: PresentPeer[], state = ACTIVE) =>
+    buildCollaborators({
+      peers,
+      members: [],
+      selfUuid: 'self',
+      selfDeviceId: 'local-profile',
+      state,
+      now: NOW,
+    })
+
+  it('groups several tabs by device while keeping one row per account', () => {
+    const [ada] = list([
+      peer(1, { userUuid: 'ada', deviceId: 'phone' }),
+      peer(2, { userUuid: 'ada', deviceId: 'laptop' }),
+      peer(3, { userUuid: 'ada', deviceId: 'laptop' }),
+    ])
+    expect(ada).toMatchObject({ connectedDevices: 2, connectedSessions: 3 })
+    expect(connectedDeviceLabel(ada)).toBe('2 devices · 3 tabs')
+  })
+
+  it('includes this tab once and deduplicates this account other tabs on the same device', () => {
+    const [self] = list([
+      peer(1, { userUuid: 'self', deviceId: 'local-profile' }),
+      peer(2, { userUuid: 'self', deviceId: 'phone' }),
+    ])
+    expect(self).toMatchObject({ isSelf: true, connectedDevices: 2, connectedSessions: 3 })
+  })
+
+  it('updates counts when connections leave and ignores duplicated awareness entries', () => {
+    const first = peer(1, { userUuid: 'ada', deviceId: 'phone' })
+    const second = peer(2, { userUuid: 'ada', deviceId: 'laptop' })
+    expect(list([first, first, second])[0]).toMatchObject({ connectedDevices: 2, connectedSessions: 2 })
+    expect(connectedDeviceLabel(list([first])[0])).toBe('1 device')
+  })
+
+  it('does not invent devices for older peers or assert stale peers are connected', () => {
+    const ada = peer(1, { userUuid: 'ada' })
+    expect(connectedDeviceLabel(list([ada])[0])).toBe('1 connection')
+    const stale = list([ada], { status: { kind: 'unavailable', reason: 'offline' }, hasBeenActive: true })[0]
+    expect(connectedDeviceLabel(stale)).toBeUndefined()
   })
 })
 

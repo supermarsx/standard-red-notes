@@ -65,6 +65,8 @@ class Footer extends AbstractComponent<Props, State> {
   private didCheckForOffline = false
   private completedInitialSync = false
   private showingDownloadStatus = false
+  private syncStatusMessage?: string
+  private downloadCompletionTimeout?: ReturnType<typeof setTimeout>
   private loadingToastId?: string
   private localDataLoadStartedAt?: number
   private static readonly LOADING_TOAST_ID = 'database-load-progress'
@@ -130,6 +132,7 @@ class Footer extends AbstractComponent<Props, State> {
 
   override deinit() {
     this.dismissLoadingToast()
+    clearTimeout(this.downloadCompletionTimeout)
 
     this.removeStatusObserver()
     ;(this.removeStatusObserver as unknown) = undefined
@@ -154,9 +157,9 @@ class Footer extends AbstractComponent<Props, State> {
       if (event !== StatusServiceEvent.MessageChanged) {
         return
       }
-      this.setState({
-        arbitraryStatusMessage: message,
-      })
+      if (message !== this.state.arbitraryStatusMessage) {
+        this.setState({ arbitraryStatusMessage: message })
+      }
     })
   }
 
@@ -213,7 +216,7 @@ class Footer extends AbstractComponent<Props, State> {
         break
       case ApplicationEvent.CompletedFullSync:
         if (!this.completedInitialSync) {
-          this.application.status.setMessage('')
+          this.publishSyncMessage('')
           this.completedInitialSync = true
         }
         if (!this.didCheckForOffline) {
@@ -229,6 +232,7 @@ class Footer extends AbstractComponent<Props, State> {
         })
         break
       case ApplicationEvent.SyncStatusChanged:
+      case ApplicationEvent.HighLatencySync:
         this.updateSyncStatus()
         break
       case ApplicationEvent.FailedSync:
@@ -252,27 +256,47 @@ class Footer extends AbstractComponent<Props, State> {
         break
       case ApplicationEvent.WillSync:
         if (!this.completedInitialSync) {
-          this.application.status.setMessage('Syncing…')
+          this.publishSyncMessage('Syncing…')
         }
         break
     }
   }
 
+  /** Routine saves stay quiet and must not erase backup or other footer messages. */
+  private publishSyncMessage(message: string): void {
+    const status = this.application.status
+    if (!message) {
+      const previous = this.syncStatusMessage
+      this.syncStatusMessage = undefined
+      if (previous && status.message === previous) {
+        status.setMessage('')
+      }
+      return
+    }
+    this.syncStatusMessage = message
+    if (status.message !== message) {
+      status.setMessage(message)
+    }
+  }
+
   updateSyncStatus() {
-    const statusManager = this.application.status
     const syncStatus = this.application.sync.getSyncStatus()
     const stats = syncStatus.getStats()
     if (syncStatus.hasError()) {
-      statusManager.setMessage('Unable to Sync')
+      this.publishSyncMessage('Unable to Sync')
     } else if (stats.downloadCount > 20) {
       const text = `Downloading ${stats.downloadCount} items. Keep app open.`
-      statusManager.setMessage(text)
+      this.publishSyncMessage(text)
       this.showingDownloadStatus = true
     } else if (this.showingDownloadStatus) {
       this.showingDownloadStatus = false
-      statusManager.setMessage('Download Complete.')
-      setTimeout(() => {
-        statusManager.setMessage('')
+      this.publishSyncMessage('Download Complete.')
+      clearTimeout(this.downloadCompletionTimeout)
+      this.downloadCompletionTimeout = setTimeout(() => {
+        this.downloadCompletionTimeout = undefined
+        if (this.syncStatusMessage === 'Download Complete.') {
+          this.publishSyncMessage('')
+        }
       }, 2000)
     } else if (stats.uploadTotalCount > 20) {
       const completionPercentage =
@@ -282,9 +306,11 @@ class Footer extends AbstractComponent<Props, State> {
         style: 'percent',
       })
 
-      statusManager.setMessage(`Syncing ${stats.uploadTotalCount} items (${stringPercentage} complete)`)
+      this.publishSyncMessage(`Syncing ${stats.uploadTotalCount} items (${stringPercentage} complete)`)
+    } else if (syncStatus.syncInProgress && syncStatus.secondsSinceSyncStart >= 5) {
+      this.publishSyncMessage('Syncing… Taking longer than usual.')
     } else {
-      statusManager.setMessage('')
+      this.publishSyncMessage('')
     }
   }
 

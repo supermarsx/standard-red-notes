@@ -1,7 +1,14 @@
-import { ContentType, NoteType, Result, SNNote } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, NoteType, Result, SNNote } from '@standardnotes/snjs'
 import { InternalEventBus, ItemManagerInterface } from '@standardnotes/services'
-import { ItemGroupController } from '@/Components/NoteView/Controller/ItemGroupController'
+import {
+  ChecklistEditorOpeningCanceledError,
+  ItemGroupController,
+} from '@/Components/NoteView/Controller/ItemGroupController'
 import { ItemListController } from './ItemListController'
+import { PersistenceService } from '../Abstract/PersistenceService'
+import { PersistedStateValue, PersistenceKey, StorageKey } from '@standardnotes/ui-services'
+import { ShouldPersistNoteStateKey } from '@/Components/Preferences/Panes/General/Persistence'
+import { NoteViewController } from '@/Components/NoteView/Controller/NoteViewController'
 
 /**
  * Standard Red Notes: double-clicking a row in the notes list opens that note in
@@ -28,10 +35,13 @@ jest.mock('@standardnotes/toast', () => ({
 
 jest.mock('@/Components/NoteView/Controller/NoteViewController', () => {
   class MockNoteViewController {
+    static initializeFor = new Map<string, () => Promise<void>>()
     runtimeId = `${Math.random()}`
     item: { uuid: string }
     dealloced = false
-    initialize = jest.fn().mockResolvedValue(undefined)
+    initialize = jest.fn(async () => {
+      await MockNoteViewController.initializeFor.get(this.item.uuid)?.()
+    })
     deinit = jest.fn(() => {
       this.dealloced = true
     })
@@ -61,14 +71,22 @@ const makeNote = (uuid: string): SNNote =>
     payload: {},
   }) as unknown as SNNote
 
+const initializers = (NoteViewController as unknown as { initializeFor: Map<string, () => Promise<void>> })
+  .initializeFor
+
 describe('notes-list double click opens a new tab', () => {
   let controller: ItemListController
   let group: ItemGroupController
   let store: Map<string, SNNote>
+  let eventBus: InternalEventBus
+  let itemManager: ItemManagerInterface
+  let controllerWasDeinitialized: boolean
 
   const items = () =>
     ({
       findItem: jest.fn((uuid: string) => store.get(uuid)),
+      findSureItem: jest.fn((uuid: string) => store.get(uuid)),
+      findItems: jest.fn((uuids: string[]) => uuids.flatMap((uuid) => (store.has(uuid) ? [store.get(uuid)] : []))),
       streamItems: jest.fn(() => jest.fn()),
       getItems: jest.fn(() => [...store.values()]),
       conflictsOf: jest.fn().mockReturnValue([]),
@@ -78,13 +96,16 @@ describe('notes-list double click opens a new tab', () => {
     }) as unknown as ItemManagerInterface
 
   beforeEach(() => {
+    initializers.clear()
+    controllerWasDeinitialized = false
     store = new Map([
       ['note-a', makeNote('note-a')],
       ['note-b', makeNote('note-b')],
       ['note-c', makeNote('note-c')],
     ])
 
-    const itemManager = items()
+    itemManager = items()
+    eventBus = new InternalEventBus()
     /**
      * The local-pref store must really STORE: a fake whose `setLocalValue` drops
      * the write makes `setTabLocked` inert, and the locked-tab test below then
@@ -147,12 +168,14 @@ describe('notes-list double click opens a new tab', () => {
       { execute: jest.fn().mockReturnValue(Result.ok(false)) } as never,
       { execute: jest.fn() } as never,
       { add: jest.fn() } as never,
-      new InternalEventBus(),
+      eventBus,
     )
   })
 
   afterEach(() => {
-    controller.deinit()
+    if (!controllerWasDeinitialized) {
+      controller.deinit()
+    }
   })
 
   const openUuids = () => group.itemControllers.map((open) => open.item?.uuid)
@@ -243,6 +266,245 @@ describe('notes-list double click opens a new tab', () => {
     await controller.openListItemInNewTabFromDoubleClick('note-b', displaced)
 
     expect(openUuids()).toEqual(['note-b'])
+  })
+
+  describe('last-session note persistence', () => {
+    const settle = async () => {
+      for (let turn = 0; turn < 30; turn++) {
+        await Promise.resolve()
+      }
+    }
+    const persistence = (selectedUuids: string[], enabled = true) => {
+      const values = new Map<string, unknown>([
+        [ShouldPersistNoteStateKey, enabled],
+        [
+          StorageKey.MasterStatePersistenceKey,
+          {
+            [PersistenceKey.ItemListController]: { selectedUuids },
+            [PersistenceKey.NavigationController]: {},
+          },
+        ],
+      ])
+      let loaded = false
+      const service = new PersistenceService(
+        controller,
+        { getPersistableValue: () => ({}), hydrateFromPersistedValue: jest.fn() } as never,
+        {
+          getValue: (key: string) => values.get(key),
+          setValue: (key: string, value: unknown) => values.set(key, JSON.parse(JSON.stringify(value))),
+        } as never,
+        itemManager,
+        { isDatabaseLoaded: () => loaded, setLaunchPriorityUuids: jest.fn() } as never,
+        eventBus,
+      )
+      return {
+        service,
+        values,
+        loaded: () => (loaded = true),
+        saved: () =>
+          (values.get(StorageKey.MasterStatePersistenceKey) as PersistedStateValue)[PersistenceKey.ItemListController],
+      }
+    }
+
+    it('retries the remembered note after an automatic fallback was opened before its load batch', async () => {
+      const remembered = store.get('note-a')!
+      store.delete('note-a')
+      const state = persistence(['note-a'])
+      controller.setSelectedUuids(new Set(['note-b']))
+      await controller.openNote('note-b')
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBe('note-b')
+      expect(state.saved().selectedUuids).toEqual(['note-a'])
+      store.set('note-a', remembered)
+      state.loaded()
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBe('note-a')
+      expect([...controller.selectedUuids]).toEqual(['note-a'])
+      expect(state.saved().selectedUuids).toEqual(['note-a'])
+    })
+
+    it('persists and restores the committed reopened note while the list highlights the previous note', async () => {
+      const state = persistence([])
+      state.loaded()
+      controller.setSelectedUuids(new Set(['note-b']))
+      await controller.openNote('note-b')
+      expect(state.saved().selectedUuids).toEqual(['note-b'])
+      await controller.openNote('note-a')
+      expect([...controller.selectedUuids]).toEqual(['note-b'])
+      expect(state.saved().selectedUuids).toEqual(['note-a'])
+      const saved = state.values.get(StorageKey.MasterStatePersistenceKey) as PersistedStateValue
+      group.closeAllItemControllers()
+      controller.setSelectedUuids(new Set())
+      state.service.hydrateFromPersistedValues(saved)
+      await settle()
+      expect(activeUuid()).toBe('note-a')
+    })
+
+    it('retries a startup editor open canceled by authorization before the final load', async () => {
+      const state = persistence(['note-a'])
+      jest
+        .spyOn(group, 'createItemController')
+        .mockRejectedValueOnce(new ChecklistEditorOpeningCanceledError('startup'))
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      await settle()
+      expect([...controller.selectedUuids]).toEqual(['note-a'])
+      expect(activeUuid()).toBeUndefined()
+      state.loaded()
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBe('note-a')
+      expect(state.saved().selectedUuids).toEqual(['note-a'])
+    })
+
+    it('coalesces final-load restoration while a canceled startup open is still settling', async () => {
+      const state = persistence(['note-a'])
+      let cancel!: (error: Error) => void
+      jest.spyOn(group, 'createItemController').mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            cancel = reject
+          }),
+      )
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      state.loaded()
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      expect(group.createItemController).toHaveBeenCalledTimes(1)
+      cancel(new ChecklistEditorOpeningCanceledError('startup'))
+      await settle()
+      expect(group.createItemController).toHaveBeenCalledTimes(2)
+      expect(activeUuid()).toBe('note-a')
+    })
+
+    it('retries an uncommitted startup selection when full synchronization becomes ready', async () => {
+      const state = persistence(['note-a'])
+      jest
+        .spyOn(group, 'createItemController')
+        .mockRejectedValueOnce(new ChecklistEditorOpeningCanceledError('startup'))
+      state.loaded()
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBeUndefined()
+      await controller.handleEvent({ type: ApplicationEvent.CompletedFullSync, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBe('note-a')
+    })
+
+    it('keeps the user choice after an earlier restore was canceled', async () => {
+      const state = persistence(['note-a'])
+      jest
+        .spyOn(group, 'createItemController')
+        .mockRejectedValueOnce(new ChecklistEditorOpeningCanceledError('startup'))
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      await settle()
+      await controller.selectUuids(['note-b'], true)
+      state.loaded()
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBe('note-b')
+    })
+
+    it('does not revive restoration callbacks after teardown while an editor open is pending', async () => {
+      const state = persistence(['note-a'])
+      let finish!: () => void
+      jest.spyOn(group, 'createItemController').mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({} as never)
+          }),
+      )
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      controller.deinit()
+      controllerWasDeinitialized = true
+      finish()
+      await settle()
+      expect(error).not.toHaveBeenCalled()
+      expect(group.createItemController).toHaveBeenCalledTimes(1)
+      expect(Object.prototype.hasOwnProperty.call(controller, 'restoringPersistedSelection')).toBe(false)
+      error.mockRestore()
+    })
+
+    it('does not retry a pending canceled restore after the user has opened another note', async () => {
+      const state = persistence(['note-a'])
+      let cancel!: (error: Error) => void
+      jest.spyOn(group, 'createItemController').mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            cancel = reject
+          }),
+      )
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      await controller.selectUuids(['note-b'], true)
+      cancel(new ChecklistEditorOpeningCanceledError('startup'))
+      await settle()
+      expect(activeUuid()).toBe('note-b')
+      expect(group.createItemController).toHaveBeenCalledTimes(2)
+    })
+
+    it('cannot commit a slower successful startup restore over a newer explicit note choice', async () => {
+      const state = persistence(['note-a'])
+      let finish!: () => void
+      initializers.set(
+        'note-a',
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataIncrementalLoad, payload: undefined })
+      await settle()
+      await controller.selectUuids(['note-b'], true)
+      expect(activeUuid()).toBe('note-b')
+      finish()
+      await settle()
+      expect(activeUuid()).toBe('note-b')
+      expect(openUuids()).toEqual(['note-b'])
+      expect([...controller.selectedUuids]).toEqual(['note-b'])
+    })
+
+    it('does not let late restoration override an explicit user choice or disabled persistence', async () => {
+      const state = persistence(['note-a'])
+      controller.setSelectedUuids(new Set(['note-b']))
+      await controller.openSingleSelectedItem({ userTriggered: true })
+      await settle()
+      state.loaded()
+      await state.service.handleEvent({ type: ApplicationEvent.LocalDataLoaded, payload: undefined })
+      await settle()
+      expect(activeUuid()).toBe('note-b')
+      state.values.set(ShouldPersistNoteStateKey, false)
+      group.closeAllItemControllers()
+      controller.setSelectedUuids(new Set())
+      state.service.hydratePersistedValues()
+      await settle()
+      expect(activeUuid()).toBeUndefined()
+    })
+
+    it('preserves multi-selection and selected files rather than replacing them with a background note', async () => {
+      await controller.openNote('note-a')
+      controller.setSelectedUuids(new Set(['note-a', 'note-b']))
+      expect(controller.getPersistableValue().selectedUuids).toEqual(['note-a', 'note-b'])
+      store.set('file', { ...makeNote('file'), content_type: ContentType.TYPES.File } as SNNote)
+      controller.setSelectedUuids(new Set(['file']))
+      expect(controller.getPersistableValue().selectedUuids).toEqual(['file'])
+    })
+    it('keeps the actually committed note persisted when a requested switch is canceled', async () => {
+      const state = persistence([])
+      state.loaded()
+      controller.setSelectedUuids(new Set(['note-b']))
+      await controller.openNote('note-b')
+      controller.setSelectedUuids(new Set(['note-a']))
+      jest
+        .spyOn(group, 'createItemController')
+        .mockRejectedValueOnce(new ChecklistEditorOpeningCanceledError('revoked'))
+      await controller.openNote('note-a')
+      await settle()
+      expect(activeUuid()).toBe('note-b')
+      expect(state.saved().selectedUuids).toEqual(['note-b'])
+    })
   })
 
   it('still opens the note when the first click did not open it at all', async () => {
