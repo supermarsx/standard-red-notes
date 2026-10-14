@@ -25,6 +25,11 @@ const UserPaths = {
   register: '/v1/users',
   session: (sessionUuid: string) => `/v1/sessions/${sessionUuid}`,
   sessions: '/v1/sessions',
+  sessionActivity: '/v1/sessions/activity',
+  adminUserSessions: (userUuid: string) => `/v1/admin/users/${encodeURIComponent(userUuid)}/sessions`,
+  adminUserStorageUsage: (userUuid: string) => `/v1/admin/users/${encodeURIComponent(userUuid)}/storage-usage`,
+  adminUserMfaStatus: (userUuid: string) => `/v1/admin/users/${encodeURIComponent(userUuid)}/mfa/status`,
+  adminUserMfaReset: (userUuid: string) => `/v1/admin/users/${encodeURIComponent(userUuid)}/mfa/reset`,
   signIn: '/v1/login',
   signOut: '/v1/logout',
   // Standard Red Notes: EMAIL CONFIRMATION (part 2). Public, unauthenticated.
@@ -33,6 +38,7 @@ const UserPaths = {
 }
 
 const ItemsPaths = {
+  storageUsage: '/v1/items/storage-usage',
   checkIntegrity: '/v1/items/check-integrity',
   getSingleItem: (uuid: string) => `/v1/items/${uuid}`,
   itemRevisions: (itemUuid: string) => `/v1/items/${itemUuid}/revisions`,

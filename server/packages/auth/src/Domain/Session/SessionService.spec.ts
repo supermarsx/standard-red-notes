@@ -249,6 +249,7 @@ describe('SessionService', () => {
 
     expect(sessionRepository.insert).toHaveBeenCalledWith(expect.any(Session))
     expect(sessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20200115,
       createdAt: expect.any(Date),
@@ -289,6 +290,7 @@ describe('SessionService', () => {
 
     expect(sessionRepository.insert).toHaveBeenCalledWith(expect.any(Session))
     expect(sessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20240226,
       createdAt: expect.any(Date),
@@ -329,6 +331,7 @@ describe('SessionService', () => {
 
     expect(sessionRepository.insert).toHaveBeenCalledWith(expect.any(Session))
     expect(sessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20240226,
       createdAt: expect.any(Date),
@@ -369,6 +372,7 @@ describe('SessionService', () => {
 
     expect(sessionRepository.insert).toHaveBeenCalledWith(expect.any(Session))
     expect(sessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20200115,
       createdAt: expect.any(Date),
@@ -410,6 +414,7 @@ describe('SessionService', () => {
 
     expect(sessionRepository.insert).toHaveBeenCalledWith(expect.any(Session))
     expect(sessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20200115,
       createdAt: expect.any(Date),
@@ -457,6 +462,7 @@ describe('SessionService', () => {
 
     expect(sessionRepository.insert).toHaveBeenCalledWith(expect.any(Session))
     expect(sessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20200115,
       createdAt: expect.any(Date),
@@ -619,6 +625,7 @@ describe('SessionService', () => {
 
     expect(ephemeralSessionRepository.insert).toHaveBeenCalledWith(expect.any(EphemeralSession))
     expect(ephemeralSessionRepository.insert).toHaveBeenCalledWith({
+      authGeneration: 0,
       accessExpiration: expect.any(Date),
       apiVersion: ApiVersion.VERSIONS.v20200115,
       createdAt: expect.any(Date),

@@ -603,6 +603,81 @@ export class AdminController extends BaseHttpController {
    * one that matters is the handler's, because it is the one the single-container
    * topology also runs.
    */
+  @httpGet('/users/:userUuid/mfa/status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUserMfaStatus(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'admin/users/:userUuid/mfa/status',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+  @httpPost('/users/:userUuid/mfa/reset', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async resetUserMfa(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (response.locals.readOnlyAccess) {
+      response.status(403).json({ error: { message: 'Writable admin session required.' } })
+      return
+    }
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'POST',
+        'admin/users/:userUuid/mfa/reset',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpGet('/users/:userUuid/storage-usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUserStorageUsage(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    await this.serviceProxy.callSyncingServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'items/storage-usage/:userUuid',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
+  @httpGet('/users/:userUuid/sessions', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUserSessions(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'admin/users/:userUuid/sessions',
+        request.params.userUuid as string,
+      ),
+      request.body,
+    )
+  }
+
   @httpPost('/item-storage-usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async getUsersItemStorageUsage(request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {

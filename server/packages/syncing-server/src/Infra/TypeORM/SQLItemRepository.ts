@@ -1,7 +1,8 @@
 import { Repository, SelectQueryBuilder } from 'typeorm'
-import { safeErrorLogMetadata, MapperInterface, Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, MapperInterface, Uuid, StorageComponent } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
+import { inSyncingTransaction } from './InSyncingTransaction'
 import { Item } from '../../Domain/Item/Item'
 import { ItemQuery } from '../../Domain/Item/ItemQuery'
 import { ItemRepositoryInterface } from '../../Domain/Item/ItemRepositoryInterface'
@@ -219,6 +220,59 @@ export class SQLItemRepository implements ItemRepositoryInterface {
    * Both `CASE` forms and `COALESCE` are standard SQL and behave identically on
    * the two dialects this server ships with (MySQL and SQLite).
    */
+  async measureStoredItems(userUuid: string, vaultUuids: string[]): Promise<StorageComponent> {
+    return inSyncingTransaction(this.ormRepository.manager.connection, async (manager) => {
+      const repository = manager.getRepository(SQLItem)
+      const scoped = () => {
+        const query = repository
+          .createQueryBuilder('item')
+          .where('item.deleted = :deleted', { deleted: false })
+          .andWhere(
+            vaultUuids.length
+              ? '((item.shared_vault_uuid IS NULL AND item.user_uuid = :userUuid) OR item.shared_vault_uuid IN (:...vaultUuids))'
+              : '(item.shared_vault_uuid IS NULL AND item.user_uuid = :userUuid)',
+            { userUuid, vaultUuids },
+          )
+        return query
+      }
+      const row = await scoped()
+        .select('COALESCE(SUM(item.content_size), 0)', 'bytes')
+        .addSelect('COUNT(*)', 'count')
+        .addSelect('COALESCE(SUM(CASE WHEN item.content_size < 0 THEN 1 ELSE 0 END), 0)', 'invalid')
+        .getRawOne<{ bytes: string | number; count: string | number; invalid: string | number }>()
+      if (Number(row?.invalid) > 0) {
+        throw new Error('Item size unavailable')
+      }
+      let bytes = Number(row?.bytes)
+      const count = Number(row?.count)
+      // Legacy rows have no content_size. Measure their actual persisted encrypted
+      // item representation through the same mapper used by the normal save path.
+      let after: string | undefined
+      for (;;) {
+        const query = scoped().andWhere('item.content_size IS NULL').orderBy('item.uuid', 'ASC').take(500)
+        if (after) {
+          query.andWhere('item.uuid > :after', { after })
+        }
+        const rows = await query.getMany()
+        if (!rows.length) {
+          break
+        }
+        for (const item of rows) {
+          const size = this.mapper.toDomain(item).props.contentSize
+          if (size == null || !Number.isSafeInteger(size) || size < 0) {
+            throw new Error('Item size unavailable')
+          }
+          bytes += size
+        }
+        after = rows[rows.length - 1].uuid
+      }
+      if (!Number.isSafeInteger(bytes) || bytes < 0 || !Number.isSafeInteger(count) || count < 0) {
+        throw new Error('Item size unavailable')
+      }
+      return { bytes, count, complete: true }
+    })
+  }
+
   async getStorageUsageForUser(userUuid: Uuid): Promise<ItemStorageUsage> {
     const raw = await this.ormRepository
       .createQueryBuilder('item')

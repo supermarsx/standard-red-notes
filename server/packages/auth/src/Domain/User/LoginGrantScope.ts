@@ -22,15 +22,14 @@ export class LoginGrantScope {
       this.settings.findLastByNameAndUserUuid(SettingName.NAMES.MfaSecret, user.uuid),
       this.settings.findLastByNameAndUserUuid(SettingName.NAMES.MagicLinkEnabled, user.uuid),
       this.authenticators.findByUserUuid(uuid.getValue()),
-      flow === 'recovery'
-        ? this.settings.findLastByNameAndUserUuid(SettingName.NAMES.RecoveryCodes, user.uuid)
-        : null,
+      flow === 'recovery' ? this.settings.findLastByNameAndUserUuid(SettingName.NAMES.RecoveryCodes, user.uuid) : null,
     ])
     // Stored ciphertext identifies factor changes without decrypting or logging secrets.
     // Authenticator counters deliberately do not participate in policy identity.
     const policy = JSON.stringify({
       flow,
       account: user.uuid,
+      authGeneration: user.authGeneration ?? 0,
       workspace: user.workspaceIdentifier ?? 'default',
       password: user.encryptedPassword,
       mfa: mfa?.props.value ?? null,

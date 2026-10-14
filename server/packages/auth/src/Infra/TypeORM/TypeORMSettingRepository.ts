@@ -1,3 +1,4 @@
+import { authGenerationManager } from '../../Domain/Session/AuthSessionGenerationService'
 import { Repository } from 'typeorm'
 
 import { Setting } from '../../Domain/Setting/Setting'
@@ -8,9 +9,13 @@ import { MapperInterface, SettingName } from '@standardnotes/domain-core'
 
 export class TypeORMSettingRepository implements SettingRepositoryInterface {
   constructor(
-    private ormRepository: Repository<TypeORMSetting>,
+    private baseRepository: Repository<TypeORMSetting>,
     private mapper: MapperInterface<Setting, TypeORMSetting>,
   ) {}
+
+  private get ormRepository(): Repository<TypeORMSetting> {
+    return authGenerationManager()?.getRepository(TypeORMSetting) ?? this.baseRepository
+  }
 
   async countAllByNameAndValue(dto: { name: SettingName; value: string }): Promise<number> {
     return this.ormRepository

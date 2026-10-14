@@ -1,6 +1,7 @@
 import * as crypto from 'crypto'
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 
+import { AuthSessionGenerationService } from '../../Session/AuthSessionGenerationService'
 import { Session } from '../../Session/Session'
 import { GetSessionFromTokenDTO } from './GetSessionFromTokenDTO'
 import { SessionService } from '../../Session/SessionService'
@@ -16,6 +17,7 @@ export class GetSessionFromToken implements UseCaseInterface<GetSessionFromToken
     private ephemeralSessionRepository: EphemeralSessionRepositoryInterface,
     private getCooldownSessionTokens: GetCooldownSessionTokens,
     private logger: Logger,
+    private generation?: AuthSessionGenerationService,
   ) {}
 
   async execute(dto: GetSessionFromTokenDTO): Promise<Result<GetSessionFromTokenResult>> {
@@ -89,6 +91,10 @@ export class GetSessionFromToken implements UseCaseInterface<GetSessionFromToken
 
     if (accessTokens.length === 0 || !retrievedSession) {
       return Result.fail('Invalid token')
+    }
+
+    if (this.generation && !(await this.generation.sessionCurrent(retrievedSession))) {
+      return Result.fail('Session not found')
     }
 
     const currentSessionTokensMatching = this.areTokensMatching(accessTokens, retrievedSession.hashedAccessToken)

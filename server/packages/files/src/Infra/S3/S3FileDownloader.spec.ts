@@ -58,7 +58,34 @@ describe('S3FileDownloader', () => {
         { name: 'user/two', size: 2 },
       ])
       expect(lastCommand()).toBeInstanceOf(ListObjectsV2Command)
-      expect(lastCommand().input).toEqual({ Bucket: 'bucket', Prefix: 'user' })
+      expect(lastCommand().input).toEqual({ Bucket: 'bucket', Prefix: 'user/', ContinuationToken: undefined })
+    })
+
+    it('paginates more than one object page and keeps owner prefixes isolated', async () => {
+      s3Client.send = jest
+        .fn()
+        .mockResolvedValueOnce({
+          Contents: [
+            { Key: 'user/one', Size: 1 },
+            { Key: 'user-other/wrong', Size: 99 },
+          ],
+          IsTruncated: true,
+          NextContinuationToken: 'page2',
+        })
+        .mockResolvedValueOnce({ Contents: [{ Key: 'user/two', Size: 2 }], IsTruncated: false })
+      expect(await createDownloader().listFiles('user')).toEqual([
+        { name: 'user/one', size: 1 },
+        { name: 'user/two', size: 2 },
+      ])
+      expect((s3Client.send as jest.Mock).mock.calls[1][0].input).toEqual({
+        Bucket: 'bucket',
+        Prefix: 'user/',
+        ContinuationToken: 'page2',
+      })
+    })
+    it('rejects truncated listings without a usable continuation token', async () => {
+      s3Client.send = jest.fn().mockResolvedValue({ IsTruncated: true })
+      await expect(createDownloader().listFiles('user')).rejects.toThrow('Incomplete file listing')
     })
 
     it('returns an empty list when the bucket holds nothing for the user', async () => {
@@ -73,10 +100,10 @@ describe('S3FileDownloader', () => {
       expect(await createDownloader().listFiles('user')).toEqual([{ name: 'user/two', size: 2 }])
     })
 
-    it('reports an object with no reported size as zero bytes', async () => {
+    it('rejects an object with no reported size instead of fabricating zero bytes', async () => {
       s3Client.send = jest.fn().mockResolvedValue({ Contents: [{ Key: 'user/one' }] })
 
-      expect(await createDownloader().listFiles('user')).toEqual([{ name: 'user/one', size: 0 }])
+      await expect(createDownloader().listFiles('user')).rejects.toThrow('File size unavailable')
     })
   })
 })

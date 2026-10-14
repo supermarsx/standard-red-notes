@@ -49,11 +49,12 @@ export class AuthenticationMethodResolver implements AuthenticationMethodResolve
         userId: userUuid.value,
       })
 
-      return {
-        type: 'jwt',
-        user: await this.userRepository.findOneByUuid(userUuid),
-        claims: decodedToken,
+      const user = await this.userRepository.findOneByUuid(userUuid)
+      const generation = decodedToken.auth_generation ?? 0
+      if (user && (!Number.isSafeInteger(generation) || generation !== (user.authGeneration ?? 0))) {
+        return undefined
       }
+      return { type: 'jwt', user, claims: decodedToken }
     }
 
     const resultOrError = await this.getSessionFromToken.execute(dto)
@@ -68,12 +69,11 @@ export class AuthenticationMethodResolver implements AuthenticationMethodResolve
       }
       const userUuid = userUuidOrError.getValue()
 
-      return {
-        type: 'session_token',
-        user: await this.userRepository.findOneByUuid(userUuid),
-        session: session,
-        givenTokensWereInCooldown: givenTokensWereInCooldown,
+      const user = await this.userRepository.findOneByUuid(userUuid)
+      if (user && (session.authGeneration ?? 0) !== (user.authGeneration ?? 0)) {
+        return undefined
       }
+      return { type: 'session_token', user, session, givenTokensWereInCooldown }
     }
 
     const revokedSession = await this.sessionService.getRevokedSessionFromToken(dto.authTokenFromHeaders)

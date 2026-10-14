@@ -1,7 +1,8 @@
-import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { AccountStorageUsage, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
 import { GetUserStorageUsageDTO } from './GetUserStorageUsageDTO'
 import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
+import { AccountStorageUsageService } from './AccountStorageUsageService'
 import { ItemStorageUsage } from '../../../Item/ItemStorageUsage'
 
 /**
@@ -41,9 +42,12 @@ import { ItemStorageUsage } from '../../../Item/ItemStorageUsage'
  * file total it reads from auth, and reports which halves it had.
  */
 export class GetUserStorageUsage implements UseCaseInterface<ItemStorageUsage> {
-  constructor(private itemRepository: ItemRepositoryInterface) {}
+  constructor(
+    private itemRepository: ItemRepositoryInterface,
+    private accountUsage?: AccountStorageUsageService,
+  ) {}
 
-  async execute(dto: GetUserStorageUsageDTO): Promise<Result<ItemStorageUsage>> {
+  async execute(dto: GetUserStorageUsageDTO): Promise<Result<ItemStorageUsage & Partial<AccountStorageUsage>>> {
     const userUuidOrError = Uuid.create(dto.userUuid)
     if (userUuidOrError.isFailed()) {
       return Result.fail(userUuidOrError.getError())
@@ -51,6 +55,6 @@ export class GetUserStorageUsage implements UseCaseInterface<ItemStorageUsage> {
 
     const usage = await this.itemRepository.getStorageUsageForUser(userUuidOrError.getValue())
 
-    return Result.ok(usage)
+    return Result.ok(this.accountUsage ? { ...usage, ...(await this.accountUsage.measure(dto.userUuid)) } : usage)
   }
 }

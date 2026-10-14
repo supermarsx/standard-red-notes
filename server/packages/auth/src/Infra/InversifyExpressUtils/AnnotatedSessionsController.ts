@@ -8,6 +8,8 @@ import { CreateCrossServiceToken } from '../../Domain/UseCase/CreateCrossService
 import { GetActiveSessionsForUser } from '../../Domain/UseCase/GetActiveSessionsForUser'
 import { CustomProjectorInterface } from '../../Projection/ProjectorInterface'
 import { Session } from '../../Domain/Session/Session'
+import { AdminMfaService } from '../../Domain/Session/AdminMfaService'
+import { SessionActivityService } from '../../Domain/Session/SessionActivityService'
 import { BaseSessionsController } from './Base/BaseSessionsController'
 
 @controller('/sessions')
@@ -17,8 +19,23 @@ export class AnnotatedSessionsController extends BaseSessionsController {
     @inject(TYPES.Auth_AuthenticateRequest) override authenticateRequest: AuthenticateRequest,
     @inject(TYPES.Auth_SessionProjector) override sessionProjector: CustomProjectorInterface<Session>,
     @inject(TYPES.Auth_CreateCrossServiceToken) override createCrossServiceToken: CreateCrossServiceToken,
+    @inject(SessionActivityService) activity: SessionActivityService,
+    @inject(AdminMfaService) adminMfa: AdminMfaService,
   ) {
-    super(getActiveSessionsForUser, authenticateRequest, sessionProjector, createCrossServiceToken)
+    super(
+      getActiveSessionsForUser,
+      authenticateRequest,
+      sessionProjector,
+      createCrossServiceToken,
+      undefined,
+      activity,
+      adminMfa,
+    )
+  }
+
+  @httpPost('/activity', TYPES.Auth_RequiredCrossServiceTokenMiddleware, TYPES.Auth_SessionMiddleware)
+  override async recordActivity(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.recordActivity(request, response)
   }
 
   @httpPost('/validate')

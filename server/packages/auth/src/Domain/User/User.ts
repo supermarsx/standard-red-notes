@@ -23,6 +23,9 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   declare uuid: string
 
+  @Column({ name: 'auth_generation', type: 'int', default: 0, update: false })
+  declare authGeneration: number
+
   @Column({
     length: 255,
     nullable: true,

@@ -4,6 +4,8 @@ import { WebApplication } from '@/Application/WebApplication'
 import Authentication from './Authentication'
 import Credentials from './Credentials'
 import Sync from './Sync'
+import SessionsAndDevices from './SessionsAndDevices'
+import StorageUsagePanel from '@/Components/StorageUsage/StorageUsagePanel'
 import SignOutWrapper from './SignOutView'
 import FilesSection from './Files'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
@@ -27,6 +29,8 @@ const AccountPreferences = ({ application }: Props) => {
           <ProfilePicture application={application} />
           <Credentials application={application} />
           <Sync application={application} />
+          <SessionsAndDevices application={application} />
+          <StorageUsagePanel application={application} />
         </>
       )}
       {application.hasAccount() && application.featuresController.entitledToFiles && (

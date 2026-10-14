@@ -44,6 +44,16 @@ export class SessionsController extends BaseHttpController {
     )
   }
 
+  @httpPost('/activity', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async recordActivity(request: Request, response: Response): Promise<void> {
+    await this.httpService.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'sessions/activity'),
+      request.body,
+    )
+  }
+
   @httpPost('/refresh')
   async refreshSession(request: Request, response: Response): Promise<void> {
     await this.httpService.callAuthServer(

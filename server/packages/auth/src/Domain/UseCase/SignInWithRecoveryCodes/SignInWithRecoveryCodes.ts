@@ -1,6 +1,7 @@
 import * as bcrypt from 'bcryptjs'
 import { Result, SettingName, UseCaseInterface, Username, Uuid, Validator } from '@standardnotes/domain-core'
 
+import { AuthSessionGenerationService, AuthGenerationChangedError } from '../../Session/AuthSessionGenerationService'
 import { AuthResponse20200115 } from '../../Auth/AuthResponse20200115'
 import { CrypterInterface } from '../../Encryption/CrypterInterface'
 import { PKCERepositoryInterface } from '../../User/PKCERepositoryInterface'
@@ -34,6 +35,7 @@ export class SignInWithRecoveryCodes implements UseCaseInterface<AuthResponse202
     private maxNonCaptchaAttempts: number,
     private lockRepository: LockRepositoryInterface,
     private verifyHumanInteractionUseCase: VerifyHumanInteraction,
+    private generation?: AuthSessionGenerationService,
   ) {}
 
   async execute(dto: SignInWithRecoveryCodesDTO): Promise<Result<AuthResponse20200115>> {
@@ -125,36 +127,53 @@ export class SignInWithRecoveryCodes implements UseCaseInterface<AuthResponse202
       return Result.fail('Invalid recovery codes')
     }
 
-    const authResponse = await this.authResponseFactory.createResponse({
-      user,
-      apiVersion,
-      userAgent: dto.userAgent,
-      ephemeralSession: false,
-      readonlyAccess: false,
-      snjs: dto.snjs,
-      application: dto.application,
-      ipAddress: dto.ipAddress,
-    })
+    try {
+      const authResponse = await this.authResponseFactory.createResponse({
+        user,
+        apiVersion,
+        userAgent: dto.userAgent,
+        ephemeralSession: false,
+        readonlyAccess: false,
+        snjs: dto.snjs,
+        application: dto.application,
+        ipAddress: dto.ipAddress,
+      })
 
-    const generateNewRecoveryCodesResult = await this.generateRecoveryCodes.execute({
-      userUuid: user.uuid,
-    })
-    if (generateNewRecoveryCodesResult.isFailed()) {
-      await this.increaseLoginAttempts.execute({ email: username.value })
+      const rotate = async () => {
+        const generateNewRecoveryCodesResult = await this.generateRecoveryCodes.execute({
+          userUuid: user.uuid,
+        })
+        if (generateNewRecoveryCodesResult.isFailed()) {
+          await this.increaseLoginAttempts.execute({ email: username.value })
 
-      return Result.fail(`Could not sign in with recovery codes: ${generateNewRecoveryCodesResult.getError()}`)
+          return Result.fail(`Could not sign in with recovery codes: ${generateNewRecoveryCodesResult.getError()}`)
+        }
+
+        await this.deleteSetting.execute({
+          settingName: SettingName.NAMES.MfaSecret,
+          userUuid: user.uuid,
+        })
+
+        await this.authenticatorRepository.removeByUserUuid(userUuid)
+
+        return Result.ok()
+      }
+      const rotation = this.generation
+        ? await this.generation.run(user.uuid, user.authGeneration ?? 0, rotate)
+        : await rotate()
+      if (rotation.isFailed()) {
+        return Result.fail(rotation.getError())
+      }
+
+      await this.clearLoginAttempts.execute({ email: username.value })
+
+      return Result.ok(authResponse.response as AuthResponse20200115)
+    } catch (error) {
+      if (error instanceof AuthGenerationChangedError) {
+        return Result.fail(error.message)
+      }
+      throw error
     }
-
-    await this.deleteSetting.execute({
-      settingName: SettingName.NAMES.MfaSecret,
-      userUuid: user.uuid,
-    })
-
-    await this.authenticatorRepository.removeByUserUuid(userUuid)
-
-    await this.clearLoginAttempts.execute({ email: username.value })
-
-    return Result.ok(authResponse.response as AuthResponse20200115)
   }
 
   private async validateCodeVerifier(codeVerifier: string, user: User): Promise<boolean> {

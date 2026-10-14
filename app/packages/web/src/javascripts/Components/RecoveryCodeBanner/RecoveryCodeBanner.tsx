@@ -9,21 +9,30 @@ import StyledTooltip from '../StyledTooltip/StyledTooltip'
 const RecoveryCodeBanner = ({ application }: { application: WebApplication }) => {
   const [recoveryCode, setRecoveryCode] = useState<string>()
   const [errorMessage, setErrorMessage] = useState<string>()
+  const [loading, setLoading] = useState(false)
 
   const onClickShow = async () => {
-    const password = await application.challenges.promptForAccountPassword()
-
-    if (!password) {
+    if (loading) {
       return
     }
-
-    const recoveryCodeOrError = await application.getRecoveryCodes.execute({ password })
-    if (recoveryCodeOrError.isFailed()) {
-      setErrorMessage(recoveryCodeOrError.getError())
-      return
+    setLoading(true)
+    setErrorMessage(undefined)
+    try {
+      const password = await application.challenges.promptForAccountPassword()
+      if (!password) {
+        return
+      }
+      const recoveryCodeOrError = await application.getRecoveryCodes.execute({ password })
+      if (recoveryCodeOrError.isFailed()) {
+        setErrorMessage('Could not retrieve your recovery code. Try again.')
+        return
+      }
+      setRecoveryCode(recoveryCodeOrError.getValue())
+    } catch {
+      setErrorMessage('Could not retrieve your recovery code. Try again.')
+    } finally {
+      setLoading(false)
     }
-
-    setRecoveryCode(recoveryCodeOrError.getValue())
   }
 
   return (
@@ -36,10 +45,16 @@ const RecoveryCodeBanner = ({ application }: { application: WebApplication }) =>
         Your recovery code allows you access to your account in the event you lose your 2FA authenticating device or
         app. Save your recovery code in a safe place outside your account.
       </p>
-      {errorMessage && <div>{errorMessage}</div>}
+      {errorMessage && <div role="alert">{errorMessage}</div>}
       {!recoveryCode && (
-        <Button primary small className="col-start-1 col-end-3 mt-3 justify-self-start" onClick={onClickShow}>
-          Show recovery code
+        <Button
+          primary
+          small
+          disabled={loading}
+          className="col-start-1 col-end-3 mt-3 justify-self-start"
+          onClick={() => void onClickShow()}
+        >
+          {loading ? 'Loading recovery code' : 'Show recovery code'}
         </Button>
       )}
       {recoveryCode && (

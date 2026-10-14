@@ -1,6 +1,5 @@
 import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  type AdminItemStorageUsageResponse,
   type AdminUserFeatureFlagsResponse,
   type AdminUserStorageUsage,
   type AdminUserTokenUsageWindow,
@@ -10,25 +9,15 @@ import {
 } from '@standardnotes/snjs'
 import {
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
-  AdminItemBytesReading,
   AdminUserRow,
-  ADMIN_ITEM_BYTES_READING,
-  ADMIN_STORAGE_READING_MARKER,
   AdminUsersFilterState,
-  adminItemBytesMeaning,
-  adminSpaceTotalMeaning,
-  adminStorageUsedMarker,
-  adminStorageUsedMeaning,
   adminUsersFiltersAreEmpty,
   buildAdminListUsersParams,
-  combineAdminSpaceTotal,
-  describeAdminItemBytes,
   describeAdminStorageLimit,
   describeAdminStorageUsed,
   emptyAdminUsersFilterState,
   formatAdminUserDate,
   formatAdminUserRoles,
-  formatAdminUserStorage,
   formatAdminUserSubscription,
 } from './adminHelpers'
 import { describeAdminUsersActiveFilters } from './adminUsersUi'
@@ -40,6 +29,9 @@ import {
   formatAdminTokenCount,
 } from './adminUserUsage'
 import AdminPagination from './AdminPagination'
+import AdminUserSessions from './AdminUserSessions'
+import AdminUserMfa from './AdminUserMfa'
+import StorageUsagePanel from '@/Components/StorageUsage/StorageUsagePanel'
 import {
   BulkItemResult,
   excludeSelfTarget,
@@ -210,10 +202,7 @@ type EffectivePermissions = {
  * says which halves are in it rather than implying it is everything.
  */
 export const ADMIN_USERS_STORAGE_COLUMN_SCOPE =
-  'Stored note bytes (items.content_size, read per account from the syncing server) plus uploaded FILE bytes ' +
-  '(FILE_UPLOAD_BYTES_USED), against the stored upload allowance — which caps the FILE half only. A ≥ figure is a ' +
-  'LOWER BOUND: one half did not arrive, or some of the account’s items carry no recorded size. Revisions (note ' +
-  'history) live on another service and are in neither half.'
+  'Measured encrypted items, uploaded file data and saved revisions. Totals require all components; upload quota applies only to files.'
 
 /**
  * What one request for several accounts' stored note bytes came back with.
@@ -224,97 +213,6 @@ export const ADMIN_USERS_STORAGE_COLUMN_SCOPE =
  * can still carry no entry for one account, which is that account's own silence.
  * Collapsing the two is how an unread figure starts printing as a measurement.
  */
-type ItemBytesRequestReading =
-  | { state: 'not-attempted' }
-  | { state: 'loading' }
-  | { state: 'failed'; message: string | null }
-  | { state: 'unsupported' }
-  | { state: 'reported'; byUser: Record<string, { bytes: number; itemsUnmeasured: number }> }
-
-/**
- * Read the stored note bytes of the given accounts in ONE request, and return what
- * came back rather than throwing or guessing.
- *
- * *** ENTRIES ARE MATCHED BACK AGAINST WHAT WAS ASKED FOR. *** This endpoint
- * exists because its predecessor answered the CALLER's own figure whatever account
- * it was asked about, so each entry names its subject and anything naming an
- * account this call did not ask about is DROPPED. A figure printed beside the wrong
- * email is the defect, not a cosmetic problem, and the check costs one `Set`.
- *
- * An unusable figure (not a number, not finite, negative) is dropped for the same
- * reason: the row then reports a silence, which is true, instead of a size that
- * cannot be one.
- */
-const readAdminItemBytes = async (
-  application: WebApplication,
-  userUuids: string[],
-): Promise<ItemBytesRequestReading> => {
-  if (userUuids.length === 0) {
-    return { state: 'reported', byUser: {} }
-  }
-
-  const requested = new Set(userUuids)
-  try {
-    const response = await application.legacyApi.adminGetUsersItemStorageUsage(userUuids)
-    if (isErrorResponse(response)) {
-      const status = (response as { status?: number }).status
-      // A 404 is a server build without the route, not a failure to answer — the
-      // commonest reading while a fleet is being upgraded, and the one whose
-      // remedy is a redeploy rather than an investigation.
-      if (status === 404) {
-        return { state: 'unsupported' }
-      }
-
-      return { state: 'failed', message: typeof status === 'number' ? `HTTP ${status}` : null }
-    }
-
-    const usages = (response as { data?: AdminItemStorageUsageResponse }).data?.usages
-    if (!Array.isArray(usages)) {
-      return { state: 'failed', message: null }
-    }
-
-    const byUser: Record<string, { bytes: number; itemsUnmeasured: number }> = {}
-    for (const usage of usages) {
-      if (!requested.has(usage.userUuid)) {
-        continue
-      }
-      if (typeof usage.itemBytesUsed !== 'number' || !Number.isFinite(usage.itemBytesUsed) || usage.itemBytesUsed < 0) {
-        continue
-      }
-      byUser[usage.userUuid] = {
-        bytes: usage.itemBytesUsed,
-        itemsUnmeasured:
-          typeof usage.itemsUnmeasured === 'number' &&
-          Number.isFinite(usage.itemsUnmeasured) &&
-          usage.itemsUnmeasured > 0
-            ? usage.itemsUnmeasured
-            : 0,
-      }
-    }
-
-    return { state: 'reported', byUser }
-  } catch (error) {
-    console.error(error)
-
-    return { state: 'failed', message: error instanceof Error && error.message ? error.message : null }
-  }
-}
-
-/** One account's reading, derived from a request's reading plus its own entry. */
-const itemBytesOf = (request: ItemBytesRequestReading, userUuid: string): AdminItemBytesReading => {
-  if (request.state !== 'reported') {
-    return request
-  }
-  const entry = request.byUser[userUuid]
-  if (entry === undefined) {
-    // The endpoint answers for every account it is asked about, so a missing entry
-    // means this one WAS asked about and not answered. A silence, never a zero.
-    return { state: 'failed', message: null }
-  }
-
-  return { state: 'reported', bytes: entry.bytes, itemsUnmeasured: entry.itemsUnmeasured }
-}
-
 /**
  * The per-user SERVER storage reading, as a closed set of ANSWERS rather than one
  * nullable figure.
@@ -527,6 +425,8 @@ type Props = {
 }
 
 const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden, email, setEmail, user, setUser }) => {
+  const [adminSessionsRevision, setAdminSessionsRevision] = useState(0)
+  const [pageStorageRevision, setPageStorageRevision] = useState(0)
   const [lookingUp, setLookingUp] = useState(false)
 
   // The server contract is default-on: only an explicit canonical 'false'
@@ -567,8 +467,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
    * page, and a figure borrowed from a page that does not contain them would be
    * either absent or, worse, somebody else's.
    */
-  const [selectedItemBytes, setSelectedItemBytes] = useState<AdminItemBytesReading>({ state: 'not-attempted' })
-  const selectedItemBytesGeneration = useRef(0)
   const [storageLimitValue, setStorageLimitValue] = useState('')
   const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
   const [savingStorageLimit, setSavingStorageLimit] = useState(false)
@@ -614,7 +512,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [permissionsVisible, setPermissionsVisible] = useState(false)
   const [adminRoleInProgress, setAdminRoleInProgress] = useState(false)
   // Panel equivalents of the srn-admin CLI's reset-mfa / fix-quota commands.
-  const [resettingMfa, setResettingMfa] = useState(false)
   const [fixingQuota, setFixingQuota] = useState(false)
   // What the pane has read since it last asked for a recount for this user;
   // null until it asks. See ADMIN_QUOTA_RECOUNT_REREAD_DELAYS_MS.
@@ -740,19 +637,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
    * subject-matching, and the figure cannot be borrowed from the list's batch
    * because the email lookup can open an account that is not on the current page.
    */
-  const loadSelectedItemBytes = useCallback(
-    async (userUuid: string) => {
-      const generation = ++selectedItemBytesGeneration.current
-      setSelectedItemBytes({ state: 'loading' })
-      const reading = await readAdminItemBytes(application, [userUuid])
-      if (generation !== selectedItemBytesGeneration.current) {
-        return
-      }
-      setSelectedItemBytes(itemBytesOf(reading, userUuid))
-    },
-    [application],
-  )
-
   const loadBanStatus = useCallback(
     async (lookupEmail: string) => {
       try {
@@ -886,16 +770,14 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     // Same rule as the file half above, and for the same reason: a note-bytes
     // figure read for the PREVIOUS user must not stay on screen attributed to
     // this one while the new read is in flight or after it fails.
-    setSelectedItemBytes({ state: 'not-attempted' })
     void Promise.all([
       loadFlags(user.uuid),
-      loadSelectedItemBytes(user.uuid),
       loadUserUsage(user.uuid),
       loadBanStatus(user.email),
       loadSuspensionStatus(user.email),
       loadPermissions(user.uuid),
     ])
-  }, [user, loadFlags, loadSelectedItemBytes, loadUserUsage, loadBanStatus, loadSuspensionStatus, loadPermissions])
+  }, [user, loadFlags, loadUserUsage, loadBanStatus, loadSuspensionStatus, loadPermissions])
 
   const lookupUser = useCallback(async () => {
     if (!email.trim()) {
@@ -950,29 +832,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
    * across a service boundary, which is why the endpoint takes the whole page in
    * its body.
    */
-  const [pageItemBytes, setPageItemBytes] = useState<ItemBytesRequestReading>({ state: 'not-attempted' })
-  const itemBytesLoadGeneration = useRef(0)
-
-  /** The reading for ONE row, derived from the page's reading plus its own entry. */
-  const itemBytesFor = useCallback(
-    (userUuid: string): AdminItemBytesReading => itemBytesOf(pageItemBytes, userUuid),
-    [pageItemBytes],
-  )
-
-  const loadItemBytes = useCallback(
-    async (userUuids: string[]) => {
-      const generation = ++itemBytesLoadGeneration.current
-      if (userUuids.length > 0) {
-        setPageItemBytes({ state: 'loading' })
-      }
-      const reading = await readAdminItemBytes(application, userUuids)
-      if (generation === itemBytesLoadGeneration.current) {
-        setPageItemBytes(reading)
-      }
-    },
-    [application],
-  )
-
   // -------------------------------------------------------------------------
   // Bulk selection + actions over the CURRENT page. The selected set holds
   // uuids from the currently loaded page only; it is cleared on every list
@@ -1001,29 +860,25 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         setTotal(0)
         // The note-bytes reading belongs to the page that failed to arrive. It
         // must not survive into a list that is no longer on screen.
-        itemBytesLoadGeneration.current += 1
-        setPageItemBytes({ state: 'not-attempted' })
         return
       }
       const data = (response as { data?: { users?: AdminUserRow[]; total?: number } }).data
       const users = data?.users ?? []
       setRows(users)
+      setPageStorageRevision((value) => value + 1)
       setTotal(data?.total ?? 0)
       // Second half of the space figure, for this page, in one request. Awaited so
       // a reload cannot leave the previous page's note bytes on screen beside the
       // new page's file bytes.
-      await loadItemBytes(users.map((row) => row.uuid))
     } catch (error) {
       console.error(error)
       setListError('Could not load the users list.')
       setRows([])
       setTotal(0)
-      itemBytesLoadGeneration.current += 1
-      setPageItemBytes({ state: 'not-attempted' })
     } finally {
       setListLoading(false)
     }
-  }, [application, noteIfForbidden, filters, page, pageSize, loadItemBytes])
+  }, [application, noteIfForbidden, filters, page, pageSize])
 
   useEffect(() => {
     void loadUsers()
@@ -1113,11 +968,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
    * different silence from "the server holds none" and is passed through as such
    * so the sentence beside the total names the right one.
    */
-  const selectedSpaceTotal = combineAdminSpaceTotal(
-    selectedItemBytes,
-    storageReading.state === 'reported' ? storageReading.storage.uploadBytesUsed : null,
-    storageReading.state === 'reported',
-  )
 
   // ---- Bulk selection derived state -------------------------------------
   const pageUuids = rows.map((row) => row.uuid)
@@ -1763,39 +1613,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     }
   }, [application, user, permissions, userIsAdmin, loadPermissions])
 
-  const resetMfa = useCallback(async () => {
-    if (!user) {
-      return
-    }
-    const confirmed = await confirmDialog({
-      title: 'Reset two-factor authentication',
-      text: `Reset 2FA for ${user.email}? Their authenticator secret and recovery requirement are cleared, so anyone with their account password can sign in until they re-enroll. Only do this after verifying the request out-of-band.`,
-      confirmButtonText: 'Reset 2FA',
-      confirmButtonStyle: 'danger',
-    })
-    if (!confirmed) {
-      return
-    }
-
-    setResettingMfa(true)
-    try {
-      const response = await application.legacyApi.adminResetUserMFA(user.uuid)
-      if (isErrorResponse(response)) {
-        const message = (response as { data?: { error?: { message?: string } } }).data?.error?.message
-        addToast({ type: ToastType.Error, message: message ?? 'Failed to reset 2FA.' })
-        return
-      }
-      addToast({ type: ToastType.Success, message: '2FA has been reset for this user.' })
-      // 2FA is now cleared — keep the table's MFA column in sync.
-      patchUserRow(user.uuid, { mfaEnabled: false })
-    } catch (error) {
-      console.error(error)
-      addToast({ type: ToastType.Error, message: 'Failed to reset 2FA.' })
-    } finally {
-      setResettingMfa(false)
-    }
-  }, [application, user, patchUserRow])
-
   /**
    * Re-read ONE thing, the selected user's stored usage, and leave the rest of
    * the panel alone. `loadFlags` cannot be the read that repeats: it puts the
@@ -2219,7 +2036,9 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                       Banned
                     </th>
                     <th className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 font-semibold">
-                      MFA
+                      <span title="Authenticator app (TOTP) only; open the user details to inspect all sign-in factors.">
+                        Authenticator
+                      </span>
                     </th>
                     <th
                       className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 text-right font-semibold"
@@ -2281,7 +2100,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                           'No'
                         )}
                       </td>
-                      <td className="px-3 py-2.5">{row.mfaEnabled ? 'On' : 'Off'}</td>
+                      <td className="px-3 py-2.5">{row.mfaEnabled ? 'Configured' : 'Not configured'}</td>
                       {/*
                         Both halves of the account's stored space, with the
                         combined figure on top and the breakdown under it. The
@@ -2291,30 +2110,15 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         is the state in which the figure is a lower bound rather
                         than a measurement.
                       */}
-                      <td className="px-3 py-2.5 text-right whitespace-nowrap tabular-nums">
-                        <div
-                          data-test-id="admin-row-space-total"
-                          title={adminSpaceTotalMeaning(
-                            combineAdminSpaceTotal(itemBytesFor(row.uuid), row.storageUsedBytes),
-                          )}
-                        >
-                          {combineAdminSpaceTotal(itemBytesFor(row.uuid), row.storageUsedBytes).label}
-                        </div>
-                        <div className="text-passive-1 text-xs">
-                          <span data-test-id="admin-row-notes" title={adminItemBytesMeaning(itemBytesFor(row.uuid))}>
-                            <span className="mr-1 font-mono" aria-hidden="true">
-                              {ADMIN_STORAGE_READING_MARKER[ADMIN_ITEM_BYTES_READING[itemBytesFor(row.uuid).state]]}
-                            </span>
-                            notes {describeAdminItemBytes(itemBytesFor(row.uuid)).label}
-                          </span>
-                          {' · '}
-                          <span data-test-id="admin-row-files" title={adminStorageUsedMeaning(row.storageUsedBytes)}>
-                            <span className="mr-1 font-mono" aria-hidden="true">
-                              {adminStorageUsedMarker(row.storageUsedBytes)}
-                            </span>
-                            files {formatAdminUserStorage(row.storageUsedBytes, row.storageLimitBytes)}
-                          </span>
-                        </div>
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        <StorageUsagePanel
+                          application={application}
+                          userUuid={row.uuid}
+                          compact
+                          lazy
+                          noteIfForbidden={noteIfForbidden}
+                          refreshRevision={pageStorageRevision}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -2332,11 +2136,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               one that omitted a marker the rows DO print would be worse.
             */}
             <Text className="text-passive-1 mt-3 text-xs">
-              <span className="font-mono">{ADMIN_STORAGE_READING_MARKER.answered}</span> a figure arrived &middot;{' '}
-              <span className="font-mono">{ADMIN_STORAGE_READING_MARKER.unanswered}</span> asked and nothing came back,
-              which is never a zero &middot;{' '}
-              <span className="font-mono">{ADMIN_STORAGE_READING_MARKER.unpublished}</span> this server build does not
-              publish it. {ADMIN_USERS_STORAGE_COLUMN_SCOPE}
+              {ADMIN_USERS_STORAGE_COLUMN_SCOPE} Only visible rows are measured, with at most four requests at a time.
             </Text>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
@@ -2381,6 +2181,22 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           <Subtitle>
             Editing: {user.email} ({user.uuid})
           </Subtitle>
+          <AdminUserSessions
+            application={application}
+            userUuid={user.uuid}
+            noteIfForbidden={noteIfForbidden}
+            refreshRevision={adminSessionsRevision}
+          />
+          <AdminUserMfa
+            application={application}
+            userUuid={user.uuid}
+            email={user.email}
+            noteIfForbidden={noteIfForbidden}
+            onReset={(uuid) => {
+              patchUserRow(uuid, { mfaEnabled: false })
+              setAdminSessionsRevision((value) => value + 1)
+            }}
+          />
 
           {flagsLoading ? (
             <Spinner className="mt-3 h-5 w-5" />
@@ -2694,30 +2510,8 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 admin-authorised read there was no way to show this for anyone but
                 the signed-in operator.
               */}
-              <div className="flex flex-col gap-2" data-test-id="admin-space-readout">
-                <Subtitle>Space used</Subtitle>
-                <Text>
-                  Total: <strong title={adminSpaceTotalMeaning(selectedSpaceTotal)}>{selectedSpaceTotal.label}</strong>{' '}
-                  &mdash; notes{' '}
-                  <strong title={adminItemBytesMeaning(selectedItemBytes)}>
-                    {describeAdminItemBytes(selectedItemBytes).label}
-                  </strong>{' '}
-                  plus uploaded files <strong>{describeStorageUsage(storageReading)}</strong>.
-                </Text>
-                <Text className="text-passive-1">{adminSpaceTotalMeaning(selectedSpaceTotal)}</Text>
-                {(selectedItemBytes.state === 'failed' || selectedItemBytes.state === 'loading') && (
-                  <div>
-                    <Button
-                      label={selectedItemBytes.state === 'loading' ? 'Reading note bytes…' : 'Retry note-bytes read'}
-                      disabled={selectedItemBytes.state === 'loading'}
-                      onClick={() => {
-                        if (user) {
-                          void loadSelectedItemBytes(user.uuid)
-                        }
-                      }}
-                    />
-                  </div>
-                )}
+              <div data-test-id="admin-space-readout">
+                <StorageUsagePanel application={application} userUuid={user.uuid} noteIfForbidden={noteIfForbidden} />
               </div>
 
               <HorizontalSeparator classes="my-3" />
@@ -2992,25 +2786,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               </div>
 
               <HorizontalSeparator classes="my-3" />
-
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-col">
-                  <Subtitle>Reset two-factor authentication</Subtitle>
-                  <Text>
-                    Clears this user's authenticator secret (and recovery requirement) so they can sign in with their
-                    password alone and re-enroll 2FA. Verify a reset request out-of-band before using this.
-                  </Text>
-                </div>
-                <Button
-                  className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap"
-                  colorStyle="danger"
-                  onClick={() => void resetMfa()}
-                  disabled={resettingMfa}
-                >
-                  <Icon type="authenticator" size="small" />
-                  Reset 2FA
-                </Button>
-              </div>
 
               <HorizontalSeparator classes="my-3" />
 

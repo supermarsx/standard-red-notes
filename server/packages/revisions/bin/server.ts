@@ -11,6 +11,7 @@ import { Env } from '../src/Bootstrap/Env'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 
 import '../src/Infra/InversifyExpress/AnnotatedRevisionsController'
+import '../src/Infra/InversifyExpress/AnnotatedStorageUsageController'
 import '../src/Infra/InversifyExpress/AnnotatedHealthCheckController'
 
 const container = new ContainerConfigLoader()

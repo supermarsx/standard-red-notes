@@ -1,10 +1,11 @@
-import { inject, injectable } from 'inversify'
+import { inject, injectable, optional } from 'inversify'
 import TYPES from '../../Bootstrap/Types'
 import { EphemeralSessionRepositoryInterface } from '../Session/EphemeralSessionRepositoryInterface'
 import { SessionRepositoryInterface } from '../Session/SessionRepositoryInterface'
 import { GetActiveSessionsForUserDTO } from './GetActiveSessionsForUserDTO'
 import { GetActiveSessionsForUserResponse } from './GetActiveSessionsForUserResponse'
 import { UseCaseInterface } from './UseCaseInterface'
+import { AuthSessionGenerationService } from '../Session/AuthSessionGenerationService'
 import { Session } from '../Session/Session'
 
 @injectable()
@@ -13,18 +14,25 @@ export class GetActiveSessionsForUser implements UseCaseInterface {
     @inject(TYPES.Auth_SessionRepository) private sessionRepository: SessionRepositoryInterface,
     @inject(TYPES.Auth_EphemeralSessionRepository)
     private ephemeralSessionRepository: EphemeralSessionRepositoryInterface,
+    @inject(AuthSessionGenerationService) @optional() private generation?: AuthSessionGenerationService,
   ) {}
 
   async execute(dto: GetActiveSessionsForUserDTO): Promise<GetActiveSessionsForUserResponse> {
     const ephemeralSessions = await this.ephemeralSessionRepository.findAllByUserUuid(dto.userUuid)
     const sessions = await this.sessionRepository.findAllByRefreshExpirationAndUserUuid(dto.userUuid)
 
-    const activeSessions = sessions.concat(ephemeralSessions).sort((a, b) => {
-      const dateA = a.refreshExpiration instanceof Date ? a.refreshExpiration : new Date(a.refreshExpiration)
-      const dateB = b.refreshExpiration instanceof Date ? b.refreshExpiration : new Date(b.refreshExpiration)
+    const generation = this.generation ? await this.generation.currentGeneration(dto.userUuid) : undefined
+    const activeSessions = sessions
+      .concat(ephemeralSessions)
+      .filter(
+        (session) => !this.generation || (generation !== undefined && (session.authGeneration ?? 0) === generation),
+      )
+      .sort((a, b) => {
+        const dateA = a.refreshExpiration instanceof Date ? a.refreshExpiration : new Date(a.refreshExpiration)
+        const dateB = b.refreshExpiration instanceof Date ? b.refreshExpiration : new Date(b.refreshExpiration)
 
-      return dateB.getTime() - dateA.getTime()
-    })
+        return dateB.getTime() - dateA.getTime()
+      })
 
     if (dto.sessionUuid) {
       let sessions: Session[] = []

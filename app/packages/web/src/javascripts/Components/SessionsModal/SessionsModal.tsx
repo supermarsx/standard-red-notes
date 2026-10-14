@@ -15,6 +15,13 @@ import Icon from '../Icon/Icon'
 import Modal, { ModalAction } from '../Modal/Modal'
 import ModalOverlay from '../Modal/ModalOverlay'
 import AlertDialog from '../AlertDialog/AlertDialog'
+import {
+  countSessionDevices,
+  formatSessionDate,
+  presentActivity,
+  presentSessionActivity,
+  sessionDeviceLabel,
+} from './sessionPresentation'
 
 type Session = SessionListEntry & {
   revoking?: true
@@ -22,11 +29,12 @@ type Session = SessionListEntry & {
 
 function useSessions(
   application: SNApplication,
-): [Session[], () => void, boolean, (uuid: UuidString) => Promise<void>, string] {
+): [Session[], () => void, boolean, (uuid: UuidString) => Promise<void>, string, number] {
   const [sessions, setSessions] = useState<Session[]>([])
   const [lastRefreshDate, setLastRefreshDate] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+  const [receivedAt, setReceivedAt] = useState(Date.now())
 
   useEffect(() => {
     ;(async () => {
@@ -42,21 +50,30 @@ function useSessions(
       } else {
         const sessions = response.data as SessionListEntry[]
         setSessions(sessions)
+        setReceivedAt(Date.now())
         setErrorMessage('')
       }
 
       setRefreshing(false)
-    })().catch(console.error)
+    })().catch(() => {
+      setErrorMessage('Could not load sessions. Try refreshing.')
+      setRefreshing(false)
+    })
   }, [application, lastRefreshDate])
 
   function refresh() {
-    setLastRefreshDate(Date.now())
+    setLastRefreshDate((previous) => previous + 1)
   }
 
   async function revokeSession(uuid: UuidString) {
     const sessionsBeforeRevoke = sessions
 
-    const responsePromise = application.revokeSession(uuid)
+    const responsePromise = Promise.resolve()
+      .then(() => application.revokeSession(uuid))
+      .catch(() => {
+        setErrorMessage('Could not revoke the session. Try again.')
+        return undefined
+      })
 
     const sessionsDuringRevoke = sessions.slice()
     const toRemoveIndex = sessions.findIndex((session) => session.uuid === uuid)
@@ -76,34 +93,27 @@ function useSessions(
 
       setSessions(sessionsBeforeRevoke)
     } else {
-      setSessions(sessions.filter((session) => session.uuid !== uuid))
+      setSessions(response.data)
+      setReceivedAt(Date.now())
     }
   }
 
-  return [sessions, refresh, refreshing, revokeSession, errorMessage]
+  return [sessions, refresh, refreshing, revokeSession, errorMessage, receivedAt]
 }
 
 const SessionsModalContent: FunctionComponent<{
   application: WebApplication
 }> = ({ application }) => {
-  const [sessions, refresh, refreshing, revokeSession, errorMessage] = useSessions(application)
+  const [sessions, refresh, refreshing, revokeSession, errorMessage, receivedAt] = useSessions(application)
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
 
   const [confirmRevokingSessionUuid, setRevokingSessionUuid] = useState('')
   const closeRevokeSessionAlert = () => setRevokingSessionUuid('')
   const cancelRevokeRef = useRef<HTMLButtonElement>(null)
-
-  const formatter = useMemo(
-    () =>
-      new Intl.DateTimeFormat(undefined, {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        weekday: 'long',
-        hour: 'numeric',
-        minute: 'numeric',
-      }),
-    [],
-  )
 
   const closeRevokeConfirmationDialog = () => {
     setRevokingSessionUuid('')
@@ -129,8 +139,12 @@ const SessionsModalContent: FunctionComponent<{
 
   return (
     <>
-      <Modal title="Active Sessions" close={application.closeSessionsModal} actions={sessionModalActions}>
+      <Modal title="Open sessions and devices" close={application.closeSessionsModal} actions={sessionModalActions}>
         <div className="px-4 py-4">
+          <p>
+            Open sessions are unexpired sign-ins. Active recently means authenticated activity within the last two
+            minutes.
+          </p>
           {refreshing ? (
             <div className="flex items-center gap-2">
               <Spinner className="h-3 w-3" />
@@ -144,29 +158,61 @@ const SessionsModalContent: FunctionComponent<{
                 </div>
               )}
               {sessions.length > 0 && (
-                <ul>
-                  {sessions.map((session) => (
-                    <li key={session.uuid}>
-                      <h2 className="text-base font-bold">{session.device_info}</h2>
-                      {session.ip_address && <p>IP {session.ip_address}</p>}
-                      <p>Signed in on {formatter.format(new Date(session.created_at))}</p>
-                      <p>Last active {formatter.format(new Date(session.updated_at))}</p>
-                      {session.current ? (
-                        <span className="text-info font-bold">Current session</span>
-                      ) : (
-                        <Button
-                          primary
-                          small
-                          colorStyle="danger"
-                          disabled={session.revoking}
-                          onClick={() => setRevokingSessionUuid(session.uuid)}
-                        >
-                          <span>Revoke</span>
-                        </Button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <p className="my-3 font-semibold">
+                    {sessions.length} open sessions ·{' '}
+                    {sessions.every((session) => Array.isArray(session.devices))
+                      ? `${countSessionDevices(sessions)} observed devices`
+                      : 'Device activity unavailable'}
+                  </p>
+                  <ul className="divide-border divide-y">
+                    {sessions.map((session) => (
+                      <li key={session.uuid} className="py-3">
+                        <h2 className="text-base font-bold">{sessionDeviceLabel(session)}</h2>
+                        {session.ip_address && <p>IP {session.ip_address}</p>}
+                        <p>Signed in on {formatSessionDate(session.created_at)}</p>
+                        <p>
+                          {presentSessionActivity(session, now, receivedAt).statusLabel} · Last seen:{' '}
+                          {presentSessionActivity(session, now, receivedAt).lastSeenText}
+                        </p>
+                        {session.refresh_expiration && (
+                          <p>Session expires {formatSessionDate(session.refresh_expiration)}</p>
+                        )}
+                        {session.devices?.length ? (
+                          <ul className="my-2 pl-3">
+                            {session.devices.map((device, index) => {
+                              const activity = presentActivity(
+                                { ...device, activity_checked_at: session.activity_checked_at },
+                                now,
+                                receivedAt,
+                              )
+                              return (
+                                <li key={device.device_id}>
+                                  Device {index + 1}: {activity.statusLabel} · Last seen: {activity.lastSeenText}
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        ) : (
+                          <p>No device activity observed for this session.</p>
+                        )}
+                        {session.current ? (
+                          <span className="text-info font-bold">Current session</span>
+                        ) : (
+                          <Button
+                            primary
+                            small
+                            colorStyle="danger"
+                            disabled={session.revoking}
+                            onClick={() => setRevokingSessionUuid(session.uuid)}
+                          >
+                            <span>Revoke</span>
+                          </Button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
             </>
           )}

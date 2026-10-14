@@ -2,11 +2,12 @@ import { SessionTokenData, TokenEncoderInterface } from '@standardnotes/security
 import { ProtocolVersion } from '@standardnotes/common'
 import * as crypto from 'crypto'
 
-import { inject, injectable } from 'inversify'
+import { inject, injectable, optional } from 'inversify'
 import { Logger } from 'winston'
 import TYPES from '../../Bootstrap/Types'
 import { ProjectorInterface } from '../../Projection/ProjectorInterface'
 
+import { AuthSessionGenerationService } from '../Session/AuthSessionGenerationService'
 import { User } from '../User/User'
 import { AuthResponseFactoryInterface } from './AuthResponseFactoryInterface'
 import { AuthResponseCreationResult } from './AuthResponseCreationResult'
@@ -18,6 +19,7 @@ export class AuthResponseFactory20161215 implements AuthResponseFactoryInterface
     @inject(TYPES.Auth_UserProjector) protected userProjector: ProjectorInterface<User>,
     @inject(TYPES.Auth_SessionTokenEncoder) protected tokenEncoder: TokenEncoderInterface<SessionTokenData>,
     @inject(TYPES.Auth_Logger) protected logger: Logger,
+    @inject(AuthSessionGenerationService) @optional() protected generation?: AuthSessionGenerationService,
   ) {}
 
   async createResponse(dto: {
@@ -34,10 +36,15 @@ export class AuthResponseFactory20161215 implements AuthResponseFactoryInterface
 
     const data: SessionTokenData = {
       user_uuid: dto.user.uuid,
+      auth_generation: dto.user.authGeneration ?? 0,
       pw_hash: crypto.createHash('sha256').update(dto.user.encryptedPassword).digest('hex'),
     }
 
-    const token = this.tokenEncoder.encodeToken(data)
+    const token = this.generation
+      ? await this.generation.run(dto.user.uuid, dto.user.authGeneration ?? 0, async () =>
+          this.tokenEncoder.encodeToken(data),
+        )
+      : this.tokenEncoder.encodeToken(data)
 
     this.logger.debug('Created JWT authentication response', {
       userId: dto.user.uuid,

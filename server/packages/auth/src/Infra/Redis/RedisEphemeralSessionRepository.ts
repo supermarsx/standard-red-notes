@@ -4,6 +4,7 @@ import { inject, injectable } from 'inversify'
 import TYPES from '../../Bootstrap/Types'
 import { EphemeralSession } from '../../Domain/Session/EphemeralSession'
 import { EphemeralSessionRepositoryInterface } from '../../Domain/Session/EphemeralSessionRepositoryInterface'
+import { AuthGenerationChangedError } from '../../Domain/Session/AuthSessionGenerationService'
 
 @injectable()
 export class RedisEphemeralSessionRepository implements EphemeralSessionRepositoryInterface {
@@ -26,13 +27,26 @@ export class RedisEphemeralSessionRepository implements EphemeralSessionReposito
   }
 
   async deleteOne(uuid: string, userUuid: string): Promise<void> {
-    const pipeline = this.redisClient.pipeline()
-
-    pipeline.del(`${this.PREFIX}:${uuid}`)
-    pipeline.del(`${this.PREFIX}:${uuid}:${userUuid}`)
-    pipeline.srem(`${this.USER_SESSIONS_PREFIX}:${userUuid}`, uuid)
-
-    await pipeline.exec()
+    await this.redisClient.eval(
+      `
+      local stored = redis.call('GET', KEYS[1])
+      if stored then
+        local session = cjson.decode(stored)
+        if session.userUuid ~= ARGV[1] then return 0 end
+        redis.call('DEL', ARGV[3] .. session.privateIdentifier)
+      end
+      redis.call('DEL', KEYS[1], KEYS[2])
+      redis.call('SREM', KEYS[3], ARGV[2])
+      return 1
+    `,
+      3,
+      `${this.PREFIX}:${uuid}`,
+      `${this.PREFIX}:${uuid}:${userUuid}`,
+      `${this.USER_SESSIONS_PREFIX}:${userUuid}`,
+      userUuid,
+      uuid,
+      `${this.PREFIX_PRIVATE_ID}:`,
+    )
   }
 
   async updateTokensAndExpirationDates(
@@ -105,6 +119,26 @@ export class RedisEphemeralSessionRepository implements EphemeralSessionReposito
   }
 
   async update(ephemeralSession: EphemeralSession): Promise<void> {
-    return this.insert(ephemeralSession)
+    const updated = await this.redisClient.eval(
+      `
+      if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[2]) == 0 then return 0 end
+      local session = cjson.decode(redis.call('GET', KEYS[1]))
+      if session.userUuid ~= ARGV[3] then return 0 end
+      for index = 1, 3 do redis.call('SETEX', KEYS[index], ARGV[1], ARGV[2]) end
+      redis.call('EXPIRE', KEYS[4], ARGV[1])
+      return 1
+    `,
+      4,
+      `${this.PREFIX}:${ephemeralSession.uuid}`,
+      `${this.PREFIX}:${ephemeralSession.uuid}:${ephemeralSession.userUuid}`,
+      `${this.PREFIX_PRIVATE_ID}:${ephemeralSession.privateIdentifier}`,
+      `${this.USER_SESSIONS_PREFIX}:${ephemeralSession.userUuid}`,
+      this.ephemeralSessionAge,
+      JSON.stringify(ephemeralSession),
+      ephemeralSession.userUuid,
+    )
+    if (updated !== 1) {
+      throw new AuthGenerationChangedError()
+    }
   }
 }

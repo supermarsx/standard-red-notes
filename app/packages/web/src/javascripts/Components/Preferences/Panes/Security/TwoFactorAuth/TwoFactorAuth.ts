@@ -3,17 +3,19 @@ import { TwoFactorActivation } from './TwoFactorActivation'
 import { MfaServiceInterface, SessionsClientInterface } from '@standardnotes/snjs'
 
 type TwoFactorStatus = 'two-factor-enabled' | TwoFactorActivation | 'two-factor-disabled'
+type TwoFactorDisplayStatus = TwoFactorStatus | 'fetching' | 'unavailable'
 
-export const is2FADisabled = (status: TwoFactorStatus): status is 'two-factor-disabled' =>
+export const is2FADisabled = (status: TwoFactorDisplayStatus): status is 'two-factor-disabled' =>
   status === 'two-factor-disabled'
 
-export const is2FAActivation = (status: TwoFactorStatus): status is TwoFactorActivation =>
+export const is2FAActivation = (status: TwoFactorDisplayStatus): status is TwoFactorActivation =>
   (status as TwoFactorActivation)?.type === 'two-factor-activation'
 
-export const is2FAEnabled = (status: TwoFactorStatus): status is 'two-factor-enabled' => status === 'two-factor-enabled'
+export const is2FAEnabled = (status: TwoFactorDisplayStatus): status is 'two-factor-enabled' =>
+  status === 'two-factor-enabled'
 
 export class TwoFactorAuth {
-  private _status: TwoFactorStatus | 'fetching' = 'fetching'
+  private _status: TwoFactorStatus | 'fetching' | 'unavailable' = 'fetching'
   private _errorMessage: string | null
 
   constructor(
@@ -84,6 +86,7 @@ export class TwoFactorAuth {
     if (!this.isLoggedIn()) {
       return
     }
+    this._status = 'fetching'
 
     this.mfa
       .isMfaActivated()
@@ -97,9 +100,9 @@ export class TwoFactorAuth {
         }),
       )
       .catch(
-        action((e) => {
-          this._status = 'two-factor-disabled'
-          this.setError(e.message)
+        action(() => {
+          this._status = 'unavailable'
+          this.setError('Could not check two-factor authentication. Retry when your connection is available.')
         }),
       )
   }
@@ -126,7 +129,7 @@ export class TwoFactorAuth {
     return this._errorMessage
   }
 
-  get status(): TwoFactorStatus | 'fetching' {
+  get status(): TwoFactorStatus | 'fetching' | 'unavailable' {
     return this._status
   }
 }

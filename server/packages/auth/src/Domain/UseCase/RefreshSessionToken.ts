@@ -1,3 +1,5 @@
+import { AuthGenerationChangedError } from '../Session/AuthSessionGenerationService'
+import { SessionCreationResult } from '../Session/SessionCreationResult'
 import * as crypto from 'crypto'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { TimerInterface } from '@standardnotes/time'
@@ -150,13 +152,21 @@ export class RefreshSessionToken {
     const hashedAccessTokenBeforeCooldown = session.hashedAccessToken
     const hashedRefreshTokenBeforeCooldown = session.hashedRefreshToken
 
-    const sessionCreationResult = await this.sessionService.refreshTokens({
-      session,
-      isEphemeral,
-      apiVersion,
-      snjs: dto.requestMetadata.snjs,
-      application: dto.requestMetadata.application,
-    })
+    let sessionCreationResult: SessionCreationResult
+    try {
+      sessionCreationResult = await this.sessionService.refreshTokens({
+        session,
+        isEphemeral,
+        apiVersion,
+        snjs: dto.requestMetadata.snjs,
+        application: dto.requestMetadata.application,
+      })
+    } catch (error) {
+      if (error instanceof AuthGenerationChangedError) {
+        return { success: false, errorTag: 'invalid-refresh-token', errorMessage: 'The refresh token is not valid.' }
+      }
+      throw error
+    }
 
     await this.cooldownSessionTokens.execute({
       sessionUuid: session.uuid,

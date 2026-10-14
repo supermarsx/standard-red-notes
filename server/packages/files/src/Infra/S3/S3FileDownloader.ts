@@ -43,24 +43,36 @@ export class S3FileDownloader implements FileDownloaderInterface {
   }
 
   async listFiles(userUuid: string): Promise<{ name: string; size: number }[]> {
-    const objectsList = await this.s3Client.send(
-      new ListObjectsV2Command({
-        Bucket: this.s3BuckeName,
-        Prefix: userUuid,
-      }),
-    )
-
-    const filesList = []
-    for (const object of objectsList.Contents ?? []) {
-      if (!object.Key) {
-        continue
+    const filesList: { name: string; size: number }[] = []
+    let continuationToken: string | undefined
+    const seenTokens = new Set<string>()
+    do {
+      const objectsList = await this.s3Client.send(
+        new ListObjectsV2Command({
+          Bucket: this.s3BuckeName,
+          Prefix: `${userUuid}/`,
+          ContinuationToken: continuationToken,
+        }),
+      )
+      for (const object of objectsList.Contents ?? []) {
+        if (!object.Key || object.Key.endsWith('/') || !object.Key.startsWith(`${userUuid}/`)) {
+          continue
+        }
+        if (typeof object.Size !== 'number' || !Number.isSafeInteger(object.Size) || object.Size < 0) {
+          throw new Error('File size unavailable')
+        }
+        filesList.push({ name: object.Key, size: object.Size })
       }
-      filesList.push({
-        name: object.Key,
-        size: object.Size ?? 0,
-      })
-    }
-
+      if (!objectsList.IsTruncated) {
+        break
+      }
+      const next = objectsList.NextContinuationToken
+      if (!next || seenTokens.has(next)) {
+        throw new Error('Incomplete file listing')
+      }
+      seenTokens.add(next)
+      continuationToken = next
+    } while (true)
     return filesList
   }
 }

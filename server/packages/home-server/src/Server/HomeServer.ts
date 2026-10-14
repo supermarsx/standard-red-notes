@@ -75,7 +75,7 @@ import {
   type InviteRealtimeDomainEventBridge,
   type SyncRedisClient,
 } from '@standard-red-notes/websocket-gateway'
-import { Service as FilesService } from '@standardnotes/files-server'
+import { Service as FilesService, FileStorageUsage } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import {
   Service as AuthService,
@@ -91,11 +91,12 @@ import {
   resolveAuthRuntimeDiagnosticsReport,
 } from '@standardnotes/auth-server'
 import {
+  AccountStorageUsageService,
   Service as SyncingService,
   SharedVaultMembershipAuthority,
   SQLCollaborationSaveFence,
 } from '@standardnotes/syncing-server'
-import { Service as RevisionsService } from '@standardnotes/revisions-server'
+import { Service as RevisionsService, RevisionStorageUsage } from '@standardnotes/revisions-server'
 import { Container } from 'inversify'
 import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
 import helmet from 'helmet'
@@ -761,6 +762,11 @@ export class HomeServer implements HomeServerInterface {
         environmentOverrides,
         container,
       })
+
+      container.get(AccountStorageUsageService).setReaders(
+        (scope) => container.get(FileStorageUsage).measure(scope),
+        (scope) => container.get(RevisionStorageUsage).measure(scope),
+      )
 
       const server = new InversifyExpressServer(container)
 

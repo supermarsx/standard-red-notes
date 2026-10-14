@@ -334,3 +334,124 @@ describe('AuthMiddleware client IP for session validation', () => {
     expect(ip).toBe('203.0.113.5')
   })
 })
+
+describe('fresh authorization with warm or late-written credential caches', () => {
+  const decoded = (): CrossServiceTokenData => ({
+    user: { uuid: 'user-1', email: 'fixture@example.test' },
+    auth_generation: 0,
+    roles: [],
+    session: {
+      uuid: 'session-1',
+      api_version: '20200115',
+      created_at: '',
+      updated_at: '',
+      device_info: '',
+      readonly_access: false,
+      access_expiration: '2099-01-01T00:00:00Z',
+      refresh_expiration: '2099-01-01T00:00:00Z',
+    },
+  })
+  const response = () => {
+    const value = { locals: {}, status: jest.fn(), send: jest.fn(), setHeader: jest.fn() }
+    value.status.mockReturnValue(value)
+    return value as unknown as Response
+  }
+  const request = () =>
+    ({
+      headers: { authorization: 'Bearer credential' },
+      method: 'GET',
+      url: '/v1/sessions',
+      socket: { remoteAddress: '127.0.0.1' },
+    }) as unknown as Request
+  const timer = { getTimestampInSeconds: () => 1, convertStringDateToSeconds: () => 10000 }
+  const logger = { debug: jest.fn(), error: jest.fn() }
+  it.each([true, false])(
+    'refuses revoked credentials despite a warm cached grant (sessionBound=%s)',
+    async (sessionBound) => {
+      const token = decoded()
+      if (!sessionBound) {
+        delete token.session
+      }
+      ;(verify as unknown as jest.Mock).mockReturnValue(token)
+      const proxy = {
+        validateSession: jest
+          .fn()
+          .mockResolvedValue({
+            status: 401,
+            data: { error: { tag: 'invalid-auth', message: 'Invalid login credentials.' } },
+            headers: {},
+          }),
+      }
+      const cache = { get: jest.fn().mockResolvedValue('stale-grant'), set: jest.fn() }
+      const middleware = new RequiredCrossServiceTokenMiddleware(
+        proxy as never,
+        'secret',
+        600,
+        cache as never,
+        timer as never,
+        logger as never,
+      )
+      const reply = response(),
+        next = jest.fn()
+      await middleware.handler(request(), reply, next)
+      expect(proxy.validateSession).toHaveBeenCalledTimes(1)
+      expect(reply.status).toHaveBeenCalledWith(401)
+      expect(next).not.toHaveBeenCalled()
+      expect(cache.set).not.toHaveBeenCalled()
+    },
+  )
+  it('rejects new requests after reset even if an already-authorized request writes an old grant after invalidation', async () => {
+    ;(verify as unknown as jest.Mock).mockReturnValue(decoded())
+    let entered!: () => void, release!: () => void
+    const setting = new Promise<void>((done) => {
+        entered = done
+      }),
+      hold = new Promise<void>((done) => {
+        release = done
+      })
+    const entries = new Map<string, string>()
+    const cache = {
+      get: jest.fn(async (key: string) => entries.get(key) ?? null),
+      set: jest.fn(async (value: { key: string; encodedCrossServiceToken: string }) => {
+        entered()
+        await hold
+        entries.set(value.key, value.encodedCrossServiceToken)
+      }),
+    }
+    const proxy = {
+      validateSession: jest.fn().mockResolvedValue({ status: 200, data: { authToken: 'old-grant' }, headers: {} }),
+    }
+    const middleware = new RequiredCrossServiceTokenMiddleware(
+      proxy as never,
+      'secret',
+      600,
+      cache as never,
+      timer as never,
+      logger as never,
+    )
+    const before = jest.fn(),
+      pending = middleware.handler(request(), response(), before)
+    await setting
+    entries.clear()
+    proxy.validateSession.mockResolvedValue({
+      status: 401,
+      data: { error: { tag: 'invalid-auth', message: 'Invalid login credentials.' } },
+      headers: {},
+    } as never)
+    const during = jest.fn(),
+      duringReply = response()
+    await middleware.handler(request(), duringReply, during)
+    expect(duringReply.status).toHaveBeenCalledWith(401)
+    expect(during).not.toHaveBeenCalled()
+    release()
+    await pending
+    expect(before).toHaveBeenCalledTimes(1)
+    expect(entries.get('Bearer credential')).toBe('old-grant')
+    const after = jest.fn(),
+      afterReply = response()
+    await middleware.handler(request(), afterReply, after)
+    expect(afterReply.status).toHaveBeenCalledWith(401)
+    expect(after).not.toHaveBeenCalled()
+    expect(proxy.validateSession).toHaveBeenCalledTimes(3)
+  })
+})

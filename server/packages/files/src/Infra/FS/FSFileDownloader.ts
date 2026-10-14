@@ -45,7 +45,15 @@ export class FSFileDownloader implements FileDownloaderInterface {
       return []
     }
     for (const file of files) {
+      // Attempt-owned files are not published uploads and can temporarily share
+      // an inode with their final destination during atomic publication.
+      if (/^\..+\.[0-9a-f-]{36}\.partial$/i.test(file)) {
+        continue
+      }
       const fileStat = await promises.stat(`${this.fileUploadPath}/${userUuid}/${file}`)
+      if (!fileStat.isFile()) {
+        continue
+      }
       filesList.push({
         name: file,
         size: fileStat.size,

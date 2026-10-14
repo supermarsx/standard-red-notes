@@ -51,6 +51,7 @@ import { RevisionHttpMapper } from '../Mapping/Http/RevisionHttpMapper'
 import { RevisionMetadataHttpRepresentation } from '../Mapping/Http/RevisionMetadataHttpRepresentation'
 import { RevisionHttpRepresentation } from '../Mapping/Http/RevisionHttpRepresentation'
 import { SQLRevision } from '../Infra/TypeORM/SQL/SQLRevision'
+import { RevisionStorageUsage } from '../Infra/TypeORM/SQL/RevisionStorageUsage'
 import { SQLRevisionRepository } from '../Infra/TypeORM/SQL/SQLRevisionRepository'
 import { SQLRevisionMetadataPersistenceMapper } from '../Mapping/Persistence/SQL/SQLRevisionMetadataPersistenceMapper'
 import { SQLRevisionPersistenceMapper } from '../Mapping/Persistence/SQL/SQLRevisionPersistenceMapper'
@@ -196,6 +197,11 @@ export class ContainerConfigLoader {
       .toConstantValue(appDataSource.getRepository(SQLRevision))
 
     // Repositories
+    container
+      .bind(RevisionStorageUsage)
+      .toConstantValue(
+        new RevisionStorageUsage(container.get(TYPES.Revisions_ORMRevisionRepository), env.get('AUTH_JWT_SECRET')),
+      )
     container
       .bind<RevisionRepositoryInterface>(TYPES.Revisions_SQLRevisionRepository)
       .toConstantValue(

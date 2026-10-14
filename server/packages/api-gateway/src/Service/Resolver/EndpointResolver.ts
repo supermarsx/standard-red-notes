@@ -68,6 +68,10 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[GET]:offline/features', 'auth.offline.features'],
     ['[POST]:offline/subscription-tokens', 'auth.offline.subscriptionTokens.create'],
     // Sessions Controller
+    ['[GET]:admin/users/:userUuid/mfa/status', 'admin.mfa.status'],
+    ['[POST]:admin/users/:userUuid/mfa/reset', 'admin.mfa.resetAll'],
+    ['[POST]:sessions/activity', 'auth.sessions.activity'],
+    ['[GET]:admin/users/:userUuid/sessions', 'admin.sessions.list'],
     ['[GET]:sessions', 'auth.sessions.list'],
     ['[DELETE]:session', 'auth.sessions.delete'],
     ['[DELETE]:session/all', 'auth.sessions.deleteAll'],
@@ -155,6 +159,7 @@ export class EndpointResolver implements EndpointResolverInterface {
     // ABOVE the bare ':uuid' read for the same reason as the sync-command status
     // above it — a literal path that sorts after a parameterised one is a path the
     // parameterised one eats.
+    ['[GET]:items/storage-usage/:userUuid', 'sync.items.storage_usage_for_user'],
     ['[GET]:items/storage-usage', 'sync.items.storage_usage'],
     // Standard Red Notes: the ADMIN per-account read of the same figure. Three
     // segments, so the ':uuid' entry below cannot claim it; a POST, because it

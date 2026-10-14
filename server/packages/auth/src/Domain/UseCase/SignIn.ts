@@ -4,6 +4,8 @@ import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 import { AuthResponseFactoryResolverInterface } from '../Auth/AuthResponseFactoryResolverInterface'
 import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterface'
+import { AuthGenerationChangedError } from '../Session/AuthSessionGenerationService'
+import { AuthResponseCreationResult } from '../Auth/AuthResponseCreationResult'
 import { SessionServiceInterface } from '../Session/SessionServiceInterface'
 import { User } from '../User/User'
 import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
@@ -178,18 +180,25 @@ export class SignIn implements UseCaseInterface {
 
     const authResponseFactory = this.authResponseFactoryResolver.resolveAuthResponseFactoryVersion(apiVersion)
 
+    let result: AuthResponseCreationResult
+    try {
+      result = await authResponseFactory.createResponse({
+        user,
+        apiVersion,
+        userAgent: dto.userAgent,
+        ephemeralSession: dto.ephemeralSession,
+        readonlyAccess: false,
+        snjs: dto.snjs,
+        application: dto.application,
+        ipAddress: dto.ipAddress,
+      })
+    } catch (error) {
+      if (error instanceof AuthGenerationChangedError) {
+        return { success: false, errorMessage: error.message, errorCode: HttpStatusCode.BadRequest }
+      }
+      throw error
+    }
     await this.sendSignInEmailNotification(user, dto.userAgent)
-
-    const result = await authResponseFactory.createResponse({
-      user,
-      apiVersion,
-      userAgent: dto.userAgent,
-      ephemeralSession: dto.ephemeralSession,
-      readonlyAccess: false,
-      snjs: dto.snjs,
-      application: dto.application,
-      ipAddress: dto.ipAddress,
-    })
 
     await this.recordLoginSuccess(user.uuid, dto.ipAddress)
 

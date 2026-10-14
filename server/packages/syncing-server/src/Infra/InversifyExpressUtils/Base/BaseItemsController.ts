@@ -89,6 +89,7 @@ export class BaseItemsController extends BaseHttpController {
       // topology all stay green — the gateway resolves a method identifier the
       // container has never heard of and answers "Method not found". This repo has
       // shipped that exact gap before.
+      this.controllerContainer.register('sync.items.storage_usage_for_user', this.getAccountStorageUsage.bind(this))
       this.controllerContainer.register('sync.items.storage_usage', this.getStorageUsage.bind(this))
       // Standard Red Notes: and WITHOUT THIS LINE the admin per-user space report
       // is dead on every single-container deployment for exactly the same reason
@@ -387,6 +388,38 @@ export class BaseItemsController extends BaseHttpController {
    * "we could not measure it" and "there is nothing stored" are different facts and
    * the pane that consumes this is built entirely around keeping them apart.
    */
+  async getAccountStorageUsage(request: Request, response: Response): Promise<results.JsonResult> {
+    const locals = response.locals as ResponseLocals
+    if (!locals.roles?.some((role) => role.name === RoleName.NAMES.AdminUser)) {
+      return this.json({ error: { message: 'Admin role required.' } }, 403)
+    }
+    if (!this.getUserStorageUsage) {
+      return this.json({ error: { message: 'Storage usage unavailable.' } }, 503)
+    }
+    try {
+      const result = await this.getUserStorageUsage.execute({ userUuid: request.params.userUuid as string })
+      if (result.isFailed()) {
+        return this.json({ error: { message: result.getError() } }, 400)
+      }
+      const usage = result.getValue()
+      return this.json({
+        itemBytesUsed: usage.sizedBytes,
+        itemsMeasured: usage.sizedItems,
+        itemsUnmeasured: usage.unsizedItems,
+        ...(usage.components
+          ? {
+              totalBytesUsed: usage.totalBytesUsed,
+              complete: usage.complete,
+              measuredAt: usage.measuredAt,
+              components: usage.components,
+            }
+          : {}),
+      })
+    } catch {
+      return this.json({ error: { message: 'Storage usage could not be read.' } }, 503)
+    }
+  }
+
   async getStorageUsage(_request: Request, response: Response): Promise<results.JsonResult> {
     const locals = response.locals as ResponseLocals
 
@@ -412,6 +445,14 @@ export class BaseItemsController extends BaseHttpController {
         itemBytesUsed: usage.sizedBytes,
         itemsMeasured: usage.sizedItems,
         itemsUnmeasured: usage.unsizedItems,
+        ...(usage.components
+          ? {
+              totalBytesUsed: usage.totalBytesUsed,
+              complete: usage.complete,
+              measuredAt: usage.measuredAt,
+              components: usage.components,
+            }
+          : {}),
       })
     } catch (error) {
       this.logger.error('Storage usage lookup failed.', {

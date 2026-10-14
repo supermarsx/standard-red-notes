@@ -68,6 +68,32 @@ describe('SQLItemRepository.getStorageUsageForUser', () => {
     repository = new SQLItemRepository(dataSource.getRepository(SQLItem), new SQLItemPersistenceMapper(), logger)
   })
 
+  it('measures legacy payload sizes and ownedvault items, excluding foreignvault and deleted data', async () => {
+    const legacy = await insertRow({ contentSize: null })
+    const owned = await insertRow({ owner: otherUserUuid, contentSize: 500 })
+    const foreign = await insertRow({ contentSize: 700 })
+    const vault = '00000000-0000-4000-8000-000000000040'
+    await dataSource.query('UPDATE items SET shared_vault_uuid = ? WHERE uuid = ?', [vault, owned])
+    await dataSource.query('UPDATE items SET shared_vault_uuid = ? WHERE uuid = ?', [
+      '00000000-0000-4000-8000-000000000041',
+      foreign,
+    ])
+    await insertRow({ contentSize: 900, deleted: true })
+    const measurement = await repository.measureStoredItems(userUuid.value, [vault])
+    expect(measurement.complete).toBe(true)
+    expect(measurement.count).toBe(2)
+    expect(measurement.bytes).toBeGreaterThan(500)
+    expect(
+      (await dataSource.query('SELECT content_size FROM items WHERE uuid = ?', [legacy]))[0].content_size,
+    ).toBeNull()
+  })
+
+  it('refuses invalid persisted sizes instead of claiming a complete understated sum', async () => {
+    await insertRow({ contentSize: 100 })
+    await insertRow({ contentSize: -10 })
+    await expect(repository.measureStoredItems(userUuid.value, [])).rejects.toThrow('Item size unavailable')
+  })
+
   afterEach(async () => {
     await dataSource.destroy()
   })

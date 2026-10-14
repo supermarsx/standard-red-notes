@@ -36,6 +36,7 @@ import { SyncResponseFactoryResolver } from '../Domain/Item/SyncResponse/SyncRes
 import { SyncResponseFactoryResolverInterface } from '../Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
 import { CheckIntegrity } from '../Domain/UseCase/Syncing/CheckIntegrity/CheckIntegrity'
 import { GetItem } from '../Domain/UseCase/Syncing/GetItem/GetItem'
+import { AccountStorageUsageService } from '../Domain/UseCase/Syncing/GetUserStorageUsage/AccountStorageUsageService'
 import { GetUserStorageUsage } from '../Domain/UseCase/Syncing/GetUserStorageUsage/GetUserStorageUsage'
 import { GetUsersStorageUsage } from '../Domain/UseCase/Syncing/GetUsersStorageUsage/GetUsersStorageUsage'
 import { AuthorizeCollaborationAccess } from '../Domain/UseCase/Syncing/AuthorizeCollaborationAccess/AuthorizeCollaborationAccess'
@@ -1047,8 +1048,26 @@ export class ContainerConfigLoader {
     container.bind<GetItem>(TYPES.Sync_GetItem).toDynamicValue((context: ResolutionContext) => {
       return new GetItem(context.get(TYPES.Sync_SQLItemRepository))
     })
+    container
+      .bind(AccountStorageUsageService)
+      .toDynamicValue(
+        () =>
+          new AccountStorageUsageService(
+            container.get(TYPES.Sync_BaseSQLItemRepository),
+            container.get(TYPES.Sync_SharedVaultRepository),
+            env.get('AUTH_JWT_SECRET'),
+            env.get('STORAGE_USAGE_FILES_URL', true) ||
+              env.get('API_GATEWAY_WEBSOCKET_SYNC_FILES_URL', true) ||
+              `http://localhost:${env.get('FILES_SERVER_PORT', true) || '3104'}`,
+            env.get('STORAGE_USAGE_REVISIONS_URL', true) ||
+              env.get('API_GATEWAY_REVISIONS_SERVER_URL', true) ||
+              env.get('REVISIONS_SERVER_URL', true) ||
+              `http://localhost:${env.get('REVISIONS_SERVER_PORT', true) || '3105'}`,
+          ),
+      )
+      .inSingletonScope()
     container.bind<GetUserStorageUsage>(TYPES.Sync_GetUserStorageUsage).toDynamicValue((context: ResolutionContext) => {
-      return new GetUserStorageUsage(context.get(TYPES.Sync_SQLItemRepository))
+      return new GetUserStorageUsage(context.get(TYPES.Sync_SQLItemRepository), context.get(AccountStorageUsageService))
     })
     container
       .bind<GetUsersStorageUsage>(TYPES.Sync_GetUsersStorageUsage)

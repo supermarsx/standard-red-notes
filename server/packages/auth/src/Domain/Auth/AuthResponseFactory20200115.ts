@@ -1,6 +1,6 @@
 import { SessionTokenData, TokenEncoderInterface } from '@standardnotes/security'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
-import { inject, injectable } from 'inversify'
+import { inject, injectable, optional } from 'inversify'
 import { Logger } from 'winston'
 
 import TYPES from '../../Bootstrap/Types'
@@ -12,6 +12,7 @@ import { User } from '../User/User'
 import { AuthResponseFactory20190520 } from './AuthResponseFactory20190520'
 import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterface'
 
+import { AuthSessionGenerationService } from '../Session/AuthSessionGenerationService'
 import { SessionCreationResult } from '../Session/SessionCreationResult'
 import { AuthResponseCreationResult } from './AuthResponseCreationResult'
 import { ApiVersion } from '../Api/ApiVersion'
@@ -27,8 +28,9 @@ export class AuthResponseFactory20200115 extends AuthResponseFactory20190520 {
     @inject(TYPES.Auth_DomainEventFactory) private domainEventFactory: DomainEventFactoryInterface,
     @inject(TYPES.Auth_DomainEventPublisher) private domainEventPublisher: DomainEventPublisherInterface,
     @inject(TYPES.Auth_Logger) logger: Logger,
+    @inject(AuthSessionGenerationService) @optional() generation?: AuthSessionGenerationService,
   ) {
-    super(userProjector, tokenEncoder, logger)
+    super(userProjector, tokenEncoder, logger, generation)
   }
 
   override async createResponse(dto: {

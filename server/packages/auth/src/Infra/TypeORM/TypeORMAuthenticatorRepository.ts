@@ -1,3 +1,4 @@
+import { authGenerationManager } from '../../Domain/Session/AuthSessionGenerationService'
 import { MapperInterface, UniqueEntityId, Uuid } from '@standardnotes/domain-core'
 import { Repository } from 'typeorm'
 
@@ -7,9 +8,13 @@ import { TypeORMAuthenticator } from './TypeORMAuthenticator'
 
 export class TypeORMAuthenticatorRepository implements AuthenticatorRepositoryInterface {
   constructor(
-    private ormRepository: Repository<TypeORMAuthenticator>,
+    private baseRepository: Repository<TypeORMAuthenticator>,
     private mapper: MapperInterface<Authenticator, TypeORMAuthenticator>,
   ) {}
+
+  private get ormRepository(): Repository<TypeORMAuthenticator> {
+    return authGenerationManager()?.getRepository(TypeORMAuthenticator) ?? this.baseRepository
+  }
 
   async updateCounter(id: UniqueEntityId, counter: number): Promise<void> {
     await this.ormRepository

@@ -43,6 +43,9 @@ import { ClearLoginAttempts } from '../Domain/UseCase/ClearLoginAttempts'
 import { IncreaseLoginAttempts } from '../Domain/UseCase/IncreaseLoginAttempts'
 import { GetUserKeyParams } from '../Domain/UseCase/GetUserKeyParams/GetUserKeyParams'
 import { RedisEphemeralSessionRepository } from '../Infra/Redis/RedisEphemeralSessionRepository'
+import { AuthSessionGenerationService } from '../Domain/Session/AuthSessionGenerationService'
+import { AdminMfaService } from '../Domain/Session/AdminMfaService'
+import { SessionActivityService } from '../Domain/Session/SessionActivityService'
 import { GetActiveSessionsForUser } from '../Domain/UseCase/GetActiveSessionsForUser'
 import { DeleteOtherSessionsForUser } from '../Domain/UseCase/DeleteOtherSessionsForUser'
 import { DeleteSessionForUser } from '../Domain/UseCase/DeleteSessionForUser'
@@ -1166,9 +1169,14 @@ export class ContainerConfigLoader {
           container.get(TYPES.Auth_AuthenticatorPersistenceMapper),
         ),
       )
-    container.bind(LoginGrantScope).toConstantValue(
-      new LoginGrantScope(container.get(TYPES.Auth_SettingRepository), container.get(TYPES.Auth_AuthenticatorRepository)),
-    )
+    container
+      .bind(LoginGrantScope)
+      .toConstantValue(
+        new LoginGrantScope(
+          container.get(TYPES.Auth_SettingRepository),
+          container.get(TYPES.Auth_AuthenticatorRepository),
+        ),
+      )
     container
       .bind<AppPasswordRepositoryInterface>(TYPES.Auth_AppPasswordRepository)
       .toConstantValue(
@@ -1626,6 +1634,7 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_CacheEntryRepository),
             container.get(TYPES.Auth_EPHEMERAL_SESSION_AGE),
             container.get(TYPES.Auth_Timer),
+            container.get(TYPES.Auth_ORMCacheEntryRepository),
           ),
         )
       container
@@ -1910,6 +1919,9 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind(AuthSessionGenerationService)
+      .toConstantValue(new AuthSessionGenerationService(container.get(TYPES.Auth_ORMUserRepository)))
+    container
       .bind<SessionService>(TYPES.Auth_SessionService)
       .toConstantValue(
         new SessionService(
@@ -1927,6 +1939,7 @@ export class ContainerConfigLoader {
           container.get<string[]>(TYPES.Auth_READONLY_USERS),
           container.get<GetSetting>(TYPES.Auth_GetSetting),
           container.get<boolean>(TYPES.Auth_FORCE_LEGACY_SESSIONS),
+          container.get(AuthSessionGenerationService),
         ),
       )
     container
@@ -1944,6 +1957,7 @@ export class ContainerConfigLoader {
           container.get<EphemeralSessionRepositoryInterface>(TYPES.Auth_EphemeralSessionRepository),
           container.get<GetCooldownSessionTokens>(TYPES.Auth_GetCooldownSessionTokens),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get(AuthSessionGenerationService),
         ),
       )
     const httpAgentKeepAliveTimeout = env.get('HTTP_AGENT_KEEP_ALIVE_TIMEOUT', true)
@@ -2849,6 +2863,36 @@ export class ContainerConfigLoader {
       ),
     )
     container.bind<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser).to(GetActiveSessionsForUser)
+    container
+      .bind(AdminMfaService)
+      .toDynamicValue(
+        () =>
+          new AdminMfaService({
+            sessions: container.get(TYPES.Auth_ORMSessionRepository),
+            settings: container.get(TYPES.Auth_SettingRepository),
+            authenticators: container.get(TYPES.Auth_AuthenticatorRepository),
+            trustedDevices: container.get(TYPES.Auth_TrustedDeviceRepository),
+            appPasswords: container.get(TYPES.Auth_AppPasswordRepository),
+            users: container.get(TYPES.Auth_UserRepository),
+            getSetting: container.get(TYPES.Auth_GetSetting),
+            getSessions: container.get(TYPES.Auth_GetActiveSessionsForUser),
+            revokeSessions: container.get(TYPES.Auth_DeleteOtherSessionsForUser),
+            audit: container.get(TYPES.Auth_AuditLogWriter),
+            generation: container.get(AuthSessionGenerationService),
+          }),
+      )
+      .inSingletonScope()
+    container
+      .bind(SessionActivityService)
+      .toDynamicValue(
+        () =>
+          new SessionActivityService(
+            container.get(TYPES.Auth_ORMSessionRepository),
+            container.get(TYPES.Auth_GetActiveSessionsForUser),
+            container.get(TYPES.Auth_SessionProjector),
+          ),
+      )
+      .inSingletonScope()
     container.bind<DeleteOtherSessionsForUser>(TYPES.Auth_DeleteOtherSessionsForUser).to(DeleteOtherSessionsForUser)
     container.bind<DeleteSessionForUser>(TYPES.Auth_DeleteSessionForUser).to(DeleteSessionForUser)
     container
@@ -2941,6 +2985,7 @@ export class ContainerConfigLoader {
           container.get<number>(TYPES.Auth_MAX_LOGIN_ATTEMPTS),
           container.get<LockRepositoryInterface>(TYPES.Auth_LockRepository),
           container.get<VerifyHumanInteraction>(TYPES.Auth_VerifyHumanInteraction),
+          container.get(AuthSessionGenerationService),
         ),
       )
     container
@@ -3123,6 +3168,7 @@ export class ContainerConfigLoader {
         // (direct ∪ group) so e.g. admin granted via a group works.
         container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),
         (userUuid) => container.get(SharedVaultMembershipReconciler).reconcile(userUuid),
+        container.get(AuthSessionGenerationService),
       ),
     )
     container.bind<ProcessUserRequest>(TYPES.Auth_ProcessUserRequest).to(ProcessUserRequest)
@@ -3961,6 +4007,8 @@ export class ContainerConfigLoader {
             container.get(TYPES.Auth_SessionProjector),
             container.get(TYPES.Auth_CreateCrossServiceToken),
             container.get(TYPES.Auth_ControllerContainer),
+            container.get(SessionActivityService),
+            container.get(AdminMfaService),
           ),
         )
       container

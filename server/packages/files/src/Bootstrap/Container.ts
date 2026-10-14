@@ -6,6 +6,7 @@ import { S3Client, S3ClientConfig } from '@aws-sdk/client-s3'
 import { Container } from 'inversify'
 import { RuntimeLogLevelApplier, ServerSettingsLogLevelResolver } from '@standardnotes/domain-core'
 
+import { FileStorageUsage } from '../Domain/Services/FileStorageUsage'
 import { Env } from './Env'
 import TYPES from './Types'
 import { UploadFileChunk } from '../Domain/UseCase/UploadFileChunk/UploadFileChunk'
@@ -322,6 +323,12 @@ export class ContainerConfigLoader {
           container.get<DomainEventPublisherInterface>(TYPES.Files_DomainEventPublisher),
           container.get<DomainEventFactoryInterface>(TYPES.Files_DomainEventFactory),
         ),
+      )
+
+    container
+      .bind(FileStorageUsage)
+      .toConstantValue(
+        new FileStorageUsage(container.get(TYPES.Files_FileDownloader), env.get('AUTH_JWT_SECRET', true)),
       )
 
     // middleware

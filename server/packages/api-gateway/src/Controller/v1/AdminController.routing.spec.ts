@@ -67,7 +67,7 @@ describe('AdminController auth-server pass-through routes', () => {
    * their own assertions below instead — so a new one cannot quietly inherit
    * either exemption.
    */
-  const syncingServerHandlers = new Set(['getUsersItemStorageUsage'])
+  const syncingServerHandlers = new Set(['getUsersItemStorageUsage', 'getUserStorageUsage'])
 
   const makeController = () =>
     new AdminController(serviceProxy, endpointResolver, true, false, undefined, {} as AssistantProviderConfig, '')
@@ -134,7 +134,10 @@ describe('AdminController auth-server pass-through routes', () => {
     >
 
     try {
-      await controller[handlerName](buildRequest(params), buildResponse())
+      await controller[handlerName](buildRequest(params), {
+        ...buildResponse(),
+        locals: { roles: [{ name: 'ADMIN_USER' }] },
+      } as Response)
     } catch {
       // A gateway-local handler may reject against these bare stubs; the only
       // thing that matters here is whether it reached the auth-server proxy.
@@ -266,6 +269,34 @@ describe('AdminController auth-server pass-through routes', () => {
       expect((serviceProxy.callAuthServer as jest.Mock).mock.calls.length).toBe(0)
     })
   })
+
+  it('forwards target-account complete storage only for an admin, with the correct substituted path', async () => {
+    const request = buildRequest({ userUuid: 'target-user' })
+    const denied = buildResponse()
+    await makeController().getUserStorageUsage(request, denied)
+    expect(denied.status).toHaveBeenCalledWith(403)
+    expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
+    await makeController().getUserStorageUsage(request, {
+      ...buildResponse(),
+      locals: { roles: [{ name: 'ADMIN_USER' }] },
+    } as Response)
+    expect(endpointResolver.resolveEndpointOrMethodIdentifier).toHaveBeenCalledWith(
+      'GET',
+      'items/storage-usage/:userUuid',
+      'target-user',
+    )
+    expect(serviceProxy.callSyncingServer).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['getUserSessions', 'getUserMfaStatus', 'resetUserMfa'] as const)(
+    'refuses nonadmin %s before auth forwarding',
+    async (method) => {
+      const response = buildResponse()
+      await makeController()[method](buildRequest({ userUuid: 'target-user' }), response)
+      expect(response.status).toHaveBeenCalledWith(403)
+      expect(serviceProxy.callAuthServer).not.toHaveBeenCalled()
+    },
+  )
 
   it('parses an HTTP verb for exactly the routes the runtime registered', () => {
     const registered = routeMetadata.map((route) => route.key as string).sort()

@@ -45,9 +45,9 @@ export abstract class AuthMiddleware extends BaseMiddleware {
     try {
       let crossServiceTokenFetchedFromCache = true
       let crossServiceToken = null
-      if (this.crossServiceTokenCacheTTL) {
-        crossServiceToken = await this.crossServiceTokenCache.get(cacheKey)
-      }
+      // Cached grants are bookkeeping snapshots, never proof that a credential
+      // is still authorized. Every new request validates against auth so reset,
+      // revocation, and a late stale cache write cannot restore access.
 
       if (crossServiceToken === null) {
         const cookiesFromHeaders = new Map<string, string[]>()

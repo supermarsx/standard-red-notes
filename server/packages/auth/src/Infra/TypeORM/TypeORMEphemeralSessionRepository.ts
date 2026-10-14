@@ -3,6 +3,10 @@ import { TimerInterface } from '@standardnotes/time'
 
 import { EphemeralSession } from '../../Domain/Session/EphemeralSession'
 import { EphemeralSessionRepositoryInterface } from '../../Domain/Session/EphemeralSessionRepositoryInterface'
+import { Repository } from 'typeorm'
+import { TypeORMCacheEntry } from './TypeORMCacheEntry'
+import { runAuthTypeORMTransaction } from './AuthTypeORMTransactionCoordinator'
+import { AuthGenerationChangedError } from '../../Domain/Session/AuthSessionGenerationService'
 
 export class TypeORMEphemeralSessionRepository implements EphemeralSessionRepositoryInterface {
   private readonly PREFIX = 'session'
@@ -13,6 +17,7 @@ export class TypeORMEphemeralSessionRepository implements EphemeralSessionReposi
     private cacheEntryRepository: CacheEntryRepositoryInterface,
     private ephemeralSessionAge: number,
     private timer: TimerInterface,
+    private ormRepository: Repository<TypeORMCacheEntry>,
   ) {}
 
   async findOneByPrivateIdentifier(privateIdentifier: string): Promise<EphemeralSession | null> {
@@ -27,8 +32,23 @@ export class TypeORMEphemeralSessionRepository implements EphemeralSessionReposi
   }
 
   async deleteOne(uuid: string, userUuid: string): Promise<void> {
-    await this.cacheEntryRepository.removeByKey(`${this.PREFIX}:${uuid}`)
-    await this.cacheEntryRepository.removeByKey(`${this.PREFIX}:${uuid}:${userUuid}`)
+    await runAuthTypeORMTransaction(this.ormRepository.manager.connection, async (manager) => {
+      const repository = manager.getRepository(TypeORMCacheEntry)
+      const query = repository.createQueryBuilder('cache').where('cache.key = :key', { key: `${this.PREFIX}:${uuid}` })
+      if (['mysql', 'mariadb'].includes(this.ormRepository.manager.connection.options.type)) {
+        query.setLock('pessimistic_write')
+      }
+      const existing = await query.getOne()
+      const session = existing ? (JSON.parse(existing.value) as EphemeralSession) : undefined
+      if (session && session.userUuid !== userUuid) {
+        return
+      }
+      const keys = [`${this.PREFIX}:${uuid}`, `${this.PREFIX}:${uuid}:${userUuid}`]
+      if (session) {
+        keys.push(`${this.PREFIX_PRIVATE_ID}:${session.privateIdentifier}`)
+      }
+      await repository.createQueryBuilder().delete().where('key IN (:...keys)', { keys }).execute()
+    })
 
     const userSessionsJSON = await this.cacheEntryRepository.findUnexpiredOneByKey(
       `${this.USER_SESSIONS_PREFIX}:${userUuid}`,
@@ -84,7 +104,42 @@ export class TypeORMEphemeralSessionRepository implements EphemeralSessionReposi
   }
 
   async update(ephemeralSession: EphemeralSession): Promise<void> {
-    return this.insert(ephemeralSession)
+    await runAuthTypeORMTransaction(this.ormRepository.manager.connection, async (manager) => {
+      const repository = manager.getRepository(TypeORMCacheEntry)
+      const query = repository
+        .createQueryBuilder('cache')
+        .where('cache.key = :key', { key: `${this.PREFIX}:${ephemeralSession.uuid}` })
+        .andWhere('cache.expires_at > :now', { now: this.timer.getUTCDate() })
+      if (['mysql', 'mariadb'].includes(this.ormRepository.manager.connection.options.type)) {
+        query.setLock('pessimistic_write')
+      }
+      const existing = await query.getOne()
+      if (!existing || JSON.parse(existing.value).userUuid !== ephemeralSession.userUuid) {
+        throw new AuthGenerationChangedError()
+      }
+      ephemeralSession.updatedAt = this.timer.getUTCDate()
+      const keys = [
+        `${this.PREFIX}:${ephemeralSession.uuid}`,
+        `${this.PREFIX}:${ephemeralSession.uuid}:${ephemeralSession.userUuid}`,
+        `${this.PREFIX_PRIVATE_ID}:${ephemeralSession.privateIdentifier}`,
+        `${this.USER_SESSIONS_PREFIX}:${ephemeralSession.userUuid}`,
+      ]
+      await repository
+        .createQueryBuilder()
+        .update()
+        .set({
+          value: JSON.stringify(ephemeralSession),
+          expiresAt: this.timer.getUTCDateNSecondsAhead(this.ephemeralSessionAge),
+        })
+        .where('key IN (:...keys)', { keys: keys.slice(0, 3) })
+        .execute()
+      await repository
+        .createQueryBuilder()
+        .update()
+        .set({ expiresAt: this.timer.getUTCDateNSecondsAhead(this.ephemeralSessionAge) })
+        .where('key = :key', { key: keys[3] })
+        .execute()
+    })
   }
 
   async insert(ephemeralSession: EphemeralSession): Promise<void> {

@@ -94,6 +94,11 @@ export class AnnotatedItemsController extends BaseItemsController {
   // swallow `/storage-usage` as an item uuid and answer 404 "Item not found" —
   // which is exactly what the Space block would then report as an unreadable
   // server. `/sync-command/:commandId` sits above `/:uuid` for the same reason.
+  @httpGet('/storage-usage/:userUuid')
+  override async getAccountStorageUsage(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getAccountStorageUsage(request, response)
+  }
+
   @httpGet('/storage-usage')
   override async getStorageUsage(request: Request, response: Response): Promise<results.JsonResult> {
     return super.getStorageUsage(request, response)

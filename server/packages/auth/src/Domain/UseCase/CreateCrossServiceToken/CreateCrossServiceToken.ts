@@ -4,6 +4,7 @@ import { gt, valid } from 'semver'
 
 import { ProjectorInterface } from '../../../Projection/ProjectorInterface'
 import { Role } from '../../Role/Role'
+import { AuthSessionGenerationService, AuthGenerationChangedError } from '../../Session/AuthSessionGenerationService'
 import { Session } from '../../Session/Session'
 import { User } from '../../User/User'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
@@ -37,6 +38,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     // compiling; when absent, tokens carry direct roles only (previous behavior).
     private groupRepository?: GroupRepositoryInterface,
     private refreshSharedVaultMemberships?: (userUuid: string) => Promise<void>,
+    private generation?: AuthSessionGenerationService,
   ) {}
 
   /**
@@ -302,6 +304,25 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       }
     }
 
+    if (this.generation) {
+      const expected = user.authGeneration ?? 0
+      if (resolvedSession && (resolvedSession.authGeneration ?? 0) !== expected) {
+        return Result.fail('Could not find an active session for the supplied session uuid')
+      }
+      authTokenData.auth_generation = expected
+      try {
+        return Result.ok(
+          await this.generation.run(user.uuid, expected, async () =>
+            this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL),
+          ),
+        )
+      } catch (error) {
+        if (error instanceof AuthGenerationChangedError) {
+          return Result.fail(error.message)
+        }
+        throw error
+      }
+    }
     return Result.ok(this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL))
   }
 

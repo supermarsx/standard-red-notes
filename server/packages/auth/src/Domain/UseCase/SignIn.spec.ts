@@ -17,6 +17,7 @@ import { Session } from '../Session/Session'
 import { LockRepositoryInterface } from '../User/LockRepositoryInterface'
 import { VerifyHumanInteraction } from './VerifyHumanInteraction/VerifyHumanInteraction'
 import { Result } from '@standardnotes/domain-core'
+import { AuthGenerationChangedError } from '../Session/AuthSessionGenerationService'
 
 describe('SignIn', () => {
   let user: User
@@ -95,6 +96,25 @@ describe('SignIn', () => {
     lockRepository.getLockCounter = jest.fn().mockReturnValue(0)
 
     maxNonCaptchaAttempts = 6
+  })
+  it('asks a verified login to restart when reset fences its delayed mint, without reporting a successful sign-in', async () => {
+    authResponseFactory.createResponse = jest.fn().mockRejectedValue(new AuthGenerationChangedError())
+    const request = {
+      email: user.email,
+      password: 'qweqwe123123',
+      userAgent: 'test',
+      apiVersion: '20200115',
+      ephemeralSession: false,
+      codeVerifier: 'test',
+    }
+    expect(await createUseCase().execute(request)).toMatchObject({
+      success: false,
+      errorCode: 400,
+      errorMessage: 'Authentication state changed. Restart sign-in.',
+    })
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+    authResponseFactory.createResponse = jest.fn().mockRejectedValue(new Error('database unavailable'))
+    await expect(createUseCase().execute(request)).rejects.toThrow('database unavailable')
   })
 
   it('should fail sign in a legacy user without code verifier', async () => {

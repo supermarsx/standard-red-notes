@@ -64,6 +64,13 @@ describe('FSFileDownloader', () => {
       )
     })
 
+    it('counts published uploads once while ignoring attempt-owned partial hardlinks and directories', async () => {
+      await seed('user-1/final', '1234')
+      await seed('user-1/.final.00000000-0000-4000-8000-000000000001.partial', '1234')
+      await mkdir(join(uploadPath, 'user-1', 'directory'))
+      expect(await createDownloader().listFiles('user-1')).toEqual([{ name: 'final', size: 4 }])
+    })
+
     // Scoping: the listing is per user, and the directories are siblings under
     // one upload root. A `readdir` of the root rather than the user's
     // subdirectory would disclose the existence of every other account's

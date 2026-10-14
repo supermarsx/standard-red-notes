@@ -223,15 +223,15 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
       expect(serviceProxy.validateSession).toHaveBeenCalled()
     })
 
-    it('serves a cache hit without calling the auth service', async () => {
+    it('revalidates warm cached credentials with auth before authorizing a new request', async () => {
       ;(crossServiceTokenCache.get as jest.Mock).mockResolvedValue('cached-token')
 
       await required(60).handler(makeRequest(), response, next)
 
-      expect(serviceProxy.validateSession).not.toHaveBeenCalled()
-      expect(mockedVerify).toHaveBeenCalledWith('cached-token', 'jwt-secret', { algorithms: ['HS256'] })
-      expect(crossServiceTokenCache.set).not.toHaveBeenCalled()
-      expect(locals.authToken).toBe('cached-token')
+      expect(serviceProxy.validateSession).toHaveBeenCalled()
+      expect(mockedVerify).toHaveBeenCalledWith('encoded', 'jwt-secret', { algorithms: ['HS256'] })
+      expect(crossServiceTokenCache.get).not.toHaveBeenCalled()
+      expect(locals.authToken).toBe('encoded')
       expect(next).toHaveBeenCalled()
     })
 
@@ -246,7 +246,7 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
     it('keys the cache separately per shared vault owner context so contexts cannot leak', async () => {
       await required(60).handler(makeRequest({ 'x-shared-vault-owner-context': 'owner-1' }), response, next)
 
-      expect(crossServiceTokenCache.get).toHaveBeenCalledWith('Bearer token:owner-1')
+      expect(crossServiceTokenCache.get).not.toHaveBeenCalled()
       expect((crossServiceTokenCache.set as jest.Mock).mock.calls[0][0].key).toBe('Bearer token:owner-1')
     })
 

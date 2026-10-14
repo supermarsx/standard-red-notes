@@ -64,6 +64,33 @@ describe('AuthenticationMethodResolver', () => {
     fallbackTokenDecoder.decodeToken = jest.fn()
   })
 
+  it('rejects an old session when reset lands between session validation and the fresh account lookup', async () => {
+    session.authGeneration = 0
+    getSessionFromToken.execute = jest
+      .fn()
+      .mockResolvedValue(Result.ok({ session, isEphemeral: false, givenTokensWereInCooldown: false }))
+    let entered!: () => void, release!: () => void
+    const lookup = new Promise<void>((done) => {
+        entered = done
+      }),
+      hold = new Promise<void>((done) => {
+        release = done
+      })
+    userRepository.findOneByUuid = jest.fn(async () => {
+      entered()
+      await hold
+      return user
+    })
+    const pending = createResolver().resolve({
+      authTokenFromHeaders: '1:session:access',
+      requestMetadata: { url: '/', method: 'GET' },
+    })
+    await lookup
+    user.authGeneration = 1
+    release()
+    expect(await pending).toBeUndefined()
+  })
+
   it('should resolve jwt authentication method', async () => {
     sessionTokenDecoder.decodeToken = jest.fn().mockReturnValue({ user_uuid: '00000000-0000-0000-0000-000000000000' })
 

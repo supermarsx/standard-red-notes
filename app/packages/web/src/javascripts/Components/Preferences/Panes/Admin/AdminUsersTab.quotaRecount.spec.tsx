@@ -76,6 +76,32 @@ const makeApplication = (usageReadings: Array<number | null>, uploadBytesLimit: 
 
   return {
     legacyApi: {
+      adminGetUserStorageUsage: jest.fn().mockResolvedValue({
+        data: {
+          itemBytesUsed: 0,
+          itemsMeasured: 0,
+          itemsUnmeasured: 0,
+          totalBytesUsed: 0,
+          complete: true,
+          components: {
+            items: { bytes: 0, count: 0, complete: true },
+            files: { bytes: 0, count: 0, complete: true },
+            revisions: { bytes: 0, count: 0, complete: true },
+          },
+        },
+      }),
+      adminGetUserMfaStatus: jest.fn().mockResolvedValue({
+        data: {
+          totpConfigured: false,
+          securityKeyCount: 0,
+          magicLinkEnabled: false,
+          recoveryCodesAvailable: false,
+          trustedDeviceCount: 0,
+          appPasswordCount: 0,
+          openSessionCount: 0,
+        },
+      }),
+      getAdminUserSessions: jest.fn().mockResolvedValue({ data: [] }),
       adminListUsers: jest.fn().mockResolvedValue({
         data: { users: [listRow(TARGET_UUID, TARGET_EMAIL), listRow(OTHER_UUID, OTHER_EMAIL)], total: 2 },
       }),
@@ -262,18 +288,13 @@ describe('AdminUsersTab — after "Recalculate storage quota"', () => {
     expect(usageReadsFor(application, TARGET_UUID)).toBe(reads)
   })
 
-  it('brings the table row into step with the panel', async () => {
+  it('keeps upload quota recount separate from the full measured storage total', async () => {
     const application = makeApplication([null, null, 0])
     await renderUser(application, TARGET_UUID, TARGET_EMAIL)
-    expect(filesCellFor(TARGET_EMAIL)).toBe('[?]files Not reported / Not set')
-
     await requestRecount()
     await wait(1000)
-
     expect(storageReadout()).toContain('Current usage: 0 B')
-    expect(filesCellFor(TARGET_EMAIL)).toBe('[v]files 0 B / Not set')
-    // And nobody else's row.
-    expect(filesCellFor(OTHER_EMAIL)).toBe('[?]files Not reported / Not set')
+    expect(container.querySelector('[data-test-id="storage-total"]')?.textContent).toBe('Total: 0 B')
   })
 
   it('stops looking after the window and says so, without claiming the recount ran', async () => {

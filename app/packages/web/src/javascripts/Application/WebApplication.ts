@@ -99,6 +99,7 @@ import { SearchIndexRunner } from '@/Utils/Items/Search/SearchIndexRunner'
 import { DecryptionPool } from '@/Utils/Items/Decryption/DecryptionPool'
 import { AutoEmptyTrashService } from '@/Services/AutoEmptyTrash/AutoEmptyTrashService'
 import { UpdateCheckService } from '@/Services/UpdateCheck/UpdateCheckService'
+import { SessionActivityService } from '@/Services/SessionActivity/SessionActivityService'
 import { PendingMfaApprovalsNotifier } from '@/Services/PendingMfaApprovals/PendingMfaApprovalsNotifier'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
@@ -153,6 +154,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // createBackgroundServices() so the launch-time auto check and the in-session
   // re-evaluation timer run from app start; torn down (timer cleared) in deinit.
   private _updateCheckService?: UpdateCheckService
+  private _sessionActivityService?: SessionActivityService
   // Standard Red Notes: push-MFA approvals app-wide notifier. Created in
   // createBackgroundServices() so a "new sign-in awaiting your approval" toast
   // reaches the user even when the Security preferences pane is closed;
@@ -254,6 +256,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     void this.mobileWebReceiver
     void this.autolockService
     void this.persistence
+    void this.sessionActivityService
     if (this.environment !== Environment.Clipper) {
       void this.themeManager
     }
@@ -841,6 +844,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   override deinit(mode: DeinitMode, source: DeinitSource): void {
+    this._sessionActivityService?.deinit()
+    this._sessionActivityService = undefined
     if (!this.isNativeMobileWeb()) {
       this.webOrDesktopDevice.removeApplication(this)
     }
@@ -1429,6 +1434,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       this._updateCheckService = new UpdateCheckService(this)
     }
     return this._updateCheckService
+  }
+
+  get sessionActivityService(): SessionActivityService {
+    return (this._sessionActivityService ??= new SessionActivityService(this))
   }
 
   // Standard Red Notes: the push-MFA approvals app-wide notifier. Lazily

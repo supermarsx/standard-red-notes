@@ -12,6 +12,7 @@ import { User } from '../../User/User'
 import { Role } from '../../Role/Role'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 
+import { AuthSessionGenerationService, AuthGenerationChangedError } from '../../Session/AuthSessionGenerationService'
 import { CreateCrossServiceToken } from './CreateCrossServiceToken'
 import {
   Result,
@@ -56,6 +57,7 @@ describe('CreateCrossServiceToken', () => {
     applicationVersionThresholdForTokenVersion2?: string,
     applicationVersionThresholdForTokenVersion3?: string,
     refreshMemberships?: (userUuid: string) => Promise<void>,
+    generation?: AuthSessionGenerationService,
   ) =>
     new CreateCrossServiceToken(
       userProjector,
@@ -73,7 +75,76 @@ describe('CreateCrossServiceToken', () => {
       getSetting,
       undefined,
       refreshMemberships,
+      generation,
     )
+
+  it('rejects a named stale ephemeral session instead of issuing a websocket grant under a new epoch', async () => {
+    user.authGeneration = 1
+    session.authGeneration = 0
+    session.uuid = '00000000-0000-0000-0000-000000000002'
+    getActiveSessionsForUser.execute = jest.fn().mockResolvedValue({ sessions: [session] })
+    const run = jest.fn(async (_user: string, _epoch: number, encode: () => Promise<string>) => encode())
+    const result = await createUseCase(undefined, undefined, undefined, {
+      run,
+    } as unknown as AuthSessionGenerationService).execute({ user, sessionUuid: session.uuid })
+    expect(result.isFailed()).toBe(true)
+    expect(run).not.toHaveBeenCalled()
+    expect(tokenEncoder.encodeExpirableToken).not.toHaveBeenCalled()
+  })
+  it('signs a current-generation token inside the local fence and propagates unexpected fence errors', async () => {
+    user.authGeneration = 2
+    const run = jest.fn(async (_user: string, _epoch: number, encode: () => Promise<string>) => encode())
+    expect(
+      (
+        await createUseCase(undefined, undefined, undefined, {
+          run,
+        } as unknown as AuthSessionGenerationService).execute({ user })
+      ).isFailed(),
+    ).toBe(false)
+    expect(run).toHaveBeenCalledWith(user.uuid, 2, expect.any(Function))
+    expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalledWith(
+      expect.objectContaining({ auth_generation: 2 }),
+      jwtTTL,
+    )
+    run.mockRejectedValueOnce(new Error('storage unavailable'))
+    await expect(
+      createUseCase(undefined, undefined, undefined, { run } as unknown as AuthSessionGenerationService).execute({
+        user,
+      }),
+    ).rejects.toThrow('storage unavailable')
+  })
+  it('fences final local token signing when reset lands during authority refresh, without holding SQL over network work', async () => {
+    user.authGeneration = 0
+    let entered!: () => void, release!: () => void
+    const refreshing = new Promise<void>((done) => {
+        entered = done
+      }),
+      hold = new Promise<void>((done) => {
+        release = done
+      })
+    let currentEpoch = 0
+    const run = jest.fn(async (_user: string, expected: number, encode: () => Promise<string>) => {
+      if (expected !== currentEpoch) {
+        throw new AuthGenerationChangedError()
+      }
+      return encode()
+    })
+    const pending = createUseCase(
+      undefined,
+      undefined,
+      async () => {
+        entered()
+        await hold
+      },
+      { run } as unknown as AuthSessionGenerationService,
+    ).execute({ user })
+    await refreshing
+    expect(run).not.toHaveBeenCalled()
+    currentEpoch = 1
+    release()
+    expect((await pending).isFailed()).toBe(true)
+    expect(tokenEncoder.encodeExpirableToken).not.toHaveBeenCalled()
+  })
 
   it('refuses to mint stale membership grants when the authority cannot be reached', async () => {
     const refresh = jest.fn().mockRejectedValue(new Error('unavailable'))
@@ -306,6 +377,18 @@ describe('CreateCrossServiceToken', () => {
 
     const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
     expect(payload.ai_enabled).toBe(false)
+  })
+  it('fails optional workflow grants closed and omits unreadable quota overrides when their authority fails', async () => {
+    getSetting.execute = jest.fn().mockImplementation(({ settingName }) => {
+      if ([SettingName.NAMES.WorkflowsEnabled, SettingName.NAMES.AiRequestLimit].includes(settingName)) {
+        return Promise.reject(new Error('setting authority unavailable'))
+      }
+      return Promise.resolve(Result.fail('not found'))
+    })
+    await createUseCase().execute({ user, session })
+    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    expect(payload.workflows_enabled).toBeUndefined()
+    expect(payload.ai_request_limit).toBeUndefined()
   })
 
   it.each(['not-a-number', '25junk', '0', '9007199254740992'])(

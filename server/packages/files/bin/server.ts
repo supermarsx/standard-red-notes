@@ -5,6 +5,7 @@ import busboy from 'connect-busboy'
 
 import '../src/Infra/InversifyExpress/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpress/AnnotatedFilesController'
+import '../src/Infra/InversifyExpress/AnnotatedStorageUsageController'
 import '../src/Infra/InversifyExpress/AnnotatedSharedVaultFilesController'
 
 import helmet from 'helmet'

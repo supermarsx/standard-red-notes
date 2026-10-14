@@ -272,6 +272,32 @@ export type AdminItemStorageUsageResponse = {
   usages: AdminUserItemStorageUsage[]
 }
 
+export type AccountStorageComponent = { bytes: number | null; count: number | null; complete: boolean }
+export type AdminUserMfaStatus = {
+  totpConfigured: boolean
+  securityKeyCount: number
+  magicLinkEnabled: boolean
+  recoveryCodesAvailable: boolean
+  trustedDeviceCount: number
+  appPasswordCount: number
+  openSessionCount: number
+}
+export type AdminUserMfaResetResponse = {
+  success: boolean
+  userUuid: string
+  scope: 'all_factors'
+  status: AdminUserMfaStatus
+}
+export type AccountStorageUsage = {
+  itemBytesUsed: number
+  itemsMeasured: number
+  itemsUnmeasured: number
+  totalBytesUsed?: number | null
+  complete?: boolean
+  measuredAt?: string
+  components?: { items: AccountStorageComponent; files: AccountStorageComponent; revisions: AccountStorageComponent }
+}
+
 export type AdminUserTokenUsageWindow = {
   usedTokens: number | null
   /** Effective per-user ceiling; 0 means unlimited. */
@@ -849,6 +875,85 @@ export class LegacyApiService
     this.processSuccessResponseForMetaBody(response)
 
     return response
+  }
+
+  async recordSessionActivity(
+    deviceId: string,
+  ): Promise<HttpResponse<{ last_seen_at: string; activity_checked_at: string; active: boolean }>> {
+    const preprocessingError = this.preprocessingError()
+    if (preprocessingError) {
+      return preprocessingError
+    }
+    const accessToken = this.getSessionAccessToken()
+    const response = await this.httpService.post<{
+      last_seen_at: string
+      activity_checked_at: string
+      active: boolean
+    }>(Paths.v1.sessionActivity, { device_id: deviceId }, { authentication: accessToken })
+    if (isErrorResponse(response) && this.getSessionAccessToken() === accessToken) {
+      this.preprocessAuthenticatedErrorResponse(response)
+    }
+    return response
+  }
+
+  async getAdminUserSessions(userUuid: string): Promise<HttpResponse<SessionListResponse>> {
+    const preprocessingError = this.preprocessingError()
+    if (preprocessingError) {
+      return preprocessingError
+    }
+    const response = await this.httpService.get<SessionListResponse>(
+      Paths.v1.adminUserSessions(userUuid),
+      {},
+      { authentication: this.getSessionAccessToken() },
+    )
+    if (isErrorResponse(response)) {
+      this.preprocessAuthenticatedErrorResponse(response)
+    }
+    return response
+  }
+
+  async getAccountStorageUsage(): Promise<HttpResponse<AccountStorageUsage>> {
+    const preprocessingError = this.preprocessingError()
+    if (preprocessingError) {
+      return preprocessingError
+    }
+    const response = await this.httpService.get<AccountStorageUsage>(
+      Paths.v1.storageUsage,
+      {},
+      { authentication: this.getSessionAccessToken() },
+    )
+    if (isErrorResponse(response)) {
+      this.preprocessAuthenticatedErrorResponse(response)
+    }
+    return response
+  }
+
+  async adminGetUserStorageUsage(userUuid: string): Promise<HttpResponse<AccountStorageUsage>> {
+    return this.tokenRefreshableRequest<AccountStorageUsage>({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.adminUserStorageUsage(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Could not load account storage usage.',
+    })
+  }
+
+  async adminGetUserMfaStatus(userUuid: string): Promise<HttpResponse<AdminUserMfaStatus>> {
+    return this.tokenRefreshableRequest<AdminUserMfaStatus>({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.adminUserMfaStatus(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Could not load authentication methods.',
+    })
+  }
+
+  async adminResetAllUserFactors(userUuid: string): Promise<HttpResponse<AdminUserMfaResetResponse>> {
+    return this.tokenRefreshableRequest<AdminUserMfaResetResponse>({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.adminUserMfaReset(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      params: { intent: 'reset_all_factors', userUuid },
+      fallbackErrorMessage: 'Could not reset authentication methods.',
+    })
   }
 
   async deleteSession(sessionId: UuidString): Promise<HttpResponse<SessionListResponse>> {

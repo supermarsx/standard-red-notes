@@ -2,6 +2,8 @@ import { Role } from '../Role/Role'
 
 export type CrossServiceTokenData = {
   version?: number
+  /** Account authentication generation, advanced by full-factor resets. */
+  auth_generation?: number
   user: {
     uuid: string
     email: string

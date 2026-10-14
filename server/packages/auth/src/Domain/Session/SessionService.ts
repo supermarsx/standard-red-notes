@@ -10,6 +10,7 @@ import { LogSessionUserAgentOption } from '@standardnotes/settings'
 import { SessionBody } from '@standardnotes/responses'
 import { CryptoNode } from '@standardnotes/sncrypto-node'
 
+import { AuthSessionGenerationService, AuthGenerationChangedError } from './AuthSessionGenerationService'
 import { Session } from './Session'
 import { SessionRepositoryInterface } from './SessionRepositoryInterface'
 import { SessionServiceInterface } from './SessionServiceInterface'
@@ -46,6 +47,7 @@ export class SessionService implements SessionServiceInterface {
     private readonlyUsers: string[],
     private getSetting: GetSetting,
     private forceLegacySessions: boolean,
+    private generation?: AuthSessionGenerationService,
   ) {}
 
   async createNewSessionForUser(dto: {
@@ -57,14 +59,17 @@ export class SessionService implements SessionServiceInterface {
     application?: string
     ipAddress?: string | null
   }): Promise<SessionCreationResult> {
-    const session = await this.createSession({
-      ephemeral: false,
-      ...dto,
-    })
-
+    const expectedGeneration = dto.user.authGeneration ?? 0
+    const session = await this.createSession({ ephemeral: false, ...dto })
+    session.authGeneration = expectedGeneration
     const sessionPayload = await this.createTokens(session, dto.apiVersion)
-
-    await this.sessionRepository.insert(session)
+    if (this.generation) {
+      await this.generation.run(dto.user.uuid, session.authGeneration, async (manager) => {
+        await manager.getRepository(Session).insert(session)
+      })
+    } else {
+      await this.sessionRepository.insert(session)
+    }
 
     try {
       const userSubscription = await this.userSubscriptionRepository.findOneByUserUuid(dto.user.uuid)
@@ -95,14 +100,18 @@ export class SessionService implements SessionServiceInterface {
     application?: string
     ipAddress?: string | null
   }): Promise<SessionCreationResult> {
-    const ephemeralSession = await this.createSession({
-      ephemeral: true,
-      ...dto,
-    })
-
+    const expectedGeneration = dto.user.authGeneration ?? 0
+    const ephemeralSession = await this.createSession({ ephemeral: true, ...dto })
+    ephemeralSession.authGeneration = expectedGeneration
     const sessionPayload = await this.createTokens(ephemeralSession, dto.apiVersion)
-
+    if (this.generation && !(await this.generation.current(dto.user.uuid, ephemeralSession.authGeneration))) {
+      throw new AuthGenerationChangedError()
+    }
     await this.ephemeralSessionRepository.insert(ephemeralSession)
+    if (this.generation && !(await this.generation.current(dto.user.uuid, ephemeralSession.authGeneration))) {
+      await this.ephemeralSessionRepository.deleteOne(ephemeralSession.uuid, dto.user.uuid)
+      throw new AuthGenerationChangedError()
+    }
 
     return {
       ...sessionPayload,
@@ -126,7 +135,27 @@ export class SessionService implements SessionServiceInterface {
     dto.session.snjs = dto.snjs ?? null
     dto.session.application = dto.application ?? null
 
-    if (dto.isEphemeral) {
+    if (this.generation) {
+      if (dto.isEphemeral) {
+        if (!(await this.generation.sessionCurrent(dto.session))) {
+          throw new AuthGenerationChangedError()
+        }
+        await this.ephemeralSessionRepository.update(dto.session)
+        if (!(await this.generation.sessionCurrent(dto.session))) {
+          await this.ephemeralSessionRepository.deleteOne(dto.session.uuid, dto.session.userUuid)
+          throw new AuthGenerationChangedError()
+        }
+      } else {
+        await this.generation.run(dto.session.userUuid, dto.session.authGeneration ?? 0, async (manager) => {
+          const { uuid, ...values } = dto.session
+          values.updatedAt = this.timer.getUTCDate()
+          const result = await manager.getRepository(Session).update({ uuid }, values)
+          if (result.affected !== 1) {
+            throw new AuthGenerationChangedError()
+          }
+        })
+      }
+    } else if (dto.isEphemeral) {
       await this.ephemeralSessionRepository.update(dto.session)
     } else {
       await this.sessionRepository.update(dto.session)
