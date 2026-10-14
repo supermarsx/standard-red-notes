@@ -180,28 +180,8 @@ type EffectivePermissions = {
   effectivePermissionNames: string[]
 }
 
-/**
- * What the users-list space column is a figure OF, and what it is not.
- *
- * *** THIS COLUMN USED TO BE FILE BYTES ONLY, AND THAT WAS THE WHOLE DEFECT. ***
- * An account's stored bytes are its synced ITEM payload plus its uploaded FILES,
- * and for most accounts the notes are the larger half. The file half lives in
- * auth's own `subscription_settings` and batches across a page in two statements.
- * The item half is `items.content_size` on the syncing server, which published it
- * at exactly one route — `GET /v1/items/storage-usage`, scoped to
- * `response.locals.user.uuid` with no parameter — and had no admin-authorised
- * surface of any kind. So an administrator could get a full space report for
- * themselves and for nobody else: asked about three accounts holding 3 MB, 7 MB
- * and 11 MB of notes, the only endpoint that existed answered their own figure
- * three times.
- *
- * The syncing server now publishes the measurement for the accounts an ADMIN
- * names, in one request for the whole page, and this column carries both halves.
- * What it still does not carry is REVISIONS (note history), which live on a third
- * service with their own pruning schedule and are not guessed at — so the figure
- * says which halves are in it rather than implying it is everything.
- */
-export const ADMIN_USERS_STORAGE_COLUMN_SCOPE =
+/** Scope of the selected user's measured storage and separate upload quota. */
+export const ADMIN_USER_STORAGE_SCOPE =
   'Measured encrypted items, uploaded file data and saved revisions. Totals require all components; upload quota applies only to files.'
 
 /**
@@ -426,7 +406,6 @@ type Props = {
 
 const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden, email, setEmail, user, setUser }) => {
   const [adminSessionsRevision, setAdminSessionsRevision] = useState(0)
-  const [pageStorageRevision, setPageStorageRevision] = useState(0)
   const [lookingUp, setLookingUp] = useState(false)
 
   // The server contract is default-on: only an explicit canonical 'false'
@@ -858,18 +837,12 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         setListError('The users list is not available on this server.')
         setRows([])
         setTotal(0)
-        // The note-bytes reading belongs to the page that failed to arrive. It
-        // must not survive into a list that is no longer on screen.
         return
       }
       const data = (response as { data?: { users?: AdminUserRow[]; total?: number } }).data
       const users = data?.users ?? []
       setRows(users)
-      setPageStorageRevision((value) => value + 1)
       setTotal(data?.total ?? 0)
-      // Second half of the space figure, for this page, in one request. Awaited so
-      // a reload cannot leave the previous page's note bytes on screen beside the
-      // new page's file bytes.
     } catch (error) {
       console.error(error)
       setListError('Could not load the users list.')
@@ -2040,12 +2013,6 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         Authenticator
                       </span>
                     </th>
-                    <th
-                      className="border-border bg-contrast sticky top-0 z-10 border-b px-3 py-2 text-right font-semibold"
-                      title={ADMIN_USERS_STORAGE_COLUMN_SCOPE}
-                    >
-                      Space used
-                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-border divide-y">
@@ -2101,43 +2068,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                         )}
                       </td>
                       <td className="px-3 py-2.5">{row.mfaEnabled ? 'Configured' : 'Not configured'}</td>
-                      {/*
-                        Both halves of the account's stored space, with the
-                        combined figure on top and the breakdown under it. The
-                        breakdown is not decoration: the two halves come from
-                        different services and fail independently, and a single
-                        number could not say that one of them is missing — which
-                        is the state in which the figure is a lower bound rather
-                        than a measurement.
-                      */}
-                      <td className="px-3 py-2.5 text-right tabular-nums">
-                        <StorageUsagePanel
-                          application={application}
-                          userUuid={row.uuid}
-                          compact
-                          lazy
-                          noteIfForbidden={noteIfForbidden}
-                          refreshRevision={pageStorageRevision}
-                        />
-                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-
-            {/*
-              All THREE readings are offered now, because all three are printable
-              on a row. `[n]` arrived here when the note half did: a server build
-              without the admin read publishes nothing, which is a different fact
-              from asking and getting no answer, and the remedy is a redeploy
-              rather than an investigation. A legend advertising a marker nothing
-              can print would be the decoration this pane exists to remove — and
-              one that omitted a marker the rows DO print would be worse.
-            */}
-            <Text className="text-passive-1 mt-3 text-xs">
-              {ADMIN_USERS_STORAGE_COLUMN_SCOPE} Only visible rows are measured, with at most four requests at a time.
-            </Text>
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <Text className="text-passive-1 text-xs">
@@ -2501,17 +2436,9 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
               <HorizontalSeparator classes="my-3" />
 
-              {/*
-                *** THE BLOCK THE OPERATOR ASKED FOR. *** Everything below it is
-                about the FILE half and the allowance that caps it. This one is the
-                account's space: notes plus files, each half saying whether it is a
-                measurement, and a combined figure that wears a `≥` rather than
-                passing a bound off as a total. Until the syncing server grew an
-                admin-authorised read there was no way to show this for anyone but
-                the signed-in operator.
-              */}
               <div data-test-id="admin-space-readout">
                 <StorageUsagePanel application={application} userUuid={user.uuid} noteIfForbidden={noteIfForbidden} />
+                <Text className="text-passive-1 mt-2 text-xs">{ADMIN_USER_STORAGE_SCOPE}</Text>
               </div>
 
               <HorizontalSeparator classes="my-3" />

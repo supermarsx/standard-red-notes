@@ -36,7 +36,7 @@ jest.mock('@standardnotes/filepicker', () => ({
   formatSizeToReadableString: (bytes: number) => `${bytes} B`,
 }))
 
-import AdminUsersTab, { ADMIN_USERS_STORAGE_COLUMN_SCOPE } from './AdminUsersTab'
+import AdminUsersTab, { ADMIN_USER_STORAGE_SCOPE } from './AdminUsersTab'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const TARGET_UUID = 'target-user-uuid'
@@ -187,33 +187,6 @@ const storageEvidence = (): string =>
 
 /** The storage-limit amount box of the per-user editor. */
 const storageLimitInput = (): HTMLInputElement | null => container.querySelector('input[placeholder="e.g. 5"]')
-
-/** The Storage cell (last column) of the list row whose Email cell is `email`. */
-const storageCellForRow = (email: string): string => {
-  const row = Array.from(container.querySelectorAll('tbody tr')).find((candidate) =>
-    Array.from(candidate.querySelectorAll('td')).some((cell) => cell.textContent === email),
-  )
-  if (!row) {
-    throw new Error(`No list row rendered for ${email}`)
-  }
-  const cells = Array.from(row.querySelectorAll('td'))
-  return cells[cells.length - 1].textContent ?? ''
-}
-
-/** One half of a row's space cell, by its own test id. */
-const spacePartForRow = (email: string, testId: string): string => {
-  const row = Array.from(container.querySelectorAll('tbody tr')).find((candidate) =>
-    Array.from(candidate.querySelectorAll('td')).some((cell) => cell.textContent === email),
-  )
-  if (!row) {
-    throw new Error(`No list row rendered for ${email}`)
-  }
-  const part = row.querySelector(`[data-test-id="${testId}"]`)
-  if (!part) {
-    throw new Error(`Row for ${email} rendered no ${testId}`)
-  }
-  return part.textContent ?? ''
-}
 
 const setInputValue = async (input: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
@@ -652,7 +625,7 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
     consoleError.mockRestore()
   })
 
-  it('shows full measured totals per target and never turns missing components into zero', async () => {
+  it('keeps storage breakdowns in the selected user management section instead of list rows', async () => {
     const application = makeApplication()
     application.legacyApi.adminListUsers.mockResolvedValue({
       data: {
@@ -694,17 +667,14 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
       },
     }))
     await renderTab(application)
-    await act(async () => {
-      Array.from(container.querySelectorAll('table button'))
-        .filter((button) => button.textContent === 'Read storage usage')
-        .forEach((button) => (button as HTMLButtonElement).click())
-      for (let turn = 0; turn < 20; turn++) await Promise.resolve()
-    })
-    expect(spacePartForRow('zero@example.com', 'admin-row-space-total')).toBe('Total: 0 B')
-    expect(spacePartForRow('missing@example.com', 'admin-row-space-total')).toBe('Total: Unavailable')
-    expect(spacePartForRow('missing@example.com', 'admin-row-files')).toContain('Not fully measured')
-    expect(application.legacyApi.adminGetUserStorageUsage).toHaveBeenCalledWith('row-zero')
-    expect(application.legacyApi.adminGetUserStorageUsage).toHaveBeenCalledWith('row-missing')
+    const table = container.querySelector('table')!
+    expect(table.textContent).not.toContain('Space used')
+    expect(table.textContent).not.toContain('Total:')
+    expect(table.textContent).not.toContain('Uploaded files')
+    expect(container.querySelector('[data-test-id="admin-space-readout"]')?.textContent).toContain('Total: 0 B')
+    expect(application.legacyApi.adminGetUserStorageUsage).toHaveBeenCalledWith(TARGET_UUID)
+    expect(application.legacyApi.adminGetUserStorageUsage).not.toHaveBeenCalledWith('row-zero')
+    expect(application.legacyApi.adminGetUserStorageUsage).not.toHaveBeenCalledWith('row-missing')
   })
 
   // -------------------------------------------------------------------------
@@ -827,10 +797,10 @@ describe('AdminUsersTab — per-user storage reporting states', () => {
   })
 
   it('states that full storage covers current items, uploaded files and saved revisions', () => {
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('encrypted items')
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('uploaded file data')
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('saved revisions')
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('all components')
-    expect(ADMIN_USERS_STORAGE_COLUMN_SCOPE).toContain('quota applies only to files')
+    expect(ADMIN_USER_STORAGE_SCOPE).toContain('encrypted items')
+    expect(ADMIN_USER_STORAGE_SCOPE).toContain('uploaded file data')
+    expect(ADMIN_USER_STORAGE_SCOPE).toContain('saved revisions')
+    expect(ADMIN_USER_STORAGE_SCOPE).toContain('all components')
+    expect(ADMIN_USER_STORAGE_SCOPE).toContain('quota applies only to files')
   })
 })
