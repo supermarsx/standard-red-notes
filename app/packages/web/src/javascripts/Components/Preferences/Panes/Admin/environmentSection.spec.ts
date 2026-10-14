@@ -1413,6 +1413,32 @@ describe('the three states the runtime ledger separates', () => {
     expect(codesOf(model)).toContain('GRPC_CALLS_REFUSED')
   })
 
+  it('does not describe refused server faults as HTTP fallback when no call used HTTP', () => {
+    const model = buildEnvironmentSection({
+      topology: topology({ boundServiceProxy: 'grpc' }),
+      fallback: {
+        observed: true,
+        everDegraded: false,
+        lanes: lanes({
+          'session-validation': {
+            degradedCalls: 0,
+            refusedCalls: 3,
+            lastFailureClass: 'server-fault',
+            lastFailureAgeMs: 49_000,
+          },
+        }),
+      },
+    })
+    expect(rowOf(model, 'Calls served over HTTP instead of gRPC').value).toBe('0')
+    expect(codesOf(model)).not.toContain('GRPC_BOUND_SERVING_HTTP')
+    const finding = model.blocks
+      .flatMap((block) => block.findings ?? [])
+      .find((entry) => entry.code === 'GRPC_CALLS_REFUSED')
+    expect(finding?.remedy?.code).toBe('GRPC_CALLS_REFUSED')
+    expect(finding?.remedy?.summary).toContain('were not retried over HTTP')
+    expect(finding?.remedy?.summary).not.toContain('serving calls over HTTP anyway')
+  })
+
   it('keeps refused calls visible beside the degradations rather than letting one imply the other', () => {
     const degradedOnly = buildEnvironmentSection({
       topology: topology({ boundServiceProxy: 'grpc' }),

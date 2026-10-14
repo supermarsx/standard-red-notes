@@ -782,6 +782,22 @@ function remedyForGrpcServingHttp(): Remedy {
   }
 }
 
+function remedyForGrpcCallsRefused(): Remedy {
+  return {
+    code: 'GRPC_CALLS_REFUSED',
+    summary:
+      'Some internal gRPC calls failed and were not retried over HTTP. Inspect the reported lane and failure class; these refused-call counters do not establish that HTTP carried any calls.',
+    steps: [
+      'Match the reported lane and failure class to the service logs at the failure time. A server fault can be an exception inside a reachable service.',
+      'Keep refused calls separate from calls served over HTTP. The gateway does not replay a call when a second delivery could duplicate its effects.',
+      'Re-read the counters after repairing the cause. Historical refusals can remain recorded while current checks pass.',
+    ],
+    effort: REPAIR_ANOTHER_SERVICE,
+    basis: 'verified',
+    because: ['The runtime ledger recorded at least one call refused rather than retried.'],
+  }
+}
+
 function remedyForPartitionedWithoutSecure(): Remedy {
   return {
     code: 'COOKIE_PARTITIONED_WITHOUT_SECURE',
@@ -1606,7 +1622,7 @@ function buildTransportBlock(
           'A second delivery of these calls could have duplicated a write, so the gateway surfaced the failure instead of absorbing it. The requests failed and the clients saw errors. This is the intended trade and it must stay visible, because a degradation count on its own reads as an outage that was handled.',
         verdict: 'degraded',
         evidence: EVIDENCE_DIRECT,
-        remedy: remedyForGrpcServingHttp(),
+        remedy: remedyForGrpcCallsRefused(),
       }),
     )
   }

@@ -237,6 +237,16 @@ describe('buildBackendSection with nothing reported', () => {
    * payload, and must not fill the rest of the section in with negatives. This
    * is the state an older gateway build produces.
    */
+  it.each([
+    ['401 unauthorized', 'answered with 401; status data unavailable'],
+    ['403 forbidden', 'answered with 403; status data unavailable'],
+  ])('reports an answered authorization failure without claiming silence: %s', (statusError, expected) => {
+    const model = buildBackendSection({ statusError })
+    expect(rowOf(model, 'Admin status endpoint').value).toBe(expected)
+    expect(codesOf(model)).toEqual(['BACKEND_STATUS_UNREADABLE'])
+    expect(rowOf(model, 'Auth service probe').value).toBe('not reported')
+  })
+
   it('does not turn an empty payload into negative verdicts for the services', () => {
     const model = buildBackendSection({ serverStatus: {} })
 

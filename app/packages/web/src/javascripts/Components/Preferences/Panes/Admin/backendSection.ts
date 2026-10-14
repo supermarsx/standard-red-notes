@@ -1096,16 +1096,19 @@ function buildReadBlock(
       ? errorKind(statusError)
       : undefined
 
-  // Three states, not two. A payload means it answered; an error with no payload
-  // means it did not; NEITHER means nobody has tried yet, and that is absent
-  // evidence rather than a failure — the state this pane previously rendered as
-  // a confident claim that the server had refused.
+  // A payload, a rejected response and an uncompleted read are distinct.
+  // Missing payload data must not turn a known 401/403 into network silence.
   const answered = status !== undefined ? true : failure !== undefined ? false : undefined
 
   const rows: DiagnosticRow[] = [
     diagnosticRow({
       label: LABEL_ENDPOINT,
-      value: safeState(answered, 'answered', 'did not answer'),
+      value:
+        failure === 'unauthorized'
+          ? safeConstant('answered with 401; status data unavailable')
+          : failure === 'forbidden'
+            ? safeConstant('answered with 403; status data unavailable')
+            : safeState(answered, 'answered', 'did not answer'),
       ...absentOr(answered, answered === true ? 'healthy' : 'broken'),
       note: 'Whether the payload every other row in this section reads actually arrived. It is the first row on purpose: a section full of "not reported" means one of two completely different things, and this is the row that says which. No read at all is reported as undetermined, never as a failure.',
     }),
