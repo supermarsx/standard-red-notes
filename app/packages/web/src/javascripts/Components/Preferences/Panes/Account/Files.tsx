@@ -10,6 +10,7 @@ import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 
 type Props = {
   application: WebApplication
+  embedded?: boolean
 }
 
 /**
@@ -65,7 +66,7 @@ function describeReadFailure(error: unknown): string {
  * `failed` says the read failed and offers a retry, `unreported` says the
  * server returned no figure, and `read` prints figures.
  */
-const FilesSection: FunctionComponent<Props> = ({ application }) => {
+const FilesSection: FunctionComponent<Props> = ({ application, embedded = false }) => {
   const [reading, setReading] = useState<QuotaReading>({ state: 'loading' })
   const [attempt, setAttempt] = useState(0)
 
@@ -126,61 +127,70 @@ const FilesSection: FunctionComponent<Props> = ({ application }) => {
     setAttempt((current) => current + 1)
   }, [])
 
-  return (
-    <PreferencesGroup>
-      <PreferencesSegment>
-        <Title>Files</Title>
-        <Subtitle>Storage Quota</Subtitle>
-        {reading.state === 'loading' && (
-          <div className="mt-2">
-            <Spinner className="h-3 w-3" />
+  const content = (
+    <div className={embedded ? 'border-border mt-5 border-t pt-4' : undefined}>
+      {!embedded && <Title>Files</Title>}
+      <Subtitle>File upload allowance</Subtitle>
+      <SmallText className="text-passive-1 mb-3">
+        This server-reported upload quota counter may differ from measured uploaded file data. Notes and saved revisions
+        are excluded from this allowance.
+      </SmallText>
+      {reading.state === 'loading' && (
+        <div className="mt-2">
+          <Spinner className="h-3 w-3" />
+        </div>
+      )}
+      {reading.state === 'failed' && (
+        <>
+          <div className="mt-1 mb-1 font-semibold">Could not read your file storage usage.</div>
+          <SmallText className="mb-2">{reading.detail}</SmallText>
+          <Button small onClick={retry}>
+            Try again
+          </Button>
+        </>
+      )}
+      {reading.state === 'unreported' && (
+        <>
+          <div className="mt-1 mb-1 font-semibold">Not reported by the server</div>
+          <SmallText className="mb-2">
+            Your server has not reported an upload quota counter for this account. This is not a measured zero.
+          </SmallText>
+          <Button small onClick={retry}>
+            Try again
+          </Button>
+        </>
+      )}
+      {reading.state === 'read' && (
+        <>
+          <div className="mt-1 mb-1">
+            <span className="text-passive-1">Upload quota counter: </span>
+            <span className="font-semibold">{formatSizeToReadableString(reading.usedBytes)}</span> of{' '}
+            <span>
+              {reading.allowance.kind === 'bytes'
+                ? formatSizeToReadableString(reading.allowance.value)
+                : reading.allowance.kind === 'unbounded'
+                  ? '∞'
+                  : 'an allowance the server did not report'}
+            </span>{' '}
+            used
           </div>
-        )}
-        {reading.state === 'failed' && (
-          <>
-            <div className="mt-1 mb-1 font-semibold">Could not read your file storage usage.</div>
-            <SmallText className="mb-2">{reading.detail}</SmallText>
-            <Button small onClick={retry}>
-              Try again
-            </Button>
-          </>
-        )}
-        {reading.state === 'unreported' && (
-          <>
-            <div className="mt-1 mb-1 font-semibold">Not reported by the server</div>
-            <SmallText className="mb-2">
-              Your server returned no FILE_UPLOAD_BYTES_USED figure for this account, so this is not a measured zero. It
-              appears once the server records file usage for the account.
-            </SmallText>
-            <Button small onClick={retry}>
-              Try again
-            </Button>
-          </>
-        )}
-        {reading.state === 'read' && (
-          <>
-            <div className="mt-1 mb-1">
-              <span className="font-semibold">{formatSizeToReadableString(reading.usedBytes)}</span> of{' '}
-              <span>
-                {reading.allowance.kind === 'bytes'
-                  ? formatSizeToReadableString(reading.allowance.value)
-                  : reading.allowance.kind === 'unbounded'
-                    ? '∞'
-                    : 'an allowance the server did not report'}
-              </span>{' '}
-              used
-            </div>
-            {reading.allowance.kind === 'bytes' && reading.allowance.value > 0 && (
-              <progress
-                className="progress-bar w-full"
-                aria-label="Files storage used"
-                value={reading.usedBytes}
-                max={reading.allowance.value}
-              />
-            )}
-          </>
-        )}
-      </PreferencesSegment>
+          {reading.allowance.kind === 'bytes' && reading.allowance.value > 0 && (
+            <progress
+              className="progress-bar w-full"
+              aria-label="File upload quota counter"
+              value={reading.usedBytes}
+              max={reading.allowance.value}
+            />
+          )}
+        </>
+      )}
+    </div>
+  )
+  return embedded ? (
+    content
+  ) : (
+    <PreferencesGroup>
+      <PreferencesSegment>{content}</PreferencesSegment>
     </PreferencesGroup>
   )
 }

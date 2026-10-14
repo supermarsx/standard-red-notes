@@ -5,9 +5,8 @@ import Authentication from './Authentication'
 import Credentials from './Credentials'
 import Sync from './Sync'
 import SessionsAndDevices from './SessionsAndDevices'
-import StorageUsagePanel from '@/Components/StorageUsage/StorageUsagePanel'
+import AccountStorage from './AccountStorage'
 import SignOutWrapper from './SignOutView'
-import FilesSection from './Files'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import Email from './Email/Email'
 import ProfilePicture from './ProfilePicture'
@@ -30,11 +29,8 @@ const AccountPreferences = ({ application }: Props) => {
           <Credentials application={application} />
           <Sync application={application} />
           <SessionsAndDevices application={application} />
-          <StorageUsagePanel application={application} />
+          <AccountStorage application={application} />
         </>
-      )}
-      {application.hasAccount() && application.featuresController.entitledToFiles && (
-        <FilesSection application={application} />
       )}
       {application.hasAccount() && !isUsingThirdPartyServer && <Email application={application} />}
       <SignOutWrapper application={application} />

@@ -2436,47 +2436,51 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
               <HorizontalSeparator classes="my-3" />
 
-              <div data-test-id="admin-space-readout">
-                <StorageUsagePanel application={application} userUuid={user.uuid} noteIfForbidden={noteIfForbidden} />
-                <Text className="text-passive-1 mt-2 text-xs">{ADMIN_USER_STORAGE_SCOPE}</Text>
-              </div>
-
-              <HorizontalSeparator classes="my-3" />
-
-              <div className="flex flex-col gap-2">
-                <Subtitle>Server storage limit</Subtitle>
-                <Text>
-                  Maximum total size of this user's files stored on the server. A new limit applies to new uploads;
-                  upload tokens issued before the change keep the previous limit until they expire. The limit caps the
-                  FILE half of the space above and nothing else &mdash; synced notes are not charged against it.
-                </Text>
-                <div data-test-id="admin-storage-readout">
-                  <Text>
-                    Current usage: <strong>{describeStorageUsage(storageReading)}</strong>, limit:{' '}
-                    <strong>{describeStorageLimit(storageReading)}</strong>.
-                  </Text>
+              <div className="border-border bg-default rounded-lg border p-4">
+                <Title>Storage</Title>
+                <div data-test-id="admin-space-readout">
+                  <StorageUsagePanel
+                    application={application}
+                    userUuid={user.uuid}
+                    noteIfForbidden={noteIfForbidden}
+                    embedded
+                  />
                 </div>
-                {/* The evidence behind those two labels. Without it a figure the
+
+                <HorizontalSeparator classes="my-3" />
+
+                <div className="flex flex-col gap-2">
+                  <Subtitle>File upload allowance</Subtitle>
+                  <div data-test-id="admin-storage-readout">
+                    <Text>
+                      Upload quota counter: <strong>{describeStorageUsage(storageReading)}</strong>, limit:{' '}
+                      <strong>{describeStorageLimit(storageReading)}</strong>.
+                    </Text>
+                  </div>
+                  <Text className="text-passive-1 text-xs">
+                    The server-reported upload quota counter may differ from the measured uploaded file data above.
+                  </Text>
+                  {/* The evidence behind those two labels. Without it a figure the
                     server never sent reads exactly like one it measured. */}
-                {describeStorageEvidence(storageReading) !== null && (
-                  <div data-test-id="admin-storage-evidence">
-                    <Text className="text-passive-1">{describeStorageEvidence(storageReading)}</Text>
-                  </div>
-                )}
-                {storageReading.state === 'failed' && (
-                  <div>
-                    <Button
-                      label="Retry storage read"
-                      onClick={() => {
-                        if (user) {
-                          void loadFlags(user.uuid)
-                        }
-                      }}
-                      disabled={flagsLoading}
-                    />
-                  </div>
-                )}
-                {/*
+                  {storageReading.state === 'failed' && describeStorageEvidence(storageReading) !== null && (
+                    <div data-test-id="admin-storage-evidence">
+                      <Text className="text-passive-1">{describeStorageEvidence(storageReading)}</Text>
+                    </div>
+                  )}
+                  {storageReading.state === 'failed' && (
+                    <div>
+                      <Button
+                        label="Retry storage read"
+                        onClick={() => {
+                          if (user) {
+                            void loadFlags(user.uuid)
+                          }
+                        }}
+                        disabled={flagsLoading}
+                      />
+                    </div>
+                  )}
+                  {/*
                   *** THIS USED TO HIDE THE EDITOR, AND THE REASON IT GAVE IS NO
                   LONGER TRUE. *** It replaced the control with "the limit cannot
                   be changed here" whenever no `user_subscriptions` row existed —
@@ -2488,38 +2492,52 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   works; the editor stays, and the note says what applies while
                   nothing is stored.
                 */}
-                {storageReading.state === 'reported' && !storageReading.storage.hasSubscription && (
-                  <Text className="text-passive-1 text-xs">
-                    This account has no subscription record, so its limit is stored under the account’s own uuid. With
-                    none stored, upload tokens are minted with an unlimited allowance.
-                  </Text>
-                )}
-                <div className="mt-1 flex items-center gap-3">
-                  <DecoratedInput
-                    className={{ container: 'w-28' }}
-                    placeholder="e.g. 5"
-                    value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
-                    onChange={setStorageLimitValue}
-                    type="number"
-                    disabled={storageLimitUnit === 'unlimited' || !storageWasRead(storageReading)}
-                  />
-                  <Dropdown
-                    label="Storage limit unit"
-                    items={[
-                      { label: 'MB', value: 'MB' },
-                      { label: 'GB', value: 'GB' },
-                      { label: 'Unlimited', value: 'unlimited' },
-                    ]}
-                    value={storageLimitUnit}
-                    onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
-                  />
-                  {/* Named apart from the AI request limit's own "Save limit"
+                  <div className="mt-1 flex items-center gap-3">
+                    <DecoratedInput
+                      className={{ container: 'w-28' }}
+                      placeholder="e.g. 5"
+                      value={storageLimitUnit === 'unlimited' ? '' : storageLimitValue}
+                      onChange={setStorageLimitValue}
+                      type="number"
+                      disabled={storageLimitUnit === 'unlimited' || !storageWasRead(storageReading)}
+                    />
+                    <Dropdown
+                      label="Storage limit unit"
+                      items={[
+                        { label: 'MB', value: 'MB' },
+                        { label: 'GB', value: 'GB' },
+                        { label: 'Unlimited', value: 'unlimited' },
+                      ]}
+                      value={storageLimitUnit}
+                      onChange={(value) => setStorageLimitUnit(value as 'MB' | 'GB' | 'unlimited')}
+                    />
+                    {/* Named apart from the AI request limit's own "Save limit"
                       above: two identically labelled buttons on one screen. */}
-                  <Button
-                    label="Save storage limit"
-                    onClick={() => void saveStorageLimit()}
-                    disabled={savingStorageLimit || flagsLoading || !storageWasRead(storageReading)}
-                  />
+                    <Button
+                      label="Save storage limit"
+                      onClick={() => void saveStorageLimit()}
+                      disabled={savingStorageLimit || flagsLoading || !storageWasRead(storageReading)}
+                    />
+                  </div>
+                  <details className="text-passive-1 mt-2 text-xs">
+                    <summary className="cursor-pointer">About the upload allowance</summary>
+                    <Text>
+                      Maximum total size of this user's files stored on the server. A new limit applies to new uploads;
+                      upload tokens issued before the change keep the previous limit until they expire. Notes and saved
+                      revisions are not charged against it.
+                    </Text>
+                    {storageReading.state !== 'failed' && describeStorageEvidence(storageReading) !== null && (
+                      <div data-test-id="admin-storage-evidence">
+                        <Text className="text-passive-1">{describeStorageEvidence(storageReading)}</Text>
+                      </div>
+                    )}
+                    {storageReading.state === 'reported' && !storageReading.storage.hasSubscription && (
+                      <Text className="text-passive-1 text-xs">
+                        This account has no subscription record, so its limit is stored under the account’s own uuid.
+                        With none stored, upload tokens are minted with an unlimited allowance.
+                      </Text>
+                    )}
+                  </details>
                 </div>
               </div>
 

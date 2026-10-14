@@ -36,6 +36,7 @@ const StorageUsagePanel = ({
   application,
   userUuid,
   compact = false,
+  embedded = false,
   lazy = false,
   noteIfForbidden,
   refreshRevision = 0,
@@ -43,6 +44,7 @@ const StorageUsagePanel = ({
   application: WebApplication
   userUuid?: string
   compact?: boolean
+  embedded?: boolean
   lazy?: boolean
   noteIfForbidden?: (response: { status?: number }) => void
   refreshRevision?: number
@@ -120,9 +122,9 @@ const StorageUsagePanel = ({
     <div
       ref={element}
       aria-label={compact ? 'Storage usage' : 'Account storage usage'}
-      className={compact ? 'text-xs' : 'my-3'}
+      className={compact ? 'text-xs' : `border-border bg-contrast rounded-lg border p-4 ${embedded ? 'mt-3' : 'my-3'}`}
     >
-      {!compact && <h3 className="font-semibold">Space used</h3>}
+      {!compact && !embedded && <h3 className="mb-3 font-semibold">Storage</h3>}
       {loading && <p role="status">Measuring storage…</p>}
       {error && (
         <p role="alert" className="text-danger">
@@ -131,20 +133,30 @@ const StorageUsagePanel = ({
       )}
       {reading && (
         <>
-          <div data-test-id={compact ? 'admin-row-space-total' : 'storage-total'}>
-            Total: <strong>{reading.total}</strong>
+          <div
+            data-test-id={compact ? 'admin-row-space-total' : 'storage-total'}
+            className={compact ? '' : 'flex flex-wrap items-end justify-between gap-3'}
+          >
+            <span className={compact ? '' : 'text-passive-1 text-sm'}>
+              {compact ? 'Total: ' : 'Total measured storage'}
+            </span>
+            <strong className={compact ? '' : 'text-2xl leading-none font-bold tabular-nums'}>{reading.total}</strong>
           </div>
-          <dl className={compact ? 'text-passive-1' : 'mt-2 grid grid-cols-2 gap-1'}>
+          <dl className={compact ? 'text-passive-1' : 'divide-border mt-4 divide-y'}>
             {reading.parts.map((part) => (
               <div
                 key={part.key}
                 data-test-id={compact ? `admin-row-${part.key}` : undefined}
-                className={compact ? '' : 'contents'}
+                className={compact ? '' : 'grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-2 text-sm'}
               >
                 <dt>{part.label}</dt>
-                <dd>
-                  {part.text}
-                  {part.count !== undefined && !compact ? ` · ${part.count.toLocaleString()} records` : ''}
+                <dd className={compact ? '' : 'text-right tabular-nums'}>
+                  <span className={compact ? '' : 'font-semibold'}>{part.text}</span>
+                  {part.count !== undefined && !compact && (
+                    <span className="text-passive-1 mt-0.5 block text-xs">
+                      {part.count.toLocaleString()} {part.count === 1 ? 'record' : 'records'}
+                    </span>
+                  )}
                 </dd>
               </div>
             ))}
@@ -157,36 +169,43 @@ const StorageUsagePanel = ({
         </>
       )}
       {!visible && <p className="text-passive-1">Not measured yet</p>}
-      <Button
-        small
-        label={
-          !visible
-            ? 'Read storage usage'
-            : error || reading?.complete === false
-              ? 'Retry storage measurement'
-              : 'Refresh storage usage'
-        }
-        disabled={loading}
-        onClick={() => {
-          setVisible(true)
-          setRevision((value) => value + 1)
-        }}
-      />
+      <div
+        className={compact ? '' : 'border-border mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3'}
+      >
+        {!compact && reading && (
+          <p className="text-passive-1 text-xs">
+            Measured:{' '}
+            {snapshot?.usage.measuredAt && Number.isFinite(Date.parse(snapshot.usage.measuredAt))
+              ? new Date(snapshot.usage.measuredAt).toISOString().replace('T', ' ').replace('Z', ' UTC')
+              : 'Time unavailable'}
+            {' · '}
+            {reading.complete ? 'Complete' : 'Partial'}
+          </p>
+        )}
+        <Button
+          small
+          label={
+            !visible
+              ? 'Read storage usage'
+              : error || reading?.complete === false
+                ? 'Retry storage measurement'
+                : 'Refresh storage usage'
+          }
+          disabled={loading}
+          onClick={() => {
+            setVisible(true)
+            setRevision((value) => value + 1)
+          }}
+        />
+      </div>
       {!compact && (
-        <>
-          {reading && (
-            <p className="text-passive-1 mt-2 text-xs">
-              Measurement time:{' '}
-              {snapshot?.usage.measuredAt && Number.isFinite(Date.parse(snapshot.usage.measuredAt))
-                ? new Date(snapshot.usage.measuredAt).toLocaleString()
-                : 'Unavailable'}
-            </p>
-          )}
+        <details className="text-passive-1 mt-3 text-xs">
+          <summary className="cursor-pointer">What counts toward storage</summary>
           <p className="text-passive-1 mt-2 text-xs">
             Encrypted items include notes and other stored item metadata. Uploaded file data and saved note revisions
             are counted separately. Upload quota applies to files separately.
           </p>
-        </>
+        </details>
       )}
     </div>
   )

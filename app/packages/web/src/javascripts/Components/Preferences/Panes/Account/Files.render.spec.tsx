@@ -92,6 +92,8 @@ describe('Account pane file storage quota', () => {
     expect(spinner()).toBeNull()
     expect(text()).toContain('1 MB')
     expect(text()).toContain('10 MB')
+    expect(text()).toContain('Upload quota counter:')
+    expect(text()).toContain('may differ from measured uploaded file data')
     const bar = container.querySelector('progress')
     expect(bar?.getAttribute('max')).toBe('10485760')
     expect(bar?.getAttribute('value')).toBe('1048576')

@@ -39,10 +39,35 @@ it('uses caller storage in Account and the explicit selected target in admin', a
   expect(app.legacyApi.getAccountStorageUsage).toHaveBeenCalledTimes(1)
   expect(container.textContent).toContain('600 B')
   expect(container.textContent).toContain('Saved revisions')
+  expect(container.querySelector('details')?.hasAttribute('open')).toBe(false)
+  expect(container.querySelector('summary')?.textContent).toBe('What counts toward storage')
+  expect(container.querySelectorAll('dl > div')).toHaveLength(3)
+  expect(container.querySelector('[data-test-id="storage-total"] strong')?.className).toContain('text-2xl')
   await act(async () =>
     root.render(createElement(StorageUsagePanel, { application: app as never, userUuid: 'target' })),
   )
   expect(app.legacyApi.adminGetUserStorageUsage).toHaveBeenCalledWith('target')
+})
+
+it('embeds without a duplicate heading and preserves partial measurements and retry', async () => {
+  const app = fixture()
+  app.legacyApi.getAccountStorageUsage.mockResolvedValueOnce({
+    data: {
+      ...complete,
+      complete: false,
+      totalBytesUsed: null,
+      components: { ...complete.components, files: { bytes: null, count: null, complete: false } },
+    },
+  })
+  await act(async () => root.render(createElement(StorageUsagePanel, { application: app as never, embedded: true })))
+  expect(container.querySelector('h3')).toBeNull()
+  expect(container.textContent).toContain('Unavailable')
+  expect(container.textContent).toContain('Not fully measured')
+  expect(container.textContent).not.toContain('600 B')
+  expect(container.textContent).toContain('Time unavailable · Partial')
+  expect(container.querySelector('button')?.textContent).toContain('Retry storage measurement')
+  await act(async () => container.querySelector('button')!.click())
+  expect(container.textContent).toContain('600 B')
 })
 it('does not automatically measure offscreen or unsupported-visibility rows', async () => {
   const app = fixture()
