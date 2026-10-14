@@ -91,3 +91,47 @@ it('handles authorization denial without exposing old data and allows an explici
   })
   expect(container.textContent).toContain('No open sessions.')
 })
+
+it('keeps each session compact with visible status and collapsed details without identifiers', async () => {
+  const first = {
+    ...session('opaque-session-token-one', 'opaque-device-identifier-one'),
+    current: true,
+    ip_address: '192.0.2.10',
+  }
+  const second = session('opaque-session-token-two', 'opaque-device-identifier-two')
+  await render({ getAdminUserSessions: jest.fn().mockResolvedValue({ data: [first, second] }) })
+  const details = [...container.querySelectorAll('details')]
+  expect(details).toHaveLength(2)
+  expect(details.every((element) => !element.open)).toBe(true)
+  for (const element of details) {
+    const row = element.parentElement!
+    expect(row.querySelector('span')?.textContent).toBe('Active recently')
+    expect(row.textContent).toContain('Last seen: Just now')
+    expect(row.querySelector('[aria-label$="observed profiles"]')?.textContent).toBe('1 profile')
+  }
+  expect(details[0].querySelector('summary')?.textContent).toContain('Current session')
+  expect(details[0].querySelector('summary')?.getAttribute('aria-label')).toBe('Session 1 details: Firefox on Linux')
+  expect(details[0].textContent).toContain('Expires:')
+  expect(details[0].textContent).toContain('192.0.2.10')
+  expect(container.textContent).not.toContain('opaque-session-token')
+  expect(container.textContent).not.toContain('opaque-device-identifier')
+  expect([...container.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Refresh sessions'])
+})
+
+it('distinguishes missing observations from an observed empty profile list', async () => {
+  await render({
+    getAdminUserSessions: jest.fn().mockResolvedValue({
+      data: [
+        { ...session('unreported', 'unused'), devices: undefined, active: undefined, last_seen_at: null },
+        { ...session('observed-empty', 'unused'), devices: [] },
+      ],
+    }),
+  })
+  const counts = [...container.querySelectorAll('[aria-label$="observed profiles"]')].map(
+    (element) => element.textContent,
+  )
+  expect(counts).toEqual(['Not reported', '0 profiles'])
+  expect(container.textContent).toContain('Activity unavailable')
+  expect(container.textContent).toContain('Device observations not reported.')
+  expect(container.textContent).toContain('No device observations yet.')
+})

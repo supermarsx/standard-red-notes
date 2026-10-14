@@ -84,8 +84,7 @@ const AdminUserSessions = ({
         <Button small label="Refresh sessions" disabled={loading} onClick={() => setRefresh((value) => value + 1)} />
       </div>
       <p className="text-passive-1 mt-1 text-xs">
-        An open session is an unexpired sign-in. Activity reflects authenticated device contact within the last two
-        minutes.
+        Open sessions are unexpired sign-ins. Activity is authenticated contact within two minutes.
       </p>
       {loading && <p role="status">Loading sessions…</p>}
       {error && (
@@ -95,40 +94,68 @@ const AdminUserSessions = ({
       )}
       {sessions && (
         <>
-          <p className="mt-2 text-sm">
+          <p className="mt-2 text-xs">
             {sessions.length} open sessions · {countSessionDevices(sessions)} observed devices · {activeDevices} active
             recently
           </p>
           {!sessions.length && <p>No open sessions.</p>}
-          <ul className="mt-2 space-y-3">
-            {sessions.map((session) => {
+          <ul className="divide-border mt-2 divide-y text-xs">
+            {sessions.map((session, index) => {
               const activity = presentSessionActivity(session, now, receivedAt)
+              const devices = session.devices
+              const deviceCount =
+                devices === undefined
+                  ? 'Not reported'
+                  : `${devices.length} ${devices.length === 1 ? 'profile' : 'profiles'}`
               return (
-                <li key={session.uuid} className="border-border rounded border p-3">
-                  <h4 className="font-semibold">{sessionDeviceLabel(session)}</h4>
-                  <p>
-                    {activity.statusLabel} · Last seen: {activity.lastSeenText}
-                  </p>
-                  <p className="text-passive-1 text-xs">
-                    Signed in: {formatSessionDate(session.created_at)} · Session expires:{' '}
-                    {formatSessionDate(session.refresh_expiration)}
-                  </p>
-                  {session.ip_address && <p className="text-passive-1 text-xs">IP: {session.ip_address}</p>}
-                  <ul>
-                    {session.devices?.map((device) => {
-                      const status = presentActivity(
-                        { ...device, activity_checked_at: session.activity_checked_at },
-                        now,
-                        receivedAt,
-                      )
-                      return (
-                        <li key={device.device_id} className="mt-1 text-xs">
-                          Device {device.device_id.slice(0, 8)} · {status.statusLabel} · Last seen:{' '}
-                          {status.lastSeenText}
-                        </li>
-                      )
-                    })}
-                  </ul>
+                <li key={session.uuid} className="py-2">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <details className="min-w-0 flex-1">
+                      <summary
+                        className="cursor-pointer list-inside truncate font-medium"
+                        aria-label={`Session ${index + 1} details: ${sessionDeviceLabel(session)}`}
+                      >
+                        {sessionDeviceLabel(session)}
+                        {session.current ? ' · Current session' : ''}
+                      </summary>
+                      <div className="text-passive-1 mt-2 space-y-1 pl-3">
+                        <p>
+                          Signed in: {formatSessionDate(session.created_at)} · Expires:{' '}
+                          {formatSessionDate(session.refresh_expiration)}
+                        </p>
+                        {session.ip_address && <p>IP: {session.ip_address}</p>}
+                        {devices === undefined ? (
+                          <p>Device observations not reported.</p>
+                        ) : devices.length === 0 ? (
+                          <p>No device observations yet.</p>
+                        ) : (
+                          <ul aria-label={`Observed profiles for session ${index + 1}`}>
+                            {devices.map((device, deviceIndex) => {
+                              const status = presentActivity(
+                                { ...device, activity_checked_at: session.activity_checked_at },
+                                now,
+                                receivedAt,
+                              )
+                              return (
+                                <li key={device.device_id}>
+                                  Profile {deviceIndex + 1} · {status.statusLabel} · Last seen: {status.lastSeenText}
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    </details>
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 ${activity.active ? 'bg-info text-info-contrast' : 'bg-contrast text-passive-1'}`}
+                    >
+                      {activity.statusLabel}
+                    </span>
+                    <span className="text-passive-1">Last seen: {activity.lastSeenText}</span>
+                    <span className="text-passive-1" aria-label={`Session ${index + 1} observed profiles`}>
+                      {deviceCount}
+                    </span>
+                  </div>
                 </li>
               )
             })}
